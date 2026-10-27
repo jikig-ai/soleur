@@ -6,6 +6,8 @@ An earlier merge incorporated `origin/main` at
 `2a6558455894163057a8642419495cdd9d1d0303`. The session-start fetch then
 advanced the ref to `2e9874cdf65e9ca5fd086f3728fd0c2105d0cae5`; this second
 merge brings in that latest source, including main migrations 177 and 178.
+The reconciliation is recorded in merge commit
+`b2969dcea081ba570627e11cda0828ea714f9115`.
 Its three content conflicts are resolved: the dev-ledger refusal list keeps
 all exact branch and main migration names; the Privacy Policy keeps main's
 current agent-web-access and egress-audit disclosures plus the feature's
@@ -23,8 +25,11 @@ numbered after current main's 178; if main remains unchanged, the next two are
 
 The Python migration-ledger suite passes 8/8 and the synthetic dev-ledger
 parity suite passes 295/295. After the latest legal merge, the SHA guard and
-the two legal consistency/SHA suites pass 43/43. These are source checks and do
-not establish shared-ledger state.
+the two legal consistency/SHA suites pass 43/43. The collector suite passes
+26/26 and project `tsc --noEmit` passes on app-pinned Node 22.3.0. The combined
+collector/legal suite passes 69/69 after its first sandboxed attempt failed
+with fixture-helper EPERM and was rerun with subprocess permission. These are
+source checks and do not establish shared-ledger state.
 
 ## Source reconciliation and local evidence
 

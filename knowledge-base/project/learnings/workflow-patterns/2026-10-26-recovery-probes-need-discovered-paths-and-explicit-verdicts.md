@@ -61,3 +61,9 @@ of copying metadata or changing the worktree layout. The initial merge from
 the newly fetched main had one expected source conflict: preserve both sides'
 distinct migration filenames in the exact-name refusal fixture, then rerun its
 synthetic parity suite before committing the merge.
+
+After the session environment refreshed, Node 22.23.4 was no longer installed;
+the app's `.nvmrc` still specifies 22.3.0 while global mise selected Node 26.
+Do not reuse a remembered executable path. Read the app pin, inspect installed
+versions, install that pin when needed, and rerun the failed validation before
+reporting a result.
