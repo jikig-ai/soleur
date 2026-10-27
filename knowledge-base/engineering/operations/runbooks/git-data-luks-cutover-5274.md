@@ -1638,7 +1638,7 @@ SSH-class and for a stuck state only; no step above depends on it. `wipe_snapsho
 
 The retired plaintext Hetzner volume (id 106867358, name `soleur-git-data-store`) was deleted through Terraform on 2026-10-27, instead of by the DL-2 wipe (which cannot conclude; see the wipe section above). The claim limits, the controls and the consequences are in ADR-239 Amendment 2026-10-26, attested by Amendment 2026-10-27 as to items 1-3 and 5-9. This section is the record of the run and of what stays true afterwards; the one-shot workflow, its plan gate and the read-only probe were deleted by #11195, so there is nothing left to dispatch.
 
-**As run (2026-10-27, counts and identifiers only).** The owner dispatched the one-shot destroy workflow on `main` at 09:05:55Z: https://github.com/jikig-ai/soleur/actions/runs/40478209838 (`validate` and `destroy` both `success`).
+**As run (2026-10-27, counts and identifiers only).** The owner dispatched the one-shot destroy workflow on `main` at 09:05:55Z: <https://github.com/jikig-ai/soleur/actions/runs/40478209838> (`validate` and `destroy` both `success`).
 
 - Pre-plan read: `shape=present_attached`; git-data server 170370833; LUKS volume 107140231 on server 170370833.
 - Plan: `0 to add, 0 to change, 2 to destroy` (the volume and its attachment); the destroy gate passed, then passed again inside the apply step.

@@ -599,7 +599,7 @@ The end event of Amendments 2026-10-09 and 2026-10-15 for the retired plaintext 
 
 **Status: ATTESTED / IN FORCE as to items 1-3 and 5-9 of Amendment 2026-10-26, on the evidence below.** Ruled by CLO agent, 2026-10-27: the executed destroy plus the independent read-back is the equivalent end event of Amendment 2026-10-26 (v1 internal attestation, not external counsel; the owner keeps an optional veto). Item 4 of that amendment is **not** affected and stays in force unchanged: the git-data host replace, rotate and create routes stay disabled, and the literal `git_data_volume_id = "106867358"` now names a device that no longer exists. "IN FORCE" here does not lift #11194 or those gates. The 2026-10-26 section above is not edited; this section is appended.
 
-1. **What ran.** The owner dispatched `.github/workflows/git-data-plaintext-volume-destroy.yml` on `main` at 2026-10-27T09:05:55Z: https://github.com/jikig-ai/soleur/actions/runs/40478209838 (head `2e9874cdf6`; `validate` 09:05:59-09:06:03Z and `destroy` 09:06:21-09:07:09Z, both `success`). Counts and identifiers only; no volume content was read.
+1. **What ran.** The owner dispatched `.github/workflows/git-data-plaintext-volume-destroy.yml` on `main` at 2026-10-27T09:05:55Z: <https://github.com/jikig-ai/soleur/actions/runs/40478209838> (head `2e9874cdf6`; `validate` 09:05:59-09:06:03Z and `destroy` 09:06:21-09:07:09Z, both `success`). Counts and identifiers only; no volume content was read.
 
    | Step | Result |
    |---|---|
