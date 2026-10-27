@@ -4,7 +4,7 @@ date: 2026-10-27
 slug: durable-action-bound-approval-requests
 branch: feat-hitl-approval-queue
 issue: 4672
-closes: 4672
+closes: [4672, 5351]
 type: feat
 priority: p2-medium
 domain: engineering
@@ -20,7 +20,7 @@ pr: 11289
 
 ## Overview
 
-Replace the in-memory review gate for the highest-risk gated agent tools with a stored approval request the workspace Owner can answer later, in the product, bound to the exact action, single use, and expiring. #10443 (first-class approval primitive) is the same deliverable and is closed as a duplicate when this lands. #5351 (no liveness signal on an unanswered gate) is folded in as a precondition. Slice 1 covers eight gated tools; the existing path stays byte-identical for every other tool. The feature ships dark behind the Flagsmith flag `approval-queue`.
+Replace the in-memory review gate for the highest-risk gated agent tools with a stored approval request the workspace Owner can answer later, in the product, bound to the exact action, single use, and expiring. #10443 (first-class approval primitive) is the same deliverable and is closed as a duplicate when this lands. #5351 (no liveness signal on an unanswered gate) is folded in as a precondition. Slice 1 covers eight gated tools; the existing path stays byte-identical for every other tool. The feature ships dark behind the Flagsmith flag `approval-queue`; the one flag-independent change is a defect fix (a gated-tool wait timeout or abort now returns a static deny instead of escaping `canUseTool`), shipped as its own first commit.
 
 Inputs: brainstorm `knowledge-base/project/brainstorms/2026-10-27-hitl-approval-queue-brainstorm.md`, spec `knowledge-base/project/specs/feat-hitl-approval-queue/spec.md`, wireframes `knowledge-base/product/design/approvals/approval-request.pen` (operator-approved 2026-10-27), draft PR #11289.
 
@@ -44,7 +44,7 @@ Inputs: brainstorm `knowledge-base/project/brainstorms/2026-10-27-hitl-approval-
 - Expiry pattern: no DB sweep exists for `expires_at` rows. The cron pattern is `server/inngest/functions/cron-action-required-sla.ts` (memoised `step.run`, `postSentryHeartbeat`, `reportSilentFallback` in the catch), registered in `cron-manifest.ts` `EXPECTED_CRON_FUNCTIONS`, `app/api/inngest/route.ts`, `execution-placement.ts`, `routine-metadata.ts`, and `infra/sentry/cron-monitors.tf`.
 - RPC pattern (migration 177): `SECURITY DEFINER SET search_path = public, pg_temp`, owner check via `is_workspace_owner` (migration 098), `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role`, explicit `GRANT EXECUTE`. ADR-303 / migration 178: a new public relation must declare its Data API grants or a `-- soleur:no-data-api:` sentinel, and `test/rls-fuzz/table-grants.ts` must classify it.
 - `inbox_item.source` has a CHECK of `('task_completed','system')`; `approval_required` needs a widening.
-- Real-SDK probe infrastructure is one human-run script, `apps/web-platform/scripts/dev-probe-destroy-ask.ts`; about 48 test files mock the SDK. #10111 is open.
+- Real-SDK probe infrastructure is one human-run script, `apps/web-platform/scripts/dev-probe-destroy-ask.ts`; dozens of test files mock the SDK (83 test files import `claude-agent-sdk`; the census command is `git grep -l claude-agent-sdk -- apps/web-platform/test`). #10111 is open.
 - Flag files for `approval-queue`: `lib/feature-flags/server.ts` (`RUNTIME_FLAGS`), `apps/web-platform/.env.example` (`FLAG_APPROVAL_QUEUE=0`), `plugins/soleur/skills/flag-set-role/scripts/flip.sh` `FLAG_ENV_VARS` (parity test `plugins/soleur/test/flip-flag-map-parity.test.sh`), Doppler `soleur` dev and prd, and the Flagsmith feature.
 
 ### Institutional learnings applied
@@ -64,7 +64,7 @@ Inputs: brainstorm `knowledge-base/project/brainstorms/2026-10-27-hitl-approval-
 - P4. Only a workspace Owner can decide; the sandboxed agent cannot.
 - P5. Every decision leaves an audit row that survives erasure of the action text.
 - P6. The consequence text the Owner reads cannot disagree with the action that runs.
-- P7. With the flag off nothing new is created, shown or emitted.
+- P7. With the flag off no approval request is created, shown or emitted, and the only behaviour change is the timeout-deny defect fix.
 
 ### Cut List (Phase 0.6b)
 
@@ -112,20 +112,20 @@ agent tool call (slice-1 tool, flag on)
   expired / consume rejected -> deny with its own static message + warn op
 
 Owner decides:  chat card (WS approval_decide) | inbox row -> /dashboard/approvals/[id] (POST decide route)
-                -> decide_approval(p_id, p_decision, p_actor) -> owner check in the RPC
+                -> decide_approval(p_id, p_decision) as the authenticated user -> owner check on auth.uid() in the RPC
 Cron every 5 min: expire_due_approvals() | flag_unanswered_approvals() | scrub_approval_text()
 ```
 
 ### Data model (migration `179_approval_request.sql`, with `.down.sql` and `supabase/verify/179_approval_request.sql`)
 
-`approval_request`: `id`, `workspace_id` (FK to the workspace table used by `inbox_item`, confirmed at work time), `requested_by_user_id` and `decided_by` (nullable, `ON DELETE SET NULL` carve-out as in `action_sends`), `conversation_id`, `tool_name` (CHECK over the eight slice-1 names), `action_sha256` (CHECK length 64), `canonical_action jsonb` (erasable; nulled by the scrub), `status` (`pending|approved|rejected|expired|consumed`), `expires_at`, `decided_at`, `consumed_at`, `expired_at`, `unanswered_flagged_at`, `text_scrubbed_at`, `created_at`, `request_count` (number of requests for this exact hash in this conversation, for the card header), `expired_reason` (`unanswered` when never decided, `unconsumed` when approved but the agent never asked again; drives the owner-facing wording and whether a push is sent).
+`approval_request`: `id`, `workspace_id` (FK to the workspace table used by `inbox_item`, confirmed at work time), `requested_by_user_id` and `decided_by` (nullable, `ON DELETE SET NULL` carve-out as in `action_sends`), `conversation_id`, `tool_name` (CHECK over the eight slice-1 names), `action_sha256` (CHECK length 64), `canonical_action jsonb` (erasable; nulled by the scrub), `status` (`pending|approved|rejected|expired|consumed`), `expires_at`, `decided_at`, `consumed_at`, `unanswered_flagged_at` (set once by the sweep), `created_at`. Derived, not stored (plan review): the request count for a card header is a `count(*)` over the same conversation and hash across all statuses; an expiry's reason is `unanswered` when `decided_at IS NULL` and `unconsumed` when it is set; scrubbed text is `canonical_action IS NULL`; the expiry time is `expires_at` with status `expired`.
 
-Constraints and triggers: unique partial index on `(conversation_id, action_sha256)` where `status in ('pending','approved')`; a trigger allowing only `pending -> approved|rejected|expired` and `approved -> consumed|expired`, making `workspace_id`, `conversation_id`, `tool_name`, `action_sha256`, `expires_at`, `decided_*`, `consumed_at`, `expired_at` write-once, and refusing every write other than through the RPCs (GUC-gated scrub path for `canonical_action`). RLS: Owner `SELECT` via `is_workspace_owner`; no INSERT/UPDATE/DELETE policy. Explicit grants or a `-- soleur:no-data-api:` sentinel per ADR-303, and a `table-grants.ts` classification.
+Constraints and triggers: unique partial index on `(conversation_id, action_sha256)` where `status in ('pending','approved')`; a trigger allowing only `pending -> approved|rejected|expired` and `approved -> consumed|expired`, making `workspace_id`, `conversation_id`, `tool_name`, `action_sha256`, `expires_at`, `decided_*`, `consumed_at`, `expired_at` write-once, and refusing every write other than through the RPCs (GUC-gated scrub path for `canonical_action`). The trigger carries an explicit allowed-write matrix and the cascade carve-out that migration 162 (`162_action_sends_message_id_cascade_null_carveout`) added for `action_sends`: a row-level `SET NULL` of `requested_by_user_id` and `decided_by` from the user FK, and the workspace-cascade DELETE, are permitted; without them account erasure would be blocked by the write-once rule (Kieran P1; precedent: migration 162). RLS: Owner `SELECT` via `is_workspace_owner`; no INSERT/UPDATE/DELETE policy. Explicit grants or a `-- soleur:no-data-api:` sentinel per ADR-303, and a `table-grants.ts` classification.
 
-RPCs (all `SECURITY DEFINER SET search_path = public, pg_temp`, `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role`, then `GRANT EXECUTE ... TO service_role` only; the TypeScript callers derive the actor from the authenticated socket or session, never from a payload):
+RPCs (all `SECURITY DEFINER SET search_path = public, pg_temp`, `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role`, then `GRANT EXECUTE`: `decide_approval` to `authenticated` only (Ruled by CTO agent 2026-10-27: one function, one authority, the actor comes from `auth.uid()` as in migration 177, never from a parameter; the HTTP route calls it with the user JWT and the WS path with the ws-handler's local `tenantFor(userId, "approval-decide")` wrapper over `lib/supabase/tenant.ts`, because the socket keeps only the verified `userId`; the handler reuses or exports that wrapper, confirmed at work time); every other RPC to `service_role` only. A sentinel test asserts that no module reachable from the MCP tool builders or the `canUseTool` deps imports the tenant-client or service-client decide path (the agent shares the process, so the boundary is code discipline and the sentinel is mandatory), and a test confirms the runtime tenant JWT passes the new function's `is_jti_denied_from_jwt()` check. The comment in migration 179 explains why the grant differs from the service-role RPCs):
 
-- `create_approval_request(...)` — idempotent on the live unique index; also inserts the `inbox_item` (`source='approval_required'`, `severity='action_required'`, `source_ref`, `dedup_key` = approval id) in the same transaction; returns the row and `request_count`.
-- `decide_approval(p_id, p_decision, p_actor)` — `is_workspace_owner(workspace, p_actor)` re-checked at decision time (an Owner who left or lost the role is refused); refuses when the conversation is archived or deleted ("conversation closed", nothing recorded as approved); idempotent for the same decision, refuses the opposite and returns the current row to the loser of a two-Owner race; in the same transaction moves the linked `inbox_item` out of the `action_required` count; `.select()`-checked.
+- `create_approval_request(...)` — idempotent on the live unique index; also inserts the `inbox_item` (`source='approval_required'`, `severity='action_required'`, `source_ref`, `dedup_key` = approval id) in the same transaction; returns the row; when the live row is already `approved` the caller consumes it immediately with no card and no wait; the request count is a count query across all statuses.
+- `decide_approval(p_id, p_decision)` — requires `expires_at > now()` and flips an overdue row to `expired` inline instead of recording `approved` (the cron is five minutes late at worst, never the authority); `is_workspace_owner(workspace, p_actor)` re-checked at decision time (an Owner who left or lost the role is refused); refuses when the conversation is archived or deleted ("conversation closed", nothing recorded as approved); idempotent for the same decision, refuses the opposite and returns the current row to the loser of a two-Owner race; in the same transaction moves the linked `inbox_item` out of the `action_required` count; `.select()`-checked.
 - `consume_approval(p_id, p_hash, p_conversation)` — one atomic `UPDATE ... WHERE status='approved' AND expires_at>now() AND action_sha256=p_hash AND conversation_id=p_conversation RETURNING`.
 - `get_approval_status(p_id)`, `list_live_approvals(p_conversation)` (for reattach replay).
 - `expire_due_approvals()`, `flag_unanswered_approvals()`, `scrub_approval_text()` for the cron; `anonymise_approval_request(p_user)` for account deletion.
@@ -134,7 +134,7 @@ Audit trail: the row itself (hash, tool, status, actor, timestamps, all write-on
 
 ### Canonical action and consequence text
 
-`server/approval/canonical.ts` exports `canonicalizeAction(tool, input, serverDerived)` returning a versioned object (`v: 1`) with every field that changes what runs, string values NFC-normalised, keys sorted, nothing truncated:
+`server/approval/canonical.ts` exports `canonicalizeAction(tool, input, serverDerived)` returning a versioned object (`v: 1`) with every field that changes what runs, keys sorted, strings hashed exactly as supplied (no Unicode normalisation: the hashed bytes must be the executed bytes), nothing truncated:
 
 - `email_send`, `email_reply`, `email_suppress`: full recipient list (server-derived for reply), subject, full body, attachments; suppress adds address and reason enum.
 - `github_push_branch`: repo, branch, `force`, the commit list; `create_pull_request`: repo, head, base, title, full body; `github_trigger_workflow`: repo, workflow, ref, `inputs`.
@@ -145,21 +145,21 @@ Audit trail: the row itself (hash, tool, status, actor, timestamps, all write-on
 
 ### Gated branch (`permission-callback.ts`)
 
-The gated branch gets a `try/finally` that always restores `status` and converts every rejection to a static deny (this part is ungated). With the flag on and the tool in `APPROVAL_REQUIRED_TOOLS`, the flow in the Architecture block runs. The wait is a bounded loop (5 minutes, 5-second poll) that also honours the abort signal; abort denies and leaves the row `pending`. `allow()` passes the original input unchanged (`updatedInput` is never set on this path, so the hashed input is the executed input). The static deny texts tell the agent what it can do next: on an undecided wait, "saved for the workspace Owner; do not retry now; once the user says it is approved, call this tool again with byte-identical arguments" (a regenerated email body hashes differently and would not consume; the rate of `approval-consume-rejected` is the success metric for this wording).
+The gated branch gets a `try/finally` that always restores `status` and converts every rejection to a static deny (this part is ungated). With the flag on and the tool in `APPROVAL_REQUIRED_TOOLS`, the flow in the Architecture block runs. The wait is a bounded loop (5 minutes, about 5-second poll with jitter, at most 60 reads) whose sleep is abort-aware and which checks the signal first; abort denies and leaves the row `pending`. A transient read error continues until the deadline and never allows. The flag is evaluated once per gate, not per poll, and a Flagsmith error means off. If `create_approval_request` returns an already-`approved` row, the branch calls `consume_approval` at once with no card. The shared `allow()` always sets `updatedInput: toolInput` (to avoid an SDK schema error), so the invariant is that the object handed to `allow()` is the same deep-cloned snapshot that was hashed before the first `await`; nothing may mutate it between hash and allow. The static deny texts tell the agent what it can do next: on an undecided wait, "saved for the workspace Owner; do not retry now; once the user says it is approved, call this tool again with byte-identical arguments" (a regenerated email body hashes differently and would not consume; the rate of `approval-consume-rejected` is the success metric for this wording).
 
 Concurrent proposals: a newer pending request for the same conversation and tool does not supersede an older one (parallel same-tool calls such as several emails are legitimate); instead the older card renders a render-time banner "A newer request from your agent exists" and each card always shows its own exact action. Approving one card never approves another.
 
 ### Reattach and WS
 
-New message types: `approval_request` (server to client: id, view, status, expiry, request count, viewer role), `approval_status` (server to client), `approval_decide` (client to server: id, decision enum `approve|deny`). No option strings, so "Approve all" cannot be expressed. On session attach, `list_live_approvals(conversation)` re-sends cards for every `pending` or `approved` row. The `approval_decide` handler takes `userId` from the socket, calls `decide_approval`, then wakes the in-memory waiter if present.
+New message types: `approval_request` (server to client: id, view, status, expiry, request count, viewer role), `approval_status` (server to client), `approval_decide` (client to server: id, decision enum `approve|deny`). No option strings, so "Approve all" cannot be expressed. On session attach, a `SELECT` of the conversation's `pending` and `approved` rows re-emits the `approval_request` cards (this is not the stream replay ring buffer, which does not carry `review_gate`). The `approval_decide` handler takes `userId` from the socket, calls `decide_approval` through the tenant client, then resolves the in-memory waiter directly when it is on this host. Live-path mechanism (Ruled by CTO agent): single process, the decide path wakes the waiter and one database re-read at timeout closes the race; multi-host, a decide that arrives over HTTP on the other host only writes the row, so the waiter polls one indexed row by id every 5 seconds while registered and stops on resolution (a read, no WAL). Terminal rows keep their hash and are never deleted, so the request count is a `count(*)` over `(conversation_id, action_sha256)`.
 
 ### Away-user surfaces
 
-`app/(dashboard)/dashboard/approvals/[id]/page.tsx` (Owner-only via RLS; signed-out redirects to sign-in and returns to the same path through sign-in and MFA with a same-origin allowlist; a non-Owner or unknown id gets an identical not-found) renders the same card. The member's read-only waiting card (wireframe 05) is the in-thread WS card built server-side for the requester's own session; no member landing page and no RLS widening for members is added. `app/api/approvals/[id]/decide/route.ts` (HTTP-method exports only) calls `decide_approval`. `inbox-item-row.tsx` renders `approval_required` rows with an expiry chip and a link, never an inline decide button; `inbox-nav-badge.tsx` counts them through the existing `action_required` path (confirmed at work time). `notifications.ts` gains generic push and email copy (no action text, per #8532); the push dispatch is split out of `notifyInboxItem` if it is coupled to the insert.
+`app/(dashboard)/dashboard/approvals/[id]/page.tsx` (Owner-only via RLS; signed-out redirects to sign-in and returns to the same path through sign-in and MFA with a same-origin allowlist; a non-Owner or unknown id gets an identical not-found) renders the same card. The member's read-only waiting card (wireframe 05) is the in-thread WS card built server-side for the requester's own session; no member landing page and no RLS widening for members is added. `app/api/approvals/[id]/decide/route.ts` (HTTP-method exports only) calls `decide_approval`. `inbox-item-row.tsx` renders `approval_required` rows with an expiry chip and a link, never an inline decide button; `inbox-nav-badge.tsx` counts them through the existing `action_required` path (confirmed at work time). `notifications.ts` gains generic push and email copy (no action text, per #8532); the TypeScript `source` union of `notifyInboxItem` is widened (union-widening grep over the three consumer patterns) and `dispatchInboxPush(inboxItemId)` is split out so the row inserted by the RPC is pushed after the RPC returns, keeping the deep-link guard and the Sentry op; `notifications.ts` stays a leaf with no imports from `server/approval/`.
 
 ### Expiry cron
 
-`server/inngest/functions/cron-approval-expiry.ts`, every 5 minutes: (1) `expire_due_approvals()` then, per row, the owner's inbox item moves to FYI, a generic push goes out and the op `approval-expired` fires; (2) `flag_unanswered_approvals()` marks `pending` rows older than 15 minutes once and fires `gate_unanswered`; (3) `scrub_approval_text()` nulls `canonical_action` 30 days after the terminal state. Registered in the five places listed under Research Insights; its Sentry cron monitor lands in `infra/sentry/cron-monitors.tf`.
+`server/inngest/functions/cron-approval-expiry.ts`, every 5 minutes, one `step.run` calling one `sweep_approvals()` RPC that (1) expires due rows (an `approved` row past expiry becomes `expired` with `decided_at` set, meaning `unconsumed`), (2) flags `pending` rows older than 15 minutes once through `unanswered_flagged_at`, and (3) nulls `canonical_action` 30 days after the terminal state. For each expired row the owner's inbox item moves to FYI, a generic push goes out for the `unanswered` case only (an `unconsumed` expiry is inbox-only), and the ops fire. Registered in `cron-manifest.ts` `EXPECTED_CRON_FUNCTIONS`, `app/api/inngest/route.ts`, `execution-placement.ts` (class: not host-affine, it touches only the database and push), `routine-metadata.ts`, `infra/sentry/cron-monitors.tf`, and the other places `git grep -l cron-action-required-sla` finds outside the knowledge base (`.github/workflows/cutover-inngest.yml`, `scripts/infra-config-red-alert.sh` and its test, `test/server/inngest/cron-safe-commit-parity.test.ts`), each classified at work time as needing the new cron or not; plus a new issue-alert rule in `infra/sentry/issue-alerts.tf` and an `infra/sentry/alert-reference.json` entry for the `approval gate unanswered` op only.
 
 ### Flag
 
@@ -169,8 +169,8 @@ Flagsmith `approval-queue`, default off, evaluated per workspace identity so a c
 
 ### Phase 0 — measurements and design deltas (before any product code)
 
-- 0.1 Real-SDK probe `apps/web-platform/scripts/dev-probe-approval-gate.ts` modelled on `dev-probe-destroy-ask.ts`: an in-process MCP stub with a slice-1 tool name, the real `createCanUseTool`, and an in-memory approval service. Measure: (a) `canUseTool` is invoked for the slice-1 tool names and allow/deny are honoured; (b) what the bundled CLI does when `canUseTool` throws today (informational: records the existing defect). Results in `knowledge-base/project/specs/feat-hitl-approval-queue/phase-0-measurements.md`.
-- 0.2 Wireframe delta via `soleur:product:design:ux-design-lead` (the spec-flow review found screens 01 and 04A promise execution that slice 1 does not perform, which is false consent on a consent gate): rename the button "Approve and send" to "Approve" and change the consequence line to "Your agent can send this once, if you ask it to try again; valid in this conversation only"; add the pending-card sub-line "Your agent stopped waiting after 5 minutes"; add the state "Approved, waiting for your agent" with the instruction to ask the agent again; replace "Email sent" and "approved but did not complete" with "Released to your agent"; add the expired-unconsumed wording ("You approved this, but your agent never asked again"), the "details removed per retention policy" state, the "already decided by <name>" loser state, the "conversation closed" refusal, the "a newer request exists" banner, and the request-count header ("the agent asked again"); drop the member landing variant (wireframe 07c). Re-export screenshots, scrub `fileToken`, and record the approval with the operator.
+- 0.1 Real-SDK probe `apps/web-platform/scripts/dev-probe-approval-gate.ts` modelled on `dev-probe-destroy-ask.ts`, human-run and out of CI like its model. It builds the query options through the real `buildAgentQueryOptions` path (an in-process stub that skips it could pass vacuously, because the legacy runner passes every platform tool as `allowedTools` and `cc-dispatcher.ts` documents `allowedTools` as bypassing `canUseTool`). Measure: (a) whether `canUseTool` is invoked for each slice-1 tool name under the real option composition and allow/deny are honoured; (b) if `allowedTools` short-circuits it, the fix is a pure `buildAllowedTools` that drops `APPROVAL_REQUIRED_TOOLS` when the flag is on, pinned by a census test. Results in `knowledge-base/project/specs/feat-hitl-approval-queue/phase-0-measurements.md`. The SDK's behaviour on a throwing `canUseTool` is already verified by reading `sdk.mjs` (`control_response` with `subtype: error`, neither allow nor deny), so it is not re-measured. **Stop point:** if (a) fails for any tool, stop and re-plan before building the rest.
+- 0.2 Wireframe delta via `soleur:product:design:ux-design-lead` (the spec-flow review found screens 01 and 04A promise execution that slice 1 does not perform, which is false consent on a consent gate): rename the button "Approve and send" to "Approve" and change the consequence line to "Your agent can send this once, if you ask it to try again; valid in this conversation only"; add the pending-card sub-line "Your agent stopped waiting after 5 minutes"; add the state "Approved, waiting for your agent" with the instruction to ask the agent again; replace "Email sent" and "approved but did not complete" with "Released to your agent"; add the expired-unconsumed wording ("You approved this, but your agent never asked again"), the "details removed per retention policy" state, the "already decided by <name>" loser state, the "conversation closed" refusal, the "a newer request exists" banner, and the request-count header ("the agent asked again"); drop the member landing variant (wireframe 07c) and wireframe 04G (it assumed a supersede link that the banner design replaces); split the approved state in two (live release inside the wait: 'Released, your agent is continuing'; late approval after the agent stopped: 'Approved, ask your agent again'); make the 'Your agent stopped waiting' sub-line render only after the wait ends and align the mock timers to the 5-minute-then-24-hour model; fix the copy deck (section C drops 'Approve and {verb}' and the 'no bare Approve' rule; section D drops 'Approved and ran / executed: true', 'Approved but failed' and 'superseded'; every 'the agent was told it did not run and must not retry' line becomes 'saved for your agent; asking again with the same arguments is allowed'); reword the push and email body 'Your agent is waiting for your decision' to 'A request needs your decision'; soften 'Dana has been notified' on the member card; make wireframe 05 note 3 and 05 note 4 agree with the not-found rule for non-Owners; remove the 'Ref AR-7F3K' source line or define it from the approval id. Unconsumed-expiry stays an inbox-only calm line. Re-export screenshots, scrub `fileToken`, and record the approval with the operator.
 - 0.3 Confirm per-tool canonical field lists against each tool's zod schema; list the fields in the test fixtures.
 
 ### Phase 1 — failing tests, then data layer
@@ -181,7 +181,7 @@ Flagsmith `approval-queue`, default off, evaluated per workspace identity so a c
 
 ### Phase 2 — gate wiring
 
-- 2.1 `permission-callback.ts` gated branch (try/finally deny; approval flow behind the flag), `tool-tiers.ts` `APPROVAL_REQUIRED_TOOLS`, `email-triage-tools.ts` binding fix (the handler verifies the consumed approval's body hash, removing the tautology).
+- 2.1 First, as its own commit: the `try/finally` deny-on-reject fix in the gated branch of `permission-callback.ts` for every gated tool (about 15 tools, not only the eight), with its test; it is a defect fix independent of the flag and a revert must not touch the feature. Then the approval flow behind the flag: `permission-callback.ts` takes `deps.approval` (injected, so the callback stays unit-testable without Supabase), `tool-tiers.ts` `APPROVAL_REQUIRED_TOOLS`, a `server/approval/waiters.ts` registry keyed by approval id, and a guard that `review_gate_response` can never resolve an approval waiter. The email handler's body-hash check is left as it is (the gate hash over the snapshot already binds what runs).
 - 2.2 WS types, `ws-handler.ts` decide and reattach, `chat-state-machine.ts`.
 - 2.3 Ops: static-message Sentry ops and `SOLEUR_APPROVAL_*` markers; confirm the Vector allowlist admits the marker family.
 
@@ -196,9 +196,11 @@ Flagsmith `approval-queue`, default off, evaluated per workspace identity so a c
 
 ### Phase 5 — governance
 
+Commit order in the one PR (so a revert stays surgical): (1) the timeout-deny defect fix, (2) migration, RPCs and service, (3) gate wiring and WS, (4) surfaces and notifications, (5) cron and flag, (6) C4, (7) legal, (8) ADR.
+
 - 5.1 ADR-305 (provisional) via `soleur:architecture`, plus ADR-284 and ADR-085 amendment notes.
 - 5.2 C4: `approvalStore` element, edges, description fixes, `views.c4` include, regenerate `model.likec4.json`, parity counts +1 (monitors) in prose.
-- 5.3 Legal: Art. 30 entry (or PA-14/PA-16 amendment), DPD §2.3, GDPR Policy, Privacy Policy and mirrors with `legal-doc-shas.ts`; `account-delete.ts` anonymise step; `dsar-export-allowlist.ts` entry.
+- 5.3 Legal (own commit; Ruled by CLO agent 2026-10-27: public documents stay in this PR with 'not yet switched on' wording; no precedent defers them to a flip PR, and the flip is a Flagsmith toggle that nothing enforces as a PR): Art. 30 entry (or PA-14/PA-16 amendment), DPD §2.3, GDPR Policy, Privacy Policy and both mirrors with `legal-doc-shas.ts` (Privacy Policy, DPD and GDPR Policy only; no Terms change, no `TC_VERSION` bump), the anonymise RPC with its `account-delete.ts` call site, `dsar-export-allowlist.ts`, a `compliance-posture.md` header comment and an Active Items row 'Approval queue: public wording and enabling gate' (trigger: before `approval-queue` is ON for any workspace except a Jikigai-owned canary; gates enabling, not the merge). Wording: conditioned on the merge, never past tense; says the feature is switched off and nothing is processed until enabled; no present-tense control claim ('single-use', 'expires in 24 h', 'bound to the exact action') until probe-measured; never 'every outward action requires your approval'; states the retention purpose and the lawful basis per column; marked draft pending counsel review. The row closes only when (a) the Phase 5.4 probe passes and is recorded, (b) a CLO attestation is discharged in `knowledge-base/legal/audits/`, (c) a docs PR removes the qualifier sentence and re-pins the SHAs, and (d) `gdpr-gate` is recorded; `flag-create` and `flag-set-role` are made to refuse a non-canary ON while the qualifier string remains in the two policy files or the row is open.
 - 5.4 Run the real-SDK probe against the finished branch; record in the PR.
 
 ## Alternative Approaches Considered
@@ -231,7 +233,7 @@ liveness_signal:
 
 error_reporting:
   destination: Sentry project web-platform via reportSilentFallback and warnSilentFallback in server/observability.ts
-  fail_loud: ops gate_unanswered, approval-expired, approval-consume-rejected, approval-notify-failed and approval-reproposed, each emitted with its own static message
+  fail_loud: ops gate_unanswered, approval-expired, approval-consume-rejected, approval-notify-failed and approval-reproposed, each emitted with its own static message and tagged with the approval id
 
 failure_modes:
   - mode: Owner never answers; the request sits pending
@@ -242,22 +244,22 @@ failure_modes:
     alert_route: Owner inbox item and generic push; Sentry warn for the operator
   - mode: consume rejected because the input changed or the row was already used
     detection: consume_approval returns no row; op approval-consume-rejected with the tool name and request id
-    alert_route: Sentry issue alert
+    alert_route: Sentry warn event with no issue alert; its rate is the rollout metric reviewed at the enabling gate
   - mode: push or email notification failed
-    detection: dispatch error caught; op approval-notify-failed; the inbox item still exists because it is written in the same transaction
-    alert_route: Sentry issue alert
+    detection: dispatch error caught; op approval-notify-failed; the inbox item still exists because the RPC writes it, and the push is dispatched separately afterwards
+    alert_route: Sentry warn event with no issue alert; the inbox item remains the fallback surface
   - mode: cron stops running
     detection: Sentry cron monitor missed check-in
     alert_route: Sentry cron monitor alert
 
 logs:
-  where: web-platform stdout markers SOLEUR_APPROVAL_REQUESTED, SOLEUR_APPROVAL_DECIDED and SOLEUR_APPROVAL_CONSUMED in Better Stack, plus Sentry for fault ops
+  where: web-platform stdout markers SOLEUR_APPROVAL_REQUESTED, SOLEUR_APPROVAL_DECIDED, SOLEUR_APPROVAL_CONSUMED and SOLEUR_APPROVAL_EXPIRED and, on every cron run regardless of the flag, SOLEUR_APPROVAL_SWEEP with counts in Better Stack (the whole lifecycle is reconstructable from one grep), plus Sentry for fault ops
   retention: Better Stack retention window; Sentry project retention
 
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_APPROVAL_REQUESTED
-  expected_output: SOLEUR_APPROVAL_REQUESTED
-  credentials_required: Better Stack read token via Doppler prd_terraform — the production marker stream has no unauthenticated substitute that proves the markers reach the aggregator
+  command: bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_APPROVAL_SWEEP
+  expected_output: SOLEUR_APPROVAL_SWEEP
+  credentials_required: Better Stack read token via Doppler prd_terraform — the production marker stream has no unauthenticated substitute that proves the markers reach the aggregator; the sweep marker is emitted every five minutes even while the flag is off, so the probe is valid on a dark deploy
 ```
 
 ## Encryption Posture
@@ -305,28 +307,28 @@ tasks:
 
 **Property.** A slice-1 tool call is allowed only if it consumes, exactly once, an approved and unexpired request whose hash equals the hash of the full input about to run, in the same conversation, decided by a workspace Owner.
 
-**Assembly.** Every path that can return `allow` for a slice-1 tool: the gated branch of `createCanUseTool` (used by `agent-runner.ts` and `cc-dispatcher.ts`), the Bash autonomous bypass and the 60-minute approve-prefix cache (which must not apply to platform tools), the `updatedInput` return, the SDK auto-allow and hook-allow paths measured in Phase 0, the MCP registration and permission allowlist names, and the email handler's own body-hash check. The chokepoint is `createCanUseTool`; the consume RPC is the single place that turns an approval into an allow.
+**Assembly.** Every path that can return `allow` for a slice-1 tool: the gated branch of `createCanUseTool` (used by `agent-runner.ts` and `cc-dispatcher.ts`, each registering its own tool set, so the census asserts registration per runner), the SDK `allowedTools` option (which bypasses `canUseTool` when a tool name is listed, measured in Phase 0.1), the shared `allow()` which always sets `updatedInput: toolInput`, the MCP registration and permission allowlist names, and the consume RPC. The Bash autonomous bypass and the 60-minute approve-prefix cache live only in the Bash branch and cannot launder platform tools; a regression test pins that. The chokepoint is `createCanUseTool`; the consume RPC is the single place that turns an approval into an allow.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | drop `action_sha256 = p_hash` from the consume predicate | RED |
-| 2 | drop `expires_at > now()` from the consume predicate | RED |
+| 2 | drop `expires_at > now()` from the consume predicate, or from `decide_approval` | RED |
 | 3 | make consume non-single-use (no status change to `consumed`) | RED |
 | 4 | remove the `is_workspace_owner` check in `decide_approval` | RED |
-| 5 | accept a free-form decision string instead of the `approve\|deny` enum | RED |
-| 6 | return `allow` when the wait throws or times out | RED |
-| 7 | build the card view from the tool input instead of the canonical object (preview built from different data than the hash) | RED |
-| 8 | remove one slice-1 tool from `APPROVAL_REQUIRED_TOOLS` so it falls to the old path | RED |
-| 9 | set `updatedInput` on the allow path | RED |
-| 10 | make the dispatch guard report zero tools checked and exit 0 (vacuous census) | RED |
-| 11 | add a second pending request for the same hash after a compliant first and approve only the first | RED (second must not be consumable) |
-| 12 | reorder: consume before the hash comparison input is final (mutate input between hash and allow) | RED |
-| 13 | let `decide_approval` record `approved` for an archived conversation | RED |
-| 14 | let an approval on card A make a different pending request B (same conversation and tool, different hash) consumable | RED |
+| 5 | return `allow` when the wait throws, times out or aborts | RED |
+| 6 | build the card view from the tool input instead of the canonical object (preview built from different data than the hash) | RED |
+| 7 | remove one slice-1 tool from `APPROVAL_REQUIRED_TOOLS`, or list one in `allowedTools` while the flag is on | RED |
+| 8 | hand `allow()` an object other than the hashed snapshot (mutate the input between hash and allow) | RED |
+| 9 | let `decide_approval` record `approved` for an archived conversation | RED |
+| 10 | after a compliant first request, approve a second pending request for the same tool with a different hash and consume it with the first approval | RED |
+| 11 | let `create_approval_request` return an `approved` row to the wait loop instead of consuming at once | RED |
+| 12 | make the dispatch census report zero tools checked and exit 0 (vacuous) | RED |
 
-**Harness rows.** (a) Remove the assertion that `canUseTool` is invoked in the real-SDK probe; the suite must go RED. (b) A must-PASS case that is not the canonical: the same tool with a different but permitted argument ordering and whitespace-only string differences within the NFC normalisation, which must hash equal and consume.
+(An unvalidated decision string is covered by the database CHECK and the zod enum, tested as ordinary unit tests, not as mutation rows.)
+
+**Harness rows.** (a) Remove the assertion that `canUseTool` is invoked in the real-SDK probe; the suite must go RED. (b) A must-PASS case that is not the canonical: the same tool with the same arguments supplied in a different key order, which must hash equal and consume (strings are not normalised, so any string difference must hash differently).
 
 **Anchor.** The consume predicate compares a stored hash to the executed input; one diff could edit both. The independent anchor is the real-SDK probe (Phase 0.1 and 5.4), which drives a real tool call with an altered input and asserts the deny, and the review-time mutation run recorded in the PR.
 
@@ -344,12 +346,13 @@ tasks:
 | 2 | empty the census (zero gated tools enumerated) | RED |
 | 3 | add a second unclassified gated tool after a classified one | RED |
 | 4 | exempt a tool with an empty reason | RED |
+| 5 | register a slice-1 tool in one runner but not the other without a recorded reason | RED |
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-Create ADR-305 (provisional; re-check against fresh `origin/main` before merge, 304 is claimed by PR #11225) "Durable, action-bound approval requests" via `soleur:architecture`: the decision (new table, consume in `canUseTool`, Owner-only decide, no server-side execution, flag-gated), alternatives (Cut List and Alternatives table), and the relationship to ADR-284 (memory-less lane unchanged), ADR-085 (source CHECK widened), ADR-060 (hash-bound single-use precedent), ADR-249/264 (operator TTY ack kept). Amend ADR-284 and ADR-085 with a dated note. Status `adopting` until the flag is flipped and the path is measured.
+Create ADR-305 (provisional; re-check against fresh `origin/main` before merge, 304 is claimed by PR #11225) "Durable, action-bound approval requests" via `soleur:architecture`: the decision (new table, consume in `canUseTool`, Owner-only decide, no server-side execution, flag-gated), alternatives (Cut List and Alternatives table), and the relationship to ADR-284 (memory-less lane unchanged), ADR-085 (source CHECK widened), ADR-060 (hash-bound single-use precedent), ADR-249/264 (operator TTY ack kept). Amend ADR-284 and ADR-085 with a dated note. Related ADRs also cited: ADR-027 and ADR-068 (process-local state and multi-host, which the waiter plus database read answers). The ADR records that the CTO ruling's 'extend `action_sends`' was superseded by a new table (`grant_id` NOT NULL, send-shaped) so it is not re-litigated, and carries an 'Adding a gated tool' checklist (canonical field list, render entry, zod cross-check, copy-deck string, `APPROVAL_REQUIRED_TOOLS` or exempt-with-reason; the census test failure message points at it). Flag lifecycle: owner and removal trigger are recorded in the ADR (remove `approval-queue` and the old in-memory path for the eight tools once the flag has been ON for all workspaces for 30 days with consume success above the agreed threshold). Status `adopting` until the flag is flipped and the path is measured.
 
 ### C4 views
 
@@ -469,11 +472,10 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 | ADR-305, ADR-284/085 amendments, C4 edits | — | inferred — justification: architecture decisions are a plan deliverable (wg-architecture-decision-is-a-plan-deliverable) |
 | legal documents, anonymise RPC, DSAR allowlist | "gdpr-gate (persisted approval records)" | asked |
 | real-SDK probe | "SDK behaviour when canUseTool throws" | asked |
-| `request_count` column and card header | "per-exact-action binding" (re-proposal after deny must be visible, FR7) | inferred — justification: the spec's FR7 requires repeated re-proposal to be surfaced and the count has no other home |
 
 ### Split Assessment
 
-- Subsystems touched: 3 — `apps/web-platform`, `knowledge-base`, `plugins/soleur`
+- Subsystems touched: 4 — `apps/web-platform`, `knowledge-base`, `plugins/soleur`, `.github`
 - Planned files: ~58 | Estimated changed lines: ~2400
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — the thresholds are exceeded and the offer to split is declined with a reason: the only natural seam (backend plus RPCs versus UI) leaves a dark backend with no decide surface that the real-SDK probe and the Owner can verify end to end, the operator asked for one PR per issue, and a flag-off deploy makes the whole diff inert until a separate rollout decision. The review panel and the mutation battery carry the added risk.
@@ -482,7 +484,7 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 
 - `apps/web-platform/supabase/migrations/179_approval_request.sql`, `179_approval_request.down.sql`
 - `apps/web-platform/supabase/verify/179_approval_request.sql`
-- `apps/web-platform/server/approval/canonical.ts`, `render.ts`, `service.ts`, `tools.ts` (`APPROVAL_REQUIRED_TOOLS` and the exempt set)
+- `apps/web-platform/server/approval/canonical.ts`, `render.ts`, `service.ts`, `waiters.ts`, `tools.ts` (`APPROVAL_REQUIRED_TOOLS` and the exempt set)
 - `apps/web-platform/server/inngest/functions/cron-approval-expiry.ts`
 - `apps/web-platform/components/chat/approval-request-card.tsx`
 - `apps/web-platform/app/(dashboard)/dashboard/approvals/[id]/page.tsx` (directory convention confirmed at work time)
@@ -494,12 +496,12 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 
 ## Files to Edit
 
-- `apps/web-platform/server/permission-callback.ts`, `tool-tiers.ts`, `email-triage-tools.ts`, `review-gate.ts` (shared wait helper only if needed), `ws-handler.ts`, `notifications.ts`, `account-delete.ts`, `dsar-export-allowlist.ts`
+- `apps/web-platform/server/permission-callback.ts`, `tool-tiers.ts`, `review-gate.ts` (shared wait helper only if needed), `ws-handler.ts`, `notifications.ts`, `account-delete.ts`, `dsar-export-allowlist.ts`
 - `apps/web-platform/lib/chat-state-machine.ts`, `lib/feature-flags/server.ts`, `lib/types` WS message unions
 - `apps/web-platform/components/inbox/inbox-item-row.tsx`, `components/dashboard/inbox-nav-badge.tsx`
 - `apps/web-platform/server/inngest/cron-manifest.ts`, `execution-placement.ts`, `routine-metadata.ts`, `app/api/inngest/route.ts`
-- `apps/web-platform/infra/sentry/cron-monitors.tf`, `apps/web-platform/.env.example`
-- `apps/web-platform/test/rls-fuzz/table-grants.ts`
+- `apps/web-platform/infra/sentry/cron-monitors.tf`, `infra/sentry/alert-reference.json`, `infra/sentry/issue-alerts.tf`, `.github/workflows/cutover-inngest.yml`, `apps/web-platform/.env.example`
+- `apps/web-platform/test/rls-fuzz/table-grants.ts`, `plugins/soleur/test/preflight-discoverability-test.test.ts` (`BASELINE_DECLARED_PROBES` 85 to 86, with its PLACEMENT/TRUTH/NO-SUBSTITUTE comment)
 - `plugins/soleur/skills/flag-set-role/scripts/flip.sh`
 - `knowledge-base/engineering/architecture/diagrams/model.c4`, `views.c4`, `model.likec4.json`
 - ADR-284 and ADR-085 (amendment notes)
@@ -513,30 +515,32 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 - [ ] AC1. With `approval-queue` off, no NEW `approval_request` row, card, inbox item, push or Sentry op is produced for any tool; the only changed behaviour is that a gated-tool wait timeout or abort returns a static deny and restores conversation status (test asserts both). Flag off gates creation only: `decide_approval`, the expiry cron and rendering stay live for rows that already exist, so turning the flag off never strands a pending request (test).
 - [ ] AC2. For each of the eight slice-1 tools a test builds the canonical action from the full input (including `force`, `inputs`, PR `body`, `value`, the server-derived reply recipient and the untruncated email body) and asserts the card view is rendered from the same object as the hash.
 - [ ] AC3. `consume_approval` succeeds exactly once for an approved, unexpired, same-hash, same-conversation request; each of hash mismatch, expiry, wrong conversation, already consumed and non-approved status is rejected and emits `approval-consume-rejected`.
-- [ ] AC4. `decide_approval` is refused for a non-Owner and for an unauthenticated actor, is idempotent for a repeated same decision, and refuses the opposite decision; a forged `approval_decide` payload cannot carry a different user id.
+- [ ] AC4. `decide_approval` is refused for a non-Owner and for an unauthenticated actor, is idempotent for a repeated same decision, and refuses the opposite decision; a forged `approval_decide` payload (the actor is `auth.uid()` from the tenant client, never a parameter) cannot carry a different user id.
 - [ ] AC5. Live path: an Owner decision inside the window releases the call; a wait that ends undecided denies with the static "saved, do not retry" message and the row stays `pending`; a later approval makes the next identical proposal consume it once.
 - [ ] AC6. On session attach, live `pending` and `approved` requests for the conversation are re-sent as cards; a resolved or expired one shows its final state.
 - [ ] AC7. The cron expires due rows, flags unanswered rows once, scrubs `canonical_action` 30 days after the terminal state, and a second run is a no-op (test).
 - [ ] AC8. Each new Sentry op has its own static message; a grep test fails if two ops share a message string; `SOLEUR_APPROVAL_*` markers are admitted by the Vector allowlist (verified by reading the allowlist, not assumed).
 - [ ] AC9. The tool-map census (Guard 2) and the mutation battery (Guard 1, every matrix row plus the harness rows) are green, and every mutation lands RED on a pristine copy with a green unmutated control; `scripts/lint-guard-contract.py` passes on this plan.
-- [ ] AC10. The real-SDK probe was run against the finished branch and its output is in `phase-0-measurements.md`; it shows `canUseTool` invoked for a slice-1 tool name and the deny honoured.
+- [ ] AC10. The real-SDK probe, built through the real `buildAgentQueryOptions` path and pointed at the dev Supabase project only (`hr-dev-prd-distinct-supabase-projects`), was run before the build (Phase 0.1) and again on the finished branch; `phase-0-measurements.md` has one result line per slice-1 tool name and shows `canUseTool` invoked for every slice-1 tool name and the deny honoured, and records whether `allowedTools` short-circuited it (with the `buildAllowedTools` fix and census test if so). A census test asserts each slice-1 tool is registered in each runner or exempt with a reason.
 - [ ] AC11. Migration 179 applies and reverts cleanly; `table-grants.ts` classifies the table; the RLS fuzz and the grants gate are green; no INSERT/UPDATE/DELETE policy exists.
 - [ ] AC12. ADR-305 exists (ordinal re-checked against fresh `origin/main`), C4 files edited and `model.likec4.json` regenerated, `c4-model-freshness`, `c4-count-parity` and the C4 render tests green.
 - [ ] AC13. Legal documents, Art. 30 entry, anonymise RPC and DSAR allowlist entry are in the PR and the `gdpr-gate` result is recorded; migration 179 carries `-- LAWFUL_BASIS:` annotations and a retention comment; `anonymise_approval_request` has a call site in `account-delete.ts` with a test; the Art. 30 entry states the retention purpose for the decision metadata; no copy claims "every outward action requires your approval".
-- [ ] AC14. The approved wireframe delta (Phase 0.2) is committed, and no card, thread line, notification or copy-deck string claims an outcome ("sent", "ran") or an execution on approve that slice 1 does not perform; a string-level test over the copy deck constants asserts the absence of those words.
+- [ ] AC13b. No site page, changelog entry, release note or epic text uses 'approval queue' or 'human-in-the-loop' as a coverage claim before the enabling-gate row closes.
+- [ ] AC14. The approved wireframe delta (Phase 0.2) is committed, and no card, thread line, notification or copy-deck string claims an outcome ("sent", "ran") or an execution on approve that slice 1 does not perform; a string-level test over the copy deck constants asserts the absence of the outcome words `sent`, `ran`, `executed` and `delivered` and the presence of "Released to your agent" (the approved consequence line legitimately contains "send", so the test is scoped to outcome words).
 - [ ] AC14b. `decide_approval` on an archived or deleted conversation returns "conversation closed" and records nothing; an approved-but-never-consumed request expires with `expired_reason='unconsumed'` and no push; a decision removes the linked inbox item from the `action_required` count; a second Owner deciding at the same time receives the final row ("already decided by <name>").
-- [ ] AC15. `soleur:review` runs with `user-impact-reviewer` and the review findings are resolved; PR body carries `Closes #4672`.
+- [ ] AC14c. `decide_approval` refuses an overdue row and flips it to `expired` inline; a re-proposal that finds an `approved` row consumes it at once with no card and no wait; account erasure succeeds against rows with set user columns (write-once trigger carve-out test).
+- [ ] AC15. `soleur:review` runs with `user-impact-reviewer` and the review findings are resolved; PR body carries `Closes #4672` and `Closes #5351`, and its first line answers 'does merging this alone mutate production?': it applies migration 179 to production and creates one Sentry cron monitor through the existing Sentry apply workflow, with the flag off and no behaviour change other than the timeout deny.
 
 ### Post-merge (operator and verification)
 
 - [ ] AC16. Migration 179 is applied to production by the deploy pipeline (agent verifies through the deploy run, not by hand).
 - [ ] AC17. The Flagsmith feature `approval-queue` is created through `soleur:flag-create` (typed-yes write handed to the operator, ADR-249); the flag is not flipped by this plan.
 - [ ] AC18. After the first deploy the Sentry cron monitor `cron-approval-expiry` shows a check-in (read by the agent from Sentry).
-- [ ] AC19. #10443 is closed as a duplicate of #4672 with a pointer to the PR; the consolidated deferral issue (Risks and Deferrals) exists.
+- [ ] AC19. #10443 is closed as a duplicate of #4672 with a pointer to the PR; the consolidated deferral issue #11300 exists.
 
 ## Test Scenarios
 
-- Canonicalization: stable hash across key order and NFC variants; every field change flips the hash; no truncation of a 100 KB body.
+- Canonicalization: stable hash across key order; NFC and NFD variants of the same text hash differently (no normalisation); every field change flips the hash; no truncation of a 100 KB body.
 - Consume: happy path once; replay; concurrent double-consume (one wins); changed input; wrong conversation; expired; rejected row.
 - Decide: Owner approve, Owner deny, member refused, signed-out refused, opposite decision refused, two Owners deciding at once (first wins, second sees the final state).
 - Gate wait: decision in window, timeout, abort, restart mid-wait, decision made on another host (poll picks it up).
@@ -548,9 +552,10 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 
 ## Risks and Deferrals
 
+- **Rollout is a dogfood slice (CPO):** the wait, deny, approve, ask-again loop and byte-identical replay will feel broken to a wider audience and `approval-consume-rejected` is likely high for free-text tools. No enablement beyond a Jikigai canary until consume success is measured over a stated window and the enabling-gate row closes; the deny text tells the agent to call again with exactly the same arguments. Roadmap: milestone `Phase 4: Validate + Scale` (same as #10443, #9776, #10111).
 - **Approval fatigue and consequence-text drift** (CPO) are controlled by the narrow slice, the server-built view and AC2; the approve rate is tracked through the `SOLEUR_APPROVAL_DECIDED` markers.
 - **Real-SDK behaviour on throw is inferred** until Phase 0.1; the deny-on-reject fix does not depend on the answer.
 - **Cross-host decide** relies on the 5-second poll; a request decided on another host is seen within five seconds, not instantly.
 - **ADR ordinal** is provisional.
-- **Deferred (one consolidated tracking issue, filed at the end of planning because the deferral rule requires it):** approval outcome recording ("ran" / "failed" card states), server-side execution of an approved payload after the session died, cross-host instant wake-up, a one-hour reminder push, a requester cancel control, a persisted thread line telling the requester how a request was decided, and migrating the Bash must-ask lane to the new table. Related existing issues stay as they are: #9388, #5331, #10196, #4674, #9776, #10111.
+- **Deferred (one consolidated tracking issue, #11300, filed because the deferral rule requires it; it also carries flag retirement):** approval outcome recording ("ran" / "failed" card states), server-side execution of an approved payload after the session died, cross-host instant wake-up, a one-hour reminder push, a requester cancel control, a persisted thread line telling the requester how a request was decided, and migrating the Bash must-ask lane to the new table. Related existing issues stay as they are: #9388, #5331, #10196, #4674, #9776, #10111.
 - **Egress collection flag and #11237 steps:** untouched by this plan.

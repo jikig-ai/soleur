@@ -1,0 +1,54 @@
+# Tasks: durable, action-bound approval requests (slice 1)
+
+Plan: `knowledge-base/project/plans/2026-10-27-feat-durable-action-bound-approval-requests-plan.md`
+Issue: #4672 (closes; #10443 closed as duplicate) | Epic #9601 | Draft PR #11289
+
+Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/service, (3) gate wiring and WS, (4) surfaces and notifications, (5) cron and flag, (6) C4, (7) legal, (8) ADR.
+
+## Phase 0: Measurements and design deltas (stop point: 0.1 must pass before 2.x)
+
+- [ ] 0.1 Write `apps/web-platform/scripts/dev-probe-approval-gate.ts` through the real `buildAgentQueryOptions` path; run it; record in `phase-0-measurements.md` whether `canUseTool` is invoked for each slice-1 tool and whether `allowedTools` short-circuits it
+  - [ ] 0.1.1 If short-circuited: extract pure `buildAllowedTools`, drop `APPROVAL_REQUIRED_TOOLS` when the flag is on, add census test
+- [ ] 0.2 Wireframe delta via `soleur:product:design:ux-design-lead` (honest "Approve" copy, two approved states, copy-deck fixes, drop 04G and member landing variant, other items in plan Phase 0.2); scrub `fileToken`; operator approval
+- [ ] 0.3 Confirm per-tool canonical field lists against each tool's zod schema; record in test fixtures
+
+## Phase 1: Failing tests, then data layer
+
+- [ ] 1.1 Write failing tests first: canonicalization per tool, consume predicate, status machine, `decide_approval` owner/expiry, gated-branch timeout deny, tool-map census, re-proposal on `approved` row
+- [ ] 1.2 `179_approval_request.sql` + `.down.sql` + `supabase/verify/179_approval_request.sql`
+  - [ ] 1.2.1 Table, constraints, partial unique index, write-once trigger with SET NULL and workspace-cascade carve-outs
+  - [ ] 1.2.2 RPCs: create, decide (authenticated, `auth.uid()`), consume, get status, sweep, anonymise; grants per plan
+  - [ ] 1.2.3 `inbox_item.source` CHECK widening (`NOT VALID` then `VALIDATE`); `-- LAWFUL_BASIS:` and retention comments
+  - [ ] 1.2.4 `test/rls-fuzz/table-grants.ts` classification; RLS fuzz entry; ADR-303 grants declaration
+- [ ] 1.3 `server/approval/{canonical,render,service,waiters,tools}.ts`
+
+## Phase 2: Gate wiring
+
+- [ ] 2.1 Commit 1: `try/finally` deny-on-reject in the gated branch for all gated tools, with test
+- [ ] 2.2 Approval flow behind the flag in `permission-callback.ts` via `deps.approval`; `tool-tiers.ts` `APPROVAL_REQUIRED_TOOLS`; deep-cloned snapshot hashed and passed to `allow()`; abort-aware poll; consume-on-approved
+- [ ] 2.3 WS types `approval_request`, `approval_status`, `approval_decide`; `ws-handler.ts` decide via `tenantFor`, reattach re-emit, waiter wake; `chat-state-machine.ts`; guard that `review_gate_response` cannot resolve an approval
+- [ ] 2.4 Static-message Sentry ops, `SOLEUR_APPROVAL_*` markers, `approval_id` tag; confirm Vector allowlist admits the marker family
+
+## Phase 3: Surfaces and notifications
+
+- [ ] 3.1 `components/chat/approval-request-card.tsx` (all states), landing page, decide route, inbox row, nav badge
+- [ ] 3.2 `notifications.ts`: widen `source` union (three-pattern grep), split `dispatchInboxPush`, generic push and email copy; copy-deck constants and the string test for forbidden outcome words
+
+## Phase 4: Cron, flag, infra
+
+- [ ] 4.1 `cron-approval-expiry.ts` with one `sweep_approvals()` step; register in `cron-manifest.ts`, `app/api/inngest/route.ts`, `execution-placement.ts`, `routine-metadata.ts`
+- [ ] 4.2 `infra/sentry/cron-monitors.tf`, `alert-reference.json`, `issue-alerts.tf`, `cutover-inngest.yml`
+- [ ] 4.3 Flag `approval-queue`: `lib/feature-flags/server.ts`, `.env.example`, `flip.sh` map and parity test; per-workspace identity; flag-create hand-over note
+
+## Phase 5: Governance
+
+- [ ] 5.1 C4: `approvalStore` element and edge, description fixes, `views.c4` include, regenerate `model.likec4.json`, parity counts, render tests
+- [ ] 5.2 Legal (own commit): Art. 30 entry, DPD, GDPR Policy, Privacy Policy and mirrors, `legal-doc-shas.ts`, `account-delete.ts` call site, `dsar-export-allowlist.ts`, posture row and flag-refusal check
+- [ ] 5.3 ADR-305 (re-check ordinal against fresh `origin/main`), ADR-284 and ADR-085 amendment notes, "Adding a gated tool" checklist
+- [ ] 5.4 Guard 1 mutation battery (one dedicated file, pristine-copy harness) and census guard green; re-run the real-SDK probe on the finished branch
+
+## Phase 6: Ship
+
+- [ ] 6.1 Review (`user-impact-reviewer` included), resolve findings, QA, compound
+- [ ] 6.2 Ship; close #10443 as duplicate; file the consolidated deferral issue (done at plan end)
+- [ ] 6.3 Post-merge: verify migration applied, cron check-in in Sentry, flag created via `soleur:flag-create` (typed-yes hand-over); the flag is not flipped
