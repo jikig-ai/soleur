@@ -20,8 +20,11 @@ on:
       - "apps/web-platform/test/rls-fuzz/**"
       - "apps/web-platform/scripts/rls-parity-check.ts"
       - "apps/web-platform/scripts/supabase-local.sh"
+      - "apps/web-platform/supabase/config.toml"
       - "apps/web-platform/package.json"
       - ".github/workflows/rls-authz-fuzz.yml"
+      - ".github/scripts/ghcr-pull-with-retry.sh"
+      - ".github/scripts/test/test-rls-fuzz-ghcr-resilience.sh"
   workflow_dispatch: {}
 
 permissions:
@@ -56,17 +59,28 @@ jobs:
       # via GetRegistryAuth() (internal/utils/docker.go upstream) and attaches
       # it as RegistryAuth on every pull. The default post-step logout removes
       # the token at job end — deliberately left unconfigured.
+      #
+      # Same-repo refs only: `pull_request` runs fork code, and login
+      # materializes the GITHUB_TOKEN into ~/.docker/config.json for the whole
+      # job — a fork PR touching in-scope files could read it. Forks keep the
+      # anonymous path plus the retry helper below, which is exactly its
+      # fallback purpose.
       - name: Log in to GHCR (authenticated pulls for the Supabase image set)
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Positive control (ADR-166): ~1s probe that turns the login→CLI auth
-      # hand-off assumption into a measurement — a GHCR outage now fails HERE
-      # (or at login), not ambiguously inside `supabase start`.
+      # Positive control (ADR-166): ~1s probe that exercises the registry path
+      # end-to-end — a GHCR outage now fails HERE (or at login), not
+      # ambiguously inside `supabase start`. (It measures reachability, not
+      # auth: the package is public, so an anonymous fetch also succeeds.) The
+      # tag is the image the pinned CLI below pulls — bump it with `version:`
+      # in lockstep.
       - name: Probe GHCR pull auth (manifest inspect)
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: docker manifest inspect ghcr.io/supabase/postgres:17.6.1.095 >/dev/null
 
       # Pin the CLI/GoTrue version to prod's — the ADR-111 parity contract (the
@@ -80,11 +94,11 @@ jobs:
       # bind-address setting (supabase/cli#4613 closed unmerged on policy), so a
       # bare start publishes every service on 0.0.0.0 + ::. The wrapper applies a
       # loopback-bound Docker network. See ADR-153.
+      # #10868: bounded retry gated on the daemon's `toomanyrequests` token —
+      # deterministic failures (incl. the wrapper's rc-2 class) still exit on
+      # attempt 1. Contract: .github/scripts/ghcr-pull-with-retry.sh.
       - name: Start local Supabase stack (loopback-bound)
         working-directory: apps/web-platform
-        # #10868: bounded retry gated on the daemon's `toomanyrequests` token —
-        # deterministic failures (incl. the wrapper's rc-2 class) still exit on
-        # attempt 1. Contract: .github/scripts/ghcr-pull-with-retry.sh.
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" ./scripts/supabase-local.sh start
 
       # Fail the job if the stack is reachable off-loopback. Runs BEFORE the

@@ -56,10 +56,6 @@ if (( PASS != 1 || FAIL != 1 )); then
   printf '[FATAL] instrument self-test: pass()/fail() counters did not move (PASS=%s FAIL=%s)\n' "$PASS" "$FAIL" >&2
   exit 1
 fi
-# The two self-test rows are instrument, not coverage: reset so the floor and
-# the final verdict count real rows only.
-PASS=0
-FAIL=0
 
 # ---------------------------------------------------------------------------
 # Run helper for the behavioral arm.
@@ -79,6 +75,7 @@ run_helper() {
   LAST_OUT="$TMP/$name.out"
   : > "$STUB_CALLS"
   env STUB_CALLS="$STUB_CALLS" GHCR_PULL_RETRY_SLEEPS="0 0" \
+      RUNNER_TEMP="$RUNNER_TEMP_FIXTURE" \
       bash "$HELPER" "$@" > "$LAST_OUT" 2>&1
   LAST_RC=$?
 }
@@ -101,6 +98,10 @@ assert_out_lacks() { # name needle (fixed string)
   if grep -qF -- "$2" "$LAST_OUT"; then fail "$1" "output carries forbidden '$2'"
   else pass "$1"; fi
 }
+assert_out_re() { # name extended-regex
+  if grep -qE -- "$2" "$LAST_OUT"; then pass "$1"
+  else fail "$1" "output lacks /$2/ — $(tail -5 "$LAST_OUT" 2>/dev/null | tr '\n' '|')"; fi
+}
 assert_out_count() { # name needle expected-count
   local got
   got=$(grep -cF -- "$2" "$LAST_OUT" 2>/dev/null || true)
@@ -116,9 +117,32 @@ assert_wf_lacks() { # name needle (fixed string)
   else pass "$1"; fi
 }
 
+# Drive a verdict helper on a designed-fail too — a neutered assert_* that
+# greens unconditionally must be caught here, not ride the row count.
+LAST_OUT="$TMP/selftest.out"; printf 'clean\n' > "$LAST_OUT"
+{ assert_out_lacks selftest-assert 'toomanyrequests'; } >/dev/null
+if (( PASS != 2 )); then
+  printf '[FATAL] instrument self-test: assert_out_lacks passed a forbidden token (PASS=%s)\n' "$PASS" >&2
+  exit 1
+fi
+LAST_OUT=/dev/null; { assert_out_has selftest-assert-fail 'never-present'; } >/dev/null
+if (( FAIL != 2 )); then
+  printf '[FATAL] instrument self-test: assert_out_has failed to fail (FAIL=%s)\n' "$FAIL" >&2
+  exit 1
+fi
+# The self-test rows are instrument, not coverage: reset so the floor and
+# the final verdict count real rows only.
+PASS=0
+FAIL=0
+
 STUB_CALLS="$TMP/stub-calls"
 assert_fixture_dir "$STUB_CALLS"
 : > "$STUB_CALLS"
+# The helper's log dir is rooted inside $TMP so suite runs leave nothing
+# behind in /tmp (and failure tails stay inspectable under the trap).
+RUNNER_TEMP_FIXTURE="$TMP/runner-temp"
+assert_fixture_dir "$RUNNER_TEMP_FIXTURE"
+mkdir -p "$RUNNER_TEMP_FIXTURE"
 
 # sleep — the helper's backoff is real wall-clock time inside a required
 # merge-queue gate; nothing here needs a real sleep.
@@ -190,21 +214,35 @@ printf '%s\n' \
 # fake-stale-sig — throttle on attempt 1 (retried), a clean non-signature
 # failure on attempt 2: attempt 2 must classify on ITS OWN fresh log and exit
 # immediately, not inherit attempt 1's signature. calls==2 is the assertion.
+# The token is emitted MIXED-CASE: dropping `grep -i`'s -i must red this row.
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'echo x >> "${STUB_CALLS:?unset}"' \
   'n=$(wc -l < "$STUB_CALLS" | tr -d " ")' \
   'if [[ "$n" == "1" ]]; then' \
-  '  echo "toomanyrequests: retry-after: 1s" >&2' \
+  '  echo "TooManyRequests: retry-after: 1s" >&2' \
   '  exit 1' \
   'fi' \
   'echo "manifest unknown: deterministic" >&2' \
   'exit 1' \
   > "$BIN/fake-stale-sig"
 
+# fake-sig-above-tail — the signature appears, then >40 non-signature lines:
+# the helper classifies on the TAIL (~40 lines) of the attempt's log only, so
+# a signature that "recovered" mid-attempt must NOT retry. calls==1 is the
+# assertion; a whole-log grep regression greens nothing here.
+{ printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'echo x >> "${STUB_CALLS:?unset}"' \
+  'echo "Error response from daemon: toomanyrequests: retry-after: 1s" >&2' \
+  'i=0; while (( i < 60 )); do echo "noise line $i" >&2; i=$((i+1)); done' \
+  'echo "denied: requested access to the resource is denied" >&2' \
+  'exit 1' \
+  > "$BIN/fake-sig-above-tail"; }
+
 chmod +x "$BIN/fake-ok" "$BIN/fake-throttle-then-ok" "$BIN/fake-non-sig" \
          "$BIN/fake-rc2" "$BIN/fake-always-throttle" "$BIN/fake-decoy" \
-         "$BIN/fake-stale-sig"
+         "$BIN/fake-stale-sig" "$BIN/fake-sig-above-tail"
 
 echo "=== Guard 1a: workflow + helper wiring ==="
 
@@ -213,14 +251,15 @@ echo "=== Guard 1a: workflow + helper wiring ==="
 JOB_BLOCK=$(awk '
   /^  rls-fuzz:/ { inf=1 }
   inf && /^  [a-zA-Z0-9_-]+:/ && !/^  rls-fuzz:/ { inf=0 }
+  inf && /^[a-zA-Z0-9_-]+:/ && !/^  / { inf=0 }
   inf { print }
 ' "$WORKFLOW")
 
-if grep -qF 'contents: read' <<<"$JOB_BLOCK"; then pass "wiring:job-contents-read"
-else fail "wiring:job-contents-read" "rls-fuzz job block lacks contents: read"; fi
-if grep -qF 'packages: read' <<<"$JOB_BLOCK"; then pass "wiring:job-packages-read"
-else fail "wiring:job-packages-read" "rls-fuzz job block lacks packages: read"; fi
-if grep -qF 'timeout-minutes: 30' <<<"$JOB_BLOCK"; then pass "wiring:timeout-30"
+if grep -qE '^[[:space:]]+contents: read([[:space:]#]|$)' <<<"$JOB_BLOCK"; then pass "wiring:job-contents-read"
+else fail "wiring:job-contents-read" "rls-fuzz job block lacks a contents: read key"; fi
+if grep -qE '^[[:space:]]+packages: read([[:space:]#]|$)' <<<"$JOB_BLOCK"; then pass "wiring:job-packages-read"
+else fail "wiring:job-packages-read" "rls-fuzz job block lacks a packages: read key"; fi
+if grep -qE '^[[:space:]]+timeout-minutes: 30([[:space:]#]|$)' <<<"$JOB_BLOCK"; then pass "wiring:timeout-30"
 else fail "wiring:timeout-30" "rls-fuzz job block lacks timeout-minutes: 30"; fi
 
 # The workflow-level permissions block stays contents: read only (the
@@ -230,10 +269,12 @@ if [[ "$TOP_PERM" == "  contents: read" ]]; then pass "wiring:top-perm-unchanged
 else fail "wiring:top-perm-unchanged" "top-level permissions: block no longer 'contents: read' (got: $TOP_PERM)"; fi
 
 LOGIN_SHA='docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9'
-LN_CHECKOUT=$(grep -n 'actions/checkout@' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
-LN_LOGIN=$(grep -n "$LOGIN_SHA" "$WORKFLOW" | head -1 | cut -d: -f1 || true)
-LN_PROBE=$(grep -n 'docker manifest inspect ghcr.io/supabase/postgres' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
-LN_START=$(grep -n 'ghcr-pull-with-retry.sh' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+# Every LN_* is anchored on a YAML key shape (`uses:`/`run:` in key position)
+# — a comment quoting the same string cannot corrupt the ordering asserts.
+LN_CHECKOUT=$(grep -nE '^[[:space:]]+- uses: actions/checkout@' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+LN_LOGIN=$(grep -nE "^[[:space:]]+uses: ${LOGIN_SHA}" "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+LN_PROBE=$(grep -nE '^[[:space:]]+run: docker manifest inspect ghcr\.io/supabase/postgres' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+LN_START=$(grep -nE '^[[:space:]]+run:.*ghcr-pull-with-retry\.sh' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 
 if [[ -n "$LN_LOGIN" ]]; then pass "wiring:login-sha-pinned"
 else fail "wiring:login-sha-pinned" "no uses: line pins the full docker/login-action SHA"; fi
@@ -249,29 +290,74 @@ if [[ -n "$LN_LOGIN" && -n "$LN_PROBE" && -n "$LN_START" && "$LN_LOGIN" -lt "$LN
   pass "wiring:probe-between-login-start"
 else fail "wiring:probe-between-login-start" "login=$LN_LOGIN probe=$LN_PROBE start=$LN_START"; fi
 
+# The probe's run: must END at the redirect — an appended `|| true` would
+# silence the positive control while the presence grep stays green.
+if grep -qE '^[[:space:]]+run: docker manifest inspect ghcr\.io/supabase/postgres:[^ ]+ >/dev/null$' "$WORKFLOW"; then pass "wiring:probe-run-ends-clean"
+else fail "wiring:probe-run-ends-clean" "probe run: line is missing, retagged, or ends in a silence operator"; fi
+
+# Login + probe carry the same-repo `if:` gate (fork PRs run anonymous + the
+# retry helper — the token never enters a fork-reachable daemon config).
+FORK_GATE='github.event.pull_request.head.repo.full_name == github.repository'
+if grep -qF "$FORK_GATE" "$WORKFLOW"; then pass "wiring:fork-gate-present"
+else fail "wiring:fork-gate-present" "no same-repo if: gate on the login step"; fi
+FORK_GATE_LINES=$(grep -cF "$FORK_GATE" "$WORKFLOW" || true)
+if [[ "$FORK_GATE_LINES" -ge 2 ]]; then pass "wiring:fork-gate-both-steps"
+else fail "wiring:fork-gate-both-steps" "fork gate on $FORK_GATE_LINES step(s), expected >=2 (login + probe)"; fi
+
 # The start step keeps ./scripts/supabase-local.sh start as the wrapped argv
-# and keeps working-directory: apps/web-platform.
-assert_wf_has "wiring:start-argv" 'ghcr-pull-with-retry.sh" ./scripts/supabase-local.sh start'
-assert_wf_has "wiring:start-workdir" 'working-directory: apps/web-platform'
+# and keeps working-directory: apps/web-platform — asserted inside the start
+# step's own block so a same-string elsewhere cannot satisfy it.
+if [[ -n "$LN_START" ]]; then
+  START_BLOCK=$(awk -v s="$LN_START" 'NR>s && /^[[:space:]]+- /{exit} NR>=s{print}' "$WORKFLOW")
+  START_HEAD=$(awk -v s="$LN_START" -v n="$((LN_START - 3))" 'NR>=n && NR<=s{print}' "$WORKFLOW")
+  if grep -qF 'ghcr-pull-with-retry.sh" ./scripts/supabase-local.sh start' <<<"$START_BLOCK"; then pass "wiring:start-argv"
+  else fail "wiring:start-argv" "start step does not wrap ./scripts/supabase-local.sh start in the helper"; fi
+  if grep -qF 'working-directory: apps/web-platform' <<<"$START_HEAD"; then pass "wiring:start-workdir"
+  else fail "wiring:start-workdir" "start step lacks working-directory: apps/web-platform"; fi
+  if grep -qE '^[[:space:]]+(if|continue-on-error):' <<<"$START_BLOCK"; then fail "wiring:start-no-skip" "start step carries an if:/continue-on-error: skip key"
+  else pass "wiring:start-no-skip"; fi
+else
+  fail "wiring:start-argv" "no start step"; fail "wiring:start-workdir" "no start step"; fail "wiring:start-no-skip" "no start step"
+fi
 
 # No `logout:` key anywhere in the login step (the default logout:true post
 # phase must survive — a GITHUB_TOKEN must not persist in daemon config).
 # Anchored on the YAML-key shape — a comment mentioning the key cannot match
 # a line that begins `logout:` in key position.
 if [[ -n "$LN_LOGIN" ]]; then
-  LOGIN_BLOCK=$(sed -n "${LN_LOGIN},$((LN_LOGIN + 8))p" "$WORKFLOW")
+  # Slice the login step from its `uses:` line to the next step boundary —
+  # a fixed line window lets a `logout:` key placed deeper in `with:` escape.
+  LOGIN_BLOCK=$(awk -v s="$LN_LOGIN" 'NR>s && /^[[:space:]]+- /{exit} NR>=s{print}' "$WORKFLOW")
   if grep -qE '^[[:space:]]+logout:' <<<"$LOGIN_BLOCK"; then fail "wiring:no-logout-key" "login step carries a logout: key"
   else pass "wiring:no-logout-key"; fi
+  # The login step's inputs ARE the authenticated path — retargeting the
+  # registry or dropping the token silently keeps login+probe green while
+  # pulls stay anonymous.
+  if grep -qE '^[[:space:]]+registry: ghcr\.io([[:space:]#]|$)' <<<"$LOGIN_BLOCK"; then pass "wiring:login-registry"
+  else fail "wiring:login-registry" "login step does not target registry: ghcr.io"; fi
+  if grep -qF 'password: ${{ secrets.GITHUB_TOKEN }}' <<<"$LOGIN_BLOCK"; then pass "wiring:login-token"
+  else fail "wiring:login-token" "login step does not supply the GITHUB_TOKEN"; fi
 else
   fail "wiring:no-logout-key" "no login step to check"
+  fail "wiring:login-registry" "no login step to check"
+  fail "wiring:login-token" "no login step to check"
 fi
 
-# The image set is never repointed: no registry override, no docker
-# pull/tag/save/load added to the workflow.
+# The image set is never repointed and no channel acquires images outside the
+# authenticated wrapper: no registry override, no implicit-pull verbs, no
+# auth-stripping verbs, no elevated trigger, no silent-backoff override.
 assert_wf_lacks "wiring:no-registry-override" 'SUPABASE_INTERNAL_IMAGE_REGISTRY='
 assert_wf_lacks "wiring:no-docker-pull" 'docker pull'
 assert_wf_lacks "wiring:no-docker-save" 'docker save'
 assert_wf_lacks "wiring:no-docker-load" 'docker load'
+assert_wf_lacks "wiring:no-docker-run" 'docker run'
+assert_wf_lacks "wiring:no-docker-create" 'docker create'
+assert_wf_lacks "wiring:no-docker-compose" 'docker compose'
+assert_wf_lacks "wiring:no-docker-logout" 'docker logout'
+assert_wf_lacks "wiring:no-docker-config-redirect" 'DOCKER_CONFIG'
+assert_wf_lacks "wiring:no-pr-target" 'pull_request_target'
+assert_wf_lacks "wiring:no-continue-on-error" 'continue-on-error'
+assert_wf_lacks "wiring:no-sleeps-override" 'GHCR_PULL_RETRY_SLEEPS'
 
 # Helper load-bearing tokens (spec-flow P1-1/P1-4 + CTO ruling).
 if [[ -f "$HELPER" ]]; then pass "wiring:helper-exists"
@@ -284,11 +370,37 @@ if [[ -f "$HELPER" ]] && grep -qi 'toomanyrequests' "$HELPER"; then pass "wiring
 else fail "wiring:helper-signature" "helper lacks the toomanyrequests signature"; fi
 if [[ -f "$HELPER" ]] && grep -qF 'GHCR_PULL_RETRY_SLEEPS' "$HELPER"; then pass "wiring:helper-sleeps-env"
 else fail "wiring:helper-sleeps-env" "helper lacks the GHCR_PULL_RETRY_SLEEPS override"; fi
+# The default backoff itself (20 45) is what paces the throttle on the real
+# runner — the suite only ever exercises the "0 0" override.
+if [[ -f "$HELPER" ]] && grep -qF 'GHCR_PULL_RETRY_SLEEPS:-20 45' "$HELPER"; then pass "wiring:helper-sleeps-default"
+else fail "wiring:helper-sleeps-default" "helper default backoff is not '20 45'"; fi
+
+# The wrapped argv is opaque to this suite — pin its two load-bearing lines:
+# the propagated `exit "$start_rc"` (a remap to `exit 2` makes EVERY failure
+# unretryable) and no credential-path strip on the exec (`HOME=`/`DOCKER_CONFIG=`
+# prefixes would drop the auth the login just wrote).
+SUPA_LOCAL="$REPO_ROOT/apps/web-platform/scripts/supabase-local.sh"
+if grep -qF 'exit "$start_rc"' "$SUPA_LOCAL"; then pass "wiring:supa-rc-propagated"
+else fail "wiring:supa-rc-propagated" "supabase-local.sh no longer exits the start rc verbatim"; fi
+if grep -qE '(DOCKER_CONFIG|HOME)=[^ ]' "$SUPA_LOCAL"; then fail "wiring:supa-no-cred-strip" "supabase-local.sh prefixes an env credential-path override"
+else pass "wiring:supa-no-cred-strip"; fi
 
 # run-all's floor must equal the post-addition suite count (16 on main + this
-# suite = 17) or the new guard is itself silently deletable.
-if grep -q 'MIN_SUITES=17' "$RUN_ALL"; then pass "wiring:min-suites-17"
+# suite = 17) or the new guard is itself silently deletable. Whole-line
+# anchor: `MIN_SUITES=170` must not satisfy it.
+if grep -qxF 'MIN_SUITES=17' "$RUN_ALL"; then pass "wiring:min-suites-17"
 else fail "wiring:min-suites-17" "run-all.sh MIN_SUITES is not 17"; fi
+
+# The workflow's own pull_request.paths must list the helper and this suite —
+# a helper-only edit otherwise never exercises the live wiring (the wrapped
+# supabase-local.sh is listed; the wrapper must be too).
+PATHS_BLOCK=$(awk '/^    paths:/{inf=1} inf && /^  [a-zA-Z_]+:/{inf=0} inf{print}' "$WORKFLOW")
+if grep -qF '.github/scripts/ghcr-pull-with-retry.sh' <<<"$PATHS_BLOCK"; then pass "wiring:paths-helper"
+else fail "wiring:paths-helper" "pull_request.paths omits the retry helper"; fi
+if grep -qF '.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh' <<<"$PATHS_BLOCK"; then pass "wiring:paths-suite"
+else fail "wiring:paths-suite" "pull_request.paths omits this suite"; fi
+if grep -qF 'apps/web-platform/supabase/config.toml' <<<"$PATHS_BLOCK"; then pass "wiring:paths-config-toml"
+else fail "wiring:paths-config-toml" "pull_request.paths omits supabase/config.toml (image repoints)"; fi
 
 echo "=== Guard 1b: helper behavior over PATH-stubbed commands ==="
 
@@ -302,7 +414,9 @@ run_helper throttle-ok fake-throttle-then-ok
 assert_rc "b:throttle-then-ok-rc" 0
 assert_calls "b:throttle-then-ok-calls" 2
 assert_out_has "b:throttle-then-ok-warning" '::warning::'
-assert_out_has "b:throttle-then-ok-warn-line" 'toomanyrequests'
+# The annotation must NAME the measured line — a bare 'toomanyrequests'
+# substring is satisfied by the stub's own tee'd stderr.
+assert_out_re "b:throttle-then-ok-warn-line" '^::warning::.*toomanyrequests'
 assert_out_count "b:throttle-then-ok-warn-count" '::warning::' 1
 assert_out_lacks "b:throttle-then-ok-no-error" '::error::'
 
@@ -322,7 +436,13 @@ assert_rc "b:exhaust-rc" 1
 assert_calls "b:exhaust-calls" 3
 assert_out_count "b:exhaust-warn-count" '::warning::' 2
 assert_out_has "b:exhaust-error" '::error::'
-assert_out_has "b:exhaust-error-line" 'toomanyrequests'
+assert_out_re "b:exhaust-error-line" '^::error::.*toomanyrequests'
+# Exhaustion re-emits the failing log's tail (~200 lines): the daemon line
+# appears once per tee'd attempt (3) plus once in the re-emitted tail (4) —
+# annotations are excluded since they themselves quote the signature line.
+reemit_count=$(grep -vE '^::' "$LAST_OUT" | grep -cF 'Error response from daemon' || true)
+if [[ "$reemit_count" == "4" ]]; then pass "b:exhaust-reemit"
+else fail "b:exhaust-reemit" "non-annotation 'Error response from daemon' count=$reemit_count, expected 4"; fi
 
 run_helper decoy fake-decoy
 assert_rc "b:decoy-rc" 1
@@ -335,12 +455,30 @@ assert_calls "b:stale-sig-calls" 2
 assert_out_has "b:stale-sig-error" '::error::'
 assert_out_count "b:stale-sig-warn-count" '::warning::' 1
 
+run_helper sig-above-tail fake-sig-above-tail
+assert_rc "b:sig-above-tail-rc" 1
+assert_calls "b:sig-above-tail-calls" 1
+assert_out_lacks "b:sig-above-tail-no-warning" '::warning::'
+
+# The real invocation is TWO argv words (script + `start`) — a `"$@"`→`"$*"`
+# mangling would collapse them into one nonexistent command.
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'echo x >> "${STUB_CALLS:?unset}"' \
+  '[[ "$#" == "2" && "$1" == "first" && "$2" == "second" ]] || exit 9' \
+  'exit 0' \
+  > "$BIN/fake-two-arg"
+chmod +x "$BIN/fake-two-arg"
+run_helper two-arg fake-two-arg first second
+assert_rc "b:two-arg-rc" 0
+assert_calls "b:two-arg-calls" 1
+
 # ---------------------------------------------------------------------------
 # Floor + verdict. The bound is a literal adjacent to the if (ADR-193); the
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=49
+MIN_ASSERTIONS=78
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

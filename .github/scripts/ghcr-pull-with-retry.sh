@@ -39,12 +39,16 @@ if (( $# == 0 )); then
 fi
 
 ATTEMPTS=3
-# shellcheck disable=SC2206 # intentional word-split: env carries "20 45".
-SLEEPS=(${GHCR_PULL_RETRY_SLEEPS:-20 45})
+# Word-split without glob-expansion (read -a never pathname-expands): an env
+# value containing `*`/`?`/`[` must not turn into runner filenames — a failed
+# `sleep <filename>` would hot-loop the saturated bucket.
+read -ra SLEEPS <<< "${GHCR_PULL_RETRY_SLEEPS:-20 45}"
 TAIL_LINES=40
 REEMIT_LINES=200
 
-log_dir="${RUNNER_TEMP:-$(mktemp -d)}"
+# Each invocation gets its own dir under RUNNER_TEMP (or /tmp): fixed
+# filenames in the shared temp dir would collide under a second call site.
+log_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ghcr-pull.XXXXXX")"
 
 # Annotation-safe one-liner: % -> %25, CR/LF stripped (the workflow-annotation
 # protocol is line-oriented and % is its escape introducer).
@@ -74,7 +78,9 @@ while (( attempt <= ATTEMPTS )); do
     if (( attempt < ATTEMPTS )); then
       printf '::warning::attempt %d/%d failed on a measured pull throttle: %s\n' \
         "$attempt" "$ATTEMPTS" "$(sanitize "$sig_line")"
-      sleep "${SLEEPS[$((attempt - 1))]:-0}"
+      # A short env array falls back to its LAST element — `:-0` would silently
+      # hot-retry, defeating the backoff that paces the throttle.
+      sleep "${SLEEPS[attempt - 1]:-${SLEEPS[-1]:-0}}"
       attempt=$((attempt + 1))
       continue
     fi
@@ -90,8 +96,6 @@ while (( attempt <= ATTEMPTS )); do
   # class): exit on this attempt, unchanged rc, symmetric attribution.
   last_line="$(tail -n 1 "$log")"
   printf '::error::%s failed (rc=%d) — last log line: %s\n' \
-    "$*" "$last_rc" "$(sanitize "$last_line")"
+    "$(sanitize "$*")" "$last_rc" "$(sanitize "$last_line")"
   exit "$last_rc"
 done
-
-exit "$last_rc"
