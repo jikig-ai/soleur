@@ -13,6 +13,24 @@ requires_cpo_signoff: true
 
 # fix: git-data store accepts pushes/fetches from shallow workspace clones (#8211 fix-forward 2)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive L3→L7), Technical Considerations (pin inventory, retry/fetch shapes), Observability (discoverability literal corrected)
+**Research agents used:** none — this harness has no Task/agent spawning; the deepen pass ran its halt gates in-process (4.5 deep-dive written, 4.6 user-brand present at `single-user incident`, 4.7 observability validated — including the `expected_output: "2"` literal fix, 4.8 PAT-clean, 4.9 no UI surface, 4.10 encryption posture present, 4.11 `lint-guard-contract.py` green (2 entries), 4.12 Scope Check single unfenced section with all rows mapped/justified, 4.13 no new autonomous task) plus the precedent-diff and verify-the-negative greps below.
+
+### Key Improvements
+
+1. Exec-line pin inventory (3 sites incl. the production fence probe `git-data-cutover.sh:689`) drove the conditional-branch design that keeps every existing pin green — the fix-forward's own defect class caught at design time.
+2. Merge-safety proof enumerated every apply surface (push-apply allow-list, post-bridge `terraform_data` targets, dispatch-only git-data jobs, drift workflow) — merging cannot auto-replace `hcloud_server.git_data` or its volumes.
+3. Retry shaped as a positive-match classifier reading `err.stderr ?? err.message` (the actual execFile rejection surface), never a blanket retry — per the 2026-09-21 retry-flag learning.
+
+### New Considerations Discovered
+
+- `git-data-transport-wrapper.test.sh` (T2/T11 + exact floor) must co-change with the wrapper — a file the brief did not name but the pin structure requires.
+- `err.stderr` (not only `err.message`) is the surface the transient match must read — the execFile rejection puts git's stderr there.
+- Parked: shallowUpdate's `.git/shallow` writability under the shared tree routes to security-sentinel at review (Non-Goal recorded, no issue filed per the brief).
+
 ## Overview
 
 The R3 rehearsal re-run (2026-10-27, window 16:27-16:31Z) FAILED: the session-end replication push was rejected with `! [remote rejected] main -> refs/soleur/worktrees/<id>/heads/main (shallow update not allowed)` — a clean Better Stack `git-data replication push failed` hit on web-1 at 16:30:17Z. No `replication shed`, no overlay-fallback hits. The synthetic session ran and ended; R4 stays blocked because the verdict is not SESSION-ENDED.
@@ -93,7 +111,14 @@ The match is a POSITIVE list, so `shallow update not allowed` and `remote: git-d
 
 ## Hypotheses
 
-Confirmed failure layer (no connectivity hypothesis survives the evidence): the push reached the host, the wrapper canonicalized, and `receive-pack` negotiated — the refusal `shallow update not allowed` is an application-layer (git protocol) verdict returned on stderr. A transport-level failure (egress drop, handshake reset) produces `killed: true` / `ssh:` errors or the `git-data replication push failed` line WITHOUT a remote rejection reason — the 16:30:17Z Better Stack row names the remote rejection. Layer check (per the network checklist's L3→L7 order): L3 egress rule `dedicated-git-data-22-accept` already shipped and observed passing this rehearsal (the refusal arrived, so the path works); DNS/routing n/a (static private IP 10.0.1.20); L7 = git protocol — root cause confirmed at that layer.
+Confirmed failure layer (no connectivity hypothesis survives the evidence): the push reached the host, the wrapper canonicalized, and `receive-pack` negotiated — the refusal `shallow update not allowed` is an application-layer (git protocol) verdict returned on stderr. A transport-level failure (egress drop, handshake reset) produces `killed: true` / `ssh:` errors or the `git-data replication push failed` line WITHOUT a remote rejection reason — the 16:30:17Z Better Stack row names the remote rejection.
+
+### Network-Outage Deep-Dive (checklist L3→L7)
+
+- **L3 firewall allow-list — verified (by arrival).** The git-data egress rule `dedicated-git-data-22-accept` shipped in the prior fix-forward and the re-run's `git-data replication push failed` row carrying the remote's own `shallow update not allowed` verdict IS the verification artifact: a remote rejection proves the packet reached the host and the answer returned — a blackholed egress cannot produce a remote-reject line. (Contrast with rehearsal 1's `killed: true` + empty stderr, which was the real egress fault.) The hcloud firewall describe/diff is N/A here — the client is the web host's container, not an operator IP, and the egress chain is the standing `SOLEUR-EGRESS` ruleset already proven by the delivered refusal.
+- **L3 DNS/routing — verified (by arrival).** Static private-net destination `10.0.1.20:22` — no DNS involved; the refusal arrived, so routing is proven for the incident window.
+- **L7 TLS/proxy — N/A.** Plain SSH transport, no TLS/proxy intermediary; host key is pinned (`resolveGitDataHostKeyPin`) and a pin fault would surface through `classifyGitDataPinFault`, a different error path than observed.
+- **L7 application — verified.** The remote's own stderr verdict `shallow update not allowed` was observed end-to-end at web-1 16:30:17Z (Better Stack `git-data replication push failed` row); `git help config` documents the matching refusal semantics for `receive.shallowUpdate` — root cause confirmed at this layer.
 
 ## Research Insights
 
@@ -153,7 +178,7 @@ logs:
 
 discoverability_test:
   command: grep -c "receive.shallowUpdate=true" apps/web-platform/infra/git-data-transport-wrapper.sh
-  expected_output: "1"
+  expected_output: "2"
 ```
 
 ## Encryption Posture
