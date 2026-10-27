@@ -136,8 +136,8 @@ assert_contains "$out" "open_document" "unresolved-session failure names the rec
 # so an agent holding a save-failed marker is not told that open_document (which discards the
 # only copy of its edit) resolves it.
 assert_contains "$out" "save-failed" "unresolved-session failure names the save-failed recovery"
-assert_contains "$out" "save-incomplete" "unresolved-session failure names the save-incomplete recovery"
-assert_contains "$out" "clean save" "unresolved-session failure says a clean save resets the flag for the save codes"
+assert_contains "$out" "unconfirmed and save-incomplete" "unresolved-session failure names save-incomplete among the reload codes"
+assert_contains "$out" "clean save for save-failed" "unresolved-session failure says a clean save resets the flag for save-failed only"
 assert_contains "$out" "unconfirmed" "unresolved-session failure names unconfirmed among the reload codes"
 
 # 4b. Fail closed: a flag that is neither 0 nor 1 (unset, empty, typo) never passes.

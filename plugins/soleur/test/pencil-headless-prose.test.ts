@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import {
   LIVE_TOOL_NAMES,
+  RAW_CALL_STEERING,
   REMOVED_TOOL_NAMES,
 } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
 import * as saveGate from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
@@ -37,21 +38,10 @@ const RESTORE_FIRST = "If the file is tracked, restore it from version control f
 const STEERING =
   "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit).";
 
-// Reason codes: the save gate's own list when it exports one, so a new code without a prose
-// row fails here. The local list is the contract of record (marker contract, ADR-304).
-const MARKER_CODES: { refused: string[]; notPersisted: string[] } = {
-  refused: ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized"],
-  notPersisted: ["save-failed", "unconfirmed", "save-incomplete"],
-};
-const exportedCodes = (saveGate as Record<string, unknown>).REASON_CODES as
-  | { refused?: string[]; notPersisted?: string[] }
-  | string[]
-  | undefined;
-const ALL_CODES: string[] = Array.isArray(exportedCodes)
-  ? exportedCodes
-  : exportedCodes && typeof exportedCodes === "object"
-    ? [...(exportedCodes.refused ?? []), ...(exportedCodes.notPersisted ?? [])]
-    : [...MARKER_CODES.refused, ...MARKER_CODES.notPersisted];
+// Reason codes come from the save gate itself (REASON_CODES), so a new code without a prose
+// row fails here. The two shared sentences are also compared with the gate's exports: a
+// reworded copy on either side is a drift.
+const ALL_CODES: string[] = [...saveGate.REASON_CODES];
 
 const LIVE = new Set<string>(LIVE_TOOL_NAMES);
 // `get_style` is a REPL command the adapter never exposes; it is not in the removed-stub
@@ -157,13 +147,22 @@ describe("pencil-setup/SKILL.md", () => {
 
   test("every code in the save gate's list has a table row; every recovery that reloads names open_document, the two save codes name `save`", () => {
     for (const code of ALL_CODES) expect(tableRow(skill, code), `table row for reason=${code}`).toBeDefined();
-    for (const code of ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized", "unconfirmed"]) {
+    // save-incomplete stops the engine (the in-memory edit is gone): its recovery is a reload, not a retry
+    for (const code of ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized", "unconfirmed", "save-incomplete"]) {
       expect(recovery(tableRow(skill, code) ?? ""), `recovery for reason=${code}`).toMatch(/open_document/);
     }
-    for (const code of ["save-failed", "save-incomplete"]) {
-      expect(recovery(tableRow(skill, code) ?? ""), `recovery for reason=${code}`).toMatch(/`save`/);
-    }
+    expect(recovery(tableRow(skill, "save-failed") ?? "")).toMatch(/`save`/);
     expect(recovery(tableRow(skill, "unrecognized") ?? "")).toMatch(/git|new path/i);
+  });
+
+  test("the save gate's reason-code list is the marker contract's eight codes, and its shared sentences equal the prose's", () => {
+    expect([...saveGate.REFUSAL_REASON_CODES].sort()).toEqual(
+      ["empty", "refusal-pending", "stale", "unknown-baseline", "unrecognized"],
+    );
+    expect([...saveGate.NOT_PERSISTED_REASON_CODES].sort()).toEqual(["save-failed", "save-incomplete", "unconfirmed"]);
+    expect(saveGate.REPLAY_SAFETY_SENTENCE).toBe(REPLAY_SAFETY);
+    expect(saveGate.ONLY_COPY_SENTENCE).toBe(ONLY_COPY);
+    expect(RAW_CALL_STEERING).toBe(STEERING);
   });
 
   test("SHARED TEXT CONTRACT: replay-safety sentence on unconfirmed, save-incomplete and refusal-pending external-change", () => {
@@ -188,7 +187,8 @@ describe("pencil-setup/SKILL.md", () => {
 
   test("the gate flag resets per code, in the same words as the agent's gate step", () => {
     expect(skill).toMatch(/gate flag[^\n]*per code|resets? per code/i);
-    expect(skill).toMatch(/clean `save`[^\n]*(save-failed|save-incomplete)|(save-failed|save-incomplete)[^\n]*clean `save`/);
+    expect(skill).toMatch(/a clean `save` for `save-failed` only/);
+    expect(skill).toMatch(/`unconfirmed` and `save-incomplete`/);
   });
 
   test("get_style is named as an engine command this adapter does not expose, with the brand-token / guide page alternative", () => {
@@ -363,7 +363,7 @@ describe("ux-design-lead.md", () => {
     for (const c of ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized", "unconfirmed"]) {
       expect(step, `reset rule names ${c}`).toContain(`\`${c}\``);
     }
-    expect(step).toMatch(/`save-failed`[^.]*`save-incomplete`[^.]*clean `save`|clean `save`[^.]*`save-failed`[^.]*`save-incomplete`/);
+    expect(step).toMatch(/`unconfirmed` and `save-incomplete`[^;]*; a clean `save`[^;]*for `save-failed` only/);
     expect(step).toMatch(/only when the recovery named for the code has completed/);
     expect(reload === null || reload).toBeTruthy();
     // the gate's failure text itself is code-aware
