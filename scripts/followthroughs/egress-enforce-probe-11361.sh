@@ -39,9 +39,10 @@ SENTRY_ORG="jikigai-eu"
 SENTRY_PROJECT="web-platform"
 # Window opens at the fix's merge (adjust to actual merge ts if the directive
 # pins a start=; absent that, 14d covers the deploy window).
-HTTP=$(curl -s -o /tmp/ft11361-events.json -w '%{http_code}' -m 20 \
-  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
-  "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20stage%3Aegress_enforce_probe&statsPeriod=14d&per_page=50&field=timestamp&field=stage&field=host_name" 2>/dev/null || echo 000)
+FT_TMP="$(mktemp /tmp/ft11361.XXXXXX)"; trap 'rm -f "$FT_TMP"' EXIT
+HTTP=$(curl --disable --noproxy '*' -s -o "$FT_TMP" -w '%{http_code}' -m 20 --config - \
+  "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20stage%3Aegress_enforce_probe&statsPeriod=14d&per_page=50&field=timestamp&field=stage&field=host_name" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") 2>/dev/null || echo 000)
 if [ "$HTTP" != "200" ]; then
   echo "TRANSIENT: Sentry events query returned http=$HTTP" >&2
   exit 2
@@ -50,7 +51,7 @@ fi
 FATALS=$(python3 -c "
 import json
 try:
-    d = json.load(open('/tmp/ft11361-events.json'))
+    d = json.load(open('$FT_TMP'))
 except Exception:
     print(-1); raise SystemExit
 rows = d.get('data', d if isinstance(d, list) else [])
