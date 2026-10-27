@@ -89,7 +89,7 @@ import {
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
-import { createCanUseTool } from "./permission-callback";
+import { createCanUseTool, gateStatusWriteOp } from "./permission-callback";
 import { reportSilentFallback, hashUserId } from "./observability";
 import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
@@ -2250,10 +2250,8 @@ are the requirements to implement.`;
                     convId,
                     status as Conversation["status"],
                     guard.onlyIfStatusIn,
-                    // Distinct ops so one Sentry dedup window never hides the other half of the lifecycle.
-                    status === "waiting_for_user"
-                      ? "updateConversationStatusGateHold"
-                      : "updateConversationStatusGateRestore",
+                    // Distinct hold/restore ops (see gateStatusWriteOp).
+                    gateStatusWriteOp(status),
                   )
                 : updateConversationStatus(userId, convId, status as Conversation["status"]),
           },

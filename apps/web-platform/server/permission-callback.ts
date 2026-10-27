@@ -355,6 +355,13 @@ const GATE_STATUS_OPS = {
     restore: { op: "platform-gate-status-restore", message: "Platform tool gate: failed to restore the conversation to active" },
   },
 } as const satisfies Record<GateClass, Record<"hold" | "restore", { op: string; message: string }>>;
+/**
+ * The Sentry `op` the agent-runner status writer tags a guarded gate write with. Distinct ops so one Sentry dedup window
+ * never hides the other half of the lifecycle: the hold is the write TO `waiting_for_user`, the restore is the write back.
+ */
+export function gateStatusWriteOp(status: string): "updateConversationStatusGateHold" | "updateConversationStatusGateRestore" {
+  return status === "waiting_for_user" ? "updateConversationStatusGateHold" : "updateConversationStatusGateRestore";
+}
 // Hold: never revive a terminal row. Restore: waiting_for_user -> active ONLY (never overwrite completed/failed/other).
 const HOLD_GUARD: StatusGuard = { onlyIfStatusIn: ["active", "waiting_for_user"] };
 const RESTORE_GUARD: StatusGuard = { onlyIfStatusIn: ["waiting_for_user"] };
@@ -436,7 +443,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       }
     }
     // Checked AFTER the restore write has settled, so an abort that lands while that write is awaited still denies.
-    if (selection !== null && (signal.aborted || ctx.controllerSignal.aborted)) return null;
+    if (selection !== null && (signal?.aborted || ctx.controllerSignal.aborted)) return null;
     return selection;
   };
   // One expiry/abort deny for both gate classes. The Bash class stays at info (an expired Bash card is routine). The

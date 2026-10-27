@@ -28,7 +28,7 @@ vi.mock("../server/logger", () => ({ createChildLogger: () => log, default: log 
 vi.mock("../server/permission-log", () => ({ logPermissionDecision: mockLogDecision }));
 vi.mock("../server/observability", () => ({ warnSilentFallback: mockWarn, reportSilentFallback: vi.fn() }));
 
-import { createCanUseTool, type CanUseToolContext, type StatusGuard } from "../server/permission-callback";
+import { createCanUseTool, gateStatusWriteOp, type CanUseToolContext, type StatusGuard } from "../server/permission-callback";
 import { abortableReviewGate, REVIEW_GATE_TIMEOUT_MS } from "../server/review-gate";
 import { EMAIL_DENY_BODY, EMAIL_DENY_RECIPIENT } from "../server/tool-tiers";
 import { ACTIVE_STATUSES_FOR_FINALIZE } from "../server/conversation-finalize-statuses";
@@ -517,21 +517,45 @@ describe("an Approve is never honoured after the session aborted (shared by the 
 
   test("platform: abort during the awaited restore write denies (not allow) and logs aborted", async () => {
     const controller = new AbortController();
-    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"), { controller });
+    const { ctx, deps, row } = makeCtx(() => Promise.resolve("Approve"), { controller });
     abortDuringRestoreWrite(controller, deps);
     const res = await callTool(ctx);
+    abortFinalize(row, "failed"); // the abort branch runs after the await, against the row the restore just made `active`
     expect(statuses(deps)).toEqual(["waiting_for_user", "active"]); // precondition: the restore write really ran
+    expect(row.status).toBe("failed"); // active-only policy: the finalize lands on the restored row
     expect(res).toEqual({ behavior: "deny", message: EXPIRED_DENY });
     expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-aborted", reason: "aborted" }), expect.any(String));
   });
 
   test("Bash: abort during the awaited restore write denies (not allow)", async () => {
     const controller = new AbortController();
-    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"), { controller });
+    const { ctx, deps, row } = makeCtx(() => Promise.resolve("Approve"), { controller });
     abortDuringRestoreWrite(controller, deps);
     const res = await bashCall(ctx);
+    abortFinalize(row, "failed");
     expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
+    expect(row.status).toBe("failed");
     expect(res.behavior).toBe("deny");
+  });
+
+  test("platform: abort INSIDE the hold write denies an Approve and never writes `active`", async () => {
+    const controller = new AbortController();
+    const { ctx, deps, row } = makeCtx(() => Promise.resolve("Approve"), { controller });
+    const real = deps.updateConversationStatus.getMockImplementation()!;
+    deps.updateConversationStatus.mockImplementation(async (id: string, status: string, guard?: StatusGuard) => {
+      await real(id, status, guard);
+      if (status === "waiting_for_user") controller.abort(new Error("disconnected"));
+    });
+    const res = await callTool(ctx);
+    abortFinalize(row, "failed");
+    expect(statuses(deps)).toEqual(["waiting_for_user"]); // precondition: the hold ran; no restore to `active`
+    expect(res.behavior).toBe("deny");
+    expect(row.status).toBe("waiting_for_user"); // the active-only abort finalize is a no-op against the held row
+  });
+
+  test("the agent-runner status writer tags the hold and the restore with distinct Sentry ops", () => {
+    expect(gateStatusWriteOp("waiting_for_user")).toBe("updateConversationStatusGateHold");
+    expect(gateStatusWriteOp("active")).toBe("updateConversationStatusGateRestore");
   });
 
   test("platform: Approve resolving after the per-call signal aborted denies", async () => {

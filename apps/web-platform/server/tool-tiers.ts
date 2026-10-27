@@ -312,11 +312,13 @@ const CARD_FIELD_MAX = 120;
 // vowels, the Mongolian vowel separator, zero-width and bidi marks, line and paragraph separators, bidi embeddings/overrides/
 // isolates, word joiner, the invisible math operators and deprecated format characters (U+2060-206F), the Braille blank, the
 // Hangul filler, variation selectors, the BOM, the halfwidth Hangul filler, the Unicode tag characters and the variation
-// selectors supplement. Escapes only: no literal separators (cq-regex-unicode-separators-escape-only). Written as `\\u` text
+// selectors supplement, the Mongolian free variation selectors, the interlinear annotation and object replacement
+// characters, the shorthand format controls and the musical format controls. Escapes only: no literal separators
+// (cq-regex-unicode-separators-escape-only). Written as `\\u` text
 // in a string and compiled with the `u` flag, so the astral ranges use the `\u{...}` form.
 const HIDDEN_COMMON_CLASS =
-  "\\u007F-\\u009F\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u206F" +
-  "\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}";
+  "\\u007F-\\u009F\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u206F" +
+  "\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF9-\\uFFFC\\u{1BCA0}-\\u{1BCA3}\\u{1D173}-\\u{1D17A}\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}";
 // C0 controls: all of them for a single-line field; the body variant leaves tab and newline (ordinary body text) alone.
 const HIDDEN_LINE_CONTROLS = "\\u0000-\\u001F";
 const HIDDEN_BODY_CONTROLS = "\\u0000-\\u0008\\u000B-\\u001F";
@@ -382,12 +384,13 @@ function workflowInputs(v: unknown): string {
  */
 const EMAIL_DISPLAY_NAME_MAX = 60;
 const EMAIL_MESSAGE_ID_MAX = 64;
-const ASCII_HINT = "Use the ASCII form of the address (punycode for international domains).";
+const ASCII_HINT = "Use the ASCII form of the address (punycode for international domains), with no leading or trailing spaces.";
 export const EMAIL_DENY_RECIPIENT =
   `The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again. ${ASCII_HINT}`;
 export const EMAIL_DENY_REPLY_TO =
   `The reply-to address could not be shown in full for review, so the email was not sent. Fix the reply-to and try again. ${ASCII_HINT}`;
-export const EMAIL_DENY_DISPLAY_NAME = "Remove the comma from the display name, or send to the bare address, and try again.";
+export const EMAIL_DENY_DISPLAY_NAME =
+  "Remove any comma, semicolon or @ from the display name, or send to the bare address, and try again.";
 export const EMAIL_DENY_BODY = `Shorten the body to ${EMAIL_BODY_MAX.toLocaleString("en-US")} characters or fewer and try again. Tell the user the limit was hit; do not silently truncate the email.`;
 export const EMAIL_DENY_SUBJECT = `Shorten the subject to ${EMAIL_SUBJECT_MAX} characters or fewer and try again. Tell the user the limit was hit; do not silently truncate the email.`;
 export const EMAIL_DENY_FIELDS =

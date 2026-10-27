@@ -103,6 +103,8 @@ Known follow-ups, named here so they are not silent (tracked in the plan and `ta
 - Serialising the gate hold and restore writes per session.
 - A per-Query closed flag instead of the sticky controller-abort skip on the cc path.
 - `failed` finalizers with active-only guards leaving a parked `waiting_for_user` row, and the AskUserQuestion / destroy-gate status writers bypassing `pendingGates` and the compare-and-set (pre-existing).
+- Approve resolved, restore write in flight, then disconnect: the active-only abort finalize is a no-op against the still-waiting_for_user row and the restore then lands, leaving the row `active` with no session until the 5-minute stuck-active reaper corrects it (one DB round-trip window; same shape as AskUserQuestion). Accepted by CTO ruling.
+- The destroy-ask Bash lane and AskUserQuestion have no post-hold abort recheck (pre-existing, #11289 follow-up).
 - One shared `tool-tiers` `vi.mock` factory across the eight test files that mock it.
 - Consent fatigue from one extra card per gated call.
 - Other-field cards print "not shown" notes rather than the value.

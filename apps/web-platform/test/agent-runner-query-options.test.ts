@@ -658,6 +658,9 @@ describe("buildAgentQueryOptions — allowedTools pre-approval allowlist (#11303
     ["a lower-case Bash rule", "bash(ls)"],
     ["a Bash rule with a space before the paren", "Bash (npm *)"],
     ["a Bash rule with a tab before the paren", "Bash\t(npm *)"],
+    ["a Bash rule with a newline before the paren", "Bash\n(x)"],
+    ["a Bash rule with a single space before the paren", "Bash (x)"],
+    ["a Bash rule with a vertical tab before the paren", "Bash\u000b(x)"],
   ];
 
   it.each(REJECTED)("throws on %s", (_label, entry) => {

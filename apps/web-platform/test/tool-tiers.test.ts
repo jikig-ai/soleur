@@ -31,6 +31,7 @@ import {
 import {
   EMAIL_ADDR_MAX,
   EMAIL_BODY_MAX,
+  EMAIL_RAW_ADDR_MAX,
   EMAIL_SUBJECT_MAX,
 } from "../server/email-triage/outbound-compliance";
 import { EXPECTED_GATED } from "./helpers/expected-tool-tiers";
@@ -307,10 +308,11 @@ const HOSTILE = `evil**bold**\n\n[click here](https://evil.invalid)\u202Egpj.exe
 const inputOf = (v: unknown) => new Proxy({}, { get: () => v }) as Record<string, unknown>;
 const countOf = (s: string, ch: string) => s.split(ch).length - 1;
 // eslint-disable-next-line no-control-regex -- asserting the absence of control characters is the point
-const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
+const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFC\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
 // The extra invisible characters (beyond bidi/zero-width) every card must neutralise, as code points.
 const EXTRA_HIDDEN_CODE_POINTS = [
   0x206a, 0x206f, 0xfe00, 0xfe0f, 0xe0100, 0xe01ef, 0x3164, 0xffa0, 0x115f, 0x1160, 0x2800, 0x034f, 0x180e, 0x17b4, 0x17b5,
+  0x180b, 0x180c, 0x180d, 0xfff9, 0xfffa, 0xfffb, 0xfffc, 0x1d173, 0x1d17a, 0x1bca0, 0x1bca3,
 ];
 const hex = (cp: number) => cp.toString(16).toUpperCase().padStart(4, "0");
 
@@ -400,7 +402,27 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     ["a semicolon in the display name", "Jo; Al <jo@example.invalid>"],
   ])("%s is refused with the actionable display-name text", (_n, to) => {
     expect(buildGateCard(SEND, { ...base, to })).toEqual({ deny: EMAIL_DENY_DISPLAY_NAME });
-    expect(EMAIL_DENY_DISPLAY_NAME).toBe("Remove the comma from the display name, or send to the bare address, and try again.");
+    expect(EMAIL_DENY_DISPLAY_NAME).toBe("Remove any comma, semicolon or @ from the display name, or send to the bare address, and try again.");
+  });
+
+  test.each([
+    ["a comma", "Doe, Jo <jo@example.invalid>", "comma"],
+    ["a semicolon", "Jo; Al <jo@example.invalid>", "semicolon"],
+    ["an @", "ceo@bank.invalid <evil@example.invalid>", "@"],
+  ])("%s in the display name gets the display-name text, which names that cause", (_n, to, cause) => {
+    const res = buildGateCard(SEND, { ...base, to }) as { deny: string };
+    expect(res.deny).toBe(EMAIL_DENY_DISPLAY_NAME);
+    expect(res.deny).toContain(cause);
+    expect(res.deny).not.toContain("punycode");
+  });
+
+  test.each([
+    ["leading space", " jo@example.invalid"],
+    ["trailing space", "jo@example.invalid "],
+  ])("%s gets the address text with the no-leading-or-trailing-spaces clause", (_n, to) => {
+    const res = buildGateCard(SEND, { ...base, to }) as { deny: string };
+    expect(res.deny).toBe(EMAIL_DENY_RECIPIENT);
+    expect(res.deny).toContain("no leading or trailing spaces");
   });
 
   test.each([
@@ -422,15 +444,27 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     ["a non-ASCII local part", "jö@example.invalid"],
     ["an internationalised domain (fail closed in v1)", "jo@exämple.invalid"],
     ["a non-breaking space inside", "jo x@example.invalid"],
+    ["a domain with no dot (localhost)", "jo@localhost"],
+    ["a domain with a trailing dot and no label", "jo@example."],
     ["a non-string", 42],
   ])("fails closed on %s: the exact static deny, never a card", (_n, to) => {
     expect(buildGateCard(SEND, { ...base, to })).toEqual({ deny: EMAIL_DENY_RECIPIENT });
   });
 
   test("the recipient deny tells the agent to use the ASCII form (punycode for international domains)", () => {
-    expect(EMAIL_DENY_RECIPIENT).toContain("Use the ASCII form of the address (punycode for international domains).");
-    expect(EMAIL_DENY_REPLY_TO).toContain("Use the ASCII form of the address (punycode for international domains).");
-    expect(EMAIL_DENY_SUPPRESS).toContain("Use the ASCII form of the address (punycode for international domains).");
+    expect(EMAIL_DENY_RECIPIENT).toContain("Use the ASCII form of the address (punycode for international domains), with no leading or trailing spaces.");
+    expect(EMAIL_DENY_REPLY_TO).toContain("Use the ASCII form of the address (punycode for international domains), with no leading or trailing spaces.");
+    expect(EMAIL_DENY_SUPPRESS).toContain("Use the ASCII form of the address (punycode for international domains), with no leading or trailing spaces.");
+  });
+
+  test("the raw-length cap counts the display name: a short address behind a long name is allowed at exactly 320, denied at 321", () => {
+    const tail = " <jo@example.invalid>";
+    const at = `${"N".repeat(EMAIL_RAW_ADDR_MAX - tail.length)}${tail}`;
+    expect(at.length).toBe(EMAIL_RAW_ADDR_MAX);
+    expect(buildGateCard(SEND, { ...base, to: at })).toHaveProperty("card");
+    const over = `N${at}`;
+    expect(over.length).toBe(EMAIL_RAW_ADDR_MAX + 1);
+    expect(buildGateCard(SEND, { ...base, to: over })).toEqual({ deny: EMAIL_DENY_RECIPIENT });
   });
 
   test("a punycode (xn--) domain is allowed and shown as written", () => {
@@ -516,10 +550,8 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     expect(CONTROL_OR_BIDI.test(msg)).toBe(false);
   });
 
-  test("a recipient with one of the extra invisible characters is refused, not shown", () => {
-    for (const cp of EXTRA_HIDDEN_CODE_POINTS) {
-      expect(buildGateCard(SEND, { ...base, to: `jo${String.fromCodePoint(cp)}@example.invalid` })).toEqual({ deny: EMAIL_DENY_RECIPIENT });
-    }
+  test.each(EXTRA_HIDDEN_CODE_POINTS)("a recipient with the invisible code point %i is refused, not shown", (cp) => {
+    expect(buildGateCard(SEND, { ...base, to: `jo${String.fromCodePoint(cp)}@example.invalid` })).toEqual({ deny: EMAIL_DENY_RECIPIENT });
   });
 
   test("a literal [U+ in the text cannot forge a real marker: it is rewritten and counted", () => {
@@ -544,6 +576,13 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     const msg = buildGateMessage(SEND, { ...base, to: 'Jo "the boss" <jo@example.invalid>', subject: 'He said "hi" \\ bye' });
     expect(msg).toContain('(display name: "Jo \\"the boss\\"")');
     expect(msg).toContain('Subject: "He said \\"hi\\" \\\\ bye"');
+  });
+
+  test("email_reply shows a subject with embedded quotes JSON-escaped, the same way as email_send", () => {
+    const subject = 'He said "hi" \\ bye';
+    const msg = buildGateMessage(REPLY, { messageId: "m1", subject, body: "b" });
+    expect(msg).toContain(`Subject: ${JSON.stringify(subject)}`);
+    expect(msg).toContain(String.raw`Subject: "He said \"hi\" \\ bye"`);
   });
 
   test("a CRLF body is normalised to LF (no U+000D marker); a lone CR is made visible", () => {
