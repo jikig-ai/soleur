@@ -67,6 +67,16 @@ emitted. The `secret-scan` arm requires `gitleaks` on PATH and is reported as a
 loud SKIP when absent — an advisory hook that cannot scan is a tool error, not
 a silent guard.
 
+## Verifying the scaffold itself
+
+A green pass -> fail -> pass proof or a perfect mutation score can still be vacuous. Before trusting a guard or its test battery, check these:
+
+- Pin the wiring, not only the artifact: assert the guard is actually invoked from the hook or CI job that is supposed to run it. Reverting the wire must turn something red.
+- Make each fixture discriminate the clause under test: a row that a later clause would also reject proves nothing about the clause it names. Give each clause its own failing input.
+- Do not count a crash or a harness error as a mutation kill; require the expected failure message.
+- Re-check fixtures whenever a predicate is widened; a fixture that predates the widening can pass straight through the regression.
+- A mutation score shows the tests notice change, not that the predicate is correct. Add escape rows for realistic shapes the mutations cannot reach.
+
 ## Requirements
 
 bash + POSIX tools on the target host (stock macOS included). Emitted artifacts
