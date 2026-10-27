@@ -201,19 +201,24 @@ export async function cronAnthropicCostReportHandler({
     //      Its delivery does NOT depend on the level chosen here.
     // Keeping the Sentry mirror at all is required by
     // cq-silent-fallback-must-mirror-to-sentry.
-    warnSilentFallback(null, {
-      feature: CRON_NAME,
-      op: "anthropic-admin-key-missing",
-      message:
-        "ANTHROPIC_ADMIN_KEY unset — daily cost report is dark until the key is provisioned (expected during the mint window)",
-      extra: { fn: CRON_NAME, days_since_first_dark: daysDark },
-    });
-    emitClaudeCostDailyMarker({
-      status: "key-missing",
-      date: priorUtcDay(),
-      cost_usd: null,
-      models: [],
-      days_since_first_dark: daysDark,
+    // Both emissions live INSIDE a step (#8764): handler-scope code after a
+    // step is replayed on every re-entry, so an in-handler emit fired once per
+    // replay — the harness pinned two daily-marker rows per run.
+    await step.run("key-missing-report", async () => {
+      warnSilentFallback(null, {
+        feature: CRON_NAME,
+        op: "anthropic-admin-key-missing",
+        message:
+          "ANTHROPIC_ADMIN_KEY unset — daily cost report is dark until the key is provisioned (expected during the mint window)",
+        extra: { fn: CRON_NAME, days_since_first_dark: daysDark },
+      });
+      emitClaudeCostDailyMarker({
+        status: "key-missing",
+        date: priorUtcDay(),
+        cost_usd: null,
+        models: [],
+        days_since_first_dark: daysDark,
+      });
     });
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({
@@ -314,12 +319,15 @@ export async function cronAnthropicCostReportHandler({
   }
 
   // Success — emit the authoritative daily marker (field-allowlist per model)
-  // and a GREEN heartbeat.
-  emitClaudeCostDailyMarker({
-    status: "ok",
-    date: day,
-    cost_usd: decision.costUsd,
-    models: decision.models,
+  // and a GREEN heartbeat. The emit is INSIDE a step (#8764): at handler scope
+  // it re-fired on every replay after `anthropic-admin-report` memoized.
+  await step.run("daily-marker", async () => {
+    emitClaudeCostDailyMarker({
+      status: "ok",
+      date: day,
+      cost_usd: decision.costUsd,
+      models: decision.models,
+    });
   });
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({

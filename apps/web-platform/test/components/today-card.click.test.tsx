@@ -190,16 +190,13 @@ describe("GitHubCard onClick (PR-A)", () => {
     });
   });
 
-  it("200 with degraded:'enqueue_failed' → 'Acknowledged (queued)' pill", async () => {
+  it("503 enqueue_unavailable (#10543) → in-place error copy, no acknowledged pill, card not archived, Send re-enabled", async () => {
     nextResponse = {
-      status: 200,
+      status: 503,
       body: {
-        id: "as-1",
-        action_class: "engineering.pr_review_pending",
-        tier: "draft_one_click",
+        error: "enqueue_unavailable",
         action_send_id: "as-1",
-        artifact_view_url: "https://github.com/acme/repo/pull/7",
-        degraded: "enqueue_failed",
+        retryable: true,
       },
     };
 
@@ -218,11 +215,17 @@ describe("GitHubCard onClick (PR-A)", () => {
     await user.click(screen.getByLabelText(/Let CTO spawn a PR-review agent/));
 
     await waitFor(() => {
-      const pill = screen.getByTestId("acknowledged-pill");
-      expect(pill).toBeInTheDocument();
-      expect(pill.getAttribute("data-pill-state")).toBe("queued");
-      expect(pill.textContent).toMatch(/Acknowledged \(queued/);
+      expect(
+        screen.getByText(/Your approval is saved.*Click Send again to retry/),
+      ).toBeInTheDocument();
     });
+    // The draft is still a draft: no pill, no LeaderLoopStatus, and the
+    // Send control is usable again so the founder can retry.
+    expect(screen.queryByTestId("acknowledged-pill")).toBeNull();
+    expect(screen.queryByTestId("leader-loop-status")).toBeNull();
+    expect(
+      screen.getByLabelText(/Let CTO spawn a PR-review agent/),
+    ).not.toBeDisabled();
   });
 });
 

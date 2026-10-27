@@ -83,6 +83,8 @@ Any other shape = **P1 finding**.
 
 **Tag-filtered alerts need the message path.** When a `sentry_alert` filters on the `feature`/`op` tags of a `reportSilentFallback` event, that call must pass `err = null`. With an `Error`, the pino mirror captures it first and the tagged capture is deduplicated away, so the rule never matches (#8629). For any "X pages" claim in the diff, also check that the rule exists and routes to a person. **Why:** #8505: a probe documented as paging emitted untagged events to a monitor that routes to no one.
 
+**A static message belongs to exactly one `op`.** Sentry groups message events by message text; level and tags do not split a group. When a paged op and an unpaged op (a decorative warn) share a message literal, the unpaged one can create the group first and the paged op's later events join a group whose first event does not match the rule's `op in (...)` filter, so the page stays dark until someone resolves the group. Grep the diff's mirror calls for any message literal that appears under two ops, and require the op-contract test to assert it. **Why:** #11115: a card's warn and the page's paged fault shared two strings; an op-set comparison could not see it.
+
 ### Step 4: Inngest-middleware-coverage check
 
 Verify every new Inngest function file under `server/inngest/functions/` is registered in `app/api/inngest/route.ts`. The middleware applies automatically via `server/inngest/client.ts` — but a function not registered in route.ts is silently invisible (no run-id tags, no breadcrumbs, no error capture). Unregistered new function = **P0 finding**.

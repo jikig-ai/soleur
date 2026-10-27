@@ -1,0 +1,4 @@
+revert.rc=0
+census.rc=1
+ratchet.rc=0
+note: the census rc=1 in the reverted scratch tree comes from reverting the test-file fix that rode in the same commit as the index edit; the documented rollback is the revert of the MERGE commit, which takes both commits

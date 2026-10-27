@@ -467,7 +467,7 @@ describe("#6750 A1 pin 1 — every finalizeOutputAwareHeartbeat caller passes re
       // the flag migrating into ANY object literal — including an indented line
       // inside one of the large backtick prompt templates — while the finalize
       // call silently loses it.
-      const calls = [...src.matchAll(/finalizeOutputAwareHeartbeat\(\{([\s\S]*?)\n    \}\)/g)];
+      const calls = [...src.matchAll(/finalizeOutputAwareHeartbeat\(\{([\s\S]*?)\n {4}\}\)/g)];
       expect(calls.length, `${file}: could not parse the finalize call — gate DISENGAGED`).toBeGreaterThan(0);
       for (const [, body] of calls) {
         expect(body, `${file}: a finalizeOutputAwareHeartbeat call omits retryEligible`).toMatch(
@@ -712,5 +712,116 @@ describe("#7122 — cron-community-monitor persists by exactPaths, not the diges
 
   it("no module-level allowlist constant reintroduces the directory as a persistence prefix", () => {
     expect(src).not.toMatch(/COMMUNITY_MONITOR_ALLOWED_PATHS\s*=\s*\[\s*COMMUNITY_DIGEST_DIR/);
+  });
+});
+
+// #10550 -- the gated create arm's commit call lives OUTSIDE `functions/` (in `server/compound-promote-create-arm.ts`),
+// so invariant 1's directory walk cannot see it. This extends the SAME source-text guards to that file: no blanket
+// git-add literal, and its one safeCommitAndPr call persists by `exactPaths` with an empty `allowedPaths` (the closed
+// six-path set, byte-checked against `expectedContent`), exactly like the #7122 precedent above. Fail-closed on parse.
+/**
+ * The git subcommand of every `runGit(<root>, [...])` call in `src`: the first non-flag token of the argument list
+ * (`-c` and `-C` take a value, any other `-x` is a bare flag). The clean-main restore passes a loop variable, whose literal
+ * list is read from the `for (const args of [...])` line. Throws (fail closed) on a call it cannot read.
+ */
+function armGitSubcommands(src: string): Set<string> {
+  const subs = new Set<string>();
+  const firstNonFlag = (items: string[], where: string): string => {
+    for (let i = 0; i < items.length; i++) {
+      const t = items[i];
+      if (t === "-c" || t === "-C") { i += 1; continue; }
+      if (t.startsWith("-")) continue;
+      return t;
+    }
+    throw new Error(`runGit call has no subcommand: ${where}`);
+  };
+  const literalItems = (list: string): string[] => [...list.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  for (const m of src.matchAll(/runGit\(\s*[A-Za-z.]+\s*,\s*([^\n]*)/g)) {
+    const rest = m[1];
+    if (rest.startsWith("[")) {
+      // up to the closing bracket of the first argument list (the arm's lists hold no nested brackets)
+      const close = rest.indexOf("]");
+      subs.add(firstNonFlag(literalItems(close < 0 ? rest : rest.slice(0, close)), m[0]));
+    } else if (/^args\b/.test(rest)) {
+      const loop = /for \(const args of \[(.*?)\]\) \{/s.exec(src)?.[1];
+      if (loop === undefined) throw new Error("runGit(args) call cannot be read: no literal loop list");
+      for (const arr of loop.matchAll(/\[([^\]]*)\]/g)) subs.add(firstNonFlag(literalItems(arr[1]), arr[0]));
+    } else {
+      throw new Error(`runGit call cannot be read: ${m[0]}`);
+    }
+  }
+  return subs;
+}
+
+describe("#10550 — the create arm's commit call (outside functions/) persists by exactPaths", () => {
+  const ARM = resolve(__dirname, "../../../server/compound-promote-create-arm.ts");
+  const src = readFileSync(ARM, "utf-8");
+  const calls = [...src.matchAll(/await commit\(\{([\s\S]*?)\n\s*\}\);/g)];
+
+  it("carries no blanket-add literal", () => {
+    expect(src).not.toContain("git add -A");
+    expect(src).not.toContain("git add --all");
+    expect(src).not.toContain("git add -u");
+    expect(src).not.toContain("git add .");
+  });
+
+  it("carries no ARRAY-FORM staging either (the literal strings above miss `[\"add\", \"-A\"]`), and its own git calls are a closed list of non-writing subcommands", () => {
+    expect(src).not.toMatch(/\[\s*"add"/);
+    expect(src).not.toMatch(/"add",\s*"(?:-A|--all|-u|\.)"/);
+    const ALLOWED = new Set(["fetch", "reset", "clean", "checkout", "rev-parse", "remote", "ls-tree", "ls-remote"]);
+    const subs = armGitSubcommands(src);
+    expect(subs.size, "could not parse the arm's git calls — gate DISENGAGED").toBeGreaterThanOrEqual(7);
+    expect([...subs].filter((x) => !ALLOWED.has(x))).toEqual([]);
+    for (const verb of ["add", "commit", "push", "merge", "rebase", "apply", "am", "cherry-pick", "config", "stash"]) expect(subs.has(verb), verb).toBe(false);
+  });
+
+  it("reads the FIRST NON-FLAG token of each runGit call, so a leading `-c name=value` cannot hide the subcommand", () => {
+    const hidden = 'await runGit(root, ["-c", "user.name=x", "commit", "-m", "m"], { timeoutMs: 1 });';
+    expect([...armGitSubcommands(hidden)]).toEqual(["commit"]);
+    const flagged = 'runGit(root, ["--no-pager", "-C", "/x", "push", "origin"], opts);\nrunGit(r, ["-c","a=b","-c","c=d","fetch"], o);';
+    expect([...armGitSubcommands(flagged)].sort()).toEqual(["fetch", "push"]);
+    // a call whose argument list is not a literal array (and is not the clean-main loop's `args`) cannot be read: fail closed
+    expect(() => armGitSubcommands("runGit(root, someArgs, o);")).toThrow(/cannot be read/);
+    expect(() => armGitSubcommands('runGit(root, ["-c", "x=y"], o);')).toThrow(/no subcommand/);
+  });
+
+  it("never spawns git (or anything) itself: no child_process import and no raw execFile/spawn/exec call in the arm", () => {
+    const code = src.split("\n").filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).join("\n"); // comments may say "spawn" and "fork"
+    expect(code.length).toBeGreaterThan(1000); // non-vacuity
+    expect(code).not.toMatch(/from\s+["'](?:node:)?child_process["']/);
+    expect(code).not.toMatch(/require\(\s*["'](?:node:)?child_process["']/);
+    expect(code).not.toMatch(/(?<![.\w])(?:execFile|execFileSync|spawn|spawnSync|exec|execSync|fork)\s*\(/);
+    // the harness can fail: the same patterns DO see a raw spawn of git
+    expect('import { execFile } from "node:child_process";').toMatch(/from\s+["'](?:node:)?child_process["']/);
+    expect('execFile("git", ["push"], cb)').toMatch(/(?<![.\w])(?:execFile|execFileSync|spawn|spawnSync|exec|execSync|fork)\s*\(/);
+    expect("/x/.exec(y)").not.toMatch(/(?<![.\w])(?:execFile|execFileSync|spawn|spawnSync|exec|execSync|fork)\s*\(/);
+  });
+
+  it("has exactly one commit call (the safeCommitAndPr seam) and the gate parsed it", () => {
+    expect(src).toMatch(/const commit = a\.safeCommit \?\? safeCommitAndPr;/);
+    expect(calls, "could not parse the commit call — gate DISENGAGED").toHaveLength(1);
+  });
+
+  it("the call passes exactPaths and expectedContent, and its allowedPaths is the empty list only", () => {
+    const [, body] = calls[0] ?? [];
+    expect(body).toMatch(/^\s+exactPaths:\s*\S/m);
+    expect(body).toMatch(/^\s+expectedContent:\s*\S/m);
+    const allowed = /^\s+allowedPaths:\s*([^\n]+?),?\s*$/m.exec(body ?? "");
+    expect(allowed, "no allowedPaths argument found in the call body").not.toBeNull();
+    expect(allowed![1].replace(/,\s*$/, "").trim()).toMatch(/^\[\s*\](?:\s+as\s+const)?$/);
+  });
+
+  it("is a draft with mergeMode none (the arm never auto-merges)", () => {
+    const [, body] = calls[0] ?? [];
+    expect(body).toMatch(/^\s+prDraft:\s*true,/m);
+    expect(body).toMatch(/^\s+mergeMode:\s*"none",/m);
+  });
+
+  it("mutation: a call that allows a directory prefix is RED", () => {
+    const mutated = src.replace("allowedPaths: [],", 'allowedPaths: ["plugins/soleur/skills/"],');
+    expect(mutated).not.toBe(src);
+    const [, body] = [...mutated.matchAll(/await commit\(\{([\s\S]*?)\n\s*\}\);/g)][0] ?? [];
+    const allowed = /^\s+allowedPaths:\s*([^\n]+?),?\s*$/m.exec(body ?? "");
+    expect(allowed![1].replace(/,\s*$/, "").trim()).not.toMatch(/^\[\s*\](?:\s+as\s+const)?$/);
   });
 });

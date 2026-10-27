@@ -81,7 +81,7 @@ Use the **AskUserQuestion tool** to clarify the design scope:
    - **New-file exemption:** when `open_document` creates a brand-new document there is
      no pre-existing file to snapshot, and the collapse gate does not apply (a new doc
      legitimately starts at ~41-96 bytes). The gate fires only when opening a pre-existing
-     non-empty `.pen`.
+     non-empty `.pen`. The `open_document` PreToolUse hook still refuses an **untracked** path, so for a brand-new `.pen` first `Write` a skeleton (`{"version":"2.18","variables":{...tokens...},"children":[]}`), `git add` and commit it, then `open_document`; the adapter rewrites it on the first `batch_design`. Stray `get_screenshot` captures land in `screenshots/` as `<nodeId>-<timestamp>.png` — delete them before committing.
 4. **Record the pre-edit hash (input to the Step 3 post-save gate).** Right after `open_document` and before the first `batch_design`, run this with `PEN_FILE` set to the `.pen` path and keep the printed value as `PRE_SHA` (`none` means the file does not exist yet):
 
    ```bash

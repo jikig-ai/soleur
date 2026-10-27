@@ -105,11 +105,24 @@ export async function isTemplateAuthorized(
   founderId: string,
   templateHash: string,
   grantId: string,
+  // #10543: a founder re-click REPLAYS an approval whose action_sends row already exists, so that
+  // row is already counted in `sendsUsed`. Without this the replay of the send that took the count
+  // to max_sends is denied as quota-exhausted (and auto-revokes the authorization on a refused
+  // path). Set ONLY on replay; a fresh send never passes it.
+  excludeActionSendId?: string,
 ): Promise<PredicateResult> {
   // Unconditional parallel fetch: the most-recent template_authorizations
   // row (regardless of revoked/expired state) + the count of action_sends
   // sharing this (user_id, template_hash). NO fallback path — plan v2
   // explicitly cut the v1 conditional double-query.
+  let countQuery = client
+    .from("action_sends")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", founderId)
+    .eq("template_hash", templateHash);
+  if (excludeActionSendId !== undefined) {
+    countQuery = countQuery.neq("id", excludeActionSendId);
+  }
   const [rowResult, countResult] = await Promise.all([
     client
       .from("template_authorizations")
@@ -119,11 +132,7 @@ export async function isTemplateAuthorized(
       .order("authorized_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
-    client
-      .from("action_sends")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", founderId)
-      .eq("template_hash", templateHash),
+    countQuery,
   ]);
 
   if (rowResult.error) {
