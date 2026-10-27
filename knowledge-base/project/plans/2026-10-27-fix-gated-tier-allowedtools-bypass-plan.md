@@ -533,7 +533,7 @@ Globs verified at plan time (`git ls-files`): every `apps/web-platform/test/*.te
 - [x] For every name `n` in the legacy `platformToolNames` with `getToolTier(n) !== "auto-approve"` (24 of 46 at plan time; the test derives the counts), `options.allowedTools` does not contain it; every auto-approve name and every `mcp__plugin_soleur_<server>__*` wildcard remains. `createCanUseTool` still receives the unfiltered list.
 - [x] `conversations_lookup` is `auto-approve`; `plausible_*` and `account_*` have explicit `gated` entries; every registered `soleur_platform` tool name of a booted legacy session has an explicit `TOOL_TIER_MAP` entry.
 - [x] `buildAgentQueryOptions` throws on a gated FQN, the bare `mcp__soleur_platform`, and `mcp__*` / `mcp__soleur*` wildcard entries; passes `Read`, plugin wildcards, `narrate`, `summarize`, and the real `CC_PATH_ALLOWED_TOOLS` with the support filter.
-- [ ] No gated tool's `buildGateMessage` equals the generic default; every card text is length-bounded and neutralised under hostile input; the email preview states truncation and total length; the approved-body binding at `server/email-triage/outbound.ts` is cited in the PR body (or the plan stops and escalates).
+- [x] No gated tool's `buildGateMessage` equals the generic default; every card text is length-bounded and neutralised under hostile input; the email preview states truncation and total length; the approved-body binding at `server/email-triage/outbound.ts` is cited in the PR body (or the plan stops and escalates).
 - [x] `buildOfflineGateMessage` is content-free for every gated tool (no tool-input value in any offline message); no published privacy text is edited.
 - [x] `buildAgentQueryOptions` uses the allowlist form (exact auto FQN or validated `mcp__plugin_soleur_<name>__*` only for `mcp__` entries) and rejects `bypassPermissions`.
 - [x] Phase 0.6 recorded: whether a real `CAN_USE_TOOL_SHADOWED` row exists in Better Stack, its `host_name` and discriminating field; the post-merge check uses the real host names.
@@ -545,7 +545,7 @@ Globs verified at plan time (`git ls-files`): every `apps/web-platform/test/*.te
 - [x] Probe: `NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform/scripts/dev-probe-approval-gate.ts` prints `RESULT: PASS`: eight `:prod` rows `invoked=yes` with deny honoured, `email_send:raw` `verdict=BYPASS`, `email_send:prod-stream` `invoked=yes`. Provenance and PROBE lines are pasted in the PR body. Never run against `prd`.
 - [x] `tsc --noEmit`, the touched vitest suites, eslint, and `plugins/soleur/test/c4-count-parity.test.sh` are green. No published legal text, `compliance-posture.md`, or flag definition is changed (`git diff --stat origin/main`).
 - [x] ADR created via `soleur:architecture`, ordinal re-verified against `origin/main` at ship.
-- [ ] CPO sign-off conditions met (Domain Review); `soleur:engineering:review:user-impact-reviewer` ran at review.
+- [x] CPO sign-off conditions met (Domain Review); `soleur:engineering:review:user-impact-reviewer` ran at review. (CPO sign-off 2026-10-27: yes, with the PR-body first-line condition satisfied at ship; user-impact-reviewer ran in the 12-seat panel and the fix-round pass.)
 
 ### PR body contract
 
