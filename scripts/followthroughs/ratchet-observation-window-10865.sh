@@ -190,7 +190,7 @@ for ev in pull_request merge_group; do
     page=$((page + 1))
   done
 done
-awk -F'\t' '$1 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' "$RUNS" || fail_api "ci.yml runs (non-numeric run id)"
+awk -F'\t' '$1 !~ /^[0-9]+$/ || $6 !~ /^[0-9]+$/ || $7 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' "$RUNS" || fail_api "ci.yml runs (non-numeric run id, attempt or PR number)"
 runs_listed="$(grep -c . "$RUNS")"
 # a cancelled run spends no budget. The newest NEWEST_MG merge_group runs are dispatched FIRST (the pause check and the defects need the newest queue state, and a read
 # budget must never be what cuts it), then the oldest runs up to MAX_UNITS, oldest first.

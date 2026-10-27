@@ -3238,7 +3238,7 @@ row_ow_progress() {
   grep -q 'parallel=4 budget_s=300' "$OWERR" || return 1
   ! grep -qE 'runs_listed|units_read|units=|truncated' "$OWERR"
 }
-row_ow_heartbeat() {   # 48 readable runs: a beat per 25 completions, only when asked for (stderr here is a file, not a TTY)
+row_ow_heartbeat() {   # 49 readable runs (a beat at 25; the exact-count assertion holds below 50): a beat per 25 completions, only when asked for (stderr here is a file, not a TTY)
   ow_case; ow_u_bigmax; ow_write; OW_ENV=(SOAK_PARALLEL=1 SOAK_PROGRESS=1); ow_probe_split
   grep -q '^soak-progress: heartbeat read=25/' "$OWERR" && [[ "$(grep -c 'heartbeat' "$OWERR")" -eq 1 ]] || return 1
   OW_ENV=(SOAK_PARALLEL=1); ow_probe_split
@@ -3275,17 +3275,24 @@ row_ow_parallelism() {   # eight 1 s reads: the stub counts how many are in flig
     [[ "$conc" -eq "$p" ]] || return 1
   done
 }
-row_ow_run_id() {   # a run id from the API is validated at list time
-  ow_case; ow_write
-  local item; item="$(ow_run_item '"6001x"' shaZ feat/z 2031-02-03T05:00:00Z 1 merge_group success 0)"
-  printf '{"total_count":1,"workflow_runs":[%s]}' "$item" | fx "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"
-  ow_probe
-  [[ "$RC" -eq 3 ]] && grep -q 'non-numeric run id' <<<"$OWOUT"
+row_ow_run_id() {   # a run id, attempt or PR number from the API is validated at list time (trailing garbage, leading garbage, an embedded space, a non-numeric PR number)
+  local id prn item
+  for id in '"6001x"' '"x6001"' '"60 01"' ok; do
+    ow_case; ow_write; prn=0; [[ "$id" != ok ]] || { id=6001; prn='"x"'; }
+    item="$(ow_run_item "$id" shaZ feat/z 2031-02-03T05:00:00Z 1 merge_group success "$prn")"
+    printf '{"total_count":1,"workflow_runs":[%s]}' "$item" | fx "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"
+    ow_probe
+    [[ "$RC" -eq 3 ]] && grep -q 'non-numeric run id' <<<"$OWOUT" || return 1
+  done
 }
 row_ow_empty_branch() {   # an empty head_branch must not collapse under the tab IFS and shift every later field
   ow_case; ow_write
   local f; f="$GHFIX/$(keyof "repos/$R/actions/workflows/ci.yml/runs?event=pull_request&status=completed&per_page=100&created=%3EX")"
   sed -i 's/"head_branch":"feat\/a"/"head_branch":""/' "$f" && grep -q '"head_branch":""' "$f" || return 1
+  ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
+  ow_case; ow_write   # the same, with a JSON null (the API schema allows it)
+  sed -i 's/"head_branch":"feat\/a"/"head_branch":null/' "$f" && grep -q '"head_branch":null' "$f" || return 1
   ow_probe
   [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT"
 }
@@ -3300,6 +3307,11 @@ row_ow_budget_facts() {   # the reads finish inside their budget; the first pull
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/11")"
   OW_ENV=(SOAK_FACTS_BUDGET_S=2 SOAK_PARALLEL=4 SLOW_S=3); ow_probe
   [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'NOT YET: read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT"
+}
+row_ow_facts_clock() {   # the facts allowance starts at the facts phase: a 5 s jobs read must not eat a 4 s allowance that the facts then need under 2 s
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  OW_ENV=(SOAK_FACTS_BUDGET_S=4 SOAK_PARALLEL=4 SLOW_S=5); ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q 'truncated=0' <<<"$OWOUT" && ! grep -q 'PR-facts phase' <<<"$OWOUT" && grep -q 'soleur_pulls_11$' "$GHLOG"
 }
 row_ow_quota() {   # need = 2 * runs to read + 5 * PRs + 200; the base fixture reads 8 runs of 5 PRs
   ow_case; OW_RL_REMAINING=100; ow_write; ow_probe
@@ -3324,16 +3336,18 @@ row_ow_seam_caps() {
   ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=abc); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=301); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=abc); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=600 SOAK_FACTS_BUDGET_S=300); ow_probe; [[ "$RC" -eq 0 ]]
 }
-ow_u_json_error() { ow_u_few16; OW_P16_FILES="{\"message\":\"@octocat </details> [x](http://e) #1 www.attacker.example\\u001b$(printf 'A%.0s' $(seq 1 300))\"}"; }
+ow_u_json_error() { ow_u_few16; OW_P16_FILES="{\"message\":\"@octocat </details> [x](http://e) #1 www.attacker.example `x` \\u001b$(printf 'A%.0s' $(seq 1 300))\"}"; }
 row_ow_jq_error_text() {
   ow_variant ow_u_json_error
   [[ "$RC" -eq 3 ]] || return 1
   local line detail; line="$(grep '^CANNOT ESTABLISH' <<<"$OWOUT" | head -n 1)"
   [[ "$line" == *'pull 16 files (parse): '* ]] || return 1
   detail="${line#*pull 16 files (parse): }"; detail="${detail%)}"
-  [[ ${#detail} -ge 20 && ${#detail} -le 160 ]] && [[ "$detail" != *[@\<\>\[\]\#\`.]* ]] && ! grep -q $'\033' <<<"$line"
+  [[ ${#detail} -ge 20 && ${#detail} -le 160 ]] && [[ "$detail" != *[@\<\>\[\]\#\`./]* ]] && ! grep -q $'\033' <<<"$line"
 }
 row_ow_trap() {   # SIGTERM while a slow read is in flight: exit 143, no worker survives, the work directory is gone
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
@@ -3399,6 +3413,7 @@ chk "window probe: a quota shortfall, a failed rate_limit read and a 403 exit 3 
 chk "window probe: SOAK_PARALLEL above 8 and SOAK_BUDGET_S above 600 are CANNOT ESTABLISH; the caps themselves are allowed" row_ow_seam_caps
 chk "window probe: jq's error text reaches the failure message, allow-listed and at most 160 bytes" row_ow_jq_error_text
 chk "window probe: SIGTERM while a read is in flight leaves no worker and no work directory (exit 143)" row_ow_trap
+chk "window probe: the facts allowance starts at the facts phase, not at the probe start" row_ow_facts_clock
 chk "window probe: a failed read stops further launches" row_ow_stop_after_fail
 chk "window probe: exactly SOAK_PARALLEL reads are in flight at once (4 and 1), counted by the stub" row_ow_parallelism
 chk "window probe: a non-numeric run id from the API is CANNOT ESTABLISH at list time" row_ow_run_id
@@ -3472,11 +3487,18 @@ ow_mutate failed-flag-ignored $'if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; t
 ow_mutate worker-order-reversed $'for wrc_file in "$UD"/*.rc; do' $'for wrc_file in $(ls -r "$UD"/*.rc); do' row_ow_worker_fail
 ow_mutate 429-ignored $'grep -oE \'HTTP (403|429)\'' $'grep -oE \'HTTP 403\'' row_ow_quota
 ow_mutate listcalls-dropped $'if (( RL_REM - LISTCALLS < need )); then' $'if (( RL_REM < need )); then' row_ow_quota
-ow_mutate run-id-unvalidated $'awk -F\'\\t\' \'$1 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }\' "$RUNS" || fail_api "ci.yml runs (non-numeric run id)"' $':' row_ow_run_id
+ow_mutate run-id-unvalidated $'awk -F\'\\t\' \'$1 !~ /^[0-9]+$/ || $6 !~ /^[0-9]+$/ || $7 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }\' "$RUNS" || fail_api "ci.yml runs (non-numeric run id, attempt or PR number)"' $':' row_ow_run_id
 ow_mutate hb-modulus $'(( done_n % 25 == 0 ))' $'(( done_n % 5 == 0 ))' row_ow_heartbeat
 ow_mutate jq-detail-allows-at $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 _:,()@#-\' \'?\'' row_ow_jq_error_text
 ow_mutate par-regex-zero $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[0-9]+$ && "$PAR" -le 8 ]]' row_ow_seam_caps
 ow_mutate branch-field-unguarded $'((.head_branch // "") | if . == "" then "-" else . end)' $'(.head_branch // "")' row_ow_empty_branch
+ow_mutate facts-clock-from-probe-start $'FACTS_CUT=0; TF0=$SECONDS;' $'FACTS_CUT=0; TF0=$T0;' row_ow_facts_clock
+ow_mutate facts-regex-dropped $'[[ "$FACTS_BUDGET" =~ ^[1-9][0-9]*$ && "$FACTS_BUDGET" -le 300 ]]' $'[[ "$FACTS_BUDGET" -le 300 ]]' row_ow_seam_caps
+ow_mutate jq-detail-allows-dot $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 ._:,()-\' \'?\'' row_ow_jq_error_text
+ow_mutate jq-detail-allows-slash $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 /_:,()-\' \'?\'' row_ow_jq_error_text
+ow_mutate branch-guard-empty-only $'((.head_branch // "") | if . == "" then "-" else . end)' $'(if .head_branch == "" then "-" else (.head_branch // "") end)' row_ow_empty_branch
+ow_mutate run-id-anchor-loose $'$1 !~ /^[0-9]+$/ || $6' $'$1 !~ /[0-9]+$/ || $6' row_ow_run_id
+ow_mutate prn-unvalidated $' || $7 !~ /^[0-9]+$/ { bad = 1 }' $' { bad = 1 }' row_ow_run_id
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
 # ---------------------------------------------------------------------------------------------------------------------
@@ -4768,7 +4790,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1201   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 49 added by the observation-window probe fix (19 rows, 30 mutant kills) (measured below)
+FLOOR_ASSERTIONS=1209   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 37 mutant kills) (measured below)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
