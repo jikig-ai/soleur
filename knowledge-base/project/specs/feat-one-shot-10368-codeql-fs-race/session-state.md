@@ -56,3 +56,9 @@
 - 5 fix-round seats reported; P1 (dead `open` destructure, eslint ratchet) + P2s (EPERM regression, stale-fd guard missing on unlink) all fixed inline; `\` rejection + single-sourced relPath check + stale-fd test added. 107/107 vitest, tsc, eslint all green.
 - HEAD after this commit: fix-round-resolutions (pending commit id). Remaining: 1 verification pass over fix range, then Step 5.5 qa (unit-scoped, likely quick), 6 compound, 7 ship (awaits affected gate /tmp/testall-affected-10368.log + CI), 8 DONE.
 - Deferred P3s (won't fix this PR): procfs-less-Linux probe, non-Linux fallback test coverage, fh.close() lone-writeback masking, error-prefix family naming, fuller /race refused/ regex anchor.
+
+## QA + compound complete
+- QA: unit-scoped (107/107 vitest green); caller contract verified unchanged (cron-community-monitor.ts:1122,1243 same signature); only impl+test+KB in diff.
+- Compound: learnings file knowledge-base/project/learnings/security-issues/2026-10-27-exported-containment-primitives-must-self-validate.md committed.
+- NEXT: Step 7 ship — invoke soleur:ship; affected gate /tmp/testall-affected-10368.log still running (was mid-suites at last check). Ship owns merge + postmerge; post-merge verify CodeQL alert 248 state via gh api repos/jikig-ai/soleur/code-scanning/alerts/248 --jq .state.
+- HEAD includes fix-round resolutions; PR #11334 body carries 10x Closes.
