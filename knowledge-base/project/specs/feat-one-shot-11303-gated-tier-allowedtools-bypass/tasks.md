@@ -53,11 +53,12 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 
 - [x] 6.1 A1 late-click wording (`ERR_REVIEW_GATE_NOT_FOUND` text), platform deny texts tell the agent to tell the user
 - [x] 6.2 A2 email cards: full parsed recipient, reply-to, subject, entire body (cap 4000), hidden characters made visible, static fail-closed denies (`buildGateCard`), zod `.max`, `+N more`, pre-capped scalars, new strip set; hash comments corrected; other gated cards name inputs they do not print
-- [x] 6.3 A3 deterministic abort/restore rule (CAS restore, abort-skip, abort finalize accepts `waiting_for_user`) with ordering tests
+- [x] 6.3 A3 deterministic abort/restore rule (CAS restore, abort-skip; the abort finalize stays active-only, #3463) with ordering tests
 - [x] 6.4 A4 explicit `nonInteractive` flag from the auto-sync seam; immediate static deny
 - [x] 6.5 A5 pending-card cap (5), `permissionMode` allowlist, Bash-family rejection in `allowedTools`
 - [x] 6.6 B1 expiry/abort log rows (`delivered`, `conversationId`, `reason`, distinct `platform-gate-aborted`), B2 gate registered before the status write, B3 shared keep-rule exports
 - [x] 6.7 B4 full hand-written tier table, signal-delivery and real-gate fake-timer tests, assertion anchors, shared `registeredPlatformTools`; B5 comment truth; B6 system-prompt line; B7 plan/ADR corrections
-- [x] 6.8 Mutation-verify every new guard in an allocated sandbox (see PR notes)
-- [ ] 6.9 FOLLOW-UP (not here): replay unresolved `review_gate` frames on resume; email_reply sender/subject lookup for the card; per-session toolUseID-keyed body hash map; full non-MCP `allowedTools` allowlist
+- [x] 6.8 Mutation-verify every new guard in an allocated sandbox (round-1 and round-2 results recorded in the plan, section Mutation Evidence)
+- [x] 6.10 Fix-round 2 (CTO round-2 rulings): abort finalize reverted to active-only; Approve after abort denied; ASCII/trim recipient fidelity, one hidden-character class, exact quoting, shared caps in zod; wrapping approval card with a short aria-label; test-design rows; ADR and plan corrections
+- [ ] 6.9 FOLLOW-UP (not here; also under ADR-305 "Scoped out"): replay unresolved `review_gate` frames on resume; email_reply sender/subject lookup for the card; per-session toolUseID-keyed body hash map; full non-MCP `allowedTools` allowlist; `nonInteractive` for Bash gates in headless sync; serialise hold/restore writes per session; per-Query closed flag instead of the sticky controller skip (cc path); `failed` finalizers with active-only guards leaving a parked row, and the AskUserQuestion / destroy-gate status writers bypassing `pendingGates` / CAS (pre-existing); one shared tool-tiers `vi.mock` factory across eight test files; consent fatigue; other-field cards print "not shown" notes
 

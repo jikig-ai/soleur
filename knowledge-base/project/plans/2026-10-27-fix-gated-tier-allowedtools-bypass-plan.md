@@ -177,7 +177,7 @@ Generalize `holdForUser` with a trailing options object (`{ kind?, gateClass }`,
 - `null` (timeout or abort) → `log.warn` (not `info`: the log shipper forwards only level 40 and above, so a warn row reaches Better Stack without SSH, observability review) with `sec: true`, `decision: "platform-gate-expired"`, `logPermissionDecision("canUseTool-platform-gated", tool, "deny", "gate expired")`, and a **static** deny: `The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.` No Sentry capture for expiry (expected user behaviour); Sentry only for status-write failures, which are triage-only (no pager rule is added; stated, not implied).
 - `"Approve"` → allow (unchanged); any other selection → deny `User rejected the action. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.` (CPO sign-off condition: the agent must not retry around the gate; no existing test pins the old string, re-grep at work time).
 - Parallel gated calls now stack correctly (first answer does not mark the turn `active` while another card is open).
-- **Status policy (corrected in review; ADR-305): one deterministic rule for BOTH gate classes.** (1) The hold write is a compare-and-set (`active` or `waiting_for_user` to `waiting_for_user`). (2) The restore runs only when the pending counter reaches 0 AND `ctx.controllerSignal.aborted` is false; on abort the restore is skipped for Bash and platform gates alike. (3) The restore is a compare-and-set, `waiting_for_user` to `active` only, so it never overwrites `completed`, `failed` or a status the abort branch wrote. (4) The abort branch of `startAgentSession` finalizes from `active` OR `waiting_for_user` (`ABORT_FINALIZE_FROM_STATUSES`; every other finalize site keeps `["active"]`), and a terminal row is still never overwritten. Result: the same end state in either write order, and a disconnect with a card pending ends `failed`. The earlier text here (platform class only; a disconnect leaving `waiting_for_user` until a reaper flips it) was wrong on both counts: the stuck-conversation reaper handles `status = 'active'` only and would never have flipped that row. The other gate sites (`AskUserQuestion` around line 515, the destroy gate around line 777) are out of scope here.
+- **Status policy (corrected in review; ADR-305): one deterministic rule for BOTH gate classes.** (1) The hold write is a compare-and-set (`active` or `waiting_for_user` to `waiting_for_user`). (2) The restore runs only when the pending counter reaches 0 AND `ctx.controllerSignal.aborted` is false; on abort the restore is skipped for Bash and platform gates alike. (3) The restore is a compare-and-set, `waiting_for_user` to `active` only, so it never overwrites `completed`, `failed` or a status the abort branch wrote. (4) The abort branch of `startAgentSession` finalizes from `active` ONLY, by design (#3463; the set is `ACTIVE_STATUSES_FOR_FINALIZE`, shared by every finalize site): the result branch writes `waiting_for_user` as the normal turn-end status, and a widened finalize would let a disconnect right after a clean result overwrite it with `failed`. (5) An Approve that lands after the session aborted, or while the restore write is awaited, is not honoured: `holdForUser` returns null and every caller denies. Result: a disconnect or Stop while a card is pending leaves the row `waiting_for_user`, the same end state in either write order; that state is resumable and the 2-hour inactivity timer (`startInactivityTimer`, which completes `waiting_for_user` rows) closes it. The earlier text here (a widened abort finalize, so a disconnect with a card pending ends `failed`) re-opened #3463 and was reverted after the CTO's second-round ruling; the stuck-conversation reaper handles `status = 'active'` only. The other gate sites (`AskUserQuestion` around line 515, the destroy gate around line 777) are out of scope here.
 - `options.agentID` (subagent) is present on the call context; a test sets it on a gated call to confirm the verdict path is identical.
 
 ### Alternatives considered
@@ -231,12 +231,14 @@ Write-site sweep (`hr-write-boundary-sentinel-sweep-all-write-sites`): `rg -n "a
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** `email_send`, `github_push_branch` or `kb_share_create` still run with no card (on any web host not yet redeployed, or if a tool lacks a tier entry); or the card never renders and the call is denied, leaving `conversation.status` at `waiting_for_user` and holding the user's concurrency slot until the stuck-conversation reaper runs; or the card renders attacker-shaped text (markdown, newlines, an unbounded title) so the user approves something other than what runs. Rolling-deploy window: sessions are instance-local, so a user pinned to the not-yet-updated host stays unprotected until that host is on the new image; both hosts must be on the merge-commit image before the post-deploy check counts.
+- **If this lands broken, the user experiences:** `email_send`, `github_push_branch` or `kb_share_create` still run with no card (on any web host not yet redeployed, or if a tool lacks a tier entry); or the card never renders and the call is denied, leaving `conversation.status` at `waiting_for_user` until the 2-hour inactivity timer completes it (resumable meanwhile); or the card renders attacker-shaped text (markdown, newlines, an unbounded title) so the user approves something other than what runs. Rolling-deploy window: sessions are instance-local, so a user pinned to the not-yet-updated host stays unprotected until that host is on the new image; both hosts must be on the merge-commit image before the post-deploy check counts.
 - **If this leaks, the user's workflow and third-party recipients are exposed via:** a prompt-injected agent (inbound email body, GitHub issue/PR text, CRM note content) calling `email_send` to an arbitrary recipient, `github_push_branch` / `create_pull_request` / `github_trigger_workflow` against the connected repo, `kb_share_create` (public URL for a KB document), or `workspace_set_autonomous` (switching off approvals on a code-executing surface), with no human approval.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one prompt-injected outbound email, push or public share from one user's workspace is brand-defining on its own, so this is not an aggregate-pattern risk.
 
 Consent fatigue (accepted by the CPO): the `crm_*` and `workstream_issue_*` cards appear in legacy chat for the first time; reflexive Approve clicks weaken the gate, which is a #11289 design item, not a reason to leave the bypass. A late click on an expired card must say the action was not performed (Phase 0.5 asserts the wording of the ws-handler error), because no client frame marks a gate expired today.
+
+**Scoped out, named (not silent).** Reconnect replay of an unresolved `review_gate` frame; `email_reply` sender lookup on the card; a `toolUseID`-keyed body-hash binding; a full non-MCP `allowedTools` allowlist; `nonInteractive` for Bash gates in headless sync; serialising the hold and restore writes per session; a per-Query closed flag instead of the sticky controller-abort skip (cc path); `failed` finalizers with active-only guards leaving a parked `waiting_for_user` row, and the AskUserQuestion / destroy-gate status writers bypassing `pendingGates` and the compare-and-set (pre-existing); one shared `tool-tiers` `vi.mock` factory across the eight test files that mock it; consent fatigue; other-field cards print "not shown" notes. **The PR's honest limit:** "Approve" binds to `allow(toolInput)`, because the SDK passes the same object to `canUseTool` and then to the handler (probe-covered); there is no `toolUseID`-keyed binding of the reviewed body to the executed one.
 
 CPO sign-off: **conditional approve** (Domain Review). `soleur:engineering:review:user-impact-reviewer` runs at review time.
 
@@ -273,6 +275,9 @@ failure_modes:
 logs:
   where: "pino stdout in the web container (not shipped to Better Stack, per the issue's evidence limits); SDK CLI stderr warnings (CAN_USE_TOOL_SHADOWED) in Better Stack scoped by host_name; Sentry for the warn ops"
   retention: "per the Better Stack source retention setting and Sentry project retention; unchanged by this PR"
+
+scoped_out:
+  - "Not observable and not built here: reconnect replay of review_gate, email_reply sender lookup on the card, toolUseID-keyed body-hash binding, a full non-MCP allowedTools allowlist, nonInteractive for Bash gates, per-session serialisation of hold/restore writes, a per-Query closed flag (cc path), active-only `failed` finalizers leaving a parked row and the AskUserQuestion / destroy-gate writers bypassing pendingGates (pre-existing). Hold and restore writes report under distinct ops (updateConversationStatusGateHold / updateConversationStatusGateRestore) so one Sentry dedup window cannot hide the other."
 
 discoverability_test:
   command: bash scripts/betterstack-assert-absence.sh --host soleur-web-platform --absence mcp__soleur_platform__email_send --absence mcp__soleur_platform__github_push_branch --absence-require CAN_USE_TOOL_SHADOWED --control mcp__soleur_platform__narrate --control-require-field source_kind=app_container --since 7d
@@ -335,7 +340,8 @@ The ADR describes the live state; it lands in this PR (commit 4). It also record
 | 6 | Status write throws on hold or restore | RED if the throw replaces the verdict; GREEN requires the verdict preserved and a `warnSilentFallback` with the `platform-gate-status-*` op and its static message (this row also catches the gate-class label being dropped) |
 | 7 | Restore `active` even when the session controller is aborted (either class) | RED: the abort case asserts no `active` write after `controllerSignal.aborted`, for both abort reasons |
 | 8 | Drop the compare-and-set guard on the restore | RED: a concurrent `completed` is overwritten |
-| 9 | Abort-branch finalize accepts only `active` | RED: a disconnect with a card pending stays `waiting_for_user` |
+| 9 | Widen the abort-branch finalize to also accept `waiting_for_user` (#3463 regression) | RED: the disconnect-after-result race test (a row already `waiting_for_user` must not become `failed`) and the gate-expiry ordering tests |
+| 10 | Approve honoured after abort: drop the post-hold abort recheck | RED: abort during the awaited restore write, a per-call abort and a controller abort each expect a deny |
 
 **Harness rows.** Suite edit that must go RED: change the timeout-case stub to resolve `"Approve"` instead of rejecting; the case's precondition assertion (the stub was called and rejected) fails. Must-PASS non-canonical inputs: a gated tool outside the probed eight (`crm_note_append`, `workstream_issue_close`), an `AbortError`-shaped rejection and a plain `Error("timeout")` rejection, and a rejection after an already-aborted signal. **Anchor.** Not a stored-value comparison; the guard compares behaviour, so no anchor applies beyond the observation-inside-the-window row (3).
 
@@ -355,6 +361,47 @@ The ADR describes the live state; it lands in this PR (commit 4). It also record
 | 4 | The legacy-name derivation (`registration()`) fails an import | CANT-RUN, never a silent fall back to the eight FQNs |
 
 **Harness rows.** The probe is paid and model-dependent, so its matrix is exercised by edit-and-run at work time for rows 1 and 3 (one paid call each, `PROBE_ONLY`), and by reading the verdict function for rows 2 and 4. Must-PASS input differing from canonical: the `:prod` rows run with the production string prompt, while the diagnostic row uses a streaming prompt. **Anchor.** The `:raw` canary is the externally-anchored row: it ties the probe to the SDK's actual current behaviour independent of any repo edit.
+
+## Mutation Evidence (recorded in fix-rounds 1 and 2)
+
+Each row was applied in an allocated sandbox copy (never the live tree), after a green control of the same test files, with the edit asserted to have landed; the sandbox was removed afterwards. "Red" means the named tests failed with the mutation and passed without it.
+
+**Round 2 (new guards):**
+
+| Guard | Mutation | Landed | Test that reds |
+|---|---|---|---|
+| Abort finalize active-only | widen `ACTIVE_STATUSES_FOR_FINALIZE` to include `waiting_for_user` | yes | `agent-runner-disconnect-after-result-race` (row stays `waiting_for_user`, no applied `failed` write), gate-expiry ordering tests: 6 red |
+| Post-hold abort recheck | remove the `signal.aborted \|\| controllerSignal.aborted` recheck after the restore write | yes | gate-expiry "an Approve is never honoured after the session aborted": 5 red |
+| Restore skip on abort | remove `!ctx.controllerSignal.aborted` from the restore condition | yes | gate-expiry abort-first / gate-first / user-Stop / stacked rows: 9 red (the earlier rows stayed green because the failed row blocked the CAS; the new rows keep the row at `waiting_for_user`) |
+| Recipient ASCII-only | remove the `CARD_ADDR_ASCII_RE` check | yes | `tool-tiers` non-ASCII local part, IDN domain, NBSP rows: 4 red |
+| Recipient trim equality | remove `raw !== raw.trim()` | yes | leading / trailing whitespace, trailing newline rows (to, reply-to, suppress): 5 red |
+| `endsWith(">")` | remove the guard | yes | "trailing text after the closing bracket" rows: 3 red |
+| Display name revealed | `revealHidden(p.name, true)` replaced by the raw name | yes | hostile display name on a valid recipient: 1 red |
+| Suppress reason | `cardField(reason)` replaced by `String(reason)` | yes | hostile suppress reason row: 1 red |
+| Hidden-character class | drop U+3164, U+2800, U+034F (and its neighbours), narrow U+2060-206F, drop U+E0100-E01EF | yes (5 mutants) | per-code-point body, subject, recipient and plain-card rows: 2 to 4 red each |
+| `[U+` escape | remove the literal `[U+` rewrite | yes | forged-marker row: 1 red |
+| Exact quoting | subject back to the `"` to `'` rewrite | yes | quote-bearing subject / display name row: 1 red |
+| zod caps | body cap +1; recipient cap removed; reply-to cap removed | yes (3) | `outbound-tools` schema cap rows: 1 red each |
+| Card UI | drop `whitespace-pre-wrap`; drop `[overflow-wrap:anywhere]`; aria-label back to the question | yes (3) | `review-gate-card-layout`: 2, 1 and 2 red |
+| `findOffenders` | never flags; skips bare wildcards | yes (2) | census known-positive control: 1 red each |
+| Bash family grammar | regex without `\s*` before the paren | yes | `Bash (npm *)` and tab rows: 2 red |
+| Pending-cap deny text | reverted | yes | gate-expiry cap row: 1 red |
+
+**Round 1 guards, re-run in round 2:**
+
+| Guard | Mutation | Landed | Test that reds |
+|---|---|---|---|
+| Guard 1 row 4 | `allowedToolsList` back to the raw list plus wildcards | yes | census: 47 red (the `buildAgentQueryOptions` assertion throws at session start, so the boot fails loudly) |
+| Guard 1 row 1 | filter keeps every platform tool | yes | census: 47 red (same loud failure) |
+| Guard 1 row 5 | assertion neutered / `permissionMode` check removed | yes | `agent-runner-query-options`: 21 and 6 red |
+| Guard 2 row 1 | gate rejection no longer caught | yes | gate-expiry: 22 red |
+| Guard 2 row 8 | restore CAS guard dropped / hold CAS guard dropped | yes | gate-expiry: 3 and 2 red |
+| Non-interactive fast deny | removed | yes | gate-expiry: 1 red |
+| Pending cap | raised to 50 | yes | gate-expiry: 1 red |
+| Fail-closed card | deny ignored (card built anyway) | yes | gate-expiry: 4 red |
+| Body cap | card cap +1 | yes | `tool-tiers` and `outbound-tools`: 2 red |
+
+Round-1 panel mutations that had stayed green and drove round 2: dropping `endsWith(">")` (140/140 green), removing the controller-abort restore skip (47/47 green), removing the display-name reveal, the suppress-reason `cardField`, the subject quote rewrite and the CRLF handling. Each now has a row above that reds.
 
 ## Implementation Phases
 

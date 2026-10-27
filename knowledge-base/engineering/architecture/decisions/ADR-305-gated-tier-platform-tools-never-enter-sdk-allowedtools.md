@@ -46,7 +46,7 @@ human decision.
    hand such a tool to the SDK as pre-approved (`allowedTools`, settings-file `permissions.allow`, skill or agent `allowed-tools`
    frontmatter, a permission mode that skips the callback, or a PreToolUse `allow`).
 2. **The keep-rule is `isPreApprovable(name)` (`getToolTier(name) === "auto-approve"`)**, implemented once in `server/tool-tiers.ts` (it imports only the pure `outbound-compliance` validators, so tests and the real-SDK probe load it
-   without booting the runner) and shared by `buildAllowedTools`, the `buildAgentQueryOptions` assertion and the plugin-tool prefix check, together with `pluginWildcard` / `parsePluginWildcard` and used at the legacy runner's `allowedToolsList` site. `createCanUseTool` keeps receiving the
+   without booting the runner) and shared by `buildAllowedTools` and the `buildAgentQueryOptions` assertion; the plugin prefix helper (`pluginToolPrefix`) is the keep-rule shared with `canUseTool`'s plugin check, together with `pluginWildcard` / `parsePluginWildcard`, and `buildAllowedTools` is used at the legacy runner's `allowedToolsList` site. `createCanUseTool` keeps receiving the
    **unfiltered** `platformToolNames` (its own allowlist); only the SDK pre-approval list is filtered. `auto-approve` means read-only, or a hard-scoped
    reversible write whose justification is written next to its `TOOL_TIER_MAP` entry (`edit_c4_diagram` is the one existing write-shaped
    entry, scoped to `engineering/architecture/diagrams/`).
@@ -58,19 +58,23 @@ human decision.
 4. **Every name handed to `createCanUseTool` as a platform tool has an explicit `TOOL_TIER_MAP` entry.** `getToolTier` still defaults to
    `gated`, but the census test fails until a new tool's tier is *decided*, so "decided" is distinguishable from "defaulted".
 5. **The gate itself fails closed.** The gated branch runs through the shared `holdForUser` lifecycle: timeout or abort resolves to a static
-   deny ("the action was not performed; do not retry unless the user asks; tell the user"), parallel cards stack (at most 5 pending, Bash and
-   platform together), and status-write failures mirror to Sentry under `platform-gate-status-hold|restore`, each with its own static
+   deny ("the action was not performed; do not retry unless the user asks; tell the user"), parallel cards stack (platform calls are denied once 5 cards, Bash and platform together, are pending; Bash cards are not themselves capped), and status-write failures mirror to Sentry under `platform-gate-status-hold|restore`, each with its own static
    message. **One deterministic status rule for both gate classes:** the hold is a compare-and-set into `waiting_for_user`; the restore
    runs only when the last pending gate resolves AND the session controller is not aborted, and is a compare-and-set
    `waiting_for_user` to `active` (it never overwrites `completed` or `failed`); the abort branch of `startAgentSession` finalizes from
-   `active` OR `waiting_for_user` (a terminal row is still never overwritten). The end state is the same in either write order, and a
-   disconnect while a card is pending ends `failed`. A session with no human present (the auto-sync seam sets an explicit
+   `active` ONLY, by design (#3463): the result branch writes `waiting_for_user` as the normal turn-end status, and a finalize that also
+   accepted `waiting_for_user` would let a disconnect right after a clean result overwrite it with `failed`. A disconnect or Stop while a
+   card is pending therefore leaves the row `waiting_for_user`; that state is resumable and the 2-hour sweep completes it. The end state is
+   the same in either write order. An Approve that arrives after the session aborted (or while the restore write is awaited) is not
+   honoured: the helper returns the aborted deny, never an `allow`. A session with no human present (the auto-sync seam sets an explicit
    `nonInteractive` flag) denies a gated platform tool at once, with no card, no status write and no notification.
 6. **The card is part of the control.** Interpolated tool-input fields are bounded and neutralised, every accepted input that changes the
    outcome is shown or named as not shown, and the offline push/email text is content-free for every gated tool (privacy notice scope,
    #8532). The outbound-email cards show the full parsed recipient, reply-to, subject and the entire body (cap 4000), make hidden
-   characters visible instead of deleting them, and DENY with a static message when the input cannot be shown in full: an Approve card is
-   never built from a truncated recipient or body. The body hash (`approvedBodySha256`) is a handler-local integrity hash of the body as
+   characters visible instead of deleting them (one shared hidden-character class; a literal `[U+` in the text is rewritten so it cannot
+   forge a marker), and DENY with a static message when the input cannot be shown in full: an Approve card is
+   never built from a truncated recipient or body. Recipients are ASCII-only and fail closed in v1 (punycode `xn--` is allowed) and must
+   not carry leading or trailing whitespace, so the handler sends exactly the string the card parsed. The body hash (`approvedBodySha256`) is a handler-local integrity hash of the body as
    sent, not a binding to the card; the binding is `canUseTool` returning `allow(toolInput)`, the same object the handler runs on.
 7. **Enforced by**, per forbidden pre-approval route in decision 1 (in the spirit of AP-020, not a quotation of it):
    - `allowedTools`: the `buildAllowedTools` filter plus the `buildAgentQueryOptions` assertion (both runners).
@@ -82,7 +86,26 @@ human decision.
    `plugin.json`, and `canUseTool` also allows them without a card, so the wildcard is the designed absence of a gate, not a bypass of one.
    That residual risk is outside this decision.
 
+The honest limit of this decision: "Approve" binds to `allow(toolInput)`, because the SDK passes the same object to `canUseTool` and then to the
+handler (probe-covered). There is no `toolUseID`-keyed binding of the reviewed body to the executed one.
+
 This reverses the earlier implicit design in which `allowedTools` listed every registered platform tool.
+
+## Scoped out
+
+Known follow-ups, named here so they are not silent (tracked in the plan and `tasks.md` item 6.9):
+
+- Reconnect replay of an unresolved `review_gate` frame.
+- `email_reply`: look up the inbound sender and show it on the card.
+- A `toolUseID`-keyed body-hash binding between the card and the executed call.
+- A full non-MCP `allowedTools` allowlist (only MCP and the Bash family are checked today).
+- `nonInteractive` for Bash gates in headless sync (only gated platform tools honour it).
+- Serialising the gate hold and restore writes per session.
+- A per-Query closed flag instead of the sticky controller-abort skip on the cc path.
+- `failed` finalizers with active-only guards leaving a parked `waiting_for_user` row, and the AskUserQuestion / destroy-gate status writers bypassing `pendingGates` and the compare-and-set (pre-existing).
+- One shared `tool-tiers` `vi.mock` factory across the eight test files that mock it.
+- Consent fatigue from one extra card per gated call.
+- Other-field cards print "not shown" notes rather than the value.
 
 ## Consequences
 
