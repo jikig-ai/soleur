@@ -9,7 +9,8 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 - [ ] 0.2 Baseline vitest on touched suites + `tsc --noEmit`
 - [ ] 0.3 Re-derive the platform tool census from the builders (counts derived, never hard-coded)
 - [ ] 0.4 Cherry-pick `0acc541b6f` with `-n` into the working tree; scratch-edit the prompt to a plain string; run `PROBE_ONLY=email_send:no-allowed` against Doppler `ci` (never prd); expect `invoked=yes`; capture the `CAN_USE_TOOL_SHADOWED` line format. STOP and re-plan if `invoked=no`
-- [ ] 0.5 Confirm ws-handler late-click behaviour; `rg "User rejected the action"` in tests
+- [ ] 0.5 Confirm ws-handler late-click behaviour (error must say expired/not performed); `rg "User rejected the action"` in tests
+- [ ] 0.6 Prove the post-deploy channel: find a historical `CAN_USE_TOOL_SHADOWED` row in Better Stack (read-only query, Doppler prd_terraform), record `host_name` (`soleur-web-platform` / `soleur-web-2`), the discriminating journald field, and whether it lists auto-approve names; none found = post-deploy check recorded as unobservable up front
 
 ## Phase 1: Gate lifecycle (commit 1)
 
@@ -19,17 +20,18 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 
 ## Phase 2: The filter (commit 2)
 
-- [ ] 2.1 RED: `test/build-allowed-tools-census.test.ts` (unit census, in-suite mutation battery, registered-name explicit-entry check, `buildAgentQueryOptions` assertion cases incl. bare server name and wildcards and real `CC_PATH_ALLOWED_TOOLS`, frontmatter sentinel, gate-message test)
+- [ ] 2.1 RED: `test/build-allowed-tools-census.test.ts` (unit census with derived floors, in-suite mutation battery, registered-name explicit-entry check incl. Plausible-registered vacuity guard, `buildAgentQueryOptions` assertion cases incl. bare server name, wildcards, rule-content/case/whitespace variants, empty result equivalence, non-mutation, real `CC_PATH_ALLOWED_TOOLS` plus an injected unclassified name, call-site-by-equality assertion, frontmatter and `annotations` sentinels, distinct status-op messages, card-text hardening tests, offline-message content-free test)
 - [ ] 2.2 RED: flip `agent-runner-tools`, `agent-runner-kb-share-tools`, `email-triage-tools` presence assertions; switch `kb_share_create` verbatim sites (`agent-runner-query-options.test.ts` 221/498, `agent-runner-helpers.test.ts` 422) to `kb_share_list`; add `startAgentSession` wiring test
-- [ ] 2.3 GREEN: `buildAllowedTools` + `conversations_lookup` auto + explicit gated entries (`plausible_*`, `account_*`) + six `buildGateMessage` cases in `tool-tiers.ts`
-- [ ] 2.4 GREEN: `agent-runner.ts` call site; `agent-runner-query-options.ts` fail-closed assertion; comment refresh
+- [ ] 2.3 GREEN: `buildAllowedTools` (plugin names validated `^[a-z0-9-]+$`) + `conversations_lookup` auto + explicit gated entries (`plausible_*`, `account_*`) + six `buildGateMessage` cases + card-field helper (bounded, neutralised, email truncation marker) + content-free `buildOfflineGateMessage` for every gated tool in `tool-tiers.ts`
+- [ ] 2.3a Cite the approved-body binding at `server/email-triage/outbound.ts` for the PR body (stop and escalate if the body is not bound)
+- [ ] 2.4 GREEN: `agent-runner.ts` call site; `agent-runner-query-options.ts` allowlist-form assertion (exact auto FQN or validated plugin wildcard; rejects `bypassPermissions`); comment refresh
 - [ ] 2.5 Run production-code mutation rows (Guard 1 rows 1, 4, 5, 6) via edit + `git checkout -- <file>`; record RED evidence
 - [ ] 2.6 Commit `fix(security): stop pre-approving gated platform tools via allowedTools (#11303)`
 
 ## Phase 3: Real-SDK probe (commit 3)
 
 - [ ] 3.1 Keep only `apps/web-platform/scripts/dev-probe-approval-gate.ts`; drop `phase-0-measurements.md`
-- [ ] 3.2 Switch to `buildAllowedTools`, full derived legacy name set, production string prompt, drop `:no-allowed`, add `email_send:raw` canary and `email_send:prod-stream`, builder-import failure = CANT-RUN, update header and floor
+- [ ] 3.2 Add `pyramid-justified` marker to the probe header; exit 4 never green. Switch to `buildAllowedTools`, full derived legacy name set, production string prompt, drop `:no-allowed`, add `email_send:raw` canary and `email_send:prod-stream`, builder-import failure = CANT-RUN, update header and floor
 - [ ] 3.3 Run against Doppler `ci`: expect `RESULT: PASS`; paste PROVENANCE/REGISTRATION/PROBE lines for the PR body
 - [ ] 3.4 Fix stale comment in `dev-probe-destroy-ask.ts` only if Phase 0.4 contradicts it
 - [ ] 3.5 Commit `test(approval): real-SDK probe builds allowedTools via buildAllowedTools; prod rows now invoke canUseTool (#11303)`
