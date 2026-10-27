@@ -124,6 +124,8 @@ new_case() {
 # cryptsetup stub. Records argv + environment per call, and on the proof call drains stdin into
 # keyrec so the suite can assert the EXACT bytes that arrived on the pipe.
 sub="${1:-}"
+# An early exit BEFORE any logging or stdin read: the upstream tr then takes SIGPIPE (race, ~4 in 10).
+[ -n "${STUB_EARLY_RC:-}" ] && [ "$sub" = luksOpen ] && exit "$STUB_EARLY_RC"
 printf '%s\n' "$*" >> "$STUB_DIR/arglog"
 env >> "$STUB_DIR/envlog"
 [ -f "${STUB_STAMP:-/nonexistent}" ] && { printf '%s|%s\n' "$sub" "$(cat "$STUB_STAMP")" >> "$STUB_DIR/stampseen"; }
@@ -801,7 +803,7 @@ pred_g2_static() {
   # ...and so is every statement that names the key FILE: a read of it into a variable or a second
   # reader is a key sink the name-keyed check above cannot see.
   local kf
-  kf="$(printf '%s\n' "$stmts" | sed 's/\${keyfile}/$keyfile/g' | grep -E '\$keyfile|CUTOVER_LUKS_KEY_FILE|/etc/default/inngest-luks' | grep -v -- '--key-file' | grep -v "^timeout -k 5 [0-9]* grep -q '\^INNGEST_REDIS_LUKS_KEY=\.' \"\$keyfile\" 2>/dev/null\$" | grep -v '^if \[\[ -e "\$keyfile" \]\]; then$' | grep -vxF 'local keyfile="${CUTOVER_LUKS_KEY_FILE:-/etc/default/inngest-luks}"' || true)"
+  kf="$(printf '%s\n' "$stmts" | sed -E 's/\$\{keyfile[^}]*\}/$keyfile/g' | grep -E '\$keyfile|CUTOVER_LUKS_KEY_FILE|/etc/default/inngest-luks' | grep -v -- '--key-file' | grep -v "^timeout -k 5 [0-9]* grep -q '\^INNGEST_REDIS_LUKS_KEY=\.' \"\$keyfile\" 2>/dev/null\$" | grep -v '^if \[\[ -e "\$keyfile" \]\]; then$' | grep -vxF 'local keyfile="${CUTOVER_LUKS_KEY_FILE:-/etc/default/inngest-luks}"' || true)"
   [[ -z "$kf" ]] || return 1
   local pr
   pr="$(probe_region "$1")"
@@ -1003,6 +1005,21 @@ PY
 mutation_landed "G1-8 a bare blkid with no timeout in the probe" g1_m8
 expect_red "G1-8 the timeout census sees a bare external outside its original name list" pred_externals g1_m8
 
+pred_early_exit_rc() {
+  SUT="$1"
+  new_case
+  local bad=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    rm -f "$STAMP"
+    : > "$LOGTRACE"
+    : > "$PHONETRACE"
+    run_tick "done" STUB_EARLY_RC=4
+    [[ "$(probe_summary)" == "$(expect_summary 'token=indeterminate rc=4 at=kdf' indeterminate)" ]] || bad=$((bad + 1))
+  done
+  end_case
+  SUT="$TARGET"
+  [[ "$bad" -eq 0 ]]
+}
 pred_upstream_fail() {
   SUT="$1"
   new_case
@@ -1017,6 +1034,17 @@ pred_upstream_fail() {
   [[ "$sum" == "$(expect_summary 'token=indeterminate rc=1 at=key' indeterminate)" ]]
 }
 assert_true "pristine: a failing upstream stage is indeterminate at=key" pred_upstream_fail "$TARGET"
+assert_true "pristine: a cryptsetup that exits before reading (tr takes SIGPIPE in about 4 of 10 runs) keeps its own rc: 20 runs, all indeterminate rc=4 at=kdf" pred_early_exit_rc "$TARGET"
+mutate g4_m2 <<'PY'
+s = s.replace('    0:0:0|141:0:0|0:0:141) ;;', '    0:0:0|141:0:0) ;;', 1)
+PY
+mutation_landed "G4-2 the tr-SIGPIPE allowance dropped" g4_m2
+expect_red "G4-2 without the allowance an early cryptsetup exit reads as rc=141 at=key" pred_early_exit_rc g4_m2
+mutate g2_m8 <<'PY'
+s = s.replace('  # 7. proof.', '  read -r kv < "${keyfile:-}"\n  # 7. proof.', 1)
+PY
+mutation_landed "G2-8 the key file read through a brace form with a default" g2_m8
+expect_red "G2-8 the closed key-file set normalises every brace form" pred_g2_static g2_m8
 mutate g4_m1 <<'PY'
 s = s.replace('    0:0:0|141:0:0|0:0:141) ;;', '    *) ;;', 1)
 PY
@@ -1249,7 +1277,7 @@ fi
 # The inventory is fixed by this file; a count that drifts (an assertion deleted, a block silently
 # skipped) is itself a RED. Bump it in the same edit that adds an assertion. Optional arms that
 # skipped with an explicit marker above are subtracted by their own constants.
-EXPECTED_ASSERTIONS=152
+EXPECTED_ASSERTIONS=157
 REAL_ARM_ASSERTIONS=11
 REFUSAL_ARM_ASSERTIONS=2
 EXPECTED=$EXPECTED_ASSERTIONS
