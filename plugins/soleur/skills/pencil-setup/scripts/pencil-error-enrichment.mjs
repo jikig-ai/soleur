@@ -21,7 +21,7 @@ export const LIVE_TOOL_NAMES = Object.freeze([
 // The one steering sentence for the raw DSL calls that bypass the adapter's tools (the
 // batch_design description, SKILL.md and ux-design-lead.md step 2 quote it verbatim).
 export const RAW_CALL_STEERING =
-  "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit).";
+  "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path is resolved against the document's directory, so it can write next to the .pen).";
 
 // Every hint starts with the removed tool's own name and names a tool that exists.
 const REMOVED_TOOL_HINTS = Object.freeze({

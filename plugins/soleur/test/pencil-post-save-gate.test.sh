@@ -178,7 +178,7 @@ assert_contains "$AGENT_TEXT" "NOT PERSISTED:" "agent prose treats NOT PERSISTED
 assert_contains "$AGENT_TEXT" "agent-reported" "agent prose states the agent-reported residual (ruling 5)"
 assert_contains "$AGENT_TEXT" "only when the recovery named for the code has completed" "agent prose states the code-aware reset rule"
 assert_contains "$AGENT_TEXT" "Before replaying, check whether the edit is already present (compare the node count open_document reports, or Get the nodes): this session's own interrupted save may already have written it." "agent prose carries the replay-safety sentence (shared text contract)"
-assert_contains "$AGENT_TEXT" "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit)." "agent prose carries the Export/TakeScreenshot steering sentence (shared text contract)"
+assert_contains "$AGENT_TEXT" "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path is resolved against the document's directory, so it can write next to the .pen)." "agent prose carries the Export/TakeScreenshot steering sentence (shared text contract)"
 if [[ "$AGENT_TEXT" == *"Node 22.19 is guaranteed"* ]]; then
   echo "  FAIL: agent prose must not claim Node 22.19 is guaranteed"
   FAIL=$((FAIL + 1))

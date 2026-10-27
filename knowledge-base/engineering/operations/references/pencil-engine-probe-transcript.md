@@ -1,15 +1,15 @@
 # Engine contract probe transcript
 
-engine: @pen.dev/cli@0.3.13 probed 2026-10-26
+engine: @pen.dev/cli@0.3.13 probed 2026-10-27
 scope: engine and adapter cases
-result: all cases passed (137 passed)
+result: all cases passed (145 passed)
 
 Credential, `$HOME`, absolute paths, UUIDs (including a document `fileToken`) and account lines are scrubbed by `plugins/soleur/test/lib/scrub-transcript.mjs`; `pen status` output is never recorded.
 
 ```text
 PASS pen status reports Active for the credential (fail-open engine guard)
 PASS installed @pen.dev/cli version equals the check_deps.sh pin
-RECORD undici version in the engine tree under test: 8.12.2
+RECORD undici version in the engine tree under test: 8.10.2
 PASS parsed tool signatures from --help
 PASS every REPL_SURFACE tool has exactly the signature the CLI prints
 PASS none of the 9 removed tools is listed in --help
@@ -111,6 +111,17 @@ PASS pinned engine behaviour: exportHtmlOverDocument
 PASS pinned engine behaviour: imageAbs
 PASS pinned engine behaviour: imageFileUrl
 PASS pinned engine behaviour: imageTraversal
+PASS recipes: created the 60-rectangle frame and read its id
+PASS recipe: Get(id,(n,c)=>Print(c.bounds.width)) prints the frame's measured width FIRST
+PASS pinned engine behaviour: Get(id, visitor) visits the node and all of its descendants (one Print line per node)
+PASS recipe: Get(id,(n,c)=>Print(n.id+' '+c.bounds.width)) (the hint's own example) prints the id and the width, frame first
+RECORD recipe: c.problems values across the frame and its 60 rectangles: -, string:partially clipped
+PASS recipe: the c.problems visitor runs on every node of the frame without an error
+PASS pinned engine behaviour: c.problems is a string, `partially clipped` or `fully clipped`, undefined when the node has no problem (the 400x300 frame clips overhanging rectangles)
+PASS recipe: Print(FindEmptySpace({width:50,height:50})) prints a position
+RECORD recipe: FindEmptySpace reply: {"x":400,"y":0}
+RECORD recipe (steering): raw Export with a relative directory lands: next to the document (relative to the .pen's directory)
+PASS pinned engine behaviour: a raw Export with a relative directory is resolved against the document's directory, not the engine's working directory
 PASS control: an unmodified copy of the seed document loads its 3 top-level nodes
 PASS no engine write to the unrecognised-version file in a 15 s idle window after an edit (mtime polling)
 RECORD --in with an unrecognised document version: opens EMPTY (0 top-level nodes loaded, no error): the save sentinel is the only guard
@@ -122,7 +133,7 @@ RECORD files the engine wrote under HOME in a session: none
 PASS no file the engine wrote under HOME contains a form of the canary credential
 PASS positive control: this probe's own redactor removes the canary in all three forms
 RECORD lockfile packages declaring an install script (skipped by --ignore-scripts): @google/genai, protobufjs, sharp
-RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 9 s; node v26.12.1
+RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 43 s; node v26.12.1
 PASS npm ci --ignore-scripts from the committed lockfile succeeds
 PASS npm ci left the lockfile byte-identical
 PASS the --ignore-scripts install holds the pinned engine version
@@ -270,7 +281,7 @@ RECORD acceptance workstream workstream filter bar.pen: disk=3 loaded=3
 RECORD acceptance workstream workstream issue crud.pen: disk=29 loaded=29
 RECORD acceptance workstream workstream kanban.pen: disk=5 loaded=5
 RECORD acceptance REFUSED dashboard dashboard load states.pen: open failed: [pencil-adapter] pen exited before it was ready (code=1 signal=null):
-RECORD load-fidelity acceptance summary: 106 committed design .pen files, 106 parse as documents, 105 load faithfully, 1 refused by the engine, 0 load with fewer top-level nodes, 91 s
+RECORD load-fidelity acceptance summary: 106 committed design .pen files, 106 parse as documents, 105 load faithfully, 1 refused by the engine, 0 load with fewer top-level nodes, 210 s
 PASS acceptance: every committed file was evaluated
 PASS acceptance (ruling 6): no committed design .pen loads with fewer top-level nodes than on disk
 PASS acceptance: the committed files the engine refuses to open are exactly the pinned set

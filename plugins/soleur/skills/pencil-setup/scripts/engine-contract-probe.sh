@@ -61,8 +61,14 @@
 # (PROBE_TRANSCRIPT overrides it), scrubbed by test/lib/scrub-transcript.mjs and checked with
 # gitleaks; a leak fails the run. A run that hit a tooling error does not touch the transcript.
 #
+# Environment: PROBE_PEN_BINARY=<abs path> probes another `pen` instead of the installed default (the
+# adapter never reads an engine-binary environment variable, so this one is the probe's own);
+# PROBE_TRANSCRIPT=<path> redirects the transcript.
+#
 # Exit codes: 0   PROBE OK: every case ran and passed
 #             1   a contract check failed, the credential is not Active, or the transcript leaked
+#                 (also when a tooling error stops the run after a check had already FAILED:
+#                 `PROBE FAILED (n)` is printed first, then the tooling line)
 #             2   internal setup error (for example the work directory is not absolute)
 #             3   PROBE SKIPPED (no key), tooling missing or broken, or a case was skipped:
 #                 an incomplete run is never reported as PROBE OK
@@ -99,16 +105,16 @@ for tool in node npm; do
   command -v "$tool" >/dev/null 2>&1 || { echo "UNRESOLVED: $tool not on PATH" >&2; exit 3; }
 done
 
-PENCIL_BIN="${PENCIL_BINARY:-$HOME/.local/share/pen-cli/node_modules/.bin/pen}"
+PENCIL_BIN="${PROBE_PEN_BINARY:-$HOME/.local/share/pen-cli/node_modules/.bin/pen}"
 if [[ ! -e "$PENCIL_BIN" ]]; then
-  echo "UNRESOLVED: pen binary not found at $PENCIL_BIN (run: bash $SCRIPT_DIR/check_deps.sh --auto, or set PENCIL_BINARY)" >&2
+  echo "UNRESOLVED: pen binary not found at $PENCIL_BIN (run: bash $SCRIPT_DIR/check_deps.sh --auto, or set PROBE_PEN_BINARY)" >&2
   exit 3
 fi
 
 # The default binary must pass the same identity rule check_deps.sh and the adapter apply
 # (the real .bin/pen resolves to the installed package's declared bin.pen target).
 OVERRIDE=0
-if [[ -n "${PENCIL_BINARY:-}" ]]; then
+if [[ -n "${PROBE_PEN_BINARY:-}" ]]; then
   OVERRIDE=1
 elif ! resolved_pen="$(bash -c 'f="$1"; set --; source "$f"; detect_headless_cli' _ "$SCRIPT_DIR/check_deps.sh" 2>/dev/null)" || [[ -z "$resolved_pen" ]]; then
   echo "FAIL the default .bin/pen does not pass the check_deps.sh identity rule: $PENCIL_BIN"
@@ -203,6 +209,17 @@ const isGone = (pid) => {
 class ProbeStop extends Error {
   constructor(code, verdict) { super(verdict); this.code = code; this.verdict = verdict; }
 }
+
+// Anything that escapes the case runner (a stray rejection inside an event handler) is a tooling
+// error too: release the children, say so, exit 3 (1 when a check had already failed).
+const fatal = (e) => {
+  try { for (const x of sessions) x.child.kill("SIGKILL"); } catch { /* a child already gone, or the registry not created yet */ }
+  if (failures > 0) console.log(`PROBE FAILED (${failures})`);
+  console.log(`PROBE TOOLING ERROR (uncaught, nothing further was asserted): ${redact(String(e?.message ?? e)).replace(/\s+/g, " ").slice(0, 300)}`);
+  process.exit(failures > 0 ? 1 : 3);
+};
+process.on("uncaughtException", fatal);
+process.on("unhandledRejection", fatal);
 
 if (!nodeVersionOk(process.version)) {
   console.error(`UNRESOLVED: node ${process.version} is below the engine floor 22.19.0`);
@@ -716,6 +733,58 @@ let engineGuideNames = [];
   await p.quit();
 }
 
+// 11b. the recipe forms the prose promises (SKILL.md, ux-design-lead.md, the removed-tool hints): they must
+// RUN against the engine, not merely read well. A hint that names a form that errors is worse than no hint.
+{
+  const s = open(["--out", join(workDir, "recipes.pen")]);
+  await s.start();
+  const pr = async (code) => s.send(buildBatchDesignCommand(code));
+  const r0 = await pr(MANY_RECTS);
+  const id = idOf(r0);
+  check(Boolean(id), "recipes: created the 60-rectangle frame and read its id", r0.all);
+
+  // Get(id,(n,c)=>Print(c.bounds.width)): the visitor runs for the node AND every descendant (measured:
+  // 61 calls for the frame plus its 60 rectangles), frame first. The prose must not promise a single value.
+  const w = await pr(`Get(${JSON.stringify(id)},(n,c)=>Print(c.bounds.width))`);
+  const widths = printed(w).split(/\s+/);
+  check(!/rror/.test(w.all) && widths[0] === "400", "recipe: Get(id,(n,c)=>Print(c.bounds.width)) prints the frame's measured width FIRST", `${widths.slice(0, 4).join(" ")} | ${w.all.slice(0, 120)}`);
+  check(widths.length === 61, "pinned engine behaviour: Get(id, visitor) visits the node and all of its descendants (one Print line per node)", `values=${widths.length}`);
+  const w2 = await pr(`Get(${JSON.stringify(id)},(n,c)=>Print(n.id+' '+c.bounds.width))`);
+  check(!/rror/.test(w2.all) && printed(w2).split(/\s+/).slice(0, 2).join(" ") === `${id} 400`, "recipe: Get(id,(n,c)=>Print(n.id+' '+c.bounds.width)) (the hint's own example) prints the id and the width, frame first", `${printed(w2).slice(0, 60)} | ${w2.all.slice(0, 120)}`);
+
+  // c.problems: a STRING per node (or undefined), "partially clipped" / "fully clipped"; the frame's rectangles
+  // that overhang it report it. The hint wording "clipping (partially or fully clipped)" is pinned to this.
+  const pf = await pr(`var out=[];Get(${JSON.stringify(id)},(n,c)=>{out.push(c.problems===undefined?"-":typeof c.problems+":"+c.problems)});Print(out.join("|"))`);
+  const pvals = printed(pf).split("|");
+  const kindsSeen = [...new Set(pvals.map((v) => v.replace(/^string:(.*)$/, "string:$1")))].sort();
+  record("recipe: c.problems values across the frame and its 60 rectangles", kindsSeen.join(", "));
+  check(!/rror/.test(pf.all) && pvals.length === 61, "recipe: the c.problems visitor runs on every node of the frame without an error", `values=${pvals.length} ${pf.all.slice(0, 120)}`);
+  check(pvals.some((v) => v === "string:partially clipped") && pvals.every((v) => v === "-" || /^string:(partially|fully) clipped$/.test(v)),
+    "pinned engine behaviour: c.problems is a string, `partially clipped` or `fully clipped`, undefined when the node has no problem (the 400x300 frame clips overhanging rectangles)", kindsSeen.join(", "));
+
+  // Print(FindEmptySpace({width:50,height:50})): the hint for the removed find_empty_space_on_canvas
+  const fes = await pr("Print(FindEmptySpace({width:50,height:50}))");
+  check(!/rror/.test(fes.all) && /## Print output\n\S/.test(fes.out), "recipe: Print(FindEmptySpace({width:50,height:50})) prints a position", `${printed(fes)} | ${fes.all.slice(0, 120)}`);
+  record("recipe: FindEmptySpace reply", printed(fes));
+  await s.quit();
+
+  // The steering sentence "do not call Export inside batch_design": a raw Export with a RELATIVE directory is
+  // resolved against the DOCUMENT's directory (measured), not the engine's working directory: it lands inside the
+  // project, next to the .pen, with none of the adapter's containment or overwrite list applied.
+  const docDir = join(workDir, "rel-doc");
+  mkdirSync(docDir, { recursive: true });
+  const rs = open(["--out", join(docDir, "rel.pen")]);
+  await rs.start();
+  const mk = await rs.send(buildBatchDesignCommand('var rf=I(document,{type:"frame",layout:"none",width:20,height:20,fill:"#00FF00"});Print("ID:"+rf);'));
+  const rid = idOf(mk);
+  await rs.send(buildBatchDesignCommand(`Export([${JSON.stringify(rid)}],"png","rel-export-dir")`));
+  const underCwd = existsSync(join(cwd, "rel-export-dir")) ? readdirSync(join(cwd, "rel-export-dir")).filter((f) => f.endsWith(".png")) : [];
+  const nextToDoc = existsSync(join(docDir, "rel-export-dir")) ? readdirSync(join(docDir, "rel-export-dir")).filter((f) => f.endsWith(".png")) : [];
+  record("recipe (steering): raw Export with a relative directory lands", nextToDoc.length ? "next to the document (relative to the .pen's directory)" : underCwd.length ? "under the engine's working directory" : "nowhere found");
+  check(nextToDoc.length === 1 && underCwd.length === 0, "pinned engine behaviour: a raw Export with a relative directory is resolved against the document's directory, not the engine's working directory", `nextToDoc=${nextToDoc.join(",") || "nothing"} cwd=${underCwd.join(",") || "nothing"}`);
+  await rs.quit();
+}
+
 // 12. a file with an unrecognised version, opened via --in: record the engine's answer
 {
   const f = join(workDir, "version.pen");
@@ -890,7 +959,7 @@ let engineGuideNames = [];
 
   // A2. the adapter's DEFAULT binary resolution: HOME is the real prefix, no --pencil-binary flag
   if (USING_OVERRIDE) {
-    skip("adapter: default binary resolution", "PENCIL_BINARY is set for this run, so the default prefix is not the engine under test");
+    skip("adapter: default binary resolution", "PROBE_PEN_BINARY is set for this run, so the default prefix is not the engine under test");
   } else {
     const d = join(workDir, "adapter-default.pen");
     a = await connect({ penBinary: "" });
@@ -1053,12 +1122,14 @@ let verdict = null;
 try {
   await runCases();
 } catch (e) {
-  if (e instanceof ProbeStop) verdict = { code: e.code, line: e.verdict, noTranscript: true };
-  else verdict = { code: 3, line: `PROBE TOOLING ERROR (nothing further was asserted): ${redact(String(e?.message ?? e)).replace(/\s+/g, " ").slice(0, 300)}`, noTranscript: true };
+  if (e instanceof ProbeStop) verdict = { code: e.code, line: e.verdict };
+  else verdict = { code: failures > 0 ? 1 : 3, line: `PROBE TOOLING ERROR (nothing further was asserted): ${redact(String(e?.message ?? e)).replace(/\s+/g, " ").slice(0, 300)}` };
 } finally {
   await finish();
 }
 if (verdict) {
+  // A check that already FAILED must not be hidden behind a tooling error: the failure count comes first.
+  if (failures > 0 && !verdict.line.startsWith("PROBE FAILED")) console.log(`PROBE FAILED (${failures})`);
   emit(verdict.line);
   process.exit(verdict.code);
 }

@@ -36,7 +36,7 @@ const ONLY_COPY =
   "If a retry is refused, the in-memory document is the only complete copy: read it out (get_editor_state, or Get/Print inside batch_design) or export it BEFORE calling open_document.";
 const RESTORE_FIRST = "If the file is tracked, restore it from version control first.";
 const STEERING =
-  "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit).";
+  "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path is resolved against the document's directory, so it can write next to the .pen).";
 
 // Reason codes come from the save gate itself (REASON_CODES), so a new code without a prose
 // row fails here. The two shared sentences are also compared with the gate's exports: a
