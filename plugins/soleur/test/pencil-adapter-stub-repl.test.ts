@@ -28,7 +28,7 @@ import {
 } from "./lib/pencil-adapter-roundtrip.mjs";
 import { buildPenTree, LAYOUTS } from "./lib/pen-identity-tree.mjs";
 import { REPL_SURFACE } from "../skills/pencil-setup/scripts/pencil-repl-surface.mjs";
-import { LIVE_TOOL_NAMES, REMOVED_TOOL_NAMES } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
+import { LIVE_TOOL_NAMES, REMOVED_TOOL_NAMES, RAW_CALL_STEERING } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
 
 // #11143 / #11156 / #11168 integration: the INSTALLED adapter copy over real MCP stdio
 // against the stub REPL (fixtures/pencil-stub-repl.mjs), which reproduces the measured
@@ -192,6 +192,8 @@ describe("open_document on an existing file", () => {
     expect(next.isError).toBe(true);
     expect(next.text).toMatch(/open failed/i);
     expect(next.text).toMatch(/Next step: open_document a different \.pen path/);
+    expect(next.text).toContain("The original file is untouched; it can still be edited in Pencil Desktop.");
+    expect(s.stderr()).toContain("[pencil-adapter] tool=get_editor_state refused: open failed");
     expect(read(f)).toBe(before);
     expect(saves(f)).toBe(0);
   });
@@ -314,6 +316,16 @@ describe("registered tools", () => {
     expect(bd.description).toMatch(/read_skill/);
     const state = (tools as any[]).find((t) => t.name === "get_editor_state");
     expect(state.description).toMatch(/include_schema/);
+  });
+
+  test("the descriptions carry the shared steering: raw Export/TakeScreenshot, and get_style is not exposed", async () => {
+    const s = await session();
+    const tools = (await s.listTools()) as any[];
+    const bd = tools.find((t) => t.name === "batch_design");
+    expect(bd.description).toContain(RAW_CALL_STEERING);
+    expect(bd.description).toMatch(/first line is `REFUSED save: \[reason=\.\.\.\]`/);
+    const skill = tools.find((t) => t.name === "read_skill");
+    expect(skill.description).toContain("Archetype names are listed in the engine index but this adapter does not expose get_style; use brand tokens or a guide/*.md page.");
   });
 
   test("every removed tool answers with a hint naming a live tool, whatever arguments the caller sends, and never saves", async () => {
@@ -696,6 +708,27 @@ describe("stale-file save guard (#11168)", () => {
     expect(children(f)).toBe(4);
   });
 
+  test("a recreate whose directory was swapped for a symlink is refused as unknown-baseline: nothing is written through the link", async () => {
+    const d = caseDir("recreate-symlinked-parent");
+    const real = join(d, "docs");
+    const elsewhere = join(d, "elsewhere");
+    mkdirSync(real);
+    mkdirSync(elsewhere);
+    const f = join(real, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false); // baseline = the saved 3 nodes
+    rmSync(real, { recursive: true, force: true });
+    symlinkSync(elsewhere, real); // the parent directory now leads somewhere else
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=unknown-baseline] ${f} was not modified.`);
+    expect(r.text).toMatch(/directory on the way to it is now a link or has moved/);
+    expect(existsSync(join(elsewhere, "a.pen"))).toBe(false); // nothing was written through the link (the stub's own side logs may land there)
+    expect(s.stderr()).toMatch(/REFUSED save: \[reason=unknown-baseline\] \S+ cause=recreate-path-changed/);
+  });
+
   test("an explicit save over a file removed behind a live session is prefixed by the same note", async () => {
     const f = join(caseDir("removed-behind-save"), "a.pen");
     writeFileSync(f, pen(2));
@@ -939,8 +972,15 @@ describe("stale-file save guard (#11168)", () => {
     expect(s.stderr()).toMatch(/save did not complete: .*pen exited/);
     expect(children(f)).toBe(2);
     setFlags(f, {});
+    // the engine died with the edit: the respawn arms the refusal instead of letting an
+    // unrelated save pass as if nothing was lost; recovery is open_document, then the replay
     const explicit = await s.call("save");
-    expect(explicit.isError).toBe(false);
+    expect(explicit.isError).toBe(true);
+    expect(explicit.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(s.stderr()).toMatch(/respawn: edits were not persisted when the engine restarted \(cause=restart\)/);
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(children(f)).toBe(3);
   });
 
   test("exports and screenshots are marked while ANY edit is unpersisted (NOT PERSISTED too), and the mark clears on a confirmed save", async () => {
@@ -994,6 +1034,138 @@ describe("stale-file save guard (#11168)", () => {
     writeFileSync(f, pen(4, "other"));
     expect((await s.call("batch_design", { operations: ADD })).isError).toBe(true);
     expect((await s.call("get_editor_state", {})).isError).toBe(false);
+  });
+});
+
+describe("the explicit `save` tool and the unpersistedEdits transitions (behavioural)", () => {
+  const first = (r: { text: string }) => r.text.split("\n")[0];
+  const UNSAVED = "WARNING: rendered from unsaved memory, not the file on disk";
+  const exported = async (s: Session, d: string, name: string) => (await s.call("export_nodes", { nodeIds: ["seed0"], outputDir: join(d, name) })).text;
+
+  test("an explicit `save` after a definite failure answers `NOT PERSISTED: [reason=save-failed]` on line one (not a refusal, not success)", async () => {
+    const f = join(caseDir("save-tool-failed"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { failSave: true });
+    const r = await s.call("save");
+    expect(r.isError).toBe(true);
+    expect(first(r)).toMatch(/^NOT PERSISTED: \[reason=save-failed\] \S+ was not written: the engine reported a failed save \(Save failed: EACCES/);
+    expect(r.text).toMatch(/Do NOT call open_document/);
+    expect(r.text).toContain("the in-memory document is the only complete copy");
+  });
+
+  test("an explicit `save` whose engine dies mid-command answers `NOT PERSISTED: [reason=save-incomplete]` on line one", async () => {
+    const f = join(caseDir("save-tool-incomplete"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { exitOnSave: true });
+    const r = await s.call("save");
+    expect(r.isError).toBe(true);
+    expect(first(r)).toMatch(/^NOT PERSISTED: \[reason=save-incomplete\] \S+: the edit was applied in memory but the save did not complete/);
+    expect(r.text).toContain("Before replaying, check whether the edit is already present");
+    expect(s.stderr()).toMatch(/save did not complete: .*pen exited/);
+  });
+
+  test("an explicit `save` with an ambiguous reply answers `NOT PERSISTED: [reason=unconfirmed]` on line one", async () => {
+    const f = join(caseDir("save-tool-unconfirmed"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { saveReply: "", saveWrites: false });
+    expect(first(await s.call("save"))).toMatch(/^NOT PERSISTED: \[reason=unconfirmed\] /);
+  });
+
+  test("unconfirmed sets the unsaved mark and a successful open_document clears it", async () => {
+    const d = caseDir("mark-unconfirmed");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session({ cwd: d });
+    await s.call("open_document", { filePath: f });
+    expect(await exported(s, d, "e0")).not.toContain(UNSAVED);
+    setFlags(f, { saveReply: "", saveWrites: false });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/reason=unconfirmed/);
+    setFlags(f, {});
+    expect((await exported(s, d, "e1")).split("\n")[0]).toBe(UNSAVED);
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect(await exported(s, d, "e2")).not.toContain(UNSAVED);
+  });
+
+  test("save-incomplete sets the unsaved mark and a successful open_document clears it", async () => {
+    const d = caseDir("mark-incomplete");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session({ cwd: d });
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { exitOnSave: true });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/reason=save-incomplete/);
+    setFlags(f, {});
+    expect((await exported(s, d, "e1")).split("\n")[0]).toBe(UNSAVED);
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect(await exported(s, d, "e2")).not.toContain(UNSAVED);
+  });
+
+  test("a confirmed save clears the mark only when no engine restart intervened (a restart with unpersisted edits arms the refusal)", async () => {
+    const d = caseDir("mark-restart");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session({ cwd: d });
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { failSave: true });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/reason=save-failed/);
+    setFlags(f, {});
+    await killAndWait(stubPid(f));
+    const retry = await s.call("save");
+    expect(retry.isError).toBe(true); // the discarded edit must not be mistaken for a saved one
+    expect(first(retry)).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect((await exported(s, d, "e1")).split("\n")[0]).toBe(UNSAVED);
+  });
+
+  test("a confirmed save whose file cannot be read back warns, and the next save is refused as unknown-baseline (post-save read failed)", async () => {
+    const f = join(caseDir("post-save-read"), "a.pen");
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { saveWrites: false }); // `Saved <path>` but nothing on disk
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(false);
+    expect(r.text).toMatch(/WARNING: The save was confirmed, but the file could not be read back \(ENOENT\)/);
+    expect(s.stderr()).toMatch(/WARN post-save read failed \(ENOENT\); baseline=unknown/);
+    setFlags(f, {});
+    expect(first(await s.call("save"))).toBe(`REFUSED save: [reason=unknown-baseline] ${f} was not modified.`);
+  });
+
+  test("a save that fails while the file changes under it (a partial write) arms the refusal and says the in-memory document is the only copy", async () => {
+    const d = caseDir("failed-write-changed");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session({ cwd: d });
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { failSave: true, failSaveWrites: JSON.parse(pen(1, "partial")) });
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(first(r)).toMatch(/^NOT PERSISTED: \[reason=save-failed\] /);
+    expect(r.text).toContain("the file changed during the failed write; the in-memory document is the only complete copy");
+    expect(r.text).not.toMatch(/call save again/);
+    expect(s.stderr()).toMatch(/refusalPending=true/);
+    setFlags(f, {});
+    const before = read(f);
+    const retry = await s.call("save");
+    expect(first(retry)).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(read(f)).toBe(before);
+    expect((await exported(s, d, "e1")).split("\n")[0]).toBe(UNSAVED);
+  });
+
+  test("a failed save that leaves the file as it was is NOT armed (the retry after the fix saves)", async () => {
+    const f = join(caseDir("failed-write-unchanged"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { failSave: true });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/reason=save-failed/);
+    expect(s.stderr()).not.toMatch(/refusalPending=true/);
+    setFlags(f, {});
+    expect((await s.call("save")).isError).toBe(false);
   });
 });
 
@@ -1176,6 +1348,81 @@ describe("crash respawn onto a file the session did not see", () => {
     const r = await s.call("save");
     expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
     expect(saves(f)).toBe(1);
+  });
+
+  test("a respawn with UNPERSISTED edits and an unchanged file arms the refusal with cause `restart` (the discarded edit is never silently adopted)", async () => {
+    const f = join(caseDir("respawn-unpersisted"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { failSave: true });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/reason=save-failed/);
+    setFlags(f, {});
+    await killAndWait(stubPid(f));
+    const before = read(f);
+    const savesBefore = saves(f);
+    const r = await s.call("save");
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(r.text).toMatch(/session restarted/);
+    expect(r.text).toMatch(/earlier edits were discarded/);
+    expect(s.stderr()).toMatch(/respawn: edits were not persisted when the engine restarted \(cause=restart\)[^\n]*refusalPending armed/);
+    expect(read(f)).toBe(before);
+    expect(saves(f)).toBe(savesBefore);
+    // recovery is open_document, then the replay saves
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(children(f)).toBe(3);
+  });
+
+  test("the FIRST arm cause is kept: a second crash while armed by external-change does not turn it into a generic restart", async () => {
+    const f = join(caseDir("respawn-keep-cause"), "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    await killAndWait(stubPid(f));
+    writeFileSync(f, pen(5, "other"));
+    expect((await s.call("get_editor_state", {})).isError).toBe(false); // respawn #1 arms external-change
+    await killAndWait(stubPid(f));
+    expect((await s.call("get_editor_state", {})).isError).toBe(false); // respawn #2 while armed
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(r.text).toMatch(/engine reloaded NEW content/);
+    expect(r.text).not.toMatch(/while earlier edits were not persisted/);
+  });
+
+  test("a respawn-armed refusal marks exports and screenshots as rendered from unsaved memory", async () => {
+    const d = caseDir("respawn-armed-mark");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session({ cwd: d });
+    await s.call("open_document", { filePath: f });
+    await killAndWait(stubPid(f));
+    writeFileSync(f, pen(5, "other"));
+    const ex = await s.call("export_nodes", { nodeIds: ["other0"], outputDir: join(d, "exports") });
+    expect(ex.isError).toBe(false);
+    expect(ex.text.split("\n")[0]).toBe("WARNING: rendered from unsaved memory, not the file on disk");
+  });
+
+  test("a crash during which the file is rewritten as an unrecognised version is never saved over: the engine will not load it (0.3.13) or the load is refused", async () => {
+    for (const legacy of [false, true]) {
+      const f = join(caseDir(`respawn-unrecognised-${legacy}`), "a.pen");
+      writeFileSync(f, pen(3));
+      const s = await session();
+      await s.call("open_document", { filePath: f });
+      await killAndWait(stubPid(f));
+      writeFileSync(f, "{not json");
+      if (legacy) setFlags(f, { invalidAsEmpty: true }); // an engine that would load it as an EMPTY document
+      const savesBefore = saves(f);
+      const g = await s.call("get_editor_state", {});
+      expect(g.isError).toBe(true);
+      const e = await s.call("batch_design", { operations: ADD });
+      expect(e.isError).toBe(true);
+      expect((await s.call("save")).isError).toBe(true);
+      expect(read(f)).toBe("{not json");
+      expect(saves(f)).toBe(savesBefore);
+      if (legacy) expect(g.text).toMatch(/not a recognizable \.pen document/);
+    }
   });
 });
 
@@ -1367,6 +1614,39 @@ await import(${JSON.stringify(pathToFileURL(STUB).href)});
     expect(s.stderr()).not.toContain(SECRET);
     // the edits themselves still went through
     expect(children(f)).toBe(2);
+  });
+
+  test("a key split ACROSS two replies (end of one reply's stderr, start of the next) is never emitted: the rolling redactor is not flushed at command end (log sink only)", async () => {
+    const f = join(caseDir("echo-across"), "a.pen");
+    const s = await session({ keys: { PEN_CLI_KEY: SECRET } });
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { echoKeyAcross: true });
+    const first = await s.call("batch_design", { operations: ADD });
+    const second = await s.call("batch_design", { operations: ADD });
+    // the tool results carry at most their own half; the whole key is never in either
+    for (const r of [first, second]) {
+      expect(r.text).not.toContain(SECRET);
+    }
+    // the adapter's log never holds the first half either: it was held back and met its second half
+    await s.call("batch_design", { operations: "x=Insert(document,{type:\"frame\",width:1,height:1})" });
+    expect(s.stderr()).not.toContain(SECRET);
+    expect(s.stderr()).not.toContain(SECRET.slice(0, Math.ceil(SECRET.length / 2)));
+    expect(s.stderr()).toContain("<redacted>");
+  });
+
+  test("a stderr flood past the 1 MiB buffer cap (no newline, the key every 35 bytes) is trimmed without leaving a key fragment in the error text", async () => {
+    const f = join(caseDir("flood-key"), "a.pen");
+    const s = await session({ keys: { PEN_CLI_KEY: SECRET } });
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { floodKeyThenExit: true });
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/pen exited during a command/);
+    expect(r.text.length).toBeGreaterThan(100_000); // the buffered tail made it into the message: the scan below is not vacuous
+    expect(r.text).toContain("<redacted>");
+    // no run of 6+ characters of the key survives, wherever the trim point fell
+    for (let i = 0; i + 6 <= SECRET.length; i++) expect(r.text).not.toContain(SECRET.slice(i, i + 6));
+    expect(s.stderr()).not.toContain(SECRET);
   });
 
   test("A26: a key inside the refused operations is redacted in the tool result (the echo is not a leak path)", async () => {
@@ -1568,13 +1848,61 @@ describe("binary resolution", () => {
       expect(accepted(r)).toBe(true);
     });
 
-    test("a group-writable package directory is refused", async () => {
+    test("a group-writable package directory is refused, and the error names the exact remedy (umask 002 installs)", async () => {
       const home = caseDir("cand-writable");
       const tree = buildPenTree(home, "good");
       chmodSync(tree.pkgDir, 0o775);
       const { r } = await openOn("cand-writable-1", { passwdHome: home, home });
-      expect(r.text).toMatch(/pen CLI not found or not trusted \(the package directory is group- or world-writable\)/);
+      expect(r.text).toMatch(/pen CLI not found or not trusted \(the package directory is group- or world-writable; run `chmod -R go-w [^`]+\/node_modules`/);
+      expect(r.text).toContain(`chmod -R go-w ${tree.prefix}/node_modules`);
+      expect(r.text).toMatch(/check_deps\.sh --auto/);
       expect(existsSync(join(home, "engine-env.log"))).toBe(false);
+    });
+
+    test("the cwd-ancestor exemption applies to the PASSWD home only: HOME=<cwd>/fake with a valid tree is refused (a project env block can set HOME inside the project)", async () => {
+      const project = caseDir("cand-fake-home-project");
+      const fake = join(project, "fake");
+      buildPenTree(fake, "good");
+      const empty = caseDir("cand-fake-home-passwd"); // the passwd home holds nothing
+      const { r } = await openOn("cand-fake-home", { passwdHome: empty, home: fake, cwd: project });
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/pen CLI not found or not trusted \(the package directory is inside the working directory or the project directory\)/);
+      expect(existsSync(join(fake, "engine-env.log"))).toBe(false); // the credential was never handed over
+      // the same through CLAUDE_PROJECT_DIR
+      const viaProject = await openOn("cand-fake-home-2", { passwdHome: empty, home: fake, extraEnv: { CLAUDE_PROJECT_DIR: project } });
+      expect(viaProject.r.text).toMatch(/inside the working directory or the project directory/);
+      expect(existsSync(join(fake, "engine-env.log"))).toBe(false);
+    });
+
+    test("order-discriminating twin: with a valid install under BOTH homes (different pinned versions), the passwd one is the one spawned, whichever way round the versions are", async () => {
+      for (const [name, passwdVersion, homeVersion] of [
+        ["twin-a", "0.3.13", "0.3.12"],
+        ["twin-b", "0.3.12", "0.3.13"],
+      ] as const) {
+        const passwd = caseDir(`${name}-passwd`);
+        const home = caseDir(`${name}-home`);
+        buildPenTree(passwd, "good", { version: passwdVersion });
+        buildPenTree(home, "good", { version: homeVersion });
+        const { s, r } = await openOn(name, { passwdHome: passwd, home });
+        expect(r.text).toMatch(/exited before it was ready/);
+        // the engine that ran is the passwd one: it logged under ITS home (the child gets the resolved home)
+        expect(existsSync(join(passwd, "engine-env.log"))).toBe(true);
+        expect(existsSync(join(home, "engine-env.log"))).toBe(false);
+        // and its version is the one the adapter warned about (only a non-pin version warns)
+        const warned = /version (0\.3\.1[23]) differs from the pin/.exec(s.stderr())?.[1];
+        expect(warned).toBe(passwdVersion === "0.3.13" ? undefined : passwdVersion);
+        expect(s.stderr()).not.toMatch(/using the pen CLI under \$HOME/);
+      }
+    });
+
+    test("the child's HOME is the home the binary was resolved under, not the (possibly redirected) $HOME", async () => {
+      const passwd = caseDir("child-home-passwd");
+      const other = caseDir("child-home-other"); // $HOME: holds nothing
+      buildPenTree(passwd, "good");
+      const { r } = await openOn("child-home", { passwdHome: passwd, home: other });
+      expect(r.text).toMatch(/exited before it was ready/);
+      expect(existsSync(join(passwd, "engine-env.log"))).toBe(true);
+      expect(existsSync(join(other, "engine-env.log"))).toBe(false);
     });
   });
 
@@ -1704,6 +2032,45 @@ describe("a tool error leaves a stderr marker", () => {
     expect(s.stderr()).not.toContain(SECRET);
     expect(r.text).not.toContain(SECRET);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Top-level start failures: an adapter-authored line and exit 1, not a bare stack trace.
+
+describe("server start failures", () => {
+  const KEY = ["stub", "credential", "golf", "hotel", "india"].join("-");
+  const runWith = (failAt: "connect" | "tool", toolName = "save") => {
+    const d = caseDir(`start-fail-${failAt}`);
+    const sdkMcp = pathToFileURL(join(installDir, "node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js")).href;
+    const preload = join(d, "fail.mjs");
+    writeFileSync(
+      preload,
+      `import { McpServer } from ${JSON.stringify(sdkMcp)};
+const key = process.env.PEN_CLI_KEY ?? "";
+if (${JSON.stringify(failAt)} === "connect") McpServer.prototype.connect = async () => { throw new Error("transport refused\\nwith " + key + " " + "x".repeat(600)); };
+else { const tool = McpServer.prototype.tool; McpServer.prototype.tool = function (name, ...rest) { if (name === ${JSON.stringify(toolName)}) throw new Error("duplicate tool " + name + " " + key); return tool.call(this, name, ...rest); }; }
+`
+    );
+    return spawnSync("node", ["--import", pathToFileURL(preload).href, join(installDir, "pencil-mcp-adapter.mjs")], {
+      env: { PATH: process.env.PATH ?? "", HOME: d, PEN_CLI_KEY: KEY },
+      input: "",
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+  };
+
+  for (const failAt of ["connect", "tool"] as const) {
+    test(`a failing ${failAt === "connect" ? "server.connect" : "tool registration"} writes one redacted, bounded \`server start failed\` line and exits 1`, () => {
+      const r = runWith(failAt);
+      expect(r.status).toBe(1);
+      const line = r.stderr.split("\n").find((l) => l.startsWith("[pencil-adapter] ERROR: server start failed: ")) ?? "";
+      expect(line).not.toBe("");
+      expect(line.length).toBeLessThanOrEqual("[pencil-adapter] ERROR: server start failed: ".length + 300);
+      expect(r.stderr).not.toContain(KEY);
+      expect(line).toContain("<redacted>");
+      expect(r.stderr).not.toMatch(/MCP server started on stdio/);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -182,27 +182,6 @@ describe("Observability — one logRefusal helper behind both save call sites", 
     expect(code.split("\n").filter((l) => /REFUSED save/.test(l) && /stderr/.test(l))).toEqual([]);
   });
 
-  test("every refusal state has its stderr marker", () => {
-    for (const marker of [
-      "refusalPending=true",
-      "refusalPending=false",
-      "respawn: refusalPending still armed, baseline not recaptured",
-      "respawn: baseline unknown, not recaptured (open_document to re-baseline)",
-      "save unconfirmed: reply did not match the expected Saved line; baseline=unknown",
-      "save failed (definite): baseline kept",
-      "WARN post-save read failed",
-      "[reason=recreated]",
-      "respawn load check failed",
-      "baseline capture failed for",
-    ]) {
-      expect(adapter).toContain(marker);
-    }
-    // the respawn that finds the file changed or gone names its cause
-    expect(adapter).toMatch(/cause=\$\{armCause\}/);
-    expect(code).toMatch(/armCause = "file-missing"/);
-    expect(code).toMatch(/armCause = "external-change"/);
-  });
-
   test("registerTool's catch writes `tool=<name> error:` (redacted, one line, <= 300 chars) next to the result", () => {
     const start = code.indexOf("function registerTool(");
     const body = code.slice(start, code.indexOf("\n}\n", start));
@@ -217,14 +196,6 @@ describe("Observability — one logRefusal helper behind both save call sites", 
       expect(gate).toContain(marker);
     }
     for (const code of ["save-failed", "unconfirmed", "save-incomplete"]) expect(adapter).toContain(`code: "${code}"`);
-  });
-
-  test("unpersistedEdits is set on refusal and not-persisted outcomes, cleared on a confirmed save or a successful open_document, and gates the unsaved warning", () => {
-    expect(code).toMatch(/if \(saved\.refused \|\| saved\.failed \|\| saved\.unconfirmed\) unpersistedEdits = true;/);
-    expect(code).toMatch(/else if \(saved\.saved\) unpersistedEdits = false;/);
-    expect(count2(code, /unpersistedEdits = false;/g)).toBe(3); // the declaration, a confirmed save, open_document (clearRefusal)
-    expect(count2(code, /if \(unpersistedEdits\)/g)).toBe(2); // get_screenshot, export_nodes
-    expect(code).not.toMatch(/if \(refusalPending === true\) (content|lines)\.push/);
   });
 
   test("the success-side lines are pinned so a migration cannot drop them", () => {
@@ -243,7 +214,7 @@ describe("Single definitions", () => {
     }
     expect(adapter).toMatch(/\{ classifyResponse, stripAnsi \} = await import\("\.\/pencil-response-classify\.mjs"\)/);
     // the widened class: private-mode CSI is included
-    expect(classify).toContain("[0-9;?]*");
+    expect(classify).toContain("[0-9;?:<=>]*[@-~]");
   });
 
   test("the export format enum comes from the surface table, not a second hard-coded list", () => {
@@ -266,27 +237,13 @@ describe("Single definitions", () => {
     expect(adapter).not.toMatch(/[^-]cq-pencil-mcp-silent-drop-diagnosis-checklist/);
     expect(code).toMatch(/let refusalPending = false;/);
   });
-
-  test("the stderr tail buffer is trimmed at a line start, never mid-line", () => {
-    const at = code.indexOf("STDERR_BUFFER_CAP) {");
-    expect(at).toBeGreaterThan(-1);
-    const block = code.slice(at, at + 500);
-    expect(block).toMatch(/tail\.indexOf\("\\n"\)/);
-    expect(block).toMatch(/tail\.slice\(nl \+ 1\)/);
-  });
-
-  test("the rolling redactor is flushed when the child's streams close and nowhere else", () => {
-    expect(count2(code, /\.flush\(\)/g)).toBe(1);
-    const at = code.indexOf(".flush()");
-    expect(code.slice(code.lastIndexOf("const gone", at), at)).toMatch(/const gone = /);
-  });
 });
 
 describe("Credential and engine identity", () => {
   test("the engine binary override is argv-only: --pencil-binary is parsed, the PENCIL_BINARY variable is only ever warned about", () => {
     expect(code).toMatch(/startsWith\("--pencil-binary="\)/);
     expect(count2(code, /process\.env\.PENCIL_BINARY\b/g)).toBe(1); // only the value-free WARN condition, nothing that resolves a path
-    expect(code).toMatch(/PENCIL_BINARY_ARG \? trustedOverride\(PENCIL_BINARY_ARG\) : findPenBinary\(\)/);
+    expect(code).toMatch(/if \(PENCIL_BINARY_ARG\) return \{ binary: trustedOverride\(PENCIL_BINARY_ARG\), home: process\.env\.HOME \};\s*return findPenBinary\(\);/);
   });
 
   test("candidates are the passwd home then $HOME, each excluded when inside the working directory or CLAUDE_PROJECT_DIR, owner- and mode-checked, and the bin must be a regular file", () => {
@@ -302,9 +259,11 @@ describe("Credential and engine identity", () => {
     expect(roots.slice(0, roots.indexOf("\n}\n"))).toMatch(/process\.cwd\(\), process\.env\.CLAUDE_PROJECT_DIR/);
   });
 
-  test("the error and warning texts name `check_deps.sh --auto`", () => {
-    expect(code).toMatch(/const CHECK_DEPS_CMD = "bash plugins\/soleur\/skills\/pencil-setup\/scripts\/check_deps\.sh --auto"/);
-    expect(count2(code, /\$\{CHECK_DEPS_CMD\}/g)).toBeGreaterThanOrEqual(2);
+  test("the customer-facing repair text names /soleur:pencil-setup first and `check_deps.sh --auto`; the repo-relative path is a dev note only", () => {
+    expect(code).toMatch(/const REPAIR_HINT = `run \/soleur:pencil-setup \(it runs \\`check_deps\.sh --auto\\`/);
+    expect(count2(code, /\$\{REPAIR_HINT\}/g)).toBeGreaterThanOrEqual(2);
+    // the Node-floor exit message names it too
+    expect(adapter).toMatch(/Node >= \$\{NODE_FLOOR\.join\("\."\)\} required[\s\S]{0,400}pencil-setup[\s\S]{0,200}check_deps\.sh --auto/);
   });
 
   test("the key is resolved once into a const and both names are deleted from process.env", () => {

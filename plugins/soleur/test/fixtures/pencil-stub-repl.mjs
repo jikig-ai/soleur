@@ -32,6 +32,7 @@
 //     startDelayMs      delay the first prompt by this long (a slow new child)
 //     bigExecute        pad execute replies past 64 KiB (a large design)
 //     failSave          save() prints the measured `Save failed: EACCES...` shape and writes nothing
+//     failSaveWrites    <doc>: with failSave, write <doc> to --out BEFORE printing `Save failed:` (a partial write)
 //     exitOnSave        the process dies when save() arrives (a crash mid-save)
 //     saveReply         text printed verbatim instead of `Saved <path>` ("" prints nothing)
 //     saveWrites        false: save() does not write the file
@@ -42,6 +43,10 @@
 //     echoKey           true: an execute error on stderr that echoes PEN_CLI_KEY;
 //                       "stdout": the same text as a stdout reply
 //     echoKeySplit      the key goes to stderr in two chunks 50 ms apart on each execute
+//     echoKeyAcross     the key is split ACROSS two execute replies: the first half ends one reply's
+//                       stderr (no newline), the second half starts the next reply's
+//     floodKeyThenExit  an execute writes ~1.6 MiB of `<key> ` units to stderr with no newline, then
+//                       the process exits 1 (the adapter's stderr buffer must trim without leaking a key fragment)
 // It reads stdin to EOF-or-exit (a stub that stops draining makes pipefail suites flake
 // on EPIPE).
 
@@ -510,6 +515,7 @@ function runCountProbe(nonce) {
 function doSave() {
   const f = flags();
   if (f.exitOnSave) process.exit(1);
+  if (f.failSave && f.failSaveWrites !== undefined) writeDoc(outFile, f.failSaveWrites);
   if (f.failSave) return saveFailure({ message: `EACCES: permission denied, open '${outFile}'`, errno: -13, code: "EACCES", syscall: "open", path: outFile });
   if (f.saveReply !== undefined) {
     if (f.saveWrites !== false) writeDoc(outFile, { version: "2.21", fileToken, children: nodes });
@@ -539,6 +545,7 @@ function saveFailure(err) {
 // ---------------------------------------------------------------------------
 // The command loop.
 
+let acrossCalls = 0;
 const rl = createInterface({ input: process.stdin });
 rl.on("line", async (line) => {
   const cmd = line.trim();
@@ -584,6 +591,19 @@ rl.on("line", async (line) => {
     await sleep(50);
     process.stderr.write(`${key.slice(half)} (end)\n`);
     await sleep(40);
+  }
+  if (f.echoKeyAcross) {
+    const key = process.env.PEN_CLI_KEY ?? "";
+    const half = Math.ceil(key.length / 2);
+    acrossCalls++;
+    process.stderr.write(acrossCalls % 2 === 1 ? `[WARN] retrying with credential ${key.slice(0, half)}` : `${key.slice(half)} (end)\n`);
+    await sleep(60);
+  }
+  if (f.floodKeyThenExit) {
+    const unit = `${process.env.PEN_CLI_KEY ?? ""} `;
+    const piece = unit.repeat(Math.ceil(65536 / unit.length));
+    for (let sent = 0; sent < 1.6 * 1024 * 1024; sent += piece.length) await new Promise((r) => process.stderr.write(piece, r));
+    process.exit(1);
   }
   if (f.echoKey) {
     const text = `Error: auth failed for key ${process.env.PEN_CLI_KEY}`;

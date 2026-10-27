@@ -37,7 +37,7 @@ const NODE_FLOOR = [22, 19, 0];
   if (below) {
     process.stderr.write(
       `[pencil-adapter] ERROR: Node >= ${NODE_FLOOR.join(".")} required (@pen.dev/cli needs it), got ${process.version}.\n` +
-        "[pencil-adapter] Run `bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh` to find or install a supported Node, then re-register.\n"
+        "[pencil-adapter] Run `/soleur:pencil-setup` (it runs `check_deps.sh --auto`; in a Soleur checkout: `bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto`) to find or install a supported Node, then re-register.\n"
     );
     process.exit(1);
   }
@@ -128,7 +128,7 @@ let existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, r
 let openSync, closeSync, fstatSync, readSync, fsConstants;
 let basename, dirname, isAbsolute, join, resolve, sep;
 let homedir, tmpdir, userInfo;
-let enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES, sanitizeFilename, classifyResponse, stripAnsi;
+let enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES, RAW_CALL_STEERING, sanitizeFilename, classifyResponse, stripAnsi;
 let runGuardedSave, diskTopLevelCount, memoryTopLevelCount, fingerprintState, savedReplyPath, hash8;
 let loadFidelityFailure, notPersistedMessage, recreatedNote, isDefiniteSaveFailure, saveFailureLine;
 let formatReplCommand, planSpawn, REPL_PROMPT;
@@ -148,7 +148,7 @@ try {
   } = await import("node:fs"));
   ({ basename, dirname, isAbsolute, join, resolve, sep } = await import("node:path"));
   ({ homedir, tmpdir, userInfo } = await import("node:os"));
-  ({ enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES } = await import("./pencil-error-enrichment.mjs"));
+  ({ enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES, RAW_CALL_STEERING } = await import("./pencil-error-enrichment.mjs"));
   ({ sanitizeFilename } = await import("./sanitize-filename.mjs"));
   ({ classifyResponse, stripAnsi } = await import("./pencil-response-classify.mjs"));
   ({
@@ -290,10 +290,10 @@ function canonicalFile(p) {
   return join(nearestRealpath(dirname(p)), basename(p));
 }
 
-// The engine is ASSUMED to write through symlinks (not re-measured on @pen.dev/cli), and
-// the sentinel's reads would follow them too, so a link from a project's design.pen to an
-// unrelated file could turn one edit into an overwrite of that file. Only plain .pen
-// files; the returned path is canonical.
+// The engine is ASSUMED to write through symlinks (never observed either way on
+// @pen.dev/cli), and the sentinel's reads would follow them too, so a link from a project's
+// design.pen to an unrelated file could turn one edit into an overwrite of that file. Only
+// plain .pen files; the returned path is canonical.
 function penPath(value, label) {
   const abs = resolve(value);
   if (!abs.toLowerCase().endsWith(".pen")) {
@@ -301,7 +301,7 @@ function penPath(value, label) {
   }
   try {
     if (lstatSync(abs).isSymbolicLink()) {
-      throw new Error(`${label} ${abs} is a symlink; refusing (the engine writes through links)`);
+      throw new Error(`${label} ${abs} is a symlink; refusing (a link could redirect the write to another file)`);
     }
   } catch (err) {
     if (err?.code !== "ENOENT") throw err;
@@ -444,12 +444,18 @@ function saveScreenshot(base64Data, mimeType, nodeId) {
 // directory is outside the working directory and CLAUDE_PROJECT_DIR (a project cannot
 // supply the binary), owned by this user and not group- or world-writable.
 const PEN_CLI_PIN = "0.3.13";
+// What the customer is told to run. The repo-relative path is a dev note: a customer's
+// project has no plugins/ directory, but /soleur:pencil-setup runs the same script.
 const CHECK_DEPS_CMD = "bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto";
+const REPAIR_HINT = `run /soleur:pencil-setup (it runs \`check_deps.sh --auto\`; in a Soleur checkout: \`${CHECK_DEPS_CMD}\`)`;
 
-// realpath of the working directory and of CLAUDE_PROJECT_DIR, minus any that contain
-// `realHome` (a root at or above the home directory would exclude every default install,
-// and is the user's own tree, not a project that could plant a binary).
-function projectRoots(realHome) {
+// realpath of the working directory and of CLAUDE_PROJECT_DIR. `exemptHome` (the realpath of
+// the PASSWD home, which no environment variable can redirect) drops any root that contains
+// it: a root at or above the user's own home would exclude every default install and is the
+// user's tree, not a project that could plant a binary. Pass null for the $HOME candidate:
+// a project's settings env block can set HOME inside the project, so no root is ever
+// skipped for it.
+function projectRoots(exemptHome) {
   const roots = [];
   for (const p of [process.cwd(), process.env.CLAUDE_PROJECT_DIR]) {
     if (!p) continue;
@@ -459,7 +465,7 @@ function projectRoots(realHome) {
     } catch {
       continue;
     }
-    if (real === sep || (realHome && isInside(real, realHome)) || roots.includes(real)) continue;
+    if (real === sep || (exemptHome && isInside(real, exemptHome)) || roots.includes(real)) continue;
     roots.push(real);
   }
   return roots;
@@ -478,7 +484,7 @@ function findPenBinary() {
 
   // One candidate: the verdict is { declared, pkg } or { why, installed } (installed: the
   // package directory exists but is not trusted or not a valid install).
-  const inspect = (home) => {
+  const inspect = (home, exempt) => {
     const prefix = join(home, ".local", "share", "pen-cli");
     let pkgDir;
     try {
@@ -486,13 +492,15 @@ function findPenBinary() {
     } catch {
       return { installed: false, why: "@pen.dev/cli is not installed under ~/.local/share/pen-cli" };
     }
-    let realHome = null;
-    try {
-      realHome = realpathSync(home);
-    } catch {
-      // keep null: nothing extra to exempt
+    let exemptHome = null;
+    if (exempt) {
+      try {
+        exemptHome = realpathSync(home);
+      } catch {
+        // keep null: nothing extra to exempt
+      }
     }
-    if (projectRoots(realHome).some((root) => isInside(root, pkgDir))) {
+    if (projectRoots(exemptHome).some((root) => isInside(root, pkgDir))) {
       return { installed: true, why: "the package directory is inside the working directory or the project directory" };
     }
     let st;
@@ -504,7 +512,12 @@ function findPenBinary() {
     if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
       return { installed: true, why: "the package directory is not owned by the current user" };
     }
-    if ((st.mode & 0o022) !== 0) return { installed: true, why: "the package directory is group- or world-writable" };
+    if ((st.mode & 0o022) !== 0) {
+      return {
+        installed: true,
+        why: `the package directory is group- or world-writable; run \`chmod -R go-w ${prefix}/node_modules\` (an npm ci under umask 002 leaves it so)`,
+      };
+    }
     let pkg;
     try {
       pkg = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
@@ -538,7 +551,7 @@ function findPenBinary() {
 
   const whys = [];
   for (const candidate of candidates) {
-    const verdict = inspect(candidate.home);
+    const verdict = inspect(candidate.home, candidate.label === "passwd");
     if (!verdict.declared) {
       whys.push(verdict);
       continue;
@@ -548,14 +561,14 @@ function findPenBinary() {
     }
     if (verdict.pkg.version !== PEN_CLI_PIN) {
       process.stderr.write(
-        `[pencil-adapter] WARN: @pen.dev/cli version ${oneLine(verdict.pkg.version)} differs from the pin ${PEN_CLI_PIN}; run \`${CHECK_DEPS_CMD}\` to re-install the pinned version\n`
+        `[pencil-adapter] WARN: @pen.dev/cli version ${oneLine(verdict.pkg.version)} differs from the pin ${PEN_CLI_PIN}; ${REPAIR_HINT} to re-install the pinned version\n`
       );
     }
-    return verdict.declared;
+    return { binary: verdict.declared, home: candidate.home };
   }
   const why = (whys.find((v) => v.installed) ?? whys[0])?.why ?? "no home directory could be determined";
   throw new Error(
-    `pen CLI not found or not trusted (${why}); run \`${CHECK_DEPS_CMD}\` or /soleur:pencil-setup to install @pen.dev/cli@${PEN_CLI_PIN}`
+    `pen CLI not found or not trusted (${why}); ${REPAIR_HINT} to install @pen.dev/cli@${PEN_CLI_PIN}`
   );
 }
 
@@ -578,37 +591,44 @@ function trustedOverride(path) {
   }
   if ((st.mode & 0o022) !== 0) throw new Error("--pencil-binary must not be group- or world-writable");
   const real = realpathSync(path);
-  let realHome = null;
+  let passwdHome = null;
   try {
-    realHome = realpathSync(userInfo().homedir);
+    passwdHome = realpathSync(userInfo().homedir);
   } catch {
     // keep null
   }
-  if (projectRoots(realHome).some((root) => isInside(root, real))) {
+  if (projectRoots(passwdHome).some((root) => isInside(root, real))) {
     throw new Error("--pencil-binary must not be inside the working directory or the project directory");
   }
   process.stderr.write("[pencil-adapter] --pencil-binary override in use (the default pen binary was not resolved)\n");
   return real;
 }
 
+// { binary, home }: the binary to run and the home directory the child engine gets as HOME
+// (the home findPenBinary resolved it under; an override keeps this process's HOME).
 function resolveBinary() {
-  return PENCIL_BINARY_ARG ? trustedOverride(PENCIL_BINARY_ARG) : findPenBinary();
+  if (PENCIL_BINARY_ARG) return { binary: trustedOverride(PENCIL_BINARY_ARG), home: process.env.HOME };
+  return findPenBinary();
 }
 
 // --- Child process environment ---
 
-// The child gets an allowlisted environment plus the credential under ONE name. Empty and
+// The child gets an allowlisted environment, HOME from the binary resolution, plus the
+// credential under ONE name. Empty and
 // relative PATH entries are dropped (they would resolve against the project the user
 // opened); the adapter's own Node directory goes first so the engine's shebang resolves to
 // the Node (22.19+) that runs the adapter.
-function buildPencilEnv() {
-  const allowed = ["HOME", "NODE_ENV", "LANG", "TERM", "USER", "SHELL", "TMPDIR"];
+function buildPencilEnv(home) {
+  const allowed = ["NODE_ENV", "LANG", "TERM", "USER", "SHELL", "TMPDIR"];
   const env = {};
   for (const key of allowed) {
     if (process.env[key] !== undefined) {
       env[key] = process.env[key];
     }
   }
+  // HOME is the one findPenBinary trusted, not whatever $HOME says now: the engine keeps its
+  // login state and caches there.
+  if (home) env.HOME = home;
   const dirs = [dirname(process.execPath), ...(process.env.PATH ?? "").split(":").filter((p) => p && isAbsolute(p))];
   env.PATH = [...new Set(dirs)].join(":");
   env.PEN_CLI_KEY = API_KEY;
@@ -674,7 +694,9 @@ const baseline = new SaveBaseline();
 // re-baseline).
 let refusalPending = false;
 // Why the engine was respawned while a refusal was armed: false, "restart" (it was already
-// armed), or the cause that armed it at the respawn ("external-change" | "file-missing").
+// armed, or edits were unpersisted at the respawn), or the cause that armed it at the
+// respawn ("external-change" | "file-missing"). The FIRST cause is kept: a later restart
+// never overwrites it.
 let restartedWhileArmed = false;
 // True from the moment an edit's outcome is a refusal or a NOT PERSISTED result until a
 // confirmed save or a successful open_document: exports and screenshots made meanwhile are
@@ -682,6 +704,8 @@ let restartedWhileArmed = false;
 let unpersistedEdits = false;
 
 function armRefusal(file) {
+  // an armed refusal means edits are (or may be) unpersisted, so renders from memory are marked
+  unpersistedEdits = true;
   if (refusalPending === true) return;
   refusalPending = true;
   restartedWhileArmed = false;
@@ -716,7 +740,7 @@ const FS_PROBE = {
 // the one the caller asked for. Cleared ONLY on success.
 let openFailure = null;
 const OPEN_FAILED_NEXT =
-  "Next step: open_document a different .pen path (the failed file was not modified), or restore it from version control. Do not delete it to bypass this.";
+  "Next step: open_document a different .pen path (the failed file was not modified), or restore it from version control. Do not delete it to bypass this. The original file is untouched; it can still be edited in Pencil Desktop.";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -762,7 +786,7 @@ class PencilProcess {
       let recapture = true;
       if (refusalPending === true) {
         recapture = false;
-        restartedWhileArmed = "restart";
+        if (restartedWhileArmed === false) restartedWhileArmed = "restart";
         process.stderr.write("[pencil-adapter] respawn: refusalPending still armed, baseline not recaptured\n");
       } else if (baseline.get().tag === "unknown") {
         recapture = false;
@@ -784,7 +808,7 @@ class PencilProcess {
   // the session's baseline (ruling: arm the refusal when the file changed or vanished) and
   // checks load fidelity here, because no open_document runs after it.
   async spawn(outFile, explicitInFile = null, resumeInFile = null, { recapture = true, respawn = false } = {}) {
-    const binary = resolveBinary();
+    const { binary, home: engineHome } = resolveBinary();
     const { inFile } = planSpawn({
       outFile,
       initialInFile: explicitInFile,
@@ -826,6 +850,10 @@ class PencilProcess {
       if (captured.state.tag === "missing") armCause = "file-missing";
       else if (captured.state.tag === "hash" && captured.state.hash !== previous.hash) armCause = "external-change";
     }
+    // Edits that were never persisted (a refused, failed, unconfirmed or incomplete save) died
+    // with the old engine: the file looks unchanged, and adopting it would let the next
+    // save pass as if nothing was lost. The baseline stays the old one.
+    if (respawn && recapture && armCause === null && unpersistedEdits) armCause = "restart";
 
     this.buffer = "";
     this.stderrBuffer = "";
@@ -837,7 +865,7 @@ class PencilProcess {
     // adapter and a link swapped since resolution is not followed.
     const child = nodeSpawn(process.execPath, [binary, ...args], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: buildPencilEnv(),
+      env: buildPencilEnv(engineHome),
       cwd: childCwd(),
     });
     this.child = child;
@@ -852,9 +880,13 @@ class PencilProcess {
       const safe = redactor.push(text);
       if (safe) process.stderr.write(safe);
       if (this.child === child) {
-        this.stderrBuffer += text;
+        // Redacted BEFORE it is stored or trimmed: a spelling that straddles the trim point
+        // (or a chunk boundary: the whole buffer is re-scanned) is already replaced, so the
+        // kept tail never starts with half a credential. A spelling still being assembled
+        // at the very end stays whole in the buffer until its second half arrives.
+        this.stderrBuffer = redactKey(this.stderrBuffer + text);
         if (this.stderrBuffer.length > STDERR_BUFFER_CAP) {
-          // trim at a line start, never mid-line (a half line could hide half a credential spelling)
+          // trim at a line start where there is one
           const tail = this.stderrBuffer.slice(-(STDERR_BUFFER_CAP >> 1));
           const nl = tail.indexOf("\n");
           this.stderrBuffer = nl === -1 ? tail : tail.slice(nl + 1);
@@ -893,8 +925,14 @@ class PencilProcess {
       // the baseline stays the OLD one: the engine loaded content (or nothing) this session never saw
       armRefusal(outFile);
       restartedWhileArmed = armCause;
+      const what =
+        armCause === "file-missing"
+          ? "file is gone behind a restarted session"
+          : armCause === "external-change"
+            ? "file changed on disk behind a restarted session"
+            : "edits were not persisted when the engine restarted";
       process.stderr.write(
-        `[pencil-adapter] respawn: file ${armCause === "file-missing" ? "is gone" : "changed on disk"} behind a restarted session (cause=${armCause}) baseline=${hash8(previous.hash)} disk=${hash8(captured.state.hash)}; refusalPending armed\n`
+        `[pencil-adapter] respawn: ${what} (cause=${armCause}) baseline=${hash8(previous.hash)} disk=${hash8(captured.state.hash)}; refusalPending armed\n`
       );
     } else if (recapture) {
       baseline.commit(captured.state);
@@ -984,11 +1022,13 @@ class PencilProcess {
       }
       throw err;
     }
-    // (the rolling redactor is NOT flushed here: a credential spelling split across the
-    // end of one reply and the start of the next must still be caught; it is flushed when
-    // the child's streams close)
-    // Every reply leaves here, so one redaction covers every sink that follows.
-    const errText = stripAnsi(redactKey(this.stderrBuffer)).trim();
+    // (the rolling redactor behind the adapter's own stderr log is NOT flushed here: a
+    // spelling split across the end of one reply and the start of the next must still be
+    // caught THERE, so it is flushed when the child's streams close. That protection is for
+    // the log sink only: a tool result carries one reply's stderr, which is buffered per
+    // command.) The buffer is already redacted; redacting the reply text too covers every
+    // sink that follows.
+    const errText = stripAnsi(this.stderrBuffer).trim();
     const out = redactKey(raw);
     // stderr holds the engine's failures (`Error:`, `[ERROR]`, `Save failed:`, `Unknown tool:`).
     // When it carries one it goes first, so the whole text is scanned; stderr that holds only
@@ -1022,7 +1062,7 @@ class PencilProcess {
       // fails the wait immediately with its stderr tail, not after 30 s.
       this._onExit = (code, signal, err) => {
         cleanup();
-        const tail = stripAnsi(redactKey(this.stderrBuffer))
+        const tail = stripAnsi(this.stderrBuffer)
           .trim()
           .split("\n")
           .slice(-10)
@@ -1135,6 +1175,18 @@ function isSavedFor(raw, file) {
   }
 }
 
+// A recreate (the file was removed behind a live session) is allowed only while the path is
+// still the canonical one the session opened: no directory on the way has been swapped for a
+// link or moved, so the write cannot land somewhere else.
+function canRecreatePath(file) {
+  try {
+    if (canonicalFile(file) !== file) return false;
+    return !lstatSync(dirname(file)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 async function guardedSave(send, source) {
   const file = pencilProcess.outputFile;
   const saved = await runGuardedSave({
@@ -1157,8 +1209,11 @@ async function guardedSave(send, source) {
     readAfterSave: async () => readBytesOrNull(file),
     adoptBaseline: (state) => baseline.adopt(state),
     wasRestarted: () => restartedWhileArmed,
+    canRecreate: async () => canRecreatePath(file),
   });
-  if (saved.refused && saved.arm) armRefusal(file);
+  // a refusal that says the session is behind the file, or a failed write that left the
+  // file different from the baseline, arms the refusal until open_document succeeds
+  if ((saved.refused || saved.failed) && saved.arm) armRefusal(file);
   if (saved.refused || saved.failed || saved.unconfirmed) unpersistedEdits = true;
   else if (saved.saved) unpersistedEdits = false;
   if (saved.recreated) {
@@ -1167,7 +1222,9 @@ async function guardedSave(send, source) {
     );
   }
   if (saved.failed) {
-    process.stderr.write(`[pencil-adapter] save failed (definite): baseline kept; ${failureDetail(saved.raw)}\n`);
+    process.stderr.write(
+      `[pencil-adapter] save failed (definite): baseline kept${saved.changedDuringFailedWrite ? ", but the file changed during the failed write (refusalPending armed)" : ""}; ${failureDetail(saved.raw)}\n`
+    );
   }
   if (saved.unconfirmed) {
     process.stderr.write(
@@ -1218,7 +1275,9 @@ function errorResult(text) {
 // (`failed` / `unconfirmed`), with the engine's own text in `detail` (redacted, capped).
 function notPersistedResult(saved) {
   const file = pencilProcess.outputFile;
-  if (saved.failed) return notPersistedMessage({ code: "save-failed", file, detail: failureDetail(saved.raw) });
+  if (saved.failed) {
+    return notPersistedMessage({ code: "save-failed", file, detail: failureDetail(saved.raw), changed: saved.changedDuringFailedWrite === true });
+  }
   const after = classifyResponse(saved.raw);
   const detail = after.isError ? oneLine(enrichErrorMessage(after.text)).slice(0, 300) : "";
   return notPersistedMessage({ code: "unconfirmed", file, detail });
@@ -1234,10 +1293,23 @@ function saveIncompleteResult(err) {
 
 // --- MCP Server setup ---
 
-const server = new McpServer({
-  name: "pencil-mcp-adapter",
-  version: "0.0.1",
-});
+// A failure while the server is being built or started (a tool that cannot be registered, a
+// transport that cannot connect) leaves one adapter-authored, redacted, bounded line in the
+// MCP log and exits 1; without it Claude Code only reports `failed to connect`.
+function startFailed(err) {
+  process.stderr.write(`[pencil-adapter] ERROR: server start failed: ${oneLine(redactKey(err?.message ?? err)).slice(0, 300)}\n`);
+  process.exit(1);
+}
+
+let server;
+try {
+  server = new McpServer({
+    name: "pencil-mcp-adapter",
+    version: "0.0.1",
+  });
+} catch (err) {
+  startFailed(err);
+}
 
 // Every tool goes through here: an open-failed adapter refuses everything but
 // open_document, and any thrown error (a REPL contract violation, a bad path, a dead
@@ -1247,6 +1319,7 @@ const server = new McpServer({
 function registerTool(name, schema, handler, { allowWhenOpenFailed = false, description } = {}) {
   const callback = async (params) => {
     if (openFailure && !allowWhenOpenFailed) {
+      process.stderr.write(`[pencil-adapter] tool=${name} refused: open failed\n`);
       return errorResult(
         `open failed: ${openFailure}\nNo tool runs until open_document succeeds on a valid .pen file. ${OPEN_FAILED_NEXT}`
       );
@@ -1259,8 +1332,12 @@ function registerTool(name, schema, handler, { allowWhenOpenFailed = false, desc
       return errorResult(enrichErrorMessage(message));
     }
   };
-  if (description) server.tool(name, description, schema, callback);
-  else server.tool(name, schema, callback);
+  try {
+    if (description) server.tool(name, description, schema, callback);
+    else server.tool(name, schema, callback);
+  } catch (err) {
+    startFailed(err);
+  }
 }
 
 // --- Read-only tool handler factory ---
@@ -1326,7 +1403,8 @@ registerReadOnlyTool(
   {
     errorFrom: "stderr",
     description:
-      "Read the engine's own design guidance: read_skill() lists the pages; read_skill({ path }) reads one (execute.md is the operation grammar, pen-schema.md the file schema, guide/<name>.md the design guides). Read-only.",
+      "Read the engine's own design guidance: read_skill() lists the pages; read_skill({ path }) reads one (execute.md is the operation grammar, pen-schema.md the file schema, guide/<name>.md the design guides). Read-only. " +
+      "Archetype names are listed in the engine index but this adapter does not expose get_style; use brand tokens or a guide/*.md page.",
   }
 );
 
@@ -1468,7 +1546,9 @@ registerTool(
       const { text, isError } = classifyResponse(await send(cmd));
       if (isError) {
         // Surface the error AND skip the save: a failed edit must not trigger a write that
-        // replaces valid .pen content with empty or stale state.
+        // replaces valid .pen content with empty or stale state. unpersistedEdits stays as it
+        // was BECAUSE the engine rolls the failed block back ("All operations in this block
+        // have been rolled back": measured), so the in-memory document is unchanged.
         process.stderr.write(`[pencil-adapter] SKIPPED save (batch_design errored): ${oneLine(text).slice(0, 200)}\n`);
         return errorResult(enrichErrorMessage(text));
       }
@@ -1495,7 +1575,8 @@ registerTool(
       "Run a Pencil operation script (Insert, Update, Copy, Replace, Move, Delete, Generate, with short aliases I, U, C, R, M, D, G). " +
       'The field is `operations`. Full grammar: read_skill({ path: "execute.md" }). ' +
       "The document is saved after every successful call (a read through Get/Print saves too); a save that did not persist is reported as an error whose first line is `REFUSED save: [reason=...]` (refused, with the refused operations echoed) or `NOT PERSISTED: [reason=...]`. " +
-      "Layout problems arrive as an `## issues detected:` block in the reply. The reply ends with `Document: <path>`.",
+      "Layout problems arrive as an `## issues detected:` block in the reply. The reply ends with `Document: <path>`. " +
+      RAW_CALL_STEERING,
   }
 );
 
@@ -1604,6 +1685,9 @@ registerTool("save", {}, async () => {
 // The credential hard-fail and Node-version gate both run at the top of this module, before
 // the dynamic imports. See the comment block above the imports for rationale.
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+try {
+  await server.connect(new StdioServerTransport());
+} catch (err) {
+  startFailed(err);
+}
 process.stderr.write("[pencil-adapter] MCP server started on stdio\n");
