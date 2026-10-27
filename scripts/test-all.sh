@@ -6841,6 +6841,10 @@ if want_scripts; then
   # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
   # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
+  # #10972: the orphan-sweeps re-look probe's exit-code contract (a curl shim that accepts one exact argv, an injected
+  # clock, mutant-justified rows for every branch that can end in 0 or 1, and an in-process plus nested proof that the
+  # verdict helpers and the final gate can fail). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/orphan-sweeps-relook-10972" bash scripts/followthroughs/orphan-sweeps-relook-10972.test.sh
 fi
 
 # Named bun-test entries — bun shard.
