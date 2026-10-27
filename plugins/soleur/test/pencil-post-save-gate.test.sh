@@ -135,10 +135,42 @@ assert_contains "$out" "open_document" "unresolved-session failure names the rec
 # The failure text is code-aware: the reload codes and the save codes name different recoveries,
 # so an agent holding a save-failed marker is not told that open_document (which discards the
 # only copy of its edit) resolves it.
-assert_contains "$out" "save-failed" "unresolved-session failure names the save-failed recovery"
-assert_contains "$out" "unconfirmed and save-incomplete" "unresolved-session failure names save-incomplete among the reload codes"
+assert_contains "$out" "open_document plus a replay for stale, unknown-baseline, refusal-pending, empty (a readable, empty document), unrecognized, unconfirmed and save-incomplete" "unresolved-session failure names the full reload-code list (stale, unknown-baseline, refusal-pending, empty, unrecognized, unconfirmed, save-incomplete)"
 assert_contains "$out" "clean save for save-failed" "unresolved-session failure says a clean save resets the flag for save-failed only"
-assert_contains "$out" "unconfirmed" "unresolved-session failure names unconfirmed among the reload codes"
+assert_contains "$out" "empty with an unreadable count" "unresolved-session failure gives the unreadable-count sub-case its own recovery (retry, or a NEW path)"
+
+# 4a. Recovery-reload branches of the PRE_SHA rule (ux-design-lead.md step 2.4). After a recovery
+# open_document the edit is either NOT on disk (replay needed: re-run step 4 right after the reload,
+# then replay) or ALREADY on disk (an interrupted save had written it: KEEP the original PRE_SHA and skip
+# the replay). Re-running step 4 in the second case would fold the edit into PRE_SHA and fail the gate
+# on "file unchanged" although the file differs from the original.
+ORIG="$WORK/orig.pen"
+node -e 'const f=require("fs");f.writeFileSync(process.argv[1],JSON.stringify({version:"2.21",children:[{type:"frame",id:"a",name:"Original frame",width:320,height:200},{type:"frame",id:"b",name:"Second frame",width:320,height:200}]}))' "$ORIG"
+EDITED="$WORK/edited.pen"
+node -e 'const f=require("fs");const d=JSON.parse(f.readFileSync(process.argv[1],"utf8"));d.children.push({type:"frame",id:"c",name:"Edit",width:320,height:200});f.writeFileSync(process.argv[2],JSON.stringify(d))' "$ORIG" "$EDITED"
+ORIG_SHA="$(pre_sha_of "$ORIG")"
+# (a) edit already present after the reload: keeping the ORIGINAL PRE_SHA passes ...
+set +e
+out="$(run_gate "$EDITED" "$ORIG_SHA" 0)"; rc=$?
+set -e
+assert_eq "0" "$rc" "reload found the edit already on disk: the ORIGINAL PRE_SHA is kept and the gate passes"
+# ... while re-running step 4 on the reloaded (edited) file makes the gate fail "file unchanged"
+RELOADED_SHA="$(pre_sha_of "$EDITED")"
+set +e
+out="$(run_gate "$EDITED" "$RELOADED_SHA" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "re-running step 4 after the edit is already present folds it into PRE_SHA and fails the gate"
+assert_contains "$out" "unchanged" "the folded-in PRE_SHA fails on file unchanged (why the agent keeps the original)"
+# (b) edit NOT on disk after the reload: step 4 re-run on the reloaded file, replay skipped -> fails; replayed -> passes
+RELOADED_SHA="$(pre_sha_of "$ORIG")"
+set +e
+out="$(run_gate "$ORIG" "$RELOADED_SHA" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "reload without the edit and a skipped replay leaves the hash equal to the re-run PRE_SHA: the gate fails"
+set +e
+out="$(run_gate "$EDITED" "$RELOADED_SHA" 0)"; rc=$?
+set -e
+assert_eq "0" "$rc" "reload without the edit, step 4 re-run, then a replayed edit: the gate passes"
 
 # 4b. Fail closed: a flag that is neither 0 nor 1 (unset, empty, typo) never passes.
 set +e
@@ -187,4 +219,4 @@ else
   PASS=$((PASS + 1))
 fi
 
-print_results 38
+print_results 42

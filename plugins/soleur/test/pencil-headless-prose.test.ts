@@ -196,7 +196,8 @@ describe("pencil-setup/SKILL.md", () => {
   });
 
   test("probe recipe forms: Get/Print bounds, c.problems means clipping, Print(FindEmptySpace(...))", () => {
-    expect(skill).toContain("Get(id,(n,c)=>Print(c.bounds.width))");
+    expect(skill).toContain("Get(id,(n,c)=>Print(n.id+' '+c.bounds.width))");
+    expect(skill).toMatch(/visitor runs for the node AND every descendant, the frame first/);
     expect(skill).toMatch(/c\.problems[^\n]*clipp/i);
     expect(skill).toContain("Print(FindEmptySpace({width:50,height:50}))");
   });
@@ -212,6 +213,15 @@ describe("pencil-setup/SKILL.md", () => {
     const row = tableRow(skill, "refusal-pending") ?? "";
     for (const cause of ["external-change", "file-missing", "restart"]) expect(row).toContain(cause);
     expect(tableRow(skill, "empty") ?? "").toMatch(/unreadable|cannot be read|unprobe/i);
+  });
+
+  test("reason=empty has two recoveries matching the adapter: empty document re-opens the file, unreadable count retries then opens a NEW path", () => {
+    const rec = recovery(tableRow(skill, "empty") ?? "");
+    expect(rec).toMatch(/Empty document: `open_document` the same file/);
+    expect(rec).toMatch(/Unreadable count: retry the call; if it keeps failing, `open_document` a NEW file path/);
+    // the adapter's own unreadable-count text (the source of the second sub-case)
+    const text = saveGate.refusalMessage({ file: "a.pen", source: "save", code: "empty", diskCount: 3, memoryCount: null });
+    expect(text).toContain("retry the call; if it keeps failing, open_document a new file path");
   });
 
   test("NOT PERSISTED: codes are documented with a recovery; save-failed never says to open_document", () => {
@@ -289,8 +299,19 @@ describe("pencil-setup/SKILL.md", () => {
     // a project-scoped entry's command is never executed
     expect(step1).toMatch(/Scope: User/);
     expect(step1).toMatch(/never execute[^\n]*(project|\.mcp\.json)|(project|\.mcp\.json)[^\n]*never (run|execute)/i);
-    // the registered --pencil-binary= flag survives the re-registration
-    expect(step1).toMatch(/--pencil-binary=\[\^ \]\+|pencil_binary_flag/);
+    // the registered --pencil-binary= flag survives the re-registration, but is extracted ONLY inside the
+    // user-scope branch (a project-scoped .mcp.json flag must never reach the trusted user registration)
+    const code = step1.split("\n").map((l) => l.replace(/^\s*#.*$/, "").replace(/\s+#.*$/, "")).join("\n");
+    const branch = code.indexOf('if [[ "$scope" == "Scope: User" ]]; then');
+    const elseAt = code.indexOf("\n  else\n", branch);
+    const extract = code.search(/^\s*pencil_binary_flag=\$\(.*grep -oE -- '--pencil-binary=\[\^ \]\+'/m);
+    expect(branch).toBeGreaterThan(-1);
+    expect(extract, "flag extraction present").toBeGreaterThan(-1);
+    expect(extract).toBeGreaterThan(branch);
+    expect(extract).toBeLessThan(elseAt);
+    // exactly one extraction, and the empty initialiser precedes the branch
+    expect(code.match(/pencil_binary_flag=\$\(/g)).toHaveLength(1);
+    expect(code.indexOf('pencil_binary_flag=""')).toBeLessThan(branch);
     // not for a Node PATH difference, not for a working deprecated key name
     expect(step1).not.toMatch(/"\$registered_node" != "\$PREFERRED_NODE"/);
     expect(step1).toMatch(/below 22\.19|node_status[^\n]*old/);
@@ -355,17 +376,17 @@ describe("ux-design-lead.md", () => {
     expect(step).toMatch(/REFUSED save:[^.]*NOT PERSISTED:|NOT PERSISTED:[^.]*REFUSED save:/);
   });
 
-  test("gate reset rule is code-aware: open_document + replay for six codes, a clean `save` for save-failed and save-incomplete", () => {
+  test("gate reset rule is code-aware: open_document + replay for seven reload codes, a clean `save` for save-failed only, a retry or a new path for an unreadable empty count", () => {
     const i = agent.indexOf("**Post-save verification (HARD GATE).**");
     const step = agent.slice(i, agent.indexOf("\n3. **Export", i));
-    const reload = step.match(/open_document` plus a (?:clean )?replay[^:]*for ([^;.]*)|for ([^;.]*) the recovery is `open_document`/);
-    // the six reload codes named together, then the two save codes named together
-    for (const c of ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized", "unconfirmed"]) {
-      expect(step, `reset rule names ${c}`).toContain(`\`${c}\``);
-    }
+    // the seven reload codes named together, in the gate's order, then the one save code
+    expect(step).toMatch(
+      /for `stale`, `unknown-baseline`, `refusal-pending`, `empty` \([^)]*\), `unrecognized`, `unconfirmed` and `save-incomplete`/,
+    );
     expect(step).toMatch(/`unconfirmed` and `save-incomplete`[^;]*; a clean `save`[^;]*for `save-failed` only/);
     expect(step).toMatch(/only when the recovery named for the code has completed/);
-    expect(reload === null || reload).toBeTruthy();
+    // empty has two sub-cases: an unreadable count retries or opens a NEW path (it never re-opens the same file)
+    expect(step).toMatch(/`empty` with an unreadable in-memory count, a retried call[^;]*NEW file path/);
     // the gate's failure text itself is code-aware
     const gate = agent.slice(agent.indexOf("# post-save-gate"), agent.indexOf("```", agent.indexOf("# post-save-gate")));
     expect(gate).toMatch(/save-failed/);
@@ -373,7 +394,9 @@ describe("ux-design-lead.md", () => {
   });
 
   test("after a recovery open_document, step 4 (PRE_SHA) is re-run before the gate; an open that could not record a baseline means a new path", () => {
-    expect(agent).toMatch(/re-run this step 4 before the gate: `PRE_SHA` must describe the file as the recovery reloaded it/);
+    expect(agent).toMatch(/If it is NOT present and a replay is needed, re-run this step 4 right after the reload and before replaying: `PRE_SHA` must describe the file as the recovery reloaded it/);
+    // the other branch keeps the ORIGINAL hash: re-running step 4 after the edit is already on disk would hide it
+    expect(agent).toMatch(/If it IS already present[^.]*KEEP the original `PRE_SHA` and skip the replay: re-running step 4 would fold the edit into `PRE_SHA`/);
     expect(agent).toMatch(/warns that it could not record a baseline for the file, stop and use a new path/);
   });
 
@@ -383,7 +406,7 @@ describe("ux-design-lead.md", () => {
 
   test("the agent-reported residual (ruling 5): REFUSED is agent-reported and a skipped replay is undetectable from the file", () => {
     expect(agent).toMatch(/agent-reported/i);
-    expect(agent).toMatch(/skipped replay[^.]*(undetectable|cannot be detected|not detectable)[^.]*unless[^.]*(step 4|PRE_SHA)[^.]*re-run/i);
+    expect(agent).toMatch(/skipped replay[^.]*(undetectable|cannot be detected|not detectable)[^.]*unless[^.]*(step 4|PRE_SHA)[^.]*re-run[^.]*recovery that needed a replay/i);
   });
 
   test("step 3.2 commits the first marker line verbatim into the wireframe summary for a recovered session", () => {
@@ -411,8 +434,10 @@ describe("ux-design-lead.md", () => {
   test("style-guide step does not promise loadable archetypes; layout audit uses Get/Print and c.problems", () => {
     expect(agent).not.toMatch(/index of guides and style archetypes/);
     expect(agent).toMatch(/cannot be loaded headless/i);
-    expect(agent).toContain("Get(id,(n,c)=>Print(c.bounds.width))");
-    expect(agent).toContain("c.problems");
+    expect(agent).toContain("Get(id,(n,c)=>Print(n.id+' '+c.bounds.width))");
+    expect(agent).toMatch(/visitor runs for the node AND every descendant, the frame first/);
+    expect(agent).toMatch(/`c\.problems` visitor for a node's clipping/);
+    expect(agent).not.toMatch(/c\.problems[^\n]*layout problems/);
   });
 
   test("the open guard needs a tracked file, and a load that drops nodes is a refused open", () => {
