@@ -171,11 +171,11 @@ Assessment ran inline (sequential-fallback — see Research Insights; no domain-
 
 ## Acceptance Criteria
 
-- [ ] AC-1 — Byte-identical archival: `git show HEAD:knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md | sha256sum` equals `ffa9cbe118ac875635f5ae051682c418f678f069b22a9d546e2e9c901d038b5f` on the PR head.
-- [ ] AC-2 — No credential values in the added file: `git show HEAD:knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md | grep -cE 'sdu_[A-Za-z0-9]+|dop_(pat|oi|st)_[A-Za-z0-9]+|gh(p|o|u)_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|-----BEGIN'` exits 1 (zero matching lines).
+- [x] AC-1 — Byte-identical archival: `git show HEAD:knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md | sha256sum` equals `ffa9cbe118ac875635f5ae051682c418f678f069b22a9d546e2e9c901d038b5f` on the PR head.
+- [x] AC-2 — No credential values in the added file: `git show HEAD:knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md | grep -cE 'sdu_[A-Za-z0-9]+|dop_(pat|oi|st)_[A-Za-z0-9]+|gh(p|o|u)_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|-----BEGIN'` exits 1 (zero matching lines).
 - [ ] AC-3 — Epic stays open: the PR body contains the literal text `Ref #11181` and no case-insensitive `closes #11181` / `fixes #11181` / `close #11181` token; after merge, `gh issue view 11181 --json state -q .state` returns `OPEN`.
-- [ ] AC-4 — KB-only diff: `git diff --name-only origin/main...HEAD` lists only paths starting with `knowledge-base/`.
-- [ ] AC-5 — Destination exactness: the file exists at `knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md` (no stray copies elsewhere in the tree; `git ls-files knowledge-base | grep delegated-act-11181` returns exactly one line).
+- [x] AC-4 — KB-only diff: `git diff --name-only origin/main...HEAD` lists only paths starting with `knowledge-base/`.
+- [x] AC-5 — Destination exactness: the file exists at `knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md` and is the tree's only committed copy. Amended at work-time (explicit, per verify-by-literal-command discipline): the plan-time form `git ls-files knowledge-base | grep delegated-act-11181` measured 1 line only because this plan was still untracked then; after the plan commit it also matches this plan's filename. Fixed predicate: `git ls-files | grep delegated-act-11181` names exactly two paths, of which exactly one `cmp`-matches the source bytes (the runbook); the other is this branch's planning artifact, not a copy of the envelope. Measured 2026-10-27: `ENVELOPE-COPY` count = 1.
 
 ## Test Scenarios
 
