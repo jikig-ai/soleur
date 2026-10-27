@@ -3472,7 +3472,7 @@ ow_mutate parallel-rc-ignored $'if [ "$(cat "$wrc_file")" != 0 ]; then' $'if fal
 ow_mutate budget-ignored $'if (( o_launched > 0 && SECONDS - T0 >= BUDGET )); then BUDGET_CUT=1; break; fi' $':' row_ow_budget
 ow_mutate deadline-gates-first-oldest-first $'if (( o_launched > 0 && SECONDS - T0 >= BUDGET )); then' $'if (( SECONDS - T0 >= BUDGET )); then' row_ow_budget
 ow_mutate deadline-gates-extras $'  if [ "$kind" = O ]; then' $'  if [ -n "$kind" ]; then' row_ow_budget
-ow_mutate extras-last $'{ sed \'s/^/E\\t/\' "$WORK/extras.tsv"; sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; } > "$WORK/dispatch.tsv"' $'{ sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; sed \'s/^/E\\t/\' "$WORK/extras.tsv"; } > "$WORK/dispatch.tsv"' row_ow_budget
+ow_mutate extras-last $'{ sed \'s/^/E\\t/\' "$WORK/extras.tsv"; sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; }' $'{ sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; sed \'s/^/E\\t/\' "$WORK/extras.tsv"; }' row_ow_budget
 ow_mutate unit-sort-dropped $'sort -t$\'\\t\' -k5,5 -k1,1n -s -o "$UNITS" "$UNITS" || fail_api "unit sort"' $':' row_ow_parallel_same
 ow_mutate draft-cache-dropped $'[ -n "${PR_TL[$n]+x}" ] || { PR_TL' $'{ PR_TL' row_ow_pr_facts_cached
 ow_mutate jq-detail-unbounded $'| LC_ALL=C cut -c1-160; }' $'| cat; }' row_ow_jq_error_text
