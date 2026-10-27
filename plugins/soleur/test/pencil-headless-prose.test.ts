@@ -173,8 +173,16 @@ describe("pencil-setup/SKILL.md", () => {
     expect(recovery(tableRow(skill, "stale") ?? "")).not.toContain(REPLAY_SAFETY);
   });
 
+  test("SHARED TEXT CONTRACT: unknown-baseline cause=unconfirmed-save carries the replay-safety sentence, in the gate text and in the prose row", () => {
+    expect(recovery(tableRow(skill, "unknown-baseline") ?? "")).toMatch(/For `cause=unconfirmed-save`: /);
+    expect(recovery(tableRow(skill, "unknown-baseline") ?? "")).toContain(REPLAY_SAFETY);
+    const text = saveGate.refusalMessage({ file: "a.pen", source: "save", code: "unknown-baseline", cause: "unconfirmed-save" });
+    expect(text).toContain(REPLAY_SAFETY);
+    expect(saveGate.refusalMessage({ file: "a.pen", source: "save", code: "unknown-baseline", cause: "capture-failed" })).not.toContain(REPLAY_SAFETY);
+  });
+
   test("SHARED TEXT CONTRACT: only-copy sentence on save-failed and unrecognized; file-missing restores from version control first", () => {
-    for (const code of ["save-failed", "unrecognized"]) {
+    for (const code of ["save-failed", "unrecognized", "refusal-pending"]) {
       expect(recovery(tableRow(skill, code) ?? ""), `only-copy for reason=${code}`).toContain(ONLY_COPY);
     }
     expect(recovery(tableRow(skill, "refusal-pending") ?? "")).toContain(RESTORE_FIRST);
@@ -209,9 +217,14 @@ describe("pencil-setup/SKILL.md", () => {
     expect(skill).toMatch(/exits? 2[^\n]*adapter[^\n]*unchanged/);
   });
 
-  test("refusal-pending names its three causes and empty also covers an unreadable memory count", () => {
+  test("refusal-pending names its four causes (failed-write reads the document out first, then open_document) and empty also covers an unreadable memory count", () => {
     const row = tableRow(skill, "refusal-pending") ?? "";
-    for (const cause of ["external-change", "file-missing", "restart"]) expect(row).toContain(cause);
+    for (const cause of ["external-change", "file-missing", "restart", "failed-write"]) expect(row).toContain(cause);
+    expect(recovery(row)).toMatch(/For `failed-write`: read the in-memory document out FIRST, then `open_document` the file\./);
+    // the failed-write cause text comes from the gate itself: the only-copy sentence, then open_document
+    const text = saveGate.refusalMessage({ file: "a.pen", source: "save", code: "refusal-pending", restart: "failed-write" });
+    expect(text).toContain(ONLY_COPY);
+    expect(text.indexOf(ONLY_COPY)).toBeLessThan(text.indexOf("call open_document"));
     expect(tableRow(skill, "empty") ?? "").toMatch(/unreadable|cannot be read|unprobe/i);
   });
 
