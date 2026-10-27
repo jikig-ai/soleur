@@ -320,6 +320,16 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - **Inline scripts**: scripts must be committed. We considered allowing inline shell in directives and rejected it for security.
 - **Multi-step verification**: each script is one binary pass/fail. For verifications that span multiple days with different criteria, file multiple follow-through issues that block each other.
 
+## A probe that closes its tracker over a time window (#10972, 2026-10-26)
+
+A probe whose exit 0 closes the issue after a window of recurring check-ins must prove the property it names, not a count that usually implies it.
+
+- **Cover slots, not rows.** "One ok per 12-hour slot" is a claim about distinct slots: bucket each row by its own timestamp and require every bucket. A row count is satisfied by a duplicate or manual re-dispatch standing in for a slot that never ran.
+- **Allowlist statuses, never denylist.** An unrecognised status word is exit 3 (cannot establish), printed from a closed token set so response text never reaches the public comment.
+- **Pin the window and the clock in the probe.** The sweeper re-reads and honours an edited `earliest=`, so the probe refuses to judge before its own pinned window end. Validate the clock and bounds as `^[1-9][0-9]{0,15}$` (a leading zero is octal in bash arithmetic and falls through to PASS).
+- **Judge one JSON document** (`jq -s`, exactly one array), cap the reply (`--max-filesize` plus `--max-time`), and never echo the body.
+- Reference implementation and its mutation-proven suite: `scripts/followthroughs/orphan-sweeps-relook-10972.sh` and `.test.sh`.
+
 ## Retiring a probe
 
 - **Deleting a probe script leaves live GitHub state behind.** The sweeper re-scans CLOSED `follow-through` issues for 14 days, so a closed *promotion* tracker (not just the tracker the probe is named for) whose directive names the deleted script logs a `missing in repo HEAD` ERROR on every daily sweep until the window lapses. Before merging a deletion, `gh issue list --state closed --label follow-through -L 200 --search "closed:>=<14 days ago>" --json number,body` and `grep` the directive for the script name; after merge, remove the `follow-through` label from any hit (reversible, closed body untouched). Found on G1 PR-4a, where the plan checked the named tracker (#2640) and missed its promotion tracker (#9888).
