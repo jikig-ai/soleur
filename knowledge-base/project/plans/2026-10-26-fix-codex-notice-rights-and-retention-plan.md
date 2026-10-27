@@ -200,7 +200,7 @@ TOM 4 classification attestation does not substitute for them.
 | Mark delivered or repair | `persistCodexNoticeDelivery()` calls `mark_codex_history_transfer_notice_delivered` after socket send acceptance or authenticated reconnect repair. | The service RPC rechecks current conversation owner, generation and membership epoch and matches the nonce hash. |
 | Remove unsent issuance | `discardCodexNoticeIssuance()` calls `delete_codex_history_transfer_notice_issuance` after failed or superseded sends. | The RPC deletes only the matching row while `delivered_at IS NULL`. |
 | Acknowledge | WebSocket message `codex_history_transfer_acknowledge` uses the tenant JWT to call the three-argument acknowledgment RPC. That function consumes only a matching delivered issuance, then records an acknowledgment. | Possession hash is required. The client acknowledgement path emits a response; it does not itself dispatch a provider request. |
-| Lifecycle cleanup | Migration 175 deletes pending rows when the auth-mode generation or membership epoch changes. Conversation, user and membership foreign keys cascade on deletion. | These are real lifecycle bounds but do not bound abandoned rows whose parents and generation remain. |
+| Lifecycle cleanup | `175_codex_history_notice_issuance.sql` deletes pending rows when the auth-mode generation or membership epoch changes. Conversation, user and membership foreign keys cascade on deletion. | These are real lifecycle bounds but do not bound abandoned rows whose parents and generation remain. |
 | Browser cache | `lib/codex-held-turn-cache.ts` keeps a bounded held message and raw notice nonce in tab memory for up to 30 minutes; it clears on auth-scope change, expiry or reload. | This is distinct from database retention. Never log, export or persist the raw nonce; do not promise recovery after cache expiry/reload. |
 | Member access export | `DSAR_TABLE_ALLOWLIST` and `exportSqlTable()` include `codex_history_transfer_acknowledgments` by member. Issuance metadata appears in neither allowlist nor exclusions and has no export read path. | The worker uses a service client. The issuance table revokes direct table privileges from PUBLIC, `anon`, `authenticated` and `service_role`; that invariant must remain. |
 | Current expiration | No database expiry column/check or abandoned-row sweep exists for the issuance table. | `issued_at` is not refreshed when a replacement nonce hash is stored, so it cannot currently express the current nonce's age. |
@@ -259,7 +259,8 @@ Successful acknowledgment may delete the issuance without permanent history.
 
 ### 2. Expiry and bounded cleanup
 
-Do not edit or replay migration 175. Remeasure migration ownership and ordinals
+Do not edit or replay `175_codex_history_notice_issuance.sql`. Remeasure
+migration ownership and ordinals
 before each forward-only migration in dependent companion PRs stacked on #9051's
 feature branch; any correction migration must follow #9051's prerequisite on
 the stack and must be numbered after current `origin/main`'s maximum ordinal
@@ -588,7 +589,8 @@ it must not be treated as available until added and tested.
   job-bound export; Slice B implements expiry, bounded cleanup/health and the
   renewal UI/protocol. Integrate both before reconsidering #9051 readiness. One
   completion gate spans all six asks. Do not target `main` with either
-  correction migration until prerequisite migration 175 from #9051 is present
+  correction migration until prerequisite
+  `175_codex_history_notice_issuance.sql` from #9051 is present
   there. Current fetched main reaches ordinal 178, so remeasure before choosing
   correction ordinals. Preserve the draft hold.
 
@@ -636,7 +638,7 @@ it must not be treated as available until added and tested.
 
 ## Files to Edit
 
-- `apps/web-platform/supabase/migrations/<rechecked-ordinal>_codex_dsar_snapshot.sql` and `<rechecked-ordinal>_codex_notice_retention.sql` — dependent forward migrations; do not edit migration 175.
+- `apps/web-platform/supabase/migrations/<rechecked-ordinal>_codex_dsar_snapshot.sql` and `<rechecked-ordinal>_codex_notice_retention.sql` — dependent forward migrations; do not edit `175_codex_history_notice_issuance.sql`.
 - `apps/web-platform/server/dsar-export-allowlist.ts`, `server/dsar-export.ts`, account-export request admission and verified email intake — atomic request/job/snapshot binding and scoped export.
 - DSAR snapshot/job lifecycle migrations and tests — fresh request versus retry, deletion, account erasure, encryption, PITR and restore behavior.
 - `apps/web-platform/server/ws-handler.ts`, `lib/types.ts`, `lib/ws-zod-schemas.ts`, `lib/ws-client.ts`, and chat UI — fresh nonce renewal, acknowledgment and separate explicit resend.
@@ -648,7 +650,7 @@ it must not be treated as available until added and tested.
 
 ## Non-Goals
 
-- Do not change the meaning or bytes of migration 175 or any earlier migration.
+- Do not change the meaning or bytes of `175_codex_history_notice_issuance.sql` or any earlier migration.
 - Do not treat the issuance as an explicit transfer instruction, GDPR consent,
   evidence that the notice was read, or provider permission.
 - Do not add direct table SELECT or expand the issuance projection to expose

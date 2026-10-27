@@ -67,3 +67,11 @@ the app's `.nvmrc` still specifies 22.3.0 while global mise selected Node 26.
 Do not reuse a remembered executable path. Read the app pin, inspect installed
 versions, install that pin when needed, and rerun the failed validation before
 reporting a result.
+
+The installed GitHub CLI also advanced from 2.103.2 to 2.103.3 during the
+session; resolve the executable with `command -v gh` or `mise ls gh` instead
+of using a cached absolute path. This version names the PR field
+`autoMergeRequest` (not `autoMerge`); inspect the CLI's available JSON fields
+and request the exact supported field. When the sandbox blocks API access,
+repeat the same read-only query with escalation rather than interpreting the
+connectivity error as an empty result.
