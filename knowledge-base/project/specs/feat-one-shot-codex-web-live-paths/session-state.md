@@ -2924,3 +2924,45 @@
   repeat qualification, recovery and QA, exact-head review/preflight, legal/data
   clearance and readiness/ship gates. Provider-hosted auth modes remain blocked;
   customer content remains blocked. Do not ready or merge the PR.
+
+### Recovery continuation — 2026-10-27
+
+- Operator approved the single Pencil `fileToken` scanner false-positive
+  exception at historical commit `7e473494e634`; the scanner must continue to
+  report FINDINGS and its rules/waivers stay unchanged. Operator also approved
+  the CLO legal-risk policy for implementation and isolated testing only:
+  30-minute nonce, deletion within five further minutes in the primary table,
+  request-receipt-time non-secret Article 15 projection, eligible Article 20
+  activity, no permanent notice history, and contract basis only for verified
+  contracting subjects. This did not authorize capture, reconciliation,
+  provider/customer processing, readiness, merge or shipping.
+- The plan now records CTO resend semantics: stable logical turn ID, definite
+  pre-admission retry only after explicit member action, ambiguous outcomes
+  remain unresolved until authenticated scope-bound status reconciliation,
+  and no replacement ID or automatic retry. Spec-flow confirmed the P2 fixed
+  at `b3e5ba4c2f`; code simplicity found no unnecessary mechanism. Pencil UX
+  design remains pending because this Codex session has no Pencil MCP tools;
+  no new `.pen` wireframe or independent UX review is claimed.
+- Push `b3e5ba4c2f` exposed a tenant-integration static failure in migration
+  API-role lint for frozen migrations 165 and 175. It stopped before the DB
+  suite; no shared DB operation occurred. CTO ruled to preserve both migration
+  files byte-for-byte and use exact path+SHA-256-bound contracts that name only
+  the affected relations and intended privilege scope. The 175 issuance table
+  stays INTERNAL with zero API privileges. The two 165 DSAR-read relations
+  require only service-role metadata columns via a later forward correction;
+  checkpoint payloads and attempt keys remain private. RLS-fuzz remains the
+  effective-privilege authority and its run was cancelled under the hold.
+- Added a narrow historical declaration path to the migration API-grant
+  linter; exact frozen files still scan all three relations, and unrelated
+  relations, changed digests, blanket grants and sequence checks remain
+  enforced. Focused linter suite passes 33 assertions; direct migration scan
+  reports 2 files / 3 relations / no violations. PR remains draft with
+  auto-merge off at `c1a6c6a5fbe3a97043c55f97c69833ab8464d242` before this
+  guard fix is pushed. A later exact-head review and CI cycle are required.
+- Tenant integration and RLS fuzz runs for the pushed heads were cancelled and
+  verified; the `c1a6` Sentry apply job was skipped on the pull-request event.
+  The earlier Tenant integration run failed in the static migration grant
+  lint, not the database suite. No current shared catalog capture,
+  reconciliation, writer clearance, provider request or processing clearance
+  exists. Full qualification, QA, code review, preflight and readiness/ship
+  remain held. Keep the PR draft and do not merge.

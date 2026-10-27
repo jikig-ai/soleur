@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "contracts": [
+    {
+      "path": "apps/web-platform/supabase/migrations/165_agent_engine_attempts.sql",
+      "sha256": "b9dcb189ae301c8f5f3081030e9eec0bee6755b28a10dfe31a5c2c04dc610a71",
+      "relations": {
+        "agent_engine_attempts": {
+          "kind": "EXPOSED",
+          "reason": "Frozen migration 165; the approved DSAR projection needs only these service-role metadata columns. An ordinally remeasured forward correction must establish them before qualification.",
+          "privilegeContract": {
+            "anon": {},
+            "authenticated": {},
+            "service_role": {
+              "SELECT": ["id", "run_id", "status", "created_at", "updated_at", "terminal_at", "accepted_at"]
+            }
+          }
+        },
+        "agent_engine_recovery_checkpoints": {
+          "kind": "EXPOSED",
+          "reason": "Frozen migration 165; the approved DSAR projection needs only run and update metadata. An ordinally remeasured forward correction must establish them before qualification; checkpoint payloads stay private.",
+          "privilegeContract": {
+            "anon": {},
+            "authenticated": {},
+            "service_role": {
+              "SELECT": ["run_id", "updated_at"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "path": "apps/web-platform/supabase/migrations/175_codex_history_notice_issuance.sql",
+      "sha256": "ddaed3842b9a8de8ee0d7d8126434f30e47dda0a8a336d7fa1fde013abf3f66d",
+      "relations": {
+        "codex_history_transfer_notice_issuances": {
+          "kind": "INTERNAL",
+          "reason": "Frozen migration 175 revokes direct table access from every API role; access remains through its narrowly scoped SECURITY DEFINER RPCs.",
+          "privilegeContract": {
+            "anon": {},
+            "authenticated": {},
+            "service_role": {}
+          }
+        }
+      }
+    }
+  ]
+}
