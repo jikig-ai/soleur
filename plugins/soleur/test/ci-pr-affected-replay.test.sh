@@ -3012,7 +3012,7 @@ ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> 
 }
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* "$GHFIX"/ERR4*RL_* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
   printf '{"resources":{"core":{"limit":5000,"remaining":%s,"used":100,"reset":1900000000}}}' "${OW_RL_REMAINING:-4900}" | fx "rate_limit"   # the probe reads the API quota before it reads any run
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
@@ -3275,11 +3275,12 @@ row_ow_parallelism() {   # eight 1 s reads: the stub counts how many are in flig
     [[ "$conc" -eq "$p" ]] || return 1
   done
 }
-row_ow_run_id() {   # a run id, attempt or PR number from the API is validated at list time (trailing garbage, leading garbage, an embedded space, a non-numeric PR number)
-  local id prn item
-  for id in '"6001x"' '"x6001"' '"60 01"' ok; do
-    ow_case; ow_write; prn=0; [[ "$id" != ok ]] || { id=6001; prn='"x"'; }
-    item="$(ow_run_item "$id" shaZ feat/z 2031-02-03T05:00:00Z 1 merge_group success "$prn")"
+row_ow_run_id() {   # a run id, attempt or PR number from the API is validated at list time (trailing garbage, leading garbage, an embedded space, a non-numeric PR number, a non-numeric attempt)
+  local v id att prn item
+  for v in '"6001x"' '"x6001"' '"60 01"' prn att; do
+    ow_case; ow_write; id=6001; att=1; prn=0
+    case "$v" in prn) prn='"x"' ;; att) att='"x"' ;; *) id="$v" ;; esac
+    item="$(ow_run_item "$id" shaZ feat/z 2031-02-03T05:00:00Z "$att" merge_group success "$prn")"
     printf '{"total_count":1,"workflow_runs":[%s]}' "$item" | fx "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"
     ow_probe
     [[ "$RC" -eq 3 ]] && grep -q 'non-numeric run id' <<<"$OWOUT" || return 1
@@ -3499,6 +3500,7 @@ ow_mutate jq-detail-allows-slash $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A
 ow_mutate branch-guard-empty-only $'((.head_branch // "") | if . == "" then "-" else . end)' $'(if .head_branch == "" then "-" else (.head_branch // "") end)' row_ow_empty_branch
 ow_mutate run-id-anchor-loose $'$1 !~ /^[0-9]+$/ || $6' $'$1 !~ /[0-9]+$/ || $6' row_ow_run_id
 ow_mutate prn-unvalidated $' || $7 !~ /^[0-9]+$/ { bad = 1 }' $' { bad = 1 }' row_ow_run_id
+ow_mutate attempt-unvalidated $' || $6 !~ /^[0-9]+$/' $'' row_ow_run_id
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
 # ---------------------------------------------------------------------------------------------------------------------
@@ -4790,7 +4792,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1209   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 37 mutant kills) (measured below)
+FLOOR_ASSERTIONS=1210   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 38 mutant kills) (measured below)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
