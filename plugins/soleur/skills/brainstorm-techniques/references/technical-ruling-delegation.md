@@ -79,6 +79,8 @@ question. Architectural forks found mid-work (a plan's mechanism structurally bl
 traced from the ACTUAL producer) route here too; record the decision and the rejected alternatives in an ADR
 (`soleur:architecture`).
 
+A ruling that WIDENS a status, permission or approval guard needs the guard's history in the brief: `git log -S` of the guarded set and the tests that pin it, plus every writer of the status. **Why (guard widening):** #11303 — a ruling that let the abort finalize accept `waiting_for_user` re-opened the #3463 disconnect-after-result race and its test was rewritten to match; the next review round caught it. See `knowledge-base/project/learnings/security-issues/2026-10-27-the-allowlist-pre-approved-the-gated-tier-and-two-of-my-fixes-reopened-it.md`.
+
 **Why:** #5325 — the plan's `action_sends`-reuse mechanism was structurally blocked and the substrate choice (dedicated
 WORM table vs gate-only vs full reuse) was first offered to the operator before the CTO ruled. See
 `knowledge-base/project/learnings/workflow-patterns/2026-06-15-architectural-fork-decisions-route-to-cto-not-operator.md`.
