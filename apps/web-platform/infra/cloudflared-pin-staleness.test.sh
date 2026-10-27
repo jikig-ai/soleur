@@ -163,7 +163,7 @@ fi
 # the wrong release.
 for asset in cloudflared-linux-amd64 cloudflared-linux-amd64.deb; do
   url="https://github.com/cloudflare/cloudflared/releases/download/$pin_ver/$asset"
-  if printf '%s\n' "$cur_section" | grep -qF "$url"; then
+  if grep -qF "$url" <<<"$cur_section"; then
     pass "sidecar records the pinned release URL for $asset"
   else
     fail "sidecar '## Current pin' does not name $url -- the recorded provenance anchor must point at the pinned tag's own asset"

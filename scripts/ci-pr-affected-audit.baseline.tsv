@@ -378,6 +378,8 @@ plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/apply-web-platf
 plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/ci.yml
 plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/git-data-cutover.yml
 plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/scheduled-terraform-drift.yml
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-cutover.yml
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-verify.yml
 plugins/soleur/test/fanout-suite-scope.test.sh	.gitignore
 plugins/soleur/test/fanout-suite-scope.test.sh	.nvmrc
 plugins/soleur/test/fanout-suite-scope.test.sh	AGENTS.md
@@ -428,8 +430,6 @@ plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-plan-gate-prea
 plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-gate-mutation-battery.sh
 plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-pull-path-health.sh
 plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-restore-from-ghcr.sh
-plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-cutover.yml
-plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-verify.yml
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	apps/web-platform/.env.example
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	apps/web-platform/lib/feature-flags/server.ts
 plugins/soleur/test/flagsmith-stdin-config.test.sh	apps/web-platform/.env.example
