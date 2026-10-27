@@ -173,7 +173,10 @@ case "${1:-}" in
         cat "$MOCKD/issue.json"; exit 0 ;;
       comment)
         [[ "$#" -eq 5 && "$3" == 10515 && "$4" == "--body-file" && "$5" == "-" ]] || deny "$@"
-        if [[ -f "$MOCKD/comment_fail" ]]; then cat >/dev/null; echo "gh: Resource not accessible by integration (HTTP 403)" >&2; exit 1; fi
+        if [[ -f "$MOCKD/comment_fail" ]]; then
+          cat >/dev/null; cst="$(cat "$MOCKD/comment_fail")"; [[ "$cst" =~ ^[0-9]{3}$ ]] || cst=403
+          echo "gh: Resource not accessible by integration (HTTP $cst)" >&2; exit 1
+        fi
         cat >> "$MOCKD/bodies"; exit 0 ;;
     esac
     deny "$@" ;;
@@ -215,8 +218,11 @@ case "${1:-}" in
       orgs/jikig-ai/settings/billing/usage\?year=*\&month=*)
         y="${path#*year=}"; y="${y%%&*}"; m="${path#*month=}"
         [[ "$y" =~ ^20[0-9]{2}$ && "$m" =~ ^([1-9]|1[0-2])$ ]] || deny api "$@"
-        if [[ -f "$MOCKD/bill_fail" ]]; then
-          case "$(cat "$MOCKD/bill_fail")" in
+        bf=""
+        [[ -f "$MOCKD/bill_fail_${y}_${m}" ]] && bf="$MOCKD/bill_fail_${y}_${m}"
+        [[ -z "$bf" && -f "$MOCKD/bill_fail" ]] && bf="$MOCKD/bill_fail"
+        if [[ -n "$bf" ]]; then
+          case "$(cat "$bf")" in
             401) echo "gh: Bad credentials (HTTP 401)" >&2 ;;
             403) echo "gh: Resource not accessible by integration (HTTP 403)" >&2 ;;
             404) echo "gh: Not Found (HTTP 404)" >&2 ;;
@@ -387,6 +393,46 @@ SHIM
   chmod +x "$MOCKD/date"
   RUN_UNSET_NOW=1; run; RUN_UNSET_NOW=""
   [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$BODY" == *"Collected 2027-02-03T04:05:06Z"* && "$(bill_calls)" -eq 5 ]]
+}
+
+# Sanitizer checks: run the library of the script under test (SUT_RUN's sibling lib/), so a mutated copy is exercised too.
+san_lib() { printf '%s/lib/watch-notify-once.sh' "$(dirname "$SUT_RUN")"; }
+# shellcheck disable=SC1090  # the library path is the copy under test
+san_run() { ( . "$(san_lib)" && wn_sanitize "$1" ); }
+san_strips() { local out; out="$(san_run "a${1}b")"; [[ "$out" == '`ab`' ]]; }
+# U+1160, U+FFA0, U+034F, U+2800, U+E0100 (UTF-8 bytes spelled out: no locale dependence).
+SAN_CPS=($'\xe1\x85\xa0' $'\xef\xbe\xa0' $'\xcd\x8f' $'\xe2\xa0\x80' $'\xf3\xa0\x84\x80')
+chk_sanitize() {
+  local cp
+  for cp in "${SAN_CPS[@]}"; do san_strips "$cp" || return 1; done
+  return 0
+}
+chk_sanitize_inert() {
+  local out
+  out="$(san_run "a${BT}<>&b")"; [[ "$out" == "${BT}a    b${BT}" ]] || return 1
+  out="$(san_run $'a\xffb')"
+  [[ "$out" == "${BT}"*"${BT}" && "$(grep -o "$BT" <<<"$out" | wc -l | tr -d ' ')" -eq 2 ]] || return 1
+  printf '%s' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+}
+chk_post_http() {
+  mkmock; NOW="$NOW_AT"; flag comment_fail; run
+  [[ "$RC" -eq 1 && "$ERR" == *"::error::posting the notice on #10515 failed (HTTP 403)"* && "$ERR" != *"no HTTP status"* ]]
+}
+chk_billing_yes_partial() { # a definite yes in October stays a yes although November is unreadable
+  mkmock; NOW="$NOW_AT"; setfile bill_2026_10.json "$(bill_lines 2026-10-22)"; setfile bill_fail_2026_11 404; run
+  [[ "$RC" -eq 0 && "$BODY" == *"dated 2026-10-21 or later: yes"* && "$BODY" != *"or later: not determinable"* && "$BODY" == *"not readable from CI"* ]]
+}
+chk_trunc() { # timestamps in the billing reply are shown as dates
+  mkmock; NOW="$NOW_AT"; setfile bill_2026_10.json '{"usageItems":[{"product":"code_quality","date":"2026-10-05T12:34:56Z","grossAmount":1,"netAmount":1},{"product":"code_quality","date":"2026-10-19T01:02:03Z","grossAmount":1,"netAmount":1}]}'; run
+  [[ "$RC" -eq 0 && "$BODY" == *'first `2026-10-05`, last `2026-10-19`'* && "$BODY" != *"T12:34"* ]]
+}
+chk_pad() { # the month in the billing annotations is zero-padded (2027-01, not 2027-1)
+  mkmock; NOW="$NOW_AT"; setfile bill_fail_2027_1 500; run
+  [[ "$RC" -eq 3 && "$ERR" == *"billing read for 2027-01 failed (HTTP 500)"* && "$ERR" == *"billing read for 2027-01 failed transiently"* ]]
+}
+chk_dry_closed() {
+  mkmock; issue CLOSED '[]'; NOW="$NOW_AT"; run --dry-run
+  [[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 && "$OUT" == *"state=CLOSED; sentinel absent (not OPEN: a real run would post nothing)"* ]]
 }
 
 # ================================ SCENARIOS =========================================
@@ -615,6 +661,24 @@ mkmock; flag comment_fail; run
 [[ "$RC" -eq 1 && "$(comments_posted)" -eq 1 && "$ERR" == *"::error::"* ]] && pass "S16e a failed post: exit 1 with ::error::" || fail "S16e (rc=$RC posted=$(comments_posted))"
 mkmock; issue OPEN "$UNEVAL"; run
 [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 ]] && pass "S16f an unevaluable comment list: exit 3, never read as 'no sentinel'" || fail "S16f (rc=$RC posted=$(comments_posted))"
+# The failure annotation carries the REAL HTTP status: wn_post runs in the current shell (a pipeline stage would drop WN_ERR_HTTP).
+for st in 403 422; do
+  mkmock; setfile comment_fail "$st"; run
+  [[ "$RC" -eq 1 && "$ERR" == *"::error::posting the notice on #10515 failed (HTTP $st)"* && "$ERR" != *"no HTTP status"* && "$ERR" != *"Resource not accessible"* ]] \
+    && pass "S16g failed post with HTTP $st: the ::error:: annotation names the real status (HTTP $st), never the response text" || fail "S16g HTTP $st (rc=$RC err=$(printf '%s' "$ERR" | head -c 200))"
+done
+# Billing: a definite yes survives an unreadable later month; timestamps become dates; annotation months are zero-padded.
+chk_billing_yes_partial && pass "S16h October holds a line dated 2026-10-22 and November is unreadable (404): the verdict is 'yes', not 'not determinable'; the unreadable commands are still listed" || fail "S16h yes with an unreadable later month (rc=$RC)"
+chk_trunc && pass "S16i billing timestamps are cut to dates: first \`2026-10-05\`, last \`2026-10-19\`, no time of day" || fail "S16i date truncation (rc=$RC)"
+chk_pad && pass "S16j a transient billing failure in January 2027 is annotated 2027-01 (zero-padded) by both the library and the script" || fail "S16j zero-padded month (rc=$RC err=$ERR)"
+chk_dry_closed && pass "S16k --dry-run on a CLOSED tracker with no sentinel says a real run would post nothing and posts nothing" || fail "S16k dry-run non-OPEN (rc=$RC out=$OUT)"
+# Sanitizer: default-ignorable and blank characters are stripped; backtick < > & stay inert; invalid UTF-8 renders inert.
+san_i=0
+for san_label in "U+1160 HANGUL JUNGSEONG FILLER" "U+FFA0 HALFWIDTH HANGUL FILLER" "U+034F COMBINING GRAPHEME JOINER" "U+2800 BRAILLE PATTERN BLANK" "U+E0100 VARIATION SELECTOR-17"; do
+  SUT_RUN="$SUT"; san_strips "${SAN_CPS[$san_i]}" && pass "S22 wn_sanitize strips $san_label (output is exactly the code span of 'ab')" || fail "S22 $san_label survived the sanitizer"
+  san_i=$((san_i + 1))
+done
+SUT_RUN="$SUT"; chk_sanitize_inert && pass "S22b wn_sanitize turns backtick < > & into spaces and renders invalid UTF-8 as valid inert text inside one code span" || fail "S22b sanitizer inertness"
 
 # ---- S17 (scenario 11): xtrace refusal ----
 mkmock
@@ -693,6 +757,72 @@ done
 # A read-only GraphQL query variant must stay GREEN (must-PASS non-canonical input).
 argv_ok 'api graphql -f query=query{rateLimit{remaining}}' && pass "G1c a read-only GraphQL query is allowed" || fail "G1c"
 
+# ---- W: the workflow facets of the reeval-10515 job (PyYAML; an absent workflow file or PyYAML FAILS, never skips) ----
+WF="$SCRIPT_DIR/../.github/workflows/code-quality-followups-watch.yml"
+assert_fixture_dir "$ROOT"
+cat > "$ROOT/wfcheck.py" <<'PY'
+import sys
+try:
+    import yaml
+except ImportError:
+    print("PyYAML is not importable")
+    sys.exit(3)
+path = sys.argv[1]
+doc = yaml.safe_load(open(path)) or {}
+job = (doc.get("jobs") or {}).get("reeval-10515")
+bad = []
+if not isinstance(job, dict):
+    bad.append("job reeval-10515 is missing")
+else:
+    steps = job.get("steps") or []
+    co = steps[0] if len(steps) > 0 and isinstance(steps[0], dict) else {}
+    rn = steps[1] if len(steps) > 1 and isinstance(steps[1], dict) else {}
+    if "actions/checkout@" not in str(co.get("uses", "")):
+        bad.append("step 1 is not actions/checkout")
+    if (co.get("with") or {}).get("fetch-depth") != 0:
+        bad.append("checkout fetch-depth is %r, want 0 (the watcher reads full git history)" % ((co.get("with") or {}).get("fetch-depth"),))
+    if "watch-lint-ratchet-reeval-10515.sh" not in str(rn.get("run", "")):
+        bad.append("run step does not invoke watch-lint-ratchet-reeval-10515.sh")
+    env = rn.get("env") or {}
+    for k in ("GH_TOKEN", "DRY_RUN", "GH_REPO"):
+        if k not in env:
+            bad.append("run step env lacks %s" % k)
+    if "github.token" not in str(env.get("GH_TOKEN", "")):
+        bad.append("GH_TOKEN is not the workflow token")
+    if "github.repository" not in str(env.get("GH_REPO", "")):
+        bad.append("GH_REPO is not github.repository")
+    if "inputs.dry_run" not in str(env.get("DRY_RUN", "")):
+        bad.append("DRY_RUN is not inputs.dry_run")
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+PY
+WF_OUT=""; WF_RC=0
+wf_run() { # FILE [python flags]
+  if [[ ! -f "$1" ]]; then WF_RC=4; WF_OUT="workflow file absent: $1"; return; fi
+  WF_OUT="$(python3 "${2:--I}" "$ROOT/wfcheck.py" "$1" 2>&1)"; WF_RC=$?
+}
+wf_mut() { # NAME PERL_SUBST -> $ROOT/wfmut-NAME.yml; rc 0 only when the mutation landed
+  assert_fixture_dir "$ROOT"
+  cp "$WF" "$ROOT/wfmut-$1.yml" || fatal "wf copy failed"
+  perl -0pi -e "$2" "$ROOT/wfmut-$1.yml" || fatal "wf mutation perl failed"
+  ! diff -q "$WF" "$ROOT/wfmut-$1.yml" >/dev/null 2>&1
+}
+wf_run "$WF"
+[[ "$WF_RC" -eq 0 ]] && pass "W1 the workflow's reeval-10515 job: checkout with fetch-depth 0, runs this script, env GH_TOKEN / GH_REPO / DRY_RUN wired to the workflow token, repository and dry_run input" || fail "W1 (rc=$WF_RC: $WF_OUT)"
+wf_mut depth 's/(reeval-10515:.*?fetch-depth: )0/${1}1/s' && landed=1 || landed=0
+wf_run "$ROOT/wfmut-depth.yml"
+[[ "$landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"fetch-depth"* ]] && pass "W2 mutated copy with fetch-depth 1 on the reeval-10515 job: the facet goes RED" || fail "W2 (landed=$landed rc=$WF_RC $WF_OUT)"
+wf_mut nodry 's/(reeval-10515:.*?)          DRY_RUN: [^\n]*\n/$1/s' && landed=1 || landed=0
+wf_run "$ROOT/wfmut-nodry.yml"
+[[ "$landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"DRY_RUN"* ]] && pass "W3 mutated copy without the DRY_RUN env on the reeval-10515 job: the facet goes RED" || fail "W3 (landed=$landed rc=$WF_RC $WF_OUT)"
+wf_mut script 's/(reeval-10515:.*?bash scripts\/)watch-lint-ratchet-reeval-10515\.sh/${1}watch-brand-hex-triggers-11177.sh/s' && landed=1 || landed=0
+wf_run "$ROOT/wfmut-script.yml"
+[[ "$landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"does not invoke"* ]] && pass "W4 mutated copy where the reeval-10515 job runs another script: the facet goes RED" || fail "W4 (landed=$landed rc=$WF_RC $WF_OUT)"
+wf_run "$ROOT/no-such-workflow.yml"; r1=$WF_RC
+[[ "$r1" -ne 0 ]] && pass "W5 an absent workflow file FAILS the facet (never skips)" || fail "W5 (rc $r1)"
+wf_run "$WF" -IS
+[[ "$WF_RC" -eq 3 && "$WF_OUT" == *"PyYAML"* ]] && pass "W6 with PyYAML unavailable the facet exits 3 (a loud FAIL in the real row, never a skip)" || fail "W6 (rc=$WF_RC $WF_OUT)"
+
 # ---- Mutation harness: mutated COPIES in a scratch dir, a pristine diff proving each mutation landed, an unmutated control required green ----
 mutate() { # file old new -> rewrites file; rc 1 when OLD is absent (the mutation could not land)
   local f="$1" old="$2" new="$3" s
@@ -719,13 +849,14 @@ chk_gate_precedes()  { mkmock; NOW="$NOW_BEFORE"; issue OPEN '[]'; run; [[ "$RC"
 all_chk() {
   chk_post_happens && chk_bot_suppresses && chk_human_ignored && chk_junk_is_rc3 && chk_gate_precedes \
     && chk_args_strict && chk_billing_verdict && chk_incomplete && chk_quote && chk_cap && chk_null_user \
-    && chk_commits_cap && chk_shallow && chk_clock
+    && chk_commits_cap && chk_shallow && chk_clock \
+    && chk_post_http && chk_sanitize && chk_sanitize_inert && chk_billing_yes_partial && chk_trunc && chk_pad && chk_dry_closed
 }
 
 # Control: the unmutated copy must be green on every check.
 mkcopy ctl; SUT_RUN="$ROOT/mut_ctl/scripts/watch-lint-ratchet-reeval-10515.sh"
 M0_OK=0
-if all_chk; then M0_OK=1; pass "M0 the unmutated scratch copy is green on all fourteen behaviour checks (control)"; else fail "M0 control copy is not green"; fi
+if all_chk; then M0_OK=1; pass "M0 the unmutated scratch copy is green on all twenty-one behaviour checks (control)"; else fail "M0 control copy is not green"; fi
 
 # Run one mutation: NAME TARGET(lib|sut) OLD NEW CHECK-FN LABEL
 mutation_row() {
@@ -751,11 +882,11 @@ mutation_row m2_4 lib "| length' 2>/dev/null)\" || return 3" "| length' 2>/dev/n
 # Guard 2 #5: drop the earliest gate -> a pre-date run with an OPEN tracker and no comments posts.
 mutation_row m2_5 lib '    wn_reached "$earliest"; rc=$?' '    rc=0' chk_gate_precedes "G2#5 drop the earliest-date gate"
 # Harness row: remove the wn_post call -> the posting scenario must go RED.
-mutation_row m2_h lib '| wn_post "$tracker"; then' '| cat >/dev/null; then' chk_post_happens "G2-harness remove the wn_post call"
+mutation_row m2_h lib 'wn_post "$tracker" <<<"$payload"; then' 'cat >/dev/null <<<"$payload"; then' chk_post_happens "G2-harness remove the wn_post call"
 
 # Review-fix guards (each: the mutated copy must go RED on the matching check).
 mutation_row mr_trk sut 'TRACKER=10515' 'TRACKER=10514' chk_post_happens "RF the tracker number pinned by the mock (TRACKER=10514)"
-mutation_row mr_wnp lib '| wn_post "$tracker"; then' '| wn_post 10514; then' chk_post_happens "RF the tracker number pinned by the mock (wn_post hardcoded elsewhere)"
+mutation_row mr_wnp lib 'wn_post "$tracker" <<<"$payload"; then' 'wn_post 10514 <<<"$payload"; then' chk_post_happens "RF the tracker number pinned by the mock (wn_post hardcoded elsewhere)"
 mutation_row mr_pp sut 'per_page=30' 'per_page=50' chk_post_happens "RF the per_page=30 pin"
 mutation_row mr_args sut 'elif [[ $# -ne 0 ]]; then' 'elif [[ "${1:-}" == --bogus ]]; then' chk_args_strict "RF strict arguments (an empty argument must not run the real path)"
 mutation_row mr_ge sut '! "${last:0:10}" < "$WN_BILLING_STOP_EXPECTED_BY"' '"${last:0:10}" >'' "$WN_BILLING_STOP_EXPECTED_BY"' chk_billing_verdict "RF billing stop day compared with > instead of >="
@@ -767,6 +898,13 @@ mutation_row mr_user sut '(.user.login // "")' '.user.login' chk_null_user "RF u
 mutation_row mr_fp sut '--first-parent ' '' chk_commits_cap "RF --first-parent (a merged side branch counted once)"
 mutation_row mr_mc sut '--max-count=20 ' '' chk_commits_cap "RF --max-count=20"
 mutation_row mr_sh sut 'rev-parse --is-shallow-repository' 'rev-parse --is-bare-repository' chk_shallow "RF the shallow-clone guard"
+mutation_row mr_pipe lib 'wn_post "$tracker" <<<"$payload"; then' 'printf "%s\n" "$payload" | wn_post "$tracker"; then' chk_post_http "RF wn_post as a pipeline stage loses the HTTP status (the pipe form must not return)"
+mutation_row mr_di lib '\p{Default_Ignorable_Code_Point}' '' chk_sanitize "RF default-ignorable code points are stripped"
+mutation_row mr_2800 lib '\x{2800}' '' chk_sanitize "RF U+2800 (blank braille) is stripped"
+mutation_row mr_yp sut 'if (( code_after == 1 )); then' 'if false; then' chk_billing_yes_partial "RF a definite yes survives an unreadable later month"
+mutation_row mr_tr sut 'span_date "${first:0:10}"' 'span_date "$first"' chk_trunc "RF billing first/last are cut to dates"
+mutation_row mr_pad lib 'billing read for ${tag} failed (' 'billing read for ${y}-${m} failed (' chk_pad "RF the library's billing annotation zero-pads the month"
+mutation_row mr_dc lib 'notopen=" (not OPEN: a real run would post nothing)"' 'notopen=""' chk_dry_closed "RF dry-run on a non-OPEN tracker says a real run would post nothing"
 mutation_row mr_clk lib '${WATCH_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}' '${WATCH_NOW:-2000-01-01T00:00:00Z}' chk_clock "RF the clock fallback reads date"
 
 # Guard 1 #1: `gh issue close` added after the post -> the recorded argv set exposes it.
@@ -796,7 +934,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY
 # above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=117
+MIN_ASSERTIONS=152
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2

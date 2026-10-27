@@ -139,7 +139,7 @@ render_pr_volume() {
     wo[$ws]=$((wo[$ws] + PV_OPENED[i])); wm[$ws]=$((wm[$ws] + PV_MERGED[i])); wd[$ws]=$((wd[$ws] + 1))
     tot_o=$((tot_o + PV_OPENED[i])); tot_m=$((tot_m + PV_MERGED[i]))
   done
-  PV_MD+="Pull requests in jikig-ai/soleur, ${PV_DAYS[0]} to ${PV_DAYS[${#PV_DAYS[@]}-1]} (UTC), counted by creation day (opened) and by merge day (merged)."$'\n\n'
+  PV_MD+="Pull requests in jikig-ai/soleur, ${PV_DAYS[0]} to ${PV_DAYS[${#PV_DAYS[@]}-1]} (UTC), counted by creation day (opened) and by merge day (merged). The final day is partial: it is the day of this run."$'\n\n'
   PV_MD+="Total (${#PV_DAYS[@]} days): ${tot_o} opened, ${tot_m} merged."$'\n\n'
   PV_MD+="| Week starting (Mon) | Opened | Merged | Days counted |"$'\n'"|---|---|---|---|"$'\n'
   for k in "${order[@]}"; do PV_MD+="| ${k} | ${wo[$k]} | ${wm[$k]} | ${wd[$k]} |"$'\n'; done
@@ -152,7 +152,7 @@ render_pr_volume() {
 # Every month from 2026-09 through the current month. wn_billing_month keeps only the
 # `code_quality` product. unreadable:<status> degrades; rc 3 (5xx, 429, rate limit, network,
 # unparseable) propagates so a blip retries next Monday instead of spending the one-shot.
-BILL_MD=""; BILL_UNREADABLE=0; BILL_CMDS=""; BILL_OK_MONTHS=0; BILL_LATEST=""; BILL_STATUSES=""
+BILL_MD=""; BILL_UNREADABLE=0; BILL_CMDS=""; BILL_LATEST=""; BILL_STATUSES=""
 gather_billing() {
   local now cy cm y=$FIRST_YEAR m=$FIRST_MONTH rc lines gross net first last tag guard=0 f
   now="$(wn_now_iso)"; cy="${now:0:4}"; cm=$((10#${now:5:2}))
@@ -169,7 +169,6 @@ gather_billing() {
         [[ "$first" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})(T[0-9:.]+Z?)?$ || "$first" == "-" ]] || { echo "::error::billing aggregate for ${tag} has an unparseable first date; posting nothing" >&2; return 3; }
         [[ "$last" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})(T[0-9:.]+Z?)?$ || "$last" == "-" ]] || { echo "::error::billing aggregate for ${tag} has an unparseable last date; posting nothing" >&2; return 3; }
         first="${first:0:10}"; last="${last:0:10}"
-        BILL_OK_MONTHS=$((BILL_OK_MONTHS + 1))
         if [[ "$lines" -eq 0 ]]; then
           BILL_MD+="| ${tag} | 0 (no \`code_quality\` line) | 0 | 0 | - | - |"$'\n'
         else
@@ -193,14 +192,13 @@ gather_billing() {
 
 render_billing() {
   BILL_SECTION="Only the \`code_quality\` product is read from the usage API and only its aggregates are shown; no other product, SKU, invoice or account figure is published here."$'\n\n'"${BILL_MD}"
-  # The yes/no verdict needs EVERY month: with one month unreadable a "no" would be a guess.
+  # A "yes" is definite as soon as ONE readable month holds a line on or after the stop day, even
+  # when another month was unreadable. A "no" needs EVERY month: with one unreadable it would be a guess.
   local stop="$WN_BILLING_STOP_EXPECTED_BY"
-  if [[ "$BILL_UNREADABLE" -eq 0 ]]; then
-    if [[ "$BILL_LATEST" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && ! "$BILL_LATEST" < "$stop" ]]; then
-      BILL_SECTION+=$'\n'"ADR-276 expects no \`code_quality\` line dated ${stop} or later once the switch-off took effect. A \`code_quality\` line dated ${stop} or later is present: yes (latest ${BILL_LATEST})."$'\n'
-    else
-      BILL_SECTION+=$'\n'"ADR-276 expects no \`code_quality\` line dated ${stop} or later once the switch-off took effect. A \`code_quality\` line dated ${stop} or later is present: no."$'\n'
-    fi
+  if [[ "$BILL_LATEST" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && ! "$BILL_LATEST" < "$stop" ]]; then
+    BILL_SECTION+=$'\n'"ADR-276 expects no \`code_quality\` line dated ${stop} or later once the switch-off took effect. A \`code_quality\` line dated ${stop} or later is present: yes (latest ${BILL_LATEST})."$'\n'
+  elif [[ "$BILL_UNREADABLE" -eq 0 ]]; then
+    BILL_SECTION+=$'\n'"ADR-276 expects no \`code_quality\` line dated ${stop} or later once the switch-off took effect. A \`code_quality\` line dated ${stop} or later is present: no."$'\n'
   else
     BILL_SECTION+=$'\n'"ADR-276 expects no \`code_quality\` line dated ${stop} or later once the switch-off took effect. Whether such a line exists is not determinable (at least one month was unreadable)."$'\n'
   fi
@@ -224,7 +222,7 @@ gather() {
   WN_BODY+="As recorded in the ADR-276 amendment of 2026-10-19, GitHub Code Quality was switched OFF on 2026-10-19 for jikig-ai/soleur (residual re-checked in the amendment of 2026-10-22). That is a fixed statement taken from the ADR; this script does not read the setting live. Nothing fires on the due date by itself; this comment is the data for the re-evaluation."$'\n\n'
   WN_BODY+="**Scope:** this comment covers the Code Quality half only: the trigger text in the body of this tracker predates the ADR-276 amendment of 2026-10-19. ADR-276's re-evaluation step (1), comparing the open Code Quality and CodeQL alerts with the 23-rule table, is NOT gathered here; the ruling session runs it."$'\n\n'
   WN_BODY+="**Re-enable criteria, as recorded in ADR-276:** re-enable only if (i) a consumer for the findings exists (a ratchet or an issue filer for the type-inference rules) and (ii) the AI-credit spend can be capped (a billing budget on the \`code_quality\` product; availability unverified). What would flip the 2026-10-22 ruling: a consumer for the type-inference rules appears, or a product incident is traced to one of these rule classes. A re-enable resumes metered billing, and whether findings history survives it is unverified; if it is re-enabled, read the sites named in the 2026-10-22 amendment first."$'\n\n'
-  WN_BODY+="#### PR volume"$'\n\n'"PR volume per day is printed because the ADR-276 amendment of 2026-10-19 names it as the cost driver of the metered billing."$'\n\n'"${PV_MD}"$'\n\n'
+  WN_BODY+="#### PR volume"$'\n\n'"PR volume per day is printed as usage context for the billing figures below."$'\n\n'"${PV_MD}"$'\n\n'
   WN_BODY+="#### Billing (\`code_quality\` only)"$'\n\n'"${BILL_SECTION}"$'\n'
   WN_BODY+="#### What happens next"$'\n\n'
   WN_BODY+="No ruling is made here. The next \`soleur:go\` session has the CTO agent record the keep-off or turn-on ruling from this data, and decides any successor tracker or watcher before closing the tracker. This tracker stays open and this comment is posted once."$'\n\n'

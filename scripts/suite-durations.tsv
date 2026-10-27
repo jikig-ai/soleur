@@ -550,9 +550,9 @@ scripts/tunnel-connector-census	132	measured
 scripts/verify-agent-security-slice1	1194	measured
 scripts/verify-lockfile-guards	107	measured
 scripts/verify-marketplace-ruleset	1373	measured
-scripts/watch-brand-hex-triggers-11177	150000	measured
-scripts/watch-code-quality-reeval-9730	45000	measured
-scripts/watch-lint-ratchet-reeval-10515	140000	measured
+scripts/watch-brand-hex-triggers-11177	150000	floor
+scripts/watch-code-quality-reeval-9730	45000	floor
+scripts/watch-lint-ratchet-reeval-10515	140000	floor
 scripts/watch-live-verify-pass	172	measured
 scripts/watch-registration-narrowing-9564	10976	measured
 scripts/watchdog-arm-soak-9237	2199	measured

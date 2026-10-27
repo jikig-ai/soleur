@@ -3,8 +3,8 @@
 # (.github/workflows/code-quality-followups-watch.yml). SOURCED, never executed.
 #
 # The only GitHub write any caller can make is `wn_post` (one `gh issue comment` on
-# the caller's own tracker). Every other `gh` call here is a read: `issue view` and
-# GET-shaped `api` calls. Nothing here closes, reopens, edits, labels or locks an
+# the caller's own tracker). Every other `gh` call here is a read: `issue view` and `api`
+# reads (GET, plus one read-only GraphQL query). Nothing here closes, reopens, edits, labels or locks an
 # issue, and nothing changes a repository setting (suite Guard 1 pins this).
 #
 # Contract for callers (set -uo pipefail, NOT set -e):
@@ -124,15 +124,16 @@ wn_post() {
 
 # ----------------------------------------------------------------- sanitizing --
 # Render ONE third-party string (title, login, path, commit subject, gate reason) as
-# an inert code span: C0 controls, DEL, line/paragraph separators, bidi overrides and
-# zero-width characters are dropped; backtick, <, > and & become spaces (so a closing
+# an inert code span: C0 controls, DEL, line/paragraph separators, bidi overrides,
+# zero-width characters, every Default_Ignorable_Code_Point (Hangul fillers, the combining
+# grapheme joiner, variation selectors, tag characters) and the blank braille U+2800 are dropped; backtick, <, > and & become spaces (so a closing
 # `-->`, an HTML comment opener or an entity cannot survive); cut to 100 characters.
 # Inside a code span @mentions, #N back-references and bare URLs do not notify.
 wn_sanitize() {
   WN_S="$1" perl -e '
     use strict; use warnings; use Encode qw(decode encode);
     my $s = decode("UTF-8", $ENV{WN_S} // "", Encode::FB_DEFAULT);
-    $s =~ s/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\x{0085}\x{061C}\x{115F}\x{3164}\x{180B}-\x{180F}\x{FE00}-\x{FE0F}\x{E0000}-\x{E007F}]//g;
+    $s =~ s/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\x{0085}\x{061C}\x{115F}\x{3164}\x{180B}-\x{180F}\x{2800}\x{FE00}-\x{FE0F}\x{E0000}-\x{E007F}]//g;
     $s =~ s/[`<>&]/ /g;
     $s = substr($s, 0, 100);
     print encode("UTF-8", "`" . $s . "`");'
@@ -148,6 +149,8 @@ wn_sanitize() {
 wn_billing_month() {
   local y="$1" m="$2" errf out err http rc
   [[ "$y" =~ ^20[0-9]{2}$ && "$m" =~ ^([1-9]|1[0-2])$ ]] || return 3
+  local tag
+  printf -v tag '%04d-%02d' "$y" "$((10#$m))"
   WN_BILL_STATUS=""; WN_BILL_JSON=""
   errf="$(mktemp "${TMPDIR:-/var/tmp}/wn-err.XXXXXXXX")" || return 3
   out="$(gh api "orgs/${WN_ORG}/settings/billing/usage?year=${y}&month=${m}" 2>"$errf")"
@@ -160,12 +163,12 @@ wn_billing_month() {
       403)
         case "$err" in
           *[Rr]ate\ limit*|*secondary*)
-            echo "::error::billing read for ${y}-${m} was rate limited (HTTP 403); posting nothing, retrying next run" >&2
+            echo "::error::billing read for ${tag} was rate limited (HTTP 403); posting nothing, retrying next run" >&2
             return 3 ;;
         esac
         WN_BILL_STATUS="unreadable:403"; return 0 ;;
     esac
-    echo "::error::billing read for ${y}-${m} failed (${http:+HTTP }${http:-no HTTP status; network or client error}); posting nothing, retrying next run" >&2
+    echo "::error::billing read for ${tag} failed (${http:+HTTP }${http:-no HTTP status; network or client error}); posting nothing, retrying next run" >&2
     return 3
   fi
   WN_BILL_JSON="$(printf '%s' "$out" | jq -c '
@@ -177,7 +180,7 @@ wn_billing_month() {
            first: (map(.date // empty) | min // null),
            last: (map(.date // empty) | max // null)}
       else error("no usageItems array") end' 2>/dev/null)" || {
-    echo "::error::billing read for ${y}-${m} returned an unexpected shape (no usageItems array); posting nothing, retrying next run" >&2
+    echo "::error::billing read for ${tag} returned an unexpected shape (no usageItems array); posting nothing, retrying next run" >&2
     return 3
   }
   [[ -n "$WN_BILL_JSON" ]] || return 3
@@ -188,8 +191,9 @@ wn_billing_month() {
 # ------------------------------------------------------------------ main flow ---
 # wn_notify_once_main TRACKER EARLIEST KEY GATHER_FN
 # Order: earliest gate -> tracker OPEN? -> sentinel? -> gather -> compose -> post.
-# --dry-run (WN_DRY_RUN=1): skip the gate, the issue read and the sentinel, gather,
-# print the would-be body, never post and never spend a sentinel.
+# --dry-run (WN_DRY_RUN=1): skip the earliest gate; still READ the tracker and its sentinel
+# (read-only, never fatal) and report what was found; gather, print the would-be body, never
+# post and never spend a sentinel.
 wn_notify_once_main() {
   local tracker="$1" earliest="$2" key="$3" gather="$4" rc sentinel
   sentinel="$(wn_sentinel "$key")"
@@ -220,10 +224,12 @@ wn_notify_once_main() {
     # validates the tracker read and the sentinel reader. Never fatal here and never posts.
     wn_read_issue "$tracker"; rc=$?
     if [[ "$rc" -eq 0 ]]; then
+      local notopen=""
+      [[ "$WN_STATE" == "OPEN" ]] || notopen=" (not OPEN: a real run would post nothing)"
       wn_sentinel_present "$key"; rc=$?
       case "$rc" in
         0) echo "dry-run: tracker #${tracker} state=${WN_STATE}; sentinel already present (a real run would post nothing)" ;;
-        1) echo "dry-run: tracker #${tracker} state=${WN_STATE}; sentinel absent" ;;
+        1) echo "dry-run: tracker #${tracker} state=${WN_STATE}; sentinel absent${notopen}" ;;
         *) echo "::warning::dry-run: could not evaluate the comments of #${tracker}" ;;
       esac
     else
@@ -249,8 +255,12 @@ wn_notify_once_main() {
     echo "dry-run: nothing posted, no sentinel spent"
     return 0
   fi
-  # The sentinel is always the exact LAST line, built from constants only.
-  if ! printf '%s\n\n%s\n' "$WN_BODY" "$sentinel" | wn_post "$tracker"; then
+  # The sentinel is always the exact LAST line, built from constants only. wn_post runs in THIS
+  # shell (a here-string, never a pipeline: a pipeline stage is a subshell and would drop
+  # WN_ERR_HTTP, so the failure annotation below would never carry the real HTTP status).
+  local payload
+  payload="$(printf '%s\n\n%s' "$WN_BODY" "$sentinel")"
+  if ! wn_post "$tracker" <<<"$payload"; then
     echo "::error::posting the notice on #${tracker} failed (${WN_ERR_HTTP:-no HTTP status}); nothing spent, retrying next run" >&2
     return 1
   fi

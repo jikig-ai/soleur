@@ -135,6 +135,7 @@ case "$1 $2" in
   "issue comment")
     [[ "$*" == "issue comment 11177 --body-file -" ]] || { echo "mock gh: unexpected comment argv: $*" >&2; exit 64; }
     if [[ -f "$MOCKD/comment_fail" ]]; then cat >/dev/null; echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1; fi
+    if [[ -f "$MOCKD/comment_403" ]]; then cat >/dev/null; echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1; fi
     c=0; for b in "$MOCKD"/body.*; do [[ -e "$b" ]] && c=$((c + 1)); done
     cat > "$MOCKD/body.$((c + 1))"; exit 0 ;;
 esac
@@ -149,27 +150,28 @@ payload="$(cat)"
 names="$(git diff --cached --name-only 2>/dev/null)"
 allow_json='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
 # The positive control (a synthetic zz-canary file in the index) is logged apart from candidate runs,
-# and by default answers like the real gate; FIX_CANARY forces a broken answer.
+# and by default answers like the real gate; WATCH_GATE_X_CANARY forces a broken answer.
 if [[ "$names" == *zz-canary* ]]; then
-  [ -n "${FIX_GATE_LOG:-}" ] && printf 'canary\n' >> "$FIX_GATE_LOG"
-  case "${FIX_CANARY:-real}" in
+  [ -n "${WATCH_GATE_X_LOG:-}" ] && printf 'canary\n' >> "$WATCH_GATE_X_LOG"
+  case "${WATCH_GATE_X_CANARY:-real}" in
     allow) printf '%s\n' "$allow_json"; exit 0 ;;
     garbage) echo "this is not json"; exit 0 ;;
     rc2) printf '%s\n' "$allow_json"; exit 2 ;;
   esac
-  exec bash "$FIX_REAL/brand-hex-commit-gate.sh" <<<"$payload"
+  exec bash "$WATCH_GATE_X_REAL/brand-hex-commit-gate.sh" <<<"$payload"
 fi
-[ -n "${FIX_GATE_LOG:-}" ] && printf 'run\n' >> "$FIX_GATE_LOG"
-if [ -n "${FIX_GATE_ENV:-}" ]; then
+[ -n "${WATCH_GATE_X_LOG:-}" ] && printf 'run\n' >> "$WATCH_GATE_X_LOG"
+if [ -n "${WATCH_GATE_X_ENV:-}" ]; then
   {
     printf 'recorded=1\n'
     printf 'project_dir=%s\n' "${CLAUDE_PROJECT_DIR:-}"
     printf 'project_dir_entries=%s\n' "$(ls -A "${CLAUDE_PROJECT_DIR:-/nonexistent}" 2>/dev/null | wc -l)"
+    printf 'home=%s\n' "${HOME:-}"
     printf '%s\n' "$names" | sed 's/^/name=/'
-    env | cut -d= -f1 | grep -E '^(GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GH_HOST)$' | sed 's/^/leaked=/'
-  } >> "$FIX_GATE_ENV"
+    env | cut -d= -f1 | grep -vE '^(PATH|HOME|LANG|TMPDIR|CLAUDE_PROJECT_DIR|PWD|OLDPWD|SHLVL|_|WATCH_GATE_X_[A-Z0-9_]+)$' | sed 's/^/leaked=/'
+  } >> "$WATCH_GATE_X_ENV"
 fi
-case "${FIX_FORCE:-}" in
+case "${WATCH_GATE_X_FORCE:-}" in
   allow) printf '%s\n' "$allow_json"; exit 0 ;;
   garbage) echo "this is not json"; exit 0 ;;
   warn) echo "[brand-hex-commit-gate] WARN: stub warning" >&2; printf '%s\n' "$allow_json"; exit 0 ;;
@@ -186,7 +188,7 @@ case "$names" in
   *zz-slow*) exec sleep 30 ;;
   *zz-ignoreterm*) trap '' TERM; sleep 20; exit 0 ;;
 esac
-exec bash "$FIX_REAL/brand-hex-commit-gate.sh" <<<"$payload"
+exec bash "$WATCH_GATE_X_REAL/brand-hex-commit-gate.sh" <<<"$payload"
 WRAP
 # The watcher reads the path classes from the gate file that will run; the wrapper carries the real
 # gate's two class lines (never executed here, after the exec) so that contract stays honest.
@@ -199,7 +201,7 @@ mkrepo() {
   REPO="$ROOT/repo$N"; MOCKD="$ROOT/mock$N"
   assert_fixture_dir "$REPO"; assert_fixture_dir "$MOCKD"
   cp -a "$TPL" "$REPO" || fatal "cp template failed"
-  mkdir -p "$MOCKD/tmp" || fatal "mkdir mock failed"
+  mkdir -p "$MOCKD/tmp" "$MOCKD/home" || fatal "mkdir mock failed"
   : > "$MOCKD/calls"; : > "$MOCKD/gatelog"; : > "$MOCKD/gateenv"
   cp "$MOCK_SRC" "$MOCKD/gh" || fatal "cp mock failed"
   if [[ "$MOCK_DEAD" -eq 1 ]]; then grep -v '^printf .%s.n. "\$\*" >> "\$MOCKD/calls"$' "$MOCK_SRC" > "$MOCKD/gh" || true; fi
@@ -232,7 +234,7 @@ run() {
   assert_fixture_dir "$MOCKD"; assert_fixture_dir "$REPO"
   local o="$MOCKD/stdout" e="$MOCKD/stderr" p="${RUN_PATH:-$MOCKD:$PATH}"
   assert_fixture_dir "$o"; assert_fixture_dir "$e"
-  ( cd "$REPO" && env "PATH=$p" "MOCKD=$MOCKD" "TMPDIR=$MOCKD/tmp" "GH_TOKEN=$DUMMY_TOKEN" "FIX_REAL=$REAL_COPY" "FIX_GATE_LOG=$MOCKD/gatelog" "FIX_GATE_ENV=$MOCKD/gateenv" \
+  ( cd "$REPO" && env "PATH=$p" "MOCKD=$MOCKD" "TMPDIR=$MOCKD/tmp" "HOME=$MOCKD/home" "GH_TOKEN=$DUMMY_TOKEN" "WATCH_GATE_X_REAL=$REAL_COPY" "WATCH_GATE_X_LOG=$MOCKD/gatelog" "WATCH_GATE_X_ENV=$MOCKD/gateenv" \
       ${RUN_ENV[@]+"${RUN_ENV[@]}"} bash "$SUT_UNDER" "$@" ) > "$o" 2> "$e"
   RC=$?
   OUT="$(cat "$o")"; ERR="$(cat "$e")"
@@ -272,7 +274,7 @@ scenario() { local label="$1" fn="$2"; DIAG=""; if "$fn"; then pass "$label"; el
 # ---- Guard 3: trigger 1 ----
 chk_g3_clean() { # no extra hook: silent, trigger 2 reports examined=0 (nothing in the window)
   mkrepo; run
-  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"trigger1 hooks="*"fired=0"* && "$OUT" == *"scanned=0 candidates=0 examined=0"* ]]'
+  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"trigger1 hooks="*"fired=0"* && "$OUT" == *"scanned=0 candidates=0 examined=0"* && "$OUT" == *"no new findings; nothing to post" && "$OUT" != *"(truncated)"* ]]'
 }
 chk_g3_r1() { # a new hook sourcing the lib: one comment, trigger-1 sentinel last, exact call set
   mkrepo; fc .claude/hooks/new-hook.sh "$HOOK_SRC" "add hook"; run
@@ -359,7 +361,7 @@ chk_g4_outside() { # commits outside the path classes are skipped without runnin
 }
 chk_skew() { # a skew-dated commit in the middle of the window must not hide or truncate its neighbours
   mkrepo; clean "A in window"; local a="$LAST"; fc_skew apps/web-platform/app/skew.tsx "$TOK_TSX" "B skew-dated 2020"; local b="$LAST"; clean "C in window"
-  use_wrapper; RUN_ENV=(FIX_FORCE=allow); run
+  use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=allow); run
   need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"scanned=3 candidates=3 examined=3"* && "$(gate_runs)" -eq 3 ]]' || return 1
   need '[[ -n "$a" && -n "$b" ]]'
 }
@@ -399,14 +401,18 @@ chk_g2_malformed() { # a comment list jq cannot evaluate is exit 3, never "no se
 }
 chk_over10() { # 12 findings: the body summarises (10 listed) and every finding is still sentineled
   mkrepo; local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do clean "case $i"; done
-  use_wrapper; RUN_ENV=(FIX_FORCE=deny); run
+  use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=deny); run
   local b; b="$(cat "$(body_of 1)" 2>/dev/null)"
   need '[[ "$RC" -eq 0 && "$(posted)" -eq 1 && "$(nsent "$(body_of 1)" trigger-2:)" -eq 12 && "$(grep -c "^- " "$(body_of 1)")" -eq 10 && "$b" == *"12 "* ]]' || return 1
   body_hygiene "$(body_of 1)"
 }
 chk_postfail() { # a failed post: exit 1 (the sentinel only ever lands with the comment)
   mkrepo; offend; flag comment_fail; run
-  need '[[ "$RC" -eq 1 && "$(posted)" -eq 1 && "$ERR" == *"::error::"* ]]'
+  need '[[ "$RC" -eq 1 && "$(posted)" -eq 1 && "$ERR" == *"::error::"* && "$ERR" == *"(HTTP 502)"* ]]'
+}
+chk_postfail403() { # the post runs in the current shell: the HTTP status of a failed post reaches the annotation
+  mkrepo; offend; flag comment_403; run
+  need '[[ "$RC" -eq 1 && "$(posted)" -eq 1 && "$ERR" == *"::error::posting the notice on #11177 failed (HTTP 403)"* && "$ERR" != *"no HTTP status"* ]]'
 }
 chk_unj_one() { # one timed-out commit: reported unjudgeable once, loop continues, next week it is not re-run
   mkrepo; clean "a"; fc apps/web-platform/app/zz-timeout.tsx "$TOK_TSX" "times out"; local unj="$LAST"; offend; local off="$LAST"; clean "d"
@@ -436,11 +442,11 @@ chk_unj_realtimeout() { # a really hanging gate is killed by timeout and reporte
   need '[[ "$RC" -eq 0 && "$dt" -lt 15 && "$(posted)" -eq 1 ]]' && need 'has_sent "$(body_of 1)" "trigger-2-unjudgeable:$s"'
 }
 chk_sys_garbage() { # the first three judged commits all unusable: systemic, exit 3, nothing posted
-  mkrepo; clean; clean; clean; clean; use_wrapper; RUN_ENV=(FIX_FORCE=garbage); run
+  mkrepo; clean; clean; clean; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=garbage); run
   need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"::error::the first three judged commits"* && "$ERR" == *"last reason: unusable output"* && "$ERR" != *"cannot deny"* ]]' && need 'worktrees_clean'
 }
 chk_sys_warn() { # same for a gate that only ever warns
-  mkrepo; clean; clean; clean; use_wrapper; RUN_ENV=(FIX_FORCE=warn); run
+  mkrepo; clean; clean; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=warn); run
   need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"last reason: gate warning"* && "$ERR" == *"::warning::commit "*" unjudgeable: gate warning"* ]]'
 }
 chk_pre_nogate() { # no gate file on disk: cannot establish
@@ -464,8 +470,8 @@ chk_pre_nojq() {
   need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"jq"* ]]'
 }
 chk_budget() { # the loop budget truncates like the cap (all 3 collected, so it is the LOOP check that stopped it)
-  mkrepo; clean; clean; clean; clean; use_wrapper; RUN_ENV=(FIX_FORCE=slow WATCH_LOOP_BUDGET=3); run
-  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"candidates=4 examined="*" truncated=1 budget=1"* && "$OUT" != *"examined=4"* && "$ERR$OUT" == *"::warning::"* ]]'
+  mkrepo; clean; clean; clean; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=slow WATCH_LOOP_BUDGET=3); run
+  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"candidates=4 examined="*" truncated=1 budget=1"* && "$OUT" != *"examined=4"* && "$ERR$OUT" == *"::warning::"* && "$OUT" == *"nothing to post (truncated)" ]]'
 }
 chk_cap() { # more than 120 candidate commits: examined=120 truncated=1, exit 0
   mkrepo; clean "tip-1"; local i tip; local f="$MOCKD/fi"; assert_fixture_dir "$f"; tip="$(g rev-parse HEAD)"; : > "$f"
@@ -477,8 +483,8 @@ chk_cap() { # more than 120 candidate commits: examined=120 truncated=1, exit 0
   done
   g fast-import --quiet < "$f" || fatal "fast-import failed"
   g reset -q --hard || fatal "reset failed"
-  use_wrapper; RUN_ENV=(FIX_FORCE=allow); run
-  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"examined=120 truncated=1"* && "$(gate_runs)" -eq 120 ]]' && need 'worktrees_clean'
+  use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=allow); run
+  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"examined=120 truncated=1"* && "$OUT" == *"nothing to post (truncated)" && "$(gate_runs)" -eq 120 ]]' && need 'worktrees_clean'
 }
 
 # ---- review-fix scenarios ----
@@ -494,24 +500,25 @@ chk_gitenv() { # an inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointing at A
   git -C "$other" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m "other tip" || fatal "other commit failed"
   printf 'x\n' > "$other/apps/web-platform/app/staged.tsx"; git -C "$other" add -- apps/web-platform/app/staged.tsx || fatal "other add failed"
   local before_o before_r; before_o="$(snap_repo "$other")"; before_r="$(snap_repo "$REPO")"
-  RUN_ENV=(FIX_FORCE=allow "GIT_DIR=$other/.git" "GIT_WORK_TREE=$other" "GIT_INDEX_FILE=$other/.git/index"); run
+  RUN_ENV=(WATCH_GATE_X_FORCE=allow "GIT_DIR=$other/.git" "GIT_WORK_TREE=$other" "GIT_INDEX_FILE=$other/.git/index"); run
   need '[[ "$RC" -eq 0 && "$OUT" == *"examined=2"* && "$(gate_runs)" -eq 2 ]]' || return 1
   need '[[ "$(snap_repo "$other")" == "$before_o" ]]' || return 1
   need '[[ "$(snap_repo "$REPO")" == "$before_r" ]]'
 }
 chk_canary_allow() { # a gate that cannot deny here (stub always allows) is exit 3 with the canary message, before any candidate
-  mkrepo; clean; clean; use_wrapper; RUN_ENV=(FIX_CANARY=allow FIX_FORCE=allow); run
-  need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$(gate_runs)" -eq 0 && "$(canary_runs)" -eq 1 && "$ERR" == *"the gate cannot deny in this environment"* && "$ERR" == *"a clean result would be meaningless"* ]]' && need 'worktrees_clean'
+  mkrepo; clean; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_CANARY=allow WATCH_GATE_X_FORCE=allow); run
+  need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$(gate_runs)" -eq 0 && "$(canary_runs)" -eq 1 && "$ERR" == *"the gate cannot deny in this environment"* && "$ERR" == *"a clean result would be meaningless"* && "$ERR" == *"answered allow instead of deny"* && "$ERR" != *"unusable output"* ]]' && need 'worktrees_clean'
 }
 chk_canary_unusable() { # a canary answered with garbage or a non-zero exit is exit 3 as well
-  local m
+  local m want
   for m in garbage rc2; do
-    mkrepo; clean; use_wrapper; RUN_ENV=("FIX_CANARY=$m" FIX_FORCE=allow); run
-    need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$(gate_runs)" -eq 0 && "$ERR" == *"cannot deny"* ]]' || return 1
+    case "$m" in garbage) want='was unjudgeable (unusable output)' ;; *) want='was unjudgeable (gate exit 2)' ;; esac
+    mkrepo; clean; use_wrapper; RUN_ENV=("WATCH_GATE_X_CANARY=$m" WATCH_GATE_X_FORCE=allow); run
+    need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$(gate_runs)" -eq 0 && "$ERR" == *"cannot deny"* && "$ERR" == *"$want"* && "$ERR" != *"answered allow"* ]]' || return 1
   done
 }
 chk_canary_clean() { # the canary proceeds, runs first, and leaves no trace in the index a real candidate sees
-  mkrepo; clean; clean; use_wrapper; RUN_ENV=(FIX_FORCE=allow); run
+  mkrepo; clean; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=allow); run
   need '[[ "$RC" -eq 0 && "$(canary_runs)" -eq 1 && "$(gate_runs)" -eq 2 && "$(head -n 1 "$MOCKD/gatelog")" == canary ]]' || return 1
   need '[[ "$(grep -c "^name=.*zz-canary" "$MOCKD/gateenv" || true)" -eq 0 && "$(grep -c "^name=apps/web-platform/app/c" "$MOCKD/gateenv")" -eq 2 ]]'
 }
@@ -525,7 +532,7 @@ chk_pop_first3() { # the three NEWEST judged commits all unjudgeable is systemic
 }
 chk_nfind() { # N MODE: exactly N findings; MODE=flat has no summary line, MODE=summary lists the first 10
   local n="$1" mode="$2" i
-  mkrepo; for ((i = 1; i <= n; i++)); do clean "case $i"; done; use_wrapper; RUN_ENV=(FIX_FORCE=deny); run
+  mkrepo; for ((i = 1; i <= n; i++)); do clean "case $i"; done; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=deny); run
   local b; b="$(cat "$(body_of 1)" 2>/dev/null)"
   need '[[ "$RC" -eq 0 && "$(posted)" -eq 1 && "$(nsent "$(body_of 1)" trigger-2:)" -eq "$n" ]]' || return 1
   if [[ "$mode" == summary ]]; then
@@ -541,7 +548,7 @@ chk_rc2allow() { # a gate exiting 2 with a valid allow JSON is unjudgeable, neve
   need '[[ "$RC" -eq 0 && "$(posted)" -eq 1 && "$ERR" == *"::warning::commit ${u:0:12} unjudgeable: gate exit 2"* ]]' && need 'has_sent "$(body_of 1)" "trigger-2-unjudgeable:$u"'
 }
 chk_denynoloc() { # a deny reason without the Locations marker falls back to the reason text
-  mkrepo; clean; use_wrapper; RUN_ENV=(FIX_FORCE=denynoloc); run
+  mkrepo; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=denynoloc); run
   need '[[ "$RC" -eq 0 && "$(posted)" -eq 1 && "$(cat "$(body_of 1)")" == *"stub reason without the location marker"* ]]'
 }
 chk_ignoreterm() { # `timeout -k 5` is effective: a gate that ignores TERM is still killed
@@ -552,19 +559,61 @@ chk_ignoreterm() { # `timeout -k 5` is effective: a gate that ignores TERM is st
 chk_gate_env() { # no token variable reaches the gate; CLAUDE_PROJECT_DIR is an empty scratch dir outside the repo
   mkrepo; clean; clean; use_wrapper
   local before; before="$(g status --porcelain)"
-  RUN_ENV=(FIX_FORCE=allow "GITHUB_TOKEN=$DUMMY_TOKEN" "GH_ENTERPRISE_TOKEN=$DUMMY_TOKEN" "GH_HOST=ghe.example.test"); run
+  RUN_ENV=(WATCH_GATE_X_FORCE=allow "GITHUB_TOKEN=$DUMMY_TOKEN" "GH_ENTERPRISE_TOKEN=$DUMMY_TOKEN" "GH_HOST=ghe.example.test" "GH_ACCESS_TOKEN=$DUMMY_TOKEN" "GITHUB_PAT=$DUMMY_TOKEN" \
+    "ACTIONS_RUNTIME_TOKEN=$DUMMY_TOKEN" "SOLEUR_BRAND_HEX_UI_RE=zz" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/nonexistent); run
   need '[[ "$RC" -eq 0 && "$(grep -c "^recorded=1$" "$MOCKD/gateenv")" -eq 2 && "$(grep -c "^leaked=" "$MOCKD/gateenv" || true)" -eq 0 ]]' || return 1
   local pd; pd="$(grep -m1 '^project_dir=' "$MOCKD/gateenv" | cut -d= -f2-)"
   need '[[ -n "$pd" && "$pd" == "$MOCKD/tmp/"* && "$pd" != "$REPO"* && "$(grep -c "^project_dir_entries=0$" "$MOCKD/gateenv")" -eq 2 ]]' || return 1
+  local hd; hd="$(grep -m1 '^home=' "$MOCKD/gateenv" | cut -d= -f2-)"
+  need '[[ -n "$hd" && "$hd" == "$MOCKD/tmp/"* && "$hd" != "$MOCKD/home" ]]' || return 1
   need '[[ "$(g status --porcelain)" == "$before" ]]' && need 'worktrees_clean'
 }
+chk_gitconf() { # a GIT_CONFIG_* injection reaches neither a write-capable gitx call nor the gate child
+  mkrepo; clean; clean; use_wrapper
+  local shim="$MOCKD/shim" real_git; real_git="$(command -v git)"
+  assert_fixture_dir "$shim"; mkdir -p "$shim" || fatal "shim mkdir failed"
+  cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+# The gate sets its own GIT_CONFIG_COUNT for its own git calls (and has CLAUDE_PROJECT_DIR); only the watcher's calls are judged here.
+[ -n "\${CLAUDE_PROJECT_DIR:-}" ] || { printf 'call %s\n' "\$*"; env | grep -E '^(GIT_CONFIG|GIT_CEILING)' | cut -d= -f1 | sed 's/^/leak=/'; } >> "$MOCKD/gitenv"
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$shim/git" || fatal "shim chmod failed"
+  RUN_PATH="$shim:$MOCKD:$PATH"
+  RUN_ENV=(WATCH_GATE_X_FORCE=allow GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/nonexistent "GIT_CONFIG_PARAMETERS='core.abbrev'='4'" GIT_CEILING_DIRECTORIES=/ "GH_ACCESS_TOKEN=$DUMMY_TOKEN"); run
+  need '[[ "$RC" -eq 0 && "$OUT" == *"examined=2"* && "$(gate_runs)" -eq 2 ]]' || return 1
+  need '[[ "$(grep -c " worktree add " "$MOCKD/gitenv")" -ge 1 && "$(grep -c " update-ref --no-deref HEAD " "$MOCKD/gitenv")" -ge 2 && "$(grep -c " read-tree " "$MOCKD/gitenv")" -ge 3 ]]' || return 1
+  need '[[ "$(grep -c "^leak=" "$MOCKD/gitenv" || true)" -eq 0 && "$(grep -c "^leaked=" "$MOCKD/gateenv" || true)" -eq 0 && "$(grep -c "^recorded=1$" "$MOCKD/gateenv")" -eq 2 ]]'
+}
+chk_forged_header() { # a tracked path named like a commit header (control char + 40 hex) must not hide the real commit
+  mkrepo; clean
+  local forged; forged=$'\x01'"$(printf 'a%.0s' $(seq 1 40))"
+  put "$forged" "x"; put apps/web-platform/app/zz-forge.tsx "$OFF_TSX"
+  g add -- "$forged" apps/web-platform/app/zz-forge.tsx || fatal "forge add failed"; gcommit "path forged as a header"; use_wrapper; run
+  need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"::error::the commit stream does not match the first-parent list"* ]]'
+}
+chk_hook_unreadable() { # an unreadable tracked hook is exit 3 and its name is printed inert (no ESC, no @)
+  mkrepo; clean; local esc=$'\x1b' p
+  p=".claude/hooks/ev@il${esc}[31m.sh"
+  g update-index --add --cacheinfo "160000,$(printf 'b%.0s' $(seq 1 40)),$p" || fatal "gitlink stage failed"
+  gcommit "gitlink hook"; run
+  need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"cannot read tracked hook"* && "$ERR" != *"$esc"* && "$ERR" != *"@"* ]]'
+}
+chk_dry_readfail() { # --dry-run with an unreadable tracker: a warning and the run goes on (like scripts 1-2), nothing posted
+  mkrepo; clean; flag view_fail; run --dry-run
+  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"::warning::dry-run: could not read #11177"* && "$OUT" == *"examined=1"* ]]'
+}
 chk_stderr_ok() { # valid allow JSON with a non-WARN stderr line counts clean (only WARN is screened)
-  mkrepo; clean; clean; use_wrapper; RUN_ENV=(FIX_FORCE=stderr_ok); run
+  mkrepo; clean; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=stderr_ok); run
   need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"examined=2"* && "$OUT" == *"unjudgeable=0"* && "$ERR" != *"unjudgeable"* ]]'
 }
 chk_budget_collect() { # the budget is measured from script start and also stops candidate collection
-  mkrepo; clean; clean; clean; use_wrapper; RUN_ENV=(FIX_FORCE=allow WATCH_ELAPSED_OFFSET=100000); run
+  mkrepo; clean; clean; clean; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=allow WATCH_ELAPSED_OFFSET=100000); run
   need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"candidates=1 examined=1 truncated=1 budget=1"* && "$(gate_runs)" -eq 1 && "$ERR" == *"::warning::"* ]]'
+}
+chk_budget_first() { # an exhausted budget never stops collection before the FIRST candidate exists: it is still judged
+  mkrepo; clean; fc docs/readme.md "later notes" "docs only (newest)"; use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=allow WATCH_ELAPSED_OFFSET=100000); run
+  need '[[ "$RC" -eq 0 && "$OUT" == *"candidates=1 examined=1"* && "$(gate_runs)" -eq 1 ]]'
 }
 chk_createdat() { # a garbage createdAt (shape or calendar) is exit 3, never a whole-history scan
   local c
@@ -612,7 +661,7 @@ chk_nullcomments() { mkrepo; fc .claude/hooks/new-hook.sh "$HOOK_SRC" "hook"; ra
   need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"::error::"* ]]'; }
 chk_dry() { # both detectors run, the would-be comment is printed, nothing is posted or spent
   mkrepo; fc .claude/hooks/new-hook.sh "$HOOK_SRC" "hook"; offend; local sha="$LAST"; run --dry-run
-  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"new-hook.sh"* && "$OUT" == *"${sha:0:12}"* && "$OUT" == *"dry-run: nothing posted"* ]]' && need 'calls_are "$VIEW_ARGV"'
+  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"new-hook.sh"* && "$OUT" == *"${sha:0:12}"* && "$OUT" == *"dry-run: nothing posted"* && "$OUT" == *"dry-run: tracker #11177 state=OPEN; sentinel"* ]]' && need 'calls_are "$VIEW_ARGV"'
 }
 chk_print_state() { # local git only: no gh call at all, fast, the documented first line
   mkrepo; fc .claude/hooks/new-hook.sh "$HOOK_SRC" "hook"; clean; clean; local t0=$SECONDS; run --print-state; local dt=$((SECONDS - t0))
@@ -624,7 +673,13 @@ chk_xtrace() { # bash -x with a token in the environment: refuse before anything
   RC=$?; ERR="$(cat "$MOCKD/stderr")"; OUT=""
   need '[[ "$RC" -eq 78 && "$ERR" == *"refusing to run under xtrace"* && ! -s "$MOCKD/calls" ]]'
 }
-chk_usage() { mkrepo; run --nope; need '[[ "$RC" -eq 2 && "$ERR" == *"usage:"* && ! -s "$MOCKD/calls" ]]'; }
+chk_usage() { # an unknown flag, a lone EMPTY argument and extra arguments are all exit 2 with no gh call
+  local a
+  for a in --nope ''; do
+    mkrepo; run "$a"; need '[[ "$RC" -eq 2 && "$ERR" == *"usage:"* && ! -s "$MOCKD/calls" ]]' || return 1
+  done
+  mkrepo; run --dry-run extra; need '[[ "$RC" -eq 2 && "$ERR" == *"usage:"* && ! -s "$MOCKD/calls" ]]'
+}
 chk_hostile() { # hostile subject and paths: inert, no mention, no closing keyword, no marker forgery
   mkrepo
   fc "apps/web-platform/app/@user.tsx" "$OFF_TSX" 'fixes #11177 @octocat <!-- hide --> `tick` resolved owner/repo#5 --> & closes #9'
@@ -670,6 +725,7 @@ scenario "G2 harness: the github-actions[bot] spelling suppresses as well" chk_g
 scenario "G2 row4: unevaluable comments are exit 3, never absent" chk_g2_malformed
 scenario "more than 10 findings: ten listed, every finding sentineled, one comment" chk_over10
 scenario "a failed post is exit 1" chk_postfail
+scenario "a failed post reports its HTTP status (wn_post runs in the current shell)" chk_postfail403
 scenario "G4 row8: one timed-out commit is reported unjudgeable once and never re-run" chk_unj_one
 scenario "G4 row8: WARN and garbage commits are unjudgeable and never called off-brand" chk_unj_text
 scenario "G4 row8: a really hanging gate is killed by the timeout wrapper" chk_unj_realtimeout
@@ -687,12 +743,17 @@ scenario "null comments are exit 3" chk_nullcomments
 scenario "--dry-run runs both detectors, prints the comment, posts nothing" chk_dry
 scenario "--print-state is local only, fast, with the documented first line" chk_print_state
 scenario "bash -x is refused with exit 78 before anything runs" chk_xtrace
-scenario "an unknown argument is exit 2 with usage and no gh call" chk_usage
+scenario "an unknown argument, a lone empty argument and extra arguments are exit 2 with usage and no gh call" chk_usage
 scenario "hostile third-party text is inert (no mention, keyword, marker forgery)" chk_hostile
 scenario "an inherited WN_DRY_RUN=1 without --dry-run still posts" chk_env_dry
 scenario "H1 the recorder is alive: a posting scenario logs a view and a comment" chk_mockalive
 scenario "G4 window: a skew-dated commit mid-window hides and truncates nothing (A, B, C all examined)" chk_skew
 scenario "gitx: an inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE never touches the other repository" chk_gitenv
+scenario "G4 budget: an exhausted budget still judges the first candidate" chk_budget_first
+scenario "gitx: a GIT_CONFIG_* injection reaches neither a write-capable git call nor the gate child" chk_gitconf
+scenario "G4 forge: a tracked path named like a commit header is exit 3, never a silent drop" chk_forged_header
+scenario "an unreadable tracked hook is exit 3 and its name is printed inert" chk_hook_unreadable
+scenario "--dry-run with an unreadable tracker warns and goes on" chk_dry_readfail
 scenario "G4 canary: a gate that always allows is exit 3 with the canary message" chk_canary_allow
 scenario "G4 canary: garbage or non-zero canary answers are exit 3" chk_canary_unusable
 scenario "G4 canary: runs first, proceeds on a deny and leaves the worktree index clean" chk_canary_clean
@@ -703,7 +764,7 @@ scenario "11 findings: the summary line and the remainder count" chk_eleven
 scenario "G4 row8: a gate exiting 2 with a valid allow JSON is unjudgeable" chk_rc2allow
 scenario "G4 row8: a deny reason without Locations falls back to the reason text" chk_denynoloc
 scenario "G4 row8: a TERM-ignoring gate is killed by timeout -k" chk_ignoreterm
-scenario "G4 env: no token variable reaches the gate and CLAUDE_PROJECT_DIR is an empty scratch dir" chk_gate_env
+scenario "G4 env: only the allowlist reaches the gate; CLAUDE_PROJECT_DIR and HOME are empty scratch dirs" chk_gate_env
 scenario "G4 stderr: valid allow JSON with non-WARN stderr counts clean" chk_stderr_ok
 scenario "G4 budget: the budget counts from script start and stops candidate collection" chk_budget_collect
 scenario "a garbage createdAt is exit 3" chk_createdat
@@ -735,7 +796,7 @@ ui_re_src="$(sed -nE 's/^UI_RE="\$\{SOLEUR_BRAND_HEX_UI_RE:-(.*)\}"$/\1/p' "$REA
   && pass "the gate's path classes are derived from its source, not copied into the watcher" || fail "the watcher copies the gate's UI regex or the gate no longer declares it"
 
 # ------------------------------------------------------------- mutation harness ----
-MUTN=0
+MUTN=0; N_PRE_MUT=$N
 # mutate_in FILE OLD NEW: replace the single occurrence of OLD (fixed string); rc 1 when OLD is absent
 # or ambiguous.
 mutate_in() {
@@ -776,10 +837,10 @@ if [[ -s "$SUT" ]]; then
   mutation_row "G4-h1" "remove the read-tree step: the gate sees an empty diff and allows everything" chk_g4_r1 \
     sut 'gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1' 'true'
   mutation_row "G4-r7" "refresh the reused worktree index only once" chk_g4_r7 \
-    sut 'if gitx -C "$WT" reset --mixed -q "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; then' \
-        'if { [[ -n "${ONCE:-}" ]] || { gitx -C "$WT" reset --mixed -q "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; }; }; then ONCE=1'
+    sut 'if gitx -C "$WT" update-ref --no-deref HEAD "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; then' \
+        'if { [[ -n "${ONCE:-}" ]] || { gitx -C "$WT" update-ref --no-deref HEAD "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; }; }; then ONCE=1'
   mutation_row "G4-canary-leak" "skip the per-commit index refresh: the canary file leaks into a real candidate" chk_canary_clean \
-    sut 'if gitx -C "$WT" reset --mixed -q "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; then' 'if true; then'
+    sut 'if gitx -C "$WT" update-ref --no-deref HEAD "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; then' 'if true; then'
   mutation_row "G4-r3" "drop the createdAt window (everything is in the window)" chk_g4_r3 \
     sut '$2 + 0 >= c + 0' '$2 + 0 >= 0'
   mutation_row "G4-skew" "the window starts at the NEWEST pre-window-looking commit (the --since shape)" chk_skew \
@@ -818,8 +879,30 @@ if [[ -s "$SUT" ]]; then
     sut 'canary || return 3' ':'
   mutation_row "G4-gitenv" "git calls keep an inherited GIT_DIR/GIT_INDEX_FILE" chk_gitenv \
     sut 'gitx() { env "${GIT_UNSET[@]}" git "$@"; }' 'gitx() { git "$@"; }'
-  mutation_row "G4-token" "the gate child keeps the job token variables" chk_gate_env \
-    sut '-u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GH_HOST' '-u GH_HOST'
+  mutation_row "G4-token" "the gate child inherits the environment (no env -i allowlist): tokens and GIT_CONFIG_* reach it" chk_gate_env \
+    sut 'env -i "PATH=$PATH"' 'env "PATH=$PATH"'
+  mutation_row "G4-gitconf-num" "the numbered GIT_CONFIG_KEY_n/VALUE_n variables are not removed from git calls" chk_gitconf \
+    sut 'GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) GIT_UNSET+=(-u "$_n") ;;' 'GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) : ;;'
+  mutation_row "G4-gitconf-count" "GIT_CONFIG_COUNT/PARAMETERS/CEILING are not removed from git calls" chk_gitconf \
+    sut 'GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM' 'GIT_DISCOVERY_ACROSS_FILESYSTEM'
+  mutation_row "G4-forge" "the header stream is no longer verified against the first-parent list" chk_forged_header \
+    sut 'if [[ "$hdr_sha" != "${FP[$hi]:-}" || "$hdr_par" != "${FP[$((hi + 1))]:-}" ]]; then' 'if false; then'
+  mutation_row "G4-hook-san" "an unreadable tracked hook name is printed raw" chk_hook_unreadable \
+    sut 'cannot read tracked hook $(san "$f")' 'cannot read tracked hook ${f}'
+  mutation_row "G4-post-subshell" "the post runs in a pipeline subshell: WN_ERR_HTTP is lost" chk_postfail403 \
+    sut 'wn_post "$ISSUE" <<<"$body"' 'printf '"'"'%s\n'"'"' "$body" | wn_post "$ISSUE"'
+  mutation_row "G4-editlast" "the post call gains --edit-last (lib): the exact-argv oracle must catch it" chk_g4_r1 \
+    lib 'gh issue comment "$n" --body-file - >/dev/null 2>"$errf"' 'gh issue comment "$n" --body-file - --edit-last >/dev/null 2>"$errf"'
+  mutation_row "G4-usage-empty" "a lone empty argument takes the real posting path" chk_usage \
+    sut 'if [[ "$#" -eq 1 ]]; then' 'if [[ -n "${1:-}" ]]; then'
+  mutation_row "G4-dry-read" "a failed tracker read in --dry-run is exit 3" chk_dry_readfail \
+    sut 'WN_STATE="UNKNOWN"; WN_CREATED="$PRINT_STATE_CREATED"' 'exit 3'
+  mutation_row "G4-canary-msg" "the canary failure message loses its accurate reason" chk_canary_allow \
+    sut 'why="answered allow instead of deny"' 'why="answered ${G_VERDICT}"'
+  mutation_row "G4-truncated" "the quiet line no longer says (truncated)" chk_budget \
+    sut 'echo "no new findings; nothing to post (truncated)"' 'echo "no new findings; nothing to post"'
+  mutation_row "G4-budget-first" "the collection budget check ignores whether a candidate exists" chk_budget_first \
+    sut 'if [[ "${#CAND_SHA[@]}" -ge 1 ]] && [[ "$1" -eq 1 ]]' 'if [[ "$1" -eq 1 ]]'
   mutation_row "G4-projdir" "CLAUDE_PROJECT_DIR points at the repo, not the empty scratch dir" chk_gate_env \
     sut '"CLAUDE_PROJECT_DIR=$EMPTY"' '"CLAUDE_PROJECT_DIR=$REPO_ROOT"'
   mutation_row "G4-kill" "timeout without -k: a TERM-ignoring gate hangs" chk_ignoreterm \
@@ -876,15 +959,28 @@ else
 fi
 
 # ------------------------------------------------------------ recorded-argv oracle ----
+# Exact pins: the only calls ever made are the one `issue view` and the one `issue comment` argv
+# (no --edit-last, no other flag). Only the scenario directories (before the mutation rows) are scanned:
+# a mutated copy that adds a flag is SUPPOSED to be refused by the mock, and the witness below proves the
+# oracle itself catches it.
+argv_bad() { # FILE: print how many recorded lines are not exactly one of the two pinned argv
+  local n=0 l
+  while IFS= read -r l; do
+    case "$l" in "$VIEW_ARGV"|"$POST_ARGV") ;; *) n=$((n + 1)); echo "unexpected call: $l" >&2 ;; esac
+  done < "$1"
+  printf '%s' "$n"
+}
 bad=0; seen=0
-for d in "$ROOT"/mock*; do
+for ((i = 1; i <= N_PRE_MUT; i++)); do
+  d="$ROOT/mock$i"
   [[ -s "$d/calls" ]] || continue
-  while IFS= read -r line; do
-    seen=$((seen + 1))
-    case "$line" in "issue view "*|"issue comment "*) ;; *) bad=$((bad + 1)); echo "unexpected call: $line" ;; esac
-  done < "$d/calls"
+  seen=$((seen + $(wc -l < "$d/calls")))
+  bad=$((bad + $(argv_bad "$d/calls")))
 done
-[[ "$bad" -eq 0 && "$seen" -gt 0 ]] && pass "recorded gh argv set is a subset of {issue view, issue comment} ($seen calls)" || fail "recorded argv oracle ($bad unexpected of $seen)"
+[[ "$bad" -eq 0 && "$seen" -gt 0 ]] && pass "recorded gh argv set is exactly {$VIEW_ARGV ; $POST_ARGV} ($seen calls)" || fail "recorded argv oracle ($bad unexpected of $seen)"
+ORW="$ROOT/oracle-witness.calls"; assert_fixture_dir "$ORW"
+printf '%s\n%s\n%s\n' "$VIEW_ARGV" "$POST_ARGV" "$POST_ARGV --edit-last" > "$ORW"
+[[ "$(argv_bad "$ORW" 2>/dev/null)" -eq 1 ]] && pass "argv oracle witness: a posting call with --edit-last is flagged, the two pinned argv are not" || fail "argv oracle witness: --edit-last stayed unflagged"
 
 # ------------------------------------------------------------ workflow facets ----
 if [[ -f "$WF" ]]; then
@@ -895,7 +991,7 @@ import re, sys
 try:
     import yaml
 except Exception:
-    print("SKIP-NO-YAML"); sys.exit(0)
+    print("NO-YAML"); sys.exit(0)
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
 doc = yaml.safe_load(text)
@@ -938,7 +1034,7 @@ print("OK" if not missing else "MISSING " + " ".join(missing))
 PY
   wf_res="$(python3 -I "$PYF" "$WF" 2>&1)"
   case "$wf_res" in
-    SKIP-NO-YAML) pass "workflow facets: skipped (PyYAML unavailable) - PASS-skip" ;;
+    NO-YAML) fail "workflow facets: PyYAML is unavailable, so the facets cannot be checked (a skip would be a vacuous pass); install python3-yaml" ;;
     OK) pass "workflow facets: cron, repository+ref if guards, exact permissions, no secrets, fetch-depth 0, persist-credentials false, dry_run via env, job timeout" ;;
     *) fail "workflow facets: $wf_res" ;;
   esac
@@ -969,7 +1065,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY above the
 # `if`, not with the other constants: guard-vacuity-floor builds its mutant by slicing the floor
 # block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=108
+MIN_ASSERTIONS=136
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2

@@ -26,13 +26,19 @@
 #   widen it, a known superset). The newest 120 that touch the gate's own path classes
 #   (UI_RE/EMAIL_RE are READ from the gate source, never copied) are judged, found in ONE
 #   `git log --name-only` pass. Each is judged by the REAL committed gate: one reused
-#   `git worktree add --no-checkout --detach`, per commit `git reset --mixed -q <first-parent>` then
-#   `git read-tree <commit>` into that worktree's own index (the gate unsets GIT_INDEX_FILE, so an
-#   env-var index would be ignored), a plain `git commit -m x` payload on stdin, CLAUDE_PROJECT_DIR
-#   at an empty scratch directory (no incident ledger is written), GH_TOKEN/GITHUB_TOKEN/
-#   GH_ENTERPRISE_TOKEN/GH_HOST removed from the gate's environment, under `timeout -k 5 60`.
-#   Every git call is made with the git location variables (GIT_DIR, GIT_INDEX_FILE, ...) unset, so
-#   an inherited one can never point a write at a different repository.
+#   `git worktree add --no-checkout --detach`, per commit `git update-ref --no-deref HEAD <first-parent>`
+#   then `git read-tree <commit>` into that worktree's own index (the gate unsets GIT_INDEX_FILE, so
+#   an env-var index would be ignored; read-tree replaces the whole index, so no reset is needed and
+#   the per-commit cost drops from about 0.5 s to about 0.13 s), a plain `git commit -m x` payload
+#   on stdin, under `timeout -k 5 60`. The gate child runs under `env -i` with an ALLOWLIST: PATH,
+#   HOME (an empty scratch directory), LANG=C, TMPDIR (the run's scratch directory) and
+#   CLAUDE_PROJECT_DIR (another empty scratch directory, so no incident ledger is written), plus any
+#   `WATCH_GATE_X_*` variable (a test seam for the stub gate; nothing else). No token, host or
+#   regex override and no GIT_* variable can reach it.
+#   Every git call is made with the git location and config variables (GIT_DIR, GIT_INDEX_FILE,
+#   GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_*, GIT_CONFIG_PARAMETERS, GIT_CONFIG_GLOBAL/
+#   SYSTEM, GIT_CEILING_DIRECTORIES, ...) unset, so an inherited one can never point a write at a
+#   different repository or inject a configuration value.
 #   POSITIVE CONTROL: before the loop the same worktree and gate run a synthetic off-palette file
 #   (staged only in the worktree's own index, never committed) and MUST answer `deny`; anything else
 #   is exit 3, because a gate that cannot deny here would make every "clean" result meaningless.
@@ -43,8 +49,15 @@
 #   `::warning::` naming the reason): reported once, skipped, the loop continues, never called
 #   off-brand. Systemic failure is exit 3 (preflight, the canary, or the first three judged commits
 #   all unjudgeable). The sentinel is checked BEFORE judging, so a sentineled commit is never re-run.
+#   RESIDUAL (accepted): an unjudgeable verdict is recorded permanently. A transient gate timeout
+#   later in a run (after the first three commits judged fine) is sentineled and never re-judged;
+#   the comment says the commit could not be judged, never that it is clean.
+#   The commit stream is verified: every header SHA and its first parent must equal the next entries
+#   of the first-parent list written beforehand, so a tracked path named like a header (a control
+#   character plus 40 hex digits) cannot hide the real commit's files; a mismatch is exit 3.
 #   The run budget (default 480 s) is measured from SCRIPT START and checked while collecting
-#   candidates and between commits (at least one candidate is always judged); on overrun it stops,
+#   candidates and between commits (the collection check applies only once a candidate exists, so at least one
+#   candidate is always judged); on overrun it stops,
 #   prints `examined=N truncated=1 budget=1` and a ::warning:: and exits 0. Newest-first order can
 #   starve the oldest clean commits under a truncation: a documented residual with no watermark
 #   (CTO ruling S1). `scanned=` (first-parent commits looked at) next to `candidates=` tells a quiet
@@ -55,8 +68,9 @@
 # commit and a human commit look alike): it is a lead for the ruling session.
 #
 # Modes:  (none)         run both detectors, post once if anything is new
-#         --dry-run      run both detectors (the tracker read stays read-only), print the would-be
-#                        comment, make no `issue comment` call, spend no sentinel
+#         --dry-run      run both detectors (the tracker read stays read-only; a failed read is a
+#                        ::warning::, not exit 3), print the would-be comment, make no
+#                        `issue comment` call, spend no sentinel
 #         --print-state  local git only, no network: print the trigger-1 hook list and the trigger-2
 #                        candidate-commit count (the discoverability probe). Exit 0 only when both
 #                        were measured; `hooks=unknown` / `candidates=unknown` is exit 3.
@@ -65,7 +79,7 @@
 #   (--print-state window), WATCH_ELAPSED_OFFSET (seconds pretended to have elapsed already).
 #
 # Exit: 0 posted, or any no-op (tracker not open or gone, nothing new, dry-run, print-state);
-#       1 comment post failed; 2 usage; 3 cannot establish (a read the verdict depends on failed,
+#       1 comment post failed; 2 usage (anything but no argument, --dry-run or --print-state); 3 cannot establish (a read the verdict depends on failed,
 #       a tool or the gate is missing, history unreadable, invalid path-class regex, canary or
 #       systemic gate failure) - nothing is posted so the next run retries; 78 refusing to run
 #       under xtrace.
@@ -94,24 +108,36 @@ PAYLOAD='{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}'
 
 usage() { echo "usage: ${0##*/} [--dry-run|--print-state]" >&2; exit 2; }
 MODE=run
-case "${1:-}" in
-  "") ;;
-  --dry-run) WN_DRY_RUN=1 ;;
-  --print-state) MODE=print-state ;;
-  *) usage ;;
-esac
-[[ "$#" -le 1 ]] || usage
+# Only no argument, `--dry-run` or `--print-state` is accepted: a lone empty argument is a usage error.
+if [[ "$#" -gt 1 ]]; then usage; fi
+if [[ "$#" -eq 1 ]]; then
+  case "$1" in
+    --dry-run) WN_DRY_RUN=1 ;;
+    --print-state) MODE=print-state ;;
+    *) usage ;;
+  esac
+fi
 [[ "$BUDGET" =~ ^[1-9][0-9]{0,5}$ && "$GATE_TIMEOUT" =~ ^[1-9][0-9]{0,4}$ && "$ELAPSED_OFFSET" =~ ^[0-9]{1,6}$ ]] || { echo "::error::WATCH_LOOP_BUDGET/WATCH_GATE_TIMEOUT must be positive integers and WATCH_ELAPSED_OFFSET a non-negative integer" >&2; exit 2; }
 SCRIPT_START=$((SCRIPT_START - ELAPSED_OFFSET))
 over_budget() { [[ "$(( SECONDS - SCRIPT_START ))" -ge "$BUDGET" ]]; }
 
-# Every git call goes through gitx: the git location variables are removed so an inherited one
-# (a hook, a wrapper, a CI shell) can never redirect a reset/read-tree/worktree write at another
-# repository's branch or index.
-GIT_UNSET=()
-for _v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX; do GIT_UNSET+=(-u "$_v"); done
-# The gate child additionally never sees the job token or a host override, nor a regex override.
-GATE_UNSET=("${GIT_UNSET[@]}" -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GH_HOST -u SOLEUR_BRAND_HEX_UI_RE -u SOLEUR_BRAND_HEX_EMAIL_RE)
+# Every git call goes through gitx: the git location AND configuration variables are removed so an
+# inherited one (a hook, a wrapper, a CI shell) can never redirect an update-ref/read-tree/worktree
+# write at another repository's branch or index, nor inject a config value (GIT_CONFIG_COUNT with
+# GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n, GIT_CONFIG_PARAMETERS). The numbered ones are found in `env`.
+GIT_UNSET=(); GATE_PASS=()
+for _v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX \
+          GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM \
+          GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_GRAFT_FILE GIT_SHALLOW_FILE; do GIT_UNSET+=(-u "$_v"); done
+while IFS= read -r -d '' _kv; do
+  _n="${_kv%%=*}"
+  case "$_n" in
+    GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) GIT_UNSET+=(-u "$_n") ;;
+    # The only variables forwarded to the gate child besides its fixed allowlist (see judge_gate): the
+    # stub-gate seam of the test suite. A real run has none.
+    WATCH_GATE_X_[A-Z0-9_]*) GATE_PASS+=("$_kv") ;;
+  esac
+done < <(env -0)
 gitx() { env "${GIT_UNSET[@]}" git "$@"; }
 
 REPO_ROOT=""; WT=""; EMPTY=""
@@ -164,7 +190,7 @@ t1_run() {
     return 3
   fi
   for f in "${HOOKS[@]}"; do
-    content="$(gitx -C "$REPO_ROOT" show ":$f" 2>/dev/null)" || { echo "::error::cannot read tracked hook ${f}; cannot establish trigger 1" >&2; return 3; }
+    content="$(gitx -C "$REPO_ROOT" show ":$f" 2>/dev/null)" || { echo "::error::cannot read tracked hook $(san "$f"); cannot establish trigger 1" >&2; return 3; }
     noncomment="$(grep -vE '^[[:space:]]*#' <<<"$content")" || true
     named=no
     if grep -qF 'commit-index-sim' <<<"$noncomment"; then named=yes; fi
@@ -238,16 +264,18 @@ t2_flush() {
     fi
   fi
   T2_CUR=""; T2_PAR=""; T2_HIT=0
-  if [[ "$1" -eq 1 ]] && over_budget; then TRUNC_BUDGET=1; return 1; fi
+  if [[ "${#CAND_SHA[@]}" -ge 1 ]] && [[ "$1" -eq 1 ]] && over_budget; then TRUNC_BUDGET=1; return 1; fi
   return 0
 }
 # t2_collect: newest-first first-parent commits in the window that touch the path classes, at most
 # CAP of them (CAND_MORE=1 when more existed), from ONE git log pass parsed here.
 t2_collect() {
-  local tok first=0 range=HEAD r fr hdr_sha hdr_par
+  local tok first=0 range=HEAD r fr hdr_sha hdr_par hi=0 FP=()
   CAND_SHA=(); CAND_PAR=(); CAND_MORE=0; SCANNED=0; TRUNC_BUDGET=0; T2_CUR=""; T2_PAR=""; T2_HIT=0
   t2_base || { echo "::error::git log failed; cannot establish trigger 2" >&2; return 3; }
   if [[ -n "$BASE" ]]; then range="${BASE}..HEAD"; fi
+  # The first-parent list written by t2_base is the oracle for the header stream below.
+  mapfile -t FP < <(awk '{ print $1 }' "$WORK/fp")
   gitx -C "$REPO_ROOT" log --first-parent --no-renames --name-only -z --diff-merges=first-parent --format='%x01%H%x20%P' "$range" > "$WORK/log" 2>/dev/null \
     || { echo "::error::git log failed; cannot establish trigger 2" >&2; return 3; }
   while IFS= read -r -d '' tok || [[ -n "$tok" ]]; do
@@ -255,6 +283,13 @@ t2_collect() {
     if [[ "$tok" =~ ^$'\001'([0-9a-f]{40})\ ?([0-9a-f]{40})? ]]; then
       # t2_flush runs its own =~ matches, which would clobber BASH_REMATCH: capture first.
       hdr_sha="${BASH_REMATCH[1]}"; hdr_par="${BASH_REMATCH[2]:-}"
+      # A tracked path named like a header (control character + 40 hex digits) must not forge one:
+      # each real header carries the next first-parent SHA, in order, and its first parent.
+      if [[ "$hdr_sha" != "${FP[$hi]:-}" || "$hdr_par" != "${FP[$((hi + 1))]:-}" ]]; then
+        echo "::error::the commit stream does not match the first-parent list (a tracked path named like a commit header, or history changed during the run); cannot establish trigger 2" >&2
+        return 3
+      fi
+      hi=$((hi + 1))
       t2_flush 1; fr=$?
       if [[ "$fr" -eq 3 ]]; then return 3; fi
       if [[ "$fr" -eq 1 ]]; then return 0; fi
@@ -268,6 +303,12 @@ t2_collect() {
   done < "$WORK/log"
   t2_flush 0; fr=$?
   if [[ "$fr" -eq 3 ]]; then return 3; fi
+  # Natural end of the stream: the commit after the last header must be the window base (or the
+  # history must end there), else a header was swallowed.
+  if [[ "${FP[$hi]:-}" != "$BASE" ]]; then
+    echo "::error::the commit stream ended before the window base of the first-parent list; cannot establish trigger 2" >&2
+    return 3
+  fi
   return 0
 }
 
@@ -290,10 +331,12 @@ render_item() { # sha detail
 
 # judge_gate: run the REAL gate in the reused worktree against whatever its index holds, exactly the
 # way a candidate is run. Sets G_VERDICT (allow|deny|unjudgeable), G_REASON, G_OUT.
-GATE=""; OUTF="$WORK/gate.out"; ERRF="$WORK/gate.err"; G_VERDICT=""; G_REASON=""; G_OUT=""
+GATE=""; GATE_HOME=""; OUTF="$WORK/gate.out"; ERRF="$WORK/gate.err"; G_VERDICT=""; G_REASON=""; G_OUT=""
 judge_gate() {
   local g_rc gate_err decision
-  ( cd "$WT" && env "${GATE_UNSET[@]}" "CLAUDE_PROJECT_DIR=$EMPTY" timeout -k 5 "$GATE_TIMEOUT" bash "$GATE" ) < "$WORK/payload" > "$OUTF" 2> "$ERRF"
+  # Allowlist, not denylist: nothing but these variables (and the WATCH_GATE_X_* test seam) exists in the gate child.
+  ( cd "$WT" && env -i "PATH=$PATH" "HOME=$GATE_HOME" LANG=C "TMPDIR=$WORK" "CLAUDE_PROJECT_DIR=$EMPTY" ${GATE_PASS[@]+"${GATE_PASS[@]}"} \
+      timeout -k 5 "$GATE_TIMEOUT" bash "$GATE" ) < "$WORK/payload" > "$OUTF" 2> "$ERRF"
   g_rc=$?
   G_VERDICT=unjudgeable; G_REASON="unusable output"
   G_OUT="$(cat "$OUTF" 2>/dev/null)"; gate_err="$(cat "$ERRF" 2>/dev/null)"
@@ -306,8 +349,8 @@ judge_gate() {
   else
     decision="$(jq -r 'select(type=="object") | .hookSpecificOutput.permissionDecision // empty' <<<"$G_OUT" 2>/dev/null)" || decision=""
     case "$decision" in
-      allow) G_VERDICT=allow ;;
-      deny) G_VERDICT=deny ;;
+      allow) G_VERDICT=allow; G_REASON="" ;;
+      deny) G_VERDICT=deny; G_REASON="" ;;
       *) G_VERDICT=unjudgeable ;;
     esac
   fi
@@ -317,7 +360,7 @@ judge_gate() {
 # (never a commit) and require the real gate to deny it. The loop's per-commit reset/read-tree
 # replaces this index, so nothing of it reaches a real candidate.
 canary() {
-  local csha
+  local csha why
   if ! gitx -C "$WT" read-tree "${CAND_PAR[0]}" >/dev/null 2>&1; then
     echo "::error::canary: cannot load the first candidate's parent into the worktree index; cannot establish trigger 2" >&2
     return 3
@@ -330,7 +373,8 @@ canary() {
   fi
   judge_gate
   if [[ "$G_VERDICT" != deny ]]; then
-    echo "::error::the gate cannot deny in this environment (positive control answered ${G_VERDICT}: ${G_REASON}); a clean result would be meaningless, cannot establish trigger 2" >&2
+    if [[ "$G_VERDICT" == allow ]]; then why="answered allow instead of deny"; else why="was unjudgeable (${G_REASON})"; fi
+    echo "::error::the gate cannot deny in this environment (positive control ${why}); a clean result would be meaningless, cannot establish trigger 2" >&2
     return 3
   fi
   return 0
@@ -347,8 +391,8 @@ t2_run() {
   if [[ "${#CAND_SHA[@]}" -eq 0 ]]; then return 0; fi
 
   GATE="$REPO_ROOT/$GATE_REL"
-  WT="$WORK/wt"; EMPTY="$WORK/empty"
-  mkdir "$EMPTY" || return 3
+  WT="$WORK/wt"; EMPTY="$WORK/empty"; GATE_HOME="$WORK/gate-home"
+  mkdir "$EMPTY" "$GATE_HOME" || return 3
   printf '%s' "$PAYLOAD" > "$WORK/payload" || return 3
   if ! gitx -C "$REPO_ROOT" worktree add -q --no-checkout --detach "$WT" "${CAND_PAR[0]}" >/dev/null 2>&1; then
     WT=""
@@ -367,8 +411,9 @@ t2_run() {
     if [[ "$rc" -eq 0 ]]; then skipped=$((skipped + 1)); continue; fi
 
     judged=$((judged + 1))
-    # Per commit: HEAD to the first parent, then the commit's tree into this worktree's own index.
-    if gitx -C "$WT" reset --mixed -q "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; then
+    # Per commit: HEAD to the first parent (no reset: read-tree replaces the whole index anyway), then
+    # the commit's tree into this worktree's own index.
+    if gitx -C "$WT" update-ref --no-deref HEAD "$parent" >/dev/null 2>&1 && gitx -C "$WT" read-tree "$sha" >/dev/null 2>&1; then
       judge_gate
     else
       echo "::error::cannot refresh the worktree index for ${sha:0:12}; cannot establish trigger 2" >&2
@@ -467,13 +512,26 @@ fi
 wn_preflight || exit 3
 
 wn_read_issue "$ISSUE"; rc=$?
-# The two notices below are the library's own wording (wn_notify_once_main in watch-notify-once.sh);
-# the suite pins that they still match.
-if [[ "$rc" -eq 4 ]]; then echo "::notice::tracker #${ISSUE} no longer resolves; tracker gone, nothing to watch"; exit 0; fi
-if [[ "$rc" -ne 0 ]]; then echo "::error::could not read #${ISSUE} (state/comments; ${WN_ERR_HTTP:-no HTTP status}); posting nothing" >&2; exit 3; fi
-if [[ "$WN_STATE" != "OPEN" ]]; then
-  echo "::notice::#${ISSUE} is '${WN_STATE}' (not OPEN); nothing to watch; delete the watcher per the RETIREMENT block in code-quality-followups-watch.yml"
-  exit 0
+if [[ "$WN_DRY_RUN" -eq 1 ]]; then
+  # Like scripts 1 and 2: the dry-run read is read-only and never fatal. A failed read falls back to
+  # the --print-state window start and treats every finding as unreported.
+  if [[ "$rc" -eq 0 ]]; then
+    echo "dry-run: tracker #${ISSUE} state=${WN_STATE}; sentinels are per finding (trigger-1:v1, trigger-2:<sha>) and are checked while detecting"
+  else
+    echo "::warning::dry-run: could not read #${ISSUE} (${WN_ERR_HTTP:-rc ${rc}}); using the fallback window start ${PRINT_STATE_CREATED} and treating every finding as unreported"
+    WN_STATE="UNKNOWN"; WN_CREATED="$PRINT_STATE_CREATED"
+    # shellcheck disable=SC2034  # WN_JSON is read by wn_sentinel_present in the sourced library
+    WN_JSON='{"comments":[]}'
+  fi
+else
+  # The two notices below are the library's own wording (wn_notify_once_main in watch-notify-once.sh);
+  # the suite pins that they still match.
+  if [[ "$rc" -eq 4 ]]; then echo "::notice::tracker #${ISSUE} no longer resolves; tracker gone, nothing to watch"; exit 0; fi
+  if [[ "$rc" -ne 0 ]]; then echo "::error::could not read #${ISSUE} (state/comments; ${WN_ERR_HTTP:-no HTTP status}); posting nothing" >&2; exit 3; fi
+  if [[ "$WN_STATE" != "OPEN" ]]; then
+    echo "::notice::#${ISSUE} is '${WN_STATE}' (not OPEN); nothing to watch; delete the watcher per the RETIREMENT block in code-quality-followups-watch.yml"
+    exit 0
+  fi
 fi
 WN_CREATED_EPOCH="$(wn_epoch "$WN_CREATED")" || { echo "::error::unusable createdAt on #${ISSUE}; cannot establish the window" >&2; exit 3; }
 
@@ -502,7 +560,7 @@ if [[ "$CAND_MORE" -eq 1 ]]; then echo "::warning::more than ${CAP} candidate co
 if [[ "$TRUNC_BUDGET" -eq 1 ]]; then echo "::warning::the ${BUDGET}s run budget (measured from script start) ended the examination early; the oldest candidates were not examined this run" >&2; fi
 
 if [[ "$T1_NEW" -eq 0 && "${#FIND_SHA[@]}" -eq 0 && "${#UNJ[@]}" -eq 0 ]]; then
-  echo "no new findings; nothing to post"
+  if [[ "$CAND_MORE" -eq 1 || "$TRUNC_BUDGET" -eq 1 ]]; then echo "no new findings; nothing to post (truncated)"; else echo "no new findings; nothing to post"; fi
   exit 0
 fi
 
@@ -515,7 +573,8 @@ if [[ "$WN_DRY_RUN" == 1 ]]; then
   echo "dry-run: nothing posted, no sentinel spent"
   exit 0
 fi
-if ! printf '%s\n' "$body" | wn_post "$ISSUE"; then
+# wn_post runs in THIS shell (a here-string, not a pipeline subshell) so its WN_ERR_HTTP survives.
+if ! wn_post "$ISSUE" <<<"$body"; then
   echo "::error::posting the notice on #${ISSUE} failed (${WN_ERR_HTTP:-no HTTP status})" >&2
   exit 1
 fi

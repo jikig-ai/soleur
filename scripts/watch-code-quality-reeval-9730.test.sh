@@ -11,7 +11,8 @@
 #   Guard 1  read-only, notify-only write set: recorded-argv oracle (the comment argv pinned
 #            exactly) + ONE static allowlist census (R5; spans the lib, the sibling watchers that
 #            exist at run time and the workflow; also flags non-gh egress and gh-through-a-variable)
-#            + per-job workflow permissions (PyYAML; absent workflow or PyYAML FAILS).
+#            + per-job workflow permissions, the `if:` guard and the exact step list of every job
+#            (checkout pinned to a SHA + ONE run step invoking its own script) (PyYAML; absent workflow or PyYAML FAILS).
 #   Guard 2  notify-once with a bot-only sentinel.
 # Each guard's mutation rows run against a MUTATED COPY of the script/lib in a scratch dir,
 # after an unmutated control of the same scenario went green.
@@ -104,7 +105,10 @@ case "$*" in
     fi
     cat "$MOCKD/issue.json"; exit 0 ;;
   "issue comment 9730 --body-file -")
-    if [[ -f "$MOCKD/comment_fail" ]]; then cat >/dev/null; echo "gh: Resource not accessible by integration (HTTP 403)" >&2; exit 1; fi
+    if [[ -f "$MOCKD/comment_fail" ]]; then
+      cat >/dev/null; cst="$(cat "$MOCKD/comment_fail")"; [[ "$cst" =~ ^[0-9]{3}$ ]] || cst=403
+      echo "gh: Resource not accessible by integration (HTTP $cst)" >&2; exit 1
+    fi
     cat >> "$MOCKD/bodies"; exit 0 ;;
 esac
 if [[ $# -eq 4 && "$1 $2 $3" == "api graphql -f" && "$4" == query=* ]]; then
@@ -221,10 +225,56 @@ floor_ok() { grep -q '^issue view ' "$1/calls" && grep -q '^issue comment ' "$1/
 # `gh issue` subcommand is `view` or `comment`; every `gh api` call is GET-shaped (no -X or
 # --method other than GET, no -f/-F/--field/--raw-field/--input, except the single
 # `-f query=` of a GraphQL read, and no `mutation` anywhere in the call); any other `gh` noun
-# is rejected. The census ALSO flags every other way to reach the network or write to a remote
-# (curl, wget, nc, git push, HTTP::Tiny / LWP in perl) and every way to reach `gh` through a
-# variable (`"$GH" issue ...`, `${GH:-gh}`, `GH=gh`), because a name-based gh scan cannot see them.
-CENSUS_EGRESS_RE='(^|[^[:alnum:]_.-])(curl|wget)([^[:alnum:]_]|$)|(^|[^[:alnum:]_.-])nc[[:space:]]|git[[:space:]]+push|HTTP::Tiny|LWP|\$\{?GH([^[:alnum:]_]|$)|(^|[^[:alnum:]_])GH='
+# is rejected. `gh` is recognised by name, by absolute path (`/usr/bin/gh`) and inside a command
+# substitution (`for t in $(gh ...)`; the `for x in LIST;` stripper only drops plain word lists).
+# The census ALSO flags every other way to reach the network or write to a remote: curl, wget, nc,
+# git push, HTTP::Tiny / LWP / IO::Socket / Net::* in perl, /dev/tcp, and (at command position) ssh,
+# scp, sftp, rsync, socat, telnet, ncat, netcat, ftp, python/node/ruby/php/deno/bun, `openssl s_*`,
+# and git / gitx with any subcommand outside a READ-ONLY allowlist (read subcommands plus the local
+# scratch-worktree plumbing the #11177 watcher uses: worktree, read-tree, hash-object, update-index,
+# update-ref, reset; push, fetch, pull, clone, remote, config, commit ... all rejected; `git -C DIR push` and `gitx push` included). And every way to reach
+# `gh` through a variable (`"$GH" issue ...`, `${GH:-gh}`, `GH=gh`, `B=gh`, `BIN=$(command -v gh)`,
+# `"${BIN}" issue ...`), because a name-based gh scan cannot see them.
+CENSUS_EGRESS_RE='(^|[^[:alnum:]_.-])(curl|wget)([^[:alnum:]_]|$)|(^|[^[:alnum:]_.-])nc[[:space:]]|git[[:space:]]+push|HTTP::Tiny|LWP|IO::Socket|Net::[A-Z]|/dev/(tcp|udp)/|\$\{?GH([^[:alnum:]_]|$)|(^|[^[:alnum:]_])GH=|(command[[:space:]]+-v|which|type[[:space:]]+-p)[[:space:]]+gh([^[:alnum:]_-]|$)'
+# `VAR=gh`, `VAR=/usr/bin/gh`, `VAR="gh"` (a plain gh assignment; `out="$(gh ...)"` is a call, scanned as one).
+CENSUS_ASSIGN_GH_RE="(^|[^[:alnum:]_])[A-Za-z_][A-Za-z0-9_]*=[\"']?([^[:space:]\"'\$]*/)?gh([\"'[:space:];|&)]|\$)"
+# Command-position scan (perl, reads the stripped text on stdin, prints one offending call per line).
+CENSUS_PERL="$(cat <<'PERL'
+my %ro = map { $_ => 1 } qw(rev-parse log show ls-files cat-file diff diff-tree diff-index merge-base rev-list ls-tree
+  show-ref for-each-ref describe name-rev status worktree read-tree hash-object update-index update-ref reset grep blame shortlog
+  check-ignore merge-tree version --version);
+my $pre = qr/(?:^|[;&|({`!]|\$\(|\b(?:if|then|do|else|elif|while|until|exec|command|time|xargs|sudo|nohup)\s|\benv\b[^;|&]*?\s)/;
+my $verbs = 'issue|api|pr|repo|label|workflow|release|run|secret|variable|auth|gist|project|ruleset|cache|codespace|extension|alias|browse|search|status|org';
+while (my $l = <STDIN>) {
+  while ($l =~ /$pre\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:(?:\S*\/)?(git|gitx|ssh|scp|sftp|rsync|socat|telnet|ncat|netcat|ftp|python[0-9.]*|nodejs|node|ruby|php|deno|bun|openssl)\s+([^;|&)]*)|"?\$\{?[A-Za-z_]\w*[^\s"]*"?\s+((?:$verbs)\b[^;|&)]*))/g) {
+    my ($tool, $rest, $var) = ($1, $2, $3);
+    if (defined $var) { print "[var-as-command] $var\n"; next; }
+    if ($tool eq 'git' || $tool eq 'gitx') {
+      my @w = split ' ', $rest; my $sub;
+      while (@w) {
+        my $x = shift @w;
+        if ($x =~ /^-[Cc]$/ || $x =~ /^--(?:git-dir|work-tree|namespace|exec-path|super-prefix)$/) { shift @w; next; }
+        next if $x =~ /^-/;
+        $sub = $x; last;
+      }
+      next unless defined $sub;
+      (my $b = $sub) =~ s/^["']|["']$//g;
+      next if $sub eq '"$@"' || $ro{$b};
+      print "[git-subcommand] $tool $rest\n";
+    } elsif ($tool eq 'openssl') {
+      print "[exec] $tool $rest\n" if $rest =~ /^\s*s_/;
+    } else {
+      print "[exec] $tool $rest\n";
+    }
+  }
+}
+PERL
+)"
+# The comment-stripped text of one file. `for x in LIST;` is dropped only for a plain word list: a list
+# holding a command substitution keeps it (only the `for x in ` prefix goes), so `for t in $(gh ...)` is scanned.
+census_text() {
+  grep -vE '^[[:space:]]*#' "$1" | sed -E 's/for [A-Za-z_]+ in (([^;$`]|\$[^(])*);//g; s/for [A-Za-z_]+ in //g'
+}
 census_check_call() {
   local c="$1" t
   local -a W
@@ -242,20 +292,26 @@ census_check_call() {
 }
 CENSUS_OUT=""
 census_scan() {
-  local f calls call egress
+  local f calls call egress text execs
   CENSUS_OUT=""
   for f in "$@"; do
     [[ -f "$f" ]] || continue
-    calls="$(grep -vE '^[[:space:]]*#' "$f" | sed -E 's/for [A-Za-z_]+ in [^;]*;//g' | grep -oE '(^|[^[:alnum:]_./-])gh[[:space:]]+[^;|&)]*' | sed -E 's/^[^g]*//' || true)"
+    text="$(census_text "$f")"
+    calls="$(grep -oE '(^|[^[:alnum:]_.-])gh[[:space:]]+[^;|&)]*' <<<"$text" | sed -E 's/^[^g]*//' || true)"
     while IFS= read -r call; do
       [[ -n "$call" ]] || continue
       census_check_call "$call" || CENSUS_OUT+="$f: $call"$'\n'
     done <<<"$calls"
-    egress="$(grep -vE '^[[:space:]]*#' "$f" | sed -E 's/for [A-Za-z_]+ in [^;]*;//g' | grep -E "$CENSUS_EGRESS_RE" || true)"
+    egress="$(grep -E -e "$CENSUS_EGRESS_RE" -e "$CENSUS_ASSIGN_GH_RE" <<<"$text" || true)"
     while IFS= read -r call; do
       [[ -n "$call" ]] || continue
       CENSUS_OUT+="$f: [egress] $call"$'\n'
     done <<<"$egress"
+    execs="$(perl -e "$CENSUS_PERL" <<<"$text" || true)"
+    while IFS= read -r call; do
+      [[ -n "$call" ]] || continue
+      CENSUS_OUT+="$f: $call"$'\n'
+    done <<<"$execs"
   done
 }
 census_count() { census_scan "$@"; if [[ -z "$CENSUS_OUT" ]]; then echo 0; else printf '%s' "$CENSUS_OUT" | wc -l | tr -d ' '; fi; }
@@ -266,7 +322,7 @@ probe_census() { assert_fixture_dir "$ROOT"; printf '%s\n' "$1" > "$ROOT/probe.t
 # scratch dir (the script finds its lib relative to itself). mutsubst TARGET FROM TO applies a
 # literal one-shot substitution; MUT_LANDED is then 1 only if the mutated copy really differs
 # from the pristine one (a mutation that did not land would read as a green "caught" row).
-MUT_DIR=""; MUT_SUT=""; CTL_SUT=""; MUT_LANDED=0
+MUT_DIR=""; MUT_SUT=""; CTL_SUT=""; MUT_LANDED=0; MUT_ARGS=()
 mutcopy() {
   MUT_DIR="$ROOT/mut-$1"
   assert_fixture_dir "$MUT_DIR"
@@ -290,13 +346,18 @@ scen_bot() { mkmock; issue OPEN "$(bot_comment)"; }
 scen_human() { mkmock; issue OPEN "$(human_comment)"; }
 scen_junk() { mkmock; issue OPEN '["junk"]'; }
 scen_before() { mkmock; NOW="$NOW_BEFORE"; }
+scen_late_partial() { mkmock; flag billing_10 late; flag billing_11 404; }
+scen_postfail() { mkmock; flag comment_fail 403; }
+scen_dryclosed() { mkmock; issue CLOSED '[]'; }
+obs_posthttp() { if [[ "$ERR" == *"posting the notice on #9730 failed (HTTP 403)"* ]]; then printf http; else printf nohttp; fi; }
+obs_dryclosed() { if [[ "$OUT" == *"state=CLOSED; sentinel absent (not OPEN: a real run would post nothing)"* ]]; then printf says; else printf silent; fi; }
 
 # mut_row LABEL SCENARIO OBSERVABLE CTL_EXPECT MUT_EXPECT: control first (must be green), then
 # the mutated copy must land and flip the observable.
 mut_row() {
   local label="$1" scen="$2" obs="$3" want_ctl="$4" want_mut="$5" got_ctl got_mut
-  "$scen"; run_with "$CTL_SUT"; got_ctl="$($obs)"
-  "$scen"; run_with "$MUT_SUT"; got_mut="$($obs)"
+  "$scen"; run_with "$CTL_SUT" ${MUT_ARGS[@]+"${MUT_ARGS[@]}"}; got_ctl="$($obs)"
+  "$scen"; run_with "$MUT_SUT" ${MUT_ARGS[@]+"${MUT_ARGS[@]}"}; got_mut="$($obs)"
   if [[ "$got_ctl" == "$want_ctl" ]]; then pass "$label: unmutated control is green ($got_ctl)"; else fail "$label: control expected $want_ctl got $got_ctl"; fi
   if [[ "$MUT_LANDED" -eq 1 && "$got_mut" == "$want_mut" ]]; then pass "$label: mutation landed and turns the suite RED ($got_mut)"; else fail "$label: landed=$MUT_LANDED expected $want_mut got $got_mut"; fi
 }
@@ -323,11 +384,12 @@ floor_ok "$MOCKD" && pass "S1e the recorder floor holds on a posting scenario (a
 ok=1
 for needle in 'As recorded in the ADR-276 amendment of 2026-10-19' 'switched OFF on 2026-10-19' 'does not read the setting live' \
   'Code Quality half only' 'predates the ADR-276 amendment of 2026-10-19' "ADR-276's re-evaluation step (1)" 'NOT gathered here' 'ruling session runs it' \
-  'cost driver' 're-enable only if (i) a consumer for the findings exists' 'a billing budget on the `code_quality` product' \
+  'usage context for the billing figures' 're-enable only if (i) a consumer for the findings exists' 'a billing budget on the `code_quality` product' \
   'ADR-276' 'No ruling is made here' 'next `soleur:go` session' 'CTO agent' 'successor' 'Nothing was changed' '<details>' '</details>'; do
   [[ "$B" == *"$needle"* ]] || { ok=0; echo "  missing body text: $needle"; }
 done
-[[ "$ok" -eq 1 ]] && pass "S1f body carries the ADR-276 criteria, the recorded (not live) OFF state, the Code-Quality-half and step-(1)-not-gathered scoping, the PR-volume cost-driver reason, the no-ruling and successor sentences and the nothing-changed line" || fail "S1f body text"
+[[ "$B" != *"names it as the cost driver"* && "$B" != *"cost driver"* ]] || { ok=0; echo "  body still attributes the cost driver to the ADR amendment"; }
+[[ "$ok" -eq 1 ]] && pass "S1f body carries the ADR-276 criteria, the recorded (not live) OFF state, the Code-Quality-half and step-(1)-not-gathered scoping, the PR-volume usage-context line, the no-ruling and successor sentences and the nothing-changed line" || fail "S1f body text"
 ok=1
 [[ "$B" == *"1853 opened, 1097 merged"* ]] || ok=0
 [[ "$B" == *"| 2026-08-31 | 75 | 21 | 6 |"* && "$B" == *"| 2026-09-14 | 182 | 119 | 7 |"* && "$B" == *"| 2026-11-16 | 27 | 16 | 1 |"* ]] || ok=0
@@ -406,6 +468,12 @@ mkmock; flag view_fail gone; run
 [[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"tracker gone"* ]] && pass "S5f a tracker that no longer resolves: terminal notice, exit 0" || fail "S5f (rc=$RC out=$OUT)"
 mkmock; flag comment_fail; run
 [[ "$RC" -eq 1 && "$(posted)" -eq 1 && "$ERR" == *"::error::"* ]] && pass "S5g failed post: exit 1 with ::error:: (no sentinel exists without the comment)" || fail "S5g (rc=$RC posted=$(posted))"
+# The failure annotation carries the REAL HTTP status: wn_post runs in the current shell (a pipeline stage would drop WN_ERR_HTTP).
+for st in 403 422; do
+  mkmock; flag comment_fail "$st"; run
+  [[ "$RC" -eq 1 && "$ERR" == *"::error::posting the notice on #9730 failed (HTTP $st)"* && "$ERR" != *"no HTTP status"* && "$ERR" != *"Resource not accessible"* ]] \
+    && pass "S5h failed post with HTTP $st: the ::error:: annotation names the real status (HTTP $st), never the response text" || fail "S5h HTTP $st (rc=$RC err=$(printf '%s' "$ERR" | head -c 200))"
+done
 
 # ---- S14: every exit-3 scenario prints an ::error:: line that names a cause (never a silent red run) ----
 exit3_row() {
@@ -468,6 +536,10 @@ B="$(body)"
   && pass "S19d September readable, October and November 404: 'not determinable', never 'no'" || fail "S19d (verdict=$(verdict_of))"
 mkmock; run
 [[ "$(verdict_of)" == no ]] && pass "S19e all months readable and clean: verdict no" || fail "S19e (verdict=$(verdict_of))"
+mkmock; flag billing_10 late; flag billing_11 404; run
+B="$(body)"
+[[ "$RC" -eq 0 && "$(posted)" -eq 1 && "$(verdict_of)" == yes && "$B" == *"is present: yes (latest 2026-10-22)"* && "$B" != *"is not determinable"* && "$B" == *"not readable from CI"* && "$B" == *"month=11'"* ]] \
+  && pass "S19f a definite yes (October line dated 2026-10-22) with November unreadable: verdict yes, not 'not determinable'; the unreadable month's command is still listed" || fail "S19f (verdict=$(verdict_of))"
 
 # ---- S11: xtrace refusal precedes the lib and any gh call ----
 mkmock
@@ -499,6 +571,9 @@ mkmock; run --dry-run
 mkmock; flag view_fail 502; run --dry-run
 [[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"::warning::dry-run: could not read #9730 (HTTP 502)"* && "$OUT" == *"dry-run: nothing posted, no sentinel spent"* ]] \
   && pass "S12g --dry-run with an unreadable tracker: non-fatal ::warning:: naming the status, body still printed, nothing posted" || fail "S12g (rc=$RC out=$(printf '%s' "$OUT" | head -c 300))"
+mkmock; issue CLOSED '[]'; run --dry-run
+[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"dry-run: tracker #9730 state=CLOSED; sentinel absent (not OPEN: a real run would post nothing)"* && "$OUT" == *"dry-run: nothing posted, no sentinel spent"* ]] \
+  && pass "S12h --dry-run on a CLOSED tracker with no sentinel says a real run would post nothing, still prints the body, zero comment calls" || fail "S12h (rc=$RC out=$(printf '%s' "$OUT" | head -n 2))"
 mkmock; run --bogus
 [[ "$RC" -eq 2 && ! -s "$MOCKD/calls" && "$ERR" == *"usage:"* ]] && pass "S12d an unknown flag: exit 2 with usage, no gh call" || fail "S12d (rc=$RC err=$ERR)"
 mkmock; run --dry-run extra
@@ -558,19 +633,29 @@ for probe in 'gh issue close 1' 'gh issue edit 1 --add-label x' 'gh issue reopen
   'gh api repos/x --raw-field a=b' 'gh api repos/x --input f' "gh api graphql -f query='mutation { x }'" 'gh api -XDELETE repos/x' 'gh workflow run x' 'x=$(gh issue close 1)' \
   'curl -X POST https://api.github.com/repos/x/issues/1/comments' 'x=$(curl -s https://example.invalid)' 'wget -qO- http://example.invalid' '/usr/bin/curl http://example.invalid' \
   'nc example.invalid 80' 'git push origin HEAD' 'perl -MHTTP::Tiny -e 1' 'perl -MLWP::UserAgent -e 1' \
-  '"$GH" issue close 1' '${GH:-gh} issue close 1' 'GH=gh' '$GH api -X POST repos/x' 'echo hi && GH=gh'; do
+  '"$GH" issue close 1' '${GH:-gh} issue close 1' 'GH=gh' '$GH api -X POST repos/x' 'echo hi && GH=gh' \
+  '/usr/bin/gh issue close 1' 'x=$(/usr/bin/gh issue edit 1 --add-label x)' 'B=gh; "$B" issue close 1' 'BIN=$(command -v gh)' '"${BIN}" issue close 1' '  "$BIN" api -X POST repos/x' \
+  'for t in $(gh issue close 1); do' 'for t in $(gh api -X POST repos/x); do' 'git -C /srv/r push' 'git -C /srv/r push origin HEAD' 'gitx push' 'gitx -C "$d" push origin HEAD' \
+  'if ! gitx -C "$d" push; then' 'x=$(git push)' 'FOO=1 git push' 'git fetch origin' 'gitx -C "$d" fetch --all' 'git remote add o https://example.invalid/r.git' 'git pull' 'git clone https://example.invalid/r.git' \
+  'git config user.name x' 'git -c user.name=t commit -m x' 'ssh host true' 'x=$(ssh host true)' 'scp a b:c' 'rsync -a a b:c' 'python3 -c "import urllib.request"' 'node -e "fetch()"' \
+  'openssl s_client -connect example.invalid:443' 'echo hi >/dev/tcp/example.invalid/80' 'socat - TCP:example.invalid:80' 'telnet example.invalid 80' 'ncat example.invalid 80' \
+  'perl -MIO::Socket::INET -e 1' 'perl -MNet::HTTP -e 1' 'perl -e "use IO::Socket; 1"' 'env FOO=1 git push'; do
   cprobe=$((cprobe + 1))
   [[ "$(probe_census "$probe")" -ge 1 ]] || { cbad=$((cbad + 1)); echo "  census let through: $probe"; }
 done
-[[ "$cbad" -eq 0 ]] && pass "G1d census self-test: all $cprobe forbidden shapes (gh writes, curl, wget, nc, git push, HTTP::Tiny, LWP, gh through a variable) are flagged (the census can fail)" || fail "G1d census missed $cbad of $cprobe forbidden shapes"
+[[ "$cbad" -eq 0 ]] && pass "G1d census self-test: all $cprobe forbidden shapes (gh writes incl. absolute-path and command-substitution gh, curl, wget, nc, git/gitx write or egress subcommands, ssh/scp/rsync, python/node, openssl s_client, /dev/tcp, socat, telnet, ncat, perl sockets, gh through a variable) are flagged (the census can fail)" || fail "G1d census missed $cbad of $cprobe forbidden shapes"
 cok=0; cprobe=0
 for probe in 'gh issue view 1 --json state' 'gh issue comment 1 --body-file -' "gh api 'orgs/o/settings/billing/usage?year=2026&month=9'" \
   "gh api graphql -f query='query { viewer { login } }'" 'gh api -X GET repos/x' '# gh issue close 1' '  for t in gh jq perl git; do' \
-  '# curl http://example.invalid' 'git log --oneline -n 3' 'git -C "$d" rev-parse HEAD' 'echo "GH_TOKEN is injected"' 'GH_TOKEN=x' 'sync --all' 'func_nc() { :; }' 'perl -e "print 1"' 'echo "$GH_REPO"'; do
+  '# curl http://example.invalid' 'git log --oneline -n 3' 'git -C "$d" rev-parse HEAD' 'echo "GH_TOKEN is injected"' 'GH_TOKEN=x' 'sync --all' 'func_nc() { :; }' 'perl -e "print 1"' 'echo "$GH_REPO"' \
+  '/usr/bin/gh issue view 1 --json state' 'for t in $(gh issue view 1); do' 'for t in gh jq perl git; do' 'for f in "$ROOT/$ADR_DIR_REL"/ADR-276-*.md; do' \
+  'gitx() { env "${GIT_UNSET[@]}" git "$@"; }' 'gitx -C "$d" log --first-parent --format=%H HEAD' 'if ! gitx -C "$d" worktree add -q --detach "$w" HEAD; then' \
+  'x="$(printf x | gitx -C "$w" hash-object -w --stdin)"' 'gitx -C "$w" update-index --add --cacheinfo "100644,${c},f"' 'gitx -C "$w" read-tree HEAD' 'gitx -C "$w" reset --mixed -q HEAD' \
+  'git -c core.x=1 -C "$d" show :f' 'echo "::error::git history is not fully readable"' "PAYLOAD='{\"command\":\"git commit -m x\"}'" 'echo "see the ssh docs"' 'python_ok=1' 'sshd_ok=1' 'BIN=cat' 'run_gh_thing=1'; do
   cprobe=$((cprobe + 1))
   [[ "$(probe_census "$probe")" -eq 0 ]] || { cok=$((cok + 1)); echo "  census false positive: $probe"; }
 done
-[[ "$cok" -eq 0 ]] && pass "G1e census must-PASS non-canonical inputs: a read-only graphql query, an explicit GET, comments, the preflight for-loop, plain git reads, GH_TOKEN/GH_REPO names stay clean" || fail "G1e census false positives: $cok of $cprobe"
+[[ "$cok" -eq 0 ]] && pass "G1e census must-PASS non-canonical inputs: a read-only graphql query, an explicit GET, comments, the preflight for-loop, an absolute-path or command-substitution gh view, the read-only git/gitx subcommands the watchers use (log, rev-parse, worktree, read-tree, hash-object, update-index, reset, show), messages that merely mention git or ssh, GH_TOKEN/GH_REPO names stay clean" || fail "G1e census false positives: $cok of $cprobe"
 
 # Guard 1 mutation rows: #1 (close after the post), #5 (graphql mutation), #6 (-f on a plain api call).
 mutcopy g1m1; mutsubst script 'exit "$rc"' 'gh issue close "$TRACKER" >/dev/null 2>&1
@@ -600,10 +685,11 @@ run
 [[ "$ctl_floor" == ok && "$dead_landed" -eq 1 && "$(posted)" -eq 0 ]] && ! floor_ok "$MOCKD" \
   && pass "G1#2 a mock that logs nothing: the recorder floor (one read, one comment per posting scenario) goes RED while the control is green" || fail "G1#2 (ctl=$ctl_floor landed=$dead_landed)"
 
-# The workflow facets of Guard 1 (per-job permissions, the `if:` guard, the run step). They PARSE the
+# The workflow facets of Guard 1 (per-job permissions, the `if:` guard, the run step, the exact step list). They PARSE the
 # workflow with PyYAML; an absent workflow file or an unavailable PyYAML FAILS (never skips).
 assert_fixture_dir "$ROOT"
 cat > "$ROOT/wfcheck.py" <<'PY'
+import re
 import sys
 try:
     import yaml
@@ -633,6 +719,30 @@ elif facet == "runs":
     steps = (jobs.get("reeval-9730") or {}).get("steps") or []
     if not any("watch-code-quality-reeval-9730.sh" in str(st.get("run", "")) for st in steps if isinstance(st, dict)):
         bad.append("no step of reeval-9730 runs watch-code-quality-reeval-9730.sh")
+elif facet == "steps":
+    # Every job is EXACTLY [checkout (pinned SHA, persist-credentials false), one run step invoking its own script].
+    own = {"reeval-9730": "watch-code-quality-reeval-9730.sh", "reeval-10515": "watch-lint-ratchet-reeval-10515.sh",
+           "triggers-11177": "watch-brand-hex-triggers-11177.sh"}
+    for name, job in jobs.items():
+        if name not in own:
+            bad.append("job %s is not one of the known watcher jobs" % name)
+            continue
+        steps = job.get("steps") if isinstance(job, dict) else None
+        if not isinstance(steps, list) or len(steps) != 2 or not all(isinstance(st, dict) for st in steps):
+            bad.append("job %s steps is %d entries, want exactly 2 (checkout + one run)" % (name, len(steps) if isinstance(steps, list) else -1))
+            continue
+        co, rn = steps
+        uses = str(co.get("uses", ""))
+        if not re.match(r"^actions/checkout@[0-9a-f]{40}$", uses):
+            bad.append("job %s step 1 uses %r, want actions/checkout pinned to a 40-hex SHA" % (name, uses))
+        if (co.get("with") or {}).get("persist-credentials") is not False:
+            bad.append("job %s checkout persist-credentials is %r, want false" % (name, (co.get("with") or {}).get("persist-credentials")))
+        if "uses" in rn or not isinstance(rn.get("run"), str):
+            bad.append("job %s step 2 must be a plain run step (no uses:)" % name)
+            continue
+        refs = re.findall(r"scripts/[A-Za-z0-9_./-]+", rn["run"])
+        if refs != ["scripts/" + own[name]]:
+            bad.append("job %s run step references %r, want exactly [scripts/%s]" % (name, refs, own[name]))
 else:
     bad.append("unknown facet")
 print("\n".join(bad))
@@ -650,6 +760,7 @@ wf_expect() { # LABEL FACET FILE: the facet must pass on the real workflow
 wf_expect "G1f every workflow permissions block is exact: workflow-level {} and each job contents: read + issues: write" perms "$WF"
 wf_expect "G1g every job's if: is the repository + schedule/default-branch-ref guard, verbatim" if "$WF"
 wf_expect "W1 the workflow's reeval-9730 job runs this script" runs "$WF"
+wf_expect "W2 every job is exactly [checkout pinned to a SHA with persist-credentials false, one run step invoking its own script]: no other uses:, no extra step" steps "$WF"
 # Self-tests: the facets can fail. Mutated COPIES of the workflow (mutation must land: diff -q).
 wf_mut() { # NAME PERL_SUBST (applied once) -> $ROOT/wfmut-NAME.yml
   assert_fixture_dir "$ROOT"
@@ -669,8 +780,23 @@ wf_run perms "$ROOT/wfmut-addjob.yml"
 wf_mut noguard "s/github\\.repository == 'jikig-ai\\/soleur' && //" && wf_row_landed=1 || wf_row_landed=0
 wf_run if "$ROOT/wfmut-noguard.yml"
 [[ "$wf_row_landed" -eq 1 && "$WF_RC" -eq 1 ]] && pass "G1k mutated copy with the repository condition removed from one job: the if: facet goes RED" || fail "G1k (landed=$wf_row_landed rc=$WF_RC)"
-wf_run perms "$ROOT/no-such-workflow.yml"; r1=$WF_RC; wf_run if "$ROOT/no-such-workflow.yml"; r2=$WF_RC; wf_run runs "$ROOT/no-such-workflow.yml"; r3=$WF_RC
-[[ "$r1" -ne 0 && "$r2" -ne 0 && "$r3" -ne 0 ]] && pass "G1l an absent workflow file FAILS every workflow facet (never skips)" || fail "G1l (rc $r1 $r2 $r3)"
+wf_mut extrauses 's/(bash scripts\/watch-code-quality-reeval-9730\.sh[^\n]*\n)/$1      - uses: actions\/github-script\@v7\n        with:\n          script: ""\n/' && wf_row_landed=1 || wf_row_landed=0
+wf_run steps "$ROOT/wfmut-extrauses.yml"
+[[ "$wf_row_landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"reeval-9730"* && "$WF_OUT" == *"exactly 2"* ]] && pass "W3 mutated copy with an extra 'uses: actions/github-script' step: the steps facet goes RED" || fail "W3 (landed=$wf_row_landed rc=$WF_RC $WF_OUT)"
+wf_mut extrarun 's/(bash scripts\/watch-code-quality-reeval-9730\.sh[^\n]*\n)/$1      - run: echo second\n/' && wf_row_landed=1 || wf_row_landed=0
+wf_run steps "$ROOT/wfmut-extrarun.yml"
+[[ "$wf_row_landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"exactly 2"* ]] && pass "W4 mutated copy with a second run step: the steps facet goes RED" || fail "W4 (landed=$wf_row_landed rc=$WF_RC $WF_OUT)"
+wf_mut unpinned 's/actions\/checkout\@[0-9a-f]{40}/actions\/checkout\@v4/' && wf_row_landed=1 || wf_row_landed=0
+wf_run steps "$ROOT/wfmut-unpinned.yml"
+[[ "$wf_row_landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"pinned to a 40-hex SHA"* ]] && pass "W5 mutated copy with an unpinned checkout: the steps facet goes RED" || fail "W5 (landed=$wf_row_landed rc=$WF_RC $WF_OUT)"
+wf_mut persist 's/persist-credentials: false/persist-credentials: true/' && wf_row_landed=1 || wf_row_landed=0
+wf_run steps "$ROOT/wfmut-persist.yml"
+[[ "$wf_row_landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"persist-credentials"* ]] && pass "W6 mutated copy with persist-credentials true: the steps facet goes RED" || fail "W6 (landed=$wf_row_landed rc=$WF_RC $WF_OUT)"
+wf_mut wrongscript 's/bash scripts\/watch-lint-ratchet-reeval-10515\.sh/bash scripts\/watch-code-quality-reeval-9730.sh/' && wf_row_landed=1 || wf_row_landed=0
+wf_run steps "$ROOT/wfmut-wrongscript.yml"
+[[ "$wf_row_landed" -eq 1 && "$WF_RC" -eq 1 && "$WF_OUT" == *"reeval-10515"* ]] && pass "W7 mutated copy where a job runs another job's script: the steps facet goes RED" || fail "W7 (landed=$wf_row_landed rc=$WF_RC $WF_OUT)"
+wf_run perms "$ROOT/no-such-workflow.yml"; r1=$WF_RC; wf_run if "$ROOT/no-such-workflow.yml"; r2=$WF_RC; wf_run runs "$ROOT/no-such-workflow.yml"; r3=$WF_RC; wf_run steps "$ROOT/no-such-workflow.yml"; r4=$WF_RC
+[[ "$r1" -ne 0 && "$r2" -ne 0 && "$r3" -ne 0 && "$r4" -ne 0 ]] && pass "G1l an absent workflow file FAILS every workflow facet (never skips)" || fail "G1l (rc $r1 $r2 $r3 $r4)"
 wf_run perms "$WF" -IS
 [[ "$WF_RC" -eq 3 && "$WF_OUT" == *"PyYAML"* ]] && pass "G1m with PyYAML unavailable the facet exits 3 (a loud FAIL in the real rows, never a skip)" || fail "G1m (rc=$WF_RC $WF_OUT)"
 
@@ -688,8 +814,15 @@ mut_row "G2#4 jq failure read as absent" scen_junk obs_rcposted "3:0" "0:1"
 mutcopy g2m5; mutsubst lib 'wn_reached "$earliest"; rc=$?' 'rc=0'
 mut_row "G2#5 date gate removed" scen_before obs_rcposted "0:0" "0:1"
 # Harness row: remove the wn_post call -> the positive posting scenario must go RED.
-mutcopy g2post; mutsubst lib '| wn_post "$tracker"; then' '| cat >/dev/null; then'
+mutcopy g2post; mutsubst lib 'wn_post "$tracker" <<<"$payload"; then' 'cat >/dev/null <<<"$payload"; then'
 mut_row "G2 harness: wn_post removed" scen_fresh obs_rcposted "0:1" "0:0"
+# The pipe form must not come back: a pipeline stage is a subshell, so WN_ERR_HTTP (the real HTTP status) would be lost.
+mutcopy g2pipe; mutsubst lib 'wn_post "$tracker" <<<"$payload"; then' 'printf "%s\n" "$payload" | wn_post "$tracker"; then'
+mut_row "G2 pipe form: wn_post as a pipeline stage loses the HTTP status" scen_postfail obs_posthttp http nohttp
+mutcopy g2dry; mutsubst lib 'notopen=" (not OPEN: a real run would post nothing)"' 'notopen=""'
+MUT_ARGS=(--dry-run)
+mut_row "G2 dry-run on a non-OPEN tracker stays silent about the real run" scen_dryclosed obs_dryclosed says silent
+MUT_ARGS=()
 
 # ---- mutation rows for the review-fix guards (each: control green, mutated copy lands and flips the observable) ----
 scen_partial_bill() { mkmock; flag billing_10 404; flag billing_11 404; }
@@ -705,8 +838,10 @@ obs_gn() { if [[ "$(body)" == *"| 2026-09 | 1 | 10 | 4 | 2026-09-05 | 2026-09-05
 obs_pvcause() { if grep -qE '^::error::PR-volume search failed \(HTTP 403\)' <<<"$ERR"; then printf cause; else printf nocause; fi; }
 obs_warnstatus() { if [[ "$ERR" == *"::warning::"*"2026-10 HTTP 403"* ]]; then printf status; else printf nostatus; fi; }
 
-mutcopy v1; mutsubst script 'if [[ "$BILL_UNREADABLE" -eq 0 ]]; then' 'if true; then'
+mutcopy v1; mutsubst script 'elif [[ "$BILL_UNREADABLE" -eq 0 ]]; then' 'elif true; then'
 mut_row "V1 verdict emitted although a month was unreadable" scen_partial_bill verdict_of nd no
+mutcopy v5; mutsubst script 'if [[ "$BILL_LATEST" =~' 'if [[ "$BILL_UNREADABLE" -eq 0 && "$BILL_LATEST" =~'
+mut_row "V5 a definite yes demoted to 'not determinable' when another month is unreadable" scen_late_partial verdict_of yes nd
 mutcopy v2; mutsubst script '! "$BILL_LATEST" < "$stop"' '"$BILL_LATEST" == never'
 mut_row "V2 the yes branch forced to no" scen_late verdict_of yes no
 mutcopy v3; mutsubst script '! "$BILL_LATEST" < "$stop"' '"$stop" < "$BILL_LATEST"'
@@ -742,6 +877,15 @@ exit "$rc"'
 mutcopy x3; mutsubst lib 'wn_preflight() {' 'wn_exfil() { git push origin HEAD; }
 wn_preflight() {'
 [[ "$MUT_LANDED" -eq 1 && "$(census_count "$CTL_SUT" "$MUT_DIR/pristine/lib/watch-notify-once.sh")" -eq 0 && "$(census_count "$MUT_SUT" "$MUT_DIR/mut/lib/watch-notify-once.sh")" -ge 1 ]] && pass "X3 a git push added to the library: the census flags it (control clean)" || fail "X3 census git push"
+mutcopy x4; mutsubst script 'exit "$rc"' '/usr/bin/gh issue close "$TRACKER" >/dev/null 2>&1
+exit "$rc"'
+[[ "$MUT_LANDED" -eq 1 && "$(census_count "$CTL_SUT")" -eq 0 && "$(census_count "$MUT_SUT")" -ge 1 ]] && pass "X4 an absolute-path gh issue close added to the script: the census flags it (control clean)" || fail "X4 census absolute-path gh"
+mutcopy x5; mutsubst lib 'wn_preflight() {' 'wn_exfil() { git -C /srv/r push origin HEAD; ssh host true; }
+wn_preflight() {'
+[[ "$MUT_LANDED" -eq 1 && "$(census_count "$CTL_SUT" "$MUT_DIR/pristine/lib/watch-notify-once.sh")" -eq 0 && "$(census_count "$MUT_SUT" "$MUT_DIR/mut/lib/watch-notify-once.sh")" -ge 2 ]] && pass "X5 'git -C DIR push' and ssh added to the library: the census flags both (control clean)" || fail "X5 census git -C push / ssh"
+mutcopy x6; mutsubst script 'exit "$rc"' 'for t in $(gh issue close "$TRACKER"); do :; done
+exit "$rc"'
+[[ "$MUT_LANDED" -eq 1 && "$(census_count "$CTL_SUT")" -eq 0 && "$(census_count "$MUT_SUT")" -ge 1 ]] && pass "X6 a gh write hidden in a for-in command substitution: the census flags it (control clean)" || fail "X6 census for-in command substitution"
 
 # Exit-gate check (behavioural): this same suite, re-run with ONE injected failure, must
 # exit EXACTLY 1. An `exit 0` placed before the gate, a reset FAIL counter, or a neutered
@@ -758,7 +902,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY
 # above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=125
+MIN_ASSERTIONS=155
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2

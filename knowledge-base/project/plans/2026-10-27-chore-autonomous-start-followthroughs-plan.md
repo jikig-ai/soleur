@@ -155,7 +155,7 @@ Runs every Monday; posts only when a trigger fires; never touches the issue othe
 
 ```yaml
 liveness_signal:
-  what: the weekly Monday run of code-quality-followups-watch.yml (three jobs); a no-op is a green run with a ::notice:: line naming why
+  what: the weekly Monday run of code-quality-followups-watch.yml (three jobs); a no-op is a green run whose job log names why (a ::notice:: for not-yet-due, not-OPEN and no-longer-resolves; a plain `already notified` or `no new findings` line otherwise)
   cadence: weekly (cron '17 9 * * 1')
   alert_target: a red run -> the Actions tab and GitHub's default failure email (same stance as registration-narrowing-watch.yml); the data/trigger comment itself is the success signal on the tracker
   configured_in: .github/workflows/code-quality-followups-watch.yml
@@ -172,11 +172,11 @@ failure_modes:
   - mode: the brand-hex gate cannot be run or returns malformed output
     detection: script exits 3 (never reads as "no trigger")
     alert_route: red weekly run
-  - mode: workflow never runs (cron not registered, or default-branch guard skips every run)
-    detection: post-merge `gh workflow list` shows the workflow, and a dry-run dispatch on main completes
-    alert_route: the post-merge verification in this plan
+  - mode: workflow never runs (cron not registered, a dropped scheduled run, or a repository rename that makes the `if:` guard skip every job)
+    detection: layer = workflow run log; `gh workflow list` shows the workflow, a `dry_run=true` dispatch on main completes, and `gh run list --event schedule` shows the first Monday's jobs ran and were not skipped
+    alert_route: the post-merge verification in this plan, then a missing or red run on the Actions tab (CTO ruling S2: no dead-man alarm)
 logs:
-  where: GitHub Actions run logs and the job step summary
+  where: GitHub Actions run logs (job log and ::error::/::warning:: annotations; no step summary is written)
   retention: GitHub default (90 days)
 discoverability_test:
   command: bash scripts/watch-brand-hex-triggers-11177.sh --print-state

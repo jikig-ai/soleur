@@ -4,7 +4,7 @@
 # comment on that tracker. NOTIFY-ONLY: the tracker is never closed, reopened,
 # relabelled or edited; the only GitHub write is one `issue comment` (via wn_post in
 # scripts/lib/watch-notify-once.sh); every other gh call is a read (`issue view`,
-# GET-shaped `api`). Nothing here changes a repository setting.
+# `api` reads: GET, plus one read-only GraphQL query). Nothing here changes a repository setting.
 #
 # No ruling is made here. The comment says so: the next `soleur:go` session has the CTO
 # agent apply the flip condition to this data (decision-challenges.md F1).
@@ -258,7 +258,7 @@ billing_section() {
   while (( y * 12 + m <= ny * 12 + nm )); do
     wn_billing_month "$y" "$m"; brc=$?
     if [[ "$brc" -ne 0 ]]; then
-      echo "::error::billing read for ${y}-${m} failed transiently; posting nothing (the next run retries)" >&2
+      echo "::error::billing read for $(printf '%04d-%02d' "$y" "$m") failed transiently; posting nothing (the next run retries)" >&2
       return 3
     fi
     case "$WN_BILL_STATUS" in
@@ -272,7 +272,7 @@ billing_section() {
         # malformed last date is never "after the stop".
         if [[ "$lines" -gt 0 && "${last:0:10}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && ! "${last:0:10}" < "$WN_BILLING_STOP_EXPECTED_BY" ]]; then code_after=1; fi
         when="$(printf '%04d-%02d' "$y" "$m")"
-        add "- ${when}: ${lines} line(s), month gross $(span_num "$gross"), net $(span_num "$net"), first $(span_date "$first"), last $(span_date "$last")"
+        add "- ${when}: ${lines} line(s), month gross $(span_num "$gross"), net $(span_num "$net"), first $(span_date "${first:0:10}"), last $(span_date "${last:0:10}")"
         ;;
       unreadable:*)
         unread_y="$y"; unread_m="$m"
@@ -290,7 +290,11 @@ billing_section() {
       m=$((m + 1)); if (( m > 12 )); then m=1; y=$((y + 1)); fi
     done
     add ""
-    add "Any \`code_quality\` usage dated ${WN_BILLING_STOP_EXPECTED_BY} or later: not determinable (billing is unreadable from CI)."
+    if (( code_after == 1 )); then
+      add "Any \`code_quality\` usage dated ${WN_BILLING_STOP_EXPECTED_BY} or later: yes (ADR-276 expected billing to have stopped; investigate before any flip; a later month was unreadable from CI, so more may exist)."
+    else
+      add "Any \`code_quality\` usage dated ${WN_BILLING_STOP_EXPECTED_BY} or later: not determinable (billing is unreadable from CI)."
+    fi
     echo "::warning::org billing is not readable from CI (${WN_BILL_STATUS}); the comment says so and lists the commands to run locally" >&2
   elif [[ "$code_after" -eq 1 ]]; then
     add ""
