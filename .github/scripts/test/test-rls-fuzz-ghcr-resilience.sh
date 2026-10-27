@@ -402,6 +402,46 @@ else fail "wiring:paths-suite" "pull_request.paths omits this suite"; fi
 if grep -qF 'apps/web-platform/supabase/config.toml' <<<"$PATHS_BLOCK"; then pass "wiring:paths-config-toml"
 else fail "wiring:paths-config-toml" "pull_request.paths omits supabase/config.toml (image repoints)"; fi
 
+# --- Pre-pull wiring (measured run 40525753531 — the whole-command retry
+# could not win against the shared org bucket; serial per-image pulls can).
+
+PREPULL="$REPO_ROOT/.github/scripts/supabase-pre-pull-images.sh"
+if [[ -f "$PREPULL" ]]; then pass "wiring:prepull-exists"
+else fail "wiring:prepull-exists" "$PREPULL absent"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'ghcr-pull-with-retry.sh' "$PREPULL"; then pass "wiring:prepull-via-helper"
+else fail "wiring:prepull-via-helper" "pre-pull does not route pulls through the retry helper"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'docker pull' "$PREPULL"; then pass "wiring:prepull-docker-pull"
+else fail "wiring:prepull-docker-pull" "pre-pull does not docker pull"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'ghcr\.io/supabase/' "$PREPULL"; then pass "wiring:prepull-ghcr-anchored"
+else fail "wiring:prepull-ghcr-anchored" "pre-pull extraction is not anchored on ghcr.io/supabase/"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'strings "$SUPABASE_BIN"' "$PREPULL"; then pass "wiring:prepull-binary-strings"
+else fail "wiring:prepull-binary-strings" "pre-pull does not extract refs from the CLI binary"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'MIN_IMAGES' "$PREPULL"; then pass "wiring:prepull-floor"
+else fail "wiring:prepull-floor" "pre-pull lacks the extraction floor"; fi
+
+LN_PREPULL=$(grep -nE '^[[:space:]]+run:.*supabase-pre-pull-images\.sh' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+LN_CLI=$(grep -nE '^[[:space:]]+- name: Install Supabase CLI' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+if [[ -n "$LN_PREPULL" ]]; then pass "wiring:prepull-step-present"
+else fail "wiring:prepull-step-present" "no step invokes supabase-pre-pull-images.sh"; fi
+if [[ -n "$LN_CLI" && -n "$LN_PREPULL" && -n "$LN_START" && "$LN_CLI" -lt "$LN_PREPULL" && "$LN_PREPULL" -lt "$LN_START" ]]; then
+  pass "wiring:prepull-order"
+else fail "wiring:prepull-order" "cli=$LN_CLI prepull=$LN_PREPULL start=$LN_START"; fi
+
+# The pre-pull step is credential-free — it must NOT sit behind the fork gate
+# (forks need it most) and must not silently degrade.
+if [[ -n "$LN_PREPULL" ]]; then
+  PREPULL_BLOCK=$(awk -v s="$LN_PREPULL" 'NR>s && /^[[:space:]]+- /{exit} NR>=s{print}' "$WORKFLOW")
+  PREPULL_HEAD=$(awk -v s="$LN_PREPULL" -v n="$((LN_PREPULL - 8))" 'NR>=n && NR<=s{print}' "$WORKFLOW")
+  if grep -qE '^[[:space:]]+(if|continue-on-error):' <<<"$PREPULL_BLOCK"; then fail "wiring:prepull-no-skip" "pre-pull step carries an if:/continue-on-error: key"
+  else pass "wiring:prepull-no-skip"; fi
+  if grep -qF 'working-directory: apps/web-platform' <<<"$PREPULL_HEAD"; then pass "wiring:prepull-workdir"
+  else fail "wiring:prepull-workdir" "pre-pull step lacks working-directory: apps/web-platform"; fi
+else
+  fail "wiring:prepull-no-skip" "no pre-pull step"; fail "wiring:prepull-workdir" "no pre-pull step"
+fi
+if grep -qF '.github/scripts/supabase-pre-pull-images.sh' <<<"$PATHS_BLOCK"; then pass "wiring:paths-prepull"
+else fail "wiring:paths-prepull" "pull_request.paths omits the pre-pull script"; fi
+
 echo "=== Guard 1b: helper behavior over PATH-stubbed commands ==="
 
 run_helper ok fake-ok
@@ -473,12 +513,105 @@ run_helper two-arg fake-two-arg first second
 assert_rc "b:two-arg-rc" 0
 assert_calls "b:two-arg-calls" 1
 
+echo "=== Guard 1c: pre-pull behavior (fake binary + stubbed docker) ==="
+
+# A fake CLI binary: `strings` extracts the printable refs embedded in it —
+# 10 refs clears the MIN_IMAGES=8 floor; noise lines prove only anchored
+# ghcr.io/supabase refs are extracted.
+FAKE_BIN_DIR="$TMP/fake-bin"
+assert_fixture_dir "$FAKE_BIN_DIR"
+mkdir -p "$FAKE_BIN_DIR"
+{
+  printf '#!/bin/sh\n'
+  printf 'binary noise one\n'
+  n=0
+  for i in a b c d e f g h i j; do
+    n=$((n+1))
+    printf 'ghcr.io/supabase/img-%s:1.%d.0\n' "$i" "$n"
+  done
+  printf 'ghcr.io/other-org/not-counted:1.0\n'
+  printf 'ghcr.io/supabase/template-no-tag:%%s\n'
+  printf 'more noise\n'
+} > "$FAKE_BIN_DIR/supabase"
+chmod +x "$FAKE_BIN_DIR/supabase"
+
+# docker stub: logs `pull <img>` argv lines to $STUB_CALLS; DOCKER_MODE picks
+# the behavior arm (ok | throttle-once | always).
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'echo "$*" >> "${STUB_CALLS:?unset}"' \
+  'n=$(wc -l < "$STUB_CALLS" | tr -d " ")' \
+  'case "${DOCKER_MODE:-ok}" in' \
+  '  throttle-once) if [[ "$n" == "1" ]]; then echo "toomanyrequests: retry-after: 1s" >&2; exit 1; fi ;;' \
+  '  always) echo "toomanyrequests: retry-after: 1s" >&2; exit 1 ;;' \
+  'esac' \
+  'exit 0' \
+  > "$BIN/docker"
+chmod +x "$BIN/docker"
+
+ORIG_PATH="$PATH"
+run_prepull() { # name path-prefix [docker-mode]
+  local name="$1" pfx="$2" mode="${3:-ok}"
+  LAST_OUT="$TMP/$name.out"
+  : > "$STUB_CALLS"
+  env STUB_CALLS="$STUB_CALLS" GHCR_PULL_RETRY_SLEEPS="0 0" \
+      TMPDIR="$RUNNER_TEMP_FIXTURE" DOCKER_MODE="$mode" \
+      PATH="$pfx:$ORIG_PATH" \
+      bash "$PREPULL" > "$LAST_OUT" 2>&1
+  LAST_RC=$?
+}
+
+# Happy path: 10 extracted refs, 10 serial pulls, rc 0.
+run_prepull pp-ok "$FAKE_BIN_DIR:$BIN" ok
+assert_rc "c:happy-rc" 0
+assert_calls "c:happy-pulls" 10
+assert_out_has "c:happy-echo" 'pre-pull: 10 images'
+# Serial order preserved: pull argv lines arrive in the extraction order.
+if grep -qF 'pull ghcr.io/supabase/img-a:1.1.0' "$STUB_CALLS" && \
+   grep -qF 'pull ghcr.io/supabase/img-j:1.10.0' "$STUB_CALLS"; then pass "c:happy-args"
+else fail "c:happy-args" "pull argv missing extracted refs — $(cat "$STUB_CALLS" | tr '\n' '|')"; fi
+# The foreign-org ref and the %-templated ref must NOT be pulled.
+if grep -qF 'other-org' "$STUB_CALLS"; then fail "c:happy-anchor" "extraction leaked a non-supabase ref"; else pass "c:happy-anchor"; fi
+if grep -qF 'template-no-tag' "$STUB_CALLS"; then fail "c:happy-tag-required" "extraction pulled an untagged/template ref"; else pass "c:happy-tag-required"; fi
+
+# Throttle on the first pull retried by the helper: N+1 calls, rc 0, warning.
+run_prepull pp-retry "$FAKE_BIN_DIR:$BIN" throttle-once
+assert_rc "c:retry-rc" 0
+assert_calls "c:retry-pulls" 11
+assert_out_re "c:retry-warn" '^::warning::.*toomanyrequests'
+
+# Extraction floor: 3 refs < 8 fails loudly, docker never invoked.
+FEW_BIN_DIR="$TMP/few-bin"
+assert_fixture_dir "$FEW_BIN_DIR"
+mkdir -p "$FEW_BIN_DIR"
+{ printf '#!/bin/sh\n'; printf 'ghcr.io/supabase/only-one:1.0\n'; printf 'ghcr.io/supabase/only-two:2.0\n'; printf 'ghcr.io/supabase/only-three:3.0\n'; } > "$FEW_BIN_DIR/supabase"
+chmod +x "$FEW_BIN_DIR/supabase"
+run_prepull pp-floor "$FEW_BIN_DIR:$BIN" ok
+assert_rc "c:floor-rc" 2
+assert_calls "c:floor-no-pulls" 0
+assert_out_re "c:floor-error" '^::error::.*expected >= 8'
+
+# Exhausted pull propagates: first image throttles 3 times, helper exits 1,
+# set -e stops the loop — no further pulls.
+run_prepull pp-exhaust "$FAKE_BIN_DIR:$BIN" always
+assert_rc "c:exhaust-rc" 1
+assert_calls "c:exhaust-pulls" 3
+assert_out_re "c:exhaust-error" '^::error::.*toomanyrequests'
+
+# Missing CLI fails loudly instead of extracting nothing.
+NO_BIN_DIR="$TMP/no-bin"
+assert_fixture_dir "$NO_BIN_DIR"
+mkdir -p "$NO_BIN_DIR"
+run_prepull pp-nobin "$NO_BIN_DIR:$BIN" ok
+assert_rc "c:nobin-rc" 2
+assert_out_re "c:nobin-error" '^::error::.*not on PATH'
+
 # ---------------------------------------------------------------------------
 # Floor + verdict. The bound is a literal adjacent to the if (ADR-193); the
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=78
+MIN_ASSERTIONS=106
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

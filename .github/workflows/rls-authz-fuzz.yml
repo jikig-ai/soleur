@@ -24,6 +24,7 @@ on:
       - "apps/web-platform/package.json"
       - ".github/workflows/rls-authz-fuzz.yml"
       - ".github/scripts/ghcr-pull-with-retry.sh"
+      - ".github/scripts/supabase-pre-pull-images.sh"
       - ".github/scripts/test/test-rls-fuzz-ghcr-resilience.sh"
   workflow_dispatch: {}
 
@@ -89,6 +90,16 @@ jobs:
         uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
         with:
           version: 2.84.2
+
+      # #10868 (measured run 40525753531): the 44000/min org bucket is shared
+      # globally, so a single `supabase start` fan-out (~150 requests) re-trips
+      # it every attempt — auth and whole-command retry alone cannot win. Pull
+      # the embedded image set SERIALLY first, each image through the retry
+      # helper; cached images make `supabase start` issue minimal registry
+      # traffic. Runs for forks too — no credentials involved.
+      - name: Pre-pull Supabase image set (serial, per-image retry)
+        working-directory: apps/web-platform
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/supabase-pre-pull-images.sh"
 
       # Started via the wrapper, NOT bare `supabase start`. The CLI has no
       # bind-address setting (supabase/cli#4613 closed unmerged on policy), so a
