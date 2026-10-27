@@ -13,7 +13,7 @@
 #
 # WHAT THIS FILE IS, AND IS NOT. Text-level assertions over the Terraform SOURCE and the apply
 # workflow's -target allowlist. It pins the SQL and the parameters the CTO rulings D4/D5b/D12 fixed
-# (knowledge-base/project/specs/feat-one-shot-9927-key-continuity-probe/decision-challenges.md). It
+# (knowledge-base/project/specs/archive/20261027-112122-feat-one-shot-9927-key-continuity-probe/decision-challenges.md). It
 # does NOT prove the SQL's BEHAVIOUR (that is the read-only substitution run through
 # scripts/betterstack-query.sh) and does NOT prove the alert is unpaused in Better Stack.
 #
