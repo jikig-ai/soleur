@@ -20,8 +20,9 @@
 #     fixture is broken on purpose, must-PASS non-canonical runs, and an exact assertion count
 #     reported with printf + exit (never through fail()).
 #   * The real-tool arm builds a file-backed LUKS2 container in a temp dir (no root) and runs the
-#     script's own pipeline against real cryptsetup. It is skipped with an EXPLICIT marker, never
-#     silently, when cryptsetup is absent or cannot build the container here.
+#     script's own pipeline against real cryptsetup. Outside CI it is skipped with an EXPLICIT marker,
+#     never silently, when cryptsetup is absent or cannot build the container; under CI (CI set) it
+#     FAILS instead of skipping, so a runner without cryptsetup cannot drop it.
 #
 # Seam used by the RED step only: PROBE_SUITE_TARGET points the suite at another copy of the script
 # (the pre-probe revision), proving the suite is RED before the function exists.
@@ -129,7 +130,8 @@ env >> "$STUB_DIR/envlog"
 case "$sub" in
   status)
     # exact production argv: status --disable-locks <mapper> (3 words, operand not an option)
-    [ "$#" -eq 3 ] && [ "${2:-}" = "--disable-locks" ] && [ -n "${3:-}" ] && [ "${3#-}" = "${3}" ] || exit 98
+    _m="$(tail -n 1 "$STUB_DIR/findmnt.out")"; _m="${_m#/dev/mapper/}"; _m="${_m%%\[*}"
+    [ "$#" -eq 3 ] && [ "${2:-}" = "--disable-locks" ] && [ "${3:-}" = "$_m" ] || exit 98
     [ "${STUB_HANG:-}" = status ] && exec sleep 60
     [ -n "${STUB_RC_STATUS:-}" ] && exit "$STUB_RC_STATUS"
     cat "$STUB_DIR/status.out"; exit 0 ;;
@@ -543,6 +545,11 @@ run_tick "done"
 assert_eq "a pending stamp 30 s old counts as non-ok: skip" "0" "$(grep -c 'SOLEUR_INNGEST_LUKS_KEY_PROBE' "$LOGTRACE" || true)"
 end_case
 new_case
+seed_stamp ok 18446744073709551716
+run_tick "done"
+assert_eq "a stamp timestamp that wraps a 64-bit compare (20 digits) is due once, not never" "1" "$(grep -c 'SOLEUR_INNGEST_LUKS_KEY_PROBE' "$LOGTRACE" || true)"
+end_case
+new_case
 seed_stamp ok "$(( $(now_s) + 7200 ))"
 run_tick "done"
 assert_eq "a future-dated stamp is treated as unparsable: due once" "1" "$(grep -c 'SOLEUR_INNGEST_LUKS_KEY_PROBE' "$LOGTRACE" || true)"
@@ -762,10 +769,12 @@ pred_callsites() {
 pred_externals() {
   local region bare unwrapped n
   region="$(probe_region "$1")"
-  bare="$(printf '%s\n' "$region" | grep -E '(^|[|;&(]|\$\()[[:space:]]*(grep|sed|head|tr|date|stat|cat|awk|tail|mkdir|rm|touch|sleep|curl|logger|cryptsetup|findmnt|sort|wc|cut|doppler|systemctl|blkid|ls|dmsetup|lsblk|ps|flock|jq|base64|od|xxd|dd|readlink|nice|ionice)[[:space:]]' || true)"
+  bare="$(printf '%s\n' "$region" | grep -E '(^|[|;&(]|\$\()[[:space:]]*(grep|sed|head|tr|date|stat|cat|awk|tail|mkdir|rm|touch|sleep|curl|logger|cryptsetup|findmnt|sort|wc|cut|doppler|systemctl|blkid|ls|dmsetup|lsblk|ps|flock|jq|base64|od|xxd|dd|readlink|nice|ionice|python3|id|sync|env|xargs|command|true|false)[[:space:]]' || true)"
   unwrapped="$(printf '%s\n' "$region" | grep -E '"\$cs"|"\$fm"|"\$\{CUTOVER_(LOGGER|PHONE_HOME)_CMD' | grep -vE 'timeout -k 5 [0-9]+ ("\$cs"|"\$fm"|"\$\{CUTOVER_(LOGGER|PHONE_HOME)_CMD)' || true)"
   n="$(printf '%s\n' "$region" | grep -cE 'timeout -k 5 [0-9]+ ' || true)"
-  [[ -z "$bare" && -z "$unwrapped" && "$n" -ge 12 ]]
+  local nokill
+  nokill="$(printf '%s\n' "$region" | grep -E '(^|[|;&(]|\$\()[[:space:]]*timeout[[:space:]]' | grep -vE 'timeout -k 5 [0-9]+ ' || true)"
+  [[ -z "$bare" && -z "$unwrapped" && -z "$nokill" && "$n" -ge 12 ]]
 }
 pred_no_fsm_or_wait() {
   local region
@@ -792,7 +801,7 @@ pred_g2_static() {
   # ...and so is every statement that names the key FILE: a read of it into a variable or a second
   # reader is a key sink the name-keyed check above cannot see.
   local kf
-  kf="$(printf '%s\n' "$stmts" | grep -F '$keyfile' | grep -v -- '--key-file' | grep -v "^timeout -k 5 [0-9]* grep -q '\^INNGEST_REDIS_LUKS_KEY=\.' \"\$keyfile\" 2>/dev/null\$" | grep -v '^if \[\[ -e "\$keyfile" \]\]; then$' | grep -v '^local keyfile=' || true)"
+  kf="$(printf '%s\n' "$stmts" | sed 's/\${keyfile}/$keyfile/g' | grep -E '\$keyfile|CUTOVER_LUKS_KEY_FILE|/etc/default/inngest-luks' | grep -v -- '--key-file' | grep -v "^timeout -k 5 [0-9]* grep -q '\^INNGEST_REDIS_LUKS_KEY=\.' \"\$keyfile\" 2>/dev/null\$" | grep -v '^if \[\[ -e "\$keyfile" \]\]; then$' | grep -vxF 'local keyfile="${CUTOVER_LUKS_KEY_FILE:-/etc/default/inngest-luks}"' || true)"
   [[ -z "$kf" ]] || return 1
   local pr
   pr="$(probe_region "$1")"
@@ -880,10 +889,12 @@ _ctl_p0=$PASS
 _ctl_f0=$FAIL
 assert_eq "control" "a" "b" >/dev/null
 assert_true "control" false >/dev/null
+assert_true "control" test 1 -eq 2 >/dev/null
 expect_red "control" pred_ctl_green pristine >/dev/null
-if [[ "$FAIL" -ne $((_ctl_f0 + 3)) || "$PASS" -ne "$_ctl_p0" ]]; then
+CTL_RAN=1
+if [[ "$FAIL" -ne $((_ctl_f0 + 4)) || "$PASS" -ne "$_ctl_p0" ]]; then
   printf 'FATAL: a verdict-owning helper (assert_eq, assert_true or expect_red) cannot reject a failing input (PASS=%s FAIL=%s, expected PASS=%s FAIL=%s).\n' \
-    "$PASS" "$FAIL" "$_ctl_p0" "$((_ctl_f0 + 3))" >&2
+    "$PASS" "$FAIL" "$_ctl_p0" "$((_ctl_f0 + 4))" >&2
   exit 1
 fi
 FAIL=$_ctl_f0
@@ -1007,7 +1018,7 @@ pred_upstream_fail() {
 }
 assert_true "pristine: a failing upstream stage is indeterminate at=key" pred_upstream_fail "$TARGET"
 mutate g4_m1 <<'PY'
-s = s.replace('    0:0:0|141:0:0) ;;', '    *) ;;', 1)
+s = s.replace('    0:0:0|141:0:0|0:0:141) ;;', '    *) ;;', 1)
 PY
 mutation_landed "G4-1 the upstream-stage guard neutered" g4_m1
 expect_red "G4-1 without the guard a failed head reads as fail_passphrase" pred_upstream_fail g4_m1
@@ -1238,12 +1249,16 @@ fi
 # The inventory is fixed by this file; a count that drifts (an assertion deleted, a block silently
 # skipped) is itself a RED. Bump it in the same edit that adds an assertion. Optional arms that
 # skipped with an explicit marker above are subtracted by their own constants.
-EXPECTED_ASSERTIONS=151
+EXPECTED_ASSERTIONS=152
 REAL_ARM_ASSERTIONS=11
 REFUSAL_ARM_ASSERTIONS=2
 EXPECTED=$EXPECTED_ASSERTIONS
 if [[ "$REAL_RAN" != "1" ]]; then EXPECTED=$((EXPECTED - REAL_ARM_ASSERTIONS)); fi
 if [[ "$REFUSAL_RAN" != "1" ]]; then EXPECTED=$((EXPECTED - REFUSAL_ARM_ASSERTIONS)); fi
+if [[ "${CTL_RAN:-0}" != "1" ]]; then
+  printf 'FATAL: the verdict-helper negative controls never ran (CTL_RAN unset) — the block was deleted or skipped.\n' >&2
+  exit 1
+fi
 if [[ "$PASS" -ne "$EXPECTED" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the count through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

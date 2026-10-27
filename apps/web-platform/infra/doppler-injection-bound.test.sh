@@ -244,13 +244,13 @@ GUARD1_UNSET = {
 }
 GUARD1_UNSET_CARDINALITY = 38
 
-# Names that appear in a script ONLY as the presence test of its xtrace refusal (${NAME:+x}), never as
-# a value read from the environment. lint-shell-trace-credential-refusal requires that test for EVERY
-# credential name the file references, so the flip script's refusal covers INNGEST_REDIS_LUKS_KEY even
-# though the script reads the key from the root-only /etc/default/inngest-luks (a pipe to cryptsetup),
-# and the unit's environment must NOT carry it (#9927 item 2). Exempting it here is not weakening
-# --only-secrets: adding the name to the list would put the passphrase in the process environment.
-XTRACE_REFUSAL_ONLY = {'INNGEST_REDIS_LUKS_KEY'}
+# The presence test of an xtrace refusal, `${INNGEST_REDIS_LUKS_KEY:+x}`, is not a read of the value.
+# lint-shell-trace-credential-refusal requires that test for EVERY credential name the file references,
+# so the flip script's refusal covers INNGEST_REDIS_LUKS_KEY even though the script reads the key from
+# the root-only /etc/default/inngest-luks (a pipe to cryptsetup) and the unit's environment must NOT
+# carry it (#9927 item 2). Only this exact SHAPE is removed before the read scan; any other expansion
+# of the name still counts as a read and still fails the read-set check.
+XTRACE_PRESENCE_TEST_RE = re.compile(r'\$\{INNGEST_REDIS_LUKS_KEY:\+x\}')
 
 # ── the ack list: AUTHORED, each entry carrying WHY, cardinality pinned ───────────────────────
 ACK_REASONS = {
@@ -741,12 +741,12 @@ FORVAR_RE = re.compile(r'\bfor\s+([A-Z][A-Z0-9_]{2,})\s+in\b')
 
 
 def read_set_lower_bound(body):
-    src = strip_comments(body)
+    src = XTRACE_PRESENCE_TEST_RE.sub('', strip_comments(body))
     reads = set()
     for m in READ_RE.finditer(src):
         reads.add(m.group(1) or m.group(2))
     assigned = set(ASSIGNED_RE.findall(src)) | set(FORVAR_RE.findall(src))
-    return sorted(reads - assigned - SHELL_BUILTINS - GUARD1_UNSET - XTRACE_REFUSAL_ONLY)
+    return sorted(reads - assigned - SHELL_BUILTINS - GUARD1_UNSET)
 
 
 def main():

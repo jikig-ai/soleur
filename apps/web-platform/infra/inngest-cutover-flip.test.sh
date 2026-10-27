@@ -944,7 +944,7 @@ UNSET_COUNT="$(printf '%s\n' "$UNSET_LIST" | grep -cE '^(CUTOVER_|INNGEST_CUTOVE
 if [[ "$UNSET_COUNT" -ge 25 ]]; then
   pass "the gate unsets at least 25 seam names (got $UNSET_COUNT)"
 else
-  fail "the gate's unset list holds only $UNSET_COUNT names, expected >= 15"
+  fail "the gate's unset list holds only $UNSET_COUNT names, expected >= 25"
 fi
 assert_absent "INNGEST_REDIS_PASSWORD is NOT unset (it is a real input, not a seam)" \
   "$UNSET_LIST" "INNGEST_REDIS_PASSWORD"
@@ -1272,7 +1272,7 @@ GS_COUNT="$(printf '%s\n' "$GATE_SEAMS" | grep -c '^[A-Z]' || true)"
 if [[ "$GS_COUNT" -ge 25 ]]; then
   pass "read ${GS_COUNT} seam names out of the gate itself (>=25)"
 else
-  fail "read only ${GS_COUNT} of 15 seam names out of the gate — the extractor is broken"
+  fail "read only ${GS_COUNT} of 25 seam names out of the gate — the extractor is broken"
 fi
 UNIT_ENV="$(grep -E '^Environment=' "$UNIT_SRC" || true)"
 _env_seam_hits=0

@@ -1121,9 +1121,10 @@ luks_key_probe_tick() {
   pst=("${PIPESTATUS[@]}")
   rc="${pst[3]:-1}"
   # An upstream stage that died or timed out fed cryptsetup a short or empty key: that is not a
-  # verdict on the key. sed may legitimately take SIGPIPE (141) once head has its line.
+  # verdict on the key. sed may legitimately take SIGPIPE (141) once head has its line, and tr
+  # does when cryptsetup exits before reading (its own rc, e.g. 4, then stays the verdict).
   case "${pst[0]:-1}:${pst[1]:-1}:${pst[2]:-1}" in
-    0:0:0|141:0:0) ;;
+    0:0:0|141:0:0|0:0:141) ;;
     *)
       if [[ "${pst[0]:-1}" != 0 && "${pst[0]:-1}" != 141 ]]; then
         rc="${pst[0]:-1}"
