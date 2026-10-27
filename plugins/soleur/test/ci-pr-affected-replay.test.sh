@@ -154,6 +154,9 @@ if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
 if [ -f "$GH_FIX/HANG_$key" ]; then sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
+# SLOW_<key>: answer the REAL fixture after SLOW_S seconds (HANG_ answers an empty run list, so a delayed unit would vanish). The probe's budget clock is
+# SECONDS, which has one-second granularity, so a budget row needs a read that is longer than the budget; the pid is recorded for the trap row.
+if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; sleep "${SLOW_S:-1}"; fi
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
 GHSTUB
@@ -3006,7 +3009,8 @@ ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> 
 }
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
+  printf '{"resources":{"core":{"limit":5000,"remaining":%s,"used":100,"reset":1900000000}}}' "${OW_RL_REMAINING:-4900}" | fx "rate_limit"   # the probe reads the API quota before it reads any run
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
     runconc=success; [[ "$ex" != cancelrun ]] || runconc=cancelled
@@ -3055,12 +3059,32 @@ ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a me
 ow_json_files() {   # ow_json_files <n> <prefix>: a files array of n entries
   local i out=""; for i in $(seq 1 "$1"); do out="${out:+$out,}{\"filename\":\"$2$i.ts\"}"; done; printf '[%s]' "$out"
 }
-OW_ATT1=""; OW_ENV=()
-ow_probe() {   # ow_probe [now epoch]: RC, OWOUT
-  RC=0; OWOUT="$(env PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
+ow_big_files() {   # ow_big_files <n> <prefix> <patch bytes> [name pad bytes] [patch text]: a files page the way GitHub serves one (a patch body per file makes a page of 100 entries 400 KB)
+  python3 -c '
+import json, sys
+n, prefix, patch, pad = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+text = sys.argv[5] if len(sys.argv) > 5 else ""
+out = []
+for i in range(1, n + 1):
+    body = ("x" * patch) if not (text and i == 1) else (text + "x" * max(0, patch - len(text)))
+    e = {"filename": "%s%d-%s.ts" % (prefix, i, "n" * pad)}
+    if patch: e["patch"] = body
+    out.append(e)
+sys.stdout.write(json.dumps(out, separators=(",", ":")))' "$1" "$2" "$3" "${4:-0}" "${5:-}"
+}
+ow_bytes_over() {   # ow_bytes_over <limit> <request path>: the fixture the STUB serves is bigger than <limit> bytes (a trimmed fixture must fail its row, not become a copy of the small one)
+  [[ "$(wc -c < "$GHFIX/$(keyof "$2")")" -gt "$1" ]]
+}
+OW_ATT1=""; OW_ENV=(); OWERR="$SANDBOX/ow.err"
+ow_probe() {   # ow_probe [now epoch]: RC, OWOUT (stdout and stderr merged). The SOAK_ seams of a developer's shell never reach the probe.
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_PROGRESS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
   OW_RCS+=("$RC")
 }
-ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=()
+ow_probe_split() {   # ow_probe_split: RC, OWOUT (stdout only), OWERR (the stderr file)
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_PROGRESS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
+  OW_RCS+=("$RC")
+}
+ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; rm -f "$GHLOG.slowpids" "$OWERR"
   unset OW_BL_TIP; OW_BL_TIP_ABSENT=""; OW_BL_MERGE_ABSENT=""; OW_BL_TIP_FAIL=""; ow_base_units; }
 ow_variant() {   # ow_variant <fn that edits OW_UNITS or globals>: rebuild the fixtures and run the probe
   ow_case; "$1"; ow_write; ow_probe "${OW_NOW:-}"
@@ -3149,6 +3173,136 @@ print("\n".join(m.RATCHET_ORACLE))
 PY
 )" ]]
 }
+# ---- the E2BIG fix and the speed work (#10865 follow-up): a files page over the 128 KiB per-argument limit, parallel reads, a budget, a quota guard, progress ----
+OW_PATH16F="repos/$R/pulls/16/files?per_page=100"
+ow_u_big_patch() {   # three pages of 100, 100 and 50 entries with 4 KB patches (page 1 about 410 KB); one patch body names an oracle path: only filenames decide
+  ow_u_few16; OW_P16_FILES="$(ow_big_files 100 a 4000 0 'scripts/test-all.sh')"; OW_P16_PAGE2="$(ow_big_files 100 b 4000)"; OW_P16_PAGE3="$(ow_big_files 50 c 4000)"
+}
+ow_u_big_long() { ow_u_few16; OW_P16_FILES="$(ow_big_files 100 a 4000)"; OW_P16_PAGE2="$(ow_big_files 100 b 4000)"; OW_P16_PAGE3="$(ow_big_files 100 c 4000)"; }   # the PR 9051 shape: three full pages, the sentinel path
+ow_u_long_names() { ow_u_few16; OW_P16_FILES="$(ow_big_files 100 a 0 600)"; OW_P16_PAGE2="$(ow_big_files 100 b 0 600)"; OW_P16_PAGE3="$(ow_big_files 50 c 0 600)"; }
+row_ow_big_patch() {
+  ow_case; ow_u_big_patch; ow_write; ow_bytes_over 131072 "$OW_PATH16F" || return 1; ow_probe "${OW_NOW:-}"
+  grep -q 'green_pr_units_distinct_prs=3 ' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_big_long() {
+  ow_case; ow_u_big_long; ow_write; ow_bytes_over 131072 "$OW_PATH16F" || return 1; ow_probe "${OW_NOW:-}"
+  [[ "$RC" -eq 2 ]] && grep -q 'green_pr_units_distinct_prs=2 ' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_long_names() {   # each served page stays under the limit; the accumulated list handed to the exclusion program does not
+  ow_case; ow_u_long_names; ow_write
+  local k; for k in "$OW_PATH16F" "$OW_PATH16F&page=2" "$OW_PATH16F&page=3"; do [[ "$(wc -c < "$GHFIX/$(keyof "$k")")" -lt 131072 ]] || return 1; done
+  [[ $(( $(wc -c < "$GHFIX/$(keyof "$OW_PATH16F")") + $(wc -c < "$GHFIX/$(keyof "$OW_PATH16F&page=2")") + $(wc -c < "$GHFIX/$(keyof "$OW_PATH16F&page=3")") )) -gt 131072 ]] || return 1
+  ow_probe "${OW_NOW:-}"
+  grep -q 'green_pr_units_distinct_prs=3 ' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+ow_u_two_units_pr11() { OW_UNITS+=("5007 pull_request shaG feat/a 2031-02-02T01:30:00Z 1 11 0 150"); }
+row_ow_pr_facts_cached() {   # PR 11 has two green units: its timeline and its pull are each read once
+  ow_variant ow_u_two_units_pr11
+  [[ "$(grep -c '^REQ .*issues_11_timeline_per_page_100$' "$GHLOG")" -eq 1 && "$(grep -c '^REQ .*soleur_pulls_11$' "$GHLOG")" -eq 1 ]]
+}
+ow_scan_argv() {   # ow_scan_argv <file>: print every jq option that takes an operand as name=operand (quotes stripped); the operand is what travels on argv
+  python3 - "$1" <<'PY'
+import re, sys
+for line in open(sys.argv[1]):
+    if line.lstrip().startswith("#"): continue
+    for m in re.finditer(r'--(?:arg|argjson|slurpfile|rawfile)\s+([A-Za-z_][A-Za-z0-9_]*)\s+("[^"]*"(?:"[^"]*")*|[^\s]+)', line):
+        print("%s=%s" % (m.group(1), m.group(2).replace('"', "")))
+    if re.search(r'--(?:args|jsonargs)\b', line): print("ARGS-OPTION")
+PY
+}
+row_ow_argv() {   # only small scalars may ride on a jq argv: an API payload on one raises E2BIG at 128 KiB (MAX_ARG_STRLEN)
+  local ctl got allowed="m=\$merged_at ev=\$ev n=\$JOB s=\$STEP oracle=\$ORACLE_JSON kb=knowledge-base t=\$t cur=\${PR_CURDRAFT[\$n]}" pair found=0
+  ctl="$SANDBOX/ow-argv-control.sh"; printf '%s\n' '  files="$(jq -c -n --argjson b "$page" "$b")"' > "$ctl"
+  [[ "$(ow_scan_argv "$ctl")" == 'b=$page' ]] || return 1   # instrument control: the scan must flag a payload on argv
+  got="$(ow_scan_argv "$OW_SCRIPT")"
+  while IFS= read -r pair; do
+    [[ -n "$pair" ]] || continue; found=$((found + 1))
+    [[ " $allowed " == *" $pair "* ]] || return 1
+  done <<<"$got"
+  [[ "$found" -ge 6 ]] && grep -qF '{filename}' "$OW_SCRIPT"
+}
+row_ow_progress() {
+  ow_case; ow_write; ow_probe_split
+  [[ "$RC" -eq 0 ]] || return 1
+  ! grep -q '^soak-progress:' <<<"$OWOUT" || return 1
+  local p1 p2 p3
+  p1="$(grep -n '^soak-progress: phase=listed ' "$OWERR" | head -n 1 | cut -d: -f1)"; p2="$(grep -n '^soak-progress: phase=read-done ' "$OWERR" | head -n 1 | cut -d: -f1)"; p3="$(grep -n '^soak-progress: phase=facts-done ' "$OWERR" | head -n 1 | cut -d: -f1)"
+  [[ -n "$p1" && -n "$p2" && -n "$p3" && "$p1" -lt "$p2" && "$p2" -lt "$p3" ]] || return 1
+  [[ "$(wc -c < "$OWERR")" -lt 500 ]] || return 1
+  grep -q 'parallel=4 budget_s=300' "$OWERR" || return 1
+  ! grep -qE 'runs_listed|units_read|units=|truncated' "$OWERR"
+}
+row_ow_heartbeat() {   # 48 readable runs: a beat per 25 completions, only when asked for (stderr here is a file, not a TTY)
+  ow_case; ow_u_bigmax; ow_write; OW_ENV=(SOAK_PARALLEL=1 SOAK_PROGRESS=1); ow_probe_split
+  grep -q '^soak-progress: heartbeat read=25/' "$OWERR" || return 1
+  OW_ENV=(SOAK_PARALLEL=1); ow_probe_split
+  ! grep -q 'heartbeat' "$OWERR"
+}
+ow_u_eleven_mg() {   # eleven merge_group units; the NEWEST one is red; the base fixture's 6001..6003 are replaced
+  local i; for i in 6001 6002 6003; do ow_drop $i; done
+  for i in $(seq 1 11); do OW_UNITS+=("$((6000 + i)) merge_group shaM$i gh-readonly-queue/main/pr-$i-k $(printf '2031-02-03T%02d:00:00Z' "$i") 1 0 $([[ $i -eq 11 ]] && echo 1 || echo 0) 150"); done
+}
+row_ow_parallel_same() {
+  local o1 o4
+  ow_case; ow_u_eleven_mg; ow_write; : > "$(printf '%s/SLOW_%s' "$GHFIX" "$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")")"; OW_ENV=(SOAK_PARALLEL=1 SLOW_S=2); ow_probe_split; o1="$OWOUT"
+  OW_ENV=(SOAK_PARALLEL=4 SLOW_S=2); ow_probe_split; o4="$OWOUT"
+  [[ "$o1" == "$o4" ]] && grep -q 'paused: the latest merge_group unit (run 6011) is red' <<<"$o4"
+}
+ow_u_fail_two() { OW_UNITS[6]="6002 merge_group x@a#1<b> gh-readonly-queue/main/pr-12-b 2031-02-03T02:00:00Z 1 0 0 150"; }
+row_ow_worker_fail() {   # the jobs reads of an extra (6002) and of an oldest-first run (5002) fail; the first failure in DISPATCH order is named
+  ow_case; ow_u_fail_two; ow_write
+  fx_err "repos/$R/actions/runs/6002/jobs?per_page=100&filter=latest"; fx_err "repos/$R/actions/runs/5002/jobs?per_page=100&filter=latest"
+  OW_ENV=(SOAK_PARALLEL=4); ow_probe
+  [[ "$RC" -eq 3 ]] && [[ "$(grep -c '^CANNOT ESTABLISH' <<<"$OWOUT")" -eq 1 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (run 6002 jobs)' <<<"$OWOUT" && ! grep -q '5002\|x@a' <<<"$OWOUT"
+}
+row_ow_budget() {   # SECONDS has one-second granularity: a 2 s read against a 1 s budget
+  ow_case; ow_write
+  : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  OW_ENV=(SOAK_BUDGET_S=1 SOAK_PARALLEL=1 SLOW_S=2); ow_probe
+  [[ "$RC" -eq 2 ]] && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" && grep -q 'units_read=4 truncated=1' <<<"$OWOUT" || return 1
+  [[ "$(grep -m1 'actions_runs_[0-9]*_jobs' "$GHLOG")" == *actions_runs_6001_jobs* ]]   # the newest queue state is read first
+}
+row_ow_budget_facts() {   # the reads finish inside the budget; the first pull read (PR 11) overruns it; the facts loop stops
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/11")"
+  OW_ENV=(SOAK_BUDGET_S=8 SOAK_PARALLEL=4 SLOW_S=9); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'NOT YET: read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT"
+}
+row_ow_quota() {   # need = 2 * runs to read + 5 * PRs + 200; the base fixture reads 8 runs of 5 PRs
+  ow_case; OW_RL_REMAINING=100; ow_write; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: API quota (remaining=100, need=241, resets at 20[0-9][0-9]-' <<<"$OWOUT" && ! grep -q 'actions_runs_[0-9]' "$GHLOG" || return 1
+  ow_case; ow_write; fx_err "rate_limit"; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: GitHub API read failed (rate_limit' <<<"$OWOUT" || return 1
+  ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'HTTP 403' <<<"$OWOUT" && ! grep -q 'actions_runs_6002_jobs\|actions_runs_5001_jobs' "$GHLOG" || return 1
+  ow_case; ow_write; ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q '^quota: used_delta=0 limit=5000 remaining=4900$' <<<"$OWOUT"
+}
+row_ow_seam_caps() {
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=9); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=601); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=600); ow_probe; [[ "$RC" -eq 0 ]]
+}
+ow_u_json_error() { ow_u_few16; OW_P16_FILES="{\"message\":\"$(printf 'A%.0s' $(seq 1 300))\\u001b@octocat </details> [x](http://e) #1\"}"; }
+row_ow_jq_error_text() {
+  ow_variant ow_u_json_error
+  [[ "$RC" -eq 3 ]] || return 1
+  local line detail; line="$(grep '^CANNOT ESTABLISH' <<<"$OWOUT" | head -n 1)"
+  [[ "$line" == *'pull 16 files (parse): '* ]] || return 1
+  detail="${line#*pull 16 files (parse): }"; detail="${detail%)}"
+  [[ ${#detail} -ge 20 && ${#detail} -le 160 ]] && [[ "$detail" != *[@\<\>\[\]\#\`]* ]] && ! grep -q $'\033' <<<"$line"
+}
+row_ow_trap() {   # SIGTERM while a slow read is in flight: exit 143, no worker survives, the work directory is gone
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  local before after pid i spid alive=0
+  before="$(ls -d "$SANDBOX"/tmp.* 2>/dev/null | wc -l)"
+  env -u SOAK_PARALLEL PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" SLOW_S=30 SOAK_PARALLEL=2 bash "$OW_SCRIPT" > /dev/null 2>&1 & pid=$!
+  for i in $(seq 1 100); do [[ -s "$GHLOG.slowpids" ]] && break; sleep 0.2; done
+  [[ -s "$GHLOG.slowpids" ]] || { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 1; }
+  kill -TERM "$pid"; RC=0; wait "$pid" || RC=$?; OW_RCS+=("$RC")
+  while read -r spid; do kill -0 "$spid" 2>/dev/null && alive=1; done < "$GHLOG.slowpids"
+  after="$(ls -d "$SANDBOX"/tmp.* 2>/dev/null | wc -l)"
+  [[ "$RC" -eq 143 && "$alive" -eq 0 && "$before" -eq "$after" ]]
+}
 row_ow_never_one() { local n=0 rc; for rc in "${OW_RCS[@]}"; do n=$((n + 1)); [[ "$rc" -ne 1 ]] || return 1; done; [[ "$n" -ge 30 ]]; }   # exit 1 is unreachable by design: no stub scenario of this section returned it
 chk "window probe: a healthy window passes (the canary is excluded from the 4 distinct PRs, the echoed run: source in the logs is not read as a marker)" row_ow_pass
 chk "window probe: PR3a not merged is NOT YET (exit 2)" row_ow_notmerged
@@ -3186,6 +3340,21 @@ chk "window probe: it refuses to run under xtrace with GH_TOKEN set (exit 78)" r
 chk "window probe: it only reads (every request hit a fixture; none missed)" row_ow_read_only
 chk "window probe: the header states the exit contract and the provisional ceilings, merged_at goes to jq by --arg, and the oracle list is the SUT's" row_ow_static
 chk "window probe: no stub scenario of this section returned exit 1 (exit 1 is not used)" row_ow_never_one
+chk "window probe: a files page over the 128 KiB argv limit (patch bodies) is read, and a patch text that names an oracle path decides nothing" row_ow_big_patch
+chk "window probe: three full big pages (the 300-file sentinel path) exclude the PR as oracle-touching without an error" row_ow_big_long
+chk "window probe: 250 long file names (the accumulated list over 128 KiB) reach the exclusion program" row_ow_long_names
+chk "window probe: a PR with two green units has its timeline and its pull read once each" row_ow_pr_facts_cached
+chk "window probe: only small scalars ride on a jq argv (an instrument control proves the scan flags a payload)" row_ow_argv
+chk "window probe: progress is three ordered phase lines on stderr, under 500 bytes, with no stdout line and none of the status tokens" row_ow_progress
+chk "window probe: the heartbeat prints a beat per 25 completions only when asked for" row_ow_heartbeat
+chk "window probe: SOAK_PARALLEL=1 and =4 give byte-identical stdout, and the newest red queue run still pauses the window" row_ow_parallel_same
+chk "window probe: a failed worker read exits 3 naming the first failure in dispatch order, with one line and no branch name" row_ow_worker_fail
+chk "window probe: the budget cuts the oldest-first reads (newest queue state first, extras exempt) and exits 2, never 3" row_ow_budget
+chk "window probe: the budget also bounds the PR-facts loop, and never ends in a PASS" row_ow_budget_facts
+chk "window probe: a quota shortfall, a failed rate_limit read and a 403 exit 3 before further reads; the quota line is printed" row_ow_quota
+chk "window probe: SOAK_PARALLEL above 8 and SOAK_BUDGET_S above 600 are CANNOT ESTABLISH; the caps themselves are allowed" row_ow_seam_caps
+chk "window probe: jq's error text reaches the failure message, allow-listed and at most 160 bytes" row_ow_jq_error_text
+chk "window probe: SIGTERM while a read is in flight leaves no worker and no work directory (exit 143)" row_ow_trap
 ow_mutate() {   # ow_mutate <name> <old> <new> <row>: one edit of the PROBE (it must land once and parse); the row is GREEN on the real probe and must be RED on the mutant
   local m="$SANDBOX/owmut-$1.sh" real="$OW_SCRIPT" red=0
   cp "$real" "$m"
