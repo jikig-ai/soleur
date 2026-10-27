@@ -17,3 +17,13 @@
 
 ### Components Invoked
 soleur:plan (subagent, in-process), soleur:deepen-plan (subagent, in-process), collision-precheck.sh 8211, lint-guard-contract.py, gh issue/PR probes. Commits: 6631050a7e (plan+tasks+decision-challenges), 37339bbf7a (deepened plan).
+
+## QA + Compound Phase
+- Status: complete (re-run at HEAD 4a20ebfd7d, post review-fix commits bd1ad6d265/44efc1f344/4a20ebfd7d).
+- `test/git-data-remote-url-wrapper.test.ts`: 12/12 pass (R-PUSH-SHALLOW, R-FETCH-OVERLAY green).
+- `test/git-data-replication.test.ts`: 31/31 pass (retry arms green).
+- `infra/git-data-transport-wrapper.test.sh`: 73/73 assertions pass.
+- `infra/git-data-cutover-access.test.sh`: 775/775 pass, 0 skipped.
+- Step 2.6 nav-states gate: skipped — diff touches no `(dashboard)/**`, `components/dashboard/**`, or `layout.tsx`.
+- Learnings recorded: `learnings/test-failures/2026-10-27-shallow-fetch-red-trigger-is-a-shallow-store-not-a-deep-ref.md`, `learnings/best-practices/2026-10-27-exec-line-pinned-by-live-host-probe-forces-conditional-branch.md`; one bullet routed to `plugins/soleur/skills/plan/references/plan-sharp-edges.md` (gated:false).
+- KB archival (Auto-Consolidation Step E) DEFERRED — spec dir still in-flight (PR #11342 DRAFT; ship Phase 6 step 2.5 reads `decision-challenges.md` from the live path). ship Phase 6.45 or cleanup-merged is the archival point.
