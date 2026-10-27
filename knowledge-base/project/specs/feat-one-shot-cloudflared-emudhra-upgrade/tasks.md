@@ -7,7 +7,7 @@ Derived from `knowledge-base/project/plans/2026-10-27-fix-cloudflared-emudhra-up
 - 1.1 Re-verify latest cloudflared release + compute sha256 of the real
   `cloudflared-linux-amd64` asset AND `cloudflared-linux-amd64.deb` (curl +
   sha256sum; never paste — per composite-action headers). Record both in PR body.
-- 1.2 Probe cpx22 stock in hel1 (`GET /v1/datacenters` `.server_types.available`)
+- 1.2 Probe cpx22 stock in hel1 (`GET /v1/server_types?name=cpx22` `.locations[].available` — the datacenters endpoint now returns 410; measured OK in hel1/fsn1/nbg1 this session)
   — the web-host-replace dispatch fails closed on a miss.
 - 1.3 Grep for other consumers of the Cloudflare apt source/`cf_apt_key` stage in
   cloud-init.yml before removal.

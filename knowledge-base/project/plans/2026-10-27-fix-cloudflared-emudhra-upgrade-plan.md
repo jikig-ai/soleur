@@ -425,7 +425,7 @@ re-imaged except web-2 via its dedicated dispatch.
   explicit `-replace` in O2.
 - `stock_preflight_gate` in the replace job aborts if cpx22 is unplaceable at apply
   time (the #6482 trap; probe first at dispatch time — cheap:
-  `GET /v1/datacenters` `.server_types.available`).
+  `GET /v1/server_types?name=<type>` `.locations[].available` (the datacenters endpoint now returns 410).
 - TF state holds the new tunnel token (same sensitivity class as today).
 
 ### Vendor-tier reality check
