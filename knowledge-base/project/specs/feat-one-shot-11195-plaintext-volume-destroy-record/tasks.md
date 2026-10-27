@@ -34,7 +34,7 @@ Plan: knowledge-base/project/plans/2026-10-27-chore-git-data-plaintext-volume-de
 
 ## Phase 4: Verification
 
-- [ ] 4.1 Parity, preflight G1, census, grep-q-pipe-guard, wipe-wedge, replace/birth gates, root-key-arm, ledger lint, orphan-suite lint, guard-vacuity-floor, C4 tests + count parity, workflow lint, ci.yml ratchet step, kb-consumers test, affected-tests selection (heavy suites to CI, read back)
+- [ ] 4.1 Parity, preflight G1, census, grep-q-pipe-guard, wipe-wedge, replace/birth gates, root-key-arm, ledger lint, orphan-suite lint, guard-vacuity-floor, C4 tests + count parity, workflow lint, ci.yml ratchet step, kb-consumers test, affected-tests selection (heavy suites to CI, read back); plus the suites that read the rewritten runbook (`git-data-wipe-access`, `git-data-cutover-access`, `git-data-wipe-assert`, `lint-infra-no-human-steps` tests) and the shard-registry suites (`scripts-shard-totality`, `scripts-shard-manifest`, `regenerate-shard-manifest`, `test-infra-suite-registration*`); expenses check expects `expired=29 anomalies=0`
 
 ## Phase 5: PR and dated items
 
