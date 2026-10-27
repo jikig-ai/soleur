@@ -13,7 +13,7 @@ tags:
 related:
   - https://github.com/jikig-ai/soleur/issues/8211
   - https://github.com/jikig-ai/soleur/pull/11342
-  - knowledge-base/project/plans/2026-10-27-fix-git-data-store-shallow-push-plan.md
+  - knowledge-base/project/plans/archive/20261027-191424-2026-10-27-fix-git-data-store-shallow-push-plan.md
   - knowledge-base/project/learnings/test-failures/2026-10-27-shallow-fetch-red-trigger-is-a-shallow-store-not-a-deep-ref.md
 ---
 
