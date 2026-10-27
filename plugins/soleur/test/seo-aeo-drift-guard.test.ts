@@ -3119,3 +3119,197 @@ describe("#9579 hero structure — privacy line visible, one install CTA, hosted
     expect(plainText(html.slice(lastItemEnd, sectionEnd)), "line names Discord").toContain("Discord");
   });
 });
+
+// -- Test N: pillar/cluster link graph (#8143/#8144/#5616) -------------------
+// Entry-point + mesh link-equity guard for the fix shipped under
+// knowledge-base/project/plans/archive/20261026-141820-2026-10-26-fix-gsc-index-link-equity-plan.md:
+// every pillar/cluster URL is reachable from the rendered global nav or the
+// homepage body, the pillar<->cluster mesh links exist in built output, and a
+// census over plugins/soleur/docs/pages/** requires every page file to be
+// classified so a future unreachable page cannot slip past a pinned name list.
+
+describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
+  const PAGES_DIR = resolve(REPO_ROOT, "plugins/soleur/docs/pages");
+
+  // The ten pillar/cluster pages (#8144 AC: "each of the ten pages is
+  // reachable from the global nav on every page").
+  const PILLAR_CLUSTER = [
+    "/company-as-a-service/",
+    "/agentic-engineering/",
+    "/glossary/",
+    "/claude-code-plugins/",
+    "/ai-agents-for-solo-founders/",
+    "/solo-founder-ai-stack/",
+    "/ai-cto/",
+    "/ai-cmo/",
+    "/compare/soleur-vs-cursor/",
+    "/compare/soleur-vs-devin/",
+  ];
+
+  // Reachable via the homepage rail only — same coverage property (nav OR
+  // homepage body), deliberately not nav children. The three blog URLs are the
+  // "Crawled - currently not indexed" remediation set.
+  const RAIL_LINKED = [
+    "/goal-primitive/",
+    "/blog/soleur-vs-polsia/",
+    "/blog/why-most-agentic-tools-plateau/",
+    "/blog/ai-agents-for-solo-founders/",
+  ];
+
+  // Nav/footer destinations — reachable site-wide by design. The legal family
+  // (permalink /legal/*) interlinks under /legal/ plus footerLegal and is
+  // classified chrome as a group below.
+  const CHROME = new Set([
+    "/about/",
+    "/agents/",
+    "/skills/",
+    "/pricing/",
+    "/getting-started/",
+    "/blog/",
+    "/changelog/",
+    "/community/",
+    "/vision/",
+    "/legal/",
+    "/known-external-tools/",
+  ]);
+
+  function pagePermalinks(): { file: string; url: string }[] {
+    const out: { file: string; url: string }[] = [];
+    const walk = (dir: string): void => {
+      // Dirent-based listing: the type check rides the directory entry, so no
+      // stat-then-read TOCTOU (CodeQL js/file-system-race) and no extra syscall.
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, ent.name);
+        if (ent.isDirectory()) {
+          walk(full);
+        } else if (/\.(njk|md)$/.test(ent.name)) {
+          const src = readFileSync(full, "utf8");
+          const m = src.match(/^permalink:\s*(\S+)\s*$/m);
+          expect(m, `${full}: permalink frontmatter`).not.toBeNull();
+          out.push({
+            file: full,
+            url: `/${m![1].replace(/index\.html$/, "")}`,
+          });
+        } else {
+          // A non-page-source file under pages/** must not silently escape the
+          // census — classify it explicitly or the glob's totality claim is false.
+          out.push({ file: full, url: `__nonpage__:${full}` });
+        }
+      }
+    };
+    walk(PAGES_DIR);
+    return out;
+  }
+
+  // Anchored on the href= call-form — a bare URL token appears in prose and
+  // comments and cannot be driven RED (cq-assert-anchor-not-bare-token).
+  const hasHref = (html: string, url: string): boolean =>
+    html.includes(`href="${url}"`) ||
+    html.includes(`href="https://soleur.ai${url}"`);
+
+  test("anti-vacuity: registry is complete and every registry URL resolves to a built page", () => {
+    expect(PILLAR_CLUSTER.length).toBeGreaterThanOrEqual(10);
+    for (const url of [...PILLAR_CLUSTER, ...RAIL_LINKED]) {
+      expect(
+        existsSync(resolve(SITE, url.slice(1), "index.html")),
+        `built page for ${url}`,
+      ).toBe(true);
+    }
+  });
+
+  test("census: every plugins/soleur/docs/pages/** file is classified", () => {
+    const unclassified: string[] = [];
+    for (const { file, url } of pagePermalinks()) {
+      const classified =
+        PILLAR_CLUSTER.includes(url) ||
+        RAIL_LINKED.includes(url) ||
+        CHROME.has(url) ||
+        url.startsWith("/legal/");
+      if (!classified) unclassified.push(`${file} (${url})`);
+    }
+    expect(
+      unclassified,
+      `unclassified pages — add to PILLAR_CLUSTER, RAIL_LINKED, or CHROME with a reason: ${unclassified.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("every pillar/cluster URL is reachable from the global nav; rail members from nav or homepage body", () => {
+    // Nav subtree = <ul class="nav-links"> ... </header> (nav children render
+    // site-wide, so a non-homepage page proves the site-wide claim). Footer
+    // links do not count.
+    const pricing = readSite("pricing/index.html");
+    const navStart = pricing.indexOf('<ul class="nav-links">');
+    expect(navStart, "nav-links block present on /pricing/").toBeGreaterThan(-1);
+    const navEnd = pricing.indexOf("</header>", navStart);
+    expect(navEnd, "</header> follows the nav block").toBeGreaterThan(navStart);
+    const navSubtree = pricing.slice(navStart, navEnd);
+    // Homepage body = built index.html minus the footer region.
+    const indexHtml = readSite("index.html");
+    const body = indexHtml.slice(0, indexHtml.indexOf("<footer"));
+    // PILLAR_CLUSTER coverage is nav-specific (#8144 AC: "reachable from the
+    // global nav on every page") — a homepage-only link does not satisfy it.
+    for (const url of PILLAR_CLUSTER) {
+      expect(
+        hasHref(navSubtree, url),
+        `${url}: not reachable from the global nav`,
+      ).toBe(true);
+    }
+    for (const url of RAIL_LINKED) {
+      expect(
+        hasHref(navSubtree, url) || hasHref(body, url),
+        `${url}: no entry-point inbound link (nav or homepage body)`,
+      ).toBe(true);
+    }
+  });
+
+  test("pillar/cluster mesh: pillar forward-links, compare back/sibling links, agentic-engineering cluster", () => {
+    // Scope the haystack to <main> … </main> — the rendered page also carries
+    // the global nav (where every pillar/cluster URL is now a child), so a
+    // whole-page match is satisfied by nav chrome and cannot be driven RED.
+    const mainOf = (rel: string): string => {
+      const html = readSite(rel);
+      const s = html.indexOf("<main");
+      const e = html.indexOf("</main>", s);
+      expect(s, `${rel}: <main> present`).toBeGreaterThan(-1);
+      expect(e, `${rel}: </main> present`).toBeGreaterThan(s);
+      return html.slice(s, e);
+    };
+    const pillar = mainOf("company-as-a-service/index.html");
+    for (const url of [
+      "/compare/soleur-vs-cursor/",
+      "/compare/soleur-vs-devin/",
+      "/ai-agents-for-solo-founders/",
+      "/solo-founder-ai-stack/",
+    ]) {
+      expect(hasHref(pillar, url), `pillar forward-links ${url}`).toBe(true);
+    }
+    const cursor = mainOf("compare/soleur-vs-cursor/index.html");
+    expect(
+      hasHref(cursor, "/company-as-a-service/"),
+      "cursor compare links the pillar",
+    ).toBe(true);
+    expect(
+      hasHref(cursor, "/compare/soleur-vs-devin/"),
+      "cursor compare links its sibling",
+    ).toBe(true);
+    const devin = mainOf("compare/soleur-vs-devin/index.html");
+    expect(
+      hasHref(devin, "/company-as-a-service/"),
+      "devin compare links the pillar",
+    ).toBe(true);
+    expect(
+      hasHref(devin, "/compare/soleur-vs-cursor/"),
+      "devin compare links its sibling",
+    ).toBe(true);
+    const ae = mainOf("agentic-engineering/index.html");
+    for (const url of [
+      "/skills/",
+      "/glossary/",
+      "/claude-code-plugins/",
+      "/ai-agents-for-solo-founders/",
+      "/company-as-a-service/",
+    ]) {
+      expect(hasHref(ae, url), `agentic-engineering links ${url}`).toBe(true);
+    }
+  });
+});

@@ -1,37 +1,49 @@
 ---
-last_updated: 2026-10-25
+last_updated: 2026-10-26
 ---
 # Campaign Calendar
 
 Rolling view of content distributions. Auto-generated from `distribution-content/` frontmatter.
 
+## Overdue
+
+> These items have a scheduled publish date in the past but have not been published.
+
+| Title | Type | Publish Date | Channels | Status |
+|-------|------|--------------|----------|--------|
+| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 2026-04-24 | unknown | draft |
+
 ## Upcoming
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
-| Soleur on OpenCode: run your AI organization on open-weights models | feature-launch | 2026-10-27 | x, bluesky | scheduled |
+| Soleur on OpenCode: open-weights models, sovereign memory | feature-launch | 2026-10-27 | x, bluesky | scheduled |
+| A Property Test That Cannot Fail Teaches Nothing | pillar | 2026-10-28 | x, bluesky, discord, linkedin-personal | scheduled |
 | We Audited 102 Guardrails. Only Four Belong in Every Repository. | pillar | 2026-10-29 | x, bluesky, discord, linkedin-personal | scheduled |
+| The First Property Test We Wrote Found a Real Bug | pillar | 2026-11-03 | x, bluesky, discord, linkedin-personal | scheduled |
+| Before Your AI Team Takes a Recurring Job, It Answers Six Questions | spoke | 2026-11-04 | x, bluesky, discord, linkedin-personal | scheduled |
+| A Map That Can't Drift | pillar | 2026-11-05 | x, bluesky, discord, linkedin-personal | scheduled |
+| Test the Migration, Not Just the Schema | pillar | 2026-11-10 | x, bluesky, discord, linkedin-personal | scheduled |
+| The Map That Only Records What the Agent Saw | pillar | 2026-11-12 | x, bluesky, discord, linkedin-personal | scheduled |
+| A Flaky Test Passed on Retry and the Loop Called It Fixed | pillar | 2026-11-17 | x, bluesky, discord, linkedin-personal | scheduled |
 
 ## Stale Draft — needs approval
 
 > Drafts older than 7 days still awaiting operator approval. The
 > publisher never ages these out — flip `publish_date` + `status: scheduled` to
 > release, or delete if abandoned.
+
 | Title | Type | Age (days) | Channels | Status |
 |-------|------|------------|----------|--------|
-| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 184 | unknown | draft |
+| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 185 | unknown | draft |
 
 ## Draft
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
 | A 'healthy' server can lie — new deep-readiness check proves a host can actually serve you | feature-launch | 2026-08-25 | x, bluesky | stale |
-| A Flaky Test Passed on Retry and the Loop Called It Fixed | pillar |  | x, bluesky, discord, linkedin-personal | draft |
-| A Map That Can't Drift | pillar |  | x, bluesky, discord, linkedin-personal | draft |
-| A Property Test That Cannot Fail Teaches Nothing | pillar |  | x, bluesky, discord, linkedin-personal | draft |
 | AI Agents for Solo Founders: The Definitive Guide | pillar | 2026-09-08 | discord, x, bluesky, linkedin-company | stale |
 | Agents That Use APIs, Not Browsers | milestone-announcement | 2026-07-09 | discord, x, bluesky, linkedin-personal, linkedin-company | stale |
-| Before Your AI Team Takes a Recurring Job, It Answers Six Questions | spoke | 2026-11-04 | x, bluesky, discord, linkedin-personal | draft |
 | From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-07-07 | discord, x, bluesky, linkedin-company | stale |
 | How We Let AI Agents Run Cron Jobs Without Letting Them Exfiltrate Secrets | engineering-deep-dive |  | blog, hackernews, x, linkedin-personal | parked |
 | Jump anywhere in the app with two keystrokes | feature-launch | 2026-08-13 | x, bluesky | stale |
@@ -39,9 +51,6 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders? | comparison | 2026-05-21 | discord, x, bluesky, linkedin-company | stale |
 | Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Automation | comparison | 2026-06-05 | discord, x, bluesky, linkedin-company | stale |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | 2026-09-10 | discord, x, bluesky, linkedin-company | stale |
-| Test the Migration, Not Just the Schema | pillar |  | x, bluesky, discord, linkedin-personal | draft |
-| The First Property Test We Wrote Found a Real Bug | pillar |  | x, bluesky, discord, linkedin-personal | draft |
-| The Map That Only Records What the Agent Saw | pillar |  | x, bluesky, discord, linkedin-personal | draft |
 | The One-Person Billion-Dollar Company: Why It's an Engineering Problem | pillar | 2026-04-21 | discord, x, bluesky, linkedin-company | stale |
 | What Is Company-as-a-Service? | pillar | 2026-05-12 | discord, x, bluesky, linkedin-company | stale |
 | Your brand context now auto-loads in the web AI agent, not just the CLI | feature-launch | 2026-08-27 | x, bluesky | stale |

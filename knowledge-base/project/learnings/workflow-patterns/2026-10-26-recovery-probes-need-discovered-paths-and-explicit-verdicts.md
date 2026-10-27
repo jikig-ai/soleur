@@ -51,3 +51,13 @@ top-level all identified the recovery feature worktree. The installed harness
 guidance already documents the missing-envelope-CWD failure mode. Pass the
 absolute worktree through `git -C` so the guard inspects the intended branch;
 do not disable or bypass the main-branch guard.
+
+The harness shell still ran from the main checkout, so a worktree-relative
+`git add` hit the main-branch guard. Use absolute `git -C <worktree>` for both
+staging and commit. The linked-worktree Git index also lives below the shared
+`.git` metadata path, which the sandbox mounts read-only; after confirming the
+exact path allowlist, request escalation for that Git metadata write instead
+of copying metadata or changing the worktree layout. The initial merge from
+the newly fetched main had one expected source conflict: preserve both sides'
+distinct migration filenames in the exact-name refusal fixture, then rerun its
+synthetic parity suite before committing the merge.

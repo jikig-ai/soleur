@@ -1,5 +1,24 @@
 # Recovery continuation — 2026-10-26
 
+## Reconciliation against the later fetched main
+
+The branch was subsequently merged with fetched `origin/main`
+`2a6558455894163057a8642419495cdd9d1d0303`. The sole content conflict was
+the exact-name refusal list in `apps/web-platform/scripts/dev-ledger-parity.test.sh`;
+it now contains both branch-owned 174/175 down filenames and main-owned 174,
+175 and 176 filenames. The conflict did not alter migration SQL.
+
+The remeasurement finds 185 forward migrations on fetched main (maximum
+ordinal 176) and 196 on the merged branch (maximum ordinal 176). Duplicate
+ordinals already exist in the repository; migration ownership remains the
+full filename. The branch's `174_agent_engine_erasure_lock_order` and
+`175_codex_history_notice_issuance` therefore remain byte-preserving and
+distinct from main's `174_api_data_grants_snapshot` and
+`175_tom4_shape_iv_client_grant_revokes`. Main's migration 176 is also
+preserved. The Python migration-ledger suite passes 8/8 and the synthetic
+dev-ledger parity suite passes 295/295 after resolving the pin-list conflict.
+These are source checks and do not establish shared-ledger state.
+
 ## Source reconciliation and local evidence
 
 Recovered uncommitted work is preserved in checkpoint `2371552479`. Merge

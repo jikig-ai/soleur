@@ -18,6 +18,18 @@
       { "label": "Agents", "url": "/agents/" },
       { "label": "Skills", "url": "/skills/" }
     ] },
+    { "label": "Learn", "children": [
+      { "label": "Company-as-a-Service", "url": "/company-as-a-service/" },
+      { "label": "Agentic Engineering", "url": "/agentic-engineering/" },
+      { "label": "Glossary", "url": "/glossary/" },
+      { "label": "Claude Code Plugins", "url": "/claude-code-plugins/" },
+      { "label": "AI Agents for Solo Founders", "url": "/ai-agents-for-solo-founders/" },
+      { "label": "Solo Founder AI Stack", "url": "/solo-founder-ai-stack/" },
+      { "label": "AI CTO", "url": "/ai-cto/" },
+      { "label": "AI CMO", "url": "/ai-cmo/" },
+      { "label": "Soleur vs Cursor", "url": "/compare/soleur-vs-cursor/" },
+      { "label": "Soleur vs Devin", "url": "/compare/soleur-vs-devin/" }
+    ] },
     { "label": "Pricing", "url": "/pricing/" },
     { "label": "Get Started", "url": "/getting-started/" },
     { "label": "Blog", "url": "/blog/" },

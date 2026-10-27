@@ -1,0 +1,8 @@
+# round 2: round-1 edges + the 5 real-read files, round-1 accept rows present; reveal 0 (fixpoint)
+SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=stale-line live=1620 baseline=1629
+wall=169
+# final tree after baseline regeneration:
+SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=1620 baseline=1620
+wall=164
+ref	scripts/lib/tweet-eligibility.test.sh	apps/web-platform/supabase/config.toml	scripts/lib/tweet-eligibility.test.sh:148	a03c3a6b6cdf/1	"feat(web): x" "app:web-platform" "apps/web-platform/supabase/config.toml"
+SOLEUR_PR_AFFECTED_AUDIT suites=669 always_on=119 audited=550 unaudited=0 gap_suites=253 gap_refs=1620 accepted=63 stale=0 refs=3593 files_read=1071
