@@ -381,6 +381,7 @@ in_transit:
 
 ### Apply path
 
+<!-- lint-infra-ignore start -->
 **(b) `terraform apply -replace` + dispatch** — the running-host path. Sequence
 (post-merge, per-command operator go-ahead each step — `hr-menu-option-ack`):
 
@@ -399,6 +400,7 @@ curl -s -H "Authorization: Bearer $CF_API_TOKEN" \
   "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel/<new-id>/connections" \
   | jq -r '[.result[].conns[].client_version] | unique'
 ```
+<!-- lint-infra-ignore end -->
 
 Alternative for O1: dashboard "Rotate token" or `PATCH tunnel_secret` + `DELETE
 /cfd_tunnel/<id>/connections` — preserves the tunnel ID (no CNAME churn); default is
