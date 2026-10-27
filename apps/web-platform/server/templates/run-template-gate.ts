@@ -43,6 +43,8 @@ export interface RunTemplateGateArgs {
   grantId: string;
   actionClass: string;
   messageId: string;
+  /** #10543: set ONLY on a founder re-click replay; excluded from the quota count (see is-template-authorized.ts). */
+  excludeActionSendId?: string;
 }
 
 export type TemplateGateResult =
@@ -82,12 +84,19 @@ export async function runTemplateGate(
     grantId,
     actionClass,
     messageId,
+    excludeActionSendId,
   } = args;
 
   let predicateResult;
   try {
     predicateResult = await Promise.race([
-      isTemplateAuthorized(supabase, founderId, templateHash, grantId),
+      isTemplateAuthorized(
+        supabase,
+        founderId,
+        templateHash,
+        grantId,
+        excludeActionSendId,
+      ),
       new Promise<never>((_, reject) =>
         setTimeout(
           () => reject(new PredicateException("predicate timed out")),

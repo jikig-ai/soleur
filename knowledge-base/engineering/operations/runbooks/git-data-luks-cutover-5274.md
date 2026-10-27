@@ -1634,6 +1634,51 @@ The boot-signal read takes the newest `boot_complete` row of the CURRENT server 
 
 SSH-class and for a stuck state only; no step above depends on it. `wipe_snapshot_teardown_failed` means a host-local device-mapper snapshot named `git-data-pt-snap` (copy-on-write file in `/dev/shm`) may still exist over the retired device. Every later run then refuses (`wipe_snapshot_present` or `wipe_device_has_holders`), and nothing can be detached while it stands. Do not clear it by rebooting the host: the reboot is the dead end above. Open an incident with the CTO and have the host-side teardown done in the script's own order (unmount the snapshot, `dmsetup remove --retry git-data-pt-snap`, detach the loop device, remove the COW file), then `wipe_check` shows the device as before.
 
+## Plaintext-volume destroy (Option B, #8211 / #6897)
+
+The retired plaintext Hetzner volume (id 106867358, name `soleur-git-data-store`) is to be deleted through Terraform by `.github/workflows/git-data-plaintext-volume-destroy.yml` when the owner dispatches it, instead of by the DL-2 wipe (which cannot conclude; see the wipe section above). The claim limits, the controls and the consequences are in ADR-239 Amendment 2026-10-26 (DRAFT, pending CLO attestation; nothing in it is in force until a dispatch has concluded successfully and been read back). This section is the procedure.
+
+**Order** (CTO 2026-10-26; the sentence "a rotate is required before every flip dispatch" is stale and is not part of this order, see "When a rotate is needed after the flip"):
+
+1. Dispatch the flip retry as the flip section says.
+2. If it refuses `verdict=d6_replace_stale` AND no cutover run has executed the `Write GIT_DATA_STORE_ENABLED` step, dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA`, then re-dispatch the flip. If it reports `store_dirty` or `scan_unreadable`, do NOT rotate and do not override: a rotate after a flag-write is refused by design (the LUKS store may hold the only copy). The merge is then not ordered behind a rotate, because none is possible.
+3. Wait until the flip run is terminal: success, or a refusal that no permitted rotate can fix.
+4. Merge PR #11179. From the merge, the git-data host rotate, replace and create routes are disabled until the gate-retirement follow-up (#11194) lands. Between this merge and the dispatch, no PR that touches `cloud-init-git-data.yml`, `git-data-bootstrap.sh`, `modules/git-data-userdata/**` or the scripts injected into the host may merge: any change to the rendered `user_data` makes the server plan a replace, the gate refuses it (`out_of_scope_change`), and the usual remedy (a rotate) is the route the merge disabled.
+5. Before the dispatch: #11195 exists, is open and has a milestone; no git-data-cutover run is queued or running (the job holds the `git-data-state` group, so it waits behind one; cancel a stale `waiting` cutover run); the reviewer can approve at once; no cohort onboarding call or demo is under way. Dispatch within about 24 hours of the merge (the clock starts at the merge). Post a comment with the dispatch's UTC time and the run URL on #11195 and on #6897.
+6. After a rotate (step 2 only, before the merge) nothing is re-read or re-pinned: the server and the LUKS volume are resolved by name, and only volume 106867358 is a hard pin.
+
+**Dispatch** (the owner, in their own session):
+
+```bash
+gh workflow run git-data-plaintext-volume-destroy.yml -f expected_volume_id=106867358 -f confirm=DESTROY-PLAINTEXT-GIT-DATA-VOLUME
+gh run list --workflow git-data-plaintext-volume-destroy.yml -L 5   # confirm the run actually started
+```
+
+A dispatch from any ref other than `main` fails `validate` with `verdict=not_main`; a wrong input fails there too, before any approval is requested. The `destroy` job then waits for the `web-platform-infra-apply` reviewer. The run holds the workflow-level `terraform-apply-web-platform-host` group from its start, including while it waits, and GitHub keeps one pending run per group: a waiting destroy can supersede a pending per-merge infra apply (re-run that apply afterwards if it shows `cancelled`), so dispatch only when the reviewer can approve at once and cancel a stale waiting run. **The delete is final.** No snapshot or backup of this volume exists or is created, and what the provider keeps after a delete is not measured. The reviewer approves a deliberate retention-ending act.
+
+**Read the state without dispatching** (read-only GETs, no SSH, counts and identifiers only):
+
+```bash
+bash apps/web-platform/infra/git-data-plaintext-volume-state.sh
+```
+
+It uses `HCLOUD_TOKEN_READONLY` (or `HCLOUD_TOKEN`), falling back to Doppler `prd_terraform` when you are logged in. The first line is the summary (`plaintext_volume=present|absent|unknown`), then `shape=`, `server_id=`, `luks_volume_id=`, `volume_created=`, `volume_delete_protected=`. The "gone" answer rests on the token belonging to the production project (the presence proof is by name); the workflow supplies only the `prd_terraform` token, and no other root in this repo creates these names. Exit codes: 0 determined; 3 no credential; 4 API, transport or parse error (retry later); 5 presence proof failed (the token cannot see exactly one server named `soleur-git-data` holding exactly one `soleur-git-data-luks-store` volume attached to it, so a 404 would mean nothing: check which project the token belongs to and the host's state). Shapes: `present_attached` and `present_detached` are dispatchable (a detached volume is the re-dispatch after a partial run); `gone` means the end event already holds and a dispatch only re-proves it; `name_other_id`, `attached_elsewhere` and `identity_mismatch` are refused by the workflow: stop and escalate to the owner.
+
+**What the run proves.** The pre-plan read resolves the server and the LUKS volume by name and proves the token can see them; the plan deletes exactly the volume and its attachment; the gate judges that plan and then judges the saved plan again inside the step that applies it; the read-back, which also runs after a failed apply, requires 404 by id AND an empty list by name (`shape=gone`), the LUKS volume still on the same server, and the same server and LUKS ids as before the plan. The step summary carries counts and identifiers only; paste it into the record PR (#11195), because the default run retention is shorter than an attestation needs. The 2026-10-15 wipe preconditions (soak, run-record scan, boot signal) are superseded for this end event: ADR-239 Amendment 2026-10-26, item 8. If a killed wipe left a `git-data-pt-snap` snapshot over the plaintext device (`wipe_snapshot_teardown_failed`), run `snapshot_clear` before the dispatch.
+
+**Between merge and dispatch.**
+
+- The state still holds both addresses, so every untargeted plan shows the two destroys. `scheduled-terraform-drift.yml` files the issue `infra: drift detected in web-platform` (label `infra-drift`) and sends email. The plan in it is exactly the two destroys. Nothing closes the issue automatically: after the destroy, wait for the first drift run that logs "No drift detected in web-platform", then close it by hand.
+- **The drift issue's "apply locally" next step is not to be taken, and no untargeted apply is acceptable for any reason** (including the full-apply break-glass text in `apply-web-platform-infra.yml`, ADR-096): it would delete the volume without the typed pins, the gate or a reviewer, on a lockless R2 state.
+
+**If the git-data host is lost in that window (or after the destroy, before #11194).** Stop and escalate to the owner; the replace, rotate and create routes are disabled and the failure text that says "re-dispatch git-data-host-replace" is void. With the flag on, git push and pull and workspace provisioning fail (they do not corrupt), and the bare-repo part of an account deletion (Art. 17) stays `pending` with a Sentry alert while the one-month clock runs. After the destroy the literal `git_data_volume_id` names a deleted device: a host rebirth boots into the bootstrap's `plaintext_unverified reason=source` FATAL until the id is set to `""`. A plain reboot is believed safe (the bootstrap runs from cloud-init `runcmd`, once per instance, as two review seats read it) but that is unverified on the live host. #11194 must end with either `id = ""` or a bootstrap that treats a nonexistent device as absent once the volume is retired.
+
+**Retention and public disclosure (CLO 2026-10-26).** `docs/legal/**` is not edited by this change, and not on the dispatch day: a dispatch is not a deletion, and the public sentence may change only after the verified read-back. The record PR (#11195) must be merged and live by the earlier of 7 calendar days after the read-back and 2026-11-11. The ledger `expires_on` stays 2026-11-12. If PR #11179 is not merged by 2026-11-02, or no verified read-back is recorded on #6897 by the 2026-11-09 checkpoint, a CLO re-ruling is requested that day; a dated, linked re-ruling is a precondition of moving `expires_on`, and a one-line date bump is not a renewal.
+
+**Recovery.** A failed or partial run is re-dispatched through the same workflow; the read-back says what remains (verdicts: `volume_still_present_after_failed_apply` re-dispatch; `apply_failed_volume_gone` do NOT re-dispatch, the device is gone and a refresh drops the stale state entries; `server_id_drift` and `luks_volume_missing` stop and escalate). A re-dispatch after success finds the volume gone, skips plan/gate/apply and re-proves the end event. A reviewer rejection changes nothing; re-dispatch, and note the new date on #6897.
+
+**After the destroy.** The wipe-family modes of `git-data-cutover.yml` still exist and will see the volume gone. A rollback cannot use the plaintext volume as a target. The record PR (#11195) deletes this workflow, its gate, probe and tests, retires the ledger row, and appends the run URL and read-back to the ADR amendment.
+
 ## Verdict map
 
 | Where you are | What the run reads | What to do |

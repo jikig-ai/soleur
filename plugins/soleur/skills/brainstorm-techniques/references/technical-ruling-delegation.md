@@ -116,7 +116,9 @@ per persisted decision, whatever shape the free-form body uses. Columns: `Item |
   gets an `operator (scope)` row naming that override, so the operator sees it. A CLO ruling on legal posture is recorded
   with Class `operator (legal-risk)` and a `Ruled by CLO agent, <date>: ...` Ruling; `technical (legal)` is not a valid Class.
 - **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>` (`CLO` for legal; and `Dissent: <line>` when
-  present). If the ruling differs from what a headless subagent assumed and built, re-enter `work` for the item.
+  present). Write the cell only AFTER the agent's reply is in context, copying its decision: the gate checks the cell's
+  shape and cannot tell whether the consultation happened. **Why:** #10552 — three rows were pre-written with a CTO/CLO
+  name before either was asked; a fix-round seat caught it, and the CLO's real answer amended one row. If the ruling differs from what a headless subagent assumed and built, re-enter `work` for the item.
 - **Ruling, operator row:** the ACTION being authorised, citing the sibling technical row's item id when split. For a
   production-mutating act covered by a Standing Delegation the Ruling cell reads exactly
   `Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]` and is valid only on

@@ -102,8 +102,7 @@ Follow `knowledge-base/marketing/brand-guide.md` → `### X/Twitter` and its
     omitted.
 - Present-tense "just shipped X" framing; lead the build-in-public peer voice,
   land one concrete buyer benefit. General register (plain language).
-- Links (if any) go in the **final** post of each channel only. A ship tweet has
-  no blog, so `blog_url` is omitted entirely.
+- **Official handles and links (when applicable):** When the shipped feature references a public tool, platform, company, or product by name, tag its official social handle (e.g., `@opencode`) in the hook tweet / primary post. Verify the handle via the tool's official website or verified account — never guess. Do not tag competitor handles in comparison posts. If the handle cannot be verified, omit the tag. See the brand guide's `### X/Twitter` and `### Bluesky` channel notes for the full policy.
 
 ## Step 5 — Write the draft file
 

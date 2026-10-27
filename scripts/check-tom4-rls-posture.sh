@@ -278,15 +278,30 @@ check("7", re.search(r'GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+(?:public\.)?purge_work
       "not found — TOM 4 shape (iv) states postgres reaches these ledgers; if "
       "that grant is gone, the instrument now overstates the principal set")
 
-client_roles = re.compile(r'\bTO\s+[^;]*?\b(anon|authenticated)\b', re.I)
-bad8 = []
-for mo in re.finditer(r'GRANT\s+[^;]*?\bON\s+(?:TABLE\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s+TO\s+[^;]*?;',
-                      ALL, re.I | re.S):
-    if mo.group(1) in SHAPE_IV and client_roles.search(mo.group(0)):
-        bad8.append(mo.group(0).strip())
+# NET of revokes, replayed in migration order — the same model granted_roles()
+# uses for functions below. A raw GRANT grep cannot express the corpus's
+# effective state once a later migration revokes (174 granted, 175 revoked:
+# cumulative text still shows the GRANT). Assertion 8's warrant is about the
+# EFFECTIVE corpus posture, so the instrument replays it.
+tbl_acl = collections.defaultdict(set)  # shape-(iv) table -> effective grantee set
+tbl_op = re.compile(
+    r'\b(GRANT|REVOKE)\s+[^;]*?\bON\s+(?:TABLE\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s+(TO|FROM)\s+([^;]+?);',
+    re.I | re.S)
+for m in MIGRATIONS:
+    for mo in tbl_op.finditer(BODY[m]):
+        tab = mo.group(2)
+        if tab not in SHAPE_IV:
+            continue
+        roles = {r.strip().strip('"').lower() for r in mo.group(4).split(",")}
+        if mo.group(1).upper() == "GRANT":
+            tbl_acl[tab] |= roles
+        else:
+            tbl_acl[tab] -= roles
+bad8 = ["%s -> %s" % (tab, sorted(tbl_acl[tab] & {"anon", "authenticated"}))
+        for tab in sorted(SHAPE_IV) if tbl_acl[tab] & {"anon", "authenticated"}]
 check("8", not bad8,
-      "no shape-(iv) TABLE is granted to anon or authenticated",
-      "client-reachable grants found: %s — shape (iv) warrants that no "
+      "no shape-(iv) TABLE holds an EFFECTIVE anon or authenticated grant (net of revokes, corpus order)",
+      "client-reachable grantees found: %s — shape (iv) warrants that no "
       "client-held credential reaches these tables" % bad8)
 
 # ================================================================= PREDICATES
