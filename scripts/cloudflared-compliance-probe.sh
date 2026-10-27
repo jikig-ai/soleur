@@ -123,6 +123,7 @@ done <<< "$CENSUS"
 # Pairing: every pin-bearing file+form must carry BOTH kinds. Collected through
 # a temp file because the producer loop runs in a pipeline subshell.
 PAIR_TMP="$(mktemp)"
+trap 'rm -f "$PAIR_TMP"' EXIT
 printf '%s\n' "$CENSUS" | cut -f1,2 | sort -u | while IFS=$'\t' read -r file form; do
   [[ -z "$file" ]] && continue
   kinds="$(printf '%s\n' "$CENSUS" | awk -F'\t' -v f="$file" -v m="$form" '$1==f && $2==m {print $3}' | sort -u | tr '\n' ' ')"
