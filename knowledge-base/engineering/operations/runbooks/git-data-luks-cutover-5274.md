@@ -11,7 +11,8 @@ repoints a mount — the flag-off readback is the rollback); `unfreeze` clears t
 There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
 plaintext volume is retained read-only until its wipe decision (#6897/#8571). The residue on it ends
 when that volume is destroyed by the DL-2 wipe, never mounted to purge in place; the target date and the slip
-rule are in ADR-239, amendment 2026-10-09. Three further modes, `wipe_check`, `wipe` and `wipe_finish` (#10138),
+rule are in ADR-239, amendment 2026-10-09. [Superseded 2026-10-27 (#11195): the volume was deleted at the
+provider API on 2026-10-27 by a Terraform destroy, not by the DL-2 wipe; see "Plaintext-volume destroy".] Three further modes, `wipe_check`, `wipe` and `wipe_finish` (#10138),
 run in a separate job (`wipe`) and retire that volume by detaching it and deleting it at the provider API; they
 are owner-named and described in [The wipe](#the-wipe-dl-2-10138--6897).
 
@@ -1532,6 +1533,8 @@ A `wipe_finish` publishes no phase before its delete gate (nothing in a finish w
 
 ### The wedge
 
+> **Superseded 2026-10-27 (#11195):** this section describes the DL-2 wipe path, which was not the path taken. The volume was deleted by a Terraform destroy, and neither the state nor the HCL holds `hcloud_volume.git_data` or its attachment any more (see "Plaintext-volume destroy"). It is kept as the record of the reasoning.
+
 After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data` (and its attachment). Read facts, from `tests/scripts/test-git-data-wipe-wedge.sh`:
 
 - **The drift plan shows a create of `hcloud_volume.git_data`.** `scheduled-terraform-drift.yml` plans the whole root with no `-target` and keeps reporting that create until PR-C merges. It only plans, so the effect is a drift report; it is the second reader of the wedge, and expected.
@@ -1645,7 +1648,7 @@ The retired plaintext Hetzner volume (id 106867358, name `soleur-git-data-store`
 - Apply: `Apply complete! Resources: 0 added, 0 changed, 2 destroyed.` (09:07:04Z).
 - Read-back: `shape=gone`; git-data server and LUKS volume unchanged. An independent read-only Hetzner GET afterwards returned 404 for volume 106867358 and an empty list for the name `soleur-git-data-store`; the LUKS volume was still attached to server 170370833 and the server was `running`.
 
-The claim is limited to "device deleted at the provider API" (ADR-239 Amendment 2026-10-27, item 3). It says nothing about the volume's contents before deletion, lock residue, or what the provider retains after a delete; those stay unmeasured. The delete was final: no snapshot or backup of this volume existed or was created.
+The claim is limited to "device deleted at the provider API" (ADR-239 Amendment 2026-10-27, item 3). It says nothing about the volume's contents before deletion, lock residue, or what the provider retains after a delete; those stay unmeasured. Provider-side snapshots or copies are not measured here either.
 
 **Drift.** After the destroy the state no longer holds the two retired addresses, so untargeted plans no longer show them. The drift issues titled `infra: drift detected in web-platform` that were open before 2026-10-27 predate the destroy. Close one only if its plan lists exactly those two destroys; the first drift run after the destroy that logs "No drift detected in web-platform" is the check.
 
