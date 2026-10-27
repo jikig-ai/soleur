@@ -267,8 +267,8 @@ env:
   # documentation or AI output per the 2026-03-21 server-provisioning learning,
   # Session Error #4; re-verified at /work time). Kept byte-identical to
   # apply-deploy-pipeline-fix.yml's pins so both bridges install the same binary.
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
 jobs:
   preflight:
@@ -3597,8 +3597,8 @@ jobs:
           # and `secrets: inherit` does not apply because this is not a reusable-workflow call.
           doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
           # Kept in step with reusable-release.yml's invocation; both are SHA-pinned.
-          cloudflared-version: "2026.5.0"
-          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          cloudflared-version: "2026.10.4"
+          cloudflared-sha256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
       - name: Restore production's pinned image set from GHCR
         # NO `continue-on-error`. This is the step that ends the empty-store window; a

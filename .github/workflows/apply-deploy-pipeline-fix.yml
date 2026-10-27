@@ -216,8 +216,8 @@ env:
   # SHA-256 computed against the real released binary at the pinned version
   # (NEVER paste a checksum from documentation or AI output per the 2026-03-21
   # server-provisioning learning, Session Error #4; re-verified at /work time).
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
 jobs:
   preflight:
