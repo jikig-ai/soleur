@@ -39,6 +39,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../../../.." && pwd)"
 TF="${KEYPROBE_GUARD_TF:-$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf}"
 WF="${KEYPROBE_GUARD_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
+FLIP="${KEYPROBE_GUARD_FLIP:-$REPO/apps/web-platform/infra/inngest-cutover-flip.sh}"
+RB="${KEYPROBE_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md}"
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -57,7 +59,7 @@ assert_fixture_dir() {
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-assert_fixture_dir "$TF"; assert_fixture_dir "$WF"
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$FLIP"; assert_fixture_dir "$RB"
 
 # INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
 _p0=$pass; _f0=$fail
@@ -67,7 +69,7 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
 fi
 pass=$_p0; fail=$_f0; FAILED=()
 
-for f in "$TF" "$WF"; do
+for f in "$TF" "$WF" "$FLIP" "$RB"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
@@ -131,10 +133,11 @@ else
   no "a resource block is missing (fail_ex=${#FAIL_EX} fail_al=${#FAIL_AL}) — every parameter row below would be vacuous"
 fi
 
-for pair in "fail:$FAIL_EX:$FAIL_AL"; do
-  _k="${pair%%:*}"; _rest="${pair#*:}"; _ex="${_rest%%:*}"
-  _al="${_rest#*:}"
-  _nm="inngest_luks_key_probe_$_k"
+_k=fail
+_ex="$FAIL_EX"
+_al="$FAIL_AL"
+_nm="inngest_luks_key_probe_$_k"
+{
   param "$_ex" sql_query "replace\\(trimspace\\(local\\.${_nm}_sql\\), \"/\\\\\\\\s\\+/\", \" \"\\)" \
     && ok "$_k exploration carries its own predicate local, collapsed to one line (perpetual-diff rule)" \
     || no "$_k exploration does not carry local.${_nm}_sql as its collapsed sql_query"
@@ -167,7 +170,7 @@ for pair in "fail:$FAIL_EX:$FAIL_AL"; do
     && grep -qF 'local.inngest_luks_key_probe_runbook_url' <<< "$(grep -E '^[[:space:]]*incident_cause' <<< "$_al")" \
     && ok "$_k alert points its metadata.runbook and incident_cause at the key-probe runbook local" \
     || no "$_k alert does not point metadata.runbook AND incident_cause at local.inngest_luks_key_probe_runbook_url"
-done
+}
 
 param "$FAIL_AL" check_period 300 && param "$FAIL_AL" query_period 10800 && param "$FAIL_AL" recovery_period 3600 \
   && ok "paging alert window: check 300 s, query 10800 s (3 h), recovery 3600 s" \
@@ -177,12 +180,28 @@ grep -qE '^[[:space:]]*inngest_luks_key_probe_runbook_url[[:space:]]*=[[:space:]
   && ok "the runbook local is the clickable URL of the 'Key-continuity probe (#9927 item 2)' subsection" \
   || no "inngest_luks_key_probe_runbook_url is not the runbook URL with the key-continuity-probe-9927-item-2 anchor"
 
+# ── presence rows: the EMITTER and the runbook agree with the SQL (pairwise pins are not enough) ─
+# The SQL, this guard and the probe suite each carry their own copy of the marker and the paging
+# prefix; a rename in the script and the probe suite alone would leave this alert matching nothing,
+# and on_missing_data=treat_as_zero reads that as health.
+grep -qF "\"${MARKER} \${row}\"" "$FLIP" \
+  && ok "the script's logger row carries the marker the SQL anchors on" \
+  || no "inngest-cutover-flip.sh no longer emits the logger row as \"${MARKER} \${row}\" — the paging SQL would match nothing"
+grep -qF "\"luks-key-probe\" \"\$row\" ${MARKER}" "$FLIP" \
+  && ok "the script's phone-home call passes the same marker as its message prefix" \
+  || no "the phone-home call no longer passes ${MARKER} as the marker override"
+_toks="$(grep -oE 'luks_probe_finish [a-z_]+' "$FLIP" | awk '{print $2}' | sort -u | tr '\n' ' ')"
+[ "$_toks" = "fail_header fail_key_absent fail_passphrase indeterminate ok " ] \
+  && ok "the script emits exactly the closed token set, and every paging token starts with the fail_ prefix the SQL matches" \
+  || no "the script's luks_probe_finish tokens drifted from the set the SQL and runbook assume: $_toks"
+grep -qxF '### Key-continuity probe (#9927 item 2)' "$RB" \
+  && ok "the runbook heading behind the alert's clickable anchor exists" \
+  || no "the runbook has no '### Key-continuity probe (#9927 item 2)' heading — the alert's runbook anchor is dead"
+
 # ── presence rows: -target parity with the apply workflow ─────────────────────────────────────
 _miss=""
-for nm in "$FAIL_NAME"; do
-  for ty in logtail_exploration logtail_exploration_alert; do
-    grep -qE "^[[:space:]]*-target=$ty\\.$nm \\\\\$" "$WF" || _miss="$_miss $ty.$nm"
-  done
+for ty in logtail_exploration logtail_exploration_alert; do
+  grep -qE "^[[:space:]]*-target=$ty\\.$FAIL_NAME \\\\\$" "$WF" || _miss="$_miss $ty.$FAIL_NAME"
 done
 [ -z "$_miss" ] \
   && ok "both resources have an anchored -target= line in the apply workflow (#5566)" \
@@ -246,6 +265,7 @@ SQLEND = "\n  SQL\n"'
     case "$which" in
       TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
+      FLIP) src="$FLIP"; copy="$MUT_DIR/inngest-cutover-flip.sh" ;;
       *) printf '[FATAL] mutate_red: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
     cp "$src" "$copy" || { printf '[FATAL] mutate_red: cp %s failed\n' "$src" >&2; exit 2; }
@@ -264,6 +284,7 @@ PY
     case "$which" in
       TF) KEYPROBE_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
       WF) KEYPROBE_GUARD_WF="$copy" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
+      FLIP) KEYPROBE_GUARD_FLIP="$copy" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
     esac
     # rc DISCRIMINATION. Only rc=1 (an assertion went red) is a caught mutation. rc>=2 is this
     # guard's own FATAL class, rc=126/127 a broken invocation: none is evidence a row pins anything.
@@ -298,6 +319,10 @@ assert s.count(old) == 1
 s = s.replace(old, old + "              -target=logtail_exploration.inngest_luks_key_probe_dark \\\n")'
   mutate_red "the dead-man is smuggled back: a dark resource joins the .tf" TF \
     's = s + "\nresource " + chr(34) + "logtail_exploration" + chr(34) + " " + chr(34) + "inngest_luks_key_probe_dark" + chr(34) + " {\n}\n"'
+  mutate_red "the script's marker is reworded in the emitter only (the SQL would watch a row nobody emits)" FLIP \
+    's = s.replace("SOLEUR_INNGEST_LUKS_KEY_PROBE ${row}", "SOLEUR_INNGEST_LUKS_KEY_PROBX ${row}")'
+  mutate_red "the script renames a paging token away from the fail_ prefix" FLIP \
+    's = s.replace("luks_probe_finish fail_header 1 uuid", "luks_probe_finish bad_header 1 uuid")'
   mutate_red "the dead-man is smuggled back: a dark SQL local joins the .tf" TF \
     'old = "  inngest_luks_key_probe_runbook_url ="
 assert s.count(old) == 1
@@ -307,8 +332,8 @@ fi
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer run
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
-PRESENCE_ROWS=26
-MUT_ROWS=11
+PRESENCE_ROWS=30
+MUT_ROWS=13
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))

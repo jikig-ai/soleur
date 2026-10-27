@@ -370,8 +370,10 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   name           = "soleur-inngest-luks-key-probe-fail-prd"
 
   # Presence-only, so safe before the probe is delivered (no rows, value 0). A 3 h window (a 25 h
-  # one would hold an incident open for a day); recovery_period 1 h so one good row does not close
-  # an incident the next hourly re-probe would re-open.
+  # one would hold an incident open for a day): while any fail_ row is inside it the count stays
+  # above 0, which is the hysteresis against the next hourly re-probe re-opening an incident. The
+  # incident clears about 3 to 4 h after the LAST failing row (the window, then recovery_period),
+  # which is not proof of recovery: only a token=ok row is.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
@@ -383,8 +385,9 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
 
   paused = false
 
+  # #11068 convention (#9168 measured flip): push armed; revert to `push = false` if the apply refuses it.
   email          = true
-  push           = false
+  push           = true
   call           = false
   sms            = false
   critical_alert = false
