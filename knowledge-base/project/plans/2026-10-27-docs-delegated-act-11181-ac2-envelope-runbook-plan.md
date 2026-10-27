@@ -184,7 +184,7 @@ Assessment ran inline (sequential-fallback — see Research Insights; no domain-
 - Given the source scratch file on disk, when `cp` lands it at the destination, then AC-1's `sha256sum` over `git show HEAD:<path>` prints the anchor hash (`integration`: deterministic command above).
 - Given a reviewer suggests "tidying" the envelope markdown (frontmatter, heading normalization), when the diff is checked, then AC-1 fails on any byte change — the precedent files carry no frontmatter and the receipt fingerprints bytes, so formatting edits are out of scope by construction (`unit`-equivalent: the cmp check itself). `integration`.
 - Given the PR body drafted per Phase 1 step 3, when `gh pr view <N> --json body -q .body | grep -icE 'clos(es|e) #11181|fixes #11181'` runs, then it exits 1, and the same pipe with `grep -c 'Ref #11181'` exits 0 (`integration`).
-- Given the branch, when `git diff --name-only origin/main...HEAD | grep -v '^knowledge-base/'` runs, then it prints nothing and exits 1 (`integration`).
+- Given the branch, when `git diff --name-only origin/main...HEAD | grep -vE '^knowledge-base/|^\.markdownlintignore$'` runs, then it prints nothing and exits 1 (`integration`). Amended at work-time (review F1): the pre-amendment single-allowlist form is superseded by the two-path allowlist governing AC-4; the plan-time snapshot bullet in `### Verification already run at plan time` stays intact per the append-only rule.
 
 No e2e scenario: nothing renders or executes. No new pyramid markers needed.
 
