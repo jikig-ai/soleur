@@ -92,14 +92,24 @@ jobs:
         with:
           version: 2.84.2
 
-      # #10868 (measured run 40525753531): the 44000/min org bucket is shared
-      # globally, so a single `supabase start` fan-out (~150 requests) re-trips
-      # it every attempt — auth and whole-command retry alone cannot win. Pull
-      # the embedded image set SERIALLY first, each image through the retry
-      # helper; cached images make `supabase start` issue minimal registry
-      # traffic. Runs for forks too — no credentials involved.
+      # #10868 (measured runs 40525753531/40561028313/40572250940/40573437435):
+      # the 44000/min org bucket AND the ECR bandwidth cap are shared-IP
+      # lotteries — auth, whole-command retry, AND registry rotation all lose
+      # to sustained contention. The image-set tarball cache restores the last
+      # pulled set from disk: a hit issues ZERO registry requests
+      # (forks get the base branch's read-only cache). On a miss the script
+      # pulls each image SERIALLY through the retry helper — ECR mirror first,
+      # ghcr fallback — then rewrites the tarball for the next run.
+      - name: Restore Supabase image cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/supabase-img-cache
+          key: supabase-imgs-${{ hashFiles('.github/scripts/supabase-pre-pull-images.sh', 'apps/web-platform/supabase/config.toml') }}
+          restore-keys: supabase-imgs-
       - name: Pre-pull Supabase image set (serial, per-image retry)
         working-directory: apps/web-platform
+        env:
+          SUPABASE_IMG_CACHE_DIR: ${{ runner.temp }}/supabase-img-cache
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/supabase-pre-pull-images.sh"
 
       # Started via the wrapper, NOT bare `supabase start`. The CLI has no

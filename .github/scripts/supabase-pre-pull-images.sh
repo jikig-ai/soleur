@@ -33,6 +33,17 @@
 # pulls. Each ref tries ECR first; a success is `docker tag`ed onto the ghcr
 # ref so `supabase start` sees the image as already-present and skips its
 # own pull. An ECR miss (unmirrored image) or failure falls back to ghcr.
+#
+# ACTIONS CACHE. Run 40573437435 showed ECR's shared-IP bandwidth cap also
+# trips (`toomanyrequests: Data limit exceeded`) — every registry quota is
+# a shared-runner lottery. The workflow therefore restores an
+# `actions/cache` tarball of the pulled image set BEFORE this script: a hit
+# restores the refs with `docker load` and issues ZERO registry requests
+# (fork PRs get the base branch's read-only cache — no credentials needed).
+# After successful pulls the script writes the set back to the cache path so
+# the cache action's post-job save keeps it warm; a CLI bump degrades the hit
+# to a partial restore (stale tags simply don't satisfy new refs) and only
+# the missing images pull.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,9 +73,31 @@ if (( ${#IMAGES[@]} < MIN_IMAGES )); then
 fi
 
 printf 'pre-pull: %d images from %s\n' "${#IMAGES[@]}" "$SUPABASE_BIN"
+
+CACHE_TAR="${SUPABASE_IMG_CACHE_DIR:-}/images.tar.gz"
+if [[ -s "$CACHE_TAR" ]] && docker load -i "$CACHE_TAR" >/dev/null; then
+  present=0
+  for img in "${IMAGES[@]}"; do
+    docker image inspect "ghcr.io/$img" >/dev/null 2>&1 && present=$((present + 1)) || true
+  done
+  if (( present == ${#IMAGES[@]} )); then
+    printf 'pre-pull: cache hit — %d images restored, zero registry requests\n' "$present"
+    exit 0
+  fi
+  printf 'pre-pull: cache restore gave %d/%d images — pulling the rest\n' "$present" "${#IMAGES[@]}"
+else
+  printf 'pre-pull: no usable image cache — pulling the full set\n'
+fi
+
+refs=()
 for img in "${IMAGES[@]}"; do
   ecr="public.ecr.aws/$img"
   ghcr="ghcr.io/$img"
+  refs+=("$ghcr")
+  if docker image inspect "$ghcr" >/dev/null 2>&1; then
+    printf 'pre-pull: %s already cached\n' "$img"
+    continue
+  fi
   if bash "$RETRY" docker pull "$ecr"; then
     docker tag "$ecr" "$ghcr"
     printf 'pre-pull: %s via ecr mirror\n' "$img"
@@ -73,3 +106,9 @@ for img in "${IMAGES[@]}"; do
     bash "$RETRY" docker pull "$ghcr"
   fi
 done
+
+if [[ -n "${SUPABASE_IMG_CACHE_DIR:-}" ]]; then
+  mkdir -p "$SUPABASE_IMG_CACHE_DIR"
+  docker save "${refs[@]}" | gzip > "$CACHE_TAR"
+  printf 'pre-pull: wrote %s (%d refs)\n' "$CACHE_TAR" "${#refs[@]}"
+fi

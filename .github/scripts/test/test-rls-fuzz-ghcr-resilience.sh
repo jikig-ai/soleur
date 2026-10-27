@@ -419,6 +419,13 @@ if [[ -f "$PREPULL" ]] && grep -qF 'strings "$SUPABASE_BIN"' "$PREPULL"; then pa
 else fail "wiring:prepull-binary-strings" "pre-pull does not extract refs from the CLI binary"; fi
 if [[ -f "$PREPULL" ]] && grep -qF 'MIN_IMAGES' "$PREPULL"; then pass "wiring:prepull-floor"
 else fail "wiring:prepull-floor" "pre-pull lacks the extraction floor"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'public.ecr.aws/' "$PREPULL"; then pass "wiring:prepull-ecr-first"
+else fail "wiring:prepull-ecr-first" "pre-pull does not try the ECR mirror first"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'SUPABASE_IMG_CACHE_DIR' "$PREPULL" && \
+   grep -qF 'docker load' "$PREPULL" && grep -qF 'docker save' "$PREPULL"; then pass "wiring:prepull-cache"
+else fail "wiring:prepull-cache" "pre-pull lacks the cache restore/save path"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'docker image inspect' "$PREPULL"; then pass "wiring:prepull-inspect"
+else fail "wiring:prepull-inspect" "pre-pull lacks the cached-image skip"; fi
 
 LN_PREPULL=$(grep -nE '^[[:space:]]+run:.*supabase-pre-pull-images\.sh' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 LN_CLI=$(grep -nE '^[[:space:]]+- name: Install Supabase CLI' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
@@ -442,6 +449,24 @@ else
 fi
 if grep -qF '.github/scripts/supabase-pre-pull-images.sh' <<<"$PATHS_BLOCK"; then pass "wiring:paths-prepull"
 else fail "wiring:paths-prepull" "pull_request.paths omits the pre-pull script"; fi
+
+# The image tarball restore sits between CLI install and pre-pull, pinned
+# to a full actions/cache SHA like the other action pins in this workflow.
+LN_CACHE=$(grep -nE '^[[:space:]]+uses: actions/cache@' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+if [[ -n "$LN_CACHE" ]]; then pass "wiring:cache-step-present"
+else fail "wiring:cache-step-present" "no actions/cache step restores the image tarball"; fi
+if grep -qE '^[[:space:]]+uses: actions/cache@[0-9a-f]{40}' "$WORKFLOW"; then pass "wiring:cache-sha-pinned"
+else fail "wiring:cache-sha-pinned" "actions/cache is not pinned to a full SHA"; fi
+if [[ -n "$LN_CACHE" && -n "$LN_CLI" && -n "$LN_PREPULL" && "$LN_CLI" -lt "$LN_CACHE" && "$LN_CACHE" -lt "$LN_PREPULL" ]]; then pass "wiring:cache-order"
+else fail "wiring:cache-order" "cli=$LN_CLI cache=$LN_CACHE prepull=$LN_PREPULL"; fi
+if grep -qF 'path: ${{ runner.temp }}/supabase-img-cache' "$WORKFLOW"; then pass "wiring:cache-path"
+else fail "wiring:cache-path" "cache path is missing or moved off runner.temp"; fi
+if grep -qF 'key: supabase-imgs-' "$WORKFLOW" && grep -qF "hashFiles('.github/scripts/supabase-pre-pull-images.sh'" "$WORKFLOW"; then pass "wiring:cache-key"
+else fail "wiring:cache-key" "cache key lacks the supabase-imgs- prefix or the script/config hash"; fi
+if grep -qF 'restore-keys: supabase-imgs-' "$WORKFLOW"; then pass "wiring:cache-restore-keys"
+else fail "wiring:cache-restore-keys" "no restore-keys fallback for stale-but-useful caches"; fi
+if grep -qF 'SUPABASE_IMG_CACHE_DIR: ${{ runner.temp }}/supabase-img-cache' "$WORKFLOW"; then pass "wiring:cache-env"
+else fail "wiring:cache-env" "pre-pull step is not wired to the cache path"; fi
 
 echo "=== Guard 1b: helper behavior over PATH-stubbed commands ==="
 
@@ -539,17 +564,26 @@ mkdir -p "$FAKE_BIN_DIR"
 } > "$FAKE_BIN_DIR/supabase"
 chmod +x "$FAKE_BIN_DIR/supabase"
 
-# docker stub: logs `pull <img>` / `tag <src> <dst>` argv lines to
-# $STUB_CALLS; DOCKER_MODE picks the behavior arm
-# (ok | throttle-once | always | ecr-fail).
+# docker stub: logs `<verb> <argv>` lines to $STUB_CALLS; DOCKER_MODE picks
+# the behavior arm
+# (ok | throttle-once | always | ecr-fail | cached | half-cached | load-fail).
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'echo "$*" >> "${STUB_CALLS:?unset}"' \
+  'verb="$1"' \
   'n=$(grep -c "^pull " "$STUB_CALLS" || true)' \
-  'case "${DOCKER_MODE:-ok}" in' \
-  '  throttle-once) if [[ "$*" == pull* && "$n" == "1" ]]; then echo "toomanyrequests: retry-after: 1s" >&2; exit 1; fi ;;' \
-  '  always) [[ "$*" == pull* ]] && { echo "toomanyrequests: retry-after: 1s" >&2; exit 1; } ;;' \
-  '  ecr-fail) [[ "$*" == pull*public.ecr.aws* ]] && { echo "name unknown" >&2; exit 1; } ;;' \
+  'case "$verb" in' \
+  '  image) case "${DOCKER_MODE:-ok}" in' \
+  '    cached) exit 0 ;;' \
+  '    half-cached) [[ "$*" == *img-a:* || "$*" == *img-b:* || "$*" == *img-c:* ]] && exit 0 || exit 1 ;;' \
+  '    *) exit 1 ;;' \
+  '  esac ;;' \
+  '  load) [[ "${DOCKER_MODE:-ok}" == "load-fail" ]] && exit 1 || exit 0 ;;' \
+  '  pull) case "${DOCKER_MODE:-ok}" in' \
+  '    throttle-once) if [[ "$n" == "1" ]]; then echo "toomanyrequests: retry-after: 1s" >&2; exit 1; fi ;;' \
+  '    always) echo "toomanyrequests: retry-after: 1s" >&2; exit 1 ;;' \
+  '    ecr-fail) [[ "$*" == *public.ecr.aws* ]] && { echo "name unknown" >&2; exit 1; } ;;' \
+  '  esac ;;' \
   'esac' \
   'exit 0' \
   > "$BIN/docker"
@@ -559,13 +593,17 @@ ORIG_PATH="$PATH"
 run_prepull() { # name path-prefix [docker-mode]
   local name="$1" pfx="$2" mode="${3:-ok}"
   LAST_OUT="$TMP/$name.out"
+  LAST_CACHE="$TMP/$name-cache"
   : > "$STUB_CALLS"
   env STUB_CALLS="$STUB_CALLS" GHCR_PULL_RETRY_SLEEPS="0 0" \
       TMPDIR="$RUNNER_TEMP_FIXTURE" DOCKER_MODE="$mode" \
+      SUPABASE_IMG_CACHE_DIR="$LAST_CACHE" \
       PATH="$pfx:$ORIG_PATH" \
       bash "$PREPULL" > "$LAST_OUT" 2>&1
   LAST_RC=$?
 }
+# Pre-seed a nonempty cache tarball so the script's `[[ -s ... ]]` passes.
+seed_cache() { mkdir -p "$1"; printf 'fake-tar\n' > "$1/images.tar.gz"; }
 
 pull_count() { grep -c '^pull ' "$STUB_CALLS" || true; }
 tag_count() { grep -c '^tag ' "$STUB_CALLS" || true; }
@@ -612,6 +650,35 @@ else fail "c:ecrfail-ghcr" "ghcr fallbacks=$(grep -c '^pull ghcr\.io/' "$STUB_CA
 if [[ "$(tag_count)" == 0 ]]; then pass "c:ecrfail-no-tags" else fail "c:ecrfail-no-tags" "tagged without an ecr image"; fi
 assert_out_has "c:ecrfail-echo" 'via ghcr'
 
+# Cache write: after pulls the set is saved for the cache action's post-job.
+run_prepull pp-save "$FAKE_BIN_DIR:$BIN" ok
+assert_rc "c:save-rc" 0
+if grep -qE '^save (ghcr\.io/supabase/[^ ]+ ?)+$' "$STUB_CALLS"; then pass "c:save-argv"
+else fail "c:save-argv" "docker save argv missing ghcr refs — $(cat "$STUB_CALLS" | tr '\n' '|')"; fi
+assert_out_has "c:save-echo" 'pre-pull: wrote'
+
+# Full cache hit: `docker load` + every `image inspect` true → zero pulls.
+LAST_CACHE="$TMP/pp-hit-cache"; seed_cache "$LAST_CACHE"
+run_prepull pp-hit "$FAKE_BIN_DIR:$BIN" cached
+assert_rc "c:hit-rc" 0
+if [[ "$(pull_count)" == 0 ]]; then pass "c:hit-no-pulls" else fail "c:hit-no-pulls" "pulls=$(pull_count) want 0"; fi
+assert_out_has "c:hit-echo" 'cache hit'
+
+# Partial cache: restored images skip pulls; the rest pull.
+LAST_CACHE="$TMP/pp-partial-cache"; seed_cache "$LAST_CACHE"
+run_prepull pp-partial "$FAKE_BIN_DIR:$BIN" half-cached
+assert_rc "c:partial-rc" 0
+if [[ "$(pull_count)" == 9 ]]; then pass "c:partial-pulls" else fail "c:partial-pulls" "pulls=$(pull_count) want 9"; fi
+assert_out_re "c:partial-echo" 'cache restore gave 3/12'
+assert_out_has "c:partial-skip" 'already cached'
+
+# Corrupt cache: `docker load` fails → falls through to the full pull set.
+LAST_CACHE="$TMP/pp-loadfail-cache"; seed_cache "$LAST_CACHE"
+run_prepull pp-loadfail "$FAKE_BIN_DIR:$BIN" load-fail
+assert_rc "c:loadfail-rc" 0
+if [[ "$(pull_count)" == 12 ]]; then pass "c:loadfail-pulls" else fail "c:loadfail-pulls" "pulls=$(pull_count) want 12"; fi
+assert_out_has "c:loadfail-echo" 'no usable image cache'
+
 # Extraction floor: 3 refs < 8 fails loudly, docker never invoked.
 FEW_BIN_DIR="$TMP/few-bin"
 assert_fixture_dir "$FEW_BIN_DIR"
@@ -643,7 +710,7 @@ assert_out_re "c:nobin-error" '^::error::.*not on PATH'
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=117
+MIN_ASSERTIONS=140
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
