@@ -12,7 +12,7 @@ Plan: knowledge-base/project/plans/2026-10-27-fix-registry-host-replace-cap-hit-
 
 ## Phase 2: GREEN
 
-- [ ] 2.1 Gate cap arm in `.github/workflows/registry-host-replace-dispatch.yml`: hoist `INFRA/TF/VARS`, `blob_at` with 3 attempts, loop over all three inputs, `unproven=cap` before `exit 1`, `::notice::`, cap-aware `deliver=false` sentence, rewritten cap comment, STEP MAP line
+- [ ] 2.1 Gate cap arm in `.github/workflows/registry-host-replace-dispatch.yml`: hoist `INFRA/TF/VARS`, `blob_at` with 3 attempts (any non-40-hex result is unprovable), `if ! _b=... || ! _a=...` loop over all three inputs (not the `&& ||` form: SC2015), `unproven=cap` before `exit 1`, `::notice::`, cap-aware `deliver=false` sentence, rewritten cap comment, STEP MAP line
 - [ ] 2.2 Verdict step: `GATE_UNPROVEN` env (`${GATE_UNPROVEN:-}`), `gate-unproven` arm before `gate-failed` with its own WHAT/WHY/STATE
 - [ ] 2.3 Suites and probe test green; drive mutations 1, 2, 4, 6 and the stub-ignores-ref harness row RED once; note in PR body
 
@@ -24,7 +24,7 @@ Plan: knowledge-base/project/plans/2026-10-27-fix-registry-host-replace-cap-hit-
 
 ## Phase 4: Validation and PR
 
-- [ ] 4.1 `scripts/lint-workflows.sh`, the five run-body lints, shellcheck on extracted bodies, c4-count-parity
+- [ ] 4.1 `actionlint` on the workflow (expect no output; the wrapper exits 0 on findings), the run-body lints named in AC8, c4-count-parity
 - [ ] 4.2 `bash plugins/soleur/scripts/affected-tests.sh` (expect lock queueing) plus both suites directly
 - [ ] 4.3 `rg` for other literals pinning the old cap behaviour
 - [ ] 4.4 PR body: `Closes #10650`, `Closes #9149` only if AC1-AC7 hold, `Ref #10205`, `Ref #11325`, Changelog, RED-first evidence; `gh pr merge --squash --auto` only after green checks; never push to a PR in the merge queue

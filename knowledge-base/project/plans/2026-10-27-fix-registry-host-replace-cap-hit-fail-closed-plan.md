@@ -14,6 +14,23 @@ lane: cross-domain
 
 # fix: a compare-API 300-file cap hit must not default to deliver
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27
+**Sections enhanced:** Research Insights (deepen findings), Technical Considerations (snippet), Acceptance Criteria (AC8), Test Scenarios (K2 fixture)
+**Checks run:** deepen-plan gates 4.6-4.13 (all pass or skip, see below), a prototype of the new gate arm patched into a scratch copy of the workflow and linted, a live read-only replay of the PR #10501 range, PR/issue citation verification.
+
+### Key Improvements
+
+1. The incident was replayed against the live API (read-only) and the design flips it: with the watermark `e071b82` and the #10501 merge commit `f90d49c0`, the compare returns 300 files (64 commits), the `cloud-init-registry.yml` and `zot-registry.tf` blobs are identical at both ends, and only `variables.tf` differs (a new unrelated `inngest_link_tls` variable). The by-value compare of `registry_server_type` (`cpx22`), `registry_location` (`hel1`) and `registry_volume_size` (`60`) is equal at both ends, so the new gate reaches `deliver=false` with no render. The K2 fixture is synthesized from that shape.
+2. The prototype caught a lint regression in the first draft of the snippet: `_b=... && _a=... || { ...; break; }` raises shellcheck SC2015 through actionlint, and this workflow has 0 actionlint findings today. The snippet now uses `if ! _b=... || ! _a=...; then ...; break; fi`, which is clean.
+3. AC8 now names the real invocation forms of the lints and checks actionlint's output rather than its exit code (the repo wrapper exits 0 on findings by design).
+
+### New Considerations Discovered
+
+- `scripts/lint-workflows.sh` exits 0 on both clean and findings; only a hang (124) fails. A zero-findings claim must read the output.
+- The five run-body lints do not share one calling convention (see AC8).
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No spec.md exists for this one-shot branch.
 
 ## Overview
@@ -109,9 +126,8 @@ Test registration: the verdict suite is declared for the workflow in `scripts/li
 terraform) is **not** selected by a workflow-only diff and its infra runner is gated on
 `apps/web-platform/infra/` or `apply-web-platform-infra.yml`. Filed as #11325 (deferred, `Ref #10650`); this
 plan mitigates by also placing the terraform-free cap rows in the always-selected verdict suite and by
-editing the render-delta suite in the same PR. Lints for the edited `run:` body: `bash scripts/lint-workflows.sh`
-and the five `scripts/lint-workflow-*.py` run-body lints (all clean on the current file); actionlint and
-shellcheck are installed locally.
+editing the render-delta suite in the same PR. Lints for the edited `run:` body are listed in AC8 (all clean on the current file; actionlint and
+shellcheck are installed locally).
 
 **Institutional learnings applied.**
 `2026-09-19-the-one-defect-lived-in-the-only-code-path-with-no-test-and-my-stub-answered-every-question.md`
@@ -126,6 +142,14 @@ not be swallowed by the gate's `2>/dev/null`);
 `2026-08-13-i-wrote-two-guards-against-vacuity-and-both-guards-were-vacuous.md` (floors report by `printf` +
 `exit 1`, never through the helper they audit);
 `2026-09-25-gh-stub-must-mirror-real-cli-flags.md` (the stub accepts only the flags the gate really passes).
+
+**Deepen-plan findings (2026-10-27).**
+
+- Incident replay (read-only, live API; commands: `gh pr view 10501 --json mergeCommit`, `gh api repos/jikig-ai/soleur/compare/<wm>...<merge>`, `gh api repos/jikig-ai/soleur/contents/<path>?ref=<sha> --jq .sha`, then the gate's own `read_default` awk on both `variables.tf` revisions): watermark `e071b828f479fddf40023aff56fb377088d7c1ae`, merge `f90d49c0661b49664a39decb963f32a19488238d`, `status ahead`, `total_commits 64`, 300 files. `cloud-init-registry.yml` SAME, `zot-registry.tf` SAME, `variables.tf` DIFF (only a new unrelated `inngest_link_tls` variable block); `registry_server_type cpx22`, `registry_location hel1`, `registry_volume_size 60` equal at both ends. The new design therefore decides `deliver=false` for the exact incident range, while a file-list proxy could not.
+- Prototype: the cap arm was patched into a scratch copy of the workflow (outside the repo) and linted. `actionlint` baseline for the real file is 0 findings; the first-draft snippet produced one SC2015 info finding, the `if !` form produces none. `lint-workflow-run-body-syntax.py`, `lint-workflow-step-env-refs.py` (file argument), `lint-workflow-errexit-capture.py` (`--root`), and `lint-workflow-issue-write-scope.py` (directory argument) are clean on the patched copy. The loop was also executed under `bash --noprofile --norc -eo pipefail` with a function-stubbed `gh`: one 502 input yields `unread=<that input>`, the other inputs are compared, and nothing aborts the step.
+- Citations verified live: #10650 and #9149 OPEN; #10205 OPEN (epic); #10501 MERGED 2026-10-20 (merge commit above); #7582 and #8714 CLOSED; #11325 OPEN (the deferral filed by this plan); #11324 is this branch's draft PR. #10540/#11287/#11322 are named only as sibling work not to touch. No AGENTS rule ID is cited in the body.
+- Gate results: 4.6 pass (threshold `aggregate pattern`); 4.7 pass (all five fields, `grep` is an allowlisted verb, the literal `gate-unproven` is a matchable output, no ssh; the probe becomes true once T3.1 lands, and the block is new in this run so the cap and literal conditions are satisfied); 4.8 pass (no PAT-shaped match); 4.9 skip (no UI surface); 4.10 skip (no store, no `.tf`, no migration); 4.11 pass (lint green, one guard entry, assembly names the chokepoint, matrix derived from the design); 4.12 pass (one unfenced `## Scope Check`, no `unmapped` cell, every `inferred` row justified, counts derived from the file lists); 4.13 skip (no new autonomous task surface).
+- Not run, by judgment: the skill's "launch every available agent" fan-out. The plan changes one bash arm and its tests; the three-agent plan-review panel and the CTO rulings already covered simplicity, correctness and design, and a 40-agent sweep would re-read the same 70 lines. The mechanical halts above and the prototype are the deepen evidence.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -208,7 +232,7 @@ if [[ "${n_files:-0}" -ge 300 ]]; then
   }
   changed=""; unread=""
   for _p in "$CFG" "$TF" "$VARS"; do                      # all three are read until one is unprovable
-    _b="$(blob_at "$_p" "$BEFORE_SHA")" && _a="$(blob_at "$_p" "$AFTER_SHA")" || { unread="$_p"; break; }
+    if ! _b="$(blob_at "$_p" "$BEFORE_SHA")" || ! _a="$(blob_at "$_p" "$AFTER_SHA")"; then unread="$_p"; break; fi
     [[ "$_b" != "$_a" ]] && changed="${changed:+$changed$'\n'}$_p"
   done
   if [[ -n "$unread" ]]; then
@@ -347,7 +371,7 @@ A property about order or lifetime is not claimed: the unproven output must prec
 - **T1.1 `plugins/soleur/test/lib/registry-gate-gh-stub.sh` (new, shared).** One executable refusing `gh` stub used by both suites, driven by env (`STUB_WATERMARK`, `STUB_AFTER`, `STUB_COMPARE`, `STUB_BEFORE`, `STUB_HEAD` trees, `STUB_ERR`, `GH_LOG`). Routes: `run list` (watermark); `compare/<W>...<A>` exactly; `contents/<path>?ref=<ref>` where the argv's `--jq` selects `.sha` (returns the blob sha of the tree for that ref, computed without `git` as `{ printf 'blob %s\0' "$(wc -c <f)"; cat f; } | sha1sum`, because an unconstructed `git` spawn is forbidden by `plugins/soleur/AGENTS.md`) or `.content` (base64, watermark ref only, as today); modelled failures by env (`STUB_CONTENTS_FAIL` for every read, `STUB_SHA_FAIL=<path>@<ref>` for one read: HTTP 502, exit 1). Everything else, including `workflow run`, is refused (exit 64) with the refusal appended to `STUB_ERR`, which each harness's `run_gate` asserts empty. Both suites also put a no-op `sleep` earlier on `PATH` so the retry and `fetch_before` delays do not cost wall time.
 - **T1.2 `plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh`.** Extract `gate` alongside `change/verdict/dispatch`; add a `run_gate` (cwd a fixture tree copied from the real `variables.tf`, `PATH` without terraform and `CI=1` so any render attempt fails closed, the gate body under `bash --noprofile --norc -eo pipefail`). Terraform-free rows:
   - **K1** cap hit (exactly 300 entries, none a render input), the three blobs identical => `deliver=false`, rc 0, exactly six `?ref=` blob reads (3 inputs x 2 refs), no `.content` read at the head ref, no render.
-  - **K2** incident replay: cap hit, `variables.tf` blob differs only in an unrelated default => `deliver=false` by the by-value compare, no render.
+  - **K2** incident replay: cap hit, `variables.tf` blob differs only by an appended synthesized unrelated variable block (the shape measured on the live #10501 range: `cloud-init-registry.yml` and `zot-registry.tf` identical, only `variables.tf` differs, the three by-value variables equal) => `deliver=false` by the by-value compare, no render.
   - **K3v** cap hit, `variables.tf`'s `registry_server_type` differs => rc 0, `deliver=true`, `render_changed=true`, `why` names `registry_server_type` (a `deliver=true` alone would also pass against the old arm, so the `why` and `render_changed` assertions carry the RED).
   - **K6** unprovable: cap hit, HTTP 502 on `variables.tf` at the head ref (third input, after two compliant ones) => rc == 1, `unproven=cap` in the output, no `deliver` line, `::error::` names the cap and `variables.tf`, three attempts at that exact URL in the request log, empty refusal file.
   - **V16** verdict `gate-unproven`: `JOB_STATUS=failure GATE_OUTCOME=failure GATE_UNPROVEN=cap` (others skipped) => `kind=gate-unproven`, no "NOT live", no "unchanged since", marker last, owner issue created when no target is derivable.
@@ -370,7 +394,7 @@ A property about order or lifetime is not claimed: the unproven output must prec
 
 ### Phase 4 — validation and PR
 
-- **T4.1** `bash scripts/lint-workflows.sh .github/workflows/registry-host-replace-dispatch.yml`, the five run-body lints, shellcheck on the extracted gate and verdict bodies, `bash plugins/soleur/test/c4-count-parity.test.sh`.
+- **T4.1** `actionlint .github/workflows/registry-host-replace-dispatch.yml` (expect no output), the run-body lints named in AC8, `bash plugins/soleur/test/c4-count-parity.test.sh`.
 - **T4.2** `bash plugins/soleur/scripts/affected-tests.sh` (the test-all lock is contended by sibling runs; expect queueing) and the two suites directly.
 - **T4.3** `rg` the repo for any other literal that pins the old cap behaviour ("Delivering rather than silently skipping", "cannot prove .* was untouched").
 - **T4.4** PR body: `Closes #10650` and `Closes #9149` only if AC1-AC7 hold, `Ref #10205`, `Ref #11325`, a `## Changelog` section, the RED-first evidence and the mutation note. Arm the merge with `gh pr merge --squash --auto` only after the required checks are green; never push to a PR that is in the merge queue.
@@ -386,7 +410,7 @@ A property about order or lifetime is not claimed: the unproven output must prec
 - [ ] AC5 Every gate row ran against the shared stub that refuses unexpected requests; both harnesses assert an empty refusal file; the six blob reads (3 inputs x 2 refs) are asserted by argv in K1, and no `.content` read happens at the head ref.
 - [ ] AC6 RED-first is demonstrable: `git log --oneline` shows the tests-only commit before the fix commit, and the recorded RED run lists K1 (read-count), K2, K3v, K3, K4, K5, K6, V16 and the probe loop failing against the unmodified workflow, with the existing rows green.
 - [ ] AC7 Closed sets updated: `grep -c gate-unproven scripts/followthroughs/registry-htpasswd-stdin-10119.sh knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md` is at least 1 for each, and the probe test exits 0.
-- [ ] AC8 Lints clean: `bash scripts/lint-workflows.sh .github/workflows/registry-host-replace-dispatch.yml` rc 0; `lint-workflow-run-body-syntax.py`, `lint-workflow-step-env-refs.py`, `lint-workflow-errexit-capture.py`, `lint-workflow-issue-write-scope.py` exit 0; the verdict env uses `env:` only (no inline `${{ steps.gate.outputs.unproven }}` inside any `run:` body).
+- [ ] AC8 Lints clean: `actionlint .github/workflows/registry-host-replace-dispatch.yml` prints nothing (baseline is 0 findings; `scripts/lint-workflows.sh` exits 0 even with findings, so read its output, not its rc); `python3 scripts/lint-workflow-run-body-syntax.py <file>` and `python3 scripts/lint-workflow-step-env-refs.py <file>` exit 0; `python3 scripts/lint-workflow-errexit-capture.py` and `python3 scripts/lint-workflow-issue-write-scope.py .github/workflows` exit 0; the verdict env uses `env:` only (no inline `${{ steps.gate.outputs.unproven }}` inside any `run:` body).
 - [ ] AC9 Diff scope: `git diff origin/main --stat` lists only the seven edited files, the one new shared stub and the plan/spec artifacts; no `gh workflow run` appears in any added line outside comments, docs and the stub's refusal route; no `.tf`, no `apply-web-platform-infra.yml`, no secret reference is touched.
 - [ ] AC10 Mutations 1, 2, 4, 6 and harness row (a) were each driven RED once locally and the outcome is noted in the PR body.
 - [ ] AC11 `bash plugins/soleur/scripts/affected-tests.sh` passes; `bash plugins/soleur/test/c4-count-parity.test.sh` passes; the selection record for an edit to the shared stub is in the PR body (T3.3).
