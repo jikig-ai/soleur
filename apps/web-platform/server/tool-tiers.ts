@@ -12,9 +12,12 @@
  * Invariant (#11303): the Agent SDK approves a bare `allowedTools` entry BEFORE it consults
  * `canUseTool`, so only `auto-approve` platform tools may ever be handed to the SDK as
  * pre-approved. `buildAllowedTools` is the single filter; `canUseTool` is the only approver
- * of every other tier. This module stays import-free so tests and the real-SDK probe can
- * load it without booting the runner.
+ * of every other tier. This module imports only the pure `outbound-compliance` validators
+ * (node:crypto and nothing else) so tests and the real-SDK probe can load it without booting
+ * the runner.
  */
+
+import { extractAddrSpec } from "./email-triage/outbound-compliance";
 
 export type ToolTier = "auto-approve" | "gated" | "blocked";
 
@@ -126,8 +129,11 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // `gated` (NEVER auto-approve) because the human review gate IS the trust
   // boundary — the operator sees the exact recipient + body and approves before
   // the handler runs. A prompt-injected auto-send would be a CAN-SPAM/GDPR +
-  // brand incident; the gate approval is what binds the send to a human-
-  // reviewed body (the chokepoint recomputes the body hash). Suppression is
+  // brand incident. What the gate binds is the SDK allow decision: canUseTool
+  // returns allow(toolInput) with the same object the handler then runs on. The
+  // chokepoint's body hash is a handler-local integrity check of the body as
+  // sent, NOT a binding to what the card showed. The card therefore shows the
+  // whole send and fails closed when it cannot (buildEmailCard). Suppression is
   // also gated (permanent, no un-suppress) so a mis-suppression is human-seen.
   "mcp__soleur_platform__email_send": "gated",
   "mcp__soleur_platform__email_reply": "gated",
@@ -178,7 +184,7 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // Explicit `gated` entries (#11303). Behaviour is unchanged (getToolTier already defaulted these to
   // gated); the entries exist so a census can tell "decided" from "defaulted" and a NEW platform tool
   // fails CI until someone decides its tier.
-  // Plausible: a shared, cross-tenant PLAUSIBLE_API_KEY with no per-site enforcement.
+  // Plausible: the user's own stored PLAUSIBLE_API_KEY (serviceTokens), an account-wide key with no per-site scoping.
   "mcp__soleur_platform__plausible_create_site": "gated",
   "mcp__soleur_platform__plausible_add_goal": "gated",
   "mcp__soleur_platform__plausible_get_stats": "gated",
@@ -195,11 +201,12 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
  * fail-closed at factory construction (the helper throws if any short-name
  * resolving to a member of this set appears in `CC_MCP_ALLOWLIST`).
  *
- * Plausible tools (`plausible_create_site/add_goal/get_stats`) share a
- * single backend `PLAUSIBLE_API_KEY` with no per-user / per-site
- * enforcement (see `apps/web-platform/server/plausible-tools.ts:52-74`).
- * Exposing them via the router is a cross-tenant credential by
- * construction, regardless of any future demand signal.
+ * Plausible tools (`plausible_create_site/add_goal/get_stats`) run on the
+ * user's own stored `PLAUSIBLE_API_KEY`, an account-wide key with no
+ * per-site scoping (see `apps/web-platform/server/plausible-tools.ts:52-74`
+ * and the `serviceTokens.PLAUSIBLE_API_KEY` read in `agent-runner.ts`).
+ * Exposing them via the router would hand an account-wide credential to the
+ * autonomous path, regardless of any future demand signal.
  *
  * See brainstorm Key Decision #3:
  *   knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
@@ -225,17 +232,40 @@ export function getToolTier(toolName: string): ToolTier {
 }
 
 /** Plugin MCP server names come from `plugin.json`; only this shape may be interpolated into a wildcard entry. */
-export const PLUGIN_SERVER_NAME_RE = /^[a-z0-9-]+$/;
+const PLUGIN_SERVER_NAME_SOURCE = "[a-z0-9-]+";
+export const PLUGIN_SERVER_NAME_RE = new RegExp(`^${PLUGIN_SERVER_NAME_SOURCE}$`);
+/** The tool-name prefix every plugin MCP tool carries: `mcp__plugin_soleur_<server>__`. */
+export function pluginToolPrefix(server: string): string {
+  return `mcp__plugin_soleur_${server}__`;
+}
+/** The SDK `allowedTools` wildcard entry for one plugin MCP server: `mcp__plugin_soleur_<server>__*`. */
+export function pluginWildcard(server: string): string {
+  return `${pluginToolPrefix(server)}*`;
+}
+const PLUGIN_WILDCARD_RE = new RegExp(`^mcp__plugin_soleur_(${PLUGIN_SERVER_NAME_SOURCE})__\\*$`);
+/** The server name inside a valid plugin wildcard entry, or null when the entry is not exactly that shape. */
+export function parsePluginWildcard(entry: string): string | null {
+  const m = PLUGIN_WILDCARD_RE.exec(entry);
+  return m === null ? null : m[1];
+}
+
+/**
+ * The ONE keep-rule for SDK pre-approval (#11303): a platform tool may be handed to the SDK as pre-approved only when its
+ * effective tier is `auto-approve` (fail-closed: `gated`, `blocked` and unclassified names are all not pre-approvable).
+ * `buildAllowedTools` filters with it and `assertAllowedToolsPreApprovalSafe` re-checks with it.
+ */
+export function isPreApprovable(fqn: string): boolean {
+  return getToolTier(fqn) === "auto-approve";
+}
 
 /**
  * The SDK `allowedTools` pre-approval list for the legacy runner (#11303).
  *
  * The SDK auto-approves a bare `allowedTools` entry BEFORE it consults `canUseTool`, so any `gated` platform tool listed
- * there runs with no review card. This keeps a platform name only when its effective tier is `auto-approve`
- * (fail-closed: `gated`, `blocked` and unclassified names all drop out, and a new tool is gated until someone decides),
- * and appends `mcp__plugin_soleur_<server>__*` for each validly-named plugin MCP server (third-party plugin servers
- * are allowed by design, as `canUseTool` also allows them). Pure; never mutates its inputs; always returns an array
- * (the call site omits the key when it is empty). `createCanUseTool` must keep receiving the UNFILTERED platform list.
+ * there runs with no review card. This keeps a platform name only when `isPreApprovable` holds, and appends
+ * `pluginWildcard(server)` for each validly-named plugin MCP server (third-party plugin servers are allowed by design, as
+ * `canUseTool` also allows them). Pure; never mutates its inputs; always returns an array (the call site omits the key
+ * when it is empty). `createCanUseTool` must keep receiving the UNFILTERED platform list.
  */
 export function buildAllowedTools(
   platformToolNames: readonly string[],
@@ -243,10 +273,10 @@ export function buildAllowedTools(
 ): string[] {
   const out = new Set<string>();
   for (const name of platformToolNames) {
-    if (getToolTier(name) === "auto-approve") out.add(name);
+    if (isPreApprovable(name)) out.add(name);
   }
   for (const server of pluginMcpServerNames) {
-    if (PLUGIN_SERVER_NAME_RE.test(server)) out.add(`mcp__plugin_soleur_${server}__*`);
+    if (PLUGIN_SERVER_NAME_RE.test(server)) out.add(pluginWildcard(server));
   }
   return [...out];
 }
@@ -267,16 +297,18 @@ export function summarizeOutboundEmailInput(toolName: string, input: unknown): s
  * Card-field helpers (#11303). Once the gate is reachable, the review card is the only control, and its text is built
  * from model-controlled tool input. Every scalar interpolated into a card goes through `cardField`: control, bidi and
  * zero-width characters are stripped, newlines and markdown emphasis/link/html characters are removed, the value is
- * length-capped, and a non-scalar becomes the literal word `unknown` (never an object).
+ * length-capped (with a visible ellipsis), and a non-scalar becomes the literal word `unknown` (never an object).
+ * The outbound-email tools do NOT use `cardField` for the fields that decide who receives what: see `buildEmailCard`.
  */
 const CARD_FIELD_MAX = 120;
-const CARD_BODY_PREVIEW_MAX = 240;
-// Controls (incl. newline and tab, which are folded to a space first), DEL and C1, zero-width and bidi marks, line and
-// paragraph separators, bidi embeddings/overrides/isolates, word joiner and the BOM. Escapes only: no literal separators.
+// Controls (incl. newline and tab, which are folded to a space first), DEL and C1, the soft hyphen, the Arabic letter mark,
+// zero-width and bidi marks, line and paragraph separators, bidi embeddings/overrides/isolates, word joiner, the BOM and
+// the Unicode tag characters. Escapes only: no literal separators (cq-regex-unicode-separators-escape-only).
 // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-const CARD_STRIP_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/g;
+const CARD_STRIP_RE = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
 // Markdown emphasis, code, link and html characters.
 const CARD_MARKDOWN_RE = /[*`[\]<>\\~|]/g;
+const CARD_MARKDOWN_CHAR_RE = /[*`[\]<>\\~|]/;
 
 function cardScalar(v: unknown): string | null {
   if (typeof v === "string") return v;
@@ -296,9 +328,11 @@ function cleanForCard(raw: string): string {
 function cardField(v: unknown, fallback = "unknown", max = CARD_FIELD_MAX): string {
   const raw = cardScalar(v);
   if (raw === null) return fallback;
-  const cleaned = cleanForCard(raw);
+  // Perf: model input is unbounded; never clean more than one character past the cap.
+  const clipped = raw.length > max + 1;
+  const cleaned = cleanForCard(clipped ? raw.slice(0, max + 1) : raw);
   if (cleaned === "") return fallback;
-  return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
+  return clipped || cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
 }
 
 /** A card field as a quoted value (double quotes inside the value become single quotes so it cannot close the quote). */
@@ -306,21 +340,154 @@ function quoted(v: unknown, fallback = "unknown", max = CARD_FIELD_MAX): string 
   return `"${cardField(v, fallback, max).replace(/"/g, "'")}"`;
 }
 
-/** A short list of scalars (labels, assignees, lens); a non-array is the word `unknown`. */
+const CARD_LIST_MAX = 10;
+/** A short list of scalars (labels, assignees, lens); a non-array is the word `unknown`; a longer list says how many more. */
 function cardList(v: unknown, sep = ", "): string {
   if (!Array.isArray(v)) return "unknown";
-  return v.slice(0, 10).map((x) => cardField(x, "?", 40)).join(sep);
+  const shown = v.slice(0, CARD_LIST_MAX).map((x) => cardField(x, "?", 40)).join(sep);
+  return v.length > CARD_LIST_MAX ? `${shown}${sep}… +${v.length - CARD_LIST_MAX} more` : shown;
+}
+
+/** A card clause for an input the tool accepts but the card does not print: it says so, with the size, instead of staying silent. */
+function notShown(label: string, v: unknown): string {
+  if (typeof v === "string") return v === "" ? "" : ` (${label} of ${v.length} characters is not shown here)`;
+  if (v === undefined || v === null) return "";
+  return ` (${label} is not shown here)`;
+}
+
+/** The workflow_dispatch inputs: the names are shown, the values are not. */
+function workflowInputs(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  if (typeof v !== "object" || Array.isArray(v)) return " (with inputs that are not shown here)";
+  const names = Object.keys(v);
+  return names.length ? ` with inputs [${cardList(names)}] (input values are not shown here)` : "";
 }
 
 /**
- * The email body preview: capped at 240 characters and DISPLAY-ONLY untrusted content. A body longer than the cap says so
- * and reports the full length, so a payload placed after the preview is never silently hidden.
+ * Outbound-email card (#5325, #11303). The card is the only control between a prompt-injected agent and a real cold email,
+ * so it shows every field that decides who receives what: the FULL parsed recipient address (the display name separately,
+ * capped with a visible ellipsis), the reply-to, the subject and the ENTIRE body. When the input cannot be shown in full
+ * the tool is DENIED before any card exists (fail closed): nothing is truncated into an Approve card.
  */
-function bodyPreview(body: unknown): string {
-  const raw = cardScalar(body) ?? "";
-  const shown = cleanForCard(raw.slice(0, CARD_BODY_PREVIEW_MAX));
-  if (raw.length <= CARD_BODY_PREVIEW_MAX) return shown;
-  return `${shown}… [+${raw.length - CARD_BODY_PREVIEW_MAX} more characters not shown, total ${raw.length}]`;
+const EMAIL_RAW_ADDR_MAX = 320; // RFC 5321 forward-path: 254 plus a display name's worth of slack is refused outright
+const EMAIL_ADDR_MAX = 254;
+const EMAIL_DISPLAY_NAME_MAX = 60;
+const EMAIL_SUBJECT_MAX = 200;
+export const EMAIL_BODY_MAX = 4000;
+const EMAIL_MESSAGE_ID_MAX = 64;
+export const EMAIL_DENY_RECIPIENT =
+  "The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again.";
+export const EMAIL_DENY_REPLY_TO =
+  "The reply-to address could not be shown in full for review, so the email was not sent. Fix the reply-to and try again.";
+export const EMAIL_DENY_BODY = "Shorten the body to 4,000 characters or fewer and try again.";
+export const EMAIL_DENY_SUBJECT = "Shorten the subject to 200 characters or fewer and try again.";
+export const EMAIL_DENY_FIELDS =
+  "The email could not be shown in full for review, so it was not sent. Fix the email fields and try again.";
+export const EMAIL_DENY_SUPPRESS =
+  "The recipient could not be shown in full for review, so the suppression was not applied. Fix the recipient and try again.";
+
+// Characters that are invisible or control in a card: they are made VISIBLE as [U+XXXX], never deleted. Newline and tab
+// are ordinary body text and pass through. Escapes only (cq-regex-unicode-separators-escape-only).
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const CARD_HIDDEN_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+// The same set for a single-line field (subject, message id), where newline and tab are hidden too.
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const CARD_HIDDEN_LINE_RE = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+// A bare address: one addr-spec, no whitespace, comma, semicolon, quote, angle bracket or '@' beyond the single separator.
+const CARD_ADDR_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
+
+type Revealed = { text: string; revealed: number };
+
+/** Make hidden characters visible. Returns the escaped text and how many characters were revealed (0 = verbatim). */
+function revealHidden(raw: string, singleLineField = false): Revealed {
+  let revealed = 0;
+  const text = (singleLineField ? raw : raw.replace(/\r\n/g, "\n"))
+    .replace(singleLineField ? CARD_HIDDEN_LINE_RE : CARD_HIDDEN_RE, (ch) => {
+      revealed += 1;
+      return `[U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}]`;
+    });
+  return { text, revealed };
+}
+
+type ParsedAddress = { addr: string; name: string };
+
+/**
+ * A bare address or a single `Name <addr>`; anything else is null. The address is shown in full and verbatim: an address
+ * that is too long, empty, malformed or contains a hidden/control/markup character is refused rather than cleaned.
+ */
+function parseCardAddress(raw: unknown): ParsedAddress | null {
+  if (typeof raw !== "string" || raw.length > EMAIL_RAW_ADDR_MAX) return null;
+  const trimmed = raw.trim();
+  const opens = trimmed.split("<").length - 1;
+  const closes = trimmed.split(">").length - 1;
+  let name = "";
+  if (opens === 0 && closes === 0) {
+    // bare form
+  } else if (opens === 1 && closes === 1 && trimmed.endsWith(">") && trimmed.indexOf("<") < trimmed.indexOf(">")) {
+    name = trimmed.slice(0, trimmed.indexOf("<")).trim();
+    // A display name that carries an '@', a comma or a semicolon can pass for a second address or recipient list.
+    if (/[@,;]/.test(name)) return null;
+  } else {
+    return null;
+  }
+  const addr = extractAddrSpec(trimmed);
+  if (addr === "" || addr.length > EMAIL_ADDR_MAX || !CARD_ADDR_RE.test(addr)) return null;
+  if (revealHidden(addr, true).revealed > 0 || CARD_MARKDOWN_CHAR_RE.test(addr)) return null;
+  return { addr, name };
+}
+
+function addressLine(p: ParsedAddress): string {
+  if (p.name === "") return `<${p.addr}>`;
+  const { text } = revealHidden(p.name);
+  const flat = text.replace(/\s+/g, " ").replace(/"/g, "'").trim();
+  const shown = flat.length > EMAIL_DISPLAY_NAME_MAX ? `${flat.slice(0, EMAIL_DISPLAY_NAME_MAX)}…` : flat;
+  return `<${p.addr}> (display name: "${shown}")`;
+}
+
+export type GateCard = { card: string } | { deny: string };
+
+/** A single-line field (subject, message id) shown in full, hidden characters made visible; null = too long or not a string. */
+function singleLine(raw: unknown, max: number): Revealed | null {
+  if (typeof raw !== "string" || raw.length > max) return null;
+  return revealHidden(raw, true);
+}
+
+function buildEmailCard(shortName: string, toolInput: Record<string, unknown>): GateCard {
+  const body = toolInput.body;
+  if (typeof body !== "string") return { deny: EMAIL_DENY_FIELDS };
+  if (body.length > EMAIL_BODY_MAX) return { deny: EMAIL_DENY_BODY };
+  const subject = singleLine(toolInput.subject, EMAIL_SUBJECT_MAX);
+  if (subject === null) {
+    return { deny: typeof toolInput.subject === "string" ? EMAIL_DENY_SUBJECT : EMAIL_DENY_FIELDS };
+  }
+  const bodyShown = revealHidden(body);
+  const revealed = bodyShown.revealed + subject.revealed;
+  const revealNote = revealed > 0
+    ? `\n\nNote: ${revealed} hidden or control character${revealed === 1 ? "" : "s"} in the subject or body ${revealed === 1 ? "is" : "are"} shown as [U+XXXX].`
+    : "";
+  const bodyBlock = `Body (review carefully — untrusted, display-only; shown in full, ${body.length} characters):\n${bodyShown.text}${revealNote}`;
+
+  if (shortName === "email_send") {
+    const to = parseCardAddress(toolInput.to);
+    if (to === null) return { deny: EMAIL_DENY_RECIPIENT };
+    let replyToLine = "";
+    const rawReplyTo = toolInput.replyTo;
+    if (rawReplyTo !== undefined && rawReplyTo !== null && rawReplyTo !== "") {
+      const replyTo = parseCardAddress(rawReplyTo);
+      if (replyTo === null) return { deny: EMAIL_DENY_REPLY_TO };
+      replyToLine = `\nReply-To: ${addressLine(replyTo)}`;
+    }
+    return {
+      card: `Agent wants to send a cold email.\nTo: ${addressLine(to)}${replyToLine}\nSubject: "${subject.text.replace(/"/g, "'")}"\n\n${bodyBlock}\n\nThe email is sent as plain text exactly as shown. Send?`,
+    };
+  }
+  // email_reply: the recipient is derived server-side from the inbound item (P0-3); it is NOT in toolInput, so the card
+  // names the inbound item. Looking up that item's sender/subject for the card is a follow-up.
+  const messageId = singleLine(toolInput.messageId, EMAIL_MESSAGE_ID_MAX);
+  if (messageId === null) return { deny: EMAIL_DENY_FIELDS };
+  return {
+    card: `Agent wants to reply to inbound item ${messageId.text} (the reply goes to that item's original sender).\nSubject: "${subject.text.replace(/"/g, "'")}"\n\n${bodyBlock}\n\nThe email is sent as plain text exactly as shown. Send?`,
+  };
 }
 
 /**
@@ -367,26 +534,53 @@ export function buildOfflineGateMessage(
 }
 
 /**
- * Build a human-readable review gate message for a gated tool invocation.
- * The message should clearly describe what the agent wants to do so the
- * founder can make an informed approval decision. Every interpolated tool-input
+ * Build the review card for a gated tool invocation, or a static deny reason when the input cannot be shown in full (#11303).
+ * The caller (`createCanUseTool`) MUST deny on `{ deny }` before any card, status write or notification exists. The card
+ * should clearly describe what the agent wants to do so the founder can make an informed approval decision, and every
+ * accepted tool input that changes the outcome is either printed or named as not shown. Every interpolated tool-input
  * value goes through the card-field helpers above (bounded and neutralised).
+ */
+export function buildGateCard(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): GateCard {
+  const shortName = toolName.replace("mcp__soleur_platform__", "");
+  if (shortName === "email_send" || shortName === "email_reply") return buildEmailCard(shortName, toolInput);
+  if (shortName === "email_suppress") {
+    const target = parseCardAddress(toolInput.recipient);
+    if (target === null) return { deny: EMAIL_DENY_SUPPRESS };
+    return {
+      card: `Agent wants to PERMANENTLY suppress ${addressLine(target)} (reason: ${cardField(toolInput.reason)}) so no future cold email can reach them. There is no un-suppress. Allow?`,
+    };
+  }
+  return { card: buildPlainGateMessage(shortName, toolInput) };
+}
+
+/**
+ * The card text as a plain string (the fail-closed reason when there is no card). Display and test helper only: the
+ * permission callback uses `buildGateCard` and never shows a deny reason in an Approve card.
  */
 export function buildGateMessage(
   toolName: string,
   toolInput: Record<string, unknown>,
 ): string {
-  const shortName = toolName.replace("mcp__soleur_platform__", "");
+  const r = buildGateCard(toolName, toolInput);
+  return "card" in r ? r.card : r.deny;
+}
 
+function buildPlainGateMessage(
+  shortName: string,
+  toolInput: Record<string, unknown>,
+): string {
   switch (shortName) {
     case "github_trigger_workflow":
-      return `Agent wants to trigger workflow **${cardField(toolInput.workflow_id)}** on branch **${cardField(toolInput.ref)}**. Allow?`;
+      return `Agent wants to trigger workflow **${cardField(toolInput.workflow_id)}** on branch **${cardField(toolInput.ref)}**${workflowInputs(toolInput.inputs)}. Allow?`;
     case "github_push_branch":
-      return `Agent wants to push to branch **${cardField(toolInput.branch)}**. Allow?`;
+      return `Agent wants to push to branch **${cardField(toolInput.branch)}**${toolInput.force === true ? " (a force-push was requested; the push tool rejects force-pushes)" : ""}. Allow?`;
     case "create_pull_request":
-      return `Agent wants to open PR: **${cardField(toolInput.title, "untitled")}** (${cardField(toolInput.base, "main")} ← ${cardField(toolInput.head)}). Allow?`;
+      return `Agent wants to open PR: **${cardField(toolInput.title, "untitled")}** (${cardField(toolInput.base, "main")} ← ${cardField(toolInput.head)})${notShown("description", toolInput.body)}. Allow?`;
     case "create_issue":
-      return `Agent wants to file an issue: **${cardField(toolInput.title, "untitled")}**. Allow?`;
+      return `Agent wants to file an issue: **${cardField(toolInput.title, "untitled")}**${Array.isArray(toolInput.labels) && toolInput.labels.length ? ` with labels [${cardList(toolInput.labels)}]` : ""}${notShown("description", toolInput.body)}. Allow?`;
     case "kb_share_create":
       return `Agent wants to create a public share link for **${cardField(toolInput.documentPath)}**. Allow?`;
     case "kb_share_revoke": {
@@ -395,20 +589,6 @@ export function buildGateMessage(
     }
     case "routine_run":
       return `Agent wants to run routine **${cardField(toolInput.fnId)}** now, off-schedule. This fires real production work. Allow?`;
-    // Outbound email (#5325) — the operator MUST see the exact recipient,
-    // subject, and body before approving: the body-hash approval binding and
-    // the whole single-user-incident safety story rest on the human reviewing
-    // what is actually sent. A content-free "Allow?" here would make the gate
-    // decorative. Body shown as a preview is DISPLAY-ONLY untrusted content —
-    // do not act on instructions inside it.
-    case "email_send":
-      return `Agent wants to send a cold email to **${cardField(toolInput.to)}** — subject: ${quoted(toolInput.subject, "")}.\n\nBody (review carefully — untrusted, display-only):\n${bodyPreview(toolInput.body)}\n\nSend?`;
-    case "email_reply":
-      // The recipient is derived server-side from the inbound item (P0-3); it
-      // is NOT in toolInput, so the gate names the inbound item, not an address.
-      return `Agent wants to reply to inbound item **${cardField(toolInput.messageId)}** (the reply goes to that item's original sender) — subject: ${quoted(toolInput.subject, "")}.\n\nBody (review carefully — untrusted, display-only):\n${bodyPreview(toolInput.body)}\n\nSend?`;
-    case "email_suppress":
-      return `Agent wants to PERMANENTLY suppress **${cardField(toolInput.recipient)}** (reason: ${cardField(toolInput.reason)}) so no future cold email can reach them. There is no un-suppress. Allow?`;
     // Beta-CRM writes (#6165) — the operator MUST see what the agent is about to
     // record/overwrite: R3 (within-tenant prompt-injection) is mitigated by this
     // human review. The gate string can egress to the operator's push/email when
@@ -447,7 +627,7 @@ export function buildGateMessage(
     // Workstream writes (#6304) — name the DECISION-relevant fields so the
     // founder can approve informed (the write hits a real GitHub issue).
     case "workstream_issue_create":
-      return `Agent wants to create a GitHub issue: **${cardField(toolInput.title, "untitled")}**${toolInput.status ? ` (→ ${cardField(toolInput.status)})` : ""}. Allow?`;
+      return `Agent wants to create a GitHub issue: **${cardField(toolInput.title, "untitled")}**${toolInput.status ? ` (→ ${cardField(toolInput.status)})` : ""}${notShown("description", toolInput.body)}. Allow?`;
     case "workstream_issue_set_status":
       return `Agent wants to move issue **#${cardField(toolInput.number, "?")}** to **${cardField(toolInput.status)}**${toolInput.state_reason ? ` (${cardField(toolInput.state_reason)})` : ""}. Allow?`;
     case "workstream_issue_update_title":
@@ -480,7 +660,7 @@ export function buildGateMessage(
     case "account_export_enqueue":
       return "Agent wants to request a full export of your account data. Allow?";
     case "plausible_create_site":
-      return `Agent wants to create the Plausible Analytics site **${cardField(toolInput.domain)}**. Allow?`;
+      return `Agent wants to create the Plausible Analytics site **${cardField(toolInput.domain)}** (timezone ${cardField(toolInput.timezone, "UTC")}). Allow?`;
     case "plausible_add_goal":
       return `Agent wants to add a Plausible Analytics **${cardField(toolInput.goal_type)}** goal **${cardField(toolInput.value)}** to site **${cardField(toolInput.site_id)}**. Allow?`;
     case "plausible_get_stats":

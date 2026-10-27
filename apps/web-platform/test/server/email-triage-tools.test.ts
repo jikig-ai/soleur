@@ -304,6 +304,17 @@ describe("buildEmailTriageTools", () => {
     }
   });
 
+  test("email_send / email_reply cap the body at 4000 and the subject at 200 (the review card shows the whole send)", async () => {
+    const tools = (await buildTools()) as unknown as Array<{ name: string; schema: Record<string, { safeParse: (v: unknown) => { success: boolean } }> }>;
+    for (const name of ["email_send", "email_reply"]) {
+      const schema = tools.find((t) => t.name === name)!.schema;
+      expect(schema.body.safeParse("b".repeat(4000)).success).toBe(true);
+      expect(schema.body.safeParse("b".repeat(4001)).success).toBe(false);
+      expect(schema.subject.safeParse("s".repeat(200)).success).toBe(true);
+      expect(schema.subject.safeParse("s".repeat(201)).success).toBe(false);
+    }
+  });
+
   test("email_triage_list mirrors the route's default filters (finalized + probe-excluded + archived-excluded + owner scope + L1 cap shape)", async () => {
     const list = await getTool("email_triage_list");
     await list.handler({});
