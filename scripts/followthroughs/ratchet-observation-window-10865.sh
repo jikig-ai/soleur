@@ -11,7 +11,7 @@
 # so an unanchored pattern would count it on every healthy run. A job log can start with a byte-order mark: it is stripped.
 #
 # EXIT 0 ONLY WHEN EVERY CRITERION HOLDS (never on partial evidence). "Not yet" is exit 2, first token `NOT YET:` (the follow-through convention and the
-# sibling closing probes reserve 2 for it; the sweeper renders 1 as a FAIL comment every night). Exit 1 is NOT USED by this probe: it is unreachable by design.
+# sibling closing probes reserve 2 for it; the sweeper renders 1 as a FAIL comment every night). Exit 1 is NOT USED by this probe: it is unreachable by design (no code path chooses it; a `set -u` abort would exit 1, and the suite treats any exit 1 as a failure).
 #   (a) at least MIN_PR (3) green pull_request units from 3 DISTINCT PRs, at least one touching `scripts/` or a suite file; a throwaway canary PR
 #       (head branch `canary-*`), a fork PR (head repository is not this repository) and a PR whose file list touches an oracle input (ORACLE below, the
 #       SUT's RATCHET_ORACLE) are excluded from every count, as is a PR run that names no PR;
@@ -38,15 +38,15 @@
 # WHAT A PASS CERTIFIES. Runs are listed newest first up to MAX_PAGES (40) pages per event, then read OLDEST first, at most MAX_UNITS (250) runs per sweep,
 # PLUS always the newest 10 merge_group runs (the pause check and the defects), which are dispatched FIRST and are exempt from the read budget: a PASS certifies the
 # earliest prefix plus the newest queue state, and the status line prints runs_listed, units_read and truncated=0|1. Reads run SOAK_PARALLEL (4) at a time under a
-# SOAK_BUDGET_S (300 s) deadline that also bounds the per-PR facts loop: past it the remaining oldest-first runs wait for the next sweep (truncated=1; a budget hit is
-# NOT YET unless every criterion already holds on what was read, and is never CANNOT ESTABLISH). Measured serially on 2026-10-27: 265 jobs reads at 2.1 s and 264 job logs
+# SOAK_BUDGET_S (300 s) deadline; the per-PR facts loop has its own SOAK_FACTS_BUDGET_S (120 s) allowance: past either, the remaining runs or PRs are left unread THIS sweep
+# (nothing persists between sweeps; truncated=1; a budget hit is NOT YET unless every criterion already holds on what was read, and is never CANNOT ESTABLISH). Measured serially on 2026-10-27: 265 jobs reads at 2.1 s and 264 job logs
 # at 1.1 s (about 15 minutes) against a sweeper job limit of 15 minutes for every tracker. The oldest runs never change, so evidence latches across sweeps without any tracker write. A run whose
 # conclusion is `cancelled` is skipped before any jobs read. Closing #10865 authorizes nothing: PR3b (#10859) stays held.
 #
 # Exit codes (sweep-followthroughs.sh contract): 0 PASS; 2 NOT YET (an unmet criterion; the sweeper comments and leaves the tracker open); 3 CANNOT ESTABLISH
 # (a tool, GH_TOKEN or a read failed, or a job log carried no marker for a run that concluded success: the sweeper retries); 78 refused to run under xtrace
 # while GH_TOKEN is set (#7797). Test seams (inert under the sweeper's env -i): SOAK_NOW_EPOCH, SOAK_MAX_PAGES, SOAK_MAX_UNITS, SOAK_PARALLEL (1..8), SOAK_BUDGET_S
-# (1..600), SOAK_PROGRESS=1 (a heartbeat per 25 reads on stderr). The sweeper's GITHUB_TOKEN allows about 1,000 REST requests per hour per repository, shared: the probe reads
+# (1..600; reads), SOAK_FACTS_BUDGET_S (1..300; the serial per-PR facts phase has its own allowance), SOAK_PROGRESS=1 (a heartbeat per 25 reads on stderr). The sweeper's GITHUB_TOKEN allows about 1,000 REST requests per hour per repository, shared: the probe reads
 # rate_limit first and is CANNOT ESTABLISH (exit 3) when the planned reads (2 per run, 5 per PR, 200 reserve) do not fit, and an HTTP 403 or 429 stops further reads.
 # Progress is on stderr (three phase lines, counts only); stdout is the status line, the verdict and a `quota:` line. NO API payload may travel on a jq argv (one argv entry
 # is capped at 131072 bytes): pages go to jq on stdin. The rows live in
@@ -82,7 +82,8 @@ MAX_PAGES="${SOAK_MAX_PAGES:-40}"
 MAX_UNITS="${SOAK_MAX_UNITS:-250}"
 NEWEST_MG=10
 PAR="${SOAK_PARALLEL:-4}"          # concurrent run reads (cap 8)
-BUDGET="${SOAK_BUDGET_S:-300}"     # wall-clock seconds the reads may take before the remaining oldest-first runs wait for the next sweep (cap 600)
+BUDGET="${SOAK_BUDGET_S:-300}"     # wall-clock seconds the reads may take before the remaining oldest-first runs are left unread this sweep (cap 600)
+FACTS_BUDGET="${SOAK_FACTS_BUDGET_S:-120}"   # the serial per-PR facts phase has its OWN allowance, measured from its start (cap 300): reads (about 258 s with the listing) plus about 60 s of facts do not fit one 300 s budget
 T0=$SECONDS
 for need in gh jq date sort mktemp rm sed awk comm paste cat head tail cut tr grep mv timeout pgrep; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
@@ -93,6 +94,7 @@ NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 [[ "$MAX_PAGES" =~ ^[1-9][0-9]*$ && "$MAX_UNITS" =~ ^[1-9][0-9]*$ ]] || { echo "CANNOT ESTABLISH: SOAK_MAX_PAGES / SOAK_MAX_UNITS are not positive integers"; exit 3; }
 [[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]] || { echo "CANNOT ESTABLISH: SOAK_PARALLEL is not an integer from 1 to 8"; exit 3; }
 [[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 600 ]] || { echo "CANNOT ESTABLISH: SOAK_BUDGET_S is not an integer from 1 to 600"; exit 3; }
+[[ "$FACTS_BUDGET" =~ ^[1-9][0-9]*$ && "$FACTS_BUDGET" -le 300 ]] || { echo "CANNOT ESTABLISH: SOAK_FACTS_BUDGET_S is not an integer from 1 to 300"; exit 3; }
 HB=0; { [ "${SOAK_PROGRESS:-}" = 1 ] || [ -t 2 ]; } && HB=1   # the per-25 heartbeat is opt-in: the sweeper folds stderr into a public comment
 
 WORK="$(mktemp -d)" || { echo "CANNOT ESTABLISH: mktemp failed"; exit 3; }
@@ -118,7 +120,7 @@ gh_get() {
 }
 api() { gh_get "$1"; }
 log_api() { gh_get --allow-escape-sequences "$1"; }
-jq_detail() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9 ._:,()-' '?' | LC_ALL=C cut -c1-160; }   # a public comment must carry no @name, #123, markup or control byte from a payload
+jq_detail() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9 _:,()-' '?' | LC_ALL=C cut -c1-160; }   # a public comment must carry no @name, #123, markup or control byte from a payload
 UNITS="$WORK/units.tsv"; : > "$UNITS"
 MARKER_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z SOLEUR_PR_AFFECTED_RATCHET exit=([012]) reason=([a-z0-9-]+) live=[0-9]+ baseline=[0-9]+$'
 nots=()   # the unmet criteria, each reported as `NOT YET: <what>`
@@ -139,7 +141,7 @@ merged_epoch="$(date -u -d "$merged_at" +%s 2>/dev/null)" || fail_api "merge tim
 age_days=$(( (NOW - merged_epoch) / 86400 ))
 
 # --- read one job: sets RJ_EX, RJ_REASON, RJ_WALL, RJ_RAN (RJ_EX is 2 with reason no-marker when the job concluded without an emitted marker) ---------
-# Called in the main shell, never in a command substitution: fail_api's `exit` must end the probe.
+# Called inside a read_unit worker subshell (fail_api's `exit` ends that worker; the main shell then reports its one fixed line and exits 3), never in a command substitution.
 read_job() {   # <jobs json> <run id>
   local jobs="$1" run="$2" j jid conc started completed step log line t0 t1
   RJ_EX=none; RJ_REASON=none; RJ_WALL=0; RJ_RAN=0
@@ -160,7 +162,7 @@ read_job() {   # <jobs json> <run id>
   if [ "$step" != success ] && [ "$step" != failure ]; then return 0; fi
   RJ_RAN=1; RJ_WALL=$((t1 - t0))
   log="$(log_api "repos/$REPO/actions/jobs/$jid/logs")" || fail_api "run $run job log"
-  line="$(printf '%s\n' "$log" | sed 's/^\xef\xbb\xbf//' | tr -d '\r' | grep -E "$MARKER_RE" | tail -n 1)"
+  line="$(printf '%s\n' "$log" | sed 's/^\xef\xbb\xbf//' | tr -d '\r' | grep -aE "$MARKER_RE" | tail -n 1)"
   if [ -z "$line" ]; then
     [ "$conc" != success ] || fail_api "run $run job log: a successful ratchet job printed no emitted marker line"
     RJ_EX=2; RJ_REASON=no-marker; return 0   # a non-success run with no annotation counts as exit 2
@@ -179,7 +181,7 @@ for ev in pull_request merge_group; do
     LISTCALLS=$((LISTCALLS + 1))
     runs="$(api "$path")" || fail_api "ci.yml $ev runs (page $page)"
     jq -r --arg m "$merged_at" --arg ev "$ev" '.workflow_runs[]? | select(.created_at > $m)
-         | [.id, $ev, .head_sha, (.head_branch // ""), .created_at, (.run_attempt // 1), ((.pull_requests[0].number // 0) | tostring), (.conclusion // ""),
+         | [.id, $ev, .head_sha, ((.head_branch // "") | if . == "" then "-" else . end), .created_at, (.run_attempt // 1), ((.pull_requests[0].number // 0) | tostring), (.conclusion // ""),
             (if ((.head_repository.full_name // .repository.full_name // "") != (.repository.full_name // "")) then 1 else 0 end)] | @tsv' <<<"$runs" >> "$RUNS" 2>/dev/null \
       || fail_api "ci.yml $ev runs (parse)"
     n="$(jq -r '(.workflow_runs // []) | length' <<<"$runs" 2>/dev/null)" || fail_api "ci.yml $ev runs (parse)"
@@ -188,6 +190,7 @@ for ev in pull_request merge_group; do
     page=$((page + 1))
   done
 done
+awk -F'\t' '$1 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' "$RUNS" || fail_api "ci.yml runs (non-numeric run id)"
 runs_listed="$(grep -c . "$RUNS")"
 # a cancelled run spends no budget. The newest NEWEST_MG merge_group runs are dispatched FIRST (the pause check and the defects need the newest queue state, and a read
 # budget must never be what cuts it), then the oldest runs up to MAX_UNITS, oldest first.
@@ -200,7 +203,8 @@ awk -F'\t' 'NR == FNR { x[$1] = 1; next } !($1 in x)' "$WORK/extras.tsv" "$WORK/
 to_read="$(grep -c . "$WORK/dispatch.tsv")"
 need_prs="$(awk -F'\t' '$3 == "pull_request" && $8 != 0 { print $8 }' "$WORK/dispatch.tsv" | sort -u | grep -c .)"
 note "phase=listed seen=$runs_listed readable=$readable_n to_read=$to_read parallel=$PAR budget_s=$BUDGET elapsed_s=$((SECONDS - T0))"
-# the quota guard: a shortfall is CANNOT ESTABLISH (the sweeper retries), never NOT YET (that would say a criterion is unmet) and never a smaller plan (that would change what a PASS certifies)
+# the quota guard: a shortfall is CANNOT ESTABLISH (the sweeper retries), never NOT YET (that would say a criterion is unmet) and never a smaller plan (that would change what a PASS certifies).
+# Measured 2026-10-27: the oldest 250 runs belong to 4 PRs, so need is about 740 against about 580 actually spent; a rerun costs 4 reads, not 2, which the 200 reserve covers.
 need=$(( 2 * to_read + 5 * need_prs + 200 ))
 if (( RL_REM - LISTCALLS < need )); then
   at="unknown"; [[ "$RL_RESET" =~ ^[0-9]+$ ]] && at="$(date -u -d "@$RL_RESET" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
@@ -330,12 +334,12 @@ draft_at() {   # <pr number> <ISO time>: sets DRAFT to 1 when the PR was a draft
 # --- the counts -------------------------------------------------------------------------------------------------------------------------------
 pr_units="$(awk -F'\t' '$2 == "pull_request"' "$GREEN")"
 mg_n="$(awk -F'\t' '$2 == "merge_group" { print $3 }' "$GREEN" | sort -u | grep -c .)"
-FACTS_CUT=0; declare -A SEEN_KEY; distinct=0; any_scripts=0; docs_seen=0; draft_seen=0; bot_seen=0
+FACTS_CUT=0; TF0=$SECONDS; declare -A SEEN_KEY; distinct=0; any_scripts=0; docs_seen=0; draft_seen=0; bot_seen=0
 while IFS=$'\t' read -r id ev sha branch created prn ex reason wall cls fork; do
   [ -n "$id" ] || continue
   [ "$prn" != 0 ] || continue        # a pull_request run that names no PR (a fork run) cannot be read: not evidence
   [ "$fork" != 1 ] || continue       # a fork PR run
-  if [ -z "${PR_DOCS[$prn]+x}" ] && (( SECONDS - T0 >= BUDGET )); then FACTS_CUT=1; TRUNC=1; break; fi   # the facts loop shares the read budget
+  if [ -z "${PR_DOCS[$prn]+x}" ] && (( SECONDS - TF0 >= FACTS_BUDGET )); then FACTS_CUT=1; TRUNC=1; break; fi   # the facts loop has its own allowance
   pr_facts "$prn"
   [ "${PR_EXCLUDED[$prn]}" != 1 ] || continue   # canary, fork or oracle-touching: excluded from every count
   [ "${PR_SCRIPTS[$prn]}" != 1 ] || any_scripts=1
@@ -402,8 +406,9 @@ fi
 if (( nwall > 0 && ${#nots[@]} == nwall && age_days >= REVIEW_DAYS )); then
   nots+=("the $REVIEW_DAYS-day trigger has passed and (d) is the only unmet criterion: the CTO agent re-rules the two wall ceilings now")
 fi
-if (( FACTS_CUT == 1 )); then nots+=("read budget ended in the PR-facts phase (SOAK_BUDGET_S=$BUDGET): the next sweep reads the rest"); fi
-if (( BUDGET_CUT == 1 && ${#nots[@]} > 0 )); then nots+=("read budget ended after $units_read of $to_read runs (SOAK_BUDGET_S=$BUDGET): the next sweep reads the rest"); fi
+# nothing persists between sweeps: a cut sweep leaves the rest unread THIS sweep, and a faster sweep reads further. A cut is NOT YET only while a criterion is unmet.
+if (( FACTS_CUT == 1 && ${#nots[@]} > 0 )); then nots+=("read budget ended in the PR-facts phase (SOAK_FACTS_BUDGET_S=$FACTS_BUDGET): PRs after that point were not read this sweep"); fi
+if (( BUDGET_CUT == 1 && ${#nots[@]} > 0 )); then nots+=("read budget ended after $units_read of $to_read runs (SOAK_BUDGET_S=$BUDGET): runs after that point were not read this sweep"); fi
 if (( ${#nots[@]} > 0 )); then
   printf 'NOT YET: %s\n' "${nots[@]}"
   exit 2

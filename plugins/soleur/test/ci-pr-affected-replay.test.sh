@@ -150,13 +150,15 @@ key="$(printf '%s' "$path" | sed -E 's/created=[^&]*/created=X/' | tr -c 'A-Za-z
 printf 'REQ %s\n' "$key" >> "$GH_LOG"
 # a job log is fetched with --allow-escape-sequences or gh refuses it: the stub refuses it too
 case "$path" in */logs) [ "$esc" = 1 ] || { echo "STUB-MISS no --allow-escape-sequences on $key" >> "$GH_LOG"; echo "gh: refusing escape sequences" >&2; exit 1; } ;; esac
+# SLOW_<key>: wait SLOW_S seconds BEFORE answering (the real fixture, or an ERR_ failure: a slow failing read keeps two workers in flight at once). HANG_ answers an empty run
+# list, so a delayed unit would vanish. The probe's budget clock is SECONDS (one-second granularity), so a budget row needs a read longer than the budget; the pid is recorded
+# for the trap row and S/E lines for the concurrency row.
+if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; echo "S $$" >> "$GH_LOG.conc"; sleep "${SLOW_S:-1}"; echo "E $$" >> "$GH_LOG.conc"; fi
 if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
+if [ -f "$GH_FIX/ERR429RL_$key" ]; then echo "gh: Too Many Requests (HTTP 429)" >&2; exit 1; fi
 if [ -f "$GH_FIX/HANG_$key" ]; then sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
-# SLOW_<key>: answer the REAL fixture after SLOW_S seconds (HANG_ answers an empty run list, so a delayed unit would vanish). The probe's budget clock is
-# SECONDS, which has one-second granularity, so a budget row needs a read that is longer than the budget; the pid is recorded for the trap row.
-if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; sleep "${SLOW_S:-1}"; fi
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
 GHSTUB
@@ -171,6 +173,7 @@ fx_err() { : > "$GHFIX/ERR_$(keyof "$1")"; }
 fx_err404() { : > "$GHFIX/ERR404_$(keyof "$1")"; }
 fx_hang() { : > "$GHFIX/HANG_$(keyof "$1")"; }
 fx_err403rl() { : > "$GHFIX/ERR403RL_$(keyof "$1")"; }
+fx_err429rl() { : > "$GHFIX/ERR429RL_$(keyof "$1")"; }
 runs_path() { printf 'repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100' "${REPO_NAME:-$R}" "$1"; }
 jobs_path() { printf 'repos/%s/actions/runs/%s/jobs?per_page=100&filter=latest' "${REPO_NAME:-$R}" "$1"; }
 jobs1_path() { printf 'repos/%s/actions/runs/%s/attempts/1/jobs?per_page=100' "${REPO_NAME:-$R}" "$1"; }
@@ -2983,7 +2986,7 @@ OW_MSHA=0123456789abcdef0123456789abcdef01234567
 OW_STEP="$(wf_block "$WF_REAL" $RJOB | sed -n 's/^      - name: \(.*\)$/\1/p')"   # read from the workflow; row_ow_parity ties it to the probe's STEP
 OW_KBD="knowledge-""base"   # assembled: the dropped-consumer census must not read this suite as a knowledge-base reader
 OW_BL_PATH="repos/$R/contents/scripts/ci-pr-affected-audit.baseline.tsv"
-OW_UNITS=(); OW_MUT_RUN=0
+OW_UNITS=(); OW_MUT_RUN=0; OW_MUT_KILLED=0
 OW_RCS=()   # every exit code the probe returned in this section: none may be 1 (exit 1 is not used by the probe)
 ow_base_units() {
   OW_UNITS=("5001 pull_request shaA feat/a 2031-02-02T01:00:00Z 1 11 0 150" "5002 pull_request shaB docs/b 2031-02-02T02:00:00Z 1 12 0 140"
@@ -3009,7 +3012,7 @@ ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> 
 }
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* "$GHFIX"/ERR4*RL_* 2>/dev/null
   printf '{"resources":{"core":{"limit":5000,"remaining":%s,"used":100,"reset":1900000000}}}' "${OW_RL_REMAINING:-4900}" | fx "rate_limit"   # the probe reads the API quota before it reads any run
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
@@ -3077,14 +3080,14 @@ ow_bytes_over() {   # ow_bytes_over <limit> <request path>: the fixture the STUB
 }
 OW_ATT1=""; OW_ENV=(); OWERR="$SANDBOX/ow.err"
 ow_probe() {   # ow_probe [now epoch]: RC, OWOUT (stdout and stderr merged). The SOAK_ seams of a developer's shell never reach the probe.
-  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_PROGRESS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
   OW_RCS+=("$RC")
 }
 ow_probe_split() {   # ow_probe_split: RC, OWOUT (stdout only), OWERR (the stderr file)
-  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_PROGRESS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
   OW_RCS+=("$RC")
 }
-ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; rm -f "$GHLOG.slowpids" "$OWERR"
+ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$OWERR"
   unset OW_BL_TIP; OW_BL_TIP_ABSENT=""; OW_BL_MERGE_ABSENT=""; OW_BL_TIP_FAIL=""; ow_base_units; }
 ow_variant() {   # ow_variant <fn that edits OW_UNITS or globals>: rebuild the fixtures and run the probe
   ow_case; "$1"; ow_write; ow_probe "${OW_NOW:-}"
@@ -3203,7 +3206,8 @@ row_ow_pr_facts_cached() {   # PR 11 has two green units: its timeline and its p
 ow_scan_argv() {   # ow_scan_argv <file>: print every jq option that takes an operand as name=operand (quotes stripped); the operand is what travels on argv
   python3 - "$1" <<'PY'
 import re, sys
-for line in open(sys.argv[1]):
+text = re.sub(r"\\\n[ \t]*", " ", open(sys.argv[1]).read())   # a continuation line is one logical line
+for line in text.splitlines():
     if line.lstrip().startswith("#"): continue
     for m in re.finditer(r'--(?:arg|argjson|slurpfile|rawfile)\s+([A-Za-z_][A-Za-z0-9_]*)\s+("[^"]*"(?:"[^"]*")*|[^\s]+)', line):
         print("%s=%s" % (m.group(1), m.group(2).replace('"', "")))
@@ -3214,12 +3218,14 @@ row_ow_argv() {   # only small scalars may ride on a jq argv: an API payload on 
   local ctl got allowed="m=\$merged_at ev=\$ev n=\$JOB s=\$STEP oracle=\$ORACLE_JSON kb=knowledge-base t=\$t cur=\${PR_CURDRAFT[\$n]}" pair found=0
   ctl="$SANDBOX/ow-argv-control.sh"; printf '%s\n' '  files="$(jq -c -n --argjson b "$page" "$b")"' > "$ctl"
   [[ "$(ow_scan_argv "$ctl")" == 'b=$page' ]] || return 1   # instrument control: the scan must flag a payload on argv
+  printf '%s\n' '  jq -n --argjson c \' '      "$payload" x' > "$ctl"
+  [[ "$(ow_scan_argv "$ctl")" == 'c=$payload' ]] || return 1   # ... and one whose operand sits on a continuation line
   got="$(ow_scan_argv "$OW_SCRIPT")"
   while IFS= read -r pair; do
     [[ -n "$pair" ]] || continue; found=$((found + 1))
     [[ " $allowed " == *" $pair "* ]] || return 1
   done <<<"$got"
-  [[ "$found" -ge 6 ]] && grep -qF '{filename}' "$OW_SCRIPT"
+  [[ "$found" -eq 8 ]] && grep -qF '{filename}' "$OW_SCRIPT"
 }
 row_ow_progress() {
   ow_case; ow_write; ow_probe_split
@@ -3234,7 +3240,7 @@ row_ow_progress() {
 }
 row_ow_heartbeat() {   # 48 readable runs: a beat per 25 completions, only when asked for (stderr here is a file, not a TTY)
   ow_case; ow_u_bigmax; ow_write; OW_ENV=(SOAK_PARALLEL=1 SOAK_PROGRESS=1); ow_probe_split
-  grep -q '^soak-progress: heartbeat read=25/' "$OWERR" || return 1
+  grep -q '^soak-progress: heartbeat read=25/' "$OWERR" && [[ "$(grep -c 'heartbeat' "$OWERR")" -eq 1 ]] || return 1
   OW_ENV=(SOAK_PARALLEL=1); ow_probe_split
   ! grep -q 'heartbeat' "$OWERR"
 }
@@ -3248,12 +3254,40 @@ row_ow_parallel_same() {
   OW_ENV=(SOAK_PARALLEL=4 SLOW_S=2); ow_probe_split; o4="$OWOUT"
   [[ "$o1" == "$o4" ]] && grep -q 'paused: the latest merge_group unit (run 6011) is red' <<<"$o4"
 }
-ow_u_fail_two() { OW_UNITS[6]="6002 merge_group x@a#1<b> gh-readonly-queue/main/pr-12-b 2031-02-03T02:00:00Z 1 0 0 150"; }
-row_ow_worker_fail() {   # the jobs reads of an extra (6002) and of an oldest-first run (5002) fail; the first failure in DISPATCH order is named
+ow_u_fail_two() { OW_UNITS[7]="6003 merge_group x@a#1<b> gh-readonly-queue/main/pr-13-c 2031-02-03T03:00:00Z 1 0 0 150"; }
+row_ow_worker_fail() {   # the jobs reads of an extra (6003, dispatched 3rd) and of the oldest run (5001, dispatched 4th, LOWEST id) both fail slowly, so both are launched; the first in DISPATCH order is named
   ow_case; ow_u_fail_two; ow_write
-  fx_err "repos/$R/actions/runs/6002/jobs?per_page=100&filter=latest"; fx_err "repos/$R/actions/runs/5002/jobs?per_page=100&filter=latest"
-  OW_ENV=(SOAK_PARALLEL=4); ow_probe
-  [[ "$RC" -eq 3 ]] && [[ "$(grep -c '^CANNOT ESTABLISH' <<<"$OWOUT")" -eq 1 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (run 6002 jobs)' <<<"$OWOUT" && ! grep -q '5002\|x@a' <<<"$OWOUT"
+  local id; for id in 6003 5001; do fx_err "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest"; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+  OW_ENV=(SOAK_PARALLEL=4 SLOW_S=1); ow_probe
+  [[ "$RC" -eq 3 ]] && [[ "$(grep -c '^CANNOT ESTABLISH' <<<"$OWOUT")" -eq 1 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (run 6003 jobs)' <<<"$OWOUT" && ! grep -q '5001\|x@a' <<<"$OWOUT"
+}
+row_ow_stop_after_fail() {   # one failed read stops further launches (the first run fails; sequentially, no later run is requested)
+  ow_case; ow_write; fx_err "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'run 6001 jobs' <<<"$OWOUT" && ! grep -q 'actions_runs_6002_jobs\|actions_runs_5001_jobs' "$GHLOG"
+}
+row_ow_parallelism() {   # eight 1 s reads: the stub counts how many are in flight at once; the probe must hold exactly SOAK_PARALLEL
+  local id p conc
+  for p in 4 1; do
+    ow_case; ow_write
+    for id in 5001 5002 5003 5004 5005 6001 6002 6003; do : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+    OW_ENV=("SOAK_PARALLEL=$p" SLOW_S=1); ow_probe
+    conc="$(awk '$1 == "S" { c++; if (c > m) m = c } $1 == "E" { c-- } END { print m + 0 }' "$GHLOG.conc")"
+    [[ "$conc" -eq "$p" ]] || return 1
+  done
+}
+row_ow_run_id() {   # a run id from the API is validated at list time
+  ow_case; ow_write
+  local item; item="$(ow_run_item '"6001x"' shaZ feat/z 2031-02-03T05:00:00Z 1 merge_group success 0)"
+  printf '{"total_count":1,"workflow_runs":[%s]}' "$item" | fx "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"
+  ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'non-numeric run id' <<<"$OWOUT"
+}
+row_ow_empty_branch() {   # an empty head_branch must not collapse under the tab IFS and shift every later field
+  ow_case; ow_write
+  local f; f="$GHFIX/$(keyof "repos/$R/actions/workflows/ci.yml/runs?event=pull_request&status=completed&per_page=100&created=%3EX")"
+  sed -i 's/"head_branch":"feat\/a"/"head_branch":""/' "$f" && grep -q '"head_branch":""' "$f" || return 1
+  ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT"
 }
 row_ow_budget() {   # SECONDS has one-second granularity: a 2 s read against a 1 s budget
   ow_case; ow_write
@@ -3262,9 +3296,9 @@ row_ow_budget() {   # SECONDS has one-second granularity: a 2 s read against a 1
   [[ "$RC" -eq 2 ]] && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" && grep -q 'units_read=4 truncated=1' <<<"$OWOUT" || return 1
   [[ "$(grep -m1 'actions_runs_[0-9]*_jobs' "$GHLOG")" == *actions_runs_6001_jobs* ]]   # the newest queue state is read first
 }
-row_ow_budget_facts() {   # the reads finish inside the budget; the first pull read (PR 11) overruns it; the facts loop stops
+row_ow_budget_facts() {   # the reads finish inside their budget; the first pull read (PR 11, 3 s) overruns the 2 s facts allowance; the facts loop stops
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/11")"
-  OW_ENV=(SOAK_BUDGET_S=8 SOAK_PARALLEL=4 SLOW_S=9); ow_probe
+  OW_ENV=(SOAK_FACTS_BUDGET_S=2 SOAK_PARALLEL=4 SLOW_S=3); ow_probe
   [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'NOT YET: read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT"
 }
 row_ow_quota() {   # need = 2 * runs to read + 5 * PRs + 200; the base fixture reads 8 runs of 5 PRs
@@ -3274,28 +3308,38 @@ row_ow_quota() {   # need = 2 * runs to read + 5 * PRs + 200; the base fixture r
   [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: GitHub API read failed (rate_limit' <<<"$OWOUT" || return 1
   ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
   [[ "$RC" -eq 3 ]] && grep -q 'HTTP 403' <<<"$OWOUT" && ! grep -q 'actions_runs_6002_jobs\|actions_runs_5001_jobs' "$GHLOG" || return 1
+  ow_case; ow_write; fx_err429rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'HTTP 429' <<<"$OWOUT" || return 1
+  ow_case; OW_RL_REMAINING=243; ow_write; ow_probe   # need 241 + the 2 listing calls: exactly enough
+  [[ "$RC" -eq 0 ]] || return 1
+  ow_case; OW_RL_REMAINING=242; ow_write; ow_probe   # one request short
+  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=242, need=241' <<<"$OWOUT" || return 1
   ow_case; ow_write; ow_probe
   [[ "$RC" -eq 0 ]] && grep -q '^quota: used_delta=0 limit=5000 remaining=4900$' <<<"$OWOUT"
 }
 row_ow_seam_caps() {
   ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=9); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=601); ow_probe; [[ "$RC" -eq 3 ]] || return 1
-  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=600); ow_probe; [[ "$RC" -eq 0 ]]
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=abc); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=301); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=600 SOAK_FACTS_BUDGET_S=300); ow_probe; [[ "$RC" -eq 0 ]]
 }
-ow_u_json_error() { ow_u_few16; OW_P16_FILES="{\"message\":\"$(printf 'A%.0s' $(seq 1 300))\\u001b@octocat </details> [x](http://e) #1\"}"; }
+ow_u_json_error() { ow_u_few16; OW_P16_FILES="{\"message\":\"@octocat </details> [x](http://e) #1 www.attacker.example\\u001b$(printf 'A%.0s' $(seq 1 300))\"}"; }
 row_ow_jq_error_text() {
   ow_variant ow_u_json_error
   [[ "$RC" -eq 3 ]] || return 1
   local line detail; line="$(grep '^CANNOT ESTABLISH' <<<"$OWOUT" | head -n 1)"
   [[ "$line" == *'pull 16 files (parse): '* ]] || return 1
   detail="${line#*pull 16 files (parse): }"; detail="${detail%)}"
-  [[ ${#detail} -ge 20 && ${#detail} -le 160 ]] && [[ "$detail" != *[@\<\>\[\]\#\`]* ]] && ! grep -q $'\033' <<<"$line"
+  [[ ${#detail} -ge 20 && ${#detail} -le 160 ]] && [[ "$detail" != *[@\<\>\[\]\#\`.]* ]] && ! grep -q $'\033' <<<"$line"
 }
 row_ow_trap() {   # SIGTERM while a slow read is in flight: exit 143, no worker survives, the work directory is gone
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
   local before after pid i spid alive=0 t_kill
   before="$(ls -d "$SANDBOX"/tmp.* 2>/dev/null | wc -l)"
-  env -u SOAK_PARALLEL PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" SLOW_S=30 SOAK_PARALLEL=2 bash "$OW_SCRIPT" > /dev/null 2>&1 & pid=$!
+  env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" SLOW_S=30 SOAK_PARALLEL=2 bash "$OW_SCRIPT" > /dev/null 2>&1 & pid=$!
   for i in $(seq 1 100); do [[ -s "$GHLOG.slowpids" ]] && break; sleep 0.2; done
   [[ -s "$GHLOG.slowpids" ]] || { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 1; }
   t_kill=$SECONDS; kill -TERM "$pid"; RC=0; wait "$pid" || RC=$?; OW_RCS+=("$RC")   # a probe that waits for its 30 s read instead of stopping it would also leave no worker behind: the exit must be quick
@@ -3355,6 +3399,10 @@ chk "window probe: a quota shortfall, a failed rate_limit read and a 403 exit 3 
 chk "window probe: SOAK_PARALLEL above 8 and SOAK_BUDGET_S above 600 are CANNOT ESTABLISH; the caps themselves are allowed" row_ow_seam_caps
 chk "window probe: jq's error text reaches the failure message, allow-listed and at most 160 bytes" row_ow_jq_error_text
 chk "window probe: SIGTERM while a read is in flight leaves no worker and no work directory (exit 143)" row_ow_trap
+chk "window probe: a failed read stops further launches" row_ow_stop_after_fail
+chk "window probe: exactly SOAK_PARALLEL reads are in flight at once (4 and 1), counted by the stub" row_ow_parallelism
+chk "window probe: a non-numeric run id from the API is CANNOT ESTABLISH at list time" row_ow_run_id
+chk "window probe: an empty head_branch does not shift the tab-separated run fields" row_ow_empty_branch
 ow_mutate() {   # ow_mutate <name> <old> <new> <row>: one edit of the PROBE (it must land once and parse); the row is GREEN on the real probe and must be RED on the mutant
   local m="$SANDBOX/owmut-$1.sh" real="$OW_SCRIPT" red=0
   OW_MUT_RUN=$((OW_MUT_RUN + 1))   # the section's own floor counts every call (ow_mutate does not feed MUT_RUN, so FLOOR_MUTANTS is not the guard for these)
@@ -3369,7 +3417,7 @@ PY
   bash -n "$m" 2>/dev/null || { fail "probe mutant $1 does not parse"; return 0; }
   "$4" >/dev/null 2>&1 || { fail "probe mutant $1: row $4 is red on the real probe"; return 0; }
   OW_SCRIPT="$m"; "$4" >/dev/null 2>&1 || red=1; OW_SCRIPT="$real"
-  if [[ "$red" -eq 1 ]]; then pass "probe mutant $1 is killed by $4"; else fail "probe mutant $1 SURVIVED row $4"; fi
+  if [[ "$red" -eq 1 ]]; then OW_MUT_KILLED=$((OW_MUT_KILLED + 1)); pass "probe mutant $1 is killed by $4"; else fail "probe mutant $1 SURVIVED row $4"; fi
 }
 ow_mutate not-yet-is-exit-1 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
   exit 2' 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
@@ -3412,12 +3460,23 @@ ow_mutate extras-last $'{ sed \'s/^/E\\t/\' "$WORK/extras.tsv"; sed \'s/^/O\\t/\
 ow_mutate unit-sort-dropped $'sort -t$\'\\t\' -k5,5 -k1,1n -s -o "$UNITS" "$UNITS" || fail_api "unit sort"' $':' row_ow_parallel_same
 ow_mutate draft-cache-dropped $'[ -n "${PR_TL[$n]+x}" ] || { PR_TL' $'{ PR_TL' row_ow_pr_facts_cached
 ow_mutate jq-detail-unbounded $'| LC_ALL=C cut -c1-160; }' $'| cat; }' row_ow_jq_error_text
-ow_mutate jq-detail-unfiltered $'LC_ALL=C tr -c \'A-Za-z0-9 ._:,()-\' \'?\' | ' $'' row_ow_jq_error_text
+ow_mutate jq-detail-unfiltered $'LC_ALL=C tr -c \'A-Za-z0-9 _:,()-\' \'?\' | ' $'' row_ow_jq_error_text
 ow_mutate quota-guard-dropped $'if (( RL_REM - LISTCALLS < need )); then' $'if false; then' row_ow_quota
 ow_mutate rate-limit-403-continues $'if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; then break; fi' $'if false; then break; fi' row_ow_quota
 ow_mutate trap-kill-dropped $'for p in $(jobs -p 2>/dev/null); do kill_tree "$p"; done; wait' $'wait' row_ow_trap
-ow_mutate facts-budget-ignored $'if [ -z "${PR_DOCS[$prn]+x}" ] && (( SECONDS - T0 >= BUDGET )); then FACTS_CUT=1; TRUNC=1; break; fi' $':' row_ow_budget_facts
+ow_mutate facts-budget-ignored $'if [ -z "${PR_DOCS[$prn]+x}" ] && (( SECONDS - TF0 >= FACTS_BUDGET )); then FACTS_CUT=1; TRUNC=1; break; fi' $':' row_ow_budget_facts
 ow_mutate seam-cap-parallel-dropped $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[1-9][0-9]*$ ]]' row_ow_seam_caps
+ow_mutate par-serial $'while (( inflight >= PAR )); do wait -n' $'while (( inflight >= 1 )); do wait -n' row_ow_parallelism
+ow_mutate par-uncapped $'while (( inflight >= PAR )); do wait -n' $'while (( inflight >= 99 )); do wait -n' row_ow_parallelism
+ow_mutate failed-flag-ignored $'if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; then break; fi' $'if [ -e "$RL_FLAG" ]; then break; fi' row_ow_stop_after_fail
+ow_mutate worker-order-reversed $'for wrc_file in "$UD"/*.rc; do' $'for wrc_file in $(ls -r "$UD"/*.rc); do' row_ow_worker_fail
+ow_mutate 429-ignored $'grep -oE \'HTTP (403|429)\'' $'grep -oE \'HTTP 403\'' row_ow_quota
+ow_mutate listcalls-dropped $'if (( RL_REM - LISTCALLS < need )); then' $'if (( RL_REM < need )); then' row_ow_quota
+ow_mutate run-id-unvalidated $'awk -F\'\\t\' \'$1 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }\' "$RUNS" || fail_api "ci.yml runs (non-numeric run id)"' $':' row_ow_run_id
+ow_mutate hb-modulus $'(( done_n % 25 == 0 ))' $'(( done_n % 5 == 0 ))' row_ow_heartbeat
+ow_mutate jq-detail-allows-at $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 _:,()@#-\' \'?\'' row_ow_jq_error_text
+ow_mutate par-regex-zero $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[0-9]+$ && "$PAR" -le 8 ]]' row_ow_seam_caps
+ow_mutate branch-field-unguarded $'((.head_branch // "") | if . == "" then "-" else . end)' $'(.head_branch // "")' row_ow_empty_branch
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
 # ---------------------------------------------------------------------------------------------------------------------
@@ -4709,7 +4768,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1186   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 34 added by the observation-window probe fix (15 rows, 19 mutant kills) (measured below)
+FLOOR_ASSERTIONS=1201   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 49 added by the observation-window probe fix (19 rows, 30 mutant kills) (measured below)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
@@ -4722,7 +4781,7 @@ fi
 # every `mutate` line must have run (an exact reconciliation: a skipped or conditional line is a missing mutant)
 [[ "$MUT_RUN" -ge "$SITES_MUTATE" ]] || { printf '[FATAL] mutation floor: %s mutants ran but this file has %s mutate lines\n' "$MUT_RUN" "$SITES_MUTATE" >&2; exit 1; }
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"   # the observation-window section's own floor: every ow_mutate line must have run
-[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 40 ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (and at least 40 are required)\n' "$OW_MUT_RUN" "$OW_SITES" >&2; exit 1; }
+[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 40 && "$OW_MUT_KILLED" -eq "$OW_MUT_RUN" ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (at least 40 are required), %s were killed\n' "$OW_MUT_RUN" "$OW_SITES" "$OW_MUT_KILLED" >&2; exit 1; }
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
 printf 'FAILED: %s\n' "${FAILED[@]}" >&2
