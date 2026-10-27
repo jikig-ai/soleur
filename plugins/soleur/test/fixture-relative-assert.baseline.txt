@@ -298,6 +298,7 @@
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
 2	.github/scripts/ghcr-pull-with-retry.sh
+1	.github/scripts/supabase-pre-pull-images.sh
 2	.github/scripts/test/test-mint-inngest-bootstrap-tag.sh
 1	.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
