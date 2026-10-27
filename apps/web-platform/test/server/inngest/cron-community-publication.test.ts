@@ -1153,7 +1153,7 @@ describe("writeDigestFileContained", () => {
         createContainedFile(dir, leaf, async () => {
           await writeFile(join(parent, leaf), "racer");
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/race refused/);
       expect(await readFile(join(parent, leaf), "utf8")).toBe("racer");
     } finally {
       await dir.fh.close().catch(() => {});

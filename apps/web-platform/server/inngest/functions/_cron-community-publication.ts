@@ -646,7 +646,7 @@ export function renderCommunityPublication(
  * `/proc/self/fd/<fd>/`, which pins the open file description's dentry so an
  * ancestor renamed away mid-walk can no longer redirect the path. The leaf is
  * created with `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW` after an unlink, so a
- * racing re-create wins EEXIST instead of being followed or overwritten.
+ * racing re-create is refused EEXIST instead of being followed or overwritten.
  * `node:fs` is imported lazily: a top-level binding would land in the static
  * graph of every sibling test that mocks node builtins with partial
  * factories.
@@ -655,12 +655,13 @@ export function renderCommunityPublication(
 /** `/proc/self/fd` dentry pinning exists on Linux only (the tainted-workspace
  * threat model is the production Linux worker); other platforms resolve
  * children by joined path — opens still refuse symlinks/non-dirs atomically,
- * only the pin is lost. `O_DIRECTORY`/`O_NOFOLLOW` can be undefined on
- * non-POSIX platforms, so they are coalesced to 0 rather than computing NaN
- * flags. */
+ * only the pin is lost. A Linux runtime without procfs mounted fails closed
+ * and loud (every pinned-path open ENOENTs), never silently unpinned. */
 const CONTAINED_FD_BASE = "/proc/self/fd";
 const containedHasProcFd = process.platform === "linux";
 
+/** `O_DIRECTORY`/`O_NOFOLLOW` can be undefined on non-POSIX platforms, so they
+ * are coalesced to 0 rather than computing NaN flags. */
 async function containedFlagConstants(): Promise<{ dir: number; leaf: number }> {
   const { constants } = await import("node:fs");
   return {
@@ -673,65 +674,82 @@ async function containedFlagConstants(): Promise<{ dir: number; leaf: number }> 
   };
 }
 
+/** The `{ fh, dirPath }` pair `openContainedDir` returns: `fh` is the pinned
+ * handle; `dirPath` is the joined path the non-Linux fallback resolves
+ * against. Tying them keeps a caller from writing into a directory that was
+ * never opened. */
+type ContainedDir = { fh: import("node:fs/promises").FileHandle; dirPath: string };
+
+/** Open `path` as a directory, mapping the two refusal errnos to the error
+ * contract. ENOENT is deliberately NOT mapped — the caller's mkdir arm owns it. */
+async function openDirOrThrow(
+  path: string,
+  dirFlags: number,
+  what: "spawnCwd" | "ancestor",
+): Promise<import("node:fs/promises").FileHandle> {
+  const { open } = await import("node:fs/promises");
+  try {
+    return await open(path, dirFlags);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "ENOTDIR") {
+      throw new Error(`writeDigestFileContained: ${what} is not a plain directory`);
+    }
+    throw err;
+  }
+}
+
+/** Basename check for the exported helpers — the `..` and `/` rejections are
+ * the containment invariant, and `/proc/self/fd/<fd>/..` resolves outside the
+ * pinned dentry, so the primitives enforce it rather than trusting callers. */
+function containedCleanSegment(segment: string): boolean {
+  return segment !== "" && segment !== "." && segment !== ".." && !segment.includes("/");
+}
+
 /**
  * Open `spawnCwd` and each `dirSegments` ancestor as a directory FileHandle,
  * refusing symlinks and non-directories atomically at open time. Returns the
  * leaf parent's FileHandle and its joined path (the non-Linux fallback needs
  * the path; returning it keeps the validated dir and the write dir tied).
- * The caller closes `fh`.
+ * `dirSegments` must be clean basenames — the containment invariant is
+ * enforced here, not trusted to callers. The caller closes `fh`.
+ *
+ * @internal test seam — exported for `cron-community-publication.test.ts`.
  */
 export async function openContainedDir(
   spawnCwd: string,
   dirSegments: string[],
-): Promise<{ fh: import("node:fs/promises").FileHandle; dirPath: string }> {
+): Promise<ContainedDir> {
   const { open, mkdir } = await import("node:fs/promises");
   const { join } = await import("node:path");
   const dirFlags = (await containedFlagConstants()).dir;
 
-  let dirFh;
-  let current = spawnCwd;
-  try {
-    dirFh = await open(spawnCwd, dirFlags);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ELOOP" || code === "ENOTDIR") {
-      throw new Error("writeDigestFileContained: spawnCwd is not a plain directory");
-    }
-    throw err;
+  if (dirSegments.some((s) => !containedCleanSegment(s))) {
+    throw new Error("writeDigestFileContained: dirSegments must be clean basenames");
   }
+
+  let dirFh = await openDirOrThrow(spawnCwd, dirFlags, "spawnCwd");
+  let current = spawnCwd;
   try {
     for (const segment of dirSegments) {
       const childPath = containedHasProcFd
         ? `${CONTAINED_FD_BASE}/${dirFh.fd}/${segment}`
         : join(current, segment);
-      let child;
+      let child: import("node:fs/promises").FileHandle;
       try {
-        child = await open(childPath, dirFlags);
+        child = await openDirOrThrow(childPath, dirFlags, "ancestor");
       } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === "ENOENT") {
-          try {
-            await mkdir(childPath);
-          } catch (mkErr) {
-            if ((mkErr as NodeJS.ErrnoException).code !== "EEXIST") throw mkErr;
-          }
-          try {
-            child = await open(childPath, dirFlags);
-          } catch (retryErr) {
-            const retryCode = (retryErr as NodeJS.ErrnoException).code;
-            if (retryCode === "ELOOP" || retryCode === "ENOTDIR") {
-              throw new Error("writeDigestFileContained: ancestor is not a plain directory");
-            }
-            throw retryErr;
-          }
-        } else if (code === "ELOOP" || code === "ENOTDIR") {
-          throw new Error("writeDigestFileContained: ancestor is not a plain directory");
-        } else {
-          throw err;
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        try {
+          await mkdir(childPath);
+        } catch (mkErr) {
+          if ((mkErr as NodeJS.ErrnoException).code !== "EEXIST") throw mkErr;
         }
+        child = await openDirOrThrow(childPath, dirFlags, "ancestor");
       }
-      // Assign before closing the old handle: if close() throws, `child` must
-      // already be the tracked handle so the outer catch releases it.
+      // Assign before closing: `dirFh.fd` must stay open while the NEXT
+      // segment's pinned path is resolved — and if close() throws, `child` is
+      // already the tracked handle so the outer catch releases it.
       const previous = dirFh;
       dirFh = child;
       await previous.close().catch(() => {});
@@ -751,9 +769,11 @@ export async function openContainedDir(
  * keeps a caller from writing into a directory that was never opened.
  * `beforeOpen` is a test seam that runs between the unlink and the exclusive
  * create. Returns the write FileHandle; the caller writes and closes it.
+ *
+ * @internal test seam — exported for `cron-community-publication.test.ts`.
  */
 export async function createContainedFile(
-  dir: { fh: import("node:fs/promises").FileHandle; dirPath: string },
+  dir: ContainedDir,
   leaf: string,
   beforeOpen?: () => Promise<void>,
 ): Promise<import("node:fs/promises").FileHandle> {
@@ -761,8 +781,13 @@ export async function createContainedFile(
   const { join } = await import("node:path");
   const leafFlags = (await containedFlagConstants()).leaf;
 
+  if (!containedCleanSegment(leaf)) {
+    throw new Error("writeDigestFileContained: leaf must be a clean basename");
+  }
+
+  const capturedFd = dir.fh.fd;
   const leafPath = containedHasProcFd
-    ? `${CONTAINED_FD_BASE}/${dir.fh.fd}/${leaf}`
+    ? `${CONTAINED_FD_BASE}/${capturedFd}/${leaf}`
     : join(dir.dirPath, leaf);
 
   try {
@@ -770,12 +795,18 @@ export async function createContainedFile(
     await unlink(leafPath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EISDIR" || code === "EPERM") {
+    if (code === "EISDIR") {
       throw new Error("writeDigestFileContained: target is a directory");
     }
     if (code !== "ENOENT") throw err;
   }
-  await beforeOpen?.();
+  if (beforeOpen) await beforeOpen();
+  // The pinned path embeds the fd number captured above; if the handle was
+  // closed mid-flight its fd reads -1 and a recycled number would anchor the
+  // leaf under an unrelated dentry — refuse rather than resolve stale.
+  if (dir.fh.fd !== capturedFd || dir.fh.fd < 0) {
+    throw new Error("writeDigestFileContained: pinned dir handle closed during write");
+  }
   try {
     return await open(leafPath, leafFlags, 0o644);
   } catch (err) {
@@ -810,7 +841,9 @@ export async function writeDigestFileContained(
     try {
       await fh.writeFile(text);
     } finally {
-      await fh.close();
+      // Masked is better than replaced: a close() throw must not mask a
+      // writeFile failure, which is the diagnostically valuable error.
+      await fh.close().catch(() => {});
     }
   } finally {
     await dir.fh.close().catch(() => {});
