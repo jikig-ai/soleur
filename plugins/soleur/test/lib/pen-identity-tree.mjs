@@ -166,6 +166,11 @@ export const LAYOUTS = {
     writePackage(pkgDir, { ...opts, bin: { pen: "dist" } });
     link("../@pen.dev/cli/dist", join(bin, "pen"));
   },
+  // a correct install whose package directory is group-writable (what `npm ci` leaves under umask 002)
+  "group-writable-package"(ctx) {
+    LAYOUTS.good(ctx);
+    chmodSync(ctx.pkgDir, 0o775);
+  },
   // nothing installed; a foreign `pen` is on PATH (<home>/fakebin is prepended by the runner)
   "path-pen-only"({ home }) {
     put(join(home, "fakebin/pen"), "#!/bin/sh\necho foreign pen\n", 0o755);
