@@ -1,6 +1,7 @@
 # Learning: a shared cap let the mandatory loop starve the gated arm, and the tests pinned the refusal as correct
 
 ## Problem
+
 WikiSkill Phase 2 shipped the create arm of `cron-compound-promote`, dark-launched and manual-only, sharing the
 week cap (`WEEK_CAP_DEFAULT = 2` open `self-healing/auto` PRs) with the edit loop, which ran first. The first
 live-fire (2026-10-27, run `01M5YB28JD20JKKH4HG04CX2Z4`, zero open PRs beforehand) ended `create-refused`, class
@@ -8,11 +9,13 @@ live-fire (2026-10-27, run `01M5YB28JD20JKKH4HG04CX2Z4`, zero open PRs beforehan
 qualifying edit clusters the arm was unreachable on a clean state.
 
 ## Solution
+
 Hold one slot back for the arm: `editCap = allowCreate ? Math.max(remaining - 1, 0) : remaining`, used in the
 clustering prompt, the post-parse slice, and an early return in the `anthropic-cluster` step (step id unchanged).
 Scheduled, corpus and non-`true` runs are byte-identical. Runbook, ADR-092 and ADR-300 amended.
 
 ## Key Insight
+
 Three things made this invisible before the live-fire. (1) The design (G2, "edit loop first, arm shares the cap")
 was ruled on semantics, never driven with the loop at its maximum yield. (2) The tests for the cap asserted the
 refusal (`one slot left and the edit loop spending it -> week-cap`) as EXPECTED, so the unreachable case was
