@@ -137,8 +137,8 @@ const PREFIX = "mcp__soleur_platform__";
 const fqn = (n: string) => `${PREFIX}${n}`;
 const wildcard = (s: string) => `mcp__plugin_soleur_${s}__*`;
 
-const PINNED_GATED = EXPECTED_GATED.map(fqn);
-const PINNED_AUTO = EXPECTED_AUTO_APPROVE.map(fqn);
+const EXPECTED_GATED_FQNS = EXPECTED_GATED.map(fqn);
+const EXPECTED_AUTO_FQNS = EXPECTED_AUTO_APPROVE.map(fqn);
 
 const PLUGIN_SERVERS = ["context7", "cloudflare", "vercel", "stripe"];
 
@@ -180,10 +180,10 @@ function assertCensus(output: readonly string[], universe: readonly string[], pl
   const gatedInUniverse = universe.filter((n) => EXPECTED_TOOL_TIERS[n] === "gated");
   const autoInUniverse = universe.filter((n) => EXPECTED_TOOL_TIERS[n] === "auto-approve");
   if (gatedInUniverse.length === 0 || autoInUniverse.length === 0) problems.push("census holds no tool of one tier");
-  for (const g of PINNED_GATED) {
+  for (const g of EXPECTED_GATED_FQNS) {
     if (getToolTier(g) !== "gated") problems.push(`gated tool changed tier: ${g}`);
   }
-  for (const a of PINNED_AUTO) {
+  for (const a of EXPECTED_AUTO_FQNS) {
     if (getToolTier(a) !== "auto-approve") problems.push(`auto-approve tool changed tier: ${a}`);
     if (universe.includes(a) && !output.includes(a)) problems.push(`auto-approve tool dropped from the output: ${a}`);
   }
@@ -208,10 +208,9 @@ describe("buildAllowedTools: unit census", () => {
     booted = await bootLegacySession();
   });
 
-  test("the tier map equals the hand-written full table exactly (a one-sided flip of any tool, in either direction, reds here)", () => {
+  test("the tier map equals the hand-written full table exactly (a flip on ONE side only, in either direction, reds here)", () => {
     expect(TOOL_TIER_MAP).toEqual(EXPECTED_TOOL_TIERS);
-    expect(Object.keys(EXPECTED_TOOL_TIERS)).toHaveLength(EXPECTED_AUTO_APPROVE.length + EXPECTED_GATED.length);
-    expect(new Set(Object.keys(EXPECTED_TOOL_TIERS)).size).toBe(EXPECTED_AUTO_APPROVE.length + EXPECTED_GATED.length); // no name in both lists
+    expect(Object.keys(EXPECTED_TOOL_TIERS)).toHaveLength(EXPECTED_AUTO_APPROVE.length + EXPECTED_GATED.length); // no name in both lists
   });
 
   test("the booted universe is exactly the registered tools; each is in the table; auto-approve ones are pre-approved and gated ones are not", () => {
@@ -231,17 +230,17 @@ describe("buildAllowedTools: unit census", () => {
 
   test("the booted legacy session registers every hand-listed tool except the cc-only ones (a deleted or renamed tool shows here)", () => {
     const ccOnly = new Set(["edit_c4_diagram", "narrate", "summarize", "auth_revocation_status"].map(fqn));
-    const expectedRegistered = [...PINNED_GATED, ...PINNED_AUTO].filter((n) => !ccOnly.has(n));
+    const expectedRegistered = [...EXPECTED_GATED_FQNS, ...EXPECTED_AUTO_FQNS].filter((n) => !ccOnly.has(n));
     for (const n of expectedRegistered) expect(booted.platformToolNames, `expected registered: ${n}`).toContain(n);
   });
 
   test("every hand-listed gated entry is absent even when handed to the filter explicitly", () => {
-    expect(buildAllowedTools(PINNED_GATED, PLUGIN_SERVERS)).toEqual(PLUGIN_SERVERS.map(wildcard));
+    expect(buildAllowedTools(EXPECTED_GATED_FQNS, PLUGIN_SERVERS)).toEqual(PLUGIN_SERVERS.map(wildcard));
   });
 
   test("every gated tool has a content-free offline label (not the generic fallback)", () => {
     const generic = buildOfflineGateMessage(fqn("some_unlisted_future_tool"), {});
-    for (const g of PINNED_GATED) expect(buildOfflineGateMessage(g, {}), `no OFFLINE_ACTION_LABELS entry for ${g}`).not.toBe(generic);
+    for (const g of EXPECTED_GATED_FQNS) expect(buildOfflineGateMessage(g, {}), `no OFFLINE_ACTION_LABELS entry for ${g}`).not.toBe(generic);
   });
 
   // --- must-PASS inputs that are not the canonical one -----------------------------------------------------------------
@@ -259,7 +258,7 @@ describe("buildAllowedTools: unit census", () => {
   });
 
   test("a list holding only auto-approve names is returned whole", () => {
-    expect(buildAllowedTools(PINNED_AUTO, [])).toEqual(PINNED_AUTO);
+    expect(buildAllowedTools(EXPECTED_AUTO_FQNS, [])).toEqual(EXPECTED_AUTO_FQNS);
   });
 
   test.each([
@@ -424,18 +423,18 @@ describe("buildAllowedTools: unit census", () => {
     test("non-empty, holds an auto-approve tool and the plugin wildcards, holds no registered tool that is not auto-approve", () => {
       const allowed = booted.options.allowedTools as string[];
       expect(allowed.length).toBeGreaterThan(0);
-      const autoBooted = PINNED_AUTO.filter((n) => booted.platformToolNames.includes(n));
+      const autoBooted = EXPECTED_AUTO_FQNS.filter((n) => booted.platformToolNames.includes(n));
       expect(autoBooted.length).toBeGreaterThan(10);
       for (const a of autoBooted) expect(allowed).toContain(a);
       for (const s of PLUGIN_SERVERS) expect(allowed).toContain(wildcard(s));
       for (const n of booted.registered) {
         if (getToolTier(n) !== "auto-approve") expect(allowed).not.toContain(n);
       }
-      for (const g of PINNED_GATED) expect(allowed).not.toContain(g);
+      for (const g of EXPECTED_GATED_FQNS) expect(allowed).not.toContain(g);
     });
 
     test("canUseTool still receives the unfiltered platform list (filtering it would deny every gated tool outright)", () => {
-      for (const g of PINNED_GATED) expect(booted.platformToolNames).toContain(g);
+      for (const g of EXPECTED_GATED_FQNS) expect(booted.platformToolNames).toContain(g);
       expect(booted.platformToolNames.length).toBeGreaterThan(
         (booted.options.allowedTools as string[]).filter((n) => n.startsWith(PREFIX)).length,
       );
@@ -538,7 +537,56 @@ describe("buildAllowedTools: unit census", () => {
       expect(() => assertAllowedToolsPreApprovalSafe({ allowedTools: ["mcp__soleur_platform__kb_share_list"] })).not.toThrow();
     });
 
-    test("no plugin skill or agent frontmatter pre-approves a platform tool the assertion would refuse", async () => {
+    // An entry can pre-approve a platform tool when it names the platform server or is a wildcard whose prefix covers it.
+    const couldCoverPlatform = (entry: string): boolean => {
+      const n = entry.trim().toLowerCase();
+      if (n.startsWith("mcp__soleur_platform")) return true;
+      const star = n.indexOf("*");
+      return star !== -1 && "mcp__soleur_platform__".startsWith(n.slice(0, star));
+    };
+
+    // Walks the given files and returns every frontmatter tool entry that would pre-approve a platform tool the assertion
+    // refuses. Third-party plugin MCP entries (stripe, linear) are pre-approved by their skills by design and are outside this
+    // guard: they are not gated platform tools (reported separately in the PR notes).
+    function findOffenders(files: readonly string[], readFile: (f: string) => string): { offenders: string[]; parsedEntries: number } {
+      let parsedEntries = 0;
+      const offenders: string[] = [];
+      for (const f of files) {
+        for (const entry of frontmatterToolEntries(readFile(f))) {
+          parsedEntries += 1;
+          if (!couldCoverPlatform(entry)) continue;
+          try {
+            assertAllowedToolsPreApprovalSafe({ allowedTools: [entry] });
+          } catch {
+            offenders.push(`${f}: ${entry}`);
+          }
+        }
+      }
+      return { offenders, parsedEntries };
+    }
+
+    test("findOffenders known-positive control: a temp SKILL.md pre-approving a gated platform tool, or a bare mcp__* wildcard, is flagged", async () => {
+      const fs = await vi.importActual<typeof import("fs")>("fs");
+      const os = await vi.importActual<typeof import("os")>("os");
+      const dir = fs.mkdtempSync(join(os.tmpdir(), "census-control-"));
+      try {
+        const gated = join(dir, "gated.md");
+        const wild = join(dir, "wild.md");
+        const clean = join(dir, "clean.md");
+        fs.writeFileSync(gated, "---\nname: x\nallowed-tools: mcp__soleur_platform__email_send\n---\nbody");
+        fs.writeFileSync(wild, "---\nname: y\nallowed-tools:\n  - Read\n  - mcp__*\n---\nbody");
+        fs.writeFileSync(clean, "---\nname: z\nallowed-tools: Read, mcp__soleur_platform__kb_share_list, mcp__plugin_soleur_stripe__*\n---\nbody");
+        const read = (f: string) => fs.readFileSync(f, "utf8");
+        expect(findOffenders([gated], read).offenders).toEqual([`${gated}: mcp__soleur_platform__email_send`]);
+        expect(findOffenders([wild], read).offenders).toEqual([`${wild}: mcp__*`]);
+        expect(findOffenders([clean], read).offenders).toEqual([]); // and the control is not simply flagging everything
+        expect(findOffenders([clean], read).parsedEntries).toBe(3);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("no plugin skill, agent or command frontmatter pre-approves a platform tool the assertion would refuse", async () => {
       const fs = await vi.importActual<typeof import("fs")>("fs");
       const root = join(__dirname, "..", "..", "..", "plugins", "soleur");
       const files: string[] = [];
@@ -551,22 +599,9 @@ describe("buildAllowedTools: unit census", () => {
       };
       walk(join(root, "skills"), (f) => f === "SKILL.md");
       walk(join(root, "agents"), (f) => f.endsWith(".md"));
+      walk(join(root, "commands"), (f) => f.endsWith(".md"));
       expect(files.length).toBeGreaterThan(20); // not vacuous: the walk found the plugin
-      let parsedEntries = 0;
-      const offenders: string[] = [];
-      for (const f of files) {
-        for (const entry of frontmatterToolEntries(fs.readFileSync(f, "utf8"))) {
-          parsedEntries += 1;
-          // Platform entries only. Third-party plugin MCP entries (stripe, linear) are pre-approved by their skills by design
-          // and are outside this guard: they are not gated platform tools (reported separately in the PR notes).
-          if (!entry.trim().toLowerCase().startsWith("mcp__soleur_platform")) continue;
-          try {
-            assertAllowedToolsPreApprovalSafe({ allowedTools: [entry] });
-          } catch {
-            offenders.push(`${f}: ${entry}`);
-          }
-        }
-      }
+      const { offenders, parsedEntries } = findOffenders(files, (f) => fs.readFileSync(f, "utf8"));
       expect(parsedEntries).toBeGreaterThan(0); // the parser found real allowed-tools entries
       expect(offenders).toEqual([]);
     });

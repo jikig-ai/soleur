@@ -30,6 +30,7 @@ vi.mock("../server/observability", () => ({ warnSilentFallback: mockWarn, report
 
 import { createCanUseTool, type CanUseToolContext, type StatusGuard } from "../server/permission-callback";
 import { abortableReviewGate, REVIEW_GATE_TIMEOUT_MS } from "../server/review-gate";
+import { EMAIL_DENY_BODY, EMAIL_DENY_RECIPIENT } from "../server/tool-tiers";
 import { ACTIVE_STATUSES_FOR_FINALIZE } from "../server/conversation-finalize-statuses";
 
 const P = "mcp__soleur_platform__";
@@ -39,9 +40,6 @@ const REJECTED_DENY = `User rejected the action. Do not retry unless the user as
 const NON_INTERACTIVE_DENY = "This action needs interactive approval and is not available in background sync. Do not retry.";
 const TOO_MANY_DENY =
   "Too many approvals are already waiting for the user, so this action was not performed. Tell the user to answer or decline the pending ones, then ask whether to retry. Do not retry on your own.";
-const RECIPIENT_DENY =
-  "The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again.";
-
 /** A gate that never settles: the card stays open until the test releases it some other way (or never). */
 const HANG = () => new Promise<string>(() => {});
 
@@ -570,9 +568,9 @@ describe("an Approve is never honoured after the session aborted (shared by the 
 
 describe("fail-closed card: an email the card cannot show in full is denied before anything exists", () => {
   test.each([
-    ["an over-long recipient", { to: `${"a".repeat(260)}@example.invalid`, subject: "s", body: "b" }, RECIPIENT_DENY],
-    ["a recipient list", { to: "a@example.invalid, b@example.invalid", subject: "s", body: "b" }, RECIPIENT_DENY],
-    ["a body over 4000 characters", { to: "x@example.invalid", subject: "s", body: "b".repeat(4001) }, "Shorten the body to 4,000 characters or fewer and try again."],
+    ["an over-long recipient", { to: `${"a".repeat(260)}@example.invalid`, subject: "s", body: "b" }, EMAIL_DENY_RECIPIENT],
+    ["a recipient list", { to: "a@example.invalid, b@example.invalid", subject: "s", body: "b" }, EMAIL_DENY_RECIPIENT],
+    ["a body over 4000 characters", { to: "x@example.invalid", subject: "s", body: "b".repeat(4001) }, EMAIL_DENY_BODY],
   ])("%s: static deny, no card, no status write, no notification, no gate", async (_n, input, message) => {
     const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"));
     deps.sendToClient.mockReturnValue(false); // even an offline user gets no push
@@ -624,9 +622,13 @@ describe("pending-card cap", () => {
     await tick();
     expect(deps.abortableReviewGate).toHaveBeenCalledTimes(5);
     const sentBefore = deps.sendToClient.mock.calls.length;
-    const res = await verdict(run(`${P}crm_note_append`, { contactId: "c9", lens: ["sales"] }, opts()));
-    expect(res).toEqual({ behavior: "deny", message: TOO_MANY_DENY });
+    const sixth = verdict(run(`${P}crm_note_append`, { contactId: "c9", lens: ["sales"] }, opts()));
+    // Fail fast: a missing cap would open a 6th (never-settling) gate, so look at the gate-call count and race the verdict
+    // against a short tick instead of waiting out the test timeout.
+    await tick();
     expect(deps.abortableReviewGate).toHaveBeenCalledTimes(5);
+    const res = await Promise.race([sixth, tick().then(() => "still pending" as const)]);
+    expect(res).toEqual({ behavior: "deny", message: TOO_MANY_DENY });
     expect(deps.sendToClient.mock.calls.length).toBe(sentBefore);
     expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-too-many-pending" }), expect.any(String));
   });
