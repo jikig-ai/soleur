@@ -770,7 +770,7 @@ pred_externals() {
 pred_no_fsm_or_wait() {
   local region
   region="$(probe_region "$1")"
-  ! printf '%s\n' "$region" | grep -qE '\b(flag_set|emit_state|sleep|until|stop_server|start_server)\b|while[[:space:]]+(:|true)|\bfor\b'
+  ! grep -qE '\b(flag_set|emit_state|sleep|until|stop_server|start_server)\b|while[[:space:]]+(:|true)|\bfor\b' <<<"$region"
 }
 
 # pred_g2_static: the Guard 2 shape. Exactly one statement carries --key-file and it is the
@@ -794,7 +794,9 @@ pred_g2_static() {
   local kf
   kf="$(printf '%s\n' "$stmts" | grep -F '$keyfile' | grep -v -- '--key-file' | grep -v "^timeout -k 5 [0-9]* grep -q '\^INNGEST_REDIS_LUKS_KEY=\.' \"\$keyfile\" 2>/dev/null\$" | grep -v '^if \[\[ -e "\$keyfile" \]\]; then$' | grep -v '^local keyfile=' || true)"
   [[ -z "$kf" ]] || return 1
-  ! probe_region "$1" | grep -q '<<<'
+  local pr
+  pr="$(probe_region "$1")"
+  ! grep -q '<<<' <<<"$pr"
 }
 
 # Wire/census/xtrace helpers (runtime).
@@ -1055,7 +1057,7 @@ pred_seamset() {
   n="$(printf '%s\n' "$list" | grep -c '^' || true)"
   local s
   for s in $NEW_SEAMS; do
-    printf '%s\n' "$list" | grep -qxF "$s" || return 1
+    grep -qxF "$s" <<<"$list" || return 1
   done
   [[ "$derived" == "$expected" && "$n" -ge 25 ]]
 }
