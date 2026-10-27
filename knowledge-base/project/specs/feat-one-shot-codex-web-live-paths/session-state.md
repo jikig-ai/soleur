@@ -3006,3 +3006,7 @@
   approval; writer coordination/clearance, filename-map validation, isolated
   rehearsal, RLS registry correction, qualification, QA, exact-head review,
   preflight and readiness remain incomplete.
+- Recorded a second branch-head preview at `514741497ff87f6750de21e349722195ebfd69b6`;
+  it again returned `preview-no-external-actions` with the same pinned inputs
+  and bounds. The initial attempt used a mistyped full SHA, failed at source
+  binding and performed no external action; the corrected SHA succeeded.
