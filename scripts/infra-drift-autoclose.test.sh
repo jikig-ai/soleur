@@ -298,7 +298,7 @@ new_scenario() { local d; d=$(mk_sandbox) || return 1; assert_fixture_dir "$d"; 
 scn_two_issues() {  # 21 clean, 22 replacement
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf '21\n22\n' > "$d/list.out"
+  printf '[{"number":21,"title":"infra: drift detected in web-platform"},{"number":22,"title":"infra: drift detected in web-platform"},{"number":99,"title":"infra: drift detected in web-platform/sentry"}]' > "$d/list.out"
   view_json "$FIX/clean.body.md" > "$d/view.21.out"
   view_json "$FIX/replacement-present.body.md" > "$d/view.22.out"
   printf '%s' "$d"
@@ -306,7 +306,7 @@ scn_two_issues() {  # 21 clean, 22 replacement
 scn_view_partial() {  # view fails (rc 1) but printed a CLEAN document first
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf '11\n' > "$d/list.out"
+  printf '[{"number":11,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   view_json "$FIX/clean.body.md" > "$d/view.11.out"
   printf '1' > "$d/view.11.rc"
   printf '%s' "$d"
@@ -314,7 +314,7 @@ scn_view_partial() {  # view fails (rc 1) but printed a CLEAN document first
 scn_view_garbage() {
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf '12\n' > "$d/list.out"
+  printf '[{"number":12,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   printf 'this is not json' > "$d/view.12.out"
   printf '%s' "$d"
 }
@@ -333,7 +333,7 @@ scn_empty_list() {
 scn_close_fails() {  # two clean issues, every close fails
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf '41\n42\n' > "$d/list.out"
+  printf '[{"number":41,"title":"infra: drift detected in web-platform"},{"number":42,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   view_json "$FIX/clean.body.md" > "$d/view.41.out"
   view_json "$FIX/clean.body.md" > "$d/view.42.out"
   printf '1' > "$d/close.rc"
@@ -342,7 +342,7 @@ scn_close_fails() {  # two clean issues, every close fails
 scn_comment_replacement() {
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf '31\n' > "$d/list.out"
+  printf '[{"number":31,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   view_json "$FIX/clean.body.md" "$FIX/comment-replacement.md" > "$d/view.31.out"
   printf '%s' "$d"
 }
@@ -350,28 +350,28 @@ scn_forged_comment() {  # bot body WITH a replacement + a stranger's clean-looki
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
   cp "$FIX/comment-clean.md" "$d/comment-clean.forged"
-  printf '61\n' > "$d/list.out"
+  printf '[{"number":61,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   view_json "$FIX/replacement-present.body.md" "$d/comment-clean.forged" > "$d/view.61.out"
   printf '%s' "$d"
 }
 scn_order_a() {  # bot: replacement comment THEN clean comment  -> newest is clean -> close
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf '71\n' > "$d/list.out"
+  printf '[{"number":71,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   view_json "$FIX/clean.body.md" "$FIX/comment-replacement.md" "$FIX/comment-clean.md" > "$d/view.71.out"
   printf '%s' "$d"
 }
 scn_order_b() {  # bot: clean comment THEN replacement comment -> newest is replacement -> skip
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf '72\n' > "$d/list.out"
+  printf '[{"number":72,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   view_json "$FIX/clean.body.md" "$FIX/comment-clean.md" "$FIX/comment-replacement.md" > "$d/view.72.out"
   printf '%s' "$d"
 }
 scn_nonnumeric() {  # a non-numeric list entry must never reach gh issue view/close
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
-  printf 'abc\n51\n' > "$d/list.out"
+  printf '[{"number":"abc","title":"infra: drift detected in web-platform"},{"number":51,"title":"infra: drift detected in web-platform"}]' > "$d/list.out"
   view_json "$FIX/clean.body.md" > "$d/view.51.out"
   printf '%s' "$d"
 }
@@ -399,7 +399,11 @@ if grep -qF 'CALL:issue view 21 --json author,body,comments' "$d/calls.log" && g
 else bad "read shape wrong: $(cat "$d/calls.log")"; fi
 
 CASES=$((CASES + 1))
-if grep -qxF 'CALL:issue list --label infra-drift --state open -L 200 --search infra: drift detected in web-platform in:title --json number --jq .[].number' "$d/calls.log"; then
+if ! grep -q 'view 99' "$d/calls.log" && ! grep -q '^CLOSE:99' "$d/closes.log"; then
+  ok "the sentry stack's drift title is excluded by the exact-title filter"
+else bad "sentry-titled issue reached view/close"; fi
+CASES=$((CASES + 1))
+if grep -qxF 'CALL:issue list --label infra-drift --state open -L 200 --search infra: drift detected in web-platform in:title --json number,title' "$d/calls.log"; then
   ok "the list query is exact: label, state, limit and this stack's title search"
 else bad "list query drifted: $(grep '^CALL:issue list' "$d/calls.log")"; fi
 
@@ -522,15 +526,17 @@ if "terraform plan" not in dprun or "-detailed-exitcode" not in dprun:
     print("drift-plan-not-detailed-exitcode"); sys.exit(0)
 if "-target" in dprun:
     print("drift-plan-targeted"); sys.exit(0)
-wd = dp[0].get("working-directory") or dp[0].get("working_directory") or ""
+wd = dp[0].get("working-directory") or ""
 if wd.startswith("${{"):
     key = wd.strip().strip("{}$ ").replace("env.", "", 1)
     wd = ((close_job or {}).get("env") or {}).get(key) \
         or (doc.get("env") or {}).get(key) or ""
 if wd != "apps/web-platform/infra":
     print("drift-plan-wrong-directory:" + wd); sys.exit(0)
-if "exit_code=" not in dprun or "$GITHUB_OUTPUT" not in dprun:
+if "exit_code=$EXIT_CODE" not in dprun or "$GITHUB_OUTPUT" not in dprun:
     print("drift-plan-no-exit-code-output"); sys.exit(0)
+if "EXIT_CODE=$?" not in dprun:
+    print("drift-plan-exit-code-unbound"); sys.exit(0)
 print("ok")
 PY
 }
@@ -680,7 +686,10 @@ if [[ -z "${DRIFT_NO_BATTERY:-}" ]]; then
     d=$("$scn"); run_loop "$m" "$d"
     n_close=$(grep -c '^CLOSE:' "$d/closes.log" || true)
     case "$scn" in
-      scn_two_issues)   if [[ "$n_close" -ne 1 ]] || ! grep -q '^CLOSE:21:' "$d/closes.log"; then wrong=1; fi ;;
+      scn_two_issues)   if [[ "$n_close" -ne 1 ]] || ! grep -q '^CLOSE:21:' "$d/closes.log"; then wrong=1; fi
+                        # #11296 review: the sentry stack's title matches the token search
+                        # but its root was never measured — it must never even be read
+                        grep -q 'view 99' "$d/calls.log" && wrong=1 ;;
       scn_view_partial|scn_forged_comment) if [[ "$n_close" -ge 1 ]]; then wrong=1; fi ;;
     esac
     if [[ "$wrong" -eq 1 ]]; then ok "mutation $label records a wrong close (closes=$n_close)"; else bad "mutation $label NOT caught (closes=$n_close)"; fi
@@ -737,8 +746,10 @@ elif mode == "W5":
 elif mode == "W6":
     # Guard-1 row 4: a plan that exits 0 with changes pending
     key = 'terraform plan -detailed-exitcode'
-    if t.count(key) != 1: sys.exit(3)
-    t = t.replace(key, 'terraform plan')
+    i = t.index('id: drift_plan')
+    j = t.find(key, i)
+    if j < 0: sys.exit(3)
+    t = t[:j] + 'terraform plan' + t[j+len(key):]
 elif mode == "W7":
     # Guard-1 row 5: a scoped plan masquerading as full-root
     key = '-var="ssh_key_path=${CI_SSH_PUB}"'
@@ -747,15 +758,23 @@ elif mode == "W7":
     i = t.index('id: drift_plan')
     j = t.index(key, i)
     t = t[:j] + '-target=terraform_data.deploy_pipeline_fix \\\n            ' + t[j:]
+elif mode == "W8":
+    # the exit_code output must stay BOUND to the measured variable — a
+    # constant launders the gate with every other assert green
+    key = 'exit_code=$EXIT_CODE'
+    if t.count(key) != 1: sys.exit(3)
+    t = t.replace(key, 'exit_code=0')
 open(out, 'w').write(t)
 PY
   }
-  for m in W1 W2 W3 W4 W5 W6 W7; do
+  for m in W1 W2 W3 W4 W5 W6 W7 W8; do
     wmut "$MUT/$m.yml" "$m" || fatal_harness "wiring mutation $m did not apply"
     if cmp -s "$WORKFLOW" "$MUT/$m.yml"; then fatal_harness "wiring mutation $m did not change the workflow"; fi
     CASES=$((CASES + 1))
     w=$(wiring_check "$MUT/$m.yml")
-    if [[ "$w" != "ok" ]]; then ok "wiring mutation $m caught ($w)"; else bad "wiring mutation $m NOT caught"; fi
+    # a crashed checker prints nothing — an empty verdict is NOT a kill (same
+    # doctrine as row_cases: a broken mutant is not a kill)
+    if [[ -n "$w" && "$w" != "ok" ]]; then ok "wiring mutation $m caught ($w)"; else bad "wiring mutation $m NOT caught (verdict='$w')"; fi
   done
 
   # --- harness rows H1-H4: edits to the SUITE, re-invoked with the battery off --------------
@@ -816,7 +835,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
 fi
 
 if [[ -z "${DRIFT_NO_BATTERY:-}" ]]; then
-  DRIFT_MIN_ASSERTIONS=102  # == the exact count: a ratchet, raise it with every added case
+  DRIFT_MIN_ASSERTIONS=104  # == the exact count: a ratchet, raise it with every added case
   if [[ "$CASES" -lt "$DRIFT_MIN_ASSERTIONS" ]]; then
     printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
       "$CASES" "$DRIFT_MIN_ASSERTIONS" >&2

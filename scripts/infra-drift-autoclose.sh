@@ -184,7 +184,7 @@ read_issue() {
 
 do_close() {  # <issue>
   local text rc=0
-  text="Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA:-unknown}: a fresh full-root \`terraform plan -detailed-exitcode\` run by this job after the apply read no changes, and the newest bot-recorded drift plan on this issue was readable, complete and showed no pending hcloud_server replacement. The drift is treated as re-aligned with HEAD."
+  text="Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA:-unknown}: a fresh full-root \`terraform plan -detailed-exitcode\` run by this job after the apply, read no changes, and the newest bot-recorded drift plan on this issue was readable, complete and showed no pending hcloud_server replacement. The drift is treated as re-aligned with HEAD."
   gh issue close "$1" --reason completed --comment "$text" >/dev/null 2>"$ERRF" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     CLOSE_FAILED=$((CLOSE_FAILED + 1))
@@ -208,16 +208,23 @@ process_issue() {  # <issue>
 }
 
 run_loop() {
-  local list rc=0 n reason line
+  local list raw rc=0 n reason line
   ERRF=$(mktemp) || { echo "::error::drift-autoclose: mktemp failed"; return 1; }
   trap 'rm -f "${ERRF:-}"' EXIT
-  list=$(gh issue list --label "infra-drift" --state open -L "$LIST_LIMIT" \
+  # in:title is a TOKEN search — "infra: drift detected in web-platform/sentry" matches it,
+  # and that stack's root is NOT what the drift_plan step measured. Exact-title match mirrors
+  # the filer's own dedup (scheduled-terraform-drift.yml select(.title == TITLE)) — #11296 review.
+  raw=$(gh issue list --label "infra-drift" --state open -L "$LIST_LIMIT" \
     --search "infra: drift detected in web-platform in:title" \
-    --json number --jq '.[].number' 2>"$ERRF") || rc=$?
+    --json number,title 2>"$ERRF") || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     echo "::error::drift-autoclose: could not list open infra-drift issues (rc=$rc): $(err_tail)"
     return 1
   fi
+  list=$(jq -r '.[] | select(.title == "infra: drift detected in web-platform") | .number' <<<"$raw" 2>/dev/null) || {
+    echo "::error::drift-autoclose: could not parse the issue list (jq failed)"
+    return 1
+  }
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
     if [[ ! "$n" =~ ^[0-9]+$ ]]; then CONSIDERED=$((CONSIDERED + 1)); note_skip "$n" non-numeric-issue-number; continue; fi

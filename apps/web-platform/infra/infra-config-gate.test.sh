@@ -2083,7 +2083,9 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # 23 -> 26 (#9061): the drift_plan step's own `if:` carries the two verdict refs, and the drift
 # auto-close `if:` gains `steps.drift_plan.outputs.exit_code` — three new refs on the gate chain,
 # re-derived deliberately.
-G1_EXPECTED_REFERENCES=26
+# 26 -> 27 (#9061 review): the post-apply summary echoes `steps.drift_plan.outputs.exit_code`
+# (DRIFT_PLAN_EXIT_CODE) — one more ref, re-derived deliberately.
+G1_EXPECTED_REFERENCES=27
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then
