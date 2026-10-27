@@ -334,7 +334,7 @@ PR body: `Ref #11195`, `Ref #8211`, `Ref #6897`, `Ref #11194` (never `Closes`); 
 - [ ] `expenses.md` row is `retired`, marker dropped; `bash scripts/expenses-verify-by-check.sh` reports `expired=29 anomalies=0` (baseline measured 2026-10-27: `expired=30 anomalies=0`, exit 1 before and after - the exit code cannot discriminate, the counts do).
 - [ ] Diff scope: only the files listed above, plus generated `model.likec4.json`, the generated knowledge-base index if the pipeline regenerates it, and this branch's `specs/` and `plans/` artifacts. Zero changes to `docs/legal/**`, `AGENTS.rules.md`, `.github/workflows/apply-web-platform-infra.yml`, `git-data-gc.sh`, `.mcp.json`.
 - [ ] This plan declares no `credentials_required` (keeps G1 at 85).
-- [ ] PR body uses `Ref` for #11195, #8211, #6897, #11194 and lists the open DPD and Art. 30 items with dates.
+- [x] PR body uses `Ref` for #11195, #8211, #6897, #11194 and lists the open DPD and Art. 30 items with dates.
 
 ### Post-merge
 
