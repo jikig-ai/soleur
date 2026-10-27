@@ -31,6 +31,43 @@ ruled by the CTO agent (decision-challenges.md F6). The plan was then reviewed b
 plan-review panel (simplicity, DHH, Kieran, CTO devex) and a sharp-edges pass; their outcomes
 are decisions F8-F13 and are already folded in below.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27
+**Agents / passes used:** repo + learnings research (plan phase); CTO fork rulings and CTO devex review; plan-review
+panel (simplicity per mechanism, DHH, Kieran); a full sharp-edges catalogue pass; deepen-plan halt gates 4.6-4.13 run
+mechanically; live verification of every cited PR, issue, learning path and rule id.
+
+### Key Improvements
+
+1. `sleep & wait` plus INT/TERM traps removed after measurement: with only an EXIT trap, bash releases within ~1 s of
+   TERM; a TERM trap is what defers release (F12).
+2. `lstart` pinned to `TZ=UTC LC_ALL=C` (measured: it follows the caller's TZ), `+`-joined lock names (no `__`
+   collision), refusal wording branched on session ownership, and a bounded release-race grace (F10, F11).
+3. Surface cut by ~25%: no selfcheck flag, no `purpose` dimension, no CODEOWNERS rows, no hand-run mutation rows;
+   the discoverability probe is one `bash -c` line over the lib (F13).
+
+### New Considerations Discovered
+
+- Re-acquire by the SAME pid (what mutation row 2 produces on poll 2) must be an idempotent rc 0, not a self-refusal.
+- How the Monitor tool signals a stopped watch is unverified; the refusal therefore leads with `kill <pid>`.
+- Residual list (macOS `ps`, PID namespaces, divergent `XDG_RUNTIME_DIR`, clock-step `lstart`, SIGPIPE) is in Sharp Edges.
+
+### Deepen-plan gate results
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | present, threshold `none`, no sensitive path in Files lists (all under `plugins/soleur/`) - pass |
+| 4.7 Observability | section present, all 5 fields non-empty; `discoverability_test.command` first token `bash` accepted by `probe-verb-gate.sh` (exit 0), no `ssh`, finishes well inside 15 s (one acquire + release in a temp dir), `expected_output` is a literal - pass. The probe cannot run until the lib exists; Phase 5.3 runs it |
+| 4.8 PAT-shaped variable | zero hits - pass |
+| 4.9 UI wireframe | no UI-surface file - skipped |
+| 4.10 Encryption posture | no `.tf`/migration/cloud-init/compose file, no persistent store or connection - skipped |
+| 4.11 Guard Contract | `scripts/lint-guard-contract.py` green; assembly names a chokepoint (`acquire_or_exit`), the exit funnel (`_cleanup`) and the three liveness predicates, not today's members; matrix rows are derived from the design (row 10 is the measured TERM-trap hazard) - pass |
+| 4.12 Scope Check | one unfenced section, three subsections, every ask mapped, every `inferred` row justified - pass |
+| 4.13 Task design | no new autonomous-task surface - skipped |
+| 4.55 Downtime | no serving surface changes - skipped |
+| Citations | #11124, #11164, #10873 MERGED; #9757, #10924, #11286 OPEN; all seven cited learning files exist; rule ids `hr-observability-as-plan-quality-gate`, `hr-weigh-every-decision-against-target-user-impact`, `cq-write-failing-tests-before`, `hr-monitor-not-run-in-background-for-polling`, `hr-dispatch-async-must-arm-watch` active in AGENTS.md - pass |
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -197,7 +234,8 @@ which the `--repo` grammar excludes, so `a__b/c` and `a/b__c` cannot collide.
 - **Live holder** = pid numeric AND `ps -p <pid> -o pid=` non-empty (NOT `kill -0`: EPERM reads another user's live
   process as dead) AND `ps -o stat=` not `Z*` AND recorded `lstart` equals the current one (pid reuse; if the recorded
   `lstart` is empty the comparison is skipped).
-- **Acquire** `monitor_lock_acquire <owner/repo> <pr>`: `ln -s`; on EEXIST read the link: a malformed value, or a
+- **Acquire** `monitor_lock_acquire <owner/repo> <pr>`: `ln -s`; on EEXIST read the link: a holder whose pid is this
+  process's own `$$` is already ours -> rc 0 (idempotent; this is what the reorder mutant produces on poll 2); a malformed value, or a
   holder that is not live, is stale -> remove it only if `readlink` still equals the stale value, then `ln -s` ONCE more
   (still failing -> rc 2 `contended`); a path that is not a symlink (file, directory) -> rc 2; a LIVE holder -> up to
   2 more tries at `${SOLEUR_MONITOR_LOCK_GRACE_S:-1}` s spacing (F10), then rc 1 with `ML_HOLDER_PID` and `ML_HOLDER_AGE`.
@@ -456,6 +494,7 @@ Layer labels: `unit` = sources the lib; `integration` = runs the real script wit
 - (unit) Given an empty lock dir, `monitor_lock_acquire acme/widgets 7` -> rc 0 and one symlink `pr-checks+acme+widgets+7.lock` whose target parses as `<pid>|<lstart>|<epoch>` with `<pid>` = `$$`.
 - (unit) Given that lock held by a live child, a second process acquires the same key -> rc 1 after the grace with `ML_HOLDER_PID` set (`SOLEUR_MONITOR_LOCK_GRACE_S=0` in all but the grace arm); other PR / other repo -> rc 0.
 - (unit) Holder values - dead pid / live pid wrong `lstart` / stubbed-`ps` zombie / `garbage` / regular file - each reclaimed (rc 0); directory at the path -> rc 2; reclaim lost twice -> rc 2 `contended`.
+- (unit) Acquiring a key this same process already holds is an idempotent rc 0.
 - (unit) Release when the link names someone else -> link survives; own link -> removed; twice -> no-op; nothing acquired -> early return.
 - (unit) Lock dir that is a read-only directory (non-root only), a symlink to a directory, or a regular file -> rc 2 `unavailable` with a reason; `SOLEUR_MONITOR_LOCK=off` -> rc 2 `disabled`.
 - (unit) Origin-URL forms and `--repo` spellings -> identical key; non-github host / garbage -> rc 2 `unavailable`.

@@ -12,7 +12,7 @@ Ref #9757, Ref #10924 (no closing keyword). Draft PR #11286.
 ## Phase 1: the lib
 
 - [ ] 1.1 Create plugins/soleur/scripts/lib/monitor-lock.sh: _ml_dir, _ml_key (repo normaliser, + join), _ml_ident (TZ=UTC LC_ALL=C), _ml_alive (ps -p, not Z, lstart)
-- [ ] 1.2 monitor_lock_acquire (ln -s, compare-before-remove reclaim, one retry, grace x2 on a live holder, rc 0/1/2 + ML_STATE/ML_WHY/ML_HOLDER_*)
+- [ ] 1.2 monitor_lock_acquire (ln -s, compare-before-remove reclaim, one retry, grace x2 on a live holder, same-pid re-acquire is rc 0, rc 0/1/2 + ML_STATE/ML_WHY/ML_HOLDER_*)
 - [ ] 1.3 monitor_lock_release (readlink-equals-ours, early return, never branches on $?); bash 3.2 and set -u safe
 
 ## Phase 2: wire the script
