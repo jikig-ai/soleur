@@ -22,3 +22,14 @@
 
 ### Technical-Ruling Gate
 - cto_spawns=1 (one batched spawn ratified all 5 technical rows 2026-10-27; amended plan with O_DIRECTORY/O_NOFOLLOW coalesce-to-0 caveat)
+
+## Work Phase
+- Status: complete (impl commit 9d06a35e4c, tasks tick e42026a5db pushed)
+- 105/105 vitest green; tsc clean; zero stat-family calls; eslint clean on touched files
+- affected gate running: /tmp/testall-affected-10368.log (bg shell 998018)
+
+## Review Phase
+- PR: #11334 (draft). class=code (8-seat panel), design-risk=yes -> design pass first (code-simplicity + architecture-strategist, deduped)
+- Conditional: test-design-reviewer (*.test.ts in diff)
+- Pre-checks: merge-tree clean, secret-scan CLEAN, collision=foreign test-all only
+- Settled rulings for seats: decision-challenges.md rows 1-5 (Ruled by CTO agent 2026-10-27)
