@@ -68,13 +68,19 @@ afterEach(() => {
 });
 
 describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
-  it("composes an ssh:// URL under the reconciled /repositories path", () => {
-    expect(gitDataRemoteUrl(WS)).toBe(`ssh://git@10.0.1.20/repositories/${WS}.git`);
+  it("composes an absolute ssh:// URL under the git-data store bare-repo root", () => {
+    expect(gitDataRemoteUrl(WS)).toBe(`ssh://git@10.0.1.20/mnt/git-data/repositories/${WS}.git`);
   });
 
   it("rejects path-traversal / unsafe workspace ids (CWE-22)", () => {
-    for (const bad of ["..", ".", "a/b", "a b", "a;rm", ""]) {
+    for (const bad of ["..", ".", "a/b", "a b", "a;rm", "", "a..b", "..a", "a..", "a."]) {
       expect(() => assertSafeWorkspaceId(bad)).toThrow();
+    }
+  });
+
+  it("still accepts single-dot ids (positive control for the '..' rule)", () => {
+    for (const ok of ["a.b", ".a", "ws-uuid-123", "11111111-1111-4111-8111-111111111111"]) {
+      expect(() => assertSafeWorkspaceId(ok)).not.toThrow();
     }
   });
 });
