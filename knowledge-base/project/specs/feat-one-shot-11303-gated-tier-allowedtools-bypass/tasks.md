@@ -44,7 +44,7 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 
 ## Phase 5: Verify and ship
 
-- [ ] 5.1 `tsc --noEmit`, vitest (touched + new), eslint, markdown lint, `lint-guard-contract.py`
+- [x] 5.1 `tsc --noEmit`, vitest (touched + new), eslint, markdown lint, `lint-guard-contract.py`
 - [ ] 5.2 PR body: first line behaviour-change answer + changelog line; CLO ruling; plugin-wildcard residual risk; #11289 conflict note; `Closes #11303`; probe lines; RED evidence
 - [ ] 5.3 One comment on PR #11289 about the probe add/add conflict (no new issue)
 - [ ] 5.4 Post-merge: `soleur:postmerge` deploy verification; absence check on soleur-web-1 and soleur-web-2 with generated gated-name list; record verdicts on PR and #11303 (exit 2 = unobserved, not clean)

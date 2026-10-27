@@ -464,22 +464,22 @@ Globs verified at plan time (`git ls-files`): every `apps/web-platform/test/*.te
 
 ### Functional (pre-merge)
 
-- [ ] `buildAllowedTools` exists in `apps/web-platform/server/tool-tiers.ts` and `startAgentSession` passes its result as `allowedTools` (`rg -n "buildAllowedTools" apps/web-platform/server/agent-runner.ts` shows the call).
-- [ ] For every name `n` in the legacy `platformToolNames` with `getToolTier(n) !== "auto-approve"` (24 of 46 at plan time; the test derives the counts), `options.allowedTools` does not contain it; every auto-approve name and every `mcp__plugin_soleur_<server>__*` wildcard remains. `createCanUseTool` still receives the unfiltered list.
-- [ ] `conversations_lookup` is `auto-approve`; `plausible_*` and `account_*` have explicit `gated` entries; every registered `soleur_platform` tool name of a booted legacy session has an explicit `TOOL_TIER_MAP` entry.
-- [ ] `buildAgentQueryOptions` throws on a gated FQN, the bare `mcp__soleur_platform`, and `mcp__*` / `mcp__soleur*` wildcard entries; passes `Read`, plugin wildcards, `narrate`, `summarize`, and the real `CC_PATH_ALLOWED_TOOLS` with the support filter.
+- [x] `buildAllowedTools` exists in `apps/web-platform/server/tool-tiers.ts` and `startAgentSession` passes its result as `allowedTools` (`rg -n "buildAllowedTools" apps/web-platform/server/agent-runner.ts` shows the call).
+- [x] For every name `n` in the legacy `platformToolNames` with `getToolTier(n) !== "auto-approve"` (24 of 46 at plan time; the test derives the counts), `options.allowedTools` does not contain it; every auto-approve name and every `mcp__plugin_soleur_<server>__*` wildcard remains. `createCanUseTool` still receives the unfiltered list.
+- [x] `conversations_lookup` is `auto-approve`; `plausible_*` and `account_*` have explicit `gated` entries; every registered `soleur_platform` tool name of a booted legacy session has an explicit `TOOL_TIER_MAP` entry.
+- [x] `buildAgentQueryOptions` throws on a gated FQN, the bare `mcp__soleur_platform`, and `mcp__*` / `mcp__soleur*` wildcard entries; passes `Read`, plugin wildcards, `narrate`, `summarize`, and the real `CC_PATH_ALLOWED_TOOLS` with the support filter.
 - [ ] No gated tool's `buildGateMessage` equals the generic default; every card text is length-bounded and neutralised under hostile input; the email preview states truncation and total length; the approved-body binding at `server/email-triage/outbound.ts` is cited in the PR body (or the plan stops and escalates).
-- [ ] `buildOfflineGateMessage` is content-free for every gated tool (no tool-input value in any offline message); no published privacy text is edited.
-- [ ] `buildAgentQueryOptions` uses the allowlist form (exact auto FQN or validated `mcp__plugin_soleur_<name>__*` only for `mcp__` entries) and rejects `bypassPermissions`.
-- [ ] Phase 0.6 recorded: whether a real `CAN_USE_TOOL_SHADOWED` row exists in Better Stack, its `host_name` and discriminating field; the post-merge check uses the real host names.
-- [ ] Gated branch: timeout and abort return the static deny (never throw); status goes `waiting_for_user` then `active` except when the session controller is aborted (no `active` write; both abort reasons tested); parallel gated calls stack; status-write failures keep the verdict and emit `platform-gate-status-hold|restore` with static messages; a call with `options.agentID` behaves identically; Bash-class behaviour is unchanged.
-- [ ] Both deny messages include "Do not retry unless the user asks." and carry no tool input.
-- [ ] No plugin skill or agent frontmatter names `mcp__soleur_platform__` (sentinel).
-- [ ] Phase 0.4 result recorded: with the production string prompt, `canUseTool` is invoked for a gated tool whose name is absent from `allowedTools`.
-- [ ] Guard 1 production-code rows (1, 4, 5, 6) and Guard 2 rows were observed RED before revert; the in-suite battery passes. `python3 scripts/lint-guard-contract.py` passes on this plan.
-- [ ] Probe: `NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform/scripts/dev-probe-approval-gate.ts` prints `RESULT: PASS`: eight `:prod` rows `invoked=yes` with deny honoured, `email_send:raw` `verdict=BYPASS`, `email_send:prod-stream` `invoked=yes`. Provenance and PROBE lines are pasted in the PR body. Never run against `prd`.
-- [ ] `tsc --noEmit`, the touched vitest suites, eslint, and `plugins/soleur/test/c4-count-parity.test.sh` are green. No published legal text, `compliance-posture.md`, or flag definition is changed (`git diff --stat origin/main`).
-- [ ] ADR created via `soleur:architecture`, ordinal re-verified against `origin/main` at ship.
+- [x] `buildOfflineGateMessage` is content-free for every gated tool (no tool-input value in any offline message); no published privacy text is edited.
+- [x] `buildAgentQueryOptions` uses the allowlist form (exact auto FQN or validated `mcp__plugin_soleur_<name>__*` only for `mcp__` entries) and rejects `bypassPermissions`.
+- [x] Phase 0.6 recorded: whether a real `CAN_USE_TOOL_SHADOWED` row exists in Better Stack, its `host_name` and discriminating field; the post-merge check uses the real host names.
+- [x] Gated branch: timeout and abort return the static deny (never throw); status goes `waiting_for_user` then `active` except when the session controller is aborted (no `active` write; both abort reasons tested); parallel gated calls stack; status-write failures keep the verdict and emit `platform-gate-status-hold|restore` with static messages; a call with `options.agentID` behaves identically; Bash-class behaviour is unchanged.
+- [x] Both deny messages include "Do not retry unless the user asks." and carry no tool input.
+- [x] No plugin skill or agent frontmatter names `mcp__soleur_platform__` (sentinel).
+- [x] Phase 0.4 result recorded: with the production string prompt, `canUseTool` is invoked for a gated tool whose name is absent from `allowedTools`.
+- [x] Guard 1 production-code rows (1, 4, 5, 6) and Guard 2 rows were observed RED before revert; the in-suite battery passes. `python3 scripts/lint-guard-contract.py` passes on this plan.
+- [x] Probe: `NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform/scripts/dev-probe-approval-gate.ts` prints `RESULT: PASS`: eight `:prod` rows `invoked=yes` with deny honoured, `email_send:raw` `verdict=BYPASS`, `email_send:prod-stream` `invoked=yes`. Provenance and PROBE lines are pasted in the PR body. Never run against `prd`.
+- [x] `tsc --noEmit`, the touched vitest suites, eslint, and `plugins/soleur/test/c4-count-parity.test.sh` are green. No published legal text, `compliance-posture.md`, or flag definition is changed (`git diff --stat origin/main`).
+- [x] ADR created via `soleur:architecture`, ordinal re-verified against `origin/main` at ship.
 - [ ] CPO sign-off conditions met (Domain Review); `soleur:engineering:review:user-impact-reviewer` ran at review.
 
 ### PR body contract
