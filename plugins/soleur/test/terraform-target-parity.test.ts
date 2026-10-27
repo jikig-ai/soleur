@@ -1907,15 +1907,11 @@ moved {
   });
 });
 
-describe("hcloud_server.web reboot deferral — placement_group_id stays in ignore_changes (#5887 zero-downtime CI unwedge)", () => {
-  // Removing `placement_group_id` from hcloud_server.web's lifecycle.ignore_changes
-  // re-introduces the pending web-1 placement-group attach (0 -> web_spread) into
-  // every targeted plan. That attach is a reboot-forcing in-place `update` on the
-  // RUNNING prod host, which the destroy-guard `reboot_updates` counter (#5911,
-  // tests/scripts/lib/destroy-guard-filter-web-platform.jq) HALTS with rc=2 —
-  // re-wedging BOTH apply pipelines (the #5887 wedge). The GA maintenance-window PR
-  // removes this entry ON PURPOSE to take the reboot on a drained host (blue-green);
-  // until then it must stay. This static guard fails if a future edit drops it.
+describe("hcloud_server.web reboot deferral — placement_group_id removed in GA maintenance window (#5887 / #11181)", () => {
+  // The GA maintenance-window PR (#11217, epic #11181 item 5) removes
+  // `placement_group_id` from hcloud_server.web's lifecycle.ignore_changes so
+  // web-1's pending placement-group attach (0 -> web_spread) is taken on a
+  // drained host (blue-green).
   function hcloudServerWebBody(): string {
     const stripped = stripComments(
       readFileSync(resolve(INFRA_DIR, "server.tf"), "utf8"),
@@ -1936,7 +1932,7 @@ describe("hcloud_server.web reboot deferral — placement_group_id stays in igno
     return stripped.slice(start, i - 1);
   }
 
-  test("lifecycle.ignore_changes includes placement_group_id", () => {
+  test("lifecycle.ignore_changes excludes placement_group_id", () => {
     const body = hcloudServerWebBody();
     const ic = /ignore_changes\s*=\s*\[([^\]]*)\]/.exec(body);
     expect(ic).not.toBeNull();
@@ -1944,7 +1940,7 @@ describe("hcloud_server.web reboot deferral — placement_group_id stays in igno
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    expect(entries).toContain("placement_group_id");
+    expect(entries).not.toContain("placement_group_id");
     // Non-vacuity: the pre-existing import-artifact entries (#967) are still present,
     // proving we parsed the real ignore_changes list, not an empty/wrong block.
     expect(entries).toContain("user_data");
