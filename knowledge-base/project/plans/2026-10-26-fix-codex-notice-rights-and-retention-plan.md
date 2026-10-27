@@ -458,8 +458,15 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
   `agent_engine_recovery_checkpoints(run_id, updated_at)` as service-role
   SELECT; `attempt_key`, `checkpoint`, anon and authenticated remain denied.
   The `codex_history_transfer_notice_issuances` table stays INTERNAL with zero
-  API privileges. Disposable catalog parity rejects any deviation and remains
-  a qualification gate.
+  effective table- or column-level privileges for `anon`, `authenticated`, and
+  `service_role`. Disposable catalog parity uses the RLS-fuzz registry's
+  `API_ROLES` and `TABLE_VERBS`, and compares both table and per-column
+  effective privileges (including `PUBLIC` and inherited grants through
+  PostgreSQL's `has_*_privilege` functions) against `table-grants.ts`. No
+  default-ACL prediction is implied; parity checks current effective catalog
+  state. RPC/function execution remains covered by the existing RPC security
+  tests, not this table-grant parity assertion. Any deviation fails
+  qualification.
 - Given an issuance before expiry, at the exact boundary and after expiry,
   when delivery repair or acknowledgment runs, then only the pre-expiry case
   can proceed.
@@ -520,9 +527,14 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
    `attempt_key` or `checkpoint`. Classify those exact effective grants in
    `table-grants.ts`, and register the migration 175
    `codex_history_transfer_notice_issuances` table as INTERNAL with zero direct
-   API privileges.
-   Verify catalog-to-registry parity and unauthorized column denial only on a
-   disposable database before qualification. The estimate is at least 25 files
+   table or column privileges for all `API_ROLES` (`anon`, `authenticated`,
+   `service_role`) across `TABLE_VERBS`. On a disposable database, verify
+   registry parity against effective table and column privileges using the
+   RLS-fuzz gate's `has_*_privilege` checks; these include inherited grants
+   and `PUBLIC` effects on the three API roles. Default ACLs are outside this
+   current-catalog assertion, and RPC/function execution stays with the RPC
+   security tests. Verify unauthorized column denial before qualification.
+   The estimate is at least 25 files
    across five roots and exceeds the split threshold.
 3. **Slice A — request-time rights snapshot:** add RED tests for atomic
    admission-time capture, same-request retry versus new request, completed-job

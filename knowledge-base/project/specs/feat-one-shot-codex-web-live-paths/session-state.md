@@ -3010,3 +3010,24 @@
   it again returned `preview-no-external-actions` with the same pinned inputs
   and bounds. The initial attempt used a mistyped full SHA, failed at source
   binding and performed no external action; the corrected SHA succeeded.
+- Fetched `origin/main` and verified it is `2e9874cdf65e9ca5fd086f3728fd0c2105d0cae5`,
+  already an ancestor of this branch (0 behind, 431 ahead); no reconciliation
+  merge/rebase was needed. A no-action preview at `ee8fde2c2e1cc5dcfb6c23a796e230cd7be44846`
+  again passed with the same fixed source/CA/driver bindings. The operator
+  approved exactly one bounded read-only capture at that SHA. It exited
+  `catalog_capture:credential_read` before capture: Doppler `whoami` returned
+  nonzero, the `dev_scheduled` config metadata was unavailable, and no
+  DOPPLER_TOKEN was present in this process. No secret values were printed;
+  no catalog output directory was created and no database metadata was read.
+  The approval is consumed and does not authorize another invocation.
+- Exact-head plan recheck found the named table/column sets and migration 175
+  INTERNAL classification are explicit. A low-severity gap asked the plan to
+  define privilege parity surfaces and role set; the local plan now specifies
+  the existing RLS-fuzz `API_ROLES`/`TABLE_VERBS`, effective table and column
+  privilege checks including `PUBLIC`/inherited grants, current-catalog scope,
+  and separate RPC execution coverage. This clarification remains unpushed
+  pending a focused recheck at the next pushed plan head.
+- The ordinary commit hook misidentified this feature worktree as main/master
+  twice while recording the preview; `git -C <verified worktree> commit`
+  succeeded and kept the commit on the feature branch. No wrong-branch commit
+  occurred.
