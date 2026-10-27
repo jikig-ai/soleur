@@ -308,6 +308,15 @@ Live standing alarms over this source:
   affected credential FIRST, counts-only (never echo the value). Runbook:
   [`registry-zot-credential-shape-10321.md`](./registry-zot-credential-shape-10321.md).
 
+- **`logtail_exploration_alert.web_nic_guard_unpinned_url`** (#9639 F8, `higher_than 0` over 300 s,
+  checked every 60 s, missing data counts as zero): `soleur-web-nic-guard-unpinned-url-prd`. Pages
+  on ANY `SYSLOG_IDENTIFIER='web-nic-guard'` row whose message contains `unpinned_url` — the
+  private-NIC guard's refusal to POST the Better Stack token to an unpinned ingest URL. The
+  refusal also withholds the `web_nic_guard` liveness beat, so a page can coincide with that
+  beat's lapse on a healthy host. No host conjunct: the guard runs on web-1 and is baked for
+  web-2-class hosts. Runbook:
+  [`web-nic-guard-unpinned-url-alert.md`](./web-nic-guard-unpinned-url-alert.md).
+
 - **`logtail_exploration_alert.registry_clientip_not_rfc1918`** (#7530, `higher_than 0` over 900 s,
   checked every 300 s, missing data counts as zero): `soleur-registry-clientip-not-rfc1918-prd`. Emails
   (team email on the free tier) when a registry-plane row shipped to this source carries a FIRST `clientIP`

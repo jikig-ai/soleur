@@ -237,6 +237,7 @@
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
 1	apps/web-platform/infra/test-fixtures/curl-w-profiles.sh
 1	apps/web-platform/infra/web-git-data-probe.sh
+1	apps/web-platform/infra/web-git-data-probe.test.sh
 1	apps/web-platform/infra/web-zot-consumer-probe.sh
 6	apps/web-platform/infra/workspaces-boot-unlock.test.sh
 9	apps/web-platform/infra/workspaces-cutover.sh
