@@ -295,23 +295,24 @@ drop_fixture "$root"; drop_fixture "$curated"
 # to the path the app actually dials: the app emitted `ssh://host/repositories/<id>.git`, git
 # sent `'/repositories/<id>.git'` verbatim (an ssh:// path is absolute), and the wrapper refused
 # every fetch and push on the first rehearsal. The prefix below is NOT typed here: it is
-# extracted from the app constant, so this section moves with the app. A recording shim named
+# extracted from the app constant's DECLARATION (a use site that bypassed the constant is pinned by
+# test/git-data-remote-url-wrapper.test.ts R-URL, not here). A recording shim named
 # `ssh` stands in for the transport (the name matters: any other name makes git send an `ssh -G`
 # capability probe first). The literal prefix is path-mapped onto the fixture root, because the
 # runner has no /mnt/git-data; the app<->wrapper default equality is pinned separately in
 # apps/web-platform/test/git-data-remote-url-wrapper.test.ts (R-PARITY).
 APP_TS="${DIR}/../server/git-data-replication.ts"
+U_WRAP_ROOT="$(sed -nE 's#^REPO_ROOT="\$\{GIT_DATA_REPO_ROOT:-([^}]+)\}"$#\1#p' "$WRAPPER")"
 U_PREFIX_LINES="$(grep -cE '^const GIT_DATA_REPO_PATH_PREFIX = "[^"]+";$' "$APP_TS")" || U_PREFIX_LINES=0
 U_PREFIX="$(sed -nE 's#^const GIT_DATA_REPO_PATH_PREFIX = "([^"]+)";$#\1#p' "$APP_TS")"
-if [ "$U_PREFIX_LINES" = "1" ] && [ -n "$U_PREFIX" ]; then pass; else fail "U0 expected exactly one GIT_DATA_REPO_PATH_PREFIX assignment in $APP_TS, got $U_PREFIX_LINES"; U_PREFIX="/repositories"; fi
+if [ "$U_PREFIX_LINES" = "1" ] && [ -n "$U_PREFIX" ]; then pass; else fail "U0 expected exactly one GIT_DATA_REPO_PATH_PREFIX assignment in $APP_TS, got $U_PREFIX_LINES"; U_PREFIX="$U_WRAP_ROOT"; fi
 
 # U0b: the path-mapping below swaps the app's prefix for the fixture root, so on its own it would
 # stay green for ANY prefix. This is the row that does not map: the app's prefix must equal the
 # root the wrapper itself defaults to (the one a client cannot override over sshd).
-U_WRAP_ROOT="$(sed -nE 's#^REPO_ROOT="\$\{GIT_DATA_REPO_ROOT:-([^}]+)\}"$#\1#p' "$WRAPPER")"
 if [ -n "$U_WRAP_ROOT" ] && [ "$U_PREFIX" = "$U_WRAP_ROOT" ]; then pass; else fail "U0b the app prefix '$U_PREFIX' is not the wrapper's default bare-repo root '$U_WRAP_ROOT'"; fi
 
-U_DIR="$(mktemp -d "${TMPDIR}/gdxport-u.XXXXXX")"
+U_DIR="$(mktemp -d "${SEAMS}/u.XXXXXX")"   # under SEAMS, so the EXIT trap reaps it on any abort
 U_LOG="${U_DIR}/dialed.log"
 mkdir -p "${U_DIR}/bin"
 cat > "${U_DIR}/bin/ssh" <<'SHIM'
@@ -392,8 +393,8 @@ rm -f "$stub"; rm -rf "$mut_root"
 
 # --- Minimum-cardinality guard (a silent-empty extraction must fail loud) ---
 # 33 -> 53 with the C1 store rows (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20.
-# 53 -> 70 with section U (#8211): U0 1, U0b 1, U1 3, U2 3, U3 2, U4 5, stub-loop input 1 = 16, +1 over the
-# measured 54 (the floor sat one under the total); the floor is the measured total, so one dropped row reds.
+# 54 measured + 16 for section U (#8211: U0 1, U0b 1, U1 3, U2 3, U3 2, U4 5, stub-loop input 1) = 70.
+# The floor is the measured total, so one dropped row reds.
 total=$((passes + fails))
 if [ "$total" -lt 70 ]; then
   echo "FAIL: ran only ${total} assertions (<70) — suite did not execute fully" >&2

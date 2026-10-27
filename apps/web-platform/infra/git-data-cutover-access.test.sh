@@ -2980,10 +2980,11 @@ exit 1
 EMIT
   chmod +x "$CP/emit/ssh" || return 1
   ( cd "$CP/emit" && CPU_EMIT="$CP/emit/emitted" GIT_SSH_COMMAND="$CP/emit/ssh" \
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
       git ls-remote "ssh://git@10.0.1.20${prefix}/cutover-container-probe-absent.git" ) >/dev/null 2>&1 || true
   [ -s "$CP/emit/emitted" ] && [ "$(cat "$CP/emit/emitted")" = "$probe_cmd" ]
 }
-if case_cpu1; then pass "CPU1: the absent-repo command the container probe dials equals, byte for byte, the command real git emits for ssh://git@10.0.1.20<app prefix>/cutover-container-probe-absent.git (prefix extracted from the app constant)"
+if case_cpu1; then pass "CPU1: the absent-repo command this suite's container probe run dials (root injected as GDCP_REPO_ROOT) equals, byte for byte, the command real git emits for ssh://git@10.0.1.20<app prefix>/cutover-container-probe-absent.git (prefix extracted from the app constant; the probe's own default is pinned by R-PARITY in test/git-data-remote-url-wrapper.test.ts)"
 else fail "CPU1: the probe's dialed command differs from git's emission for the app's URL form" "probe=[$(sed -nE 's#^inner .* git@10\.0\.1\.20 (git-upload-pack .*)$#\1#p' "$CP/log-ok" | cut -c1-200)] emitted=[$(cut -c1-200 "$CP/emit/emitted" 2>/dev/null)]"; fi
 if case_cpx_via frozen ok CP_INNER=frozen; then pass "CPX2: a frozen-store wrapper refusal also proves reachability, key, pin and wrapper -> ok"
 else fail "CPX2: a frozen-store answer was not accepted as reachable" "$(ctx)"; fi

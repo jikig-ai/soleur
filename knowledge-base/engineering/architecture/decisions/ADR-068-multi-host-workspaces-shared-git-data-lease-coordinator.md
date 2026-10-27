@@ -1467,3 +1467,7 @@ single-flight guard that stops duplicate paid Claude sessions assumes one step-e
 ## Addendum — 2026-10-02 (#9358)
 
 `apps/web-platform/infra/lb-weight-gate-with-marker.sh` is the Phase-6 sourcing entry for the workspaces cutover marker; `lb-weight-gate.sh` stays env-only. See the ADR-263 addendum of the same date.
+
+## Addendum — 2026-10-27 (#8211): the app's remote URL is the wrapper's absolute bare-repo path
+
+The remote form recorded in §6 (`git+ssh://git@<private-ip>/<workspace_id>.git`) is not what the app ever built, and the form it did build (`ssh://git@host/repositories/<id>.git`) was refused by the transport wrapper: git sends an `ssh://` path to the server unchanged and absolute, and the wrapper requires a direct `<root>/<id>.git` child of `/mnt/git-data/repositories`. The app now builds `ssh://git@host/mnt/git-data/repositories/<workspace_id>.git` (CTO ruling 2026-10-27, form A, no env override). The `/home/git/repositories` symlink serves only scp-style relative paths and is on no app path; it is vestigial and is removed at the next deliberate host replacement. The URL embeds the host's mount path, a known leak of the host layout into the client that the immutable host accepts; a wrapper taking a logical id would be the long-term shape. Parity of the app constant with the host-side literals is pinned by `apps/web-platform/test/git-data-remote-url-wrapper.test.ts` (R-PARITY).

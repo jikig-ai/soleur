@@ -73,7 +73,7 @@ describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
   });
 
   it("rejects path-traversal / unsafe workspace ids (CWE-22)", () => {
-    for (const bad of ["..", ".", "a/b", "a b", "a;rm", ""]) {
+    for (const bad of ["..", ".", "a/b", "a b", "a;rm", "", "a..b", "..a", "a.."]) {
       expect(() => assertSafeWorkspaceId(bad)).toThrow();
     }
   });

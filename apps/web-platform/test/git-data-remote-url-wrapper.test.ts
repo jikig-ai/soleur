@@ -1,4 +1,4 @@
-// End-to-end: the remote URL the app builds (server/git-data-replication.ts) through REAL git and
+// Integration (local subprocess): the remote URL the app builds (server/git-data-replication.ts) through REAL git and
 // the REAL transport wrapper (infra/git-data-transport-wrapper.sh). #8211, ADR-239.
 //
 // Why this exists: the app built an ssh:// URL whose path was `/repositories/<id>.git`. Git sends an
@@ -14,10 +14,11 @@
 // literal equality of the app prefix with the wrapper / provision / remove / cutover / cloud-init
 // defaults is R-PARITY, so the path-mapping cannot hide a drifted prefix.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -27,6 +28,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 // The three mocks importing server/git-data-replication.ts needs; node:child_process stays REAL.
 vi.mock("../server/git-auth", () => ({
@@ -52,31 +54,27 @@ const APP_TS = join(APP_ROOT, "server", "git-data-replication.ts");
 const WS = "11111111-1111-4111-8111-111111111111";
 const WT = "55555555-5555-4555-8555-555555555555";
 const STORE_PREFIX = "/mnt/git-data/repositories";
-// The pre-fix prefix (the incident). Spelled as a constant so the residual-URL sweep stays empty.
+// The pre-fix prefix (the incident), used only by the negative control and R-STALE.
 const OLD_PREFIX = "/repositories";
 
 const read = (p: string) => readFileSync(p, "utf8");
 
-/** Environment for every git child: no ambient GIT_* (a caller's GIT_DIR beats cwd), fixed identity. */
-function cleanEnv(extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (!k.startsWith("GIT_") && v !== undefined) env[k] = v;
-  }
+/**
+ * Environment for every git child: the shared fixture builder (prefix sweep of ambient GIT_*, a
+ * discovery ceiling, config hermeticity, a synthesized identity) plus fixed commit dates so the
+ * commit ids a test creates do not depend on the wall clock.
+ */
+function cleanEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
-    ...env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@example.invalid",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@example.invalid",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
+    ...gitFixtureEnv(root),
+    GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
+    GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
     ...extra,
   };
 }
 
-function git(cwd: string, args: string[], env: Record<string, string> = cleanEnv()) {
-  return spawnSync("git", args, { cwd, env: env as NodeJS.ProcessEnv, encoding: "utf8" });
+function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = cleanEnv()) {
+  return spawnSync("git", args, { cwd, env, encoding: "utf8" });
 }
 
 /** Exactly one match or a loud failure: a zero-match extraction must never pass silently. */
@@ -104,7 +102,7 @@ function dialedCommands(): string[] {
   }
 }
 
-function transportEnv(): Record<string, string> {
+function transportEnv(): NodeJS.ProcessEnv {
   return cleanEnv({
     GIT_SSH_COMMAND: join(shimDir, "ssh"),
     ...seamEnv,
@@ -113,6 +111,9 @@ function transportEnv(): Record<string, string> {
 
 function makeBare(id: string): string {
   const bare = join(storeDir, `${id}.git`);
+  // A fresh store per test: a leftover ref from an earlier test would let a later fetch pass on
+  // state its own push never wrote.
+  rmSync(bare, { recursive: true, force: true });
   mkdirSync(storeDir, { recursive: true });
   const r = git(storeDir, ["init", "--bare", "-q", bare]);
   expect(r.status, r.stderr).toBe(0);
@@ -123,23 +124,24 @@ function makeBare(id: string): string {
   return bare;
 }
 
+// The commit message is the clone's name, so two clones never share a commit id.
 function makeClone(name: string): string {
   const dir = join(work, name);
   mkdirSync(dir, { recursive: true });
   expect(git(dir, ["init", "-q"]).status).toBe(0);
   expect(git(dir, ["symbolic-ref", "HEAD", "refs/heads/main"]).status).toBe(0);
-  expect(git(dir, ["commit", "-q", "--allow-empty", "-m", "one"]).status).toBe(0);
+  expect(git(dir, ["commit", "-q", "--allow-empty", "-m", name]).status).toBe(0);
   expect(git(dir, ["tag", "v1"]).status).toBe(0);
   return dir;
 }
 
 beforeAll(() => {
+  root = mkdtempSync(join(tmpdir(), "gdurl-"));
   // Hard preconditions: fail loud, never skip.
   for (const bin of ["git", "bash", "findmnt", "mountpoint", "stat", "readlink"]) {
-    const r = spawnSync("bash", ["-c", `command -v ${bin}`], { encoding: "utf8" });
+    const r = spawnSync("bash", ["-c", `command -v ${bin}`], { encoding: "utf8", env: cleanEnv() });
     if (r.status !== 0) throw new Error(`precondition: ${bin} is not on PATH`);
   }
-  root = mkdtempSync(join(tmpdir(), "gdurl-"));
   work = join(root, "work");
   shimDir = join(root, "bin");
   storeDir = join(root, "store", "repositories");
@@ -148,19 +150,27 @@ beforeAll(() => {
   mkdirSync(storeDir, { recursive: true });
   dialLog = join(root, "dialed.log");
 
-  const mount = execFileSync("stat", ["-c", "%m", storeDir], { encoding: "utf8" }).trim();
+  const mount = execFileSync("stat", ["-c", "%m", storeDir], {
+    encoding: "utf8",
+    env: cleanEnv(),
+  }).trim();
   const dev = spawnSync("findmnt", ["-n", "-o", "SOURCE", "--mountpoint", mount], {
     encoding: "utf8",
+    env: cleanEnv(),
   }).stdout.trim();
   if (!dev) throw new Error(`precondition: findmnt prints no SOURCE for ${mount}`);
   const realUuid = spawnSync("findmnt", ["-n", "-o", "UUID", "--mountpoint", mount], {
     encoding: "utf8",
+    env: cleanEnv(),
   }).stdout.trim();
   const uuid = realUuid || "0b1d0000-8211-4000-8000-000000000002";
 
   // findmnt stub answering ONLY the UUID query (tmpfs has no filesystem UUID); everything else is
   // delegated to the real binary.
-  const fmReal = execFileSync("bash", ["-c", "command -v findmnt"], { encoding: "utf8" }).trim();
+  const fmReal = execFileSync("bash", ["-c", "command -v findmnt"], {
+    encoding: "utf8",
+    env: cleanEnv(),
+  }).trim();
   const stubDir = join(root, "fm");
   mkdirSync(stubDir, { recursive: true });
   writeFileSync(
@@ -213,6 +223,10 @@ beforeAll(() => {
 
 afterAll(() => {
   if (root && root.startsWith(tmpdir())) rmSync(root, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 beforeEach(() => {
@@ -308,6 +322,8 @@ describe("R-PUSH / R-FETCH / R-STALE: real git -> real wrapper", () => {
   });
 
   it("the OLD form is refused with the incident's message (the control that gives the rows teeth)", () => {
+    // The refusal is only reproducible where /repositories is absent, as on the git-data host.
+    expect(existsSync(OLD_PREFIX)).toBe(false);
     makeBare(WS);
     const clone = makeClone("old");
     const r = git(
@@ -337,12 +353,40 @@ describe("R-PARITY: the app prefix is the bare-repo root every host-side consume
       /^REPO_ROOT="\$\{GIT_DATA_REPO_ROOT:-([^}]+)\}"$/m,
     );
 
-  it("equals the default REPO_ROOT of the wrapper, provision and remove scripts", () => {
+  it("equals the default REPO_ROOT of the wrapper, provision, remove and gc scripts", () => {
     const prefix = appPrefix();
     expect(prefix).toBe(STORE_PREFIX);
     expect(defaultOf("git-data-transport-wrapper.sh")).toBe(prefix);
     expect(defaultOf("git-data-provision.sh")).toBe(prefix);
     expect(defaultOf("git-data-remove.sh")).toBe(prefix);
+    expect(defaultOf("git-data-gc.sh")).toBe(prefix);
+  });
+
+  it("equals the bootstrap's own writer of the directory and the container probe's default", () => {
+    const prefix = appPrefix();
+    const bootstrap = read(join(INFRA, "git-data-bootstrap.sh"));
+    const root = extractOne("bootstrap GIT_DATA_ROOT", bootstrap, /^GIT_DATA_ROOT="([^"$]+)"/m);
+    const sub = extractOne(
+      "bootstrap REPO_ROOT",
+      bootstrap,
+      /^REPO_ROOT="\$GIT_DATA_ROOT(\/[^"]+)"/m,
+    );
+    expect(`${root}${sub}`).toBe(prefix);
+    const probe = extractOne(
+      "container probe repo_root default",
+      read(join(INFRA, "git-data-container-probe.sh")),
+      /^repo_root="\$\{GDCP_REPO_ROOT:-([^}]+)\}"/m,
+    );
+    expect(probe).toBe(prefix);
+  });
+
+  it("is the path the host's log redaction rewrites to REDACTED", () => {
+    const redacted = extractOne(
+      "cloud-init redaction target",
+      read(join(INFRA, "cloud-init-git-data.yml")),
+      /#(\/mnt\/git-data\/repositories)\/REDACTED#g/,
+    );
+    expect(redacted).toBe(appPrefix());
   });
 
   it("equals the cutover script's OLD_ROOT + REPO_SUBDIR composition", () => {

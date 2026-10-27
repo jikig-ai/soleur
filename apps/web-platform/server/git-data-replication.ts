@@ -325,6 +325,9 @@ export function assertSafeWorkspaceId(workspaceId: string): void {
     workspaceId === "" ||
     workspaceId === "." ||
     workspaceId === ".." ||
+    // The transport wrapper refuses any path containing two dots in a row, so an id like "a..b"
+    // would provision a repo that can then never be fetched or pushed.
+    workspaceId.includes("..") ||
     workspaceId.includes("/") ||
     !WORKSPACE_ID_RE.test(workspaceId)
   ) {

@@ -29,7 +29,7 @@ Spec lacks valid lane: no `spec.md` exists for this branch, so `lane:` defaulted
 
 ### New Considerations Discovered
 - The git-data host's log redaction (`cloud-init-git-data.yml`, the sed rule on `/mnt/git-data/repositories/...`) already matches the NEW path form and not the old one, so host-side log lines carrying the new path are redacted to `REDACTED` automatically.
-- `cron-egress-nftables.sh` quotes the old URL in a comment but ships in `server.tf` and `cloud-init-inngest.yml` (another host's user_data): leave it.
+- `cron-egress-nftables.sh` quotes the old URL in a comment; editing it re-runs the web hosts' `cron_egress_firewall` provisioner (its `config_hash` hashes the file), so leave it (see Sharp Edges).
 - The runbook's verdict-word census is the `RB` section of `git-data-cutover-access.test.sh` (not a suite named for a case); re-run the whole suite after the runbook edit.
 
 ## Overview
@@ -129,7 +129,7 @@ Order follows `cq-write-failing-tests-before` and the contract-before-consumer r
 
 3.1 Run, in this order: the new vitest file, `git-data-replication.test.ts`, `git-data-client.test.ts`, `git-auth.test.ts`, `git-data-ssh-connect-bound.test.ts`; then `bash apps/web-platform/infra/git-data-transport-wrapper.test.sh`, `bash apps/web-platform/infra/git-data-cutover-access.test.sh`, `bash apps/web-platform/infra/git-data-ownership.test.sh`, and `bash plugins/soleur/test/c4-count-parity.test.sh` (unchanged: no C4 edit). `git-data-container-probe.sh` has no suite of its own (the cutover-access suite is its suite) and is never executed directly.
 3.2 Residual sweep: `rg -n 'ssh://[^/ ]+/repositories/' apps/web-platform/server apps/web-platform/test/git-data-replication.test.ts apps/web-platform/test/git-data-client.test.ts apps/web-platform/test/git-data-remote-url-wrapper.test.ts` returns nothing (the regex needs the path to START at `/repositories`, so the new `/mnt/git-data/repositories` form does not match). The opaque argv samples in `git-auth.test.ts` and `git-data-ssh-connect-bound.test.ts` assert nothing about the path and are left alone.
-3.3 Not edited, with the reason (verify with `git diff origin/main --stat` at the end): `git-data-transport-wrapper.sh`, `git-data-bootstrap.sh`, `cloud-init-git-data.yml`, `git-data.tf` (user_data / host replacement); `cron-egress-nftables.sh` carries the same stale `.../repositories/<id>.git` in a comment but is shipped to the Inngest host through `server.tf` and `cloud-init-inngest.yml`, so editing it would change another host's user_data; `AGENTS.rules.md`.
+3.3 Not edited, with the reason (verify with `git diff origin/main --stat` at the end): `git-data-transport-wrapper.sh`, `git-data-bootstrap.sh`, `cloud-init-git-data.yml`, `git-data.tf` (user_data / host replacement); `cron-egress-nftables.sh` carries the same stale `.../repositories/<id>.git` in a comment but editing it changes the `config_hash` of the web hosts' `cron_egress_firewall` provisioner (`server.tf`), which re-runs it on live web hosts; `AGENTS.rules.md`.
 
 ### Phase 4 — runbook R3 and R6
 
@@ -206,6 +206,7 @@ None. Queried open `code-review` issues (200 listed) for every path in Files to 
 - **If this lands broken, the user experiences:** session-end work that is not durably replicated to the shared git-data store while the app reports no failure to them; their latest unpushed commits live only on the web host until the next successful session end (GitHub `origin` stays canonical and rehydration intact, ADR-068 section 1). Today the exposure is bounded because new agent sessions are paused.
 - **If this leaks, the user's workflow data is exposed via:** no new vector. The URL carries only the already-validated workspace id (`WORKSPACE_ID_RE`), authorization (`authorizeGitDataAccess`) and the wrapper's canonicalize-under-root, freeze and mount checks are unchanged, and the wrapper still rejects dot paths, symlinks and nested paths (rows T4-T6).
 - **Brand-survival threshold:** `aggregate pattern`
+- **After this merges (review, user-impact seat):** the replication write path and the session-start `reset --hard` overlay can run against real repositories for the first time. Two latent behaviours become reachable, and neither is mitigated by this diff: the overlay resets a fresh clone to the store tip with no ancestry check against the just-cloned GitHub tip, so a replica older than GitHub sets a fresh clone back (nothing is lost, the commits stay on origin); and a stale clone force-pushes over a newer store tip because the fence orders by lease generation, not content. Both are parked on #8211. Real-user sessions must not resume (the new-session pause stays on) before REFS-CONFIRMED and the R6/R7 erasure proof; the runbook R3 row now says so.
 - **Threshold decision (challengeable):** not `single-user incident` because the replica is an overlay with GitHub as the canonical copy and the flag is on with new sessions paused, so no single user's data is at stake before the next rehearsal; it would become `single-user incident` if sessions resume with the defect unfixed, which is the argument for merging promptly.
 
 ## Observability
@@ -338,4 +339,4 @@ Positive no-SSH refs read for R3/R6; container probe accepting any `remote: git-
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6; this one is filled.
 - The Observability `discoverability_test.command` is a one-line `rg` on a committed source file, inside the 15 second cap, with a literal expected output.
-- `cron-egress-nftables.sh` mentions the old URL in a comment but ships in two hosts' user_data; do not "clean it up" in this PR.
+- `cron-egress-nftables.sh` mentions the old URL in a comment. It is loaded on the WEB hosts through `server.tf`'s `cron_egress_firewall` provisioner, whose `config_hash` is a sha256 over the file, so even a comment edit re-runs that provisioner (and restarts `cron-egress-firewall.service`) on live web hosts. Do not "clean it up" in this PR; fold the comment fix into the next deliberate change to that file. (An earlier draft said it ships in another host's user_data; review measured that false.)
