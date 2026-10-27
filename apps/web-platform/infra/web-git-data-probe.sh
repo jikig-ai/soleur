@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 set -u
+# Refuse to run under xtrace (#7797, #9639): this probe resolves and uses a secret heartbeat URL
+# (the variable named by GIT_DATA_HEARTBEAT_URL_KEY), so a traced launch would print it to stderr,
+# which journald ships off-box. Unconditional on purpose: the script's only production launch
+# context is `doppler run` via the unit, and the env file always carries the key name, so a
+# credential-keyed refusal would fire identically at higher complexity. It tests the STATE (`$-`),
+# so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV `set -x` are all caught. The unit's ExecStart runs
+# this script directly under `doppler run` and expands nothing (#9639): the URL is resolved BELOW,
+# after this refusal, from the variable NAME in GIT_DATA_HEARTBEAT_URL_KEY. A change that resolves
+# it above this block, or that makes the unit expand it again, reopens that gap. For on-host
+# debugging read `journalctl -t web-git-data-probe` (shipped to Better Stack) or run
+# web-git-data-probe.test.sh against stubs — never `bash -x` this script.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 # --- #6548: git-data CONSUMER-perspective reachability probe ---------------------------------
 # Runs ON the web host and verifies it can reach git-data (10.0.1.20:22, ED25519 SSH transport,
 # git-data.tf:29-40) over the private NIC; pings GIT_DATA_HEARTBEAT_URL on success. A fail-soft
@@ -15,7 +29,8 @@ set -u
 # git-data is ever observed.
 #
 # CONFIG IS ENV: GIT_DATA_ENDPOINT (host:port) from /etc/default/web-git-data-probe;
-# GIT_DATA_HEARTBEAT_URL from the doppler-run env.
+# GIT_DATA_HEARTBEAT_URL_KEY, whose named Doppler var this script resolves by indirect expansion
+# after the refusal above.
 #
 # TEST SEAM: SOLEUR_GIT_DATA_PROBE_REACH_OVERRIDE (reachable|unreachable) injects the connect result
 # so the branch logic is unit-testable; SOLEUR_GIT_DATA_PROBE_PING_LOG re-routes the ping to a file.
@@ -24,7 +39,22 @@ set -u
 ENDPOINT="${GIT_DATA_ENDPOINT:-10.0.1.20:22}"
 HOST="${ENDPOINT%%:*}"
 PORT="${ENDPOINT##*:}"
-URL="${GIT_DATA_HEARTBEAT_URL:-}"
+# THE HEARTBEAT URL (#9639). The unit no longer exports it: it names the variable doppler
+# injected it under (GIT_DATA_HEARTBEAT_URL_KEY, an identity mapping for the single git-data
+# host) and this script reads that variable HERE, after the xtrace refusal above. The NAME comes
+# from an env file, and `${!name}` evaluates array subscripts and command substitutions inside
+# `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges —
+# byte-identical to the _key_ok in web-zot-consumer-probe.sh, web-private-nic-guard.sh and
+# inngest-consumer-probe.sh, whose suites' F6 locale[ranges off] rows make that case). No fallback
+# to a bare variable of any other name. This script never exports the resolved value; doppler's
+# own injected copy under the key-named variable is still inherited by children, as before.
+_key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
+# `unset` first: an exported URL in the inherited environment would keep its export attribute
+# through the assignments below.
+unset URL
+URL=""
+KEY_BAD=false
+if _key_ok "${GIT_DATA_HEARTBEAT_URL_KEY:-}"; then URL="${!GIT_DATA_HEARTBEAT_URL_KEY:-}"; else KEY_BAD=true; fi
 # Happy-path stderr is shipped off-box via Vector Source 4 (SyslogIdentifier=web-git-data-probe);
 # the heartbeat ping is the off-box liveness signal, so the "reachable ... pinged" narration is
 # redundant there and pure quota cost at 60s cadence. Gate it behind a debug flag (default OFF);
@@ -53,7 +83,7 @@ _ping() {
     printf 'PING %s\n' "$1" >> "$SOLEUR_GIT_DATA_PROBE_PING_LOG"
     return 0
   fi
-  [ -n "$URL" ] || { echo "[git-data-probe] WARN: GIT_DATA_HEARTBEAT_URL unset — reachable but cannot ping." >&2; return 0; }
+  [ -n "$URL" ] || { echo "[git-data-probe] WARN: GIT_DATA_HEARTBEAT_URL unset — reachable but cannot ping." >&2; [ "$KEY_BAD" = true ] && echo "[git-data-probe] WARN: GIT_DATA_HEARTBEAT_URL_KEY is unset or is not an upper-case variable name (the value is not shown); the heartbeat URL cannot be resolved." >&2; return 0; }
   if ! _hb_url_ok "$URL"; then
     echo "SOLEUR_CREDENTIAL_REFUSED script=web-git-data-probe reason=$(case "$URL" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac) var=GIT_DATA_HEARTBEAT_URL" >&2
     echo "[git-data-probe] WARN: heartbeat URL refused (reachable, no ping sent)" >&2
