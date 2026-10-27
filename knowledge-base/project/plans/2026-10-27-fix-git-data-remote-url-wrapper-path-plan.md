@@ -226,7 +226,7 @@ failure_modes:
     alert_route: CI red on the PR; Sentry issue alert in production
   - mode: push reports success but no ref lands (provision-only state)
     detection: no no-SSH positive read exists today; the runbook rule makes R3/R6 refuse to pass on directory existence, and the follow-up for a positive read is parked on #8211
-    alert_route: rehearsal R3 reads INCONCLUSIVE and blocks R6 and deletion
+    alert_route: SESSION-ENDED INCONCLUSIVE blocks R4; REFS-CONFIRMED unread blocks R6, the deletion and the real flip
   - mode: app prefix drifts from the host mount path
     detection: R-PARITY compares the app prefix to the wrapper, provision, remove, container probe, cutover.sh and cloud-init literals
     alert_route: CI red on the PR that changes either side

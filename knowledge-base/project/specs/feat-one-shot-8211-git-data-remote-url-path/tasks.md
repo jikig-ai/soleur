@@ -26,7 +26,7 @@ Branch: `feat-one-shot-8211-git-data-remote-url-path`. PR body starts `Ref #8211
 
 ## Phase 4 — runbook
 
-- 4.1 R3 checks: positive refs evidence required; `<id>.git`, `store_not_empty`, provisioning success never count; negative Sentry evidence alone is INCONCLUSIVE; state that no no-SSH refs read exists yet
+- 4.1 R3 checks: positive refs evidence required; `<id>.git`, `store_not_empty`, provisioning success never count; R3 splits into SESSION-ENDED (lets R4 run; INCONCLUSIVE otherwise) and REFS-CONFIRMED (gates R6, the deletion and the real flip); state that no no-SSH refs read exists yet
 - 4.2 R6 checks and failure column: `store_not_empty` necessary, not sufficient
 - 4.3 Re-run the runbook word-census case after the edit
 
