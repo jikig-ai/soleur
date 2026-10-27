@@ -18,7 +18,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { lstat, readFile, readlink, realpath, stat } from "node:fs/promises";
+import { lstat, open, readFile, readlink, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
@@ -440,12 +440,31 @@ export async function snapshotClone(root: string, baseEnv: BaseEnv = process.env
   if (!paths) return null;
   const out: CloneSnapshot = new Map();
   for (const p of paths) {
+    const abs = join(root, p);
     try {
-      const abs = join(root, p);
-      const st = await lstat(abs);
-      out.set(p, st.isSymbolicLink() ? `link:${await readlink(abs)}` : createHash("sha256").update(await readFile(abs)).digest("hex"));
-    } catch {
-      // review: swallowed -- a path git lists that cannot be lstat'd is recorded as "deleted" in the snapshot, which is what it is.
+      // One open, no check-then-read gap (CodeQL js/file-system-race): O_NOFOLLOW makes a symlink fail with ELOOP (Linux; the
+      // server runs on Linux) instead of being read through, and the kind and the bytes both come from the same descriptor.
+      // O_NONBLOCK: a tracked path replaced by a FIFO must not park a worker thread in open() forever; only a regular file is
+      // hashed, anything else (directory, FIFO, device) is recorded as "deleted" exactly as the old readFile failure did.
+      const fh = await open(abs, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      let digest: string | null = null;
+      try {
+        if ((await fh.stat()).isFile()) digest = createHash("sha256").update(await fh.readFile()).digest("hex");
+      } finally {
+        // review: swallowed -- a close failure on a read-only descriptor must not overwrite a hash that was already computed.
+        await fh.close().catch(() => undefined);
+      }
+      out.set(p, digest ?? "deleted");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ELOOP") {
+        try {
+          out.set(p, `link:${await readlink(abs)}`);
+          continue;
+        } catch {
+          // review: swallowed -- the link was removed or replaced (ENOENT/EINVAL) between the open and the readlink; recorded as "deleted" below, which is what it is.
+        }
+      }
+      // review: swallowed -- a path git lists that cannot be opened is recorded as "deleted" in the snapshot, which is what it is.
       out.set(p, "deleted");
     }
   }
