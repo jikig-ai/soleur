@@ -1,5 +1,6 @@
-// Integration (local subprocess): the remote URL the app builds (server/git-data-replication.ts) through REAL git and
-// the REAL transport wrapper (infra/git-data-transport-wrapper.sh). #8211, ADR-239.
+// Integration (local subprocess): the remote URL the app builds (server/git-data-replication.ts)
+// through REAL git and the REAL transport wrapper (infra/git-data-transport-wrapper.sh). #8211,
+// ADR-239.
 //
 // Why this exists: the app built an ssh:// URL whose path was `/repositories/<id>.git`. Git sends an
 // ssh:// path to the server unchanged and ABSOLUTE, so the wrapper ran `readlink -f '/repositories/<id>.git'`,
@@ -11,8 +12,9 @@
 // Harness: a shim named `ssh` (any other name makes git send an `ssh -G` capability probe first)
 // records the remote command git emitted, path-maps the literal bare-repo root onto a fixture root
 // (CI has no /mnt/git-data), and execs the REAL wrapper under `env -i` with the test seams. The
-// literal equality of the app prefix with the wrapper / provision / remove / cutover / cloud-init
-// defaults is R-PARITY, so the path-mapping cannot hide a drifted prefix.
+// literal equality of the app prefix with the host-side literals (wrapper, provision, remove, gc,
+// bootstrap, container probe, cutover, cloud-init mount and log redaction) is R-PARITY, so the
+// path-mapping cannot hide a drifted prefix. R-PARITY pins DECLARATIONS, not use sites.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -28,7 +30,10 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
-import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
+import {
+  gitFixtureEnv,
+  GIT_LOCATION_VARS,
+} from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 // The three mocks importing server/git-data-replication.ts needs; node:child_process stays REAL.
 vi.mock("../server/git-auth", () => ({
@@ -60,7 +65,7 @@ const OLD_PREFIX = "/repositories";
 const read = (p: string) => readFileSync(p, "utf8");
 
 /**
- * Environment for every git child: the shared fixture builder (prefix sweep of ambient GIT_*, a
+ * Environment for every child process this file spawns (git above all): the shared fixture builder (prefix sweep of ambient GIT_*, a
  * discovery ceiling, config hermeticity, a synthesized identity) plus fixed commit dates so the
  * commit ids a test creates do not depend on the wall clock.
  */
@@ -231,6 +236,9 @@ afterEach(() => {
 
 beforeEach(() => {
   rmSync(dialLog, { force: true });
+  // ensureGitDataRemote spawns git with the ambient environment: never let an inherited GIT_DIR
+  // (or friends) aim its `remote add|set-url` at a repository that is not the fixture clone.
+  for (const k of GIT_LOCATION_VARS) vi.stubEnv(k, undefined);
   vi.stubEnv("GIT_DATA_SSH_HOST", "10.0.1.20");
   vi.stubEnv("GIT_DATA_SSH_HOST_KEY", makeEd25519Pin());
   vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
@@ -365,28 +373,41 @@ describe("R-PARITY: the app prefix is the bare-repo root every host-side consume
   it("equals the bootstrap's own writer of the directory and the container probe's default", () => {
     const prefix = appPrefix();
     const bootstrap = read(join(INFRA, "git-data-bootstrap.sh"));
-    const root = extractOne("bootstrap GIT_DATA_ROOT", bootstrap, /^GIT_DATA_ROOT="([^"$]+)"/m);
+    const dataRoot = extractOne(
+      "bootstrap GIT_DATA_ROOT",
+      bootstrap,
+      /^GIT_DATA_ROOT="([^"$]+)"[ \t]*(#.*)?$/m,
+    );
     const sub = extractOne(
       "bootstrap REPO_ROOT",
       bootstrap,
-      /^REPO_ROOT="\$GIT_DATA_ROOT(\/[^"]+)"/m,
+      /^REPO_ROOT="\$GIT_DATA_ROOT(\/[^"]+)"[ \t]*(#.*)?$/m,
     );
-    expect(`${root}${sub}`).toBe(prefix);
+    expect(`${dataRoot}${sub}`).toBe(prefix);
     const probe = extractOne(
       "container probe repo_root default",
       read(join(INFRA, "git-data-container-probe.sh")),
-      /^repo_root="\$\{GDCP_REPO_ROOT:-([^}]+)\}"/m,
+      /^repo_root="\$\{GDCP_REPO_ROOT:-([^}]+)\}"[ \t]*(#.*)?$/m,
     );
     expect(probe).toBe(prefix);
   });
 
-  it("is the path the host's log redaction rewrites to REDACTED", () => {
+  it("is the path the host's log redaction matches and rewrites to REDACTED", () => {
+    const cloud = read(join(INFRA, "cloud-init-git-data.yml"));
     const redacted = extractOne(
       "cloud-init redaction target",
-      read(join(INFRA, "cloud-init-git-data.yml")),
+      cloud,
       /#(\/mnt\/git-data\/repositories)\/REDACTED#g/,
     );
     expect(redacted).toBe(appPrefix());
+    // The match side decides what is redacted; pin it too (the optional -luks group is the
+    // pre-cutover store path and is not part of the comparison).
+    const matchSide = extractOne(
+      "cloud-init redaction match side",
+      cloud,
+      /s#(\/mnt\/git-data[^#\n]*?\/repositories)\/\[\^\[:space:\]\]\*#/,
+    );
+    expect(matchSide.replace("\\(-luks\\)\\{0,1\\}", "")).toBe(appPrefix());
   });
 
   it("equals the cutover script's OLD_ROOT + REPO_SUBDIR composition", () => {

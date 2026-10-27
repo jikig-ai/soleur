@@ -324,16 +324,16 @@ export function assertSafeWorkspaceId(workspaceId: string): void {
   if (
     workspaceId === "" ||
     workspaceId === "." ||
-    workspaceId === ".." ||
-    // The transport wrapper refuses any path containing two dots in a row, so an id like "a..b"
-    // would provision a repo that can then never be fetched or pushed.
-    workspaceId.includes("..") ||
+    // The transport wrapper refuses any PATH containing two dots in a row, and the path ends in
+    // ".git": so "a..b" and also "a." (which becomes "a..git") would provision a repo that can
+    // then never be fetched or pushed. This also subsumes the exact id "..".
+    `${workspaceId}.git`.includes("..") ||
     workspaceId.includes("/") ||
     !WORKSPACE_ID_RE.test(workspaceId)
   ) {
     throw new Error(
       `git-data: refusing unsafe workspace_id '${workspaceId}' (must match ` +
-        `${WORKSPACE_ID_RE} and not be a dot/slash path — CWE-22).`,
+        `${WORKSPACE_ID_RE}, not be a dot/slash path, and not make '<id>.git' contain '..' — CWE-22).`,
     );
   }
 }

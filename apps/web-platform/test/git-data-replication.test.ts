@@ -73,8 +73,14 @@ describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
   });
 
   it("rejects path-traversal / unsafe workspace ids (CWE-22)", () => {
-    for (const bad of ["..", ".", "a/b", "a b", "a;rm", "", "a..b", "..a", "a.."]) {
+    for (const bad of ["..", ".", "a/b", "a b", "a;rm", "", "a..b", "..a", "a..", "a."]) {
       expect(() => assertSafeWorkspaceId(bad)).toThrow();
+    }
+  });
+
+  it("still accepts single-dot ids (positive control for the '..' rule)", () => {
+    for (const ok of ["a.b", ".a", "ws-uuid-123", "11111111-1111-4111-8111-111111111111"]) {
+      expect(() => assertSafeWorkspaceId(ok)).not.toThrow();
     }
   });
 });

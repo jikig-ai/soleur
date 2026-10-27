@@ -381,7 +381,7 @@ drop_fixture "$U_DIR"
 # An always-exit-0 stub stands in for a wrapper whose allowlist/canonicalize guard
 # was removed. Representative reject inputs MUST exit 0 against it — i.e. WITHOUT the
 # real guard they would sail through, so the T3/T4 `rc != 0` checks are meaningful.
-stub="$(mktemp "${TMPDIR:-/tmp}/gdxport-stub.XXXXXX")"
+stub="$(mktemp "${SEAMS}/stub.XXXXXX")"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$stub"
 chmod +x "$stub"
 mut_root=$(fresh_root)
