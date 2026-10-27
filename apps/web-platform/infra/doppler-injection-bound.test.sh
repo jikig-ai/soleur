@@ -48,8 +48,8 @@
 #      indirect expansion over a per-host key name Terraform bakes in and the tracked unit never
 #      contains — `${!WEB_ZOT_CONSUMER_URL_KEY}` — where the key expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1
 #      (the `*_URL_KEY=%s` printf of each server.tf install provisioner builds it; the git-data and inngest
-#      keys are identity mappings today — see ACK_REASONS for the measured correction). Three of the four do
-#      it in their SCRIPT now and one still does it in the unit's own ExecStart (item 5). A literal
+#      keys are identity mappings today — see ACK_REASONS for the measured correction). All four do
+#      it in their SCRIPT now, after an unconditional xtrace refusal (item 5). A literal
 #      `--only-secrets` list in a TRACKED unit cannot name a per-host secret — the unit contains a
 #      VARIABLE name, never the secret's name, so there is nothing to enumerate. That alone is the
 #      limit, and it is sufficient. An earlier revision also argued "the flag is fail-closed on a
@@ -59,14 +59,15 @@
 #      rationale using the exact flag this repo already uses. It is a real limit of the invariant,
 #      not a false positive to predicate away, so it is an ACK with a reason.
 #
-#   5. THE UNIT WRAPPER MUST NOT EXPAND THE SECRET (#9639). Three of those four probe units used to
+#   5. THE UNIT WRAPPER MUST NOT EXPAND THE SECRET (#9639). All four probe units used to
 #      resolve the key in the unit's own ExecStart (`export URL="${!KEY}"`), which runs before the
 #      script's xtrace refusal and so prints the secret on a traced launch. They now run the
 #      script directly and the SCRIPT resolves the key after its refusal. Two consequences here:
 #      (a) the unit-side `${!` stopped being the reason they are in the population, so a script-side
 #      `${!<NAME>_KEY}` is a population reason too (bound to the `_KEY` convention, row G1.9);
 #      (b) a wrapper stage fails any doppler-run unit whose Exec directive still expands a secret,
-#      unless it is in WRAPPER_ACK_REASONS (the surviving unfixed sibling), whose pin can only ratchet down.
+#      unless it is in WRAPPER_ACK_REASONS — now EMPTY (the last sibling is fixed); the dict can
+#      only ratchet down, so a re-introduced expansion is an unacked FINDING.
 #
 # THE LISTS ARE AUTHORED AND COMMENTED, NEVER DERIVED. Two independent exhaustive derivations over
 # the same two sibling scripts produced DIFFERENT answers in both directions, and both misses are
@@ -276,8 +277,10 @@ ACK_REASONS = {
         'host) — the unit never names the secret, so the list would have to be authored against a variable '
         'rather than a name',
     'web-git-data-probe.service':
-        'indirect expansion of GIT_DATA_HEARTBEAT_URL_KEY; the GIT_DATA_HEARTBEAT_URL_KEY printf in server.tf is an '
-        'identity mapping today for the single git-data host, with the same never-named-in-the-unit limit',
+        'the script resolves GIT_DATA_HEARTBEAT_URL_KEY by indirect expansion (${!GIT_DATA_HEARTBEAT_URL_KEY}), which '
+        'the GIT_DATA_HEARTBEAT_URL_KEY printf in server.tf maps to the identity name today (one git-data '
+        'host) — the unit never names the secret, so the list would have to be authored against a variable '
+        'rather than a name',
     # -- exemption class B: the read-set is not authorable from the tracked source ---------------
     'cron-egress-resolve.service':
         'read-set is not derivable: cron-egress-resolve.sh:149-157 reads SENTRY_INGEST_DOMAIN / '
@@ -315,27 +318,25 @@ ACK_CARDINALITY = 9
 
 # ── wrapper acks (#9639): units whose Exec directive STILL expands a secret by indirect expansion ─────────────────
 # An Exec directive that expands a doppler-injected secret runs that expansion before the target script can refuse to
-# run under xtrace, so the secret reaches the journal on a traced launch. web-private-nic-guard,
-# web-zot-consumer-probe and inngest-consumer-probe were fixed (the script resolves the key after its refusal).
-# The survivor has the same wrapper shape and NO xtrace refusal to order a moved lookup against; adding one is a
-# separate change, so it is recorded as NOT fixed on #9639. This list can only ratchet DOWN: a fix removes the entry
-# and lowers the pin, and an entry for a unit that no longer expands anything is itself a failure. Each entry is
+# run under xtrace, so the secret reaches the journal on a traced launch. All four probe units are now fixed —
+# web-private-nic-guard, web-zot-consumer-probe, inngest-consumer-probe (#10637/#10363) and, with this diff,
+# web-git-data-probe (#9639): each script resolves the key after its refusal and its unit expands nothing.
+# The dict is therefore EMPTY. It can only ratchet DOWN: a fix removes the entry and lowers the pin, an entry for
+# a unit that no longer expands anything is itself a failure (wrapper_stale), and with the dict empty any
+# re-introduced expansion is an unacked FINDING (the mismatch arm below is unreachable by construction while
+# the pin holds 0 — kept anyway, since the dict is ratchet-down-only, not frozen). Each entry is
 # (the EXACT set of names the unit expands, the reason): an acked unit that gains a second expansion, or swaps the
 # one it has, is a finding again.
-WRAPPER_ACK_REASONS = {
-    'web-git-data-probe.service':
-        (('GIT_DATA_HEARTBEAT_URL_KEY',),
-         'NOT fixed (#9639): the unit expands GIT_DATA_HEARTBEAT_URL_KEY in its ExecStart wrapper and its script has no '
-         'xtrace refusal for a moved lookup to follow; adding one is a separate change'),
-}
+WRAPPER_ACK_REASONS = {}
 # 2 -> 1 (#10363): inngest-consumer-probe.service fixed — the script resolves INNGEST_CONSUMER_URL_KEY after an
 # unconditional xtrace refusal and the unit's ExecStart expands nothing (the F6 block in
 # inngest-consumer-probe.test.sh replays the traced launch).
-WRAPPER_ACK_CARDINALITY = 1
+# 1 -> 0 (#9639): web-git-data-probe.service fixed the same way — its F6 block is in web-git-data-probe.test.sh.
+WRAPPER_ACK_CARDINALITY = 0
 # The wrapper stage must examine at least this many doppler-run units; a stage that checks none reports no findings.
 # This is a COUNTER-PRESENCE check only: the stage counts once per doppler-run unit, so the number equals doppler_run_units
-# (itself floored by MIN_DOPPLER_UNITS) and cannot see a broken INDIRECT_RE. Rows G1.1-G1.3 and G1.10-G1.12 are the
-# discriminating ones; G1.4 deletes the counter and proves this floor fires.
+# (itself floored by MIN_DOPPLER_UNITS) and cannot see a broken INDIRECT_RE. Rows G1.1-G1.3, G1.6, G1.9 and G1.11-G1.12
+# are the discriminating ones; G1.4 deletes the counter and proves this floor fires.
 MIN_WRAPPER_UNITS = 12
 
 # ── inner-c acks (#11103): units whose bash -c body expands an injected name ──────────────────
@@ -361,7 +362,8 @@ INNER_C_ACK_CARDINALITY = 0
 MIN_INNER_C_UNITS = 12
 
 # `bash -c '<body>'` inside an Exec directive — both single-quoted spellings, including the
-# nested-escape '\'' form (the web-git-data-probe.service ExecStart nests its inner -c that way).
+# nested-escape '\'' form (the pre-#9639 web-git-data-probe.service ExecStart nested its inner -c
+# that way; the IC1 fixture keeps a live example).
 # `sh -c` is deliberately NOT matched: the exploit class (SHELLOPTS, BASH_ENV, -x propagation) is
 # bash-specific — dash honours none of them — so a dash body is out of scope by decision, not by
 # miss. If a unit ever swaps a dash body for bash, this stage sees it on the next scan.
@@ -369,8 +371,8 @@ INNER_C_BODY_RE = re.compile(r"bash\s+-c\s+'((?:'\\''|[^'])*)'")
 # Every expansion spelling that resolves under doppler: $NAME, ${NAME}, and the systemd-escaped
 # $$NAME/$${NAME} (unit $$ renders as a literal $ at runtime — all four expand identically).
 # Names are pinned to [A-Z][A-Z0-9_]{2,} (>=3 chars) — a doppler secret's shape. ${!...} does NOT
-# match here (`!` is not [A-Z]): it stays the wrapper stage's domain, so web-git-data-probe.service
-# is covered by its existing WRAPPER ack alone and never double-flagged.
+# match here (`!` is not [A-Z]): it stays the wrapper stage's domain, so a unit carrying one is
+# never double-flagged.
 INNER_C_EXPANSION_RE = re.compile(r'\$+\{?([A-Z][A-Z0-9_]{2,})')
 # A backslash-escaped literal dollar — the ONLY spelling inside a double-quoted fragment value
 # that lands in the render as a live expansion (plain $ constructs are evaluated at render time
@@ -833,6 +835,10 @@ def main():
                     'directive that invokes `doppler run`: the expansion runs before the target script can refuse to '
                     'run under xtrace; resolve the key inside the script after its refusal src=%s'
                     % (u['name'], ','.join('${!%s}' % i for i in w_ind), u['source']))
+            # NOTE: this elif (ack-mismatch arm) is UNREACHABLE while WRAPPER_ACK_REASONS is {} —
+            # every expanding unit hits the unacked FINDING above first. If a future unfixed sibling
+            # legitimately re-enters the dict, the author MUST also re-add the mismatch mutation rows
+            # deleted with the git-data drain (see the deleted-rows note in this file's G1 block).
             elif set(w_ind) != set(WRAPPER_ACK_REASONS[u['name']][0]):
                 findings.append(
                     'FINDING unit=%s reason=wrapper-acked unit expands %s but its ack names only %s: an ack covers the '
@@ -842,7 +848,7 @@ def main():
         # --- inner -c stage (#11103): no Exec directive of a doppler-run unit expands an injected
         #     name inside a `bash -c` body — literal, or delivered through a @@SENTINEL@@ fragment
         #     assigned in the same source file. ${!...} is the wrapper stage's domain (excluded so
-        #     web-git-data-probe.service is not double-flagged); `sh -c` is out of scope (dash
+        #     a unit carrying one is not double-flagged); `sh -c` is out of scope (dash
         #     honours neither SHELLOPTS nor BASH_ENV — the class is bash-specific).
         inner_c_checked += 1
         ic_bodies = [m.group(1) for e in u['execs'] for m in INNER_C_BODY_RE.finditer(e)]
@@ -1090,9 +1096,10 @@ for _u in inngest-redis.service inngest-server.service; do
     pass "inner-c stage: no inner-bash-c finding for $_u (the #11103 fix holds)"
   fi
 done
-# Mutation-matrix row 7 is the LIVE pin: web-git-data-probe.service's inner -c expands
-# ${!GIT_DATA_HEARTBEAT_URL_KEY} — the wrapper stage's grammar, deliberately excluded here so the
-# stages never double-flag. The stage must SEE the body (bodies>=1) yet report no inner-c finding.
+# Identity pin for the unit this change is about: web-git-data-probe.service's ExecStart still
+# wraps `doppler run` in an outer `bash -c` body, which the stage must SEE (bodies>=1) yet report
+# no inner-c finding for — pre-#9639 the body carried the ${!...} the wrapper stage owns; now it
+# expands nothing. Either way, double-flagging this unit is the regression this pin catches.
 if grep -qE '^  INNER_C unit=web-git-data-probe\.service bodies=[1-9]' "$CONTROL_OUT" \
    && ! grep -qE '^FINDING unit=web-git-data-probe\.service reason=inner-bash-c' "$CONTROL_OUT"; then
   pass "inner-c stage: web-git-data-probe.service's \${!...} body is seen but not flagged (wrapper stage's domain)"
@@ -1254,11 +1261,6 @@ if prog == 'drop-ack-entry':
     s = re.sub(r'^ACK_CARDINALITY = \d+$', 'ACK_CARDINALITY = %d' % (n - 1), s, count=1, flags=re.M)
 elif prog == 'drop-ack-entry-only':
     s = re.sub(ENTRY, '', s)
-elif prog == 'ack-extra-name':
-    old = "(('GIT_DATA_HEARTBEAT_URL_KEY',),"
-    if s.count(old) != 1:
-        raise SystemExit('ack-extra-name: expected exactly one %s, found %d' % (old, s.count(old)))
-    s = s.replace(old, "(('GIT_DATA_HEARTBEAT_URL_KEY', 'GIT_DATA_EXTRA_KEY'),")
 elif prog == 'noop-wrapper-stage':
     # The wrapper stage's own dispatch: make it examine nothing. The new census floor must catch it.
     if s.count('        wrapper_checked += 1\n') != 1:
@@ -1269,27 +1271,23 @@ elif prog == 'noop-inner-c-stage':
     if s.count('        inner_c_checked += 1\n') != 1:
         raise SystemExit('noop-inner-c-stage: could not find the stage counter')
     s = s.replace('        inner_c_checked += 1\n', '')
-elif prog in ('drop-wrapper-ack', 'wrapper-pin-only', 'add-wrapper-ack'):
+elif prog in ('wrapper-pin-only', 'add-wrapper-ack'):
+    # (#9639 ruling) 'drop-wrapper-ack' and 'ack-extra-name' deleted with their rows: with the dict
+    # pinned empty both mutations cannot land (no entry to drop or widen — the suite's documented
+    # worst case), and the ack-mismatch arm they graded is unreachable by construction.
     m = re.search(r'^WRAPPER_ACK_CARDINALITY = (\d+)$', s, re.M)
     if not m:
         raise SystemExit('%s: could not find WRAPPER_ACK_CARDINALITY' % prog)
     n = int(m.group(1))
-    if prog == 'drop-wrapper-ack':
-        # Remove the sibling's wrapper ack AND lower the pin, so the pin cannot be what reds.
-        # Only inside WRAPPER_ACK_REASONS: ACK_REASONS carries an entry with the same key.
-        head, sep, tail = s.partition('WRAPPER_ACK_REASONS = {\n')
-        tail2 = re.sub(r"    'web-git-data-probe\.service':\n(?:        .*\n)+", '', tail, count=1)
-        if not sep or tail2 == tail:
-            raise SystemExit('drop-wrapper-ack: entry not found')
-        s2 = head + sep + tail2
-        s = re.sub(r'^WRAPPER_ACK_CARDINALITY = \d+$', 'WRAPPER_ACK_CARDINALITY = %d' % (n - 1), s2, count=1, flags=re.M)
-    elif prog == 'wrapper-pin-only':
+    if prog == 'wrapper-pin-only':
         s = re.sub(r'^WRAPPER_ACK_CARDINALITY = \d+$', 'WRAPPER_ACK_CARDINALITY = %d' % (n - 1), s, count=1, flags=re.M)
     else:
         # A wrapper ack for a FIXED unit (which no longer expands anything), with the pin raised to match.
         new = ("    'web-private-nic-guard.service':\n"
                "        (('WEB_NIC_GUARD_URL_KEY',), 'a stale wrapper ack for a unit that no longer expands a secret in any Exec directive'),\n")
         s2 = s.replace("WRAPPER_ACK_REASONS = {\n", "WRAPPER_ACK_REASONS = {\n" + new, 1)
+        if s2 == s:
+            s2 = s.replace("WRAPPER_ACK_REASONS = {}\n", "WRAPPER_ACK_REASONS = {\n" + new + "}\n", 1)
         if s2 == s:
             raise SystemExit('add-wrapper-ack: dict not found')
         s = re.sub(r'^WRAPPER_ACK_CARDINALITY = \d+$', 'WRAPPER_ACK_CARDINALITY = %d' % (n + 1), s2, count=1, flags=re.M)
@@ -1338,11 +1336,11 @@ ACK_N="$(grep -oE '^ACK_CARDINALITY = [0-9]+' "$SCRIPT_DIR/doppler-injection-bou
 expect_red_scanner "R7b ack cardinality pin (a silent ack edit cannot open a hole)" \
   "ACK_FAIL ack_cardinality=$((ACK_N - 1)) expected=${ACK_N}" 'drop-ack-entry-only'
 
-# G1.4 / G1.6 / G1.7 / G1.8 — the wrapper stage's own machinery (scanner-side mutations).
+# G1.4 / G1.7 / G1.8 — the wrapper stage's own machinery (scanner-side mutations). G1.6 moved to
+# the fixture rows below (re-scoped per the #9639 CTO ruling): with the dict pinned empty the
+# fixture unit itself supplies the expansion, and the ack-mismatch arm is unreachable.
 expect_red_scanner "G1.4 a wrapper stage that examines nothing (own-dispatch floor)" \
   "CENSUS_FAIL wrapper_units_checked" 'noop-wrapper-stage'
-expect_red_scanner "G1.6 an unfixed sibling's wrapper ack removed (pin lowered too)" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper expands a secret" 'drop-wrapper-ack'
 expect_red_scanner "G1.7 a wrapper ack for a FIXED unit is stale" \
   "ACK_FAIL wrapper_stale=web-private-nic-guard.service" 'add-wrapper-ack'
 WACK_N="$(grep -oE '^WRAPPER_ACK_CARDINALITY = [0-9]+' "$SCRIPT_DIR/doppler-injection-bound.test.sh" | grep -oE '[0-9]+$' || true)"
@@ -1352,8 +1350,9 @@ expect_red_scanner "G1.8 the wrapper-ack pin refuses a silent edit" \
 
 # ── #9639 F6: the wrapper stage ───────────────────────────────────────────────────────────────
 # No Exec directive of a doppler-run unit may expand a secret by indirect expansion: that expansion runs before the
-# target script can refuse to run under xtrace. Fixed units (web-private-nic-guard, web-zot-consumer-probe) stay in the
-# Guard-2 population through the SCRIPT-side `*_KEY` reason; the two unfixed siblings are wrapper-acked.
+# target script can refuse to run under xtrace. All four probe units are fixed and stay in the
+# Guard-2 population through the SCRIPT-side `*_KEY` reason; WRAPPER_ACK_REASONS is pinned empty,
+# so any re-introduced expansion is an unacked FINDING.
 NICU="web-private-nic-guard.service"
 OLD_NIC_EXEC='ExecStart=/bin/bash -c '"'"'doppler run --project soleur --config prd -- bash -c '"'"'\'"'"''"'"'export WEB_NIC_GUARD_URL="$${!WEB_NIC_GUARD_URL_KEY}"; exec /usr/local/bin/web-private-nic-guard.sh'"'"'\'"'"''"'"''"'"
 set_execstart() {   # <unit file> <full ExecStart line> : replace the unit's ExecStart line (the edit must land)
@@ -1371,6 +1370,18 @@ PY
 g11() { set_execstart "$1/$NICU" "$OLD_NIC_EXEC"; }
 expect_red "G1.1 the wrapper expansion restored in a fixed unit" \
   "FINDING unit=$NICU reason=wrapper expands a secret" g11
+# G1.6 — the pre-fix wrapper expansion restored in the (now-fixed) git-data unit. Re-scoped per
+# the #9639 CTO ruling: with WRAPPER_ACK_REASONS pinned empty the fixture unit itself supplies
+# the expansion, and this is the unacked-FINDING arm — the ack was the only thing covering it.
+GDU="web-git-data-probe.service"
+# The pre-fix git-data ExecStart is the nic-guard wrapper's shape with its names swapped (the
+# nested-escape quoting is identical), so derive it rather than re-quote it.
+OLD_GD_EXEC="${OLD_NIC_EXEC//WEB_NIC_GUARD_URL_KEY/GIT_DATA_HEARTBEAT_URL_KEY}"
+OLD_GD_EXEC="${OLD_GD_EXEC//WEB_NIC_GUARD_URL/GIT_DATA_HEARTBEAT_URL}"
+OLD_GD_EXEC="${OLD_GD_EXEC//web-private-nic-guard.sh/web-git-data-probe.sh}"
+g16() { set_execstart "$1/$GDU" "$OLD_GD_EXEC"; }
+expect_red "G1.6 the pre-fix wrapper expansion restored in the now-fixed git-data unit (unacked FINDING)" \
+  "FINDING unit=web-git-data-probe.service reason=wrapper expands a secret" g16
 # G1.2 — a SECOND directive expanding the secret, after a compliant first one: the check quantifies over every directive.
 g12() { printf '%s\n' "ExecStartPre=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export G12_X=\"\$\${!WEB_NIC_GUARD_URL_KEY}\"; true'\\'''" >> "$1/$NICU"; }
 expect_red "G1.2 a second Exec directive expands the secret (compliant first member)" \
@@ -1410,16 +1421,11 @@ expect_green "G1.9b a script using \${!_seam+x} does NOT enter the population (t
 # GH2 — must-PASS non-canonical: the fixed unit written WITHOUT the outer `bash -c` is still compliant and still counted.
 gh2() { set_execstart "$1/$NICU" 'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/web-private-nic-guard.sh'; }
 expect_green "GH2 a fixed unit written without the outer bash -c stays GREEN (the contract is no expansion, not one spelling)" gh2
-# G1.10 — an ack covers the EXACT expansion it recorded: a wrapper-acked unit that gains a second expansion is a finding again.
-g110() { printf '%s\n' "ExecStartPre=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export G110_X=\"\$\${!G110_OTHER_KEY}\"; true'\\'''" >> "$1/web-git-data-probe.service"; }
-expect_red "G1.10 a wrapper-acked unit gains a SECOND expansion its ack does not name" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands" g110
-# G1.10b/c — the ack is EXACT in both directions: a unit that SWAPS the one name it expands, and an ack that names MORE than the unit expands.
-g110b() { sed -i 's/\${!GIT_DATA_HEARTBEAT_URL_KEY}/${!GIT_DATA_SWAPPED_KEY}/' "$1/web-git-data-probe.service"; }
-expect_red "G1.10b a wrapper-acked unit SWAPS the name it expands (the ack names the old one)" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands \${!GIT_DATA_SWAPPED_KEY} but its ack names only \${!GIT_DATA_HEARTBEAT_URL_KEY}" g110b
-expect_red_scanner "G1.10c a wrapper ack that names MORE than the unit expands is a finding too" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands" 'ack-extra-name'
+# G1.10/G1.10b/G1.10c — DELETED per the #9639 CTO ruling: they graded the ack-mismatch arm
+# ("an acked unit expands a name its ack does not record"), which is unreachable while
+# WRAPPER_ACK_REASONS is pinned empty — every expanding unit hits the unacked branch first, and
+# an ack entry that would exercise the mismatch arm is itself caught by wrapper_stale/cardinality.
+# The elif mismatch check itself stays: the dict is ratchet-down-only, not frozen.
 # G1.11 — every spelling of an indirect expansion the unit-side regex must see, not only the bare and operator forms.
 g_spell() {   # <dir> <suffix after the variable name> : the nic unit's ExecStart expands ${!WEB_NIC_GUARD_URL_KEY<suffix>}
   set_execstart "$1/$NICU" "ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export WEB_NIC_GUARD_URL=\"\$\${!WEB_NIC_GUARD_URL_KEY$2}\"; exec /usr/local/bin/web-private-nic-guard.sh'\\'''"
@@ -1677,7 +1683,9 @@ TOTAL=$((PASS + FAIL))
 # 61 -> 59 (#10112): the two LUKS cutover unit pins (seen, bound) left with the retired unit; set to the measured green count.
 # 59 -> 71 (#11103): the inner -c stage (census-floor member, two identity pins, the ${!...}
 # no-double-flag pin) + IC1-IC6 mutation rows; measured 71/71.
-MIN_ASSERTIONS=71
+# 71 -> 68 (#9639): G1.10/G1.10b/G1.10c deleted — the ack-mismatch arm is unreachable while
+# WRAPPER_ACK_REASONS is pinned empty; G1.6 re-scoped onto a fixture arm (still one assertion).
+MIN_ASSERTIONS=68
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
