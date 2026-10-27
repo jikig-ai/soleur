@@ -16,6 +16,8 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 OK_ROW='{"message":"INNGEST_TRACE_RETENTION_OUTCOME=ok","_SYSTEMD_UNIT":"inngest-trace-retention.service"}'
+WRAPPED_OK='{"dt":"2026-10-27 00:00:00","raw":"{\"message\":\"INNGEST_TRACE_RETENTION_OUTCOME=ok\",\"_SYSTEMD_UNIT\":\"inngest-trace-retention.service\"}"}'
+DOPPLER_QUOTE='{"message":"runbook quotes INNGEST_TRACE_RETENTION_OUTCOME=ok from inngest-trace-retention.service","_SYSTEMD_UNIT":"doppler.service","SYSLOG_IDENTIFIER":"doppler"}'
 OTHER_UNIT='{"message":"INNGEST_TRACE_RETENTION_OUTCOME=ok","_SYSTEMD_UNIT":"inngest-server.service"}'
 ECHO_ROW='{"message":"INNGEST_TRACE_RETENTION_OUTCOME=ok inngest-trace-retention.service","caller":"api"}'
 ERROR_ROW='{"message":"INNGEST_TRACE_RETENTION_OUTCOME=error reason=seq_scan","_SYSTEMD_UNIT":"inngest-trace-retention.service"}'
@@ -37,6 +39,14 @@ run_probe() {
 write_fix "$OK_ROW"
 run_probe
 [[ $? -eq 0 ]] && pass || fail "qualifying row did not exit 0"
+
+write_fix "$WRAPPED_OK"
+run_probe
+[[ $? -eq 0 ]] && pass || fail "wrapped qualifying row did not exit 0"
+
+write_fix "$DOPPLER_QUOTE"
+run_probe
+[[ $? -eq 2 ]] && pass || fail "doppler quote did not exit 2"
 
 write_fix ""
 run_probe

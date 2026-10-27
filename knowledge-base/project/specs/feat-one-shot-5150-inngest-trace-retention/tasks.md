@@ -16,7 +16,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - [x] 2.1 Write `apps/web-platform/infra/inngest-trace-retention.sql` and `apps/web-platform/infra/inngest-trace-retention.sqlite.sql`. Pipeline A deletes `spans`, `traces`, `event_batches`, then `trace_runs`. Pipeline B deletes `history`, `function_runs`, then `function_finishes`. Pipeline C deletes an old `events` row only when no unfinished run still references it.
 - [x] 2.2 Write `apps/web-platform/infra/inngest-trace-retention.sh`. Postgres runs when `INNGEST_POSTGRES_URI` is set. SQLite runs when `/var/lib/inngest/main.db` exists. Both can run. The URI stays in the environment. Exit 78 when shell tracing is on. Log counts and the outcome marker only.
 - [x] 2.3 Batch with a cap. Stop when `pg_database_size` grows past the invocation budget. Never issue `VACUUM FULL`. Refuse a sequential scan on `spans`, `traces`, `events`, or `history` and then delete nothing.
-- [x] 2.4 `--ensure-indexes` creates `soleur_trace_runs_status_ended_at`, `soleur_function_finishes_created_at`, and `soleur_traces_run_id` with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on the session pooler. The unit test never calls it. A traces index that cannot be built for space leaves the explain guard refusing deletes.
+- [x] 2.4 `--ensure-indexes` creates `soleur_trace_runs_status_ended_at`, `soleur_function_finishes_created_at`, `soleur_traces_run_id`, and `soleur_events_received_at` with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on the session pooler. The unit test never calls it. A traces index that cannot be built for space leaves the explain guard refusing deletes.
 
 ## Phase 3: Host wiring
 

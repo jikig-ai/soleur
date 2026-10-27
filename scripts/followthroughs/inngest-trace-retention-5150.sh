@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Follow-through for #5150. Closes the issue only after a Better Stack row from
-# unit inngest-trace-retention.service contains INNGEST_TRACE_RETENTION_OUTCOME=ok
-# and is not a webhook echo ("caller":"api"). The old image cannot emit that pair.
+# Follow-through for #5150. Closes the issue only after a Better Stack row whose
+# decoded _SYSTEMD_UNIT is inngest-trace-retention.service and whose message is
+# exactly INNGEST_TRACE_RETENTION_OUTCOME=ok. A row that only quotes those tokens
+# does not qualify. The old image cannot emit that pair.
 #
 # Exit semantics (sweep-followthroughs.sh):
 #   0 = PASS       one qualifying row
@@ -65,16 +66,35 @@ else
 fi
 
 count="$(printf '%s\n' "$rows" | python3 -c "$(cat <<'PY'
+import json
 import sys
 n = 0
-echo_raw = '"caller":"api"'
-echo_escaped = '\\"caller\\":\\"api\\"'
+unit = "inngest-trace-retention.service"
+outcome = "INNGEST_TRACE_RETENTION_OUTCOME=ok"
 for line in sys.stdin:
-    if "INNGEST_TRACE_RETENTION_OUTCOME=ok" not in line:
+    line = line.strip()
+    if not line:
         continue
-    if "inngest-trace-retention.service" not in line:
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
         continue
-    if echo_raw in line or echo_escaped in line:
+    if not isinstance(obj, dict):
+        continue
+    raw = obj.get("raw")
+    if isinstance(raw, str):
+        try:
+            inner = json.loads(raw)
+        except json.JSONDecodeError:
+            inner = None
+        if isinstance(inner, dict):
+            obj = inner
+    message = obj.get("message")
+    if isinstance(message, str):
+        message = message.strip()
+    if message != outcome:
+        continue
+    if obj.get("_SYSTEMD_UNIT") != unit:
         continue
     n += 1
 print(n)

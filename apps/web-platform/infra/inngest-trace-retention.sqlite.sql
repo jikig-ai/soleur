@@ -85,6 +85,7 @@ WITH doomed AS (
       LEFT JOIN function_finishes ff ON ff.run_id = fr.run_id
       WHERE fr.event_id = e.internal_id AND ff.run_id IS NULL
     )
+  ORDER BY e.received_at
   LIMIT :batch
 )
 DELETE FROM events WHERE rowid IN (SELECT rid FROM doomed);

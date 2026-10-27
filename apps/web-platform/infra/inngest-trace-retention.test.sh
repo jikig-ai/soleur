@@ -143,6 +143,10 @@ if ! grep -F -q 'soleur_traces_run_id' "$RUNNER"; then
   die "runner missing soleur_traces_run_id"
 fi
 pass "source names soleur_traces_run_id"
+if ! grep -F -q 'soleur_events_received_at' "$RUNNER"; then
+  die "runner missing soleur_events_received_at"
+fi
+pass "source names soleur_events_received_at"
 if ! grep -F -q 'CREATE INDEX CONCURRENTLY IF NOT EXISTS' "$RUNNER"; then
   die "runner missing CREATE INDEX CONCURRENTLY IF NOT EXISTS"
 fi
@@ -244,6 +248,15 @@ elif mode == "drop-events-not-exists":
     parts[idx] = updated
     (dest / "inngest-trace-retention.sql").write_text(render(parts))
     (dest / "inngest-trace-retention.sqlite.sql").write_text(sqlite)
+elif mode == "widen-status":
+    parts = split_sql(pg)
+    idx = find_body(parts, "spans")
+    needle = "status IN (50, 300, 400, 500, 600)"
+    if needle not in parts[idx]:
+        raise SystemExit("spans statement has no status set")
+    parts[idx] = parts[idx].replace(needle, needle + " OR tr.status IN (100, 200)", 1)
+    (dest / "inngest-trace-retention.sql").write_text(render(parts))
+    (dest / "inngest-trace-retention.sqlite.sql").write_text(sqlite)
 elif mode == "third-file":
     (dest / "inngest-trace-retention.sql").write_text(pg)
     (dest / "inngest-trace-retention.sqlite.sql").write_text(sqlite)
@@ -277,6 +290,7 @@ require_out "$OUT" "guard checked 0 files" "row2 names the empty glob"
 row_red drop-sqlite-not-exists "row3 sqlite events unfinished-run guard dropped is red"
 row_red reorder-anchor "row4 trace_runs deleted before spans is red"
 row_red drop-events-not-exists "row5 events age predicate without NOT EXISTS is red"
+row_red widen-status "row6 in-flight status widens the predicate" "in-flight status"
 THIRD="$(new_fix)"
 mutate third-file "$THIRD"
 run_guard "$THIRD" "$OUT"
@@ -525,6 +539,32 @@ def seed_plain(path, rows, with_span):
             )
     conn.close()
 
+def seed_cap(path):
+    conn = connect(path)
+    conn.executescript(SCHEMA)
+    base = int(time.time() * 1000) - 8 * 86400000
+    old = "2000-01-01 00:00:00"
+    for i in range(2):
+        run_id = tid("cap%d" % i)
+        conn.execute(
+            "INSERT INTO trace_runs (run_id, ended_at, status) VALUES (?, ?, 300)",
+            (run_id, base - i),
+        )
+        conn.execute(
+            "INSERT INTO spans (span_id, trace_id, run_id) VALUES (?, ?, ?)",
+            ("cs%d" % i, "ct%d" % i, run_id),
+        )
+        finish = ("fr-cap-%d" % i).encode()
+        conn.execute(
+            "INSERT INTO function_finishes (run_id, status, created_at) VALUES (?, ?, ?)",
+            (finish, "Completed", old),
+        )
+        conn.execute(
+            "INSERT INTO history (run_id, event_id) VALUES (?, ?)",
+            (finish, b"ev-cap"),
+        )
+    conn.close()
+
 def count_table(path, table):
     conn = connect(path)
     n = conn.execute("SELECT count(*) FROM " + table).fetchone()[0]
@@ -542,6 +582,8 @@ elif cmd == "count-run":
     count_run(sys.argv[2], sys.argv[3])
 elif cmd == "seed-plain":
     seed_plain(sys.argv[2], int(sys.argv[3]), sys.argv[4] == "span")
+elif cmd == "seed-cap":
+    seed_cap(sys.argv[2])
 elif cmd == "count-table":
     count_table(sys.argv[2], sys.argv[3])
 else:
@@ -577,6 +619,16 @@ case "$sql" in
   *pg_database_size*) kind="size" ;;
   *DELETE*) kind="delete" ;;
 esac
+if [[ "$kind" == "delete" ]]; then
+  case "$sql" in
+    *"<"*) ;;
+    *) printf 'stub: delete missing age comparison\n' >&2; exit 4 ;;
+  esac
+  case "$sql" in
+    *86400000*|*'make_interval(days'*) ;;
+    *) printf 'stub: delete missing age token\n' >&2; exit 4 ;;
+  esac
+fi
 printf 'KIND=%s\n' "$kind" >>"$log"
 case "$mode" in
   seq)
@@ -679,24 +731,36 @@ fi
 pass "days=0 wrote no marker"
 export INNGEST_TRACE_RETENTION_DAYS=7
 
-# per-statement batch cap is success and still writes the marker
+# a statement that does not drain stops before either anchor and writes no marker
 CAPDB="${FIX}/cap.db"
-python3 "$HARNESS" seed-plain "$CAPDB" 2 nospan
+python3 "$HARNESS" seed-cap "$CAPDB"
 export INNGEST_TRACE_RETENTION_SQLITE="$CAPDB"
 export INNGEST_TRACE_RETENTION_MARKER="${FIX}/marker-cap"
 export INNGEST_TRACE_RETENTION_BATCH=1
 export INNGEST_TRACE_RETENTION_MAX_BATCHES=1
 run_retention "${FIX}/cap.out"
-require_green "batch cap exits 0" "${FIX}/cap.out"
-require_out "${FIX}/cap.out" "INNGEST_TRACE_RETENTION_OUTCOME=ok" "batch cap outcome ok"
-if [[ "$(python3 "$HARNESS" count-table "$CAPDB" trace_runs)" != "1" ]]; then
-  die "batch cap did not leave the unprocessed row"
+if [[ "$RET_RC" -eq 0 ]]; then
+  dump "${FIX}/cap.out"
+  die "batch cap exited 0"
 fi
-pass "batch cap leaves the rest for a later night"
-if [[ ! -f "${FIX}/marker-cap" ]]; then
-  die "batch cap did not write the marker"
+pass "batch cap exits non-zero"
+require_out "${FIX}/cap.out" "reason=batch_cap" "batch cap names the reason"
+if [[ "$(python3 "$HARNESS" count-table "$CAPDB" trace_runs)" != "2" ]]; then
+  die "batch cap deleted a trace_runs anchor"
 fi
-pass "batch cap writes the marker"
+pass "batch cap leaves trace_runs in place"
+if [[ "$(python3 "$HARNESS" count-table "$CAPDB" function_finishes)" != "2" ]]; then
+  die "batch cap deleted a function_finishes anchor"
+fi
+pass "batch cap leaves function_finishes in place"
+if [[ "$(python3 "$HARNESS" count-table "$CAPDB" history)" != "2" ]]; then
+  die "batch cap deleted history before the finish anchor"
+fi
+pass "batch cap leaves history in place"
+if [[ -f "${FIX}/marker-cap" ]]; then
+  die "batch cap wrote the marker"
+fi
+pass "batch cap writes no marker"
 unset INNGEST_TRACE_RETENTION_BATCH
 unset INNGEST_TRACE_RETENTION_MAX_BATCHES
 

@@ -8,7 +8,7 @@ WITH doomed AS (
   JOIN trace_runs tr ON tr.run_id = s.run_id
   WHERE tr.status IN (50, 300, 400, 500, 600)
     AND tr.ended_at IS NOT NULL
-    AND tr.ended_at < (floor(extract(epoch from clock_timestamp()) * 1000) - :days * 86400000)
+    AND tr.ended_at < ((floor(extract(epoch from clock_timestamp()) * 1000) - (:days)::bigint * 86400000)::bigint)
   LIMIT :batch
 ),
 deleted AS (
@@ -24,7 +24,7 @@ WITH doomed AS (
     SELECT tr.run_id FROM trace_runs tr
     WHERE tr.status IN (50, 300, 400, 500, 600)
       AND tr.ended_at IS NOT NULL
-      AND tr.ended_at < (floor(extract(epoch from clock_timestamp()) * 1000) - :days * 86400000)
+      AND tr.ended_at < ((floor(extract(epoch from clock_timestamp()) * 1000) - (:days)::bigint * 86400000)::bigint)
   )
   LIMIT :batch
 ),
@@ -39,7 +39,7 @@ WITH doomed AS (
   JOIN trace_runs tr ON tr.run_id = eb.run_id
   WHERE tr.status IN (50, 300, 400, 500, 600)
     AND tr.ended_at IS NOT NULL
-    AND tr.ended_at < (floor(extract(epoch from clock_timestamp()) * 1000) - :days * 86400000)
+    AND tr.ended_at < ((floor(extract(epoch from clock_timestamp()) * 1000) - (:days)::bigint * 86400000)::bigint)
   LIMIT :batch
 ),
 deleted AS (
@@ -52,7 +52,7 @@ WITH doomed AS (
   FROM trace_runs tr
   WHERE tr.status IN (50, 300, 400, 500, 600)
     AND tr.ended_at IS NOT NULL
-    AND tr.ended_at < (floor(extract(epoch from clock_timestamp()) * 1000) - :days * 86400000)
+    AND tr.ended_at < ((floor(extract(epoch from clock_timestamp()) * 1000) - (:days)::bigint * 86400000)::bigint)
   LIMIT :batch
 ),
 deleted AS (
@@ -106,6 +106,7 @@ WITH doomed AS (
       LEFT JOIN function_finishes ff ON ff.run_id = fr.run_id
       WHERE fr.event_id = e.internal_id AND ff.run_id IS NULL
     )
+  ORDER BY e.received_at
   LIMIT :batch
 ),
 deleted AS (

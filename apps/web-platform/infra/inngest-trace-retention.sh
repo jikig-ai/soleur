@@ -56,6 +56,10 @@ INDEX_FINISHES = (
 INDEX_TRACES = (
     "CREATE INDEX CONCURRENTLY IF NOT EXISTS soleur_traces_run_id ON traces (run_id)"
 )
+INDEX_EVENTS = (
+    "CREATE INDEX CONCURRENTLY IF NOT EXISTS soleur_events_received_at "
+    "ON events (received_at)"
+)
 
 
 def say(line):
@@ -132,13 +136,27 @@ def check_file(fn, text):
         stripped = strip_comments(body)
         if not stripped.strip():
             continue
-        if re.search(r"DELETE\s+FROM\s+(?:%s)\b" % "|".join(PROTECTED), stripped, re.I):
+        if re.search(
+            r"DELETE\s+FROM\s+(?:ONLY\s+)?(?:(?:\"?public\"?)\s*\.\s*)?\"?(?:%s)\b"
+            % "|".join(PROTECTED),
+            stripped,
+            re.I,
+        ):
             problems.append("%s: deletes a protected table" % fn)
+        if len(re.findall(r"DELETE\s+FROM\s+", stripped, re.I)) > 1:
+            problems.append("%s: more than one DELETE" % fn)
+        if re.search(r"\bDELETE\b", stripped) and ":days" not in stripped:
+            problems.append("%s: delete has no day window" % fn)
         if re.search(r"\bDELETE\b", stripped) and re.search(r"\bredis\b", stripped, re.I):
             problems.append("%s: deletes redis" % fn)
         mentions_trace = any(re.search(r"\b%s\b" % name, stripped) for name in TRACE_TABLES)
         if mentions_trace and re.search(r"\bDELETE\b", stripped) and STATUS not in stripped:
             problems.append("%s: trace statement missing the status set" % fn)
+        if mentions_trace and re.search(r"\bDELETE\b", stripped) and re.search(r"\b(100|200)\b", stripped):
+            problems.append("%s: trace statement names an in-flight status" % fn)
+        if re.search(r"DELETE FROM (?:history|function_runs)\b", stripped):
+            if "JOIN function_finishes" not in stripped or " ON " not in stripped:
+                problems.append("%s: finish gate is not a join" % fn)
         if re.search(r"DELETE FROM history\b", stripped) and "function_finishes" not in stripped:
             problems.append("%s: history delete is not gated on function_finishes" % fn)
         if re.search(r"DELETE FROM events\b", stripped):
@@ -294,13 +312,17 @@ def run_postgres_file(path, days, batch, max_batches, counts, start_size, budget
         planned = statement_plan(fh.read(), days, batch)
     for sql, _tags in planned:
         table = table_of(sql)
+        drained = False
         for _ in range(max_batches):
             deleted = count_from_output(psql(sql))
             counts[table] = counts.get(table, 0) + deleted
             if query_size() - start_size > budget:
                 error("size_budget")
             if deleted == 0:
+                drained = True
                 break
+        if not drained:
+            error("batch_cap")
 
 
 def run_sqlite_file(conn, path, days, batch, max_batches, counts):
@@ -308,6 +330,7 @@ def run_sqlite_file(conn, path, days, batch, max_batches, counts):
         planned = statement_plan(fh.read(), days, batch)
     for sql, _tags in planned:
         table = table_of(sql)
+        drained = False
         for _ in range(max_batches):
             try:
                 conn.execute(sql)
@@ -323,7 +346,10 @@ def run_sqlite_file(conn, path, days, batch, max_batches, counts):
             deleted = int(counted[0])
             counts[table] = counts.get(table, 0) + deleted
             if deleted == 0:
+                drained = True
                 break
+        if not drained:
+            error("batch_cap")
 
 
 def emit(counts):
@@ -373,7 +399,7 @@ def resolve_sqlite():
 
 
 def ensure_indexes():
-    for statement in (INDEX_TRACE_RUNS, INDEX_FINISHES):
+    for statement in (INDEX_TRACE_RUNS, INDEX_FINISHES, INDEX_EVENTS):
         psql(statement)
     present = psql("SELECT 1 FROM pg_indexes WHERE indexname = 'idx_traces_run_id'").strip()
     if present == "":
