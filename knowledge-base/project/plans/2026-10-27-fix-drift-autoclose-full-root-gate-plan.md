@@ -15,6 +15,40 @@ requires_cpo_signoff: true
 
 # fix(ci): gate drift-issue auto-close on a fresh full-root plan
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27
+**Sections enhanced:** Research Insights (premise corrections landed in-place at authoring time — this plan was written *after* the probes, so corrections are inline rather than appended)
+**Research agents used:** none — `Reviewed-Coverage: sequential-fallback`. This pipeline context exposes no Task/Agent tool, so the deepen-plan fan-out (per-section researchers, review agents, Context7, web research) did not run; the planner performed the equivalent reads inline (workflow files, `infra-drift-autoclose.sh`, both test harnesses, issue timelines, PR diffs). A re-run of `soleur:deepen-plan` in a full harness is optional hardening, not a blocker — every halt gate below was executed mechanically and passed.
+
+### Halt-gate results (deepen-plan §4.x, run mechanically)
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent-diff | PASS — the prescribed invocation is byte-equivalent to the canonical drift-cron step (`scheduled-terraform-drift.yml` "Terraform plan (drift detection)"); reuse, not novelty |
+| 4.5 Network-outage | N/A — no connectivity hypothesis proposed; the gate reads terraform's exit code (telemetry emitted at plan time) |
+| 4.55 Downtime/cutover | N/A — no serving-surface operation; workflow + test edits only |
+| 4.6 User-Brand Impact | PASS — section present, `single-user incident` threshold |
+| 4.7 Observability | PASS — 5 fields, `grep`-verb probe, literal expected output |
+| 4.8 PAT-shaped vars | PASS — zero hits |
+| 4.9 UI-wireframe | N/A — no UI-surface files |
+| 4.10 Encryption posture | N/A — no new store or connection; `hcloud_volume_attachment`/`volume` tokens are pre-existing resource names inside the recorded drift delta, not a store this plan introduces |
+| 4.11 Guard Contract | PASS — `lint-guard-contract.py` rc=0; assembly names chokepoints (single-close-step `if:` + the `exit_code` producer); matrix carries reorder, dispatch-removal, second-member, harness and must-PASS rows |
+| 4.12 Scope Check | PASS — exactly one unfenced section, all asks mapped, inferred rows justified |
+| 4.13 Task-Design | N/A — a step inside an existing workflow is not a new autonomous-task surface |
+
+### Key Improvements (landed during authoring)
+
+1. The gate reads terraform's own post-apply `-detailed-exitcode` — the strongest available evidence — rather than grading the issue's stale recorded plan.
+2. `PLAN_OUTPUT` never reaches logs (#11294 key-byte leak): captured in a command substitution; only the `^Plan:` count line reaches the step summary.
+3. `google_gws_recovery` is reconciled by already-open PR #10678 instead of a conflicting duplicate `dns.tf` block.
+
+### New Considerations Discovered
+
+- Open security issue #11294 constrains the step design (no raw terraform output to logs) — folded into the AC and step contract.
+- The drift filer's title dedupe failed once on 2026-10-22 16:04 UTC (transient; #10835 filed while #10768 was open) — observed anomaly, deliberately out of scope.
+- AC18 (`infra-config-gate.test.sh`) pins every `success()`-gated `if:` verbatim; the EXPECT-table update is the deliberate-change record, not a workaround.
+
 ## Overview
 
 `apply-deploy-pipeline-fix.yml` runs a bounded `-target` apply of five
