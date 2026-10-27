@@ -2958,7 +2958,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // The closure shape `(convId, status) => Promise<void>` is preserved
     // so `permission-callback.ts`'s 6 deps-injected call sites get
     // transitive R8 coverage with zero churn at the deps interface.
-    updateConversationStatus: async (convId: string, status: string) => {
+    updateConversationStatus: async (
+      convId: string,
+      status: string,
+      // #11303 — optional compare-and-set from the gate lifecycle: the write lands only when the CURRENT status is in
+      // this set, and a 0-rows outcome is the success case (so `expectMatch` is off for a guarded write).
+      guard?: { onlyIfStatusIn: ReadonlyArray<Conversation["status"]> },
+    ) => {
       // Runtime guard: protect against deps-injected callers passing a
       // status literal not in Conversation["status"]. The wrapper would
       // otherwise hand an invalid enum to Postgres which rejects the write
@@ -3001,7 +3007,8 @@ export const realSdkQueryFactory: QueryFactory = async (
           // Status transitions drive permission-callback waiting_for_user
           // events; a 0-rows write would emit a prompt for a deleted/
           // archived row that the UI no longer shows.
-          expectMatch: true,
+          expectMatch: guard ? false : true,
+          ...(guard ? { onlyIfStatusIn: guard.onlyIfStatusIn } : {}),
         },
       );
     },

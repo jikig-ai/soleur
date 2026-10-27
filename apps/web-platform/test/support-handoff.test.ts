@@ -31,6 +31,8 @@ vi.mock("../server/sandbox", () => ({ isPathInWorkspace: vi.fn(() => true) }));
 vi.mock("../server/tool-tiers", () => ({
   getToolTier: vi.fn(() => "auto-approve"),
   buildGateMessage: vi.fn(() => "Permission needed"),
+  buildGateCard: () => ({ card: "Permission needed" }),
+  pluginToolPrefix: (server: string) => `mcp__plugin_soleur_${server}__`,
 }));
 vi.mock("../server/review-gate", () => ({
   extractReviewGateInput: vi.fn(() => ({
@@ -466,7 +468,7 @@ describe("reduceSupportFrame + composeSupportBubbleText (handoffMarkdown)", () =
   });
 
   test("truncateSupportHandoffTask is code-point aware (no lone surrogate)", () => {
-    const emoji = "🙂".repeat(600);
+    const emoji = "\u{1F642}".repeat(600);
     // Odd code-unit boundary: a code-unit `slice(0, 501)` mutant lands INSIDE
     // a surrogate pair (2 units each, so index 500 is a lone high surrogate)
     // and would throw URIError — the fixture actually discriminates.

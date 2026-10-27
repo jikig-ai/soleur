@@ -321,7 +321,7 @@ describe("agent-runner — disconnect-after-result race (#3463)", () => {
     mockRpc.mockResolvedValue({ error: null });
   });
 
-  test("abort branch's status write threads .in('status', ['active']) so a row already at waiting_for_user is left alone", async () => {
+  test("abort branch's status write threads .in('status', ['active','waiting_for_user']) so a terminal row is left alone", async () => {
     const { updates } = setupSupabaseMock();
     mockQuery.mockReturnValue(
       buildRaceIterator({ userId: "11111111-1111-4111-8111-111111111111", conversationId: "conv-1" }) as never,
@@ -344,16 +344,17 @@ describe("agent-runner — disconnect-after-result race (#3463)", () => {
     //      have NO `.in()` guard (that write must win the race; a
     //      guard would re-introduce the bug from the other side).
     //   2. abort branch's `failed` write — MUST thread the
-    //      `onlyIfStatusIn: ["active"]` guard so the row stays at
-    //      whatever the result branch wrote (the load-bearing fix
-    //      for #3463).
+    //      `onlyIfStatusIn: ["active", "waiting_for_user"]` guard (#11303 / ADR-305:
+    //      a pending review card parks the row in waiting_for_user, and a disconnect
+    //      must still finalize it) while a TERMINAL row (completed/failed) is never
+    //      in the set, so it is left alone (the load-bearing fix for #3463).
     expect(projected).toContainEqual({
       status: "waiting_for_user",
       ins: [],
     });
     expect(projected).toContainEqual({
       status: "failed",
-      ins: [{ column: "status", values: ["active"] }],
+      ins: [{ column: "status", values: ["active", "waiting_for_user"] }],
     });
   });
 

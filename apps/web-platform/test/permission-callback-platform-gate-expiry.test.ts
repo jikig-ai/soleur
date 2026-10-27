@@ -1,15 +1,21 @@
 /**
  * #11303 — the gated platform-tool branch of `createCanUseTool` used to await `abortableReviewGate` unguarded. The gate
  * rejects on timeout (5 min) or abort, which threw out of `canUseTool` and stranded the conversation in
- * `waiting_for_user`. Removing gated names from SDK `allowedTools` (the filter in the next commit) makes this branch
- * reachable in production for the first time, so its lifecycle must fail closed first.
+ * `waiting_for_user`. Removing gated names from SDK `allowedTools` (`buildAllowedTools`) makes this branch reachable
+ * for the legacy runner, so its lifecycle must fail closed.
  *
- * Contract under test (Guard 2 of the plan): for every gated platform-tool invocation `canUseTool` returns a verdict
- * (never throws); the verdict is deny unless the selection is exactly `Approve`; the conversation status is `active`
- * again once the LAST pending gate resolves, except when the session controller is aborted (the abort branch of
- * `startAgentSession` owns the terminal status then).
+ * Contract under test: for every gated platform-tool invocation `canUseTool` returns a verdict (never throws); the
+ * verdict is deny unless the selection is exactly `Approve`; the conversation status policy is ONE deterministic rule for
+ * both gate classes (ADR-305):
+ *   - hold: a compare-and-set to `waiting_for_user` on the FIRST pending gate;
+ *   - restore: only when the LAST pending gate resolves AND the session controller was not aborted, and only as a
+ *     compare-and-set `waiting_for_user -> active` (never over `completed` / `failed`);
+ *   - on abort the abort branch of `startAgentSession` finalizes from `active` OR `waiting_for_user`, so either write
+ *     order ends in the same state (a disconnect with a card pending ends `failed`).
+ * Also pinned here: the fail-closed card (no card, no status write, no notification when the input cannot be shown in
+ * full), the non-interactive fast deny, and the pending-card cap.
  */
-import { vi, describe, test, expect, beforeEach } from "vitest";
+import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
 
 const { log, mockWarn, mockLogDecision } = vi.hoisted(() => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -20,23 +26,39 @@ vi.mock("../server/logger", () => ({ createChildLogger: () => log, default: log 
 vi.mock("../server/permission-log", () => ({ logPermissionDecision: mockLogDecision }));
 vi.mock("../server/observability", () => ({ warnSilentFallback: mockWarn, reportSilentFallback: vi.fn() }));
 
-import { createCanUseTool, type CanUseToolContext } from "../server/permission-callback";
+import { createCanUseTool, type CanUseToolContext, type StatusGuard } from "../server/permission-callback";
+import { abortableReviewGate, REVIEW_GATE_TIMEOUT_MS } from "../server/review-gate";
 
 const P = "mcp__soleur_platform__";
-const EXPIRED_DENY =
-  "The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks.";
-const REJECTED_DENY = "User rejected the action. Do not retry unless the user asks.";
+const TELL_USER = "Tell the user the action was not performed and ask how they want to proceed.";
+const EXPIRED_DENY = `The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks. ${TELL_USER}`;
+const REJECTED_DENY = `User rejected the action. Do not retry unless the user asks. ${TELL_USER}`;
+const NON_INTERACTIVE_DENY = "This action needs interactive approval and is not available in background sync. Do not retry.";
+const TOO_MANY_DENY = "Too many approvals are waiting. Answer or decline the pending ones first.";
+const RECIPIENT_DENY =
+  "The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again.";
+
+/** A gate that never settles: the card stays open until the test releases it some other way (or never). */
+const HANG = () => new Promise<string>(() => {});
+
+type Row = { status: string };
 
 function makeCtx(
-  gate: () => Promise<string>,
-  opts: { controller?: AbortController; extra?: Record<string, unknown> } = {},
+  gate: (...args: unknown[]) => Promise<string>,
+  opts: { controller?: AbortController; extra?: Record<string, unknown>; ctxExtra?: Record<string, unknown>; row?: Row } = {},
 ) {
   const controller = opts.controller ?? new AbortController();
+  const row: Row = opts.row ?? { status: "active" };
+  // A compare-and-set store with the production semantics: a guarded write lands only when the CURRENT status is in the set.
+  const updateConversationStatus = vi.fn(async (_id: string, status: string, guard?: StatusGuard) => {
+    if (guard && !(guard.onlyIfStatusIn as readonly string[]).includes(row.status)) return;
+    row.status = status;
+  });
   const deps = {
     abortableReviewGate: vi.fn(gate),
     sendToClient: vi.fn().mockReturnValue(true),
     notifyOfflineUser: vi.fn().mockResolvedValue(true),
-    updateConversationStatus: vi.fn().mockResolvedValue(undefined),
+    updateConversationStatus,
     ...opts.extra,
   };
   const ctx = {
@@ -50,13 +72,21 @@ function makeCtx(
     repoName: "r",
     session: { abort: controller, reviewGateResolvers: new Map(), sessionId: null },
     controllerSignal: controller.signal,
+    ...opts.ctxExtra,
     deps,
   } as unknown as CanUseToolContext;
-  return { ctx, deps, controller };
+  return { ctx, deps, controller, row };
 }
+
+/** What the ABORT branch of startAgentSession does (ABORT_FINALIZE_FROM_STATUSES): finalize from active OR waiting_for_user. */
+const abortFinalize = (row: Row, next: "failed" | "waiting_for_user") => {
+  if (row.status === "active" || row.status === "waiting_for_user") row.status = next;
+};
 
 const statuses = (deps: { updateConversationStatus: { mock: { calls: unknown[][] } } }) =>
   deps.updateConversationStatus.mock.calls.map((c) => c[1]);
+const guards = (deps: { updateConversationStatus: { mock: { calls: unknown[][] } } }) =>
+  deps.updateConversationStatus.mock.calls.map((c) => c[2]);
 
 // canUseTool may resolve null in the SDK type; every path under test returns a verdict, so a null here is a test failure.
 const verdict = async (r: Promise<unknown>) => (await r) as { behavior: string; message: string };
@@ -84,30 +114,54 @@ beforeEach(() => {
 
 describe("gated platform tool: gate expiry fails closed (#11303)", () => {
   test("a timed-out gate denies with the static expiry text, restores active, never throws", async () => {
-    const { ctx, deps } = makeCtx(() => Promise.reject(new Error("review gate timeout")));
+    const { ctx, deps, row } = makeCtx(() => Promise.reject(new Error("review gate timeout")));
     const res = await callTool(ctx);
     expect(deps.abortableReviewGate).toHaveBeenCalledTimes(1); // precondition: the stub was reached and rejected
     expect(res.behavior).toBe("deny");
     expect(res.message).toBe(EXPIRED_DENY);
     expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
+    expect(row.status).toBe("active");
   });
 
-  test("expiry logs at warn (the shipped level) with sec:true and decision platform-gate-expired, and records the decision", async () => {
+  test("the hold and the restore are compare-and-set writes (never over a terminal row)", async () => {
+    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"));
+    await callTool(ctx);
+    expect(guards(deps)).toEqual([
+      { onlyIfStatusIn: ["active", "waiting_for_user"] },
+      { onlyIfStatusIn: ["waiting_for_user"] },
+    ]);
+  });
+
+  test("timeout logs at warn (it must reach Better Stack) with the delivery, conversation and reason fields", async () => {
     const { ctx } = makeCtx(() => Promise.reject(new Error("review gate timeout")));
     await callTool(ctx);
     expect(log.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ sec: true, decision: "platform-gate-expired", tool: `${P}email_send` }),
-      expect.any(String),
+      expect.objectContaining({
+        sec: true,
+        decision: "platform-gate-expired",
+        reason: "timeout",
+        delivered: true,
+        conversationId: "c",
+        tool: `${P}email_send`,
+      }),
+      "Platform tool gate expired without an answer; denied",
     );
     expect(mockLogDecision).toHaveBeenCalledWith("canUseTool-platform-gated", `${P}email_send`, "deny", "gate expired");
     // expected user behaviour: no Sentry capture for expiry itself
     expect(mockWarn).not.toHaveBeenCalled();
   });
 
+  test("an offline user's expiry row says delivered:false", async () => {
+    const { ctx, deps } = makeCtx(() => Promise.reject(new Error("timeout")));
+    deps.sendToClient.mockReturnValue(false);
+    await callTool(ctx);
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-expired", delivered: false }), expect.any(String));
+  });
+
   test.each([
     ["AbortError-shaped", () => Object.assign(new Error("aborted"), { name: "AbortError" })],
     ["plain Error timeout", () => new Error("timeout")],
-  ])("%s rejection after the session controller aborted: deny, and NO active write (abort branch owns the status)", async (_n, mk) => {
+  ])("%s rejection after the session controller aborted: deny, logged as aborted, and NO restore", async (_n, mk) => {
     const controller = new AbortController();
     const { ctx, deps } = makeCtx(
       () => {
@@ -120,9 +174,14 @@ describe("gated platform tool: gate expiry fails closed (#11303)", () => {
     expect(res.behavior).toBe("deny");
     expect(res.message).toBe(EXPIRED_DENY);
     expect(statuses(deps)).toEqual(["waiting_for_user"]);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "platform-gate-aborted", reason: "aborted", delivered: true, conversationId: "c" }),
+      "Platform tool gate aborted before an answer; denied",
+    );
+    expect(mockLogDecision).toHaveBeenCalledWith("canUseTool-platform-gated", `${P}email_send`, "deny", "gate aborted");
   });
 
-  test("a rejection after an already-aborted signal behaves the same (both abort reasons end without an active write)", async () => {
+  test("a rejection after an already-aborted signal behaves the same (no restore)", async () => {
     const controller = new AbortController();
     controller.abort(new Error("disconnect-grace"));
     const { ctx, deps } = makeCtx(() => Promise.reject(new Error("aborted")), { controller });
@@ -131,16 +190,81 @@ describe("gated platform tool: gate expiry fails closed (#11303)", () => {
     expect(statuses(deps)).not.toContain("active");
   });
 
-  test("a per-call abort with the session still alive denies and RESTORES active", async () => {
-    const { ctx, deps } = makeCtx(() => Promise.reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
-    const res = await callTool(ctx);
+  test("a per-call abort with the session still alive denies, logs aborted, and RESTORES active", async () => {
+    const perCall = new AbortController();
+    const { ctx, deps } = makeCtx(() => {
+      perCall.abort();
+      return Promise.reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    });
+    const res = await callTool(ctx, "email_send", { signal: perCall.signal });
     expect(res.behavior).toBe("deny");
     expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-aborted" }), expect.any(String));
   });
 
   test("the gate stub resolving Approve instead would allow (suite-edit row: the timeout case's precondition is the rejection)", async () => {
     const { ctx } = makeCtx(() => Promise.resolve("Approve"));
     expect((await callTool(ctx)).behavior).toBe("allow");
+  });
+});
+
+describe("gated platform tool: the per-call signal reaches the gate", () => {
+  test("the gate is given options.signal itself, and aborting it denies (a detached controller would hang)", async () => {
+    const perCall = new AbortController();
+    const { ctx, deps } = makeCtx((...args: unknown[]) => {
+      const signal = args[2] as AbortSignal;
+      return new Promise<string>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+    });
+    const pending = callTool(ctx, "email_send", { signal: perCall.signal });
+    await tick();
+    expect(deps.abortableReviewGate.mock.calls[0][2]).toBe(perCall.signal);
+    perCall.abort();
+    const res = await pending;
+    expect(res.behavior).toBe("deny");
+    expect(res.message).toBe(EXPIRED_DENY);
+  });
+
+  test("composed with the REAL abortableReviewGate: no answer within REVIEW_GATE_TIMEOUT_MS denies and restores", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ctx, deps, row } = makeCtx((...args: unknown[]) =>
+        abortableReviewGate(args[0] as never, args[1] as string, args[2] as AbortSignal, undefined, args[4] as string[]),
+      );
+      const pending = callTool(ctx);
+      await vi.advanceTimersByTimeAsync(REVIEW_GATE_TIMEOUT_MS + 1);
+      const res = await pending;
+      expect(res.behavior).toBe("deny");
+      expect(res.message).toBe(EXPIRED_DENY);
+      expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
+      expect(row.status).toBe("active");
+      expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-expired", reason: "timeout" }), expect.any(String));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("the gate is registered BEFORE the waiting_for_user write lands (a fast Approve is never 'not found')", async () => {
+    let releaseWrite!: () => void;
+    const order: string[] = [];
+    const { ctx, deps } = makeCtx(() => {
+      order.push("gate-registered");
+      return Promise.resolve("Approve");
+    });
+    deps.updateConversationStatus.mockImplementationOnce(
+      () =>
+        new Promise<void>((r) => {
+          order.push("write-started");
+          releaseWrite = () => {
+            order.push("write-done");
+            r();
+          };
+        }),
+    );
+    const pending = callTool(ctx);
+    await tick();
+    expect(order).toEqual(["gate-registered", "write-started"]);
+    releaseWrite();
+    expect((await pending).behavior).toBe("allow");
   });
 });
 
@@ -159,6 +283,11 @@ describe("gated platform tool: verdicts", () => {
     expect(res.behavior).toBe("deny");
     expect(res.message).toBe(REJECTED_DENY);
     expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
+  });
+
+  test("both deny texts tell the agent to tell the user the action was not performed", () => {
+    expect(EXPIRED_DENY).toContain(TELL_USER);
+    expect(REJECTED_DENY).toContain(TELL_USER);
   });
 
   test.each(["crm_note_append", "workstream_issue_close", "github_push_branch"])(
@@ -205,7 +334,7 @@ describe("gated platform tool: status lifecycle", () => {
     const { ctx, deps } = makeCtx(() => new Promise<string>((r) => resolvers.push(r)));
     const run = createCanUseTool(ctx);
     const call = (tool: string) =>
-      run(`${P}${tool}`, { to: "x", subject: "s", body: "b", contactId: "c" }, { signal: new AbortController().signal, toolUseID: "t", requestId: "r" } as never);
+      run(`${P}${tool}`, { to: "x@example.invalid", subject: "s", body: "b", contactId: "c" }, { signal: new AbortController().signal, toolUseID: "t", requestId: "r" } as never);
     const both = Promise.all([call("email_send"), call("crm_note_append")]);
     await tick();
     expect(resolvers).toHaveLength(2);
@@ -224,7 +353,7 @@ describe("gated platform tool: status lifecycle", () => {
     const run = createCanUseTool(ctx);
     const opts = { signal: new AbortController().signal, toolUseID: "t", requestId: "r" } as never;
     const both = Promise.all([
-      run(`${P}email_send`, { to: "x", subject: "s", body: "b" }, opts),
+      run(`${P}email_send`, { to: "x@example.invalid", subject: "s", body: "b" }, opts),
       run("Bash", { command: "make deploy-something" }, opts),
     ]);
     await tick();
@@ -268,6 +397,159 @@ describe("gated platform tool: status lifecycle", () => {
   });
 });
 
+describe("abort / restore ordering ends in one deterministic state (ADR-305)", () => {
+  const BASH = { command: "make deploy-something" };
+  const opts = () => ({ signal: new AbortController().signal, toolUseID: "t", requestId: "r" }) as never;
+
+  test("abort-first: the abort branch finalizes failed while the card is pending, then the gate rejects -> still failed", async () => {
+    const controller = new AbortController();
+    const { ctx, row } = makeCtx(
+      (...args: unknown[]) => {
+        const signal = args[2] as AbortSignal;
+        return new Promise<string>((_r, rej) => controller.signal.addEventListener("abort", () => rej(signal.reason ?? new Error("aborted"))));
+      },
+      { controller },
+    );
+    const pending = callTool(ctx);
+    await tick();
+    expect(row.status).toBe("waiting_for_user");
+    controller.abort(new Error("disconnected"));
+    abortFinalize(row, "failed"); // accepts waiting_for_user: a disconnect with a card pending ends failed
+    expect(row.status).toBe("failed");
+    expect((await pending).behavior).toBe("deny");
+    expect(row.status).toBe("failed"); // the aborted gate did NOT restore active over it
+  });
+
+  test("restore-first (no abort): Approve restores active, a later abort finalizes it -> failed", async () => {
+    const controller = new AbortController();
+    const { ctx, row } = makeCtx(() => Promise.resolve("Approve"), { controller });
+    await callTool(ctx);
+    expect(row.status).toBe("active");
+    controller.abort(new Error("disconnected"));
+    abortFinalize(row, "failed");
+    expect(row.status).toBe("failed");
+  });
+
+  test("a user Stop with a card pending ends waiting_for_user in either order", async () => {
+    const controller = new AbortController();
+    const { ctx, row } = makeCtx(() => HANG(), { controller });
+    void callTool(ctx);
+    await tick();
+    controller.abort(new Error("user stop"));
+    abortFinalize(row, "waiting_for_user");
+    expect(row.status).toBe("waiting_for_user");
+  });
+
+  test("a concurrent `completed` is NOT overwritten by the restore (compare-and-set)", async () => {
+    let release!: (v: string) => void;
+    const { ctx, row } = makeCtx(() => new Promise<string>((r) => (release = r)));
+    const pending = callTool(ctx);
+    await tick();
+    expect(row.status).toBe("waiting_for_user");
+    row.status = "completed"; // the result branch wrote a terminal state while the card was open
+    release("Approve");
+    await pending;
+    expect(row.status).toBe("completed");
+  });
+
+  test("a terminal row is never revived by the hold either", async () => {
+    const { ctx, row } = makeCtx(() => Promise.resolve("Approve"), { row: { status: "failed" } });
+    await callTool(ctx);
+    expect(row.status).toBe("failed");
+  });
+
+  test("stacked Bash + platform gates with an abort: neither restores, the abort branch owns the end state", async () => {
+    const controller = new AbortController();
+    const { ctx, deps, row } = makeCtx(
+      () => new Promise<string>((_r, rej) => controller.signal.addEventListener("abort", () => rej(new Error("aborted")))),
+      { controller },
+    );
+    const run = createCanUseTool(ctx);
+    const both = Promise.all([run(`${P}email_send`, { to: "x@example.invalid", subject: "s", body: "b" }, opts()), run("Bash", BASH, opts())]);
+    await tick();
+    expect(statuses(deps)).toEqual(["waiting_for_user"]);
+    controller.abort(new Error("disconnected"));
+    abortFinalize(row, "failed");
+    const done = await both;
+    expect(done.map((d) => d?.behavior)).toEqual(["deny", "deny"]);
+    expect(statuses(deps)).toEqual(["waiting_for_user"]); // no `active` write from either class
+    expect(row.status).toBe("failed");
+  });
+});
+
+describe("fail-closed card: an email the card cannot show in full is denied before anything exists", () => {
+  test.each([
+    ["an over-long recipient", { to: `${"a".repeat(260)}@example.invalid`, subject: "s", body: "b" }, RECIPIENT_DENY],
+    ["a recipient list", { to: "a@example.invalid, b@example.invalid", subject: "s", body: "b" }, RECIPIENT_DENY],
+    ["a body over 4000 characters", { to: "x@example.invalid", subject: "s", body: "b".repeat(4001) }, "Shorten the body to 4,000 characters or fewer and try again."],
+  ])("%s: static deny, no card, no status write, no notification, no gate", async (_n, input, message) => {
+    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"));
+    deps.sendToClient.mockReturnValue(false); // even an offline user gets no push
+    const res = await callTool(ctx, "email_send", {}, input);
+    expect(res).toEqual({ behavior: "deny", message });
+    expect(deps.sendToClient).not.toHaveBeenCalled();
+    expect(deps.notifyOfflineUser).not.toHaveBeenCalled();
+    expect(deps.updateConversationStatus).not.toHaveBeenCalled();
+    expect(deps.abortableReviewGate).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-unreviewable" }), expect.any(String));
+  });
+
+  test("the deny path leaks no tool input into the message or the log row", async () => {
+    const { ctx } = makeCtx(() => Promise.resolve("Approve"));
+    const res = await callTool(ctx, "email_send", {}, { to: "a@example.invalid, victim@example.invalid", subject: "SECRET-SUBJECT", body: "SECRET-BODY" });
+    expect(res.message).not.toMatch(/victim|SECRET/);
+    expect(JSON.stringify(log.warn.mock.calls)).not.toMatch(/victim|SECRET/);
+  });
+});
+
+describe("non-interactive sessions (background auto-sync)", () => {
+  test("a gated platform tool is denied at once: no card, no status write, no notification", async () => {
+    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"), { ctxExtra: { nonInteractive: true } });
+    deps.sendToClient.mockReturnValue(false);
+    const res = await callTool(ctx);
+    expect(res).toEqual({ behavior: "deny", message: NON_INTERACTIVE_DENY });
+    expect(deps.sendToClient).not.toHaveBeenCalled();
+    expect(deps.notifyOfflineUser).not.toHaveBeenCalled();
+    expect(deps.updateConversationStatus).not.toHaveBeenCalled();
+    expect(deps.abortableReviewGate).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-non-interactive" }), expect.any(String));
+  });
+
+  test("the flag is explicit: an interactive ctx with the same prompt-less shape still shows the card", async () => {
+    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"));
+    expect((await callTool(ctx)).behavior).toBe("allow");
+    expect(deps.sendToClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pending-card cap", () => {
+  test("a 6th gated platform call is denied while 5 cards are open (Bash and platform counted together)", async () => {
+    const { ctx, deps } = makeCtx(() => HANG());
+    const run = createCanUseTool(ctx);
+    const opts = () => ({ signal: new AbortController().signal, toolUseID: "t", requestId: "r" }) as never;
+    void run("Bash", { command: "make one" }, opts());
+    void run("Bash", { command: "make two" }, opts());
+    for (let i = 0; i < 3; i++) void run(`${P}crm_note_append`, { contactId: `c${i}`, lens: ["sales"] }, opts());
+    await tick();
+    expect(deps.abortableReviewGate).toHaveBeenCalledTimes(5);
+    const sentBefore = deps.sendToClient.mock.calls.length;
+    const res = await verdict(run(`${P}crm_note_append`, { contactId: "c9", lens: ["sales"] }, opts()));
+    expect(res).toEqual({ behavior: "deny", message: TOO_MANY_DENY });
+    expect(deps.abortableReviewGate).toHaveBeenCalledTimes(5);
+    expect(deps.sendToClient.mock.calls.length).toBe(sentBefore);
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-too-many-pending" }), expect.any(String));
+  });
+
+  test("below the cap a 5th card is still shown", async () => {
+    const { ctx, deps } = makeCtx(() => HANG());
+    const run = createCanUseTool(ctx);
+    const opts = () => ({ signal: new AbortController().signal, toolUseID: "t", requestId: "r" }) as never;
+    for (let i = 0; i < 5; i++) void run(`${P}crm_note_append`, { contactId: `c${i}`, lens: ["sales"] }, opts());
+    await tick();
+    expect(deps.abortableReviewGate).toHaveBeenCalledTimes(5);
+  });
+});
+
 describe("status-op labels", () => {
   test("every platform-* and bash-* status op carries its own static, distinct message", async () => {
     const seen = new Map<string, string>();
@@ -291,16 +573,13 @@ describe("status-op labels", () => {
       "platform-gate-status-restore",
     ]);
     const messages = [...seen.values()];
-    expect(new Set(messages).size).toBe(4);
-    for (const m of messages) {
-      expect(typeof m).toBe("string");
-      expect(m).not.toBe("cc-permissions silent fallback"); // not the shared default
-    }
+    expect(new Set(messages).size).toBe(4); // four distinct, static messages (none is a shared default)
+    for (const m of messages) expect(typeof m).toBe("string");
   });
 });
 
-describe("Bash class regression (unchanged by the platform restore policy)", () => {
-  test("a Bash gate rejected after the controller aborted STILL restores active", async () => {
+describe("Bash class follows the same deterministic status rule", () => {
+  test("a Bash gate rejected after the controller aborted does NOT restore active (the abort branch owns the status)", async () => {
     const controller = new AbortController();
     const { ctx, deps } = makeCtx(
       () => {
@@ -311,6 +590,16 @@ describe("Bash class regression (unchanged by the platform restore policy)", () 
     );
     const res = await verdict(createCanUseTool(ctx)("Bash", { command: "make deploy-something" }, { signal: new AbortController().signal, toolUseID: "t", requestId: "r" } as never));
     expect(res.behavior).toBe("deny");
+    expect(statuses(deps)).toEqual(["waiting_for_user"]);
+  });
+
+  test("a Bash gate rejected with the session alive still restores active", async () => {
+    const { ctx, deps } = makeCtx(() => Promise.reject(new Error("timeout")));
+    await verdict(createCanUseTool(ctx)("Bash", { command: "make deploy-something" }, { signal: new AbortController().signal, toolUseID: "t", requestId: "r" } as never));
     expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });

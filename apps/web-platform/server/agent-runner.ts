@@ -610,14 +610,60 @@ async function updateConversationStatusIfActive(
   conversationId: string,
   status: Conversation["status"],
 ): Promise<void> {
+  await updateConversationStatusIfIn(
+    userId,
+    conversationId,
+    status,
+    ACTIVE_STATUSES_FOR_FINALIZE,
+    "updateConversationStatusIfActive",
+  );
+}
+
+/**
+ * Status set the ABORT branch of `startAgentSession` finalizes from (#11303 / ADR-305). A gated review card (Bash or
+ * platform) parks the row in `waiting_for_user`, so a user Stop or a disconnect while a card is pending must still
+ * finalize it (`waiting_for_user` for a Stop, `failed` for a disconnect). A terminal row (`completed`, `failed`) is
+ * still never overwritten. Used ONLY by the abort branch; every other finalize site keeps {@link ACTIVE_STATUSES_FOR_FINALIZE}.
+ */
+const ABORT_FINALIZE_FROM_STATUSES = [
+  "active",
+  "waiting_for_user",
+] as const satisfies ReadonlyArray<Conversation["status"]>;
+
+async function updateConversationStatusIfActiveOrWaiting(
+  userId: string,
+  conversationId: string,
+  status: Conversation["status"],
+): Promise<void> {
+  await updateConversationStatusIfIn(
+    userId,
+    conversationId,
+    status,
+    ABORT_FINALIZE_FROM_STATUSES,
+    "updateConversationStatusIfActiveOrWaiting",
+  );
+}
+
+/**
+ * Compare-and-set for the gate lifecycle (`createCanUseTool` deps): write `status` only when the current status is in
+ * `from`. The review-gate restore uses `["waiting_for_user"]`, so a late restore never overwrites `completed`/`failed`
+ * or a status the abort branch already wrote. A 0-rows outcome is the success case (no Sentry mirror).
+ */
+async function updateConversationStatusIfIn(
+  userId: string,
+  conversationId: string,
+  status: Conversation["status"],
+  from: ReadonlyArray<Conversation["status"]>,
+  op: string,
+): Promise<void> {
   const result = await updateConversationFor(
     userId,
     conversationId,
     { status, last_active: new Date().toISOString() },
     {
       feature: "agent-runner",
-      op: "updateConversationStatusIfActive",
-      onlyIfStatusIn: ACTIVE_STATUSES_FOR_FINALIZE,
+      op,
+      onlyIfStatusIn: from,
     },
   );
 
@@ -939,6 +985,8 @@ async function startAgentSessionInner(
    *  Used by dispatchToLeaders so the orchestrator sends a single
    *  session_ended after all leaders finish (see #2428). */
   skipSessionEnded?: boolean,
+  /** #11303 — no human is present to answer a review card (the auto-sync seam): gated platform tools are denied at once. */
+  nonInteractive?: boolean,
 ): Promise<void> {
   // #8211 quiet-window — refuse a NEW agent session while the kill-switch is on.
   // MUST be the first statement, ABOVE the repo-readiness read and the
@@ -1626,7 +1674,10 @@ the exact recipient and body before anything sends. You MUST supply the
 compliance fields (postal address, opt-out line, FTC material-connection
 disclosure, and — for EU/UK or unknown jurisdiction — all six Art.14 disclosure
 elements); the send is refused without them. You cannot send to a suppressed
-recipient, and suppression is permanent (no un-suppress).`;
+recipient, and suppression is permanent (no un-suppress).
+
+Write tools pause for the user to Approve or Reject. If a tool result says the
+action was not performed, tell the user that and do not retry it.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -2216,15 +2267,25 @@ are the requirements to implement.`;
           repoName,
           session,
           controllerSignal: controller.signal,
+          nonInteractive,
           deps: {
             abortableReviewGate,
             sendToClient,
             notifyOfflineUser,
             // Closure captures `userId` from the enclosing runAgentSession
-            // scope so the deps interface stays at (conversationId, status)
+            // scope so the deps interface stays at (conversationId, status[, guard])
             // — see plan §"Transitive Coverage via deps.updateConversationStatus".
-            updateConversationStatus: (convId, status) =>
-              updateConversationStatus(userId, convId, status as Conversation["status"]),
+            // A guard makes the write a compare-and-set (#11303 gate hold/restore).
+            updateConversationStatus: (convId, status, guard) =>
+              guard
+                ? updateConversationStatusIfIn(
+                    userId,
+                    convId,
+                    status as Conversation["status"],
+                    guard.onlyIfStatusIn,
+                    "updateConversationStatusGateCas",
+                  )
+                : updateConversationStatus(userId, convId, status as Conversation["status"]),
           },
         }),
       })),
@@ -2774,7 +2835,10 @@ are the requirements to implement.`;
         // state regardless of whether this write or the result branch's
         // wins, so a no-op is semantically equivalent. The
         // `session_ended:user_aborted` ack below is unconditional.
-        await updateConversationStatusIfActive(
+        // #11303 / ADR-305: a gate card parks the row in `waiting_for_user`, so this finalize accepts `active` AND
+        // `waiting_for_user` (a disconnect with a card pending must end `failed`). The gate restore skips on abort, so
+        // either write order ends in the same state; a terminal row is still never overwritten.
+        await updateConversationStatusIfActiveOrWaiting(
           userId,
           conversationId,
           nextConversationStatus,
