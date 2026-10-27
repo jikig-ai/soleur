@@ -59,11 +59,12 @@
 # "ratchet observation window"), and the directive on #10865. References: scripts/followthroughs/ratchet-observation-window-10865.sh in
 # knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md (the observation log) and in ADR-276's PR3a amendment.
 set -uo pipefail
-umask 077   # the work directory and the worker files hold API metadata and run next to GH_TOKEN
 
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this probe holds GH_TOKEN and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
+
+umask 077   # the work directory and the worker files hold API metadata and run next to GH_TOKEN
 
 REPO="jikig-ai/soleur"
 PR3A=10851
