@@ -1141,6 +1141,14 @@ assert_eq "GUARD_REV is unchanged (D7: two suites and the stale_image check pin 
 assert_eq "the unit's StateDirectory still covers the stamp path" "yes" \
   "$(grep -qE '^StateDirectory=inngest-cutover$' "$UNIT_SRC" && grep -qF '/var/lib/inngest-cutover/luks-key-probe.stamp' "$TARGET" && echo yes || echo no)"
 
+echo "TEST: cross-file pins — the key-file writer, its charset and the runbook's sandbox literal"
+assert_eq "the host key file is still written as one unquoted INNGEST_REDIS_LUKS_KEY=<value> line (the probe's sed reads the bytes the boot path reads)" "yes" \
+  "$(grep -qF "printf 'INNGEST_REDIS_LUKS_KEY=%s\\n' \"\$\${INNGEST_REDIS_LUKS_KEY}\" > /etc/default/inngest-luks" "$SCRIPT_DIR/cloud-init-inngest.yml" && echo yes || echo no)"
+assert_eq "the key is still random_password with special = false ([A-Za-z0-9]), the charset the probe's raw sed assumes" "yes" \
+  "$(grep -qE '^[[:space:]]*special[[:space:]]*=[[:space:]]*false$' "$SCRIPT_DIR/inngest-redis-luks.tf" && echo yes || echo no)"
+assert_eq "the runbook still carries the literal sandbox: unverified until a rehearsal result is recorded (task 2.4 depends on it)" "yes" \
+  "$(grep -qF 'sandbox: unverified' "$SCRIPT_DIR/../../../knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md" && echo yes || echo no)"
+
 # =============================================================================================
 # F. REAL-TOOL ARM — the script's own pipeline against a file-backed LUKS2 container (no root)
 # =============================================================================================
@@ -1230,7 +1238,7 @@ fi
 # The inventory is fixed by this file; a count that drifts (an assertion deleted, a block silently
 # skipped) is itself a RED. Bump it in the same edit that adds an assertion. Optional arms that
 # skipped with an explicit marker above are subtracted by their own constants.
-EXPECTED_ASSERTIONS=148
+EXPECTED_ASSERTIONS=151
 REAL_ARM_ASSERTIONS=11
 REFUSAL_ARM_ASSERTIONS=2
 EXPECTED=$EXPECTED_ASSERTIONS

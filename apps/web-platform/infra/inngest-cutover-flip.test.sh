@@ -938,11 +938,11 @@ EXPECTED="$(printf '%s\nINNGEST_CUTOVER_FLIP\n' "$UNSET_LIST" | grep -vE '^$' | 
 assert_eq "derived seam set == unset list + INNGEST_CUTOVER_FLIP (the completeness tripwire)" \
   "$DERIVED" "$EXPECTED"
 # A FLOOR on the list's size, so the tripwire cannot be satisfied by an EMPTY gate agreeing with an
-# empty derivation. Measured at 15 seams this session; a floor, never -eq, so adding a seam and its
+# empty derivation. Measured at 25 seams (#9927 item 2 added six); a floor, never -eq, so adding a seam and its
 # list entry together stays green.
 UNSET_COUNT="$(printf '%s\n' "$UNSET_LIST" | grep -cE '^(CUTOVER_|INNGEST_CUTOVER_)' || true)"
-if [[ "$UNSET_COUNT" -ge 15 ]]; then
-  pass "the gate unsets at least 15 seam names (got $UNSET_COUNT)"
+if [[ "$UNSET_COUNT" -ge 25 ]]; then
+  pass "the gate unsets at least 25 seam names (got $UNSET_COUNT)"
 else
   fail "the gate's unset list holds only $UNSET_COUNT names, expected >= 15"
 fi
@@ -1266,11 +1266,11 @@ unset _wt _w _covered
 echo "TEST: #7761 the unit does not set any gated seam in Environment="
 # The LAST name in the list carries no trailing backslash, so a regex that requires one silently
 # drops it — and the dropped name is whichever seam happens to sort last. Match the continuation
-# as OPTIONAL and floor the count at the full fifteen.
+# as OPTIONAL and floor the count at the full twenty-five.
 GATE_SEAMS="$(sed -n '/^  for _seam in/,/^  do$/p' "$TARGET" | grep -oE '^[[:space:]]+[A-Z_]+[[:space:]]*\\?$' | tr -d ' \\' | grep -v '^$' || true)"
 GS_COUNT="$(printf '%s\n' "$GATE_SEAMS" | grep -c '^[A-Z]' || true)"
-if [[ "$GS_COUNT" -ge 15 ]]; then
-  pass "read ${GS_COUNT} seam names out of the gate itself (>=15)"
+if [[ "$GS_COUNT" -ge 25 ]]; then
+  pass "read ${GS_COUNT} seam names out of the gate itself (>=25)"
 else
   fail "read only ${GS_COUNT} of 15 seam names out of the gate — the extractor is broken"
 fi
