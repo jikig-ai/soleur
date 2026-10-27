@@ -238,7 +238,8 @@ seed and consumes the week's `week-cap` slots. Until the flip tracker ships a dr
 2. **A `patterns` run without `allow_create` must not be triggered while any `self-healing/auto` PR is
    open** (it would stack drafts on the week-cap and on an unreviewed proposal). **A `patterns` run with
    `allow_create:true` may have at most ONE `self-healing/auto` PR open:** with one open the edit loop is
-   skipped and only the create arm runs; with two open the run ends `week-cap-reached` before the arm.
+   skipped and only the create arm runs (if that one open PR is itself an unreviewed create draft, the arm refuses
+   `create-open` and the run does nothing); with two open the run ends `week-cap-reached` before the arm.
 
 ### Marker fields (patterns path only)
 
@@ -295,7 +296,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 
 | `class` | Meaning | How to read it |
 |---|---|---|
-| `week-cap` | No week-cap slot was left for the arm although the run started with at least one free slot | Not expected since the slot reservation: treat it as a defect and read `clusters_opened` and the open `self-healing/auto` PR count. Before that fix, the edit loop ran first and could take both slots, which refused the arm on a clean state (run `01M5YB28JD20JKKH4HG04CX2Z4`, 2026-10-27). A run that starts with two open `self-healing/auto` PRs never reaches the arm and ends `week-cap-reached` |
+| `week-cap` | No week-cap slot was left for the arm although the run started with at least one free slot | Not expected since the slot reservation: treat it as a defect (unless the run straddled the deploy of the reservation, or another `self-healing/auto` PR was opened after the run read the cap) and read `clusters_opened` and the open `self-healing/auto` PR count. Before that fix, the edit loop ran first and could take both slots, which refused the arm on a clean state (run `01M5YB28JD20JKKH4HG04CX2Z4`, 2026-10-27). A run that starts with two open `self-healing/auto` PRs never reaches the arm and ends `week-cap-reached` |
 | `create-open` | another open PR already carries the `CREATE (new skill)` line, or the open-PR list could not be read | one open create at a time; a list failure refuses rather than guesses |
 | `index-empty` | no open pattern page to read | defence in depth: the handler exits `empty-corpus` first, so this refusal is not expected in production; if it appears, check `patterns_open` |
 | `input-size` | pattern index plus skill list exceeds the input ceiling | refused, never truncated; trim the index or raise the ceiling by amending the ADR |
@@ -347,7 +348,9 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 - **An unreviewed create draft holds capacity.** The create PR is a draft nobody merges automatically. While it is
   open it (a) permanently blocks any further create (`create-open`: one open create at a time) and (b) holds one of
   the two shared `self-healing/auto` week-cap slots. NO alert fires for an ignored draft today. The operator closes
-  it (rejects the skill) or merges it after review; until then the arm and one edit slot are parked.
+  it (rejects the skill) or merges it after review; until then the arm is parked and one slot is held: a patterns run
+  without `allow_create` can still use the other slot, while an `allow_create` run does nothing (the edit loop is
+  skipped with one free slot and the arm refuses `create-open`).
 
 ### Create-arm marker fields
 

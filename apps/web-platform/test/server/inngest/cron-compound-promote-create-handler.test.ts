@@ -456,19 +456,26 @@ describe("the week cap (CTO G2, amended 2026-10-27): the edit loop runs first, h
     expect(r.last).not.toHaveProperty("create_arm");
   });
 
-  it("two free slots + allow_create: the cluster prompt asks for ONE, a model answering two opens at most one edit PR, and the arm is handed capLeft=1 and is not refused week-cap", async () => {
+  it("two free slots + allow_create: the cluster prompt asks for ONE and a model answering two opens at most one edit PR", async () => {
     h.openPrs = 0;
     editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B];
     const r = await run(PATTERNS_CREATE());
     expect(clusterPrompts()).toHaveLength(1);
-    expect(clusterPrompts()[0]).toContain("Return up to 1 qualifying clusters");
+    expect(clusterPrompts()[0]).toMatch(/Return up to 1 qualifying/);
     // the slice is the second line of defence: the model answered TWO clusters, only the first survives
     expect(r.last).toMatchObject({ status: "completed", clusters_proposed: 1, clusters_opened: 1 });
     expect(applyStepsOf(r.names)).toHaveLength(1);
     expect(editCommits()).toHaveLength(1);
+  });
+
+  it("two free slots + allow_create: the arm is handed capLeft=1 and opens its draft (not refused week-cap)", async () => {
+    h.openPrs = 0;
+    editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B];
+    const r = await run(PATTERNS_CREATE());
     expect(h.capLefts).toEqual([1]);
-    expect(r.last).toMatchObject({ create_arm: "ran" });
-    expect(r.last.create_refusal_class).not.toBe("week-cap");
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "opened" });
+    expect(createCommits()).toHaveLength(1);
+    expect(r.last.refusals ?? []).not.toContain("create-refused");
   });
 
   it("one free slot + allow_create: the edit loop is skipped (no cluster model call, step id kept), the run ends no-qualifying-clusters with the create fields, capLeft=1", async () => {
@@ -482,6 +489,19 @@ describe("the week cap (CTO G2, amended 2026-10-27): the edit loop runs first, h
     expect(r.last).toMatchObject({ status: "no-qualifying-clusters", clusters_proposed: 0, clusters_opened: 0, create_arm: "ran", create_outcome: "opened" });
     expect(r.last.create_refusal_class).not.toBe("week-cap");
     expect(createCommits()).toHaveLength(1);
+  });
+
+  it.each([
+    ["a scheduled run", () => CRON()],
+    ["a manual corpus run with allow_create:true", () => MANUAL({ input: "corpus", allow_create: true })],
+  ])("%s keeps the whole cap: the prompt asks for 2 and the slice keeps 2 of 3 (no reservation)", async (_label, event) => {
+    h.openPrs = 0;
+    editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B, { ...EDIT_CLUSTER, target_path: "plugins/soleur/skills/review/SKILL.md", source_learnings: Ls(3, 5), rationale: "RATIONALE-SKILL-B" }];
+    const r = await run(event());
+    expect(clusterPrompts()[0]).toContain("Return up to 2 qualifying clusters");
+    expect(r.last).toMatchObject({ clusters_proposed: 2 });
+    expect(r.names).not.toContain("create-propose");
+    expect(h.capLefts).toEqual([]);
   });
 
   it.each([

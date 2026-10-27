@@ -624,7 +624,7 @@ export const ANTHROPIC_MAX_TOKENS = 16384;
 // Structured-output schema (#5186): the model returns clusters wrapped in an
 // object (structured-output roots are objects, not top-level arrays). Every
 // object needs `additionalProperties: false`; numeric/array constraints are
-// NOT supported by the API — the slice(0, remaining) cap stays a post-parse TS
+// NOT supported by the API — the slice(0, editCap) cap stays a post-parse TS
 // slice. The prompt and the parse-site read are kept in lockstep with this wrapper.
 export const CLUSTER_OUTPUT_SCHEMA = {
   type: "object",
@@ -2132,7 +2132,7 @@ export async function cronCompoundPromoteHandler({
       // the slice would need the corpus-key check inside this step (replay risk) and would
       // hide refusals from the marker, so it is documented, not fixed. The same applies to #8293
       // suppression on the patterns arm: a cluster that a prior PR already covers also occupies one of
-      // the (at most two) slots, and the model is not told which hashes are suppressed, so a repeatedly
+      // the (at most two; one on an `allow_create` run) slots, and the model is not told which hashes are suppressed, so a repeatedly
       // proposed rejected or merged cluster can end a week `no-qualifying-clusters` (ruling C3, slot
       // top-up cut; trigger tracked in #10977).
       return { clusters: (parsed.clusters as ProposedCluster[]).slice(0, editCap), truncated: false };
@@ -2202,8 +2202,8 @@ export async function cronCompoundPromoteHandler({
     // #10550 -- the gated create arm. Reached ONLY when `readRunOptions` said so (trigger=manual, input=patterns,
     // allow_create===true); on every other run `allowCreate` is false and none of this code executes. It runs AFTER
     // the edit loop and shares the week cap with whatever the loop opened; because the loop is held to `editCap`
-    // (the free slots minus one on this path), `capLeft` below is at least 1 whenever the arm is reached. It is two steps: a memoized, never-throwing
-    // `create-propose` and ONE `create-persist`. The work lives in `compound-promote-create-arm.ts` so this source
+    // (the free slots minus one on this path), `capLeft` below is at least 1 whenever the arm is reached. It is two
+    // steps: a memoized, never-throwing `create-propose` and ONE `create-persist`. The work lives in `compound-promote-create-arm.ts` so this source
     // gains no commit call and no synthetic-check list of its own; every outcome is accumulated HERE, from the
     // MEMOIZED step returns, so a replay still reports it.
     const recordCreateRefusal = (r: CreateRefusal): void => {

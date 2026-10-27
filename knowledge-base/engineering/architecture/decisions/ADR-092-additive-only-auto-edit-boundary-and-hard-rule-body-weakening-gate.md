@@ -276,7 +276,7 @@ edited). The follow-through probe for #10552 classes the reason N: a quorum refu
 outcome, never proof (PASS) and never a server defect (FAIL).
 
 **Known consequences, stated so they are not rediscovered.** A refused cluster still occupies one of the
-week-cap proposal slots (the phase-1 answer is sliced to the remaining cap before the server normalises
+week-cap proposal slots (the phase-1 answer is sliced to the remaining cap, minus one on an `allow_create` run since 2026-10-27, before the server normalises
 it), and still counts in the headroom divisor `proposals.length - clusterIndex`, so a valid first
 cluster can be offered a smaller headroom share. Moving the filter ahead of the slice was rejected: it
 needs the corpus-key check inside the phase-1 step (replay risk) and would hide refusals from the marker.
