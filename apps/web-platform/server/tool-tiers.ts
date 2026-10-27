@@ -323,6 +323,7 @@ const HIDDEN_COMMON_CLASS =
 const HIDDEN_LINE_CONTROLS = "\\u0000-\\u001F";
 const HIDDEN_BODY_CONTROLS = "\\u0000-\\u0008\\u000B-\\u001F";
 // cardField folds newline, tab and the separators to a space first, then strips this set.
+// eslint-disable-next-line no-misleading-character-class -- the class deliberately lists combining and joiner code points: they are exactly what must be revealed.
 const CARD_STRIP_RE = new RegExp(`[${HIDDEN_LINE_CONTROLS}${HIDDEN_COMMON_CLASS}]`, "gu");
 // Markdown emphasis, code, link and html characters.
 const CARD_MARKDOWN_RE = /[*`[\]<>\\~|]/g;
@@ -401,7 +402,9 @@ export const EMAIL_DENY_SUPPRESS =
 // Characters that are invisible or control in a card are made VISIBLE as [U+XXXX], never deleted. Newline and tab are ordinary
 // body text and pass through in the body variant. A LITERAL "[U+" in the original text is escaped in the same pass (as
 // "[U+005B]U+"), so text can never forge a real marker. Both regexes compile the one shared source class above.
+// eslint-disable-next-line no-misleading-character-class -- the class deliberately lists combining and joiner code points: they are exactly what must be revealed.
 const CARD_HIDDEN_RE = new RegExp(`\\[U\\+|[${HIDDEN_BODY_CONTROLS}${HIDDEN_COMMON_CLASS}]`, "gu");
+// eslint-disable-next-line no-misleading-character-class -- the class deliberately lists combining and joiner code points: they are exactly what must be revealed.
 const CARD_HIDDEN_LINE_RE = new RegExp(`\\[U\\+|[${HIDDEN_LINE_CONTROLS}${HIDDEN_COMMON_CLASS}]`, "gu");
 // A bare ASCII address: printable ASCII only (U+0021-U+007E). International domains must arrive as punycode (xn--).
 const CARD_ADDR_ASCII_RE = /^[\x21-\x7E]+$/;

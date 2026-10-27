@@ -3074,7 +3074,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // proposer's outcome marker rows from the Better Stack ClickHouse read connection (Better Stack Logs read token, Doppler). NO SUBSTITUTE:
   // the marker exists only in production logs and the warehouse has no unauthenticated read path; the offline suites prove the marker
   // grammar, not that the stored stream carries a run's rows. Genuine.
-  const BASELINE_DECLARED_PROBES = 85;
+  const BASELINE_DECLARED_PROBES = 86;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -307,7 +307,7 @@ describe("gate messages for tools that become reachable (#11303)", () => {
 const HOSTILE = `evil**bold**\n\n[click here](https://evil.invalid)\u202Egpj.exe\u200B\`code\`<img src=x>${"X".repeat(5000)}`;
 const inputOf = (v: unknown) => new Proxy({}, { get: () => v }) as Record<string, unknown>;
 const countOf = (s: string, ch: string) => s.split(ch).length - 1;
-// eslint-disable-next-line no-control-regex -- asserting the absence of control characters is the point
+// eslint-disable-next-line no-control-regex, no-misleading-character-class -- asserting the absence of control characters is the point, and the class deliberately lists combining and joiner code points.
 const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFC\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
 // The extra invisible characters (beyond bidi/zero-width) every card must neutralise, as code points.
 const EXTRA_HIDDEN_CODE_POINTS = [
