@@ -364,7 +364,8 @@ producer are unchanged), so no `model.c4`/`views.c4`/`spec.c4` edit is owed.
 ## Acceptance Criteria
 
 - [ ] `writeDigestFileContained` performs no `lstat`/`stat`/`access`/`existsSync`
-  call: `grep -nE '(lstat|stat|access|existsSync)\(' apps/web-platform/server/inngest/functions/_cron-community-publication.ts | grep -v '^\s*//'` returns zero matches inside the function body (other functions in the file may retain their own uses).
+  call — after the rewrite the whole file carries zero stat-family calls:
+  `grep -nE '\b(lstat|stat|access|existsSync|fstat)\s*\(' apps/web-platform/server/inngest/functions/_cron-community-publication.ts | grep -vE '^\s*[0-9]+:\s*(//|\*)'` returns zero matches (the comment-strip keeps docstring mentions honest).
 - [ ] Ancestor traversal opens each directory with
   `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` and resolves children through
   `/proc/self/fd/<fd>/` on Linux (`process.platform === "linux"`).
@@ -415,6 +416,16 @@ producer are unchanged), so no `model.c4`/`views.c4`/`spec.c4` edit is owed.
 
 ## Dependencies & Risks
 
+- **Precedent-diff (deepen-plan 4.4).** The prescribed open shape mirrors the
+  repo's canonical numeric-flag form: `open(path, fsConstants.O_RDONLY |
+  fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)` at
+  `resolve-protected-branches.ts:70` and `compound-promote-create-gates.ts:449`
+  ("One open, no check-then-read gap (CodeQL js/file-system-race)"), plus the
+  `openSync(..., O_RDONLY|O_NOFOLLOW)` + `fstat` walk at `dsar-export.ts:1808`.
+  The only novel element is the `/proc/self/fd/<fd>/` child-resolution layer —
+  no in-repo precedent for dentry-pinned traversal exists (`agent-runner-sandbox-config.ts:596`
+  uses `/proc/self/fd/N` for a different purpose); reviewers should scrutinize
+  that seam specifically.
 - **`/proc/self/fd` is Linux-only.** Mitigated: fallback path keeps atomic
   opens (no stat-based check→use anywhere, so the alert stays cleared);
   dentry pinning is production-Linux only. Residual on non-Linux is a
@@ -444,3 +455,55 @@ producer are unchanged), so no `model.c4`/`views.c4`/`spec.c4` edit is owed.
   `knowledge-base/project/learnings/2026-06-10-bot-cron-safe-commit-substrate-symlink-removal.md`,
   `knowledge-base/project/learnings/best-practices/2026-06-05-render-off-tree-return-bytes-and-drop-toctou-with-the-reread.md`,
   `knowledge-base/project/learnings/best-practices/2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md`.
+
+## Enhancement Summary
+
+Deepened 2026-10-27 by the planning subagent (inline — this harness exposes no
+Task/agent spawn, so the Phase 4/5 fan-outs were run as in-process evidence
+passes; disclose as `Reviewed-Coverage: sequential-fallback` in any downstream
+summary).
+
+### Halt-gate verdicts (deepen-plan Phases 4.4–4.13)
+
+- 4.4 Precedent-diff: ran — sibling `O_NOFOLLOW` precedents diffed into
+  Dependencies & Risks; `/proc/self/fd` layer noted as novel.
+- 4.5 Network-outage: no trigger tokens.
+- 4.55 Downtime & Cutover: no downtime-inducing operation (single function
+  rewrite behind existing deploy).
+- 4.6 User-Brand Impact: present; `none` + scope-out reason for the
+  `apps/web-platform/server/` sensitive path. PASS.
+- 4.7 Observability: present; 5/5 fields non-placeholder; probe
+  `grep -c O_NOFOLLOW <file>` is allowlisted, finishes <15 s, literal
+  `expected_output`. PASS.
+- 4.8 PAT-shaped variables: zero matches.
+- 4.9 UI wireframe: no UI-surface file → skip.
+- 4.10 Encryption Posture: no store/connection → skip.
+- 4.11 Guard Contract: prose hits are references to *existing* gates
+  (`pushTipReason`, Product/UX Gate heading); the deliverable ships no guard
+  → skip.
+- 4.12 Scope Check: exactly one unfenced section; 3/3 asks mapped; both
+  `inferred` rows carry justifications; `Recommendation: single PR`. PASS.
+- 4.13 Task Design: no new autonomous-task surface → skip.
+
+### Key Improvements Applied
+
+- AC1 strengthened to a whole-file zero-match on stat-family calls (with a
+  comment-strip) — a function-scoped grep would have let a stray `lstat`
+  elsewhere in the file pass.
+- Precedent-diff row added to Dependencies & Risks (deepen 4.4).
+- Verify-the-negative pass (4.45): the plan's negative claims ("No path-based
+  stat call remains", "cannot be redirected outside `spawnCwd`") are both
+  backed by executable AC commands, not prose alone.
+- Post-edit self-audit (4.45): no dropped symbols — all cited symbols
+  (`writeDigestFileContained`, `stageExactPaths`, `pushTipReason`,
+  `COMMUNITY_DIGEST_DIR_PATH`, `setupEphemeralWorkspace`,
+  `digestCommittedOnDefaultBranch`) verified live in the tree.
+
+### New Considerations Discovered
+
+- `spawnCwd` itself was never validated by the old code; the new root
+  `open(O_NOFOLLOW)` now refuses a symlinked root — a deliberate tightening,
+  covered by a new test.
+- The deterministic dentry-pin test requires splitting internals
+  (`openContainedDir` + `createContainedFile`) — recorded in Proposed
+  Solution so the implementer does not collapse the seam.
