@@ -261,8 +261,11 @@ Successful acknowledgment may delete the issuance without permanent history.
 
 Do not edit or replay migration 175. Remeasure migration ownership and ordinals
 before each forward-only migration in dependent companion PRs stacked on #9051's
-feature branch; migration 176 cannot target `main` while prerequisite migration
-175 exists only in the held draft. Derive expiry from
+feature branch; any correction migration must follow #9051's prerequisite on
+the stack and must be numbered after current `origin/main`'s maximum ordinal
+178. If main remains unchanged and the correction is ready after #9051 merges,
+the next two ordinals are 179 and 180; remeasure again before creating them.
+Derive expiry from
 `issued_at + interval '30 minutes'`; do not add a second stored expiry clock
 without evidence that variable policy is required. Add an index supporting
 bounded cleanup and narrow RPC changes. Do not rename or rewrite existing
@@ -584,8 +587,10 @@ it must not be treated as available until added and tested.
   held feature branch. Slice A implements atomic rights admission/snapshot and
   job-bound export; Slice B implements expiry, bounded cleanup/health and the
   renewal UI/protocol. Integrate both before reconsidering #9051 readiness. One
-  completion gate spans all six asks. Do not target `main` with migration 176
-  while migration 175 exists only in #9051. Preserve the draft hold.
+  completion gate spans all six asks. Do not target `main` with either
+  correction migration until prerequisite migration 175 from #9051 is present
+  there. Current fetched main reaches ordinal 178, so remeasure before choosing
+  correction ordinals. Preserve the draft hold.
 
 ## Acceptance Criteria
 

@@ -19,7 +19,8 @@
 #   wiring     -- plan/SKILL.md Phase 0.6 and review/SKILL.md Step 1 name the
 #                 script, and the review/work/ship lead-gate prescription is
 #                 the BOUNDED default (`bash scripts/test-all.sh` previewed by
-#                 `--print-selection`), never `TEST_GROUP=affected`.
+#                 `--print-selection`), never the `TEST_GROUP=affected` alias
+#                 spelling (spawned-agent form only, #8621).
 #
 # Writes only under `mktemp -d`. Portable to bash 3.2.
 
@@ -195,7 +196,7 @@ for pair in "$REVIEW_SKILL:Two backstops" "$WORK_SKILL:Two mechanical backstops"
   fi
   CASES=$((CASES + 1))
   if grep -qF 'TEST_GROUP=affected' <<<"$span"; then
-    fail "lead-gate span in ${sk##*/} still prescribes TEST_GROUP=affected — the #8591 heuristic is the spawned-agent form, not the lead's gate"
+    fail "lead-gate span in ${sk##*/} still prescribes TEST_GROUP=affected — the alias spelling is the spawned-agent form, not the lead's gate"
   else
     pass "lead-gate span in ${sk##*/} does not prescribe TEST_GROUP=affected"
   fi

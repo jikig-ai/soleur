@@ -441,7 +441,7 @@ elif mutation == "enumerate_off":
     s = sub_once(s, '  && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \\\n', '',
                  'enumerate conjunct in default arm')
 elif mutation == "affected_selector_off":
-    s = sub_once(s, ' || { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }', '',
+    s = sub_once(s, ' \\\n  && { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }', ' \\\n  && false',
                  'all-group affected selector')
 elif mutation == "ci_emit_off":
     s = sub_once(s, 'if [[ -z "${CI:-}" && -n "${TEST_TIMING_LOG:-}" ]] \\',
@@ -771,8 +771,9 @@ else
   fail "M7 — enumerate conjunct removal changed nothing"
 fi
 
-# M8: all-group selector deleted → the dominant bare-invocation path (C8's
-# shape) stops arming entirely; TEST_GROUP=affected arms still pass.
+# M8: the affected-axis conjunct deleted → the affected-shaped paths (bare
+# invocation, --affected, and the TEST_GROUP=affected alias — all three arm the
+# same _AFFECTED==1 fact since #8621) stop arming entirely.
 rm -rf "$TMP/durable"
 run_arm m8 affected_selector_off 1 "" || true
 if ! grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null); then

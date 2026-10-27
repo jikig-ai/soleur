@@ -396,8 +396,11 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "cascade — statutory parent rows are evidence and are never purged.",
   // #9545 PR1 (ADR-288). Workspace-keyed 15-minute aggregates of destination
   // host, allowed/denied, best-effort counts and timestamps: no user_id,
-  // session, IP or path, and the pipeline ships DARK (collection is off for
-  // every external workspace, so no external subject has rows yet).
+  // session, IP or path. Collection is off for every external workspace until an
+  // operator enables it, so no external subject has rows yet; PR2 (#9545) lets
+  // current members READ the aggregate through get_egress_audit_summary (no
+  // table grant, no policy); this export decision is re-confirmed for PR2,
+  // pending CLO.
   //
   // EXCLUSION for PR1, not a permanent ruling: for a solo workspace
   // (workspace id = user id) these rows are arguably Art. 15 data. Until
@@ -408,8 +411,8 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
   // precondition of enabling collection for any external workspace
   // (runbooks/egress-audit-enable.md).
   workspace_egress_audit_rollup:
-    "Workspace-keyed aggregate (no user_id, IP, session or path); dark in " +
-    "PR1 with no external rows. Art. 15 is served by the DSAR runbook export " +
+    "Workspace-keyed aggregate (no user_id, IP, session or path); collection " +
+    "is off for external workspaces until enabled, so no external rows yet. Art. 15 is served by the DSAR runbook export " +
     "and Art. 17 by erase_egress_audit_rollup (saga step 5.15) until the " +
     "table moves to the allowlist before collection is enabled (ADR-288).",
   // DSAR meta — including would be recursive (a bundle containing

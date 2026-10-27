@@ -338,6 +338,9 @@ ALWAYS_ON_SUITES=(
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
   # fast-tier budget lint (scripts/test-all-fast-tier-budget) pins this set.
 
+  # S4 PR5 (#10861), PR4b row 6 (2): a whole-tree reader (it walks every tracked file of PJ_EXTS and SWEEP_EXTS) whose existing edges alone select it in
+  # more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms, src=measured). Receipts: the pr5-glob-measurements spec directory (receipts/glob-rate/, under knowledge-base/project/specs/archive/ once the PR is shipped).
+  ".claude/hooks/grep-q-pipe-guard.test.sh"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -623,6 +626,19 @@ AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
   "scripts/lint-agents-compound-sync.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #8764 — the step-boundary census's verdict is scoped to the corpus it walks
+# (server/inngest/functions/) plus the lint itself; a scoped scanner takes a
+# declared edge, not ALWAYS_ON.
+AFFECTED_SCRIPTS_LINT_INNGEST_STEP_BOUNDARY_LIVE_PATHS=(
+  "apps/web-platform/server/inngest/functions/"
+  "scripts/lint-inngest-step-boundary.py"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_INNGEST_STEP_BOUNDARY_UNIT_PATHS=(
+  "scripts/lint-inngest-step-boundary.py"
+  "scripts/lint-inngest-step-boundary.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # #6931: the web-2 follow-through test drives its stub against the probe-row parser; its verdict is
 # scoped to the script, the parser it sources and the Better Stack query helper, not to corpus drift.
 AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
@@ -801,6 +817,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
+  ".github/workflows/git-data-plaintext-volume-destroy.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -809,6 +826,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/cat-inngest-verify-state.sh"
   "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/infra-config-apply.sh"
   "apps/web-platform/infra/infra-config-install.sh"
@@ -850,6 +868,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/ship-incident-pir-gate.sh"
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
+  "tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
@@ -1057,6 +1076,15 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "scripts/sentry-issue.sh"
   "tests/scripts/lib/git-data-birth-readiness-gate.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
+)
+
+# tests/scripts/git-data-plaintext-destroy-gate — derived edges could not reach its subject: the suite executes the destroy
+# workflow's run blocks and the read-only probe it names (the gate library itself is reached through the source closure).
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_PLAINTEXT_DESTROY_GATE_PATHS=(
+  ".github/workflows/git-data-plaintext-volume-destroy.yml"
+  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-git-data-plaintext-destroy-gate.sh"
 )
 
 # tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
@@ -1909,7 +1937,8 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 # S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked file whose extension is in PJ_EXTS (sh bash yml yaml tf tftpl template
 # service tmpl; pj_join_pairs over git ls-files, :2521-2527), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
 # SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv). The
-# whole-tree read is a selection-policy call (criterion (c)), and the edges whose declaration reveals mentions stay held back (#10959).
+# whole-tree read was the selection-policy call of S4 PR5 (#10861): the suite is now in ALWAYS_ON_SUITES (measured verdict `always_on`), so these exact edges are
+# inert for selection and the audit skips the suite.
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   ".github/scripts/test/fixtures-validate-infra-templates.sh"

@@ -1,23 +1,30 @@
 # Recovery continuation — 2026-10-26
 
-## Reconciliation against the later fetched main
+## Reconciliation against the latest fetched main
 
-The branch was subsequently merged with fetched `origin/main`
-`2a6558455894163057a8642419495cdd9d1d0303`. The sole content conflict was
-the exact-name refusal list in `apps/web-platform/scripts/dev-ledger-parity.test.sh`;
-it now contains both branch-owned 174/175 down filenames and main-owned 174,
-175 and 176 filenames. The conflict did not alter migration SQL.
+An earlier merge incorporated `origin/main` at
+`2a6558455894163057a8642419495cdd9d1d0303`. The session-start fetch then
+advanced the ref to `2e9874cdf65e9ca5fd086f3728fd0c2105d0cae5`; this second
+merge brings in that latest source, including main migrations 177 and 178.
+Its three content conflicts are resolved: the dev-ledger refusal list keeps
+all exact branch and main migration names; the Privacy Policy keeps main's
+current agent-web-access and egress-audit disclosures plus the feature's
+agent-engine run-record disclosure; the paired legal SHA pins are regenerated
+from canonical files. No migration SQL was changed by either conflict.
 
-The remeasurement finds 185 forward migrations on fetched main (maximum
-ordinal 176) and 196 on the merged branch (maximum ordinal 176). Duplicate
-ordinals already exist in the repository; migration ownership remains the
-full filename. The branch's `174_agent_engine_erasure_lock_order` and
-`175_codex_history_notice_issuance` therefore remain byte-preserving and
-distinct from main's `174_api_data_grants_snapshot` and
-`175_tom4_shape_iv_client_grant_revokes`. Main's migration 176 is also
-preserved. The Python migration-ledger suite passes 8/8 and the synthetic
-dev-ledger parity suite passes 295/295 after resolving the pin-list conflict.
-These are source checks and do not establish shared-ledger state.
+The current remeasurement finds 187 forward migrations on fetched main
+(maximum ordinal 178) and 198 on the merged branch (also maximum 178). Duplicate
+ordinals already exist; identity is the full filename. The branch's
+`174_agent_engine_erasure_lock_order` and `175_codex_history_notice_issuance`
+remain byte-preserving and distinct from main's same-ordinal migrations. Any
+dependent correction migrations must follow PR #9051's migration 175 and be
+numbered after current main's 178; if main remains unchanged, the next two are
+179 and 180, but remeasure before creating them.
+
+The Python migration-ledger suite passes 8/8 and the synthetic dev-ledger
+parity suite passes 295/295. After the latest legal merge, the SHA guard and
+the two legal consistency/SHA suites pass 43/43. These are source checks and do
+not establish shared-ledger state.
 
 ## Source reconciliation and local evidence
 
@@ -95,7 +102,9 @@ post-lock `clock_timestamp()`, one database-owned one-minute `pg_cron` cleanup
 with independent oldest-expired-age monitoring, exact contract-subject gating,
 and a reachable metadata-only renewal flow before explicit resend. CTO ruled
 the correction must be split into two dependent PR slices stacked on this held
-feature branch because migration 176 depends on migration 175 in PR #9051.
+feature branch because its correction migrations depend on PR #9051's
+migration 175. Current main reaches ordinal 178, so remeasure before assigning
+the correction ordinals.
 Plan review recheck is still required after pushing the revision.
 
 ## Independent holds

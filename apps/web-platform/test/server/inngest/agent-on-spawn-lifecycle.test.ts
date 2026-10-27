@@ -161,9 +161,10 @@ import {
 } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { deriveTodayCardState } from "@/components/dashboard/today-card-state-matrix";
 import { FAILURE_REASON_COPY } from "@/components/dashboard/failure-reason-copy";
-import { runLikeInngest } from "../../helpers/inngest-step-harness";
+import { runLikeInngest, type StepMemo } from "../../helpers/inngest-step-harness";
 import { stripComments } from "../../helpers/strip-comments";
 import { inngest } from "@/server/inngest/client";
+import { StepError, serializeError } from "inngest";
 
 // --- Fixtures (synthesized, cq-test-fixtures-synthesized-only) -----------------
 
@@ -235,18 +236,43 @@ function cancelledEnvelope(opts: { elapsedMs?: number | null; orig?: unknown } =
   };
 }
 
-function makeSettleStep() {
-  const ops: string[] = [];
-  return {
-    ops,
-    async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
-      ops.push(name);
-      return cb();
-    },
-    async sleep(id: string, _duration: string): Promise<void> {
-      ops.push(id);
-    },
-  };
+// #8764 — settle-driven through the real step boundary: `settle-grace`
+// (step.sleep) and `settle-orphaned-spawn` (step.run, inside settleOrphanedSpawn)
+// each end an invocation and memoize, so step ORDER is read from the memo keys
+// and a step failure reaches the handler's catch as the SDK's rebuilt StepError.
+// The makeSettleStep this replaced ran callbacks in-process and hid both.
+async function runSettle(event: unknown, opts: { attempt?: number; memo?: StepMemo } = {}) {
+  const memo: StepMemo = opts.memo ?? new Map();
+  const out = await runLikeInngest(
+    ({ step }) => agentOnSpawnSettleHandler({ event, step, attempt: opts.attempt ?? 0 } as never),
+    { maxAttempts: 1, memo },
+  );
+  return { out, memo };
+}
+
+// #8764 — onFailure's catch is around `step.sendEvent`, the same boundary: a
+// sendEvent failure reaches it as the rebuilt StepError only once its retries
+// are exhausted. `sentEvents` records each DELIVERED event (one per sendEvent —
+// the handler re-calls it on every replay, but the memoized send does not
+// re-deliver).
+async function runOnFailure(event: unknown, opts: { runId?: string; memo?: StepMemo } = {}) {
+  const memo: StepMemo = opts.memo ?? new Map();
+  const sent: { id: string; payload: unknown }[] = [];
+  const out = await runLikeInngest(
+    ({ step }) =>
+      agentOnSpawnRequestedOnFailure({
+        event,
+        step,
+        runId: opts.runId,
+      } as never),
+    { maxAttempts: 1, memo, sentEvents: sent },
+  );
+  return { out, memo, sent };
+}
+
+/** The error the handler's catch sees after a sendEvent exhausts its retries. */
+function stepErrorFor(stepId: string, err: unknown): StepError {
+  return new StepError(stepId, JSON.parse(JSON.stringify(serializeError(err))));
 }
 
 type Ctx = { level: string; tags: Record<string, string>; extra: Record<string, unknown> & { err?: { message?: string } } };
@@ -284,9 +310,8 @@ beforeEach(() => {
 
 describe("onFailure forwards; it never settles in place (T7)", () => {
   it("sends exactly one agent.spawn.orphaned carrying the ORPHANED run id, no DB call, no report", async () => {
-    const sendEvent = vi.fn(async () => undefined);
-    await agentOnSpawnRequestedOnFailure({
-      event: {
+    const { out, sent } = await runOnFailure(
+      {
         name: "inngest/function.failed",
         ts: QUEUED_AT + 30_000,
         data: {
@@ -296,12 +321,12 @@ describe("onFailure forwards; it never settles in place (T7)", () => {
           error: { error: "Error", name: "Error", message: "turn-2-progress-write failed", stack: "s" },
         },
       },
-      step: { sendEvent },
       // The -failure function's OWN run — never the one to settle.
-      runId: "01FAILUREFUNCTIONOWNRUNID00",
-    } as never);
-    expect(sendEvent).toHaveBeenCalledTimes(1);
-    const [id, payload] = sendEvent.mock.calls[0] as unknown as [
+      { runId: "01FAILUREFUNCTIONOWNRUNID00" },
+    );
+    expect(out.outcome).toBe("returned");
+    expect(sent).toHaveLength(1);
+    const [id, payload] = [sent[0].id, sent[0].payload] as [
       string,
       { name: string; data: Record<string, unknown> },
     ];
@@ -318,25 +343,24 @@ describe("onFailure forwards; it never settles in place (T7)", () => {
   });
 
   it("falls back to the envelope id when data.run_id is missing (the failure event's id IS the run id)", async () => {
-    const sendEvent = vi.fn(async () => undefined);
-    await agentOnSpawnRequestedOnFailure({
-      event: { id: FAILED_RUN, ts: QUEUED_AT, data: { event: original(), error: {} } },
-      step: { sendEvent },
-    } as never);
-    const [, payload] = sendEvent.mock.calls[0] as unknown as [string, { data: Record<string, unknown> }];
+    const { sent } = await runOnFailure({
+      id: FAILED_RUN, ts: QUEUED_AT, data: { event: original(), error: {} },
+    });
+    const payload = sent[0].payload as { data: Record<string, unknown> };
     expect(payload.data.run_id).toBe(FAILED_RUN);
   });
 
   it("a forward that fails past its retries never throws and pages (settle_failed) once", async () => {
-    const sendEvent = vi.fn(async () => {
-      throw new Error("inngest api unreachable");
-    });
-    await expect(
-      agentOnSpawnRequestedOnFailure({
-        event: { ts: QUEUED_AT, data: { event: original(), run_id: FAILED_RUN, error: {} } },
-        step: { sendEvent },
-      } as never),
-    ).resolves.toBeUndefined();
+    // What the forward looks like after its own step retries are exhausted:
+    // the catch sees the SDK-rebuilt StepError, not the live sendEvent error.
+    const memo: StepMemo = new Map([
+      ["forward-orphan", { ok: false, error: stepErrorFor("forward-orphan", new Error("inngest api unreachable")) }],
+    ]);
+    const { out } = await runOnFailure(
+      { ts: QUEUED_AT, data: { event: original(), run_id: FAILED_RUN, error: {} } },
+      { memo },
+    );
+    expect(out.outcome).toBe("returned");
     const sent = deadLetters();
     expect(sent).toHaveLength(1);
     expect(sent[0][0]).toBe(`agent-on-spawn deadlettered: leader_internal_error [${CLASS}] (settle_failed)`);
@@ -369,8 +393,7 @@ describe("precedence matrix (T8)", () => {
               // Boundary fixtures: one ms short of the cutoff is a cancel, the cutoff itself a timeout.
               elapsedMs: lifecycle === "timed_out" ? FINISH_TIMEOUT_MS : FINISH_TIMEOUT_MS - 1,
             });
-      const step = makeSettleStep();
-      await agentOnSpawnSettleHandler({ event, step, attempt: 0 } as never);
+      const { memo } = await runSettle(event);
 
       expect(row().failure_reason).toBe(reason);
       const sent = deadLetters();
@@ -391,12 +414,13 @@ describe("precedence matrix (T8)", () => {
       // No raw founder id anywhere Sentry was handed (T20, fallback form).
       expect(allSentryText()).not.toContain(FOUNDER);
 
+      const settled = [...memo.keys()];
       if (lifecycle === "failed") {
-        expect(step.ops).not.toContain("settle-grace");
+        expect(settled).not.toContain("settle-grace");
       } else {
-        expect(step.ops.indexOf("settle-grace")).toBeGreaterThanOrEqual(0);
-        expect(step.ops.indexOf("settle-grace")).toBeLessThan(
-          step.ops.indexOf("settle-orphaned-spawn"),
+        expect(settled.indexOf("settle-grace")).toBeGreaterThanOrEqual(0);
+        expect(settled.indexOf("settle-grace")).toBeLessThan(
+          settled.indexOf("settle-orphaned-spawn"),
         );
       }
     },
@@ -407,11 +431,7 @@ describe("precedence matrix (T8)", () => {
 
 describe("missing timestamps and a failed Stop read (T9)", () => {
   it("no ts on either event → elapsedMs null, suffix (cancelled)", async () => {
-    await agentOnSpawnSettleHandler({
-      event: cancelledEnvelope({ elapsedMs: null, orig: original({}, undefined) }),
-      step: makeSettleStep(),
-      attempt: 0,
-    } as never);
+    await runSettle(cancelledEnvelope({ elapsedMs: null, orig: original({}, undefined) }));
     const [[message, ctx]] = deadLetters();
     expect(message.endsWith("(cancelled)")).toBe(true);
     expect(ctx.extra.elapsedMs).toBeNull();
@@ -419,11 +439,7 @@ describe("missing timestamps and a failed Stop read (T9)", () => {
 
   it("a pending Stop with no timestamps is NOT honoured: nothing proves the cancel preceded the timeout", async () => {
     row().cancellation_requested_at = "2026-09-25T10:01:00.000Z";
-    await agentOnSpawnSettleHandler({
-      event: cancelledEnvelope({ elapsedMs: null, orig: original({}, undefined) }),
-      step: makeSettleStep(),
-      attempt: 0,
-    } as never);
+    await runSettle(cancelledEnvelope({ elapsedMs: null, orig: original({}, undefined) }));
     expect(row().failure_reason).toBe("leader_internal_error");
     expect(deadLetters()[0][1].level).toBe("error");
   });
@@ -431,11 +447,7 @@ describe("missing timestamps and a failed Stop read (T9)", () => {
   it("a Stop read error falls back to leader_internal_error (paged)", async () => {
     row().cancellation_requested_at = "2026-09-25T10:01:00.000Z";
     db.failStopRead = true;
-    await agentOnSpawnSettleHandler({
-      event: cancelledEnvelope(),
-      step: makeSettleStep(),
-      attempt: 0,
-    } as never);
+    await runSettle(cancelledEnvelope(), { attempt: 0 });
     expect(row().failure_reason).toBe("leader_internal_error");
     expect(deadLetters()[0][1].level).toBe("error");
   });
@@ -456,14 +468,14 @@ describe("a row that is terminal or not the founder's is never touched (T10, T13
       db.rows = [fixtureRow(overrides as Partial<FixtureRow>)];
       captureMessageSpy.mockReset();
       const before = { ...row() };
-      await agentOnSpawnSettleHandler({ event, step: makeSettleStep(), attempt: 0 } as never);
+      await runSettle(event);
       expect(row()).toEqual(before);
       expect(deadLetters()).toHaveLength(0);
     }
   });
 
   it("the UPDATE carries every guard filter (Guard 2 row 4 — read from the recorded call)", async () => {
-    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 0 } as never);
+    await runSettle(orphanedEnvelope(), { attempt: 0 });
     const update = (db.ops as DbOp[]).find((o) => o.mode === "update");
     expect(update?.table).toBe("action_sends");
     expect(update?.filters).toEqual(
@@ -484,7 +496,7 @@ describe("a row that is terminal or not the founder's is never touched (T10, T13
 describe("a committed write whose page was lost to a retry (T11, T12b)", () => {
   it("attempt 0, zero rows → no report and no re-read", async () => {
     row().failure_reason = "leader_internal_error"; // a concurrent persistFailure wrote it
-    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 0 } as never);
+    await runSettle(orphanedEnvelope(), { attempt: 0 });
     expect(deadLetters()).toHaveLength(0);
     const ops = db.ops as DbOp[];
     const updateAt = ops.findIndex((o) => o.mode === "update");
@@ -493,19 +505,19 @@ describe("a committed write whose page was lost to a retry (T11, T12b)", () => {
 
   it("attempt > 0, zero rows, re-read shows the same reason → exactly one report", async () => {
     row().failure_reason = "leader_internal_error";
-    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 2 } as never);
+    await runSettle(orphanedEnvelope(), { attempt: 2 });
     expect(deadLetters()).toHaveLength(1);
   });
 
   it("attempt > 0 on ANOTHER founder's row carrying the same reason → no report (the re-read is scoped)", async () => {
     db.rows = [fixtureRow({ user_id: OTHER_FOUNDER, failure_reason: "leader_internal_error" })];
-    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 2 } as never);
+    await runSettle(orphanedEnvelope(), { attempt: 2 });
     expect(deadLetters()).toHaveLength(0);
   });
 
   it("attempt > 0, zero rows, re-read shows a DIFFERENT reason → no report", async () => {
     row().failure_reason = "leader_tool_invalid";
-    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 2 } as never);
+    await runSettle(orphanedEnvelope(), { attempt: 2 });
     expect(deadLetters()).toHaveLength(0);
   });
 });
@@ -555,7 +567,7 @@ describe("envelope validation (T14)", () => {
     ["a non-ULID run_id", { name: "agent.spawn.orphaned", data: { event: original(), run_id: FORGED } }],
     ["no original event at all", { name: "agent.spawn.orphaned", data: { run_id: FAILED_RUN, lifecycle: "failed" } }],
   ])("%s → no DB call, one (settle_failed) page with a fixed message", async (_label, event) => {
-    await agentOnSpawnSettleHandler({ event, step: makeSettleStep(), attempt: 0 } as never);
+    await runSettle(event);
     expect(db.ops).toHaveLength(0);
     const sent = deadLetters();
     expect(sent).toHaveLength(1);
@@ -570,11 +582,7 @@ describe("envelope validation (T14)", () => {
   });
 
   it("an unknown actionClass is carried as [unknown] and still settles", async () => {
-    await agentOnSpawnSettleHandler({
-      event: orphanedEnvelope({ orig: original({ actionClass: "forged.class-x" }) }),
-      step: makeSettleStep(),
-      attempt: 0,
-    } as never);
+    await runSettle(orphanedEnvelope({ orig: original({ actionClass: "forged.class-x" }) }), { attempt: 0 });
     const [[message]] = deadLetters();
     expect(message).toBe("agent-on-spawn deadlettered: leader_internal_error [unknown] (failed)");
     expect(allSentryText()).not.toContain("forged.class-x");
@@ -584,7 +592,7 @@ describe("envelope validation (T14)", () => {
     const event = orphanedEnvelope();
     (event.data as Record<string, unknown>).correlation_id = "c-1";
     (event.data as Record<string, unknown>).events = [original()];
-    await agentOnSpawnSettleHandler({ event, step: makeSettleStep(), attempt: 0 } as never);
+    await runSettle(event);
     expect(row().failure_reason).toBe("leader_internal_error");
   });
 });
@@ -593,7 +601,7 @@ describe("envelope validation (T14)", () => {
 
 describe("a settled row leaves 'Working' (T22)", () => {
   it("leader_internal_error on a row mid-turn renders the failure card: no Stop, no Retry", async () => {
-    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 0 } as never);
+    await runSettle(orphanedEnvelope(), { attempt: 0 });
     const state = deriveTodayCardState(row());
     expect(state.kind).toBe("failure_no_artifact");
     expect(state.copy).toBe(`Failed — ${FAILURE_REASON_COPY.leader_internal_error.copy}`);
@@ -603,7 +611,7 @@ describe("a settled row leaves 'Working' (T22)", () => {
 
   it("a pre-timeout cancel after Stop renders the Stopped copy", async () => {
     row().cancellation_requested_at = "2026-09-25T10:01:00.000Z";
-    await agentOnSpawnSettleHandler({ event: cancelledEnvelope(), step: makeSettleStep(), attempt: 0 } as never);
+    await runSettle(cancelledEnvelope(), { attempt: 0 });
     const state = deriveTodayCardState(row());
     expect(state.kind).toBe("failure_no_artifact");
     expect(state.copy).toContain("Stopped.");
