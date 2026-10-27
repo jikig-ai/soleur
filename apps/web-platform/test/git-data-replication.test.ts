@@ -68,8 +68,8 @@ afterEach(() => {
 });
 
 describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
-  it("composes an ssh:// URL under the reconciled /repositories path", () => {
-    expect(gitDataRemoteUrl(WS)).toBe(`ssh://git@10.0.1.20/repositories/${WS}.git`);
+  it("composes an absolute ssh:// URL under the git-data store bare-repo root", () => {
+    expect(gitDataRemoteUrl(WS)).toBe(`ssh://git@10.0.1.20/mnt/git-data/repositories/${WS}.git`);
   });
 
   it("rejects path-traversal / unsafe workspace ids (CWE-22)", () => {

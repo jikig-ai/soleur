@@ -42,13 +42,19 @@ import { authorizeGitDataAccess, GitDataAuthorizationError } from "./git-data-cl
 
 const log = createChildLogger("git-data-replication");
 
-// The bare-repo root the git-data host exposes to the git-shell transport. The
-// bootstrap symlinks `/home/git/repositories → /mnt/git-data/repositories`, so a
-// URL path of `/repositories/<id>.git` resolves — through the transport (relative
-// to /home/git) AND the provision wrapper (absolute /mnt/...) — to the identical
-// `$GIT_DIR` the fence keys on (git-data-bootstrap.sh + the ADR provisioning
-// amendment's "repo-root reconcile" note).
-const GIT_DATA_REPO_PATH_PREFIX = "/repositories";
+// The bare-repo root on the git-data host, as an ABSOLUTE path. Git sends the path of an
+// `ssh://host/<path>` URL to the server unchanged and absolute, and the transport wrapper
+// (infra/git-data-transport-wrapper.sh) canonicalizes it with `readlink -f` and accepts only a
+// direct `<root>/<id>.git` child of `/mnt/git-data/repositories` — the same root the provision and
+// remove wrappers use. The earlier value `/repositories` was read as resolving "relative to
+// /home/git" through the bootstrap's `/home/git/repositories` symlink; that holds only for a
+// scp-style `host:repositories/<id>.git` URL. An ssh:// URL emits `'/repositories/<id>.git'`,
+// which does not exist at the host's filesystem root, so every fetch and push was refused with
+// `repo path does not resolve` (rehearsal R3, 2026-10-27, #8211). No env override on purpose: the
+// host path is fixed in immutable cloud-init and a client cannot reach the wrapper's
+// GIT_DATA_REPO_ROOT. Parity with the host-side literals is pinned by
+// test/git-data-remote-url-wrapper.test.ts.
+const GIT_DATA_REPO_PATH_PREFIX = "/mnt/git-data/repositories";
 
 // --- (#6982, W6) Client-side concurrency limiter -------------------------------------
 //
@@ -329,7 +335,12 @@ export function assertSafeWorkspaceId(workspaceId: string): void {
   }
 }
 
-/** The `ssh://` URL of a workspace's bare repo on the git-data host. */
+/**
+ * The `ssh://` URL of a workspace's bare repo on the git-data host. The path is ABSOLUTE (git
+ * sends it unchanged), so it must be the wrapper's own bare-repo root — see
+ * {@link GIT_DATA_REPO_PATH_PREFIX}. Both the session-end push remote (`ensureGitDataRemote`)
+ * and the session-start fetch (git-data-client.ts) build their URL here.
+ */
 export function gitDataRemoteUrl(workspaceId: string): string {
   assertSafeWorkspaceId(workspaceId);
   const host = resolveGitDataSshHost();

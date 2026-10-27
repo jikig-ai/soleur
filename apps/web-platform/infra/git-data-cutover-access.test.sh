@@ -2956,6 +2956,35 @@ case_cpx_via() { # <label> <expected verdict tail> [VAR=value ...] — the body'
 }
 if case_cpx_ok; then pass "CPX1: the REAL body, a writable root and a wrapper answer -> ok; the key sat in a 0600 file beside the pinned known_hosts line, ssh got the pinned options, the absent-repo command and /dev/null stdin; the scratch dir and the probe dir are gone; the key text never reached any output"
 else fail "CPX1: the executed container body did not clear cleanly" "$(ctx) log=[$(tr '\n' '|' < "$CP/log-ok" | cut -c1-300)]"; fi
+
+# CPU1 (#8211): the command the probe dials is the command real git emits for the APP's remote URL.
+# CPX1 pins the probe to its own literal; nothing tied that literal to the path the app builds, and
+# the app's `/repositories` prefix (an absolute path the wrapper cannot resolve) went unnoticed
+# through two rehearsals. The prefix is extracted from the app constant (exactly one assignment), a
+# recording shim named `ssh` captures git's own emission for a fetch-side URL, and the probe's
+# logged `git-upload-pack '<path>'` (CPX1's log) must equal it byte for byte.
+case_cpu1() {
+  local app_ts="$DIR/../server/git-data-replication.ts" n prefix probe_cmd
+  n="$(grep -cE '^const GIT_DATA_REPO_PATH_PREFIX = "[^"]+";$' "$app_ts")" || n=0
+  [ "$n" = 1 ] || return 1
+  prefix="$(sed -nE 's#^const GIT_DATA_REPO_PATH_PREFIX = "([^"]+)";$#\1#p' "$app_ts")"
+  [ -n "$prefix" ] || return 1
+  probe_cmd="$(sed -nE "s#^inner .* git@10\\.0\\.1\\.20 (git-upload-pack .*)\$#\\1#p" "$CP/log-ok")"
+  [ -n "$probe_cmd" ] || return 1
+  rm -rf "$CP/emit"; mkdir -p "$CP/emit" || return 1
+  cat > "$CP/emit/ssh" <<'EMIT'
+#!/bin/sh
+for last; do :; done
+printf '%s\n' "$last" > "$CPU_EMIT"
+exit 1
+EMIT
+  chmod +x "$CP/emit/ssh" || return 1
+  ( cd "$CP/emit" && CPU_EMIT="$CP/emit/emitted" GIT_SSH_COMMAND="$CP/emit/ssh" \
+      git ls-remote "ssh://git@10.0.1.20${prefix}/cutover-container-probe-absent.git" ) >/dev/null 2>&1 || true
+  [ -s "$CP/emit/emitted" ] && [ "$(cat "$CP/emit/emitted")" = "$probe_cmd" ]
+}
+if case_cpu1; then pass "CPU1: the absent-repo command the container probe dials equals, byte for byte, the command real git emits for ssh://git@10.0.1.20<app prefix>/cutover-container-probe-absent.git (prefix extracted from the app constant)"
+else fail "CPU1: the probe's dialed command differs from git's emission for the app's URL form" "probe=[$(sed -nE 's#^inner .* git@10\.0\.1\.20 (git-upload-pack .*)$#\1#p' "$CP/log-ok" | cut -c1-200)] emitted=[$(cut -c1-200 "$CP/emit/emitted" 2>/dev/null)]"; fi
 if case_cpx_via frozen ok CP_INNER=frozen; then pass "CPX2: a frozen-store wrapper refusal also proves reachability, key, pin and wrapper -> ok"
 else fail "CPX2: a frozen-store answer was not accepted as reachable" "$(ctx)"; fi
 if case_cpx_via realwrapper ok CP_INNER=wrapper; then pass "CPX3: the REAL transport wrapper's own refusal text (a store that is not mounted) is recognised as the wrapper answering -> ok"
@@ -4140,7 +4169,8 @@ fi
 # Group C (#11072): CP6, CP5b, CPX7 (3; CPX7 is a SKIP when run as root, still counted) + 2 mutants x 2 (4) = 7 more: 736 -> 743.
 # #8211 PR-G (docker-format key, key_shape): CP2 r31 (1), CPX8-CPX15 (8) = 9 standalone, plus 6 mutants x 2 (12) = 21 more: 743 -> 764.
 # PR-G review round: CPX16-CPX19 (4) + 3 mutants x 2 (6) = 10 more: 764 -> 774.
-FLOOR=774
+# #8211 (remote URL path): CPU1 (1): 774 -> 775.
+FLOOR=775
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
