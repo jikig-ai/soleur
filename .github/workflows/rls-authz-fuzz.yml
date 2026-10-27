@@ -74,16 +74,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Positive control (ADR-166): probe that exercises the registry path —
-      # behind the retry helper since the bucket throttles even single calls.
-      # end-to-end — a GHCR outage now fails HERE (or at login), not
-      # ambiguously inside `supabase start`. (It measures reachability, not
-      # auth: the package is public, so an anonymous fetch also succeeds.) The
-      # tag is the image the pinned CLI below pulls — bump it with `version:`
-      # in lockstep.
-      - name: Probe GHCR pull auth (manifest inspect)
-        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" docker manifest inspect ghcr.io/supabase/postgres:17.6.1.095
+      # Positive control (ADR-166): probe the PRIMARY image source — the
+      # public.ecr.aws mirror (the ghcr org bucket is a shared-IP lottery that
+      # rejects even single calls, measured run 40574945720; ECR's cap is
+      # BANDWIDTH — `toomanyrequests: Data limit exceeded` — so a manifest
+      # inspect is too small to trip it). Credential-free, so it runs for
+      # fork PRs too. Behind the retry helper: a failed probe still fails
+      # loudly HERE rather than ambiguously inside the pull loop. The tag is
+      # the image the pinned CLI below pulls — bump it with `version:` in
+      # lockstep.
+      - name: Probe image-registry reachability (manifest inspect)
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" docker manifest inspect public.ecr.aws/supabase/postgres:17.6.1.095
 
       # Pin the CLI/GoTrue version to prod's — the ADR-111 parity contract (the
       # diff catches catalog shape; the version pin controls claim-parsing behavior).

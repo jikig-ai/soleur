@@ -273,7 +273,7 @@ LOGIN_SHA='docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9'
 # — a comment quoting the same string cannot corrupt the ordering asserts.
 LN_CHECKOUT=$(grep -nE '^[[:space:]]+- uses: actions/checkout@' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 LN_LOGIN=$(grep -nE "^[[:space:]]+uses: ${LOGIN_SHA}" "$WORKFLOW" | head -1 | cut -d: -f1 || true)
-LN_PROBE=$(grep -nE '^[[:space:]]+run:.*docker manifest inspect ghcr\.io/supabase/postgres' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+LN_PROBE=$(grep -nE '^[[:space:]]+run:.*docker manifest inspect public\.ecr\.aws/supabase/postgres' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 LN_START=$(grep -nE '^[[:space:]]+run:.*ghcr-pull-with-retry\.sh.*supabase-local\.sh start' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 
 if [[ -n "$LN_LOGIN" ]]; then pass "wiring:login-sha-pinned"
@@ -292,18 +292,23 @@ else fail "wiring:probe-between-login-start" "login=$LN_LOGIN probe=$LN_PROBE st
 
 # The probe runs behind the retry helper (single calls throttle too, measured
 # on run 40561028313) and must end AT the image ref — an appended `|| true` or
-# `>/dev/null` would silence the control AND the helper's annotations.
-if grep -qE '^[[:space:]]+run: bash "\$\{GITHUB_WORKSPACE\}/\.github/scripts/ghcr-pull-with-retry\.sh" docker manifest inspect ghcr\.io/supabase/postgres:[^ ]+$' "$WORKFLOW"; then pass "wiring:probe-run-ends-clean"
+# `>/dev/null` would silence the control AND the helper's annotations. It
+# probes ECR, the primary source — the ghcr bucket rejects even single calls
+# (run 40574945720) while ECR's cap is bandwidth, unreachable by a manifest.
+if grep -qE '^[[:space:]]+run: bash "\$\{GITHUB_WORKSPACE\}/\.github/scripts/ghcr-pull-with-retry\.sh" docker manifest inspect public\.ecr\.aws/supabase/postgres:[^ ]+$' "$WORKFLOW"; then pass "wiring:probe-run-ends-clean"
 else fail "wiring:probe-run-ends-clean" "probe run: is missing, unwrapped, retagged, or ends in a silence operator"; fi
 
-# Login + probe carry the same-repo `if:` gate (fork PRs run anonymous + the
-# retry helper — the token never enters a fork-reachable daemon config).
+# Only login carries the same-repo `if:` gate — the probe is credential-free
+# (an ECR manifest inspect needs no token) so it runs for fork PRs too.
 FORK_GATE='github.event.pull_request.head.repo.full_name == github.repository'
 if grep -qF "$FORK_GATE" "$WORKFLOW"; then pass "wiring:fork-gate-present"
 else fail "wiring:fork-gate-present" "no same-repo if: gate on the login step"; fi
 FORK_GATE_LINES=$(grep -cF "$FORK_GATE" "$WORKFLOW" || true)
-if [[ "$FORK_GATE_LINES" -ge 2 ]]; then pass "wiring:fork-gate-both-steps"
-else fail "wiring:fork-gate-both-steps" "fork gate on $FORK_GATE_LINES step(s), expected >=2 (login + probe)"; fi
+if [[ "$FORK_GATE_LINES" -eq 1 ]]; then pass "wiring:fork-gate-login-only"
+else fail "wiring:fork-gate-login-only" "fork gate on $FORK_GATE_LINES step(s), expected exactly 1 (login only)"; fi
+PROBE_HEAD=$(awk -v s="${LN_PROBE:-1}" -v n="$((${LN_PROBE:-1} - 6))" 'NR>=n && NR<=s{print}' "$WORKFLOW" 2>/dev/null || true)
+if [[ -n "$LN_PROBE" ]] && grep -qE '^[[:space:]]+(if|continue-on-error):' <<<"$PROBE_HEAD"; then fail "wiring:probe-ungated" "probe carries an if:/continue-on-error: key — it must run for forks"
+else pass "wiring:probe-ungated"; fi
 
 # The start step keeps ./scripts/supabase-local.sh start as the wrapped argv
 # and keeps working-directory: apps/web-platform — asserted inside the start
@@ -710,7 +715,7 @@ assert_out_re "c:nobin-error" '^::error::.*not on PATH'
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=140
+MIN_ASSERTIONS=141
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
