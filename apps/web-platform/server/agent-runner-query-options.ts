@@ -266,6 +266,9 @@ export interface AgentQueryOptionsArgs {
   skills?: string[];
 }
 
+/** The Bash family after trim + lower-casing: bare `bash`, or `bash(...)` with optional whitespace before the paren. */
+const BASH_FAMILY_RE = /^bash(\s*\(|$)/;
+
 /** An offending allowedTools entry is echoed in the error at most this many characters (it is a server-built string). */
 const ENTRY_ECHO_MAX = 120;
 
@@ -293,7 +296,7 @@ export function assertAllowedToolsPreApprovalSafe(args: {
   }
   for (const entry of args.allowedTools ?? []) {
     const normalised = entry.trim().toLowerCase();
-    if (normalised === "bash" || normalised.startsWith("bash(")) {
+    if (BASH_FAMILY_RE.test(normalised)) {
       throw new Error(
         `buildAgentQueryOptions: allowedTools entry would pre-approve Bash ahead of canUseTool: ${JSON.stringify(entry.slice(0, ENTRY_ECHO_MAX))}`,
       );

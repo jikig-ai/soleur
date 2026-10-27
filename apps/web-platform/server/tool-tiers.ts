@@ -17,7 +17,13 @@
  * the runner.
  */
 
-import { extractAddrSpec } from "./email-triage/outbound-compliance";
+import {
+  extractAddrSpec,
+  EMAIL_ADDR_MAX,
+  EMAIL_BODY_MAX,
+  EMAIL_RAW_ADDR_MAX,
+  EMAIL_SUBJECT_MAX,
+} from "./email-triage/outbound-compliance";
 
 export type ToolTier = "auto-approve" | "gated" | "blocked";
 
@@ -233,7 +239,7 @@ export function getToolTier(toolName: string): ToolTier {
 
 /** Plugin MCP server names come from `plugin.json`; only this shape may be interpolated into a wildcard entry. */
 const PLUGIN_SERVER_NAME_SOURCE = "[a-z0-9-]+";
-export const PLUGIN_SERVER_NAME_RE = new RegExp(`^${PLUGIN_SERVER_NAME_SOURCE}$`);
+const PLUGIN_SERVER_NAME_RE = new RegExp(`^${PLUGIN_SERVER_NAME_SOURCE}$`);
 /** The tool-name prefix every plugin MCP tool carries: `mcp__plugin_soleur_<server>__`. */
 export function pluginToolPrefix(server: string): string {
   return `mcp__plugin_soleur_${server}__`;
@@ -301,11 +307,21 @@ export function summarizeOutboundEmailInput(toolName: string, input: unknown): s
  * The outbound-email tools do NOT use `cardField` for the fields that decide who receives what: see `buildEmailCard`.
  */
 const CARD_FIELD_MAX = 120;
-// Controls (incl. newline and tab, which are folded to a space first), DEL and C1, the soft hyphen, the Arabic letter mark,
-// zero-width and bidi marks, line and paragraph separators, bidi embeddings/overrides/isolates, word joiner, the BOM and
-// the Unicode tag characters. Escapes only: no literal separators (cq-regex-unicode-separators-escape-only).
-// eslint-disable-next-line no-control-regex -- stripping control characters is the point
-const CARD_STRIP_RE = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+// ONE source class for every invisible/format character a card must neutralise (cardField strips them; the email card makes
+// them visible). DEL and C1, the combining grapheme joiner, soft hyphen, Arabic letter mark, Hangul fillers, Khmer inherent
+// vowels, the Mongolian vowel separator, zero-width and bidi marks, line and paragraph separators, bidi embeddings/overrides/
+// isolates, word joiner, the invisible math operators and deprecated format characters (U+2060-206F), the Braille blank, the
+// Hangul filler, variation selectors, the BOM, the halfwidth Hangul filler, the Unicode tag characters and the variation
+// selectors supplement. Escapes only: no literal separators (cq-regex-unicode-separators-escape-only). Written as `\\u` text
+// in a string and compiled with the `u` flag, so the astral ranges use the `\u{...}` form.
+const HIDDEN_COMMON_CLASS =
+  "\\u007F-\\u009F\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u206F" +
+  "\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}";
+// C0 controls: all of them for a single-line field; the body variant leaves tab and newline (ordinary body text) alone.
+const HIDDEN_LINE_CONTROLS = "\\u0000-\\u001F";
+const HIDDEN_BODY_CONTROLS = "\\u0000-\\u0008\\u000B-\\u001F";
+// cardField folds newline, tab and the separators to a space first, then strips this set.
+const CARD_STRIP_RE = new RegExp(`[${HIDDEN_LINE_CONTROLS}${HIDDEN_COMMON_CLASS}]`, "gu");
 // Markdown emphasis, code, link and html characters.
 const CARD_MARKDOWN_RE = /[*`[\]<>\\~|]/g;
 const CARD_MARKDOWN_CHAR_RE = /[*`[\]<>\\~|]/;
@@ -364,82 +380,96 @@ function workflowInputs(v: unknown): string {
  * capped with a visible ellipsis), the reply-to, the subject and the ENTIRE body. When the input cannot be shown in full
  * the tool is DENIED before any card exists (fail closed): nothing is truncated into an Approve card.
  */
-const EMAIL_RAW_ADDR_MAX = 320; // RFC 5321 forward-path: 254 plus a display name's worth of slack is refused outright
-const EMAIL_ADDR_MAX = 254;
 const EMAIL_DISPLAY_NAME_MAX = 60;
-const EMAIL_SUBJECT_MAX = 200;
-export const EMAIL_BODY_MAX = 4000;
 const EMAIL_MESSAGE_ID_MAX = 64;
+const ASCII_HINT = "Use the ASCII form of the address (punycode for international domains).";
 export const EMAIL_DENY_RECIPIENT =
-  "The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again.";
+  `The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again. ${ASCII_HINT}`;
 export const EMAIL_DENY_REPLY_TO =
-  "The reply-to address could not be shown in full for review, so the email was not sent. Fix the reply-to and try again.";
-export const EMAIL_DENY_BODY = "Shorten the body to 4,000 characters or fewer and try again.";
-export const EMAIL_DENY_SUBJECT = "Shorten the subject to 200 characters or fewer and try again.";
+  `The reply-to address could not be shown in full for review, so the email was not sent. Fix the reply-to and try again. ${ASCII_HINT}`;
+export const EMAIL_DENY_DISPLAY_NAME = "Remove the comma from the display name, or send to the bare address, and try again.";
+export const EMAIL_DENY_BODY = `Shorten the body to ${EMAIL_BODY_MAX.toLocaleString("en-US")} characters or fewer and try again. Tell the user the limit was hit; do not silently truncate the email.`;
+export const EMAIL_DENY_SUBJECT = `Shorten the subject to ${EMAIL_SUBJECT_MAX} characters or fewer and try again. Tell the user the limit was hit; do not silently truncate the email.`;
 export const EMAIL_DENY_FIELDS =
   "The email could not be shown in full for review, so it was not sent. Fix the email fields and try again.";
 export const EMAIL_DENY_SUPPRESS =
-  "The recipient could not be shown in full for review, so the suppression was not applied. Fix the recipient and try again.";
+  `The recipient could not be shown in full for review, so the suppression was not applied. Fix the recipient and try again. ${ASCII_HINT}`;
 
-// Characters that are invisible or control in a card: they are made VISIBLE as [U+XXXX], never deleted. Newline and tab
-// are ordinary body text and pass through. Escapes only (cq-regex-unicode-separators-escape-only).
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
-const CARD_HIDDEN_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
-// The same set for a single-line field (subject, message id), where newline and tab are hidden too.
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
-const CARD_HIDDEN_LINE_RE = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+// Characters that are invisible or control in a card are made VISIBLE as [U+XXXX], never deleted. Newline and tab are ordinary
+// body text and pass through in the body variant. A LITERAL "[U+" in the original text is escaped in the same pass (as
+// "[U+005B]U+"), so text can never forge a real marker. Both regexes compile the one shared source class above.
+const CARD_HIDDEN_RE = new RegExp(`\\[U\\+|[${HIDDEN_BODY_CONTROLS}${HIDDEN_COMMON_CLASS}]`, "gu");
+const CARD_HIDDEN_LINE_RE = new RegExp(`\\[U\\+|[${HIDDEN_LINE_CONTROLS}${HIDDEN_COMMON_CLASS}]`, "gu");
+// A bare ASCII address: printable ASCII only (U+0021-U+007E). International domains must arrive as punycode (xn--).
+const CARD_ADDR_ASCII_RE = /^[\x21-\x7E]+$/;
 // A bare address: one addr-spec, no whitespace, comma, semicolon, quote, angle bracket or '@' beyond the single separator.
 const CARD_ADDR_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
 
 type Revealed = { text: string; revealed: number };
 
-/** Make hidden characters visible. Returns the escaped text and how many characters were revealed (0 = verbatim). */
+/**
+ * Make hidden characters visible. Returns the escaped text and how many characters were revealed or escaped (0 = verbatim).
+ * A marker is `[U+` plus at least four hex digits and `]`: BMP characters print four (`[U+202E]`), the Unicode tag
+ * characters and variation selectors supplement print five (`[U+E0041]`). A literal `[U+` in the input is rewritten to
+ * `[U+005B]U+`, which no real marker can look like (a real marker has its hex digits right after the `+`).
+ */
 function revealHidden(raw: string, singleLineField = false): Revealed {
   let revealed = 0;
   const text = (singleLineField ? raw : raw.replace(/\r\n/g, "\n"))
     .replace(singleLineField ? CARD_HIDDEN_LINE_RE : CARD_HIDDEN_RE, (ch) => {
       revealed += 1;
+      if (ch === "[U+") return "[U+005B]U+";
       return `[U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}]`;
     });
   return { text, revealed };
 }
 
 type ParsedAddress = { addr: string; name: string };
+type AddressFailure = { fail: "address" | "name" };
 
 /**
- * A bare address or a single `Name <addr>`; anything else is null. The address is shown in full and verbatim: an address
- * that is too long, empty, malformed or contains a hidden/control/markup character is refused rather than cleaned.
+ * A bare address or a single `Name <addr>`; anything else is a failure. The card and the tool handler evaluate the SAME
+ * string: a value with leading or trailing whitespace is refused (never trimmed), so the handler sends exactly the string
+ * this function parsed. The address is shown in full and verbatim: one that is too long, empty, malformed, non-ASCII (v1
+ * fails closed: punycode `xn--` is allowed) or that contains a hidden/control/markup character is refused rather than cleaned.
  */
-function parseCardAddress(raw: unknown): ParsedAddress | null {
-  if (typeof raw !== "string" || raw.length > EMAIL_RAW_ADDR_MAX) return null;
-  const trimmed = raw.trim();
-  const opens = trimmed.split("<").length - 1;
-  const closes = trimmed.split(">").length - 1;
+function parseCardAddress(raw: unknown): ParsedAddress | AddressFailure {
+  if (typeof raw !== "string" || raw.length > EMAIL_RAW_ADDR_MAX || raw !== raw.trim()) return { fail: "address" };
+  const opens = raw.split("<").length - 1;
+  const closes = raw.split(">").length - 1;
   let name = "";
   if (opens === 0 && closes === 0) {
     // bare form
-  } else if (opens === 1 && closes === 1 && trimmed.endsWith(">") && trimmed.indexOf("<") < trimmed.indexOf(">")) {
-    name = trimmed.slice(0, trimmed.indexOf("<")).trim();
+  } else if (opens === 1 && closes === 1 && raw.endsWith(">") && raw.indexOf("<") < raw.indexOf(">")) {
+    name = raw.slice(0, raw.indexOf("<")).trim();
     // A display name that carries an '@', a comma or a semicolon can pass for a second address or recipient list.
-    if (/[@,;]/.test(name)) return null;
+    if (/[@,;]/.test(name)) return { fail: "name" };
   } else {
-    return null;
+    return { fail: "address" };
   }
-  const addr = extractAddrSpec(trimmed);
-  if (addr === "" || addr.length > EMAIL_ADDR_MAX || !CARD_ADDR_RE.test(addr)) return null;
-  if (revealHidden(addr, true).revealed > 0 || CARD_MARKDOWN_CHAR_RE.test(addr)) return null;
+  const addr = extractAddrSpec(raw);
+  if (addr === "" || addr.length > EMAIL_ADDR_MAX || !CARD_ADDR_RE.test(addr) || !CARD_ADDR_ASCII_RE.test(addr)) {
+    return { fail: "address" };
+  }
+  if (revealHidden(addr, true).revealed > 0 || CARD_MARKDOWN_CHAR_RE.test(addr)) return { fail: "address" };
   return { addr, name };
 }
 
-function addressLine(p: ParsedAddress): string {
-  if (p.name === "") return `<${p.addr}>`;
-  const { text } = revealHidden(p.name);
-  const flat = text.replace(/\s+/g, " ").replace(/"/g, "'").trim();
-  const shown = flat.length > EMAIL_DISPLAY_NAME_MAX ? `${flat.slice(0, EMAIL_DISPLAY_NAME_MAX)}…` : flat;
-  return `<${p.addr}> (display name: "${shown}")`;
+/** Where a failed address goes: a display-name problem gets its own actionable text, everything else the field's text. */
+function addressDeny(f: AddressFailure, addressText: string): { deny: string } {
+  return { deny: f.fail === "name" ? EMAIL_DENY_DISPLAY_NAME : addressText };
 }
 
-export type GateCard = { card: string } | { deny: string };
+/** The display name is shown as a JSON string (quotes and backslashes escaped, whitespace collapsed), capped with an ellipsis. */
+function addressLine(p: ParsedAddress): string {
+  if (p.name === "") return `<${p.addr}>`;
+  const { text } = revealHidden(p.name, true);
+  const flat = text.replace(/\s+/g, " ").trim();
+  const shown = flat.length > EMAIL_DISPLAY_NAME_MAX ? `${flat.slice(0, EMAIL_DISPLAY_NAME_MAX)}…` : flat;
+  return `<${p.addr}> (display name: ${JSON.stringify(shown)})`;
+}
+
+type GateCard = { card: string } | { deny: string };
 
 /** A single-line field (subject, message id) shown in full, hidden characters made visible; null = too long or not a string. */
 function singleLine(raw: unknown, max: number): Revealed | null {
@@ -464,16 +494,16 @@ function buildEmailCard(shortName: string, toolInput: Record<string, unknown>): 
 
   if (shortName === "email_send") {
     const to = parseCardAddress(toolInput.to);
-    if (to === null) return { deny: EMAIL_DENY_RECIPIENT };
+    if ("fail" in to) return addressDeny(to, EMAIL_DENY_RECIPIENT);
     let replyToLine = "";
     const rawReplyTo = toolInput.replyTo;
     if (rawReplyTo !== undefined && rawReplyTo !== null && rawReplyTo !== "") {
       const replyTo = parseCardAddress(rawReplyTo);
-      if (replyTo === null) return { deny: EMAIL_DENY_REPLY_TO };
+      if ("fail" in replyTo) return addressDeny(replyTo, EMAIL_DENY_REPLY_TO);
       replyToLine = `\nReply-To: ${addressLine(replyTo)}`;
     }
     return {
-      card: `Agent wants to send a cold email.\nTo: ${addressLine(to)}${replyToLine}\nSubject: "${subject.text.replace(/"/g, "'")}"\n\n${bodyBlock}\n\nThe email is sent as plain text exactly as shown. Send?`,
+      card: `Agent wants to send a cold email.\nTo: ${addressLine(to)}${replyToLine}\nSubject: ${JSON.stringify(subject.text)}\n\n${bodyBlock}\n\nThe email is sent as plain text exactly as shown. Send?`,
     };
   }
   // email_reply: the recipient is derived server-side from the inbound item (P0-3); it is NOT in toolInput, so the card
@@ -481,7 +511,7 @@ function buildEmailCard(shortName: string, toolInput: Record<string, unknown>): 
   const messageId = singleLine(toolInput.messageId, EMAIL_MESSAGE_ID_MAX);
   if (messageId === null) return { deny: EMAIL_DENY_FIELDS };
   return {
-    card: `Agent wants to reply to inbound item ${messageId.text} (the reply goes to that item's original sender).\nSubject: "${subject.text.replace(/"/g, "'")}"\n\n${bodyBlock}\n\nThe email is sent as plain text exactly as shown. Send?`,
+    card: `Agent wants to reply to inbound item ${messageId.text} (the reply goes to that item's original sender).\nSubject: ${JSON.stringify(subject.text)}\n\n${bodyBlock}\n\nThe email is sent as plain text exactly as shown. Send?`,
   };
 }
 
@@ -543,7 +573,7 @@ export function buildGateCard(
   if (shortName === "email_send" || shortName === "email_reply") return buildEmailCard(shortName, toolInput);
   if (shortName === "email_suppress") {
     const target = parseCardAddress(toolInput.recipient);
-    if (target === null) return { deny: EMAIL_DENY_SUPPRESS };
+    if ("fail" in target) return addressDeny(target, EMAIL_DENY_SUPPRESS);
     return {
       card: `Agent wants to PERMANENTLY suppress ${addressLine(target)} (reason: ${cardField(toolInput.reason)}) so no future cold email can reach them. There is no un-suppress. Allow?`,
     };

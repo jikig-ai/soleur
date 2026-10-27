@@ -20,7 +20,19 @@ import {
   isPreApprovable,
   pluginWildcard,
   parsePluginWildcard,
+  EMAIL_DENY_RECIPIENT,
+  EMAIL_DENY_REPLY_TO,
+  EMAIL_DENY_DISPLAY_NAME,
+  EMAIL_DENY_BODY,
+  EMAIL_DENY_SUBJECT,
+  EMAIL_DENY_FIELDS,
+  EMAIL_DENY_SUPPRESS,
 } from "../server/tool-tiers";
+import {
+  EMAIL_ADDR_MAX,
+  EMAIL_BODY_MAX,
+  EMAIL_SUBJECT_MAX,
+} from "../server/email-triage/outbound-compliance";
 import { EXPECTED_GATED } from "./helpers/expected-tool-tiers";
 
 describe("getToolTier", () => {
@@ -295,7 +307,12 @@ const HOSTILE = `evil**bold**\n\n[click here](https://evil.invalid)\u202Egpj.exe
 const inputOf = (v: unknown) => new Proxy({}, { get: () => v }) as Record<string, unknown>;
 const countOf = (s: string, ch: string) => s.split(ch).length - 1;
 // eslint-disable-next-line no-control-regex -- asserting the absence of control characters is the point
-const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF\u{E0000}-\u{E007F}]/u;
+const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
+// The extra invisible characters (beyond bidi/zero-width) every card must neutralise, as code points.
+const EXTRA_HIDDEN_CODE_POINTS = [
+  0x206a, 0x206f, 0xfe00, 0xfe0f, 0xe0100, 0xe01ef, 0x3164, 0xffa0, 0x115f, 0x1160, 0x2800, 0x034f, 0x180e, 0x17b4, 0x17b5,
+];
+const hex = (cp: number) => cp.toString(16).toUpperCase().padStart(4, "0");
 
 // The email cards are not neutralised by deletion: they show the whole send, make hidden characters visible, and DENY what
 // they cannot show in full. They have their own hardening block below.
@@ -353,17 +370,15 @@ describe("offline gate message is content-free for every gated tool (#11303, pri
 describe("outbound email cards: the whole send is shown, or the tool is denied (#11303)", () => {
   const SEND = `${P}email_send`;
   const REPLY = `${P}email_reply`;
-  const DENY_RECIPIENT =
-    "The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again.";
-  const DENY_BODY = "Shorten the body to 4,000 characters or fewer and try again.";
+  const SUPPRESS = `${P}email_suppress`;
   const base = { to: "jo@example.invalid", subject: "Hello", body: "Hi Jo" };
+  const cardOf = (r: unknown) => (r as { card: string }).card;
+  const addrOfLength = (n: number) => `${"x".repeat(n - "@example.invalid".length)}@example.invalid`;
 
   test("the recipient is the full parsed address with its angle brackets, the display name separately", () => {
-    const r = buildGateCard(SEND, { ...base, to: "Jo Doe <jo@example.invalid>" });
-    expect(r).toHaveProperty("card");
-    const card = (r as { card: string }).card;
-    expect(card).toContain("To: <jo@example.invalid> (display name: \"Jo Doe\")");
-    expect(card).toContain("Subject: \"Hello\"");
+    const card = cardOf(buildGateCard(SEND, { ...base, to: "Jo Doe <jo@example.invalid>" }));
+    expect(card).toContain('To: <jo@example.invalid> (display name: "Jo Doe")');
+    expect(card).toContain('Subject: "Hello"');
     expect(card).toContain("Hi Jo");
   });
 
@@ -378,51 +393,100 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     expect(msg).not.toContain("N".repeat(61));
   });
 
-  test("a display name carrying an address-like or list separator is refused", () => {
-    for (const to of ["ceo@bank.invalid <evil@example.invalid>", "Doe, Jo <jo@example.invalid>", "Jo; Al <jo@example.invalid>"]) {
-      expect(buildGateCard(SEND, { ...base, to })).toEqual({ deny: DENY_RECIPIENT });
-    }
+  test.each([
+    ["an address-like display name", "ceo@bank.invalid <evil@example.invalid>"],
+    ["a comma in the display name", "Doe, Jo <jo@example.invalid>"],
+    ["a quoted display name with a comma", '"Doe, Jo" <jo@example.invalid>'],
+    ["a semicolon in the display name", "Jo; Al <jo@example.invalid>"],
+  ])("%s is refused with the actionable display-name text", (_n, to) => {
+    expect(buildGateCard(SEND, { ...base, to })).toEqual({ deny: EMAIL_DENY_DISPLAY_NAME });
+    expect(EMAIL_DENY_DISPLAY_NAME).toBe("Remove the comma from the display name, or send to the bare address, and try again.");
   });
 
   test.each([
     ["a recipient list", "a@example.invalid, b@example.invalid"],
     ["two angle addresses", "A <a@example.invalid> B <b@example.invalid>"],
     ["an unclosed angle bracket", "Jo <jo@example.invalid"],
+    ["trailing text after the closing bracket", "Jo <jo@example.invalid> bob@evil.invalid"],
     ["an empty address", "Jo <>"],
     ["not an address", "just a name"],
     ["a raw value over 320 characters", `${"x".repeat(321)}@example.invalid`],
     ["a raw value over 320 characters whose parsed address is short (long display name)", `${"N".repeat(310)} <jo@example.invalid>`],
-    ["an address over 254 characters", `${"x".repeat(250)}@example.invalid`],
+    ["an address over 254 characters", addrOfLength(EMAIL_ADDR_MAX + 1)],
     ["an address with a bidi override inside", "jo\u202E@example.invalid"],
     ["an address with a zero-width space", "jo\u200B@example.invalid"],
     ["an address with a markdown character", "j*o@example.invalid"],
+    ["leading whitespace (the handler would send a string the card did not parse)", " jo@example.invalid"],
+    ["trailing whitespace", "jo@example.invalid\t"],
+    ["a trailing newline", "jo@example.invalid\n"],
+    ["a non-ASCII local part", "jö@example.invalid"],
+    ["an internationalised domain (fail closed in v1)", "jo@exämple.invalid"],
+    ["a non-breaking space inside", "jo x@example.invalid"],
     ["a non-string", 42],
-  ])("fails closed on %s: a static deny, never a card", (_n, to) => {
-    expect(buildGateCard(SEND, { ...base, to })).toEqual({ deny: DENY_RECIPIENT });
+  ])("fails closed on %s: the exact static deny, never a card", (_n, to) => {
+    expect(buildGateCard(SEND, { ...base, to })).toEqual({ deny: EMAIL_DENY_RECIPIENT });
+  });
+
+  test("the recipient deny tells the agent to use the ASCII form (punycode for international domains)", () => {
+    expect(EMAIL_DENY_RECIPIENT).toContain("Use the ASCII form of the address (punycode for international domains).");
+    expect(EMAIL_DENY_REPLY_TO).toContain("Use the ASCII form of the address (punycode for international domains).");
+    expect(EMAIL_DENY_SUPPRESS).toContain("Use the ASCII form of the address (punycode for international domains).");
+  });
+
+  test("a punycode (xn--) domain is allowed and shown as written", () => {
+    expect(cardOf(buildGateCard(SEND, { ...base, to: "jo@xn--exmple-cua.invalid" }))).toContain("To: <jo@xn--exmple-cua.invalid>");
   });
 
   test("reply-to is shown on its own line, parsed the same way", () => {
     const msg = buildGateMessage(SEND, { ...base, replyTo: "Boss <boss@example.invalid>" });
-    expect(msg).toContain("\nReply-To: <boss@example.invalid> (display name: \"Boss\")\n");
+    expect(msg).toContain('\nReply-To: <boss@example.invalid> (display name: "Boss")\n');
   });
 
-  test("an absent or empty reply-to adds no line; an unparsable one denies", () => {
+  test("an absent or empty reply-to adds no line", () => {
     expect(buildGateMessage(SEND, base)).not.toContain("Reply-To");
     expect(buildGateMessage(SEND, { ...base, replyTo: "" })).not.toContain("Reply-To");
-    expect(buildGateCard(SEND, { ...base, replyTo: "a@example.invalid, b@example.invalid" })).toEqual({
-      deny: "The reply-to address could not be shown in full for review, so the email was not sent. Fix the reply-to and try again.",
-    });
-    expect(buildGateCard(SEND, { ...base, replyTo: 7 })).toHaveProperty("deny");
   });
 
-  test("a body of exactly 4000 characters is shown ENTIRELY; 4001 is denied", () => {
-    const body = `${"A".repeat(3990)}TAILMARKER`;
-    expect(body.length).toBe(4000);
-    const ok = buildGateCard(SEND, { ...base, body }) as { card: string };
-    expect(ok.card).toContain(body);
-    expect(ok.card).toContain("shown in full, 4000 characters");
-    expect(buildGateCard(SEND, { ...base, body: `${body}x` })).toEqual({ deny: DENY_BODY });
-    expect(buildGateCard(REPLY, { messageId: "m", subject: "s", body: `${body}x` })).toEqual({ deny: DENY_BODY });
+  test.each([
+    ["a list", "a@example.invalid, b@example.invalid", EMAIL_DENY_REPLY_TO],
+    ["a non-string", 7, EMAIL_DENY_REPLY_TO],
+    ["trailing text after the closing bracket", "Boss <boss@example.invalid> bob@evil.invalid", EMAIL_DENY_REPLY_TO],
+    ["surrounding whitespace", " boss@example.invalid ", EMAIL_DENY_REPLY_TO],
+    ["a non-ASCII address", "böss@example.invalid", EMAIL_DENY_REPLY_TO],
+    ["a comma in the display name", "Boss, Big <boss@example.invalid>", EMAIL_DENY_DISPLAY_NAME],
+  ])("an unparsable reply-to (%s) denies with the exact static text", (_n, replyTo, deny) => {
+    expect(buildGateCard(SEND, { ...base, replyTo })).toEqual({ deny });
+  });
+
+  test("a body of exactly the cap is shown ENTIRELY; cap+1 is denied", () => {
+    const body = `${"A".repeat(EMAIL_BODY_MAX - 10)}TAILMARKER`;
+    expect(body.length).toBe(EMAIL_BODY_MAX);
+    const ok = buildGateCard(SEND, { ...base, body });
+    expect(cardOf(ok)).toContain(body);
+    expect(cardOf(ok)).toContain(`shown in full, ${EMAIL_BODY_MAX} characters`);
+    expect(buildGateCard(REPLY, { messageId: "m", subject: "s", body })).toHaveProperty("card");
+    expect(buildGateCard(SEND, { ...base, body: `${body}x` })).toEqual({ deny: EMAIL_DENY_BODY });
+    expect(buildGateCard(REPLY, { messageId: "m", subject: "s", body: `${body}x` })).toEqual({ deny: EMAIL_DENY_BODY });
+  });
+
+  test("the body and subject deny texts name the limit and forbid silent truncation", () => {
+    for (const t of [EMAIL_DENY_BODY, EMAIL_DENY_SUBJECT]) {
+      expect(t).toContain("Tell the user the limit was hit; do not silently truncate the email.");
+    }
+    expect(EMAIL_DENY_BODY).toContain("4,000");
+    expect(EMAIL_DENY_SUBJECT).toContain("200");
+  });
+
+  test("exact-cap values are ALLOWED beside the +1 deny rows (subject, address, message id)", () => {
+    const subject = "s".repeat(EMAIL_SUBJECT_MAX);
+    expect(buildGateCard(SEND, { ...base, subject })).toHaveProperty("card");
+    expect(buildGateCard(SEND, { ...base, subject: `${subject}s` })).toEqual({ deny: EMAIL_DENY_SUBJECT });
+    const maxAddr = addrOfLength(EMAIL_ADDR_MAX);
+    expect(maxAddr.length).toBe(EMAIL_ADDR_MAX);
+    expect(cardOf(buildGateCard(SEND, { ...base, to: maxAddr }))).toContain(`To: <${maxAddr}>`);
+    expect(buildGateCard(SUPPRESS, { recipient: maxAddr, reason: "decline" })).toHaveProperty("card");
+    expect(buildGateCard(REPLY, { messageId: "m".repeat(64), subject: "s", body: "b" })).toHaveProperty("card");
+    expect(buildGateCard(REPLY, { messageId: "m".repeat(65), subject: "s", body: "b" })).toEqual({ deny: EMAIL_DENY_FIELDS });
   });
 
   test("a payload at the very end of a long body is visible", () => {
@@ -444,16 +508,59 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     expect(msg).toContain("pay[U+202E]gpj.exe");
   });
 
+  test.each(EXTRA_HIDDEN_CODE_POINTS)("invisible code point %i is made visible in the body and the subject", (cp) => {
+    const ch = String.fromCodePoint(cp);
+    const msg = buildGateMessage(SEND, { ...base, subject: `a${ch}b`, body: `x${ch}y` });
+    expect(msg).toContain(`x[U+${hex(cp)}]y`);
+    expect(msg).toContain(`Subject: "a[U+${hex(cp)}]b"`);
+    expect(CONTROL_OR_BIDI.test(msg)).toBe(false);
+  });
+
+  test("a recipient with one of the extra invisible characters is refused, not shown", () => {
+    for (const cp of EXTRA_HIDDEN_CODE_POINTS) {
+      expect(buildGateCard(SEND, { ...base, to: `jo${String.fromCodePoint(cp)}@example.invalid` })).toEqual({ deny: EMAIL_DENY_RECIPIENT });
+    }
+  });
+
+  test("a literal [U+ in the text cannot forge a real marker: it is rewritten and counted", () => {
+    const msg = buildGateMessage(SEND, { ...base, subject: "[U+0041]", body: "see [U+202E] here" });
+    expect(msg).toContain("see [U+005B]U+202E] here");
+    expect(msg).not.toContain("see [U+202E]");
+    expect(msg).toContain('Subject: "[U+005B]U+0041]"');
+    expect(msg).toContain("2 hidden or control characters");
+  });
+
   test("a clean email carries no hidden-character note", () => {
     expect(buildGateMessage(SEND, base)).not.toMatch(/hidden or control/);
   });
 
-  test("a subject over 200 characters or a non-string body denies", () => {
-    expect(buildGateCard(SEND, { ...base, subject: "s".repeat(201) })).toEqual({
-      deny: "Shorten the subject to 200 characters or fewer and try again.",
-    });
-    expect(buildGateCard(SEND, { ...base, body: { x: 1 } })).toHaveProperty("deny");
-    expect(buildGateCard(SEND, { ...base, subject: undefined })).toHaveProperty("deny");
+  test("a hostile display name on a VALID recipient is made visible (the address stays exact)", () => {
+    const msg = buildGateMessage(SEND, { ...base, to: "Jo\u202E Doe <jo@example.invalid>" });
+    expect(msg).toContain('To: <jo@example.invalid> (display name: "Jo[U+202E] Doe")');
+    expect(CONTROL_OR_BIDI.test(msg)).toBe(false);
+  });
+
+  test("quotes in the display name and the subject are shown exactly (JSON-escaped), not rewritten", () => {
+    const msg = buildGateMessage(SEND, { ...base, to: 'Jo "the boss" <jo@example.invalid>', subject: 'He said "hi" \\ bye' });
+    expect(msg).toContain('(display name: "Jo \\"the boss\\"")');
+    expect(msg).toContain('Subject: "He said \\"hi\\" \\\\ bye"');
+  });
+
+  test("a CRLF body is normalised to LF (no U+000D marker); a lone CR is made visible", () => {
+    const crlf = buildGateMessage(SEND, { ...base, body: "line one\r\nline two" });
+    expect(crlf).toContain("line one\nline two");
+    expect(crlf).not.toContain("[U+000D]");
+    expect(buildGateMessage(SEND, { ...base, body: "line one\rline two" })).toContain("line one[U+000D]line two");
+  });
+
+  test("a newline in the subject is hidden (single-line field)", () => {
+    expect(buildGateMessage(SEND, { ...base, subject: "a\nb" })).toContain('Subject: "a[U+000A]b"');
+  });
+
+  test("a subject over the cap or a non-string subject/body denies with the exact text", () => {
+    expect(buildGateCard(SEND, { ...base, subject: "s".repeat(EMAIL_SUBJECT_MAX + 1) })).toEqual({ deny: EMAIL_DENY_SUBJECT });
+    expect(buildGateCard(SEND, { ...base, body: { x: 1 } })).toEqual({ deny: EMAIL_DENY_FIELDS });
+    expect(buildGateCard(SEND, { ...base, subject: undefined })).toEqual({ deny: EMAIL_DENY_FIELDS });
   });
 
   test("email_reply shows the message id, the whole body, and where the reply goes", () => {
@@ -462,22 +569,27 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     expect(msg).toContain("0b1c2d3e-0000-4000-8000-000000000000");
     expect(msg).toContain("original sender");
     expect(msg).toContain(body);
-    expect(buildGateCard(REPLY, { subject: "s", body: "b" })).toHaveProperty("deny"); // no message id
-    expect(buildGateCard(REPLY, { messageId: "x".repeat(65), subject: "s", body: "b" })).toHaveProperty("deny");
+    expect(buildGateCard(REPLY, { subject: "s", body: "b" })).toEqual({ deny: EMAIL_DENY_FIELDS }); // no message id
   });
 
   test("email_suppress shows the parsed address in full and fails closed on an unparsable one", () => {
-    expect(buildGateMessage(`${P}email_suppress`, { recipient: "Jo <jo@example.invalid>", reason: "decline" })).toContain("<jo@example.invalid>");
-    expect(buildGateCard(`${P}email_suppress`, { recipient: "a@example.invalid, b@example.invalid", reason: "decline" })).toEqual({
-      deny: "The recipient could not be shown in full for review, so the suppression was not applied. Fix the recipient and try again.",
-    });
+    expect(buildGateMessage(SUPPRESS, { recipient: "Jo <jo@example.invalid>", reason: "decline" })).toContain("<jo@example.invalid>");
+    for (const recipient of [
+      "a@example.invalid, b@example.invalid",
+      "Jo <jo@example.invalid> bob@evil.invalid",
+      " jo@example.invalid",
+      "jö@example.invalid",
+    ]) {
+      expect(buildGateCard(SUPPRESS, { recipient, reason: "decline" })).toEqual({ deny: EMAIL_DENY_SUPPRESS });
+    }
+    expect(buildGateCard(SUPPRESS, { recipient: "Doe, Jo <jo@example.invalid>", reason: "decline" })).toEqual({ deny: EMAIL_DENY_DISPLAY_NAME });
   });
 
-  test("hostile input never yields a card with hidden characters (deny or visible escape)", () => {
-    for (const key of EMAIL_CARD_KEYS) {
-      const r = buildGateCard(key, inputOf(HOSTILE));
-      expect("deny" in r ? r.deny : r.card).not.toMatch(CONTROL_OR_BIDI);
-    }
+  test("email_suppress prints a hostile reason neutralised (cardField), on a VALID recipient", () => {
+    const msg = buildGateMessage(SUPPRESS, { recipient: "jo@example.invalid", reason: "dec\u202Eline\n**x**[y](z)" });
+    expect(msg).toContain("(reason: decline xy(z))");
+    expect(CONTROL_OR_BIDI.test(msg)).toBe(false);
+    expect(buildGateMessage(SUPPRESS, { recipient: "jo@example.invalid", reason: { a: 1 } })).toContain("(reason: unknown)");
   });
 
   test("the card names the not-shown inputs of the other gated writes (generalised omission fix)", () => {
@@ -499,10 +611,12 @@ describe("list and field truncation is never silent (#11303)", () => {
     expect(msg).toContain("+3 more");
   });
 
-  test("a long scalar ends with a visible ellipsis, and a huge one is clipped before cleaning", () => {
-    const msg = buildGateMessage(`${P}create_issue`, { title: "T".repeat(5_000_000) });
-    expect(msg).toContain(`${"T".repeat(120)}…`);
-    expect(msg.length).toBeLessThan(400);
+  test("a long scalar ends with a visible ellipsis; exactly the cap has none", () => {
+    const over = buildGateMessage(`${P}create_issue`, { title: "T".repeat(121) });
+    expect(over).toContain(`${"T".repeat(120)}…`);
+    const exact = buildGateMessage(`${P}create_issue`, { title: "T".repeat(120) });
+    expect(exact).toContain(`**${"T".repeat(120)}**`);
+    expect(exact).not.toContain("…");
   });
 
   test("tag characters, the soft hyphen and the Arabic letter mark are stripped from plain cards", () => {
@@ -510,9 +624,26 @@ describe("list and field truncation is never silent (#11303)", () => {
     expect(msg).toContain("abcd");
     expect(CONTROL_OR_BIDI.test(msg)).toBe(false);
   });
+
+  test.each(EXTRA_HIDDEN_CODE_POINTS)("the extra invisible code point %i is stripped from plain cards", (cp) => {
+    const msg = buildGateMessage(`${P}create_issue`, { title: `a${String.fromCodePoint(cp)}b` });
+    expect(msg).toContain("**ab**");
+  });
 });
 
 describe("shared pre-approval keep-rule (#11303)", () => {
+  test("a blocked-tier entry is not pre-approvable either", () => {
+    const key = `${P}zz_blocked_probe`;
+    TOOL_TIER_MAP[key] = "blocked";
+    try {
+      expect(getToolTier(key)).toBe("blocked"); // precondition: the entry is really in the blocked tier
+      expect(isPreApprovable(key)).toBe(false);
+    } finally {
+      delete TOOL_TIER_MAP[key];
+    }
+    expect(Object.hasOwn(TOOL_TIER_MAP, key)).toBe(false);
+  });
+
   test("isPreApprovable is true only for auto-approve tools", () => {
     expect(isPreApprovable(`${P}kb_share_list`)).toBe(true);
     expect(isPreApprovable(`${P}email_send`)).toBe(false);

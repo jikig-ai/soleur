@@ -656,6 +656,8 @@ describe("buildAgentQueryOptions — allowedTools pre-approval allowlist (#11303
     ["a Bash rule-content form", "Bash(git status:*)"],
     ["a wildcard Bash rule", "Bash(*)"],
     ["a lower-case Bash rule", "bash(ls)"],
+    ["a Bash rule with a space before the paren", "Bash (npm *)"],
+    ["a Bash rule with a tab before the paren", "Bash\t(npm *)"],
   ];
 
   it.each(REJECTED)("throws on %s", (_label, entry) => {
@@ -722,6 +724,12 @@ describe("buildAgentQueryOptions — allowedTools pre-approval allowlist (#11303
       );
     },
   );
+
+  it("throws on a future / unknown permissionMode (allowlist, not denylist)", () => {
+    expect(() => buildAgentQueryOptions({ ...minArgs, permissionMode: "zz-future-mode" as never })).toThrow(
+      /permissionMode "zz-future-mode" would pre-approve tools ahead of canUseTool/,
+    );
+  });
 
   it("accepts an undefined or default permissionMode", () => {
     expect(buildAgentQueryOptions({ ...minArgs, permissionMode: "default" }).permissionMode).toBe("default");

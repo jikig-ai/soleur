@@ -27,7 +27,12 @@ import {
   sendCompliantOutbound,
   type SendCompliantOutboundArgs,
 } from "@/server/email-triage/outbound";
-import { recipientHash } from "@/server/email-triage/outbound-compliance";
+import {
+  recipientHash,
+  EMAIL_BODY_MAX,
+  EMAIL_RAW_ADDR_MAX,
+  EMAIL_SUBJECT_MAX,
+} from "@/server/email-triage/outbound-compliance";
 import { untrustedRowsResponse as sharedUntrustedRowsResponse } from "@/server/untrusted-content";
 
 function sha256(s: string): string {
@@ -298,11 +303,11 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         "body text; you cannot send to a suppressed recipient. Returns " +
         "{ resendId, outboundSendId } on success.",
       {
-        to: z.string().min(3),
-        subject: z.string().min(1).max(200),
-        // The review card shows the ENTIRE body, so the schema and the card share one hard cap (EMAIL_BODY_MAX, tool-tiers.ts).
-        body: z.string().min(1).max(4000),
-        replyTo: z.string().optional(),
+        to: z.string().min(3).max(EMAIL_RAW_ADDR_MAX),
+        subject: z.string().min(1).max(EMAIL_SUBJECT_MAX),
+        // The review card shows the ENTIRE body, so the schema and the card share one hard cap (EMAIL_BODY_MAX, outbound-compliance.ts).
+        body: z.string().min(1).max(EMAIL_BODY_MAX),
+        replyTo: z.string().max(EMAIL_RAW_ADDR_MAX).optional(),
         ...COMPLIANCE_FIELDS,
       },
       async (args) => {
@@ -357,8 +362,8 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         "{ resendId, outboundSendId }.",
       {
         messageId: z.string().uuid(),
-        subject: z.string().min(1).max(200),
-        body: z.string().min(1).max(4000),
+        subject: z.string().min(1).max(EMAIL_SUBJECT_MAX),
+        body: z.string().min(1).max(EMAIL_BODY_MAX),
         ...COMPLIANCE_FIELDS,
       },
       async (args) => {
@@ -437,7 +442,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         "there is no un-suppress tool. The recipient address is hashed before " +
         "storage (never persisted in plaintext). Returns { id }.",
       {
-        recipient: z.string().min(3),
+        recipient: z.string().min(3).max(EMAIL_RAW_ADDR_MAX),
         reason: z.enum(["opt_out", "decline", "bounce", "manual"]),
       },
       async (args) => {
