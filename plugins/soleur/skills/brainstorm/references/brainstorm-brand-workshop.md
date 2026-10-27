@@ -85,17 +85,24 @@ a.1. **Commit the `.pen` source immediately after first save (recover-from-wipe 
    onward) — so an iteration-cycle wipe (#3274: `open_document` silently
    overwriting the source with empty state) is recoverable via
    `git checkout -- <path>`. **Gate the commit on a non-collapsed save first**:
-   `stat -c %s <pen>` must be `> 128 bytes` (the 41- to 96-byte empty `{"version": …, "children": []}`
+   the `.pen` must be `> 128 bytes` (the 41- to 96-byte empty `{"version": …, "children": []}`
    shell is a failed/empty save, not a baseline worth committing — committing it
-   defeats the recover-from-wipe purpose). If the `.pen` is `≤ 128 bytes`, halt and
-   surface the save failure instead of committing (also do not commit while a `REFUSED save:` or `NOT PERSISTED:` result is unresolved).
+   defeats the recover-from-wipe purpose), parse, and hold at least one top-level child.
+   Use the same `node -e` check as the `# post-save-gate` snippet in
+   `soleur:product:design:ux-design-lead` (Node is already required for the adapter; no
+   GNU-only tools). If it fails, halt and surface the save failure instead of committing
+   (also do not commit while a `REFUSED save:` or `NOT PERSISTED:` result is unresolved).
 
    ```bash
    pen=knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/<topic>.pen
-   sz=$(stat -c %s "$pen")
-   if [[ "$sz" -le 128 ]]; then
-     echo "BLOCKED: $pen is only ${sz}B — first save did not produce a real document; not committing a wiped baseline." >&2
-   else
+   if node -e '
+   const fs=require("fs");const f=process.argv[1];
+   const fail=(m)=>{console.error("BLOCKED: "+f+" "+m+"; not committing a wiped baseline.");process.exit(1)};
+   let b;try{b=fs.readFileSync(f)}catch(e){fail("cannot be read ("+e.code+")")}
+   if(b.length<=128)fail("is only "+b.length+"B, so the first save did not produce a real document");
+   let d;try{d=JSON.parse(b.toString("utf8").replace(/^\uFEFF/,""))}catch(e){fail("is not a parseable .pen document")}
+   if(!Array.isArray(d&&d.children)||d.children.length<1)fail("has no top-level children");
+   ' "$pen"; then
      git add "$pen"
      git commit -m "docs: commit design source <topic>.pen (recover-from-wipe safety)"
    fi

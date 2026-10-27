@@ -5,6 +5,7 @@ import {
   LIVE_TOOL_NAMES,
   REMOVED_TOOL_NAMES,
 } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
+import * as saveGate from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
 
 // #11156 / #11168 prose contract for the headless Pencil path. Fixed live tool set
 // (CTO ruling 1): agents are told only about tools the adapter really serves, and the
@@ -24,6 +25,33 @@ const PLAN_PATH = "plugins/soleur/skills/plan/SKILL.md";
 const WORKSHOP_PATH = "plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md";
 const agent = read(AGENT_PATH);
 const skill = read(SKILL_PATH);
+const workshop = read(WORKSHOP_PATH);
+
+// SHARED TEXT CONTRACT: these sentences are written verbatim into the adapter / save-gate
+// texts (FA1b) and into the prose (here). Quoted exactly; a reworded copy is a drift.
+const REPLAY_SAFETY =
+  "Before replaying, check whether the edit is already present (compare the node count open_document reports, or Get the nodes): this session's own interrupted save may already have written it.";
+const ONLY_COPY =
+  "If a retry is refused, the in-memory document is the only complete copy: read it out (get_editor_state, or Get/Print inside batch_design) or export it BEFORE calling open_document.";
+const RESTORE_FIRST = "If the file is tracked, restore it from version control first.";
+const STEERING =
+  "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit).";
+
+// Reason codes: the save gate's own list when it exports one, so a new code without a prose
+// row fails here. The local list is the contract of record (marker contract, ADR-304).
+const MARKER_CODES: { refused: string[]; notPersisted: string[] } = {
+  refused: ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized"],
+  notPersisted: ["save-failed", "unconfirmed", "save-incomplete"],
+};
+const exportedCodes = (saveGate as Record<string, unknown>).REASON_CODES as
+  | { refused?: string[]; notPersisted?: string[] }
+  | string[]
+  | undefined;
+const ALL_CODES: string[] = Array.isArray(exportedCodes)
+  ? exportedCodes
+  : exportedCodes && typeof exportedCodes === "object"
+    ? [...(exportedCodes.refused ?? []), ...(exportedCodes.notPersisted ?? [])]
+    : [...MARKER_CODES.refused, ...MARKER_CODES.notPersisted];
 
 const LIVE = new Set<string>(LIVE_TOOL_NAMES);
 // `get_style` is a REPL command the adapter never exposes; it is not in the removed-stub
@@ -103,7 +131,7 @@ describe("pencil-setup/SKILL.md", () => {
     expect(skill).toContain("@pen.dev/cli");
     expect(skill).not.toContain("@pencil.dev/cli");
     expect(skill).toMatch(/PENCIL_CLI_KEY[^\n]*(fallback|deprecated)|(fallback|deprecated)[^\n]*PENCIL_CLI_KEY/i);
-    expect(skill).toContain("22.19");
+    expect(skill).toMatch(/Node >= 22\.19\.0/);
   });
 
   test("one explicit export of PEN_CLI_KEY from Doppler, and no `pen login` path (the adapter refuses without the key)", () => {
@@ -127,11 +155,57 @@ describe("pencil-setup/SKILL.md", () => {
     expect(skill).toMatch(/NOTE: [^\n]*had been removed from disk|had been removed from disk[^\n]*tell the user/);
   });
 
-  test("every recovery cell that discards or replays memory names open_document; unrecognized does not discard anything", () => {
-    for (const code of ["stale", "unknown-baseline", "refusal-pending", "empty"]) {
+  test("every code in the save gate's list has a table row; every recovery that reloads names open_document, the two save codes name `save`", () => {
+    for (const code of ALL_CODES) expect(tableRow(skill, code), `table row for reason=${code}`).toBeDefined();
+    for (const code of ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized", "unconfirmed"]) {
       expect(recovery(tableRow(skill, code) ?? ""), `recovery for reason=${code}`).toMatch(/open_document/);
     }
+    for (const code of ["save-failed", "save-incomplete"]) {
+      expect(recovery(tableRow(skill, code) ?? ""), `recovery for reason=${code}`).toMatch(/`save`/);
+    }
     expect(recovery(tableRow(skill, "unrecognized") ?? "")).toMatch(/git|new path/i);
+  });
+
+  test("SHARED TEXT CONTRACT: replay-safety sentence on unconfirmed, save-incomplete and refusal-pending external-change", () => {
+    for (const code of ["unconfirmed", "save-incomplete", "refusal-pending"]) {
+      expect(recovery(tableRow(skill, code) ?? ""), `replay-safety for reason=${code}`).toContain(REPLAY_SAFETY);
+    }
+    // the stale and empty recoveries replay edits the session never wrote: no such sentence there
+    expect(recovery(tableRow(skill, "stale") ?? "")).not.toContain(REPLAY_SAFETY);
+  });
+
+  test("SHARED TEXT CONTRACT: only-copy sentence on save-failed and unrecognized; file-missing restores from version control first", () => {
+    for (const code of ["save-failed", "unrecognized"]) {
+      expect(recovery(tableRow(skill, code) ?? ""), `only-copy for reason=${code}`).toContain(ONLY_COPY);
+    }
+    expect(recovery(tableRow(skill, "refusal-pending") ?? "")).toContain(RESTORE_FIRST);
+  });
+
+  test("SHARED TEXT CONTRACT: the batch_design Export/TakeScreenshot steering sentence is in SKILL.md and ux-design-lead.md", () => {
+    expect(skill).toContain(STEERING);
+    expect(agent).toContain(STEERING);
+  });
+
+  test("the gate flag resets per code, in the same words as the agent's gate step", () => {
+    expect(skill).toMatch(/gate flag[^\n]*per code|resets? per code/i);
+    expect(skill).toMatch(/clean `save`[^\n]*(save-failed|save-incomplete)|(save-failed|save-incomplete)[^\n]*clean `save`/);
+  });
+
+  test("get_style is named as an engine command this adapter does not expose, with the brand-token / guide page alternative", () => {
+    expect(skill).toMatch(/`get_style`[^\n]*does not expose[^\n]*(brand tokens|guide\/\*\.md)/);
+  });
+
+  test("probe recipe forms: Get/Print bounds, c.problems means clipping, Print(FindEmptySpace(...))", () => {
+    expect(skill).toContain("Get(id,(n,c)=>Print(c.bounds.width))");
+    expect(skill).toMatch(/c\.problems[^\n]*clipp/i);
+    expect(skill).toContain("Print(FindEmptySpace({width:50,height:50}))");
+  });
+
+  test("--auto disclosure: ~1 GB engine, up to ~5 minutes cold, long timeout or background, failed install exits 2 and leaves the adapter unchanged", () => {
+    expect(skill).toMatch(/~1 GB/);
+    expect(skill).toMatch(/~5 minutes/);
+    expect(skill).toMatch(/(long timeout|background)/);
+    expect(skill).toMatch(/exits? 2[^\n]*adapter[^\n]*unchanged/);
   });
 
   test("refusal-pending names its three causes and empty also covers an unreadable memory count", () => {
@@ -154,8 +228,8 @@ describe("pencil-setup/SKILL.md", () => {
 
   test("the marker is on line 1 of the TOOL RESULT (and mirrored on stderr), and a refusal pending or unsaved edit marks exports", () => {
     expect(skill).toMatch(/first line of (a refusal|the (tool )?result)[^\n]*\[reason=<code>\]/);
-    expect(skill).toMatch(/stderr/);
-    expect(skill).toMatch(/rendered from unsaved memory/);
+    expect(skill).toMatch(/adapter writes the same marker to its stderr/);
+    expect(skill).toMatch(/prefixed `WARNING: rendered from unsaved memory, not the file on disk`/);
   });
 
   test("first triage step is the tool result and stderr marker, with no ssh/docker exec/systemctl", () => {
@@ -205,6 +279,25 @@ describe("pencil-setup/SKILL.md", () => {
     expect(skill).toMatch(/--auto[^\n]*(installs?|also installs?)[^\n]*engine|engine[^\n]*--auto/i);
   });
 
+  test("re-registration snippet: key loaded and checked BEFORE `claude mcp remove`; user-scope-only Node probe; --pencil-binary preserved; narrow trigger", () => {
+    const step1 = skill.slice(skill.indexOf("## Step 1"), skill.indexOf("## Step 2"));
+    const load = step1.indexOf("doppler secrets get PENCIL_CLI_KEY");
+    const remove = step1.indexOf("claude mcp remove pencil");
+    expect(load).toBeGreaterThan(-1);
+    expect(remove).toBeGreaterThan(load);
+    expect(step1.slice(load, remove)).toMatch(/-n "\$PEN_CLI_KEY"|-z "\$PEN_CLI_KEY"/);
+    // a project-scoped entry's command is never executed
+    expect(step1).toMatch(/Scope: User/);
+    expect(step1).toMatch(/never execute[^\n]*(project|\.mcp\.json)|(project|\.mcp\.json)[^\n]*never (run|execute)/i);
+    // the registered --pencil-binary= flag survives the re-registration
+    expect(step1).toMatch(/--pencil-binary=\[\^ \]\+|pencil_binary_flag/);
+    // not for a Node PATH difference, not for a working deprecated key name
+    expect(step1).not.toMatch(/"\$registered_node" != "\$PREFERRED_NODE"/);
+    expect(step1).toMatch(/below 22\.19|node_status[^\n]*old/);
+    // the outdated note is only for a headless preferred mode
+    expect(step1).toMatch(/PREFERRED_MODE" == "headless_cli" && "\$needs_rereg" == "true"|"\$PREFERRED_MODE" == "headless_cli"[^\n]*needs_rereg/);
+  });
+
   test("load fidelity: open_document fails when fewer top-level nodes load than the file holds (any drop)", () => {
     expect(skill).toMatch(/fewer top-level node/i);
   });
@@ -226,7 +319,7 @@ describe("pencil-setup/SKILL.md", () => {
     expect(skill).toMatch(/one writer per file/i);
     expect(skill).toMatch(/Pencil Desktop[^\n]*(writer|same file)|(writer|same file)[^\n]*Pencil Desktop/i);
     expect(skill).toMatch(/batch_design[^\n]*auto-save|auto-save[^\n]*batch_design/i);
-    expect(skill).toMatch(/snapshot/i);
+    expect(skill).toMatch(/copy the `\.pen` aside first/);
   });
 
   test("a read through batch_design is refused under either marker", () => {
@@ -262,9 +355,35 @@ describe("ux-design-lead.md", () => {
     expect(step).toMatch(/REFUSED save:[^.]*NOT PERSISTED:|NOT PERSISTED:[^.]*REFUSED save:/);
   });
 
+  test("gate reset rule is code-aware: open_document + replay for six codes, a clean `save` for save-failed and save-incomplete", () => {
+    const i = agent.indexOf("**Post-save verification (HARD GATE).**");
+    const step = agent.slice(i, agent.indexOf("\n3. **Export", i));
+    const reload = step.match(/open_document` plus a (?:clean )?replay[^:]*for ([^;.]*)|for ([^;.]*) the recovery is `open_document`/);
+    // the six reload codes named together, then the two save codes named together
+    for (const c of ["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized", "unconfirmed"]) {
+      expect(step, `reset rule names ${c}`).toContain(`\`${c}\``);
+    }
+    expect(step).toMatch(/`save-failed`[^.]*`save-incomplete`[^.]*clean `save`|clean `save`[^.]*`save-failed`[^.]*`save-incomplete`/);
+    expect(step).toMatch(/only when the recovery named for the code has completed/);
+    expect(reload === null || reload).toBeTruthy();
+    // the gate's failure text itself is code-aware
+    const gate = agent.slice(agent.indexOf("# post-save-gate"), agent.indexOf("```", agent.indexOf("# post-save-gate")));
+    expect(gate).toMatch(/save-failed/);
+    expect(gate).toMatch(/open_document/);
+  });
+
+  test("after a recovery open_document, step 4 (PRE_SHA) is re-run before the gate; an open that could not record a baseline means a new path", () => {
+    expect(agent).toMatch(/re-run this step 4 before the gate: `PRE_SHA` must describe the file as the recovery reloaded it/);
+    expect(agent).toMatch(/warns that it could not record a baseline for the file, stop and use a new path/);
+  });
+
+  test("SHARED TEXT CONTRACT: the replay step checks whether the edit is already present", () => {
+    expect(agent).toContain(REPLAY_SAFETY);
+  });
+
   test("the agent-reported residual (ruling 5): REFUSED is agent-reported and a skipped replay is undetectable from the file", () => {
     expect(agent).toMatch(/agent-reported/i);
-    expect(agent).toMatch(/skipped replay[^.]*(undetectable|cannot be detected|not detectable)/i);
+    expect(agent).toMatch(/skipped replay[^.]*(undetectable|cannot be detected|not detectable)[^.]*unless[^.]*(step 4|PRE_SHA)[^.]*re-run/i);
   });
 
   test("step 3.2 commits the first marker line verbatim into the wireframe summary for a recovered session", () => {
@@ -273,9 +392,8 @@ describe("ux-design-lead.md", () => {
   });
 
   test("relays the Node floor message, runs check_deps.sh when tools are missing, and does not claim Node is guaranteed", () => {
-    expect(agent).toMatch(/22\.19/);
-    expect(agent).toMatch(/verbatim/);
-    expect(agent).toMatch(/check_deps\.sh/);
+    expect(agent).toMatch(/required 22\.19\.0\)[^\n]*relay that message to the user verbatim/);
+    expect(agent).toMatch(/first run `bash "\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/pencil-setup\/scripts\/check_deps\.sh"`[^\n]*relay its printed output to the user verbatim/);
     expect(agent).not.toMatch(/Node 22\.19 is guaranteed/);
   });
 
@@ -311,10 +429,10 @@ describe("ux-design-lead.md", () => {
   });
 });
 
-describe("pointer prose in other files", () => {
+describe("other pencil prose pointers", () => {
   const files = [BRAINSTORM_PATH, PLAN_PATH, WORKSHOP_PATH];
   for (const f of files) {
-    test(`${f} no longer names the retired package, the retired key name or a pen login path`, () => {
+    test(`${f} does not name the retired package, the retired key name or a pen login path`, () => {
       const t = read(f);
       expect(t).not.toContain("@pencil.dev/cli");
       expect(t).not.toContain("PENCIL_CLI_KEY");
@@ -324,6 +442,13 @@ describe("pointer prose in other files", () => {
 
   test("brainstorm-brand-workshop case pattern matches @pen.dev/cli", () => {
     expect(read(WORKSHOP_PATH)).toContain("*@pen.dev/cli*");
+  });
+
+  test("brand workshop gates its first commit on a node check of size and children, not GNU stat", () => {
+    expect(workshop).not.toMatch(/stat -c/);
+    expect(workshop).toMatch(/node -e/);
+    expect(workshop).toMatch(/children/);
+    expect(workshop).toMatch(/post-save-gate/);
   });
 
   test("brainstorm and plan point at pencil-setup/SKILL.md", () => {

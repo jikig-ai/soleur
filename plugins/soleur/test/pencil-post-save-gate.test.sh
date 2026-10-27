@@ -8,7 +8,8 @@
 #   - an unchanged file after a refusal (stale guard: bytes identical to pre-edit)
 #   - a valid saved file (size > 128, children >= 1, hash changed)
 #   - a valid file while an UNRESOLVED `REFUSED save:` / `NOT PERSISTED:` result is
-#     outstanding (the flag is 1 until open_document + a clean replay resets it to 0)
+#     outstanding (the flag is 1 until the recovery NAMED FOR THE CODE completes: open_document
+#     + a clean replay for the reload codes, a clean `save` for save-failed/save-incomplete)
 #   - a flag that is neither 0 nor 1 (fail closed: an unset variable is not a pass)
 # The gate trusts the agent to report the flag (CTO ruling 5, ADR-304): a skipped
 # replay is undetectable from the file, which this suite does not pretend to catch.
@@ -131,6 +132,13 @@ assert_eq "1" "$rc" "valid file with an unresolved unpersisted result fails the 
 assert_contains "$out" "REFUSED save:" "unresolved-session failure names REFUSED save:"
 assert_contains "$out" "NOT PERSISTED:" "unresolved-session failure names NOT PERSISTED:"
 assert_contains "$out" "open_document" "unresolved-session failure names the recovery (open_document, then replay)"
+# The failure text is code-aware: the reload codes and the save codes name different recoveries,
+# so an agent holding a save-failed marker is not told that open_document (which discards the
+# only copy of its edit) resolves it.
+assert_contains "$out" "save-failed" "unresolved-session failure names the save-failed recovery"
+assert_contains "$out" "save-incomplete" "unresolved-session failure names the save-incomplete recovery"
+assert_contains "$out" "clean save" "unresolved-session failure says a clean save resets the flag for the save codes"
+assert_contains "$out" "unconfirmed" "unresolved-session failure names unconfirmed among the reload codes"
 
 # 4b. Fail closed: a flag that is neither 0 nor 1 (unset, empty, typo) never passes.
 set +e
@@ -168,6 +176,9 @@ AGENT_TEXT="$(cat "$AGENT")"
 assert_contains "$AGENT_TEXT" "unresolved" "agent prose defines the flag as an unresolved unpersisted state"
 assert_contains "$AGENT_TEXT" "NOT PERSISTED:" "agent prose treats NOT PERSISTED: as unpersisted"
 assert_contains "$AGENT_TEXT" "agent-reported" "agent prose states the agent-reported residual (ruling 5)"
+assert_contains "$AGENT_TEXT" "only when the recovery named for the code has completed" "agent prose states the code-aware reset rule"
+assert_contains "$AGENT_TEXT" "Before replaying, check whether the edit is already present (compare the node count open_document reports, or Get the nodes): this session's own interrupted save may already have written it." "agent prose carries the replay-safety sentence (shared text contract)"
+assert_contains "$AGENT_TEXT" "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit)." "agent prose carries the Export/TakeScreenshot steering sentence (shared text contract)"
 if [[ "$AGENT_TEXT" == *"Node 22.19 is guaranteed"* ]]; then
   echo "  FAIL: agent prose must not claim Node 22.19 is guaranteed"
   FAIL=$((FAIL + 1))
@@ -176,4 +187,4 @@ else
   PASS=$((PASS + 1))
 fi
 
-print_results 31
+print_results 38
