@@ -7119,8 +7119,8 @@ fi
 # level up: the RUN itself must not read as the battery it replaced. The denominator
 # already carries them; this line names the mode so a reader (or a poll grepping the
 # terminal marker) can tell scoped evidence from the ship gate without counting skips.
-if (( _TG_AFFECTED_ALIAS == 1 )); then
-  if (( _aff_ready == 1 )); then
+if (( ${_TG_AFFECTED_ALIAS:-0} == 1 )); then
+  if (( ${_aff_ready:-0} == 1 )); then
     echo "NOTE: TEST_GROUP=affected is a deprecated alias of --affected (#8621) — the run"
     echo "      above IS the declared-edge affected selection. This is scoped evidence, not"
     echo "      the full battery. To run everything: bash scripts/test-all.sh --full"

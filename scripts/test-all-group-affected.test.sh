@@ -134,7 +134,7 @@ fi
 # A8 — the epilogue names the alias: a run under the deprecated spelling must
 # say so rather than read as either the heuristic it replaced or a full battery.
 if grep -q 'NOTE: TEST_GROUP=affected is a deprecated alias' "$TARGET" \
-   && grep -q '_TG_AFFECTED_ALIAS == 1' "$TARGET"; then
+   && grep -q '_TG_AFFECTED_ALIAS:-0} == 1' "$TARGET"; then
   pass "A8 — epilogue announces the deprecated alias"
 else
   fail "A8 — no deprecation note keyed on _TG_AFFECTED_ALIAS"
@@ -229,7 +229,8 @@ mkdir -p "$FX/scripts"
 
 SB="$TMP/sb"; mkdir -p "$SB/lib"
 cp "$TARGET" "$SB/runner.sh" || { echo "FATAL: sandbox copy failed"; exit 2; }
-for lib in test-relevance-paths.sh repo-write-boundary.sh test-affected-paths.sh affected-glob.sh; do
+cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$SB/lib/" || { echo "FATAL: lib copy repo-write-boundary failed"; exit 2; }
+for lib in test-relevance-paths.sh test-affected-paths.sh affected-glob.sh; do
   cp "$REPO_ROOT/scripts/lib/$lib" "$SB/lib/" || { echo "FATAL: lib copy $lib failed"; exit 2; }
 done
 python3 - "$SB/runner.sh" <<'PY' || { echo "FATAL: sandbox splice failed"; exit 2; }
