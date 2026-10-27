@@ -814,6 +814,20 @@ export async function replicateToGitData(params: {
           "",
       );
       if (!/remote failure|failed to report status/.test(stderr)) throw pushErr;
+      // Observability (review P3): the transient class this retry exists for
+      // must stay measurable — a silent resend reports "push complete" with no
+      // record that it ever fired, and its frequency is what decides whether
+      // one retry suffices. The phrase is deliberately disjoint from the
+      // Better Stack failure queries (`git-data replication push failed`,
+      // `git-data replication shed`).
+      log.warn(
+        {
+          workspaceIdHash: hashUserId(workspaceId),
+          worktreeIdHash: hashUserId(worktreeId),
+          leaseGeneration,
+        },
+        "git-data replication push transient — retrying once",
+      );
       await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
         cwd: workspacePath,
         timeout: 60_000,
