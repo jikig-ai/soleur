@@ -361,7 +361,8 @@ Then run the affected-suite gate — the plugin entry point, wired the same in
 repo the gate capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh), so the
 always-on fast tier (#9763), ADR-262's PR-gated mutation batteries, and the
 infra consumed edge still apply — and a docs-only diff returns
-`NO_TESTS_AFFECTED`, which is not coverage.
+`NO_TESTS_AFFECTED`, which is not coverage. Preview with
+`bash scripts/test-all.sh --print-selection`, stating `selected N of M` (#10333).
 
 **Probe capacity first (#7545).** An affected run can still DEGRADE to the
 full battery (undecidable diff, runner/index touched, FORCE_ALL), so spend ~3 s
@@ -372,8 +373,8 @@ bash scripts/test-all.sh --capacity
 ```
 
 It prints one verdict — `CAPACITY_OK` / `CAPACITY_CONTENDED reason=…` / `CAPACITY_UNKNOWN reason=…`,
-each with the measured value and the threshold — plus the pid, worktree and elapsed time of every
-sibling run. It takes no lock, runs no suite and always exits 0.
+each with the measured value and threshold — plus pid, worktree and elapsed time per sibling run.
+It takes no lock, runs no suite and always exits 0.
 
 **It does not gate this phase and must never be treated as permission to skip it.** A
 `CAPACITY_CONTENDED` verdict changes what a RED below is *worth* (apply
@@ -397,8 +398,8 @@ from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. C
 therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
 run, and those are the same tree only when `origin/main` is already an ancestor of
 HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
-a claim it establishes rather than one it assumes. The practical consequence: to
-get the saving on a re-run, sync with `main` first.
+a claim it establishes rather than assumes. Re-run savings need `main` synced
+first.
 
 Branch on the exit code, never on the prose:
 
@@ -482,7 +483,7 @@ contended after three hours; the one-script loop launched cleanly on its first `
 - **A local `--affected` run is not, and is not meant to be, the full battery.** Suites the diff does not reach decline as counted `not-affected` skips — a healthy affected run reads `N-k/N` with a `not-affected` breakdown field, not `N/N`. Affected+ratchets does not exercise suite×suite interaction; the backstop for that class is CI's sharded full battery on the PR head, so a green affected run is not a full-coverage claim. Selection fails toward coverage: an undecidable diff, a missing declarations index, or a diff touching the runner or index itself degrades the run to the full battery and prints `AFFECTED_FALLBACK reason=…`. If the declined suites must execute, that is `--full` (or legacy `SOLEUR_TEST_FORCE_ALL=1`); `SOLEUR_INCIDENT_SKIP=1` drops the infra set while leaving this pin satisfied.
 - **Push time runs a ratchet lane (#9400):** [scripts/pre-push-ratchet-lane.sh](../../../../scripts/pre-push-ratchet-lane.sh) — the diff-reachable ratchets on a scratch `origin/main` merge; supplemental only.
 
-**The dispatch is pinned, and that pin is load-bearing.** This dispatch must run `affected-tests.sh` (or `affected-tests.sh --full` under `FULL_BATTERY`) — never a bare `test-all.sh` whose mode would silently be the operator's default, and never a `TEST_GROUP=` shard, which would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding or de-flagging* the command rather than deleting it. `TEST_GROUP=affected` (#8591) exists for LOCAL ITERATION (work Phase 2 §9) — it is the runner's heuristic scoped mode (declines counted, `[skip] (affected)` lines, epilogue scope note), and it is NOT a substitute for this checkpoint: substituting it would read a scoped run as the ship gate, which is the exact misreading its own epilogue warns against. Read the pin honestly, though: the mode selects the battery's breadth, and `_infra_in_diff`/the infra consumed edge decides whether the infra runner executes at all — so the pin is necessary and not sufficient, and the epilogue is what tells you which happened.
+**The dispatch is pinned, and that pin is load-bearing.** This dispatch must run `affected-tests.sh` (or `affected-tests.sh --full` under `FULL_BATTERY`) — never a bare `test-all.sh` whose mode would silently be the operator's default, and never a `TEST_GROUP=` shard, which would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding or de-flagging* the command rather than deleting it. `TEST_GROUP=affected` survives only as a deprecated compat alias of `--affected` (#8621 — the #8591 heuristic was folded), and it is NOT a substitute for this checkpoint: substituting it would read a scoped run as the ship gate, which is the exact misreading the runner's scope notes warn against. Read the pin honestly, though: the mode selects the battery's breadth, and `_infra_in_diff`/the infra consumed edge decides whether the infra runner executes at all — so the pin is necessary and not sufficient, and the epilogue is what tells you which happened.
 
 **A reaped run is UNRESOLVED — never ship on it, and rc=4 is not a reap.** The outcome space is four-way, not three: `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); **`rc=4` is REFUSED — nothing ran at all**; and no marker with no rc file is a harness reap. Since #8322 an `--affected` run is exempt from both contention refusals (that is the point of the mode), so rc=4 on an affected dispatch means one of: the run DEGRADED to full (`AFFECTED_FALLBACK reason=…` in the log) and then hit `SOLEUR_SUBAGENT=1` or a sibling full-gate run (#7553) — both overridden by `SOLEUR_ALLOW_FULL_GATE=1`; or selection found literally nothing to run or a gutted declarations index (a `below-floor`/`zero-selected` refusal — investigate the index, do not force). An explicit `--full` dispatch keeps the original two refusal arms. The rc=4 case exits in under a second with no `[FAIL]` lines — the easiest verdict to misread as a reap. Ship reached from a spawned agent does **not** inherit `SOLEUR_SUBAGENT` — the harness does not set it; that path trips rc=4 only via the sibling condition. With one run left in the pipeline there is no second chance — "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
 

@@ -488,7 +488,7 @@ if grep -qF 'this diff edits the runner' <<<"$ARM_OUT" \
    && grep -qF 'bash scripts/test-all.sh --print-selection' <<<"$ARM_OUT" \
    && grep -qF -- '--affected --affected-scope=staged' <<<"$ARM_OUT" \
    && grep -qF 'INDEX only' <<<"$ARM_OUT" \
-   && grep -qF 'TEST_GROUP=affected is a different selector' <<<"$ARM_OUT" \
+   && grep -qF 'TEST_GROUP=affected aliases --affected (#8621)' <<<"$ARM_OUT" \
    && grep -qxF -- "$_k_mode" <<<"$ARM_OUT"; then
   pass "k2: the runner-changed banner states cause, preview and scope commands, and keeps the MODE=full line verbatim"
 else
@@ -532,8 +532,8 @@ _k4_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --help 2>
 if grep -qF 'RUNNER EDITS' <<<"$_k4_out" \
    && grep -qF 'bash scripts/test-all.sh --print-selection' <<<"$_k4_out" \
    && grep -qF -- '--affected --affected-scope=staged' <<<"$_k4_out" \
-   && grep -qF 'TEST_GROUP=affected is a DIFFERENT, heuristic selector' <<<"$_k4_out" \
-   && grep -qF 'not an escape from the fallback' <<<"$_k4_out"; then
+   && grep -qF 'TEST_GROUP=affected is a deprecated compat ALIAS of --affected' <<<"$_k4_out" \
+   && grep -qF 'the same runner-changed fallback' <<<"$_k4_out"; then
   pass "k4: --help carries the RUNNER EDITS block with the preview and staged-scope commands"
 else
   fail "k4: --help lacks the RUNNER EDITS block"
@@ -2207,8 +2207,8 @@ else
   fail "sc7: rc=$_rc ran=${_ran} decl=${_decl} runnable=$(runnable_n "$ARM_SB")"
 fi
 
-# sc8: TEST_GROUP=affected (the heuristic axis) scopes its diff the same way
-# — the flag is valid on either affected axis.
+# sc8: TEST_GROUP=affected (the #8621 compat alias) scopes its diff the same
+# way — the flag is valid under the alias exactly as under the flag.
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_STAGED_NAMES=tests/commands/test-sync-domain-model.sh' \
@@ -2217,7 +2217,7 @@ SANDBOX_LIB=with-lib run_arm \
 if [[ "$ARM_RC" == "0" ]] \
   && grep -qF 'AFFECTED_SCOPE' <<<"$ARM_OUT" \
   && grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
-  pass "sc8: TEST_GROUP=affected + staged flag scopes the heuristic axis"
+  pass "sc8: TEST_GROUP=affected + staged flag scopes the alias axis"
 else
   fail "sc8: rc=$ARM_RC ran=$(ran_count) out=$(tail -3 <<<"$ARM_OUT" | tr '\n' ' ')"
 fi
@@ -2275,8 +2275,9 @@ if (
 ) >/dev/null 2>&1; then
   _staged_asm="$TESTROOT/assembly-staged.sh"
   # Range ends at the _diff_touches comment, covering ALL diff sources —
-  # staged branch, both branch arms, the rename pair, and all three
-  # untracked appends (scoped + both unscoped).
+  # staged branch, both branch arms, the rename pair, and both untracked
+  # appends (scoped + the _AFFECTED unscoped — the heuristic-era
+  # TEST_GROUP=affected append went away with the #8621 fold).
   awk '/^_diff_detect_ok=0$/,/^# Does this run'"'"'s diff/' "$RUNNER" > "$_staged_asm"
   # Env-read pin (#9197 security seat): the shipped runner must contain NO
   # `${SANDBOX_STAGED_NAMES+x}` read — the seam exists only in sandbox copies
@@ -2293,7 +2294,7 @@ if (
       for _v in "${!GIT_@}"; do unset "$_v"; done
       bash -c "
         source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
-        _AFF_SCOPE=staged; _AFFECTED=1; TEST_GROUP=affected
+        _AFF_SCOPE=staged; _AFFECTED=1; TEST_GROUP=all
         $(cat "$_staged_asm")
         printf '%s\nDETECT=%s HEAD=%s\n' \"\$_diff_names\" \"\$_diff_detect_ok\" \"\$_diff_head_ok\""
     ) 2>/dev/null || true)
@@ -2301,7 +2302,7 @@ if (
       for _v in "${!GIT_@}"; do unset "$_v"; done
       bash -c "
         source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
-        _AFFECTED=1; TEST_GROUP=affected
+        _AFFECTED=1; TEST_GROUP=all
         $(cat "$_staged_asm")
         printf '%s\nDETECT=%s HEAD=%s\n' \"\$_diff_names\" \"\$_diff_detect_ok\" \"\$_diff_head_ok\""
     ) 2>/dev/null || true)
@@ -2669,8 +2670,8 @@ fi
 #     selects the suite guarding it. The sandbox lib injects
 #     `zzz-deleted-subject/` — a path that does not exist in the real tree the
 #     probes run against — into guard-vacuity-floor's declared array; the diff
-#     names one file beneath it. guard-vacuity-floor passes _suite_affected on
-#     its own (signal 4's corpus-scan backstop), so the outcome reads the edge
+#     names one file beneath it. guard-vacuity-floor selects on its own via the
+#     always-on census floor, so the outcome reads the edge
 #     set alone: ^zzz-deleted-subject/ prefix-matches the deleted file's diff
 #     line. m10 re-points the declared re-add at the filtered mint, restoring
 #     the drop — t17's fixture must then decline.
@@ -2822,10 +2823,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "114" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 114 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations: 119-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "115" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 115 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard: 120-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 114) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 115) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
