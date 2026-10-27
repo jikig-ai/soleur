@@ -74,17 +74,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Positive control (ADR-166): probe the PRIMARY image source — the
-      # public.ecr.aws mirror (the ghcr org bucket is a shared-IP lottery that
-      # rejects even single calls, measured run 40574945720; ECR's cap is
-      # BANDWIDTH — `toomanyrequests: Data limit exceeded` — so a manifest
-      # inspect is too small to trip it). Credential-free, so it runs for
-      # fork PRs too. Behind the retry helper: a failed probe still fails
-      # loudly HERE rather than ambiguously inside the pull loop. The tag is
-      # the image the pinned CLI below pulls — bump it with `version:` in
-      # lockstep.
-      - name: Probe image-registry reachability (manifest inspect)
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" docker manifest inspect public.ecr.aws/supabase/postgres:17.6.1.095
+      # No reachability probe: every registry (ghcr, ECR) throttles even
+      # single manifest calls on a shared runner IP — measured across runs
+      # 40525753531/40561028313/40572250940/40573437435/40574945720/
+      # 40575928811. A probe is a guaranteed failure source, not a signal —
+      # the pre-pull loop IS the control (a cache hit issues zero requests;
+      # a miss tries ECR then ghcr per image through the retry helper).
 
       # Pin the CLI/GoTrue version to prod's — the ADR-111 parity contract (the
       # diff catches catalog shape; the version pin controls claim-parsing behavior).
