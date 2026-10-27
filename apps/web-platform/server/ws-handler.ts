@@ -2,10 +2,10 @@ import { Server as HTTPServer } from "http";
 import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "./quiet-window";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
-import { randomUUID } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { basename as pathBasename } from "path";
 
-import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode } from "@/lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode, type AttachmentRef } from "@/lib/types";
 import { ByokDelegationError } from "@/server/byok-resolver";
 import type { ConversationContext } from "@/lib/types";
 import {
@@ -24,14 +24,16 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
-import { assertLegacyConversationEngineBinding, assertLegacyEngineBinding } from "./agent-engine-route-guard";
+import { dispatchCodexConversationToWebSocket } from "./codex-conversation-dispatch";
+import { codexConversationRuntime } from "./codex-conversation-runtime";
+import type { EngineBinding } from "./agent-engine-contract";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
   startAgentSession,
   sendUserMessage,
   resolveReviewGate,
-  abortSession,
+  abortSession as abortLegacySession,
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
@@ -388,6 +390,72 @@ export function forceDisconnectForTierChange(
 
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
+const codexTurnAbortControllers = new Map<string, AbortController>();
+const codexTurnClientTurnIds = new Map<string, string>();
+const codexPendingTurnAbortControllers = new Map<string, Set<AbortController>>();
+type CodexNoticeDelivery = {
+  conversationId: string;
+  authModeGeneration: number;
+  nonceHash: string;
+  completion: Promise<boolean>;
+};
+// One latest notice per socket session. A replaced/disconnected session can be
+// collected; retain no plaintext nonce or unbounded per-turn collection.
+const codexNoticeDeliveries = new WeakMap<ClientSession, CodexNoticeDelivery>();
+const codexNoticeDeliveryRecoveries = new Map<string, Promise<boolean>>();
+const CODEX_NOTICE_RECOVERY_CACHE_LIMIT = 256;
+
+function codexNoticeRecoveryKey(userId: string, notice: Omit<CodexNoticeDelivery, "completion">): string {
+  return `${userId}:${notice.conversationId}:${notice.authModeGeneration}:${notice.nonceHash}`;
+}
+
+function codexTurnKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+/** Abort both the legacy runner session and a Codex provider turn, when present. */
+function abortSession(
+  userId: string,
+  conversationId: string,
+  reason?: Parameters<typeof abortLegacySession>[2],
+  leaderId?: string,
+): number {
+  const legacyAbortResult = leaderId === undefined
+    ? reason === undefined
+      ? abortLegacySession(userId, conversationId)
+      : abortLegacySession(userId, conversationId, reason)
+    : abortLegacySession(userId, conversationId, reason, leaderId);
+  let aborted = legacyAbortResult ?? 0;
+  const key = codexTurnKey(userId, conversationId);
+  const codexTurn = codexTurnAbortControllers.get(key);
+  if (codexTurn) {
+    codexTurn.abort(reason);
+    // Keep its delivery identity until dispatch finishes, so Stop's terminal
+    // frame is admitted while a replacement turn can supersede it.
+    aborted += 1;
+  }
+  codexTurnClientTurnIds.delete(key);
+  const pending = codexPendingTurnAbortControllers.get(key);
+  if (pending) {
+    for (const controller of pending) controller.abort(reason);
+    codexPendingTurnAbortControllers.delete(key);
+    aborted += pending.size;
+  }
+  return aborted;
+}
+
+function registerPendingCodexTurn(key: string, controller: AbortController): void {
+  const pending = codexPendingTurnAbortControllers.get(key) ?? new Set<AbortController>();
+  pending.add(controller);
+  codexPendingTurnAbortControllers.set(key, pending);
+}
+
+function removePendingCodexTurn(key: string, controller: AbortController): void {
+  const pending = codexPendingTurnAbortControllers.get(key);
+  if (!pending) return;
+  pending.delete(controller);
+  if (pending.size === 0) codexPendingTurnAbortControllers.delete(key);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -403,8 +471,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   log.info({ userId, conversationId: oldConvId }, "Aborting active session (superseded)");
 
   if (session.idleTimer) clearTimeout(session.idleTimer);
+  if (oldConvId) {
+    abortSession(userId, oldConvId, "superseded");
+  }
   if (session.conversationId) {
-    abortSession(userId, session.conversationId, "superseded");
     // feat-stream-since-disconnect (#5273) — a superseded conversation will
     // never be resumed; drop its replay frames (counter preserved). See ADR-059.
     streamReplayBuffer.clear(session.conversationId);
@@ -1000,6 +1070,7 @@ async function createConversation(
   // below is skipped), and stays out of the Command Center rail (which scopes by
   // repo_url). Default "command_center" preserves the existing behavior exactly.
   kind: "command_center" | "support" = "command_center",
+  isActive: () => boolean = () => true,
 ): Promise<string> {
   if (!id) id = randomUUID();
 
@@ -1012,6 +1083,7 @@ async function createConversation(
   // Support conversations are repo-independent — never throw on a null repo_url,
   // and always persist repo_url=null so they never enter the repo-scoped rail.
   const repoUrl = await getCurrentRepoUrl(userId);
+  if (!isActive()) return id;
   if (!repoUrl && kind !== "support") {
     throw new Error(
       "No connected repository — conversation insert aborted (disconnect race).",
@@ -1026,6 +1098,7 @@ async function createConversation(
   // second JWT-mint check before the conversation INSERT to catch a
   // mid-handler jti revocation race.
   const tenant = await tenantFor(userId, "createConversation");
+  if (!isActive()) return id;
   if (!tenant) {
     throw new Error(
       "Tenant auth-probe failed — conversation insert aborted.",
@@ -1042,6 +1115,7 @@ async function createConversation(
   const wsId = await resolveUserWorkspaceBinding(userId, (uid) =>
     readWorkspaceIdFromDb(uid, tenant),
   );
+  if (!isActive()) return id;
 
   // visibility-sweep-audit: INSERT — owner-scoped (user creates own conversation with workspace_id)
   const { error } = await tenant.from("conversations").insert({
@@ -1057,6 +1131,10 @@ async function createConversation(
     engine_binding_state: "pending",
     ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
+
+  // Creation can finish after the member closes or replaces the pending chat.
+  // Leave an inserted row pending; the resumer owns any later engine binding.
+  if (!isActive()) return id;
 
   if (error) {
     // 23505 = unique_violation (postgres). When contextPath is set, this means
@@ -1077,6 +1155,8 @@ async function createConversation(
         .order("last_active", { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      if (!isActive()) return id;
 
       if (lookupErr || !existing) {
         throw new Error(`Failed to resolve existing context_path conversation: ${lookupErr?.message ?? "not found"}`);
@@ -1146,7 +1226,7 @@ async function createConversation(
           "23505 fallback: context_path diverged; first-writer-wins — second-tab path silently discarded",
         );
       }
-      await assertLegacyConversationEngineBinding(
+      await resolveConversationEngineBinding(
         new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient),
         existingRow.id,
       );
@@ -1164,16 +1244,290 @@ async function createConversation(
     conversationId: id,
     createdBy: userId,
   });
-  // The legacy runner is the only handler currently wired for conversations.
-  // Refuse a future non-Claude default here rather than silently sending that
-  // turn to Claude while Codex qualification/runtime wiring is incomplete.
-  assertLegacyEngineBinding(
+  assertConversationEngineBinding(
     persistedBinding && typeof persistedBinding === "object" && "binding" in persistedBinding
       ? (persistedBinding as { binding: unknown }).binding
       : persistedBinding,
+    id,
+    wsId,
   );
 
   return id;
+}
+
+function assertConversationEngineBinding(value: unknown, conversationId: string, workspaceId?: string): EngineBinding {
+  if (!value || typeof value !== "object") throw new Error("conversation engine binding is invalid");
+  const binding = value as EngineBinding;
+  if (binding.execution?.kind !== "conversation" || binding.execution.conversationId !== conversationId
+    || (workspaceId && binding.workspaceId !== workspaceId)
+    || (binding.engineId !== "claude-code" && binding.engineId !== "codex")) {
+    throw new Error("conversation engine binding does not match the owned workspace");
+  }
+  if (binding.engineId === "codex" && binding.authMode !== "api-key" && binding.authMode !== "managed") {
+    throw new Error("Codex conversation auth mode is invalid");
+  }
+  return binding;
+}
+
+async function resolveConversationEngineBinding(
+  repository: AgentEnginePersistenceRepository,
+  conversationId: string,
+  workspaceId?: string,
+): Promise<EngineBinding | null> {
+  const resolved = await resolveConversationEngineRun(repository, conversationId, workspaceId);
+  return resolved?.binding ?? null;
+}
+
+async function resolveConversationEngineRun(
+  repository: AgentEnginePersistenceRepository,
+  conversationId: string,
+  workspaceId?: string,
+): Promise<{ run: unknown; binding: EngineBinding | null } | null> {
+  const run = await repository.getConversationRun(conversationId);
+  if (run === null) {
+    if (await repository.getConversationBindingState(conversationId) === "legacy") return null;
+    throw new Error("conversation engine binding is missing");
+  }
+  const binding = run && typeof run === "object" && "binding" in run
+    ? (run as { binding: unknown }).binding : run;
+  return { run, binding: assertConversationEngineBinding(binding, conversationId, workspaceId) };
+}
+
+async function persistCodexNoticeDelivery(userId: string, notice: Omit<CodexNoticeDelivery, "completion">): Promise<boolean> {
+  const key = codexNoticeRecoveryKey(userId, notice);
+  const existing = codexNoticeDeliveryRecoveries.get(key);
+  if (existing) return existing;
+  const recovery = persistCodexNoticeDeliveryOnce(userId, notice);
+  codexNoticeDeliveryRecoveries.set(key, recovery);
+  while (codexNoticeDeliveryRecoveries.size > CODEX_NOTICE_RECOVERY_CACHE_LIMIT) {
+    const oldest = codexNoticeDeliveryRecoveries.keys().next().value;
+    if (oldest === undefined) break;
+    codexNoticeDeliveryRecoveries.delete(oldest);
+  }
+  const delivered = await recovery;
+  if (codexNoticeDeliveryRecoveries.get(key) === recovery) {
+    codexNoticeDeliveryRecoveries.delete(key);
+  }
+  return delivered;
+}
+
+async function persistCodexNoticeDeliveryOnce(userId: string, notice: Omit<CodexNoticeDelivery, "completion">): Promise<boolean> {
+  // Retrying the same nonce is safe even when the first write committed but its
+  // response was lost. Bound each wait so a fast acknowledgment cannot hang.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const requestController = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        createServiceClient().rpc("mark_codex_history_transfer_notice_delivered", {
+          p_conversation_id: notice.conversationId,
+          p_auth_mode_generation: notice.authModeGeneration,
+          p_member_user_id: userId,
+          p_nonce_hash: notice.nonceHash,
+        }).abortSignal(requestController.signal),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            requestController.abort();
+            reject(new Error("Codex notice delivery persistence timed out"));
+          }, 5_000);
+        }),
+      ]);
+      if (result.error || result.data !== true) {
+        throw result.error ?? new Error("Codex history-transfer notice delivery could not be recorded");
+      }
+      return true;
+    } catch (error) {
+      reportSilentFallback(error, { feature: "codex-history-transfer", op: "mark-notice-delivered" });
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      requestController.abort();
+    }
+  }
+  return false;
+}
+
+async function discardCodexNoticeIssuance(
+  userId: string,
+  notice: Omit<CodexNoticeDelivery, "completion">,
+): Promise<void> {
+  try {
+    const { error } = await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
+      p_conversation_id: notice.conversationId,
+      p_auth_mode_generation: notice.authModeGeneration,
+      p_member_user_id: userId,
+      p_nonce_hash: notice.nonceHash,
+    });
+    if (error) reportSilentFallback(error, { feature: "codex-history-transfer", op: "discard-unsent-notice" });
+  } catch (error) {
+    reportSilentFallback(error, { feature: "codex-history-transfer", op: "discard-unsent-notice" });
+  }
+}
+
+async function dispatchCodexChatTurn(
+  userId: string,
+  conversationId: string,
+  binding: EngineBinding,
+  runId: string,
+  content: string,
+  attachments: unknown,
+  clientTurnId: string,
+  controller: AbortController,
+  sourceSession: ClientSession,
+  leaderId?: DomainLeaderId,
+): Promise<void> {
+  const key = codexTurnKey(userId, conversationId);
+  const assertCurrent = () => {
+    if (controller.signal.aborted) {
+      throw Object.assign(new Error("Codex turn was cancelled"), { code: "codex_turn_cancelled" });
+    }
+    if (sessions.get(userId) !== sourceSession || sourceSession.conversationId !== conversationId) {
+      controller.abort("session-replaced");
+      throw Object.assign(new Error("Codex session was replaced"), { code: "codex_turn_cancelled" });
+    }
+  };
+  assertCurrent();
+  // An active WS session is not ownership evidence. Recheck the row with the
+  // user's tenant JWT before constructing a service-role repository or writing
+  // an attempt. This also covers the context-path unique-index collision.
+  const tenant = await tenantFor(userId, "handleMessage.chat.codex-owner");
+  assertCurrent();
+  if (!tenant) throw new Error("Codex conversation authorization failed");
+  const { data: row, error } = await tenant.from("conversations")
+    .select("id, workspace_id, repo_url")
+    .eq("id", conversationId)
+    .eq("user_id", userId)
+    .single();
+  assertCurrent();
+  const currentRepoUrl = await getCurrentRepoUrl(userId);
+  assertCurrent();
+  const owned = row as { id?: string; workspace_id?: string; repo_url?: string | null } | null;
+  if (error || owned?.id !== conversationId || !owned.workspace_id || owned.repo_url !== currentRepoUrl) {
+    throw new Error("Codex conversation not found in the current workspace");
+  }
+  if (binding.engineId !== "codex" || binding.workspaceId !== owned.workspace_id) {
+    throw new Error("Codex conversation binding changed");
+  }
+  const authModeGeneration = binding.authModeGeneration ?? 0;
+  if (authModeGeneration > 0) {
+    const { data: historyTransferAcknowledged, error: acknowledgementError } = await tenant.rpc(
+      "codex_history_transfer_acknowledged",
+      { p_conversation_id: conversationId, p_auth_mode_generation: authModeGeneration },
+    );
+    assertCurrent();
+    if (acknowledgementError) {
+      throw new Error("Codex history-transfer acknowledgment could not be verified");
+    }
+    if (historyTransferAcknowledged !== true) {
+      const noticeNonce = randomBytes(32).toString("base64url");
+      const noticeNonceHash = createHash("sha256").update(noticeNonce).digest("hex");
+      const { data: noticeIssued, error: noticeIssueError } = await createServiceClient().rpc(
+        "issue_codex_history_transfer_notice",
+        {
+          p_conversation_id: conversationId,
+          p_auth_mode_generation: authModeGeneration,
+          p_member_user_id: userId,
+          p_nonce_hash: noticeNonceHash,
+        },
+      );
+      if (noticeIssueError || noticeIssued !== true) {
+        throw new Error("Codex history-transfer notice could not be recorded");
+      }
+      if (!controller.signal.aborted && sessions.get(userId) === sourceSession && sourceSession.conversationId === conversationId) {
+        let completeDelivery!: (delivered: boolean) => void;
+        const notice: CodexNoticeDelivery = {
+          conversationId, authModeGeneration, nonceHash: noticeNonceHash,
+          completion: new Promise<boolean>((resolve) => { completeDelivery = resolve; }),
+        };
+        // Register before sending: the client can acknowledge while the marker
+        // write is pending. That acknowledgment must await this exact nonce.
+        codexNoticeDeliveries.set(sourceSession, notice);
+        let delivered = false;
+        try {
+          delivered = sendToClient(userId, {
+            type: "codex_history_transfer_required",
+            conversationId,
+            authModeGeneration,
+            noticeNonce,
+            authMode: binding.authMode === "api-key" || binding.authMode === "managed" ? binding.authMode : undefined,
+            clientTurnId,
+          });
+          if (delivered) {
+            completeDelivery(await persistCodexNoticeDelivery(userId, notice));
+          }
+        } finally {
+          // Persistent marker failure leaves the notice actionable. The next
+          // explicit acknowledgment retries persistence before consuming it.
+          completeDelivery(false);
+          if (!delivered && codexNoticeDeliveries.get(sourceSession) === notice) {
+            codexNoticeDeliveries.delete(sourceSession);
+          }
+          if (!delivered) {
+            await discardCodexNoticeIssuance(userId, notice);
+          }
+        }
+        if (delivered) assertCurrent();
+      } else {
+        await discardCodexNoticeIssuance(userId, {
+          conversationId, authModeGeneration, nonceHash: noticeNonceHash,
+        });
+      }
+      return;
+    }
+  }
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    throw new Error("Codex conversation attachments are not qualified");
+  }
+  const runtime = codexConversationRuntime(userId);
+  const serviceRepository = new AgentEnginePersistenceRepository(createServiceClient() as unknown as PersistenceClient);
+  assertCurrent();
+  let accepted = false;
+  try {
+    await dispatchCodexConversationToWebSocket({
+      repository: serviceRepository,
+      runtime: runtime.runtime,
+      registry: runtime.registry,
+      conversationId,
+      input: { text: content, attachmentIds: [] },
+      context: { runId, binding, idempotencyKey: clientTurnId, signal: controller.signal },
+      selection: {
+        engineId: "codex", authMode: binding.authMode, operation: "existing-run",
+        workflow: "conversation", dataClass: runtime.dataClass,
+        requiredCapabilities: ["streaming"], now: Date.now(),
+      },
+      evidence: runtime.evidence,
+      leaderId: leaderId ?? "cc_router",
+      workspaceId: owned.workspace_id,
+      send: (message) => {
+        if (sessions.get(userId) !== sourceSession || sourceSession.conversationId !== conversationId) return;
+        if (codexTurnAbortControllers.get(key) !== controller) return;
+        if ("conversationId" in message && message.conversationId && message.conversationId !== conversationId) return;
+        sendToClient(userId, message);
+      },
+      onAccepted: () => {
+        assertCurrent();
+        removePendingCodexTurn(key, controller);
+        codexTurnAbortControllers.get(key)?.abort("superseded");
+        codexTurnAbortControllers.set(key, controller);
+        codexTurnClientTurnIds.set(key, clientTurnId);
+        accepted = true;
+      },
+    });
+  } catch (error) {
+    if (sessions.get(userId) !== sourceSession || sourceSession.conversationId !== conversationId
+      || (accepted && codexTurnAbortControllers.get(key) !== controller)) {
+      // Both chat paths have generic outer catches. Keep an obsolete provider
+      // failure observable without sending its error into the replacement turn.
+      reportSilentFallback(error, {
+        feature: "codex_conversation", op: "obsolete_turn_error", extra: { runId, conversationId },
+      });
+      return;
+    }
+    throw error;
+  } finally {
+    removePendingCodexTurn(key, controller);
+    if (codexTurnAbortControllers.get(key) === controller) codexTurnAbortControllers.delete(key);
+    if (codexTurnClientTurnIds.get(key) === clientTurnId) codexTurnClientTurnIds.delete(key);
+  }
 }
 
 /**
@@ -1268,7 +1622,7 @@ export async function dispatchSoleurGoForConversation(
   userMessage: string,
   routing: ConversationRouting,
   context?: ConversationContext,
-  attachments?: import("@/lib/types").AttachmentRef[],
+  attachments?: AttachmentRef[],
   sessionId?: string | null,
   /**
    * feat-cc-cap-raise-resume (#9565) — cached
@@ -1500,6 +1854,7 @@ const TC_RECHECK_MESSAGE_TYPES = new Set([
   "start_session",
   "resume_session",
   "chat",
+  "codex_history_transfer_acknowledge",
   "interactive_prompt_response",
   "review_gate_response",
 ]);
@@ -1804,12 +2159,38 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     return;
   }
 
+  let chatController: AbortController | null = null;
+  let chatControllerKey: string | null = null;
+  let chatControllerConversationId: string | null = null;
+  const chatClientTurnId = msg.type === "chat" ? (msg.clientTurnId ?? randomUUID()) : null;
+  if (msg.type === "chat") {
+    const conversationId = session.conversationId ?? session.pending?.id;
+    if (conversationId && chatClientTurnId) {
+      const key = codexTurnKey(userId, conversationId);
+      if (session.conversationId && codexTurnClientTurnIds.get(key) === chatClientTurnId) return;
+      chatController = new AbortController();
+      chatControllerKey = key;
+      chatControllerConversationId = conversationId;
+      registerPendingCodexTurn(key, chatController);
+    }
+  }
+  const releasePendingChatController = () => {
+    if (chatController && chatControllerKey) removePendingCodexTurn(chatControllerKey, chatController);
+  };
+
   log.debug({ userId, msgType: msg.type }, "Message received");
 
   // Mid-session T&C re-check. Closes the socket on stale consent or DB
   // error for gated types only (see TC_RECHECK_MESSAGE_TYPES). Exempt
   // types (abort_turn, close_conversation) pass through unchanged.
   if (await recheckTcMidSession(userId, session, msg.type)) {
+    releasePendingChatController();
+    return;
+  }
+  if (chatController?.signal.aborted || sessions.get(userId) !== session
+    || (chatControllerConversationId !== null
+      && chatControllerConversationId !== (session.conversationId ?? session.pending?.id))) {
+    releasePendingChatController();
     return;
   }
 
@@ -1936,7 +2317,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // visibility-sweep-audit: owner-scoped — WS resume creates a session bound to the user's own conversation
           const { data: existing, error: lookupErr } = await tenantResume
             .from("conversations")
-            .select("id, last_active, context_path")
+            .select("id, last_active, context_path, workspace_id")
             .eq("user_id", userId)
             .eq("repo_url", currentRepoUrl)
             .eq("context_path", validResumePath)
@@ -1947,9 +2328,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
           if (!lookupErr && existing) {
             const row = existing as { id: string; last_active: string };
-            await assertLegacyConversationEngineBinding(
+            await resolveConversationEngineBinding(
               new AgentEnginePersistenceRepository(tenantResume as unknown as PersistenceClient),
               row.id,
+              (existing as { workspace_id?: string }).workspace_id,
             );
             const { count: messageCount, error: countErr } = await tenantResume
               .from("messages")
@@ -2185,9 +2567,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           return;
         }
 
-        await assertLegacyConversationEngineBinding(
+        await resolveConversationEngineBinding(
           new AgentEnginePersistenceRepository(tenantResumeConv as unknown as PersistenceClient),
           msg.conversationId,
+          (conv as { workspace_id?: string }).workspace_id,
         );
 
         // FR1 (#5240) — re-align the agent cwd resolver with the
@@ -2404,13 +2787,17 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // chat: forward user message into the running agent session
     // ------------------------------------------------------------------
     case "chat": {
-      if (checkSubscriptionSuspended(userId, session)) return;
+      if (checkSubscriptionSuspended(userId, session)) {
+        releasePendingChatController();
+        return;
+      }
 
       if (!session.conversationId && !session.pending) {
         sendToClient(userId, {
           type: "error",
           message: "No active session. Send start_session first.",
         });
+        releasePendingChatController();
         return;
       }
 
@@ -2421,6 +2808,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           message: "Too many files",
           errorCode: "too_many_files",
         });
+        releasePendingChatController();
         return;
       }
 
@@ -2447,6 +2835,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             type: "error",
             message: "Please include a message along with the @-mention.",
           });
+          releasePendingChatController();
           return;
         }
         // First message with ANY attachments (#9297): validate every ref BEFORE
@@ -2461,6 +2850,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             }
           } catch (refErr) {
             sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
+            releasePendingChatController();
             return;
           }
         }
@@ -2485,6 +2875,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             contextPath: pendingContextPath,
             routing: pendingRouting,
           } = session.pending;
+          const pendingClientTurnId = chatClientTurnId ?? randomUUID();
+          const pendingController = chatController ?? new AbortController();
+          const pendingConversationKey = chatControllerKey ?? codexTurnKey(userId, pendingId);
+          if (!chatController) {
+            chatController = pendingController;
+            chatControllerKey = pendingConversationKey;
+            registerPendingCodexTurn(pendingConversationKey, pendingController);
+          }
           // Stage 2.12 — persist active_workflow at creation time when the
           // soleur-go flag was on at start_session. The sentinel is
           // consumed on first dispatch via persistActiveWorkflow.
@@ -2511,7 +2909,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // on a missing repo; the repo-less support user is exactly who needs help).
             // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
+            () => sessions.get(userId) === session && session.pending?.id === pendingId
+              && !pendingController.signal.aborted,
           );
+          if (sessions.get(userId) !== session || session.pending?.id !== pendingId
+            || pendingController.signal.aborted) {
+            removePendingCodexTurn(pendingConversationKey, pendingController);
+            break;
+          }
           // Two-tab context_path fallback: the row id differs from the pending
           // id the client uploaded under, so the pipeline prefix check would
           // fail closed AFTER the user message row was appended to the other
@@ -2528,8 +2933,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               type: "error",
               message: sanitizeErrorForClient(new Error(ERR_ATTACHMENT_NOT_FOUND)),
             });
+            removePendingCodexTurn(pendingConversationKey, pendingController);
             return;
           }
+          const resolvedConversationKey = codexTurnKey(userId, resolvedId);
+          removePendingCodexTurn(pendingConversationKey, pendingController);
+          registerPendingCodexTurn(resolvedConversationKey, pendingController);
+          chatControllerKey = resolvedConversationKey;
+          chatControllerConversationId = resolvedId;
           session.conversationId = resolvedId;
           session.pending = undefined;
           // Seed the routing cache so chat-case on subsequent turns
@@ -2554,6 +2965,43 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             },
             "Conversation materialized on first message",
           );
+
+          const tenantBinding = await tenantFor(userId, "handleMessage.chat.new-engine-binding");
+          if (sessions.get(userId) !== session || session.conversationId !== resolvedId
+            || pendingController.signal.aborted) {
+            removePendingCodexTurn(resolvedConversationKey, pendingController);
+            break;
+          }
+          if (!tenantBinding) throw new Error("conversation engine binding auth probe failed");
+          const newResolved = await resolveConversationEngineRun(
+            new AgentEnginePersistenceRepository(tenantBinding as unknown as PersistenceClient),
+            resolvedId,
+          );
+          if (sessions.get(userId) !== session || session.conversationId !== resolvedId
+            || pendingController.signal.aborted) {
+            removePendingCodexTurn(resolvedConversationKey, pendingController);
+            break;
+          }
+          const newBinding = newResolved?.binding ?? null;
+          if (newBinding?.engineId === "codex") {
+            const runId = newResolved?.run && typeof newResolved.run === "object" && "id" in newResolved.run
+              ? (newResolved.run as { id: unknown }).id : null;
+            if (typeof runId !== "string") throw new Error("Codex conversation run is missing");
+            await dispatchCodexChatTurn(
+              userId,
+              resolvedId,
+              newBinding,
+              runId,
+              userContent,
+              msg.attachments,
+              pendingClientTurnId,
+              pendingController,
+              session,
+              pendingLeader,
+            );
+            break;
+          }
+          removePendingCodexTurn(resolvedConversationKey, pendingController);
 
           // Stage 2.12 branch: soleur-go routing bypasses the legacy agent
           // path entirely. The soleur-go runner owns its own Query
@@ -2619,17 +3067,60 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             message: sanitizeErrorForClient(err),
             errorCode: deferredErrorCode,
           });
+        } finally {
+          const pendingId = session.pending?.id;
+          if (chatController && pendingId) removePendingCodexTurn(codexTurnKey(userId, pendingId), chatController);
+          if (chatController && session.conversationId) {
+            removePendingCodexTurn(codexTurnKey(userId, session.conversationId), chatController);
+          }
         }
         break;
       }
 
+      const dispatchConversationId = session.conversationId!;
+      const clientTurnId = chatClientTurnId ?? randomUUID();
+      const codexKey = codexTurnKey(userId, dispatchConversationId);
+      // Migration 165's unique `(run_id, attempt_key)` claim rejects a same-id
+      // retry. Return before any asynchronous work so it cannot interfere with
+      // the already accepted request for that key.
+      if (codexTurnClientTurnIds.get(codexKey) === clientTurnId) break;
+      const pendingCodexController = chatController ?? new AbortController();
+      if (!chatController) {
+        chatController = pendingCodexController;
+        chatControllerKey = codexKey;
+        registerPendingCodexTurn(codexKey, pendingCodexController);
+      }
+
       try {
         const tenantEngineBinding = await tenantFor(userId, "handleMessage.chat.engine-binding");
+        if (pendingCodexController.signal.aborted || sessions.get(userId) !== session
+          || session.conversationId !== dispatchConversationId) break;
         if (!tenantEngineBinding) throw new Error("conversation engine binding auth probe failed");
-        await assertLegacyConversationEngineBinding(
+        const chatResolved = await resolveConversationEngineRun(
           new AgentEnginePersistenceRepository(tenantEngineBinding as unknown as PersistenceClient),
-          session.conversationId!,
+          dispatchConversationId,
         );
+        if (pendingCodexController.signal.aborted || sessions.get(userId) !== session
+          || session.conversationId !== dispatchConversationId) break;
+        const chatBinding = chatResolved?.binding ?? null;
+        if (chatBinding?.engineId === "codex") {
+          const runId = chatResolved?.run && typeof chatResolved.run === "object" && "id" in chatResolved.run
+            ? (chatResolved.run as { id: unknown }).id : null;
+          if (typeof runId !== "string") throw new Error("Codex conversation run is missing");
+          await dispatchCodexChatTurn(
+            userId,
+            dispatchConversationId,
+            chatBinding,
+            runId,
+            userContent,
+            msg.attachments,
+            clientTurnId,
+            pendingCodexController,
+            session,
+          );
+          break;
+        }
+        removePendingCodexTurn(codexKey, pendingCodexController);
         // Stage 2.12 — route each turn via `parseConversationRouting`.
         // Legacy rows (NULL) flow through the existing agent-runner;
         // sentinel + workflow values dispatch to the soleur-go runner.
@@ -2739,7 +3230,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "chat error");
-        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+        if (sessions.get(userId) === session && session.conversationId === dispatchConversationId) {
+          sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+        }
+      } finally {
+        removePendingCodexTurn(codexKey, pendingCodexController);
       }
       break;
     }
@@ -2762,6 +3257,152 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // ------------------------------------------------------------------
     // review_gate_response: resolve a pending review gate in the agent
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Codex history-transfer acknowledgment: record the active socket
+    // member's explicit acknowledgment through the tenant-scoped RPC.
+    // ------------------------------------------------------------------
+    case "codex_history_transfer_acknowledge": {
+      if (
+        session.conversationId !== msg.conversationId
+        || !Number.isSafeInteger(msg.authModeGeneration)
+        || msg.authModeGeneration <= 0
+      ) {
+        sendToClient(userId, {
+          type: "error",
+          message: "This Codex history acknowledgment is no longer current. Reopen the conversation and review the notice again.",
+          errorCode: "codex_history_transfer_acknowledgment_rejected",
+        });
+        break;
+      }
+
+      const tenant = await tenantFor(userId, "handleMessage.codex-history-transfer-ack");
+      if (!tenant) {
+        sendToClient(userId, {
+          type: "error",
+          message: "The Codex history acknowledgment could not be recorded. Please reconnect and try again.",
+          errorCode: "codex_history_transfer_acknowledgment_failed",
+        });
+        break;
+      }
+
+      try {
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        const nonceHash = createHash("sha256").update(msg.noticeNonce).digest("hex");
+        const notice = codexNoticeDeliveries.get(session);
+        if (notice && (notice.conversationId !== msg.conversationId
+          || notice.authModeGeneration !== msg.authModeGeneration
+          || notice.nonceHash !== nonceHash)) {
+          // This socket already has a locally issued notice. A different nonce
+          // is stale and must not trigger privileged repair or acknowledgment.
+          sendToClient(userId, {
+            type: "error",
+            message: "The Codex account changed while you were reviewing this notice. Reopen the conversation and review the latest notice.",
+            errorCode: "codex_history_transfer_acknowledgment_rejected",
+          });
+          break;
+        }
+
+        const acknowledgmentArgs = {
+          p_conversation_id: msg.conversationId,
+          p_auth_mode_generation: msg.authModeGeneration,
+        };
+        const readAcknowledgment = async (): Promise<boolean> => {
+          const { data, error } = await tenant.rpc("codex_history_transfer_acknowledged", acknowledgmentArgs);
+          if (error) throw error;
+          return data === true;
+        };
+        const delivery = notice ?? {
+          conversationId: msg.conversationId,
+          authModeGeneration: msg.authModeGeneration,
+          nonceHash,
+          completion: Promise.resolve(false),
+        };
+        const delivered = notice
+          ? await notice.completion
+          : await persistCodexNoticeDelivery(userId, delivery);
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        let acknowledgmentRecorded = false;
+        if (!delivered && notice) {
+          // Share a retry with acknowledgments that arrived together.
+          const pending = notice.completion;
+          const priorDeliveryFailed = !await pending;
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (priorDeliveryFailed && notice.completion === pending) {
+            notice.completion = persistCodexNoticeDelivery(userId, notice);
+          }
+          const retryDelivered = await notice.completion;
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (!retryDelivered) {
+            acknowledgmentRecorded = await readAcknowledgment();
+            if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+            if (!acknowledgmentRecorded) throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+          }
+        } else if (!delivered) {
+          acknowledgmentRecorded = await readAcknowledgment();
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (!acknowledgmentRecorded) throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+        }
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        let recordError: unknown;
+        let recorded = acknowledgmentRecorded;
+        if (!recorded) {
+          try {
+            const { data, error } = await tenant.rpc("record_codex_history_transfer_acknowledgment", {
+              p_conversation_id: msg.conversationId,
+              p_auth_mode_generation: msg.authModeGeneration,
+              p_nonce_hash: nonceHash,
+            });
+            if (error) recordError = error;
+            else recorded = data === true;
+          } catch (error) {
+            recordError = error;
+          }
+        }
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        if (!recorded) {
+          const alreadyAcknowledged = await readAcknowledgment();
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (alreadyAcknowledged) {
+            if (recordError) {
+              reportSilentFallback(recordError, {
+                feature: "codex-history-transfer",
+                op: "reconcile-member-acknowledgment",
+              });
+            }
+            recorded = true;
+          }
+        }
+        if (!recorded) {
+          if (recordError) throw recordError;
+          sendToClient(userId, {
+            type: "error",
+            message: "The Codex account changed while you were reviewing this notice. Reopen the conversation and review the latest notice.",
+            errorCode: "codex_history_transfer_acknowledgment_rejected",
+          });
+          break;
+        }
+        if (codexNoticeDeliveries.get(session) === notice) codexNoticeDeliveries.delete(session);
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        sendToClient(userId, {
+          type: "codex_history_transfer_acknowledged",
+          conversationId: msg.conversationId,
+          authModeGeneration: msg.authModeGeneration,
+        });
+      } catch (error) {
+        reportSilentFallback(error, {
+          feature: "codex-history-transfer",
+          op: "record-member-acknowledgment",
+        });
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        sendToClient(userId, {
+          type: "error",
+          message: "The Codex history acknowledgment could not be recorded. Please reconnect and try again.",
+          errorCode: "codex_history_transfer_acknowledgment_failed",
+        });
+      }
+      break;
+    }
+
     // ------------------------------------------------------------------
     // abort_turn: user-initiated Stop. Broadcast-aborts every leader's
     // session for the conversation so multi-leader dispatch can't leak
@@ -2990,6 +3631,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "usage_update":
     case "fanout_truncated":
     case "context_reset":
+    case "codex_history_transfer_required":
+    case "codex_history_transfer_acknowledged":
     case "c4_diagram_saved": // #8739 — Concierge diagram-save notice (server→client only)
     case "upgrade_pending":
     case "interactive_prompt":

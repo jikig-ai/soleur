@@ -25,6 +25,8 @@ export interface EngineDefinition {
   transport: "local" | "remote";
   enabledForNewRuns: boolean;
   enabledForExistingRuns: boolean;
+  /** Allows owner configuration while execution remains policy-gated. */
+  settingsSelectable?: boolean;
   authModes: string[];
   qualifications: EngineQualification[];
 }
@@ -32,7 +34,7 @@ export interface EngineDefinition {
 /** Safe settings projection; qualifications and provider internals stay server-side. */
 export type EngineSettingsMetadata = Pick<
   EngineDefinition,
-  "id" | "version" | "transport" | "authModes" | "enabledForNewRuns"
+  "id" | "version" | "transport" | "authModes" | "enabledForNewRuns" | "settingsSelectable"
 > & { rolloutEnabled?: boolean };
 
 /** Constructed by shared policy from authenticated context and persisted state;
@@ -58,6 +60,8 @@ export interface EngineBinding {
   execution: EngineExecution;
   engineId: AgentEngineId;
   authMode: string;
+  /** Persisted fence against credentials selected from an obsolete auth binding. */
+  authModeGeneration?: number;
   adapterVersion: string;
   boundAt: string;
 }

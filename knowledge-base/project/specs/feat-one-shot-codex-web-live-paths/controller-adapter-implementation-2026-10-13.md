@@ -1,0 +1,213 @@
+---
+title: Callable controller adapter implementation
+date: 2026-10-13
+pr: 9051
+starting_source_sha: 2424951ebbd863a955a60be031388dad087c0d25
+status: implementation-in-progress-runtime-and-approval-pending
+---
+
+The operator authorized expanding source implementation on 2026-10-13. Ruled by CTO agent: callable adapters over injected transports are permitted; production wiring, execution admission and every existing operational hold remain absent. The preceding source-only restriction is superseded only for adapter implementation. No build/recovery/retry is authorized, and the withdrawn command must never execute.
+
+The [interface contract](controller-adapter-interface.md) owns the implementation boundary and synthetic acceptance scenarios. Use lifecycle code/test delegation with disjoint files; run RED before implementation. Soleur and OpenAI model usage are separate charges; Soleur disclaims warranty for runtime cost.
+
+- [ ] RED(unit): add adversarial adapter tests and record refusal of the absent implementation.
+- [ ] GREEN: implement the four adapters against the interface contract.
+- [ ] Integrate exact source census, exporter metadata validation and offline wrapper.
+- [ ] Run targeted tests, complete offline wrapper and applicable ratchets.
+- [ ] Push source, obtain focused independent review and correct findings.
+- [ ] Refresh final-source pairing, file-only export and exact-head draft CI/description evidence.
+
+Keep draft/disarmed/default-off/customer-blocked. Actual Config/profile/transport review, authenticated observations, current-source full-production build and recovery, Web/routine qualification, CLO/full review and promotion remain incomplete. No production schema or writes are added; projected production WAL impact is zero.
+
+## Implementation and measured verification
+
+The lifecycle code and test workers failed on model capacity and usage limits
+before writing files. The coordinator retained the interface contract and
+completed both scopes sequentially. Reviewed-Coverage: sequential-fallback;
+this is not independent source review and does not discharge the full PR panel.
+
+RED refused the absent adapter module. The first implementation exposed missing
+project labels; correction preserved the existing Policy requirement. Two fixture
+errors were corrected without relaxing guards: a supposedly duplicate ID was
+different, and the synthetic hostname did not match the existing browser contract.
+Follow-up behavioral regressions reproduced five guard failures and one release-
+window error, then two ambiguous cleanup retries and an oversized race timeout.
+All were corrected before GREEN. Two guard-removal controls each yield one
+intended assertion failure and zero errors.
+
+The new adapter suite passes 37 unit tests. Candidate/export tests pass 12 cases,
+including two new auxiliary-inventory cases covering all three generated files,
+bytes, modes, symlink/type substitutions, collisions and additional leaves.
+The complete offline wrapper passed with inherited `PYTHONOPTIMIZE=1` and its
+own explicit `OFFLINE_RC=0` receipt. Test transports operate only on synthetic
+metadata, isolated Git fixtures, fresh scratch files and fake local sockets.
+No real Docker, build, database/SQL, provider, credential, browser-auth/account,
+deployment, flag, recovery or withdrawn-command operation ran.
+
+Ruled by CTO agent: extend export verification with a separate explicit auxiliary
+inventory, preserving its exact default behavior. Builder expectations come from
+the separately supplied candidate specification, never files being checked.
+Hard transport cancellation/timeouts and actual daemon/network/resource admission
+remain pending; post-call deadline validation cannot preempt a blocked callback.
+Likewise, filtered volume absence, supplied complete writer references and an
+unchanged exported root do not authenticate provenance, establish global absence,
+or lock context writers. Production wiring remains absent.
+
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
+
+Scoped advisory checks cover lawful basis, retention, erasure/FK/caller wiring,
+vendor transfer and special-category fields. This delta adds no production schema,
+SDK/vendor route, account access or customer-data collection. All data-producing
+tests use synthetic fixtures; collection results contain hashes, not retained
+bytes or profile environment values. Broader mode-specific findings remain open.
+
+SAST remains VOID; Ref #10082 and Ref #9791 require fresh state observations before
+asserting their current status. No latest-source C.9 or runtime clearance is claimed.
+Hosted authentication stays BLOCKED in both modes; the alternative API route stays
+PENDING. Sharing, retention/inheritance and configured regions remain unknown.
+
+## Session errors and prevention
+
+- Delegation failed on capacity/usage limits. The coordinator completed source
+  and tests sequentially; independent review is explicitly pending.
+- Broad inspection output was truncated and two guessed reference paths were
+  absent. Exact discovered paths and bounded reads replaced affected evidence;
+  no truncated output is counted as a verification receipt.
+- Workflow tally locks refused read-only Git metadata; exact escalated retries
+  returned measured gate results. Real shared operational writes remain held.
+- Offline fixture sockets and `/var/tmp` allocator guards refused the sandbox;
+  exact retries used their required approval path. Refusal is not a pass or a
+  runtime observation; every accepted result needs the explicit producer receipt.
+
+## Focused security findings and corrections
+
+Independent security review of pushed `8b3e142402bc8420cfe6353eee39617ae4d32653`
+repeated 62 synthetic targeted cases and reproduced two P2 source defects:
+
+| Finding | Reproduction | Correction |
+|---|---|---|
+| S1 callback exception content | A transport raised a guard-class exception containing a sentinel; outward error and primary-failure snapshot retained it | Sanitize all transport/root-opener and injected-clock failures at invocation boundaries, suppressing raw exception chains |
+| S2 incomplete preflight identity | An empty waiter backend birth was accepted until holder start had already occurred | Validate both complete immutable session identities before any transport operation |
+
+New regressions first reproduced these defects, including three guard-exception
+types, root-opening and observation-clock failures, and six malformed waiter
+fields. The corrected adapter suite passes 41 cases. Closure remains owed from
+pushed-source independent reverification. This focused seat is not the full PR
+panel, runtime review or SAST clearance.
+
+Registration census passed 679 covered / zero orphans after the exact enumerator
+retry. Initial derivative diagnostics from a failed sandboxed enumerator were
+not orphan findings. Whitespace, ShellCheck, shell syntax and explicit staged
+secret scanning passed. Hooks remain configured to `/dev/null`.
+
+Main advanced by eight commits to `a1bbbb641fddb9436f138f8e1858b157a6601136`.
+Inspection found no changes to the qualification components, application server,
+forward migration bodies or production Dockerfile. Dependency locks/manifests,
+plugin and infrastructure sources do change, so current-source pairing/export
+must refresh after clean inclusion. Incoming operational snippets are read as
+source only; no incoming command is executed.
+
+## Focused integrity and test-design corrections
+
+At pushed `3a2b82f85f2b4fbbb1e46b137c7fb76725dffce0`, security independently
+closed S1/S2, repeated their original reproductions and passed 66 targeted cases.
+Integrity passed 92 cases but reproduced two P2 defects: historical running-state
+markers permitted a stopped dependency at start/collection (D1), and an ambiguous
+child delete permitted dependent parent-container deletion (D2). Fresh regressions
+failed before correction. Dependencies are now reobserved immediately before
+start; collected namespace roles must currently run; ambiguous or unverified
+child cleanup halts dependent deletion, including repeated cleanup calls.
+
+Test design scored the preceding source 7.9/10, Grade B, and classified all changed
+tests as unit tests. Its three P2 oracle gaps are corrected in source: the duplicate
+auxiliary case now stays within the cardinality limit and checks its exact refusal;
+the fake independently validates complete method/path/body expectations for every
+modeled role, mounts, DNS/sysctls, limits, labels and volume filters; stale source
+and caller/callback mutation cases now cover all four adapter boundaries. Selected
+negative tables match the intended refusal, separately from terminal retry refusal.
+Independent mutations remain UNVERIFIED-ALLOC-FAILED after the prescribed allocator
+refused its disk-backed roots. No fallback copy or live source mutation ran.
+
+Additional behavioral controls reproduced acceptance of wrong start/delete
+completion status and a nonempty lease-release response; corrections require exact
+successful receipts before progress. The current adapter suite passes 52 cases;
+candidate/export tests still contain 12 cases. All callback payloads are synthetic.
+These corrections require pushed-source reverification; none confers runtime
+or full-review clearance. Actual hard cancellation, context-writer locking,
+global volume absence and complete writer discovery remain pending.
+
+The inspected main pin merged cleanly after the exact ORIG_HEAD-lock sandbox retry.
+No merge conflict, operational action or incoming command execution occurred.
+
+## Addendum — 2026-10-13: guarded collection receipt
+
+At pushed `d4c10055a7131fca31b6e2d249257812d0deeb20`, integrity independently
+closed D2 and confirmed the original D1 start/collection reproductions now refuse.
+Security confirmed S1/S2 remain closed. Both seats identified one residual:
+namespace collection checked a Kong receipt, then fetched a second receipt for
+the recipe without applying the running-state check to it. The new regression
+first failed with two reads instead of one; collection now passes the checked
+receipt directly into the recipe. All 53 adapter cases pass with explicit
+`ADAPTER_RC=0`; independent closure on the next pushed source remains owed.
+
+Test design independently closed T1/T2/T3 at `d4c10055a7131fca31b6e2d249257812d0deeb20`,
+passed 77 targeted cases and scored 8.1/10, Grade B. Its independent mutation
+attempt remains UNVERIFIED-ALLOC-FAILED, separately from the built-in controls.
+These are focused source reviews, not the full PR panel or operational clearance.
+
+After compaction, two reads used the rollout directory instead of the live-paths
+directory and failed. Exact discovered paths replaced them before editing.
+Broad index reads were truncated; only bounded receipt reads count as evidence.
+Prevention: discover the named artifact within the feature directory before
+constructing its path, and inspect bounded sections with explicit producer status.
+
+## Addendum — 2026-10-14: focused source completion
+
+Security and integrity independently reverified pushed
+`c68e85afc97335bc5c8e04788a2ce3ef6c99897e`. Both repeated the residual Kong
+reproduction and observed exactly one checked receipt. Security closed S1/S2
+and the residual, with 78 targeted cases and explicit RC=0. Integrity closed
+D1/D2, including repeated ambiguous cleanup, with 104 cases and explicit RC=0.
+Test-design T1/T2/T3 remain closed at their preceding reviewed source; the
+additional receipt regression is coordinator-verified. No full PR panel,
+independent mutation, SAST or runtime clearance is claimed.
+
+The corrected complete offline wrapper passed under inherited optimization.
+Main advanced another ten commits to
+`b6d745fe787251a2d16e39e7a7dcbc37edc236c5`; inspection found no changes to the
+qualification components, application server, forward migrations or Dockerfile.
+It changes vendor/plugin, infrastructure, test and documentation inputs. Its
+merge conflicted only at the C.9 fixture invocation: resolution preserves the
+feature's watchdog tracing and main's four environment removals. Shell syntax
+and whitespace passed. No latest-source C.9 run or clearance is established.
+The complete offline wrapper after inclusion passed with its own explicit
+`MERGED_OFFLINE_RC=0`. Qualification bytes are identical to reviewed `c68e85af`.
+
+Ratchet receipts passed 63 relative / 71 directory / 120 temporary-file /
+41 plan assertions. The updated main vacuity suite passed 25 assertions.
+Current registration passed 681 covered / zero orphans. ShellCheck and explicit
+staged secret scanning passed. Hooks remain configured to `/dev/null`.
+
+Exact-head CI `38461145713` on `c68e85af` reports the expected draft-only
+aggregate red; its executed log shows DRAFT_LIGHT=true and all heavy legs skipped.
+Tenant run `38461146001` also failed: four teardown timeouts, account deletion
+timeout with two dependent owner-retention assertions, and a BYOK timeout.
+Independent source inspection found the six test files and their direct server/
+workflow/configuration dependencies identical to inspected main and unchanged by
+the adapter continuation. This does not prove a pre-existing runtime failure or
+its cause. Tenant red remains unresolved; no live retry or assertion relaxation
+ran. Existing remote CI's dev database operations are distinct from these local
+offline checks; no agent-issued database, credential or operational command ran.
+
+Fresh GitHub reads confirm Ref #10082 and Ref #9791 OPEN; SAST remains VOID and
+C.9 unverified. Both moderate default-branch dependency alerts remain advisory
+pending source/security disposition. All runtime, legal, authorization and
+promotion holds persist. Source implementation and focused verification are
+complete; final evidence-only head pairing, file-only export and draft CI/
+description receipts belong to the PR description and ignored local artifacts.
+Never execute a generated build recipe or the withdrawn command. Build approval
+is consumed; no recovery/rebuild/retry is authorized.
+
+Additional errors: a GitHub read refused sandbox network access and succeeded
+only on its exact approved retry; the merge conflict above required the explicit
+union resolution. Neither refusal nor unresolved conflict counted as a pass.

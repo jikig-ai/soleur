@@ -20,6 +20,7 @@ export const reviewedEngineRegistry = createEngineRegistry([
     transport: "remote",
     enabledForNewRuns: false,
     enabledForExistingRuns: false,
+    settingsSelectable: true,
     authModes: ["managed", "api-key"],
     qualifications: [],
   } satisfies EngineDefinition,

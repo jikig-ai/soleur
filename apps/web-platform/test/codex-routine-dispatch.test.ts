@@ -7,7 +7,7 @@ describe("Codex routine dispatch bridge", () => {
     const events = [] as unknown[];
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "e-1", sequence: 1, payload: { type: "status", status: "completed" } as const };
-    }) };
+    }), dispose: vi.fn().mockResolvedValue(undefined) };
     const binding = { workspaceId: "ws-1", execution: { kind: "routine" as const, routineId: "cron-daily-triage", routineRunId: "routine-1" }, engineId: "codex", authMode: "api-key", adapterVersion: "codex-v1", boundAt: new Date().toISOString() };
     const repository = {
       getRoutineRun: vi.fn().mockResolvedValue({ id: "run-1", binding }),

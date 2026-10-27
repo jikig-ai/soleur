@@ -1487,6 +1487,7 @@ assert "G3 generation: a SEVENTH token from the filter is refused, not silently 
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]]"
 # #8846: a counter reached without an emitter tag cannot scope to the FSM, so it refuses, and says
 # the defect is in the script (not the host) — on STDERR, never inside the stdout token.
+# Ref #9325: refusing consumers need no input; a pipe races printf against their exit under pipefail.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _generation_scoped_count "$FIX_FLOOR" test "" 2>"$FLV_ERR" <<<"$FIX_CUR_1_FLIP"$'\n'"$FIX_CUR_2_FLIP" )"
 assert "#8846 an EMPTY emitter tag -> __UNREADABLE__ (got '$FILTER_OUT'), with the missing-tag warning on stderr" \

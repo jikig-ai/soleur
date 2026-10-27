@@ -209,7 +209,30 @@ OUT=$(printf '%s' '["apps/dir-sentinel/infra"]' | detect_plan_dirs "$FIX_PLAN")
 assert_eq '["apps/dir-sentinel/infra"]' "$OUT" "directory sentinel → root kept"
 echo ""
 
-echo "TS18: the REAL derivation + warning block exits 0 under bash -e when the last root has no sentinel"
+echo "TS18: non-sentinel roots do not fail the warning loop under errexit"
+if OUT=$(bash -e -o pipefail -c '
+  is_plan_skipped() { [ -f "$1/.pr-plan-skip" ] && [ -s "$1/.pr-plan-skip" ]; }
+  DIRS="[\"apps/web-platform/infra\"]"
+  printf "%s" "$DIRS" | jq -r ".[]" | while IFS= read -r d; do
+    if is_plan_skipped "$d"; then
+      echo "::warning::excluding ${d}"
+    fi
+  done
+'); then
+  assert_eq "" "$OUT" "non-sentinel root emits no warning and returns success"
+else
+  echo "  FAIL: non-sentinel root made the workflow warning loop exit non-zero"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
+echo "TS19: warning loop remains pinned to the workflow's real guard"
+WARN_STEP=$(awk '/# Emit the exclusion on real stdout/{f=1} f{print} f&&/^          fi$/{exit}' \
+  "$REPO_ROOT/.github/workflows/infra-validation.yml")
+assert_contains "$WARN_STEP" 'if is_plan_skipped "$d"; then' "workflow guards the expected false predicate"
+echo ""
+
+echo "TS20: the REAL derivation + warning block exits 0 under bash -e when the last root has no sentinel"
 # The step runs under `bash -e`. A warning loop ending in `is_plan_skipped … && echo`
 # returns 1 when its last iteration is a non-sentinel root, and the pipeline
 # status of the `while` then fails the whole step (detect-changes red on every
@@ -218,15 +241,15 @@ echo "TS18: the REAL derivation + warning block exits 0 under bash -e when the l
 REAL_BLOCK=$(awk '/^          is_plan_skipped\(\) \{/{f=1} f{print} f&&/^          fi$/{exit}' \
   "$REPO_ROOT/.github/workflows/infra-validation.yml" | sed -E 's/^          //')
 assert_contains "$REAL_BLOCK" 'EVENT_NAME" = "pull_request"' "extracted block includes the pull_request warning loop"
-BLOCK_SCRIPT="$FIX_PLAN/ts18-block.sh"
+BLOCK_SCRIPT="$FIX_PLAN/ts20-block.sh"
 printf '%s\n' "$REAL_BLOCK" > "$BLOCK_SCRIPT"
 BLOCK_RC=0
 BLOCK_OUT=$(cd "$FIX_PLAN" && DIRS='["apps/cla-evidence/infra","apps/web-platform/infra"]' EVENT_NAME=pull_request \
-  GITHUB_OUTPUT="$FIX_PLAN/ts18-output" bash -e "$BLOCK_SCRIPT" 2>&1) || BLOCK_RC=$?
+  GITHUB_OUTPUT="$FIX_PLAN/ts20-output" bash -e "$BLOCK_SCRIPT" 2>&1) || BLOCK_RC=$?
 assert_eq "0" "$BLOCK_RC" "block exits 0 under bash -e (last root sentinel-free)"
 assert_contains "$BLOCK_OUT" '::warning::excluding apps/cla-evidence/infra from the terraform-plan matrix' \
   "the sentinel root still gets its exclusion annotation"
-assert_eq 'plan_directories=["apps/web-platform/infra"]' "$(cat "$FIX_PLAN/ts18-output")" \
+assert_eq 'plan_directories=["apps/web-platform/infra"]' "$(cat "$FIX_PLAN/ts20-output")" \
   "plan_directories excludes only the sentinel root"
 echo ""
 

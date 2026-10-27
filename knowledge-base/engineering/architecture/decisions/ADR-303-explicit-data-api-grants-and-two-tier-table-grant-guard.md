@@ -58,6 +58,18 @@ text.
    direction, and ADR-112 established that a mis-scoped ADP under
    `supabase_admin` is a silent no-op (the #6340 live probe auto-closed stale
    2026-10-10 and never ran — no validated ADP path exists).
+5. **Frozen migration lint declarations are narrowly permitted.** When an
+   accepted preservation requirement forbids editing a migration that lacks an
+   in-file grant/sentinel, the subordinate static lint may use a declaration
+   keyed by exact repository-relative migration path, SHA-256, relation,
+   rationale and intended privilege contract. A declaration satisfies only
+   that named relation's missing in-file marker; the linter still scans the
+   migration for blanket grants, sequences and every other relation. A changed
+   digest, different path or undeclared relation receives no exemption. This
+   declaration grants no privilege and does not replace the authoritative
+   `table-grants.ts` registry or live catalog⇔registry parity gate. Any missing
+   effective access must be corrected by a later forward migration, mirrored
+   in the registry, and verified on a disposable stack before qualification.
 
 ## Consequences
 
@@ -65,6 +77,9 @@ text.
   privileges (`verify/174` asserts effective-vs-expected post-apply).
 - A future create-table migration without grants fails in CI before merge —
   statically (lint) and at runtime (fuzz gate on a defaults-off stack).
+- The frozen-migration declaration is an exception to the in-file marker rule,
+  not an access grant or runtime clearance; the live registry must still name
+  each relation with its effective privilege contract.
 - Per-relation narrowing of default-era grants (e.g. `users` carrying
   table-level UPDATE despite 006's column-split intent) is deferred to
   follow-up issue #11193 paired with #4027 — narrowing under a remediation

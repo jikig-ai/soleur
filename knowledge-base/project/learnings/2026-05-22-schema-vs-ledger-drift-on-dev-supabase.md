@@ -176,6 +176,8 @@ When `tenant-integration` (or any CI gate that applies migrations to a shared sc
 
 6. **CWD reset across worktree boundaries** when running `cd /tmp/pg-runner ...` or `cd apps/web-platform ...` in standalone Bash tool calls — broke subsequent commands relying on persistent CWD (the shell harness resets to the bare root after the cd-prefixed call completes). Required re-anchoring with absolute path in the next call. — Recovery: chain commands within a single `cd <abs-path> && <cmd>` per call when crossing tree boundaries. — Prevention: never assume a `cd <dir>` from a prior Bash call persists. Either (a) chain in one call, or (b) always pass the absolute path explicitly. Already known; the corrective check is "run `pwd` first if you're unsure".
 
+7. **A repository-root-relative validation command was run without the app prefix.** `scripts/lint-migration-fk-preconditions.sh` does not exist at the repository root; the checked script is `apps/web-platform/scripts/lint-migration-fk-preconditions.sh`. — Recovery: verified the path with `rg --files` and reran the gate successfully. — Prevention: resolve validation script paths from the repository root before execution.
+
 ## References
 
 - Issue: #4338

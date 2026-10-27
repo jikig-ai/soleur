@@ -346,6 +346,38 @@ rc="${res%%|*}"; out="${res#*|}"
 if [[ "$rc" == "1" ]] && grep -Eq 'sequence|USAGE' <<<"$out"; then pass "exit 1 — LIKE INCLUDING IDENTITY without seq grant"; else fail "expected 1 + sequence diagnostic, got $rc ($out)"; fi
 
 # ----------------------------------------------------------------------
+echo "T17: exact-path, exact-digest historical declarations satisfy only named missing table declarations"
+node --input-type=module -e '
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { checkSql, matchHistoricalContract } from "./apps/web-platform/scripts/lib/lint-migration-api-grants.mjs";
+const bytes = Buffer.from("frozen migration bytes\n");
+const contract = { path: "migrations/175_frozen.sql", sha256: createHash("sha256").update(bytes).digest("hex"), relations: { private_row: { kind: "INTERNAL", reason: "private through scoped RPCs", privilegeContract: { anon: {}, authenticated: {}, service_role: {} } } } };
+assert.equal(matchHistoricalContract("/repo/migrations/175_frozen.sql", bytes, [contract], "/repo"), contract);
+assert.equal(matchHistoricalContract("/repo/migrations/175_frozen.sql", Buffer.from("changed bytes\n"), [contract], "/repo"), null);
+assert.equal(matchHistoricalContract("/repo/migrations/other.sql", bytes, [contract], "/repo"), null);
+assert.equal(checkSql("CREATE TABLE public.private_row (id uuid PRIMARY KEY);", contract).length, 0);
+assert.ok(checkSql("CREATE TABLE public.other_row (id uuid PRIMARY KEY);", contract).some((v) => v.includes("other_row")));
+assert.ok(checkSql("CREATE TABLE public.private_row (id bigint GENERATED ALWAYS AS IDENTITY);", contract).some((v) => v.includes("sequence")));
+assert.ok(checkSql("CREATE TABLE public.private_row (id uuid PRIMARY KEY); GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;", contract).some((v) => v.includes("blanket")));
+const exposed = { relations: { private_row: { kind: "EXPOSED", reason: "scoped metadata projection", privilegeContract: { anon: {}, authenticated: {}, service_role: { SELECT: ["id"] } } } } };
+assert.equal(checkSql("CREATE TABLE public.private_row (id uuid PRIMARY KEY);", exposed).length, 0);
+const malformed = { relations: { private_row: { kind: "EXPOSED", reason: "missing role contract", privilegeContract: { service_role: { SELECT: ["id"] } } } } };
+assert.ok(checkSql("CREATE TABLE public.private_row (id uuid PRIMARY KEY);", malformed).some((v) => v.includes("private_row")));
+console.log("historical contract path and digest bindings pass");
+'
+if [[ "$?" == "0" ]]; then pass "path and digest binding"; else fail "historical contract matcher failed"; fi
+
+echo "T18: frozen PR migrations pass at their exact approved path and digest"
+res=$(run_lint "$PWD/apps/web-platform/supabase/migrations/165_agent_engine_attempts.sql" "$PWD/apps/web-platform/supabase/migrations/175_codex_history_notice_issuance.sql")
+rc="${res%%|*}"; out="${res#*|}"
+if [[ "$rc" == "0" ]] && grep -Eq '3 relation\(s\) scanned' <<<"$out"; then
+  pass "three declared relations are scanned"
+else
+  fail "expected exact historical declarations to pass while scanning all three relations; got rc=$rc ($out)"
+fi
+
+# ----------------------------------------------------------------------
 # Assertion-count floor — deleting cases or no-op-ing pass/fail must not let
 # the suite certify nothing (the supabase-local.test.sh precedent).
 # ----------------------------------------------------------------------

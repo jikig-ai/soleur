@@ -586,6 +586,10 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "scripts/lib/scratch-root.sh"
   "scripts/lint-trap-tempfile-ownership.py"
   "scripts/lint-supabase-deprecated-endpoints.sh"
+  "scripts/codex-qualification/api_policy.py"
+  "scripts/codex-qualification/role_profiles.py"
+  "scripts/codex-qualification/test_ownership_exec.py"
+  "scripts/codex-qualification/test_resource_ownership.py"
   "scripts/lint-diagnosis-claims.sh"
   "scripts/lint-diagnosis-claims.test.sh"
   "scripts/alarm-issue-filing-guard.test.sh"
@@ -2672,6 +2676,33 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "tests/"
   "plugins/soleur/test/operator-agent-runnable.test.sh"
   "plugins/soleur/test/lib/operator-stub-world.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/apply-delivery-gap-follower — the synthetic suite reads both apply
+# workflows and the shared infra runbook; keep those edits on its test path.
+AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
+  ".github/workflows/apply-delivery-gap-follower.yml"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
+  "knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md"
+  "plugins/soleur/test/apply-delivery-gap-follower.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/diagnose-inngest-verify-workflow — the parsed-YAML gate reads its workflow.
+AFFECTED_PLUGINS_SOLEUR_TEST_DIAGNOSE_INNGEST_VERIFY_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/diagnose-inngest-verify.yml"
+  "plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# Offline qualification contract reads every committed runtime/plugin input.
+AFFECTED_SCRIPTS_LIB_CODEX_QUALIFICATION_TEST_SH_PATHS=(
+  "scripts/codex-qualification/"
+  "scripts/lib/codex-qualification.test.sh"
+  "apps/web-platform/"
+  "plugins/soleur/"
   "scripts/lib/test-affected-paths.sh"
 )
 

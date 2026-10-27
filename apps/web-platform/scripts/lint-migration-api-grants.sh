@@ -75,6 +75,10 @@ Usage: lint-migration-api-grants.sh <file> [<file> ...]
 Validates that every public relation a migration creates carries an in-file
 api-role GRANT (or a soleur:no-data-api sentinel with a reason), and that
 serial/identity tables carry a sequence GRANT USAGE.
+Byte-frozen historical migrations may use the narrow path+SHA-256-bound
+declarations in scripts/lib/historical-migration-api-contracts.json; only
+named missing relation markers are satisfied, and other violations remain
+scanned.
 
 Use --from-pr-diff to auto-scan migrations added/modified vs origin/main.
 USAGE
