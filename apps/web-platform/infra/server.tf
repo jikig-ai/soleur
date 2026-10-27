@@ -614,7 +614,7 @@ resource "hcloud_server" "web" {
   # Committed-config anti-pooling (dns.tf web-1-only, connector excludes web-2, no LB pools web-2) is
   # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-143 + moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
-    ignore_changes = [user_data, ssh_keys, image, placement_group_id]
+    ignore_changes = [user_data, ssh_keys, image]
 
     # #8609 — a fresh host's cloud-init carries the same credential render as deploy_pipeline_fix;
     # rationale at local.github_app_token_shape_ok.

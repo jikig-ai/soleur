@@ -45,6 +45,19 @@ export type StepMemo = Map<string, MemoEntry>;
 
 export interface HarnessStep {
   run<T>(id: string, cb: () => Promise<T>): Promise<T>;
+  /**
+   * `step.sleep(id, duration)` — suspends the run like a step: memoizes and ends
+   * the invocation (#8764 — agent-on-spawn-settle and cron-gh-pages-cert-reissue
+   * need it). The SDK memoizes a sleep as done; the replay returns nothing.
+   */
+  sleep(id: string, duration: string | number): Promise<void>;
+  /**
+   * `step.sendEvent(id, payload)` — an event-send is a step too: memoized as
+   * `{ ids }` and ends the invocation. A failure is modelled by seeding the
+   * memo with `{ ok: false, error }` for the id — there is no callback to
+   * inject one through.
+   */
+  sendEvent(id: string, payload: unknown): Promise<{ ids: string[] }>;
 }
 
 export interface HarnessCtx {
@@ -75,7 +88,19 @@ function toJson(v: unknown): unknown {
 
 export async function runLikeInngest<R>(
   invoke: (ctx: HarnessCtx) => Promise<R>,
-  opts: { maxAttempts: number; memo?: StepMemo; maxInvocations?: number },
+  opts: {
+    maxAttempts: number;
+    memo?: StepMemo;
+    maxInvocations?: number;
+    /**
+     * If provided, `step.sendEvent` pushes `{ id, payload }` here ONLY when the
+     * send actually settles — a replay re-reading the memo does not re-deliver
+     * the event (that's what the SDK's memoization means). Reading call counts
+     * off a wrapped `step.sendEvent` over-counts: the handler re-calls it on
+     * every invocation after the boundary.
+     */
+    sentEvents?: { id: string; payload: unknown }[];
+  },
 ): Promise<RunOutcome<R>> {
   const memo = opts.memo ?? new Map<string, MemoEntry>();
   const cap = opts.maxInvocations ?? 50;
@@ -88,6 +113,25 @@ export async function runLikeInngest<R>(
       (res) => (stop = res),
     );
     const currentAttempt = attempt;
+
+    // Shared settle path for `sleep`/`sendEvent`: a memo hit replays (or throws
+    // a seeded failure); a miss memoizes `data` and ends the invocation, exactly
+    // the settle semantics `run` uses after its callback returns.
+    const settleNoop = async <T>(id: string, data: unknown): Promise<T> => {
+      if (seen.has(id)) {
+        stop({ harnessError: new HarnessError(`step id "${id}" used twice in one invocation`), nextAttempt: 0 });
+        return NEVER<T>();
+      }
+      seen.add(id);
+      const hit = memo.get(id);
+      if (hit) {
+        if (hit.ok) return toJson(hit.data) as T;
+        throw hit.error;
+      }
+      memo.set(id, { ok: true, data: toJson(data) });
+      stop({ nextAttempt: 0 });
+      return NEVER<T>();
+    };
 
     const step: HarnessStep = {
       async run<T>(id: string, cb: () => Promise<T>): Promise<T> {
@@ -133,6 +177,15 @@ export async function runLikeInngest<R>(
         memo.set(id, { ok: true, data });
         stop({ nextAttempt: 0 });
         return NEVER<T>();
+      },
+      async sleep(id: string, _duration: string | number): Promise<void> {
+        return settleNoop<void>(id, null);
+      },
+      async sendEvent(id: string, payload: unknown): Promise<{ ids: string[] }> {
+        // Record before settleNoop: the miss path never returns (it ends the
+        // invocation), and the delivery the SDK memoizes IS this first call.
+        if (!memo.has(id)) opts.sentEvents?.push({ id, payload });
+        return settleNoop<{ ids: string[] }>(id, { ids: [] });
       },
     };
 

@@ -215,10 +215,27 @@ const RETIRED: Record<string, string> = {};
  * prd posture. OVERRIDES entries REPLACE parsed snapshot entries for the same
  * name; INTERNAL entries must NOT collide (a relation cannot be both).
  */
-// OVERRIDES for migration 175's shape-(iv) revokes: 174's parsed snapshot still
-// expects anon/authenticated grants on these seven tables, but the corpus's
-// effective state post-175 is service_role-only — the TOM-4 documented posture.
 const OVERRIDES: Record<string, RegistryEntry> = {
+  // OVERRIDES for migration 178's default-era api-grant narrowing (#11193 —
+  // the deferred pass ADR-303 §Consequences names). Each entry replaces the
+  // 174 snapshot's parsed full-DML set with the censused intended posture;
+  // per-relation consumer evidence lives in the 178 migration header.
+  "_schema_migrations": { kind: "INTERNAL", reason: "migration 178 (#11193) revokes all three api roles: every _schema_migrations reader/writer is a psql $DATABASE_URL script as the postgres role (run-migrations.sh, dev-ledger-parity*, preflight-schema-vs-ledger) — no api-role client exists" },
+  "api_keys": exposed({ authenticated: ["SELECT"], service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 178 (#11193): authenticated reads it via tenant/cookie clients (byok-lease, codex-credential-provider, agent-runner, /api/services); all writes are service-client" }),
+  "audit_byok_use": exposed({ authenticated: ["SELECT"], service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 178 (#11193): authenticated reads it via cookie client (dashboard/audit, today-cost route); writes via SECURITY DEFINER RPCs need no base-table grant" }),
+  "audit_github_token_use": exposed({ authenticated: ["SELECT"], service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 178 (#11193): authenticated reads it via cookie client (dashboard/audit/github); writes via record_github_token_use definer RPC" }),
+  "dsar_export_jobs": exposed({ authenticated: ["SELECT"], service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 178 (#11193): authenticated SELECT is the GDPR data-portability surface (settings/privacy, /api/account/export/*); writes via service-client dsar-export/account-delete" }),
+  "flag_flip_audit": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 178 (#11193): no anon/authenticated call site exists; writes via audit_flag_flip definer RPC; service_role-only per the 175 convention" }),
+  "users": exposed(
+    { authenticated: ["SELECT"], service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] },
+    {
+      columns: { authenticated: { email: ["UPDATE"], nudges_dismissed: ["UPDATE"], onboarding_completed_at: ["UPDATE"], pwa_banner_dismissed_at: ["UPDATE"], runtime_explainer_dismissed_at: ["UPDATE"] } },
+      provenance: "migration 178 (#11193) revokes the wart table-level UPDATE and re-asserts 006's intent: authenticated holds SELECT + the censused column UPDATE set (use-onboarding dismissals, team-names nudges, 006's email). kb_sync_history is deliberately absent — 017's RESTRICTIVE policy pins it and writes route through append_kb_sync_row (053 definer RPC)",
+    },
+  ),
+  // OVERRIDES for migration 175's shape-(iv) revokes: 174's parsed snapshot still
+  // expects anon/authenticated grants on these seven tables, but the corpus's
+  // effective state post-175 is service_role-only — the TOM-4 documented posture.
   "denied_jti": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
   "dsar_export_audit_pii": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
   "mint_rate_window": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),

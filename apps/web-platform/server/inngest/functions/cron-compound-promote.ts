@@ -16,7 +16,7 @@
 // PURE-TS PATTERN — PR-6 shape (cron-strategy-review.ts), NOT PR-7 claude-
 // eval-spawn shape. See ADR-027 (stateless self-modifying cron).
 
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
@@ -38,6 +38,7 @@ import {
   type CompoundPromoteOutcome,
   type CompoundPromoteStatus,
   type RefusalDetailEntry,
+  CREATE_MARKER_NUMBERS,
 } from "@/server/compound-promote-marker";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/server/observability";
@@ -72,6 +73,17 @@ import {
   type LedgerOctokit,
 } from "@/server/compound-promote-ledger";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { CREDENTIAL_RE, PII_REGEX, computeClusterHash } from "@/server/compound-promote-screens";
+import {
+  runCreatePersistStep,
+  runCreateProposeStep,
+  type CreatePersistResult,
+  type CreateVerdictCreate,
+} from "@/server/compound-promote-create-arm";
+import type { CreateRefusal, CreateVerdict } from "@/server/compound-promote-create";
+
+// Re-exported so every existing importer (tests included) keeps its import path; the leaf owns the definitions.
+export { CREDENTIAL_RE, PII_REGEX };
 
 // =============================================================================
 // Constants
@@ -477,7 +489,9 @@ function headerPairBeforeFirstHunk(diff: string): boolean {
  * do — it applies the patch to a throwaway index and asks what it DID, which
  * names both sides of every operation by construction.
  *
- * Creation is deliberately refused too: new skills are Phase 2 (#8293).
+ * Creation is deliberately refused HERE too, and stays refused: a new skill is the gated create arm's job (#10550,
+ * `compound-promote-create.ts` `checkCreate`, its own closed verdict union and six-path set under the ADR-092
+ * create-only amendment). This guard, `TARGET_ALLOW_RE` and `isAdditiveDiff` never accept status `A`.
  */
 export async function checkDiffPaths(
   diff: string,
@@ -610,7 +624,7 @@ export const ANTHROPIC_MAX_TOKENS = 16384;
 // Structured-output schema (#5186): the model returns clusters wrapped in an
 // object (structured-output roots are objects, not top-level arrays). Every
 // object needs `additionalProperties: false`; numeric/array constraints are
-// NOT supported by the API — the slice(0, remaining) cap stays a post-parse TS
+// NOT supported by the API — the slice(0, editCap) cap stays a post-parse TS
 // slice. The prompt and the parse-site read are kept in lockstep with this wrapper.
 export const CLUSTER_OUTPUT_SCHEMA = {
   type: "object",
@@ -641,23 +655,9 @@ export const CLUSTER_OUTPUT_SCHEMA = {
   },
 } as const;
 
-// Byte-for-byte port of PII_REGEX in scripts/compound-promote.sh.
-// Unit-tested for parity (AC8). The shell copy's comment block carries the
-// over-exclusion posture: the canonical credential class makes this gate
-// slightly over-excluding — a `gh[pousr]_<slug>`/`github_pat_<slug>`-shaped
-// identifier in prose drops the learning (fail-closed toward the DPA-covered
-// model call — intended).
-export const PII_REGEX = new RegExp(
-  "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})" +
-    "|([0-9]{1,3}(\\.[0-9]{1,3}){3})" +
-    "|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})" +
-    "|(eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+)" +
-    "|(sk-ant-[A-Za-z0-9_-]{20,})" +
-    "|(gh[pousr]_[A-Za-z0-9._~+/=-]{20,})|(github_pat_[A-Za-z0-9._~+/=-]{20,})" +
-    "|(AKIA[0-9A-Z]{16})" +
-    "|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})" +
-    "|(xox[baprs]-[A-Za-z0-9-]{10,})",
-);
+// PII_REGEX and CREDENTIAL_RE live in the leaf module `@/server/compound-promote-screens` (imported above and
+// re-exported below): the create arm shares them, and a leaf is the only cycle-free home. The byte-for-byte parity
+// with scripts/compound-promote.sh is still asserted by cron-compound-promote.test.ts (AC8).
 
 // =============================================================================
 // Types
@@ -898,11 +898,6 @@ function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
-function computeClusterHash(sourceLearnings: string[]): string {
-  const sorted = [...sourceLearnings].sort();
-  return createHash("sha256").update(sorted.join("\n") + "\n").digest("hex");
-}
-
 async function applyDiffToWorkspace(
   diff: string,
   repoRoot: string,
@@ -1024,20 +1019,6 @@ export const EDIT_OUTPUT_SCHEMA = {
   },
 } as const;
 
-// The credential alternatives of PII_REGEX only (Anthropic key, JWT, GitHub tokens, AWS,
-// Stripe, Slack). The email / IPv4 / IBAN alternatives over-match rule prose, and the
-// committed text goes to a public repo, so the credential shapes are the ones that matter.
-export const CREDENTIAL_RE = new RegExp(
-  "(eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+)" +
-    "|(sk-ant-[A-Za-z0-9_-]{20,})" +
-    "|(gh[pousr]_[A-Za-z0-9._~+/=-]{20,})|(github_pat_[A-Za-z0-9._~+/=-]{20,})" +
-    "|(AKIA[0-9A-Z]{16})" +
-    "|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})" +
-    "|(xox[baprs]-[A-Za-z0-9-]{10,})" +
-    // Not in PII_REGEX (its job is to keep personal data out of a prompt), but a private-key
-    // header or a bearer credential in text bound for a public repo is the same class.
-    "|(-----BEGIN [A-Z ]*PRIVATE KEY-----)|(Bearer[ \\t]+[A-Za-z0-9._~+/=-]{20,})",
-);
 // Printable ASCII only. The TS gate counts rule lines with split("\n") while
 // scripts/lint-agents-rule-budget.py uses splitlines(), so U+2028 / U+0085 would count
 // as one line in one and two in the other; zero-width, tag-block and bidi characters are
@@ -1452,7 +1433,16 @@ export type SkillScan = {
   incomplete: SkillScanBound | null;
   /** The exact targets this scan was asked about: a target outside it was never checked. */
   scanned: string[];
+  /**
+   * CREATE VARIANT ONLY (#10550): the open PRs' changed file names under the requested `collectPrefixes`,
+   * de-duplicated and capped at `maxCollected` (a PR file name is attacker-influenced, so the set is bounded and only
+   * ever compared by `startsWith`, never logged). The key is ABSENT unless `collectPrefixes` was passed, so every
+   * existing consumer sees exactly the shape it always did.
+   */
+  touched?: string[];
 };
+/** Cap on `SkillScan.touched` (create variant). Reaching it records bound `files`: unverifiable, never clear. */
+export const SKILL_GUARD_COLLECT_MAX = 500;
 export type SkillVerdict =
   | { kind: "clear" }
   | { kind: "conflict"; pr: number }
@@ -1473,8 +1463,14 @@ export async function scanOpenPrSkillPaths(input: {
   targets: string[];
   /** Clock, injectable so the deadline is testable without waiting. */
   now?: () => number;
+  /** Create variant (#10550): also record changed file names under these prefixes; disables the early return. */
+  collectPrefixes?: readonly string[];
+  maxCollected?: number;
 }): Promise<SkillScan> {
   const { octokit, owner, repo } = input;
+  const collectPrefixes = input.collectPrefixes;
+  const maxCollected = input.maxCollected ?? SKILL_GUARD_COLLECT_MAX;
+  const touched = new Set<string>();
   const now = input.now ?? Date.now;
   const deadline = now() + SKILL_GUARD_DEADLINE_MS;
   const wanted = new Set(input.targets);
@@ -1519,17 +1515,21 @@ export async function scanOpenPrSkillPaths(input: {
             if (typeof name === "string" && wanted.has(name) && !Object.hasOwn(changed, name)) {
               changed[name] = pr.number;
             }
+            if (collectPrefixes !== undefined && typeof name === "string" && collectPrefixes.some((p) => name.startsWith(p))) {
+              if (touched.size < maxCollected) touched.add(name);
+              else if (!touched.has(name)) noteBound("files");
+            }
           }
         }
         if (files.length < SKILL_GUARD_PAGE_SIZE) break;
         if (filePage === SKILL_GUARD_FILE_PAGES_PER_PR) noteBound("files");
       }
-      if (wanted.size > 0 && Object.keys(changed).length === wanted.size) return { changed, incomplete, scanned };
+      if (collectPrefixes === undefined && wanted.size > 0 && Object.keys(changed).length === wanted.size) return { changed, incomplete, scanned };
     }
     if (prs.length < SKILL_GUARD_PAGE_SIZE) break;
     if (page === SKILL_GUARD_PR_PAGES) noteBound("prs");
   }
-  return { changed, incomplete, scanned };
+  return collectPrefixes === undefined ? { changed, incomplete, scanned } : { changed, incomplete, scanned, touched: [...touched] };
 }
 
 /**
@@ -1626,11 +1626,16 @@ class InvalidRunOptionError extends Error {
 function readRunOptions(
   event: { data?: Record<string, unknown> } | undefined,
   trigger: "cron" | "manual",
-): { input: RunInput } | { invalid: true } {
-  if (trigger !== "manual") return { input: "corpus" };
+): { input: RunInput; allowCreate: boolean } | { invalid: true } {
+  if (trigger !== "manual") return { input: "corpus", allowCreate: false };
   const raw = event?.data?.input;
-  if (raw === undefined) return { input: "corpus" };
-  return raw === "corpus" || raw === "patterns" ? { input: raw } : { invalid: true };
+  if (raw === undefined) return { input: "corpus", allowCreate: false };
+  if (raw !== "corpus" && raw !== "patterns") return { invalid: true };
+  // #10550 -- the gated create arm. The SINGLE parse site of `allow_create`, reached only after the manual and the
+  // `patterns` checks above: it is true ONLY for trigger=manual AND input=patterns AND the BOOLEAN true. A truthy
+  // non-boolean ("true", 1) is ignored, never coerced. Default off; the scheduled run and a manual corpus run are
+  // byte-identical to before the arm existed (test/server/inngest/cron-compound-promote-create-handler.test.ts).
+  return { input: raw, allowCreate: raw === "patterns" && event?.data?.allow_create === true };
 }
 
 /** Learning paths named by `scripts/retired-rule-ids.txt`; shared by both input arms. */
@@ -1685,6 +1690,7 @@ export async function cronCompoundPromoteHandler({
   // invalid manual option is raised INSIDE the try below, so the one catch reports it like any failure.
   const runOptions = readRunOptions(event, trigger);
   const inputSource: RunInput = "input" in runOptions ? runOptions.input : "corpus";
+  const allowCreate = "allowCreate" in runOptions && runOptions.allowCreate;
   let patternsOpen: number | undefined;
   let ledgerRead: "ok" | "failed" | undefined;
   let ledgerScanned: number | undefined;
@@ -1696,7 +1702,16 @@ export async function cronCompoundPromoteHandler({
   // read, so they carry only the discriminator: without it a patterns request that exited there reads
   // exactly like a corpus run. Empty on the corpus arm.
   const inputMarker = (): Partial<CompoundPromoteOutcome> =>
-    inputSource === "patterns" ? { input_source: "patterns" } : {};
+    inputSource === "patterns"
+      ? {
+          input_source: "patterns",
+          // #10550: every manual PATTERNS row records whether the create arm was requested, so each switch-on is
+          // visible without SSH (also on the early terminal rows). SCOPE: this is the ONE key a manual-patterns row
+          // gains when the arm did not run; the scheduled row and the manual-corpus row stay byte-identical to before
+          // the arm existed (pinned by the key-set test in cron-compound-promote-create-handler.test.ts).
+          ...(trigger === "manual" ? { create_requested: allowCreate } : {}),
+        }
+      : {};
   // Patterns-path marker fields. EMPTY on the corpus arm, so a scheduled row has exactly the keys it had before.
   const patternsMarker = (): Partial<CompoundPromoteOutcome> =>
     inputSource === "patterns"
@@ -1709,6 +1724,27 @@ export async function cronCompoundPromoteHandler({
           ledger_title_skipped: ledgerTitleSkipped,
         }
       : {};
+  // #10550 -- the create arm's marker state. Hoisted like the counters above so the error marker can carry it. EMPTY
+  // (and `createArmRan` false) on the scheduled and corpus paths, so those rows keep exactly the keys they had.
+  let createArmRan = false;
+  let createOutcome: "no_action" | "refused" | "opened" | undefined;
+  let createNoAction: Extract<CreateVerdict, { kind: "no_action" }>["reason"] | undefined;
+  let createRefusal: CreateRefusal | undefined;
+  let createPr: number | undefined;
+  const createMarker = (): Partial<CompoundPromoteOutcome> => {
+    if (!createArmRan) return {};
+    const n = createRefusal?.numbers ?? {};
+    return {
+      kind: "create",
+      create_arm: "ran",
+      ...(createOutcome === undefined ? {} : { create_outcome: createOutcome }),
+      ...(createNoAction === undefined ? {} : { create_no_action_reason: createNoAction }),
+      ...(createRefusal === undefined ? {} : { create_refusal_class: createRefusal.class, create_detail: createRefusal.detail }),
+      // Only these numbers reach the marker (an allowlist: a number the pure module adds is Sentry-only until named here).
+      ...Object.fromEntries(Object.entries(CREATE_MARKER_NUMBERS).flatMap(([from, to]) => (n[from] === undefined ? [] : [[to, n[from]]]))),
+      ...(createPr === undefined ? {} : { create_pr: createPr }),
+    };
+  };
   // #8281: why a run produced nothing is the datum that was missing. One
   // entry per refusal that fired, plus a bounded per-cluster detail so a
   // cluster refused EVERY week is distinguishable from a quiet corpus.
@@ -1724,7 +1760,11 @@ export async function cronCompoundPromoteHandler({
   // sequence lacks, and the SDK may stop it (NON_DETERMINISTIC_FUNCTION) outside the handler's
   // catch, so no outcome marker is emitted for that run. Runs last under 10 minutes and fire
   // weekly, so this is accepted and documented rather than guarded.
+  // Every cluster hash the edit loop recorded this run (opened or attempted). The create arm treats each as
+  // suppressed: both arms build `self-healing/auto-<hash>-<date>`, so a create on one of these would find the EDIT PR.
+  const runHashes = new Set<string>();
   const record = (hash: string, o: ClusterOutcome): void => {
+    runHashes.add(hash);
     if (o.kind === "opened") {
       clustersOpened++;
       return;
@@ -1849,6 +1889,14 @@ export async function cronCompoundPromoteHandler({
       emitOutcomeMarker({ trigger, run_id: runId, status: "week-cap-reached", ...inputMarker() });
       return { ok: true, status: "week-cap-reached" };
     }
+
+    // #10550 -- slots the EDIT loop may use. On an `allow_create` run one free slot is held back for the create arm
+    // (amended 2026-10-27 after the live-fire refusal: the loop used to take both slots, so with two qualifying edit
+    // clusters the arm was unreachable and ended `create-refused` class `week-cap`). `allowCreate` is false on every
+    // scheduled, corpus and non-`true` run, so for those `editCap === weekCapResult.remaining` and the prompt text and the
+    // slice below are byte-identical to before. With one free slot `editCap` is 0 and the cluster step returns empty
+    // without a model call.
+    const editCap = allowCreate ? Math.max(weekCapResult.remaining - 1, 0) : weekCapResult.remaining;
 
     // #8293 patterns path only: read the bot's prior proposal outcomes from PR state. The scheduled path has
     // no new step, no new error path and no new marker field. Fail-closed-loud: an unprovable read ends the
@@ -1997,6 +2045,8 @@ export async function cronCompoundPromoteHandler({
 
     // FR7/FR8: Anthropic cluster call (I3: wall-clock guard)
     const clusterResult = await step.run("anthropic-cluster", () => withTimeout(async () => {
+      // One free slot on an `allow_create` run is reserved for the arm: nothing to cluster, no model call.
+      if (editCap === 0) return { clusters: [] as ProposedCluster[], truncated: false };
       const apiKey = process.env.ANTHROPIC_API_KEY;
       if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -2010,7 +2060,7 @@ export async function cronCompoundPromoteHandler({
       const patternsArm = inputSource === "patterns";
       const nonce = randomBytes(8).toString("hex");
       const prompt = [
-        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=${PROMOTION_QUORUM} source learnings; the server refuses a cluster with fewer, so do not return one).`,
+        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${editCap} qualifying clusters (each with >=${PROMOTION_QUORUM} source learnings; the server refuses a cluster with fewer, so do not return one).`,
         `Schema: {clusters:[{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], rationale:string}]}. Each source_learnings entry must be an exact path key from the corpus, ${PROMOTION_QUORUM} or more distinct ones per cluster. You do NOT write any diff: a later step edits the file.`,
         `Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.rules.md.`,
         `Current always-loaded payload (AGENTS.md + AGENTS.rules.md) is ${alwaysLoadedNow} bytes; propose against a budget of ${PROPOSE_ALWAYS_LOADED_BUDGET} bytes (the warn floor — leave headroom, do not aim for the hard ceiling).`,
@@ -2078,14 +2128,14 @@ export async function cronCompoundPromoteHandler({
 
       // Known consequence (ADR-092 Amendment 2026-10-20): this slice runs BEFORE the
       // normalisation below, so a cluster the server later refuses `quorum-not-met` still
-      // occupies one of the `remaining` proposal slots. Moving the quorum filter ahead of
+      // occupies one of the `editCap` proposal slots. Moving the quorum filter ahead of
       // the slice would need the corpus-key check inside this step (replay risk) and would
       // hide refusals from the marker, so it is documented, not fixed. The same applies to #8293
       // suppression on the patterns arm: a cluster that a prior PR already covers also occupies one of
-      // the (at most two) slots, and the model is not told which hashes are suppressed, so a repeatedly
+      // the (at most two; one on an `allow_create` run) slots, and the model is not told which hashes are suppressed, so a repeatedly
       // proposed rejected or merged cluster can end a week `no-qualifying-clusters` (ruling C3, slot
       // top-up cut; trigger tracked in #10977).
-      return { clusters: (parsed.clusters as ProposedCluster[]).slice(0, weekCapResult.remaining), truncated: false };
+      return { clusters: (parsed.clusters as ProposedCluster[]).slice(0, editCap), truncated: false };
     }, MAX_RUN_DURATION_MS));
 
     // Summaries for phase 2 come from the corpus already collected, keyed by path. A
@@ -2149,7 +2199,83 @@ export async function cronCompoundPromoteHandler({
       proposals = kept;
     }
 
+    // #10550 -- the gated create arm. Reached ONLY when `readRunOptions` said so (trigger=manual, input=patterns,
+    // allow_create===true); on every other run `allowCreate` is false and none of this code executes. It runs AFTER
+    // the edit loop and shares the week cap with whatever the loop opened; because the loop is held to `editCap`
+    // (the free slots minus one on this path), `capLeft` below is at least 1 whenever the arm is reached. It is two
+    // steps: a memoized, never-throwing `create-propose` and ONE `create-persist`. The work lives in `compound-promote-create-arm.ts` so this source
+    // gains no commit call and no synthetic-check list of its own; every outcome is accumulated HERE, from the
+    // MEMOIZED step returns, so a replay still reports it.
+    const recordCreateRefusal = (r: CreateRefusal): void => {
+      createOutcome = "refused";
+      createRefusal = r;
+      refusals.push("create-refused");
+    };
+    const runCreateArm = async (): Promise<void> => {
+      createArmRan = true;
+      const capLeft = weekCapResult.remaining - clustersOpened;
+      const proposed: CreateVerdict = await step.run("create-propose", async () => {
+        const octokit = new Octokit({ auth: installationToken });
+        return runCreateProposeStep({
+          repoRoot,
+          octokit,
+          patterns: patternRows,
+          ledgerEntries,
+          runStartedAt,
+          capLeft,
+          sameRunHashes: [...runHashes],
+          apiKey: process.env.ANTHROPIC_API_KEY,
+          runId,
+          scanOpenPrPaths: async (prefixes) => {
+            const scan = await scanOpenPrSkillPaths({ octokit, owner: REPO_OWNER, repo: REPO_NAME, targets: [], collectPrefixes: prefixes });
+            return { paths: scan.touched ?? [], incomplete: scan.incomplete };
+          },
+        });
+      });
+      if (proposed.kind === "refused") {
+        recordCreateRefusal(proposed);
+        return;
+      }
+      if (proposed.kind === "no_action") {
+        createOutcome = "no_action";
+        createNoAction = proposed.reason;
+        return;
+      }
+      if (proposed.kind === "suppressed") {
+        // The pattern is already proposed (open, merged or closed under 60 days): the existing ledger reason, no new one.
+        // A hash the edit loop recorded this run is already in the marker (opened, or one `refusal_detail` entry): the
+        // backstop hit is not a second suppression, so it is neither recorded nor counted again.
+        if (!runHashes.has(proposed.clusterHash)) {
+          record(proposed.clusterHash, { kind: "refused", reason: "ledger-suppressed" });
+          ledgerSuppressed++;
+        }
+        createOutcome = "no_action";
+        createNoAction = "other";
+        return;
+      }
+      const verdict: CreateVerdictCreate = proposed;
+      const persisted: CreatePersistResult = await step.run("create-persist", async () =>
+        runCreatePersistStep({
+          repoRoot,
+          installationToken,
+          runStartedAt,
+          octokit: new Octokit({ auth: installationToken }),
+          logger,
+          verdict,
+          // The arm resolves the verdict's page from this list, so a missing page is its own mirrored refusal.
+          patterns: patternRows,
+        }),
+      );
+      if (persisted.kind === "opened") {
+        createOutcome = "opened";
+        createPr = persisted.pr;
+        return;
+      }
+      recordCreateRefusal(persisted);
+    };
+
     if (clusterResult.clusters.length === 0 || clusterResult.truncated || (inputSource === "patterns" && proposals.length === 0)) {
+      if (allowCreate && !clusterResult.truncated) await runCreateArm();
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
@@ -2163,6 +2289,7 @@ export async function cronCompoundPromoteHandler({
         refusals: refusals.length > 0 ? refusals : undefined,
         refusal_detail: refusalDetail.length > 0 ? refusalDetail : undefined,
         ...patternsMarker(),
+        ...createMarker(),
       });
       return { ok: true, status: clusterResult.truncated ? "anthropic-truncated" : "no-qualifying-clusters" };
     }
@@ -2621,6 +2748,8 @@ export async function cronCompoundPromoteHandler({
       record(clusterHash, outcome);
     }
 
+    if (allowCreate) await runCreateArm();
+
     await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }));
     emitOutcomeMarker({ trigger, run_id: runId,
       status: "completed",
@@ -2631,6 +2760,7 @@ export async function cronCompoundPromoteHandler({
       refusal_detail: refusalDetail,
       corpus_input_bytes: corpusInputBytes,
       ...patternsMarker(),
+      ...createMarker(),
     });
     return { ok: true, status: "completed", clustersOpened };
   } catch (err) {
@@ -2672,6 +2802,7 @@ export async function cronCompoundPromoteHandler({
       error_class: err instanceof Error ? e.constructor.name : typeof err,
       error_message: safeDetail(scrubbed),
       ...patternsMarker(),
+      ...createMarker(),
     });
     return { ok: false, status: "error" };
   } finally {

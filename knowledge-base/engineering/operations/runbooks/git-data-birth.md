@@ -1,5 +1,7 @@
 # Runbook — birthing the git-data host
 
+> **DISABLED from the Option B merge until #11194 (2026-10-26, #8211).** The `git-data-host-create`, `git-data-host-replace` and `git-data-host-rotate` routes still demand the retired plaintext volume and attachment addresses, so their gates refuse every plan. Do not dispatch them. If the git-data host is lost in that window, stop and escalate to the owner; see the "Plaintext-volume destroy (Option B...)" section of `git-data-luks-cutover-5274.md` and ADR-239 Amendment 2026-10-26, item 4.
+
 > ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13 (PR #8128, merged 2026-09-14)
 >
 > This runbook opened with a `⛔ DO NOT DISPATCH THIS YET` banner from its first commit until

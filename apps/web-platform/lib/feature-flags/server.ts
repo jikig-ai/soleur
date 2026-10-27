@@ -97,7 +97,11 @@ const RUNTIME_FLAGS = {
   // apps/web-platform/server/egress-audit-ingest.ts). Dark by default and evaluated PER
   // ORG after the ingest route has authenticated the batch: environment default OFF
   // (kill switch), a Jikigai-owned canary org enabled by a per-org segment override (ruling
-  // A); external orgs stay OFF until PR2 ships. Read ONLY through the ingest module.
+  // A); external orgs stay OFF until an operator enables them (after PR2's member read path and
+  // the owner notice). Evaluated through server/egress-audit-collection.ts, which three readers
+  // share so the per-org identity cannot drift: the ingest module, the egress audit view
+  // (which empty state is true) and the Scope Grants card (whether the enable dialog may say
+  // hosts are recorded). The member read itself is NOT gated on this flag (history stays readable).
   // Fail-closed: FLAG_EGRESS_AUDIT_COLLECTION=0 mirror.
   "egress-audit-collection": "FLAG_EGRESS_AUDIT_COLLECTION",
   // #10455 (a) / ADR-075 addendum 2026-10-19 — selects the AF_UNIX-deny seccomp artifact for NO-EGRESS
@@ -337,15 +341,34 @@ export async function isAgentSandboxUnixDenyEnabled(identity: Identity = ANON_ID
 }
 
 /**
- * #10455 (b) — the same read as `isAgentSandboxUnixDenyEnabled`, plus whether Flagsmith ANSWERED. `fellBack` is true when the
- * value came from the container's env mirror because the Flagsmith fetch failed (a cold one-shot process hits a 200 ms timeout
- * routinely). The runtime Bash synthetic's resolver CLI reports `unresolved` on it instead of testing the wrong artifact.
+ * The same read as `getRuntimeFlag`, plus whether Flagsmith ANSWERED. `fellBack` is true when the value came from the
+ * container's env mirror because a configured Flagsmith client failed to answer (a cold one-shot process hits a 200 ms
+ * timeout routinely). With no `FLAGSMITH_ENVIRONMENT_KEY` configured the env mirror IS the authority, so `fellBack` is
+ * false: nothing was supposed to answer. A caller that must not act on a mirror value reads `fellBack`, not `value`.
+ */
+export async function readRuntimeFlagDetailed(
+  name: RuntimeFlagName,
+  identity: Identity,
+): Promise<{ value: boolean; fellBack: boolean }> {
+  const snap = await getRuntimeSnapshot(identity.role, identity.orgId);
+  return { value: snap[name], fellBack: client() !== null && _fallbackSnapshots.has(snap) };
+}
+
+/**
+ * #10455 (b) — the same read as `isAgentSandboxUnixDenyEnabled`, plus whether Flagsmith ANSWERED (see
+ * `readRuntimeFlagDetailed`). The runtime Bash synthetic's resolver CLI reports `unresolved` on `fellBack` instead of
+ * testing the wrong artifact.
+ *
+ * `fellBack` here is BROADER than in `readRuntimeFlagDetailed`: it is also true when no Flagsmith client is configured
+ * (there `readRuntimeFlagDetailed` reports false). The resolver CLI exists to test the artifact actually in use, and an
+ * env mirror with no Flagsmith behind it is not that artifact, so "nothing was supposed to answer" still means unresolved.
  */
 export async function readAgentSandboxUnixDenyDetailed(
   identity: Identity = ANON_IDENTITY,
 ): Promise<{ value: boolean; fellBack: boolean }> {
-  const snap = await getRuntimeSnapshot(identity.role, identity.orgId);
-  return { value: snap["agent-sandbox-unix-deny"], fellBack: _fallbackSnapshots.has(snap) };
+  const r = await readRuntimeFlagDetailed("agent-sandbox-unix-deny", identity);
+  // Unlike the audit view, the resolver CLI also treats "no Flagsmith key" as unresolved (the env mirror is not the artifact in use).
+  return client() === null ? { value: r.value, fellBack: true } : r;
 }
 
 /**

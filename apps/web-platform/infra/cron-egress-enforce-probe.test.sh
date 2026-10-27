@@ -176,8 +176,8 @@ fi
 echo "-- cloud-init boot wiring (post-container + fail-closed) --"
 assert_grep "cloud-init invokes the probe" '/usr/local/bin/cron-egress-enforce-probe\.sh' "$CLOUD_INIT"
 assert_grep "cloud-init fail-closed poweroff on non-enforcing host" 'poweroff -f' "$CLOUD_INIT"
-assert_grep "probe invocation is fail-closed (if ! probe; then … poweroff)" \
-  'if ! /usr/local/bin/cron-egress-enforce-probe\.sh; then' "$CLOUD_INIT"
+assert_grep "probe invocation is fail-closed (if probe; then :; else rc; … poweroff — #9639 F7 restructure)" \
+  'if /usr/local/bin/cron-egress-enforce-probe\.sh; then' "$CLOUD_INIT"
 # ORDERING: the probe must run AFTER the app container starts (the terminal `docker run`'s
 # final image arg). #6122 replaced the bare `${image_name}` arg with the ref the seed block
 # resolved, `"$(cat /run/soleur-image-ref)"` (#8036 1d dropped its `|| echo` GHCR fallback: the
@@ -185,7 +185,7 @@ assert_grep "probe invocation is fail-closed (if ! probe; then … poweroff)" \
 # is the only line that STARTS with the quoted `cat` (the pull/create sites prefix it with
 # `docker pull`/`docker create`). Probe line number MUST be greater.
 CONTAINER_LINE="$(grep -nE '^\s*"\$\(cat /run/soleur-image-ref' "$CLOUD_INIT" | tail -1 | cut -d: -f1)"
-PROBE_LINE="$(grep -nE 'if ! /usr/local/bin/cron-egress-enforce-probe\.sh' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
+PROBE_LINE="$(grep -nE 'if *!* */usr/local/bin/cron-egress-enforce-probe\.sh' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
 if [[ -n "$CONTAINER_LINE" && -n "$PROBE_LINE" && "$PROBE_LINE" -gt "$CONTAINER_LINE" ]]; then
   CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: probe runs AFTER the app container starts (container=$CONTAINER_LINE < probe=$PROBE_LINE)"
 else
@@ -436,6 +436,92 @@ check "F5-S1 non-vacuity: the pattern also matches the double- and single-quoted
 check "F5-S1 neither script evals or cats webhook-deploy into the shell on a code line" \
   '[[ "$(grep -vE "^[[:space:]]*#" "$PROBE" "$BOOTSTRAP" | grep -cE "eval[^#]*webhook-deploy" || true)" -eq 0 ]]'
 
+# --- #9639 F7: a refused/failed probe emits a boot-trail event BEFORE poweroff ------------------
+# The probe's xtrace refusal (exit 78) is deliberately silent — no Sentry event of its own — and
+# `poweroff -f` is signal death, so a refused or failed boot was visible only in the unreachable
+# cloud-init log. The fix restructures `if ! probe` (which destroys the exit code: inside a
+# negated-if branch $? reads 0) into `if probe; then :; else rc=$?`, writes rc=<n> to the stage
+# detail file so refused(78) vs failed(1) discriminate, and emits
+# `soleur-boot-emit egress_enforce_probe fatal` BEFORE `poweroff -f` (the hostscripts_incomplete
+# precedent). The block is awk-extracted and the rows read the extract; the fixture rows prove
+# the extract discriminates (self-contained mutants, valid pre- AND post-fix).
+echo "-- F7 (#9639): soleur-boot-emit + rc detail precede the probe's poweroff -f --"
+f7_block() { awk '/if *!* *\/usr\/local\/bin\/cron-egress-enforce-probe\.sh/{f=1} f{print} f&&/^[[:space:]]*fi[[:space:]]*$/{exit}' "$1"; }
+f7_emit_first() {  # <cloud-init file> -> rc 0 iff the probe block carries the emit BEFORE poweroff -f
+  local b e p
+  b="$(f7_block "$1")"
+  [ -n "$b" ] || return 1
+  e="$(grep -n 'soleur-boot-emit egress_enforce_probe fatal' <<<"$b" | head -1 | cut -d: -f1)"
+  p="$(grep -n 'poweroff -f' <<<"$b" | head -1 | cut -d: -f1)"
+  [ -n "$e" ] && [ -n "$p" ] && [ "$e" -lt "$p" ]
+}
+f7_rc_detail() {   # <cloud-init file> -> rc 0 iff the block captures rc=$? AND writes it to the stage detail file
+  local b
+  b="$(f7_block "$1")"
+  grep -qE 'rc=\$\?' <<<"$b" && grep -qE '/run/soleur-stage-detail\.d/egress_enforce_probe' <<<"$b"
+}
+check "F7 block extractable: awk finds the probe if…fi block" '[[ -n "$(f7_block "$CLOUD_INIT")" ]]'
+check "F7 property: soleur-boot-emit egress_enforce_probe fatal precedes poweroff -f inside the probe block" \
+  'f7_emit_first "$CLOUD_INIT"'
+check "F7 property: the real exit code is captured (rc=\$?) and written to the stage detail file" \
+  'f7_rc_detail "$CLOUD_INIT"'
+check "F7 C4 must-pass: the hostscripts_incomplete sibling keeps its emit-first shape (the extractor is not counting emits anywhere in the file)" \
+  'grep -qE "soleur-boot-emit hostscripts_incomplete fatal;[^}]*poweroff -f" "$CLOUD_INIT"'
+# Fixture mutations over COPIES: each must defeat the verdict it targets.
+F7D="$STUBS/f7"; mkdir -p "$F7D"
+cp "$CLOUD_INIT" "$F7D/emit-deleted.yml"
+python3 - "$F7D/emit-deleted.yml" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+n = s.count('soleur-boot-emit egress_enforce_probe')
+assert n >= 1, 'emit line not found'
+open(p, 'w').write(re.sub(r'\n[^\n]*soleur-boot-emit egress_enforce_probe[^\n]*', '', s, count=1))
+PY
+check "F7 C1 fixture: emit deleted from the probe block -> the emit-first verdict reds" \
+  '! f7_emit_first "$F7D/emit-deleted.yml"'
+cp "$CLOUD_INIT" "$F7D/emit-after-poweroff.yml"
+python3 - "$F7D/emit-after-poweroff.yml" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+m = re.search(r'^([ \t]*)soleur-boot-emit egress_enforce_probe fatal[ \t]*$', s, re.M)
+assert m, 'emit line not found'
+emit = m.group(0)
+s = s[:m.start()] + s[m.end():]
+i = s.index('poweroff -f', m.start())
+j = s.index('\n', i)
+open(p, 'w').write(s[:j + 1] + emit + '\n' + s[j + 1:])
+PY
+check "F7 C2 fixture: emit moved AFTER poweroff -f -> the emit-first verdict reds (order is load-bearing, not presence)" \
+  '! f7_emit_first "$F7D/emit-after-poweroff.yml"'
+cp "$CLOUD_INIT" "$F7D/no-rc-detail.yml"
+python3 - "$F7D/no-rc-detail.yml" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s2 = re.sub(r'\n[^\n]*/run/soleur-stage-detail\.d/egress_enforce_probe[^\n]*', '', s)
+s2 = re.sub(r'\n[^\n]*rc=\$\?[^\n]*', '', s2)
+assert s2 != s, 'rc detail lines not found'
+open(p, 'w').write(s2)
+PY
+check "F7 C3 fixture: no rc captured into /run/soleur-stage-detail.d/ -> the detail verdict reds" \
+  '! f7_rc_detail "$F7D/no-rc-detail.yml"'
+# Positive fixture: a canonical fixed-shape block must satisfy BOTH verdicts (the helpers are not fail-always).
+cat > "$F7D/fixed-shape.yml" <<'FIX'
+      if /usr/local/bin/cron-egress-enforce-probe.sh; then
+        :
+      else
+        rc=$?
+        printf 'rc=%s\n' "$rc" > /run/soleur-stage-detail.d/egress_enforce_probe
+        soleur-boot-emit egress_enforce_probe fatal
+        echo "FATAL: container egress enforcement not proven — powering off (#5933)" >&2
+        poweroff -f
+      fi
+FIX
+check "F7 must-pass: the canonical fixed-shape block satisfies emit-first AND rc-detail (the helpers are not fail-always)" \
+  'f7_emit_first "$F7D/fixed-shape.yml" && f7_rc_detail "$F7D/fixed-shape.yml"'
+
 echo "-- drawdown (#7797): not grandfathered in the credential-refusal baseline --"
 check "P-L the probe's repo path is absent from the A/B/C baseline" \
   '[[ "$(grep -cxF "apps/web-platform/infra/cron-egress-enforce-probe.sh" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt")" -eq 0 ]]'
@@ -447,7 +533,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). A call site recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=95
+MIN_CASES=103
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1
