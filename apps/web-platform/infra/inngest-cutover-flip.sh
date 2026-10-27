@@ -21,7 +21,8 @@
 #   flushed     POST-flush resume (crash after the DBSIZE assert, before/at start): ensure
 #               started -> set done. Does NOT re-FLUSHALL — the queue may be on prod (#5450).
 #   rollback    STOP inngest-server -> set terminal `rolled-back`            (P0-1)
-#   done / rolled-back / aborted / unset   idempotent no-op, exit 0
+#   done / rolled-back / aborted / unset   no flag change, no FSM row, exit 0; each then runs the bounded read-only
+#                                          LUKS key-continuity probe (luks_key_probe_tick, #9927 item 2, ADR-282 addendum)
 #
 # LOAD-BEARING invariants:
 #   * Order is stop -> FLUSHALL -> assert -> flushed -> start (P1-4): the dark server is

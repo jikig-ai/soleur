@@ -193,14 +193,14 @@ See "Follow-up issues to file". Filed at the start of the work phase.
 
 **What reaches the dedicated host only after the owner acts (held; production-mutating; decision D9):**
 
-1. Pre-promotion checks (agent-runnable, read-only, recorded on the tracker): `bash -n` and a `--fixture-seams` smoke run of the script as packed into the built bundle; the Phase 2.3 rehearsal result; a review of the member diff since the last promoted bundle (the bundle is built from the default branch, so any other member edit merged since then ships too); a pre-built, unpromoted revert bundle at the next higher version (the channel is monotonic, a rollback is a roll-forward).
+1. Pre-promotion checks (agent-runnable, read-only, recorded on the tracker): `bash -n` and a `--fixture-seams` smoke run of the script as packed into the built bundle; the Phase 2.3 rehearsal result; a review of the member diff since the last promoted bundle (the bundle is built from the default branch, so any other member edit merged since then ships too); an unmerged revert branch restoring the previous script, with `bash -n` and the `--fixture-seams` smoke green on it (a bundle can only be built from the default branch, so a probe-free bundle cannot exist before the revert merges; D13).
 2. Dispatch `build-inngest-config-bundle.yml` from the default branch at a version above the applied one (read it from the newest `SOLEUR_INFRA_PULL_APPLIED version=` row; if that row is absent or past retention, read the drift comparator summary; the brief says v5, so expect 6), approved in the `inngest-config-signing` environment.
 3. Promote the digest (`INNGEST_CONFIG_DIGEST` in `soleur/prd_terraform`, then the targeted apply per `inngest-config-refresh.md` step 3; #9060 automation is still open). A menu answer is not authorization for either step (`hr-menu-option-ack-not-prod-write-auth`). The plan builds none of it and dispatches nothing.
 4. Before ANY future host replace, promote a probe-carrying bundle: a replaced host applies the currently promoted bundle over the image-baked script, so a promoted bundle that predates the probe silently drops it (the refresh engine installs whatever the promoted pointer names; ADR-135 records the floor and pointer behaviour).
 
 **First-row verification (read-only, no SSH; also the close condition of the owner-hold tracker):** `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_LUKS_KEY_PROBE --limit 5`, read by meaning: a row from the SYSLOG_IDENTIFIER `inngest-cutover-flip` channel AND a phone-home row, both `token=ok rc=0`, within about two minutes of the next applied bundle (the 60 s refresh timer, then the first 30 s tick with no stamp). A webhook payload that quotes the marker, or an `indeterminate` row, does not satisfy it. `token=fail_*` pages. The first `ok` row is also the delivery proof (no `GUARD_REV` bump).
 
-**Rollback (independent of the probe path, CPO condition 1):** a revert PR restoring the previous script, a new bundle at a higher version (pre-built per step 1), and the same promotion. The refresh engine and units are not members, so the rollback path does not run through the probe. Expected side effect: the dead-man fires about 26 h after the measured rows stop (named in its `incident_cause`). A script that breaks every tick would kill the only no-SSH rollback channel on the dedicated host; that is why step 1 exists and why the isolation rules and the byte-identical-flag case are acceptance criteria.
+**Rollback (independent of the probe path, CPO condition 1):** a revert PR restoring the previous script, a new bundle built from the default branch at a higher version after the revert merges (hours; two owner acts, D13), and the same promotion. The refresh engine and units are not members, so the rollback path does not run through the probe. Expected side effect: the dead-man fires about 26 h after the measured rows stop (named in its `incident_cause`). A script that breaks every tick would kill the only no-SSH rollback channel on the dedicated host; that is why step 1 exists and why the isolation rules and the byte-identical-flag case are acceptance criteria.
 
 **Residuals stated, not hidden:** if the bundle is never promoted, the dead-man stays quiet forever (the owner hold tracks delivery, not the alert; the tracker carries a due date); the dead-man self-disarms after 30 days with no rows at all (if the probe is ever dark that long, convert to the count-variable form; recorded on the keeper follow-up); the bot pin-bump PR is merged or closed per the existing image-release runbook, its standing drift is harmless.
 <!-- lint-infra-ignore end -->
@@ -228,6 +228,8 @@ No `dev != prd` surface. The refresh-set stays exactly four (`inngest-config-ref
 Better Stack: the paid-tier gate on `escalation_target` mirrors the sibling. The 30-day `query_period` has no precedent in the file (longest is 97,200 s) and the provider does not validate it client-side; a rejection would fail the infra apply, which is why Phase 3.2 proves it before the `-target` line lands.
 
 ## Observability
+
+> **Superseded in part by D12 and the 2026-10-26 review rulings (D13 to D17):** the dead-man alert is NOT in this PR (it follows an owner-authorized proof that Better Stack accepts `query_period = 2592000`, and is a blocking prerequisite of the bundle promotion, #11266). Wherever this section names the dead-man as shipped, read it as follow-up. Until it lands, probe silence, a persistent `indeterminate` and a mid-run death are detected only by the first-row verification and the `at=died` row; the alert route for those modes is none.
 
 ```yaml
 liveness_signal:
@@ -461,6 +463,8 @@ Not filed here (already carried by #9927 with its dated trigger): the LUKS heade
 
 ## Acceptance Criteria
 
+> **Superseded in part by D12 and the 2026-10-26 review rulings (D13 to D17):** the dead-man alert is NOT in this PR (it follows an owner-authorized proof that Better Stack accepts `query_period = 2592000`, and is a blocking prerequisite of the bundle promotion, #11266). Wherever this section names the dead-man as shipped, read it as follow-up. Until it lands, probe silence, a persistent `indeterminate` and a mid-run death are detected only by the first-row verification and the `at=died` row; the alert route for those modes is none.
+
 ### Pre-merge (PR)
 
 #### Functional Requirements
@@ -507,7 +511,7 @@ Not filed here (already carried by #9927 with its dated trigger): the LUKS heade
 ## Dependencies & Risks
 
 - **Delivery depends on owner acts** (bundle build, digest promotion); until then the probe is inert on the dedicated host and both alerts are quiet by design. Mitigation: follow-up 2 tracks delivery with a due date; the first-row verification is a documented, read-only command.
-- **FSM edit risk** (the script is the only control channel of the sole scheduler; a broken script kills the no-SSH rollback channel and the engine has no post-apply health check or auto-revert). Mitigation: the CTO's mandatory isolation, Guard 1, the byte-identical-flag case, pre-promotion `bash -n` and fixture smoke checks, a pre-built higher-version revert bundle, a single PR with a stricter threshold and the user-impact reviewer.
+- **FSM edit risk** (the script is the only control channel of the sole scheduler; a broken script kills the no-SSH rollback channel and the engine has no post-apply health check or auto-revert). Mitigation: the CTO's mandatory isolation, Guard 1, the byte-identical-flag case, pre-promotion `bash -n` and fixture smoke checks, a revert branch kept green in advance (no probe-free bundle can exist before a revert merges, D13), a single PR with a stricter threshold and the user-impact reviewer.
 - **Sandbox behaviour of `--disable-locks` and the real `findmnt` shape under `ProtectSystem=strict` and a bind-mounted `ReadWritePaths`** is reasoned and measured only on a file container; Phase 2.3 measures it under the unit's properties or the runbook says `sandbox: unverified`.
 - **30-day `query_period` is unproven** (provider does not validate; longest precedent 27 h). Mitigation: Phase 3.2 gate, fallback ladder, split-PR carve-out.
 - **argon2id memory** on a 4 GB host that also runs redis (256 MB) and the scheduler: the `luksDump` pre-check returns `indeterminate` instead of risking an OOM; the shield makes the probe the first victim. The hourly re-run after a non-`ok` token repeats this; the runbook notes it.

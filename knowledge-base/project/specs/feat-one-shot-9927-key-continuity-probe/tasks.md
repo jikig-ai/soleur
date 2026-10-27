@@ -6,6 +6,8 @@ Standing constraints: no host replace, no Hetzner/Doppler/Supabase write, no bun
 
 ## Phase 0 - Setup
 
+> **Superseded in part (D12, review D13 to D17):** tasks 1.3 (dead-man SQL structure), 3.2 and the dead-man residuals in 4.2 moved to the follow-up PR; 2.1's findmnt form is `${src##*$'\n'}`, not `tail -n1`; the review round added the `at=died` row, `--disable-locks` on every header read, an upstream-stage verdict check and a push-armed alert.
+
 - 0.1 Re-run `bash apps/web-platform/infra/inngest-userdata-budget.sh` on the branch base; record headroom (expect 804 B) for the before/after check.
 - 0.2 File the two follow-up issues from the plan (standalone keeper at the next replace, including the dead-man conversion trigger; owner-hold tracker for the bundle delivery with a due date and label `follow-through`); every body `Ref #9927`.
 - 0.3 Re-run the workflow census (`git grep -l -E "apps/web-platform/infra/\*\*|betterstack-logs-alerts" -- .github/workflows`) and record it; confirm `apply-deploy-pipeline-fix.yml` paths and `server.tf` `triggers_replace` still hash the script.

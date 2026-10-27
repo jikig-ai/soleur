@@ -2,7 +2,7 @@
 
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md
-- Status: complete (plan + deepen-plan; CTO rulings D1 to D11 recorded; ruling gate green)
+- Status: complete (plan + deepen-plan; CTO rulings D1 to D12 recorded, plus D13 to D17 from the review round; ruling gate green)
 
 ### Errors
 - Planning subagent: its worktree directory vanished mid-session (cause unknown); it rebuilt the plan, tasks and decision-challenges files from its transcript and pushed them. Nothing else lost.
@@ -12,7 +12,7 @@
 ### Decisions
 - Delivery: add a bounded `luks_key_probe_tick` to the existing refresh-set member `inngest-cutover-flip.sh` (30 s timer), called from the four terminal-noop arms only; no user_data change, so no host replace.
 - Probe reads the key the host holds from stdin to `cryptsetup luksOpen --test-passphrase --disable-locks --key-file -`; never in a variable, argv, log or Doppler path.
-- Marker `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<ok|fail_passphrase|fail_header|fail_key_absent|indeterminate> rc=<n> at=<literal>`; paging alert on `fail_` plus a self-arming dead-man (arm on the oldest row being 26 h old).
+- Marker `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<ok|fail_passphrase|fail_header|fail_key_absent|indeterminate> rc=<n> at=<literal>`; paging alert on `fail_` (the self-arming dead-man moved to a follow-up PR, ruling D12).
 - Brand-survival threshold single-user incident; CPO sign-off with five conditions carried as acceptance criteria.
 - Bundle build and digest promotion after merge are production writes: held for the operator's per-command go-ahead (D9), not performed by this PR.
 

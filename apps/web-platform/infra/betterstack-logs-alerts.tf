@@ -313,7 +313,8 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 }
 
 # ── #9927 item 2: the on-host LUKS key-continuity probe (paging alert) ──────────────────────────
-# The dedicated Inngest host runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
+# Once the owner delivers the signed bundle (#11266; merged, inert until then), the dedicated Inngest host
+# runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
 # that asks cryptsetup whether the key the host holds still unlocks the LUKS2 header behind
 # /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<where>`,
 # token in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the

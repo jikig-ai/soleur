@@ -60,6 +60,15 @@ Live standing alarms over this source:
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
+- **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
+  10800 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push) on a `token=fail_*` row of
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
+  header, or is absent. `indeterminate` never pages. Merged but inert until the owner delivers the signed
+  bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
+  [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) "Key-continuity probe (#9927 item 2)".
+  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`).
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
