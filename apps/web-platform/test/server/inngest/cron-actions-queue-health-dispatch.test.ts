@@ -48,6 +48,7 @@ import {
   cronActionsQueueHealthDispatch,
   cronActionsQueueHealthDispatchHandler,
 } from "@/server/inngest/functions/cron-actions-queue-health-dispatch";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
 const SUT_SOURCE = readFileSync(
   resolve(
@@ -57,13 +58,19 @@ const SUT_SOURCE = readFileSync(
   "utf-8",
 );
 
-// A `step` that just runs each callback inline (no Inngest durability in tests).
-function makeStep() {
-  return {
-    run: async <T>(_name: string, cb: () => Promise<T>): Promise<T> => cb(),
-  };
-}
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler's catch as
+// the SDK's rebuilt StepError. The inline `makeStep` this replaced ran the
+// callback in-process and hid both (the #8717/#8726 defect class).
+// maxAttempts: 1 — a throwing dispatch callback is final on its first attempt,
+// so the failure tests keep their single-call shape.
+function runHandler() {
+  return runLikeInngest(({ step }) => cronActionsQueueHealthDispatchHandler({ step, logger }), {
+    maxAttempts: 1,
+  });
+}
 
 describe("cronActionsQueueHealthDispatch — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -129,10 +136,9 @@ describe("cronActionsQueueHealthDispatchHandler — dispatch behavior", () => {
   });
 
   it("mints a NARROWED token (actions:write, this repo only), POSTs the dispatch, returns ok", async () => {
-    const result = await cronActionsQueueHealthDispatchHandler({
-      step: makeStep(),
-      logger,
-    });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    const result = out.value;
 
     // The narrowed scope is the load-bearing difference from sibling crons —
     // toEqual, not toMatchObject: an extra permission widens the credential.
@@ -165,10 +171,9 @@ describe("cronActionsQueueHealthDispatchHandler — dispatch behavior", () => {
       new Error("fake-installation-token leaked 403"),
     );
 
-    const result = await cronActionsQueueHealthDispatchHandler({
-      step: makeStep(),
-      logger,
-    });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    const result = out.value;
 
     expect(result).toMatchObject({ ok: false });
     expect(result.errorSummary).toBeTruthy();
