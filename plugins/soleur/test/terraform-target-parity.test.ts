@@ -1311,6 +1311,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
+  // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
+  // (monitor, web-1 pool, LB on app.soleur.ai). Provisioning requires both the
+  // Load Balancing add-on subscription and `Account: Load Balancers: Edit` +
+  // `Zone: Load Balancers: Edit` scopes on CF_API_TOKEN (measured 2026-10-27:
+  // the per-PR CI token returns Cloudflare code 10000 Authentication error on
+  // /load_balancers, so per-PR auto-targeting would 403 and wedge every merge
+  // apply — the #5566-inverse footgun). Rides the GA maintenance-window apply.
+  "cloudflare_load_balancer_monitor.web",
+  "cloudflare_load_balancer_pool.web_1",
+  "cloudflare_load_balancer.app",
   // #6657 (ADR-125 / AP-019) — the DNS-edit-only Cloudflare token for the GitHub
   // Pages cert-reissue routine + its prd doppler_secret. Minting a
   // cloudflare_api_token requires "User API Tokens: Edit", which the per-PR CI
@@ -1905,15 +1915,11 @@ moved {
   });
 });
 
-describe("hcloud_server.web reboot deferral — placement_group_id stays in ignore_changes (#5887 zero-downtime CI unwedge)", () => {
-  // Removing `placement_group_id` from hcloud_server.web's lifecycle.ignore_changes
-  // re-introduces the pending web-1 placement-group attach (0 -> web_spread) into
-  // every targeted plan. That attach is a reboot-forcing in-place `update` on the
-  // RUNNING prod host, which the destroy-guard `reboot_updates` counter (#5911,
-  // tests/scripts/lib/destroy-guard-filter-web-platform.jq) HALTS with rc=2 —
-  // re-wedging BOTH apply pipelines (the #5887 wedge). The GA maintenance-window PR
-  // removes this entry ON PURPOSE to take the reboot on a drained host (blue-green);
-  // until then it must stay. This static guard fails if a future edit drops it.
+describe("hcloud_server.web reboot deferral — placement_group_id removed in GA maintenance window (#5887 / #11181)", () => {
+  // The GA maintenance-window PR (#11217, epic #11181 item 5) removes
+  // `placement_group_id` from hcloud_server.web's lifecycle.ignore_changes so
+  // web-1's pending placement-group attach (0 -> web_spread) is taken on a
+  // drained host (blue-green).
   function hcloudServerWebBody(): string {
     const stripped = stripComments(
       readFileSync(resolve(INFRA_DIR, "server.tf"), "utf8"),
@@ -1934,7 +1940,7 @@ describe("hcloud_server.web reboot deferral — placement_group_id stays in igno
     return stripped.slice(start, i - 1);
   }
 
-  test("lifecycle.ignore_changes includes placement_group_id", () => {
+  test("lifecycle.ignore_changes excludes placement_group_id", () => {
     const body = hcloudServerWebBody();
     const ic = /ignore_changes\s*=\s*\[([^\]]*)\]/.exec(body);
     expect(ic).not.toBeNull();
@@ -1942,7 +1948,7 @@ describe("hcloud_server.web reboot deferral — placement_group_id stays in igno
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    expect(entries).toContain("placement_group_id");
+    expect(entries).not.toContain("placement_group_id");
     // Non-vacuity: the pre-existing import-artifact entries (#967) are still present,
     // proving we parsed the real ignore_changes list, not an empty/wrong block.
     expect(entries).toContain("user_data");
