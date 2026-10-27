@@ -209,6 +209,9 @@ close.
 - **Non-Linux fallback.** Plain joined paths keep every refusal atomic
   (O_NOFOLLOW/O_DIRECTORY at open time); only the dentry-pin is lost. The
   Linux-pin test is `it.skipIf(process.platform !== "linux")` — CI covers it.
+  `fs.constants.O_DIRECTORY`/`O_NOFOLLOW` can be `undefined` on non-POSIX
+  platforms — coalesce each to `0` in flag math (`?? 0`) so fallback opens
+  never compute `NaN` flags (CTO caveat, decision-challenges.md row 4).
 - **Lazy imports.** `node:fs/promises` (open/mkdir/unlink) and `node:fs`
   (constants) stay lazy per the existing comment — sibling tests mock node
   builtins with partial factories.
