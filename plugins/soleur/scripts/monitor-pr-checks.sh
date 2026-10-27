@@ -48,7 +48,14 @@
 #   MERGED — ... | CLOSED WITHOUT MERGE — ... | CHECKS SETTLED — ... | TIMEOUT — ...
 #
 # Exit 0 on a merge or an all-green settle; 1 on a red/closed terminal; 2 on timeout;
-# 3 on usage error. The caller's Monitor watch ends when this exits.
+# 3 on usage error; 4 when another live monitor already watches this repo + PR (the PR is being
+# watched: not a PR failure, and do not re-arm blindly). The caller's Monitor watch ends when this exits.
+#
+# One monitor per PR (P4c of #10924): the first thing after argument validation is a per-(repo, PR) lock
+# (lib/monitor-lock.sh). A second monitor prints one `DUPLICATE MONITOR` line and exits 4 BEFORE any gh
+# call. A lock that cannot be established prints `monitor-lock: UNAVAILABLE (...)` and the watch runs
+# anyway; SOLEUR_MONITOR_LOCK=off bypasses it (prints `DISABLED`). SOLEUR_MONITOR_LOCK_DIR overrides the
+# lock directory. A stale lock (dead, zombie or pid-reused holder) never blocks.
 #
 # CI_DRAFT_LIGHT (ADR-276 S3, #9728): a red `test` row is read through ci-head-verdict.sh. pending-full and no-run report it
 # PENDING (`test(ready run <state>)`), stalled and awaiting-approval end the watch (exit 1) with the recovery command, and
@@ -103,7 +110,50 @@ if [[ -z "$ERRTMP" || ! -w "$ERRTMP" ]]; then
     "${TMPDIR:-/tmp}" >&2
   exit 3
 fi
-trap 'rm -f "$ERRTMP"' EXIT
+
+# Per-PR monitor lock (P4c of #10924). ONE exit funnel: every way out after the lock is taken (terminal
+# verdicts, TERM, HUP) runs _cleanup via the EXIT trap. There is deliberately NO INT/TERM trap: a trapped
+# TERM is deferred until the foreground `sleep` below returns, which keeps the lock for up to --interval
+# after the watch was stopped (the plugin test pins a release within 4 s of TERM at --interval 10).
+# SIGKILL runs no trap; the next monitor reclaims the dead holder's lock instead.
+ML_LIB="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/lib/monitor-lock.sh"
+ML_LOADED=0
+if [[ -r "$ML_LIB" ]]; then
+  # shellcheck source=lib/monitor-lock.sh
+  source "$ML_LIB" && ML_LOADED=1
+fi
+[[ "$ML_LOADED" == "1" ]] || monitor_lock_release() { :; }
+_cleanup() {
+  monitor_lock_release  # mut:cleanup-release
+  rm -f "$ERRTMP"
+}
+trap _cleanup EXIT
+
+# acquire_or_exit — the ONE chokepoint for the lock. Runs in the main shell (a `$(...)` subshell would
+# drop the lock state and never run the EXIT trap). A live other holder -> one terminal line, exit 4, no gh call.
+# Anything that merely prevents the lock from being established runs the watch anyway, loudly.
+acquire_or_exit() {
+  local lock_repo lrc=0
+  if [[ "$ML_LOADED" != "1" ]]; then
+    echo "monitor-lock: UNAVAILABLE (lib/monitor-lock.sh not found next to this script) - running without exclusion"
+    return 0
+  fi
+  lock_repo="${REPO_ARG[1]:-}"
+  [[ -n "$lock_repo" ]] || lock_repo="$(git config --get remote.origin.url 2>/dev/null || true)"
+  monitor_lock_acquire "$lock_repo" "$PR" || lrc=$?
+  case "$lrc" in
+    0) return 0 ;;
+    1) printf 'DUPLICATE MONITOR — PR #%s is already watched by pid %s (armed %ss ago, repo %s). This watch exits without polling. If this session armed that monitor, read its output; if not (a resumed or other session), stop it with: kill %s — then arm this watch once. SOLEUR_MONITOR_LOCK=off bypasses the lock only if the lock mechanism itself misbehaves.\n' \
+         "$PR" "$ML_HOLDER_PID" "$ML_HOLDER_AGE" "$ML_REPO" "$ML_HOLDER_PID"
+       exit 4 ;;
+    *) if [[ "$ML_STATE" == "disabled" ]]; then
+         echo "monitor-lock: DISABLED (SOLEUR_MONITOR_LOCK=off) - running without exclusion"
+       else
+         echo "monitor-lock: UNAVAILABLE (${ML_WHY:-unknown}) - running without exclusion"
+       fi ;;
+  esac
+  return 0
+}
 
 # ── Red-on-main annotation (terminal-fail exit path ONLY) ─────────────────────
 # Runs at most once per watch — never per-tick. The gh budget for this is
@@ -211,6 +261,7 @@ ci_verdict() {
   case "$m" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) V_STATE="$m" ;; *) return 1 ;; esac
 }
 
+acquire_or_exit
 n=0; prev_sig=""; queue_seen=0
 while :; do
   n=$((n + 1))

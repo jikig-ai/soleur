@@ -28,6 +28,9 @@ else
 fi
 
 STUB="$(mktemp -d)"; trap 'rm -rf "$STUB"' EXIT
+# The script takes a per-PR lock (P4c of #10924); keep every arm off a developer's real lock directory. The lock
+# itself is covered by monitor-lock.test.sh, which finishes in seconds instead of this suite's 10 s interval floor.
+export SOLEUR_MONITOR_LOCK_DIR="$STUB/locks"
 mkstub() {  # mkstub <view-json-tuple> <checks-json>
   cat > "$STUB/gh" <<EOF
 #!/usr/bin/env bash
