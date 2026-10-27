@@ -11,6 +11,8 @@
 #   0  copy succeeded (or repo already matches install)
 #   1  repo adapter or one of its sibling modules missing (should never happen inside the plugin)
 #   2  install directory not writable
+#   3  the adapter's dependency install (`npm ci`) failed: the files were copied, no lock stamp was
+#      written, node_modules is not usable (re-run, or: bash check_deps.sh --check-adapter-drift --auto)
 
 set -euo pipefail
 
@@ -80,6 +82,7 @@ lock_sha() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum -- "$1" | awk '{print $1}'; else shasum -a 256 -- "$1" | awk '{print $1}'; fi
 }
 LOCK_STAMP="$INSTALL_DIR/node_modules/.soleur-package-lock.sha256"
+npm_failed=0
 if [[ -f "$INSTALL_DIR/package.json" ]]; then
   want_sha=""
   [[ -f "$INSTALL_DIR/package-lock.json" ]] && want_sha=$(lock_sha "$INSTALL_DIR/package-lock.json")
@@ -87,10 +90,18 @@ if [[ -f "$INSTALL_DIR/package.json" ]]; then
   [[ -f "$LOCK_STAMP" ]] && have_sha=$(cat "$LOCK_STAMP")
   if [[ ! -d "$INSTALL_DIR/node_modules" ]] || [[ -z "$want_sha" ]] || [[ "$want_sha" != "$have_sha" ]]; then
     echo "Installing adapter dependencies in $INSTALL_DIR..."
-    if (cd "$INSTALL_DIR" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY npm ci --ignore-scripts --silent 2>&1 | tail -5); then
+    # The exit status is npm's own, captured before the output is trimmed (a pipeline into `tail`
+    # would report tail's status and turn a failed install into a success). umask 022 so the
+    # packages are never group-writable (a umask of 002 would otherwise do that).
+    npm_out=$(umask 022; cd "$INSTALL_DIR" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY npm ci --ignore-scripts --silent 2>&1) && npm_rc=0 || npm_rc=$?
+    [[ -z "$npm_out" ]] || printf '%s\n' "$npm_out" | tail -5
+    if [[ "$npm_rc" -eq 0 ]]; then
       [[ -z "$want_sha" ]] || printf '%s\n' "$want_sha" > "$LOCK_STAMP" 2>/dev/null || true
     else
-      echo "WARN: npm ci failed — run manually in $INSTALL_DIR (or: bash check_deps.sh --check-adapter-drift --auto)" >&2
+      # No stamp: the next run (and --check-adapter-drift) sees node_modules as not built from the lockfile.
+      rm -f -- "$LOCK_STAMP" 2>/dev/null || true
+      echo "WARN: npm ci failed (exit $npm_rc) in $INSTALL_DIR: the adapter's dependencies are not installed. Re-run, or: bash check_deps.sh --check-adapter-drift --auto" >&2
+      npm_failed=1
     fi
   fi
 fi
@@ -99,4 +110,8 @@ if [[ "$copied" -eq 0 ]]; then
   echo "OK: adapter already in sync at $INSTALL_DIR"
 else
   echo "OK: copied $copied file(s) to $INSTALL_DIR"
+fi
+if [[ "$npm_failed" -ne 0 ]]; then
+  echo "ERROR: adapter dependencies were not installed (npm ci failed)" >&2
+  exit 3
 fi

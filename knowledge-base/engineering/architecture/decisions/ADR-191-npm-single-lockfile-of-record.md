@@ -212,4 +212,8 @@ directory, separate from the adapter's own `pencil-setup/scripts/` lockfile, so
 manifest and rows) and `close-superseded-dependabot-prs.sh` (`lockfile_for`, matched before the
 broader `*pencil-setup*` arm) all name it. It carries **no `.npmrc` supply-chain floor by design**:
 its single direct dependency is pinned to an exact version and every transitive version and
-integrity hash is fixed by the lockfile, which is the stronger control than an age floor.
+integrity hash is fixed by the lockfile. That is an integrity control only: the lockfile fixes
+versions, an age floor protects freshness when the lockfile is regenerated (which this directory
+does not have), and undici needed an `overrides` entry to leave a vulnerable transitive version.
+The engine install is also keyed on a stamp of the lockfile's hash, not only on the version string,
+so a lockfile change reaches an install that is already at the pin.

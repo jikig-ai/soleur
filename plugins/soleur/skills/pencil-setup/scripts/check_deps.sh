@@ -38,6 +38,24 @@ NODE_FLOOR_PATCH=0
 NODE_FLOOR="${NODE_FLOOR_MAJOR}.${NODE_FLOOR_MINOR}.${NODE_FLOOR_PATCH}"
 CHECK_DEPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Portable sha256 of a file (GNU sha256sum, else macOS/perl shasum). Prints the hex digest only;
+# prints nothing and fails when neither tool exists or the file is unreadable.
+sha256_of() { # <file>
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$1" 2>/dev/null | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -- "$1" 2>/dev/null | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
+# Both installs record the sha256 of the package-lock.json they were built from in a stamp file
+# inside node_modules; a node_modules whose stamp differs from (or lacks) the lockfile that sits next
+# to it was not built from that lockfile. copy_adapter.sh writes the adapter's stamp, this script
+# writes the engine's.
+LOCK_STAMP_NAME=".soleur-package-lock.sha256"
+
 # Compare EVERY runtime file copy_adapter.sh installs against an install dir, not only the main
 # adapter: a stale sibling (the save sentinel, the REPL surface table) or a stale dependency
 # manifest (package.json / package-lock.json) next to a fresh adapter is exactly the state the
@@ -56,7 +74,18 @@ adapter_drifted_modules() { # <install_dir>
       ADAPTER_DRIFTED="$ADAPTER_DRIFTED $module"
     fi
   done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$CHECK_DEPS_DIR/copy_adapter.sh" 2>/dev/null | grep -oE '"[^"]*\.(mjs|json)"' | tr -d '"')
-  [[ "$ADAPTER_COMPARED" -gt 0 ]]
+  [[ "$ADAPTER_COMPARED" -gt 0 ]] || return 2
+  # The files can all match while node_modules was built from an older lockfile (a bumped
+  # dependency that never got installed): compare the stamp with the lockfile in place.
+  if [[ -d "$install_dir/node_modules" && -f "$install_dir/package-lock.json" ]]; then
+    local want have=""
+    want=$(sha256_of "$install_dir/package-lock.json")
+    [[ -f "$install_dir/node_modules/$LOCK_STAMP_NAME" ]] && have=$(cat "$install_dir/node_modules/$LOCK_STAMP_NAME" 2>/dev/null)
+    if [[ -n "$want" && "$want" != "$have" ]]; then
+      ADAPTER_DRIFTED="$ADAPTER_DRIFTED node_modules(built from a different package-lock.json)"
+    fi
+  fi
+  return 0
 }
 
 
@@ -213,31 +242,105 @@ _pen_pkg_facts() {
   ' "$1" 2>/dev/null
 }
 
+# The home directory the passwd database assigns this user (not $HOME, which a project settings
+# env block can redirect). Prints nothing when it cannot be determined.
+_passwd_home() {
+  local n
+  n=$(command -v node 2>/dev/null) || return 0
+  "$n" -e 'try{process.stdout.write(require("os").userInfo().homedir)}catch{}' 2>/dev/null
+}
+
+# "<uid> <octal mode>" of a path (Node's statSync: `stat` flags differ between GNU and BSD).
+_pen_stat() {
+  local n
+  n=$(command -v node 2>/dev/null) || return 1
+  "$n" -e 'try{const s=require("fs").statSync(process.argv[1]);console.log(s.uid+" "+(s.mode&0o7777).toString(8))}catch{process.exit(1)}' "$1" 2>/dev/null
+}
+
+# True when <path> is <root> or lies under it, on a separator boundary.
+_pen_path_inside() { # <root> <path>
+  [[ "$1" != "/" && ( "$2" == "$1" || "$2" == "$1"/* ) ]]
+}
+
+# Trust rule for where the engine lives, mirroring the adapter's findPenBinary(): the package
+# directory must be outside the working directory and CLAUDE_PROJECT_DIR (a project cannot supply
+# the binary), owned by this user, and not group- or world-writable. A project root that CONTAINS
+# the home directory is the user's own tree and is exempt ONLY for the passwd home; for a $HOME the
+# environment supplied that exemption is never granted (a project env block can set HOME inside the
+# project). Prints the refusal cause and fails when untrusted.
+_pen_trust_why() { # <real package dir>
+  local real_pkg="$1" root realhome="" roots=() r st uid mode
+  if [[ "$HOME" == "$(_passwd_home)" ]]; then realhome=$(_realpath "$HOME"); fi
+  for r in "$(pwd -P 2>/dev/null)" "${CLAUDE_PROJECT_DIR:-}"; do
+    [[ -n "$r" ]] || continue
+    root=$(_realpath "$r") || continue
+    [[ -n "$root" && "$root" != "/" ]] || continue
+    if [[ -n "$realhome" ]] && _pen_path_inside "$root" "$realhome"; then continue; fi
+    roots+=("$root")
+  done
+  for root in ${roots[@]+"${roots[@]}"}; do
+    if _pen_path_inside "$root" "$real_pkg"; then
+      echo "the package directory is inside the working directory or the project directory"
+      return 1
+    fi
+  done
+  st=$(_pen_stat "$real_pkg") || { echo "the package directory cannot be inspected"; return 1; }
+  uid=${st%% *}
+  mode=${st##* }
+  if [[ "$uid" != "$(id -u)" ]]; then
+    echo "the package directory is not owned by the current user"
+    return 1
+  fi
+  if (( (8#$mode & 8#022) != 0 )); then
+    echo "the package directory is group- or world-writable (a umask of 002 does this); fix with: chmod -R go-w $PEN_CLI_PREFIX/node_modules"
+    return 1
+  fi
+  return 0
+}
+
 # Identity rule for the headless engine (Guard 2). The credential is only ever handed to a binary
-# that is the installed @pen.dev/cli package's OWN declared bin.pen:
+# that is the installed @pen.dev/cli package's OWN declared bin.pen, in a package directory that
+# passes the trust rule above:
 #   - <prefix>/node_modules/.bin/pen exists, and the package.json beside it names @pen.dev/cli;
 #   - realpath(.bin/pen) is EQUAL to realpath(<package dir>/<declared bin.pen>), and that target
-#     sits inside the package directory on a separator boundary (no sibling-prefix match, no escape);
+#     is a regular file inside the package directory on a separator boundary (no sibling-prefix
+#     match, no escape);
 #   - only `pen` is read: the `pencil` alias is never a candidate and there is no PATH fallback.
-# Prints the resolved binary path on success. Does NOT run the binary. The adapter's findPenBinary()
-# applies the same rule (shared table: test/fixtures/pen-identity-cases.tsv).
-detect_headless_cli() {
-  local bin="$PEN_CLI_PREFIX/node_modules/.bin/pen"
-  local pkgjson="$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE/package.json"
-  [[ -e "$bin" && -f "$pkgjson" ]] || return 1
-  local facts name declared real_bin real_pkg expected
-  facts=$(_pen_pkg_facts "$pkgjson") || return 1
+# Prints one line: "OK<TAB><resolved binary>", "NOTINSTALLED<TAB><cause>" or "WHY<TAB><cause>"; always
+# returns 0. Does NOT run the binary. The adapter's findPenBinary() applies the same rule (shared
+# table: test/fixtures/pen-identity-cases.tsv).
+_pen_inspect() { # [prefix]  (default: the engine prefix)
+  local prefix="${1:-$PEN_CLI_PREFIX}"
+  local bin="$prefix/node_modules/.bin/pen"
+  local pkgdir="$prefix/node_modules/$PEN_CLI_PACKAGE"
+  local pkgjson="$pkgdir/package.json"
+  local facts name declared real_bin real_pkg expected why
+  if ! real_pkg=$(_realpath "$pkgdir") || [[ -z "$real_pkg" ]]; then
+    printf 'NOTINSTALLED\t%s is not installed under %s\n' "$PEN_CLI_PACKAGE" "$prefix"; return 0
+  fi
+  if ! why=$(_pen_trust_why "$real_pkg"); then printf 'WHY\t%s\n' "$why"; return 0; fi
+  [[ -f "$pkgjson" ]] || { printf 'WHY\tits package.json is unreadable\n'; return 0; }
+  if ! facts=$(_pen_pkg_facts "$pkgjson"); then printf 'WHY\tits package.json is unreadable\n'; return 0; fi
   name=$(printf '%s\n' "$facts" | sed -n 1p)
   declared=$(printf '%s\n' "$facts" | sed -n 2p)
-  [[ "$name" == "$PEN_CLI_PACKAGE" && -n "$declared" ]] || return 1
-  real_bin=$(_realpath "$bin") || return 1
-  real_pkg=$(_realpath "$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE") || return 1
-  expected=$(_realpath "$real_pkg/$declared") || return 1
-  [[ -n "$real_bin" && -n "$real_pkg" && -f "$expected" ]] || return 1
-  [[ "$expected" == "$real_pkg"/* ]] || return 1
-  [[ "$real_bin" == "$expected" ]] || return 1
-  printf '%s\n' "$real_bin"
-  return 0
+  [[ "$name" == "$PEN_CLI_PACKAGE" ]] || { printf 'WHY\tthe package name is not %s\n' "$PEN_CLI_PACKAGE"; return 0; }
+  [[ -n "$declared" ]] || { printf 'WHY\tthe package declares no pen bin\n'; return 0; }
+  if ! expected=$(_realpath "$real_pkg/$declared") || [[ -z "$expected" ]]; then
+    printf 'WHY\tthe declared pen bin is missing\n'; return 0
+  fi
+  [[ "$expected" == "$real_pkg"/* ]] || { printf 'WHY\tthe declared pen bin resolves outside the package directory\n'; return 0; }
+  [[ -f "$expected" ]] || { printf 'WHY\tthe declared pen bin is not a regular file\n'; return 0; }
+  if ! real_bin=$(_realpath "$bin") || [[ -z "$real_bin" ]]; then printf 'WHY\t.bin/pen is missing\n'; return 0; fi
+  [[ "$real_bin" == "$expected" ]] || { printf 'WHY\t.bin/pen does not point at the package'"'"'s declared pen bin\n'; return 0; }
+  printf 'OK\t%s\n' "$real_bin"
+}
+
+# Prints the resolved binary path and succeeds when the engine passes the identity rule.
+detect_headless_cli() { # [prefix]
+  local line
+  line=$(_pen_inspect "${1:-}")
+  [[ "${line%%$'\t'*}" == "OK" ]] || return 1
+  printf '%s\n' "${line#*$'\t'}"
 }
 
 # The installed @pen.dev/cli version (empty when the package.json is missing or unreadable).
@@ -256,6 +359,28 @@ pen_cli_pin_drifted() {
   [[ -n "$installed" && "$installed" != "$PEN_CLI_VERSION" ]]
 }
 
+# The sha256 of the committed engine lockfile (what the install is built from).
+pen_cli_lock_sha() {
+  sha256_of "$CHECK_DEPS_DIR/pen-cli/package-lock.json"
+}
+
+# True when the installed engine tree was built from the lockfile now committed (its stamp equals
+# the lockfile hash). A tree with no stamp predates the stamp: an old install at the right VERSION
+# still lacks later lockfile changes (the undici `overrides` entry), so it counts as not current.
+pen_cli_lock_current() { # [prefix]
+  local prefix="${1:-$PEN_CLI_PREFIX}" want have=""
+  want=$(pen_cli_lock_sha)
+  [[ -n "$want" ]] || return 1
+  [[ -f "$prefix/node_modules/$LOCK_STAMP_NAME" ]] && have=$(cat "$prefix/node_modules/$LOCK_STAMP_NAME" 2>/dev/null)
+  [[ "$want" == "$have" ]]
+}
+
+# True when --auto has something to do for the engine: not installed (or not trusted), off the
+# pin, or built from another lockfile than the committed one.
+pen_cli_needs_install() {
+  ! detect_headless_cli >/dev/null || pen_cli_pin_drifted || ! pen_cli_lock_current
+}
+
 # One-line advisories about the install state. Never fatal, never uses the deprecated package.
 warn_pen_cli_state() {
   local legacy_pkg="$HOME/.local/node_modules/@pencil.dev/cli"
@@ -272,7 +397,11 @@ warn_pen_cli_state() {
   local installed
   installed=$(pen_cli_installed_version)
   if [[ -n "$installed" && "$installed" != "$PEN_CLI_VERSION" ]]; then
-    echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-run with --auto to reinstall from the lockfile"
+    if [[ "$AUTO_INSTALL" == "true" ]]; then
+      echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-installing from the lockfile"
+    else
+      echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-run with --auto to reinstall from the lockfile"
+    fi
   fi
   return 0
 }
@@ -481,13 +610,19 @@ auto_launch_desktop() {
 # -- Tier Functions (early-exit pattern) --
 
 try_headless_cli_tier() {
-  local pen_bin
+  local pen_bin inspected
   if ! pen_bin=$(detect_headless_cli); then
-    # Say why the tier was skipped; a silent skip leaves the user guessing. Under --auto the
-    # install already ran, so the hint would only repeat what its own output says.
-    if [[ -e "$PEN_CLI_PREFIX/node_modules/.bin/pen" || -d "$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE" ]]; then
-      echo "  [skip] $PEN_CLI_PACKAGE at $PEN_CLI_PREFIX failed the identity check (its .bin/pen is not the package's declared bin.pen)"
-      [[ "$AUTO_INSTALL" == "true" ]] || echo "    Re-run with --auto to reinstall it from the committed lockfile"
+    # Say why the tier was skipped (the specific cause, not a generic message); a silent skip leaves
+    # the user guessing. Under --auto the install already ran, so the hint would only repeat what
+    # its own output says.
+    inspected=$(_pen_inspect)
+    if [[ "${inspected%%$'\t'*}" == "WHY" ]]; then
+      echo "  [skip] $PEN_CLI_PACKAGE at $PEN_CLI_PREFIX failed the identity check: ${inspected#*$'\t'}"
+      if [[ "$AUTO_INSTALL" == "true" ]]; then
+        echo "    (the --auto reinstall above did not fix it)"
+      else
+        echo "    Re-run with --auto to reinstall it from the committed lockfile"
+      fi
     elif [[ "$AUTO_INSTALL" != "true" ]]; then
       echo "  [info] Headless CLI ($PEN_CLI_PACKAGE) not installed; re-run with --auto to install it from the committed lockfile"
     fi
@@ -518,6 +653,10 @@ try_headless_cli_tier() {
   # needs to run and reach the network.
   local esc
   esc=$(printf '\033')
+  # `timeout` (GNU coreutils; `gtimeout` on macOS with coreutils) bounds an unreachable engine; with
+  # neither installed the probe runs unbounded, as before.
+  local tmo=""
+  if command -v timeout >/dev/null 2>&1; then tmo="timeout 20"; elif command -v gtimeout >/dev/null 2>&1; then tmo="gtimeout 20"; fi
   if status_out=$(
        unset PENCIL_CLI_KEY
        for v in $(compgen -e); do
@@ -528,11 +667,12 @@ try_headless_cli_tier() {
        done
        PEN_CLI_KEY="$key"
        export PEN_CLI_KEY
-       exec "$node_bin" "$pen_bin" status 2>&1
-     ) && printf '%s' "$status_out" | sed "s/${esc}\[[0-9;]*[A-Za-z]//g" | grep -q 'Active'; then
+       # shellcheck disable=SC2086  # $tmo is "timeout 20", "gtimeout 20" or empty
+       exec $tmo "$node_bin" "$pen_bin" status 2>&1
+     ) && printf '%s' "$status_out" | LC_ALL=C sed "s/${esc}\[[0-9;?:<=>]*[@-~]//g" | grep -q 'Active'; then
     :
   else
-    echo "  [skip] Headless CLI found but auth failed"
+    echo "  [skip] Headless CLI found but could not confirm Active (key invalid or engine unreachable)"
     echo "    Set a valid PEN_CLI_KEY environment variable (PENCIL_CLI_KEY is still read as a deprecated fallback)"
     return 1
   fi
@@ -572,32 +712,63 @@ attempt_headless_install() {
     echo "  [FAILED] Missing committed lockfile pair in $src_dir (package.json, package-lock.json)"
     return 1
   fi
-  echo "  [installing] Headless CLI $PEN_CLI_PACKAGE@$PEN_CLI_VERSION to $PEN_CLI_PREFIX (lockfile, scripts ignored)..."
-  mkdir -p "$PEN_CLI_PREFIX" || { echo "  [FAILED] cannot create $PEN_CLI_PREFIX"; return 1; }
+  echo "  [installing] Headless CLI $PEN_CLI_PACKAGE@$PEN_CLI_VERSION to $PEN_CLI_PREFIX (lockfile, scripts ignored; ~1 GB, up to a few minutes on a cold cache)..."
+  # Install into a STAGING prefix and swap it in only after it passes the identity rule: a failed
+  # reinstall (offline, a bad lockfile) must never remove an engine that works. The staging tree is
+  # a sibling of the prefix so the swap is a rename on one filesystem.
+  local stage="$PEN_CLI_PREFIX.new" old="$PEN_CLI_PREFIX.old"
+  rm -rf -- "$stage" "$old"
+  (umask 022; mkdir -p "$stage") || { echo "  [FAILED] cannot create $stage"; return 1; }
   local f
   for f in package.json package-lock.json; do
-    # unlink first so a pre-planted symlink at the destination is replaced, not followed
-    rm -f -- "$PEN_CLI_PREFIX/$f"
-    install -m 0644 -- "$src_dir/$f" "$PEN_CLI_PREFIX/$f" || { echo "  [FAILED] cannot copy $f"; return 1; }
+    install -m 0644 -- "$src_dir/$f" "$stage/$f" || { echo "  [FAILED] cannot copy $f"; rm -rf -- "$stage"; return 1; }
   done
   # `npm ci` from the pinned lockfile: every transitive version and integrity hash is fixed, and
   # the credential is removed from the environment so install-time code never sees it. Lifecycle
   # scripts are ignored (verified: the engine opens, exports and screenshots without them, see
   # engine-contract-probe.sh). The old ~/.local/node_modules tree is deliberately left alone.
   # Node's directory goes first on PATH so npm's `#!/usr/bin/env node` uses the vetted binary.
+  # umask 022 (and the chmod below) because the adapter refuses a group- or world-writable package
+  # directory: under a umask of 002 npm would otherwise create exactly that and lock the user out.
   # Only the tail of npm's output is shown (a failing resolve can print screens of it); the exit
   # status is the command's own, captured before the output is trimmed.
   local npm_out npm_rc
-  npm_out=$(cd "$PEN_CLI_PREFIX" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY PATH="$(dirname "$node_bin"):$PATH" "$npm_bin" ci --ignore-scripts 2>&1)
+  npm_out=$(umask 022; cd "$stage" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY PATH="$(dirname "$node_bin"):$PATH" "$npm_bin" ci --ignore-scripts 2>&1)
   npm_rc=$?
   [[ -z "$npm_out" ]] || printf '%s\n' "$npm_out" | tail -20
-  if [[ "$npm_rc" -eq 0 ]]; then
-    detect_headless_cli >/dev/null && return 0
-    echo "  [FAILED] Install succeeded but the $PEN_CLI_PACKAGE binary was not found or failed the identity check"
-  else
+  if [[ "$npm_rc" -ne 0 ]]; then
     echo "  [FAILED] npm ci returned non-zero"
+    rm -rf -- "$stage"
+    [[ ! -e "$PEN_CLI_PREFIX" ]] || echo "    The engine already installed at $PEN_CLI_PREFIX was left untouched."
+    return 1
   fi
-  return 1
+  # Whatever npm created (a hard-coded 775 included), nothing may stay group- or world-writable.
+  chmod -R go-w "$stage/node_modules" 2>/dev/null || true
+  local why
+  if ! detect_headless_cli "$stage" >/dev/null; then
+    why=$(_pen_inspect "$stage")
+    echo "  [FAILED] Install succeeded but the $PEN_CLI_PACKAGE binary was not found or failed the identity check: ${why#*$'\t'}"
+    rm -rf -- "$stage"
+    [[ ! -e "$PEN_CLI_PREFIX" ]] || echo "    The engine already installed at $PEN_CLI_PREFIX was left untouched."
+    return 1
+  fi
+  (umask 022; pen_cli_lock_sha > "$stage/node_modules/$LOCK_STAMP_NAME") 2>/dev/null || true
+  if [[ -e "$PEN_CLI_PREFIX" ]]; then
+    mv -- "$PEN_CLI_PREFIX" "$old" || { echo "  [FAILED] cannot move the existing engine aside"; rm -rf -- "$stage"; return 1; }
+  fi
+  if ! mv -- "$stage" "$PEN_CLI_PREFIX"; then
+    echo "  [FAILED] cannot move the new engine into place"
+    [[ ! -e "$old" ]] || mv -- "$old" "$PEN_CLI_PREFIX"
+    rm -rf -- "$stage"
+    return 1
+  fi
+  rm -rf -- "$old"
+  if ! detect_headless_cli >/dev/null; then
+    why=$(_pen_inspect)
+    echo "  [FAILED] Installed, but $PEN_CLI_PREFIX does not pass the identity check: ${why#*$'\t'}"
+    return 1
+  fi
+  return 0
 }
 
 try_cli_tier() {
@@ -667,10 +838,14 @@ fi
 # Compares the installed adapter files at PENCIL_ADAPTER_INSTALL_DIR (default
 # ~/.local/share/pencil-adapter) against the repo source. Exits:
 #   0 + OK            - every file matches
-#   3 + DRIFT         - a file differs or is missing (unless --auto: re-copies, then installs the
-#                       engine when it is missing or off the pin, then exits 0)
+#   3 + DRIFT         - a file differs or is missing, or node_modules was not built from the
+#                       package-lock.json in place (unless --auto: installs the engine FIRST when it
+#                       is missing, off the pin or built from another lockfile, then re-copies the
+#                       adapter and its dependencies, then exits 0)
 #   0 + NOT_INSTALLED - install dir absent
-#   2                 - the file list is unreadable, or an --auto repair step failed
+#   2                 - the file list is unreadable, or an --auto repair step failed (engine
+#                       install: the installed adapter is left unchanged; adapter dependency
+#                       install: the cause is printed)
 #
 # Exists because the installed adapter had drifted 24 days behind repo source, masking
 # error-classification fixes and producing the #2630 silent-drop.
@@ -695,8 +870,8 @@ run_adapter_drift_check() {
   # sha256sum / cp. Defense-in-depth; the path quoting already blocks shell
   # injection.
   local installed_sha repo_sha
-  installed_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
-  repo_sha=$(sha256sum -- "$repo_adapter" | awk '{print $1}')
+  installed_sha=$(sha256_of "$installed_adapter")
+  repo_sha=$(sha256_of "$repo_adapter")
 
   if ! adapter_drifted_modules "$install_dir"; then
     echo "ERROR: no adapter modules parsed from $CHECK_DEPS_DIR/copy_adapter.sh ADAPTER_FILES" >&2
@@ -709,25 +884,31 @@ run_adapter_drift_check() {
   fi
 
   if [[ "$AUTO_INSTALL" == "true" ]]; then
-    # Delegate the full sync to copy_adapter.sh: it copies the adapter AND its sibling modules
-    # and manifests, and runs npm ci when the lockfile changed. A bare `cp` would leave the
-    # adapter ahead of its dependencies.
-    if ! PENCIL_ADAPTER_INSTALL_DIR="$install_dir" bash "$CHECK_DEPS_DIR/copy_adapter.sh"; then
-      echo "ERROR: copy_adapter.sh failed during drift auto-repair" >&2
-      exit 2
-    fi
-    local new_sha
-    new_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
-    echo "OK: re-copied adapter (was ${installed_sha:0:12} -> now ${new_sha:0:12})"
-    # The new adapter refuses to start without its engine, so never leave the adapter ahead of
-    # it: install the engine too when it is missing or not at the pin.
-    if ! detect_headless_cli >/dev/null || pen_cli_pin_drifted; then
-      echo "  [info] Headless engine missing or not at the pin $PEN_CLI_VERSION: installing it as part of the repair"
+    # Engine FIRST: the new adapter refuses to start without its engine, so the adapter is never
+    # copied ahead of it. A failed engine install leaves the installed adapter (and any engine
+    # that already worked, see attempt_headless_install) exactly as they were.
+    if pen_cli_needs_install; then
+      echo "  [info] Headless engine missing, not at the pin $PEN_CLI_VERSION, or built from another lockfile: installing it before the adapter is updated"
       if ! attempt_headless_install; then
-        echo "ERROR: adapter re-copied but the headless engine ($PEN_CLI_PACKAGE@$PEN_CLI_VERSION) could not be installed; fix the cause above and re-run: bash check_deps.sh --auto" >&2
+        echo "ERROR: the headless engine ($PEN_CLI_PACKAGE@$PEN_CLI_VERSION) could not be installed; the installed adapter was NOT changed. Fix the cause above and re-run: bash check_deps.sh --check-adapter-drift --auto" >&2
         exit 2
       fi
     fi
+    # Delegate the full sync to copy_adapter.sh: it copies the adapter AND its sibling modules
+    # and manifests, and runs npm ci when the lockfile changed. A bare `cp` would leave the
+    # adapter ahead of its dependencies.
+    local copy_rc=0
+    PENCIL_ADAPTER_INSTALL_DIR="$install_dir" bash "$CHECK_DEPS_DIR/copy_adapter.sh" || copy_rc=$?
+    if [[ "$copy_rc" -ne 0 ]]; then
+      case "$copy_rc" in
+        3) echo "ERROR: copy_adapter.sh could not install the adapter's dependencies (npm ci failed, see above); the adapter files were copied but its node_modules is not usable until this is fixed. Re-run: bash check_deps.sh --check-adapter-drift --auto" >&2 ;;
+        *) echo "ERROR: copy_adapter.sh failed (exit $copy_rc) during drift auto-repair" >&2 ;;
+      esac
+      exit 2
+    fi
+    local new_sha
+    new_sha=$(sha256_of "$installed_adapter")
+    echo "OK: re-copied adapter (was ${installed_sha:0:12} -> now ${new_sha:0:12})"
     exit 0
   fi
 
@@ -759,9 +940,10 @@ fi
 # Tier 1: Desktop CLI (needs Desktop running)
 # Tier 2: Desktop binary (needs Desktop running)
 # Tier 3: IDE extension
-# --auto installs when the engine is missing OR installed at a version other than the pin (the
-# version advice would otherwise be a dead end); the lockfile is the way back to the pin.
-if [[ "$AUTO_INSTALL" == "true" ]] && { ! detect_headless_cli >/dev/null || pen_cli_pin_drifted; }; then
+# --auto installs when the engine is missing, not trusted, installed at a version other than the pin
+# (the version advice would otherwise be a dead end) or built from another lockfile than the
+# committed one; the lockfile is the way back to the pin.
+if [[ "$AUTO_INSTALL" == "true" ]] && pen_cli_needs_install; then
   attempt_headless_install || true
 fi
 try_headless_cli_tier || true
