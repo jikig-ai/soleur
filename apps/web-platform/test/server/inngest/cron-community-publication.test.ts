@@ -1143,6 +1143,20 @@ describe("writeDigestFileContained", () => {
     },
   );
 
+  it("refuses non-basename segments and leaves in the exported helpers", async () => {
+    for (const bad of ["..", ".", "", "a/b", "/abs"]) {
+      await expect(openContainedDir(root, [bad]), bad).rejects.toThrow(/clean basenames/);
+    }
+    const dir = await openContainedDir(root, ["knowledge-base"]);
+    try {
+      for (const bad of ["..", ".", "", "a/b", "/abs"]) {
+        await expect(createContainedFile(dir, bad), bad).rejects.toThrow(/clean basename/);
+      }
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+  });
+
   it("fails closed when the leaf is re-created between unlink and open (injected seam)", async () => {
     const parent = join(root, "knowledge-base/support/community");
     await mkdir(parent, { recursive: true });
