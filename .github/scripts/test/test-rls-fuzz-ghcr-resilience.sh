@@ -75,7 +75,7 @@ run_helper() {
   LAST_OUT="$TMP/$name.out"
   : > "$STUB_CALLS"
   env STUB_CALLS="$STUB_CALLS" GHCR_PULL_RETRY_SLEEPS="0 0" \
-      RUNNER_TEMP="$RUNNER_TEMP_FIXTURE" \
+      TMPDIR="$RUNNER_TEMP_FIXTURE" \
       bash "$HELPER" "$@" > "$LAST_OUT" 2>&1
   LAST_RC=$?
 }

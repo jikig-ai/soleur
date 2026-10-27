@@ -14,7 +14,7 @@
 #   - Runs "$@" at most 3 attempts, sleeping `20 45` between them
 #     (overridable via GHCR_PULL_RETRY_SLEEPS, whitespace-separated).
 #   - Each attempt's combined output goes to a FRESH per-attempt log under
-#     ${RUNNER_TEMP:-mktemp -d} via `cmd 2>&1 | tee <log>`; the command's rc
+#     ${TMPDIR:-/tmp} via `cmd 2>&1 | tee <log>`; the command's rc
 #     is read from ${PIPESTATUS[0]} — `rc=$?` would read tee's status.
 #   - A retry fires only when ALL of: rc != 0, rc != 2 (the wrapped
 #     supabase-local.sh deterministic not-started/unverified class — never a
@@ -46,11 +46,12 @@ read -ra SLEEPS <<< "${GHCR_PULL_RETRY_SLEEPS:-20 45}"
 TAIL_LINES=40
 REEMIT_LINES=200
 
-# Each invocation gets its own dir under RUNNER_TEMP (or /tmp): fixed
-# filenames in the shared temp dir would collide under a second call site.
-# Owning trap removes it on any exit path — the last attempt's tail is already
-# re-emitted to step output on exhaustion.
-log_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ghcr-pull.XXXXXX")"
+# Each invocation gets its own dir under TMPDIR (the runner exports it as
+# RUNNER_TEMP; /tmp is the portable default): fixed filenames in the shared
+# temp dir would collide under a second call site. Owning trap removes it on
+# any exit path — the last attempt's tail is already re-emitted to step
+# output on exhaustion.
+log_dir="$(mktemp -d "${TMPDIR:-/tmp}/ghcr-pull.XXXXXX")"
 trap 'rm -rf "$log_dir"' EXIT
 
 # Annotation-safe one-liner: % -> %25, CR/LF stripped (the workflow-annotation
