@@ -150,15 +150,15 @@ assert "app event key derives from random_id.inngest_event_key_dedicated.hex" \
 assert "app key copies no longer reference the orphaned _prd random_id values" \
   "[[ '$APP_SIGN_VAL$APP_EVT_VAL' != *'key_prd'* ]]"
 assert "app signing key keeps ignore_changes = [value] (per-merge plan stays quiet)" \
-  "tf_block '$INNGEST_TF' doppler_secret inngest_signing_key_prd | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]'"
+  "grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]' < <(tf_block '$INNGEST_TF' doppler_secret inngest_signing_key_prd)"
 assert "app event key keeps ignore_changes = [value] (per-merge plan stays quiet)" \
-  "tf_block '$INNGEST_TF' doppler_secret inngest_event_key_prd | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]'"
+  "grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]' < <(tf_block '$INNGEST_TF' doppler_secret inngest_event_key_prd)"
 assert "dedicated signing doppler_secret has NO lifecycle block (the issue's verify-whether question)" \
-  "! tf_block '$HOST_TF' doppler_secret inngest_signing_key_dedicated | grep -q 'lifecycle'"
+  "! grep -q 'lifecycle' < <(tf_block '$HOST_TF' doppler_secret inngest_signing_key_dedicated)"
 assert "dedicated event doppler_secret has NO lifecycle block (the issue's verify-whether question)" \
-  "! tf_block '$HOST_TF' doppler_secret inngest_event_key_dedicated | grep -q 'lifecycle'"
+  "! grep -q 'lifecycle' < <(tf_block '$HOST_TF' doppler_secret inngest_event_key_dedicated)"
 assert "dedicated random_id pair has no lifecycle block (a plain -replace must regenerate)" \
-  "! tf_block '$HOST_TF' random_id inngest_signing_key_dedicated | grep -q 'lifecycle' && ! tf_block '$HOST_TF' random_id inngest_event_key_dedicated | grep -q 'lifecycle'"
+  "! grep -q 'lifecycle' < <(tf_block '$HOST_TF' random_id inngest_signing_key_dedicated) && ! grep -q 'lifecycle' < <(tf_block '$HOST_TF' random_id inngest_event_key_dedicated)"
 assert "SHARED-CHANNEL CONTRACT no longer instructs an out-of-band copy" \
   "! grep -qE 'copy the host value in via|reconcile out-of-band' '$INNGEST_TF'"
 assert "SHARED-CHANNEL CONTRACT names the derivation from the dedicated random_id" \

@@ -1466,7 +1466,18 @@ after the flip sends plaintext (counted by `legacy_8288`) until that first deplo
    `tls-health` (the expected signature of a rolled-back link). An `https_to_http` warning on each host is expected here.
    The deploy run's own log does not carry the resolver line.
 3. **After the signing key rotation (act A5), a flag-off rollback sends the NEW key over `:8288` in plaintext again.** A rollback
-   after A5 therefore needs a re-rotation once the cause is fixed, and closing the legacy listener gets a date.
+   after A5 therefore needs a re-rotation once the cause is fixed, and closing the legacy listener gets a date. The link flip enforces
+   this: once any non-`plan` run of `inngest-key-rotate.yml` exists, `inngest-link-flip.yml` refuses `action=off` (and `action=flip`,
+   which can start from a flag already at `1` and reverts through `off`) unless it is dispatched with
+   `-f confirm_off_after_rotation=OFF-AFTER-ROTATION`. A rollback after A5 is therefore
+   `gh workflow run inngest-link-flip.yml -f action=off -f confirm_off_after_rotation=OFF-AFTER-ROTATION`, and it is form (b) only: a
+   fresh in-session go naming that line and saying the new key will cross plaintext `:8288` again and a re-rotation follows. The
+   workflow's best-effort failure step is never given the confirm, so after a rotation it logs the refusal and does nothing. The run
+   test counts any non-`plan` run, including a rotation that applied and then failed (it already holds the new key); a false
+   positive costs one extra confirm. Accepted residuals, stated in [ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md):
+   GitHub's default 90-day run retention expires the marker, deleted run history resets it, and dispatching
+   `apply-web-platform-infra.yml apply_target=inngest-link-flag inngest_link_value=off` directly bypasses the confirm. Re-enabling TLS
+   after a deliberate post-rotation `off` is `action=flip` with the same extra confirm.
 
 ### Production Envelope for the post-merge acts (A0 to A7)
 
@@ -1506,8 +1517,8 @@ given, it names BOTH the flip and its `action=off` revert, so a failing soak in 
 are in form (b) above).
 
 **Owner-human, no delegation covers them:** the A1b `inngest-cutover` environment approval (a GitHub required reviewer), the A5
-credential rotation (authority: a fresh in-session go or the owner executing it; a go recorded on #10382 is not a go under form
-(b)), the A6 and A7 owner-signed records (A7 keeps "SIGNED BY OWNER (human, not an agent)"), money, sole-copy data
+credential rotation (authority: a fresh in-session go naming the exact `inngest-key-rotate.yml` dispatch line, which only the owner dispatches; a go recorded on #10382 or on any other issue is not a go under form
+(b), and an agent never runs `rotate` or `converge`), the A6 and A7 owner-signed records (A7 keeps "SIGNED BY OWNER (human, not an agent)"), money, sole-copy data
 loss, force-push or ruleset bypass, and any hold the owner worded as "ask me before". For the owner-human acts (the A1b approval,
 A5, A6 and A7) the agent sends ONE plain-words ask with a direct link or pre-drafted text to paste, and reads back the result. For
 A7 the agent drafts the full accepted-risk text in plain words for the owner to paste verbatim under "SIGNED BY OWNER (human,
@@ -1542,8 +1553,8 @@ whether a replace is half-applied is the CTO's technical call; only the producti
 | A1b: `cutover-inngest.yml -f op=resume` (inherited `done`, #7228) (**done 2026-10-20**, run 39445004559) | **owner-human** for the approval: the `inngest-cutover` environment approval (a GitHub `required reviewer`) is a human gate no delegation can bypass and it authorizes a production scheduler start. The dispatch itself may be delegated (a valid recorded Standing Delegation whose Scope item names `cutover-inngest.yml`; the narrowing to `op=resume` is carried by the byte-identical envelope line); the approval never is | A1 dispatched; `INNGEST_CUTOVER_FLIP=done` inherited so the new host refuses to start (journal line `BLOCK: cutover flag='done' but this host carries no done-owner marker`); `bootstrap-done` seen for the **current** `iid` | `gh workflow run cutover-inngest.yml -f op=resume` (waits in `Waiting` for the owner's approval) | the FSM returns to `noop-done`; `inngest-server` active with a stable `NRestarts`; expect a false DOUBLE-FIRE from the bucket proxy in `op=verify` and attribute it against `routine_runs`; do **not** re-fire missed ticks (each fired exactly once on the 2026-09-17 resume) | none: never re-dispatch the replace for an inherited `done` |
 | A2: handshake verification = the handshake inside A3's `flip_verify` (`scripts/inngest-link-flip.sh` runs it after the pending redeploy installs the CA, before the `1` write); a post-flip re-run of `/hooks/inngest-tls-handshake` is an optional in-session corroboration | part of the A3 authority (read-only; no separate go) | the pending redeploy of A3 has installed the CA; the optional re-run needs A3's `1` write to have landed | the `flip_verify` line in the A3 workflow run log; for the optional re-run, web-host hook `/hooks/inngest-tls-handshake` (web-1 only: the hook channel terminates there), via doppler plus curl (GET recipe below) | the `flip_verify` handshake line in the workflow run log shows `verified=200`, `unverified_rc=60` and `result=pass`: a verified request returns 200, and the same request without the CA fails with a certificate-verification error (curl exit 60). The optional re-run body is one line, `inngest-tls-handshake verified=200 verified_rc=0 unverified=fail unverified_rc=60 result=pass`; it is never part of a delegated envelope's evidence. web-2's container path is proven by its own `ci-deploy` canary at A3 | read-only, none |
 | A3: flip through `inngest-link-flip.yml` | in-session per-command go to the displayed exact command(s): the flip, and its `action=off` revert shown in the same ask. The verifier refuses `confirm=`, so no valid recorded Standing Delegation covers the flip. `action=off` stays delegable (A4). The go is **procedural** (`infra-privileged` has no required reviewer, see "How the flag is written", so no technical control enforces it), and "procedural" means no GitHub-side reviewer, not that authority is optional; the displayed sentence says "and I switch it back if the check fails" and states the A4 rollback condition (see form (b) in the intro) | A1 green; the `apply-deploy-pipeline-fix.yml` run for the merge commit that added `inngest_link_scrub_env_file` concluded success (`gh run list --workflow apply-deploy-pipeline-fix.yml`; it delivers `ci-deploy.sh` to web-1 and web-2, and both must hold the fixed script before the flip); #10542 and #10543 fixed, or the replay check run afterwards (the same window controls as A1); no in-flight release run; a low-traffic window that is also cron-quiet (see above: the script cannot detect a cron in flight); the flip date noted on the tracker | `gh workflow run inngest-link-flip.yml -f action=flip -f confirm=FLIP-INNGEST-LINK` | the canary layer passes (all five checks, including the real in-container send; one fleet redeploy, i.e. one swap on each of the two hosts, and two such redeploys if the revert fires); the script's `FLIPPED` line is printed, which proves web-1's canary and swap and only that web-2 *accepted* the trigger; each host has a `class=resolved ... scheme=https` row **and a `class=canary_ok` row since the flip's T0, with no `canary_failed` or `env_scrub_failed` row** (the per-host flip read under "Resolver events"; web-2 is not verifiable from CI, so its rows are its only evidence, and the `resolved` row alone does not prove its canary or swap); **T = the later of the two hosts' `CRON_DRAIN: waited` rows of that deploy (logged just before the host's prod stop; the `resolved` row is written at deploy start, before the canary, the cron drain and the swap, so it is a lower bound, not the swap time) plus 5 minutes**, with the baseline row read as `--since T --until T+400s` (below); post the two anchor lines on #10136; the `flip_verify` handshake line in the workflow run log (`verified=200`, `unverified_rc=60`, `result=pass`) plus the script's `FLIPPED` line is the success evidence; the post-flip re-run of the A2 handshake hook (doppler plus curl, GET recipe below) is optional in-session corroboration only | `gh workflow run inngest-link-flip.yml -f action=off` (idempotent; the workflow's own failure step is best-effort and after a cancelled run, `off` must be dispatched again; the 30-minute lease only bounds new deploys) |
-| A4: 48 hour soak | envelope-delegable before A5 (authority: see intro, form (a) a valid recorded Standing Delegation whose Scope names `inngest-link-flip.yml`, with the narrowing to `action=off` carried by the byte-identical envelope line, or form (b) an in-session per-command go); the soak itself needs none and the `action=off` dispatch is the only command. After A5 the new `INNGEST_SIGNING_KEY` would travel over plaintext `:8288` if the link is turned off, so `action=off` after A5 is form (b) only (a fresh in-session go). The A3 go that pre-names this revert is valid only inside the session that received it | A3 timestamp T and the baseline row | the follow-through sweeper runs `inngest-tls-soak-10136.sh` | gap-free `tls-health` series since T, one `boot_id`, `legacy_8288` delta exactly 0, `tls_8443` delta at least 90% of the expected probe cadence, for 48 hours. A reboot restarts the clock: re-anchor with a new pair of comments | any non-zero legacy delta: run `action=off` and find which caller still dials `8288` |
-| A5: `INNGEST_SIGNING_KEY` rotation (#10382 row 1), together with `INNGEST_EVENT_KEY` only if the owner extends the go | **owner-human** (credential rotation; no delegation covers it): a fresh in-session go or the owner executing it; a go recorded on #10382 is not a go under form (b); the daily ask is the follow-through probe on tracker #11218 (it also warns from 2026-11-09 if #11215 or #10540 is not done); the owner posts `S5-A5-DONE: <UTC time ending in Z, like 2026-11-20T14:00:00Z>` on #10136 when A5 is complete. | A4 passed (the new key must never ride plaintext); the rotation follow-up with a minimal `apply_target` has landed; the "Key rotation" section re-read; both copies identified (host: `random_id.inngest_signing_key_dedicated` in `soleur-inngest/prd`; app: `soleur/prd` `INNGEST_SIGNING_KEY`, copied out of band per `inngest.tf`); the Stripe-webhook (#10542) and dashboard-send (#10543) loss defects fixed first, or the rotation runs inside a quiesced window with the replay check | set both values, then restart `inngest-server` (`restart-inngest-server.yml`) and redeploy web (`web-platform-release.yml`) **back to back**. No host replace is forced (keys are read from Doppler at start). During the mismatch window step calls fail signature verification (Inngest retries them) and `inngest.send` fails with 401 if the event key rotates too | old-key rejection (status code only; keep the old value until it passes), new key accepted, `.services.inngest_server` active with a stable `NRestarts` | the "Key rotation" rollback; see the post-A5 rollback note above |
+| A4: 48 hour soak | envelope-delegable before A5 (authority: see intro, form (a) a valid recorded Standing Delegation whose Scope names `inngest-link-flip.yml`, with the narrowing to `action=off` carried by the byte-identical envelope line, or form (b) an in-session per-command go); the soak itself needs none and the `action=off` dispatch is the only command. After A5 the new `INNGEST_SIGNING_KEY` would travel over plaintext `:8288` if the link is turned off, so `action=off` after A5 is form (b) only (a fresh in-session go) and also needs `-f confirm_off_after_rotation=OFF-AFTER-ROTATION` (see "Rollback" step 3). The A3 go that pre-names this revert is valid only inside the session that received it | A3 timestamp T and the baseline row | the follow-through sweeper runs `inngest-tls-soak-10136.sh` | gap-free `tls-health` series since T, one `boot_id`, `legacy_8288` delta exactly 0, `tls_8443` delta at least 90% of the expected probe cadence, for 48 hours. A reboot restarts the clock: re-anchor with a new pair of comments | any non-zero legacy delta: run `action=off` and find which caller still dials `8288` |
+| A5: `INNGEST_SIGNING_KEY` rotation (#10382 row 1), together with `INNGEST_EVENT_KEY` only if the owner extends the go | **owner-human** (credential rotation; no delegation covers it): only the owner dispatches `rotate` and `converge`, each under a fresh in-session go naming the exact command line (mode, keys and the typed confirm); a go recorded on #10382 or on any other issue is not a go under form (b); an agent never runs either mode; the typed confirm and `quiet_window` are typo-guards and a statement of fact, not the authorization. The daily ask is the follow-through probe on tracker #11218 (it also warns from 2026-11-09 if #11215 or #10540 is not done). The route prints the `S5-A5-DONE: <UTC time ending in Z, like 2026-11-20T14:00:00Z>` line and never posts it: the owner posts it on #10136 themselves, and an agent-posted line does not satisfy the record | A4 passed (the route's `guard` also checks it: tracker #11215 closed as completed and the link flag at `1`, so the new key never rides plaintext); a green read-only `mode=plan` rehearsal (`verdict=plan_ok`); the "Key rotation" section re-read; the Stripe-webhook (#10542) and dashboard-send (#10543) loss defects fixed first, or the rotation runs inside a quiesced window with the replay check; the go text names the residual that the production dedicated host has never been rebooted with its LUKS volume and live scheduler (unverified) | one dispatch of `inngest-key-rotate.yml` (`mode=rotate`, `keys=signing`, or `event` / `both` only if the owner extends the go), shown in "Key rotation": phase 1 replaces the dedicated pair, a Hetzner soft reboot restarts the scheduler on the new key, phase 2 replaces the app copy, then the canary-then-prod web redeploy runs at once. `restart-inngest-server.yml` is not used: its hook channel terminates on web-1 and cannot reach 10.0.1.40. During the mismatch window step calls fail signature verification (Inngest retries them) and `inngest.send` can fail with 401 | the run's value-free evidence block and Better Stack rows from the dedicated host (never `deploy-status`, which reads web-1): a `tls-health` row with a NEW `boot_id` and `listener=1`, and `scripts/inngest-host-state.sh` reading `SERVING=yes` (see "Key rotation order (A5)") | none: a rotation is forward-only (no old key exists after phase 1); a failed run is finished with `converge` under the owner's own per-command go; for the plaintext hazard of a flag-off rollback see "Rollback" step 3 |
 | A6: "no known access" record | **owner-human**: CLO condition; owner-signed (no delegation covers it); the daily ask follows A5 on the same tracker #11218; the owner posts `S6-A6-DONE: <UTC time ending in Z>` on #10136 when the record is filed and linked. | A5 complete; a measured re-read from the deployed #10405 emit; the Hetzner member list enumerated read-only | a record under `knowledge-base/legal/audits/`, linked from #10382 and #10136, written by the owner and attested separately by the CLO agent | the record exists and is linked | n/a (this PR does not write it) |
 | A7: leg-2 accepted-risk record (the `sdk_url` poll) | **owner-human**: owner item, class `operator (legal-risk)` (no delegation covers it) | the CLO conditions on the leg-2 row | an owner-typed record on #10136 beginning "SIGNED BY OWNER (human, not an agent)"; an agent-posted record does not satisfy it | the record exists before the poll row is relied on | n/a |
 
@@ -1808,7 +1819,7 @@ certificate are fetched at the unit's start from a template that is replace-only
 **no overlap window**: an https fleet fails closed between the host replace and the web side picking up the new CA. The order that
 never lets the fleet dial a mismatched pair:
 
-1. `inngest-link-flip.yml -f action=off` (the fleet is back on `http://10.0.1.40:8288`, which stays open through the whole sequence).
+1. `inngest-link-flip.yml -f action=off` (the fleet is back on `http://10.0.1.40:8288`, which stays open through the whole sequence). After a key rotation this `off` also needs `-f confirm_off_after_rotation=OFF-AFTER-ROTATION` (see "Rollback" step 3), and the new key crosses plaintext `:8288` while the fleet is back on it.
 2. Publish the new certificate (the three Doppler copies change together, because they come from one Terraform resource). Both
    resources carry `prevent_destroy`, so a re-mint is a reviewed code change that lifts the guard for one apply, not a dispatch; no
    apply route exists for it (#10540 covers the signing and event keys only).
@@ -1822,17 +1833,26 @@ window.
 
 ### Key rotation order (A5)
 
-1. Do not start until the soak (A4) has passed: the new key must never travel over `:8288` in plaintext.
-2. Rotate the host copy (`soleur-inngest/prd`) and the app copy (`soleur/prd` `INNGEST_SIGNING_KEY`) to the same new value in one
-   window; the event key rotates in the same window only if the owner extended the go.
-3. Restart `inngest-server` (`restart-inngest-server.yml`) and redeploy web (`web-platform-release.yml`) back to back. During the
-   mismatch window step calls fail signature verification and Inngest retries them; `inngest.send` fails with 401 if the event key
-   changed on one side only.
-4. Check the old key is rejected (status code only), the new key is accepted, and `.services.inngest_server` is active with a stable
-   `NRestarts` ([Reading host state without SSH](#reading-host-state-without-ssh)).
-5. Then the A6 record. The rotation apply route is a separate follow-up (#10540) and A5 waits for it; until it lands the existing
-   [Key rotation](#key-rotation) procedure applies. No command for the "old key is rejected" check exists yet either, so A5 is not
-   dispatchable by an agent today; keep it blocked in its follow-through issue until #10540 lands. The one exception is the legal bridge date: from 2026-11-09 the follow-through probe on #11218 also offers the manual Key rotation procedure, with the owner's own go and only once the soak has passed, so that 2026-11-12 is not missed.
+1. Do not start until the soak (A4) has passed: the new key must never travel over `:8288` in plaintext. The route's `guard` job refuses
+   `rotate` and `converge` unless the link flag reads `1` and tracker #11215 is closed as completed.
+2. Rehearse read-only first: `gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=both -f reason='rehearsal'`. It runs both plan
+   gates, reports the guard checks as booleans, refuses on none of them and writes nothing; expect `verdict=plan_ok`.
+3. The owner dispatches `rotate` under a fresh in-session go (see "Key rotation" for the lines and what the go must say). The route
+   rotates the dedicated copy (`soleur-inngest/prd`), soft-reboots the dedicated host through the Hetzner control plane, waits for it to
+   serve on a new boot, rotates the app copy (`soleur/prd`), and redeploys the web fleet canary-then-prod at once. Both copies take the
+   same value because the app copy is derived from the dedicated `random_id`; the event key rotates in the same window only if the owner's
+   go named `keys=event` or `keys=both`. During the mismatch window step calls fail signature verification and Inngest retries them;
+   `inngest.send` can fail with 401.
+4. Read the evidence from Better Stack, not from `deploy-status` (that hook reads web-1; see the note in
+   [Reading host state without SSH](#reading-host-state-without-ssh)): the run summary's value-free block (booleans and timestamps),
+   `gh workflow run inngest-host-state.yml` reading `SERVING=yes` for the dedicated host, and a `tls-health` row with a new `boot_id` and
+   `listener=1` ([Reading `tls-health` without SSH](#reading-tls-health-without-ssh)). There is no HTTP-level "old key is rejected" check
+   today (#11292, non-blocking): a single-key server refuses the old key by construction, and the old value exists nowhere after rotation.
+5. The owner pastes the run's evidence block and the printed `S5-A5-DONE: <UTC time ending in Z>` line on #10136 as their own comment. The
+   route never posts it, and the follow-through probe reads the owner's comment. Then the A6 record; the A6 ask stays gated on A5, and is
+   not made while a rotation is half-done.
+6. The legal bridge date: from 2026-11-09 the follow-through probe on #11218 also asks for A5 with the exact dispatch lines, so
+   2026-11-12 is not missed. The 2026-12-10 extension is not recorded in the legal records (unverified) and is not decided here.
 
 ### Tracked follow-ups (filed 2026-10-19)
 
@@ -1840,7 +1860,7 @@ window.
 |---|---|
 | #10538 | the `sdk_url` poll (leg 2): a web-side listener or poll removal, merge by 2026-11-12, accepted-risk row lapses 2026-12-10 |
 | #10539 | bind `:8288` to loopback and drop the legacy accept at the next unrelated replace (also restricts the Connect ports) |
-| #10540 | the signing-key and event-key rotation apply route (blocks A5) |
+| #10540 | the signing-key and event-key rotation apply route: `inngest-key-rotate.yml`, [ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md) (closed by the PR that adds it; A5 is still owner-dispatched) |
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
 | #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1; closed 2026-10-20) |
 | #10543 | the dashboard send archives the draft on a failed enqueue |
@@ -1849,18 +1869,116 @@ window.
 | #10556 | a Sentry alert rule for `op=inngest-link` events (`https_to_http`, `scope_unverified`, `canary_failed`, `selfgate_failed`) |
 | #10557 | no no-SSH repair path for a non-empty or root-owned `/mnt/data/inngest-link` on a web host |
 
+Added 2026-10-27 with the rotation route (#10540):
+
+| Issue | What it tracks |
+|---|---|
+| #11292 | an HTTP-level "old key rejected" check after a rotation (non-blocking: a single-key server refuses the old key by construction) |
+| #11293 | remove the two orphaned, unreferenced `random_id.inngest_{signing,event}_key_prd` (a `removed {}` block; their destroy handling in the shape gate and parity tests is unverified) |
+| #11294 | p1 security audit: existing dispatch jobs that print Terraform output unfiltered may have published the dedicated key pair in a public run log (a `random_id` id is the key in base64url) |
+
 The `https_to_http`, `lease_expired` and `canary_failed` events notify nobody today (#10556), and a wedged `/mnt/data/inngest-link` has no
 no-SSH repair (#10557).
 
 ## Key rotation
 
-Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.
+`INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources. The prd pair has **one route**: the dispatch-only
+workflow `.github/workflows/inngest-key-rotate.yml` (body `scripts/inngest-key-rotate.sh`, decision and rationale in
+[ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md); this section is the procedure and does not restate the rationale).
+The other generated secrets are covered under "Other generated secrets" at the end of this section.
 
 > **Secret delivery (#5560).** inngest-server reads `INNGEST_POSTGRES_URI`, `INNGEST_REDIS_URI`, `INNGEST_SIGNING_KEY`, and `INNGEST_EVENT_KEY` from the doppler-run **environment** (owner-only `/proc/<pid>/environ`), never the `inngest start` argv (world-readable `/proc/<pid>/cmdline`). A rotated value loads on the next inngest-server restart/redeploy **without** being re-exposed on argv. **Ordering matters:** when rotating because a value leaked, deploy the env-delivery build FIRST (verify `ps -eo args | grep inngest` shows no secret), THEN rotate — rotating while an old argv-form image is still running would re-leak the new value immediately. After rotation, NEVER roll back to a pre-#5560 (argv-form) image.
 
+### Who dispatches what
+
+- **`mode=plan`** is the read-only rehearsal (both Terraform plan gates, the guard checks reported as booleans, no write). Any session may dispatch it.
+- **`mode=rotate` and `mode=converge` are dispatched only by the owner.** Each needs a fresh, per-command, in-session go that names the mode, the
+  keys and the typed confirm. A go on another issue does not count (a go on #10382 is not one), no delegation covers it, and an agent never
+  runs either mode. The `confirm` string and the `quiet_window` input are typo-guards and a statement of fact, not the authorization.
+- A GitHub "re-run" of a `rotate` or `converge` run is refused (`run_attempt` must be 1): a re-run reuses the inputs and would bypass the go.
+  Only `plan` may be re-run.
+
+The lines (the date in a confirm is the UTC date of the dispatch; KEYS is upper-case):
+
+```
+gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=both -f reason='rehearsal'
+gh workflow run inngest-key-rotate.yml -f mode=rotate -f keys=signing -f confirm=ROTATE-INNGEST-SIGNING-<YYYY-MM-DD> -f quiet_window=true -f reason='A5 (#10136)'
+gh workflow run inngest-key-rotate.yml -f mode=converge -f keys=signing -f confirm=CONVERGE-INNGEST-SIGNING-<YYYY-MM-DD> -f quiet_window=true -f reason='converge after inngest-key-rotate run <id>'
+```
+
+`keys` is `signing`, `event` or `both`, has no default and is part of the confirm: a go naming `signing` cannot rotate the event key. The
+2026-10-18 go named the signing key only. `quiet_window=true` attests that no claude cron is in flight, no approved Concierge action is in
+flight, no `invoice.payment_failed` is pending and no Art. 15 request is mid-response (the route cannot check these itself). Run names read
+`inngest-key-rotate <mode> <keys>`, so a `plan` run is distinguishable in the run list.
+
+### What the owner's go must say
+
+Plain words, in the ask that precedes the dispatch: the exact command line (mode, keys, confirm); that the scheduler is down for the host
+reboot (minutes), and that one cron tick inside the boot gap may be skipped and not replayed (unverified whether Inngest backfills it); that
+**the production dedicated host has never been rebooted with its LUKS volume and live scheduler** (unverified); that for up to the redeploy
+(at most the 4800-second pipeline ceiling) the scheduler holds the new key while old web containers hold the old one, so an approved
+Concierge action or a Stripe `invoice.payment_failed` event can be rejected with 401 (lost or retried late) and a release deploying in
+that window fails its canary; that rotation is key hygiene and does not add TLS, close A6 or discharge the 2026-11-12 re-review; that
+rotation also retires any value earlier public run logs may have carried (#11294); that the rollback is `inngest-link-flip.yml
+action=off` with its extra confirm (see "Rollback" step 3) and a re-rotation follows; and that the go is fresh for this session.
+
+### The order the route runs
+
+| Job | What it does |
+|---|---|
+| `guard` | No writes. Refuses `rotate` and `converge` with a fixed verdict token unless: `run_attempt` is 1; the inputs and confirm are well-formed; `quiet_window` is true; the link flag (`INNGEST_LINK_TLS` in `soleur/prd_terraform`, read through `doppler run --preserve-env ... --name-transformer tf-var`) is `1` (`pending:*`, empty or anything else refuses); tracker #11215 is closed as completed; no run of `apply-web-platform-infra.yml`, `inngest-link-flip.yml`, `cutover-inngest.yml`, `deploy-inngest-image.yml`, `web-platform-release.yml` or another `inngest-key-rotate.yml` is in flight; exactly one server is named `soleur-inngest` and it has private IP `10.0.1.40`; for `rotate`, the host reads `SERVING=yes` with `listener=1`. It has no environment and uses the read-only Hetzner token. `converge` also derives the keys and `rotated_at` from the newest earlier non-plan run whose first apply succeeded (a refused run does not qualify) |
+| `apply1` | Phase 1. `-replace` the dedicated `random_id`(s), update the dedicated `doppler_secret`(s) in place, behind plan Gate A. `converge` skips it. The `soleur/prd` key that unrelated deploys read is untouched |
+| `reboot` | The one Hetzner control-plane soft reboot of the dedicated host (the only no-SSH lever that reaches 10.0.1.40), then the wait. Holds the Hetzner write token in the POST step only. One POST per run, no retry, no hard reset. Pass requires a NEW `boot_id` within 10 minutes of the POST, then `SERVING=yes` and a `tls-health` row with that `boot_id` and `listener=1` from Better Stack (15 minutes in all). Under the shared `deploy-inngest-restart` lock |
+| `apply2` | Phase 2. `-replace` the app `doppler_secret`(s) in `soleur/prd`, behind plan Gate B; their value derives from the already-replaced dedicated `random_id`. Asserts the two copies are equal by hashing on a pipe (booleans only) |
+| `redeploy` | Canary-then-prod fleet redeploy through `track.sh`, immediately after `apply2`. A green run prints the value-free evidence block and, for `keys=signing` or `both` only, the `S5-A5-DONE: <UTC time ending in Z>` line |
+
+No Terraform stream ever reaches a log (Terraform prints a `random_id`'s `id`, which is the key in base64url, and this repository is public):
+the script sends every Terraform stream to a private file and prints only addresses, actions and booleans. Do not paste a plan or `terraform
+show` output anywhere.
+
+**Between the two phases the copies legitimately differ.** The dedicated copy is new and the app copy is old until `apply2`. In that window the
+`cutover-inngest.yml` `op=arm` G3.5 channel-key parity gate fails closed (correct, do not work around it), and a merge or release that
+deploys would read the old app key against the new scheduler and fail its canary (a red release, not an outage; the old containers keep
+running). The in-flight-run refusal and the quiet-window attestation exist for this.
+
+### Evidence (Better Stack, not `deploy-status`)
+
+The dedicated host is read through Better Stack rows pinned to `host=soleur-inngest` and `host_role=dedicated`, never through the web hooks
+(`deploy-status` answers for web-1). A Hetzner reboot action reporting `success` only means the ACPI request reached the guest, so it is never
+the evidence. The evidence is: a `tls-health` row with a `boot_id` different from the pre-reboot one and `listener=1`
+([Reading `tls-health` without SSH](#reading-tls-health-without-ssh)); `gh workflow run inngest-host-state.yml` reading `SERVING=yes`; and the
+run's value-free summary (timestamps, which keys, booleans, the run URL). The run summary expires with the run logs (90 days), so the owner
+pastes the evidence block with the `S5-A5-DONE` line as their own comment on #10136; the workflow never posts it.
+
+### If a run fails after its first apply
+
+Every failure after a write prints one stop sentence with the exact `converge` command and files one `action-required` issue. **Do not retry and do
+not dispatch another `rotate`** (a second `rotate` is a new rotation with its own confirm and go). Recovery is `converge` under the owner's own
+per-command go; no agent runs it. `converge` never mints a key and resumes from the observed state: copies unequal means phase 1 is done and it
+continues at `apply2`; it issues no reboot POST when the newest boot began after `rotated_at` or a Hetzner reboot action is running or finished
+after it; it refuses to redeploy while the host reads NOT SERVING. There is no age limit: the copies-equal and boot-start checks decide what runs.
+
+| Verdict | Meaning and next step |
+|---|---|
+| `host_silent` | No probe row with a new `boot_id` within 10 minutes of the POST. The scheduler may still be down. Read the boot stage rows ([Provision unit (#8562)](#provision-unit-8562), [Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539)); a hard reset is a separate owner go and the route never does one |
+| `host_not_serving` | A new boot was seen but the host reads NOT SERVING or `listener` is not `1`. Sole scheduler down: treat as a P1; web keeps running on the old app key and was not redeployed. Recover the host from its stage rows, then `converge` |
+| `host_read_failed` | The Better Stack read failed (no verdict about the host). Re-read with `inngest-host-state.yml`; do not claim NOT SERVING from it |
+| `apply_failed`, `copies_differ` | A Terraform phase failed or the copies are unequal. `converge` resumes at the observed state |
+| `redeploy_failed` | The canary or fleet swap did not confirm; old containers keep the old key, the scheduler and Doppler hold the new one. `converge` runs the redeploy only |
+
+`bash scripts/inngest-key-rotate.sh --print-contract` lists every fixed verdict token (offline, no credentials).
+
+### Rollback after a rotation
+
+There is no old key to roll back to. A flag-off link rollback is guarded: see "Rollback" step 3 under Link TLS (`OFF-AFTER-ROTATION`,
+form (b) only). Accepted residuals (90-day run retention, deleted run history, a direct `apply_target=inngest-link-flag` dispatch) are in
+ADR-304.
+
+### Other generated secrets (`INNGEST_MANUAL_TRIGGER_SECRET`, the `_dev` copies)
+
 <!-- lint-infra-ignore start -->
 
-**⚠ The ONLY supported rotation path is the `terraform taint` flow below.** Do NOT rotate via the Doppler UI — every `doppler_secret` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs. The provider skips the value read-back when `ignore_changes` is set; you'd get silent dashboard ↔ tfstate divergence. If you've accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<key>` to force TF to re-converge.
+**⚠ Do NOT rotate via the Doppler UI, and `terraform taint random_id.<name>` alone does not rotate these.** Every `doppler_secret` in `inngest.tf` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs (the provider skips the value read-back when `ignore_changes` is set), and a regenerated `random_id` reaches state while the Doppler value does not move. Replace the `random_id` and the `doppler_secret` together (`-replace` on a create applies the new value). If you have accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<name>` to re-converge. This does not apply to the prd `INNGEST_SIGNING_KEY` / `INNGEST_EVENT_KEY`, which use the route above (their app copies derive from the dedicated `random_id`, so replacing the app `random_id.inngest_*_key_prd` changes nothing; those two are retired, tracked in #11293).
 
 > **#8209 / ADR-241 — the single-loader form in this runbook is the PRE-cutover one.** After the
 > Tier-B cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the
@@ -1868,36 +1986,21 @@ Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_
 > rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
 > invocation. This note covers every occurrence in this file.
 
-1. Identify which key to rotate. Replace `<KEY>` with `inngest_signing_key_prd` (or `_dev`, or `inngest_event_key_{prd,dev}`).
-2. Taint the random_id so the next apply regenerates it:
+1. Identify the secret. Replace `<NAME>` with the resource name (for example `inngest_manual_trigger_secret_dev`).
+2. Replace both resources in one apply:
 
    ```
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra taint random_id.<KEY>
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra apply -replace=random_id.<NAME> -replace=doppler_secret.<NAME>
    ```
 
-3. Apply:
+3. Restart what reads the secret. web-platform: re-run `web-platform-release.yml` (the container swap IS the restart; `ci-deploy.sh` rejects
+   `restart web-platform` by design — "web-platform restart is docker-level"). For a secret the **dedicated** scheduler reads,
+   `restart-inngest-server.yml` is not a lever: its `/hooks` channel terminates on web-1, whose quiesced unit refuses the restart, and it
+   cannot reach 10.0.1.40. The reboot step of `inngest-key-rotate.yml` is the only verified no-SSH lever for that host today; a rotation of
+   another dedicated-host secret needs its own filed route before it is run.
 
-   ```
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra apply
-   ```
-
-   The companion `doppler_secret.<KEY>` ignores `value` changes via lifecycle; force a refresh:
-
-   ```
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra apply -replace=doppler_secret.<KEY>
-   ```
-
-4. Restart the application + inngest-server so they pick up the new value — **two existing
-   no-SSH verbs, no host login:**
-   - web-platform: re-run `web-platform-release.yml`. The container is swapped, which IS the
-     restart (`ci-deploy.sh` rejects `restart web-platform` by design — "web-platform restart is
-     docker-level").
-   - inngest-server: dispatch `restart-inngest-server.yml`, which sends the `restart inngest`
-     verb (`ci-deploy.sh:2354`).
-
-   Confirm with [§ Reading host state without SSH](#reading-host-state-without-ssh): `.reason`
-   should read `success`, and `.services.inngest_server` should be `active` with
-   `.services.inngest_redis_result` showing a **stable** `NRestarts` across two reads.
+   Confirm the dedicated host with [Reading host state without SSH](#reading-host-state-without-ssh) (`scripts/inngest-host-state.sh`,
+   Better Stack rows), never with a `deploy-status` read.
 
 <!-- lint-infra-ignore end -->
 
@@ -3154,6 +3257,12 @@ ADR-100, amendment 2026-09-14.
    > config the app reads; the copy is a `prd`-root write — Doppler console or a prd-root r/w token.
    > A future full automation would mint a narrow prd-root write token; the G3.5 gate is the
    > recurrence-prevention that makes the divergence impossible to ship silently.)
+   >
+   > **Superseded for how the app copy is produced (2026-10-27, #10540, [ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md)); appended, the text above is unchanged.**
+   > The cutover completed on 2026-09-18, and since #10540 the `soleur/prd` copies derive from the dedicated `random_id` in Terraform, so
+   > there is no copy loop to run and no `prd`-root write token to find. Do not use the loop above today. The app copy is
+   > re-aligned only by the dispatch-only `inngest-key-rotate.yml` route (see "Key rotation"), whose phase 2 replaces the app secrets and
+   > whose `converge` mode finishes an interrupted run. The G3.5 gate above still holds, and it fails closed between the route's two phases.
 
 5. **`op=rearm`** (re-arm the captured reminders after the flip):
 

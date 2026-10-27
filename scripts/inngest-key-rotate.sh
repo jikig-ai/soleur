@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# inngest-key-rotate.sh - the orchestration body of .github/workflows/inngest-key-rotate.yml (#10540, ADR-304 provisional).
+# inngest-key-rotate.sh - the orchestration body of .github/workflows/inngest-key-rotate.yml (#10540, ADR-304).
 #
 # Rotates the two Inngest shared secrets (INNGEST_SIGNING_KEY, INNGEST_EVENT_KEY) on BOTH copies, in two Terraform phases with a
 # host reboot and a verification between them, then redeploys the web fleet:
@@ -147,7 +147,7 @@ KR_ROTATED_AT=""
 KR_REBOOT_POST="false"
 KR_DERIVED_KEYS=""
 KR_HZ_TOKEN=""
-KR_HS_RC=0
+KR_HS_EXIT=0
 KR_HS_SERVING=""
 KR_HS_BOOT=""
 KR_HS_OBS=0
@@ -288,13 +288,13 @@ kr_reboot_post() {
 # ---------------------------------------------------------------------------------------------------------------------------
 # Better Stack (the only channel that reaches the dedicated host). Host text never leaves the runner: the host-state output
 # is parsed with anchored patterns and only fixed tokens are printed.
-# kr_read_host <since>: runs scripts/inngest-host-state.sh; sets KR_HS_RC, KR_HS_SERVING (yes|no|""), KR_HS_BOOT (8 hex|""),
+# kr_read_host <since>: runs scripts/inngest-host-state.sh; sets KR_HS_EXIT, KR_HS_SERVING (yes|no|""), KR_HS_BOOT (8 hex|""),
 # KR_HS_OBS (epoch|0).
 kr_read_host() {
   local f="$KR_TMP/hs.out" obs
-  KR_HS_RC=0; KR_HS_SERVING=""; KR_HS_BOOT=""; KR_HS_OBS=0
-  timeout 240 bash "$KR_HOST_STATE" --since "$1" --no-errors > "$f" 2> "$KR_TMP/hs.err" || KR_HS_RC=$?
-  [[ "$KR_HS_RC" == 0 ]] || return 0
+  KR_HS_EXIT=0; KR_HS_SERVING=""; KR_HS_BOOT=""; KR_HS_OBS=0
+  timeout 240 bash "$KR_HOST_STATE" --since "$1" --no-errors > "$f" 2> "$KR_TMP/hs.err" || KR_HS_EXIT=$?
+  [[ "$KR_HS_EXIT" == 0 ]] || return 0
   KR_HS_SERVING="$(sed -n -E 's/^  VERDICT        (NOT )?SERVING   SERVING=(yes|no)( .*)?$/\2/p' "$f" | head -1)"
   KR_HS_BOOT="$(sed -n -E 's/^  boot_id        ([0-9a-f]{8,36})$/\1/p' "$f" | head -1)"
   KR_HS_BOOT="${KR_HS_BOOT:0:8}"
@@ -570,10 +570,10 @@ kr_chk_serving() {
   local newest ep boot lis now
   now="$(kr_now)"
   kr_read_host 90m
-  case "$KR_HS_RC" in
+  case "$KR_HS_EXIT" in
     0) ;;
     4) KR_CHECK_TOKEN=host_not_serving_pre; KR_CHECK_DETAIL="no dedicated-host probe row in 90 minutes (silence is not health)"; return 1 ;;
-    *) KR_CHECK_TOKEN=host_state_unreadable; KR_CHECK_DETAIL="the host-state read exited ${KR_HS_RC} (no verdict about the host)"; return 1 ;;
+    *) KR_CHECK_TOKEN=host_state_unreadable; KR_CHECK_DETAIL="the host-state read exited ${KR_HS_EXIT} (no verdict about the host)"; return 1 ;;
   esac
   if [[ "$KR_HS_SERVING" != yes ]]; then KR_CHECK_TOKEN=host_not_serving_pre; KR_CHECK_DETAIL="the newest probe row reads NOT SERVING"; return 1; fi
   kr_tls_rows "$(kr_iso $((now - 1800)))" || { KR_CHECK_TOKEN=host_state_unreadable; KR_CHECK_DETAIL="the tls-health read failed (class $(kr_bs_classify))"; return 1; }
@@ -788,7 +788,7 @@ kr_poll_host() {
   local after="$1" pre="$2" ep boot lis
   KR_NEWBOOT=""; KR_SERVE=unknown; KR_LISTEN=""; KR_READ_FAULT=0
   kr_read_host 30m
-  case "$KR_HS_RC" in 0|4) ;; *) KR_READ_FAULT=1 ;; esac
+  case "$KR_HS_EXIT" in 0|4) ;; *) KR_READ_FAULT=1 ;; esac
   if kr_tls_rows "$(kr_iso $((after - 60)))"; then
     while IFS=$'\t' read -r ep boot lis _; do
       [[ "$ep" =~ ^[0-9]+$ && "$ep" -ge "$after" && "$boot" =~ ^[0-9a-f]{8}$ ]] || continue
@@ -804,7 +804,7 @@ kr_poll_host() {
   else
     KR_READ_FAULT=1
   fi
-  if [[ "$KR_HS_RC" == 0 && -n "$KR_HS_BOOT" && ( "$pre" == - || "$KR_HS_BOOT" != "$pre" ) && "$KR_HS_OBS" -ge "$after" ]]; then
+  if [[ "$KR_HS_EXIT" == 0 && -n "$KR_HS_BOOT" && ( "$pre" == - || "$KR_HS_BOOT" != "$pre" ) && "$KR_HS_OBS" -ge "$after" ]]; then
     [[ -z "$KR_NEWBOOT" ]] && KR_NEWBOOT="$KR_HS_BOOT"
     [[ "$KR_HS_BOOT" == "$KR_NEWBOOT" ]] && KR_SERVE="${KR_HS_SERVING:-unknown}"
   fi
@@ -842,7 +842,7 @@ kr_cmd_verify() {
     fi
     now="$(kr_now)"
     if [[ -z "$KR_NEWBOOT" && "$now" -ge "$boot_deadline" ]]; then
-      if [[ "$fault_seen" == 1 && "$KR_HS_RC" != 4 ]]; then
+      if [[ "$fault_seen" == 1 && "$KR_HS_EXIT" != 4 ]]; then
         kr_post_write_failure host_read_failed "no verdict: the Better Stack read failed (class $(kr_bs_classify)); this says nothing about the host" "The host could not be read after the reboot."
       else
         kr_post_write_failure host_silent "no probe or tls-health row with a new boot_id within $((KR_BOOT_WAIT_S / 60)) minutes of the reboot request" \
@@ -866,15 +866,15 @@ kr_cmd_verify() {
 # ---------------------------------------------------------------------------------------------------------------------------
 # APPLY 2 (phase 2)
 kr_cmd_apply2() {
-  local mode="${EFF_MODE:-}" keys="${EFF_KEYS:-}" k rc klist bkeys=""
+  local mode="${EFF_MODE:-}" keys="${EFF_KEYS:-}" k rc eqst klist bkeys=""
   kr_valid_mode_keys "$mode" "$keys" || return 1
   [[ "$mode" == rotate || "$mode" == converge ]] || { kr_refuse internal_error "apply2 runs for rotate and converge only"; return 1; }
   kr_init || return 1
   klist="$(kr_keys_list "$keys")"
   kr_require_no_inflight || return 1
   for k in $klist; do
-    rc=0; kr_copies_equal "$k" || rc=$?
-    case "$rc" in
+    eqst=0; kr_copies_equal "$k" || eqst=$?
+    case "$eqst" in
       2) kr_refuse copy_unreadable "cannot compare the ${k} copies (value-silent hash)"; return 1 ;;
       1) bkeys="${bkeys:+$bkeys }$k" ;;
       0)

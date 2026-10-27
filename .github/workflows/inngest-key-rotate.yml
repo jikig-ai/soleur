@@ -1,5 +1,5 @@
 # Rotate the Inngest shared secrets (INNGEST_SIGNING_KEY, INNGEST_EVENT_KEY) on both copies: the dedicated host's
-# soleur-inngest/prd and the web app's soleur/prd (#10540, ADR-304 provisional ordinal; runbook inngest-server.md).
+# soleur-inngest/prd and the web app's soleur/prd (#10540, ADR-304; runbook inngest-server.md).
 #
 # DISPATCH-ONLY, and a production act. The authorization is the owner's fresh in-session go naming the exact command (mode,
 # keys, typed confirm); the typed confirm and quiet_window below are typo-guards and a statement of fact, NOT the
