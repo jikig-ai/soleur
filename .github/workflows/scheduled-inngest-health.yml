@@ -1432,11 +1432,12 @@ jobs:
       - name: File action-required on a below-floor connector version (eMudhra)
         # below_floor PAGES: a live conn on cloudflared < 2026.10.2 trusts the compromised
         # eMudhra intermediates and can be MITM'd — on the management plane (deploy./ssh./
-        # registry.), not a theoretical surface. version_unreadable and version_floor_invalid
-        # are deliberately excluded (soft breadcrumbs, same posture as census_unavailable).
-        # Distinct label from ci/tunnel-connector-drift: a below-floor conn is a COUNT-correct,
-        # VERSION-wrong connector — the drift arm above cannot see it.
-        if: always() && steps.census.outputs.version_verdict == 'below_floor'
+        # registry.), not a theoretical surface. version_unreadable stays a soft breadcrumb
+        # (same posture as census_unavailable), but version_floor_invalid PAGES too: a floor
+        # constant that cannot parse silently disarms this whole verdict — the disarm is the
+        # incident. Distinct label from ci/tunnel-connector-drift: a below-floor conn is a
+        # COUNT-correct, VERSION-wrong connector — the drift arm above cannot see it.
+        if: always() && (steps.census.outputs.version_verdict == 'below_floor' || steps.census.outputs.version_verdict == 'version_floor_invalid')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

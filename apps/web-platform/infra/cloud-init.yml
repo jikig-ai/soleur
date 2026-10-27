@@ -576,7 +576,7 @@ runcmd:
     curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/$${CLOUDFLARED_VERSION}/cloudflared-linux-amd64.deb" -o /tmp/cloudflared.deb
     # #6090: checksum fail-CLOSED independent of H3 set +e (mismatch aborts).
     echo "$${CLOUDFLARED_SHA256}  /tmp/cloudflared.deb" | sha256sum -c - || { soleur-boot-emit cloudflared_checksum fatal; exit 1; }
-    dpkg -i /tmp/cloudflared.deb
+    dpkg -i /tmp/cloudflared.deb || { soleur-boot-emit cloudflared_install fatal; exit 1; }
     rm /tmp/cloudflared.deb
 
   # Register cloudflared as a systemd service with the tunnel token.
