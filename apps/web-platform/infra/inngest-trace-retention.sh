@@ -41,6 +41,11 @@ COUNT_KEYS = (
     "function_finishes",
     "events",
 )
+# A capped child holds only its anchor. The other statements still run.
+ANCHOR_GATES = {
+    "trace_runs": ("spans", "traces", "event_batches"),
+    "function_finishes": ("history", "function_runs"),
+}
 SEQ_SCAN = re.compile(r"(?:Parallel )?Seq Scan on (\w+)")
 EXPLAIN_TAG = re.compile(r"(?m)^-- soleur:explain=([a-z,]+)\s*$")
 SPLIT = re.compile(r"(?m)^-- soleur:statement\s*$")
@@ -307,11 +312,24 @@ def table_of(sql):
     return match.group(1)
 
 
+def anchor_held(table, capped):
+    gates = ANCHOR_GATES.get(table)
+    if gates is None:
+        return False
+    for name in gates:
+        if name in capped:
+            return True
+    return False
+
+
 def run_postgres_file(path, days, batch, max_batches, counts, start_size, budget):
     with open(path, "r", encoding="utf-8") as fh:
         planned = statement_plan(fh.read(), days, batch)
+    capped = set()
     for sql, _tags in planned:
         table = table_of(sql)
+        if anchor_held(table, capped):
+            continue
         drained = False
         for _ in range(max_batches):
             deleted = count_from_output(psql(sql))
@@ -322,14 +340,18 @@ def run_postgres_file(path, days, batch, max_batches, counts, start_size, budget
                 drained = True
                 break
         if not drained:
-            error("batch_cap")
+            capped.add(table)
+    return capped
 
 
 def run_sqlite_file(conn, path, days, batch, max_batches, counts):
     with open(path, "r", encoding="utf-8") as fh:
         planned = statement_plan(fh.read(), days, batch)
+    capped = set()
     for sql, _tags in planned:
         table = table_of(sql)
+        if anchor_held(table, capped):
+            continue
         drained = False
         for _ in range(max_batches):
             try:
@@ -349,7 +371,8 @@ def run_sqlite_file(conn, path, days, batch, max_batches, counts):
                 drained = True
                 break
         if not drained:
-            error("batch_cap")
+            capped.add(table)
+    return capped
 
 
 def emit(counts):
@@ -449,19 +472,22 @@ def run(here):
         error("glob_mismatch")
     say("INNGEST_TRACE_RETENTION_GLOB=%s" % GLOB)
     counts = {}
+    capped = set()
     if uri:
         explain_postgres(here, pg_files, days, batch)
         start_size = query_size()
         for fn in pg_files:
             say("INNGEST_TRACE_RETENTION_FILE=%s" % fn)
-            run_postgres_file(
-                os.path.join(here, fn),
-                days,
-                batch,
-                max_batches,
-                counts,
-                start_size,
-                budget,
+            capped.update(
+                run_postgres_file(
+                    os.path.join(here, fn),
+                    days,
+                    batch,
+                    max_batches,
+                    counts,
+                    start_size,
+                    budget,
+                )
             )
     if sqlite_path:
         conn = sqlite3.connect(sqlite_path)
@@ -469,9 +495,15 @@ def run(here):
         try:
             for fn in sl_files:
                 say("INNGEST_TRACE_RETENTION_FILE=%s" % fn)
-                run_sqlite_file(conn, os.path.join(here, fn), days, batch, max_batches, counts)
+                capped.update(
+                    run_sqlite_file(
+                        conn, os.path.join(here, fn), days, batch, max_batches, counts
+                    )
+                )
         finally:
             conn.close()
+    if capped:
+        error("batch_cap")
     write_marker(marker, today)
     emit(counts)
 

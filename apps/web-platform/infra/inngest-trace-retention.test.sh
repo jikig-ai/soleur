@@ -563,6 +563,10 @@ def seed_cap(path):
             "INSERT INTO history (run_id, event_id) VALUES (?, ?)",
             (finish, b"ev-cap"),
         )
+    conn.execute(
+        "INSERT INTO events (internal_id, received_at, event_data) VALUES (?, ?, ?)",
+        (b"ev-cap-free", old, "cap"),
+    )
     conn.close()
 
 def count_table(path, table):
@@ -731,7 +735,7 @@ fi
 pass "days=0 wrote no marker"
 export INNGEST_TRACE_RETENTION_DAYS=7
 
-# a statement that does not drain stops before either anchor and writes no marker
+# a capped child holds its anchor, still deletes the other pipelines, and writes no marker
 CAPDB="${FIX}/cap.db"
 python3 "$HARNESS" seed-cap "$CAPDB"
 export INNGEST_TRACE_RETENTION_SQLITE="$CAPDB"
@@ -753,10 +757,18 @@ if [[ "$(python3 "$HARNESS" count-table "$CAPDB" function_finishes)" != "2" ]]; 
   die "batch cap deleted a function_finishes anchor"
 fi
 pass "batch cap leaves function_finishes in place"
-if [[ "$(python3 "$HARNESS" count-table "$CAPDB" history)" != "2" ]]; then
-  die "batch cap deleted history before the finish anchor"
+if [[ "$(python3 "$HARNESS" count-table "$CAPDB" history)" != "1" ]]; then
+  die "batch cap did not continue into history (count $(python3 "$HARNESS" count-table "$CAPDB" history))"
 fi
-pass "batch cap leaves history in place"
+pass "batch cap deletes one history row and holds the finish anchor"
+if [[ "$(python3 "$HARNESS" count-table "$CAPDB" spans)" != "1" ]]; then
+  die "batch cap did not stop the spans statement at one row"
+fi
+pass "batch cap deletes one span and holds the trace anchor"
+if [[ "$(python3 "$HARNESS" count-table "$CAPDB" events)" != "0" ]]; then
+  die "batch cap did not continue into events"
+fi
+pass "batch cap deletes the eligible event"
 if [[ -f "${FIX}/marker-cap" ]]; then
   die "batch cap wrote the marker"
 fi
