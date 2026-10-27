@@ -91,7 +91,7 @@ set -Eeuo pipefail
 # enumerating the ways to turn it on, two of which carry no `-x` token at all.
 case "$-" in
   *x*)
-    if [ -n "${INNGEST_REDIS_PASSWORD:+x}" ]; then
+    if [ -n "${INNGEST_REDIS_LUKS_KEY:+x}${INNGEST_REDIS_PASSWORD:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -902,7 +902,7 @@ run_preflush_flip() {
 #
 # VERDICT TOKENS (closed set; the alert SQL, the runbook table and the suite enumerate the same):
 #   ok / fail_passphrase / fail_header / fail_key_absent / indeterminate, each with an at= literal
-#   (key mount status uuid mem shield kdf). fail_header only when `cryptsetup isLuks` ALSO exits 1:
+#   (died key mount status uuid mem shield kdf). fail_header only when `cryptsetup isLuks` ALSO exits 1:
 #   rc 1 is a default errno bucket, so a second independent read must agree before a page.
 #   Anything the probe could not measure (tool absent, timeout, not on a mapper, low memory,
 #   shield refused) is indeterminate and never pages on its own.
@@ -932,7 +932,7 @@ luks_probe_due() {
   printf -v now '%(%s)T' -1 2>/dev/null || return 1
   [[ -f "$LUKS_PROBE_STAMP" ]] || return 0
   read -r tok ts 2>/dev/null < "$LUKS_PROBE_STAMP" || true
-  case "$ts" in ''|*[!0-9]*|0[0-9]*) return 0 ;; esac
+  case "$ts" in ''|*[!0-9]*|0[0-9]*|????????????*) return 0 ;; esac
   if [[ "$ts" -gt "$now" ]]; then return 0; fi
   if [[ "$tok" == "ok" ]]; then limit=86400; fi
   [[ $((now - ts)) -ge "$limit" ]]
@@ -983,6 +983,9 @@ luks_key_probe_tick() {
   trap - ERR EXIT
   set +eEx
   set +o pipefail
+  ulimit -c 0 2>/dev/null || true
+  local pst=()
+  local prev=""
   local keyfile="${CUTOVER_LUKS_KEY_FILE:-/etc/default/inngest-luks}"
   local cs="${CUTOVER_CRYPTSETUP_CMD:-cryptsetup}"
   local fm="${CUTOVER_FINDMNT_CMD:-findmnt}"
@@ -999,7 +1002,15 @@ luks_key_probe_tick() {
   local avail=""
 
   luks_probe_due || return 0
+  read -r prev _ 2>/dev/null < "$LUKS_PROBE_STAMP" || true
   luks_probe_stamp_write pending || return 0
+  # A `pending` stamp on entry means the previous run never reached luks_probe_finish (OOM kill,
+  # unit stop, abort) or its final stamp write failed. Say so once, then wait the hourly retry: the
+  # died tick returns here so it adds no KDF to a tick the last run may have just exhausted.
+  if [[ "$prev" == "pending" ]]; then
+    luks_probe_finish indeterminate 0 died
+    return 0
+  fi
 
   # 2. key presence — the value is never read into a variable here.
   timeout -k 5 2 grep -q '^INNGEST_REDIS_LUKS_KEY=.' "$keyfile" 2>/dev/null
@@ -1007,7 +1018,16 @@ luks_key_probe_tick() {
   case "$rc" in
     0) ;;
     124|126|127|137) luks_probe_finish indeterminate "$rc" key; return 0 ;;
-    *) luks_probe_finish fail_key_absent "$rc" key; return 0 ;;
+    1) luks_probe_finish fail_key_absent "$rc" key; return 0 ;;
+    *)
+      # rc 2 is a missing file OR a read error (EIO, ENOMEM): only a missing file is "key absent".
+      if [[ -e "$keyfile" ]]; then
+        luks_probe_finish indeterminate "$rc" key
+      else
+        luks_probe_finish fail_key_absent "$rc" key
+      fi
+      return 0
+      ;;
   esac
 
   # 3. the device behind /mnt/data. Under ReadWritePaths=/mnt/data systemd may bind-mount the path
@@ -1025,7 +1045,7 @@ luks_key_probe_tick() {
   esac
   mapper="${src#/dev/mapper/}"
   mapper="${mapper%%\[*}"
-  out="$(timeout -k 5 4 "$cs" status "$mapper" 2>/dev/null)"
+  out="$(timeout -k 5 4 "$cs" status --disable-locks "$mapper" 2>/dev/null)"
   rc=$?
   if [[ "$rc" -ne 0 ]]; then
     luks_probe_finish indeterminate "$rc" status
@@ -1040,10 +1060,10 @@ luks_key_probe_tick() {
   fi
 
   # 4. header: rc 1 is fail_header only when isLuks, a second independent read, also exits 1.
-  out="$(timeout -k 5 6 "$cs" luksUUID "$dev" 2>/dev/null)"
+  out="$(timeout -k 5 6 "$cs" luksUUID --disable-locks "$dev" 2>/dev/null)"
   rc=$?
   if [[ "$rc" -eq 1 ]]; then
-    timeout -k 5 4 "$cs" isLuks "$dev" >/dev/null 2>&1
+    timeout -k 5 4 "$cs" isLuks --disable-locks "$dev" >/dev/null 2>&1
     rc2=$?
     if [[ "$rc2" -eq 1 ]]; then
       luks_probe_finish fail_header 1 uuid
@@ -1064,7 +1084,7 @@ luks_key_probe_tick() {
   # 5. memory pre-check: the keyslot's KDF memory (luksDump) against MemAvailable plus 256 MiB of
   # headroom. Short means indeterminate NOW — no sleep, no retry: this runs inside the only
   # control poll, and the hourly re-probe after a non-ok token is the retry.
-  out="$(timeout -k 5 6 "$cs" luksDump "$dev" 2>/dev/null)"
+  out="$(timeout -k 5 6 "$cs" luksDump --disable-locks "$dev" 2>/dev/null)"
   rc=$?
   if [[ "$rc" -ne 0 ]]; then
     luks_probe_finish indeterminate "$rc" mem
@@ -1097,7 +1117,24 @@ luks_key_probe_tick() {
     | timeout -k 5 2 head -n 1 \
     | timeout -k 5 2 tr -d '\n' \
     | timeout -k 5 30 "$cs" luksOpen --test-passphrase --disable-locks --key-file - "$dev" >/dev/null 2>&1
-  rc=$?
+  pst=("${PIPESTATUS[@]}")
+  rc="${pst[3]:-1}"
+  # An upstream stage that died or timed out fed cryptsetup a short or empty key: that is not a
+  # verdict on the key. sed may legitimately take SIGPIPE (141) once head has its line.
+  case "${pst[0]:-1}:${pst[1]:-1}:${pst[2]:-1}" in
+    0:0:0|141:0:0) ;;
+    *)
+      if [[ "${pst[0]:-1}" != 0 && "${pst[0]:-1}" != 141 ]]; then
+        rc="${pst[0]:-1}"
+      elif [[ "${pst[1]:-1}" != 0 ]]; then
+        rc="${pst[1]:-1}"
+      else
+        rc="${pst[2]:-1}"
+      fi
+      luks_probe_finish indeterminate "$rc" key
+      return 0
+      ;;
+  esac
   case "$rc" in
     0) luks_probe_finish ok 0 kdf ;;
     2) luks_probe_finish fail_passphrase 2 kdf ;;
