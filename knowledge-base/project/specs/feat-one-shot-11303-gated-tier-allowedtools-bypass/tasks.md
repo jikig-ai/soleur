@@ -38,9 +38,9 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 
 ## Phase 4: ADR (commit 4)
 
-- [ ] 4.1 `soleur:architecture create` ADR (ordinal re-verified vs origin/main); run `plugins/soleur/test/c4-count-parity.test.sh`
-- [ ] 4.2 Confirm no legal text / compliance-posture / flag file changed
-- [ ] 4.3 Commit `docs(adr): gated-tier platform tools never enter SDK allowedTools`
+- [x] 4.1 `soleur:architecture create` ADR (ordinal re-verified vs origin/main); run `plugins/soleur/test/c4-count-parity.test.sh`
+- [x] 4.2 Confirm no legal text / compliance-posture / flag file changed
+- [x] 4.3 Commit `docs(adr): gated-tier platform tools never enter SDK allowedTools`
 
 ## Phase 5: Verify and ship
 

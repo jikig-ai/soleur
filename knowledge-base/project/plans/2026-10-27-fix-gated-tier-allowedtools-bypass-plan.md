@@ -270,7 +270,7 @@ Post-deploy honesty: the issue records no legacy sessions with platform tools si
 
 ### ADR
 
-Create a new ADR via `soleur:architecture create` at work time (ordinal chosen then: highest on disk today is ADR-303, so provisional ADR-304; re-verify against `origin/main` before merge per the ADR-ordinal collision gate and sweep this plan and `tasks.md` for the old ordinal if it moves): **"Gated-tier platform tools never enter SDK `allowedTools`; `canUseTool` is their only approver."** It records the invariant (a cross-cutting rule every runner and future caller must honour), the `getToolTier(name) === "auto-approve"` keep-rule, the fail-closed second line in `buildAgentQueryOptions`, the explicit-entry rule for `platformToolNames`, and `related_adrs: [ADR-060, ADR-109, ADR-284]`. It reverses the earlier implicit design in which `allowedTools` listed every registered platform tool. Status `accepted` (the decision is live in this PR). It is a plan deliverable, not a deferred issue.
+Create a new ADR via `soleur:architecture create` at work time (ordinal chosen then: highest on disk today is ADR-303, so provisional ADR-304; moved to ADR-305 at work time because two open PRs (#11298, #11225) already claim 304; re-verify against `origin/main` before merge per the ADR-ordinal collision gate and sweep this plan and `tasks.md` for the old ordinal if it moves): **"Gated-tier platform tools never enter SDK `allowedTools`; `canUseTool` is their only approver."** It records the invariant (a cross-cutting rule every runner and future caller must honour), the `getToolTier(name) === "auto-approve"` keep-rule, the fail-closed second line in `buildAgentQueryOptions`, the explicit-entry rule for `platformToolNames`, and `related_adrs: [ADR-060, ADR-109, ADR-284]`. It reverses the earlier implicit design in which `allowedTools` listed every registered platform tool. Status `accepted` (the decision is live in this PR). It is a plan deliverable, not a deferred issue.
 
 ### C4 views
 
@@ -401,7 +401,7 @@ Test-first per `cq-write-failing-tests-before`; each commit green on its own; al
 - `apps/web-platform/test/build-allowed-tools-census.test.ts`: census, mutation battery, explicit-entry assertion, assertion tests, sentinel, gate-message test
 - `apps/web-platform/test/permission-callback-platform-gate-expiry.test.ts`: gate lifecycle suite
 - `apps/web-platform/scripts/dev-probe-approval-gate.ts`: cherry-picked and modified probe
-- `knowledge-base/engineering/architecture/decisions/ADR-304-gated-tier-platform-tools-never-enter-sdk-allowedtools.md`: ordinal provisional
+- `knowledge-base/engineering/architecture/decisions/ADR-305-gated-tier-platform-tools-never-enter-sdk-allowedtools.md`: ordinal provisional
 
 Globs verified at plan time (`git ls-files`): every `apps/web-platform/test/*.test.ts` path above exists except the two new files; `scripts/betterstack-assert-absence.sh` exists.
 
