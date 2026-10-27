@@ -30,11 +30,11 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 
 ## Phase 3: Real-SDK probe (commit 3)
 
-- [ ] 3.1 Keep only `apps/web-platform/scripts/dev-probe-approval-gate.ts`; drop `phase-0-measurements.md`
-- [ ] 3.2 Add `pyramid-justified` marker to the probe header; exit 4 never green. Switch to `buildAllowedTools`, full derived legacy name set, production string prompt, drop `:no-allowed`, add `email_send:raw` canary and `email_send:prod-stream`, builder-import failure = CANT-RUN, update header and floor
-- [ ] 3.3 Run against Doppler `ci`: expect `RESULT: PASS`; paste PROVENANCE/REGISTRATION/PROBE lines for the PR body
-- [ ] 3.4 Fix stale comment in `dev-probe-destroy-ask.ts` only if Phase 0.4 contradicts it
-- [ ] 3.5 Commit `test(approval): real-SDK probe builds allowedTools via buildAllowedTools; prod rows now invoke canUseTool (#11303)`
+- [x] 3.1 Keep only `apps/web-platform/scripts/dev-probe-approval-gate.ts`; drop `phase-0-measurements.md`
+- [x] 3.2 Add `pyramid-justified` marker to the probe header; exit 4 never green. Switch to `buildAllowedTools`, full derived legacy name set, production string prompt, drop `:no-allowed`, add `email_send:raw` canary and `email_send:prod-stream`, builder-import failure = CANT-RUN, update header and floor
+- [x] 3.3 Run against Doppler `ci`: expect `RESULT: PASS`; paste PROVENANCE/REGISTRATION/PROBE lines for the PR body
+- [x] 3.4 Fix stale comment in `dev-probe-destroy-ask.ts` only if Phase 0.4 contradicts it
+- [x] 3.5 Commit `test(approval): real-SDK probe builds allowedTools via buildAllowedTools; prod rows now invoke canUseTool (#11303)`
 
 ## Phase 4: ADR (commit 4)
 
