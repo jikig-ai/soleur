@@ -115,7 +115,9 @@ jobs:
 
       # The live-database cases are wired through describe.skipIf, and a skipped run exits 0, so the
       # step above cannot tell "ran" from "skipped". Re-run the egress audit rollup cases (#9545,
-      # ADR-288) with a JSON report and require a non-zero EXECUTED count, zero skipped, zero failed.
+      # ADR-288) with a JSON report and require the EXECUTED count, zero skipped, zero failed. The floor is
+      # 21 PR1 cases + 20 read-RPC cases (mig 177, #9545 PR2); raise it with every case added to that file,
+      # because a floor below the count is attack budget: that many cases could be deleted unnoticed.
       - name: Assert the egress audit rollup cases executed (not skipped)
         working-directory: apps/web-platform
         env:
@@ -125,8 +127,26 @@ jobs:
           report="${RUNNER_TEMP}/egress-audit-rollup-report.json"
           ./node_modules/.bin/vitest run test/rls-fuzz/egress-audit-rollup.integration.test.ts \
             --reporter=json --outputFile="$report"
-          jq -e '.numPassedTests >= 15 and .numPendingTests == 0 and .numFailedTests == 0' "$report" >/dev/null \
+          jq -e '.numPassedTests >= 41 and .numPendingTests == 0 and .numFailedTests == 0' "$report" >/dev/null \
             || { echo "::error::egress audit rollup live-database cases did not all execute"; jq '{numPassedTests,numPendingTests,numFailedTests}' "$report"; exit 1; }
+
+      # Same executed-not-skipped pin for the api-role grant gate (ADR-303):
+      # rls-grants.integration.test.ts is describe.skipIf(!RLS_FUZZ_LOCAL) like
+      # the rest of the suite, so a skip regression would exit green having
+      # asserted nothing — the exact false-green class the file exists to
+      # close. 7 tests today (defacl pin, non-vacuity floor, parity,
+      # table-level equality, sequence equality, column splits, attacl sweep).
+      - name: Assert the api-role grant gate executed (not skipped)
+        working-directory: apps/web-platform
+        env:
+          RLS_FUZZ_LOCAL: "1"
+        run: |
+          set -euo pipefail
+          report="${RUNNER_TEMP}/rls-grants-report.json"
+          ./node_modules/.bin/vitest run test/rls-fuzz/rls-grants.integration.test.ts \
+            --reporter=json --outputFile="$report"
+          jq -e '.numPassedTests >= 7 and .numPendingTests == 0 and .numFailedTests == 0' "$report" >/dev/null \
+            || { echo "::error::rls-grants api-role grant cases did not all execute"; jq '{numPassedTests,numPendingTests,numFailedTests}' "$report"; exit 1; }
 
       # Prod-parity catalog diff — read-only introspection over the run-verify
       # doppler path. Skipped when the prod-readonly token secret is not set (so

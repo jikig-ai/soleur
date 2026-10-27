@@ -1,0 +1,1278 @@
+{
+  "version": "2.18",
+  "children": [
+    {
+      "type": "frame",
+      "id": "eZzYT",
+      "x": 0,
+      "y": 0,
+      "name": "Global nav with Learn dropdown",
+      "clip": true,
+      "width": 1440,
+      "height": 640,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "mtWIs",
+          "name": "Nav Bar",
+          "width": "fill_container",
+          "height": 72,
+          "fill": "$surface",
+          "stroke": "$line",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "gap": 40,
+          "padding": [
+            0,
+            48
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "DW1GM",
+              "name": "Logo",
+              "width": 36,
+              "height": 36,
+              "fill": "$surface-2",
+              "cornerRadius": 8,
+              "stroke": "$line-strong",
+              "strokeWidth": 1,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "p5xTu",
+                  "name": "Logo Mark",
+                  "fill": "$text-primary",
+                  "content": "S",
+                  "fontFamily": "$font",
+                  "fontSize": 18,
+                  "fontWeight": "bold"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "dTtxT",
+              "name": "Nav Links",
+              "height": "fill_container",
+              "gap": 28,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "IPi7Q",
+                  "name": "Product",
+                  "height": "fill_container",
+                  "padding": [
+                    0,
+                    2
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "J9er5",
+                      "name": "Label",
+                      "fill": "$text-secondary",
+                      "content": "Product",
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Z9GIm",
+                  "name": "Pricing",
+                  "height": "fill_container",
+                  "padding": [
+                    0,
+                    2
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Pi9cp",
+                      "name": "Label",
+                      "fill": "$text-secondary",
+                      "content": "Pricing",
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "CWZUp",
+                  "name": "Get Started",
+                  "height": "fill_container",
+                  "padding": [
+                    0,
+                    2
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "HQed4",
+                      "name": "Label",
+                      "fill": "$text-secondary",
+                      "content": "Get Started",
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "sgeiK",
+                  "name": "Blog",
+                  "height": "fill_container",
+                  "padding": [
+                    0,
+                    2
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "g866B",
+                      "name": "Label",
+                      "fill": "$text-secondary",
+                      "content": "Blog",
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ANNGd",
+                  "name": "Company",
+                  "height": "fill_container",
+                  "padding": [
+                    0,
+                    2
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "WheOX",
+                      "name": "Label",
+                      "fill": "$text-secondary",
+                      "content": "Company",
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "z2lJ0",
+                  "name": "Learn Item",
+                  "height": "fill_container",
+                  "stroke": "$text-primary",
+                  "strokeWidth": {
+                    "bottom": 2
+                  },
+                  "gap": 6,
+                  "padding": [
+                    0,
+                    2
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "JXDPM",
+                      "name": "Label",
+                      "fill": "$text-primary",
+                      "content": "Learn",
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "icon",
+                      "id": "zMlX9",
+                      "name": "Chevron",
+                      "width": 16,
+                      "height": 16,
+                      "icon": "chevron-down",
+                      "library": "lucide",
+                      "fill": "$text-primary"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "x3lWy",
+              "name": "Spacer",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "frame",
+              "id": "XoNI8",
+              "name": "Join the waitlist Button",
+              "fill": "$surface-2",
+              "cornerRadius": 6,
+              "stroke": "$line-strong",
+              "strokeWidth": 1,
+              "padding": [
+                11,
+                22
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "IQlOc",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Join the waitlist",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "bold"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "I0TDIX",
+          "layoutPosition": "absolute",
+          "x": 571,
+          "y": 80,
+          "name": "Learn Dropdown",
+          "width": 340,
+          "fill": "$surface",
+          "cornerRadius": 10,
+          "stroke": "$line-strong",
+          "strokeWidth": 1,
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer",
+            "color": "#00000066",
+            "offset": {
+              "x": 0,
+              "y": 8
+            },
+            "blur": 24
+          },
+          "layout": "vertical",
+          "gap": 2,
+          "padding": 8,
+          "children": [
+            {
+              "type": "frame",
+              "id": "jggX4",
+              "name": "Company-as-a-Service",
+              "width": "fill_container",
+              "fill": "$surface-2",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "TFuhW",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "bSV9R",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Company-as-a-Service",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "V4FFrN",
+              "name": "Agentic Engineering",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "MxKrY",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "EKGdb",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Agentic Engineering",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "S4EiyF",
+              "name": "Glossary",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "fIcjx",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "odS2o",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Glossary",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Y3d0mt",
+              "name": "Claude Code Plugins",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "seTx2",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "j7cCM",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Claude Code Plugins",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kUpCe",
+              "name": "AI Agents for Solo Founders",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "I796D",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "U2Uu91",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "AI Agents for Solo Founders",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ukDwV",
+              "name": "Solo Founder AI Stack",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "pDGJ3",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "pPr54",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Solo Founder AI Stack",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "C1OOD",
+              "name": "AI CTO",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "apEM7",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "m5sRT",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "AI CTO",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "As6x4",
+              "name": "AI CMO",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "sNeIR",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "zHonw",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "AI CMO",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zYgOv",
+              "name": "Soleur vs Cursor",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "k2s8kd",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "J3cMqb",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Soleur vs Cursor",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "H9WBS",
+              "name": "Soleur vs Devin",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "o7HWZ",
+                  "name": "Bullet",
+                  "width": 6,
+                  "height": 6,
+                  "fill": "$text-muted",
+                  "cornerRadius": 3
+                },
+                {
+                  "type": "text",
+                  "id": "D87Cl",
+                  "name": "Label",
+                  "fill": "$text-primary",
+                  "content": "Soleur vs Devin",
+                  "fontFamily": "$font",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "AEBYD",
+      "x": 0,
+      "y": 720,
+      "name": "Homepage Go deeper rail",
+      "clip": true,
+      "width": 1440,
+      "fill": "$bg",
+      "layout": "vertical",
+      "gap": 48,
+      "padding": [
+        80,
+        48,
+        96,
+        48
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "MDW6U",
+          "name": "Section Header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "text",
+              "id": "pMGRb",
+              "name": "Title",
+              "fill": "$text-primary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Go deeper",
+              "fontFamily": "$font",
+              "fontSize": 40,
+              "fontWeight": "bold"
+            },
+            {
+              "type": "text",
+              "id": "H4o8R",
+              "name": "Subtitle",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": 700,
+              "content": "Guides, references, and comparisons for running a company with agents.",
+              "lineHeight": 1.5,
+              "fontFamily": "$font",
+              "fontSize": 17,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "v9NHO",
+          "name": "Columns",
+          "width": "fill_container",
+          "height": 450,
+          "gap": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "n4UhQR",
+              "name": "Pillars Column",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "$surface",
+              "cornerRadius": 10,
+              "stroke": "$line",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 20,
+              "padding": [
+                24,
+                24,
+                28,
+                24
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "FaRuR",
+                  "name": "Column Header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 14,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZhmZ4",
+                      "name": "Group Label",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "PILLARS",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.4
+                    },
+                    {
+                      "type": "frame",
+                      "id": "snGlF",
+                      "name": "Rule",
+                      "width": "fill_container",
+                      "height": 1,
+                      "fill": "$line-strong"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "FbSl6",
+                  "name": "Links",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 18,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "J8SwV8",
+                      "name": "Company-as-a-Service",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "hey5m",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Company-as-a-Service",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "hzXLF",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "What it means to run a company as a service layer.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Bmbpj",
+                      "name": "Agentic Engineering",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "sdIaP",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Agentic Engineering",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "k1uo6",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "The practice of building software with autonomous agents.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "qoH9U",
+              "name": "Guides Column",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "$surface",
+              "cornerRadius": 10,
+              "stroke": "$line",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 20,
+              "padding": [
+                24,
+                24,
+                28,
+                24
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Ao22w",
+                  "name": "Column Header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 14,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "rhd54",
+                      "name": "Group Label",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "GUIDES",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.4
+                    },
+                    {
+                      "type": "frame",
+                      "id": "CW64i",
+                      "name": "Rule",
+                      "width": "fill_container",
+                      "height": 1,
+                      "fill": "$line-strong"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "R798Qz",
+                  "name": "Links",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 18,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Thyik",
+                      "name": "AI Agents for Solo Founders",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "q5FP2m",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "AI Agents for Solo Founders",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "YcAf8",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Where agents replace the first five hires.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "gysAM",
+                      "name": "Solo Founder AI Stack",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "U6p8Wr",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Solo Founder AI Stack",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "G5ZHXw",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "The tools a one-person company actually runs on.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "P8nQY",
+                      "name": "AI CTO",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "R2Ur4",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "AI CTO",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "NO5Xh",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Delegating architecture, review, and shipping to an agent.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Li153",
+                      "name": "AI CMO",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "T66nlJ",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "AI CMO",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "i4nfNe",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Running content, SEO, and distribution without a team.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "g5NCY8",
+                      "name": "Claude Code Plugins",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "t9NOgQ",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Claude Code Plugins",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "lAoFK",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Extending Claude Code with skills, agents, and hooks.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "uCtFR",
+                      "name": "Glossary",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "axFOh",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Glossary",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "KTOZi",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Plain definitions for the agentic-engineering vocabulary.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "GegF2",
+              "name": "Comparisons Column",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "$surface",
+              "cornerRadius": 10,
+              "stroke": "$line",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 20,
+              "padding": [
+                24,
+                24,
+                28,
+                24
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "yufrS",
+                  "name": "Column Header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 14,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "vGeD8",
+                      "name": "Group Label",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "COMPARISONS",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.4
+                    },
+                    {
+                      "type": "frame",
+                      "id": "R4KWqL",
+                      "name": "Rule",
+                      "width": "fill_container",
+                      "height": 1,
+                      "fill": "$line-strong"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "z303UH",
+                  "name": "Links",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 18,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "HqPbz",
+                      "name": "Soleur vs Cursor",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "e7hoh",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Soleur vs Cursor",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "RomK4",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Company workflows versus an AI-assisted editor.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "O7xRe",
+                      "name": "Soleur vs Devin",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EVnVF",
+                          "name": "Anchor",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Soleur vs Devin",
+                          "fontFamily": "$font",
+                          "fontSize": 16,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "XVb51",
+                          "name": "Description",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Operator-governed agents versus an autonomous SWE.",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": "#1A1A1A"
+    },
+    "surface": {
+      "type": "color",
+      "value": "#242424"
+    },
+    "surface-2": {
+      "type": "color",
+      "value": "#2E2E2E"
+    },
+    "line": {
+      "type": "color",
+      "value": "#3D3D3D"
+    },
+    "line-strong": {
+      "type": "color",
+      "value": "#555555"
+    },
+    "text-primary": {
+      "type": "color",
+      "value": "#E8E8E8"
+    },
+    "text-secondary": {
+      "type": "color",
+      "value": "#9A9A9A"
+    },
+    "text-muted": {
+      "type": "color",
+      "value": "#6E6E6E"
+    },
+    "font": {
+      "type": "string",
+      "value": "Inter"
+    }
+  },
+  "fileToken": "529e9edb-62e6-4a35-8933-2e7b02dc35a1"
+}
