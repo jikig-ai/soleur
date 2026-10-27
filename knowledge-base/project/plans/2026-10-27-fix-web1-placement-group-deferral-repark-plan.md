@@ -13,6 +13,24 @@ lane: cross-domain
 
 # revert(infra): re-park web-1 placement_group_id ignore_changes deferral (ADR-068, Ref #11181, Ref #6027)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27
+**Sections enhanced:** 3 (Downtime & Cutover added; Encryption Posture normalized to empty-set form; PR-body first-line mutation answer)
+**Reviewed-Coverage:** sequential-fallback (all deepen agents executed inline by the orchestrator; no plugin subagents on this harness)
+
+### Key Improvements
+
+1. Verified the revert applies cleanly to all **four** files the commit touched (`git apply --check -R`), correcting the brief's three-file enumeration — `web-host-birth-gate.sh` is in scope.
+2. Confirmed `6f530d494a` is a squash commit (one parent): plain `git revert`, no `-m` flag.
+3. Confirmed `bun test plugins/soleur/test/terraform-target-parity.test.ts` resolves from repo root — baseline run 2026-10-27: 314 pass / 0 fail.
+
+### New Considerations Discovered
+
+- ADR-068's 2026-07-05 amendment already asserts the four-element `ignore_changes` list as the `web_2_recreate` baseline — the revert re-aligns code with the ADR; no amendment needed.
+- Epic #11181 item 5 is still an unchecked checkbox — the revert does not falsify the epic tracker.
+- The merge-mutation answer ("the change subtracts a pending reboot rather than adding anything") is prescribed as the PR body's first line per the infra-diff convention.
+
 ## Overview
 
 Merge commit `6f530d494a` (PR #11217, "feat(infra): remove placement_group_id from web-1 ignore_changes (GA maintenance window, ADR-068 #5887)", merged 2026-10-27) dropped `placement_group_id` from `hcloud_server.web`'s `lifecycle.ignore_changes`. That exposed web-1's pending `0 -> web_spread` placement-group attach — a reboot-forcing in-place `update` on the sole live origin — to every terraform plan, where the `reboot_updates` destroy-guard now HALTs each apply. The operator has deferred that reboot until web-2 serves traffic (blue-green cutover, epic #11181 / orchestrator issue #6027, both OPEN). This plan restores the pre-removal state by reverting `6f530d494a` in full, which re-adds `placement_group_id` to the ignore list, restores the workflow error-message text naming the four-element list, flips the static parity guard back to asserting the entry is present, and restores the birth-gate comment that marks the `placement_group_id` arm unreachable while the entry is ignored.
@@ -164,13 +182,17 @@ discoverability_test:
 ## Encryption Posture
 
 ```yaml
-at_rest:
-  - store: "none introduced — the change restores lifecycle metadata on existing hcloud_server.web; no volume, bucket, table, queue, cache, or log sink is created, re-keyed, or re-scoped. Existing store postures (workspaces LUKS volume per ADR-119/ADR-263, R2 state backend) are untouched."
-in_transit:
-  - connection: "none introduced — no new cross-component or network connection; ignore_changes alters plan-time diff computation only."
+at_rest: []        # no persistent store introduced — the change restores lifecycle metadata on existing hcloud_server.web; no volume, bucket, table, queue, cache, or log sink is created, re-keyed, or re-scoped (workspaces LUKS volume per ADR-119/ADR-263 and the R2 state backend are untouched)
+in_transit: []     # no new cross-component or network connection; ignore_changes alters plan-time diff computation only
 ```
 
 No `exception` block — no plaintext mechanism and no cert-verification-off row exists.
+
+## Downtime & Cutover
+
+- **Offline-inducing operation this change performs:** none — the diff restores `lifecycle.ignore_changes` suppression of a pending `placement_group_id` attach; terraform cannot apply what it cannot see, so the change introduces no apply-time mutation of any serving surface.
+- **Zero-downtime evaluation (default):** satisfied by construction — the revert IS the zero-downtime path for this wedge (the #5887 unwedge precedent, PR #5950). The reboot-forcing attach itself is deferred to #6027's blue-green cutover: web-2 takes serving weight, web-1 drains, the entry is removed, the power-off lands on a non-serving host with auto-rollback — a bounded maintenance window already designed and gated elsewhere, not re-authored here.
+- **Residual downtime accepted by this PR:** none.
 
 ## Architecture Decision (ADR/C4)
 
