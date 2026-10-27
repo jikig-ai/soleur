@@ -33,7 +33,7 @@ Gated agent actions wait on an in-memory promise (5 minute timeout, lost on rest
 ## Functional Requirements
 
 - FR1: Slice 1 tools (`email_send`, `email_reply`, `email_suppress`, `github_push_branch`, `create_pull_request`, `github_trigger_workflow`, `kb_share_create`, `workspace_set_autonomous`) create an `approval_request` row before the agent waits.
-- FR2: The Owner sees a card with the exact bound action, a server-built consequence line, an expiry countdown, and Approve and Deny only. Wireframe: `knowledge-base/product/design/approvals/approval-request.pen` (linked once committed).
+- FR2: The Owner sees a card with the exact bound action, a server-built consequence line, an expiry countdown, and Approve and Deny only. Wireframes (9 screens, operator-approved 2026-10-27): `knowledge-base/product/design/approvals/approval-request.pen`, exports in `knowledge-base/product/design/approvals/screenshots/`. The 1-hour reminder push shown in the copy deck is outside slice 1.
 - FR3: A non-owner member who triggers a request sees a read-only "waiting for the workspace owner" state.
 - FR4: Approval is single use and bound to `action_sha256`; a changed input needs a new request and the card says so.
 - FR5: Expiry (default 24 h) denies with a static "did not run, do not retry" message, notifies the Owner, and records `expired`.

@@ -46,7 +46,8 @@ Ruled by CTO agent (2026-10-27) unless noted; product answers by CPO agent; lega
 10. **Dark launch.** Flag `approval-queue` (Flagsmith, default off, per cohort). With the flag off the old in-memory path is byte-identical. The migration is additive.
 11. **Legal (CLO):** a new Art. 30 entry (or explicit PA-14/PA-16 amendment) is required if the record holds action text; DPD §2.3, GDPR Policy and Privacy Policy move in the same PR. Retention: keep hash + decision in an append-only row, raw action text in an erasable column with a short TTL, an anonymise RPC in `account-delete.ts`, and a `dsar-export-allowlist.ts` entry. No default-on and no bulk approve for brand-critical classes. No public claim of the form "every outward action requires your approval" until measured (G5/FR6). No LLM-generated consequence summary in slice 1 (it would need a new processing entry and could contradict the bound action).
 12. **Not claimed as measured:** the ask path stays "adopting" until #9776 and #10111 close; this slice does not depend on them.
-13. **Productize Candidate:** none.
+13. **Visual design:** 9-screen wireframe `knowledge-base/product/design/approvals/approval-request.pen` (operator-approved 2026-10-27): request card (email, GitHub push), bound-action catalog, card states incl. approved-but-failed and action-changed, non-owner read-only, inbox rows + nav badge, mobile away-user landing, expiry notice, copy deck. The 1-hour reminder push is outside slice 1.
+14. **Productize Candidate:** none.
 
 ## User-Brand Impact
 
