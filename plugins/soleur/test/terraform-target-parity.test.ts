@@ -1313,6 +1313,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
+  // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
+  // (monitor, web-1 pool, LB on app.soleur.ai). Provisioning requires both the
+  // Load Balancing add-on subscription and `Account: Load Balancers: Edit` +
+  // `Zone: Load Balancers: Edit` scopes on CF_API_TOKEN (measured 2026-10-27:
+  // the per-PR CI token returns Cloudflare code 10000 Authentication error on
+  // /load_balancers, so per-PR auto-targeting would 403 and wedge every merge
+  // apply — the #5566-inverse footgun). Rides the GA maintenance-window apply.
+  "cloudflare_load_balancer_monitor.web",
+  "cloudflare_load_balancer_pool.web_1",
+  "cloudflare_load_balancer.app",
   // #6657 (ADR-125 / AP-019) — the DNS-edit-only Cloudflare token for the GitHub
   // Pages cert-reissue routine + its prd doppler_secret. Minting a
   // cloudflare_api_token requires "User API Tokens: Edit", which the per-PR CI
