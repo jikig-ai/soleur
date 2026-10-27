@@ -36,16 +36,32 @@ requires_cpo_signoff: true
 
 ## Overview
 
-In the hosted legacy agent runner (`startAgentSession` in `apps/web-platform/server/agent-runner.ts`), the list of SDK-pre-approved tools (`allowedTools`) contains every platform tool. The Claude Agent SDK approves a bare `allowedTools` entry before it consults `canUseTool`, so the `gated` approval tier (the `review_gate` card with Approve or Reject) has not been enforced for the gated platform tools: `email_send`, `email_reply`, `email_suppress`, `github_push_branch`, `create_pull_request`, `github_trigger_workflow`, `kb_share_create`, `workspace_set_autonomous`, and every other gated or default-gated platform tool. The real-SDK probe measured this on SDK 0.3.284 (CLI 2.1.284): with `allowedTools` as the legacy runner composes it, `canUseTool` is invoked for none of the eight probed tools and the handler runs; with the name removed, `canUseTool` is invoked, sees tier `gated`, and the deny is honoured. The SDK prints `CAN_USE_TOOL_SHADOWED` for these names.
+In the hosted legacy agent runner (`startAgentSession` in `apps/web-platform/server/agent-runner.ts`), the list of SDK-pre-approved tools (`allowedTools`) contains every platform tool. The Claude Agent SDK approves a bare `allowedTools` entry before it consults `canUseTool`, so the `gated` approval tier (the `review_gate` card with Approve or Reject) has not been enforced for the gated platform tools: `email_send`, `email_reply`, `email_suppress`, `github_push_branch`, `create_pull_request`, `github_trigger_workflow`, `kb_share_create`, `workspace_set_autonomous`, and every other gated or default-gated platform tool: `create_issue`, `kb_share_revoke`, `routine_run`, `crm_contact_upsert`, `crm_note_append`, `crm_contact_set_stage`, `workstream_issue_*`, and (default-gated until this plan gave them explicit entries) `account_export_enqueue`, `account_delete_initiate` and `plausible_*`. The real-SDK probe measured this on SDK 0.3.284 (CLI 2.1.284): with `allowedTools` as the legacy runner composes it, `canUseTool` is invoked for none of the eight probed tools and the handler runs; with the name removed, `canUseTool` is invoked, sees tier `gated`, and the deny is honoured. The SDK prints `CAN_USE_TOOL_SHADOWED` for these names.
 
 This plan ships an **unconditional** fix (no flag; ruled by the CTO agent 2026-10-27), as three independently reviewable commits plus one ADR commit. All four land together in one PR; the order is for review and bisect, not for staged release:
 
-1. **Gate lifecycle first** (`permission-callback.ts`): the gated platform-tool branch gets a fail-closed, status-restoring await. It goes first because the filter in commit 2 makes this branch reachable in production for the first time; "making a dead path live exposes its defects" (learning `2026-10-11-a-mocked-sdk-could-not-see-the-permission-callback-never-ran.md`).
+1. **Gate lifecycle first** (`permission-callback.ts`): the gated platform-tool branch gets a fail-closed, status-restoring await. It goes first because the filter in commit 2 makes this branch reachable for the legacy runner (the cc-soleur-go path already ran the gated `crm_*` tools through this branch via `crmLeadPermissionToolNames`); "making a dead path live exposes its defects" (learning `2026-10-11-a-mocked-sdk-could-not-see-the-permission-callback-never-ran.md`).
 2. **The filter** (`buildAllowedTools` in `tool-tiers.ts`, called at the `allowedToolsList` site, with a fail-closed second line of defence in `buildAgentQueryOptions`), explicit tier entries so the census can tell "decided" from "defaulted", informative gate messages for the tools whose card text is currently the generic default, and the census/mutation tests.
 3. **The real-SDK probe** (cherry-pick of `0acc541b6f`, switched to build `allowedTools` via `buildAllowedTools` and to the production string-prompt shape), run against Doppler `ci`/`dev`, never `prd`.
 4. **ADR** recording the invariant.
 
 The ordering evidence (the SDK pre-approves a bare `allowedTools` entry before `canUseTool`) comes from the real-SDK probe on the sibling branch and the 2026-03-20 permission-chain learning, not from code in this repo; the SDK's own `CAN_USE_TOOL_SHADOWED` warning states it in `sdk.mjs`.
+
+### Exposure window (corrected in review, 2026-10-27)
+
+Earlier text dated the exposure from 2026-06-15. That date is only when the email tools were added. A gated platform tool has been pre-approved through `allowedTools` from the day it was registered, so the window is per tool and starts at **2026-04-06** (`create_pull_request`, commits f281666dca and 298bf96cca, #1654). The telemetry lower bound for the CLO follow-up (`outbound_sends`, GitHub and KB-share events) is therefore 2026-04-06, not 2026-06-15.
+
+| Tool(s) | First registered in the legacy runner (and therefore pre-approved) |
+|---|---|
+| `create_pull_request` | 2026-04-06 |
+| `plausible_*` | 2026-04-10 |
+| `github_push_branch`, `github_trigger_workflow` | 2026-04-11 |
+| `kb_share_*` | 2026-04-17 |
+| `account_*` | 2026-05-26 |
+| `workspace_set_autonomous` | 2026-06-03 |
+| `create_issue`, `routine_run`, `email_send` / `email_reply` / `email_suppress` | about 2026-06-15 |
+| `crm_*` | 2026-07-08 |
+| `workstream_issue_*` | 2026-07-10 |
 
 ## Research Insights
 
@@ -89,7 +105,7 @@ Mechanisms named in the ask and what already covers them (the Cut List):
 - String-prompt reachability (a premise the probe header contradicts): `dev-probe-*` comments say the SDK wires `canUseTool` only for a streaming-input prompt, but the legacy runner passes a plain string. Read in `sdk.mjs` 0.3.284: `CA(query, prompt, ...)` writes a string prompt as a stdin `user` message, and `--permission-prompt-tool stdio` is added whenever `canUseTool` is set, independent of prompt shape. So the permission channel is reachable for the legacy runner, and the probe gets a string-prompt diagnostic row to measure it rather than assume it.
 - `conversations_lookup` handler is read-only: `lookupConversationForPath` does `users` SELECT probe plus `conversations`+`messages(count)` SELECT through `getFreshTenantClient`; `getCurrentRepoUrl` is a SELECT; closure-bound `userId`; no writes. It is classified `auto-approve`.
 - Registered-but-not-allowlisted siblings (`conversations_list`, ...) are denied by `canUseTool`'s deny-default today; unchanged.
-- Callers of `startAgentSession` / `sendUserMessage`: only `ws-handler.ts` (lines around 2585, 2604, 2732), i.e. always a user-attached WebSocket session. There is no headless legacy caller, so no unattended session newly times out on a card.
+- Callers of `startAgentSession` / `sendUserMessage`: only `ws-handler.ts` (lines around 2585, 2604, 2732), i.e. always a user-attached WebSocket session. That claim was false: `server/auto-sync-trigger.ts` calls `startAgentSession` with `HEADLESS_SYNC_PROMPT` (`/soleur:sync --headless`) after repo setup, with no human attached. A card there would sit for 5 minutes. Corrected in review: the auto-sync seam passes an explicit `nonInteractive` flag (not inferred from the prompt) through `startAgentSession` to `createCanUseTool`, and a gated platform tool in such a session is denied at once with a static message (no card, no `waiting_for_user` write, no offline notification).
 - Abort and status ordering: the abort branch of `startAgentSession` writes its terminal status (`waiting_for_user` for a user Stop, `failed` for a disconnect) through `updateConversationStatusIfActive`, which writes only when the current status is `active` (`ACTIVE_STATUSES_FOR_FINALIZE = ["active"]`). While a gate is held the status is `waiting_for_user`, so that write is a no-op unless the gate's restore-to-`active` lands first. A restore that lands after the abort write leaves the conversation `active`. This is a real race, decided in Proposed Solution 4.
 - Disconnect: `ws.on("close")` arms a 30 s grace (`DISCONNECT_GRACE_MS = 30_000`) after which `abortSession` fires, so a gate for a disconnected user dies at about 30 s, not at the 5-minute gate timeout. The push notification (`notifyOfflineUser`) can therefore only help within that window.
 - Late click after expiry: `abortableReviewGate` deletes the resolver on timeout and on abort, so a late `review_gate_response` finds no pending gate; the work phase confirms the ws-handler handles that as a harmless error, not an allow.
@@ -146,7 +162,7 @@ At the single assignment `opts.allowedTools = args.allowedTools` in `server/agen
 ### 3. Tier map hygiene (`tool-tiers.ts`)
 
 - `conversations_lookup` → `"auto-approve"` (handler verified read-only above); replace the stale NOTE comment.
-- Explicit `"gated"` entries for `plausible_create_site`, `plausible_add_goal`, `plausible_get_stats` (shared cross-tenant `PLAUSIBLE_API_KEY`; CTO: stay gated), `account_export_enqueue` (writes; bundles BYOK credentials and files), `account_delete_initiate` (destructive). Behaviour is unchanged (they were default-gated); the entries exist so the census can assert "every name in `platformToolNames` has an explicit `TOOL_TIER_MAP` entry" and a new tool fails CI until someone decides its tier. Update the `CC_ROUTER_TIER3_DENYLIST` comment that says Plausible entries do not exist.
+- Explicit `"gated"` entries for `plausible_create_site`, `plausible_add_goal`, `plausible_get_stats` (the user's own stored `PLAUSIBLE_API_KEY`; CTO: stay gated), `account_export_enqueue` (writes; bundles BYOK credentials and files), `account_delete_initiate` (destructive). Behaviour is unchanged (they were default-gated); the entries exist so the census can assert "every name in `platformToolNames` has an explicit `TOOL_TIER_MAP` entry" and a new tool fails CI until someone decides its tier. Update the `CC_ROUTER_TIER3_DENYLIST` comment that says Plausible entries do not exist.
 
 Card integrity (user-impact review P1): once the gate is reachable, the card is the only control, and its text is built from model-controlled tool input (`to`, `subject`, `branch`, `title`, ... interpolated unbounded inside `**...**`). Add one small helper in `tool-tiers.ts` that bounds each interpolated scalar field (length cap) and neutralises newlines and markdown emphasis/link characters, applied to every scalar interpolation in `buildGateMessage`; the email body keeps its existing 240-character preview and "untrusted, display-only" framing. At work time confirm in `server/email-triage/outbound.ts` that the approved body is bound to the send (hash recomputed at the chokepoint) and cite the line in the PR body; if it is not bound, that is a stop-and-escalate finding, not something this PR silently accepts. A test asserts every gated tool's card text is length-bounded and carries no raw newline or markdown control sequence from a hostile input. The helper also strips control, bidi and zero-width characters, quotes the value, and treats a non-string field as the literal word `unknown` rather than interpolating an object. The `email_send` / `email_reply` body preview keeps its 240-character cap but appends an explicit `[+N more characters not shown, total M]` marker so a tail payload is never silently hidden (security review P2); the approved-body binding evidence above is the second half.
 
@@ -158,10 +174,10 @@ Gate messages (`buildGateMessage`, informed consent for the cards that become re
 
 Generalize `holdForUser` with a trailing options object (`{ kind?, gateClass }`, not another positional argument) where `gateClass: "bash" | "platform"` selects the Sentry ops (`bash-gate-status-hold|restore` unchanged and still the default; new `platform-gate-status-hold` and `platform-gate-status-restore`, each with its own static `message`). The gated platform-tool branch keeps `sendToClient` + `notifyOfflineUser` as is, then replaces the unguarded `updateConversationStatus` / `await abortableReviewGate` / `updateConversationStatus` triple with a `holdForUser` call for `gateClass: "platform"`:
 
-- `null` (timeout or abort) → `log.warn` (not `info`: the log shipper forwards only level 40 and above, so a warn row reaches Better Stack without SSH, observability review) with `sec: true`, `decision: "platform-gate-expired"`, `logPermissionDecision("canUseTool-platform-gated", tool, "deny", "gate expired")`, and a **static** deny: `The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks.` No Sentry capture for expiry (expected user behaviour); Sentry only for status-write failures, which are triage-only (no pager rule is added; stated, not implied).
-- `"Approve"` → allow (unchanged); any other selection → deny `User rejected the action. Do not retry unless the user asks.` (CPO sign-off condition: the agent must not retry around the gate; no existing test pins the old string, re-grep at work time).
+- `null` (timeout or abort) → `log.warn` (not `info`: the log shipper forwards only level 40 and above, so a warn row reaches Better Stack without SSH, observability review) with `sec: true`, `decision: "platform-gate-expired"`, `logPermissionDecision("canUseTool-platform-gated", tool, "deny", "gate expired")`, and a **static** deny: `The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.` No Sentry capture for expiry (expected user behaviour); Sentry only for status-write failures, which are triage-only (no pager rule is added; stated, not implied).
+- `"Approve"` → allow (unchanged); any other selection → deny `User rejected the action. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.` (CPO sign-off condition: the agent must not retry around the gate; no existing test pins the old string, re-grep at work time).
 - Parallel gated calls now stack correctly (first answer does not mark the turn `active` while another card is open).
-- **Restore policy on session abort (decided here, platform class only):** when `ctx.controllerSignal.aborted` is true in the `finally`, the platform gate does NOT write `active`; the abort branch of `startAgentSession` owns the terminal status. A per-call abort that leaves the session running still restores `active`. The pending-gate counter is decremented either way, so stacking is unaffected. The Bash class keeps its current behaviour (no change to Bash). Known limit, same as today for a throwing gate: a disconnect during a gate leaves `waiting_for_user` (the abort write is a no-op against a non-`active` row) until the stuck-conversation reaper flips it; this is recorded, not newly introduced. The other gate sites (`AskUserQuestion` around line 515, the destroy gate around line 777) are out of scope here.
+- **Status policy (corrected in review; ADR-305): one deterministic rule for BOTH gate classes.** (1) The hold write is a compare-and-set (`active` or `waiting_for_user` to `waiting_for_user`). (2) The restore runs only when the pending counter reaches 0 AND `ctx.controllerSignal.aborted` is false; on abort the restore is skipped for Bash and platform gates alike. (3) The restore is a compare-and-set, `waiting_for_user` to `active` only, so it never overwrites `completed`, `failed` or a status the abort branch wrote. (4) The abort branch of `startAgentSession` finalizes from `active` OR `waiting_for_user` (`ABORT_FINALIZE_FROM_STATUSES`; every other finalize site keeps `["active"]`), and a terminal row is still never overwritten. Result: the same end state in either write order, and a disconnect with a card pending ends `failed`. The earlier text here (platform class only; a disconnect leaving `waiting_for_user` until a reaper flips it) was wrong on both counts: the stuck-conversation reaper handles `status = 'active'` only and would never have flipped that row. The other gate sites (`AskUserQuestion` around line 515, the destroy gate around line 777) are out of scope here.
 - `options.agentID` (subagent) is present on the call context; a test sets it on a gated call to confirm the verdict path is identical.
 
 ### Alternatives considered
@@ -235,36 +251,36 @@ liveness_signal:
 
 error_reporting:
   destination: "Sentry via warnSilentFallback in apps/web-platform/server/observability.ts (feature cc-permissions)"
-  fail_loud: "gate status-write failures emit ops platform-gate-status-hold and platform-gate-status-restore, each with its own static message; gate expiry is log.info sec:true decision platform-gate-expired by design (expected user behaviour, no Sentry); assertion failure throws with the offending FQN"
+  fail_loud: "gate status-write failures emit ops platform-gate-status-hold and platform-gate-status-restore, each with its own static message; gate expiry is log.warn sec:true decision platform-gate-expired (timeout) or platform-gate-aborted (abort), with delivered, conversationId and reason, by design no Sentry (warn is the level that reaches Better Stack); a card the input cannot be shown in full for, a non-interactive session and more than 5 pending cards each log their own static warn decision; assertion failure throws with the offending entry"
 
 failure_modes:
   - mode: "a gated or default-gated platform tool re-enters allowedTools (new tool, tier flip, new runner)"
-    detection: "census CI test (fails on any non-auto tool in the output, on an empty census, and on a platform name with no explicit tier entry) plus the query-options assertion at session start"
-    alert_route: "CI red; Sentry session error"
-  - mode: "gate expires or is aborted and canUseTool throws or strands status waiting_for_user"
-    detection: "permission-callback-platform-gate-expiry unit suite; a log.warn row decision platform-gate-expired shipped to Better Stack (log shipper forwards level 40 and above); Sentry warn events on status-write failure (pino-to-Sentry mirror via warnSilentFallback)"
+    detection: "census CI test (compares TOOL_TIER_MAP to a hand-written full tier table, fails on any non-auto tool in the output, on an empty census, and on a platform name with no explicit tier entry) plus the query-options assertion at session start. Runtime layer 2 (pino to Sentry): the assertion throws inside startAgentSession and the startAgentSession catch reports it through reportSilentFallback"
+    alert_route: "CI red; Sentry session error (layer 2)"
+  - mode: "gate expires or is aborted and canUseTool throws or strands the conversation status"
+    detection: "permission-callback-platform-gate-expiry unit suite; a log.warn row decision platform-gate-expired or platform-gate-aborted shipped to Better Stack (log shipper forwards level 40 and above); Sentry warn events on status-write failure (pino-to-Sentry mirror via warnSilentFallback)"
     alert_route: "CI red; Better Stack row and Sentry platform-gate-status-* ops are triage-only, no pager rule (stated, not implied)"
   - mode: "canUseTool unreachable for the legacy string-prompt shape, so gated tools are denied silently"
-    detection: "probe string-prompt row pre-merge (invoked=yes expected); post-deploy a SHADOWED line proves a legacy session ran"
-    alert_route: "merge blocked on the probe result; post-deploy check verdict recorded on the PR"
+    detection: "no runtime layer; probe-only: the pre-merge string-prompt probe row (invoked=yes expected). The post-deploy SHADOWED channel only shows a legacy session ran, not that canUseTool is reached"
+    alert_route: "merge blocked on the probe result"
   - mode: "fix not live in production (stale image) or an unlisted gated name remains pre-approved"
     detection: "betterstack-assert-absence.sh over SHADOWED rows on both web hosts (host_name soleur-web-platform for web-1 and soleur-web-2 for web-2, per apps/web-platform/infra/betterstack-logs-alerts.tf; confirm at work time) with a positive control. The SDK stderr to container journald to Better Stack channel is UNPROVEN until Phase 0.6 finds a real CAN_USE_TOOL_SHADOWED row; if none exists the check is recorded as unobservable"
     alert_route: "postmerge verification fails; recorded on the PR and #11303"
   - mode: "a gated-tool call is denied or hangs with no card (canUseTool unreachable, resolver race)"
-    detection: "no runtime layer: pre-merge probe (string prompt) and unit suite only; pino lines are not shipped. Stated as such"
-    alert_route: "merge blocked on the probe result"
+    detection: "no runtime signal that the SDK never invoked canUseTool or that a gate opened (neither is logged). What is observable: the offline-notification error log (\"Offline notification failed (tool gate)\") when the user is not connected, and the 5-minute expiry warn row (decision platform-gate-expired, delivered true or false) when a card went unanswered; the pre-merge probe and the unit suite cover the rest"
+    alert_route: "merge blocked on the probe result; expiry and notification-failure rows are triage-only"
 
 logs:
   where: "pino stdout in the web container (not shipped to Better Stack, per the issue's evidence limits); SDK CLI stderr warnings (CAN_USE_TOOL_SHADOWED) in Better Stack scoped by host_name; Sentry for the warn ops"
   retention: "per the Better Stack source retention setting and Sentry project retention; unchanged by this PR"
 
 discoverability_test:
-  command: bash scripts/betterstack-assert-absence.sh --host soleur-web-2 --absence mcp__soleur_platform__email_send --absence mcp__soleur_platform__github_push_branch --absence-require CAN_USE_TOOL_SHADOWED --control CAN_USE_TOOL_SHADOWED --control-require mcp__soleur_platform__kb_share_list --since 6h
+  command: bash scripts/betterstack-assert-absence.sh --host soleur-web-platform --absence mcp__soleur_platform__email_send --absence mcp__soleur_platform__github_push_branch --absence-require CAN_USE_TOOL_SHADOWED --control mcp__soleur_platform__narrate --control-require-field source_kind=app_container --since 7d
   expected_output: outcome=clean
   credentials_required: "Better Stack ClickHouse read credentials (BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD, run under doppler prd_terraform) — production log content has no unauthenticated substitute; without them the script exits 3 (unknown), which is why Check 10 skips this probe as declared"
 ```
 
-Post-deploy honesty: the issue records no legacy sessions with platform tools since 2026-09-30, so the positive control can legitimately return zero rows (`unshipping`, exit 2). That outcome is recorded as **"unobserved: no legacy session with platform tools in the window"**, never as clean; correctness evidence is then the real-SDK probe plus the census. No soak-gated close is enrolled (the check is a point-in-time deploy verification, not a time-gated closure).
+Post-deploy honesty: the issue records no legacy sessions with platform tools since 2026-09-30, so the positive control can legitimately return zero rows (`unshipping`, exit 2). That outcome is recorded as **"unobserved: no legacy session with platform tools in the window"** (the script's exit 2, `unshipping`), never as clean; correctness evidence is then the real-SDK probe plus the census. No soak-gated close is enrolled (the check is a point-in-time deploy verification, not a time-gated closure).
 
 ## Architecture Decision (ADR/C4)
 
@@ -303,7 +319,7 @@ The ADR describes the live state; it lands in this PR (commit 4). It also record
 
 ### Guard 2 — gated platform-tool gate lifecycle
 
-**Property.** For every gated platform-tool invocation, `canUseTool` returns a verdict (never throws), the verdict is deny unless the selection is exactly `Approve`, and the conversation status is `active` again once the last pending gate resolves, observed both at function return and during the wait.
+**Property.** For every gated platform-tool invocation, `canUseTool` returns a verdict (never throws), the verdict is deny unless the selection is exactly `Approve`, and the conversation status follows the one rule in Proposed Solution 4 (restore to `active` only when the last pending gate resolves, the controller is not aborted, and the row is still `waiting_for_user`), observed both at function return and during the wait.
 
 **Assembly.** Every exit of the gated branch: approve, any non-approve selection, gate rejection by timeout, gate rejection by abort, `updateConversationStatus` failing on hold, failing on restore, and two concurrent gated calls (plus a gated call concurrent with a Bash gate, since they share the `pendingGates` counter). One code path: `holdForUser`, now shared by the Bash gates and the platform gate; the `gateClass` argument only selects Sentry op labels.
 
@@ -317,7 +333,9 @@ The ADR describes the live state; it lands in this PR (commit 4). It also record
 | 4 | Make `null` fall through to allow | RED: timeout and abort tests expect deny |
 | 5 | Second concurrent gated call: first resolves while second pending | RED if status flips to `active` early (pending-counter test) |
 | 6 | Status write throws on hold or restore | RED if the throw replaces the verdict; GREEN requires the verdict preserved and a `warnSilentFallback` with the `platform-gate-status-*` op and its static message (this row also catches the gate-class label being dropped) |
-| 7 | Restore `active` even when the session controller is aborted (platform class) | RED: the abort case asserts no `active` write after `controllerSignal.aborted`, for both abort reasons |
+| 7 | Restore `active` even when the session controller is aborted (either class) | RED: the abort case asserts no `active` write after `controllerSignal.aborted`, for both abort reasons |
+| 8 | Drop the compare-and-set guard on the restore | RED: a concurrent `completed` is overwritten |
+| 9 | Abort-branch finalize accepts only `active` | RED: a disconnect with a card pending stays `waiting_for_user` |
 
 **Harness rows.** Suite edit that must go RED: change the timeout-case stub to resolve `"Approve"` instead of rejecting; the case's precondition assertion (the stub was called and rejected) fails. Must-PASS non-canonical inputs: a gated tool outside the probed eight (`crm_note_append`, `workstream_issue_close`), an `AbortError`-shaped rejection and a plain `Error("timeout")` rejection, and a rejection after an already-aborted signal. **Anchor.** Not a stored-value comparison; the guard compares behaviour, so no anchor applies beyond the observation-inside-the-window row (3).
 
@@ -495,7 +513,7 @@ Globs verified at plan time (`git ls-files`): every `apps/web-platform/test/*.te
   GATED=$(cd apps/web-platform && bun -e 'import {TOOL_TIER_MAP} from "./server/tool-tiers"; for (const [k,v] of Object.entries(TOOL_TIER_MAP)) if (v==="gated") console.log(k)')
   for HOST in soleur-web-platform soleur-web-2; do
     ARGS=(); for n in $GATED; do ARGS+=(--absence "$n"); done
-    doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-assert-absence.sh --host "$HOST" "${ARGS[@]}" --absence-require CAN_USE_TOOL_SHADOWED --control CAN_USE_TOOL_SHADOWED --control-require mcp__soleur_platform__kb_share_list --since 6h
+    doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-assert-absence.sh --host "$HOST" "${ARGS[@]}" --absence-require CAN_USE_TOOL_SHADOWED --control mcp__soleur_platform__narrate --control-require-field source_kind=app_container --since 7d
   done
   ```
 

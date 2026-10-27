@@ -391,6 +391,7 @@ describe("outbound email cards: the whole send is shown, or the tool is denied (
     ["an empty address", "Jo <>"],
     ["not an address", "just a name"],
     ["a raw value over 320 characters", `${"x".repeat(321)}@example.invalid`],
+    ["a raw value over 320 characters whose parsed address is short (long display name)", `${"N".repeat(310)} <jo@example.invalid>`],
     ["an address over 254 characters", `${"x".repeat(250)}@example.invalid`],
     ["an address with a bidi override inside", "jo\u202E@example.invalid"],
     ["an address with a zero-width space", "jo\u200B@example.invalid"],

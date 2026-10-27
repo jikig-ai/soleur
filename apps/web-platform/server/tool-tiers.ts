@@ -335,11 +335,6 @@ function cardField(v: unknown, fallback = "unknown", max = CARD_FIELD_MAX): stri
   return clipped || cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
 }
 
-/** A card field as a quoted value (double quotes inside the value become single quotes so it cannot close the quote). */
-function quoted(v: unknown, fallback = "unknown", max = CARD_FIELD_MAX): string {
-  return `"${cardField(v, fallback, max).replace(/"/g, "'")}"`;
-}
-
 const CARD_LIST_MAX = 10;
 /** A short list of scalars (labels, assignees, lens); a non-array is the word `unknown`; a longer list says how many more. */
 function cardList(v: unknown, sep = ", "): string {

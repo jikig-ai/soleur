@@ -47,4 +47,17 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 - [x] 5.1 `tsc --noEmit`, vitest (touched + new), eslint, markdown lint, `lint-guard-contract.py`
 - [ ] 5.2 PR body: first line behaviour-change answer + changelog line; CLO ruling; plugin-wildcard residual risk; #11289 conflict note; `Closes #11303`; probe lines; RED evidence
 - [ ] 5.3 One comment on PR #11289 about the probe add/add conflict (no new issue)
-- [ ] 5.4 Post-merge: `soleur:postmerge` deploy verification; absence check on soleur-web-1 and soleur-web-2 with generated gated-name list; record verdicts on PR and #11303 (exit 2 = unobserved, not clean)
+- [ ] 5.4 Post-merge: `soleur:postmerge` deploy verification; absence check on `soleur-web-platform` (web-1) and `soleur-web-2` with generated gated-name list; record verdicts on PR and #11303 (exit 2 = unobserved, not clean)
+
+## Phase 6: Review fixes (12-seat panel + CTO ruling, 2026-10-27)
+
+- [x] 6.1 A1 late-click wording (`ERR_REVIEW_GATE_NOT_FOUND` text), platform deny texts tell the agent to tell the user
+- [x] 6.2 A2 email cards: full parsed recipient, reply-to, subject, entire body (cap 4000), hidden characters made visible, static fail-closed denies (`buildGateCard`), zod `.max`, `+N more`, pre-capped scalars, new strip set; hash comments corrected; other gated cards name inputs they do not print
+- [x] 6.3 A3 deterministic abort/restore rule (CAS restore, abort-skip, abort finalize accepts `waiting_for_user`) with ordering tests
+- [x] 6.4 A4 explicit `nonInteractive` flag from the auto-sync seam; immediate static deny
+- [x] 6.5 A5 pending-card cap (5), `permissionMode` allowlist, Bash-family rejection in `allowedTools`
+- [x] 6.6 B1 expiry/abort log rows (`delivered`, `conversationId`, `reason`, distinct `platform-gate-aborted`), B2 gate registered before the status write, B3 shared keep-rule exports
+- [x] 6.7 B4 full hand-written tier table, signal-delivery and real-gate fake-timer tests, assertion anchors, shared `registeredPlatformTools`; B5 comment truth; B6 system-prompt line; B7 plan/ADR corrections
+- [x] 6.8 Mutation-verify every new guard in an allocated sandbox (see PR notes)
+- [ ] 6.9 FOLLOW-UP (not here): replay unresolved `review_gate` frames on resume; email_reply sender/subject lookup for the card; per-session toolUseID-keyed body hash map; full non-MCP `allowedTools` allowlist
+
