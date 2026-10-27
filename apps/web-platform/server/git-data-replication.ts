@@ -785,20 +785,40 @@ export async function replicateToGitData(params: {
     // depends on (#5817 review F1). NOT `--mirror`. Push-options ride THIS push
     // only, never origin/syncPush.
     via = "git";
-    await gitWithPrivateKeyAuth(
-      [
-        "push",
-        "--force",
-        "git-data",
-        `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
-        `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
-        `--push-option=lease-gen=${leaseGeneration}`,
-        `--push-option=worktree-id=${worktreeId}`,
-      ],
-      transportKey,
-      hostKeyPin,
-      { cwd: workspacePath, timeout: 60_000 },
-    );
+    const pushArgs = [
+      "push",
+      "--force",
+      "git-data",
+      `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
+      `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
+      `--push-option=lease-gen=${leaseGeneration}`,
+      `--push-option=worktree-id=${worktreeId}`,
+    ];
+    try {
+      await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+    } catch (pushErr) {
+      // (#8211 fix-forward 2) ONE retry on a POSITIVE-MATCH transient class: a
+      // first push of 2+ refs from a shallow clone can hit `remote failure` /
+      // `failed to report status`. The match list is positive, so the
+      // deterministic refusals — `shallow update not allowed` and fence rejects
+      // (`stale lease generation` / `remote: git-data fence:`) — fall through to
+      // the outer catch's loud path unretried. The execFile rejection carries
+      // git's stderr on `err.stderr`; `err.message` is the fallback surface.
+      // Resending is idempotent: the fence accepts an equal lease-gen.
+      const stderr = String(
+        (pushErr as { stderr?: string })?.stderr ??
+          (pushErr as Error)?.message ??
+          "",
+      );
+      if (!/remote failure|failed to report status/.test(stderr)) throw pushErr;
+      await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+    }
     log.info(
       {
         workspaceIdHash: hashUserId(workspaceId),
