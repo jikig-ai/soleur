@@ -74,7 +74,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Positive control (ADR-166): ~1s probe that exercises the registry path
+      # Positive control (ADR-166): probe that exercises the registry path —
+      # behind the retry helper since the bucket throttles even single calls.
       # end-to-end — a GHCR outage now fails HERE (or at login), not
       # ambiguously inside `supabase start`. (It measures reachability, not
       # auth: the package is public, so an anonymous fetch also succeeds.) The
@@ -82,7 +83,7 @@ jobs:
       # in lockstep.
       - name: Probe GHCR pull auth (manifest inspect)
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
-        run: docker manifest inspect ghcr.io/supabase/postgres:17.6.1.095 >/dev/null
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" docker manifest inspect ghcr.io/supabase/postgres:17.6.1.095
 
       # Pin the CLI/GoTrue version to prod's — the ADR-111 parity contract (the
       # diff catches catalog shape; the version pin controls claim-parsing behavior).

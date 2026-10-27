@@ -273,8 +273,8 @@ LOGIN_SHA='docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9'
 # — a comment quoting the same string cannot corrupt the ordering asserts.
 LN_CHECKOUT=$(grep -nE '^[[:space:]]+- uses: actions/checkout@' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 LN_LOGIN=$(grep -nE "^[[:space:]]+uses: ${LOGIN_SHA}" "$WORKFLOW" | head -1 | cut -d: -f1 || true)
-LN_PROBE=$(grep -nE '^[[:space:]]+run: docker manifest inspect ghcr\.io/supabase/postgres' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
-LN_START=$(grep -nE '^[[:space:]]+run:.*ghcr-pull-with-retry\.sh' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+LN_PROBE=$(grep -nE '^[[:space:]]+run:.*docker manifest inspect ghcr\.io/supabase/postgres' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
+LN_START=$(grep -nE '^[[:space:]]+run:.*ghcr-pull-with-retry\.sh.*supabase-local\.sh start' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 
 if [[ -n "$LN_LOGIN" ]]; then pass "wiring:login-sha-pinned"
 else fail "wiring:login-sha-pinned" "no uses: line pins the full docker/login-action SHA"; fi
@@ -290,10 +290,11 @@ if [[ -n "$LN_LOGIN" && -n "$LN_PROBE" && -n "$LN_START" && "$LN_LOGIN" -lt "$LN
   pass "wiring:probe-between-login-start"
 else fail "wiring:probe-between-login-start" "login=$LN_LOGIN probe=$LN_PROBE start=$LN_START"; fi
 
-# The probe's run: must END at the redirect — an appended `|| true` would
-# silence the positive control while the presence grep stays green.
-if grep -qE '^[[:space:]]+run: docker manifest inspect ghcr\.io/supabase/postgres:[^ ]+ >/dev/null$' "$WORKFLOW"; then pass "wiring:probe-run-ends-clean"
-else fail "wiring:probe-run-ends-clean" "probe run: line is missing, retagged, or ends in a silence operator"; fi
+# The probe runs behind the retry helper (single calls throttle too, measured
+# on run 40561028313) and must end AT the image ref — an appended `|| true` or
+# `>/dev/null` would silence the control AND the helper's annotations.
+if grep -qE '^[[:space:]]+run: bash "\$\{GITHUB_WORKSPACE\}/\.github/scripts/ghcr-pull-with-retry\.sh" docker manifest inspect ghcr\.io/supabase/postgres:[^ ]+$' "$WORKFLOW"; then pass "wiring:probe-run-ends-clean"
+else fail "wiring:probe-run-ends-clean" "probe run: is missing, unwrapped, retagged, or ends in a silence operator"; fi
 
 # Login + probe carry the same-repo `if:` gate (fork PRs run anonymous + the
 # retry helper — the token never enters a fork-reachable daemon config).
