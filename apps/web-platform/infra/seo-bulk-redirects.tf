@@ -95,6 +95,7 @@ locals {
     "2026-09-26-beta-testers-went-quiet"                            = "beta-testers-went-quiet"
     "2026-10-23-agentic-verification-checklist-shipped"             = "agentic-verification-checklist-shipped"
     "2026-10-23-own-your-ai-team-without-vendor-lock-in"            = "own-your-ai-team-without-vendor-lock-in"
+    "2026-10-26-run-your-ai-company-on-google-antigravity"          = "run-your-ai-company-on-google-antigravity"
     "2026-10-27-audited-102-guardrails-four-portable"               = "audited-102-guardrails-four-portable"
     "2026-10-29-property-test-cannot-fail-teaches-nothing"          = "property-test-cannot-fail-teaches-nothing"
     "2026-11-03-first-property-test-found-real-bug"                 = "first-property-test-found-real-bug"
