@@ -75,6 +75,12 @@ adapter_drifted_modules() { # <install_dir>
     fi
   done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$CHECK_DEPS_DIR/copy_adapter.sh" 2>/dev/null | grep -oE '"[^"]*\.(mjs|json)"' | tr -d '"')
   [[ "$ADAPTER_COMPARED" -gt 0 ]] || return 2
+  # `npm ci` deletes node_modules before it installs, so an interrupted or offline copy leaves the
+  # new files with NO node_modules, and the adapter then dies at its first dependency import. A
+  # dependency manifest with no node_modules beside it is therefore drift, never "nothing to compare".
+  if [[ -f "$install_dir/package.json" && ! -d "$install_dir/node_modules" ]]; then
+    ADAPTER_DRIFTED="$ADAPTER_DRIFTED node_modules(missing: the dependency install did not complete)"
+  fi
   # The files can all match while node_modules was built from an older lockfile (a bumped
   # dependency that never got installed): compare the stamp with the lockfile in place.
   if [[ -d "$install_dir/node_modules" && -f "$install_dir/package-lock.json" ]]; then
@@ -268,9 +274,9 @@ _pen_path_inside() { # <root> <path>
 # the home directory is the user's own tree and is exempt ONLY for the passwd home; for a $HOME the
 # environment supplied that exemption is never granted (a project env block can set HOME inside the
 # project). Prints the refusal cause and fails when untrusted.
-_pen_trust_why() { # <real package dir>
-  local real_pkg="$1" root realhome="" roots=() r st uid mode
-  if [[ "$HOME" == "$(_passwd_home)" ]]; then realhome=$(_realpath "$HOME"); fi
+_pen_trust_why() { # <real package dir> <home exempt from the ancestor rule, or empty> <engine prefix, for the remedy>
+  local real_pkg="$1" exempt_home="${2:-}" prefix="${3:-$PEN_CLI_PREFIX}" root realhome="" roots=() r st uid mode
+  if [[ -n "$exempt_home" ]]; then realhome=$(_realpath "$exempt_home"); fi
   for r in "$(pwd -P 2>/dev/null)" "${CLAUDE_PROJECT_DIR:-}"; do
     [[ -n "$r" ]] || continue
     root=$(_realpath "$r") || continue
@@ -292,7 +298,7 @@ _pen_trust_why() { # <real package dir>
     return 1
   fi
   if (( (8#$mode & 8#022) != 0 )); then
-    echo "the package directory is group- or world-writable (a umask of 002 does this); fix with: chmod -R go-w $PEN_CLI_PREFIX/node_modules"
+    echo "the package directory is group- or world-writable (a umask of 002 does this); fix with: chmod -R go-w $prefix/node_modules"
     return 1
   fi
   return 0
@@ -309,8 +315,8 @@ _pen_trust_why() { # <real package dir>
 # Prints one line: "OK<TAB><resolved binary>", "NOTINSTALLED<TAB><cause>" or "WHY<TAB><cause>"; always
 # returns 0. Does NOT run the binary. The adapter's findPenBinary() applies the same rule (shared
 # table: test/fixtures/pen-identity-cases.tsv).
-_pen_inspect() { # [prefix]  (default: the engine prefix)
-  local prefix="${1:-$PEN_CLI_PREFIX}"
+_pen_inspect_prefix() { # <prefix> <home exempt from the ancestor rule, or empty>
+  local prefix="$1" exempt_home="${2:-}"
   local bin="$prefix/node_modules/.bin/pen"
   local pkgdir="$prefix/node_modules/$PEN_CLI_PACKAGE"
   local pkgjson="$pkgdir/package.json"
@@ -318,7 +324,7 @@ _pen_inspect() { # [prefix]  (default: the engine prefix)
   if ! real_pkg=$(_realpath "$pkgdir") || [[ -z "$real_pkg" ]]; then
     printf 'NOTINSTALLED\t%s is not installed under %s\n' "$PEN_CLI_PACKAGE" "$prefix"; return 0
   fi
-  if ! why=$(_pen_trust_why "$real_pkg"); then printf 'WHY\t%s\n' "$why"; return 0; fi
+  if ! why=$(_pen_trust_why "$real_pkg" "$exempt_home" "$prefix"); then printf 'WHY\t%s\n' "$why"; return 0; fi
   [[ -f "$pkgjson" ]] || { printf 'WHY\tits package.json is unreadable\n'; return 0; }
   if ! facts=$(_pen_pkg_facts "$pkgjson"); then printf 'WHY\tits package.json is unreadable\n'; return 0; fi
   name=$(printf '%s\n' "$facts" | sed -n 1p)
@@ -333,6 +339,38 @@ _pen_inspect() { # [prefix]  (default: the engine prefix)
   if ! real_bin=$(_realpath "$bin") || [[ -z "$real_bin" ]]; then printf 'WHY\t.bin/pen is missing\n'; return 0; fi
   [[ "$real_bin" == "$expected" ]] || { printf 'WHY\t.bin/pen does not point at the package'"'"'s declared pen bin\n'; return 0; }
   printf 'OK\t%s\n' "$real_bin"
+}
+
+# Which engine prefix is used, mirroring findPenBinary(): the PASSWD home's prefix first (the ancestor
+# exemption applies to it alone), then $HOME's when it differs (never exempt: a project env block can
+# set HOME inside the project). The first candidate that passes wins; when none does, the cause comes
+# from the first candidate that has a package installed, else from $HOME's (so the advice names a
+# path the --auto install actually writes). An explicit prefix (the install staging directory) is
+# inspected on its own, with the exemption only when $HOME is the passwd home.
+_pen_inspect() { # [prefix]  (default: the candidate prefixes, passwd home first)
+  local passwd_home line first_why="" last="" prefixes=() exempts=() i
+  passwd_home=$(_passwd_home)
+  if [[ -n "${1:-}" ]]; then
+    if [[ -n "$passwd_home" && "$HOME" == "$passwd_home" ]]; then
+      _pen_inspect_prefix "$1" "$HOME"
+    else
+      _pen_inspect_prefix "$1" ""
+    fi
+    return 0
+  fi
+  if [[ -n "$passwd_home" ]]; then prefixes+=("$passwd_home/.local/share/pen-cli"); exempts+=("$passwd_home"); fi
+  if [[ "$HOME" != "$passwd_home" ]]; then prefixes+=("$PEN_CLI_PREFIX"); exempts+=(""); fi
+  for i in "${!prefixes[@]}"; do
+    line=$(_pen_inspect_prefix "${prefixes[$i]}" "${exempts[$i]}")
+    case "${line%%$'\t'*}" in
+      OK) printf '%s\n' "$line"; return 0 ;;
+      WHY) [[ -n "$first_why" ]] || first_why="$line" ;;
+    esac
+    last="$line"
+  done
+  # None passed: the first installed-but-refused candidate explains it; else "not installed" under the
+  # last candidate ($HOME's when it differs from the passwd home, the one --auto writes to).
+  printf '%s\n' "${first_why:-$last}"
 }
 
 # Prints the resolved binary path and succeeds when the engine passes the identity rule.
@@ -375,6 +413,21 @@ pen_cli_lock_current() { # [prefix]
   [[ "$want" == "$have" ]]
 }
 
+# An engine swap interrupted between its two renames leaves no engine at the prefix and the only
+# working one in `<prefix>.old`. Put it back; nothing is deleted. Safe to call at any time.
+restore_interrupted_engine_swap() {
+  local old="$PEN_CLI_PREFIX.old"
+  if [[ ! -e "$PEN_CLI_PREFIX" && -d "$old" ]]; then
+    if mv -- "$old" "$PEN_CLI_PREFIX"; then
+      echo "  [info] restored the previous $PEN_CLI_PACKAGE engine from $old (an earlier reinstall was interrupted before the swap finished)"
+    else
+      echo "  [FAILED] cannot restore the previous engine from $old to $PEN_CLI_PREFIX"
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # True when --auto has something to do for the engine: not installed (or not trusted), off the
 # pin, or built from another lockfile than the committed one.
 pen_cli_needs_install() {
@@ -401,6 +454,15 @@ warn_pen_cli_state() {
       echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-installing from the lockfile"
     else
       echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-run with --auto to reinstall from the lockfile"
+    fi
+  elif [[ -n "$installed" ]] && ! pen_cli_lock_current; then
+    # At the pin, but built from an older lockfile (or before the lock stamp existed): later lockfile
+    # changes (a dependency override) are missing. Without --auto the engine is used as it is; with
+    # --auto it is reinstalled (~1 GB), so say which of the two will happen.
+    if [[ "$AUTO_INSTALL" == "true" ]]; then
+      echo "  [warn] $PEN_CLI_PACKAGE $installed predates the committed lockfile (its lock stamp is missing or differs); --auto is re-installing it from the lockfile (~1 GB)"
+    else
+      echo "  [warn] $PEN_CLI_PACKAGE $installed predates the committed lockfile (its lock stamp is missing or differs); it is used as it is, and --auto will reinstall it from the lockfile (~1 GB)"
     fi
   fi
   return 0
@@ -717,7 +779,10 @@ attempt_headless_install() {
   # reinstall (offline, a bad lockfile) must never remove an engine that works. The staging tree is
   # a sibling of the prefix so the swap is a rename on one filesystem.
   local stage="$PEN_CLI_PREFIX.new" old="$PEN_CLI_PREFIX.old"
-  rm -rf -- "$stage" "$old"
+  # `$old` is NOT cleared here: after an interrupted swap it holds the only working engine, so it
+  # is restored first and is deleted only once the new install has been accepted (below).
+  restore_interrupted_engine_swap || return 1
+  rm -rf -- "$stage"
   (umask 022; mkdir -p "$stage") || { echo "  [FAILED] cannot create $stage"; return 1; }
   local f
   for f in package.json package-lock.json; do
@@ -753,6 +818,8 @@ attempt_headless_install() {
     return 1
   fi
   (umask 022; pen_cli_lock_sha > "$stage/node_modules/$LOCK_STAMP_NAME") 2>/dev/null || true
+  # The new tree is proven. Only now is an `$old` left by an earlier attempt expendable.
+  rm -rf -- "$old"
   if [[ -e "$PEN_CLI_PREFIX" ]]; then
     mv -- "$PEN_CLI_PREFIX" "$old" || { echo "  [FAILED] cannot move the existing engine aside"; rm -rf -- "$stage"; return 1; }
   fi
@@ -762,12 +829,17 @@ attempt_headless_install() {
     rm -rf -- "$stage"
     return 1
   fi
-  rm -rf -- "$old"
   if ! detect_headless_cli >/dev/null; then
     why=$(_pen_inspect)
     echo "  [FAILED] Installed, but $PEN_CLI_PREFIX does not pass the identity check: ${why#*$'\t'}"
+    # Roll back: the previous engine (if there was one) goes back; a rejected new tree is not kept.
+    if [[ -d "$old" ]]; then
+      rm -rf -- "$PEN_CLI_PREFIX"
+      mv -- "$old" "$PEN_CLI_PREFIX" && echo "    The previous engine was restored."
+    fi
     return 1
   fi
+  rm -rf -- "$old"
   return 0
 }
 
@@ -901,7 +973,7 @@ run_adapter_drift_check() {
     PENCIL_ADAPTER_INSTALL_DIR="$install_dir" bash "$CHECK_DEPS_DIR/copy_adapter.sh" || copy_rc=$?
     if [[ "$copy_rc" -ne 0 ]]; then
       case "$copy_rc" in
-        3) echo "ERROR: copy_adapter.sh could not install the adapter's dependencies (npm ci failed, see above); the adapter files were copied but its node_modules is not usable until this is fixed. Re-run: bash check_deps.sh --check-adapter-drift --auto" >&2 ;;
+        3) echo "ERROR: copy_adapter.sh could not install the adapter's dependencies (npm ci failed, see above); the installed adapter and its node_modules were left unchanged. Re-run: bash check_deps.sh --check-adapter-drift --auto" >&2 ;;
         *) echo "ERROR: copy_adapter.sh failed (exit $copy_rc) during drift auto-repair" >&2 ;;
       esac
       exit 2
@@ -926,6 +998,9 @@ fi
 
 echo "=== Pencil Setup Dependency Check ==="
 echo
+
+# An interrupted engine reinstall may have left the working engine in <prefix>.old
+restore_interrupted_engine_swap || true
 
 # Leftover deprecated engine / version drift against the pin (advisory only)
 warn_pen_cli_state

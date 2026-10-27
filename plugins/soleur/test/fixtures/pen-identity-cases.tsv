@@ -1,4 +1,4 @@
-# pen-identity-cases.tsv — shared binary-identity table (Guard 2, plan Phase 1.7).
+# pen-identity-cases.tsv — shared binary-identity table (Guard 2).
 #
 # Each row is run through BOTH resolvers against a fake package tree built under a temp HOME by
 # plugins/soleur/test/lib/pen-identity-tree.mjs (the `layout` column names a key of its LAYOUTS
@@ -38,5 +38,5 @@ bin-points-at-legacy	refuse	refuse	yes	.bin/pen links into the deprecated engine
 package-json-unreadable	refuse	refuse	no	package.json cannot be read
 declared-bin-nonexistent	refuse	refuse	no	package.json declares a pen bin that does not exist
 declared-bin-is-directory	refuse	refuse	no	the declared bin.pen target is a directory, not a file
-group-writable-package	refuse	refuse	no	package directory is group-writable (an npm ci under umask 002): refused; check_deps refuses it too once FA2c's detect_headless_cli mirrors the adapter
+group-writable-package	refuse	refuse	no	package directory is group-writable (an npm ci under umask 002): both resolvers refuse it
 path-pen-only	refuse	refuse	no	foreign pen on PATH, nothing installed: no PATH fallback

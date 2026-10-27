@@ -41,11 +41,27 @@ assert_file_exists "$CHECK_DEPS" "check_deps.sh exists"
 # ---------------------------------------------------------------------------
 tmp_dir=$(mktemp -d)
 
+# check_deps.sh asks Node for the PASSWD home (os.userInfo().homedir), which no env var can fake; on a
+# developer machine that is the real home with a real engine in it. A preload patches that one call
+# for every node process this suite starts: FAKE_PASSWD_HOME when a case sets it, otherwise a path
+# that holds nothing (so a fake $HOME is the only candidate, exactly as before the passwd home was
+# inspected first). It lives in the test only; there is no such hook in the script under test.
+cat > "$tmp_dir/passwd-shim.cjs" <<'PASSWD_SHIM_EOF'
+const os = require("node:os");
+const real = os.userInfo;
+os.userInfo = function (opts) {
+  return Object.assign({}, real.call(os, opts), { homedir: process.env.FAKE_PASSWD_HOME || "/nonexistent-passwd-home" });
+};
+PASSWD_SHIM_EOF
+export NODE_OPTIONS="--require $tmp_dir/passwd-shim.cjs"
+
 repo_adapter="$REPO_ROOT/plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs"
 
 scripts_dir="$REPO_ROOT/plugins/soleur/skills/pencil-setup/scripts"
 # The runtime set copy_adapter.sh installs: every module plus the dependency manifest pair.
 copy_adapter_set() { cp "$scripts_dir"/*.mjs "$scripts_dir/package.json" "$scripts_dir/package-lock.json" "$1/"; }
+# The same set as a COMPLETED install leaves it: dependencies in place and stamped with the lockfile hash.
+copy_adapter_installed() { copy_adapter_set "$1"; mkdir -p "$1/node_modules"; sha256sum "$1/package-lock.json" | awk '{print $1}' > "$1/node_modules/.soleur-package-lock.sha256"; }
 
 # Each case gets an isolated install dir so a failure in one case cannot
 # cascade through shared state into the next case's assertions.
@@ -53,7 +69,7 @@ copy_adapter_set() { cp "$scripts_dir"/*.mjs "$scripts_dir/package.json" "$scrip
 # --- Case 1: installed adapter matches repo → no drift, exit 0 ---
 case1_dir="$tmp_dir/case1"
 mkdir -p "$case1_dir"
-copy_adapter_set "$case1_dir"
+copy_adapter_installed "$case1_dir"
 set +e
 out=$(PENCIL_ADAPTER_INSTALL_DIR="$case1_dir" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
 rc=$?
@@ -198,7 +214,7 @@ installed_sha=$(sha256sum "$case3_dir/pencil-mcp-adapter.mjs" | awk '{print $1}'
 repo_sha=$(sha256sum "$repo_adapter" | awk '{print $1}')
 assert_eq "$repo_sha" "$installed_sha" "--auto re-copy: installed sha now matches repo"
 npm_log3=$(cat "$home3/npm.log" 2>/dev/null || true)
-assert_contains "$npm_log3" "CWD=$case3_dir" "--auto drift: adapter dependencies installed in the adapter dir"
+assert_contains "$npm_log3" "CWD=$case3_dir.new" "--auto drift: adapter dependencies installed in the staging dir beside the adapter dir"
 assert_contains "$npm_log3" "CWD=$home3/.local/share/pen-cli" "--auto drift: the engine is installed after the adapter copy"
 assert_eq "2" "$(printf '%s\n' "$npm_log3" | grep -c 'ARGS=ci --ignore-scripts')" "--auto drift: exactly two npm ci --ignore-scripts runs (adapter deps, engine)"
 assert_eq "0" "$(printf '%s\n' "$npm_log3" | grep -c -v 'CRED_VARS=0' || true)" "--auto drift: neither credential name reaches either npm ci"
@@ -570,7 +586,7 @@ assert_eq "1" "$([[ "$noise" -gt 0 && "$noise" -le 20 ]] && echo 1 || echo 0)" "
 home=$(make_fake_home legacy-sync)
 node "$TREE" "$home" good-plus-legacy >/dev/null
 mkdir -p "$home/.local/share/pencil-adapter"
-copy_adapter_set "$home/.local/share/pencil-adapter"
+copy_adapter_installed "$home/.local/share/pencil-adapter"
 out=$(in_home "$home" warn_pen_cli_state)
 assert_contains "$out" "it is not used" "leftover deprecated package + adapter in sync: warned as unused"
 echo "// stale" >> "$home/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
@@ -579,7 +595,7 @@ assert_eq "0" "$(printf '%s\n' "$out" | grep -c 'it is not used' || true)" "left
 assert_contains "$out" "check-adapter-drift --auto" "leftover deprecated package + STALE adapter: says how to sync the adapter"
 
 # ===========================================================================
-# FA2c: trust rule (umask, owner/mode, project roots), engine-first order, staging, lock stamps,
+# Trust rule (umask, owner/mode, project roots), engine-first order, staging, lock stamps,
 # adapter npm failure, portable sha256.
 # ===========================================================================
 fresh_engine_home() { # <name> -> fake HOME with the `good` engine, stamped as built from the committed lockfile
@@ -674,13 +690,43 @@ run_copy_fail() { in_fake_home "$home6" PENCIL_ADAPTER_INSTALL_DIR="$home6/inst"
 out=$(run_copy_fail)
 assert_contains "$out" "rc=3" "copy_adapter.sh with a failing npm ci: exits 3 (not 0)"
 assert_contains "$out" "WARN: npm ci failed" "copy_adapter.sh with a failing npm ci: warns"
-assert_eq "no stamp" "$([[ -e "$home6/inst/node_modules/.soleur-package-lock.sha256" ]] && echo "stamp written" || echo "no stamp")" "copy_adapter.sh with a failing npm ci (a valid-looking tree is left behind): no lock stamp written"
-assert_eq "is a dir" "$([[ -d "$home6/inst/node_modules" ]] && echo "is a dir" || echo "missing")" "(control) the failing fake npm did leave a node_modules behind"
+assert_eq "no stamp" "$([[ -e "$home6/inst/node_modules/.soleur-package-lock.sha256" ]] && echo "stamp written" || echo "no stamp")" "copy_adapter.sh with a failing npm ci (the staging tree holds a valid-looking node_modules): no lock stamp written"
+assert_eq "no node_modules" "$([[ -e "$home6/inst/node_modules" ]] && echo "node_modules installed" || echo "no node_modules")" "copy_adapter.sh with a failing npm ci: the failed staging tree never reaches the install dir"
+assert_eq "no staging dir" "$([[ -e "$home6/inst.new" ]] && echo "staging dir left" || echo "no staging dir")" "copy_adapter.sh with a failing npm ci: the staging directory is cleaned up"
 out=$(run_copy_fail)
-assert_contains "$out" "Installing adapter dependencies" "copy_adapter.sh: a failed install is retried next run (node_modules exists but has no stamp)"
+assert_contains "$out" "Installing adapter dependencies" "copy_adapter.sh: a failed install is retried next run (no node_modules)"
 out=$(in_fake_home "$home6" PENCIL_ADAPTER_INSTALL_DIR="$home6/inst" -- bash "$COPY")
 assert_contains "$out" "rc=0" "copy_adapter.sh: the retry with a working npm succeeds"
 assert_eq "stamped" "$([[ -s "$home6/inst/node_modules/.soleur-package-lock.sha256" ]] && echo stamped || echo "no stamp")" "copy_adapter.sh: the successful retry writes the stamp"
+
+# --- copy_adapter.sh: a failed dependency install must not turn a WORKING older adapter into a dead new one ---
+# `npm ci` deletes node_modules first. The install is staged in <dir>.new and swapped in only when it
+# succeeded; the adapter files are copied after that, so a failure leaves the old install exactly as it was.
+home9=$(make_fake_home copy-rollback-home)
+run_copy9() { in_fake_home "$home9" PENCIL_ADAPTER_INSTALL_DIR="$home9/inst" "$@" -- bash "$COPY"; }
+run_copy9 >/dev/null
+inst9="$home9/inst"
+echo "// OLD-ADAPTER" >> "$inst9/pencil-mcp-adapter.mjs"
+echo "0000-stamp-from-an-older-lockfile" > "$inst9/node_modules/.soleur-package-lock.sha256"
+: > "$inst9/node_modules/OLD-DEP-MARKER"
+out=$(run_copy9 FAKE_NPM_FAIL_ADAPTER=1)
+assert_contains "$out" "rc=3" "copy_adapter.sh: a failed dependency refresh over a working install exits 3"
+assert_eq "1" "$(grep -c 'OLD-ADAPTER' "$inst9/pencil-mcp-adapter.mjs" || true)" "failed dependency refresh: the installed adapter is the OLD working one (files were not copied ahead of the install)"
+assert_eq "kept" "$([[ -e "$inst9/node_modules/OLD-DEP-MARKER" ]] && echo kept || echo lost)" "failed dependency refresh: the old node_modules is still in place"
+assert_eq "0000-stamp-from-an-older-lockfile" "$(cat "$inst9/node_modules/.soleur-package-lock.sha256")" "failed dependency refresh: the old stamp is untouched"
+assert_eq "no staging dir" "$([[ -e "$home9/inst.new" ]] && echo "staging dir left" || echo "no staging dir")" "failed dependency refresh: the staging directory is cleaned up"
+assert_contains "$out" "left unchanged" "failed dependency refresh: says the installed adapter was left unchanged"
+# the retry with a working npm swaps node_modules in, then copies the files
+out=$(run_copy9)
+assert_contains "$out" "rc=0" "copy_adapter.sh: the retry succeeds"
+assert_eq "0" "$(grep -c 'OLD-ADAPTER' "$inst9/pencil-mcp-adapter.mjs" || true)" "retry: the adapter now matches the repo"
+assert_eq "gone" "$([[ -e "$inst9/node_modules/OLD-DEP-MARKER" ]] && echo kept || echo gone)" "retry: node_modules is the freshly installed tree"
+assert_eq "$(sha256sum "$inst9/package-lock.json" | awk '{print $1}')" "$(cat "$inst9/node_modules/.soleur-package-lock.sha256")" "retry: the stamp is the lockfile hash"
+assert_eq "clean" "$([[ -e "$home9/inst.new" || -e "$inst9/.node_modules.old" ]] && echo "leftovers" || echo clean)" "retry: no staging or backup directory is left behind"
+# a swap interrupted between its two renames leaves the working tree only in the backup: restored, not deleted
+rm -rf "$inst9/node_modules"; mkdir -p "$inst9/.node_modules.old"; : > "$inst9/.node_modules.old/INTERRUPTED-SWAP-MARKER"
+out=$(run_copy9 FAKE_NPM_FAIL_ADAPTER=1)
+assert_eq "restored" "$([[ -e "$inst9/node_modules/INTERRUPTED-SWAP-MARKER" ]] && echo restored || echo lost)" "interrupted node_modules swap + failing npm: the backup is restored as node_modules"
 
 # --- drift: the adapter's lock stamp is compared with the lockfile when node_modules exists ---
 d="$tmp_dir/stamp-drift"; mkdir -p "$d/node_modules"
@@ -697,7 +743,17 @@ set +e; out=$(PENCIL_ADAPTER_INSTALL_DIR="$d" bash "$CHECK_DEPS" --check-adapter
 assert_eq "3" "$rc" "files match but node_modules has no stamp: DRIFT (exit 3)"
 rm -rf "$d/node_modules"
 set +e; out=$(PENCIL_ADAPTER_INSTALL_DIR="$d" bash "$CHECK_DEPS" --check-adapter-drift 2>&1); rc=$?; set -e
-assert_eq "0" "$rc" "files match and no node_modules at all: exit 0 (nothing to compare)"
+# `npm ci` deletes node_modules before it installs, so an interrupted or offline copy leaves the new
+# files with NO node_modules: every file matches, and the adapter dies at its first dependency import.
+assert_eq "3" "$rc" "files match but package.json is present and node_modules is missing: DRIFT (exit 3)"
+assert_contains "$out" "node_modules" "missing node_modules: the drift names node_modules"
+assert_contains "$out" "DRIFT" "missing node_modules: prints the DRIFT marker"
+# no dependency manifest at all: nothing is promised, so nothing is missing (the manifest itself is
+# already reported as a missing file by the module comparison)
+rm -f "$d/package.json"
+set +e; out=$(PENCIL_ADAPTER_INSTALL_DIR="$d" bash "$CHECK_DEPS" --check-adapter-drift 2>&1); rc=$?; set -e
+assert_eq "3" "$rc" "package.json itself missing: still drift (reported as the missing file)"
+assert_eq "0" "$(printf '%s\n' "$out" | grep -c 'node_modules(' || true)" "package.json missing: node_modules is not additionally blamed"
 
 # --- --check-adapter-drift --auto: the adapter's npm ci failing is exit 2 with the cause ---
 home7=$(fresh_engine_home auto-adapter-fail)
@@ -720,7 +776,7 @@ mkdir -p "$home8/.local/share/pencil-adapter"
 cp "$repo_adapter" "$home8/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
 echo "// drift" >> "$home8/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
 in_fake_home "$home8" -- bash "$CHECK_DEPS" --check-adapter-drift --auto >/dev/null
-assert_eq "engine-then-adapter" "$(grep -o 'CWD=[^ ]*' "$home8/npm.log" | sed -e 's|.*pen-cli.new|engine|' -e 's|.*pencil-adapter|adapter|' | tr '\n' '-' | sed 's/-$//;s/engine-adapter/engine-then-adapter/')" "--auto drift: npm runs for the engine before the adapter"
+assert_eq "engine-then-adapter" "$(grep -o 'CWD=[^ ]*' "$home8/npm.log" | sed -e 's|.*pen-cli.new|engine|' -e 's|.*pencil-adapter.new|adapter|' | tr '\n' '-' | sed 's/-$//;s/engine-adapter/engine-then-adapter/')" "--auto drift: npm runs for the engine before the adapter"
 
 # --- portable sha256: falls back to shasum when sha256sum is not on PATH ---
 # The helper is extracted and run with a PATH holding only awk, shasum and perl (no sha256sum).
@@ -755,4 +811,100 @@ node "$TREE" "$home" declared-bin-missing >/dev/null
 out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS")
 assert_contains "$out" "the package declares no pen bin" "identity skip: names the specific cause (declared-bin-missing)"
 
-print_results 230
+# ===========================================================================
+# Verification-panel follow-ups: interrupted engine swap, lockfile-staleness warning, passwd-home-first
+# candidate order, fixture wording.
+# ===========================================================================
+
+# --- an engine swap interrupted between its two renames leaves the working engine only in `.old` ---
+home=$(make_fake_home swap-restore)
+node "$TREE" "$home" good >/dev/null
+mv "$home/.local/share/pen-cli" "$home/.local/share/pen-cli.old"
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key FAKE_NPM_FAIL_ENGINE=1 -- bash "$CHECK_DEPS" --auto)
+assert_eq "accept" "$(verdict_of "$(in_home "$home" detect_headless_cli)")" "prefix missing + .old present + failing reinstall: the old engine is restored and accepted"
+assert_eq "no .old" "$([[ -e "$home/.local/share/pen-cli.old" ]] && echo ".old left" || echo "no .old")" "restored engine: no .old directory remains"
+assert_contains "$out" "restored" "restored engine: the run says it restored the engine"
+home=$(make_fake_home swap-restore-noauto)
+node "$TREE" "$home" good >/dev/null
+mv "$home/.local/share/pen-cli" "$home/.local/share/pen-cli.old"
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS")
+assert_contains "$out" "Headless CLI (Tier 0)" "prefix missing + .old present without --auto: the engine is restored and selected"
+assert_eq "no npm" "$([[ -s "$home/npm.log" ]] && echo "npm ran" || echo "no npm")" "restore without --auto: nothing is installed"
+# `.old` is not deleted until the new install is accepted: a failed attempt leaves a planted one alone
+home=$(make_fake_home old-kept)
+node "$TREE" "$home" version-differs >/dev/null
+mkdir -p "$home/.local/share/pen-cli.old"; : > "$home/.local/share/pen-cli.old/KEEP-MARKER"
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key FAKE_NPM_FAIL_ENGINE=1 -- bash "$CHECK_DEPS" --auto)
+assert_eq "kept" "$([[ -e "$home/.local/share/pen-cli.old/KEEP-MARKER" ]] && echo kept || echo deleted)" "failed reinstall: an existing .old is not deleted before the new install is proven"
+# a swap whose final identity check fails is rolled back to the old engine
+home=$(make_fake_home swap-rollback)
+node "$TREE" "$home" version-differs >/dev/null
+out=$(in_fake_home "$home" TMPDIR="$tmp_dir" -- bash -c 'f="$1"; set --; cd "$TMPDIR" && source "$f"; AUTO_INSTALL=true; detect_headless_cli() { [[ -n "${1:-}" ]]; }; _pen_inspect() { printf "WHY\tsynthetic late failure\n"; }; attempt_headless_install; echo "install_rc=$?"' _ "$CHECK_DEPS")
+assert_contains "$out" "install_rc=1" "swap whose final identity check fails: returns non-zero"
+assert_contains "$(grep '"version"' "$home/.local/share/pen-cli/node_modules/@pen.dev/cli/package.json")" "0.3.12" "swap whose final identity check fails: the previous engine is back in place"
+assert_eq "clean" "$([[ -e "$home/.local/share/pen-cli.old" || -e "$home/.local/share/pen-cli.new" ]] && echo leftovers || echo clean)" "rolled-back swap: no .old or .new directory is left"
+# success: .old is gone afterwards
+home=$(make_fake_home swap-ok)
+node "$TREE" "$home" version-differs >/dev/null
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS" --auto)
+assert_eq "clean" "$([[ -e "$home/.local/share/pen-cli.old" || -e "$home/.local/share/pen-cli.new" ]] && echo leftovers || echo clean)" "accepted swap: no .old or .new directory is left"
+
+# --- an engine at the pin whose lock stamp is stale or missing says so, once ---
+home=$(make_fake_home lockwarn-unstamped)
+node "$TREE" "$home" good >/dev/null
+out=$(in_home "$home" warn_pen_cli_state)
+assert_contains "$out" "predates the committed lockfile" "engine at the pin with no lock stamp: warns that it predates the committed lockfile"
+assert_contains "$out" "--auto" "lockfile warning: names --auto as the way out"
+assert_eq "1" "$(printf '%s\n' "$out" | grep -c '\[warn\]' || true)" "lockfile warning: exactly one [warn] line"
+home=$(fresh_engine_home lockwarn-stamped)
+assert_eq "0" "$(in_home "$home" warn_pen_cli_state | grep -c 'predates the committed lockfile' || true)" "engine stamped with the committed lockfile: no lockfile warning"
+echo "0000-a-stamp-from-another-lockfile" > "$home/.local/share/pen-cli/node_modules/.soleur-package-lock.sha256"
+assert_contains "$(in_home "$home" warn_pen_cli_state)" "predates the committed lockfile" "engine stamped with another lockfile hash: warns"
+home=$(make_fake_home lockwarn-none)
+assert_eq "0" "$(in_home "$home" warn_pen_cli_state | grep -c 'lockfile' || true)" "no engine installed: no lockfile warning (nothing predates anything)"
+home=$(make_fake_home lockwarn-version)
+node "$TREE" "$home" version-differs >/dev/null
+out=$(in_home "$home" warn_pen_cli_state)
+assert_eq "1" "$(printf '%s\n' "$out" | grep -c '\[warn\]' || true)" "engine off the pin: still exactly one [warn] line (the version one covers the reinstall)"
+home=$(make_fake_home lockwarn-auto)
+node "$TREE" "$home" good >/dev/null
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS" --auto)
+assert_contains "$out" "predates the committed lockfile" "full --auto run over an unstamped engine: the warning is printed before the reinstall"
+
+# --- candidate order: the passwd home is inspected FIRST, as the adapter does ---
+# cwd is "/" (never a project root) unless a case is about the working directory: the fake homes live under the suite's temp dir.
+in_passwd() { # <passwd home> <home> <cwd> -- <fn> [args...]
+  local pw="$1" h="$2" cwd="$3"; shift 4
+  ( cd "$cwd" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY -u PENCIL_ADAPTER_INSTALL_DIR -u CLAUDE_PROJECT_DIR FAKE_PASSWD_HOME="$pw" HOME="$h" \
+      bash -c 'f="$1"; shift; args=("$@"); set --; source "$f"; "${args[@]}"; echo "rc=$?"' _ "$CHECK_DEPS" "$@" </dev/null 2>&1 || true )
+}
+pw_good=$(make_fake_home cand-pw-good); node "$TREE" "$pw_good" good >/dev/null
+h_empty=$(make_fake_home cand-home-empty)
+h_good=$(make_fake_home cand-home-good); node "$TREE" "$h_good" good >/dev/null
+h_bad=$(make_fake_home cand-home-bad); node "$TREE" "$h_bad" name-mismatch >/dev/null
+pw_bad=$(make_fake_home cand-pw-bad); node "$TREE" "$pw_bad" name-mismatch >/dev/null
+out=$(in_passwd "$pw_good" "$h_empty" / -- detect_headless_cli)
+assert_eq "accept" "$(verdict_of "$out")" "an install under the passwd home (HOME holds nothing): accepted"
+assert_contains "$out" "$pw_good/.local/share/pen-cli/" "passwd-only install: the resolved binary is under the passwd home"
+out=$(in_passwd "$pw_good" "$h_good" / -- detect_headless_cli)
+assert_contains "$out" "$pw_good/.local/share/pen-cli/" "valid installs under BOTH homes: the passwd one is the one resolved (order-discriminating)"
+out=$(in_passwd "$pw_bad" "$h_good" / -- detect_headless_cli)
+assert_eq "accept" "$(verdict_of "$out")" "a bad install under the passwd home falls through to a good one under HOME"
+assert_contains "$out" "$h_good/.local/share/pen-cli/" "passwd bad, HOME good: the HOME install is resolved"
+out=$(in_passwd "$h_empty" "$h_bad" / -- _pen_inspect)
+assert_contains "$out" "the package name is not" "no install under the passwd home, a bad one under HOME: the cause names the bad install, not 'not installed'"
+out=$(in_passwd "$pw_bad" "$h_empty" / -- _pen_inspect)
+assert_contains "$out" "the package name is not" "a bad install under the passwd home, nothing under HOME: the cause names the bad install"
+# the cwd-ancestor exemption is for the passwd candidate only: a project root that contains the passwd home
+# does not exclude it, while the same containment for a $HOME that is not the passwd home still refuses
+proj2=$(make_fake_home cand-proj); mkdir -p "$proj2/pwhome" "$proj2/fakehome"
+node "$TREE" "$proj2/pwhome" good >/dev/null
+node "$TREE" "$proj2/fakehome" good >/dev/null
+assert_eq "accept" "$(verdict_of "$(in_passwd "$proj2/pwhome" "$h_empty" "$proj2" -- detect_headless_cli)")" "passwd home inside the working directory (cwd contains it): exempt, accepted"
+assert_eq "refuse" "$(verdict_of "$(in_passwd "$h_empty" "$proj2/fakehome" "$proj2" -- detect_headless_cli)")" "HOME (not the passwd home) inside the working directory: refused, no exemption"
+
+# --- committed fixtures carry no internal work-package labels ---
+assert_eq "0" "$(grep -c -E '(^|[^A-Za-z0-9])FA[0-9][a-z]?([^A-Za-z0-9]|$)|plan Phase [0-9]' "$CASES" || true)" "pen-identity-cases.tsv names no internal work-package or plan-phase label"
+assert_eq "0" "$(grep -c -E '(^|[^A-Za-z0-9])FA[0-9][a-z]?([^A-Za-z0-9]|$)|plan Phase [0-9]' "$TREE" || true)" "pen-identity-tree.mjs names no internal work-package or plan-phase label"
+
+print_results 276
