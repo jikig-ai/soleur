@@ -2578,6 +2578,7 @@ jobs:
           set +e
           PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan -detailed-exitcode -no-color -input=false \
+            -out=drift.tfplan \
             -var="ssh_key_path=${CI_SSH_PUB}" 2>&1)
           EXIT_CODE=$?
           set -e
@@ -2587,6 +2588,22 @@ jobs:
             2) echo "::notice::Post-apply full-root plan still shows changes — every drift issue stays open." ;;
             *) echo "::error::Post-apply full-root plan FAILED (exit $EXIT_CODE) — not readable as clean; drift issues stay open and this run asserts nothing about drift." ;;
           esac
+          # git-data wipe wedge (tests/scripts/test-git-data-wipe-wedge.sh): an
+          # untargeted plan reaches hcloud_server.git_data — an apply-capable
+          # reader must feed it a refusing gate. A refuse is advisory here
+          # (::error::, no job failure): the close step already requires
+          # exit_code == '0' and a wedged plan exits 2 either way.
+          if [[ -f drift.tfplan ]]; then
+            terraform show -json drift.tfplan > drift-plan.json
+            # shellcheck source=tests/scripts/lib/git-data-wedge-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-wedge-gate.sh"
+            if ! git_data_wedge_gate drift-plan.json; then
+              echo "::error::Post-apply full-root plan re-creates the retired git-data plaintext store — the wedge is open; drift issues stay open."
+            fi
+            # drift.tfplan/drift-plan.json hold cleartext secrets (same shape as
+            # the targeted tfplan.json above) — they never outlive this step.
+            rm -f drift.tfplan drift-plan.json
+          fi
           printf '%s\n' "$PLAN_OUTPUT" | grep -E '^(Plan: [0-9]+ to |Error:)' \
             >> "$GITHUB_STEP_SUMMARY" || true
 
