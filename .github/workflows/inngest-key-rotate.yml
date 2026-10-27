@@ -1,0 +1,326 @@
+# Rotate the Inngest shared secrets (INNGEST_SIGNING_KEY, INNGEST_EVENT_KEY) on both copies: the dedicated host's
+# soleur-inngest/prd and the web app's soleur/prd (#10540, ADR-304 provisional ordinal; runbook inngest-server.md).
+#
+# DISPATCH-ONLY, and a production act. The authorization is the owner's fresh in-session go naming the exact command (mode,
+# keys, typed confirm); the typed confirm and quiet_window below are typo-guards and a statement of fact, NOT the
+# authorization. `mode=plan` is the read-only rehearsal. `mode=converge` is the recovery after a failed `rotate`; it never
+# mints a key. A GitHub "re-run" of rotate or converge is refused by the guard (it would reuse the inputs and bypass the go).
+# The push trigger below exists SOLELY to register the workflow in the Actions UI; every job is gated on workflow_dispatch.
+#
+# THE REPOSITORY IS PUBLIC. Terraform prints a random_id's `id` (the key in base64url) and `hex` on plan, apply and refresh
+# lines, so this workflow never lets a Terraform stream reach a log, a summary or an artifact: scripts/inngest-key-rotate.sh
+# sends every Terraform stream to a private file (kr_tf), and this file holds no terraform command and uploads nothing.
+#
+# THE ORDER (forward-only; there is no old key to roll back to after phase 1):
+#   guard   no writes: the refusal ladder (link flag 1, soak #11215 closed, no related run in flight, one server soleur-inngest
+#           at 10.0.1.40, the pre-reboot host SERVING, run_attempt 1, typed confirm, quiet_window)
+#   apply1  phase 1: -replace the dedicated random_id(s), update the dedicated Doppler secret(s). The soleur/prd key that
+#           unrelated deploys read is untouched until the scheduler is verified SERVING.
+#   reboot  the ONE Hetzner control-plane soft reboot (the only lever that reaches 10.0.1.40), then wait for a NEW boot_id,
+#           SERVING and a tls-health row with listener=1 from Better Stack. No retry, no hard reset.
+#   apply2  phase 2: -replace the app doppler_secret(s) (their value derives from the replaced dedicated random_id); assert
+#           both copies are equal by hashing on a pipe (booleans only).
+#   redeploy  canary-then-prod fleet redeploy (track.sh). Prints, never posts, the S5-A5-DONE line.
+#
+# LOCKS. Workflow group inngest-key-rotate (never cancelled); terraform-apply-web-platform-host on the two Terraform jobs;
+# deploy-inngest-restart on the reboot job. web-platform-release has a per-SHA group and is NOT serialized against this route,
+# which is why every write job re-runs the in-flight-run refusal as its first act.
+#
+# CREDENTIALS are bound per job: guard holds the Tier-A DOPPLER_TOKEN (the link flag and the READ-ONLY Hetzner token) and the
+# Better Stack read pair; apply1/apply2 hold the Tier-B set through the loader; reboot holds the Hetzner WRITE token in its
+# POST step only (every step after the loader runs under an `env -i` allow-list); redeploy holds the deploy webhook trio only.
+# Inputs reach the shell through env: only, never interpolated into a run: body. TIMEOUTS come from the BUDGET TABLE in the script
+# (inngest-key-rotate-workflow.test.sh pins them).
+name: Inngest Key Rotate
+
+run-name: inngest-key-rotate ${{ inputs.mode }} ${{ inputs.keys }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "plan = read-only rehearsal (both plan gates, no write). rotate = a new rotation. converge = finish a rotation that failed after its first apply (never mints a key)."
+        required: true
+        type: choice
+        options:
+          - plan
+          - rotate
+          - converge
+      keys:
+        description: "Which key pair: signing, event or both. Part of the typed confirm; a go naming one cannot rotate the other."
+        required: true
+        type: choice
+        options:
+          - signing
+          - event
+          - both
+      confirm:
+        description: "rotate: ROTATE-INNGEST-<KEYS>-<YYYY-MM-DD>; converge: CONVERGE-INNGEST-<KEYS>-<YYYY-MM-DD> (KEYS upper-cased, the UTC date of this run). A typo-guard, NOT the authorization. plan needs none."
+        required: false
+        type: string
+      reason:
+        description: "Why this dispatch (recorded in the run summary)."
+        required: true
+        type: string
+      rotated_at:
+        description: "converge only, optional: the UTC time (YYYY-MM-DDTHH:MM:SSZ) the rotation's phase 1 finished. Derived from the run being converged; if given it must agree."
+        required: false
+        type: string
+      quiet_window:
+        description: "Attest: no claude cron is in flight, no approved Concierge action is in flight, no payment_failed is pending, no Art. 15 request is mid-response."
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/inngest-key-rotate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inngest-key-rotate
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+
+jobs:
+  guard:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    # (KR_GUARD_S + KR_JOB_SLACK_S) / 60 of the BUDGET TABLE in scripts/inngest-key-rotate.sh.
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+    outputs:
+      go: ${{ steps.guard.outputs.go }}
+      mode: ${{ steps.guard.outputs.mode }}
+      keys: ${{ steps.guard.outputs.keys }}
+      run_apply1: ${{ steps.guard.outputs.run_apply1 }}
+      run_reboot: ${{ steps.guard.outputs.run_reboot }}
+      run_apply2: ${{ steps.guard.outputs.run_apply2 }}
+      run_redeploy: ${{ steps.guard.outputs.run_redeploy }}
+      reboot_post: ${{ steps.guard.outputs.reboot_post }}
+      server_id: ${{ steps.guard.outputs.server_id }}
+      boot_pre: ${{ steps.guard.outputs.boot_pre }}
+      rotated_at: ${{ steps.guard.outputs.rotated_at }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+        timeout-minutes: 3
+
+      # KR_GUARD_S / 60. Reads only: the link flag, tracker #11215, in-flight runs, the read-only Hetzner token, the host.
+      - name: Refusal ladder (writes nothing)
+        id: guard
+        timeout-minutes: 15
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_KEYS: ${{ inputs.keys }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+          INPUT_REASON: ${{ inputs.reason }}
+          INPUT_ROTATED_AT: ${{ inputs.rotated_at }}
+          INPUT_QUIET_WINDOW: ${{ inputs.quiet_window }}
+          GH_TOKEN: ${{ github.token }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: bash scripts/inngest-key-rotate.sh guard
+
+  apply1:
+    needs: guard
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply1 == 'true' }}
+    environment: infra-privileged
+    runs-on: ubuntu-24.04
+    # (KR_APPLY_STEP_S + KR_JOB_SLACK_S) / 60.
+    timeout-minutes: 65
+    concurrency:
+      group: terraform-apply-web-platform-host
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        timeout-minutes: 3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        timeout-minutes: 3
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # KR_APPLY_STEP_S / 60. Phase 1 (mode=plan: Gate A and Gate B only, no apply).
+      - name: Phase 1 - dedicated copy (or plan rehearsal)
+        timeout-minutes: 55
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          GH_TOKEN: ${{ github.token }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/inngest-key-rotate.sh apply1
+
+  reboot:
+    needs: [guard, apply1]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_reboot == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') }}
+    environment: infra-privileged
+    runs-on: ubuntu-24.04
+    # (KR_REBOOT_STEP_S + KR_VERIFY_STEP_S + KR_JOB_SLACK_S) / 60.
+    timeout-minutes: 40
+    # The shared inngest mutex (cutover, image deploy, link flip and standalone deploys serialize on it).
+    concurrency:
+      group: deploy-inngest-restart
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        timeout-minutes: 3
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # The ONLY step that holds the Hetzner WRITE token (HCLOUD_TOKEN, exported by the loader) and the ONLY place a
+      # reboot POST is made: ONE POST per run, no retry. Every step after the loader runs under an env -i allow-list so the
+      # loader's other Tier-B values never reach a child. (KR_REBOOT_STEP_S / 60.)
+      - name: Reboot request (the one Hetzner write)
+        id: post
+        if: ${{ needs.guard.outputs.reboot_post == 'true' }}
+        timeout-minutes: 10
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          EFF_SERVER_ID: ${{ needs.guard.outputs.server_id }}
+          EFF_REBOOT_POST: ${{ needs.guard.outputs.reboot_post }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" \
+            GH_TOKEN="$GH_TOKEN" HCLOUD_TOKEN="$HCLOUD_TOKEN" \
+            EFF_MODE="$EFF_MODE" EFF_KEYS="$EFF_KEYS" EFF_SERVER_ID="$EFF_SERVER_ID" EFF_REBOOT_POST="$EFF_REBOOT_POST" \
+            bash scripts/inngest-key-rotate.sh reboot
+
+      # No Hetzner token here. (KR_VERIFY_STEP_S / 60.)
+      - name: Verify the host (new boot_id, SERVING, tls-health)
+        id: verify
+        timeout-minutes: 20
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          EFF_BOOT_PRE: ${{ needs.guard.outputs.boot_pre }}
+          EFF_ROTATED_AT: ${{ needs.guard.outputs.rotated_at }}
+          EFF_POST_EPOCH: ${{ steps.post.outputs.post_epoch }}
+          GH_TOKEN: ${{ github.token }}
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" \
+            GH_TOKEN="$GH_TOKEN" \
+            BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" \
+            EFF_MODE="$EFF_MODE" EFF_KEYS="$EFF_KEYS" EFF_BOOT_PRE="$EFF_BOOT_PRE" EFF_ROTATED_AT="$EFF_ROTATED_AT" EFF_POST_EPOCH="$EFF_POST_EPOCH" \
+            bash scripts/inngest-key-rotate.sh verify
+
+  apply2:
+    needs: [guard, apply1, reboot]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply2 == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && needs.reboot.result == 'success' }}
+    environment: infra-privileged
+    runs-on: ubuntu-24.04
+    # (KR_APPLY_STEP_S + KR_JOB_SLACK_S) / 60.
+    timeout-minutes: 65
+    concurrency:
+      group: terraform-apply-web-platform-host
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        timeout-minutes: 3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        timeout-minutes: 3
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # KR_APPLY_STEP_S / 60. Phase 2: the app secrets only; it never mints a key.
+      - name: Phase 2 - app copy
+        timeout-minutes: 55
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          GH_TOKEN: ${{ github.token }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/inngest-key-rotate.sh apply2
+
+  redeploy:
+    needs: [guard, apply1, reboot, apply2]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_redeploy == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && needs.reboot.result == 'success' && needs.apply2.result == 'success' }}
+    runs-on: ubuntu-24.04
+    # (KR_REDEPLOY_S + KR_JOB_SLACK_S) / 60: the redeploy is bounded by the pipeline's own 4800 s ceiling.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    env:
+      # The fan-out roster for the redeploy (track.sh `peers`). Pinned to var.web_hosts by
+      # apps/web-platform/infra/web-hosts-fanout-parity.test.sh; an empty value would redeploy web-1 alone.
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      # KR_REDEPLOY_S / 60 rounded up (+ slack in the job). Holds the deploy webhook trio only.
+      - name: Fleet redeploy (canary then prod)
+        timeout-minutes: 80
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          EFF_ROTATED_AT: ${{ needs.guard.outputs.rotated_at }}
+          GH_TOKEN: ${{ github.token }}
+          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: bash scripts/inngest-key-rotate.sh redeploy

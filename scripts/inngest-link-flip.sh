@@ -14,6 +14,15 @@
 #                                 that is already absent still gets the redeploy)
 #   inngest-link-flip.sh revert   best-effort `off` for the workflow's failure/cancel step; always exits 0
 #
+# OFF-AFTER-ROTATION GUARD (#10540, ADR-304 Guard 3). Once the Inngest keys have been rotated (any non-`plan` dispatch of
+# inngest-key-rotate.yml exists), a flag-off apply would redeploy the fleet on plaintext http://10.0.1.40:8288 and the NEW key
+# would cross it again. `flip_apply_flag off` (the chokepoint of `off` and of `revert`) therefore refuses unless
+# CONFIRM_OFF_AFTER_ROTATION=OFF-AFTER-ROTATION (workflow input confirm_off_after_rotation); `revert` never receives it, so it
+# logs the refusal through its existing warning branch. `flip` can start from a flag already at `1` (nothing here reads the flag,
+# and pending:<epoch> over `1` is a plain update), and its failure revert is `off`, so `flip` takes the same guard and the same
+# confirm (also what re-enables TLS after a deliberate post-rotation `off`). Accepted residuals: the run list is GitHub's (90-day
+# retention, deletable), and dispatching apply-web-platform-infra.yml apply_target=inngest-link-flag directly bypasses this script.
+#
 # Every subcommand ends with one verdict line (FLIPPED / OFF / REVERTED / REVERT-INCOMPLETE) and appends t=, flag_run=
 # and verdict= to $GITHUB_OUTPUT plus a block to $GITHUB_STEP_SUMMARY (verdict: flipped|off|reverted|revert_incomplete|
 # failed|refused; `refused` = a guard stopped the run before anything was written).
@@ -51,6 +60,7 @@
 #                                           the names track.sh reads
 #   WEB_HOST_PRIVATE_IPS   the fan-out roster, a parity-pinned literal in the workflow (web-hosts-fanout-parity.test.sh);
 #                          required: an empty value would redeploy web-1 alone and leave the fleet MIXED
+#   CONFIRM_OFF_AFTER_ROTATION   optional; exactly OFF-AFTER-ROTATION acknowledges the guard above (compared as data, never echoed)
 # Test seams (never set by the workflow): FLIP_SLEEP (sleep command), FLIP_NOW (date +%s command), FLIP_TRACK (the
 #   redeploy driver, default track.sh), FLIP_WATCH_TIMEOUT_S.
 
@@ -90,6 +100,7 @@ FLIP_JOB_SLACK_S=900
 FLIP_JOB_BUDGET_S=$((FLIP_STEP_BUDGET_S + FLIP_REVERT_BUDGET_S + FLIP_JOB_SLACK_S))
 
 FLIP_APPLY_WORKFLOW="apply-web-platform-infra.yml"
+FLIP_ROTATE_WORKFLOW="inngest-key-rotate.yml"
 FLIP_STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"
 FLIP_HANDSHAKE_URL="https://deploy.soleur.ai/hooks/inngest-tls-handshake"
 FLIP_SLEEP="${FLIP_SLEEP:-sleep}"
@@ -161,6 +172,41 @@ flip_guard_idle() {
   fi
 }
 
+# flip_rotation_runs: prints how many dispatch runs of the key-rotation workflow are NOT a `plan` run. Matched on displayTitle
+# (run-name `inngest-key-rotate <mode> <keys>`), over the last 200 runs so frequent plan rehearsals cannot push the marker out.
+# A failed, cancelled or guard-refused rotate counts (one that applied and then failed already holds the new key; a false positive
+# costs one extra confirm). A run with no readable title counts too. Prints nothing and returns 1 on a listing or parse failure.
+flip_rotation_runs() {
+  local out n
+  out="$(gh run list --workflow "$FLIP_ROTATE_WORKFLOW" --event workflow_dispatch --limit 200 --json displayTitle 2>/dev/null)" || return 1
+  n="$(printf '%s' "$out" | jq -r 'if type == "array" then [.[] | ((.displayTitle // "") | tostring) | select(test("^inngest-key-rotate plan( |$)") | not)] | length else error("not a list") end' 2>/dev/null)" || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$n"
+}
+
+# flip_guard_after_rotation <off|flip>: refuse (return 1) while a rotation run exists unless CONFIRM_OFF_AFTER_ROTATION is exactly
+# OFF-AFTER-ROTATION. Fails closed when the run list cannot be read. A correct confirm skips the query, so the incident rollback
+# still works while GitHub's run API is degraded. Before any rotation run exists it changes nothing.
+flip_guard_after_rotation() {
+  local what="$1" n
+  # `refused` (nothing written) only for the off subcommand; revert keeps revert_incomplete, flip never changed it.
+  if [[ "${CONFIRM_OFF_AFTER_ROTATION:-}" == "OFF-AFTER-ROTATION" ]]; then
+    flip_log "OFF-AFTER-ROTATION confirmed: proceeding with ${what} without consulting the ${FLIP_ROTATE_WORKFLOW} run list."; return 0
+  fi
+  if ! n="$(flip_rotation_runs)"; then
+    [[ "$FLIP_ACTION" != off ]] || FLIP_VERDICT=refused
+    flip_err "cannot read the ${FLIP_ROTATE_WORKFLOW} run list; refusing ${what} blind (fail closed). Nothing was dispatched."; return 1
+  fi
+  [[ "$n" != 0 ]] || return 0
+  [[ "$FLIP_ACTION" != off ]] || FLIP_VERDICT=refused
+  if [[ "$what" == off ]]; then
+    flip_err "refusing flag off: ${n} non-plan run(s) of ${FLIP_ROTATE_WORKFLOW} exist, so the Inngest keys were rotated. Removing the flag redeploys the fleet on plaintext http://10.0.1.40:8288 and the NEW key would cross plaintext :8288 again; a re-rotation follows. If this incident rollback is intended, re-run action=off with confirm_off_after_rotation=OFF-AFTER-ROTATION. Nothing was dispatched."
+  else
+    flip_err "refusing flip: ${n} non-plan run(s) of ${FLIP_ROTATE_WORKFLOW} exist, so the Inngest keys were rotated. flip can start from a flag already at 1, and its failure revert is flag off, which would put the NEW key on plaintext :8288 again. To re-enable TLS after a deliberate post-rotation off, re-run action=flip with confirm_off_after_rotation=OFF-AFTER-ROTATION. Nothing was dispatched."
+  fi
+  return 1
+}
+
 # flip_apply_flag <off|1|pending:epoch>: dispatch the Tier-B job, find OUR run, wait for it. The run is identified by
 # its non-skipped `inngest_link_flag` job and a creation time at or after the dispatch (the dispatch API returns no id).
 # The job is idempotent for `off` (an already-absent flag is green, result=already_absent) and fails for a value that did
@@ -168,6 +214,7 @@ flip_guard_idle() {
 flip_apply_flag() {
   local value="$1" t0 id="" cid created cj
   [[ "$value" =~ ^(off|1|pending:[0-9]{10})$ ]] || { flip_err "refusing a flag value outside {off, 1, pending:<epoch>}."; return 1; }
+  if [[ "$value" == off ]]; then flip_guard_after_rotation off || return 1; fi
   t0="$(flip_now)"
   gh workflow run "$FLIP_APPLY_WORKFLOW" --ref main -f apply_target=inngest-link-flag \
     -f "inngest_link_value=${value}" -f "reason=inngest-link-flip run ${GITHUB_RUN_ID:-local}: ${value%%:*}" \
@@ -297,6 +344,7 @@ flip_exit_hook() {
 flip_cmd_flip() {
   local t0
   flip_load_bearer; flip_require_peers; flip_guard_idle
+  flip_guard_after_rotation flip
   t0="$(flip_now)"; FLIP_T0="$t0"
   flip_mark_started
   flip_apply_flag "pending:${t0}"

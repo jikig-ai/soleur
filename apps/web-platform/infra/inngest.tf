@@ -43,6 +43,10 @@ locals {
 
 # ---------------- Inngest signing/event keys (random) ----------------
 
+# RETIRED, state-only (#10540): random_id.inngest_{signing,event}_key_prd no longer feed any value. The app (soleur/prd) copies
+# below DERIVE from random_id.inngest_{signing,event}_key_dedicated (inngest-host.tf), so there is one source for the shared
+# channel key. The two resources stay declared, unreferenced, so the per-merge `-target` list and the shape/parity gates stay
+# unchanged this PR; their removal (a `removed {}` block) is tracked in #11293. Do NOT taint or -replace them: it changes nothing.
 resource "random_id" "inngest_signing_key_prd" {
   byte_length = 32
 }
@@ -51,6 +55,7 @@ resource "random_id" "inngest_signing_key_dev" {
   byte_length = 32
 }
 
+# RETIRED, state-only: see random_id.inngest_signing_key_prd above (removal tracked in #11293).
 resource "random_id" "inngest_event_key_prd" {
   byte_length = 32
 }
@@ -71,27 +76,33 @@ resource "random_id" "inngest_manual_trigger_secret_dev" {
 
 # ---------------- Doppler secrets (per-env) ----------------
 
-# SHARED-CHANNEL CONTRACT (#6178 durability; ADR-100 §4 Amendment). INNGEST_EVENT_KEY +
+# SHARED-CHANNEL CONTRACT (#6178 durability; ADR-100 §4 Amendment; #10540). INNGEST_EVENT_KEY +
 # INNGEST_SIGNING_KEY here (soleur/prd) are the APP's copy of a SHARED app<->host channel
 # auth token — NOT an isolation-sensitive per-host secret. Post-cutover their VALUES MUST
 # EQUAL the dedicated host's keys (random_id.inngest_{event,signing}_key_dedicated →
 # doppler_secret.inngest_{event,signing}_key_dedicated on soleur-inngest/prd, inngest-host.tf),
 # or every app inngest.send() to 10.0.1.40:8288 is rejected (the #6178 op=rearm HTTP 502).
-# ignore_changes=[value] below means a naive `terraform apply` does NOT propagate a host-key
-# change here — reconcile out-of-band (the cutover workflow op=arm G3.5 parity gate refuses to
-# arm on divergence; copy the host value in via `doppler secrets set … -p soleur -c prd`, which
-# ignore_changes explicitly supports, then redeploy). See the runbook §2.4 (key-reconcile) +
-# ADR-100 §4 Amendment. The isolation-sensitive secrets that STAY separate per host are
-# INNGEST_POSTGRES_URI + SUPABASE_SERVICE_ROLE — never these channel keys.
+# Since #10540 the app values are DERIVED from random_id.inngest_{signing,event}_key_dedicated
+# (the same expressions the dedicated secrets use), so equality holds by construction and no
+# out-of-band copy step exists. ignore_changes=[value] below still means a plain `terraform apply`
+# does NOT move the app copy: a rotation is `-replace` on the dedicated random_id (phase 1,
+# which updates the dedicated secret in place) and then `-replace` on the app doppler_secret
+# (phase 2; ignore_changes applies to updates, not to create, so the replaced secret is created
+# with the new value), then a host restart and a fleet redeploy — the owner-authorised
+# .github/workflows/inngest-key-rotate.yml route, ADR-304. The cutover workflow op=arm G3.5 parity
+# gate still refuses to arm on divergence, and the copies legitimately differ between the two
+# phases. See the runbook §2.4 (key-reconcile) + ADR-100 §4 Amendment. The isolation-sensitive
+# secrets that STAY separate per host are INNGEST_POSTGRES_URI + SUPABASE_SERVICE_ROLE — never
+# these channel keys.
 resource "doppler_secret" "inngest_signing_key_prd" {
   project    = "soleur"
   config     = "prd"
   name       = "INNGEST_SIGNING_KEY"
-  value      = "signkey-prod-${random_id.inngest_signing_key_prd.hex}"
+  value      = "signkey-prod-${random_id.inngest_signing_key_dedicated.hex}"
   visibility = "masked"
 
   lifecycle {
-    ignore_changes = [value] # rotate out-of-band; do not churn on every apply.
+    ignore_changes = [value] # do not churn on every apply; rotate via the key-rotation route (-replace of this secret after the dedicated random_id).
   }
 }
 
@@ -111,11 +122,11 @@ resource "doppler_secret" "inngest_event_key_prd" {
   project    = "soleur"
   config     = "prd"
   name       = "INNGEST_EVENT_KEY"
-  value      = random_id.inngest_event_key_prd.hex
+  value      = random_id.inngest_event_key_dedicated.hex
   visibility = "masked"
 
   lifecycle {
-    ignore_changes = [value] # see signing_key_prd above — rotate via `terraform taint random_id.<name>`.
+    ignore_changes = [value] # see signing_key_prd above — derived from the dedicated random_id; rotate via the key-rotation route.
   }
 }
 
@@ -313,14 +324,21 @@ resource "github_actions_secret" "supabase_access_token" {
   plaintext_value = var.supabase_access_token
 }
 
-# NOTE: All `doppler_secret` resources in this file carry `ignore_changes = [value]`.
-# This means out-of-band rotation via the Doppler UI is INVISIBLE to subsequent
-# `terraform plan` runs (the provider skips the value read-back when
-# ignore_changes is set). The ONLY supported rotation path is
-# `terraform taint random_id.<name> && terraform apply` — operators MUST NOT
-# rotate via the Doppler UI or the dashboard will desync from tfstate silently.
-# Runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) documents
-# the taint procedure.
+# NOTE: Every `doppler_secret` in this file carries `ignore_changes = [value]`, with one
+# consequence: out-of-band rotation via the Doppler UI is INVISIBLE to subsequent
+# `terraform plan` runs (the provider skips the value read-back when ignore_changes is set),
+# so operators MUST NOT rotate via the Doppler UI or the dashboard desyncs from tfstate
+# silently. Rotation by `terraform taint random_id.<name>` alone does NOT work for these
+# secrets: the regenerated value reaches tfstate and ignore_changes suppresses the Doppler
+# update. Replace the doppler_secret too (`-replace` on a create applies the new value).
+# Per secret:
+#   - INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY (prd): derived from the DEDICATED random_id
+#     (inngest-host.tf). Rotate through .github/workflows/inngest-key-rotate.yml (ADR-304),
+#     never by hand: it replaces the dedicated pair, reboots the scheduler, then replaces
+#     these two secrets and redeploys the web fleet, in that order.
+#   - INNGEST_MANUAL_TRIGGER_SECRET, the _dev copies: replace the random_id and the
+#     doppler_secret together (`-replace=random_id.<name> -replace=doppler_secret.<name>`).
+# Runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) documents both.
 
 # ---------------- Better Stack heartbeat ----------------
 

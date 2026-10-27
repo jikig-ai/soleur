@@ -109,6 +109,65 @@ assert "signkey-test- prefix on dev signing key" "grep -qE '\"signkey-test-' '$I
 assert "lifecycle ignore_changes [value] on each doppler_secret" \
   "[[ \$(grep -c 'ignore_changes = \\[value\\]' '$INNGEST_TF') -ge 7 ]]"
 
+# --- #10540: the app (soleur/prd) copies DERIVE from the dedicated random_id (Terraform-derived channel) ---
+# The shared app<->host channel keys are one value in two Doppler projects. Their single source is
+# random_id.inngest_{signing,event}_key_dedicated (inngest-host.tf); the app `_prd` secrets reference it,
+# so a rotation (-replace on the dedicated random_id, then on the app secret) lands both copies without
+# a plaintext copy step. `ignore_changes=[value]` stays on the app pair so a per-merge plan shows no diff.
+HOST_TF="$SCRIPT_DIR/inngest-host.tf"
+# tf_attr FILE TYPE NAME ATTR -> the right-hand side of ATTR inside that resource block (comments skipped).
+tf_attr() {
+  awk -v t="$2" -v n="$3" -v a="$4" '
+    $0 ~ "^resource \"" t "\" \"" n "\" \\{" { inb=1; next }
+    inb && /^}/ { exit }
+    inb && /^[[:space:]]*#/ { next }
+    inb && $0 ~ "^[[:space:]]*" a "[[:space:]]*=" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+  ' "$1"
+}
+# tf_block FILE TYPE NAME -> the whole resource block, comment lines removed.
+tf_block() {
+  awk -v t="$2" -v n="$3" '
+    $0 ~ "^resource \"" t "\" \"" n "\" \\{" { inb=1 }
+    inb && /^[[:space:]]*#/ { next }
+    inb { print }
+    inb && /^}/ { exit }
+  ' "$1"
+}
+APP_SIGN_VAL="$(tf_attr "$INNGEST_TF" doppler_secret inngest_signing_key_prd value)"
+APP_EVT_VAL="$(tf_attr "$INNGEST_TF" doppler_secret inngest_event_key_prd value)"
+DED_SIGN_VAL="$(tf_attr "$HOST_TF" doppler_secret inngest_signing_key_dedicated value)"
+DED_EVT_VAL="$(tf_attr "$HOST_TF" doppler_secret inngest_event_key_dedicated value)"
+assert "non-vacuity: the four key value expressions were extracted" \
+  "[[ -n '$APP_SIGN_VAL' && -n '$APP_EVT_VAL' && -n '$DED_SIGN_VAL' && -n '$DED_EVT_VAL' ]]"
+assert "app signing key value expression == dedicated signing key value expression" \
+  "[[ '$APP_SIGN_VAL' == '$DED_SIGN_VAL' ]]"
+assert "app event key value expression == dedicated event key value expression" \
+  "[[ '$APP_EVT_VAL' == '$DED_EVT_VAL' ]]"
+assert "app signing key derives from random_id.inngest_signing_key_dedicated.hex" \
+  "[[ '$APP_SIGN_VAL' == *'random_id.inngest_signing_key_dedicated.hex'* ]]"
+assert "app event key derives from random_id.inngest_event_key_dedicated.hex" \
+  "[[ '$APP_EVT_VAL' == *'random_id.inngest_event_key_dedicated.hex'* ]]"
+assert "app key copies no longer reference the orphaned _prd random_id values" \
+  "[[ '$APP_SIGN_VAL$APP_EVT_VAL' != *'key_prd'* ]]"
+assert "app signing key keeps ignore_changes = [value] (per-merge plan stays quiet)" \
+  "tf_block '$INNGEST_TF' doppler_secret inngest_signing_key_prd | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]'"
+assert "app event key keeps ignore_changes = [value] (per-merge plan stays quiet)" \
+  "tf_block '$INNGEST_TF' doppler_secret inngest_event_key_prd | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]'"
+assert "dedicated signing doppler_secret has NO lifecycle block (the issue's verify-whether question)" \
+  "! tf_block '$HOST_TF' doppler_secret inngest_signing_key_dedicated | grep -q 'lifecycle'"
+assert "dedicated event doppler_secret has NO lifecycle block (the issue's verify-whether question)" \
+  "! tf_block '$HOST_TF' doppler_secret inngest_event_key_dedicated | grep -q 'lifecycle'"
+assert "dedicated random_id pair has no lifecycle block (a plain -replace must regenerate)" \
+  "! tf_block '$HOST_TF' random_id inngest_signing_key_dedicated | grep -q 'lifecycle' && ! tf_block '$HOST_TF' random_id inngest_event_key_dedicated | grep -q 'lifecycle'"
+assert "SHARED-CHANNEL CONTRACT no longer instructs an out-of-band copy" \
+  "! grep -qE 'copy the host value in via|reconcile out-of-band' '$INNGEST_TF'"
+assert "SHARED-CHANNEL CONTRACT names the derivation from the dedicated random_id" \
+  "grep -qE 'DERIVED from random_id\\.inngest_\\{signing,event\\}_key_dedicated' '$INNGEST_TF'"
+assert "orphaned _prd random_ids carry a retired comment that points at #11293" \
+  "grep -qE 'RETIRED.*#11293|#11293.*RETIRED' '$INNGEST_TF'"
+assert "closing NOTE no longer calls 'terraform taint random_id' the ONLY supported rotation path" \
+  "! grep -qE 'The ONLY supported rotation path' '$INNGEST_TF'"
+
 # --- BetterStack heartbeat + policy ---
 echo ""
 echo "--- BetterStack ---"
@@ -3271,7 +3330,9 @@ if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 
 # rows, and the re-anchored ExecStart + redis.service asserts; measured 585/585 with terraform
 # fmt and the pinned-container dash rows). 585 -> 586 (#11172: writer-default == conf aclfile
 # path pin).
-INNGEST_MIN_ASSERTIONS_FULL=586
+# #10540: 586 -> 601 (the app copies derive from the dedicated random_id: expression equality, derivation, ignore_changes kept,
+# dedicated pair without lifecycle, contract/NOTE/retired-comment pins; 15 rows).
+INNGEST_MIN_ASSERTIONS_FULL=601
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
