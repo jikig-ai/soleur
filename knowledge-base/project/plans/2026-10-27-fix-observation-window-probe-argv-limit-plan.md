@@ -102,7 +102,7 @@ All edits in `plugins/soleur/test/ci-pr-affected-replay.test.sh`, section "ratch
 In `scripts/followthroughs/ratchet-observation-window-10865.sh`, with no temp files for payloads (a here-string or pipe is not argv):
 
 - Per page: `out="$(jq -c 'if type == "array" then [.[] | {filename}] else error("files page is not an array") end' 2>&1 <<<"$page_files")" || fail_api "pull $n files (parse): $(jq_detail "$out")"`; accumulate the projected page into `files` with a stdin-fed `jq -s -c 'add'`; the count `cnt` comes from the projected page; keep the page loop, the 3-page cap and the sentinel, now appended as one more projected element (`files="$(jq -c '. + [{"filename":"(more than 300 files)"}]' <<<"$files")"` already reads stdin and stays).
-- The exclusion program takes the pull and the list on stdin: `{ printf '%s\n' "$p"; printf '%s\n' "$files"; } | jq -s -r --argjson oracle "$ORACLE_JSON" '.[0] as $p | .[1] as $files | ...'` with the program body unchanged (`$p` replaces `.`, `$files` is the same array). `printf` is a builtin, so there is no `execve` and no argv. `PR_DOCS` and `PR_SCRIPTS` already read `<<<"$files"`.
+- The exclusion program takes the pull and the list on stdin: `{ printf '%s\n' "$p"; printf '%s\n' "$files"; } | jq -s -r --argjson oracle "$ORACLE_JSON" '.[0] as $p | .[1] as $files | $p | ...'` with the program body unchanged (`$files` is the same array it was via `--argjson`). `printf` is a builtin, so there is no `execve` and no argv. `PR_DOCS` and `PR_SCRIPTS` already read `<<<"$files"`.
 - `jq_detail` is `printf '%s' "$1" | tr -cd '[:print:]' | cut -c1-160`.
 
 ### Phase 3 — Cache `draft_at`
