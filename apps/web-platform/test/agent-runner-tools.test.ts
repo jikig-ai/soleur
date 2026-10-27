@@ -474,7 +474,7 @@ describe("agent-runner MCP tool wiring", () => {
     await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
-    // Registered, but gated (shared cross-tenant PLAUSIBLE_API_KEY) and therefore NOT pre-approved (#11303).
+    // Registered, but gated (the user's own account-wide PLAUSIBLE_API_KEY, no per-site scoping) and therefore NOT pre-approved (#11303).
     expect(registeredPlatformTools(options)).toEqual(
       expect.arrayContaining(["plausible_create_site", "plausible_add_goal", "plausible_get_stats"]),
     );

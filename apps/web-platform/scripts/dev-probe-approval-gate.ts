@@ -149,9 +149,10 @@ if (known.length !== only.size) {
 }
 
 // --- Registration per runner, from the REAL builders (no handler is ever called). ---------------------------------------------------
-// Legacy runner (agent-runner.ts startAgentSession): every builder it composes. The names are DERIVED here, never typed, so a tool the
-// runner gains is in the `:prod` and `:raw` lists without editing this file. A builder that fails to import is CANT-RUN (never a silent
-// fall back to the eight FQNs, which would measure a smaller list than production passes).
+// Legacy runner (agent-runner.ts startAgentSession): every builder it composes. The BUILDER LIST below is hand-written from agent-runner.ts
+// and must be kept in sync with it by hand (a builder the runner gains has to be added here); the tool NAMES come from those builders, so a
+// tool added to an already-listed builder is in the `:prod` and `:raw` lists without editing this file. A builder that fails to import is
+// CANT-RUN (never a silent fall back to the eight FQNs, which would measure a smaller list than production passes).
 // cc-dispatcher (cc-soleur-go): soleurPlatformToolsForTests = narration + (flag-gated) c4 + (crm-lead only) crm. Informational only.
 const LEGACY = new Set<string>();
 const LEGACY_PLUGIN_SERVERS = ["context7"]; // one plugin MCP server, so the wildcard entry is part of the measured composition
@@ -241,7 +242,7 @@ mkdirSync(ws, { recursive: true });
 writeFileSync(join(ws, "README.md"), "throwaway probe workspace\n");
 const pluginPath = resolve(__dirname, "..", "..", "..", "plugins", "soleur");
 
-type CaseResult = { attempted: boolean; invoked: boolean; tier: string; behaviors: string[]; gateCalls: number; handlerRan: boolean; denyMessage: string; err?: string };
+type CaseResult = { attempted: boolean; invoked: boolean; tier: string; behaviors: string[]; gateCalls: number; handlerRan: boolean; err?: string };
 
 async function runCase(c: Case): Promise<CaseResult> {
   const spec = SPECS.find((s) => s.name === c.tool)!;
@@ -252,7 +253,6 @@ async function runCase(c: Case): Promise<CaseResult> {
   let gateCalls = 0;
   let handlerRan = false;
   let attempted = false;
-  let denyMessage = "";
   const abort = new AbortController();
   const session = { abort, reviewGateResolvers: new Map(), sessionId: null };
 
@@ -308,7 +308,6 @@ async function runCase(c: Case): Promise<CaseResult> {
       const r = await (inner as any)(toolName, input, o);
       if (toolName === target) {
         behaviors.push(String(r?.behavior));
-        if (r?.behavior === "deny") denyMessage = String(r.message ?? "").slice(0, 80);
       }
       return r;
     }) as any,
@@ -340,7 +339,7 @@ async function runCase(c: Case): Promise<CaseResult> {
   } finally {
     clearTimeout(timer);
   }
-  return { attempted, invoked: seen.includes(target), tier, behaviors, gateCalls, handlerRan, denyMessage, err };
+  return { attempted, invoked: seen.includes(target), tier, behaviors, gateCalls, handlerRan, err };
 }
 
 let failed = false;
