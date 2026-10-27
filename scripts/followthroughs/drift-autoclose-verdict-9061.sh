@@ -82,16 +82,15 @@ fi
 # The run log archive holds one file per step ("<job>/<NN>_<step>.txt"), which
 # isolates this step's stdout from the targeted pre-apply plan's raw output.
 tmpdir="$(mktemp -d -t soleur-followthrough.XXXXXXXX)"
+trap 'rm -rf "$tmpdir"' EXIT
 zip="$tmpdir/run-logs.zip"
 if ! gh api "repos/${REPO}/actions/runs/${sample_id}/logs" > "$zip" 2>/dev/null; then
   echo "CANNOT ESTABLISH: log archive fetch failed for run ${sample_id}" >&2
-  rm -rf "$tmpdir"
   exit 3
 fi
 entry="$(unzip -Z1 "$zip" 2>/dev/null | grep -i 'full-root drift plan' | head -1)"
 if [[ -z "$entry" ]]; then
   echo "CANNOT ESTABLISH: no '${STEP_NAME}' step file in run ${sample_id} log archive" >&2
-  rm -rf "$tmpdir"
   exit 3
 fi
 unzip -p "$zip" "$entry" > "$tmpdir/step.txt" 2>/dev/null
@@ -104,12 +103,10 @@ elif grep -qF "Post-apply full-root plan still shows changes" "$step_log"; then
   verdict=drift
 elif grep -qF "Post-apply full-root plan FAILED" "$step_log"; then
   echo "FAIL: run ${sample_id} drift_plan emitted ::error:: — the diagnostic failed closed; the gate produced no evidence" >&2
-  rm -rf "$tmpdir"
   exit 1
 fi
 if [[ -z "$verdict" ]]; then
   echo "FAIL: run ${sample_id} drift_plan log carries no verdict notice — the step produced no readable evidence" >&2
-  rm -rf "$tmpdir"
   exit 1
 fi
 
@@ -119,10 +116,8 @@ leak="$(grep -nE 'Terraform (will|has|planned) perform|Refreshing state\.|random
 if [[ -n "$leak" ]]; then
   echo "FAIL: run ${sample_id} drift_plan leaked raw plan output into the public log (#11294):" >&2
   printf '%s\n' "$leak" | head -20 >&2
-  rm -rf "$tmpdir"
   exit 1
 fi
-rm -rf "$tmpdir"
 
 if [[ "$verdict" == "drift" ]]; then
   for iss in $DRIFT_ISSUES; do
