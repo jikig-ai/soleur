@@ -274,28 +274,28 @@ Skipped: no architectural decision is made or reversed. The fix restores conform
 
 ### Functional Requirements
 
-- [ ] `gitDataRemoteUrl(id)` returns `ssh://git@<host>/mnt/git-data/repositories/<id>.git` (`apps/web-platform/server/git-data-replication.ts`, constant at the `GIT_DATA_REPO_PATH_PREFIX` line).
-- [ ] Real `git fetch` and real `git push --force` against that URL, through the REAL `git-data-transport-wrapper.sh` (seams), exit 0; the recorded commands are exactly `git-upload-pack '/mnt/git-data/repositories/<id>.git'` and `git-receive-pack '/mnt/git-data/repositories/<id>.git'` (vitest R-PUSH / R-FETCH, wrapper suite U1/U2). The vitest push is the production shape: by remote name `git-data`, both refspecs, `--push-option=lease-gen` and `--push-option=worktree-id`.
-- [ ] After the push the bare repo holds `refs/soleur/worktrees/<wt>/heads/<branch>` and `.../tags/<tag>` with the pushed shas and no ref outside that namespace (R-PUSH, U4).
-- [ ] The OLD form is refused with `repo path does not resolve: '/repositories/<id>.git'` in the wrapper suite (U3), and the always-exit-0 stub accepts it (the added stub-loop input).
-- [ ] `ensureGitDataRemote` re-points a stale `git-data` remote to the new URL (R-STALE).
-- [ ] The container-probe command equals git's emission for the URL form (CPU1, with the prefix extracted from the app constant), and the cutover.sh composition equals the prefix (R-PARITY).
-- [ ] Runbook R3 and R6 require refs under `refs/soleur/worktrees/<id>/`, state that `<id>.git` existence, `store_not_empty` and provisioning success never count, and say plainly that no no-SSH refs read exists yet.
+- [x] `gitDataRemoteUrl(id)` returns `ssh://git@<host>/mnt/git-data/repositories/<id>.git` (`apps/web-platform/server/git-data-replication.ts`, constant at the `GIT_DATA_REPO_PATH_PREFIX` line).
+- [x] Real `git fetch` and real `git push --force` against that URL, through the REAL `git-data-transport-wrapper.sh` (seams), exit 0; the recorded commands are exactly `git-upload-pack '/mnt/git-data/repositories/<id>.git'` and `git-receive-pack '/mnt/git-data/repositories/<id>.git'` (vitest R-PUSH / R-FETCH, wrapper suite U1/U2). The vitest push is the production shape: by remote name `git-data`, both refspecs, `--push-option=lease-gen` and `--push-option=worktree-id`.
+- [x] After the push the bare repo holds `refs/soleur/worktrees/<wt>/heads/<branch>` and `.../tags/<tag>` with the pushed shas and no ref outside that namespace (R-PUSH, U4).
+- [x] The OLD form is refused with `repo path does not resolve: '/repositories/<id>.git'` in the wrapper suite (U3), and the always-exit-0 stub accepts it (the added stub-loop input).
+- [x] `ensureGitDataRemote` re-points a stale `git-data` remote to the new URL (R-STALE).
+- [x] The container-probe command equals git's emission for the URL form (CPU1, with the prefix extracted from the app constant), and the cutover.sh composition equals the prefix (R-PARITY).
+- [x] Runbook R3 and R6 require refs under `refs/soleur/worktrees/<id>/`, state that `<id>.git` existence, `store_not_empty` and provisioning success never count, and say plainly that no no-SSH refs read exists yet.
 - [ ] PR body begins `Ref #8211` and contains no `Closes`/`Fixes` for it; #11086 is not mentioned as fixed.
 
 ### Non-Functional Requirements
 
-- [ ] No SSH command, secret value or host address beyond the already-public private-net `10.0.1.20` appears in new test or runbook text.
-- [ ] Every extraction in R-PARITY asserts exactly one match; zero is a failure.
-- [ ] The e2e vitest file asserts hard preconditions (`git`, `bash`, `findmnt` present and `findmnt --mountpoint` answering for the store dir) and fails loud rather than skipping. The shim is named `ssh` so git sends no `-G` probe, and log assertions match the verb lines, not the whole file.
+- [x] No SSH command, secret value or host address beyond the already-public private-net `10.0.1.20` appears in new test or runbook text.
+- [x] Every extraction in R-PARITY asserts exactly one match; zero is a failure.
+- [x] The e2e vitest file asserts hard preconditions (`git`, `bash`, `findmnt` present and `findmnt --mountpoint` answering for the store dir) and fails loud rather than skipping. The shim is named `ssh` so git sends no `-G` probe, and log assertions match the verb lines, not the whole file.
 
 ### Quality Gates
 
-- [ ] `rg -n 'ssh://[^/ ]+/repositories/' apps/web-platform/server apps/web-platform/test/git-data-replication.test.ts apps/web-platform/test/git-data-client.test.ts apps/web-platform/test/git-data-remote-url-wrapper.test.ts` returns nothing.
-- [ ] `git diff origin/main --name-only` is a subset of: the Files to Edit list, the Files to Create list, `knowledge-base/INDEX.md` if regenerated, this plan file (`knowledge-base/project/plans/2026-10-27-fix-git-data-remote-url-wrapper-path-plan.md`), and `knowledge-base/project/specs/feat-one-shot-8211-git-data-remote-url-path/{tasks.md,decision-challenges.md,session-state.md}` (pipeline-written files included on purpose).
-- [ ] `git diff origin/main --stat -- apps/web-platform/infra/git-data-transport-wrapper.sh apps/web-platform/infra/git-data-bootstrap.sh apps/web-platform/infra/cloud-init-git-data.yml apps/web-platform/infra/git-data.tf apps/web-platform/infra/cron-egress-nftables.sh AGENTS.rules.md` prints nothing.
-- [ ] The new vitest file is discovered by `npx vitest run test/git-data-remote-url-wrapper.test.ts` (reports its row count, not "no tests"), and the two infra suites still register by presence under `apps/web-platform/infra/` (`bash apps/web-platform/infra/run-registered-suites.sh --list` includes both).
-- [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` passes; the runbook word-census case in `git-data-cutover-access.test.sh` passes after the runbook edit.
+- [x] `rg -n 'ssh://[^/ ]+/repositories/' apps/web-platform/server apps/web-platform/test/git-data-replication.test.ts apps/web-platform/test/git-data-client.test.ts apps/web-platform/test/git-data-remote-url-wrapper.test.ts` returns nothing.
+- [x] `git diff origin/main --name-only` is a subset of: the Files to Edit list, the Files to Create list, `knowledge-base/INDEX.md` if regenerated, this plan file (`knowledge-base/project/plans/2026-10-27-fix-git-data-remote-url-wrapper-path-plan.md`), and `knowledge-base/project/specs/feat-one-shot-8211-git-data-remote-url-path/{tasks.md,decision-challenges.md,session-state.md}` (pipeline-written files included on purpose). Review additions, each forced by a repo guard or the architecture seat and recorded here rather than silently widening the list: `apps/web-platform/test/repo-wide-suites.ts` (the new test reads `infra/` and a shared helper, so `repo-wide-containment` requires the registration), `plugins/soleur/test/fixture-relative-assert.baseline.txt` (the ratchet drops one site and must be regenerated in the same commit), and `knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md` (dated addendum for the URL form).
+- [x] `git diff origin/main --stat -- apps/web-platform/infra/git-data-transport-wrapper.sh apps/web-platform/infra/git-data-bootstrap.sh apps/web-platform/infra/cloud-init-git-data.yml apps/web-platform/infra/git-data.tf apps/web-platform/infra/cron-egress-nftables.sh AGENTS.rules.md` prints nothing.
+- [x] The new vitest file is discovered by `npx vitest run test/git-data-remote-url-wrapper.test.ts` (reports its row count, not "no tests"), and the two infra suites still register by presence under `apps/web-platform/infra/` (`bash apps/web-platform/infra/run-registered-suites.sh --list` includes both).
+- [x] `bash plugins/soleur/test/c4-count-parity.test.sh` passes; the runbook word-census case in `git-data-cutover-access.test.sh` passes after the runbook edit.
 
 ## Test Scenarios
 
