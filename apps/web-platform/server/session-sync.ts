@@ -555,45 +555,46 @@ export function countMdFiles(dirPath: string): number {
 
 /**
  * Record the current KB file count in the user's kb_sync_history JSONB array.
- * Trims to the last 14 entries. Best-effort — failures are logged, never thrown.
+ * Trims to the last 14 entries (the RPC's `p_cap: 14` reproduces the old
+ * `.slice(-14)` — read-merge-cap happens inside the function under a
+ * row-level lock). Best-effort — failures are logged and mirrored to Sentry
+ * via `reportSilentFallback`, never thrown.
+ *
+ * #11193: routed through the `append_kb_sync_row` SECURITY DEFINER RPC
+ * (migration 053) — the same instrumented path `appendKbSyncRow` below uses.
+ * Migration 178 re-narrows `users` to SELECT + column-level UPDATE on the
+ * Note C census set, and migration 017's RESTRICTIVE policy pins
+ * kb_sync_history for any authenticated UPDATE regardless of grants, so a
+ * direct `.update({ kb_sync_history })` cannot survive the narrow. The RPC
+ * is the only tenant-callable write path (it also removes the lost-update
+ * race the JS-side fetch + update had under concurrent sync calls).
  */
 async function recordKbSyncHistory(
   userId: string,
   workspacePath: string,
 ): Promise<void> {
-  // PR-C §2.1 (#3244): tenant-scoped SELECT + UPDATE on `users`.
+  // PR-C §2.1 (#3244): tenant-scoped client (authenticated role).
   const tenant = await getFreshTenantClient(userId);
   const kbPath = join(workspacePath, "knowledge-base");
   const fileCount = countMdFiles(kbPath);
+  const today = new Date().toISOString().slice(0, 10);
 
-  const { data: user, error: fetchError } = await tenant
-    .from("users")
-    .select("kb_sync_history")
-    .eq("id", userId)
-    .single();
+  const { error } = await tenant.rpc("append_kb_sync_row", {
+    p_row: { date: today, count: fileCount } satisfies LegacyKbSyncRow,
+    p_cap: 14,
+  });
 
-  if (fetchError || !user) {
-    log.warn({ err: fetchError, userId }, "Failed to fetch kb_sync_history");
+  if (error) {
+    reportSilentFallback(error, {
+      feature: "session-sync",
+      op: "appendKbSyncRow",
+      extra: { userId },
+      message: "append_kb_sync_row RPC failed (recordKbSyncHistory)",
+    });
     return;
   }
-
-  const history = Array.isArray(user.kb_sync_history)
-    ? (user.kb_sync_history as Array<{ date: string; count: number }>)
-    : [];
-
-  const today = new Date().toISOString().slice(0, 10);
-  const updated = [...history, { date: today, count: fileCount }].slice(-14);
-
-  const { error: updateError } = await tenant
-    .from("users")
-    .update({ kb_sync_history: updated })
-    .eq("id", userId);
-
-  if (updateError) {
-    log.warn({ err: updateError, userId }, "Failed to update kb_sync_history");
-  } else {
-    log.debug({ userId, fileCount }, "Recorded KB sync history");
-  }
+  const uidHash = hashUserId(userId);
+  log.debug({ userIdHash: uidHash, fileCount }, "Recorded KB sync history");
 }
 
 // #4224 — shared constants for the workspace-reconcile feature.

@@ -338,6 +338,9 @@ ALWAYS_ON_SUITES=(
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
   # fast-tier budget lint (scripts/test-all-fast-tier-budget) pins this set.
 
+  # S4 PR5 (#10861), PR4b row 6 (2): a whole-tree reader (it walks every tracked file of PJ_EXTS and SWEEP_EXTS) whose existing edges alone select it in
+  # more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms, src=measured). Receipts: the pr5-glob-measurements spec directory (receipts/glob-rate/, under knowledge-base/project/specs/archive/ once the PR is shipped).
+  ".claude/hooks/grep-q-pipe-guard.test.sh"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -797,6 +800,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
+  ".github/workflows/git-data-plaintext-volume-destroy.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -805,6 +809,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/cat-inngest-verify-state.sh"
   "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/infra-config-apply.sh"
   "apps/web-platform/infra/infra-config-install.sh"
@@ -846,6 +851,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/ship-incident-pir-gate.sh"
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
+  "tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
@@ -1046,12 +1052,22 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/betterstack-ingest-probe.sh"
+  "scripts/betterstack-query.sh"
   "scripts/compound-promote.test.sh"
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-issue.sh"
   "tests/scripts/lib/git-data-birth-readiness-gate.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
+)
+
+# tests/scripts/git-data-plaintext-destroy-gate — derived edges could not reach its subject: the suite executes the destroy
+# workflow's run blocks and the read-only probe it names (the gate library itself is reached through the source closure).
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_PLAINTEXT_DESTROY_GATE_PATHS=(
+  ".github/workflows/git-data-plaintext-volume-destroy.yml"
+  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-git-data-plaintext-destroy-gate.sh"
 )
 
 # tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
@@ -1500,6 +1516,25 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_MERGE_EFFECT_CLASS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/ship-prepush-secret-scan.test.sh — reads the script under test, the ship SKILL.md call site, the repo's own
+# gitleaks pack and the CI range arm it must stay in parity with; the shared libs it sources are named so an edit to them selects it.
+AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PREPUSH_SECRET_SCAN_TEST_SH_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".claude/hooks/lib/incidents.sh"
+  ".claude/hooks/ship-unpushed-commits-gate.sh"
+  ".gitleaks.toml"
+  "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/lib/gitleaks-probe.sh"
+  "plugins/soleur/test/ship-prepush-secret-scan.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
@@ -1885,7 +1920,8 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 # S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked file whose extension is in PJ_EXTS (sh bash yml yaml tf tftpl template
 # service tmpl; pj_join_pairs over git ls-files, :2521-2527), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
 # SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv). The
-# whole-tree read is a selection-policy call (criterion (c)), and the edges whose declaration reveals mentions stay held back (#10959).
+# whole-tree read was the selection-policy call of S4 PR5 (#10861): the suite is now in ALWAYS_ON_SUITES (measured verdict `always_on`), so these exact edges are
+# inert for selection and the audit skips the suite.
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   ".github/scripts/test/fixtures-validate-infra-templates.sh"
@@ -2897,7 +2933,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  ".claude/hooks/brand-hex-commit-gate.sh"
+  ".claude/hooks/git-commit-secret-scan.sh"
   ".claude/hooks/incidents.test.sh"
+  ".claude/hooks/lib/commit-target-roots.sh"
+  ".claude/hooks/lib/incidents.sh"
+  ".claude/hooks/lib/technical-fork-cues.sh"
+  ".claude/hooks/pre-closing-technical-fork-gate.sh"
+  ".claude/hooks/pre-closing-technical-fork-gate.test.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_BRAND_WORKSHOP_PEN_COMMIT_AFTER_SAVE_TEST_SH_PATHS=(
@@ -3024,9 +3067,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_VERSION_BANNER_HOOK_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# (#10793) plus the target-resolution lib the hook sources and the shell lexer that lib runs.
 AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  ".claude/hooks/lib/commit-target-roots.sh"
   ".claude/hooks/lib/incidents.sh"
+  "plugins/soleur/hooks/lib/shell-argv.pl"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 # (#10696) the closure leaf libs, plus the hook, the two libs it sources, the shell lexer and the gitleaks config the suite drives.
@@ -3103,6 +3149,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_E2E_SKIP_ANCHORS_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GDPR_GATE_SELF_TEST_TEST_SH_PATHS=(
   ".claude/hooks/lib/incidents.sh"
+  "apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GIT_TRIPWIRE_TEST_SH_PATHS=(
@@ -3207,4 +3254,12 @@ AFFECTED_TESTS_SCRIPTS_LINT_RULE_BODIES_PATHS=(
   "scripts/_agents_md_sections.py"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/lint-rule-bodies.py"
+)
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CCLA_REPRESENTATIVE_ICLA_7922_PATHS=(
+  "apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_SCRIPTS_TMPFS_GUARD_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )

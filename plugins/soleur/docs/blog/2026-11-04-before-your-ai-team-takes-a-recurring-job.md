@@ -2,7 +2,7 @@
 title: "Before Your AI Team Takes a Recurring Job, It Answers Six Questions"
 date: 2026-11-04
 description: "Scheduled automations pile up quietly. Before our AI team may create a new recurring job, it has to write down six answers about it — or the job doesn't exist."
-ogImage: "blog/og-before-your-ai-team-takes-a-recurring-job.png"
+ogImage: "blog/og-audited-102-guardrails-four-portable.png"
 pillar: agentic-solo-founder
 tags:
   - agentic-engineering

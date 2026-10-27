@@ -889,6 +889,60 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "egress-audit-read-failure": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "egress-audit-read"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "rpc_error,rpc_timeout,workspace_read_error"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 41,
+    "name": "egress-audit-read-failure",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "gh-pages-cert-reissue-failed": {
     "actionFilters": [
       {

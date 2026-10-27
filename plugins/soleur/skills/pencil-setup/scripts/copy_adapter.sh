@@ -9,7 +9,7 @@
 #
 # Exit codes:
 #   0  copy succeeded (or repo already matches install)
-#   1  repo adapter missing (should never happen inside the plugin)
+#   1  repo adapter or one of its sibling modules missing (should never happen inside the plugin)
 #   2  install directory not writable
 
 set -euo pipefail
@@ -26,6 +26,7 @@ ADAPTER_FILES=(
   "sanitize-filename.mjs"
   "pencil-response-classify.mjs"
   "pencil-save-gate.mjs"
+  "pencil-repl-surface.mjs"
   "package.json"
   "package-lock.json"
 )
@@ -34,6 +35,15 @@ if [[ ! -f "$REPO_ADAPTER_DIR/pencil-mcp-adapter.mjs" ]]; then
   echo "ERROR: repo adapter not found at $REPO_ADAPTER_DIR/pencil-mcp-adapter.mjs" >&2
   exit 1
 fi
+
+# Validate EVERY source before copying ANY: a hard error mid-loop would leave a
+# mixed-version install (new adapter, old guards) that fails far from the cause.
+for file in "${ADAPTER_FILES[@]}"; do
+  if [[ ! -f "$REPO_ADAPTER_DIR/$file" ]]; then
+    echo "ERROR: missing repo file $REPO_ADAPTER_DIR/$file — refusing a partial install" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$INSTALL_DIR" || {
   echo "ERROR: cannot create install dir $INSTALL_DIR" >&2
@@ -44,10 +54,6 @@ copied=0
 for file in "${ADAPTER_FILES[@]}"; do
   src="$REPO_ADAPTER_DIR/$file"
   dst="$INSTALL_DIR/$file"
-  if [[ ! -f "$src" ]]; then
-    echo "WARN: missing repo file $src — skipping" >&2
-    continue
-  fi
   if [[ -f "$dst" ]] && ! [[ -L "$dst" ]] && cmp -s -- "$src" "$dst"; then
     continue
   fi

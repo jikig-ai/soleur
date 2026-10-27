@@ -34,11 +34,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { createServiceClient } from "@/lib/supabase/service";
-import { getRuntimeFlag } from "@/lib/feature-flags/server";
+import { isEgressAuditCollectionOn } from "@/server/egress-audit-collection";
 import { mirrorWarnWithDebounce, mirrorWithDebounce } from "@/server/observability";
 
 const FEATURE = "egress-audit-ingest";
-const FLAG = "egress-audit-collection" as const;
 
 export const MAX_BODY_BYTES = 512 * 1024;
 export const MAX_ROWS = 500;
@@ -287,13 +286,7 @@ export async function handleEgressAuditIngest(request: Request): Promise<Respons
         try {
           enabled.set(
             orgId,
-            await getRuntimeFlag(FLAG, {
-              userId: null,
-              role: "prd",
-              orgId,
-              email: null,
-              subscriptionStatus: null,
-            }),
+            await isEgressAuditCollectionOn(orgId),
           );
         } catch (err) {
           enabled.set(orgId, false);

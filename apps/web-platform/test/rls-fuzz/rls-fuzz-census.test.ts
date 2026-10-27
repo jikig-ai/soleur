@@ -46,6 +46,8 @@ const ALLOWED_BARE_SQL_CALLS = new Set([
   "securityDefinerAuthenticatedFns",
   "allSecurityDefinerFns",
   "securityDefinerAnonFns",
+  "publicApiRelations",
+  "publicApiSequences",
 ]);
 
 // `sql.end` is teardown, not a statement — exempt. A bare `await sql.begin` or

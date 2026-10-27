@@ -17,6 +17,7 @@ import { TemplateAuthorizationRow } from "@/components/scope-grants/template-aut
 import { BashAutonomousToggle } from "@/components/settings/bash-autonomous-toggle";
 import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
 import { WebEgressToggle } from "@/components/settings/web-egress-toggle";
+import { loadEgressCardState } from "@/server/egress-audit-read";
 import { resolveBashAutonomous } from "@/server/resolve-bash-autonomous";
 import { resolveDebugMode } from "@/server/resolve-debug-mode";
 import { resolveWebEgress } from "@/server/resolve-web-egress";
@@ -93,6 +94,17 @@ export default async function ScopeGrantsPage() {
   // sees a locked read-only switch so the workspace's egress posture is
   // visible to everyone it affects.
   const webEgress = await resolveWebEgress(user.id);
+
+  // #9545 PR2 — the card's "Last recorded request" hint and the collection state for the enable dialog
+  // and the non-owner line. Never throws: any failure hides the hint (a single bounded, decorative read).
+  // The loader reads its own workspace pointer; this page resolved `activeWorkspaceId` separately for the
+  // owner flag. If the two disagree (a switch between the reads, or the solo fallback) the hint and the
+  // dialog copy must not describe a different workspace than the toggle's owner state, so both are dropped.
+  const loadedEgressCard = await loadEgressCardState(supabase, user.id);
+  const egressCard =
+    loadedEgressCard.workspaceId === activeWorkspaceId
+      ? loadedEgressCard
+      : { lastRequestAt: null, collection: "unknown" as const };
 
   // Belt-and-suspenders .eq("founder_id", user.id) defends against any
   // future RLS loosening on scope_grants. Comment per today/route.ts
@@ -222,9 +234,9 @@ export default async function ScopeGrantsPage() {
         </section>
       )}
 
-      {/* feat-open-web-egress (#9534) — agent-web-access.pen. The "View
-          egress audit log" footer affordance is deferred (#9545): no
-          queryable store ships in Phase A. */}
+      {/* feat-open-web-egress (#9534) — agent-web-access.pen; the "View
+          egress audit log" link and "Last recorded request" hint (#9545 PR2,
+          egress-audit-log.pen) render inside WebEgressToggle. */}
       <section
         id="agent-web-access"
         aria-labelledby="agent-web-access-heading"
@@ -244,6 +256,8 @@ export default async function ScopeGrantsPage() {
         <WebEgressToggle
           initialWebEgress={webEgress}
           isOwner={isWorkspaceOwner}
+          lastRequestAt={egressCard.lastRequestAt}
+          collection={egressCard.collection}
         />
         <p className="mt-4 rounded-none border border-soleur-accent-gold-fg bg-soleur-bg-surface-2 p-3 text-xs text-soleur-text-secondary">
           <strong className="text-soleur-text-primary">
