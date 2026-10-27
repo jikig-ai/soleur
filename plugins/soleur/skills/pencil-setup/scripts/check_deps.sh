@@ -4,6 +4,15 @@
 # No set -euo pipefail: soft dependency checks and install failures
 # must not abort the script. Each check uses explicit if/then.
 
+case "$-" in
+  *x*)
+    if [ -n "${PENCIL_CLI_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 AUTO_INSTALL=false
 CHECK_ADAPTER_DRIFT=false
 for arg in "$@"; do
@@ -48,7 +57,27 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
   installed_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
   repo_sha=$(sha256sum -- "$repo_adapter" | awk '{print $1}')
 
-  if [[ "$installed_sha" == "$repo_sha" ]]; then
+  # Compare EVERY runtime module copy_adapter.sh installs, not only the main
+  # file: a stale sibling (the save sentinel, the REPL surface table) next to a
+  # fresh adapter is exactly the state this check exists to catch. The list is
+  # read from copy_adapter.sh so the two cannot disagree. (A while-read loop, not
+  # mapfile: this script also runs on macOS bash 3.2.)
+  drifted=""
+  compared=0
+  while IFS= read -r module; do
+    [[ -n "$module" ]] || continue
+    compared=$((compared + 1))
+    if [[ ! -f "$install_dir/$module" ]] || ! cmp -s -- "$script_dir/$module" "$install_dir/$module"; then
+      drifted="$drifted $module"
+    fi
+  done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$script_dir/copy_adapter.sh" | grep -o '"[^"]*\.mjs"' | tr -d '"')
+  if [[ "$compared" -eq 0 ]]; then
+    # An unreadable module list must not read as "no drift": it would compare nothing.
+    echo "ERROR: no adapter modules parsed from $script_dir/copy_adapter.sh ADAPTER_FILES" >&2
+    exit 2
+  fi
+
+  if [[ -z "$drifted" ]]; then
     echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"
     exit 0
   fi
@@ -69,7 +98,7 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
     fi
   fi
 
-  echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}"
+  echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}; differing or missing:${drifted}"
   echo "       Run: bash $(basename "${BASH_SOURCE[0]}") --check-adapter-drift --auto"
   echo "       Or re-run /soleur:pencil-setup to refresh the installed adapter."
   exit 3
@@ -438,7 +467,10 @@ attempt_headless_install() {
   # Package name is @pencil.dev/cli (not @anthropic-ai/pencil-cli — that 404s).
   # The detect_headless_cli function on line 182 already expects @pencil.dev/cli
   # in the symlink target; the previous install command was inconsistent.
-  if "$npm_bin" install --prefix "$HOME/.local" @pencil.dev/cli 2>&1; then
+  # Pinned to 0.2.9: the adapter's REPL surface table (pencil-repl-surface.mjs)
+  # is that version's signature list. Bumping this pin requires running
+  # engine-contract-probe.sh first (see #11143; migration tracked in #11156).
+  if "$npm_bin" install --prefix "$HOME/.local" @pencil.dev/cli@0.2.9 2>&1; then
     detect_headless_cli && return 0
     echo "  [FAILED] Install succeeded but binary not found"
   else

@@ -364,7 +364,7 @@ write_files:
   - path: /etc/systemd/system/inngest-nftables.service
     content: |
       [Unit]
-      Description=Inngest control-API nftables scoping (:8288/:8289 -> web hosts only, SEC-H2)
+      Description=Inngest nftables scoping (SEC-H2)
       After=network-online.target
       Wants=network-online.target
       [Service]
@@ -531,12 +531,17 @@ write_files:
       # P1-SEC lesson from the inngest-redis allowlist entry). Stage names are call-site
       # literals; the reason fields are numeric.
       if [ ! -r "$tok_file" ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file — the Better Stack boot-trace channel is DEAD for this boot and every marker after this one is lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs; cloud-init runcmd is first-boot only). #7228"
+        # The Better Stack boot-trace channel is DEAD for this boot and every marker after this one is
+        # lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs;
+        # cloud-init runcmd is first-boot only), or if it ran and failed (a failed re-stage does not
+        # create or overwrite the file).
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file #7228"
         exit 0
       fi
       bs_token="$(cat "$tok_file" 2>/dev/null)"
       if [ -z "$bs_token" ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file — token file empty, boot-trace channel dead. #7228"
+        # Token file empty: the boot-trace channel is dead for this boot.
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file #7228"
         exit 0
       fi
       host="$(hostname 2>/dev/null)"
@@ -566,7 +571,8 @@ write_files:
       # that simply stopped reporting. rc alone is enough to separate them: 6/7 = egress, 22 =
       # HTTP >=400 under -f, 28 = the 8s timeout, 35/60 = TLS.
       if [ "$crc" -ne 0 ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc — POST failed; curl rc 6/7 egress, 22 revoked token, 28 timeout, 35/60 TLS. #7228"
+        # The POST failed; the curl rc map is in the comment block above.
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc #7228"
       fi
       exit 0
     owner: root:root
@@ -872,7 +878,9 @@ write_files:
         # LOUD, and non-zero so `systemctl is-active` disagrees too. Nothing Requires= this
         # unit, so a failure here cannot wedge the boot — it only makes the dead channel
         # visible instead of silent, which is the entire point of the change.
-        logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=$drc — could not re-fetch BETTERSTACK_LOGS_TOKEN from Doppler, so /run/inngest-bs-logs-token is EMPTY for this boot and every SOLEUR_INNGEST_BOOT_STAGE marker will be lost. #7228"
+        # Could not re-fetch the Better Stack token from Doppler, so no token file is written to /run for
+        # this boot (the exit below precedes the write) and every boot-stage marker will be lost.
+        logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=$drc #7228"
         exit 1
       fi
       umask 077
@@ -900,7 +908,7 @@ write_files:
   - path: /etc/systemd/system/inngest-bs-token-restage.service
     content: |
       [Unit]
-      Description=Re-stage the Better Stack boot-trace token into tmpfs /run on every boot (#7228)
+      Description=Re-stage the boot-trace token (#7228)
       # Doppler needs the network. Before= inngest-server so a marker emitted around the
       # server's start has a token to ship with; ordering only, never a Requires=, so a failed
       # re-stage degrades the trace instead of blocking the thing being traced.
@@ -978,9 +986,9 @@ write_files:
       # stale-file `rm -f` below and the `docker cp` set, so the two can never drift apart.
       #   inngest-redis.{conf,service}, inngest-redis-bootstrap.sh — durable Redis (#5450)
       #   vector.toml — the journald -> Better Stack shipper's config (#6197)
-      #   the cutover flip trio + arm-atomicity guard + state reader (#6178), and the LUKS cutover
-      #   trio (#6894): inngest-bootstrap.sh gates their install on `-f /tmp/<asset>`
-      STAGED="inngest-redis.conf inngest-redis.service inngest-redis-bootstrap.sh vector.toml inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh inngest-luks-cutover.sh inngest-luks-cutover.service inngest-luks-cutover.timer"
+      #   the cutover flip trio + arm-atomicity guard + state reader (#6178): inngest-bootstrap.sh
+      #   gates their install on `-f /tmp/<asset>`
+      STAGED="inngest-redis.conf inngest-redis.service inngest-redis-bootstrap.sh vector.toml inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh"
       # ONE COMBINED EXIT TRAP, installed before the first command that can fail. In dash a later
       # `trap … EXIT` silently REPLACES an earlier one (measured), so the moved block's own
       # `trap cleanup EXIT` / `trap - EXIT` are gone and their cleanup lives here. `set +e` in the
@@ -990,8 +998,8 @@ write_files:
       # direct curl) and Sentry through the baked DSN, which needs no Doppler — and it reports
       # FIRST: a slow cleanup (the `docker rm` is bounded at 15 s) must not push the report past
       # systemd's SIGKILL. why= is the last stage this attempt announced, so a failure in an
-      # unnamed arm still says where it was. A failed attempt that stopped the cutover FSM timers
-      # (the quiesce below) starts them again: only a successful bootstrap re-enables them itself.
+      # unnamed arm still says where it was. A failed attempt that stopped the flip timer (the
+      # quiesce below) starts it again: only a successful bootstrap re-enables it itself.
       on_exit() {
         rc=$?
         set +e
@@ -1024,8 +1032,9 @@ write_files:
       attempt=$(( $${n:-0} + 1 ))
       printf '%s\n' "$attempt" > "$STATE/attempts" || true
       # CHANNEL RE-ARM. inngest-bs-token-restage.service makes ONE attempt per boot; if it ran
-      # during a Doppler outage the token file is empty and every phone-home row is lost for the
-      # rest of the boot. Re-stage it (the same script, unchanged) whenever it is empty.
+      # during a Doppler outage the token file is missing (a failed restage never creates it) or empty
+      # and every phone-home row is lost for the rest of the boot. Re-stage it (the same script,
+      # unchanged) whenever it is missing or empty.
       [ -s /run/inngest-bs-logs-token ] || /usr/local/bin/inngest-bs-token-restage.sh >/dev/null 2>&1 || true
       /usr/local/bin/inngest-boot-phone-home.sh provision-attempt-start "attempt=$attempt iid=$IID" || true
       # THE ENVIRONMENT THE UNIT PROMISED. The token reaches every doppler call below from
@@ -1267,7 +1276,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.61@sha256:e3630bcae2343e44f4db895a4b6b40bb74d383b7a99482292d5a1e620add39af
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.63@sha256:8a64642e1251f4cff8ee803b575c7215565db05eec68851b5951bd5ea61cde1a
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1317,7 +1326,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.61@sha256:e3630bcae2343e44f4db895a4b6b40bb74d383b7a99482292d5a1e620add39af"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.63@sha256:8a64642e1251f4cff8ee803b575c7215565db05eec68851b5951bd5ea61cde1a"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log
@@ -1388,7 +1397,7 @@ write_files:
       # the ID docker create returned); the cutover flip trio + guard, whose missing docker-cp
       # lines once meant DEDICATED_FLIP stayed 0 and the flip timer never installed on any
       # dedicated host (#6178: the build baked them, the bootstrap looked in /tmp, nothing copied
-      # them there); and the LUKS cutover trio (#6894, install_missing is fail-closed).
+      # them there). (The LUKS cutover trio, #6894, left this list at #11080.)
       for _f in $STAGED; do docker cp "$cid:/$_f" "/tmp/$_f" 2>/dev/null || true; done
       # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
       # the silent absence of these files is exactly what hid the missing-timer bug for a full
@@ -1430,34 +1439,35 @@ write_files:
       # The token and HOME this doppler read needs come from the unit's EnvironmentFile= — before
       # #8562 they came, implicitly, from the isolation item's `set -a` in the shared runcmd shell.
       DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config ${inngest_doppler_config} --plain 2>/dev/null || true)"
-      # QUIESCE THE CUTOVER FSMs BEFORE EVERY BOOTSTRAP RUN (architecture P1). A retry after a late
-      # failure or a timeout kill re-runs the bootstrap's `systemctl restart inngest-redis` /
+      # QUIESCE THE CUTOVER FLIP FSM BEFORE EVERY BOOTSTRAP RUN (architecture P1). A retry after a
+      # late failure or a timeout kill re-runs the bootstrap's `systemctl restart inngest-redis` /
       # `inngest-server` and re-enables the flip timer. If that lands while an operator's op=resume
       # has the flip's `flushed` step inside its verify_serving window, verification fails and the
       # FSM writes `aborted`, which op=resume cannot recover from without a /mnt/data recut. So stop
-      # both FSM timers and wait, BOUNDED (300 s total), for an in-flight step to finish. The
-      # bootstrap re-enables both timers (`enable --now`) as it always has. On attempt 1 of a fresh
-      # host neither unit exists yet and this is a no-op. NO `Before=` ordering on those services:
+      # the flip timer and wait, BOUNDED (300 s total), for an in-flight step to finish. The
+      # bootstrap re-enables the timer (`enable --now`) as it always has. On attempt 1 of a fresh
+      # host the flip timer does not exist yet and this is a no-op. NO `Before=` ordering on that service:
       # the bootstrap restarts units synchronously, so that ordering would invite a deadlock.
-      # The timers that WERE active are recorded, so a failed attempt restarts exactly those
-      # (on_exit); a successful bootstrap re-enables both itself.
-      # BUSY is wider than "a oneshot is activating": an FSM can be mid-flight between two of its
-      # steps with no unit running. /var/lib/inngest-luks-cutover/frozen-active (non-empty) is the
-      # LUKS cutover's record that it froze the live store; the flip FSM's host state slot
+      # The timer, if it WAS active, is recorded, so a failed attempt restarts exactly it
+      # (on_exit); a successful bootstrap re-enables it itself. (The retired LUKS cutover FSM had
+      # a timer and a service in this loop until #11080; image v1.1.61 stopped baking them. The loop
+      # and the accumulator stay list-shaped on purpose: the provision-unit rows and the ci-deploy
+      # variable-unit pin anchor on that shape.)
+      # BUSY is wider than "a oneshot is activating": the FSM can be mid-flight between two of its
+      # steps with no unit running. The flip FSM's host state slot
       # (/var/lock/inngest-cutover-flip.state, written by inngest-cutover-flip.sh's emit_state)
       # carrying "flag":"flipping" means the flip set flipping and has not reached flushed/done.
-      for _t in inngest-cutover-flip.timer inngest-luks-cutover.timer; do
+      for _t in inngest-cutover-flip.timer; do
         [ "$(systemctl is-active "$_t" 2>/dev/null)" = active ] && _fsm_timers_stopped="$_fsm_timers_stopped $_t"
       done
-      systemctl stop inngest-cutover-flip.timer inngest-luks-cutover.timer >/dev/null 2>&1 || true
+      systemctl stop inngest-cutover-flip.timer >/dev/null 2>&1 || true
       _q=0
       _busy=""
       while [ "$_q" -lt 300 ]; do
         _busy=""
-        for _u in inngest-cutover-flip.service inngest-luks-cutover.service; do
+        for _u in inngest-cutover-flip.service; do
           [ "$(systemctl is-active "$_u" 2>/dev/null)" = activating ] && _busy="$_busy.$_u"
         done
-        [ -s /var/lib/inngest-luks-cutover/frozen-active ] && _busy="$_busy.luks-frozen-active"
         _flip_state="$(cat /var/lock/inngest-cutover-flip.state 2>/dev/null)" || _flip_state=""
         case "$_flip_state" in *'"flag":"flipping"'*) _busy="$_busy.flip-flag-flipping" ;; esac
         [ -z "$_busy" ] && break
@@ -1586,7 +1596,7 @@ write_files:
       # installed + active = DEDICATED_FLIP reached 1) self-reports off-box, not just the
       # flip-assets-staged precondition. This is precisely the state #6178 silently failed at (the
       # timer never installed); a non-'active' 4th field surfaces it in the same curl-direct marker.
-      svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer inngest-luks-cutover.timer 2>&1 | tr '\n' ',')" || true
+      svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer 2>&1 | tr '\n' ',')" || true
       lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)" || true
       jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)" || true
       prot="$(cat /proc/sys/fs/protected_symlinks /proc/sys/fs/protected_regular 2>/dev/null | tr '\n' ',')" || true
@@ -1706,7 +1716,7 @@ write_files:
   - path: /etc/systemd/system/soleur-inngest-provision.timer
     content: |
       [Unit]
-      Description=Re-enter soleur-inngest-provision.service on every boot until it has succeeded once (#8562)
+      Description=Re-enter provisioning until it succeeds once (#8562)
 
       [Timer]
       OnBootSec=90s
@@ -2204,7 +2214,7 @@ write_files:
   - path: /etc/systemd/system/inngest-config-refresh.service
     content: |
       [Unit]
-      Description=Pull + verify + apply the signed inngest config bundle when the promoted digest moves (#6780, ADR-135)
+      Description=Apply the signed inngest config bundle (#6780)
       After=network-online.target docker.service
       Wants=network-online.target docker.service
       ConditionPathExists=/etc/default/inngest-server
@@ -2249,7 +2259,7 @@ write_files:
   - path: /etc/systemd/system/inngest-config-refresh.timer
     content: |
       [Unit]
-      Description=Fire inngest-config-refresh.service every 60 s (#6780, ADR-135)
+      Description=Fire inngest-config-refresh every 60 s (#6780)
       ConditionPathExists=/etc/default/inngest-server
 
       [Timer]
@@ -2568,13 +2578,6 @@ runcmd:
       grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the unpointed arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     fi
     luks_emit luks_key_stage 0 n/a staged
-    # THE VOLUME ID, for inngest-luks-cutover.service (#6894). That script ships in the image
-    # and cannot see template variables, and it compares every mount against these ids — never a
-    # kernel name. Not secret (0644), but asserted: the file's presence keeps the cutover units
-    # active. The image-baked script reads a plaintext id from this file too and now refuses every
-    # flagged run `volume-ids-unreadable` (#9786): the cutover is complete, that refusal is the intent.
-    printf 'INNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$LUKS_ID" > /etc/default/inngest-luks-volumes
-    grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     if [ "$MODE" = pointer ]; then
       # ── POINTER ARM — the post-cutover world ─────────────────────────────────────────────

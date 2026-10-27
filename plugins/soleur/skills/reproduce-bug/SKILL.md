@@ -1,6 +1,6 @@
 ---
 name: reproduce-bug
-description: "This skill should be used when reproducing and investigating a bug using logs, console inspection, and browser screenshots. It systematically investigates GitHub issues through log analysis, code inspection, and visual reproduction with Playwright."
+description: "This skill should be used when reproducing and investigating a bug, including GitHub issues, using logs, console inspection, code inspection, and Playwright browser screenshots."
 ---
 
 <!-- Inspired by mattpocock/skills/skills/engineering/diagnosing-bugs/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->

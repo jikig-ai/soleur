@@ -1,6 +1,6 @@
 ---
 name: brainstorm-techniques
-description: "This skill should be used before implementing features or making changes. It guides exploring user intent, approaches, and design decisions when a request has multiple valid interpretations or ambiguous requirements needing clarification."
+description: "This skill should be used before implementing features or making changes. It guides exploring user intent, approaches, and design decisions when a request has multiple interpretations or ambiguous requirements needing clarification."
 ---
 
 <!-- grok-harness-invoke:start -->
