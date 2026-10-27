@@ -19,3 +19,8 @@
 - soleur:plan, soleur:plan-review (inline), soleur:deepen-plan — all to completion
 - Inline roles (sequential-fallback): repo-research-analyst, learnings-researcher, domain leaders, CTO Rule interface (3 rulings)
 - Scripts: cloud-detect.sh (local), collision-precheck.sh x2, technical-ruling-gate.sh (PASS), lint-guard-contract.py (PASS)
+
+## Learnings (compound)
+- Verify a revert's file count against `git show <sha> --stat`, never the brief — the ask said three files; the commit touched four (birth-gate comment-only flip would have stayed stale).
+- go-session-gates H3 "real harness" rows fail on a quota-limited claude binary — pre-existing, tracked #8965; fails identically on main.
+- Fix-round seats re-grade comment edits for precision, not just correctness — two P3s settled with two-word wording fixes.
