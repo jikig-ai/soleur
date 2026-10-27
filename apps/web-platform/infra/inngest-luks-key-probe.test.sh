@@ -128,15 +128,20 @@ env >> "$STUB_DIR/envlog"
 [ -f "${STUB_STAMP:-/nonexistent}" ] && { printf '%s|%s\n' "$sub" "$(cat "$STUB_STAMP")" >> "$STUB_DIR/stampseen"; }
 case "$sub" in
   status)
+    # exact production argv: status --disable-locks <mapper> (3 words, operand not an option)
+    [ "$#" -eq 3 ] && [ "${2:-}" = "--disable-locks" ] && [ -n "${3:-}" ] && [ "${3#-}" = "${3}" ] || exit 98
     [ "${STUB_HANG:-}" = status ] && exec sleep 60
     [ -n "${STUB_RC_STATUS:-}" ] && exit "$STUB_RC_STATUS"
     cat "$STUB_DIR/status.out"; exit 0 ;;
   luksUUID)
+    [ "$#" -eq 3 ] && [ "${2:-}" = "--disable-locks" ] && [ "${3:-}" = "$(sed -n 's/^ *device: *//p' "$STUB_DIR/status.out")" ] || exit 98
     [ -n "${STUB_RC_UUID:-}" ] && exit "$STUB_RC_UUID"
     cat "$STUB_DIR/uuid.out"; exit 0 ;;
   isLuks)
+    [ "$#" -eq 3 ] && [ "${2:-}" = "--disable-locks" ] && [ "${3:-}" = "$(sed -n 's/^ *device: *//p' "$STUB_DIR/status.out")" ] || exit 98
     exit "${STUB_RC_ISLUKS:-0}" ;;
   luksDump)
+    [ "$#" -eq 3 ] && [ "${2:-}" = "--disable-locks" ] && [ "${3:-}" = "$(sed -n 's/^ *device: *//p' "$STUB_DIR/status.out")" ] || exit 98
     [ -n "${STUB_RC_DUMP:-}" ] && exit "$STUB_RC_DUMP"
     cat "$STUB_DIR/dump.out"; exit 0 ;;
   luksOpen)
@@ -254,7 +259,7 @@ probe_summary() {
   local nl np lrow prow stok
   nl="$(grep -c 'SOLEUR_INNGEST_LUKS_KEY_PROBE' "$LOGTRACE" || true)"
   np="$(grep -c 'argv3=SOLEUR_INNGEST_LUKS_KEY_PROBE' "$PHONETRACE" || true)"
-  lrow="$(grep 'SOLEUR_INNGEST_LUKS_KEY_PROBE' "$LOGTRACE" | sed 's/^-t [^ ]* SOLEUR_INNGEST_LUKS_KEY_PROBE //' | paste -sd'|' || true)"
+  lrow="$(grep 'SOLEUR_INNGEST_LUKS_KEY_PROBE' "$LOGTRACE" | sed 's/^-t inngest-cutover-flip SOLEUR_INNGEST_LUKS_KEY_PROBE //' | paste -sd'|' || true)"
   prow="$(grep 'argv3=SOLEUR_INNGEST_LUKS_KEY_PROBE' "$PHONETRACE" | sed 's/^.* :: luks-key-probe //; s/ SOLEUR_INNGEST_LUKS_KEY_PROBE$//' | paste -sd'|' || true)"
   stok="$(cut -d' ' -f1 "$STAMP" 2>/dev/null || true)"
   printf '%s:%s:%s:%s:%s' "$nl" "$lrow" "$np" "$prow" "$stok"
@@ -388,13 +393,13 @@ end_case
 new_case
 printf '/dev/sda1\n/dev/mapper/inngest-data\n' > "$WORK/findmnt.out"
 verdict "multi-line findmnt output: the LAST line is the kernel-served layer" ok 0 kdf
-assert_eq "the cryptsetup status call names the mapper from the last line" "status inngest-data" \
+assert_eq "the cryptsetup status call names the mapper from the last line" "status --disable-locks inngest-data" \
   "$(grep '^status' "$WORK/arglog" | sed -n '1p')"
 end_case
 new_case
 printf '/dev/mapper/inngest-data[/sub]\n' > "$WORK/findmnt.out"
 verdict "a [subvol] suffix is stripped from the mapper name" ok 0 kdf
-assert_eq "the cryptsetup status call names the bare mapper" "status inngest-data" \
+assert_eq "the cryptsetup status call names the bare mapper" "status --disable-locks inngest-data" \
   "$(grep '^status' "$WORK/arglog" | sed -n '1p')"
 end_case
 
@@ -547,6 +552,26 @@ printf 'garbage\n' > "$STAMP"
 run_tick "done"
 assert_eq "an unparsable stamp is due once and is rewritten as a well-formed verdict" "1:ok" \
   "$(grep -c 'SOLEUR_INNGEST_LUKS_KEY_PROBE' "$LOGTRACE" || true):$(cut -d' ' -f1 "$STAMP")"
+end_case
+
+echo "TEST: a pending stamp left by a dead run is reported once as at=died (no KDF on that tick)"
+new_case
+seed_stamp pending "$(( $(now_s) - 7200 ))"
+run_tick "done"
+assert_eq "an hour-old pending stamp: one indeterminate rc=0 at=died row on both channels, no cryptsetup call, stamp now indeterminate" \
+  "0|$(expect_summary 'token=indeterminate rc=0 at=died' indeterminate)|0" \
+  "$RC|$(probe_summary)|$(wc -l < "$WORK/arglog" 2>/dev/null | tr -d ' ')"
+end_case
+
+echo "TEST: an upstream pipeline stage that fails is indeterminate, never a verdict on the key"
+new_case
+mkdir -p "$WORK/shim"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/head"
+chmod +x "$WORK/shim/head"
+verdict "head fails: cryptsetup is fed an empty key, so the row is indeterminate at=key (not fail_passphrase)" indeterminate 1 key PATH="$WORK/shim:$PATH"
+end_case
+new_case
+verdict "key file is a directory (grep rc 2 with the path present): a read fault, not an absent key" indeterminate 2 key CUTOVER_LUKS_KEY_FILE="$WORK"
 end_case
 
 echo "TEST: a probe that dies mid-run leaves a stamp that blocks the next 30 s re-run"
@@ -737,7 +762,7 @@ pred_callsites() {
 pred_externals() {
   local region bare unwrapped n
   region="$(probe_region "$1")"
-  bare="$(printf '%s\n' "$region" | grep -E '(^|[|;&(]|\$\()[[:space:]]*(grep|sed|head|tr|date|stat|cat|awk|tail|mkdir|rm|touch|sleep|curl|logger|cryptsetup|findmnt|sort|wc|cut|doppler|systemctl)[[:space:]]' || true)"
+  bare="$(printf '%s\n' "$region" | grep -E '(^|[|;&(]|\$\()[[:space:]]*(grep|sed|head|tr|date|stat|cat|awk|tail|mkdir|rm|touch|sleep|curl|logger|cryptsetup|findmnt|sort|wc|cut|doppler|systemctl|blkid|ls|dmsetup|lsblk|ps|flock|jq|base64|od|xxd|dd|readlink|nice|ionice)[[:space:]]' || true)"
   unwrapped="$(printf '%s\n' "$region" | grep -E '"\$cs"|"\$fm"|"\$\{CUTOVER_(LOGGER|PHONE_HOME)_CMD' | grep -vE 'timeout -k 5 [0-9]+ ("\$cs"|"\$fm"|"\$\{CUTOVER_(LOGGER|PHONE_HOME)_CMD)' || true)"
   n="$(printf '%s\n' "$region" | grep -cE 'timeout -k 5 [0-9]+ ' || true)"
   [[ -z "$bare" && -z "$unwrapped" && "$n" -ge 12 ]]
@@ -764,6 +789,11 @@ pred_g2_static() {
   local others
   others="$(printf '%s\n' "$stmts" | grep 'INNGEST_REDIS_LUKS_KEY' | grep -v -- '--key-file' | grep -v "^timeout -k 5 [0-9]* grep -q '\^INNGEST_REDIS_LUKS_KEY=\.' \"\$keyfile\" 2>/dev/null\$" || true)"
   [[ -z "$others" ]] || return 1
+  # ...and so is every statement that names the key FILE: a read of it into a variable or a second
+  # reader is a key sink the name-keyed check above cannot see.
+  local kf
+  kf="$(printf '%s\n' "$stmts" | grep -F '$keyfile' | grep -v -- '--key-file' | grep -v "^timeout -k 5 [0-9]* grep -q '\^INNGEST_REDIS_LUKS_KEY=\.' \"\$keyfile\" 2>/dev/null\$" | grep -v '^if \[\[ -e "\$keyfile" \]\]; then$' | grep -v '^local keyfile=' || true)"
+  [[ -z "$kf" ]] || return 1
   ! probe_region "$1" | grep -q '<<<'
 }
 
@@ -839,6 +869,22 @@ expect_red() {
     pass "$desc: RED against the mutant"
   fi
 }
+
+# NEGATIVE CONTROLS for the verdict-owning helpers (the pass()/fail() self-test at the top proves
+# dispatch only): drive each helper once with an input that MUST fail and require the FAIL counter
+# to move and the PASS counter not to, then unwind. Reported by printf + exit, not through fail().
+pred_ctl_green() { return 0; }
+_ctl_p0=$PASS
+_ctl_f0=$FAIL
+assert_eq "control" "a" "b" >/dev/null
+assert_true "control" false >/dev/null
+expect_red "control" pred_ctl_green pristine >/dev/null
+if [[ "$FAIL" -ne $((_ctl_f0 + 3)) || "$PASS" -ne "$_ctl_p0" ]]; then
+  printf 'FATAL: a verdict-owning helper (assert_eq, assert_true or expect_red) cannot reject a failing input (PASS=%s FAIL=%s, expected PASS=%s FAIL=%s).\n' \
+    "$PASS" "$FAIL" "$_ctl_p0" "$((_ctl_f0 + 3))" >&2
+  exit 1
+fi
+FAIL=$_ctl_f0
 
 echo "TEST: Guard 1 — call-site set, timeouts and intrusion census (pristine green)"
 assert_true "the wrapper is called from exactly the four terminal-noop arm tails, after emit_state" pred_callsites "$TARGET"
@@ -926,11 +972,43 @@ mutation_landed "G2-3 debug log of the extracted value" g2_m3
 expect_red "G2-3 a debug logger of the value puts the sentinel in the logger trace" pred_g2_census g2_m3
 
 mutate g2_m4 <<'PY'
-s = s.replace('  rc=$?\n  case "$rc" in\n    0) luks_probe_finish ok 0 kdf ;;', '  rc=$?\n  timeout -k 5 30 "$cs" luksOpen --test-passphrase --disable-locks "$dev" </dev/null >/dev/null 2>&1\n  case "$rc" in\n    0) luks_probe_finish ok 0 kdf ;;', 1)
+s = s.replace('  case "$rc" in\n    0) luks_probe_finish ok 0 kdf ;;', '  timeout -k 5 30 "$cs" luksOpen --test-passphrase --disable-locks "$dev" </dev/null >/dev/null 2>&1\n  case "$rc" in\n    0) luks_probe_finish ok 0 kdf ;;', 1)
 PY
 mutation_landed "G2-4 a second cryptsetup luksOpen call (a retry) without --key-file -" g2_m4
 expect_red "G2-4 call census: a second luksOpen call (static)" pred_g2_static g2_m4
 expect_red "G2-4 call census: a second luksOpen call (wire: exactly one luksOpen)" pred_g2_wire g2_m4
+
+mutate g2_m7 <<'PY'
+s = s.replace('  # 7. proof.', '  read -r kv < "$keyfile"\n  # 7. proof.', 1)
+PY
+mutation_landed "G2-7 the key file read into a variable" g2_m7
+expect_red "G2-7 a statement that names the key file outside the blessed forms" pred_g2_static g2_m7
+
+mutate g1_m8 <<'PY'
+s = s.replace('  # 7. proof.', '  blkid "$dev" >/dev/null 2>&1\n  # 7. proof.', 1)
+PY
+mutation_landed "G1-8 a bare blkid with no timeout in the probe" g1_m8
+expect_red "G1-8 the timeout census sees a bare external outside its original name list" pred_externals g1_m8
+
+pred_upstream_fail() {
+  SUT="$1"
+  new_case
+  mkdir -p "$WORK/shim"
+  printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/head"
+  chmod +x "$WORK/shim/head"
+  run_tick "done" PATH="$WORK/shim:$PATH"
+  local sum
+  sum="$(probe_summary)"
+  end_case
+  SUT="$TARGET"
+  [[ "$sum" == "$(expect_summary 'token=indeterminate rc=1 at=key' indeterminate)" ]]
+}
+assert_true "pristine: a failing upstream stage is indeterminate at=key" pred_upstream_fail "$TARGET"
+mutate g4_m1 <<'PY'
+s = s.replace('    0:0:0|141:0:0) ;;', '    *) ;;', 1)
+PY
+mutation_landed "G4-1 the upstream-stage guard neutered" g4_m1
+expect_red "G4-1 without the guard a failed head reads as fail_passphrase" pred_upstream_fail g4_m1
 
 mutate g2_m5 <<'PY'
 s = s.replace("  set +eEx\n", "  set +eE\n  set -x\n", 1)
@@ -1009,7 +1087,7 @@ fi
 
 # pred_vocab: the verdict tokens and at= literals the script can emit are exactly the closed sets.
 CLOSED_TOKENS="fail_header fail_key_absent fail_passphrase indeterminate ok"
-CLOSED_AT="kdf key mem mount shield status uuid"
+CLOSED_AT="died kdf key mem mount shield status uuid"
 pred_vocab() {
   local calls toks ats
   calls="$(probe_region "$1" | grep -oE 'luks_probe_finish [a-z_]+ +[^ ;]+ +[a-z]+' || true)"
@@ -1068,6 +1146,12 @@ echo "TEST: real cryptsetup arm (file-backed LUKS2 container)"
 REAL_RAN=0
 RKEY="realKeyAbc123XyZ456"
 if ! command -v cryptsetup >/dev/null 2>&1; then
+  # A skip here is the fail-open class: under CI the arm that proves `tr -d '\n'` is load-bearing
+  # and exercises the real tool would be silently dropped while the count pin shrinks to match.
+  if [[ -n "${CI:-}" ]]; then
+    printf 'FAIL: real-tool arm cannot skip under CI: cryptsetup is not installed (the infra leg installs cryptsetup-bin)\n' >&2
+    exit 1
+  fi
   echo "SKIP: real-tool arm — cryptsetup is not installed on this runner (explicit skip, never silent)"
 elif ! command -v truncate >/dev/null 2>&1; then
   echo "SKIP: real-tool arm — truncate is not installed on this runner (explicit skip, never silent)"
@@ -1080,6 +1164,10 @@ else
        --batch-mode --disable-locks --key-file - "$IMG" >/dev/null 2>&1; then
     REAL_RAN=1
   else
+    if [[ -n "${CI:-}" ]]; then
+      printf 'FAIL: real-tool arm cannot skip under CI: cryptsetup could not build a file-backed LUKS2 container\n' >&2
+      exit 1
+    fi
     echo "SKIP: real-tool arm — cryptsetup could not build a file-backed LUKS2 container here (no root / no kernel crypto); explicit skip, never silent"
   fi
 fi
@@ -1140,7 +1228,7 @@ fi
 # The inventory is fixed by this file; a count that drifts (an assertion deleted, a block silently
 # skipped) is itself a RED. Bump it in the same edit that adds an assertion. Optional arms that
 # skipped with an explicit marker above are subtracted by their own constants.
-EXPECTED_ASSERTIONS=138
+EXPECTED_ASSERTIONS=148
 REAL_ARM_ASSERTIONS=11
 REFUSAL_ARM_ASSERTIONS=2
 EXPECTED=$EXPECTED_ASSERTIONS

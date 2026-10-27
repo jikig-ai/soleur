@@ -997,7 +997,9 @@ ASSIGNED_VARS="$(grep -oE '^[[:space:]]*(local |readonly |export )?[A-Za-z_][A-Z
 UNGOVERNED=""
 while IFS= read -r v; do
   [[ -n "$v" ]] || continue
-  case "$v" in CUTOVER_*|INNGEST_CUTOVER_*) continue ;; esac
+  # PIPESTATUS is set by bash itself after every pipeline (the key-continuity probe copies it, #9927);
+  # it is not an externally-supplied name.
+  case "$v" in CUTOVER_*|INNGEST_CUTOVER_*|PIPESTATUS) continue ;; esac
   if ! printf '%s\n' "$ASSIGNED_VARS" | grep -cxF "$v" >/dev/null; then
     UNGOVERNED="$UNGOVERNED $v"
   fi
