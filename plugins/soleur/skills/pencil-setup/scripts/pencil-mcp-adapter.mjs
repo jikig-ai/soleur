@@ -128,14 +128,14 @@ let existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, r
 let openSync, closeSync, fstatSync, readSync, fsConstants;
 let basename, dirname, isAbsolute, join, resolve, sep;
 let homedir, tmpdir, userInfo;
-let enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES, RAW_CALL_STEERING, sanitizeFilename, classifyResponse, stripAnsi;
+let enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES, RAW_CALL_STEERING, sanitizeFilename, classifyResponse, stripAnsi, createAnsiStripper;
 let runGuardedSave, diskTopLevelCount, memoryTopLevelCount, fingerprintState, savedReplyPath, hash8;
 let loadFidelityFailure, notPersistedMessage, recreatedNote, isDefiniteSaveFailure, saveFailureLine;
 let formatReplCommand, planSpawn, REPL_PROMPT;
 let buildBatchDesignCommand, buildScreenshotCommand, buildExportCommand, buildVariablesCommand;
 let buildEditorStateCommand, buildReadSkillCommand, newCountNonce, buildCountCommand;
 let validateNodeIds, validateExportFormat, validateScale, validateQuality, validateOutputDir, EXPORT_FORMATS;
-let redactionForms, redactText, createRollingRedactor;
+let redactionForms, redactText, createRollingRedactor, heldPrefixLength;
 
 try {
   ({ McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js"));
@@ -150,7 +150,7 @@ try {
   ({ homedir, tmpdir, userInfo } = await import("node:os"));
   ({ enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES, RAW_CALL_STEERING } = await import("./pencil-error-enrichment.mjs"));
   ({ sanitizeFilename } = await import("./sanitize-filename.mjs"));
-  ({ classifyResponse, stripAnsi } = await import("./pencil-response-classify.mjs"));
+  ({ classifyResponse, stripAnsi, createAnsiStripper } = await import("./pencil-response-classify.mjs"));
   ({
     runGuardedSave,
     diskTopLevelCount,
@@ -185,14 +185,14 @@ try {
     redactionForms,
     redactText,
     createRollingRedactor,
+    heldPrefixLength,
   } = await import("./pencil-repl-surface.mjs"));
 } catch (err) {
   process.stderr.write(
     `[pencil-adapter] ERROR: dependency import failed: ${err?.message ?? err}\n` +
     "[pencil-adapter] The installed adapter at ~/.local/share/pencil-adapter may be\n" +
-    "[pencil-adapter] missing node_modules or out of sync with repo. Re-run:\n" +
-    "[pencil-adapter]   bash plugins/soleur/skills/pencil-setup/scripts/copy_adapter.sh\n" +
-    "[pencil-adapter] or re-run /soleur:pencil-setup to refresh the install.\n"
+    "[pencil-adapter] missing node_modules or out of sync. Run /soleur:pencil-setup to refresh the install\n" +
+    "[pencil-adapter] (in a Soleur checkout: bash plugins/soleur/skills/pencil-setup/scripts/copy_adapter.sh).\n"
   );
   process.exit(1);
 }
@@ -515,7 +515,8 @@ function findPenBinary() {
     if ((st.mode & 0o022) !== 0) {
       return {
         installed: true,
-        why: `the package directory is group- or world-writable; run \`chmod -R go-w ${prefix}/node_modules\` (an npm ci under umask 002 leaves it so)`,
+        // the LITERAL path: $HOME can come from a project's env block, and this text is read by the agent
+        why: "the package directory is group- or world-writable; run `chmod -R go-w ~/.local/share/pen-cli/node_modules` (an npm ci under umask 002 leaves it so)",
       };
     }
     let pkg;
@@ -605,10 +606,34 @@ function trustedOverride(path) {
 }
 
 // { binary, home }: the binary to run and the home directory the child engine gets as HOME
-// (the home findPenBinary resolved it under; an override keeps this process's HOME).
+// (the home findPenBinary resolved it under; an override: see overrideChildHome).
 function resolveBinary() {
-  if (PENCIL_BINARY_ARG) return { binary: trustedOverride(PENCIL_BINARY_ARG), home: process.env.HOME };
+  if (PENCIL_BINARY_ARG) return { binary: trustedOverride(PENCIL_BINARY_ARG), home: overrideChildHome() };
   return findPenBinary();
+}
+
+// The home an override-launched engine gets: the passwd home (no environment variable can
+// redirect it), unless $HOME is outside the working directory and CLAUDE_PROJECT_DIR (a
+// container whose HOME is not the passwd home). A $HOME inside the project, which a project's
+// settings env block can set, is never handed to the engine; with no passwd entry the child
+// gets no HOME at all.
+function overrideChildHome() {
+  let passwd = null;
+  try {
+    passwd = userInfo().homedir || null;
+  } catch {
+    // no passwd entry
+  }
+  const envHome = process.env.HOME;
+  if (envHome) {
+    try {
+      const real = realpathSync(envHome);
+      if (!projectRoots(null).some((root) => isInside(root, real))) return envHome;
+    } catch {
+      // an unresolvable HOME is not trusted
+    }
+  }
+  return passwd;
 }
 
 // --- Child process environment ---
@@ -693,23 +718,27 @@ const baseline = new SaveBaseline();
 // respawn does not recapture the baseline (a respawn must not turn a refusal into a silent
 // re-baseline).
 let refusalPending = false;
-// Why the engine was respawned while a refusal was armed: false, "restart" (it was already
-// armed, or edits were unpersisted at the respawn), or the cause that armed it at the
-// respawn ("external-change" | "file-missing"). The FIRST cause is kept: a later restart
-// never overwrites it.
+// Why the refusal is armed, beyond "the file is behind the session" (false): "failed-write"
+// (a failed save changed the file), "restart" (it was already armed, or edits were unpersisted
+// at a respawn), or the cause that armed it at a respawn ("external-change" | "file-missing").
+// The FIRST cause is kept: a later restart never overwrites it.
 let restartedWhileArmed = false;
 // True from the moment an edit's outcome is a refusal or a NOT PERSISTED result until a
 // confirmed save or a successful open_document: exports and screenshots made meanwhile are
 // rendered from memory, not from the file.
 let unpersistedEdits = false;
 
-function armRefusal(file) {
+// `cause` says why it is armed beyond "the file is behind the session" (false): "failed-write"
+// (a save failed and the file changed during the write: the memory copy is the only complete
+// one) or, from a respawn, "external-change" | "file-missing" | "restart". The FIRST cause is
+// kept while armed.
+function armRefusal(file, cause = false) {
   // an armed refusal means edits are (or may be) unpersisted, so renders from memory are marked
   unpersistedEdits = true;
   if (refusalPending === true) return;
   refusalPending = true;
-  restartedWhileArmed = false;
-  process.stderr.write(`[pencil-adapter] refusalPending=true ${oneLine(redactKey(file))}\n`);
+  restartedWhileArmed = cause;
+  process.stderr.write(`[pencil-adapter] refusalPending=true ${oneLine(redactKey(file))}${cause ? ` cause=${cause}` : ""}\n`);
 }
 
 function clearRefusal(file) {
@@ -857,6 +886,7 @@ class PencilProcess {
 
     this.buffer = "";
     this.stderrBuffer = "";
+    this.stderrHeld = "";
     this.lastStderrAt = 0;
     this.ready = false;
 
@@ -870,6 +900,7 @@ class PencilProcess {
     });
     this.child = child;
     const redactor = createRollingRedactor(REDACT_FORMS);
+    const ansi = createAnsiStripper();
     this._redactor = redactor;
 
     // Everything below is bound to THIS child: the events of a killed child can arrive
@@ -877,14 +908,17 @@ class PencilProcess {
     child.stdout.on("data", (chunk) => this._onStdout(child, chunk.toString()));
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
-      const safe = redactor.push(text);
+      // Escape sequences go BEFORE the redactor: a credential interleaved with them would
+      // otherwise reach the log with the sequences between its characters.
+      const safe = redactor.push(ansi.push(text));
       if (safe) process.stderr.write(safe);
       if (this.child === child) {
-        // Redacted BEFORE it is stored or trimmed: a spelling that straddles the trim point
-        // (or a chunk boundary: the whole buffer is re-scanned) is already replaced, so the
-        // kept tail never starts with half a credential. A spelling still being assembled
-        // at the very end stays whole in the buffer until its second half arrives.
-        this.stderrBuffer = redactKey(this.stderrBuffer + text);
+        // Stripped, THEN redacted, BEFORE it is stored or trimmed: a spelling interleaved with
+        // escape sequences, or straddling the trim point (or a chunk boundary: the whole
+        // buffer is re-scanned), is already replaced, so the kept tail never starts with half
+        // a credential. A spelling still being assembled at the very end stays whole in the
+        // buffer until its second half arrives (heldTailOf keeps it out of every result).
+        this.stderrBuffer = redactKey(stripAnsi(this.stderrBuffer + text));
         if (this.stderrBuffer.length > STDERR_BUFFER_CAP) {
           // trim at a line start where there is one
           const tail = this.stderrBuffer.slice(-(STDERR_BUFFER_CAP >> 1));
@@ -923,8 +957,7 @@ class PencilProcess {
     }
     if (armCause) {
       // the baseline stays the OLD one: the engine loaded content (or nothing) this session never saw
-      armRefusal(outFile);
-      restartedWhileArmed = armCause;
+      armRefusal(outFile, armCause);
       const what =
         armCause === "file-missing"
           ? "file is gone behind a restarted session"
@@ -1028,7 +1061,7 @@ class PencilProcess {
     // the log sink only: a tool result carries one reply's stderr, which is buffered per
     // command.) The buffer is already redacted; redacting the reply text too covers every
     // sink that follows.
-    const errText = stripAnsi(this.stderrBuffer).trim();
+    const errText = this.takeReleasableStderr().trim();
     const out = redactKey(raw);
     // stderr holds the engine's failures (`Error:`, `[ERROR]`, `Save failed:`, `Unknown tool:`).
     // When it carries one it goes first, so the whole text is scanned; stderr that holds only
@@ -1036,6 +1069,21 @@ class PencilProcess {
     this.lastStderrError = errText !== "" && classifyResponse(errText).isError;
     if (this.lastStderrError) return out ? `${errText}\n${out}` : errText;
     return out;
+  }
+
+  // This reply's redacted stderr, minus the unfinished credential prefix at its very end
+  // (kept in `stderrHeld` and joined to the NEXT reply's stderr: if that completes the
+  // credential, the whole spelling is replaced; if not, the held part is dropped, never shown).
+  takeReleasableStderr() {
+    let text = stripAnsi(this.stderrBuffer);
+    if (this.stderrHeld) {
+      const joined = this.stderrHeld + text;
+      const redacted = redactKey(joined);
+      if (redacted !== joined) text = redacted;
+    }
+    const held = heldPrefixLength(text, REDACT_FORMS);
+    this.stderrHeld = held > 0 ? text.slice(text.length - held) : "";
+    return held > 0 ? text.slice(0, text.length - held) : text;
   }
 
   waitForPrompt(timeoutMs = TIMEOUTS.replyMs) {
@@ -1062,7 +1110,7 @@ class PencilProcess {
       // fails the wait immediately with its stderr tail, not after 30 s.
       this._onExit = (code, signal, err) => {
         cleanup();
-        const tail = stripAnsi(this.stderrBuffer)
+        const tail = this.takeReleasableStderr()
           .trim()
           .split("\n")
           .slice(-10)
@@ -1213,7 +1261,8 @@ async function guardedSave(send, source) {
   });
   // a refusal that says the session is behind the file, or a failed write that left the
   // file different from the baseline, arms the refusal until open_document succeeds
-  if ((saved.refused || saved.failed) && saved.arm) armRefusal(file);
+  if (saved.refused && saved.arm) armRefusal(file);
+  else if (saved.failed && saved.arm) armRefusal(file, "failed-write");
   if (saved.refused || saved.failed || saved.unconfirmed) unpersistedEdits = true;
   else if (saved.saved) unpersistedEdits = false;
   if (saved.recreated) {
@@ -1250,7 +1299,12 @@ function logRefusal(saved, via) {
     saved.code === "stale" || saved.code === "refusal-pending"
       ? ` baseline=${hash8(saved.baselineHash)} disk=${hash8(saved.diskHash)}`
       : "";
-  const cause = saved.code === "unknown-baseline" ? ` cause=${saved.cause ?? "unknown"}${saved.detail ? ` errno=${saved.detail}` : ""}` : "";
+  const cause =
+    saved.code === "unknown-baseline"
+      ? ` cause=${saved.cause ?? "unknown"}${saved.detail ? ` errno=${saved.detail}` : ""}`
+      : saved.code === "refusal-pending" && restartedWhileArmed
+        ? ` cause=${restartedWhileArmed}`
+        : "";
   process.stderr.write(
     oneLine(redactKey(`[pencil-adapter] REFUSED save: [reason=${saved.code}] ${file}${hashes}${cause} via=${via}`)) + "\n"
   );
@@ -1283,10 +1337,14 @@ function notPersistedResult(saved) {
   return notPersistedMessage({ code: "unconfirmed", file, detail });
 }
 
-// A save that threw (timeout, dead engine) after the edit was applied.
-function saveIncompleteResult(err) {
+// A save that threw (timeout, dead engine, a desynchronised engine) after the edit was
+// applied. Runs inside the exclusive job. The text says the engine was stopped, so it is: a
+// child that is still alive (a desync, an unexpected throw) is killed here, and the next
+// call respawns from the file with the refusal armed.
+async function saveIncompleteResult(err) {
   unpersistedEdits = true;
   const reason = oneLine(redactKey(err?.message ?? err)).slice(0, 300);
+  await pencilProcess.kill();
   process.stderr.write(`[pencil-adapter] save did not complete: ${reason}\n`);
   return errorResult(notPersistedMessage({ code: "save-incomplete", file: pencilProcess.outputFile, detail: reason }));
 }
@@ -1547,8 +1605,13 @@ registerTool(
       if (isError) {
         // Surface the error AND skip the save: a failed edit must not trigger a write that
         // replaces valid .pen content with empty or stale state. unpersistedEdits stays as it
-        // was BECAUSE the engine rolls the failed block back ("All operations in this block
-        // have been rolled back": measured), so the in-memory document is unchanged.
+        // was. MEASURED: an operation that fails (a bad Insert/Update/Delete argument) makes
+        // the engine roll the whole block back ("All operations in this block have been rolled
+        // back"), so the in-memory document is unchanged. NOT measured: a raw Export or
+        // TakeScreenshot that errors mid-block, after earlier operations of the same block
+        // ran. Whether those are rolled back is unknown, and an errored block is not marked
+        // unpersisted for it: an accepted residual (the steering sentence tells the agent not
+        // to call them inside batch_design).
         process.stderr.write(`[pencil-adapter] SKIPPED save (batch_design errored): ${oneLine(text).slice(0, 200)}\n`);
         return errorResult(enrichErrorMessage(text));
       }
@@ -1556,7 +1619,7 @@ registerTool(
       try {
         saved = await guardedSave(send, "auto-save");
       } catch (err) {
-        return saveIncompleteResult(err);
+        return await saveIncompleteResult(err);
       }
       if (saved.refused) {
         logRefusal(saved, "auto-save");
@@ -1607,6 +1670,9 @@ registerTool(
               `Open ${outFile} without inputPath, or open a new .pen path.`
           );
         }
+        // Opening ANOTHER path while edits are unpersisted discards them with the old engine:
+        // the result says so (re-opening the same path is the documented recovery).
+        const discardsEdits = unpersistedEdits && pencilProcess.outputFile !== null && pencilProcess.outputFile !== outFile;
         try {
           // spawn() reads the file's baseline (and the count the load must reproduce)
           // BEFORE the engine starts and commits the baseline at the prompt
@@ -1627,6 +1693,7 @@ registerTool(
           if (captured.tag === "unknown") {
             note += `\nWARNING: could not record a baseline for ${outFile} (${oneLine(redactKey(captured.detail ?? captured.cause))}); every save is refused until the file is a readable regular file and open_document succeeds on it.`;
           }
+          if (discardsEdits) note += "\nNOTE: unsaved edits to the previous document were discarded.";
           openFailure = null;
           clearRefusal(outFile);
           return {
@@ -1664,10 +1731,10 @@ registerTool("save", {}, async () => {
     try {
       return await guardedSave(send, "save");
     } catch (err) {
-      return { incomplete: err };
+      return { incompleteResult: await saveIncompleteResult(err) };
     }
   });
-  if (saved.incomplete) return saveIncompleteResult(saved.incomplete);
+  if (saved.incompleteResult) return saved.incompleteResult;
   if (saved.refused) {
     logRefusal(saved, "save");
     return errorResult(refusalText(saved));

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { classifyResponse, stripAnsi } from "../skills/pencil-setup/scripts/pencil-response-classify.mjs";
+import { classifyResponse, stripAnsi, createAnsiStripper } from "../skills/pencil-setup/scripts/pencil-response-classify.mjs";
 
 // The adapter's response classifier marks failure REPL strings as errors. The
 // pre-fix classifier only matched /^Error:/, /^\[ERROR\]/ and
@@ -141,5 +141,26 @@ describe("classifyResponse — node names cannot trip the patterns", () => {
 
   test("an `## issues detected:` block on an OK reply is not an error", () => {
     expect(classifyResponse("OK\n\n## Created nodes by name\n\n## issues detected:\n- node abc overflows its parent").isError).toBe(false);
+  });
+});
+
+describe("createAnsiStripper: chunked output (a credential interleaved with escapes must reach the redactor whole)", () => {
+  test("complete sequences are removed per chunk, text passes through", () => {
+    const st = createAnsiStripper();
+    expect(st.push("a\x1b[0mb\x1b[1mc")).toBe("abc");
+    expect(st.push("plain")).toBe("plain");
+  });
+  test("an escape sequence cut at a chunk boundary is finished by the next chunk, not leaked as half a sequence", () => {
+    const st = createAnsiStripper();
+    expect(st.push("key-aaa\x1b[3")).toBe("key-aaa");
+    expect(st.push("1mbbb")).toBe("bbb");
+    const lone = createAnsiStripper();
+    expect(lone.push("x\x1b")).toBe("x");
+    expect(lone.push("[0my")).toBe("y");
+  });
+  test("a lone ESC that is not the start of a sequence is released, not held forever", () => {
+    const st = createAnsiStripper();
+    expect(st.push("x\x1bQ")).toBe("x\x1bQ");
+    expect(st.push("y")).toBe("y");
   });
 });

@@ -125,9 +125,12 @@ const RESTORE_TRACKED = "If the file is tracked, restore it from version control
  * takes a `cause` (and `detail`); `restart` (refusal-pending only) says why the engine was
  * respawned while the refusal was armed: "restart" (it was already armed, or edits were
  * unpersisted at the respawn), "external-change" or "file-missing" (the respawn found the
- * file changed or gone).
+ * file changed or gone); the same parameter also names the cause that armed it outside a
+ * respawn: "failed-write" (a save failed and the file changed during the write).
+ * `recreated` (unknown-baseline/recreate-path-changed only, default true) says whether the
+ * file had been removed: false for a present file whose path is no longer canonical.
  */
-export function refusalMessage({ file, source, code, diskCount, memoryCount, memoryReason, cause, detail, restart }) {
+export function refusalMessage({ file, source, code, diskCount, memoryCount, memoryReason, cause, detail, restart, recreated = true }) {
   if (!REFUSAL_REASON_CODES.includes(code)) {
     throw new TypeError(`refusalMessage: unknown code '${code}'`);
   }
@@ -150,6 +153,11 @@ export function refusalMessage({ file, source, code, diskCount, memoryCount, mem
         "The session restarted (a crash or a timeout) and the engine reloaded NEW content: the file changed on disk since this session last loaded or saved it, so the earlier unsaved edits were lost with the old engine and any edit made since sits on a picture of the file this session never saw. Nothing on disk was overwritten.",
         `Next step: call open_document on ${file} ${UNTRACKED_HINT}, then replay the refused operations in order. ${REPLAY_SAFETY_SENTENCE} Keep one writer per file (there is no lock). ${NEVER_BYPASS} ${openFails}`
       );
+    } else if (restart === "failed-write") {
+      lines.push(
+        "An earlier save failed and the file changed during a failed write (a partial write), and no open_document has succeeded since: the in-memory document is the only complete copy. Edits made since are not persisted, and re-opening discards them.",
+        `Next step: read the in-memory document out first. ${ONLY_COPY_SENTENCE} Then call open_document on ${file} ${UNTRACKED_HINT}, ${replay} ${openFails}`
+      );
     } else if (restart) {
       lines.push(
         "The session restarted (a crash or a timeout) while earlier edits were not persisted (a refused, failed or unconfirmed save): the earlier edits were discarded when the engine reloaded the file. Edits made since are not persisted.",
@@ -171,11 +179,13 @@ export function refusalMessage({ file, source, code, diskCount, memoryCount, mem
           : cause === "capture-failed"
             ? `The file could not be read to compare it with this session's copy${detail ? ` (${detail})` : ""}: it may have been replaced by a link or a special file.`
             : cause === "recreate-path-changed"
-              ? "The file was removed from disk and the path to it is no longer the one this session opened (a directory on the way to it is now a link or has moved), so recreating it could write somewhere else."
+              ? recreated
+                ? "The file was removed from disk and the path to it is no longer the one this session opened (a directory on the way to it is now a link or has moved), so recreating it could write somewhere else."
+                : "The path to the file is no longer the one this session opened (a directory on the way to it is now a link or has moved), so a save could write somewhere else."
               : "This session has no record of what it loaded from the file, so it cannot tell whether the file changed.";
     lines.push(
       why,
-      `Next step: call open_document on ${file} ${UNTRACKED_HINT} (it reloads what is on disk and re-baselines), then replay the refused operations in order. Keep one writer per file. ${NEVER_BYPASS} If open_document itself fails, stop and tell the user.`
+      `Next step: call open_document on ${file} ${UNTRACKED_HINT} (it reloads what is on disk and re-baselines), then replay the refused operations in order. ${cause === "unconfirmed-save" ? `${REPLAY_SAFETY_SENTENCE} ` : ""}Keep one writer per file. ${NEVER_BYPASS} If open_document itself fails, stop and tell the user.`
     );
   } else if (code === "unrecognized") {
     lines.push(
@@ -403,11 +413,12 @@ function requireDeps(deps, names) {
  *   readAfterSave()   bytes after a confirmed save; retried 3 times
  *   adoptBaseline(s)  stores a new baseline state (called once per save, after `send`, except
  *                     on a definite failure, which keeps the previous baseline)
- *   canRecreate()     optional: called when the decision is `recreated`; false when the path to
- *                     the file is no longer its canonical one (a directory swapped for a link),
- *                     which refuses as unknown-baseline/recreate-path-changed
+ *   canRecreate()     optional: called when the decision is `recreated` and on every save whose
+ *                     baseline is a hash; false (or a throw) when the path to the file is no
+ *                     longer its canonical one (a directory swapped for a link), which refuses
+ *                     as unknown-baseline/recreate-path-changed
  *   wasRestarted()    optional: why the engine was respawned while a refusal was armed
- *                     (false | "restart" | "external-change" | "file-missing"; wording only)
+ *                     (false | "restart" | "external-change" | "file-missing" | "failed-write"; wording only)
  *
  * Order: readDisk, probeMemory (only when the file holds nodes), decideSave
  * (empty / unrecognized), readFresh, decideStale, send, readAfterSave, adoptBaseline.
@@ -507,16 +518,29 @@ export async function runGuardedSave(deps) {
   }
   const recreated = stale.recreated === true;
   const baselineHash = getBaseline()?.tag === "hash" ? getBaseline().hash : undefined;
-  if (recreated && typeof deps.canRecreate === "function" && !(await deps.canRecreate())) {
-    return {
-      saved: false,
-      refused: true,
-      code: "unknown-baseline",
-      cause: "recreate-path-changed",
-      reason: "the file was removed and the path to it is no longer the canonical one",
-      baselineHash,
-      message: refusalMessage({ file, source, code: "unknown-baseline", cause: "recreate-path-changed" }),
-    };
+  // The path the engine writes to must still be the canonical one this session opened: a
+  // recreate (the file is gone) and every save over a hashed baseline (a directory swapped
+  // for a link to a byte-identical copy matches the hash and would be written through).
+  if ((recreated || getBaseline()?.tag === "hash") && typeof deps.canRecreate === "function") {
+    let canonical = false;
+    try {
+      canonical = (await deps.canRecreate()) === true;
+    } catch {
+      // an unanswerable check is a refusal
+    }
+    if (!canonical) {
+      return {
+        saved: false,
+        refused: true,
+        code: "unknown-baseline",
+        cause: "recreate-path-changed",
+        reason: recreated
+          ? "the file was removed and the path to it is no longer the canonical one"
+          : "the path to the file is no longer the canonical one",
+        baselineHash,
+        message: refusalMessage({ file, source, code: "unknown-baseline", cause: "recreate-path-changed", recreated }),
+      };
+    }
   }
 
   const raw = await send();

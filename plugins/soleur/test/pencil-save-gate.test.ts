@@ -748,3 +748,97 @@ describe("runGuardedSave (dependency-injected, ordering)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round 3: the failed-write cause, the unconfirmed replay hint, the canonical-path check
+// on every save over a hashed baseline.
+
+describe("refusal-pending cause `failed-write` (a failed save that changed the file)", () => {
+  const m = refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending", restart: "failed-write" });
+  const stale = refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending" });
+
+  test("says the file changed during a failed write, the in-memory document is the only complete copy, and read it out BEFORE open_document", () => {
+    expect(m.split("\n")[0]).toBe("REFUSED save: [reason=refusal-pending] /d/a.pen was not modified.");
+    expect(m).toContain("the file changed during a failed write");
+    expect(m).toContain("the in-memory document is the only complete copy");
+    expect(m).toContain(ONLY_COPY_SENTENCE);
+    expect(m).toMatch(/call open_document on \/d\/a\.pen/);
+    expect(m.match(/Next step:/g)!.length).toBe(1);
+    expect(m).toMatch(/do not delete or recreate/i);
+  });
+  test("is not the stale-flavoured generic text, which blames an external change and has no only-copy sentence", () => {
+    expect(stale).not.toContain(ONLY_COPY_SENTENCE);
+    expect(m).not.toMatch(/refused because the file changed on disk/);
+    expect(m).not.toBe(stale);
+  });
+});
+
+describe("unknown-baseline cause unconfirmed-save carries the replay-safety sentence", () => {
+  test("the unconfirmed save may have written the edit: check before replaying", () => {
+    const m = refusalMessage({ file: "/d/a.pen", source: "save", code: "unknown-baseline", cause: "unconfirmed-save" });
+    expect(m).toContain(REPLAY_SAFETY_SENTENCE);
+    expect(m.match(/Next step:/g)!.length).toBe(1);
+  });
+  test("a cause that cannot have written the edit does not carry it", () => {
+    for (const cause of ["no-baseline", "capture-failed", "recreate-path-changed"]) {
+      expect(refusalMessage({ file: "/d/a.pen", source: "save", code: "unknown-baseline", cause })).not.toContain(REPLAY_SAFETY_SENTENCE);
+    }
+  });
+});
+
+describe("the canonical-path check runs on every save over a hashed baseline, not only a recreate", () => {
+  const nonce = "d".repeat(32);
+  const countReply = (n: number) => ({ text: `OK\n\n## Print output\nTOPLEVEL_COUNT:${nonce}:${n}\n`, nonce });
+  const disk = penWith(3);
+  const mk = (canRecreate: () => Promise<boolean>) => {
+    const calls: string[] = [];
+    const base = { tag: "hash" as const, hash: fingerprintBytes(disk) };
+    return {
+      calls,
+      deps: {
+        file: "/d/a.pen",
+        source: "save" as const,
+        readDisk: async () => disk,
+        probeMemory: async () => countReply(3),
+        readFresh: async () => disk,
+        getBaseline: () => base,
+        isRefusalPending: () => false,
+        send: async () => {
+          calls.push("send:save");
+          return "Saved /d/a.pen";
+        },
+        isConfirmed: (raw: string) => raw === "Saved /d/a.pen",
+        readAfterSave: async () => disk,
+        adoptBaseline: () => {},
+        canRecreate,
+        retryDelayMs: 1,
+      },
+    };
+  };
+
+  test("a present, unchanged file whose path is no longer canonical refuses as unknown-baseline/recreate-path-changed; nothing is sent", async () => {
+    const m = mk(async () => false);
+    const r = await runGuardedSave(m.deps);
+    expect(r).toMatchObject({ refused: true, code: "unknown-baseline", cause: "recreate-path-changed" });
+    expect(m.calls).not.toContain("send:save");
+    // the text must not claim the file was removed: it was not
+    expect(r.message).toMatch(/directory on the way to it is now a link or has moved/);
+    expect(r.message).not.toMatch(/was removed from disk/);
+  });
+  test("a canonical path saves as before, and the check ran", async () => {
+    let asked = 0;
+    const m = mk(async () => {
+      asked++;
+      return true;
+    });
+    expect(await runGuardedSave(m.deps)).toMatchObject({ saved: true });
+    expect(asked).toBe(1);
+  });
+  test("a thrown check is a refusal, never an allow", async () => {
+    const m = mk(async () => {
+      throw new Error("EACCES");
+    });
+    expect(await runGuardedSave(m.deps)).toMatchObject({ refused: true, cause: "recreate-path-changed" });
+    expect(m.calls).not.toContain("send:save");
+  });
+});

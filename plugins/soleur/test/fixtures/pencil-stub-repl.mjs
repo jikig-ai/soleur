@@ -43,8 +43,16 @@
 //     echoKey           true: an execute error on stderr that echoes PEN_CLI_KEY;
 //                       "stdout": the same text as a stdout reply
 //     echoKeySplit      the key goes to stderr in two chunks 50 ms apart on each execute
-//     echoKeyAcross     the key is split ACROSS two execute replies: the first half ends one reply's
-//                       stderr (no newline), the second half starts the next reply's
+//     echoKeyAcross     the key is split ACROSS two execute replies, as ERROR-CLASS stderr (so each
+//                       reply's stderr can reach a tool result): the first half ends one reply's
+//                       stderr (`Error: ... <half>`, no newline), the second half starts the next
+//                       reply's (`<half> (end)` then an `Error:` line)
+//     echoKeyAnsi       an error-class stderr line with the key interleaved with ANSI escape
+//                       sequences (`<a>ESC[0m<b>`); "chunked": the escape itself is cut across two
+//                       stderr writes 50 ms apart
+//     strayAfterReply   after each non-probe execute reply: a stderr warning at +35 ms (so the
+//                       adapter's stderr settle loop is running) and stray stdout bytes at +60 ms
+//                       (a desync with the child still alive)
 //     floodKeyThenExit  an execute writes ~1.6 MiB of `<key> ` units to stderr with no newline, then
 //                       the process exits 1 (the adapter's stderr buffer must trim without leaking a key fragment)
 // It reads stdin to EOF-or-exit (a stub that stops draining makes pipefail suites flake
@@ -596,8 +604,23 @@ rl.on("line", async (line) => {
     const key = process.env.PEN_CLI_KEY ?? "";
     const half = Math.ceil(key.length / 2);
     acrossCalls++;
-    process.stderr.write(acrossCalls % 2 === 1 ? `[WARN] retrying with credential ${key.slice(0, half)}` : `${key.slice(half)} (end)\n`);
+    process.stderr.write(
+      acrossCalls % 2 === 1 ? `Error: retrying with credential ${key.slice(0, half)}` : `${key.slice(half)} (end)\nError: second reply\n`
+    );
     await sleep(60);
+  }
+  if (f.echoKeyAnsi) {
+    const key = process.env.PEN_CLI_KEY ?? "";
+    const a = key.slice(0, 10);
+    const b = key.slice(10);
+    if (f.echoKeyAnsi === "chunked") {
+      process.stderr.write(`Error: leaked ${a}${ESC.slice(0, 1)}[3`);
+      await sleep(50);
+      process.stderr.write(`1m${b}${ESC}0m\n`);
+    } else {
+      process.stderr.write(`Error: leaked ${a}${ESC}0m${ESC}1m${b}\n`);
+    }
+    return reply();
   }
   if (f.floodKeyThenExit) {
     const unit = `${process.env.PEN_CLI_KEY ?? ""} `;
@@ -611,6 +634,10 @@ rl.on("line", async (line) => {
   }
   const nonce = countSnippetNonce(args.input);
   if (nonce !== null && runCountProbe(nonce) !== false) return;
+  if (f.strayAfterReply) {
+    setTimeout(() => process.stderr.write("[WARN] late note\n"), 35);
+    setTimeout(() => process.stdout.write("stray\n"), 60);
+  }
   return runExecute(args.input);
 });
 rl.on("close", () => process.exit(0));

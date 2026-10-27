@@ -52,6 +52,7 @@
 //   MAX_NODE_IDS, EXPORT_FORMATS
 //   redactionForms(secret), redactText(text, forms), createRollingRedactor(forms)
 //                                a pure rolling-tail redactor: push(chunk) / flush()
+//   heldPrefixLength(text, forms)   the unfinished credential prefix at the end of a reply
 //   planSpawn({outFile, initialInFile, resumeInFile, probe})   `--in` decision
 
 import { randomBytes } from "node:crypto";
@@ -347,6 +348,24 @@ export function redactText(text, forms) {
     if (form) out = out.split(form).join(REDACTED);
   }
   return out;
+}
+
+// How many characters at the END of `text` are the start of a credential spelling that has
+// not finished (a proper prefix of a form, at least MIN_FORM_LENGTH long): the part of a
+// reply that must not be shown until the next piece proves it is not the rest of the key.
+export function heldPrefixLength(text, forms) {
+  const s = String(text ?? "");
+  let best = 0;
+  for (const form of forms ?? []) {
+    if (!form) continue;
+    for (let k = Math.min(form.length - 1, s.length); k >= Math.max(MIN_FORM_LENGTH, best + 1); k--) {
+      if (s.endsWith(form.slice(0, k))) {
+        best = k;
+        break;
+      }
+    }
+  }
+  return best;
 }
 
 // push(chunk) returns the text that is safe to emit now; flush() returns the

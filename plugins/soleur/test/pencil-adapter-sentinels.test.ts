@@ -212,7 +212,7 @@ describe("Single definitions", () => {
       expect(src).not.toMatch(/u001b\\\[/i);
       if (name !== "adapter") expect(src).toMatch(/import \{ stripAnsi \} from "\.\/pencil-response-classify\.mjs"/);
     }
-    expect(adapter).toMatch(/\{ classifyResponse, stripAnsi \} = await import\("\.\/pencil-response-classify\.mjs"\)/);
+    expect(adapter).toMatch(/\{ classifyResponse, stripAnsi, createAnsiStripper \} = await import\("\.\/pencil-response-classify\.mjs"\)/);
     // the widened class: private-mode CSI is included
     expect(classify).toContain("[0-9;?:<=>]*[@-~]");
   });
@@ -243,7 +243,7 @@ describe("Credential and engine identity", () => {
   test("the engine binary override is argv-only: --pencil-binary is parsed, the PENCIL_BINARY variable is only ever warned about", () => {
     expect(code).toMatch(/startsWith\("--pencil-binary="\)/);
     expect(count2(code, /process\.env\.PENCIL_BINARY\b/g)).toBe(1); // only the value-free WARN condition, nothing that resolves a path
-    expect(code).toMatch(/if \(PENCIL_BINARY_ARG\) return \{ binary: trustedOverride\(PENCIL_BINARY_ARG\), home: process\.env\.HOME \};\s*return findPenBinary\(\);/);
+    expect(code).toMatch(/if \(PENCIL_BINARY_ARG\) return \{ binary: trustedOverride\(PENCIL_BINARY_ARG\), home: overrideChildHome\(\) \};\s*return findPenBinary\(\);/);
   });
 
   test("candidates are the passwd home then $HOME, each excluded when inside the working directory or CLAUDE_PROJECT_DIR, owner- and mode-checked, and the bin must be a regular file", () => {

@@ -28,6 +28,7 @@ import {
 } from "./lib/pencil-adapter-roundtrip.mjs";
 import { buildPenTree, LAYOUTS } from "./lib/pen-identity-tree.mjs";
 import { REPL_SURFACE } from "../skills/pencil-setup/scripts/pencil-repl-surface.mjs";
+import { ONLY_COPY_SENTENCE, REPLAY_SAFETY_SENTENCE } from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
 import { LIVE_TOOL_NAMES, REMOVED_TOOL_NAMES, RAW_CALL_STEERING } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
 
 // #11143 / #11156 / #11168 integration: the INSTALLED adapter copy over real MCP stdio
@@ -1154,6 +1155,20 @@ describe("the explicit `save` tool and the unpersistedEdits transitions (behavio
     expect(first(retry)).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
     expect(read(f)).toBe(before);
     expect((await exported(s, d, "e1")).split("\n")[0]).toBe(UNSAVED);
+    // the retry is told WHY: the file changed during a failed write and the memory copy is the only one
+    expect(retry.text).toContain("the file changed during a failed write");
+    expect(retry.text).toContain("the in-memory document is the only complete copy");
+    expect(retry.text).toContain(ONLY_COPY_SENTENCE);
+    expect(retry.text).not.toMatch(/refused because the file changed on disk/);
+    // and the log says which cause armed it
+    expect(s.stderr()).toMatch(/refusalPending=true \S+ cause=failed-write/);
+    expect(s.stderr()).toMatch(/REFUSED save: \[reason=refusal-pending\] \S+ baseline=[0-9a-f]{8} disk=[0-9a-f]{8} cause=failed-write/);
+    // a crash while armed keeps the first cause (it is not turned into a generic restart)
+    await killAndWait(stubPid(f));
+    const afterCrash = await s.call("save");
+    expect(first(afterCrash)).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(afterCrash.text).toContain(ONLY_COPY_SENTENCE);
+    expect(afterCrash.text).toContain("the file changed during a failed write");
   });
 
   test("a failed save that leaves the file as it was is NOT armed (the retry after the fix saves)", async () => {
@@ -1616,22 +1631,51 @@ await import(${JSON.stringify(pathToFileURL(STUB).href)});
     expect(children(f)).toBe(2);
   });
 
-  test("a key split ACROSS two replies (end of one reply's stderr, start of the next) is never emitted: the rolling redactor is not flushed at command end (log sink only)", async () => {
+  test("a key split ACROSS two replies, both halves as error-class stderr: the first half is held back from reply 1, reply 2 carries `<redacted>`, and the log never holds either half", async () => {
     const f = join(caseDir("echo-across"), "a.pen");
     const s = await session({ keys: { PEN_CLI_KEY: SECRET } });
     await s.call("open_document", { filePath: f });
     setFlags(f, { echoKeyAcross: true });
+    const half = Math.ceil(SECRET.length / 2);
     const first = await s.call("batch_design", { operations: ADD });
     const second = await s.call("batch_design", { operations: ADD });
-    // the tool results carry at most their own half; the whole key is never in either
+    // both halves are error-class: each reply's stderr reaches its tool result (not vacuous)
+    expect(first.isError).toBe(true);
+    expect(first.text).toContain("retrying with credential");
+    expect(second.isError).toBe(true);
+    expect(second.text).toContain("second reply");
+    // the first half would be a partial credential in the agent's context: it is held back
+    expect(first.text).not.toContain(SECRET.slice(0, 8));
+    // the second reply completes the held half: the whole spelling is redacted
+    expect(second.text).toContain("<redacted>");
     for (const r of [first, second]) {
       expect(r.text).not.toContain(SECRET);
+      expect(r.text).not.toContain(SECRET.slice(half - 8, half + 8));
     }
-    // the adapter's log never holds the first half either: it was held back and met its second half
-    await s.call("batch_design", { operations: "x=Insert(document,{type:\"frame\",width:1,height:1})" });
+    // the adapter's log never holds either half: it met its second half and was replaced
+    await s.call("batch_design", { operations: 'x=Insert(document,{type:"frame",width:1,height:1})' });
     expect(s.stderr()).not.toContain(SECRET);
-    expect(s.stderr()).not.toContain(SECRET.slice(0, Math.ceil(SECRET.length / 2)));
+    expect(s.stderr()).not.toContain(SECRET.slice(0, 8));
     expect(s.stderr()).toContain("<redacted>");
+  });
+
+  test("a key interleaved with ANSI escape sequences (inline, and with the escape itself cut across two writes) is redacted in the result and in the adapter's stderr", async () => {
+    for (const mode of [true, "chunked"] as const) {
+      const f = join(caseDir(`echo-ansi-${mode}`), "a.pen");
+      const s = await session({ keys: { PEN_CLI_KEY: SECRET } });
+      await s.call("open_document", { filePath: f });
+      setFlags(f, { echoKeyAnsi: mode });
+      const r = await s.call("batch_design", { operations: ADD });
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("leaked");
+      expect(r.text).toContain("<redacted>");
+      expect(r.text).not.toContain(SECRET);
+      expect(r.text).not.toContain(SECRET.slice(10, 20));
+      await s.call("batch_design", { operations: ADD }); // the flag is still on: its stderr moves the held tail out of the log's rolling redactor
+      expect(s.stderr()).not.toContain(SECRET);
+      expect(s.stderr()).not.toContain(SECRET.slice(10, 20));
+      expect(s.stderr()).toContain("<redacted>");
+    }
   });
 
   test("a stderr flood past the 1 MiB buffer cap (no newline, the key every 35 bytes) is trimmed without leaving a key fragment in the error text", async () => {
@@ -1854,7 +1898,8 @@ describe("binary resolution", () => {
       chmodSync(tree.pkgDir, 0o775);
       const { r } = await openOn("cand-writable-1", { passwdHome: home, home });
       expect(r.text).toMatch(/pen CLI not found or not trusted \(the package directory is group- or world-writable; run `chmod -R go-w [^`]+\/node_modules`/);
-      expect(r.text).toContain(`chmod -R go-w ${tree.prefix}/node_modules`);
+      expect(r.text).toContain("chmod -R go-w ~/.local/share/pen-cli/node_modules"); // the literal path: HOME is project-controlled
+      expect(r.text).not.toContain(tree.prefix);
       expect(r.text).toMatch(/check_deps\.sh --auto/);
       expect(existsSync(join(home, "engine-env.log"))).toBe(false);
     });
@@ -2197,5 +2242,179 @@ describe("export_nodes and get_screenshot persistence", () => {
     expect(ex.text.split("\n")[0]).toBe("WARNING: rendered from unsaved memory, not the file on disk");
     const shot = await s.call("get_screenshot", { nodeId: "seed0" });
     expect(shot.text).toMatch(/WARNING: rendered from unsaved memory/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 3 (verification panel): behaviours that were wrong or untested.
+
+describe("round 3: save-incomplete tells the truth about the engine", () => {
+  test("a save that throws while the engine is still alive (desynchronised) stops it, so `The engine was stopped` is true", async () => {
+    const f = join(caseDir("incomplete-alive"), "a.pen"); // a new file: no count probe, the save is the first thing to throw
+    const s = await session();
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    setFlags(f, { strayAfterReply: true });
+    const pid = stubPid(f);
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toMatch(/^NOT PERSISTED: \[reason=save-incomplete\] /);
+    expect(r.text).toMatch(/pen process is not running/); // the throw came from a child that was alive but desynchronised
+    expect(r.text).toContain("The engine was stopped");
+    // the claim holds: the process is gone by the time the result is returned
+    expect(() => process.kill(pid, 0)).toThrow();
+    setFlags(f, {});
+    // and the session recovers the documented way
+    const refused = await s.call("save");
+    expect(refused.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+  });
+});
+
+describe("round 3: the canonical-path check covers every save over a hashed baseline", () => {
+  test("a parent directory swapped for a symlink to a byte-identical copy is refused as unknown-baseline/recreate-path-changed: nothing is written through the link", async () => {
+    const d = caseDir("hash-symlinked-parent");
+    const real = join(d, "docs");
+    const copy = join(d, "copy");
+    mkdirSync(real);
+    mkdirSync(copy);
+    const f = join(real, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false); // baseline = the saved 3 nodes
+    writeFileSync(join(copy, "a.pen"), read(f)); // a byte-identical copy
+    const copyBytes = read(join(copy, "a.pen"));
+    rmSync(real, { recursive: true, force: true });
+    symlinkSync(copy, real); // docs -> copy: the file reads identically, the write would land in copy/
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=unknown-baseline] ${f} was not modified.`);
+    expect(r.text).toMatch(/directory on the way to it is now a link or has moved/);
+    expect(r.text).not.toMatch(/was removed from disk/); // the file was not removed
+    expect(read(join(copy, "a.pen"))).toBe(copyBytes); // nothing was written through the link
+    expect(s.stderr()).toMatch(/REFUSED save: \[reason=unknown-baseline\] \S+ cause=recreate-path-changed/);
+    // the explicit save is refused the same way
+    const explicit = await s.call("save");
+    expect(explicit.text.split("\n")[0]).toBe(`REFUSED save: [reason=unknown-baseline] ${f} was not modified.`);
+    expect(read(join(copy, "a.pen"))).toBe(copyBytes);
+  });
+});
+
+describe("round 3: open_document that discards unsaved edits says so", () => {
+  const NOTE = "NOTE: unsaved edits to the previous document were discarded.";
+  test("a different path while edits are unpersisted: the result carries the NOTE line", async () => {
+    const d = caseDir("open-discards");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    writeFileSync(f, pen(5, "other")); // changed behind the session: the next edit is refused, so it is unpersisted
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(true);
+    const g = join(d, "b.pen");
+    const r = await s.call("open_document", { filePath: g });
+    expect(r.isError).toBe(false);
+    expect(r.text.split("\n")).toContain(NOTE);
+    expect(r.text.split("\n")[0]).toMatch(/^Opened /);
+  });
+  test("no NOTE when nothing was unpersisted, or when the same path is re-opened (the documented recovery)", async () => {
+    const d = caseDir("open-no-discard");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    const clean = await s.call("open_document", { filePath: join(d, "b.pen") });
+    expect(clean.text).not.toContain("NOTE:");
+    writeFileSync(join(d, "b.pen"), pen(5, "other"));
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(true);
+    const same = await s.call("open_document", { filePath: join(d, "b.pen") });
+    expect(same.text).not.toContain("NOTE:");
+  });
+});
+
+describe("round 3: the group-writable remedy never carries the project-controlled HOME", () => {
+  test("a HOME with a newline and backticks in it appears nowhere in the tool error; the remedy names the literal ~/.local/share path", async () => {
+    const parent = caseDir("remedy-home");
+    const home = join(parent, "h\nome`touch pwned`");
+    mkdirSync(home, { recursive: true });
+    const tree = buildPenTree(home, "good");
+    chmodSync(tree.pkgDir, 0o775);
+    const d = caseDir("remedy-home-doc");
+    const s = await session({ binary: "", nodeBin: Bun.which("node") ?? "node", cwd: d, passwdHome: home, extraEnv: { HOME: home, PATH: "/usr/bin:/bin" } });
+    const r = await s.call("open_document", { filePath: join(d, "doc.pen") });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("chmod -R go-w ~/.local/share/pen-cli/node_modules");
+    expect(r.text).not.toContain("pwned");
+    expect(r.text).not.toContain("h\nome");
+    expect(r.text).not.toContain(parent);
+  });
+});
+
+describe("round 3: the --pencil-binary override gives the child a trustworthy HOME", () => {
+  const probe = (name: string) => {
+    const d = caseDir(`override-home-${name}`);
+    const wrapper = join(d, "homeprobe.mjs");
+    writeFileSync(
+      wrapper,
+      `import { writeFileSync } from "node:fs";
+const i = process.argv.indexOf("--out");
+writeFileSync(process.argv[i + 1] + ".homeseen", process.env.HOME ?? "<unset>");
+process.env.STUB_TAG = "";
+await import(${JSON.stringify(pathToFileURL(STUB).href)});
+`,
+      { mode: 0o755 }
+    );
+    chmodSync(wrapper, 0o755);
+    return wrapper;
+  };
+
+  test("HOME inside the working directory (a project env block can set it) is not handed to the child: the passwd home is", async () => {
+    const project = caseDir("override-home-project");
+    const fakeHome = join(project, "fake-home");
+    mkdirSync(fakeHome);
+    const passwd = caseDir("override-home-passwd");
+    const docDir = caseDir("override-home-in-doc");
+    const f = join(docDir, "a.pen");
+    const s = await session({ binary: probe("in"), cwd: project, passwdHome: passwd, extraEnv: { HOME: fakeHome } });
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect(read(`${f}.homeseen`)).toBe(passwd);
+  });
+
+  test("HOME outside every project root (a container whose HOME is not the passwd home) is kept", async () => {
+    const project = caseDir("override-home-project2");
+    const outside = caseDir("override-home-outside");
+    const passwd = caseDir("override-home-passwd2");
+    const docDir = caseDir("override-home-out-doc");
+    const f = join(docDir, "a.pen");
+    const s = await session({ binary: probe("out"), cwd: project, passwdHome: passwd, extraEnv: { HOME: outside } });
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect(read(`${f}.homeseen`)).toBe(outside);
+  });
+});
+
+describe("round 3: the dependency-import failure message names what a customer can run", () => {
+  test("it names /soleur:pencil-setup first, and the repo-relative script only as a Soleur-checkout note", () => {
+    const d = caseDir("dep-import-fail");
+    const scripts = join(d, "adapter");
+    mkdirSync(scripts);
+    for (const name of readdirSync(installDir)) {
+      if (name.endsWith(".mjs")) copyFileSync(join(installDir, name), join(scripts, name)); // no node_modules next to it
+    }
+    const r = spawnSync("node", [join(scripts, "pencil-mcp-adapter.mjs")], {
+      env: { PATH: process.env.PATH ?? "", HOME: d, PEN_CLI_KEY: "stub-key-0123456789" },
+      input: "",
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(r.status).toBe(1);
+    const lines = r.stderr.split("\n");
+    expect(lines.some((l) => l.startsWith("[pencil-adapter] ERROR: dependency import failed:"))).toBe(true);
+    const text = r.stderr;
+    const setup = text.indexOf("/soleur:pencil-setup");
+    const script = text.indexOf("copy_adapter.sh");
+    expect(setup).toBeGreaterThan(-1);
+    expect(script).toBeGreaterThan(setup); // the customer-runnable command comes first
+    expect(text).toMatch(/in a Soleur checkout[^\n]*copy_adapter\.sh/);
+    expect(text).not.toMatch(/Re-run:\s*\n\[pencil-adapter\]\s+bash plugins\/soleur/); // never the bare repo path as the instruction
   });
 });

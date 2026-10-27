@@ -52,6 +52,26 @@ export function stripAnsi(str) {
   return str.replace(ANSI_ESCAPE, "");
 }
 
+// A stream stripper for chunked output: an escape sequence cut at a chunk boundary is held and
+// finished by the next chunk, so no half sequence is left to split a credential across the
+// pieces a redactor sees. push(chunk) returns the stripped text that is complete now; the
+// unfinished tail (at most a few bytes of one escape) is dropped at the end of the stream.
+export function createAnsiStripper() {
+  let carry = "";
+  return {
+    push(chunk) {
+      const text = stripAnsi(carry + String(chunk ?? ""));
+      carry = "";
+      const i = text.lastIndexOf("\x1b");
+      if (i !== -1 && text.length - i <= 64 && /^\x1b(\[[0-9;?:<=>]*)?$/.test(text.slice(i))) {
+        carry = text.slice(i);
+        return text.slice(0, i);
+      }
+      return text;
+    },
+  };
+}
+
 export function classifyResponse(raw) {
   const input = String(raw ?? "");
   const bounded = input.length > CLASSIFY_MAX_BYTES ? input.slice(0, CLASSIFY_MAX_BYTES) : input;
