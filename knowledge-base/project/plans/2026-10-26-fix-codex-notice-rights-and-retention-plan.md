@@ -346,9 +346,25 @@ promise persistence past that bound. Show the member when the cached draft is
 unavailable; reconstruction is an explicit new user action. Tests cover
 mount/remount before and after cache TTL, reload, scope invalidation, repeated
 clicks, reconnect, stale response generations, fresh acknowledgment and exactly
-one explicit resend. No expiry path may silently drop a still-cached message or
-replay it to a provider. Copy must not equate nonce possession with reading or
-consent.
+one explicit resend. Model resend as one stable logical turn with three
+outcomes: definitely not dispatched, durably accepted, or unresolved.
+`WebSocket.send()` returning successfully means only pending; keep the held
+copy until a correlated authoritative acceptance/result. A definite
+pre-admission failure keeps the same message, attachments and original turn ID
+retryable by a new explicit member action. Repeated clicks while pending submit
+once. A disconnect, timeout or lost response is unresolved: disable resend and
+reconcile authenticated status scoped to subject, conversation and generation,
+without provider work. A durable accepted claim suppresses duplicates across
+sockets and restarts; a positive authoritative not-dispatched disposition may
+permit explicit retry of that same claim only with atomic fencing. Generic
+failure, duplicate-key errors, unavailable status or missing responses never
+prove non-dispatch and never permit a replacement ID or automatic retry.
+Wrong-scope replies and altered payloads on a reused ID cannot clear or dispatch
+the draft. Cache expiry/auth invalidation retains bounded-memory behavior and
+makes no persistence promise. This contract prevents duplicate dispatch; it
+does not promise exactly-once provider completion. No expiry path may silently
+drop a still-cached message or replay it to a provider. Copy must not equate
+nonce possession with reading or consent.
 
 ## Legal and Operator Decisions
 
@@ -385,7 +401,14 @@ slices stacked on #9051's held feature branch; capture rights metadata
 atomically at request admission and export by job ID; use one database-owned
 one-minute `pg_cron` cleanup schedule with independent expired-age monitoring;
 never treat cron registration as proof of deletion during database outages.
-The ruling preserves all six asks and keeps #9051 draft with auto-merge off.
+CTO technical ruling (2026-10-27): resend uses a stable logical turn and
+three-state dispatch outcome. Preserve the bounded held copy until correlated
+authoritative acceptance/result; only a definite pre-admission failure or
+positive authoritative not-dispatched disposition with same-claim fencing can
+permit a new explicit retry. Ambiguous outcomes require authenticated,
+scope-bound status reconciliation and never automatic retry or a new turn ID.
+This promises duplicate prevention, not exactly-once provider completion. The
+rulings preserve all six asks and keep #9051 draft with auto-merge off.
 
 ## Data Safety and Rollback
 
@@ -441,6 +464,18 @@ The ruling preserves all six asks and keeps #9051 draft with auto-merge off.
 - Given an expired notice, when the member requests renewal, then a fresh notice
   and nonce are issued only for an eligible subject; no provider request occurs
   until fresh acknowledgment and a separate explicit resend.
+- Given a closed socket or definite prequeue send failure, then the exact held
+  draft remains retryable and a later explicit retry uses its original turn ID.
+- Given a correlated server rejection before admission, then the draft remains
+  retryable and provider calls remain zero; repeated clicks while pending still
+  produce one submission.
+- Given accepted claim/provider invocation followed by lost response, reconnect
+  and server restart, then authenticated status reconciliation finds the same
+  attempt and duplicate submissions cause no second provider invocation.
+- Given lost claim response, unavailable status, generic terminal failure,
+  wrong subject/conversation/generation reply or altered payload with a reused
+  ID, then the outcome stays unresolved and no retry, replacement ID, provider
+  request or draft clearing occurs.
 - Given reconnect, repeated renewal clicks, a stale server response, reload,
   auth-scope change and cache TTL expiry, then the client never uses an old
   nonce, never duplicates provider dispatch, and communicates whether the

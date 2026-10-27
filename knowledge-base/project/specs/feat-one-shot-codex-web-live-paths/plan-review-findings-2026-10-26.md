@@ -2,8 +2,8 @@
 title: "Plan review — Codex notice rights and retention"
 date: 2026-10-26
 plan: knowledge-base/project/plans/2026-10-26-fix-codex-notice-rights-and-retention-plan.md
-reviewed_plan_head: 1b5c54acc86486da7cfad25c781119834577c201
-status: revised-cto-ruled-focused-recheck-pending
+reviewed_plan_head: 96f9ec018c7f79acdf3ced7a5e67b4570efcfa41
+status: resend-semantics-revised-focused-recheck-pending
 ---
 
 # Plan review findings
@@ -30,6 +30,7 @@ been revised against these findings and still needs a focused revision check.
 | All completed reviewers | P1 | The source estimate omitted request-time snapshots, renewal UX, wireframe and mirrored legal documents. A correction targeting `main` cannot apply its migration before held PR #9051's migration 175. | Re-inventory and stack dependent correction PRs on #9051's feature branch. Preserve all six asks and one completion gate across the stack. Keep #9051 draft and auto-merge off. |
 | CTO | Ruling | Use two dependent correction slices stacked on #9051's held feature branch; snapshot eligible rights data atomically at request admission and export by job ID; use one database-owned one-minute `pg_cron` cleanup plus independent expired-age monitoring. A database outage can prevent deletion. | Preserved in the revised plan. Both slices must integrate before reconsidering #9051 readiness; cron registration is not proof of a hard deletion bound during outages. |
 | Code simplicity recheck | P2 | Ordinal-only references to migration 175 are ambiguous because main and #9051 use distinct files with that ordinal. | Replace each with `175_codex_history_notice_issuance.sql`; preserve distinct full filenames and remeasure before assigning correction ordinals. |
+| Spec-flow | P2 | Resend failure and response-loss semantics did not distinguish definite pre-admission failure from ambiguous outcome. | Specify stable logical turn IDs, retry only after authoritative not-dispatched evidence, authenticated status reconciliation for ambiguous outcomes, no automatic retry/replacement ID, and minimum client/server/disposable-database tests. CTO ruled 2026-10-27; incorporated in plan. |
 
 ## Recheck requirements
 
