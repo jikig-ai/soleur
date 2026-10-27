@@ -25,7 +25,7 @@ closes: none (Ref #11195, Ref #8211, Ref #6897, Ref #11194 - the DPD section 10.
 
 ### New considerations discovered
 - The destroy run's log is the only durable copy of the read-back until the ADR section carries it.
-- ADR-239 item 7 binds the DPD refresh to this issue (2026-11-03 target, 2026-11-11 bound); the brief excludes `docs/legal/**`, so the issue must stay open (`Ref`, not `Closes`).
+- ADR-239 item 7 binds the DPD refresh to this issue (2026-11-03 bound, 2026-11-11 outer limit); the brief excludes `docs/legal/**`, so the issue must stay open (`Ref`, not `Closes`).
 - Any file under `apps/web-platform/infra/**` fires the per-merge apply on main; the expected plan is empty.
 
 ## Overview
@@ -55,7 +55,7 @@ Measured run facts (read from the public run log on 2026-10-27, counts and ident
 | accept rows `operator-9321-stages` | Three rows at the end of `scripts/ci-pr-affected-audit.accept.tsv` (anchors `29652c91c131`, `414af6df7316`, `93d74076191c`); file untouched since | Restore from `edade6cb3e^` |
 | "keep the `expires_on` clock until it can be retired under the lint rules" | `scripts/lint-encryption-posture.py` PASSES with the row removed (20 stores, 0 failing, measured on a scratch copy); ADR-239 Amendment 2026-10-26 item 6 says this PR retires the row; but the amendment is DRAFT | Row removal gated on CLO attestation (CTO R3); otherwise keep row and clock, rewrite evidence only |
 | records "need CLO attestation or an owner decision" (issue item 4) | `expenses.md` row 24 is a bookkeeping flip; the Art. 30 PA-36(f) marker is append-only legal wording; the DPD refresh is `docs/legal/**` | expenses flip in scope; Art. 30 marker only from CLO-supplied wording; DPD excluded (brief) |
-| ADR-239 item 7: the record PR "must be merged and live at soleur.ai/legal/" by the earlier of read-back + 7 days and 2026-11-11 | That bound includes the DPD edit, which the brief excludes from this PR | Recorded as a dated CLO item (2026-11-03 target, 2026-11-11 bound); PR uses `Ref`, issue stays open |
+| ADR-239 item 7: the record PR "must be merged and live at soleur.ai/legal/" by the earlier of read-back + 7 days and 2026-11-11 | That bound includes the DPD edit, which the brief excludes from this PR | Recorded as a dated CLO item (2026-11-03 bound, 2026-11-11 outer limit); PR uses `Ref`, issue stays open |
 | prose to "update to past tense" | `apply-web-platform-infra.yml` still `-target`s `hcloud_volume.git_data` and `hcloud_volume_attachment.git_data` (three `-target` lines in dispatch jobs: the host replace/rotate job and `git_data_host_create`, none per-merge), #11194 is open | DISABLED banners, ADR-119 addendum, DISABLED note in `git-data.tf` STAY; the destroy procedure prose goes past tense |
 | not in the brief | `model.c4` gitDataStore still says the plaintext volume "is RETAINED ... until the post-soak wipe" | In scope (architecture-record gate): update in place |
 
@@ -204,7 +204,7 @@ discoverability_test:
 - 0.1 `git fetch origin main` and re-check the premises: `gh issue view 11195`, `gh pr view 11284`, `git log edade6cb3e..origin/main -- <each restored file>` still empty for the six restore-by-checkout files (if a later commit appears, hand-revert that file instead). Re-read the run: `gh run view 40478209838 --json conclusion`.
 - 0.2 Baseline: run the guards that will be touched on the unmodified tree and record counts (census suite, parity test, `grep-q-pipe-guard.test.sh`, `lint-encryption-posture.py`, `preflight-discoverability-test.test.ts -t G1`). A red baseline is a base problem, not this change (measure the base before attributing a move).
 - 0.3 Fresh read-only state read, before the probe is deleted: `bash apps/web-platform/infra/git-data-plaintext-volume-state.sh` with `HCLOUD_TOKEN_READONLY` (Doppler `prd_terraform`, read). Expect `plaintext_volume=absent`, `shape=gone`. Record the UTC time and the identifier-only output for the ADR section. If no read credential is available in the session, record that and rely on the run's read-back; this is not a blocker.
-- 0.4 Spawn the CLO once (report-only). Prompt: the measured table above, the DRAFT amendment text, and four questions - attest the equivalence now that the read-back is in; may the ledger row be retired on that basis; supply append-only wording for the Art. 30 PA-36(f) marker (the register row says the residue "ends when that volume is destroyed ... the Hetzner volume delete is the end event"); confirm DPD section 10.3(b) stays a CLO-owned item (2026-11-03 target, 2026-11-11 bound). Persist the answer as rows in this branch's `decision-challenges.md`. Branch A (attested): proceed with the row removal and `IN FORCE`. Branch B (not attested or conditional): keep the row and its clock, rewrite evidence only, status stays "executed, still pending attestation". The rest of the plan is identical in both branches.
+- 0.4 Spawn the CLO once (report-only). Prompt: the measured table above, the DRAFT amendment text, and four questions - attest the equivalence now that the read-back is in; may the ledger row be retired on that basis; supply append-only wording for the Art. 30 PA-36(f) marker (the register row says the residue "ends when that volume is destroyed ... the Hetzner volume delete is the end event"); confirm DPD section 10.3(b) stays a CLO-owned item (2026-11-03 bound, 2026-11-11 outer limit). Persist the answer as rows in this branch's `decision-challenges.md`. Branch A (attested): proceed with the row removal and `IN FORCE`. Branch B (not attested or conditional): keep the row and its clock, rewrite evidence only, status stays "executed, still pending attestation". The rest of the plan is identical in both branches.
 
 ### Phase 1 - Delete the one-shot artifacts and reverse the counters (one commit; baselines compare to the live census)
 
@@ -257,7 +257,7 @@ Run and record green: `bun test plugins/soleur/test/terraform-target-parity.test
 
 ### Phase 5 - PR and dated items
 
-PR body: `Ref #11195`, `Ref #8211`, `Ref #6897`, `Ref #11194` (never `Closes`); includes the rendered decision-challenges table; names the open items (DPD section 10.3(b) refresh - CLO, target 2026-11-03, hard bound 2026-11-11; Art. 30 marker if the CLO returned no wording; #11194). Comment the PR link on #11195 and #6897. After merge: read the per-merge infra apply run (expected empty plan) and the next scheduled drift run that logs "No drift detected in web-platform" (the 2026-10-27 18:00Z run); close a drift issue only if its plan shows exactly the two retired destroys (the two currently open drift issues predate the destroy, 2026-10-21/22, so they are not this).
+PR body: `Ref #11195`, `Ref #8211`, `Ref #6897`, `Ref #11194` (never `Closes`); includes the rendered decision-challenges table; names the open items (DPD section 10.3(b) refresh - CLO, bound 2026-11-03, outer limit 2026-11-11; Art. 30 marker if the CLO returned no wording; #11194). Comment the PR link on #11195 and #6897. After merge: read the per-merge infra apply run (expected empty plan) and the next scheduled drift run that logs "No drift detected in web-platform" (the 2026-10-27 18:00Z run); close a drift issue only if its plan shows exactly the two retired destroys (the two currently open drift issues predate the destroy, 2026-10-21/22, so they are not this).
 
 ## Files to Edit
 
@@ -340,7 +340,7 @@ PR body: `Ref #11195`, `Ref #8211`, `Ref #6897`, `Ref #11194` (never `Closes`); 
 
 - [ ] The per-merge infra apply run triggered by the `apps/web-platform/infra/**` change concludes with an empty plan (read-only watch; nothing is dispatched).
 - [ ] The next scheduled `web-platform` drift run reports no drift; a drift issue is closed only if it lists exactly the two retired destroys.
-- [ ] #6897 / #11195 carry the PR link and the dated DPD item (2026-11-03 target, 2026-11-11 bound); #11195 stays open until the CLO closes the DPD (and, if applicable, Art. 30) items.
+- [ ] #6897 / #11195 carry the PR link and the dated DPD item (2026-11-03 bound, 2026-11-11 outer limit); #11195 stays open until the CLO closes the DPD (and, if applicable, Art. 30) items.
 
 ## Test Scenarios
 

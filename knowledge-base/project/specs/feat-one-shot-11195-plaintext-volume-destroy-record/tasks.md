@@ -38,5 +38,5 @@ Plan: knowledge-base/project/plans/2026-10-27-chore-git-data-plaintext-volume-de
 
 ## Phase 5: PR and dated items
 
-- [ ] 5.1 PR body with `Ref #11195 / #8211 / #6897 / #11194` (never Closes), rendered decision table, open items (DPD 2026-11-03 target / 2026-11-11 bound; Art. 30 if no wording)
+- [ ] 5.1 PR body with `Ref #11195 / #8211 / #6897 / #11194` (never Closes), rendered decision table, open items (DPD 2026-11-03 bound / 2026-11-11 outer limit; Art. 30 if no wording)
 - [ ] 5.2 Post-merge watch: per-merge infra apply (empty plan), next drift run clean; PR link comment on #11195 and #6897

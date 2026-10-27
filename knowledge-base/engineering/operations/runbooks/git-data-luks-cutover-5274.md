@@ -11,8 +11,8 @@ repoints a mount — the flag-off readback is the rollback); `unfreeze` clears t
 There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
 plaintext volume is retained read-only until its wipe decision (#6897/#8571). The residue on it ends
 when that volume is destroyed by the DL-2 wipe, never mounted to purge in place; the target date and the slip
-rule are in ADR-239, amendment 2026-10-09. [Superseded 2026-10-27 (#11195): the volume was deleted at the
-provider API on 2026-10-27 by a Terraform destroy, not by the DL-2 wipe; see "Plaintext-volume destroy".] Three further modes, `wipe_check`, `wipe` and `wipe_finish` (#10138),
+rule are in ADR-239, amendment 2026-10-09. **[Superseded 2026-10-27 (#11195), as to "when that volume is destroyed by the DL-2 wipe": the volume was deleted at the
+provider API on 2026-10-27 by a Terraform destroy, not by the DL-2 wipe; see "Plaintext-volume destroy".]** Three further modes, `wipe_check`, `wipe` and `wipe_finish` (#10138),
 run in a separate job (`wipe`) and retire that volume by detaching it and deleting it at the provider API; they
 are owner-named and described in [The wipe](#the-wipe-dl-2-10138--6897).
 
@@ -1261,6 +1261,8 @@ Measured against `apply-web-platform-infra.yml` and `git-data.tf`, not asserted 
 
 ### If the fresh host fails a boot check after step 3
 
+> Routes disabled until #11194: if the git-data host itself is lost, the replace, rotate and create remedies named here are void; see "If the git-data host is lost (until #11194)" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)".
+
 Applies to `plaintext_unverified`, `plaintext_residue`, `luks_residue`, `fence_on_mapper=no` and
 `erasure_probe=no`.
 
@@ -1404,6 +1406,8 @@ this sequence slips past about 2026-11-05, tell the CLO.
 
 ## The wipe (DL-2, #10138 / #6897)
 
+> **Superseded 2026-10-27 (#11195), as to "retires the plaintext rollback volume" and every `wipe_check`, `wipe`, `wipe_finish` and `snapshot_clear` dispatch described in this section: the volume was deleted by a Terraform destroy on 2026-10-27 and is gone (see "Plaintext-volume destroy"). Do not dispatch these modes against volume 106867358; the section is kept as the record of the reasoning and for the verdict words the Verdict map still uses.**
+
 The `wipe` job of `git-data-cutover.yml` retires the plaintext rollback volume (Terraform `hcloud_volume.git_data`, the Hetzner volume named `soleur-git-data-store`) by detaching it and deleting it at the provider API. It has four modes (`wipe_check`, `wipe`, `wipe_finish`, `snapshot_clear`; the table under "The modes" gives their confirm tokens), every one behind the `web-platform-infra-apply` environment, and every one names the volume by its id (`volume_id`). The `cutover` job is skipped for all four.
 
 **What a run can claim.** The only claim any wipe run, step summary, notification, record or this section makes about the end state is that the DEVICE was deleted at the provider API: the DELETE returned 204, the read-back read 404 by id and an empty list by name, and the LUKS volume was still attached to the git-data server. A `wipe_finish` that finds the volume already absent made no delete call and claims less: the volume is absent at the provider API at its read-back, and the delete outcome is in the origin run (its summary says so and names the origin run). Nothing here states that the volume was empty or held no personal data; the host verb reports only pre-detach per-type counts and fixed words (an exit-34 refusal also carries one fixed 0/1 field and two counts [superseded 2026-10-19, from the merge of the change that adds the `hk_` group only: up to three fixed 0/1 fields and four counts, see the note below], see 'Reading the exit-34 line'), and no name read from the volume ever leaves the host. Standing line, the CLO's, which the run summary carries in its own words: this run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), the served store's lock residue, the `.gc-cursor` residue, or any copy held by someone with prior access. The record PR that follows (PR-C) states the end event in the CLO's form: device (Hetzner volume id N) deleted at T by run URL; provider API delete returned 204 and read-back was 404 (for a finish that found the volume absent: absent at the read-back, delete outcome in the origin run). It adds nothing about contents. Run logs, step summaries and notification emails are as public as #6897: they carry ids, counts and fixed verdict words only. In these words `snapshot` always means the transient host-local device-mapper snapshot that the pre-detach read takes (RAM copy-on-write, removed before the run continues), never a provider-side snapshot or backup.
@@ -1533,7 +1537,7 @@ A `wipe_finish` publishes no phase before its delete gate (nothing in a finish w
 
 ### The wedge
 
-> **Superseded 2026-10-27 (#11195):** this section describes the DL-2 wipe path, which was not the path taken. The volume was deleted by a Terraform destroy, and neither the state nor the HCL holds `hcloud_volume.git_data` or its attachment any more (see "Plaintext-volume destroy"). It is kept as the record of the reasoning.
+> **Superseded 2026-10-27 (#11195), as to "After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data`": this section describes the DL-2 wipe path, which was not the path taken. The volume was deleted by a Terraform destroy, and neither the state nor the HCL holds `hcloud_volume.git_data` or its attachment any more (see "Plaintext-volume destroy"). It is kept as the record of the reasoning.**
 
 After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data` (and its attachment). Read facts, from `tests/scripts/test-git-data-wipe-wedge.sh`:
 
@@ -1645,20 +1649,22 @@ The retired plaintext Hetzner volume (id 106867358, name `soleur-git-data-store`
 
 - Pre-plan read: `shape=present_attached`; git-data server 170370833; LUKS volume 107140231 on server 170370833.
 - Plan: `0 to add, 0 to change, 2 to destroy` (the volume and its attachment); the destroy gate passed, then passed again inside the apply step.
-- Apply: `Apply complete! Resources: 0 added, 0 changed, 2 destroyed.` (09:07:04Z).
+- Apply: `Apply complete! Resources: 0 added, 0 changed, 2 destroyed.` (the volume destruction completed at 09:07:04Z).
 - Read-back: `shape=gone`; git-data server and LUKS volume unchanged. An independent read-only Hetzner GET afterwards returned 404 for volume 106867358 and an empty list for the name `soleur-git-data-store`; the LUKS volume was still attached to server 170370833 and the server was `running`.
 
 The claim is limited to "device deleted at the provider API" (ADR-239 Amendment 2026-10-27, item 3). It says nothing about the volume's contents before deletion, lock residue, or what the provider retains after a delete; those stay unmeasured. Provider-side snapshots or copies are not measured here either.
 
 **Drift.** After the destroy the state no longer holds the two retired addresses, so untargeted plans no longer show them. The drift issues titled `infra: drift detected in web-platform` that were open before 2026-10-27 predate the destroy. Close one only if its plan lists exactly those two destroys; the first drift run after the destroy that logs "No drift detected in web-platform" is the check.
 
-**If the git-data host is lost (until #11194).** Stop and escalate to the owner; the replace, rotate and create routes are disabled and the failure text that says "re-dispatch git-data-host-replace" is void. With the flag on, git push and pull and workspace provisioning fail (they do not corrupt), and the bare-repo part of an account deletion (Art. 17) stays `pending` with a Sentry alert while the one-month clock runs. The literal `git_data_volume_id` names a deleted device: a host rebirth boots into the bootstrap's `plaintext_unverified reason=source` FATAL until the id is set to `""`. A plain reboot is believed safe (the bootstrap runs from cloud-init `runcmd`, once per instance, as two review seats read it) but that is unverified on the live host. #11194 must end with either `id = ""` or a bootstrap that treats a nonexistent device as absent now that the volume is retired.
+**If the git-data host is lost (until #11194).** Stop and escalate to the owner; the replace, rotate and create routes are disabled and the failure text that says "re-dispatch git-data-host-replace" is void. With the flag on, git push and pull and workspace provisioning fail (they do not corrupt), and the bare-repo part of an account deletion (Art. 17) stays `pending` with a Sentry alert while the one-month clock runs. The literal `git_data_volume_id` names a deleted device: a host rebirth boots into the bootstrap's `plaintext_unverified reason=source` FATAL until the id is set to `""`. A plain reboot is believed safe (the bootstrap runs from cloud-init `runcmd`, once per instance) but that is unverified on the live host. #11194 must end with either `id = ""` or a bootstrap that treats a nonexistent device as absent now that the volume is retired.
 
-**Retention and public disclosure (CLO 2026-10-26 and 2026-10-27).** `docs/legal/**` was not edited by the destroy or by the record PR (#11195): a dispatch is not a deletion, and the public sentence may change only after the verified read-back, which now exists. The DPD section 10.3(b) refresh is a CLO-owned dated item with its own pull request: target 2026-11-03 (read-back plus 7 days), hard bound 2026-11-11, escalation by a comment on #6897. Until it is live the public sentence overstates retention, which is the conservative direction. The ledger row for the device and its `expires_on` were retired by #11195 (ADR-239 Amendment 2026-10-27, item 6); the provider-retention gap they described is unmeasured, not closed.
+**Retention and public disclosure (CLO 2026-10-26 and 2026-10-27).** `docs/legal/**` was not edited by the destroy or by the record PR (#11284, Ref #11195): a dispatch is not a deletion, and the public sentence may change only after the verified read-back, which now exists. The DPD section 10.3(b) refresh is a CLO-owned dated item with its own pull request: bound 2026-11-03 (read-back plus 7 days; CLO 2026-10-27), outer limit 2026-11-11, escalation by a comment on #6897. Until it is live the public sentence overstates retention, which is the conservative direction. The ledger row for the device and its `expires_on` were retired by #11195 (ADR-239 Amendment 2026-10-27, item 6); the provider-retention gap they described is unmeasured, not closed.
 
 **After the destroy.** The wipe-family modes of `git-data-cutover.yml` still exist and will see the volume gone; a rollback cannot use the plaintext volume as a target. #11195 deleted the destroy workflow, its gate, probe and tests, restored the counters those moved, retired the ledger row, and appended the run URL and read-back to ADR-239.
 
 ## Verdict map
+
+> Routes disabled until #11194: if the git-data host itself is lost, the replace, rotate and create remedies named here are void; see "If the git-data host is lost (until #11194)" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)".
 
 | Where you are | What the run reads | What to do |
 |---|---|---|
@@ -2172,6 +2178,8 @@ should page is a policy decision that stays on #8093.
   ([Liveness heartbeat](#liveness-heartbeat-9438)).
 
 ## Rotation
+
+> Routes disabled until #11194: if the git-data host itself is lost, the replace, rotate and create remedies named here are void; see "If the git-data host is lost (until #11194)" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)".
 
 The root-key root is additive-only, with no exception and no rotation input. **Any rotation, of the read
 token or of the key, is a reviewed PR** that adds a typed allowlist arm naming exactly the addresses it
