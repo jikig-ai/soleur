@@ -48,7 +48,10 @@ REEMIT_LINES=200
 
 # Each invocation gets its own dir under RUNNER_TEMP (or /tmp): fixed
 # filenames in the shared temp dir would collide under a second call site.
+# Owning trap removes it on any exit path — the last attempt's tail is already
+# re-emitted to step output on exhaustion.
 log_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ghcr-pull.XXXXXX")"
+trap 'rm -rf "$log_dir"' EXIT
 
 # Annotation-safe one-liner: % -> %25, CR/LF stripped (the workflow-annotation
 # protocol is line-oriented and % is its escape introducer).
