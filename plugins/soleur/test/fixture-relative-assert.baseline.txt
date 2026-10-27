@@ -348,7 +348,8 @@
 1	plugins/soleur/skills/incident/test/redact-sentinel.test.sh
 1	plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh
 1	plugins/soleur/skills/model-launch-review/scripts/audit-models.sh
-1	plugins/soleur/skills/pencil-setup/scripts/copy_adapter.sh
+6	plugins/soleur/skills/pencil-setup/scripts/check_deps.sh
+7	plugins/soleur/skills/pencil-setup/scripts/copy_adapter.sh
 1	plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh
 1	plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh
 1	plugins/soleur/skills/provision-github/scripts/provision-github.sh
@@ -362,7 +363,7 @@
 1	plugins/soleur/test/boundary-prefix.test.sh
 1	plugins/soleur/test/c4-from-components.test.sh
 1	plugins/soleur/test/c4-model-freshness.test.sh
-1	plugins/soleur/test/check-deps-adapter-drift.test.sh
+2	plugins/soleur/test/check-deps-adapter-drift.test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
 1	plugins/soleur/test/claude-code-action-auth.test.sh
 1	plugins/soleur/test/collision-precheck.test.sh

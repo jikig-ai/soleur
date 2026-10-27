@@ -731,7 +731,7 @@ try_headless_cli_tier() {
        export PEN_CLI_KEY
        # shellcheck disable=SC2086  # $tmo is "timeout 20", "gtimeout 20" or empty
        exec $tmo "$node_bin" "$pen_bin" status 2>&1
-     ) && printf '%s' "$status_out" | LC_ALL=C sed "s/${esc}\[[0-9;?:<=>]*[@-~]//g" | grep -q 'Active'; then
+     ) && grep -q 'Active' < <(printf '%s' "$status_out" | LC_ALL=C sed "s/${esc}\[[0-9;?:<=>]*[@-~]//g"); then
     :
   else
     echo "  [skip] Headless CLI found but could not confirm Active (key invalid or engine unreachable)"

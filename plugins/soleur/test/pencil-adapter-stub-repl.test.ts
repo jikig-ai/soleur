@@ -9,7 +9,6 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
-  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -28,7 +27,7 @@ import {
 } from "./lib/pencil-adapter-roundtrip.mjs";
 import { buildPenTree, LAYOUTS } from "./lib/pen-identity-tree.mjs";
 import { REPL_SURFACE } from "../skills/pencil-setup/scripts/pencil-repl-surface.mjs";
-import { ONLY_COPY_SENTENCE, REPLAY_SAFETY_SENTENCE } from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
+import { ONLY_COPY_SENTENCE } from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
 import { LIVE_TOOL_NAMES, REMOVED_TOOL_NAMES, RAW_CALL_STEERING } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
 
 // #11143 / #11156 / #11168 integration: the INSTALLED adapter copy over real MCP stdio
