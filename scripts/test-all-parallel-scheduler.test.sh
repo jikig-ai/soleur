@@ -99,9 +99,13 @@ build_sandbox() {
   local out="$1" arm="$2"
   cp "$TARGET" "$out" || return 1
   mkdir -p "$(dirname "$out")/lib" || return 1
-  cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
+  # repo-write-boundary.sh stays a literal cp — the boundary-relocator census
+  # keys on that form. The others go through the variable loop so the file list
+  # lives in one place.
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$(dirname "$out")/lib/" || return 1
-  cp "$REPO_ROOT/scripts/lib/test-suite-lanes.sh" "$(dirname "$out")/lib/" || return 1
+  for _lib in test-relevance-paths.sh test-suite-lanes.sh; do
+    cp "$REPO_ROOT/scripts/lib/$_lib" "$(dirname "$out")/lib/" || return 1
+  done
   python3 - "$out" "$arm" "$FIXTURES" <<'PY'
 import sys
 path, arm, fixtures = sys.argv[1:4]
@@ -333,9 +337,10 @@ fi
 sb_nolock="$TMP/runner-nolock.sh"
 cp "$TARGET" "$sb_nolock"
 mkdir -p "$TMP/lib"
-cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$TMP/lib/"
 cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$TMP/lib/"
-cp "$REPO_ROOT/scripts/lib/test-suite-lanes.sh" "$TMP/lib/"
+for _lib in test-relevance-paths.sh test-suite-lanes.sh; do
+  cp "$REPO_ROOT/scripts/lib/$_lib" "$TMP/lib/"
+done
 python3 - "$sb_nolock" "$FIXTURES" <<'PY'
 import sys, re
 path, fixtures = sys.argv[1:3]

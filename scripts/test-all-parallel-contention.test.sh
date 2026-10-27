@@ -85,9 +85,10 @@ build_sandbox() {  # <out> <python-body-file>
   local out="$1" bodyfile="$2"
   cp "$TARGET" "$out" || return 1
   mkdir -p "$(dirname "$out")/lib" || return 1
-  cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$(dirname "$out")/lib/" || return 1
-  cp "$REPO_ROOT/scripts/lib/test-suite-lanes.sh" "$(dirname "$out")/lib/" || return 1
+  for _lib in test-relevance-paths.sh test-suite-lanes.sh; do
+    cp "$REPO_ROOT/scripts/lib/$_lib" "$(dirname "$out")/lib/" || return 1
+  done
   python3 - "$out" "$bodyfile" <<'PY'
 import sys, re
 path, bodyfile = sys.argv[1:3]

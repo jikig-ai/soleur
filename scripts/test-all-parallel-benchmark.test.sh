@@ -69,7 +69,10 @@ EOF
 
 cp "$TARGET" "$TMP/runner.sh"
 mkdir -p "$TMP/lib"
-cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$REPO_ROOT/scripts/lib/test-suite-lanes.sh" "$TMP/lib/"
+cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$TMP/lib/"
+for _lib in test-relevance-paths.sh test-suite-lanes.sh; do
+  cp "$REPO_ROOT/scripts/lib/$_lib" "$TMP/lib/"
+done
 python3 - "$TMP/runner.sh" "$TMP/body.sh" <<'PY'
 import sys, re
 path, bodyfile = sys.argv[1:3]

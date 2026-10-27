@@ -2351,6 +2351,9 @@ AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_SCHEDULER_PATHS=(
   "scripts/lib/test-suite-lanes.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-contention.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"   # the lane table's `*` override subject
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_CONTENTION_PATHS=(
@@ -2358,6 +2361,9 @@ AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_CONTENTION_PATHS=(
   "scripts/lib/test-suite-lanes.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-contention.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"
   "plugins/soleur/scripts/lib/session-state.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -2365,6 +2371,9 @@ AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_BENCHMARK_PATHS=(
   "scripts/test-all-parallel-benchmark.test.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-suite-lanes.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # The lane-table census (glob-registered under scripts/lib/*.test.sh).
@@ -2372,6 +2381,7 @@ AFFECTED_SCRIPTS_LIB_TEST_SUITE_LANES_TEST_SH_PATHS=(
   "scripts/lib/test-suite-lanes.test.sh"
   "scripts/lib/test-suite-lanes.sh"
   "scripts/test-all.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"   # lane_declare `*` override subject — a rename stales it
   "scripts/lib/test-affected-paths.sh"
 )
 
