@@ -268,6 +268,7 @@ import {
 import {
   createCanUseTool,
   type CanUseToolDeps,
+  type StatusGuard,
 } from "./permission-callback";
 import { abortableReviewGate, type AgentSession } from "./review-gate";
 import { sendToClient as defaultSendToClient } from "./ws-handler";
@@ -2962,8 +2963,8 @@ export const realSdkQueryFactory: QueryFactory = async (
       convId: string,
       status: string,
       // #11303 — optional compare-and-set from the gate lifecycle: the write lands only when the CURRENT status is in
-      // this set, and a 0-rows outcome is the success case (so `expectMatch` is off for a guarded write).
-      guard?: { onlyIfStatusIn: ReadonlyArray<Conversation["status"]> },
+      // this set. A 0-rows outcome is the success case, so a guarded write is silent by design (`expectMatch` off).
+      guard?: StatusGuard,
     ) => {
       // Runtime guard: protect against deps-injected callers passing a
       // status literal not in Conversation["status"]. The wrapper would
@@ -3004,10 +3005,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           feature: "cc-dispatcher",
           op: "updateConversationStatus",
           extra: { status },
-          // Status transitions drive permission-callback waiting_for_user
-          // events; a 0-rows write would emit a prompt for a deleted/
-          // archived row that the UI no longer shows.
-          expectMatch: guard ? false : true,
+          // An UNGUARDED status transition drives permission-callback waiting_for_user events, so a 0-rows write (a
+          // deleted/archived row) is mirrored to Sentry via expectMatch. A GUARDED write (the gate hold/restore
+          // compare-and-set) legitimately matches 0 rows when the status already moved on; that is silent by design.
+          expectMatch: !guard,
           ...(guard ? { onlyIfStatusIn: guard.onlyIfStatusIn } : {}),
         },
       );

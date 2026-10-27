@@ -10,8 +10,10 @@
  *   - hold: a compare-and-set to `waiting_for_user` on the FIRST pending gate;
  *   - restore: only when the LAST pending gate resolves AND the session controller was not aborted, and only as a
  *     compare-and-set `waiting_for_user -> active` (never over `completed` / `failed`);
- *   - on abort the abort branch of `startAgentSession` finalizes from `active` OR `waiting_for_user`, so either write
- *     order ends in the same state (a disconnect with a card pending ends `failed`).
+ *   - on abort the abort branch of `startAgentSession` finalizes from `active` ONLY (#3463; the production set is
+ *     `ACTIVE_STATUSES_FOR_FINALIZE`), so a disconnect or Stop with a card pending leaves the row `waiting_for_user` in
+ *     either write order: resumable, and the 2-hour sweep completes it;
+ *   - an Approve that lands after the session aborted (or while the restore write is awaited) is NOT honoured: deny.
  * Also pinned here: the fail-closed card (no card, no status write, no notification when the input cannot be shown in
  * full), the non-interactive fast deny, and the pending-card cap.
  */
@@ -28,13 +30,15 @@ vi.mock("../server/observability", () => ({ warnSilentFallback: mockWarn, report
 
 import { createCanUseTool, type CanUseToolContext, type StatusGuard } from "../server/permission-callback";
 import { abortableReviewGate, REVIEW_GATE_TIMEOUT_MS } from "../server/review-gate";
+import { ACTIVE_STATUSES_FOR_FINALIZE } from "../server/conversation-finalize-statuses";
 
 const P = "mcp__soleur_platform__";
 const TELL_USER = "Tell the user the action was not performed and ask how they want to proceed.";
 const EXPIRED_DENY = `The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks. ${TELL_USER}`;
 const REJECTED_DENY = `User rejected the action. Do not retry unless the user asks. ${TELL_USER}`;
 const NON_INTERACTIVE_DENY = "This action needs interactive approval and is not available in background sync. Do not retry.";
-const TOO_MANY_DENY = "Too many approvals are waiting. Answer or decline the pending ones first.";
+const TOO_MANY_DENY =
+  "Too many approvals are already waiting for the user, so this action was not performed. Tell the user to answer or decline the pending ones, then ask whether to retry. Do not retry on your own.";
 const RECIPIENT_DENY =
   "The recipient could not be shown in full for review, so the email was not sent. Fix the recipient and try again.";
 
@@ -78,9 +82,9 @@ function makeCtx(
   return { ctx, deps, controller, row };
 }
 
-/** What the ABORT branch of startAgentSession does (ABORT_FINALIZE_FROM_STATUSES): finalize from active OR waiting_for_user. */
+/** What the ABORT branch of startAgentSession does: finalize ONLY from the production set (active-only, #3463). */
 const abortFinalize = (row: Row, next: "failed" | "waiting_for_user") => {
-  if (row.status === "active" || row.status === "waiting_for_user") row.status = next;
+  if ((ACTIVE_STATUSES_FOR_FINALIZE as readonly string[]).includes(row.status)) row.status = next;
 };
 
 const statuses = (deps: { updateConversationStatus: { mock: { calls: unknown[][] } } }) =>
@@ -163,7 +167,7 @@ describe("gated platform tool: gate expiry fails closed (#11303)", () => {
     ["plain Error timeout", () => new Error("timeout")],
   ])("%s rejection after the session controller aborted: deny, logged as aborted, and NO restore", async (_n, mk) => {
     const controller = new AbortController();
-    const { ctx, deps } = makeCtx(
+    const { ctx, deps, row } = makeCtx(
       () => {
         controller.abort(); // user Stop or disconnect grace fires while the card is open
         return Promise.reject(mk());
@@ -174,6 +178,7 @@ describe("gated platform tool: gate expiry fails closed (#11303)", () => {
     expect(res.behavior).toBe("deny");
     expect(res.message).toBe(EXPIRED_DENY);
     expect(statuses(deps)).toEqual(["waiting_for_user"]);
+    expect(row.status).toBe("waiting_for_user"); // the restore on abort does not write (resumable; the sweep completes it)
     expect(log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ decision: "platform-gate-aborted", reason: "aborted", delivered: true, conversationId: "c" }),
       "Platform tool gate aborted before an answer; denied",
@@ -283,11 +288,6 @@ describe("gated platform tool: verdicts", () => {
     expect(res.behavior).toBe("deny");
     expect(res.message).toBe(REJECTED_DENY);
     expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
-  });
-
-  test("both deny texts tell the agent to tell the user the action was not performed", () => {
-    expect(EXPIRED_DENY).toContain(TELL_USER);
-    expect(REJECTED_DENY).toContain(TELL_USER);
   });
 
   test.each(["crm_note_append", "workstream_issue_close", "github_push_branch"])(
@@ -401,23 +401,60 @@ describe("abort / restore ordering ends in one deterministic state (ADR-305)", (
   const BASH = { command: "make deploy-something" };
   const opts = () => ({ signal: new AbortController().signal, toolUseID: "t", requestId: "r" }) as never;
 
-  test("abort-first: the abort branch finalizes failed while the card is pending, then the gate rejects -> still failed", async () => {
-    const controller = new AbortController();
-    const { ctx, row } = makeCtx(
-      (...args: unknown[]) => {
-        const signal = args[2] as AbortSignal;
-        return new Promise<string>((_r, rej) => controller.signal.addEventListener("abort", () => rej(signal.reason ?? new Error("aborted"))));
-      },
-      { controller },
+  const abortableGate = (controller: AbortController) => (...args: unknown[]) => {
+    const signal = args[2] as AbortSignal;
+    return new Promise<string>((_r, rej) =>
+      controller.signal.addEventListener("abort", () => rej(signal.reason ?? new Error("aborted"))),
     );
+  };
+
+  test("abort-first (disconnect, card pending): the active-only finalize is a no-op and the aborted gate does not restore -> waiting_for_user", async () => {
+    const controller = new AbortController();
+    const { ctx, row } = makeCtx(abortableGate(controller), { controller });
     const pending = callTool(ctx);
     await tick();
     expect(row.status).toBe("waiting_for_user");
     controller.abort(new Error("disconnected"));
-    abortFinalize(row, "failed"); // accepts waiting_for_user: a disconnect with a card pending ends failed
-    expect(row.status).toBe("failed");
+    abortFinalize(row, "failed"); // active-only: the pending card's waiting_for_user row is left alone
+    expect(row.status).toBe("waiting_for_user");
     expect((await pending).behavior).toBe("deny");
-    expect(row.status).toBe("failed"); // the aborted gate did NOT restore active over it
+    // The discriminating assertion for the `!controllerSignal.aborted` restore skip: without it the aborted gate would
+    // CAS waiting_for_user -> active here (the finalize above did not move the row, so the guard would let it through).
+    expect(row.status).toBe("waiting_for_user");
+  });
+
+  test("gate-first (disconnect, card pending): the aborted gate settles first, then the finalize -> still waiting_for_user", async () => {
+    const controller = new AbortController();
+    const { ctx, deps, row } = makeCtx(abortableGate(controller), { controller });
+    const pending = callTool(ctx);
+    await tick();
+    controller.abort(new Error("disconnected"));
+    expect((await pending).behavior).toBe("deny");
+    expect(statuses(deps)).toEqual(["waiting_for_user"]); // the restore did not write
+    abortFinalize(row, "failed");
+    expect(row.status).toBe("waiting_for_user");
+  });
+
+  test.each(["finalize-first", "gate-first"] as const)(
+    "a user Stop with a card pending ends waiting_for_user (%s): the gate is settled by the abort and awaited",
+    async (order) => {
+      const controller = new AbortController();
+      const { ctx, row } = makeCtx(abortableGate(controller), { controller });
+      const pending = callTool(ctx);
+      await tick();
+      controller.abort(new Error("user stop"));
+      if (order === "finalize-first") abortFinalize(row, "waiting_for_user");
+      const res = await pending; // the abort rejects the gate, so canUseTool returns a deny and does not hang
+      if (order === "gate-first") abortFinalize(row, "waiting_for_user");
+      expect(res.behavior).toBe("deny");
+      expect(row.status).toBe("waiting_for_user");
+    },
+  );
+
+  test("a row already waiting_for_user from the result branch is untouched by the abort finalize (no failed, #3463)", () => {
+    const row: Row = { status: "waiting_for_user" };
+    abortFinalize(row, "failed");
+    expect(row.status).toBe("waiting_for_user");
   });
 
   test("restore-first (no abort): Approve restores active, a later abort finalizes it -> failed", async () => {
@@ -428,16 +465,6 @@ describe("abort / restore ordering ends in one deterministic state (ADR-305)", (
     controller.abort(new Error("disconnected"));
     abortFinalize(row, "failed");
     expect(row.status).toBe("failed");
-  });
-
-  test("a user Stop with a card pending ends waiting_for_user in either order", async () => {
-    const controller = new AbortController();
-    const { ctx, row } = makeCtx(() => HANG(), { controller });
-    void callTool(ctx);
-    await tick();
-    controller.abort(new Error("user stop"));
-    abortFinalize(row, "waiting_for_user");
-    expect(row.status).toBe("waiting_for_user");
   });
 
   test("a concurrent `completed` is NOT overwritten by the restore (compare-and-set)", async () => {
@@ -458,7 +485,7 @@ describe("abort / restore ordering ends in one deterministic state (ADR-305)", (
     expect(row.status).toBe("failed");
   });
 
-  test("stacked Bash + platform gates with an abort: neither restores, the abort branch owns the end state", async () => {
+  test("stacked Bash + platform gates with an abort: neither restores, the row stays waiting_for_user", async () => {
     const controller = new AbortController();
     const { ctx, deps, row } = makeCtx(
       () => new Promise<string>((_r, rej) => controller.signal.addEventListener("abort", () => rej(new Error("aborted")))),
@@ -473,7 +500,71 @@ describe("abort / restore ordering ends in one deterministic state (ADR-305)", (
     const done = await both;
     expect(done.map((d) => d?.behavior)).toEqual(["deny", "deny"]);
     expect(statuses(deps)).toEqual(["waiting_for_user"]); // no `active` write from either class
-    expect(row.status).toBe("failed");
+    expect(row.status).toBe("waiting_for_user");
+  });
+});
+
+describe("an Approve is never honoured after the session aborted (shared by the Bash and platform gates)", () => {
+  const bashCall = (ctx: CanUseToolContext, signal: AbortSignal = new AbortController().signal) =>
+    verdict(createCanUseTool(ctx)("Bash", { command: "make deploy-something" }, { signal, toolUseID: "t", requestId: "r" } as never));
+
+  /** Abort the session controller WHILE the restore write is awaited (after the gate already resolved Approve). */
+  const abortDuringRestoreWrite = (controller: AbortController, deps: ReturnType<typeof makeCtx>["deps"]) => {
+    const real = deps.updateConversationStatus.getMockImplementation()!;
+    deps.updateConversationStatus.mockImplementation(async (id: string, status: string, guard?: StatusGuard) => {
+      await real(id, status, guard);
+      if (status === "active") controller.abort(new Error("disconnected"));
+    });
+  };
+
+  test("platform: abort during the awaited restore write denies (not allow) and logs aborted", async () => {
+    const controller = new AbortController();
+    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"), { controller });
+    abortDuringRestoreWrite(controller, deps);
+    const res = await callTool(ctx);
+    expect(statuses(deps)).toEqual(["waiting_for_user", "active"]); // precondition: the restore write really ran
+    expect(res).toEqual({ behavior: "deny", message: EXPIRED_DENY });
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ decision: "platform-gate-aborted", reason: "aborted" }), expect.any(String));
+  });
+
+  test("Bash: abort during the awaited restore write denies (not allow)", async () => {
+    const controller = new AbortController();
+    const { ctx, deps } = makeCtx(() => Promise.resolve("Approve"), { controller });
+    abortDuringRestoreWrite(controller, deps);
+    const res = await bashCall(ctx);
+    expect(statuses(deps)).toEqual(["waiting_for_user", "active"]);
+    expect(res.behavior).toBe("deny");
+  });
+
+  test("platform: Approve resolving after the per-call signal aborted denies", async () => {
+    const perCall = new AbortController();
+    const { ctx } = makeCtx(() => {
+      perCall.abort();
+      return Promise.resolve("Approve");
+    });
+    const res = await callTool(ctx, "email_send", { signal: perCall.signal });
+    expect(res).toEqual({ behavior: "deny", message: EXPIRED_DENY });
+  });
+
+  test("Bash: Approve resolving after the per-call signal aborted denies", async () => {
+    const perCall = new AbortController();
+    const { ctx } = makeCtx(() => {
+      perCall.abort();
+      return Promise.resolve("Approve");
+    });
+    expect((await bashCall(ctx, perCall.signal)).behavior).toBe("deny");
+  });
+
+  test("platform: Approve resolving after the session controller aborted denies and does not restore", async () => {
+    const controller = new AbortController();
+    const { ctx, deps, row } = makeCtx(() => {
+      controller.abort(new Error("user stop"));
+      return Promise.resolve("Approve");
+    }, { controller });
+    const res = await callTool(ctx);
+    expect(res.behavior).toBe("deny");
+    expect(statuses(deps)).toEqual(["waiting_for_user"]);
+    expect(row.status).toBe("waiting_for_user");
   });
 });
 

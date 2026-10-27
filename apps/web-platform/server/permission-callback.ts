@@ -336,7 +336,7 @@ const PLATFORM_GATE_REJECTED_MESSAGE =
 const PLATFORM_GATE_NON_INTERACTIVE_MESSAGE =
   "This action needs interactive approval and is not available in background sync. Do not retry.";
 const PLATFORM_GATE_TOO_MANY_PENDING_MESSAGE =
-  "Too many approvals are waiting. Answer or decline the pending ones first.";
+  "Too many approvals are already waiting for the user, so this action was not performed. Tell the user to answer or decline the pending ones, then ask whether to retry. Do not retry on your own.";
 // Gated platform cards and Bash cards share ONE pending counter; past this many open cards a further gated platform call
 // is denied rather than stacking another card in front of the user.
 const MAX_PENDING_GATES = 5;
@@ -393,8 +393,12 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   //   - the hold write is a compare-and-set (active|waiting_for_user -> waiting_for_user) so it can never revive a
   //     terminal row;
   //   - the restore runs only when the LAST pending gate resolves AND the session controller was not aborted, and it is a
-  //     compare-and-set (waiting_for_user -> active only). On abort the abort branch of startAgentSession owns the
-  //     terminal status (it accepts active AND waiting_for_user), so either write order ends in the same state.
+  //     compare-and-set (waiting_for_user -> active only). On abort the restore does not write: a disconnect or Stop
+  //     while a card is pending leaves the row `waiting_for_user`, which is resumable and which the 2-hour sweep
+  //     completes. The abort branch of startAgentSession finalizes from `active` only by design (#3463), so it never
+  //     overwrites that row;
+  //   - an answer that arrives with the session already aborted (or aborted during the awaited restore write) is NOT
+  //     honoured: the helper returns null, so every caller denies and none can reach `allow(...)` after an abort.
   const holdForUser = async (
     gateId: string,
     signal: AbortSignal,
@@ -411,6 +415,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       kind
         ? await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions, kind)
         : await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions))().catch(() => null);
+    let selection: string | null = null;
     try {
       if (first) {
         try {
@@ -419,7 +424,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           warnSilentFallback(err, { feature: "cc-permissions", ...ops.hold });
         }
       }
-      return await verdict;
+      selection = await verdict;
     } finally {
       pendingGates -= 1;
       if (pendingGates === 0 && !ctx.controllerSignal.aborted) {
@@ -430,6 +435,9 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         }
       }
     }
+    // Checked AFTER the restore write has settled, so an abort that lands while that write is awaited still denies.
+    if (selection !== null && (signal.aborted || ctx.controllerSignal.aborted)) return null;
+    return selection;
   };
   // One expiry/abort deny for both gate classes. The Bash class stays at info (an expired Bash card is routine). The
   // platform class logs at warn ON PURPOSE: warn is the level that reaches Better Stack, and a gated write that was

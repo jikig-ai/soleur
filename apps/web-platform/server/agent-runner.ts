@@ -150,6 +150,7 @@ function resolveSessionErrorCode(
   return undefined;
 }
 
+import { ACTIVE_STATUSES_FOR_FINALIZE } from "./conversation-finalize-statuses";
 import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
 import { buildAllowedTools, summarizeOutboundEmailInput } from "./tool-tiers";
 
@@ -560,16 +561,6 @@ async function updateConversationStatus(
 }
 
 /**
- * Status set the race-safe finalize helper guards on. Pinned to a
- * `Conversation["status"]` literal subset via `satisfies` so a future
- * widening of the conversation-status enum is a TS error here rather
- * than silent semantic drift at every guarded site.
- */
-const ACTIVE_STATUSES_FOR_FINALIZE = [
-  "active",
-] as const satisfies ReadonlyArray<Conversation["status"]>;
-
-/**
  * Race-safe variant of {@link updateConversationStatus} for the
  * abort/result-branch finalization sites: writes the new status only
  * when the row's current `status` is `active`. A row that already
@@ -620,34 +611,10 @@ async function updateConversationStatusIfActive(
 }
 
 /**
- * Status set the ABORT branch of `startAgentSession` finalizes from (#11303 / ADR-305). A gated review card (Bash or
- * platform) parks the row in `waiting_for_user`, so a user Stop or a disconnect while a card is pending must still
- * finalize it (`waiting_for_user` for a Stop, `failed` for a disconnect). A terminal row (`completed`, `failed`) is
- * still never overwritten. Used ONLY by the abort branch; every other finalize site keeps {@link ACTIVE_STATUSES_FOR_FINALIZE}.
- */
-const ABORT_FINALIZE_FROM_STATUSES = [
-  "active",
-  "waiting_for_user",
-] as const satisfies ReadonlyArray<Conversation["status"]>;
-
-async function updateConversationStatusIfActiveOrWaiting(
-  userId: string,
-  conversationId: string,
-  status: Conversation["status"],
-): Promise<void> {
-  await updateConversationStatusIfIn(
-    userId,
-    conversationId,
-    status,
-    ABORT_FINALIZE_FROM_STATUSES,
-    "updateConversationStatusIfActiveOrWaiting",
-  );
-}
-
-/**
  * Compare-and-set for the gate lifecycle (`createCanUseTool` deps): write `status` only when the current status is in
  * `from`. The review-gate restore uses `["waiting_for_user"]`, so a late restore never overwrites `completed`/`failed`
- * or a status the abort branch already wrote. A 0-rows outcome is the success case (no Sentry mirror).
+ * or a status the abort branch already wrote. A 0-rows outcome is the success case (no Sentry mirror). The
+ * active-only abort finalize ({@link updateConversationStatusIfActive}) is a caller of this helper too.
  */
 async function updateConversationStatusIfIn(
   userId: string,
@@ -2283,7 +2250,10 @@ are the requirements to implement.`;
                     convId,
                     status as Conversation["status"],
                     guard.onlyIfStatusIn,
-                    "updateConversationStatusGateCas",
+                    // Distinct ops so one Sentry dedup window never hides the other half of the lifecycle.
+                    status === "waiting_for_user"
+                      ? "updateConversationStatusGateHold"
+                      : "updateConversationStatusGateRestore",
                   )
                 : updateConversationStatus(userId, convId, status as Conversation["status"]),
           },
@@ -2835,10 +2805,11 @@ are the requirements to implement.`;
         // state regardless of whether this write or the result branch's
         // wins, so a no-op is semantically equivalent. The
         // `session_ended:user_aborted` ack below is unconditional.
-        // #11303 / ADR-305: a gate card parks the row in `waiting_for_user`, so this finalize accepts `active` AND
-        // `waiting_for_user` (a disconnect with a card pending must end `failed`). The gate restore skips on abort, so
-        // either write order ends in the same state; a terminal row is still never overwritten.
-        await updateConversationStatusIfActiveOrWaiting(
+        // #11303 / ADR-305: this finalize is active-only BY DESIGN (#3463): a row already at `waiting_for_user`
+        // (the result branch's normal turn-end status, or a pending gate card's hold) is left untouched. A disconnect
+        // or Stop while a review card is pending therefore leaves the row `waiting_for_user`: that state is resumable
+        // and the 2-hour sweep completes it. The gate restore skips on abort, so nothing else writes either.
+        await updateConversationStatusIfActive(
           userId,
           conversationId,
           nextConversationStatus,

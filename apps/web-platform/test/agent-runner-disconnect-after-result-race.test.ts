@@ -197,10 +197,22 @@ function buildRaceIterator(args: {
 interface UpdateRecord {
   patch: Record<string, unknown>;
   ins: Array<{ column: string; values: unknown[] }>;
+  /** Whether the simulated row accepted this write (its `.in('status', …)` guard matched the row's current status). */
+  applied?: boolean;
 }
 
-function setupSupabaseMock(): { updates: UpdateRecord[] } {
+function setupSupabaseMock(): { updates: UpdateRecord[]; row: { status: unknown } } {
   const updates: UpdateRecord[] = [];
+  // A tiny stateful row: a guarded write lands only when the row's CURRENT status is in its `.in('status', …)` set.
+  const row: { status: unknown } = { status: "active" };
+  const settle = (record: UpdateRecord): boolean => {
+    if (record.applied === undefined) {
+      const guard = record.ins.find((i) => i.column === "status");
+      record.applied = !guard || guard.values.includes(row.status);
+      if (record.applied && "status" in record.patch) row.status = record.patch.status;
+    }
+    return record.applied;
+  };
 
   mockFrom.mockImplementation((table: string) => {
     if (table === "api_keys") {
@@ -277,10 +289,12 @@ function setupSupabaseMock(): { updates: UpdateRecord[] } {
               return chain;
             }),
             select: vi.fn(() =>
-              Promise.resolve({ data: [{ id: "conv-1" }], error: null }),
+              Promise.resolve({ data: settle(record) ? [{ id: "conv-1" }] : [], error: null }),
             ),
-            then: (resolve: (v: unknown) => void) =>
-              resolve({ error: null }),
+            then: (resolve: (v: unknown) => void) => {
+              settle(record);
+              resolve({ error: null });
+            },
           };
           (chain.eq as ReturnType<typeof vi.fn>).mockReturnValue(chain);
           return chain;
@@ -312,7 +326,7 @@ function setupSupabaseMock(): { updates: UpdateRecord[] } {
     };
   });
 
-  return { updates };
+  return { updates, row };
 }
 
 describe("agent-runner — disconnect-after-result race (#3463)", () => {
@@ -321,7 +335,7 @@ describe("agent-runner — disconnect-after-result race (#3463)", () => {
     mockRpc.mockResolvedValue({ error: null });
   });
 
-  test("abort branch's status write threads .in('status', ['active','waiting_for_user']) so a terminal row is left alone", async () => {
+  test("abort branch's status write threads .in('status', ['active']) so a row already at waiting_for_user is left alone", async () => {
     const { updates } = setupSupabaseMock();
     mockQuery.mockReturnValue(
       buildRaceIterator({ userId: "11111111-1111-4111-8111-111111111111", conversationId: "conv-1" }) as never,
@@ -344,18 +358,34 @@ describe("agent-runner — disconnect-after-result race (#3463)", () => {
     //      have NO `.in()` guard (that write must win the race; a
     //      guard would re-introduce the bug from the other side).
     //   2. abort branch's `failed` write — MUST thread the
-    //      `onlyIfStatusIn: ["active", "waiting_for_user"]` guard (#11303 / ADR-305:
-    //      a pending review card parks the row in waiting_for_user, and a disconnect
-    //      must still finalize it) while a TERMINAL row (completed/failed) is never
-    //      in the set, so it is left alone (the load-bearing fix for #3463).
+    //      `onlyIfStatusIn: ["active"]` guard so the row stays at
+    //      whatever the result branch wrote (the load-bearing fix
+    //      for #3463).
     expect(projected).toContainEqual({
       status: "waiting_for_user",
       ins: [],
     });
     expect(projected).toContainEqual({
       status: "failed",
-      ins: [{ column: "status", values: ["active", "waiting_for_user"] }],
+      ins: [{ column: "status", values: ["active"] }],
     });
+  });
+
+  // #11303 / ADR-305: the abort finalize stays ACTIVE-ONLY. The result branch writes `waiting_for_user` as the normal
+  // turn-end status; a disconnect right after a clean result (or while a review card is pending) must not overwrite it
+  // with `failed`. Widening the set to include waiting_for_user re-opens #3463.
+  test("a row already waiting_for_user (result branch) is left untouched by the abort branch: no failed write lands", async () => {
+    const { updates, row } = setupSupabaseMock();
+    mockQuery.mockReturnValue(
+      buildRaceIterator({ userId: "11111111-1111-4111-8111-111111111111", conversationId: "conv-1" }) as never,
+    );
+
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
+
+    const failedWrites = updates.filter((u) => u.patch.status === "failed");
+    expect(failedWrites.length).toBeGreaterThan(0); // the abort branch did attempt the write...
+    expect(failedWrites.every((u) => u.applied === false)).toBe(true); // ...and the guard turned it into a no-op
+    expect(row.status).toBe("waiting_for_user");
   });
 
   test("classifier maps SessionAbortError('disconnected') to non-user-requested (regression for the abort branch's nextStatus ternary)", () => {
