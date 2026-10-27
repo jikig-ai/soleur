@@ -16,23 +16,26 @@
 
 # Health monitor for the LB origin pool.
 resource "cloudflare_load_balancer_monitor" "web" {
-  account_id     = var.cf_account_id
-  type           = "https"
-  description    = "web host /health probe (ADR-068 §(b))"
-  method         = "GET"
-  path           = "/health"
-  expected_codes = "200"
-  timeout        = 5
-  retries        = 2
-  interval       = 60
+  account_id       = var.cf_account_id
+  type             = "https"
+  description      = "web host /health probe (ADR-068 §(b))"
+  method           = "GET"
+  path             = "/health"
+  expected_codes   = "200"
+  timeout          = 5
+  retries          = 2
+  interval         = 60
+  consecutive_down = 2
+  consecutive_up   = 1
   # Probe the origin directly over the private net is not possible from CF edge;
   # origin firewall permits CF IPs on 443 (see firewall.tf).
 }
 
 # Origin pool: web-1 only. web-2 is deliberately NOT an origin here (B2).
 resource "cloudflare_load_balancer_pool" "web_1" {
-  account_id = var.cf_account_id
-  name       = "web-1"
+  account_id    = var.cf_account_id
+  name          = "web-1"
+  check_regions = ["WEU"]
   # Fallback to itself so a disabled LB degrades to web-1, never NXDOMAIN (B1).
   # (fallback_pool_id is set on the LB resource below.)
 
@@ -59,6 +62,7 @@ resource "cloudflare_load_balancer" "app" {
   default_pool_ids = [cloudflare_load_balancer_pool.web_1.id]
   fallback_pool_id = cloudflare_load_balancer_pool.web_1.id
   steering_policy  = "off" # single origin today; geo/latency steering added later
+  proxied          = true
 
   session_affinity = "none"
 
