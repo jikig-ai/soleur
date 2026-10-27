@@ -113,7 +113,7 @@ Cut List (mechanism -> property -> what already covers it):
 
 | Spec claim | Reality | Plan response |
 |---|---|---|
-| "Add a per-PR monitor lock" as if no control exists | `.claude/hooks/monitor-supersede-guard.sh` (+ `monitor-arm-recorder.sh`, `lib/monitor-sig.sh`) already REPORTS a re-arm on a target the same session still watches. Session-scoped, Claude-Code-only, blind to a second session or a differently-shaped command | Keep the hook unchanged; add the script-level lock as the hard layer (F6) |
+| "Add a per-PR monitor lock" as if no control exists | `.claude/hooks/monitor-supersede-guard.sh` (+ `monitor-arm-recorder.sh`, `lib/monitor-sig.sh`) already REPORTS a re-arm on a target the same session still watches. Session-scoped, Claude-Code-only, blind to a second session, and (review finding) blind to the canonical `monitor-pr-checks.sh <PR>` command itself: `monitor_sig` yields no signature for it, so this lock is the only layer for that command | Keep the hook unchanged; add the script-level lock as the hard layer (F6) |
 | "one monitor per purpose" (plural purposes) | `monitor-pr-checks.sh` is the only script a `Monitor` watch arms for PR checks; the `sync-pr-behind.sh` standalone loop and `triage-prs.sh` also poll and are deliberately NOT adopted (F9) | Lock key = repo + PR under the constant `pr-checks` prefix |
 | CTO: "I did not read their code" | Script runs `set -uo pipefail` (no `-e`), has ONE `trap 'rm -f "$ERRTMP"' EXIT`, exits 0/1/2/3 | Fold release into that single trap; add rc 4 |
 | A TERM handler is needed for prompt release | Measured: with ONLY an EXIT trap bash dies at once on TERM and runs it (+1 s). `trap 'exit 143' TERM` defers it to the end of a foreground sleep (+6 s of a 6 s sleep) | No TERM/INT trap (F12); a test pins the ~1 s release so nobody adds one |
@@ -258,7 +258,7 @@ trap, and the lock would be released the moment the substitution ended).
 
 **Operator-visible lines** (stdout, so the Monitor tool delivers them; asserted verbatim):
 
-- Refused (rc 4): `DUPLICATE MONITOR — PR #<N> is already watched by pid <P> (armed <S>s ago, repo <owner/repo>). This watch exits without polling. If this session armed that monitor, read its output; if not (a resumed or other session), stop it with: kill <P> — then arm this watch once. SOLEUR_MONITOR_LOCK=off bypasses the lock only if the lock mechanism itself misbehaves.` Contains none of `MERGED`, `GREEN`, `CLOSED`, `SETTLED`, `TIMEOUT`, `QUEUE`, `KILLED`, `UNMERGED`.
+- Refused (rc 4): `DUPLICATE MONITOR — PR #<N> is already watched by pid <P> (watching for <S>s, repo <owner/repo>). This watch exits without polling. Only if this session still has a running Monitor task for that PR, read that task's output. Otherwise it belongs to a resumed or other session (or one you already stopped): check that "ps -o args= -p <P>" names monitor-pr-checks.sh, then stop it with: kill <P> — and arm this watch once.` (Amended in review 2026-10-27, see decision-challenges.md F14: the bypass hint left the line, the ownership branch keys on a live Monitor task, and the kill is preceded by a process check.) Contains none of `MERGED`, `GREEN`, `CLOSED`, `SETTLED`, `TIMEOUT`, `QUEUE`, `KILLED`, `UNMERGED`.
 - Not established: `monitor-lock: UNAVAILABLE (<why>) - running without exclusion`
 - Bypass: `monitor-lock: DISABLED (SOLEUR_MONITOR_LOCK=off) - running without exclusion`
 

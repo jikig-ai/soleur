@@ -45,17 +45,22 @@
 # Emits one line per poll:
 #   [OPEN|BLOCKED|automerge=true] 73/78 pass · 0 fail · 0 cancel · 2 pending → test-scripts,...
 # and exactly one terminal line:
-#   MERGED — ... | CLOSED WITHOUT MERGE — ... | CHECKS SETTLED — ... | TIMEOUT — ...
+#   MERGED — ... | CLOSED WITHOUT MERGE — ... | CHECKS SETTLED — ... | TIMEOUT — ... | DUPLICATE MONITOR — ... (exit 4)
 #
-# Exit 0 on a merge or an all-green settle; 1 on a red/closed terminal; 2 on timeout;
-# 3 on usage error; 4 when another live monitor already watches this repo + PR (the PR is being
-# watched: not a PR failure, and do not re-arm blindly). The caller's Monitor watch ends when this exits.
+# Exit 0 on a merge or an all-green settle; 1 on a red/closed terminal or any stop that needs a human
+# (BEHIND, DIRTY, DRAFT, BLOCKED, LEFT THE MERGE QUEUE UNMERGED, a stalled or unapproved ready run);
+# 2 on timeout; 3 on usage error or when no temp file can be created; 4 when another live monitor already
+# watches this repo + PR (the PR is being watched: not a PR failure, and do not re-arm blindly).
+# The caller's Monitor watch ends when this exits.
 #
-# One monitor per PR (P4c of #10924): the first thing after argument validation is a per-(repo, PR) lock
-# (lib/monitor-lock.sh). A second monitor prints one `DUPLICATE MONITOR` line and exits 4 BEFORE any gh
-# call. A lock that cannot be established prints `monitor-lock: UNAVAILABLE (...)` and the watch runs
-# anyway; SOLEUR_MONITOR_LOCK=off bypasses it (prints `DISABLED`). SOLEUR_MONITOR_LOCK_DIR overrides the
-# lock directory. A stale lock (dead, zombie or pid-reused holder) never blocks.
+# One monitor per PR (P4c of #10924): after argument validation and the temp-file setup, and BEFORE any gh
+# call, the script takes a per-(repo, PR) lock (lib/monitor-lock.sh). A second monitor waits about
+# 2 x SOLEUR_MONITOR_LOCK_GRACE_S (2 s) in case the holder is releasing, then prints one `DUPLICATE MONITOR`
+# line and exits 4. A lock that cannot be established prints `monitor-lock: UNAVAILABLE (...)` and the watch
+# runs anyway; SOLEUR_MONITOR_LOCK=off bypasses it (prints `DISABLED`). SOLEUR_MONITOR_LOCK_DIR overrides
+# the lock directory. A stale lock (dead, zombie or pid-reused holder) never blocks. The repo is --repo,
+# else GH_REPO, else `git remote get-url origin`. To see a holder:
+#   readlink "${XDG_RUNTIME_DIR:-/tmp}/soleur-monitor-locks-$(id -u)/pr-checks+<owner>+<repo>+<pr>.lock"
 #
 # CI_DRAFT_LIGHT (ADR-276 S3, #9728): a red `test` row is read through ci-head-verdict.sh. pending-full and no-run report it
 # PENDING (`test(ready run <state>)`), stalled and awaiting-approval end the watch (exit 1) with the recovery command, and
@@ -135,16 +140,18 @@ trap _cleanup EXIT
 acquire_or_exit() {
   local lock_repo lrc=0
   if [[ "$ML_LOADED" != "1" ]]; then
-    echo "monitor-lock: UNAVAILABLE (lib/monitor-lock.sh not found next to this script) - running without exclusion"
+    echo "monitor-lock: UNAVAILABLE (lib/monitor-lock.sh not found or not loadable next to this script) - running without exclusion"
     return 0
   fi
-  lock_repo="${REPO_ARG[1]:-}"
-  [[ -n "$lock_repo" ]] || lock_repo="$(git config --get remote.origin.url 2>/dev/null || true)"
+  # The repo gh will poll: --repo, else GH_REPO, else the origin remote. `remote get-url` resolves url.insteadOf
+  # aliases that `config --get` returns raw (an aliased origin would otherwise silently lose the lock).
+  lock_repo="${REPO_ARG[1]:-${GH_REPO:-}}"
+  [[ -n "$lock_repo" ]] || lock_repo="$(git remote get-url origin 2>/dev/null || git config --get remote.origin.url 2>/dev/null || true)"
   monitor_lock_acquire "$lock_repo" "$PR" || lrc=$?
   case "$lrc" in
     0) return 0 ;;
-    1) printf 'DUPLICATE MONITOR — PR #%s is already watched by pid %s (armed %ss ago, repo %s). This watch exits without polling. If this session armed that monitor, read its output; if not (a resumed or other session), stop it with: kill %s — then arm this watch once. SOLEUR_MONITOR_LOCK=off bypasses the lock only if the lock mechanism itself misbehaves.\n' \
-         "$PR" "$ML_HOLDER_PID" "$ML_HOLDER_AGE" "$ML_REPO" "$ML_HOLDER_PID"
+    1) printf 'DUPLICATE MONITOR — PR #%s is already watched by pid %s (watching for %ss, repo %s). This watch exits without polling. Only if this session still has a running Monitor task for that PR, read that task'"'"'s output. Otherwise it belongs to a resumed or other session (or one you already stopped): check that "ps -o args= -p %s" names monitor-pr-checks.sh, then stop it with: kill %s — and arm this watch once.\n' \
+         "$PR" "$ML_HOLDER_PID" "$ML_HOLDER_AGE" "$ML_REPO" "$ML_HOLDER_PID" "$ML_HOLDER_PID"
        exit 4 ;;
     *) if [[ "$ML_STATE" == "disabled" ]]; then
          echo "monitor-lock: DISABLED (SOLEUR_MONITOR_LOCK=off) - running without exclusion"
