@@ -2344,6 +2344,37 @@ AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# #8231 parallel-scheduler family — three runner-SUT suites whose subject is
+# the dispatch/reap/render path in the runner and the lane classifier lib.
+AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_SCHEDULER_PATHS=(
+  "scripts/test-all-parallel-scheduler.test.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-contention.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_CONTENTION_PATHS=(
+  "scripts/test-all-parallel-contention.test.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-contention.sh"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_BENCHMARK_PATHS=(
+  "scripts/test-all-parallel-benchmark.test.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+# The lane-table census (glob-registered under scripts/lib/*.test.sh).
+AFFECTED_SCRIPTS_LIB_TEST_SUITE_LANES_TEST_SH_PATHS=(
+  "scripts/lib/test-suite-lanes.test.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # --- #9763 fast-tier demotions: declared scopes for suites withdrawn from ALWAYS_ON whose
 # verdicts walk a corpus. The orphan lint refuses a demotion without a named scope; each array
 # names the trees the suite actually reads (edges are ^-prefixed path matches — a suffix walk
