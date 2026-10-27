@@ -340,7 +340,7 @@ model {
       }
       inngestPostgres = database "Supabase PostgreSQL (Inngest)" {
         technology "PostgreSQL — dedicated EU project, Supavisor session pooler :5432"
-        description "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
+        description "Inngest config + run history. Finished trace and log history is removed after 7 days by a status-gated job once the host image contains that job; a host that has not yet been replaced is not yet pruning, in-flight runs stay, and Redis is not deleted by age (#5150). Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
       }
       egressGw = container "Agent Egress Gateway" {
         technology "Squid CONNECT-only on dedicated docker bridge soleur-egress0 (172.31.100.2:8443)"
