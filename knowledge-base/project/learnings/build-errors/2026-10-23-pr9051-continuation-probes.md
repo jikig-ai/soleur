@@ -96,3 +96,45 @@ function replacement and grant restoration remain one later atomic apply.
 Likewise, after an acknowledgment RPC error or false result, read the
 tenant-scoped durable acknowledgment state before reporting failure. This
 recovers an ambiguous commit without repeating notice issuance or provider work.
+
+## Addendum — 2026-10-27 restricted-host continuation
+
+The login-shell `gh` shim again attempted a read-only mise update; use the
+installed executable discovered with `type -a gh`, and obtain network access
+for its GitHub reads. The session cleanup and tally also needed access to
+their shared Git/state locks: an exit-zero wrapper containing `UNKNOWN` or
+`lockfile-unwritable` did not complete that maintenance. Their escalated
+reruns completed. A token-bearing `whoami --json` result may include a token
+preview; parse authentication probes and print only success/config identity.
+
+Doppler's desktop credential service is unavailable inside the sandbox.
+Ordinary escalated CLI authentication succeeded, and a separate probe using
+the collector's exact sanitized environment also succeeded. Check both
+without fetching secrets or running the capture; a failed sandbox probe
+does not establish expired credentials. Never retry a consumed capture
+approval to diagnose authentication.
+
+The prior Node 22.3.0 absolute path no longer existed. Discover installed
+versions before using a historical path. The collector suite passed all 26
+tests under the available Node 26.12.1 after a sandboxed fixture `tar` spawn
+failed with EPERM and the exact suite was rerun with subprocess access. This
+is source-test evidence, not app-pinned Node 22 qualification. Node 26 also
+reports the dependency stack's `module.register()` deprecation; keep that
+warning distinct from the test verdict.
+
+Ledger `content_sha` values are Git blob identities (40 hexadecimal
+characters) or null, not file SHA-256 values. A preliminary SHA-256 comparison
+therefore labeled same-name entries incorrectly. The corrected Git-blob
+comparison found 119 matches and 68 unverifiable nulls, with no non-null
+same-name mismatch. Preserve nulls and microsecond timestamps; do not infer
+body parity from null hashes.
+
+The installed worktree manager created a nested companion directory when
+invoked from the recovery worktree. Inspect its printed path immediately;
+`git worktree move` relocated only that newly created worktree to the shared
+root's `.worktrees/` after verifying the destination was absent. No existing
+branch or worktree was reset. When continuing from a linked checkout on this
+installed manager, invoke creation from the verified common repository root
+and still verify its output path. Its explicit `--no-install` warning was
+intentional: dependencies were reused only after lockfile equality, without
+network installation or environment-file copying.

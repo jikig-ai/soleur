@@ -3033,3 +3033,41 @@
   twice while recording the preview; `git -C <verified worktree> commit`
   succeeded and kept the commit on the feature branch. No wrong-branch commit
   occurred.
+
+### Recovery continuation — 2026-10-27, approved metadata capture
+
+- Fresh no-action preview and independent CTO source/binding review passed at
+  `4225c68a3eb1e9bdb917f899ae85618848b2c691`. Doppler authentication succeeded
+  outside the sandbox, including the collector-equivalent restricted
+  environment; `dev_scheduled` metadata resolves to `dev`. The operator then
+  approved exactly one capture; it succeeded and consumed that approval.
+- Private capture at `2026-10-27T10:27:19.021Z` has SHA-256
+  `6b3f42ccba6a1f48d0f1a4aa1a0188fa8f5d52e3f24223f24c4e7866a49bd158`,
+  199 ledger rows and 66 relations, zero application rows/mutations, and
+  `writer_clearance:false`. Receipt hash and private permissions were checked.
+  See `recovery-capture-2026-10-27.md` for bindings, map and evidence limits.
+- Independent offline comparison validates all ten 143–152 to 165–174 mappings
+  against original committed bytes, current blobs and captured ledger hashes.
+  All 119 same-name non-null hashes match; 68 null hashes remain unverifiable.
+  Migration 175 remains unapplied. Historical `051` down-ledger and separately
+  owned `164` records remain untouched and outside the map.
+- Collector source tests pass 26/26 under available Node 26 after subprocess
+  escalation. Independent fake-Git/psql tests pass 8/8 and six pin-independent
+  rehearsal tests pass 6/6. No actual reconciliation rehearsal or runtime
+  qualification has passed. Complete-runner review, contract/auth renewal,
+  full-schema equivalence and owned execution prerequisites remain open.
+- Ruled by CTO agent, 2026-10-27: writer clearance requires a separately
+  authorized enforced window covering the three shared-dev mutators, drained
+  runs and direct credential holders; existing fail-open mutex acquisition and
+  a snapshot without a holder are insufficient. No workflows were disabled or
+  cancelled; no shared writer was cleared and no ledger change was executed.
+- A local Slice A grant/registry precursor is being prepared on
+  `fix-codex-notice-rights-slice-a` at
+  `/data/git-repositories/jikig-ai/soleur/.worktrees/fix-codex-notice-rights-slice-a`.
+  CTO ruled this retains two PR slices, with a dedicated grant migration,
+  later snapshot migration and Slice B migration. Full rights/retention AC
+  remain pending; the precursor does not complete Slice A. Keep it unpushed
+  while its shared-dev CI would exceed the current authority.
+- PR #9051 remains draft with auto-merge off. Final processing/data-lifecycle
+  clearance, provider requests, shared reconciliation, qualification, QA,
+  exact-head review, preflight and readiness remain withheld or incomplete.
