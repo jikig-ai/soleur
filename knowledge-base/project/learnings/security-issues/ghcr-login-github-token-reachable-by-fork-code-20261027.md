@@ -16,7 +16,7 @@ synced_to: [security-sentinel]
 
 ## Problem
 
-PR #11295 added `docker/login-action` to the `rls-fuzz` job (#10868 — GHCR anonymous-bucket throttling). `pull_request` is fork-reachable and that workflow's `paths:` filter includes fork-editable code (`apps/web-platform/scripts/supabase-local.sh`, `package.json`, the fuzz test tree). `docker/login-action` writes the token into `~/.docker/config.json` for the entire job lifetime — so any in-scope fork PR could `cat` or exfiltrate a live `GITHUB_TOKEN` carrying `contents: read` + `packages: read`, without touching the workflow file itself. Pre-change, the token was only reachable via workflow-expression edits.
+PR #11295 added `docker/login-action` to the `rls-fuzz` job (#10868 — GHCR anonymous-bucket throttling). `pull_request` is fork-reachable and that workflow's `paths:` filter includes fork-editable code (`apps/web-platform/scripts/supabase-local.sh`, `package.json`, the fuzz test tree). `docker/login-action` writes the token into the runner's Docker client config (`<runner-home>/.docker/config.json`) for the entire job lifetime — so any in-scope fork PR could `cat` or exfiltrate a live `GITHUB_TOKEN` carrying `contents: read` + `packages: read`, without touching the workflow file itself. Pre-change, the token was only reachable via workflow-expression edits.
 
 `logout: true` (the default post-step cleanup, correctly preserved) only fires after the job — it does not bound within-job exposure.
 
