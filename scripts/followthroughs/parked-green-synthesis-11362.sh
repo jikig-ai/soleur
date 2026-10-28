@@ -52,6 +52,7 @@ esac
 # failed command's own status — usually 1, the sweeper's FAIL verb. Every command
 # below is guarded, and this trap converts any unplanned 0/1 landing into CANNOT
 # ESTABLISH so the invariant holds structurally rather than by review.
+# shellcheck disable=SC2154  # rc is assigned at trap-fire time inside the same string
 trap 'rc=$?; case "$rc" in 0|1) printf "CANNOT ESTABLISH: unplanned exit path (rc=%s)\n" "$rc" >&2; exit 3;; esac' EXIT
 
 WINDOW_DATE="2026-11-19"
@@ -74,11 +75,12 @@ fi
 [[ -f "$DIST_FILE" ]] || cannot_establish "distribution file is missing: ${DIST_REL}"
 [[ "$(head -1 "$DIST_FILE" 2>/dev/null || true)" == "---" ]] \
   || cannot_establish "${DIST_REL} has no frontmatter block (first line is not '---')"
-fence_count="$(awk '/^---$/{c++} END{print c+0}' "$DIST_FILE")" \
-  || cannot_establish "could not read ${DIST_REL}"
-[[ "$fence_count" =~ ^[0-9]+$ ]] \
-  || cannot_establish "frontmatter fence count is not numeric in ${DIST_REL}"
-[[ "$fence_count" -ge 2 ]] \
+# The block must CLOSE as frontmatter: every line between the fences in this
+# corpus is `key: value`-shaped, so the scan exits 1 at the first non-key
+# non-fence line (a body heading reaching here means the block never closed).
+# A global `^---$` count cannot say this — the body's own `---` separators
+# would satisfy it while a body `status:` line then reads as frontmatter.
+awk 'NR==1 { next } /^---$/ { found=1; exit } /^[A-Za-z_]+:/ { next } { exit 1 } END { exit (found ? 0 : 1) }' "$DIST_FILE" \
   || cannot_establish "${DIST_REL} has an unterminated frontmatter block"
 
 # Same frontmatter/`status:` extraction as scripts/lib/validate-tweet-draft.sh.
@@ -103,7 +105,8 @@ fi
 
 case "$status" in
   parked|draft)
-    printf 'ACTION REQUIRED: window open since %s and %s still reads status: %s — flip `status: parked → scheduled` in a one-line commit so the daily publisher fires it.\n' "$WINDOW_DATE" "$DIST_REL" "$status"
+    # shellcheck disable=SC2016  # the backticked lever names are literal message text
+    printf 'ACTION REQUIRED: window open since %s and %s still reads status: %s — flip `status: parked → scheduled` in a one-line commit so the daily publisher (14:00 UTC) fires it; if `publish_date` is already past, re-date it to a remaining window day in the same commit or the file goes `stale`.\n' "$WINDOW_DATE" "$DIST_REL" "$status"
     exit 5
     ;;
   *)
