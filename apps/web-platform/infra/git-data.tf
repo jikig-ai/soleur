@@ -381,13 +381,11 @@ resource "doppler_secret" "git_data_ssh_host_key" {
 # The strip expression and the map now live in modules/git-data-userdata/main.tf. The
 # rung-2 gate derives its hash-input set by grepping THAT file — see
 # tests/scripts/lib/git-data-birth-readiness-gate.sh.
-# git_data_volume_id below is a LITERAL (the retired plaintext volume):
-# SOLEUR-DEBT: literal id naming a device that a Terraform destroy deleted at the provider API on 2026-10-27 (run 40478209838; it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendments 2026-10-26 and 2026-10-27) and so any host rebirth boots into the bootstrap plaintext_unverified FATAL; when #11194 merges (plaintext arms retired from the host replace/birth/rotate gates) set this to "" in a deliberate, owner-named host replace.
 module "git_data_userdata" {
   source = "./modules/git-data-userdata"
 
   host_name               = "soleur-git-data"
-  git_data_volume_id      = "106867358"
+  git_data_volume_id      = ""
   git_data_luks_volume_id = hcloud_volume.git_data_luks.id
   doppler_token           = doppler_service_token.git_data.key
   # (#7025, R1) The literal this template carried until #7025, now passed explicitly. It
