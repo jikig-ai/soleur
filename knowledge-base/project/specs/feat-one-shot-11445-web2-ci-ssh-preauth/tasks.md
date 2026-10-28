@@ -20,7 +20,7 @@ Plan: `knowledge-base/project/plans/2026-10-28-infra-web2-ssh-preauth-after-rebi
 
 ## Phase 4 — Verify + close
 
-- [ ] 4.1 Run the C4 three-file read (`model.c4`, `views.c4`, `spec.c4`) and cite the checked actors/systems/relationships (plan §ADR/C4).
+- [x] 4.1 Run the C4 three-file read (`model.c4`, `views.c4`, `spec.c4`) and cite the checked actors/systems/relationships (plan §ADR/C4). Read: `model.c4` (actors: founder/owner, third-party emailers, untrusted contributors; systems: CLI/Desktop + Devin Cloud surfaces — no infra host-key material modeled), `views.c4`, `spec.c4` — zero web-2/ssh/bastion/admin elements in any. No actor, system, container, data-store, or relationship added → no C4 impact.
 - [ ] 4.2 Merge the PR; confirm `apply-web-platform-infra.yml` merge-run passes `SSH forward to web-2` + runs `Terraform apply (SSH-provisioned resources, over the bridge)` non-skipped. (AC3)
 - [ ] 4.3 Confirm `apply-deploy-pipeline-fix.yml` merge-run delivers `terraform_data.deploy_pipeline_fix_web2` (pin-hash re-fire). (AC3)
 - [ ] 4.4 Close #11445 with the verification evidence; leave #10585/#6406/#11402 open (context issues, out of scope).
