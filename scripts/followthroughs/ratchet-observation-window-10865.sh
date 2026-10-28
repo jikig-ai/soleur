@@ -44,14 +44,17 @@
 # (nothing persists between sweeps; truncated=1; a budget hit is NOT YET unless every criterion already holds on what was read, and is never CANNOT ESTABLISH). Measured serially on 2026-10-27: 265 jobs reads at 2.1 s and 264 job logs
 # at 1.1 s (about 15 minutes) against a sweeper job limit of 15 minutes for every tracker. GitHub's 1,000-result cap on a run listing means that beyond 1,000 runs the listing is the NEWEST 1,000 and the oldest-250 prefix MOVES forward as runs accumulate:
 # evidence does NOT latch across sweeps, and the one sweep that sees every criterion is what closes the tracker. The time arithmetic is in the runbook. A run whose
-# conclusion is `cancelled` is skipped before any jobs read. Closing #10865 authorizes nothing: PR3b (#10859) stays held.
+# conclusion is `cancelled` is skipped before any jobs read. RESTART FLOOR: a drain PR (label `s4-drain`) merged inside the window changes the baseline, the live set and the oracle, so
+# only runs created after the LATER of the PR3a merge and the latest drain merge count (runbook, "The drain claim"; one issues read; the status line's `window opened=` is that floor, while
+# age_days and the 30-day triggers stay anchored to the PR3a merge). Closing #10865 authorizes nothing: PR3b (#10859) stays held.
 #
 # Exit codes (sweep-followthroughs.sh contract): 0 PASS; 2 NOT YET (an unmet criterion; the sweeper comments and leaves the tracker open); 3 CANNOT ESTABLISH
 # (a tool, GH_TOKEN or a read failed, or a job log carried no marker for a run that concluded success: the sweeper retries); 78 refused to run under xtrace
 # while GH_TOKEN is set (#7797). Test seams (inert under the sweeper's env -i): SOAK_NOW_EPOCH, SOAK_MAX_PAGES, SOAK_MAX_UNITS, SOAK_PARALLEL (1..8), SOAK_BUDGET_S
 # (1..600; reads), SOAK_FACTS_BUDGET_S (1..300; the serial per-PR facts phase has its own allowance), SOAK_PROGRESS=1 (a heartbeat per 25 reads on stderr). The sweeper's GITHUB_TOKEN allows about 1,000 REST requests per hour per repository, shared: the probe reads
 # rate_limit first and is CANNOT ESTABLISH (exit 3) when the planned reads (1.5 per run, half a lookup per run needing one, 3 per PR, 100 reserve; printed as `planned=`) do not fit,
-# and an HTTP 403 or 429 stops further reads. A read that fails with a timeout or a 5xx is retried ONCE after 2 s; a 403, 429, 404 or 422 is never retried.
+# and an HTTP 403 or 429 stops further reads. A read that fails with a timeout, a 5xx or a network-class error (EOF, connection reset, TLS handshake or i/o timeout, dial tcp) is retried ONCE after 2 s, and only while the read and facts budgets are not
+# spent; a 403, 429, 404 or 422 is never retried.
 # Progress is on stderr (three phase lines, counts only); stdout is the status line, the verdict and a `quota:` line. NO API payload may travel on a jq argv (one argv entry
 # is capped at 131072 bytes): pages go to jq on stdin. The rows live in
 # plugins/soleur/test/ci-pr-affected-replay.test.sh (stub gh; a registered scripts/followthroughs/*.test.sh would need a run_suite line in scripts/test-all.sh).
@@ -88,7 +91,7 @@ MAX_UNITS="${SOAK_MAX_UNITS:-250}"
 NEWEST_MG=10
 PAR="${SOAK_PARALLEL:-4}"          # concurrent run reads (cap 8)
 BUDGET="${SOAK_BUDGET_S:-300}"     # wall-clock seconds the reads may take before the remaining oldest-first runs are left unread this sweep (cap 600)
-FACTS_BUDGET="${SOAK_FACTS_BUDGET_S:-180}"   # the serial per-PR facts phase has its OWN allowance, measured from its start (cap 300): reads (about 258 s with the listing) plus about 60 s of facts do not fit one 300 s budget
+FACTS_BUDGET="${SOAK_FACTS_BUDGET_S:-180}"   # the serial per-PR facts phase has its OWN allowance, measured from its start (cap 300): a PR's facts are a pull, up to 3 files pages and a timeline (up to 5 serial reads, about 2.4 s each measured 2026-10-28), checked against it before each PR, so reads plus facts do not fit one 300 s budget
 T0=$SECONDS
 for need in gh jq date sort mktemp rm sed awk comm paste cat head tail cut tr grep mv timeout pgrep sleep; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
@@ -125,13 +128,13 @@ gh_get() {
     if [ "$rc" -ne 0 ]; then
       st="$(grep -oE 'HTTP (403|429)' "$errf" 2>/dev/null | head -n 1)"
       [ -z "$st" ] || printf '%s\n' "$st" > "$RL_FLAG"
-      if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi
+      if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi
       if grep -q 'HTTP 404' "$errf" 2>/dev/null; then rc=44; elif grep -q 'HTTP 422' "$errf" 2>/dev/null; then rc=45; fi
     fi
     break
   done
   rm -f "$errf"
-  [ "$rc" -eq 0 ] && printf '%s\n' "$out"
+  [ "$rc" -ne 0 ] || printf '%s\n' "$out" || rc=$?
   return "$rc"
 }
 api() { gh_get "$1"; }
@@ -155,6 +158,15 @@ merged_at="$(jq -r '.merged_at // empty' <<<"$pr_json" 2>/dev/null)" || fail_api
 merge_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pr_json" 2>/dev/null)" || fail_api "pull $PR3A (parse)"
 merged_epoch="$(date -u -d "$merged_at" +%s 2>/dev/null)" || fail_api "merge time $merged_at"
 age_days=$(( (NOW - merged_epoch) / 86400 ))
+# --- the restart floor: the window counts from the LATER of the PR3a merge and the latest merged `s4-drain` PR (a drain PR changes the baseline, the live set and the oracle; until now the closer applied
+# this by hand, #10949). One read of the (small) label list; `merged_at` is the floor from here on, so the run listing, the units and the status line all start there. age_days stays PR3a-based above.
+drain_json="$(api "repos/$REPO/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100")" || fail_api "s4-drain pulls"
+drain_at="$(jq -r 'if type != "array" then error("not an array") else ([.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // "") end' <<<"$drain_json" 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
+[[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] || fail_api "s4-drain pulls (parse)"
+if [[ -n "$drain_at" ]]; then
+  drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
+  if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; fi
+fi
 
 # --- read one job: sets RJ_EX, RJ_REASON, RJ_WALL, RJ_RAN (RJ_EX is 2 with reason no-marker when the job concluded without an emitted marker) ---------
 # Called inside a read_unit worker subshell (fail_api's `exit` ends that worker; the main shell then reports its one fixed line and exits 3), never in a command substitution.
@@ -198,7 +210,7 @@ for ev in pull_request merge_group; do
     runs="$(api "$path")" || fail_api "ci.yml $ev runs (page $page)"
     jq -r --arg m "$merged_at" --arg ev "$ev" '.workflow_runs[]? | select(.created_at > $m)
          | [.id, $ev, .head_sha, ((.head_branch // "") | if . == "" then "-" else . end), .created_at, (.run_attempt // 1), ((.pull_requests[0].number // 0) | tostring), (.conclusion // ""),
-            (if ((.head_repository.full_name // .repository.full_name // "") != (.repository.full_name // "")) then 1 else 0 end)] | @tsv' <<<"$runs" >> "$RUNS" 2>/dev/null \
+            (if ((.head_repository.full_name // "") != (.repository.full_name // "")) then 1 else 0 end)] | @tsv' <<<"$runs" >> "$RUNS" 2>/dev/null \
       || fail_api "ci.yml $ev runs (parse)"
     n="$(jq -r '(.workflow_runs // []) | length' <<<"$runs" 2>/dev/null)" || fail_api "ci.yml $ev runs (parse)"
     [ "$n" -ge 100 ] || break
@@ -220,7 +232,7 @@ to_read="$(grep -c . "$WORK/dispatch.tsv")"
 note "phase=listed seen=$runs_listed readable=$readable_n to_read=$to_read parallel=$PAR budget_s=$BUDGET elapsed_s=$((SECONDS - T0))"
 # the quota guard: a shortfall is CANNOT ESTABLISH (the sweeper retries), never NOT YET (that would say a criterion is unmet) and never a smaller plan (that would change what a PASS certifies).
 # Estimated from dispatch.tsv alone: 1.5 requests per run read (a jobs read, a log for a unit that ran, a rerun costs 4), half a commit lookup per run whose own PR is empty (res_cands), and 3 per
-# PR (its pull, its files, its timeline). Measured 2026-10-28 on ~260 runs of ~81 PRs: about 856 planned against about 600 spent; the old 2-per-run, 5-per-PR formula was calibrated to 4 PRs and
+# PR (its pull, its files, its timeline). Measured 2026-10-28: a sweep of 156 units and 24 PRs spent 321 requests against planned=716 (~260 runs of ~81 PRs plan about 856); the old 2-per-run, 5-per-PR formula was calibrated to 4 PRs and
 # would be above the whole hourly token quota at ~80, a permanent exit 3. The weights rest on two days of measurements: the `planned=` figure on the quota line is how they are shown wrong.
 res_cands="$(awk -F'\t' '$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/' "$WORK/dispatch.tsv" | grep -c .)"
 pr_est="$(awk -F'\t' '$3 == "pull_request" && $8 != 0 { print "n" $8 } $3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/ { print "b" $5 }' "$WORK/dispatch.tsv" | sort -u | grep -c .)"
@@ -428,8 +440,8 @@ RL_USED1="$(jq -r '.resources.core.used // empty' <<<"$rl1" 2>/dev/null)"; RL_LI
 if [[ "$RL_USED1" =~ ^[0-9]+$ && "$RL_LIMIT" =~ ^[0-9]+$ && "$RL_REM1" =~ ^[0-9]+$ ]]; then echo "quota: used_delta=$((RL_USED1 - RL_USED0)) limit=$RL_LIMIT remaining=$RL_REM1 planned=$need"; else echo "quota: unreadable"; fi
 
 if (( distinct < MIN_PR )); then
-  nosuffix=""; (( distinct == 0 && unattr > 0 )) && nosuffix=" ($unattr runs could not be attributed to a PR)"
-  nots+=("only $distinct distinct green pull_request PR(s) (need $MIN_PR)$nosuffix")
+  unattr_note=""; (( distinct == 0 && unattr > 0 )) && unattr_note=" ($unattr runs could not be attributed to a PR)"
+  nots+=("only $distinct distinct green pull_request PR(s) (need $MIN_PR)$unattr_note")
 fi
 (( mg_n >= MIN_MG )) || nots+=("only $mg_n green merge_group SHA(s) (need $MIN_MG)")
 (( any_scripts == 1 )) || nots+=("no green pull_request unit is from a PR touching scripts/ or a suite file")
@@ -456,5 +468,5 @@ if (( ${#nots[@]} > 0 )); then
   printf 'NOT YET: %s\n' "${nots[@]}"
   exit 2
 fi
-echo "PASS: the window held: $distinct distinct PRs and $mg_n merge_group SHAs green, wall p95 ${p95}s max ${max}s, docs-only, draft and bot coverage as above, the baseline has not grown. It certifies the earliest prefix of the LISTED runs plus the newest queue state (units_read=$units_read truncated=$TRUNC); a listing is capped at 1,000 results, so the prefix moves between sweeps. Closing #10865 does not authorize PR3b (#10859)."
+echo "PASS: the window held: $distinct distinct PRs and $mg_n merge_group SHAs green, wall p95 ${p95}s max ${max}s, docs-only, draft and bot coverage as above, the baseline has not grown. It certifies the earliest prefix of the LISTED runs plus the newest queue state (units_read=$units_read truncated=$TRUNC); a listing is capped at 1,000 results, so the prefix moves between sweeps. The two wall ceilings are PROVISIONAL: the CTO agent re-rules them at this close (runbook, 'Ceilings are PROVISIONAL'). Closing #10865 does not authorize PR3b (#10859)."
 exit 0

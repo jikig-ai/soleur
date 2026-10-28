@@ -155,6 +155,8 @@ case "$path" in */logs) [ "$esc" = 1 ] || { echo "STUB-MISS no --allow-escape-se
 # for the trap row and S/E lines for the concurrency row.
 if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; echo "S $$" >> "$GH_LOG.conc"; command -p sleep "${SLOW_S:-1}"; echo "E $$" >> "$GH_LOG.conc"; fi
 if [ -f "$GH_FIX/ERR_ONCE_$key" ]; then rm -f "$GH_FIX/ERR_ONCE_$key"; echo "gh: HTTP 502" >&2; exit 1; fi   # the first call fails, later calls fall through to the fixture (or to a later ERR_ handler)
+if [ -f "$GH_FIX/ERRONCEMSG_$key" ]; then m="$(cat "$GH_FIX/ERRONCEMSG_$key")"; rm -f "$GH_FIX/ERRONCEMSG_$key"; echo "gh: $m" >&2; exit 1; fi   # the first call fails with the fixture's text as stderr
+if [ -f "$GH_FIX/ERRONCE124_$key" ]; then rm -f "$GH_FIX/ERRONCE124_$key"; exit 124; fi   # the first call is killed by `timeout` (rc 124)
 if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR422_$key" ]; then echo "gh: No commit found for SHA (HTTP 422)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR401EXIT4_$key" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 4; fi   # gh exits 4 itself on an authentication failure
@@ -3012,9 +3014,9 @@ ow_jobs_json() {   # ow_jobs_json <job id> <exit> <wall> [cancelled]
   printf '{"total_count":2,"jobs":[{"id":1,"name":"test","conclusion":"success"},{"id":%s,"name":"affected-index-ratchet","conclusion":"%s","started_at":"2031-02-02T00:00:00Z","completed_at":"%s","runner_id":9,"steps":[{"name":"%s","conclusion":"%s"}]}]}' \
     "$1" "$concl" "$(date -u -d "2031-02-02T00:00:00Z + $3 seconds" +%Y-%m-%dT%H:%M:%SZ)" "$OW_STEP" "$step"
 }
-ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> <conclusion> <pr number> [fork 0|1]
-  printf '{"id":%s,"head_sha":"%s","head_branch":"%s","created_at":"%s","run_attempt":%s,"event":"%s","conclusion":"%s","pull_requests":[%s],"repository":{"full_name":"jikig-ai/soleur"},"head_repository":{"full_name":"%s"}}' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$([[ "$8" != 0 ]] && printf '{"number":%s}' "$8")" "$([[ "${9:-0}" == 1 ]] && echo someone/soleur || echo jikig-ai/soleur)"
+ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> <conclusion> <pr number> [fork 0|1|gone]
+  printf '{"id":%s,"head_sha":"%s","head_branch":"%s","created_at":"%s","run_attempt":%s,"event":"%s","conclusion":"%s","pull_requests":[%s],"repository":{"full_name":"jikig-ai/soleur"},"head_repository":%s}' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$([[ "$8" != 0 ]] && printf '{"number":%s}' "$8")" "$(case "${9:-0}" in 1) echo '{"full_name":"someone/soleur"}' ;; gone) echo null ;; *) echo '{"full_name":"jikig-ai/soleur"}' ;; esac)"
 }
 ow_sha() { printf '%040d' "$1"; }   # a 40-hex head sha for a synthetic run (digits are hex); never a tracked path
 ow_pr_obj() {   # ow_pr_obj <n> <branch> [head repo] [base repo]: one element of GET commits/<sha>/pulls
@@ -3022,12 +3024,12 @@ ow_pr_obj() {   # ow_pr_obj <n> <branch> [head repo] [base repo]: one element of
 }
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/ERR*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*_issues_labels_s4_drain* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
   printf '{"resources":{"core":{"limit":5000,"remaining":%s,"used":100,"reset":1900000000}}}' "${OW_RL_REMAINING:-4900}" | fx "rate_limit"   # the probe reads the API quota before it reads any run
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
     runconc=success; [[ "$ex" != cancelrun ]] || runconc=cancelled
-    fork=0; [[ " ${OW_RUNFORK:-} " != *" $id "* ]] || fork=1
+    fork=0; [[ " ${OW_RUNFORK:-} " != *" $id "* ]] || fork=1; [[ " ${OW_RUNGONE:-} " != *" $id "* ]] || fork=gone
     item="$(ow_run_item "$id" "$sha" "$br" "$created" "$att" "$ev" "$runconc" "$prn" "$fork")"
     if [[ "$ev" == pull_request ]]; then pr_list="${pr_list:+$pr_list,}$item"; else mg_list="${mg_list:+$mg_list,}$item"; fi
     [[ "$ex" != cancelrun ]] || continue   # a cancelled run: no jobs fixture, so a read of it is a STUB-MISS
@@ -3068,6 +3070,9 @@ ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a me
   [[ "${OW_BL_TIP_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=main")"
   [[ "${OW_BL_MERGE_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=$OW_MSHA")"
   [[ "${OW_BL_TIP_FAIL:-}" != 1 ]] || fx_err "$OW_BL_PATH?ref=main"
+  local dm di="" n=0   # the s4-drain label list: OW_DRAIN is a space-separated list of merged_at values ("null" = closed without merging)
+  for dm in ${OW_DRAIN:-}; do n=$((n + 1)); di="${di:+$di,}{\"number\":$((900 + n)),\"pull_request\":{\"merged_at\":$([[ "$dm" == null ]] && echo null || echo "\"$dm\"")}}"; done
+  printf '[%s]' "$di" | fx "repos/$R/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100"
   local r rid rprn rbr rmode rkey   # the commit lookups of the runs whose own pull_requests is empty: "<run id> <pr> <branch> [mode]"
   for r in "${OW_RESOLVE[@]}"; do
     read -r rid rprn rbr rmode <<<"$r"
@@ -3118,7 +3123,7 @@ ow_probe_split() {   # ow_probe_split: RC, OWOUT (stdout only), OWERR (the stder
   RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN/nosleep:$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
   OW_RCS+=("$RC")
 }
-ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; OW_RESOLVE=(); rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$GHLOG.sleeps" "$OWERR"
+ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; OW_RESOLVE=(); OW_DRAIN=""; OW_RUNGONE=""; rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$GHLOG.sleeps" "$OWERR"
   unset OW_BL_TIP; OW_BL_TIP_ABSENT=""; OW_BL_MERGE_ABSENT=""; OW_BL_TIP_FAIL=""; ow_base_units; }
 ow_variant() {   # ow_variant <fn that edits OW_UNITS or globals>: rebuild the fixtures and run the probe
   ow_case; "$1"; ow_write; ow_probe "${OW_NOW:-}"
@@ -3192,7 +3197,8 @@ row_ow_one_page() { ow_variant ow_u_onepage; [[ "$RC" -eq 2 ]] && grep -q 'trunc
 row_ow_unit_cap() { ow_variant ow_u_cap; grep -q 'units_read=5 truncated=1' <<<"$OWOUT" && ! grep -q 'actions_runs_5003_jobs' "$GHLOG" && grep -q 'actions_runs_6003_jobs' "$GHLOG"; }   # the 2 oldest runs plus the newest merge_group runs; the middle ones wait for the next sweep
 row_ow_baseline_grew() { ow_variant ow_u_grew; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: baseline grew by 1 line(s) since the PR3a merge ("scripts/^\[\[31mnew^Idata/9")' <<<"$OWOUT" && ! grep -q $'\033' <<<"$OWOUT"; }
 row_ow_baseline_set() { ow_variant ow_u_moved; [[ "$RC" -eq 0 ]] || return 1; ow_variant ow_u_shrunk; [[ "$RC" -eq 0 ]] || return 1; ow_variant ow_u_tipabsent; [[ "$RC" -eq 0 ]]; }   # a moved line, a shrink and an absent tip are not growth
-row_ow_baseline_reads() { ow_variant ow_u_mergeabsent; [[ "$RC" -eq 3 ]] || return 1; ow_variant ow_u_tipfail; [[ "$RC" -eq 3 ]]; }
+row_ow_baseline_reads() { ow_variant ow_u_mergeabsent; [[ "$RC" -eq 3 ]] || return 1; ow_variant ow_u_tipfail; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; : > "$GHFIX/ERR422_$(keyof "$OW_BL_PATH?ref=main")"; ow_probe; [[ "$RC" -eq 3 ]]; }   # an HTTP 422 on the baseline is a failed read, never "absent at the tip"
 row_ow_xtrace() { RC=0; OWOUT="$(env GH_TOKEN=fake PATH="$BIN:$PATH" bash -x "$OW_SCRIPT" 2>&1)" || RC=$?; [[ "$RC" -eq 78 ]]; }
 row_ow_read_only() { ow_case; ow_write; : > "$GHLOG"; ow_probe; ! grep -qE 'STUB-MISS' "$GHLOG" && [[ "$(grep -c '^REQ' "$GHLOG")" -gt 10 ]]; }
 row_ow_static() {   # the header states the exit contract and the provisional ceilings; no jq program splices a shell variable; the oracle list is the SUT's
@@ -3443,29 +3449,31 @@ row_ow_resolve_errors() {
   done
   OW_RM=ok
 }
-ow_u_scope() {   # prn-0 runs that must NOT spend a lookup: not green, an incident, a fork run, a run with its own PR, a non-hex sha, a merge_group run
+ow_u_scope() {   # prn-0 runs that must NOT spend a lookup: not green, an incident, a fork run, a run with its own PR, a non-hex sha, a merge_group run, a deleted fork
   ow_u_resolved
   OW_UNITS+=("5101 pull_request $(ow_sha 5101) feat/a 2031-02-02T08:01:00Z 1 0 1 150" "5102 pull_request $(ow_sha 5102) feat/a 2031-02-02T08:02:00Z 2 0 0 150"
     "5103 pull_request $(ow_sha 5103) feat/a 2031-02-02T08:03:00Z 1 0 0 150" "5104 pull_request $(ow_sha 5104) feat/a 2031-02-02T08:04:00Z 1 11 0 150"
-    "5105 pull_request nothex5105 feat/a 2031-02-02T08:05:00Z 1 0 0 150" "6101 merge_group $(ow_sha 6101) gh-readonly-queue/main/pr-14-z 2031-02-03T04:00:00Z 1 0 0 150")
-  OW_RUNFORK=5103
+    "5105 pull_request nothex5105 feat/a 2031-02-02T08:05:00Z 1 0 0 150" "6101 merge_group $(ow_sha 6101) gh-readonly-queue/main/pr-14-z 2031-02-03T04:00:00Z 1 0 0 150" "5106 pull_request $(ow_sha 5106) feat/a 2031-02-02T08:06:00Z 1 0 0 150")
+  OW_RUNFORK=5103; OW_RUNGONE=5106   # 5106: the head repository is gone (a deleted fork): a fork, not an unattributed run
 }
 row_ow_resolve_scope() {
   ow_variant ow_u_scope
-  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
-  local id; for id in 5101 5102 5103 5104 5105 6101 5005; do [[ "$(ow_req_count "$(ow_cpath $id)")" -eq 0 ]] || return 1; done
+  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=1$' <<<"$OWOUT" || return 1   # only 5105 (a non-hex sha) is unattributed; the two fork runs are not
+  local id; for id in 5101 5102 5103 5104 5105 5106 6101 5005; do [[ "$(ow_req_count "$(ow_cpath $id)")" -eq 0 ]] || return 1; done
   [[ "$(ow_req_count "$(ow_cpath 5001)")" -eq 1 ]]   # the control: a compliant run does call
 }
 ow_u_mg_only() { local u keep=(); for u in "${OW_UNITS[@]}"; do [[ "$u" != *" pull_request "* ]] && keep+=("$u"); done; OW_UNITS=("${keep[@]}"); }
 row_ow_zero_pr_units() {   # no PR unit at all: the phase line still prints and the verdict is NOT YET (bash 5.3 aborted on ${#PR_EXCLUDED[@]} of an empty associative array)
   local m
   ow_case; ow_u_mg_only; ow_write; ow_probe_split
-  [[ "$RC" -eq 2 ]] && grep -q 'only 0 distinct green pull_request PR' <<<"$OWOUT" && ! grep -q 'unbound variable' "$OWERR" && grep -q 'phase=facts-done prs=0 ' "$OWERR" || return 1
-  ow_case; ow_u_resolved; for m in 0 1 2 3 4; do OW_RESOLVE[m]="${OW_RESOLVE[m]% *} empty"; done; ow_write; ow_probe_split   # every PR run unresolved
+  [[ "$RC" -eq 2 ]] && grep -q 'only 0 distinct green pull_request PR' <<<"$OWOUT" && ! grep -q 'could not be attributed' <<<"$OWOUT" && ! grep -q 'unbound variable' "$OWERR" && grep -q 'phase=facts-done prs=0 ' "$OWERR" || return 1
+  ow_case; ow_u_resolved; for m in 0 1 2 3 4; do OW_RESOLVE[m]="${OW_RESOLVE[m]} empty"; done; ow_write; ow_probe_split   # every PR run unresolved
   OW_RESOLVE=()
   [[ "$RC" -eq 2 ]] && grep -q 'only 0 distinct green pull_request PR(s) (need 3) (5 runs could not be attributed to a PR)' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=5$' <<<"$OWOUT" && ! grep -q 'unbound variable' "$OWERR" || return 1
-  ow_case; ow_write; ow_probe_split   # the base fixture: five PRs read
-  [[ "$RC" -eq 0 ]] && grep -q 'phase=facts-done prs=5 ' "$OWERR"
+  ow_case; ow_u_resolved; OW_RESOLVE[2]="${OW_RESOLVE[2]} empty"; OW_RESOLVE[3]="${OW_RESOLVE[3]} empty"; ow_write; ow_probe_split   # two PRs resolve, two runs do not: the suffix is for ZERO distinct PRs only
+  [[ "$RC" -eq 2 ]] && grep -q 'only 2 distinct green pull_request PR(s) (need 3)$' <<<"$OWOUT" && ! grep -q 'could not be attributed' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=2$' <<<"$OWOUT" || return 1
+  ow_case; ow_write; ow_probe_split   # the base fixture: five PRs read, four non-canary green PR rows
+  [[ "$RC" -eq 0 ]] && grep -q 'phase=facts-done prs=5 green_pr_rows=4 ' "$OWERR"
 }
 row_ow_retry() {
   local jp1="repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest" jp2="repos/$R/actions/runs/6002/jobs?per_page=100&filter=latest" jp3="repos/$R/actions/runs/6003/jobs?per_page=100&filter=latest" m
@@ -3481,10 +3489,60 @@ row_ow_retry() {
   [[ "$RC" -eq 3 ]] && grep -q 'HTTP 403' <<<"$OWOUT" && [[ "$(ow_req_count "$jp3")" -eq 2 ]] || return 1
   ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$OW_BL_PATH?ref=main")"; ow_probe   # the baseline contents read goes through the same retry
   [[ "$RC" -eq 0 && "$(ow_req_count "$OW_BL_PATH?ref=main")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  for m in 'EOF' 'connection reset by peer' 'TLS handshake timeout' 'read: i/o timeout' 'dial tcp 192.0.2.1:443: connect: connection refused' 'Client.Timeout exceeded while awaiting headers'; do   # every network-class stderr is retried once
+    ow_case; ow_write; printf '%s' "$m" > "$GHFIX/ERRONCEMSG_$(keyof "$jp1")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+    [[ "$RC" -eq 0 && "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  done
+  ow_case; ow_write; : > "$GHFIX/ERRONCE124_$(keyof "$jp1")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # a read killed by `timeout` (rc 124) is retried once
+  [[ "$RC" -eq 0 && "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  for m in 'HTTP 400 Bad Request' 'HTTP 401 Bad credentials'; do   # other 4xx are never retried
+    ow_case; ow_write; printf '%s' "$m" > "$GHFIX/ERRONCEMSG_$(keyof "$jp3")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+    [[ "$RC" -eq 3 && "$(ow_req_count "$jp3")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
+  done
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; fx_err "$jp2"   # past the read and facts budgets a failed read is NOT retried
+  OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=1 SOAK_FACTS_BUDGET_S=1 SLOW_S=3); ow_probe
+  [[ "$RC" -eq 3 && "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
   ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; fx_err "$jp2"; : > "$GHFIX/SLOW_$(keyof "$jp2")"   # a flagged run: the 403 lands while the 502 read sleeps
   OW_ENV=(SOAK_PARALLEL=2 SLOW_S=1); ow_probe
   [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]]   # the retry is skipped while the rate flag is set
 }
+ow_u_drain_later() { OW_DRAIN="2031-02-02T03:30:00Z"; }   # a drain PR merged after PR3a: only runs created after it count (5004 at 04:00 and the canary 5005 are the PR units left)
+row_ow_drain_floor() {
+  local d
+  ow_variant ow_u_drain_later
+  [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z age_days=4 green_pr_units_distinct_prs=1 ' <<<"$OWOUT" || return 1   # the floor counts, the 30-day clock stays on PR3a
+  for d in "2031-02-02T01:30:00Z 2031-02-02T03:30:00Z" "2031-02-02T03:30:00Z 2031-02-02T01:30:00Z"; do   # the LATEST drain merge wins, whatever the listing order
+    ow_case; OW_DRAIN="$d"; ow_write; ow_probe
+    [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z ' <<<"$OWOUT" || return 1
+  done
+  for d in "2031-01-15T00:00:00Z" "null" "null 2031-01-20T00:00:00Z" ""; do   # a drain merge before PR3a, a drain PR closed unmerged, or none: the PR3a merge stays the floor
+    ow_case; OW_DRAIN="$d"; ow_write; ow_probe
+    [[ "$RC" -eq 0 ]] && grep -q 'window opened=2031-02-01T00:00:00Z age_days=4 green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
+  done
+}
+row_ow_drain_errors() {
+  local k="repos/$R/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100"
+  ow_case; ow_write; fx_err "$k"; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls)' <<<"$OWOUT" || return 1
+  ow_case; ow_write; printf '{"message":"nope"}' | fx "$k"; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT" || return 1
+  ow_case; ow_write; printf '[{"number":901,"pull_request":{"merged_at":"yesterday"}}]' | fx "$k"; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT"   # a malformed timestamp never becomes a floor
+}
+ow_u_quota_shape() {   # the resolved fixture plus a second lookup on feat/c and a fork run on its own branch: 6 lookup candidates (3), 4 branches (12), 11 reads (17)
+  ow_u_resolved
+  OW_UNITS+=("5008 pull_request $(ow_sha 5008) feat/c 2031-02-02T03:30:00Z 1 0 0 150" "5009 pull_request $(ow_sha 5009) fork/x 2031-02-02T09:00:00Z 1 0 0 150")
+  OW_RESOLVE+=("5008 13 feat/c"); OW_RUNFORK=5009
+}
+row_ow_quota_shape() {
+  ow_case; OW_RL_REMAINING=134; ow_u_quota_shape; ow_write; ow_probe   # need 17 + 3 + 12 + 100 = 132, plus the 2 listing calls
+  [[ "$RC" -ne 3 ]] && grep -q ' planned=132$' <<<"$OWOUT" || return 1
+  ow_case; OW_RL_REMAINING=133; ow_u_quota_shape; ow_write; ow_probe   # one request short: a fork run or a canary counted as a lookup candidate moves it by exactly one
+  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=133, need=132' <<<"$OWOUT"
+}
+chk "window probe: the window counts from the later of the PR3a merge and the latest merged s4-drain PR (the recorded drain restart); an earlier, unmerged or absent drain changes nothing" row_ow_drain_floor
+chk "window probe: a failed or malformed s4-drain read is CANNOT ESTABLISH with one fixed line, never a floor" row_ow_drain_errors
+chk "window probe: the quota estimate excludes fork runs and canary branches from the lookup candidates and from the PR estimate" row_ow_quota_shape
 chk "window probe: a run whose own pull_requests is empty (a merged PR) is attributed by its head commit, counted once per PR, and the canary run spends no lookup" row_ow_resolve_merged
 chk "window probe: an unresolvable run (empty, two PRs, a foreign head or base repository, another head ref, HTTP 404 or 422) is excluded and counted, never an abort and never retried" row_ow_resolve_unresolvable
 chk "window probe: a failed lookup (502 after one retry, 403, 429, a non-array payload, gh's own exit 4) is CANNOT ESTABLISH with one fixed line" row_ow_resolve_errors
@@ -3646,13 +3704,30 @@ ow_mutate resolve-gh-exit-4-is-unresolved $'case "$rc" in 0) ;; 44|45) return 0 
 ow_mutate distinct-per-run-not-per-pr $'  [ -z "${SEEN_KEY[$prn]+x}" ] || continue' $'  :' row_ow_resolve_merged
 ow_mutate facts-prs-not-counted $'  facts_prs=$((facts_prs + 1))\n' $'  :\n' row_ow_zero_pr_units
 ow_mutate unattributed-not-counted $'$2 == "pull_request" && $6 == 0 && $11 != 1' $'$2 == "pull_request" && $6 == 99 && $11 != 1' row_ow_zero_pr_units
-ow_mutate unattributed-note-dropped $'(( distinct == 0 && unattr > 0 )) && nosuffix=' $'false && nosuffix=' row_ow_zero_pr_units
+ow_mutate unattributed-note-dropped $'(( distinct == 0 && unattr > 0 )) && unattr_note=' $'false && unattr_note=' row_ow_zero_pr_units
 ow_mutate quota-lookups-unplanned $'(res_cands + 1) / 2 + ' $'' row_ow_quota
 ow_mutate quota-prs-unplanned $'3 * pr_est + ' $'' row_ow_quota
 ow_mutate retry-5xx-unrecognised $'HTTP 5[0-9][0-9]|EOF' $'EOF' row_ow_retry
 ow_mutate retry-404-recognised $'HTTP 5[0-9][0-9]|EOF' $'HTTP 5[0-9][0-9]|HTTP 404|EOF' row_ow_retry
-ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
-ow_mutate retry-ignores-rate-flag $'[ ! -e "$RL_FLAG" ] && transient_err' $'transient_err' row_ow_retry
+ow_mutate drain-floor-ignored $'if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; fi' $'if false; then merged_at="$drain_at"; fi' row_ow_drain_floor
+ow_mutate drain-earliest-not-latest $'[.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // ""' $'[.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | min // ""' row_ow_drain_floor
+ow_mutate drain-before-pr3a-wins $'if (( drain_epoch > merged_epoch )); then' $'if true; then' row_ow_drain_floor
+ow_mutate drain-read-failure-ignored $'|| fail_api "s4-drain pulls"\n' $'|| drain_json="[]"\n' row_ow_drain_errors
+ow_mutate drain-timestamp-unvalidated $'[[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] || fail_api "s4-drain pulls (parse)"' $'true' row_ow_drain_errors
+ow_mutate fork-null-head-repository-is-same-repo $'(.head_repository.full_name // "") != (.repository.full_name // "")' $'(.head_repository.full_name // .repository.full_name // "") != (.repository.full_name // "")' row_ow_resolve_scope
+ow_mutate unattributed-counts-fork-rows $'$2 == "pull_request" && $6 == 0 && $11 != 1' $'$2 == "pull_request" && $6 == 0' row_ow_resolve_scope
+ow_mutate green-pr-rows-zero $'green_pr_rows="$(awk -F\'\\t\' \'$2 == "pull_request" && $11 != 1 && $4 !~ /^canary-/\' "$GREEN" | grep -c .)"' $'green_pr_rows=0' row_ow_zero_pr_units
+ow_mutate unattributed-note-needs-no-zero-distinct $'(( distinct == 0 && unattr > 0 ))' $'(( distinct >= 0 && unattr > 0 ))' row_ow_zero_pr_units
+ow_mutate unattributed-note-needs-unattributed $'(( distinct == 0 && unattr > 0 ))' $'(( distinct == 0 ))' row_ow_zero_pr_units
+ow_mutate transient-network-class-dropped $'HTTP 5[0-9][0-9]|EOF|connection reset|TLS handshake timeout|i/o timeout|dial tcp|Client.Timeout' $'HTTP 5[0-9][0-9]' row_ow_retry
+ow_mutate transient-timeout-rc-dropped $'[ "$1" -eq 124 ] ||' $'false ||' row_ow_retry
+ow_mutate retry-deadline-dropped $' && (( SECONDS - T0 < BUDGET + FACTS_BUDGET ))' $'' row_ow_retry
+ow_mutate baseline-422-is-absent $'[ "$rc" -eq 44 ] && return 4' $'{ [ "$rc" -eq 44 ] || [ "$rc" -eq 45 ]; } && return 4' row_ow_baseline_reads
+ow_mutate quota-lookup-candidates-count-forks $'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'$3 == "pull_request" && $8 == 0 && $5 !~ /^canary-/\'' row_ow_quota_shape
+ow_mutate quota-lookup-candidates-count-canaries $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0\'' row_ow_quota_shape
+ow_mutate quota-pr-estimate-counts-forks $'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/ { print "b" $5 }' $'$3 == "pull_request" && $8 == 0 && $5 !~ /^canary-/ { print "b" $5 }' row_ow_quota_shape
+ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
+ow_mutate retry-ignores-rate-flag $'[ ! -e "$RL_FLAG" ] && (( SECONDS - T0' $'(( SECONDS - T0' row_ow_retry
 ow_mutate baseline-read-unretried $'gh_get -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" || rc=$?' $'timeout 60 gh api -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" 2>/dev/null || rc=$?' row_ow_retry
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
@@ -4945,7 +5020,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1210   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 38 mutant kills) (measured below)
+FLOOR_ASSERTIONS=1270   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 38 mutant kills) (measured below) + 20 added by the merged-PR resolution probe fix (6 rows, 25 mutants) and its review round (3 rows, 17 mutants), measured 1270 passes, floor kept equal to the measured count
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
@@ -4958,7 +5033,7 @@ fi
 # every `mutate` line must have run (an exact reconciliation: a skipped or conditional line is a missing mutant)
 [[ "$MUT_RUN" -ge "$SITES_MUTATE" ]] || { printf '[FATAL] mutation floor: %s mutants ran but this file has %s mutate lines\n' "$MUT_RUN" "$SITES_MUTATE" >&2; exit 1; }
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"   # the observation-window section's own floor: every ow_mutate line must have run
-[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 40 && "$OW_MUT_KILLED" -eq "$OW_MUT_RUN" ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (at least 40 are required), %s were killed\n' "$OW_MUT_RUN" "$OW_SITES" "$OW_MUT_KILLED" >&2; exit 1; }
+[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 102 && "$OW_MUT_KILLED" -eq "$OW_MUT_RUN" ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (at least 102 are required), %s were killed\n' "$OW_MUT_RUN" "$OW_SITES" "$OW_MUT_KILLED" >&2; exit 1; }
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
 printf 'FAILED: %s\n' "${FAILED[@]}" >&2
