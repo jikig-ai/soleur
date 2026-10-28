@@ -397,6 +397,7 @@ const ALLOWED: Record<string, (v: unknown) => boolean> = {
   create_arm: (v) => v === "ran",
   create_outcome: (v) => v === "no_action" || v === "refused" || v === "opened",
   create_no_action_reason: (v) => (CREATE_NO_ACTION_REASONS as readonly unknown[]).includes(v),
+  create_offered: (v) => typeof v === "number" && Number.isInteger(v) && v >= 0,
   create_refusal_class: (v) => (CREATE_REFUSAL_CLASSES as readonly unknown[]).includes(v),
   create_detail: (v) => typeof v === "string" && /^[a-z0-9][a-z0-9_.:[\]-]{0,63}$/.test(v),
   create_words: (v) => typeof v === "number",
@@ -477,7 +478,7 @@ const CREATE_KEYS_ALL: string[] = Object.keys(ALLOWED);
 
 describe("the create-arm marker fields (#10550)", () => {
   const CREATE_KEYS = [
-    "kind", "create_requested", "create_arm", "create_outcome", "create_no_action_reason", "create_refusal_class",
+    "kind", "create_requested", "create_arm", "create_outcome", "create_no_action_reason", "create_offered", "create_refusal_class",
     "create_detail", "create_words", "create_cap", "create_total", "create_top1", "create_nearest_rank", "create_pr",
     "create_tokens", "create_max", "create_bytes", "create_path_index", "create_file_index", "create_missing_tools", "create_exit", "create_changed_count",
   ];
@@ -500,6 +501,18 @@ describe("the create-arm marker fields (#10550)", () => {
     for (const [k, v] of Object.entries(row)) {
       if (k.startsWith("create_") || k === "kind") expect(ALLOWED[k](v), `marker key ${k} has the wrong shape`).toBe(true);
     }
+  });
+
+  it("create_offered is a non-negative integer count: emitted for a refused row (6) and a no_action row (0), never a CREATE_MARKER_NUMBERS value", () => {
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "completed", input_source: "patterns", kind: "create", create_requested: true, create_arm: "ran", create_outcome: "refused", create_refusal_class: "create-open", create_detail: "open-create-pr", create_offered: 6 });
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "no-qualifying-clusters", input_source: "patterns", kind: "create", create_requested: true, create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "all-owned", create_offered: 0 });
+    const rows = captured.lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(rows.map((r) => r.create_offered)).toEqual([6, 0]);
+    for (const r of rows) expect(ALLOWED.create_offered(r.create_offered), "marker key create_offered has the wrong shape").toBe(true);
+    // the validator rejects what must never reach the row
+    for (const bad of [-1, 1.5, "6", null, {}, Number.NaN]) expect(ALLOWED.create_offered(bad), String(bad)).toBe(false);
+    // it is its own field, not a refusal number routed through the allowlist
+    expect(Object.values(CREATE_MARKER_NUMBERS)).not.toContain("create_offered");
   });
 
   it("the number allowlist: every refusal number the marker forwards maps to a typed, numeric create_* field (and nothing else is forwarded)", () => {

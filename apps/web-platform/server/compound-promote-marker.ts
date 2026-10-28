@@ -161,12 +161,17 @@ export interface CompoundPromoteOutcome {
    *   - `create_refusal_class` the closed class of the ONE refusal reason `create-refused`; `create_detail` its closed
    *                          token (a field label plus a rule id, or a fixed phrase); the numbers explain a budget or
    *                          overlap refusal (cap and total, top-1 overlap score, rank of the nearest skill).
+   *   - `create_offered`     a count, never text: the candidate patterns left after the same-run and ledger filters. When a
+   *                          model call was made it is exactly the number the model saw; on a pre-call refusal it is the
+   *                          candidate count and no call was spent; on a pre-call `no_action` it is 0. Absent on a
+   *                          `week-cap` or `index-empty` refusal and when the memoized step output carried none.
    */
   kind?: "create";
   create_requested?: boolean;
   create_arm?: "ran";
   create_outcome?: "no_action" | "refused" | "opened";
   create_no_action_reason?: CreateNoActionReason;
+  create_offered?: number;
   create_refusal_class?: CreateRefusalClass;
   create_detail?: string;
   create_words?: number;

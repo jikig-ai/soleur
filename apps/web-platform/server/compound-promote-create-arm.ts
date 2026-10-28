@@ -345,12 +345,23 @@ export interface CreateProposeArgs {
 }
 
 /**
+ * The step's output: a verdict plus, once the arm got past the week-cap and index-empty refusals, `offered`, the number of
+ * candidate patterns left after the same-run and ledger filters. Whenever a model call was made it is exactly the number the
+ * model saw; on a pre-call refusal it is the candidate count and no call was spent; on a pre-call `no_action` it is 0.
+ * Optional on read: the step output is memoized JSON that outlives a deploy, so an older memo has no `offered`.
+ */
+export type CreateStepVerdict = CreateVerdict & { offered?: number };
+
+/**
  * Step A. NEVER THROWS: any failure is converted to a returned, mirrored refusal with a closed class, so the
  * memoized step output is always a verdict and a replay re-enters nothing.
  */
-export async function runCreateProposeStep(a: CreateProposeArgs): Promise<CreateVerdict> {
+export async function runCreateProposeStep(a: CreateProposeArgs): Promise<CreateStepVerdict> {
   try {
-    return await proposeInner(a);
+    // Unwrapped INSIDE the try: a defect in the count is the closed internal refusal below (no `offered` key), never a throw
+    // out of the memoized step.
+    const { verdict, offeredCount } = await proposeInner(a);
+    return offeredCount === undefined ? verdict : { ...verdict, offered: offeredCount };
   } catch (err) {
     // A defect, not a gate outcome: mirror the Error itself so the stack reaches Sentry, then return a closed refusal.
     reportSilentFallback(err, { feature: CREATE_ARM_FEATURE, op: "create-propose-internal", message: "create-propose failed unexpectedly" });
@@ -367,26 +378,46 @@ function openPrAgentOrCommandCollision(slug: string, openPrPaths: readonly strin
   return null;
 }
 
-async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
-  // week-cap: the edit loop ran first and shares the cap (`remaining - editPrsOpenedThisRun`). The handler holds the loop to
-  // the free slots minus one on an `allow_create` run, so `capLeft >= 1` here by construction; this refusal is a defensive backstop.
-  if (!(a.capLeft > 0)) return fail("week-cap", "no-slot");
+/** The patterns the arm would send to the model, or the verdict that ends the arm before any I/O when none are left. */
+type Selected =
+  | { done: CreateVerdict }
+  | { candidates: PatternPage[]; sameRun: ReadonlySet<string>; ledgerOwned: (hash: string) => boolean };
 
-  // index-empty before any I/O: a create needs a pattern to be about.
-  if (a.patterns.length === 0) return fail("index-empty", "no-open-patterns");
-
-  // A pattern that is already owned cannot be created, so it is not offered to the model: the single call must not be
-  // spent on it. Two owners, two stages: the edit loop's branch this run (`sameRun`), then the ledger's prior PRs, judged
-  // by the same `decideSuppression` and the same memoized clock as the gate. Nothing offerable after the first stage is
-  // `other`; after the second it is `all-owned`. Both end before any I/O. The full list still goes to `checkCreate`,
-  // whose `isHashSuppressed` below stays as the backstop for a model that names an unoffered pattern anyway.
+/**
+ * A pattern that is already owned cannot be created, so it is not offered to the model: the single call must not be
+ * spent on it. Two owners, two stages: the edit loop's branch this run (`sameRun`), then the ledger's prior PRs, judged
+ * by the same `decideSuppression` and the same memoized clock as the gate. Nothing offerable after the first stage is
+ * `other`; after the second it is `all-owned`. Both end before any I/O. The full list still goes to `checkCreate`,
+ * whose `isHashSuppressed` stays as the backstop for a model that names an unoffered pattern anyway.
+ *
+ * ONE helper feeds both the model call and the `offered` count, so the count cannot drift from what the model is sent.
+ */
+function selectOffered(a: CreateProposeArgs): Selected {
   const runNow = new Date(a.runStartedAt);
   const sameRun = new Set(a.sameRunHashes ?? []);
   const ledgerOwned = (hash: string) => decideSuppression({ entries: a.ledgerEntries, hash, now: runNow });
   const unclaimed = a.patterns.filter((p) => !sameRun.has(createClusterHash(p.evidence)));
-  if (unclaimed.length === 0) return { kind: "no_action", reason: "other" };
-  const offered = unclaimed.filter((p) => !ledgerOwned(createClusterHash(p.evidence)));
-  if (offered.length === 0) return { kind: "no_action", reason: "all-owned" };
+  if (unclaimed.length === 0) return { done: { kind: "no_action", reason: "other" } };
+  const candidates = unclaimed.filter((p) => !ledgerOwned(createClusterHash(p.evidence)));
+  if (candidates.length === 0) return { done: { kind: "no_action", reason: "all-owned" } };
+  return { candidates, sameRun, ledgerOwned };
+}
+
+async function proposeInner(a: CreateProposeArgs): Promise<{ verdict: CreateVerdict; offeredCount?: number }> {
+  // week-cap: the edit loop ran first and shares the cap (`remaining - editPrsOpenedThisRun`). The handler holds the loop to
+  // the free slots minus one on an `allow_create` run, so `capLeft >= 1` here by construction; this refusal is a defensive backstop.
+  if (!(a.capLeft > 0)) return { verdict: fail("week-cap", "no-slot") };
+
+  // index-empty before any I/O: a create needs a pattern to be about.
+  if (a.patterns.length === 0) return { verdict: fail("index-empty", "no-open-patterns") };
+
+  const selected = selectOffered(a);
+  if ("done" in selected) return { verdict: selected.done, offeredCount: 0 };
+  return { verdict: await proposeOffered(a, selected), offeredCount: selected.candidates.length };
+}
+
+async function proposeOffered(a: CreateProposeArgs, selected: Extract<Selected, { candidates: PatternPage[] }>): Promise<CreateVerdict> {
+  const { candidates, sameRun, ledgerOwned } = selected;
 
   // The clone is the arm's only data source: a lost clone is its own named refusal, not a budget or slug symptom.
   if (!existsSync(a.repoRoot)) return fail("persist", "clone-missing");
@@ -411,7 +442,7 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
   }
 
   const nonce = a.nonce ?? randomBytes(8).toString("hex");
-  const prepared = prepareCreate({ patterns: offered, skills: measured.counted.records, nonce });
+  const prepared = prepareCreate({ patterns: candidates, skills: measured.counted.records, nonce });
   if (prepared.kind === "refused") return mirrored(prepared);
 
   if (!a.apiKey) return fail("model-invalid", "no-api-key");

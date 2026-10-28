@@ -1283,7 +1283,7 @@ describe("Guard 3d (#10550) -- the create steps accumulate nothing; outcomes are
   beforeEach(() => {
     expect.hasAssertions();
   });
-  const MUTATED = ["refusals.push(", "refusalDetail.push(", "clustersOpened++", "ledgerSuppressed++", "createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createArmRan ="];
+  const MUTATED = ["refusals.push(", "refusalDetail.push(", "clustersOpened++", "ledgerSuppressed++", "createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createOffered =", "createArmRan ="];
 
   it.each(["create-propose", "create-persist"])("%s: exactly one step, and no handler-scope accumulator is mutated inside its callback", (name) => {
     const src = readFileSync(SRC_PATH, "utf-8");
@@ -1296,7 +1296,7 @@ describe("Guard 3d (#10550) -- the create steps accumulate nothing; outcomes are
   it("non-vacuity: the accumulation DOES happen, in the handler body outside both callbacks", () => {
     const src = readFileSync(SRC_PATH, "utf-8");
     const inside = [...stepBodies(src, "create-propose"), ...stepBodies(src, "create-persist")].join("\n");
-    for (const m of ["createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createArmRan =", "refusals.push("]) {
+    for (const m of ["createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createOffered =", "createArmRan =", "refusals.push("]) {
       expect(src).toContain(m);
       expect(inside).not.toContain(m);
     }
@@ -1307,6 +1307,13 @@ describe("Guard 3d (#10550) -- the create steps accumulate nothing; outcomes are
     const mutated = src.replace('return runCreateProposeStep({', 'createOutcome = "refused";\n        return runCreateProposeStep({');
     expect(mutated).not.toBe(src);
     expect(stepBodies(mutated, "create-propose")[0]).toContain("createOutcome =");
+  });
+
+  it("mutation: a createOffered assignment moved INTO the create-propose callback is caught (a replay would lose the field)", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const mutated = src.replace('return runCreateProposeStep({', 'createOffered = 0;\n        return runCreateProposeStep({');
+    expect(mutated).not.toBe(src);
+    expect(stepBodies(mutated, "create-propose")[0]).toContain("createOffered =");
   });
 
   it("dispatch: a handler with no / two create-propose steps is detected by the count, never read clean", () => {
