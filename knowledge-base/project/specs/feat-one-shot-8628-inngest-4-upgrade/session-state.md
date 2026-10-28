@@ -25,3 +25,9 @@
 - cto_spawns=1 (one batched spawn, 6 items — max 2 for the pipeline)
 - Outcome: Item A OVERTURNED planner default → ship `checkpointing: false`, S9 measurement-only. Items B–F confirmed/refined (no telemetry replacement; exported-for-test seam; single error-prefix family + op token; `streaming: true`; `^4.<latest>`; no bun.lock).
 - Row 18 recategorized: `operator (challengeable)` → `operator (brand)` (closed category list).
+
+## Pipeline Progress (one-shot #8628)
+- Draft PR: #11381 (branch feat-one-shot-8628-inngest-4-upgrade, worktree .worktrees/feat-one-shot-8628-inngest-4-upgrade)
+- Done: collision checks, worktree+draft-PR, plan+deepen (subagent), scope verify, CTO ruling batch (spawn 1), plan/tasks amended for checkpointing:false, ruling gate PASS.
+- Next: soleur:work <plan file> → review → resolve → qa → compound → ship → postmerge.
+- Session bookkeeping: #8316 + #9705 closed with evidence comments; #10290 stays deferred (no probe_schema bump); #11372 owned by sibling session (PR #11374 live); apply-web-platform-infra has unrelated red runs (422 alert resource — being fixed by that session; a gated host-update and a dark web-2 boot are operator-side).
