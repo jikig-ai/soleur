@@ -86,7 +86,7 @@ case "$url" in
   *cfd_tunnel*)                    spec="${MOCK_TUNNEL:-$ACCT_AUTH}" ;;
   *access/apps*)                   spec="${MOCK_ACCESS:-$ACCT_AUTH}" ;;
   *dns_records*)                   spec="${MOCK_DNS:-$ACCT_AUTH}" ;;
-  *notification_policies*)         spec="${MOCK_NOTIF:-$ACCT_AUTH}" ;;
+  *alerting/v3/policies*) spec="${MOCK_NOTIF:-$ACCT_AUTH}" ;;
   *load_balancers/pools*)          spec="${MOCK_LB_POOLS:-$ACCT_AUTH}" ;;
   *load_balancers*)                spec="${MOCK_LB_ZONE:-$ACCT_AUTH}" ;;
   */rulesets)                      spec="${MOCK_ACCT:-$ACCT_AUTH}" ;;
@@ -278,9 +278,10 @@ DM1="$WORK/d1-curl-marker"
 MOCK_CURL_MARKER="$DM1" run "$MOCKPATH" --profile default-token --dry-run
 assert_rc 0 "D1 default-token dry-run -> exit 0"
 has "doppler secrets get CF_API_TOKEN " "D1 dry-run resolves the token secret to CF_API_TOKEN"
-for u in cfd_tunnel access/apps dns_records notification_policies "load_balancers/pools" 'zones/$ZONE/load_balancers'; do
+for u in cfd_tunnel access/apps dns_records alerting/v3/policies "load_balancers/pools" 'zones/$ZONE/load_balancers'; do
   has "$u" "D1 dry-run prints the $u row"
 done
+src_lacks 'notification_policies' "D1 source no longer contains the legacy Notifications route"
 # shellcheck disable=SC2016  # the literal, unexpanded '$TOK' is exactly the assertion
 has '"$TOK"' "D1 dry-run keeps the token var unexpanded"
 has "printf 'Authorization: Bearer %s'" "D1 dry-run models the private-fd form"
@@ -303,7 +304,7 @@ D2MARK="$WORK/d2-doppler-requests"
 D2URLS="$WORK/d2-curl-urls"
 : >"$D2MARK"
 LB403='403:{"success":false,"errors":[{"code":10000}]}'
-MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
 # RUN-PATH URL ASSEMBLY pin (design-pass P2): the mock-substring arms match on
 # path fragments, so a broken $ZONE/$ACCT placeholder substitution would sail
@@ -313,11 +314,15 @@ if [[ -s "$D2URLS" ]] \
    && grep -q "zones/zone0123456789abcdef/dns_records" "$D2URLS" \
    && grep -q "zones/zone0123456789abcdef/load_balancers" "$D2URLS" \
    && grep -q "accounts/acct9876543210fedcba/load_balancers/pools" "$D2URLS" \
+   && grep -qF -- 'https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/alerting/v3/policies' "$D2URLS" \
+   && ! grep -qF -- '/notification_policies' "$D2URLS" \
+   && ! grep -qF -- 'alerting/v3/policies?' "$D2URLS" \
    && ! grep -q '\$ZONE\|\$ACCT' "$D2URLS"; then
-  ok "D2 run-path URLs carry resolved ZONE/ACCT ids, no literal placeholder reaches curl"
+  ok "D2 run-path URLs carry resolved ids; Notifications uses the exact documented URL without the legacy route or query suffix"
 else
-  no "D2 run-path URL assembly broken (see $D2URLS)"
+  no "D2 run-path URL assembly or Notifications route is wrong (see $D2URLS)"
 fi
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+authorized \(200\)' "D2 Notifications array-shaped 200 remains authorized with both LB rows at baseline 403"
 has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 pools row prints per-row not-yet-widened (403, err 10000)"
 has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 zone-LB row prints not-yet-widened too (per-row, not aggregate)"
 has "PASS: no scope dropped" "D2 baseline still PASSes the retained ledger"
@@ -355,6 +360,29 @@ done
 lacks "PASS: no scope dropped" "D3 omits 'no scope dropped'"
 # addendum 9: the zone-control diagnostic names a probe default-token never issues.
 lacks "zone control" "D3 default-token failure prints no rulesets-only zone-control line"
+
+# --- D3n: Notifications 404 is not neutralized by the two expected baseline LB 403s. ---
+MOCK_NOTIF='404:{"success":false,"errors":[{"code":10404}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3n Notifications 404 with expected LB baseline 403s -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+denied \(404, unverified — fail-closed\)' "D3n Notification 404 remains fail-closed"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3n account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3n zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3n Notifications 404 prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D3m: a degraded Notification 200 is not authorization. ---
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":false,"result":[]}' run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3m degraded Notifications 200 -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3m degraded Notifications 200 is reported, not authorized"
+lacks "PASS: no scope dropped" "D3m degraded Notifications response prevents the retained-scope PASS"
+unset MOCK_NOTIF
+
+# --- D3w: a Notification 200 with an object result violates the account-array contract. ---
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":true,"result":{"id":"synthetic-policy-id"}}' run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3w wrong-shape Notifications 200 -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3w Notifications object result is rejected by the array contract"
+lacks "PASS: no scope dropped" "D3w wrong-shape Notifications response prevents the retained-scope PASS"
+unset MOCK_NOTIF
 
 # --- D4: fail-closed layers hold on the new endpoints ---
 MOCK_DNS='200:{"success":true,"result":null}' run "$MOCKPATH" --profile default-token
@@ -563,6 +591,8 @@ d_has 'profiles only' "$SKILLDOC" "D-doc SKILL.md re-words the posture (profiles
 # pins the doc).
 d_has 'NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it' "$SKILLDOC" "D-doc SKILL.md quotes the NOTE literal verbatim"
 d_has '--profile default-token --expect-lb-scopes' "$PLAYBOOK" "D-doc playbook carries the post-widen pointer"
+d_has 'accounts/<acct>/alerting/v3/policies' "$SKILLDOC" "D-doc SKILL.md documents the official Notifications route"
+if grep -qF -- 'accounts/<acct>/notification_policies' "$SKILLDOC"; then no "D-doc SKILL.md retains the legacy Notifications route"; else ok "D-doc SKILL.md has no legacy Notifications route"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
