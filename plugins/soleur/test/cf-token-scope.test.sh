@@ -60,20 +60,31 @@ EOF
 cat >"$MOCKBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 # Mock curl: emit "<body>\n<code>" to match the SUT's -w '\n%{http_code}'.
-# Log every absolute URL argument (not just the last one), so an extra --url
-# cannot hide behind a canonical final argument. A spec of "NONE" emits nothing
-# at all (models a total curl failure -> empty response, the no-newline path).
+# Log positional URL operands and both --url forms across schemes, so an extra
+# target cannot hide behind a canonical final argument. A spec of "NONE" emits
+# nothing at all (models a total curl failure -> empty response, the no-newline path).
 [[ -n "${MOCK_CURL_MARKER:-}" ]] && printf 'called\n' >>"$MOCK_CURL_MARKER"
-url=""
-for a in "$@"; do
-  if [[ "$a" == https://* ]]; then
-    url="$a"
-    [[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$a" >>"$MOCK_CURL_URLLOG"
-  fi
-done
-# %q keeps multi-line arg values (the -w format) on ONE log line: the argv shape
-# is what the confinement pins below read.
+# %q keeps multi-line arg values (the -w format) on ONE log line: retain the
+# original argv before URL parsing shifts the positional parameters below.
 [[ -n "${MOCK_CURL_ARGV:-}" ]] && printf '%q ' "$@" >>"$MOCK_CURL_ARGV" && printf '\n' >>"$MOCK_CURL_ARGV"
+url=""
+record_url() {
+  url="$1"
+  [[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$url" >>"$MOCK_CURL_URLLOG"
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url)
+      shift
+      [[ $# -gt 0 ]] && record_url "$1"
+      ;;
+    --url=*|--proxy=*|--preproxy=*) record_url "${1#*=}" ;;
+    --max-time|-w|-H|--noproxy) shift ;;
+    -* ) [[ "$1" == *://* ]] && record_url "$1" ;;
+    *) record_url "$1" ;;
+  esac
+  shift
+done
 # Real CF shapes: a zone .../entrypoint returns a single ruleset OBJECT; the
 # account /rulesets list returns an ARRAY. The mock must mirror this so the
 # per-scheme body-shape check is exercised against the true contract (#6892 QA).
@@ -290,10 +301,9 @@ for u in cfd_tunnel access/apps dns_records alerting/v3/policies "load_balancers
   has "$u" "D1 dry-run prints the $u row"
 done
 D1_EXPECTED_NOTIF_URL="https://api.cloudflare.com/client/v4/accounts/\$ACCT/alerting/v3/policies"
-D1_NOTIF_RECIPES=$(grep -F -- "$D1_EXPECTED_NOTIF_URL" "$OUTFILE" || true)
-D1_NOTIF_RECIPE_COUNT=$(printf '%s\n' "$D1_NOTIF_RECIPES" | grep -c '^curl ' || true)
-D1_NOTIF_URL_COUNT=$(printf '%s\n' "$D1_NOTIF_RECIPES" | grep -oF 'https://' | wc -l | tr -d '[:space:]')
-if [[ "$D1_NOTIF_RECIPE_COUNT" == "1" && "$D1_NOTIF_URL_COUNT" == "1" && "$D1_NOTIF_RECIPES" == *"$D1_EXPECTED_NOTIF_URL" ]]; then
+D1_EXPECTED_NOTIF_RECIPE="curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $D1_EXPECTED_NOTIF_URL"
+D1_NOTIF_RECIPE_COUNT=$(grep -Fc -- "$D1_EXPECTED_NOTIF_URL" "$OUTFILE" || true)
+if [[ "$D1_NOTIF_RECIPE_COUNT" == "1" ]] && grep -Fxq -- "$D1_EXPECTED_NOTIF_RECIPE" "$OUTFILE"; then
   ok "D1 dry-run prints exactly one Notifications URL with no query or suffix"
 else
   no "D1 dry-run Notifications recipe is not the exact documented URL"
@@ -335,6 +345,17 @@ if grep -Fxq -- '418' "$OUTFILE"; then
   ok "D2 mock dispatch rejects a suffixed Notifications URL"
 else
   no "D2 mock dispatch accepted a suffixed Notifications URL"
+fi
+D2_OPERAND_LOG="$WORK/d2-curl-operands"
+PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_OPERAND_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' \
+  "$MOCKBIN/curl" --url=http://example.invalid --url 'ftp://example.invalid/path' "$NOTIF_URL" >"$OUTFILE"
+if [[ "$(wc -l < "$D2_OPERAND_LOG" | tr -d '[:space:]')" == "3" ]] \
+   && grep -Fxq -- 'http://example.invalid' "$D2_OPERAND_LOG" \
+   && grep -Fxq -- 'ftp://example.invalid/path' "$D2_OPERAND_LOG" \
+   && grep -Fxq -- "$NOTIF_URL" "$D2_OPERAND_LOG"; then
+  ok "D2 mock observer records --url=, --url, and positional targets across schemes"
+else
+  no "D2 mock observer missed or altered a URL operand"
 fi
 MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
@@ -419,6 +440,15 @@ has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not 
 has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3w expected account LB 403 remains baseline-neutral"
 has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3w expected zone LB 403 remains baseline-neutral"
 lacks "PASS: no scope dropped" "D3w wrong-shape Notifications response prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D3we: an empty object is still the wrong result shape for this account list. ---
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":true,"result":{}}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3we empty-object Notifications 200 -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3we empty object is rejected by the array contract"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3we expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3we expected zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3we empty-object Notifications response prevents the retained-scope PASS"
 unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
 
 # --- D4: fail-closed layers hold on the new endpoints ---
