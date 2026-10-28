@@ -30,9 +30,9 @@
 #
 # RETIREMENT: when the #11362 tracker closes, delete this file and disposition every
 # hit of `git grep parked-green-synthesis-11362` — today that lists: the
-# `<!-- soleur:followthrough script=... -->` directive comment on issue #11362, the
-# plan (knowledge-base/project/plans/2026-10-28-content-testsuite-arc-synthesis-plan.md),
-# the tasks file (knowledge-base/project/specs/feat-one-shot-11362-arc-synthesis/tasks.md),
+# `<!-- soleur:followthrough script=... -->` directive on issue #11362's body, the
+# archived plan (knowledge-base/project/plans/archive/20261028-112214-2026-10-28-content-testsuite-arc-synthesis-plan.md),
+# the archived tasks file (knowledge-base/project/specs/archive/20261028-112214-feat-one-shot-11362-arc-synthesis/tasks.md),
 # and this file itself. The distribution file stays — it is the published wave's record.
 set -euo pipefail
 
