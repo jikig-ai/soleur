@@ -21,3 +21,10 @@
 
 ## Tally
 - agent_rounds=1 (planning child)
+
+## Rulings & Consult (pre-work)
+- technical-ruling-gate: exit 1 on first run (2 bad-ruling-shape, 1 bad-class, 7 pending rows) -> fixed in main context (R1/R2 re-shaped, D7 class->technical).
+- CTO batch spawn #1 (Rule interface): D1-D7 all ruled, no second ruling spawn needed (pipeline CTO-spawn budget: 1 of 2 used).
+- Advisor consult (D7): ONE bounded spawn (engineering/review/architecture-strategist, session-inherited model - disclosed tier substitution on OpenCode). Zero TECHNICAL findings; 19 TASTE/PROCESS dispositions recorded as the BINDING addendum "Advisor Consult Dispositions" in the plan (commit fac2734694).
+- technical-ruling-gate re-run: PASS (9 rows).
+- cto_spawns=1; agent_rounds=3 (plan child, CTO batch, consult).
