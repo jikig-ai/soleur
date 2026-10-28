@@ -706,7 +706,7 @@ describe("Step A: create-propose is ONE bounded model call, memoized, and never 
   it("backstop: a model that names an unoffered ledger-owned pattern is SUPPRESSED, not refused: existing ledger-suppressed reason", async () => {
     h.ledger.items = [ledgerOpenHash(ENTRY_HASH)];
     const r = await run(PATTERNS_CREATE());
-    expect(createPrompts()).toHaveLength(1); // pages two (edit loop) and three are offered; the owned page one is not
+    expect(createPrompts()).toHaveLength(1); // precondition: the backstop path ran (the slug check below carries the pre-filter sensitivity)
     expect(String((createPrompts()[0][0] as { messages: Array<{ content: string }> }).messages[0].content)).not.toContain(CREATE_PATTERN_SLUG);
     expect(r.last.refusals).toContain("ledger-suppressed");
     expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 1 });
