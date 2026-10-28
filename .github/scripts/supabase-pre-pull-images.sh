@@ -154,7 +154,10 @@ for img in "${IMAGES[@]}"; do
     fi
     # Throttle exhaustion increments; anything else (a deterministic answer,
     # or a failure with no ::error:: at all) resets — see ECR-DEAD LATCH.
-    if grep '^::error::' "$ecr_log" | tail -n 1 | grep -qi toomanyrequests; then
+    # No `grep -q` on a pipe: under pipefail an early match can SIGPIPE the
+    # producer and read as a miss (grep-q-pipe-guard, #9217).
+    last_err_line=$(grep '^::error::' "$ecr_log" | tail -n 1)
+    if [[ "${last_err_line,,}" == *toomanyrequests* ]]; then
       ecr_consec_throttle=$((ecr_consec_throttle + 1))
       if (( ecr_consec_throttle >= ECR_DEAD_AFTER )); then
         ecr_dead=1
