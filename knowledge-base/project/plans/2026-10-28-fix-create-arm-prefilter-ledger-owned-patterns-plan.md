@@ -11,6 +11,27 @@ brand_survival_threshold: none
 
 # fix(create-arm): drop ledger-owned patterns from the offered list before the single model call
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28
+**Sections enhanced:** Research Insights (deepen-pass verification), Phase 2 tests, Phase 3 docs, Guard Contract
+**Reviewers used:** DHH, Kieran and code-simplicity plan reviewers (plan-review), then the deepen-plan halt gates run directly
+
+### Key Improvements
+
+1. Test specs made implementable against the real helpers (typed prompt read from the `post` mock; nonexistent `repoRoot` in T2 so
+   the before-I/O ordering is actually pinned; T3 second half has the ledger own the same-run pattern so a ledger-first
+   order goes RED).
+2. The H2 RED reason corrected (only the prompt assertion is RED on unfixed source) and T4/handler-rename/ADR-tail/Guard
+   Contract trimmed to what discriminates.
+3. ADR parity hazard made explicit (no `STAGE_PHRASES` anchor in the tail; run the parity test after each ADR edit).
+
+### New Considerations Discovered
+
+- Edit-loop `ledger-suppressed` refusals are part of `sameRunHashes`, so `other` vs `all-owned` for those is decided by the
+  same-run stage; the runbook must say so.
+- A model may itself return `all-owned`; the runbook row must not describe `all-owned` as server-side only.
+
 Ref #10550 (the issue stays open; this PR never closes it).
 
 ## Overview
@@ -105,8 +126,38 @@ accept it, is UNMEASURED until a live-fire clears. This PR removes the structura
   and `checkCreate` must agree on the candidate set; this change makes them agree for the ledger fact.
 - `2026-10-20-a-threshold-that-lives-only-in-a-prompt-is-a-request-not-a-constraint.md`: do not "tell" the model; remove
   the option.
-- plan Sharp Edges: an Inngest step that keeps its return TYPE needs no shape-tolerant reader (see Memoized step output
-  below); a "byte-identical" claim must list the inputs it touches (see Byte-identical claim below).
+- plan Sharp Edges: an Inngest step that keeps its return TYPE needs no shape-tolerant reader, and a "byte-identical"
+  claim must list the inputs it touches (both stated in the Phase 1 safety notes below).
+
+### Deepen-pass verification (2026-10-28)
+
+Run directly (no agent fan-out: one 15-line function, one binding ruling; the plan-review panel of three already
+fanned out). Commands and results:
+
+- Halt gates 4.6 (User-Brand Impact present, threshold `none` with the sensitive-path scope-out bullet), 4.7 (all five
+  Observability fields present; the probe verb is `grep`; no suite-shaped regex hit; `expected_output` is the literal
+  `all-owned`), 4.8 (no PAT-shaped token), 4.11 (`python3 scripts/lint-guard-contract.py <plan>` exit 0), 4.12 (one
+  unfenced `## Scope Check`, one `Recommendation:` line): all pass. 4.9, 4.10, 4.13 and 4.55 do not trigger (no UI file,
+  no `.tf` / migration, no new autonomous task, no downtime-inducing operation).
+- Cited rule ids: none are cited, so there is nothing to verify against `AGENTS.md`. Cited PRs and issues:
+  `gh pr view 11291` OPEN with head `self-healing/auto-92ac0c4a...-2026-10-27` (the attribution "PR #11291 owns the
+  observed hash" holds: the hash is in its branch name); `gh pr view 11394` OPEN, head is this branch (own WIP PR);
+  #10552 CLOSED (do not touch). #10551, #8293, #8443, #11183, #10676, #11228 appear only in the do-not-touch list.
+- Probe can fail: `grep -o 'reason: "all-owned"' apps/web-platform/server/compound-promote-create-arm.ts` exits 1 with no
+  output on the unfixed source and prints the literal once the Phase 1 return is written exactly as
+  `{ kind: "no_action", reason: "all-owned" }` (keep the single space after `reason:`).
+- Claim "TTL edges, invalid clock and exact-hash matching are already covered": confirmed in
+  `apps/web-platform/test/server/compound-promote-ledger.test.ts` ("closed EXACTLY 60 days ago", "an unusable clock (Invalid
+  Date) fails closed ...", "the TTL constant is 60 days").
+- Claim "no consumer treats `all-owned` specially": the only readers are the marker type, the handler passthrough
+  (`createNoAction = proposed.reason`) and an enum-membership assertion in the outcome-marker test; the handler test that
+  has the MODEL return `all-owned` already pins the passthrough.
+- Hazard recorded from review: the handler's `record()` adds EVERY recorded hash (including the edit loop's own
+  `ledger-suppressed` refusals) to `runHashes`, which becomes `sameRunHashes`; an offer emptied only by those hashes ends
+  `other`, not `all-owned`. This is consistent with the ruling; the runbook text must say so (Phase 3).
+- The file header comment of `compound-promote-create-arm.ts` lists the Step A chain "week-cap -> index-empty -> same-run
+  -> clone-present -> ..."; the chain's stage ids are unchanged (the ledger drop lives inside `same-run`), so the
+  header needs at most a one-word gloss, not a new stage.
 
 ### Research Reconciliation (brief vs codebase)
 
@@ -365,262 +416,6 @@ equivalence test).
 
 **Anchor.** The tests assert behaviour, not a stored value; the ledger is read from GitHub by the handler outside this
 commit, so no stored hash or count floor is involved.
-
-## Observability` block parses a non-empty `credentials_required` | This plan does NOT declare `credentials_required` (the discoverability probe is a local, unauthenticated `grep`), so the baseline stays 87 and no bump is needed |
-
-## Scope Check
-
-### Ask Mapping
-
-| # | User ask (verbatim) | Plan item | Status |
-|---|---------------------|-----------|--------|
-| 1 | "Fix the create arm's pattern selection so a ledger-owned pattern cannot win the single model call." | Phase 1 (code) | mapped |
-| 2 | "compute the run time (`runNow`) before the filter and extend the `offered` filter to also drop `decideSuppression({entries: a.ledgerEntries, hash: h, now: runNow})`" | Phase 1 | mapped |
-| 3 | "Keep the post-call isHashSuppressed gate as a backstop." | Phase 1 (checkCreate untouched, full list) and test T5 | mapped |
-| 4 | "If the offered list is empty BECAUSE of the ledger, return {kind:\"no_action\", reason:\"all-owned\"}" | Phase 1, tests T2, T3, H3 | mapped |
-| 5 | "Leave the same-run empty case as `other`" | Phase 1 two-stage filter, existing G4 tests | mapped |
-| 6 | "Do NOT increment ledger_suppressed for pre-filtered hashes" | Phase 1, handler tests H2, H3 | mapped |
-| 7 | "Add a failing-first test: with one suppressed pattern among several, the model prompt must not offer the suppressed pattern's slug, and a different eligible pattern can reach create." | Phase 0 (T1 written and run red first), H2 | mapped |
-| 8 | "Update tests and docs that describe filter order: G4 tests ... and handler tests ..." | Phase 2 | mapped |
-| 9 | "Add a dated append-only amendment to ADR-092" | Phase 3 | mapped |
-| 10 | "update the runbook ... \"Same-run collision\" bullet and the create_no_action_reason row" | Phase 3 | mapped |
-| 11 | "Add a learning under knowledge-base/project/learnings/" | Phase 3 | mapped |
-| 12 | "if the plan declares credentials_required, bump BASELINE_DECLARED_PROBES ... or avoid declaring it" | Observability section (not declared) and AC | mapped |
-| 13 | "Leave open PR #11291 alone" | Non-goals, AC | mapped |
-| 14 | "Record the design above as a `technical` row ... run technical-ruling-gate.sh --branch and fix to exit 0" | decision-challenges.md (done, gate exit 0) | mapped |
-
-### Plan-Item Provenance
-
-| Plan item | User words cited (verbatim quote) | Verdict |
-|-----------|-----------------------------------|---------|
-| Two-stage filter (same-run first, then ledger) so same-run-empty stays `other` | "Leave the same-run empty case as `other` (existing tests pin it)" | asked |
-| A mixed case (same-run drops some, the ledger drops the rest) returns `all-owned` | "If the offered list is empty BECAUSE of the ledger" | asked (the ledger removed the last candidate; pinned by test T3) |
-| Dated tail section in ADR-092 plus a short clause in the gate list | "dated append-only amendment to ADR-092 (Step A gate list around line 318 ...)" | asked |
-| Handler tests retitled as backstop tests | "need a model naming a different pattern, or an empty offer" | asked (retitle is the minimal honest form because they still pass) |
-| Guard Contract section | — | inferred — justification: the deliverable moves an admission gate ahead of the call, plan Phase 2.12 requires it |
-| Memoized-step note | — | inferred — justification: plan Sharp Edge for Inngest step returns; one sentence, no work |
-
-### Split Assessment
-
-- Subsystems touched: 3 (apps/web-platform, knowledge-base/engineering, knowledge-base/project)
-- Planned files: 7 | Estimated changed lines: about 350 (about 15 code, about 120 tests, about 215 docs and learning)
-- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR
-
-## Architecture Decision (ADR/C4)
-
-### ADR
-
-Amend ADR-092 (extension of an existing decision, no new ordinal): the create arm's Step A `same-run` stage now also
-drops ledger-suppressed patterns before the single model call, with `all-owned` for an empty-because-of-ledger offer;
-the post-call ledger gate becomes an explicit backstop. Delivered in Phase 3 as (a) a short dated clause appended after
-the pinned phrase in the `**Gates on the new path.**` paragraph and (b) a new dated tail section
-`## Amendment — create-arm ledger pre-filter (2026-10-28, #10550)`. Both avoid repeating any
-`STAGE_PHRASES` anchor (the parity test slices the ADR from the create-only amendment heading to EOF and counts each
-anchor exactly once), and the tail section must not contain the strings `the ledger (a pattern with an existing proposal`
-or `a pattern the edit loop already recorded this run is not offered`.
-
-### C4 views
-
-No C4 change. Checked against all three model files (`knowledge-base/engineering/architecture/diagrams/model.c4`,
-`views.c4`, `spec.c4`): external human actors (the reviewer of the draft PR) unchanged; external systems (Anthropic
-messages edge, the GitHub search read that feeds the ledger at `model.c4` "cron-compound-promote reads bot-PR state
-through Octokit search", the GitHub write path) unchanged, no new call or edge; no container or data store touched; no
-actor-to-surface access relationship changes. The model-call count per run does not change (still at most one create
-call), only which candidates it sees. At work time no `.c4` file is edited, so no derived cardinality moves.
-
-### Sequencing
-
-The ADR text describes the deployed state as soon as this PR merges; nothing is deferred.
-
-## Implementation Phases
-
-### Phase 0 - Failing-first test (RED)
-
-Write T1 (below) in `apps/web-platform/test/server/compound-promote-create-arm.test.ts` first and run it against the
-unchanged source: it must FAIL at `expect(prompt).not.toContain(PATTERN.slug)` (the owned slug is offered today). Capture
-the first failure line in the work log. Then write H2 and H3 in the handler suite. H2 fails ONLY at its
-`not.toContain(CREATE_PATTERN_SLUG)` prompt assertion (the stubbed model deterministically names `zz-page-three`, so on the
-unfixed source the run still opens; H2 proves the owned pattern is absent from the prompt, it cannot reproduce "the model
-picks the owned pattern"). H3 fails (a model call happens, reason `other`, counter 1).
-
-### Phase 1 - Code (GREEN), `apps/web-platform/server/compound-promote-create-arm.ts`
-
-In `proposeInner`, replace the block that builds `offered` (currently: `sameRun` set, filter, `other` on empty) with a
-two-stage filter, and hoist `runNow`:
-
-```ts
-// A pattern the EDIT loop recorded this run owns the branch `self-healing/auto-<hash>-<date>`, and a pattern the LEDGER
-// already owns (an open or merged promotion PR, or one closed inside the TTL) would be refused at gate 5: offering either
-// spends the ONE model call on a pattern that cannot be created, and the model can pick it while every other pattern is
-// never evaluated (#10550, run 01M60XZRYG9ADVEWAY07HEQ5JK). Both are dropped here, before the call. The same predicate and the
-// same memoized clock as `isHashSuppressed` below, which stays as the backstop for a model that names an unoffered pattern.
-const runNow = new Date(a.runStartedAt);
-const sameRun = new Set(a.sameRunHashes ?? []);
-const notSameRun = a.patterns.filter((p) => !sameRun.has(createClusterHash(p.evidence)));
-if (notSameRun.length === 0) return { kind: "no_action", reason: "other" };
-const offered = notSameRun.filter((p) => !decideSuppression({ entries: a.ledgerEntries, hash: createClusterHash(p.evidence), now: runNow }));
-if (offered.length === 0) return { kind: "no_action", reason: "all-owned" };
-```
-
-and delete the later `const runNow = new Date(a.runStartedAt);` (before `checkCreate`), reusing the hoisted constant. Update
-the `sameRunHashes` doc comment on `CreateProposeArgs` and the comment above the filter so they describe the ledger drop
-and the backstop. Do not touch `checkCreate`, the handler, the marker, `CREATE_STAGE_ORDER` or `isHashSuppressed`.
-
-Placement is deliberate: both empty returns stay before `existsSync`, the open-create lookup, the clone measurement and
-the key check, so an all-owned run spends nothing and does no I/O (same as the existing same-run empty return). Also update
-the stage-chain line in the file's header comment if it lists `same-run`.
-
-Safety notes: the `create-propose` step keeps returning the same `CreateVerdict` union (`no_action` / `all-owned` is an
-existing member the handler already reads), so a run memoized under the old code resumes safely and a replay is
-deterministic because `runNow` derives from the memoized `runStartedAt`. With an EMPTY `ledgerEntries` list
-`decideSuppression` is false for every hash, so `offered` equals the old value; the scheduled, corpus, non-`true` and
-edit-loop paths never execute `proposeInner`.
-
-### Phase 2 - Tests
-
-`apps/web-platform/test/server/compound-promote-create-arm.test.ts` (inside `describe("Step A with a valid create proposal")`,
-next to the G4 tests; `HASH = createClusterHash(PATTERN.evidence)`). Hoist ONE shared `OTHER` pattern const (the inline
-`other` literal is already copied twice in the G4 tests; do not edit those two, just do not add a third-to-fifth copy):
-
-- T1 (written first, RED): "G5: a ledger-owned pattern is NOT offered; another eligible pattern reaches create".
-  `const a = createArgs({ patterns: [PATTERN, OTHER], ledgerEntries: [{ hash: HASH, state: "open" }] }, { pattern_slug: OTHER.slug })`;
-  read the prompt as `(vi.mocked(a.post!).mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[0].content`
-  (the default `post` from `createArgs` has no declared parameter, so a bare `mock.calls[0][0]` fails `tsc`); assert the
-  prompt contains `OTHER.slug` and does not contain `PATTERN.slug`; assert the verdict is `kind: "create"` with
-  `clusterHash === createClusterHash(OTHER.evidence)`.
-- T2: "G5: when the ledger owns EVERY pattern the arm ends no_action(all-owned) before any read, request or model call":
-  `ledgerEntries` owns `HASH`, `patterns: [PATTERN]`, and a NONEXISTENT `repoRoot` (as the peel test does) so the result
-  being `all-owned` rather than `persist/clone-missing` proves the return precedes `existsSync`; `toEqual({ kind: "no_action", reason: "all-owned" })`;
-  `post` and `request` never called; `reportSilentFallback` not called.
-- T3: mixed case pinned: `patterns: [PATTERN, OTHER]`, `sameRunHashes: [createClusterHash(OTHER.evidence)]`, ledger owns
-  `HASH` -> `all-owned` (the ledger removed the last candidate); and a pattern owned by BOTH the same-run set AND the ledger
-  (`patterns: [PATTERN]`, `sameRunHashes: [HASH]`, ledger owns `HASH`) -> still `other` (guards a ledger-first order; the
-  existing same-run test has an empty ledger and cannot).
-- T4: the clock. A `closed` entry whose `closed_at` is inside 60 days of `runStartedAt` filters the pattern, with
-  `runStartedAt` set far from the wall clock (the `args()` default is within days of today and would not catch a
-  `new Date()` mutation). TTL edges, an invalid clock and exact-hash matching are `decideSuppression`'s own contract and are
-  already covered in `test/server/compound-promote-ledger.test.ts`; do not re-test them here.
-- T5: backstop retained: `patterns: [PATTERN, OTHER]`, ledger owns `HASH`, model returns the default proposal naming
-  `PATTERN.slug` -> `{ kind: "suppressed", clusterHash: HASH }` (the owned slug was not offered, the model named it anyway).
-- The existing G4 tests (same-run `other`, prompt omits the owned slug, same-run backstop, unrelated hash) and the peel
-  test stay byte-identical; do not edit them.
-
-`apps/web-platform/test/server/inngest/cron-compound-promote-create-handler.test.ts` (the fixture has three pages:
-`CREATE_PATTERN_SLUG`, `page-two` with the edit loop's evidence, `zz-page-three`):
-
-- Retitle the test "a pattern already proposed (ledger: an open PR carries its cluster hash) is SUPPRESSED, not refused" to say
-  it pins the BACKSTOP and add one assertion that the create prompt does not contain `CREATE_PATTERN_SLUG` (the owned slug is
-  no longer offered) while the default reply that names it is still suppressed with `ledger_suppressed: 1`. Leave
-  "G4: a hash the LEDGER suppresses (a prior PR) is still recorded once and counted once" UNTOUCHED (its title is still
-  accurate and it still passes).
-- H2: "the ledger owns the create pattern: it is not offered, a different pattern is, and it opens".
-  `h.ledger.items` carries an open PR for `ENTRY_HASH`; `createReply = goodProposal({ pattern_slug: "zz-page-three" })`.
-  Assert `createPrompts()` has length 1 and its prompt contains `zz-page-three` and not `CREATE_PATTERN_SLUG` (the only
-  assertion that is RED on the unfixed source); `create_outcome: "opened"`, one create commit whose `branchName` contains
-  the hash of `Ls(6, 7)`; `ledger_suppressed: 0`; `refusals` does not contain `ledger-suppressed`; `(r.last.refusal_detail ?? [])`
-  has no entry for `ENTRY_HASH`.
-- H3 (the only test that reads the operator-visible marker end to end; drop first if scope must shrink): "the ledger owns
-  the ONLY pattern: no create model call, no_action(all-owned), counter 0". Remove `page-two` and `zz-page-three` with the
-  same `git rm` + `reset --hard HEAD~1` fixture pattern the existing G4 "only pattern" test uses; assert `createPrompts()`
-  length 0, `names` contains `create-propose` and not `create-persist`, `create_no_action_reason: "all-owned"`,
-  `ledger_suppressed: 0`, `refusals` without `ledger-suppressed`, no `create_refusal_class`.
-
-Run: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/compound-promote-create-arm.test.ts test/server/inngest/cron-compound-promote-create-handler.test.ts test/server/compound-promote-create-parity.test.ts test/server/compound-promote-runbook-parity.test.ts`
-and `./node_modules/.bin/tsc --noEmit`.
-
-### Phase 3 - Docs and learning
-
-- ADR-092 (`knowledge-base/engineering/architecture/decisions/ADR-092-additive-only-auto-edit-boundary-and-hard-rule-body-weakening-gate.md`):
-  in the `**Gates on the new path.**` paragraph, immediately after the pinned phrase's parenthetical
-  "(nothing offerable is a clean no-action)", insert ", and, amended 2026-10-28 (#10550), nor is a pattern the ledger already
-  owns (the same predicate and run clock as the ledger gate below; nothing offerable because of the ledger is a clean
-  `all-owned` no-action)" (exact text chosen at work time; the pinned prefix is untouched). Append a SHORT tail section
-  `## Amendment — create-arm ledger pre-filter (2026-10-28, #10550)` (dated, append-only; 5 to 8 lines): the decision (the
-  ledger drop happens before the single call, two-stage so same-run-empty stays `other` and ledger-empty is `all-owned`;
-  `checkCreate` keeps the full list so the ledger gate is a backstop), `ledger_suppressed` semantics (counts clusters
-  dropped: edit-loop refusals and backstop hits, never pre-filtered offers), no marker change, and the residual (what the
-  model does with the remaining patterns is unmeasured until a live-fire). The evidence (run id, counts) lives in the
-  learning. Constraint: the tail must contain NO `STAGE_PHRASES` anchor from `compound-promote-create-parity.test.ts` (not
-  only the two phrases named earlier: also `the API key`, `slug format`, `schema validation`, `the clone being present`,
-  `one open create at a time`, `then ONE model call with no retry.` and the rest); run
-  `compound-promote-create-parity.test.ts` after EACH ADR edit, not only at the end.
-- Runbook `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`: rewrite the "Same-run collision"
-  bullet (2 to 3 sentences) to "Same-run collision and ledger pre-filter": both facts drop a pattern from the offered list
-  before the one call; "same-run" is every hash the edit loop recorded (opened, attempted, OR refused, including the edit
-  loop's own `ledger-suppressed` refusals), and an all-same-run offer ends `other`; an offer emptied by the ledger ends
-  `all-owned`; neither increments `ledger_suppressed`; a model naming an unoffered pattern is the backstop (a ledger hit is
-  recorded and counted once). Update the `create_no_action_reason` row: `all-owned` = every offerable pattern is owned by
-  the ledger (server-side, no model call; a model may also return `all-owned` itself); `other` = the model declined with
-  `other`, every pattern was owned by the edit loop this run, or the backstop caught a named owned pattern. Update the
-  `create_outcome` row sentence "or the pattern is already proposed (`ledger-suppressed` in `refusals[]`,
-  `ledger_suppressed` counted)" so it applies to a backstop hit only. The `ledger_suppressed` row is not edited (the bullet
-  states it once).
-- Learning `knowledge-base/project/learnings/2026-10-28-a-filter-that-runs-after-the-single-decision-cannot-protect-the-decision.md`
-  (one short file): Problem (run `01M60XZRYG9ADVEWAY07HEQ5JK`), Solution, Key Insight (a gate placed after a one-shot
-  decision is a backstop, not protection; apply every fact knowable before the decision to the candidate set before the call;
-  test: with N candidates and one owned, assert the owned one is absent from the prompt and another can win). Add a
-  Session Errors list only if the work phase has real ones.
-
-## Files to Edit
-
-- `apps/web-platform/server/compound-promote-create-arm.ts`
-- `apps/web-platform/test/server/compound-promote-create-arm.test.ts`
-- `apps/web-platform/test/server/inngest/cron-compound-promote-create-handler.test.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-092-additive-only-auto-edit-boundary-and-hard-rule-body-weakening-gate.md`
-- `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`
-
-## Files to Create
-
-- `knowledge-base/project/learnings/2026-10-28-a-filter-that-runs-after-the-single-decision-cannot-protect-the-decision.md`
-- `knowledge-base/project/specs/feat-one-shot-10550-create-arm-prefilter-owned/tasks.md` (and the already-written
-  `decision-challenges.md`)
-
-## Open Code-Review Overlap
-
-None. `gh issue list --label code-review --state open` (200 issues) was searched for each planned code, test, ADR and
-runbook path; no body names any of them.
-
-## Guard Contract
-
-### Guard 1 - create-arm offered-list ledger pre-filter
-
-**Property.** No pattern whose cluster hash `decideSuppression` would suppress with the run's memoized clock is ever
-included in the candidate list sent to the single create model call, and a run whose candidates are all ledger-owned makes
-no model call.
-
-**Assembly.** The candidate set is the single `offered` array in `proposeInner` that feeds `prepareCreate({ patterns: offered ... })`;
-there is exactly one create model call site (`post(...)` in `proposeInner`) and exactly one list passed to it. The ledger
-predicate has three consumers that must agree: the pre-filter (new), the `isHashSuppressed` backstop passed to
-`checkCreate` (kept, full `a.patterns` list), and Step B's `isHashSuppressed: () => false` (consults nothing because Step A
-already did; unchanged). The inputs are `a.ledgerEntries` and `a.runStartedAt` only. The assembly is the chokepoint
-(`offered`), not a list of today's patterns: any new code path that builds a prompt from `a.patterns` instead of `offered`
-would bypass it, which is why T1 asserts on the prompt the model actually receives.
-
-**Mutation matrix.**
-
-| # | Mutation (edit to the system under test) | Must go RED | Which test |
-|---|---|---|---|
-| 1 | Delete the ledger filter line (`offered = notSameRun`) | the owned slug is in the prompt and the model can name it | T1, H2 |
-| 2 | Hoisted `runNow` replaced by `new Date()` (wall clock) in the filter | a closed entry near the 60-day boundary flips on the wrong side | T4 (runStartedAt far from the wall clock) |
-| 3 | Pass `offered` instead of `a.patterns` to `checkCreate` | a model naming an unoffered owned pattern becomes `model-invalid`, not `suppressed` | T5 |
-| 4 | Remove the post-call `isHashSuppressed` ledger term | a model naming an unoffered owned pattern would be created | T5 |
-| 5 | Return `reason: "other"` for the ledger-empty case | wrong reason | T2, H3 |
-| 6 | Return `reason: "all-owned"` for the same-run-empty case | existing G4 same-run test and the peel test | existing G4, peel |
-| 7 | Increment the handler's `ledger_suppressed` for pre-filtered hashes | counter becomes 1 | H2, H3 |
-| 8 | Run the ledger filter FIRST and the same-run empty check after | a pattern owned by both returns `all-owned` instead of `other` | T3 second half |
-| 9 | Move the empty returns after `existsSync` / `findOpenCreatePr` | I/O happens on an all-owned run | T2 (`request` never called) |
-| 10 | Filter only the first ledger entry per hash (stop at first member) | a hash with an old closed entry first and a fresh open entry second is offered | T4 second-member row |
-
-**Harness rows.** Suite edits that MUST go RED: (a) delete the `expect(prompt).not.toContain(PATTERN.slug)` line in T1 and
-confirm T1 then passes against the UNFIXED source (proves the assertion is the discriminator; the work log records both
-runs); (b) make `createArgs` ignore `ledgerEntries` in T1 and confirm T1 goes RED on the fixed source. Must-PASS inputs that
-are not the canonical: a `closed` entry older than 60 days (not owned, so the pattern IS offered), an unrelated hash in
-`ledgerEntries`, and an empty ledger.
-
-**Anchor.** The tests compare behaviour, not a stored hash; the ledger itself is read from GitHub by the handler and is
-outside this commit. The mutation that weakens the property (matrix row 1) cannot pass T1/H2 without changing the test
-assertions, which a reviewer sees in the same diff.
 
 ## Observability
 
