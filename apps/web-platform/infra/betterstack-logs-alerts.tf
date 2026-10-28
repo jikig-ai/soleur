@@ -331,7 +331,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
-  # hourly, so a failing probe keeps a row inside the 3 h window and a fixed one clears in about 4 to 5 h.
+  # hourly, so a failing probe keeps a row inside the 1.5 h window and a fixed one clears in about 2.5 to 3 h.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
@@ -370,22 +370,25 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
   name           = "soleur-inngest-luks-key-probe-fail-prd"
 
-  # Presence-only, so safe before the probe is delivered (no rows, value 0). A 3 h window (a 25 h
-  # one would hold an incident open for a day): while any fail_ row is inside it the count stays
-  # above 0, which is the hysteresis against the next hourly re-probe re-opening an incident. The
-  # incident clears about 4 to 5 h after the LAST failing row (the window, the wait for the next hourly
-  # check, then recovery_period), which is not proof of recovery: only a token=ok row is. It pages within
-  # about 1 h of the first failing row.
-  # check_period 3600, not 300 or 900: Better Stack refused both over 10800 with 422 "too resource
-  # intensive" (the #11260 and #11384 merge applies), so the limit is not a plain period ratio. 3600 is
-  # what the three accepted alerts with this query shape run (claude_cost_daily_burn, claude_cost_capture_dark
-  # and luks_monitor_host_timer_dark: scalar aggregate, dt BETWEEN, checked hourly), over windows 8x or more
-  # longer than this one.
+  # Presence-only, so safe before the probe is delivered (no rows, value 0). A 1.5 h window (5400 s; a
+  # 25 h one would hold an incident open for a day): a failing probe re-runs no sooner than every 3600 s,
+  # so while it fails a row is always inside the window and the count stays above 0, which is the
+  # hysteresis against the next re-probe re-opening an incident. The incident clears about 2.5 to 3 h
+  # after the LAST failing row (the window, the wait for the next check, then recovery_period), which is
+  # not proof of recovery: only a token=ok row is. It pages within about 15 min of the first failing row.
+  # query_period 5400, not 10800: Better Stack refused this alert THREE times with 422 "too resource
+  # intensive ... reduce the data range" (#11260, #11384, #11404 merge applies) at check 300, 900 and 3600
+  # over 10800, so the lever is the data range, not the check period. 5400 is the window of
+  # inngest_luks_wrong_volume, the one accepted alert that also parses JSON on every row (position over
+  # JSONExtractString); every accepted window above 5400 (86400, 97200) sits behind a cheap `raw LIKE`
+  # prefilter, which this SQL must not use (see the SQL RULES above). If 5400 is refused too, stop
+  # guessing: have the owner run a create-and-delete probe, or move the marker match to a prefilter plus
+  # the position anchor.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
-  check_period        = 3600
-  query_period        = 10800
+  check_period        = 900
+  query_period        = 5400
   confirmation_period = 0
   recovery_period     = 3600
   on_missing_data     = "treat_as_zero"
