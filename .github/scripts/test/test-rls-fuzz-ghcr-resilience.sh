@@ -9,7 +9,7 @@
 # silent removal of the login/retry wiring would never reproduce in review.
 # Two arms: (a) wiring — greps the workflow for the authenticated-pull path
 # (packages: read, pinned docker/login-action, ordering, no `logout:` key,
-# manifest-inspect positive control, helper invocation, timeout 30) and for
+# manifest-inspect positive control, helper invocation, timeout 45) and for
 # the helper's load-bearing tokens; (b) behavior — PATH-stubbed fake commands
 # classify retry/no-retry/exhaustion against the helper's OWN contract
 # (toomanyrequests-signature-only, rc!=2 exclusion, fresh per-attempt log,
@@ -259,8 +259,8 @@ if grep -qE '^[[:space:]]+contents: read([[:space:]#]|$)' <<<"$JOB_BLOCK"; then 
 else fail "wiring:job-contents-read" "rls-fuzz job block lacks a contents: read key"; fi
 if grep -qE '^[[:space:]]+packages: read([[:space:]#]|$)' <<<"$JOB_BLOCK"; then pass "wiring:job-packages-read"
 else fail "wiring:job-packages-read" "rls-fuzz job block lacks a packages: read key"; fi
-if grep -qE '^[[:space:]]+timeout-minutes: 30([[:space:]#]|$)' <<<"$JOB_BLOCK"; then pass "wiring:timeout-30"
-else fail "wiring:timeout-30" "rls-fuzz job block lacks timeout-minutes: 30"; fi
+if grep -qE '^[[:space:]]+timeout-minutes: 45([[:space:]#]|$)' <<<"$JOB_BLOCK"; then pass "wiring:timeout-45"
+else fail "wiring:timeout-45" "rls-fuzz job block lacks timeout-minutes: 45"; fi
 
 # The workflow-level permissions block stays contents: read only (the
 # packages grant is job-scoped).
@@ -423,6 +423,22 @@ else fail "wiring:prepull-cache" "pre-pull lacks the cache restore/save path"; f
 if [[ -f "$PREPULL" ]] && grep -qF 'docker image inspect' "$PREPULL"; then pass "wiring:prepull-inspect"
 else fail "wiring:prepull-inspect" "pre-pull lacks the cached-image skip"; fi
 
+# #11386 latch + partial-save wiring: the ECR-dead latch (env-tunable
+# threshold, once-only ::warning::, per-image skip marker), the save built
+# from the inspect-verified present subset, and the fast compressor.
+if [[ -f "$PREPULL" ]] && grep -qF 'SUPABASE_ECR_DEAD_AFTER' "$PREPULL"; then pass "wiring:prepull-latch-env"
+else fail "wiring:prepull-latch-env" "pre-pull lacks the SUPABASE_ECR_DEAD_AFTER latch threshold"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'ecr skipped (latch)' "$PREPULL"; then pass "wiring:prepull-latch-skip"
+else fail "wiring:prepull-latch-skip" "pre-pull lacks the latch-skip marker"; fi
+if [[ -f "$PREPULL" ]] && grep -qF '::warning::ecr latch' "$PREPULL"; then pass "wiring:prepull-latch-warn"
+else fail "wiring:prepull-latch-warn" "pre-pull lacks the once-only latch ::warning::"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'present_refs' "$PREPULL"; then pass "wiring:prepull-partial-save"
+else fail "wiring:prepull-partial-save" "pre-pull does not save the inspect-verified present subset"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'pigz -1' "$PREPULL" && grep -qF 'gzip -1' "$PREPULL"; then pass "wiring:prepull-fastcompress"
+else fail "wiring:prepull-fastcompress" "pre-pull lacks the pigz -1 / gzip -1 fast tar write"; fi
+if [[ -f "$PREPULL" ]] && grep -qF '| gzip >' "$PREPULL"; then fail "wiring:prepull-no-default-gzip" "pre-pull still pipes to bare gzip (default level)"
+else pass "wiring:prepull-no-default-gzip"; fi
+
 LN_PREPULL=$(grep -nE '^[[:space:]]+run:.*supabase-pre-pull-images\.sh' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 LN_CLI=$(grep -nE '^[[:space:]]+- name: Install Supabase CLI' "$WORKFLOW" | head -1 | cut -d: -f1 || true)
 if [[ -n "$LN_PREPULL" ]]; then pass "wiring:prepull-step-present"
@@ -561,8 +577,13 @@ mkdir -p "$FAKE_BIN_DIR"
 chmod +x "$FAKE_BIN_DIR/supabase"
 
 # docker stub: logs `<verb> <argv>` lines to $STUB_CALLS; DOCKER_MODE picks
-# the behavior arm
-# (ok | throttle-once | always | ecr-fail | cached | half-cached | load-fail).
+# the behavior arm (ok | throttle-once | always | ecr-fail | cached |
+# half-cached | load-fail | ecr-throttle-ghcr-ok | ecr-flap | partial-fail).
+# Successful `pull`s append `pulled <ref>` records (distinct from `pull `
+# lines so pull_count is unaffected) and `tag` records `pulled <dst>` — the
+# pull-tracked `image inspect` default arm answers present iff the queried
+# ref was pulled/tagged, which is what lets the partial-save rows assert the
+# save argv against the INSPECTED subset rather than the intended set.
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'echo "$*" >> "${STUB_CALLS:?unset}"' \
@@ -572,14 +593,22 @@ printf '%s\n' \
   '  image) case "${DOCKER_MODE:-ok}" in' \
   '    cached) exit 0 ;;' \
   '    half-cached) [[ "$*" == *img-a:* || "$*" == *img-b:* || "$*" == *img-c:* ]] && exit 0 || exit 1 ;;' \
-  '    *) exit 1 ;;' \
+  '    *) grep -qF "pulled ${3:-}" "$STUB_CALLS" && exit 0 || exit 1 ;;' \
   '  esac ;;' \
   '  load) [[ "${DOCKER_MODE:-ok}" == "load-fail" ]] && exit 1 || exit 0 ;;' \
   '  pull) case "${DOCKER_MODE:-ok}" in' \
   '    throttle-once) if [[ "$n" == "1" ]]; then echo "toomanyrequests: retry-after: 1s" >&2; exit 1; fi ;;' \
   '    always) echo "toomanyrequests: retry-after: 1s" >&2; exit 1 ;;' \
   '    ecr-fail) [[ "$*" == *public.ecr.aws* ]] && { echo "name unknown" >&2; exit 1; } ;;' \
-  '  esac ;;' \
+  '    ecr-throttle-ghcr-ok) [[ "$*" == *public.ecr.aws* ]] && { echo "toomanyrequests: retry-after: 1s" >&2; exit 1; } ;;' \
+  '    ecr-flap) if [[ "$*" == *public.ecr.aws* ]]; then' \
+  '      if [[ "$*" == *img-b:* ]]; then echo "name unknown" >&2; exit 1;' \
+  '      elif [[ "$*" == *img-a:* || "$*" == *img-c:* || "$*" == *img-d:* ]]; then echo "toomanyrequests: retry-after: 1s" >&2; exit 1; fi' \
+  '    fi ;;' \
+  '    partial-fail) [[ "$*" == *img-a:* ]] && { echo "toomanyrequests: retry-after: 1s" >&2; exit 1; } ;;' \
+  '  esac' \
+  '  echo "pulled ${2:-}" >> "$STUB_CALLS" ;;' \
+  '  tag) echo "pulled ${3:-}" >> "$STUB_CALLS" ;;' \
   'esac' \
   'exit 0' \
   > "$BIN/docker"
@@ -608,8 +637,8 @@ tag_count() { grep -c '^tag ' "$STUB_CALLS" || true; }
 # onto the ghcr ref: 12 pulls + 12 tags, rc 0.
 run_prepull pp-ok "$FAKE_BIN_DIR:$BIN" ok
 assert_rc "c:happy-rc" 0
-if [[ "$(pull_count)" == 12 ]]; then pass "c:happy-pulls" else fail "c:happy-pulls" "pulls=$(pull_count) want 12"; fi
-if [[ "$(tag_count)" == 12 ]]; then pass "c:happy-tags" else fail "c:happy-tags" "tags=$(tag_count) want 12"; fi
+if [[ "$(pull_count)" == 12 ]]; then pass "c:happy-pulls"; else fail "c:happy-pulls" "pulls=$(pull_count) want 12"; fi
+if [[ "$(tag_count)" == 12 ]]; then pass "c:happy-tags"; else fail "c:happy-tags" "tags=$(tag_count) want 12"; fi
 assert_out_has "c:happy-echo" 'pre-pull: 12 images'
 # Serial order preserved: pull argv lines hit the ECR mirror; the tag lands
 # each on the ghcr ref the CLI will look for.
@@ -633,7 +662,7 @@ if grep -qF 'orioledb' "$STUB_CALLS"; then fail "c:orioledb-excluded" "non-versi
 # Throttle on the first pull retried by the helper: N+1 pulls, rc 0, warning.
 run_prepull pp-retry "$FAKE_BIN_DIR:$BIN" throttle-once
 assert_rc "c:retry-rc" 0
-if [[ "$(pull_count)" == 13 ]]; then pass "c:retry-pulls" else fail "c:retry-pulls" "pulls=$(pull_count) want 13"; fi
+if [[ "$(pull_count)" == 13 ]]; then pass "c:retry-pulls"; else fail "c:retry-pulls" "pulls=$(pull_count) want 13"; fi
 assert_out_re "c:retry-warn" '^::warning::.*toomanyrequests'
 
 # ECR miss falls back to ghcr per image: deterministic failure skips retry.
@@ -643,7 +672,7 @@ if [[ "$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS" || true)" == 12 ]]; the
 else fail "c:ecrfail-ecr" "ecr tries=$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS") want 12"; fi
 if [[ "$(grep -c '^pull ghcr\.io/' "$STUB_CALLS" || true)" == 12 ]]; then pass "c:ecrfail-ghcr"
 else fail "c:ecrfail-ghcr" "ghcr fallbacks=$(grep -c '^pull ghcr\.io/' "$STUB_CALLS") want 12"; fi
-if [[ "$(tag_count)" == 0 ]]; then pass "c:ecrfail-no-tags" else fail "c:ecrfail-no-tags" "tagged without an ecr image"; fi
+if [[ "$(tag_count)" == 0 ]]; then pass "c:ecrfail-no-tags"; else fail "c:ecrfail-no-tags" "tagged without an ecr image"; fi
 assert_out_has "c:ecrfail-echo" 'via ghcr'
 
 # Cache write: after pulls the set is saved for the cache action's post-job.
@@ -657,14 +686,14 @@ assert_out_has "c:save-echo" 'pre-pull: wrote'
 LAST_CACHE="$TMP/pp-hit-cache"; seed_cache "$LAST_CACHE"
 run_prepull pp-hit "$FAKE_BIN_DIR:$BIN" cached
 assert_rc "c:hit-rc" 0
-if [[ "$(pull_count)" == 0 ]]; then pass "c:hit-no-pulls" else fail "c:hit-no-pulls" "pulls=$(pull_count) want 0"; fi
+if [[ "$(pull_count)" == 0 ]]; then pass "c:hit-no-pulls"; else fail "c:hit-no-pulls" "pulls=$(pull_count) want 0"; fi
 assert_out_has "c:hit-echo" 'cache hit'
 
 # Partial cache: restored images skip pulls; the rest pull.
 LAST_CACHE="$TMP/pp-partial-cache"; seed_cache "$LAST_CACHE"
 run_prepull pp-partial "$FAKE_BIN_DIR:$BIN" half-cached
 assert_rc "c:partial-rc" 0
-if [[ "$(pull_count)" == 9 ]]; then pass "c:partial-pulls" else fail "c:partial-pulls" "pulls=$(pull_count) want 9"; fi
+if [[ "$(pull_count)" == 9 ]]; then pass "c:partial-pulls"; else fail "c:partial-pulls" "pulls=$(pull_count) want 9"; fi
 assert_out_re "c:partial-echo" 'cache restore gave 3/12'
 assert_out_has "c:partial-skip" 'already cached'
 
@@ -672,7 +701,7 @@ assert_out_has "c:partial-skip" 'already cached'
 LAST_CACHE="$TMP/pp-loadfail-cache"; seed_cache "$LAST_CACHE"
 run_prepull pp-loadfail "$FAKE_BIN_DIR:$BIN" load-fail
 assert_rc "c:loadfail-rc" 0
-if [[ "$(pull_count)" == 12 ]]; then pass "c:loadfail-pulls" else fail "c:loadfail-pulls" "pulls=$(pull_count) want 12"; fi
+if [[ "$(pull_count)" == 12 ]]; then pass "c:loadfail-pulls"; else fail "c:loadfail-pulls" "pulls=$(pull_count) want 12"; fi
 assert_out_has "c:loadfail-echo" 'no usable image cache'
 
 # Extraction floor: 3 refs < 8 fails loudly, docker never invoked.
@@ -686,12 +715,65 @@ assert_rc "c:floor-rc" 2
 assert_calls "c:floor-no-pulls" 0
 assert_out_re "c:floor-error" '^::error::.*expected >= 8'
 
-# Exhausted pull propagates: first image throttles 3x on ECR then 3x on the
-# ghcr fallback, helper exits 1, set -e stops the loop — no further pulls.
+# Exhausted pulls are best-effort (#11386): the loop walks ALL images —
+# img-a/img-b burn 3 ECR + 3 ghcr each (the latch trips after img-b's ECR
+# exhaustion), the other 10 refs skip ECR and burn 3 ghcr each: 42 pulls,
+# rc 1, every ref named unfetched, and NOTHING is present so no save runs.
 run_prepull pp-exhaust "$FAKE_BIN_DIR:$BIN" always
 assert_rc "c:exhaust-rc" 1
-if [[ "$(pull_count)" == 6 ]]; then pass "c:exhaust-pulls" else fail "c:exhaust-pulls" "pulls=$(pull_count) want 6"; fi
+if [[ "$(pull_count)" == 42 ]]; then pass "c:exhaust-pulls"; else fail "c:exhaust-pulls" "pulls=$(pull_count) want 42"; fi
 assert_out_re "c:exhaust-error" '^::error::.*toomanyrequests'
+assert_out_has "c:exhaust-unfetched" 'unpulled'
+assert_out_has "c:exhaust-unfetched-set" 'img-j'
+if grep -qE '^save ' "$STUB_CALLS"; then fail "c:exhaust-no-save" "docker save attempted with zero present refs"; else pass "c:exhaust-no-save"; fi
+
+# ECR-dead latch (#11386): img-a/img-b exhaust the ECR retry budget with a
+# throttle tail each (3+3 pulls); the latch then trips ONCE and the other 10
+# refs go straight to ghcr — ECR pulls == 6, ghcr pulls == 12, rc 0, exactly
+# one latch ::warning::, and the skip marker prints for each remaining image.
+run_prepull pp-latch "$FAKE_BIN_DIR:$BIN" ecr-throttle-ghcr-ok
+assert_rc "c:latch-rc" 0
+if [[ "$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS" || true)" == 6 ]]; then pass "c:latch-ecr-pulls"
+else fail "c:latch-ecr-pulls" "ecr pulls=$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS") want 6 — latch did not cap the dead tax"; fi
+if [[ "$(grep -c '^pull ghcr\.io/' "$STUB_CALLS" || true)" == 12 ]]; then pass "c:latch-ghcr-pulls"
+else fail "c:latch-ghcr-pulls" "ghcr pulls=$(grep -c '^pull ghcr\.io/' "$STUB_CALLS") want 12"; fi
+assert_out_count "c:latch-warn-once" '::warning::ecr latch' 1
+assert_out_count "c:latch-skip-lines" 'ecr skipped (latch)' 10
+assert_out_has "c:latch-saves" 'pre-pull: wrote'
+
+# Latch reset on a deterministic answer (refs pull in `sort -u` order —
+# edge, img-a..img-j, old): edge serves ECR cleanly (pull 1), img-a
+# throttles (counter 1, pulls 3), img-b answers `name unknown` (counter
+# RESETS to 0 — a deterministic reply is evidence the registry RESPONDS,
+# against saturation; pull 1), img-c/img-d throttle again (counter 1 then 2
+# → latch; pulls 3+3). ECR pulls == 11; img-e..img-j + old skip (7 images).
+# If a deterministic failure were COUNTED as throttle the latch would trip
+# at img-b (pulls == 5); if it merely preserved the count, at img-c (== 8).
+run_prepull pp-flap "$FAKE_BIN_DIR:$BIN" ecr-flap
+assert_rc "c:flap-rc" 0
+if [[ "$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS" || true)" == 11 ]]; then pass "c:flap-ecr-pulls"
+else fail "c:flap-ecr-pulls" "ecr pulls=$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS") want 11 — deterministic answer did not reset the streak"; fi
+if [[ "$(grep -c '^pull ghcr\.io/' "$STUB_CALLS" || true)" == 11 ]]; then pass "c:flap-ghcr-pulls"
+else fail "c:flap-ghcr-pulls" "ghcr pulls=$(grep -c '^pull ghcr\.io/' "$STUB_CALLS") want 11"; fi
+assert_out_count "c:flap-warn-once" '::warning::ecr latch' 1
+assert_out_count "c:flap-skip-lines" 'ecr skipped (latch)' 7
+
+# Partial save on a failed pull: img-a throttles on BOTH registries; the
+# other 11 pull via ECR. rc 1 with the unfetched ref named, and exactly one
+# `docker save` whose argv carries every PRESENT ref and never the absent
+# one — the partial tar still warms the next run via the post-action save.
+run_prepull pp-partial-fail "$FAKE_BIN_DIR:$BIN" partial-fail
+assert_rc "c:partialfail-rc" 1
+assert_out_re "c:partialfail-error" '^::error::.*img-a'
+SAVE_LINES=$(grep -cE '^save ' "$STUB_CALLS" || true)
+if [[ "$SAVE_LINES" == 1 ]]; then pass "c:partialfail-save-once"
+else fail "c:partialfail-save-once" "docker save invocations=$SAVE_LINES, want 1"; fi
+SAVE_ARGV=$(grep -E '^save ' "$STUB_CALLS" | head -1 || true)
+if grep -qF 'ghcr.io/supabase/img-b:1.2.0' <<<"$SAVE_ARGV" && \
+   grep -qF 'ghcr.io/supabase/img-j:1.10.0' <<<"$SAVE_ARGV"; then pass "c:partialfail-save-present"
+else fail "c:partialfail-save-present" "save argv missing present refs — $SAVE_ARGV"; fi
+if grep -qF 'img-a' <<<"$SAVE_ARGV"; then fail "c:partialfail-save-absent" "save argv carries the unfetched img-a ref — docker save would die on it"
+else pass "c:partialfail-save-absent"; fi
 
 # Missing CLI fails loudly instead of extracting nothing.
 NO_BIN_DIR="$TMP/no-bin"
@@ -706,7 +788,7 @@ assert_out_re "c:nobin-error" '^::error::.*not on PATH'
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=138
+MIN_ASSERTIONS=163
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
