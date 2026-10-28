@@ -14,7 +14,7 @@ Detail level: MINIMAL. Docs only; one append to one file. PR #11414 (draft). Wor
 
 ## Overview
 
-Append one dated addendum, `## Addendum - 2026-10-28 (#9927)`, at the end of `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` (currently ends with the `Addendum - 2026-10-26 (#9927)` block, last line the "Superseded (route only)" paragraph). It records, with evidence class and date, exactly what a re-read of two public Hetzner sources showed on 2026-10-28 and what stays unmeasured, and names three owner-side follow-ups as not started. Append-only: no edit to the 2026-10-23 addendum, any dated cell, the Status block, or the residuals. No new ordinal; status stays `accepted`.
+Append one dated addendum, `## Addendum - 2026-10-28 (#9927)`, at the end of `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` (before this append it ended with the `Addendum - 2026-10-26 (#9927)` block, last line the "Superseded (route only)" paragraph). It records, with evidence class and date, exactly what a re-read of two public Hetzner sources showed on 2026-10-28 and what stays unmeasured, and names three owner-side follow-ups as not started. Append-only: no edit to the 2026-10-23 addendum, any dated cell, the Status block, or the residuals. No new ordinal; status stays `accepted`.
 
 ## Enhancement Summary
 
@@ -93,6 +93,7 @@ Owner-side follow-ups, none started and none decided here: (1) a read-only conso
 
 - `knowledge-base/project/plans/2026-10-28-docs-adr-282-hetzner-project-deletion-addendum-plan.md` (this file)
 - `knowledge-base/project/specs/feat-one-shot-9927-adr-282-hetzner-project-deletion-note/tasks.md`
+- `knowledge-base/project/specs/feat-one-shot-9927-adr-282-hetzner-project-deletion-note/session-state.md` (pipeline state, written by `soleur:one-shot`)
 
 ## Open Code-Review Overlap
 
@@ -138,7 +139,7 @@ No cross-domain implications detected: internal documentation append. Legal expo
 ### Split Assessment
 
 - Subsystems touched: 1 - knowledge-base (ADR, plan, spec)
-- Planned files: 3 | Estimated changed lines: about 35 in the ADR plus plan and tasks
+- Planned files: 4 | Estimated changed lines: about 35 in the ADR plus plan and tasks
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
