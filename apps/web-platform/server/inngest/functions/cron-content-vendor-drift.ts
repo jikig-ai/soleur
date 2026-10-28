@@ -2689,12 +2689,10 @@ export const cronContentVendorDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "17 11 * * 1" },
+      { event: "cron/content-vendor-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "17 11 * * 1" },
-    { event: "cron/content-vendor-drift.manual-trigger" },
-  ],
-  cronContentVendorDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronContentVendorDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

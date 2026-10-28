@@ -2,8 +2,9 @@
 //
 // Mounts the Inngest substrate at /api/inngest. ADR-030 invariant I4:
 // signature verification required at startup — `signingKey` is sourced
-// from INNGEST_SIGNING_KEY and the SDK enforces HMAC validation on every
-// inbound POST in cloud mode (INNGEST_DEV unset or =0).
+// from INNGEST_SIGNING_KEY on the client (inngest@4 moved it off serve())
+// and the SDK enforces HMAC validation on every inbound POST in cloud mode
+// (INNGEST_DEV unset or =0).
 //
 // Phase 2 ships with `functions: []`. Phase 3 will fill `cfoOnPaymentFailed`.
 // Once functions are registered, the signature gate (validateSignature in
@@ -18,7 +19,6 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
-import { detachFromConsumerCancel, streamRequestInfo } from "@/server/inngest/stream-detach";
 import { agentOnSpawnRequested, agentOnSpawnSettle } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
@@ -91,16 +91,6 @@ import { oneshotGdprGate50dEval } from "@/server/inngest/functions/oneshot-gdpr-
 import { oneshotRecheck4217Calibration } from "@/server/inngest/functions/oneshot-recheck-4217-calibration";
 import { workspaceReconcileOnPush } from "@/server/inngest/functions/workspace-reconcile-on-push";
 
-const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
-// next build page-data collection loads this module without runtime env.
-// Skip the throw during build; runtime process restart on Hetzner re-fires
-// the validation against Doppler-injected env. Mirrors the bypass in
-// server/inngest/client.ts.
-const IS_BUILD_PHASE = process.env.NEXT_PHASE === "phase-production-build";
-if (!IS_BUILD_PHASE && !SIGNING_KEY) {
-  throw new Error("INNGEST_SIGNING_KEY missing at /api/inngest load");
-}
-
 // #5159: pin the serve URL the SDK reports to the self-hosted inngest-server at
 // registration. Without this, the SDK infers the host from the inbound request's
 // Host/proto — so the loopback re-register PUT (http://127.0.0.1:3000, fired by
@@ -110,7 +100,8 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
 // confirmed live on 2026-06-11: a manual `PUT https://app.soleur.ai/api/inngest`
 // returns `modified:true` and crons fire, while the loopback PUT returns 200 with
 // `inngest_crons:{}` (surfaced by #5178's deploy-status diagnostic). Pinning
-// serveHost makes EVERY registration path — container boot, the server's
+// serveOrigin (serveHost in v3 — renamed in inngest@4) makes EVERY registration
+// path — container boot, the server's
 // --poll-interval sync, AND the in-loop loopback PUT — report the canonical public
 // URL, so a standalone inngest restart self-recovers (the #5160 design intent that
 // the loopback PUT alone could not achieve).
@@ -206,24 +197,25 @@ const handlers = serve({
     oneshotRecheck4217Calibration,
     workspaceReconcileOnPush,
   ],
-  signingKey: SIGNING_KEY ?? "build-phase-placeholder",
   // #8611 / ADR-243: the self-hosted server calls steps at SERVE_HOST, which is Cloudflare-proxied
   // with a ~100s origin timeout. A step that held its request longer got a 524, `retries` re-ran it
   // while the first Claude child was still alive, and the run failed anyway. Streaming answers 201
   // at once and writes a heartbeat byte every 3 s, so the proxy never times out; the real status
-  // (including a signature 401) travels in the streamed JSON envelope. Evidence:
-  // knowledge-base/project/specs/archive/20260923-200917-feat-anthropic-spend-reduction/streaming-spike.md.
-  streaming: "force",
+  // (including a signature 401) travels in the streamed JSON envelope. inngest@4 replaces the v3
+  // "allow"/"force" enum with a boolean — `true` streams wherever the handler supports it, which
+  // is what "force" selected for this Next.js route (evidence:
+  // knowledge-base/project/specs/archive/20260923-200917-feat-anthropic-spend-reduction/streaming-spike.md
+  // + the v4 re-run in specs/feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md).
+  streaming: true,
   // #5159 (see SERVE_HOST note above): pin the registered serve URL to the
   // canonical public origin so a loopback re-register PUT plans crons. Omitted
   // when NEXT_PUBLIC_APP_URL is unset (dev/build) → SDK infers from the request.
-  ...(SERVE_HOST ? { serveHost: SERVE_HOST, servePath: "/api/inngest" } : {}),
+  ...(SERVE_HOST ? { serveOrigin: SERVE_HOST, servePath: "/api/inngest" } : {}),
 });
 
-export const { GET, PUT } = handlers;
-
-// POST carries the streamed step responses. detachFromConsumerCancel keeps the SDK stream from ever
-// seeing a client disconnect: on inngest 3.54.2 that would leak a heartbeat timer whose throws exit
-// the process via server/crash-handlers.ts (ADR-243).
-export const POST = async (...args: Parameters<typeof handlers.POST>): Promise<Response> =>
-  detachFromConsumerCancel(await handlers.POST(...args), streamRequestInfo(args[0]));
+// POST carries the streamed step responses. Inngest 3.54.2 required the
+// stream-detach wrapper here (ADR-243 — a dropped consumer left a heartbeat
+// interval throwing uncaughtExceptions); inngest@4 fixes createStream
+// upstream (`cancel()` clears the interval, a `closed` flag gates enqueue),
+// so POST is the bare SDK handler again.
+export const { GET, POST, PUT } = handlers;

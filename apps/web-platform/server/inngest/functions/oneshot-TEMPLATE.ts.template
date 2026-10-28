@@ -102,9 +102,9 @@ export const oneshotFILL = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
-  },
-  { event: "oneshot/FILL-name.fire" }, // FILL
-  oneshotFILLHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+    triggers: { event: "oneshot/FILL-name.fire" },
+  }, // FILL
+  oneshotFILLHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 
 // === ALSO DO — the 4 integration points (the function alone does nothing) ===

@@ -660,6 +660,23 @@ export function renderCommunityPublication(
 const CONTAINED_FD_BASE = "/proc/self/fd";
 const containedHasProcFd = process.platform === "linux";
 
+/**
+ * @internal test seam — optional overrides threaded through the three
+ * contained-write helpers (same precedent as `createContainedFile`'s
+ * `beforeOpen?`). `hasProcFd` forces the path-resolution arm a non-Linux
+ * runtime would take; `fdBase` points the pinned arm at a different base so a
+ * test can simulate a Linux runtime with procfs absent (every pinned open
+ * must then fail LOUD with ENOENT, never silently unpinned). A
+ * `process.platform` module-mock would be load-order fragile — the const
+ * evaluates at import — so the seam is a parameter (CTO ruling 2026-10-28).
+ */
+export type ContainedFdSeam = { hasProcFd?: boolean; fdBase?: string };
+
+/** Resolve the seam to the effective pair. */
+function containedFdResolve(seam?: ContainedFdSeam): { has: boolean; base: string } {
+  return { has: seam?.hasProcFd ?? containedHasProcFd, base: seam?.fdBase ?? CONTAINED_FD_BASE };
+}
+
 /** `O_DIRECTORY`/`O_NOFOLLOW` can be undefined on non-POSIX platforms, so they
  * are coalesced to 0 rather than computing NaN flags. */
 async function containedFlagConstants(): Promise<{ dir: number; leaf: number }> {
@@ -693,7 +710,7 @@ async function openDirOrThrow(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP" || code === "ENOTDIR") {
-      throw new Error(`writeDigestFileContained: ${what} is not a plain directory`);
+      throw new Error(`writeDigestFileContained: op=openDir: ${what} is not a plain directory`);
     }
     throw err;
   }
@@ -725,21 +742,23 @@ function containedCleanSegment(segment: string): boolean {
 export async function openContainedDir(
   spawnCwd: string,
   dirSegments: string[],
+  seam?: ContainedFdSeam,
 ): Promise<ContainedDir> {
   const { mkdir } = await import("node:fs/promises");
   const { join } = await import("node:path");
   const dirFlags = (await containedFlagConstants()).dir;
+  const fd = containedFdResolve(seam);
 
   if (dirSegments.some((s) => !containedCleanSegment(s))) {
-    throw new Error("writeDigestFileContained: dirSegments must be clean basenames");
+    throw new Error("writeDigestFileContained: op=openDir: dirSegments must be clean basenames");
   }
 
   let dirFh = await openDirOrThrow(spawnCwd, dirFlags, "spawnCwd");
   let current = spawnCwd;
   try {
     for (const segment of dirSegments) {
-      const childPath = containedHasProcFd
-        ? `${CONTAINED_FD_BASE}/${dirFh.fd}/${segment}`
+      const childPath = fd.has
+        ? `${fd.base}/${dirFh.fd}/${segment}`
         : join(current, segment);
       let child: import("node:fs/promises").FileHandle;
       try {
@@ -782,18 +801,20 @@ export async function createContainedFile(
   dir: ContainedDir,
   leaf: string,
   beforeOpen?: () => Promise<void>,
+  seam?: ContainedFdSeam,
 ): Promise<import("node:fs/promises").FileHandle> {
   const { open, unlink } = await import("node:fs/promises");
   const { join } = await import("node:path");
   const leafFlags = (await containedFlagConstants()).leaf;
+  const fd = containedFdResolve(seam);
 
   if (!containedCleanSegment(leaf)) {
-    throw new Error("writeDigestFileContained: leaf must be a clean basename");
+    throw new Error("writeDigestFileContained: op=createLeaf: leaf must be a clean basename");
   }
 
   const capturedFd = dir.fh.fd;
-  const leafPath = containedHasProcFd
-    ? `${CONTAINED_FD_BASE}/${capturedFd}/${leaf}`
+  const leafPath = fd.has
+    ? `${fd.base}/${capturedFd}/${leaf}`
     : join(dir.dirPath, leaf);
 
   // The pinned path embeds the fd number captured above; if the handle was
@@ -802,7 +823,7 @@ export async function createContainedFile(
   // before EVERY use of the pinned path, unlink included.
   const fdIsLive = (): boolean => dir.fh.fd === capturedFd && dir.fh.fd >= 0;
   if (!fdIsLive()) {
-    throw new Error("writeDigestFileContained: pinned dir handle closed during write");
+    throw new Error("writeDigestFileContained: op=createLeaf: pinned dir handle closed during write");
   }
   try {
     // unlink removes a symlink itself, never the file it points at.
@@ -810,20 +831,20 @@ export async function createContainedFile(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EISDIR" || code === "EPERM") {
-      throw new Error("writeDigestFileContained: target is a directory");
+      throw new Error("writeDigestFileContained: op=createLeaf: target is a directory");
     }
     if (code !== "ENOENT") throw err;
   }
   if (beforeOpen) await beforeOpen();
   if (!fdIsLive()) {
-    throw new Error("writeDigestFileContained: pinned dir handle closed during write");
+    throw new Error("writeDigestFileContained: op=createLeaf: pinned dir handle closed during write");
   }
   try {
     return await open(leafPath, leafFlags, 0o644);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EEXIST" || code === "ELOOP") {
-      throw new Error("writeDigestFileContained: target appeared during write (race refused)");
+      throw new Error("writeDigestFileContained: op=createLeaf: target appeared during write (race refused)");
     }
     throw err;
   }
@@ -833,6 +854,7 @@ export async function writeDigestFileContained(
   spawnCwd: string,
   relPath: string,
   text: string,
+  seam?: ContainedFdSeam,
 ): Promise<void> {
   const { isAbsolute } = await import("node:path");
 
@@ -842,20 +864,31 @@ export async function writeDigestFileContained(
     isAbsolute(relPath) ||
     segments.some((s) => !containedCleanSegment(s))
   ) {
-    throw new Error("writeDigestFileContained: relPath must be a clean relative path");
+    throw new Error("writeDigestFileContained: op=splitPath: relPath must be a clean relative path");
   }
 
   const dirSegments = segments.slice(0, -1);
-  const dir = await openContainedDir(spawnCwd, dirSegments);
+  const dir = await openContainedDir(spawnCwd, dirSegments, seam);
   try {
-    const fh = await createContainedFile(dir, segments[segments.length - 1]);
+    const fh = await createContainedFile(dir, segments[segments.length - 1], undefined, seam);
+    // Track-and-rethrow: a close() error is masked ONLY while a writeFile
+    // error is already in flight (the write error is the diagnostically
+    // valuable one). A successful write + failed close must surface the
+    // close error — a lone writeback failure must not go silent.
+    let writeErr: unknown;
+    let sawWriteErr = false;
     try {
       await fh.writeFile(text);
-    } finally {
-      // Masked is better than replaced: a close() throw must not mask a
-      // writeFile failure, which is the diagnostically valuable error.
-      await fh.close().catch(() => {});
+    } catch (e) {
+      writeErr = e;
+      sawWriteErr = true;
     }
+    try {
+      await fh.close();
+    } catch (closeErr) {
+      if (!sawWriteErr) throw closeErr;
+    }
+    if (sawWriteErr) throw writeErr;
   } finally {
     await dir.fh.close().catch(() => {});
   }

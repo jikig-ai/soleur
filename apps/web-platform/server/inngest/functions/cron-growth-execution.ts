@@ -680,10 +680,10 @@ export const cronGrowthExecution = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 10 1,15 * *" },
+      { event: "cron/growth-execution.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 10 1,15 * *" },
-    { event: "cron/growth-execution.manual-trigger" },
-  ],
-  cronGrowthExecutionHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronGrowthExecutionHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

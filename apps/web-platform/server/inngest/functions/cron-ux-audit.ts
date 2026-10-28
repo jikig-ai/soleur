@@ -528,10 +528,10 @@ export const cronUxAudit = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 9 1 * *" },
+      { event: "cron/ux-audit.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 9 1 * *" },
-    { event: "cron/ux-audit.manual-trigger" },
-  ],
-  cronUxAuditHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronUxAuditHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

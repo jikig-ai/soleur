@@ -22,7 +22,7 @@ import { ProxyLogger } from "inngest";
 
 import {
   applyBoundLogger,
-  boundLoggerMiddleware,
+  BoundLoggerMiddleware,
 } from "@/server/inngest/middleware/bound-logger";
 
 /** Mirrors inngest's real ProxyLogger: `enabled` as an initialized instance
@@ -401,21 +401,22 @@ describe("applyBoundLogger — hostile logger shapes must not throw", () => {
 });
 
 // Nothing above exercises the middleware itself — every case calls
-// applyBoundLogger directly. This drives the real hook chain, so a wiring
-// regression (e.g. reading ctx.logger from onFunctionRun, where it is
-// undefined) reds here instead of silently unbinding all 65 functions.
-describe("boundLoggerMiddleware — the hook wiring", () => {
+// applyBoundLogger directly. This drives the real v4 hook
+// (transformFunctionInput on a fresh per-request instance), so a wiring
+// regression — reading `logger` off a ctx that does not carry it, or
+// returning a ctx that strips the run fields — reds here instead of
+// silently unbinding all 65 functions.
+describe("BoundLoggerMiddleware — the hook wiring", () => {
   function runTransformInput(ctx: Record<string, unknown>) {
-    const init = boundLoggerMiddleware.init as unknown as () => {
-      onFunctionRun: () => {
-        transformInput: (a: { ctx: Record<string, unknown> }) =>
-          { ctx?: { logger?: unknown } } | undefined;
-      };
-    };
-    return init().onFunctionRun().transformInput({ ctx });
+    const mw = new BoundLoggerMiddleware({ client: {} as never });
+    const arg = { ctx, fn: { id: () => "fn-x" }, steps: {} };
+    const out = mw.transformFunctionInput(arg as never) as
+      | { ctx?: { logger?: unknown } }
+      | undefined;
+    return out;
   }
 
-  it("patches ctx.logger with a bound facade taken from transformInput's ctx", () => {
+  it("patches ctx.logger with a bound facade taken from transformFunctionInput's ctx", () => {
     const sink: unknown[][] = [];
     const real = new ProxyLogger({
       info: (...a: unknown[]) => {
@@ -427,17 +428,22 @@ describe("boundLoggerMiddleware — the hook wiring", () => {
     });
     real.enable();
 
-    const patch = runTransformInput({ logger: real, runId: "r1" });
-    const logger = patch?.ctx?.logger as BoundLogger;
+    const out = runTransformInput({ logger: real, runId: "r1" });
+    const logger = out?.ctx?.logger as BoundLogger;
     expect(logger).toBeDefined();
     expect(logger).not.toBe(real);
+    // The rest of the ctx rides along — the returned ctx REPLACES the run
+    // ctx, so a bare { logger } would strip event/runId/step from handlers.
+    expect((out?.ctx as Record<string, unknown>).runId).toBe("r1");
 
     const detached = logger.info;
     expect(() => detached("through-middleware")).not.toThrow();
     expect(sink).toContainEqual(["through-middleware"]);
   });
 
-  it("returns no ctx patch when the run ctx carries no logger", () => {
-    expect(runTransformInput({ runId: "r1" })).toBeUndefined();
+  it("returns the arg unmodified when the run ctx carries no logger", () => {
+    const out = runTransformInput({ runId: "r1" });
+    expect((out?.ctx as Record<string, unknown>).logger).toBeUndefined();
+    expect((out?.ctx as Record<string, unknown>).runId).toBe("r1");
   });
 });

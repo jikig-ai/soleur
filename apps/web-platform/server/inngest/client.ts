@@ -16,9 +16,9 @@
 
 import { Inngest } from "inngest";
 
-import { sentryCorrelationMiddleware } from "@/server/inngest/middleware/sentry-correlation";
-import { runLogMiddleware } from "@/server/inngest/middleware/run-log";
-import { boundLoggerMiddleware } from "@/server/inngest/middleware/bound-logger";
+import { SentryCorrelationMiddleware } from "@/server/inngest/middleware/sentry-correlation";
+import { RunLogMiddleware } from "@/server/inngest/middleware/run-log";
+import { BoundLoggerMiddleware } from "@/server/inngest/middleware/bound-logger";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 const EVENT_KEY = process.env.INNGEST_EVENT_KEY;
@@ -63,10 +63,22 @@ if (BASE_URL) {
 export const inngest = new Inngest({
   id: "soleur-runtime",
   eventKey: EVENT_KEY ?? "build-phase-placeholder",
+  // inngest@4: signingKey moved off serve() onto the client; the module-load
+  // guard above still throws on a missing key before this line is reached.
+  signingKey: SIGNING_KEY ?? "build-phase-placeholder",
+  // inngest@4 turns checkpointing ON by default — an eager multi-step
+  // execution model with SDK→server POST /v1/checkpoint* calls, a different
+  // transport shape than the one ADR-243's streaming decision and the unit
+  // harness model (one new step per request). Self-hosted support on the
+  // pinned v1.45.1 server is upstream-docs-only (unverified), so this PR
+  // pins it OFF — spike row S9 measures both arms; flip-on is a future
+  // one-flag decision (CTO ruling 2026-10-28,
+  // specs/feat-one-shot-8628-inngest-4-upgrade/decision-challenges.md).
+  checkpointing: false,
   // sentry-correlation middleware tags every Sentry event captured during
   // a function run with `inngest.run_id` + `inngest.fn_id` and emits per-
   // step breadcrumbs. Final-result errors are captured to Sentry's issues
-  // stream via the middleware's `transformOutput` hook. Applied once
+  // stream via the middleware's `onRunError` hook (v4; was `transformOutput`). Applied once
   // here so every existing AND future Inngest function is covered without
   // per-handler instrumentation.
   // routine-run-log middleware (#5345) writes one terminal row per
@@ -82,9 +94,9 @@ export const inngest = new Inngest({
   // regardless (Inngest.js:673), so wiring one would not fix the receiver loss,
   // and it would turn INFO ctx-logs into JSON that vector.toml then drops.
   middleware: [
-    sentryCorrelationMiddleware,
-    runLogMiddleware,
-    boundLoggerMiddleware,
+    SentryCorrelationMiddleware,
+    RunLogMiddleware,
+    BoundLoggerMiddleware,
   ],
   ...(BASE_URL ? { baseUrl: BASE_URL } : {}),
 });

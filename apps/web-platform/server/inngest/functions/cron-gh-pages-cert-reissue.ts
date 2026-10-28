@@ -2032,9 +2032,7 @@ export const cronGhPagesCertReissue = inngest.createFunction(
     onFailure: cronGhPagesCertReissueOnFailure as unknown as Parameters<
       typeof inngest.createFunction
     >[0]["onFailure"],
+    triggers: [{ event: "cron/gh-pages-cert-reissue.manual-trigger" }],
   },
-  [{ event: "cron/gh-pages-cert-reissue.manual-trigger" }],
-  cronGhPagesCertReissueHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronGhPagesCertReissueHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

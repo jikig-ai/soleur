@@ -694,7 +694,7 @@ export const emailOnReceived = inngest.createFunction(
     // solo-operator volume (Inngest QUEUES, not drops, beyond the limit);
     // the daily LLM ceiling above caps total spend.
     throttle: { limit: 60, period: "1h" },
+    triggers: { event: EMAIL_INBOUND_RECEIVED_EVENT },
   },
-  { event: EMAIL_INBOUND_RECEIVED_EVENT },
-  emailOnReceivedHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  emailOnReceivedHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
