@@ -365,6 +365,11 @@ jobs:
           cp apps/web-platform/infra/cat-inngest-cutover-state.sh "$BUILD_DIR/cat-inngest-cutover-state.sh"
           cp apps/web-platform/infra/inngest-cutover-flip.service "$BUILD_DIR/inngest-cutover-flip.service"
           cp apps/web-platform/infra/inngest-cutover-flip.timer "$BUILD_DIR/inngest-cutover-flip.timer"
+          # Trace retention (#5150). cloud-init docker-cps these from the image root
+          # because they are words of STAGED. The host bootstrap installs them.
+          cp apps/web-platform/infra/inngest-trace-retention.sh "$BUILD_DIR/inngest-trace-retention.sh"
+          cp apps/web-platform/infra/inngest-trace-retention.sql "$BUILD_DIR/inngest-trace-retention.sql"
+          cp apps/web-platform/infra/inngest-trace-retention.sqlite.sql "$BUILD_DIR/inngest-trace-retention.sqlite.sql"
 
           # Conditional Vector env block — empty pin values produce empty
           # ENV lines, which the bootstrap script's `${VECTOR_CLI_VERSION:-}`
@@ -386,7 +391,10 @@ jobs:
           COPY cat-inngest-cutover-state.sh /cat-inngest-cutover-state.sh
           COPY inngest-cutover-flip.service /inngest-cutover-flip.service
           COPY inngest-cutover-flip.timer /inngest-cutover-flip.timer
-          RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh
+          COPY inngest-trace-retention.sh /inngest-trace-retention.sh
+          COPY inngest-trace-retention.sql /inngest-trace-retention.sql
+          COPY inngest-trace-retention.sqlite.sql /inngest-trace-retention.sqlite.sql
+          RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-trace-retention.sh
           # The bootstrap script reads /tmp/vector.toml + /tmp/inngest-redis.* +
           # /tmp/inngest-cutover-flip.* (flip trio + guard, #6178) at install time;
           # stage the OCI-bundled assets there at entrypoint.
