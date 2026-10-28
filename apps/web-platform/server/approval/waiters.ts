@@ -51,6 +51,11 @@ export function wakeWaiter(approvalId: string, status: WaitStatus): boolean {
   return true;
 }
 
+/** True while an approval waiter is registered under this id (used to refuse a cross-kind `review_gate_response`). */
+export function hasWaiter(approvalId: string): boolean {
+  return waiters.has(approvalId);
+}
+
 export function unregisterWaiter(approvalId: string): void {
   waiters.delete(approvalId);
 }

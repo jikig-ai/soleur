@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   parseWSMessage,
+  wsMessageTypeLiterals,
   wsMessageSchema,
   interactivePromptPayloadSchema,
   interactivePromptResponseSchema,
@@ -491,5 +492,52 @@ describe("wsMessageSchema: bash_approval payload size caps (CWE-400)", () => {
       payload: { command: "x".repeat(16_384), cwd: "/", gated: false },
     });
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("approval frames (#4672)", () => {
+  const ID = "00000000-0000-4000-8000-000000000006";
+  const view = {
+    tool: "mcp__soleur_platform__email_send",
+    title: "t",
+    verbPhrase: "v",
+    fields: [{ label: "To", value: "maria@example.test", kind: "text" }],
+    consequence: "c",
+    singleUse: "s",
+    approveLabel: "Approve",
+    denyLabel: "Deny",
+    danger: false,
+  };
+  const request = {
+    type: "approval_request",
+    approvalId: ID,
+    conversationId: "c",
+    toolName: view.tool,
+    view,
+    status: "pending",
+    expiresAt: "2030-01-01T00:00:00.000Z",
+    requestCount: 1,
+    viewerRole: "owner",
+  };
+
+  test("approval_request round-trips and rejects forged or unknown fields", () => {
+    expect(parseWSMessage(request).ok).toBe(true);
+    expect(parseWSMessage({ ...request, options: ["Approve"] }).ok).toBe(false);
+    expect(parseWSMessage({ ...request, status: "consumed" }).ok).toBe(false); // only live statuses are cards
+    expect(parseWSMessage({ ...request, view: { ...view, approveLabel: "Approve all" } }).ok).toBe(false);
+    expect(parseWSMessage({ ...request, view: { ...view, extra: 1 } }).ok).toBe(false);
+  });
+
+  test("approval_status round-trips; outcome is a closed enum", () => {
+    const st = { type: "approval_status", approvalId: ID, conversationId: "c", status: "approved" };
+    expect(parseWSMessage(st).ok).toBe(true);
+    expect(parseWSMessage({ ...st, outcome: "conflict" }).ok).toBe(true);
+    expect(parseWSMessage({ ...st, outcome: "whatever" }).ok).toBe(false);
+    expect(parseWSMessage({ ...st, status: "maybe" }).ok).toBe(false);
+  });
+
+  test("the discriminator literal set admits the three approval frames", () => {
+    const types = wsMessageTypeLiterals();
+    for (const t of ["approval_request", "approval_status", "approval_decide"]) expect(types.has(t)).toBe(true);
   });
 });

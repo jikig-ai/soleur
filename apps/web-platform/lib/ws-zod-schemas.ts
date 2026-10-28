@@ -258,6 +258,13 @@ const autonomousDisclosureResponseSchema = z.strictObject({
   gateId: z.string(),
   selection: z.string(),
 });
+// #4672 — the Owner's decision on a durable approval request (client→server). Closed `decision` enum; `userId` is not a
+// wire field (strictObject rejects forgery), and the id is a UUID so a free-form review gate id fails at the boundary.
+const approvalDecideSchema = z.strictObject({
+  type: z.literal("approval_decide"),
+  approvalId: z.uuid(),
+  decision: z.enum(["approve", "deny"]),
+});
 // `abort_turn` (feat-abort-conversation-web PR1, plan §1.2): user-initiated
 // Stop. `userId` is intentionally NOT a wire field — strictObject + the
 // minimum-length conversationId reject forged userIds and empty IDs at the
@@ -391,6 +398,38 @@ const autonomousDisclosureSchema = z.strictObject({
 const autonomousPostureSchema = z.strictObject({
   type: z.literal("autonomous_posture"),
   autonomous: z.boolean(),
+});
+// #4672 — durable approval request card and status (server→client). Not a buffered family: no `seq`.
+const approvalCardViewSchema = z.strictObject({
+  tool: z.string(),
+  title: z.string(),
+  verbPhrase: z.string(),
+  fields: z.array(
+    z.strictObject({ label: z.string(), value: z.string(), kind: z.enum(["text", "code", "block"]) }),
+  ),
+  consequence: z.string(),
+  singleUse: z.string(),
+  approveLabel: z.literal("Approve"),
+  denyLabel: z.literal("Deny"),
+  danger: z.boolean(),
+});
+const approvalRequestSchema = z.strictObject({
+  type: z.literal("approval_request"),
+  approvalId: z.uuid(),
+  conversationId: z.string(),
+  toolName: z.string(),
+  view: approvalCardViewSchema,
+  status: z.enum(["pending", "approved"]),
+  expiresAt: z.string(),
+  requestCount: z.number().int().nonnegative(),
+  viewerRole: z.enum(["owner", "member"]),
+});
+const approvalStatusSchema = z.strictObject({
+  type: z.literal("approval_status"),
+  approvalId: z.uuid(),
+  conversationId: z.string(),
+  status: z.enum(["pending", "approved", "rejected", "expired", "consumed"]),
+  outcome: z.enum(["decided", "unchanged", "conflict", "expired", "closed"]).optional(),
 });
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
@@ -638,6 +677,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   closeConversationSchema,
   reviewGateResponseSchema,
   autonomousDisclosureResponseSchema,
+  approvalDecideSchema,
   abortTurnSchema,
   streamSchema,
   streamStartSchema,
@@ -652,6 +692,8 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   reviewGateSchema,
   autonomousDisclosureSchema,
   autonomousPostureSchema,
+  approvalRequestSchema,
+  approvalStatusSchema,
   sessionStartedSchema,
   sessionResumedSchema,
   sessionEndedSchema,

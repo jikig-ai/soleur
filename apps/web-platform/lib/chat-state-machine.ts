@@ -8,6 +8,9 @@ import type {
   SubagentCompleteStatus,
   WorkflowEndStatus,
   ContextResetReason,
+  ApprovalCardView,
+  ApprovalDecideOutcomeWire,
+  ApprovalWireStatus,
 } from "./types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
@@ -196,6 +199,23 @@ interface ChatAutonomousDisclosureMessage extends ChatMessageBase {
   selectedOption?: string;
 }
 
+/** #4672 — a durable approval request card. Built server-side from the canonical action; resolved by an Owner decision
+ *  that arrives as `approval_status`, never by `review_gate_response`. Upserted by `approvalId` so a reattach re-send is
+ *  idempotent. `viewerRole: "member"` is the read-only waiting card. */
+export interface ChatApprovalMessage extends ChatMessageBase {
+  type: "approval_request";
+  approvalId: string;
+  conversationId: string;
+  toolName: string;
+  view: ApprovalCardView;
+  status: ApprovalWireStatus;
+  expiresAt: string;
+  requestCount: number;
+  viewerRole: "owner" | "member";
+  /** Set on the reply to this socket's own `approval_decide` (conflict / expired / closed explain a refusal). */
+  decideOutcome?: ApprovalDecideOutcomeWire;
+}
+
 /** Stage 4 (#2886): subagent group bubble — parent leader's assessment +
  *  nested child sub-bubbles, one per spawned subagent. */
 export interface ChatSubagentGroupMessage extends ChatMessageBase {
@@ -304,6 +324,7 @@ export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
   | ChatAutonomousDisclosureMessage
+  | ChatApprovalMessage
   | ChatSubagentGroupMessage
   | ChatInteractivePromptMessage
   | ChatWorkflowEndedMessage
@@ -689,6 +710,9 @@ export type StreamEvent = Extract<
   | { type: "task_completed" }
   | { type: "review_gate" }
   | { type: "autonomous_disclosure" }
+  // #4672 — durable approval request card and its status updates (live-only, not stream-replayed).
+  | { type: "approval_request" }
+  | { type: "approval_status" }
   | { type: "subagent_spawn" }
   | { type: "subagent_complete" }
   | { type: "workflow_started" }
@@ -1535,6 +1559,71 @@ export function applyStreamEvent(
         spawnIndex: priorSpawnIndex,
         timerAction: { type: "clear_all" },
       };
+    }
+
+    case "approval_request": {
+      // #4672 — upsert by approval id: the server re-sends live cards on every session attach, so a second frame for
+      // the same request updates the card in place and never stacks a duplicate.
+      const cardId = `approval-${event.approvalId}`;
+      const existingIdx = prev.findIndex((m) => m.id === cardId);
+      const card: ChatApprovalMessage = {
+        id: cardId,
+        role: "assistant",
+        content: event.view.title,
+        type: "approval_request",
+        approvalId: event.approvalId,
+        conversationId: event.conversationId,
+        toolName: event.toolName,
+        view: event.view,
+        status: event.status,
+        expiresAt: event.expiresAt,
+        requestCount: event.requestCount,
+        viewerRole: event.viewerRole,
+      };
+      if (existingIdx !== -1) {
+        const old = prev[existingIdx];
+        // A terminal status already folded in (rejected / expired / consumed) is never walked back by a stale re-send.
+        const keepStatus = old.type === "approval_request" && old.status !== "pending" && old.status !== "approved";
+        const updated = prev.slice();
+        updated[existingIdx] = keepStatus && old.type === "approval_request" ? { ...card, status: old.status } : card;
+        return {
+          messages: updated,
+          activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+        };
+      }
+      // A NEW card means the agent is blocked on the Owner: settle any mid-turn bubble before clearing activeStreams
+      // (the stuck "Working" badge root cause, #2843), exactly like the review_gate arm.
+      const updated = prev.slice();
+      for (const id of activeStreams.values()) {
+        const idx = updated.findIndex((m) => m.id === id);
+        if (idx === -1) continue;
+        const m = updated[idx];
+        if (m.type === "text" && (m.state === "thinking" || m.state === "tool_use" || m.state === "streaming")) {
+          updated[idx] = { ...m, state: "done", interrupted: false, ...foldCurrentStep(m) };
+        }
+      }
+      return {
+        messages: [...updated, card],
+        activeStreams: new Map(),
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+        timerAction: { type: "clear_all" },
+      };
+    }
+
+    case "approval_status": {
+      // #4672 — fold a status change (and the outcome of this socket's own decide) into the card. Unknown id: no-op.
+      const cardId = `approval-${event.approvalId}`;
+      const idx = prev.findIndex((m) => m.id === cardId);
+      const old = idx === -1 ? undefined : prev[idx];
+      if (!old || old.type !== "approval_request") {
+        return { messages: prev, activeStreams, workflow: priorWorkflow, spawnIndex: priorSpawnIndex };
+      }
+      const updated = prev.slice();
+      updated[idx] = { ...old, status: event.status, decideOutcome: event.outcome ?? old.decideOutcome };
+      return { messages: updated, activeStreams, workflow: priorWorkflow, spawnIndex: priorSpawnIndex };
     }
 
     // -----------------------------------------------------------------

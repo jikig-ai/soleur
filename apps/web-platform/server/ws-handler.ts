@@ -23,6 +23,11 @@ import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
+import { decideApproval } from "./approval/decide";
+import { reemitLiveApprovals } from "./approval/reattach";
+import { logApprovalMarker, reportApprovalOp } from "./approval/ops";
+import { hasWaiter as hasApprovalWaiter, wakeWaiter as wakeApprovalWaiter } from "./approval/waiters";
+import type { ApprovalRpcClient } from "./approval/service";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
 import { assertLegacyConversationEngineBinding, assertLegacyEngineBinding } from "./agent-engine-route-guard";
 
@@ -1502,6 +1507,8 @@ const TC_RECHECK_MESSAGE_TYPES = new Set([
   "chat",
   "interactive_prompt_response",
   "review_gate_response",
+  // #4672 — the Owner's decision is a consent-bearing action like a review-gate answer.
+  "approval_decide",
 ]);
 
 /**
@@ -1724,6 +1731,9 @@ async function handleResumeStream(
       return;
     }
 
+    // #4672 — approval cards are not in the replay ring; re-send the live ones from the table.
+    reattachApprovals(userId, verifiedConvId);
+
     const { frames, status } = streamReplayBuffer.replayFrom(verifiedConvId, ackSeq);
     if (status === "incomplete") {
       // Expected/informational (cap too low or buffer reclaimed) — warn, not error.
@@ -1782,6 +1792,26 @@ function replayBufferedDebugEvents(
       sendToClient(userId, { ...frame, replayed: true });
     }
   }
+}
+
+/**
+ * #4672 — re-send the conversation's live approval cards on attach (resume_session, context_path resume,
+ * resume_stream). Fire-and-forget: a failure is one Sentry op inside `reemitLiveApprovals` and must never delay or
+ * fail the attach. Dormant (zero reads) while the approval flag is off.
+ */
+function reattachApprovals(userId: string, conversationId: string): void {
+  void reemitLiveApprovals({
+    userId,
+    conversationId,
+    send: sendToClient,
+    client: () => supabase as unknown as ApprovalRpcClient,
+    viewerRole: async (workspaceId) => {
+      const tenant = await tenantFor(userId, "approval-reattach");
+      if (!tenant) return "member";
+      const { data, error } = await tenant.rpc("is_workspace_owner", { p_workspace_id: workspaceId, p_user_id: userId });
+      return !error && data === true ? "owner" : "member";
+    },
+  }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1971,6 +2001,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // leave-and-return rebind (buffered frames only; no-op when the
             // ring is gone).
             replayBufferedDebugEvents(userId, row.id);
+            reattachApprovals(userId, row.id);
 
             log.info({ userId, conversationId: row.id }, "start_session resumed by context_path");
             break;
@@ -2343,6 +2374,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // leave-and-return rebind: emit the conversation's buffered debug
         // frames (marked `replayed`; no-op when the ring is gone).
         replayBufferedDebugEvents(userId, msg.conversationId);
+        reattachApprovals(userId, msg.conversationId);
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "resume_session error");
@@ -2803,6 +2835,19 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         return;
       }
 
+      // #4672 — cross-kind guard: a review-gate answer can NEVER resolve a durable approval. The approval waiter
+      // registry is its own namespace (keyed by approval id) and only a recorded Owner decision wakes it; refusing
+      // here (before any resolver is consulted) means an id that names an approval is never even looked up as a gate.
+      if (typeof msg.gateId === "string" && hasApprovalWaiter(msg.gateId)) {
+        log.warn({ sec: true, userId, decision: "approval-cross-kind-refused" }, "review_gate_response carried an approval id; refused");
+        sendToClient(userId, {
+          type: "error",
+          message: "This request is an approval and can only be answered from its approval card.",
+          gateId: msg.gateId,
+        });
+        break;
+      }
+
       try {
         // Layer 1: transport-level length guard (defense-in-depth)
         if (typeof msg.selection !== "string" || msg.selection.length > MAX_SELECTION_LENGTH) {
@@ -2851,6 +2896,58 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           message: sanitizeErrorForClient(err),
           gateId: msg.gateId,
         });
+      }
+      break;
+    }
+
+    // ------------------------------------------------------------------
+    // approval_decide (#4672): the authenticated workspace Owner's decision on a durable approval request.
+    // `userId` is the verified socket user, NEVER a payload field (the strictObject schema has none); the actor inside
+    // the RPC is `auth.uid()` of the tenant client minted for that user, so a forged frame cannot decide as someone
+    // else, and the agent (which never holds this socket or a tenant client) cannot decide at all. This case touches
+    // only the approval decide path: it never resolves a review gate, and `review_gate_response` never reaches it.
+    // ------------------------------------------------------------------
+    case "approval_decide": {
+      if (!session.conversationId) {
+        sendToClient(userId, { type: "error", message: "No active session." });
+        return;
+      }
+      const tenantDecide = await tenantFor(userId, "approval-decide");
+      if (!tenantDecide) {
+        sendToClient(userId, { type: "error", message: "Auth probe failed — please retry." });
+        return;
+      }
+      try {
+        const result = await decideApproval(tenantDecide as unknown as ApprovalRpcClient, {
+          id: msg.approvalId,
+          decision: msg.decision,
+        });
+        const row = result.approval;
+        logApprovalMarker("SOLEUR_APPROVAL_DECIDED", {
+          approval_id: row.id,
+          tool: row.tool_name,
+          conversation_id: row.conversation_id,
+          decision: msg.decision,
+          outcome: result.outcome,
+          status: row.status,
+        });
+        // Wake the waiter on THIS host only as a hint, and only for a status the database holds. A decide that lands
+        // on another host is seen by the waiter's own poll within one interval.
+        if (row.status !== "pending") wakeApprovalWaiter(row.id, row.status);
+        const statusFrame = {
+          type: "approval_status" as const,
+          approvalId: row.id,
+          conversationId: row.conversation_id,
+          status: row.status,
+        };
+        sendToClient(userId, { ...statusFrame, outcome: result.outcome });
+        // The requester (possibly a different user than the deciding Owner) sees the card settle too.
+        if (row.requested_by_user_id && row.requested_by_user_id !== userId) {
+          sendToClient(row.requested_by_user_id, statusFrame);
+        }
+      } catch (err) {
+        reportApprovalOp("decideFailed", err, { approvalId: msg.approvalId, conversationId: session.conversationId, userId });
+        sendToClient(userId, { type: "error", message: "Could not record your decision. Please try again." });
       }
       break;
     }
@@ -2983,6 +3080,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "debug_event":
     case "review_gate":
     case "autonomous_disclosure":
+    case "approval_request": // #4672 — server→client only (cards are emitted by the gate and on attach)
+    case "approval_status":
     case "autonomous_posture":
     case "session_started":
     case "session_resumed":

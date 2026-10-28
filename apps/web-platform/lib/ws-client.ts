@@ -1141,6 +1141,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
+        case "approval_request":
+        case "approval_status": {
+          // #4672 — durable approval card and status. Live-only (not buffered, no seq): reattach re-sends live cards
+          // from the server. sendToClient is user-scoped, so drop a frame bound to another conversation's surface.
+          if (msg.conversationId !== realConversationIdRef.current) break;
+          dispatch({ type: "stream_event", msg });
+          break;
+        }
+
         case "autonomous_posture": {
           // Server truth for the persistent chip — never a message-presence guess.
           setAutonomousPosture(msg.autonomous);
@@ -1454,6 +1463,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "close_conversation":
         case "review_gate_response":
         case "autonomous_disclosure_response":
+        // #4672 — client→server only (the Owner's decision); the client never receives it.
+        case "approval_decide":
         case "abort_turn":
         case "interactive_prompt_response":
         case "fanout_truncated":

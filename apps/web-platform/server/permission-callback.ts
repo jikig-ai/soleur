@@ -35,6 +35,9 @@ import {
   type AgentSession,
 } from "./review-gate";
 import { getToolTier, buildGateCard, buildOfflineGateMessage, pluginToolPrefix, type ToolTier } from "./tool-tiers";
+import { isApprovalRequiredTool } from "./approval/tools";
+import { runApprovalGate } from "./approval/gate-flow";
+import type { ApprovalGateDeps } from "./approval/gate-types";
 import {
   isFileTool,
   isSafeTool,
@@ -287,6 +290,13 @@ export interface CanUseToolDeps {
    * `ctx.repoName` are empty strings on the cc path, so the lane's telemetry reads this instead. Pino only.
    */
   connectedRepoSlug?: string;
+  /**
+   * #4672 — the durable approval flow for the slice-1 gated tools (`APPROVAL_REQUIRED_TOOLS`). ABSENT is the dormant
+   * state and the gated branch is then exactly the in-memory review gate (ADR-305). When present, the flag seam it
+   * carries is read once per gate; off (or unreadable) falls through to the same in-memory gate. Never wired to a
+   * module that can decide an approval (the agent shares this process): see approval/decide.ts.
+   */
+  approval?: ApprovalGateDeps;
 }
 
 export interface CanUseToolContext {
@@ -410,18 +420,22 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     gateId: string,
     signal: AbortSignal,
     gateOptions: string[],
-    holdOptions: { kind?: "autonomous_disclosure"; gateClass?: GateClass } = {},
+    holdOptions: { kind?: "autonomous_disclosure"; gateClass?: GateClass; wait?: () => Promise<string> } = {},
   ): Promise<string | null> => {
-    const { kind, gateClass = "bash" } = holdOptions;
+    const { kind, gateClass = "bash", wait } = holdOptions;
     const ops = GATE_STATUS_OPS[gateClass];
     const first = pendingGates++ === 0;
     // Register the gate BEFORE the status write so a fast Approve is never "not found" and an abort during a slow write is
     // observed. A rejection (timeout/abort only; review-gate.ts) becomes null here, so nothing can reject unobserved while
     // the write is awaited, and the caller DENIES; it never throws out of canUseTool and never allows.
+    // #4672: the durable approval flow supplies its own verdict source (`wait`) and reuses everything else here; every
+    // other caller passes none and gets the review-gate promise exactly as before.
     const verdict: Promise<string | null> = (async () =>
-      kind
-        ? await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions, kind)
-        : await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions))().catch(() => null);
+      wait
+        ? await wait()
+        : kind
+          ? await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions, kind)
+          : await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions))().catch(() => null);
     let selection: string | null = null;
     try {
       if (first) {
@@ -1473,6 +1487,26 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           );
           logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "too many pending approvals");
           return { behavior: "deny" as const, message: PLATFORM_GATE_TOO_MANY_PENDING_MESSAGE };
+        }
+
+        // #4672 — the durable, action-bound approval flow for the slice-1 tools. `null` = flag off or unreadable: fall
+        // through to the in-memory review gate below, unchanged. Anything else is the final verdict (allow only on a
+        // consumed approval; every error, timeout and abort is a static deny).
+        if (deps.approval && isApprovalRequiredTool(toolName)) {
+          const approvalVerdict = await runApprovalGate({
+            toolName,
+            toolInput,
+            callSignal: options.signal,
+            controllerSignal: ctx.controllerSignal,
+            userId: ctx.userId,
+            conversationId: ctx.conversationId,
+            approval: deps.approval,
+            sendToClient: deps.sendToClient,
+            hold: (approvalId, signal, wait) => holdForUser(approvalId, signal, [], { gateClass: "platform", wait }),
+            allow,
+            logDecision: (name, decision, reason) => logPermissionDecision("canUseTool-platform-gated", name, decision, reason),
+          });
+          if (approvalVerdict !== null) return approvalVerdict;
         }
 
         const gateId = randomUUID();

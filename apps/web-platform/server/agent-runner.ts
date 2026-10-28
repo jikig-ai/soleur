@@ -90,6 +90,7 @@ import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool, gateStatusWriteOp } from "./permission-callback";
+import { createApprovalGateDeps } from "./approval/gate";
 import { reportSilentFallback, hashUserId } from "./observability";
 import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
@@ -2239,6 +2240,15 @@ are the requirements to implement.`;
             abortableReviewGate,
             sendToClient,
             notifyOfflineUser,
+            // #4672 — the durable approval flow for the slice-1 gated tools. Cheap to build (no database access until a
+            // slice-1 tool reaches the gate); the flag seam inside it decides, once per gate, whether the flow runs.
+            // Off (today: constant false) the gated branch is the in-memory review gate, unchanged.
+            approval: createApprovalGateDeps({
+              userId,
+              workspaceId: activeWorkspaceId,
+              repoSlug: repoOwner && repoName ? `${repoOwner}/${repoName}` : "",
+              workspacePath,
+            }),
             // Closure captures `userId` from the enclosing runAgentSession
             // scope so the deps interface stays at (conversationId, status[, guard])
             // — see plan §"Transitive Coverage via deps.updateConversationStatus".

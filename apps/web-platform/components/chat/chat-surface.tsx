@@ -1184,6 +1184,11 @@ export function ChatSurface({
                     </div>
                   );
                   break;
+                case "approval_request":
+                  // #4672 — the durable approval card is rendered by task 3.1 (ApprovalRequestCard). This case only
+                  // satisfies the `: never` rail below; the flag is off, so no such message exists yet.
+                  body = null;
+                  break;
                 case "debug_event":
                   // feat-debug-mode-stream — harness instruction-stream events
                   // render in the SEPARATE collapsed <DebugStreamPanel> below,

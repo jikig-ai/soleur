@@ -25,9 +25,9 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 ## Phase 2: Gate wiring
 
 - [x] 2.1 (delivered by the hotfix: shared `holdForUser` fail-closed lifecycle; verify on the rebased branch, add only what is missing) Commit 1: `try/finally` deny-on-reject in the gated branch for all gated tools, with test
-- [ ] 2.2 Approval flow behind the flag in `permission-callback.ts` via `deps.approval`; `tool-tiers.ts` `APPROVAL_REQUIRED_TOOLS`; deep-cloned snapshot hashed and passed to `allow()`; abort-aware poll; consume-on-approved
-- [ ] 2.3 WS types `approval_request`, `approval_status`, `approval_decide`; `ws-handler.ts` decide via `tenantFor`, reattach re-emit, waiter wake; `chat-state-machine.ts`; guard that `review_gate_response` cannot resolve an approval
-- [ ] 2.4 Static-message Sentry ops, `SOLEUR_APPROVAL_*` markers, `approval_id` tag; confirm Vector allowlist admits the marker family
+- [x] 2.2 Approval flow behind the flag in `permission-callback.ts` via `deps.approval`; `tool-tiers.ts` `APPROVAL_REQUIRED_TOOLS`; deep-cloned snapshot hashed and passed to `allow()`; abort-aware poll; consume-on-approved
+- [x] 2.3 WS types `approval_request`, `approval_status`, `approval_decide`; `ws-handler.ts` decide via `tenantFor`, reattach re-emit, waiter wake; `chat-state-machine.ts`; guard that `review_gate_response` cannot resolve an approval
+- [x] 2.4 Static-message Sentry ops, `SOLEUR_APPROVAL_*` markers, `approval_id` tag; confirm Vector allowlist admits the marker family
 
 ## Phase 3: Surfaces and notifications
 
