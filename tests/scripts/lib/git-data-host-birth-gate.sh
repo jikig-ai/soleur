@@ -26,9 +26,9 @@
 #   firewall_rules          == 0    the deny-all firewall stays deny-all
 #   luks_passphrase_touched == 0    no delete/forget/update on the passphrase pair
 #   reboot_updates          == 0    no live host power-cycled by the birth
-#   out_of_scope            == 0    nothing outside the twenty-two-address fan-out
-#   the three ENTAILED members each create exactly once
-#   the seventeen PRESENCE members each appear with actions ⊆ {create, no-op}
+#   out_of_scope            == 0    nothing outside the birth fan-out (the allow-set below)
+#   the ENTAILED members each create exactly once
+#   the PRESENCE members each appear with actions ⊆ {create, no-op}
 #   host key created   =>  its pin doppler_secret.git_data_ssh_host_key is a CREATE (#7226)
 #   pin UPDATE         =>  only while hcloud_server.git_data is ["create"] (post-rotation retry)
 #
@@ -55,7 +55,7 @@
 #
 # So the rule is not "require the fan-out". It is "require exactly those members whose
 # existence the server's own creation ENTAILS, and require the rest merely to be
-# PRESENT". The three entailed members each reference `hcloud_server.git_data.id`, so a
+# PRESENT". The entailed members each reference `hcloud_server.git_data.id`, so a
 # new server implies a new instance by construction — which is what makes demanding
 # their create safe. Nothing else has that property. Anything looser breaks a legitimate
 # retry; anything tighter is unenforceable.
@@ -107,9 +107,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm-gate
 _GIT_DATA_BIRTH_ALLOW='def allow: [
       "hcloud_server.git_data",
       "hcloud_server_network.git_data",
-      "hcloud_volume.git_data",
       "hcloud_volume.git_data_luks",
-      "hcloud_volume_attachment.git_data",
       "hcloud_volume_attachment.git_data_luks",
       "hcloud_firewall.git_data",
       "hcloud_firewall_attachment.git_data",
@@ -153,7 +151,7 @@ git_data_host_birth_gate() {
   # mid-dispatch does not learn that the thing about to be destroyed is the store holding
   # every user's source code, and that is the sentence that stops a hand from moving.
   volume_destroys=$(jq '[.resource_changes[]
-    | select(.address == "hcloud_volume.git_data" or .address == "hcloud_volume.git_data_luks")
+    | select(.address == "hcloud_volume.git_data_luks")
     | select(.change.actions | index("delete") or index("forget"))] | length' < "$plan_json" 2>/dev/null)
 
   # FIREWALL-CONTENT arm. hcloud_firewall.git_data is a ZERO-RULE DENY-ALL firewall and
@@ -293,14 +291,14 @@ git_data_host_birth_gate() {
        | select(.change.actions | index("create"))] | length ) as $vol_creates
     | if $pw_creates > 0 and $vol_creates == 0 then $pw_creates else 0 end' < "$plan_json" 2>/dev/null)
 
-  # VOLUME-UPDATE arm. Both volumes are in the allow-set (their ids are baked into
-  # user_data), so `update` on either is permitted by every other arm. A resize riding a
-  # birth is a mis-scope signal: the birth CREATES these volumes, so an in-place update
-  # means the plan is grading against volumes that already exist — a different operation
+  # VOLUME-UPDATE arm. The LUKS volume is in the allow-set (its id is baked into
+  # user_data), so `update` on it is permitted by every other arm. A resize riding a
+  # birth is a mis-scope signal: the birth CREATES this volume, so an in-place update
+  # means the plan is grading against a volume that already exists — a different operation
   # wearing a birth's clothes. Scoped to `update` alone; delete/forget belong to the
   # named volume-destroy arm above.
   volume_updates=$(jq '[.resource_changes[]
-    | select(.address == "hcloud_volume.git_data" or .address == "hcloud_volume.git_data_luks")
+    | select(.address == "hcloud_volume.git_data_luks")
     | select(.change.actions | index("update"))] | length' < "$plan_json" 2>/dev/null)
 
   # Reboot-forcing IN-PLACE update on ANY hcloud_server. A BACKSTOP here rather than live
@@ -328,14 +326,15 @@ git_data_host_birth_gate() {
   # verb terraform adds NEXT as inert, and terraform has grown this vocabulary once
   # already (`forget`). Measured: a synthesized `["evict"]` on an out-of-scope address
   # scores 0 under the allow-list (gate PASSES) and 1 under this deny-list (gate ABORTS),
-  # while every legitimate shape — the 18-address birth, a data-source `read`, a
+  # while every legitimate shape — the full birth fan-out, a data-source `read`, a
   # transitive `no-op` — scores identically under both. A novel verb is now refused until
   # someone deliberately classifies it.
   #
-  # IN(...) is EXACT-equality membership. `contains`/`inside` substring-match, so a bare
-  # `hcloud_volume.git_data` would satisfy the `hcloud_volume.git_data_luks` member —
-  # conflating the plaintext store with the encrypted one, which is the single confusion
-  # this gate must never make.
+  # IN(...) is EXACT-equality membership. `contains`/`inside` substring-match, so an
+  # impostor such as `hcloud_volume.git_data_luks_backup` would satisfy the
+  # `hcloud_volume.git_data_luks` member — the confusion this gate must never make. The retired
+  # plaintext pair (hcloud_volume.git_data, hcloud_volume_attachment.git_data, #11194) is in no
+  # allow-set, so a create/update/delete/forget on either is out of scope (or a destroy).
   out_of_scope=$(jq -r "${_GIT_DATA_BIRTH_ALLOW}"'
     [ .resource_changes[]
       | select(.change.actions | any(. != "no-op" and . != "read"))
@@ -364,9 +363,9 @@ git_data_host_birth_gate() {
 
   if [[ "$volume_destroys" -ne 0 ]]; then
     offenders=$(jq -r '[.resource_changes[]
-      | select(.address == "hcloud_volume.git_data" or .address == "hcloud_volume.git_data_luks")
+      | select(.address == "hcloud_volume.git_data_luks")
       | select(.change.actions | index("delete") or index("forget")) | .address] | join(", ")' < "$plan_json" 2>/dev/null)
-    echo "git_data_host_birth_gate: ABORT — this plan destroys a git-data DATA VOLUME: ${offenders}. That is the shared bare-repo store holding every connected user's source code and workspace history. hcloud_volume.git_data is the plaintext store and hcloud_volume.git_data_luks is the encrypted one; destroying either during a BIRTH is never correct, because a birth is additive by definition and the volumes outlive the host. If you are trying to recover a half-created host, the volumes are exactly what you must keep."
+    echo "git_data_host_birth_gate: ABORT — this plan destroys a git-data DATA VOLUME: ${offenders}. That is the shared bare-repo store holding every connected user's source code and workspace history (hcloud_volume.git_data_luks, the encrypted one); destroying it during a BIRTH is never correct, because a birth is additive by definition and the volume outlives the host. If you are trying to recover a half-created host, the volume is exactly what you must keep."
     return 1
   fi
 
@@ -426,7 +425,7 @@ git_data_host_birth_gate() {
 
   if [[ "$volume_updates" -ne 0 ]]; then
     offenders=$(jq -r '[.resource_changes[]
-      | select(.address == "hcloud_volume.git_data" or .address == "hcloud_volume.git_data_luks")
+      | select(.address == "hcloud_volume.git_data_luks")
       | select(.change.actions | index("update")) | .address] | join(", ")' < "$plan_json" 2>/dev/null)
     echo "git_data_host_birth_gate: ABORT — VOLUME UPDATE: the plan updates ${offenders} in place. A birth CREATES these volumes, so an in-place update means the plan is grading against volumes that already exist — a resize or a retype riding a birth is a mis-scope signal, not a birth. Apply a volume change as its own operation, where the abort message can tell you what it will do to the data on it."
     return 1
@@ -443,13 +442,13 @@ git_data_host_birth_gate() {
         | select(.change.actions | any(. != "no-op" and . != "read"))
         | select(IN(.address; allow[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
-    echo "git_data_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the twenty-two-address birth fan-out: ${offenders}. One authorization births one host and touches only that host's fan-out. Two addresses are refused here deliberately: betteruptime_heartbeat.git_data_prd (its feeder already shipped and is web-host-resident — creating a monitor this route cannot arm produces a green dashboard measuring nothing) and terraform_data.git_data_probe_install (it SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY, not at plan)."
+    echo "git_data_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the birth fan-out: ${offenders}. One authorization births one host and touches only that host's fan-out. Two addresses are refused here deliberately: betteruptime_heartbeat.git_data_prd (its feeder already shipped and is web-host-resident — creating a monitor this route cannot arm produces a green dashboard measuring nothing) and terraform_data.git_data_probe_install (it SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY, not at plan)."
     return 1
   fi
 
   # ── REQUIREMENT ARM — ENTAILED HALF ────────────────────────────────────────────
   #
-  # Exactly these three reference hcloud_server.git_data.id, so a new server implies a new
+  # Exactly these reference hcloud_server.git_data.id, so a new server implies a new
   # instance of each by construction. That implication is what makes `creates == 1` safe
   # to demand here and unsafe to demand anywhere else. Every arm above is a PROHIBITION,
   # and prohibitions cannot catch a MISSING member — the allow-set says these addresses
@@ -459,21 +458,20 @@ git_data_host_birth_gate() {
   # entailment; STATE IDENTITY is, and this is the one member where they diverge.
   for required_addr in \
     "hcloud_server_network.git_data" \
-    "hcloud_volume_attachment.git_data" \
     "hcloud_volume_attachment.git_data_luks"; do
     required_creates=$(jq --arg a "$required_addr" \
       '[.resource_changes[] | select(.address == $a) | select(.change.actions | index("create"))] | length' \
       < "$plan_json" 2>/dev/null)
     plan_gate_assert_numeric "git_data_host_birth_gate" "required_creates[${required_addr}]=${required_creates}" || return 1
     if [[ "$required_creates" -ne 1 ]]; then
-      echo "git_data_host_birth_gate: ABORT — the plan births ${want_addr} but does NOT create ${required_addr} (${required_creates} creates; expected exactly 1). Each of the three entailed members has a distinct catastrophic absence: hcloud_server_network.git_data missing is #6416 — the host comes up with no private-net IP, and because runcmd is once-per-instance no reboot repairs it (ADR-115 bars git-data from the reboot primitive, so the host must be REPLACED). hcloud_firewall_attachment.git_data missing leaves the host NAKED on its public IPv4/IPv6, because the deny-all firewall is bound to it by nothing else. Either hcloud_volume_attachment missing means the store boots with its volume unmounted — for git_data_luks that means at-rest encryption is absent while every artifact claims it is present. All three are entailed by the server's own creation, so their absence means the -target set is mis-scoped, not that they were deliberately omitted. (hcloud_firewall_attachment.git_data is the fourth address that references the server id, but it is NOT in this loop: it is handled by the separate outcome assertion below, as the comment above the loop says. #7772 corrected four sites that still said FOUR here while the loop carried three.)"
+      echo "git_data_host_birth_gate: ABORT — the plan births ${want_addr} but does NOT create ${required_addr} (${required_creates} creates; expected exactly 1). Each of the entailed members has a distinct catastrophic absence: hcloud_server_network.git_data missing is #6416 — the host comes up with no private-net IP, and because runcmd is once-per-instance no reboot repairs it (ADR-115 bars git-data from the reboot primitive, so the host must be REPLACED). hcloud_firewall_attachment.git_data missing leaves the host NAKED on its public IPv4/IPv6, because the deny-all firewall is bound to it by nothing else. hcloud_volume_attachment.git_data_luks missing means the store boots with its volume unmounted — at-rest encryption is absent while every artifact claims it is present. All of them are entailed by the server's own creation, so their absence means the -target set is mis-scoped, not that they were deliberately omitted. (hcloud_firewall_attachment.git_data also references the server id, but it is NOT in this loop: it is handled by the separate outcome assertion below, as the comment above the loop says.)"
       return 1
     fi
   done
 
   # ── REQUIREMENT ARM — PRESENCE HALF ────────────────────────────────────────────
   #
-  # The remaining seventeen must APPEAR in the plan with actions ⊆ {create, no-op}. This
+  # The remaining members must APPEAR in the plan with actions ⊆ {create, no-op}. This
   # catches a typo'd -target (an address absent from the closure fails presence, and
   # nothing else in CI asserts that a -target string names a declared address) while
   # NOT poisoning the retry: on a resumed dispatch these legitimately re-plan as no-ops.
@@ -523,7 +521,6 @@ git_data_host_birth_gate() {
   fi
 
   for present_addr in \
-    "hcloud_volume.git_data" \
     "hcloud_volume.git_data_luks" \
     "hcloud_firewall.git_data" \
     "doppler_config.git_data_prd" \
@@ -628,6 +625,6 @@ git_data_host_birth_gate() {
 
   git_data_root_key_arm "$plan_json" "${GIT_DATA_ROOT_KEY_FINGERPRINT_FILE:-}" || return 1
 
-  echo "git_data_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, its 3 entailed members created + its firewall attachment bound to exactly 1 server, all 15 presence members create-or-no-op, 0 destroys, 0 volume destroys, 0 firewall rules, 0 passphrase mutations, 0 reboots, 0 out-of-scope changes)."
+  echo "git_data_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, its entailed members created + its firewall attachment bound to exactly 1 server, every presence member create-or-no-op, 0 destroys, 0 volume destroys, 0 firewall rules, 0 passphrase mutations, 0 reboots, 0 out-of-scope changes)."
   return 0
 }
