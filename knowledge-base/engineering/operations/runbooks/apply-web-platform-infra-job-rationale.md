@@ -709,7 +709,7 @@ required entries, and duplicate repo:tag pairs. Every one of those checks runs b
 call, so an exit 1 means THIS ATTEMPT wrote nothing. That is a statement about the attempt, not
 about the store: the restore job can chain against a store that was not empty (the refill flag is
 set before the apply, so an apply that fails before the destroy still chains it), which is why the
-arm says the store is "exactly as the previous step left it" and not "empty".
+arm says the store is "unchanged by this step" and not "empty".
 
 Which of those can fire here is narrower than the list. The step passes fixed arguments (the
 local sink as `--target`, the downloaded pins file as `--tags-from`), so the argument checks cannot
@@ -719,8 +719,9 @@ zero or duplicated required pairs). In a normal dispatch the uploaded `registry-
 are the file the D10 verdict step wrote and the pull-path gate already ran the engine against, and
 no step between that upload and this download rewrites the file. The traceable route to an exit 1
 here is the resume arm: it skips the verdict step, so the engine never ran on this manifest in this
-run, and the gate's own manifest check is parse-only (it does not apply the engine's floor,
-zero-entry or duplicate checks). The other possibility is the gate and the engine disagreeing about
+run, and the gate's own manifest check only asserts that `.entries` is an array carrying at least
+the resolved entry count (it does not apply the engine's required-disposition, distinct repo:tag or
+floor checks). The other possibility is the gate and the engine disagreeing about
 a manifest shape, which is a defect.
 
 That is why the arm does not say "re-run this job": a re-run re-downloads the same artifact
@@ -729,8 +730,8 @@ That is why the arm does not say "re-run this job": a re-run re-downloads the sa
 destroys anything, but that path is unmeasured for this failure, so the arm and the runbook row stay
 conservative: read the engine's own `::error::` line and fix the cause it names. The arm says "a
 correct refusal, not an engine defect", the same position as the rehearsal gate's own exit-1 arm,
-and the runbook row names the one case worth filing (the engine line names a check the rehearsal
-gate accepted on the same manifest).
+and the runbook row adds the one case worth filing (the engine line names a check the rehearsal
+gate accepted on the same manifest), so the two are close but not identical.
 
 The step's own `exit 1` after a failed Doppler read happens before the retry loop and never reaches
 the `case`; the arm text says "engine" so the two exit-1 origins are not conflated. Ruling:
