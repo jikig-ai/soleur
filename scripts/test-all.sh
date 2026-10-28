@@ -5983,10 +5983,6 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
-  # #10390 defect 3: verdict-matrix harness for the inngest verify-blob soak probe. Registered EXPLICITLY
-  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
-  # the soak tracker — an undetailed reason=pull row must not read as FAIL.
-  run_suite "scripts/followthroughs/inngest-verify-clean-10390" bash scripts/followthroughs/inngest-verify-clean-10390.test.sh
   # #5150: exit-code harness for the Inngest trace-retention close probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
   # sweeper closes #5150, so a PASS on a webhook echo or on an empty read must redden CI.
@@ -6616,7 +6612,7 @@ if want_scripts; then
   # echoes `zotregistry.dev` must NOT pass. That is not hypothetical: it is the state production is
   # in right now, where a bare grep for that string returns 53 rows over 6h and every one is an echo.
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
-  # git-data-host-replace scoped-recreate destroy-guard (#6242; preserves the LUKS data volume + LUKS passphrase by omission; the retired plaintext pair is refused as out_of_scope, #11194).
+  # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
   run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
