@@ -69,9 +69,11 @@ const PATTERN: PatternPage = {
 const OTHER_PATTERN: PatternPage = { ...PATTERN, slug: "other-pattern", evidence: [6, 7, 8, 9, 10].map((n) => `knowledge-base/project/learnings/2026-10-${n < 10 ? "0" : ""}${n}-synthetic-${n}.md`) };
 
 const roots: string[] = [];
+// Every `pluginTree()` is ~230 files; the cleanup removes dozens of them synchronously, which under a loaded runner can
+// exceed the 20s default hook timeout (the full-battery run timed out here), so the hook gets its own ceiling.
 afterAll(() => {
   for (const r of roots) rmSync(r, { recursive: true, force: true });
-});
+}, 120_000);
 
 beforeEach(() => {
   expect.hasAssertions();
