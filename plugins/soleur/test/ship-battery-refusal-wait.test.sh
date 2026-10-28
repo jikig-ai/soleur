@@ -585,7 +585,7 @@ for lit in 'apps/web-platform/infra/' '.github/workflows/apply-web-platform-infr
   assert_eq "1" "$(grep -cF -- "'$lit'" "$REAL_SCRIPT" | awk '{print ($1>=1)}')" "F infra literal in the script's CODE (quoted, not the header prose): $lit"
 done
 assert_eq "1" "$(grep -cF 'battery-refusal-wait.sh' "$SKILL_MD" | awk '{print ($1>=1)}')" "F3 SKILL.md names the script"
-assert_eq "1" "$(grep -cF '](./references/battery-refusal-wait.md)' "$SKILL_MD" | awk '{print ($1>=1)}')" "F4 SKILL.md links the reference"
+assert_eq "1" "$(grep -cF '](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/battery-refusal-wait.md)' "$SKILL_MD" | awk '{print ($1>=1)}')" "F4 SKILL.md links the reference"
 assert_eq "0" "$(grep -c 'go back to waiting' "$SKILL_MD")" "F5 the unbounded 'go back to waiting' prescription is gone"
 assert_eq "1" "$(grep -cF 'SOLEUR_ALLOW_FULL_GATE=1 TC_LOCK_TIMEOUT=14400 TC_RUNTIME_CEILING_S=39600 bash scripts/test-all.sh --full' "$SKILL_MD" | awk '{print ($1>=1)}')" "F6 the queue-in-lock command (target of exit 12) is kept"
 assert_eq "1" "$(grep -cE 'rc=4. is REFUSED' "$SKILL_MD" | awk '{print ($1>=1)}')" "F7 the rc=4 REFUSED sentence is intact"

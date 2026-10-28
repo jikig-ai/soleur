@@ -1,5 +1,7 @@
 # Refused local battery: bounded wait, then "CI is the gate" (P4d)
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
+
 Loaded from `soleur:ship` Phase 4 when the detached local battery is **REFUSED** (rc=4, nothing ran) because a sibling worktree already runs a full-gate battery. The script is [battery-refusal-wait.sh](../scripts/battery-refusal-wait.sh); its header carries the contract, this file carries the recipe and the record.
 
 Scope: only the sibling-run refusal (`refusing a full-gate run ... N sibling full-gate run(s) already in flight`) is waitable. Every other rc=4 (selection refusals, a gutted index, `SOLEUR_SUBAGENT=1`, a toolchain fault) keeps stop-and-fix; the script answers `NOT_WAITABLE` (exit 11) for them. The monitor-lock rc=4 of `monitor-pr-checks.sh` is a different exit and is not handled here. Two forms of contention exist and each is already bounded: an `--affected` run that degrades to full, or `--full`, is **refused** (rc=4, this file); a plain `--affected` run is exempt from the refusal and queues on the lock, where `affected-tests.sh` rc 6 is the budget deferral that already means "CI authoritative".
@@ -56,5 +58,5 @@ The `apps/web-platform/infra/` tree has no required CI check (#6480), so a diff 
 
 ## See also
 
-- [affected-gate-contract.md](./affected-gate-contract.md): the rc contract of the affected gate (rc 4 = refused, rc 6 = budget deferral).
+- [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md): the rc contract of the affected gate (rc 4 = refused, rc 6 = budget deferral).
 - When substituting hand-picked suites for a refused gate instead, derive them from the diff's new vocabulary, not its file names: `knowledge-base/project/learnings/2026-09-11-the-shard-i-substituted-for-a-refused-gate-was-the-one-that-was-red.md`.
