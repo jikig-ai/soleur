@@ -36,3 +36,8 @@
 - Route-to-definition: operator ACCEPTED the bounded one-shot/SKILL.md depth-1 adaptation bullet (applied).
 - Constitution promotion: nothing to propose (no uncovered principle).
 - ARCHIVAL DEFERRED: run archive-kb.sh at ship Phase 6.45, not pre-ship — ship Phase 6 step 2.5 reads decision-challenges.md from knowledge-base/project/specs/<branch>/ on this branch (#7490 ordering).
+
+> **Addendum 2026-10-28 (ship Phase 6):** the accepted route-to-definition bullet first landed in
+> one-shot/SKILL.md and tripped lint-skill-body-budget (52,470 > 52,000 ceiling; pre-bullet
+> headroom was 4 bytes). Rerouted to one-shot/references/token-discipline.md — read before Step 0
+> every run, so the insight stays binding without the per-invocation byte cost.
