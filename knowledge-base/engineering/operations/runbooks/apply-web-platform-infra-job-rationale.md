@@ -300,6 +300,63 @@ DELTAS FROM web_host_create, each evidenced rather than inherited:
     fleet's for-loop. No other hcloud_server can enter this plan's closure, which is
     why the gate's reboot arm is a backstop here rather than live coverage.
 
+### Birth fan-out target notes (relocated from the `git_data_host_create` plan step, #11194)
+
+Moved verbatim from the workflow comment to keep `apply-web-platform-infra.yml` under its byte gate (#8361):
+
+```
+(#6982) 18 -> 20: doppler_secret.git_data_ssh_host (ADR-149 item 5 — without it
+every account deletion files a FALSE Art. 17 erasure-failed event from the moment
+the host exists) and doppler_secret.git_data_betterstack_logs_token (the ingest
+token the post-Doppler emits read). BOTH join the gate's PRESENCE half, never its
+entailed loop: entailed demands `creates == 1`, and on a resumed dispatch these
+legitimately re-plan as no-ops, so requiring a create would be a permanent wedge.
+
+Five more would not be pulled by the server's own graph. Note this PR's two
+depends_on edits changed their DIRECTION even though it does not change the
+conclusion: the three doppler_secret SSH halves are now DOWNSTREAM of the server
+(issue AC4), and the LUKS passphrase pair is now UPSTREAM of it (P13). Neither is
+reached by `-target`'s upstream closure from the server alone, so both stay
+explicitly targeted.
+```
+
+### Plaintext-id interlock placement (#11194)
+
+The interlock step is UNCONDITIONAL in both dispatch jobs: the census suite's G5c row (ADR-241 D-Guard-5) forbids any `if:` on a gate step, because a condition is a way to skip it. In `git_data_host_replace` a refusal is downgraded to a warning only when `PLAN_ONLY` is exactly the string `true` (unset, empty or any other value blocks), because a `plan_only` dispatch grades a real plan with the plaintext-free gate and stops before any apply, so there is no host to destroy; the verdict still prints (CTO ruling, `decision-challenges.md` row H). `git_data_host_create` has no `plan_only` input, so it blocks always. The step prints a verdict and a line number, never the value.
+
+### #6453 stock preflight rationale (relocated from the `git_data_host_create` plan step, #11194)
+
+Moved verbatim from the workflow comment to keep the file under its byte gate (#8361):
+
+```
+#6453 STOCK preflight. GATED rather than excluded, unlike the sibling additive
+path inngest-host, and the difference is the fan-out. The birth gate above proves
+the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
+terraform creates this host's dependencies FIRST — the workspaces volume and the
+per-host Better Stack heartbeats — and only then the server. So a server_type with no
+stock in the target DC does not fail cleanly here: it strands a 20 GB volume
+attached to nothing, plus the heartbeat resources for a host that will never
+exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
+holds for a host with no such fan-out) — it is billed debris and a dirty state
+slot, caught by a gate we already own and can run in 2 seconds.
+
+CORRECTION, recorded because the earlier wording was load-bearing and false: this
+comment used to say the stranded heartbeats "will therefore PAGE as down", and
+that was the headline argument for gating rather than excluding. They do not page.
+web-probe.tf declares both with `paused = true` + `ignore_changes = [paused]`, and
+the ONLY unpause path is the `Arm web-host probe heartbeats` step in the `apply`
+job, whose `if:` is mutually exclusive with this one. The gating decision survives
+on the stranded-volume argument alone; the false-page claim does not, and a
+decision defended by a false premise is one review away from being reverted for
+the right reason.
+
+KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
+new host's heartbeats paused, so it has no active heartbeat coverage until a
+later merge-to-main apply arms them. The Dispatch summary says so explicitly.
+
+```
+
+
 ## web_host_create
 
 See also: knowledge-base/engineering/operations/runbooks/web-host-birth.md

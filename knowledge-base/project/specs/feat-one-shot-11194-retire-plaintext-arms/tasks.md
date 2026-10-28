@@ -22,7 +22,9 @@ PR-1 is this branch. PR-2 is a separate branch off `main`. Neither PR merges, di
 ## Phase 3: Birth gate, workflow, interlock
 
 - [x] 3.1 `git-data-host-birth-gate.sh`: remove both addresses from the allow-set, entailed loop and presence loop; narrow selectors/offender jq/ABORT text to the LUKS volume; delete number words
+<!-- lint-infra-ignore start -->
 - [x] 3.2 `apply-web-platform-infra.yml`: delete the three `-target` lines; fix operator-facing text in the replace job (rotate-abort error, post-apply comments, apply-failure annotations, header target list) and the create job prose; fix the `scripts/test-all.sh` run_suite comment
+<!-- lint-infra-ignore end -->
 - [x] 3.3 Add `git_data_plaintext_id_interlock` to `tests/scripts/lib/git-data-birth-readiness-gate.sh` and wire a step before the plan step in `git_data_host_replace` (skipped under `plan_only`) and in `git_data_host_create` (unconditional)
 
 ## Phase 4: Floors and counters

@@ -3932,20 +3932,9 @@ jobs:
             exit 1
           fi
 
-      # (#11194, ADR-239 Amendment 2026-10-28) THE PLAINTEXT-ID INTERLOCK. The plaintext git-data
-      # volume was destroyed at the provider on 2026-10-27 and the gates above no longer demand it, so
-      # they PASS a correct plaintext-free plan; but while git-data.tf still passes a non-empty
-      # `git_data_volume_id` to module "git_data_userdata" the rendered user_data names that deleted
-      # device and the new host would boot into the bootstrap's plaintext_unverified FATAL. This
-      # step reads the same checkout the plan step plans and refuses before anything is planned or
-      # replaced. It prints a verdict and a line number, never the value.
-      #
-      # UNCONDITIONAL (no `if:`; the census suite's G5c row, ADR-241 D-Guard-5, forbids any `if:` on a
-      # gate step because a condition is a way to skip it). Under plan_only a refusal is DOWNGRADED to
-      # a warning instead: a plan_only dispatch grades a real plan with the plaintext-free gate and
-      # stops before any apply (the owner's verification path), so there is no host to destroy, and the
-      # verdict still prints. The downgrade tests the exact string `true`; unset, empty or any other
-      # value stays blocking (CTO ruling, decision-challenges.md row H).
+      # (#11194) Plaintext-id interlock: refuses while git-data.tf still passes a non-empty
+      # git_data_volume_id (rationale: apply-web-platform-infra-job-rationale.md). UNCONDITIONAL (no
+      # `if:`, census G5c); only the exact string `true` in PLAN_ONLY downgrades a refusal to a warning.
       - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
         env:
           PLAN_ONLY: ${{ inputs.plan_only }}
@@ -3955,9 +3944,9 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf"; then
             if [[ "${PLAN_ONLY:-}" == "true" ]]; then
-              echo "::warning::plan_only: the plaintext-id interlock WOULD hold a real git-data-host-replace/-rotate dispatch (verdict above). This plan_only run stops before any apply, so it proceeds; blank git_data_volume_id in git-data.tf (the one-hunk change tracked on #11194) before the real dispatch."
+              echo "::warning::plan_only: the plaintext-id interlock WOULD hold a real dispatch (verdict above); blank git_data_volume_id in git-data.tf (tracked on #11194) first."
             else
-              echo "::error::git-data-host-replace/-rotate is HELD: git-data.tf still passes a non-empty git_data_volume_id to module git_data_userdata, which names a plaintext volume destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap plaintext_unverified FATAL. The step log names the line. Set it to \"\" (the one-hunk change tracked on #11194), merge, then dispatch in one sitting. Nothing has been planned, replaced or created."
+              echo "::error::git-data-host-replace/-rotate is HELD: git-data.tf passes a non-empty git_data_volume_id (a volume destroyed on 2026-10-27), so a host from this tree boots into the plaintext_unverified FATAL. Set it to \"\" (tracked on #11194), merge, then dispatch. Nothing was planned or replaced."
               exit 1
             fi
           fi
@@ -5009,30 +4998,8 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
-          # #6453 STOCK preflight. GATED rather than excluded, unlike the sibling additive
-          # path inngest-host, and the difference is the fan-out. The birth gate above proves
-          # the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
-          # terraform creates this host's dependencies FIRST — the workspaces volume and the
-          # per-host Better Stack heartbeats — and only then the server. So a server_type with no
-          # stock in the target DC does not fail cleanly here: it strands a 20 GB volume
-          # attached to nothing, plus the heartbeat resources for a host that will never
-          # exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
-          # holds for a host with no such fan-out) — it is billed debris and a dirty state
-          # slot, caught by a gate we already own and can run in 2 seconds.
-          #
-          # CORRECTION, recorded because the earlier wording was load-bearing and false: this
-          # comment used to say the stranded heartbeats "will therefore PAGE as down", and
-          # that was the headline argument for gating rather than excluding. They do not page.
-          # web-probe.tf declares both with `paused = true` + `ignore_changes = [paused]`, and
-          # the ONLY unpause path is the `Arm web-host probe heartbeats` step in the `apply`
-          # job, whose `if:` is mutually exclusive with this one. The gating decision survives
-          # on the stranded-volume argument alone; the false-page claim does not, and a
-          # decision defended by a false premise is one review away from being reverted for
-          # the right reason.
-          #
-          # KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
-          # new host's heartbeats paused, so it has no active heartbeat coverage until a
-          # later merge-to-main apply arms them. The Dispatch summary says so explicitly.
+          # #6453 STOCK preflight, GATED rather than excluded (rationale, the false-page CORRECTION and the
+          # KNOWN GAP: job-rationale runbook §git_data_host_create).
           #
           # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
           # OUTSIDE the `doppler run` wrapper above — without this read the gate would
@@ -5818,21 +5785,14 @@ jobs:
             exit 1
           fi
 
-      # (#11194, ADR-239 Amendment 2026-10-28) THE PLAINTEXT-ID INTERLOCK. The plaintext git-data
-      # volume was destroyed at the provider on 2026-10-27 and the gates above no longer demand it, so
-      # they PASS a correct plaintext-free plan; but while git-data.tf still passes a non-empty
-      # `git_data_volume_id` to module "git_data_userdata" the rendered user_data names that deleted
-      # device and the new host would boot into the bootstrap's plaintext_unverified FATAL. This
-      # step reads the same checkout the plan step plans and refuses before anything is planned or
-      # replaced. It prints a verdict and a line number, never the value. UNCONDITIONAL on this route:
-      # it documents no plan_only input and has no verification mode the interlock must leave open.
+      # (#11194) Plaintext-id interlock, UNCONDITIONAL on this route (no plan_only input); see the job-rationale runbook.
       - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
         run: |
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf"; then
-            echo "::error::git-data-host-create is HELD: git-data.tf still passes a non-empty git_data_volume_id to module git_data_userdata, which names a plaintext volume destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap plaintext_unverified FATAL. The step log names the line. Set it to \"\" (the one-hunk change tracked on #11194), merge, then dispatch in one sitting. Nothing has been planned, replaced or created."
+            echo "::error::git-data-host-create is HELD: git-data.tf passes a non-empty git_data_volume_id (a volume destroyed on 2026-10-27), so a host from this tree boots into the plaintext_unverified FATAL. Set it to \"\" (tracked on #11194), merge, then dispatch. Nothing was created."
             exit 1
           fi
 
@@ -5911,28 +5871,15 @@ jobs:
         # plugins/soleur/test/terraform-target-parity.test.ts. That test asserts all of them
         # agree; this comment tells you why it will fail.
         #
-        # (#6982) 18 -> 20: doppler_secret.git_data_ssh_host (ADR-149 item 5 — without it
-        # every account deletion files a FALSE Art. 17 erasure-failed event from the moment
-        # the host exists) and doppler_secret.git_data_betterstack_logs_token (the ingest
-        # token the post-Doppler emits read). BOTH join the gate's PRESENCE half, never its
-        # entailed loop: entailed demands `creates == 1`, and on a resumed dispatch these
-        # legitimately re-plan as no-ops, so requiring a create would be a permanent wedge.
-        #
-        # (#11194) The retired plaintext pair (hcloud_volume.git_data and
-        # hcloud_volume_attachment.git_data, destroyed at the provider on 2026-10-27) is no longer
-        # targeted; terraform-target-parity.test.ts asserts neither returns.
+        # (#6982) the two doppler_secret additions join the gate's PRESENCE half, never its entailed
+        # loop; direction notes on the SSH halves and the LUKS passphrase pair: job-rationale runbook.
         #
         # Three of them are DOWNSTREAM of the server and so are NOT auto-pulled by
         # -target's upstream closure — omitting any one is a distinct catastrophe:
         #   hcloud_server_network.git_data           -> no private IP (#6416), unrepairable
         #   hcloud_firewall_attachment.git_data      -> host NAKED on public IPv4/IPv6
         #   hcloud_volume_attachment.git_data_luks   -> store boots with its volume unmounted
-        # Five more would not be pulled by the server's own graph. Note this PR's two
-        # depends_on edits changed their DIRECTION even though it does not change the
-        # conclusion: the three doppler_secret SSH halves are now DOWNSTREAM of the server
-        # (issue AC4), and the LUKS passphrase pair is now UPSTREAM of it (P13). Neither is
-        # reached by `-target`'s upstream closure from the server alone, so both stay
-        # explicitly targeted.
+        # Five more would not be pulled by the server's own graph (rationale: job-rationale runbook).
         run: |
           # set +e so the rc=$? diagnostic below actually runs — GitHub runs `run:` under
           # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
