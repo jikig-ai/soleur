@@ -54,7 +54,9 @@ n="$(printf '%s\n' "$key_lines" | awk 'NF' | wc -l | tr -d ' ')"
 
 # The key line must satisfy the consumer's anchored key shape — a bare type token or a
 # truncated blob is PIN_CURRENT on an artifact every consumer rejects at plan time.
-printf '%s\n' "$key_lines" | grep -qxE 'ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB[A-Za-z0-9+/]{86}=' \
+# =~ on the single verified line: no pipe-into-early-exit-grep under pipefail (#9217).
+KEY_SHAPE_RE='^ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB[A-Za-z0-9+/]{86}=$'
+[[ $key_lines =~ $KEY_SHAPE_RE ]] \
   || die "key line does not match the consumer's anchored ecdsa-sha2-nistp256 key shape (server.tf local.web_2_ssh_host_key regex) — got: $(printf '%s' "$key_lines" | cut -c1-60)…"
 
 # The # fingerprint: header must carry a SHA256: value bound to the key BODY — recompute
