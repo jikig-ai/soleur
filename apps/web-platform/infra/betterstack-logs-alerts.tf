@@ -376,7 +376,7 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # incident clears about 3 to 4 h after the LAST failing row (the window, then recovery_period),
   # which is not proof of recovery: only a token=ok row is.
   # check_period 900, not 300: Better Stack refused 300 over 10800 (a 36x ratio) with 422 "too resource
-  # intensive" at the #11260 merge apply. Accepted siblings run 18x to 27x; this is 12x.
+  # intensive" at the #11260 merge apply. The highest-ratio accepted siblings run 18x to 27x (most run 3x to 5x); this is 12x.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
