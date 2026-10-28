@@ -160,12 +160,13 @@ merged_epoch="$(date -u -d "$merged_at" +%s 2>/dev/null)" || fail_api "merge tim
 age_days=$(( (NOW - merged_epoch) / 86400 ))
 # --- the restart floor: the window counts from the LATER of the PR3a merge and the latest merged `s4-drain` PR (a drain PR changes the baseline, the live set and the oracle; until now the closer applied
 # this by hand, #10949). One read of the (small) label list; `merged_at` is the floor from here on, so the run listing, the units and the status line all start there. age_days stays PR3a-based above.
+floor_src="pr3a"   # which merge the floor came from, printed on the status line
 drain_json="$(api "repos/$REPO/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100")" || fail_api "s4-drain pulls"
-drain_at="$(jq -r 'if type != "array" then error("not an array") else ([.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // "") end' <<<"$drain_json" 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
-[[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] || fail_api "s4-drain pulls (parse)"
+drain_at="$(jq -r 'if type != "array" then error("not an array") elif length >= 100 then error("full page") else ([.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // "") end' <<<"$drain_json" 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
+[[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain pulls (parse)"
 if [[ -n "$drain_at" ]]; then
   drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
-  if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; fi
+  if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; floor_src="s4-drain"; fi
 fi
 
 # --- read one job: sets RJ_EX, RJ_REASON, RJ_WALL, RJ_RAN (RJ_EX is 2 with reason no-marker when the job concluded without an emitted marker) ---------
@@ -433,7 +434,7 @@ if [ -n "$added" ]; then
   first3="$(printf '%s\n' "$added" | head -n 3 | cat -vT | sed 's/.*/"&"/' | paste -sd' ' -)"
   nots+=("baseline grew by $grew line(s) since the PR3a merge ($first3)")
 fi
-echo "window opened=$merged_at age_days=$age_days green_pr_units_distinct_prs=$distinct green_merge_group_shas=$mg_n scripts_pr=$any_scripts docs_only=$docs_seen draft=$draft_seen bot=$bot_seen wall_p95_s=$p95 wall_max_s=$max units=$n_w runs_listed=$runs_listed units_read=$units_read truncated=$TRUNC baseline_grown=$grew pr_unattributed_runs=$unattr"
+echo "window opened=$merged_at age_days=$age_days floor=$floor_src green_pr_units_distinct_prs=$distinct green_merge_group_shas=$mg_n scripts_pr=$any_scripts docs_only=$docs_seen draft=$draft_seen bot=$bot_seen wall_p95_s=$p95 wall_max_s=$max units=$n_w runs_listed=$runs_listed units_read=$units_read truncated=$TRUNC baseline_grown=$grew pr_unattributed_runs=$unattr"
 # the quota this sweep spent (rate_limit is free to read); a failed read here never decides the verdict
 rl1="$(api "rate_limit" 2>/dev/null)" || rl1=""
 RL_USED1="$(jq -r '.resources.core.used // empty' <<<"$rl1" 2>/dev/null)"; RL_LIMIT="$(jq -r '.resources.core.limit // empty' <<<"$rl1" 2>/dev/null)"; RL_REM1="$(jq -r '.resources.core.remaining // empty' <<<"$rl1" 2>/dev/null)"

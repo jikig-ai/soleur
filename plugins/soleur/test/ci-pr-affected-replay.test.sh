@@ -3197,7 +3197,7 @@ row_ow_one_page() { ow_variant ow_u_onepage; [[ "$RC" -eq 2 ]] && grep -q 'trunc
 row_ow_unit_cap() { ow_variant ow_u_cap; grep -q 'units_read=5 truncated=1' <<<"$OWOUT" && ! grep -q 'actions_runs_5003_jobs' "$GHLOG" && grep -q 'actions_runs_6003_jobs' "$GHLOG"; }   # the 2 oldest runs plus the newest merge_group runs; the middle ones wait for the next sweep
 row_ow_baseline_grew() { ow_variant ow_u_grew; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: baseline grew by 1 line(s) since the PR3a merge ("scripts/^\[\[31mnew^Idata/9")' <<<"$OWOUT" && ! grep -q $'\033' <<<"$OWOUT"; }
 row_ow_baseline_set() { ow_variant ow_u_moved; [[ "$RC" -eq 0 ]] || return 1; ow_variant ow_u_shrunk; [[ "$RC" -eq 0 ]] || return 1; ow_variant ow_u_tipabsent; [[ "$RC" -eq 0 ]]; }   # a moved line, a shrink and an absent tip are not growth
-row_ow_baseline_reads() { ow_variant ow_u_mergeabsent; [[ "$RC" -eq 3 ]] || return 1; ow_variant ow_u_tipfail; [[ "$RC" -eq 3 ]] || return 1
+row_ow_baseline_reads() { ow_variant ow_u_mergeabsent; [[ "$RC" -eq 3 ]] && grep -q 'the baseline is absent at the PR3a merge commit' <<<"$OWOUT" || return 1; ow_variant ow_u_tipfail; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; : > "$GHFIX/ERR422_$(keyof "$OW_BL_PATH?ref=main")"; ow_probe; [[ "$RC" -eq 3 ]]; }   # an HTTP 422 on the baseline is a failed read, never "absent at the tip"
 row_ow_xtrace() { RC=0; OWOUT="$(env GH_TOKEN=fake PATH="$BIN:$PATH" bash -x "$OW_SCRIPT" 2>&1)" || RC=$?; [[ "$RC" -eq 78 ]]; }
 row_ow_read_only() { ow_case; ow_write; : > "$GHLOG"; ow_probe; ! grep -qE 'STUB-MISS' "$GHLOG" && [[ "$(grep -c '^REQ' "$GHLOG")" -gt 10 ]]; }
@@ -3502,6 +3502,13 @@ row_ow_retry() {
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; fx_err "$jp2"   # past the read and facts budgets a failed read is NOT retried
   OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=1 SOAK_FACTS_BUDGET_S=1 SLOW_S=3); ow_probe
   [[ "$RC" -eq 3 && "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
+  local bf   # the deadline is the SUM of the two budgets: each budget alone, spent, must still allow the retry
+  for bf in "SOAK_BUDGET_S=1 SOAK_FACTS_BUDGET_S=300" "SOAK_BUDGET_S=300 SOAK_FACTS_BUDGET_S=1"; do
+    ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; : > "$GHFIX/ERR_ONCE_$(keyof "$jp2")"
+    # shellcheck disable=SC2086
+    OW_ENV=(SOAK_PARALLEL=1 $bf SLOW_S=3); ow_probe
+    [[ "$(ow_req_count "$jp2")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  done
   ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; fx_err "$jp2"; : > "$GHFIX/SLOW_$(keyof "$jp2")"   # a flagged run: the 403 lands while the 502 read sleeps
   OW_ENV=(SOAK_PARALLEL=2 SLOW_S=1); ow_probe
   [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]]   # the retry is skipped while the rate flag is set
@@ -3510,14 +3517,14 @@ ow_u_drain_later() { OW_DRAIN="2031-02-02T03:30:00Z"; }   # a drain PR merged af
 row_ow_drain_floor() {
   local d
   ow_variant ow_u_drain_later
-  [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z age_days=4 green_pr_units_distinct_prs=1 ' <<<"$OWOUT" || return 1   # the floor counts, the 30-day clock stays on PR3a
+  [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z age_days=4 floor=s4-drain green_pr_units_distinct_prs=1 ' <<<"$OWOUT" || return 1   # the floor counts, the 30-day clock stays on PR3a
   for d in "2031-02-02T01:30:00Z 2031-02-02T03:30:00Z" "2031-02-02T03:30:00Z 2031-02-02T01:30:00Z"; do   # the LATEST drain merge wins, whatever the listing order
     ow_case; OW_DRAIN="$d"; ow_write; ow_probe
     [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z ' <<<"$OWOUT" || return 1
   done
   for d in "2031-01-15T00:00:00Z" "null" "null 2031-01-20T00:00:00Z" ""; do   # a drain merge before PR3a, a drain PR closed unmerged, or none: the PR3a merge stays the floor
     ow_case; OW_DRAIN="$d"; ow_write; ow_probe
-    [[ "$RC" -eq 0 ]] && grep -q 'window opened=2031-02-01T00:00:00Z age_days=4 green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
+    [[ "$RC" -eq 0 ]] && grep -q 'window opened=2031-02-01T00:00:00Z age_days=4 floor=pr3a green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
   done
 }
 row_ow_drain_errors() {
@@ -3526,8 +3533,15 @@ row_ow_drain_errors() {
   [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls)' <<<"$OWOUT" || return 1
   ow_case; ow_write; printf '{"message":"nope"}' | fx "$k"; ow_probe
   [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT" || return 1
-  ow_case; ow_write; printf '[{"number":901,"pull_request":{"merged_at":"yesterday"}}]' | fx "$k"; ow_probe
-  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT"   # a malformed timestamp never becomes a floor
+  local bad
+  for bad in yesterday 2031-13-45T99:99:99Z 2031-02-02T03:30:00+01:00 2031-02-02T03:30:00 20310-2-2T03:30:00Z 2031-02-02T3:30:0Z; do   # a malformed or impossible timestamp never becomes a floor (the regex and `date -d` are separate layers)
+    ow_case; ow_write; printf '[{"number":901,"pull_request":{"merged_at":"%s"}}]' "$bad" | fx "$k"; ow_probe
+    [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT" || return 1
+  done
+  ow_case; ow_write; printf '{}' | fx "$k"; ow_probe   # an object is not a list (jq would otherwise iterate nothing and ignore the floor)
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT" || return 1
+  ow_case; ow_write; OW_DRAIN="$(for _i in $(seq 1 100); do printf '2031-01-1%sT00:00:00Z ' $((_i % 10)); done)"; ow_write; ow_probe   # a full page cannot be trusted to hold the latest drain merge
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT"
 }
 ow_u_quota_shape() {   # the resolved fixture plus a second lookup on feat/c and a fork run on its own branch: 6 lookup candidates (3), 4 branches (12), 11 reads (17)
   ow_u_resolved
@@ -3709,11 +3723,11 @@ ow_mutate quota-lookups-unplanned $'(res_cands + 1) / 2 + ' $'' row_ow_quota
 ow_mutate quota-prs-unplanned $'3 * pr_est + ' $'' row_ow_quota
 ow_mutate retry-5xx-unrecognised $'HTTP 5[0-9][0-9]|EOF' $'EOF' row_ow_retry
 ow_mutate retry-404-recognised $'HTTP 5[0-9][0-9]|EOF' $'HTTP 5[0-9][0-9]|HTTP 404|EOF' row_ow_retry
-ow_mutate drain-floor-ignored $'if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; fi' $'if false; then merged_at="$drain_at"; fi' row_ow_drain_floor
+ow_mutate drain-floor-ignored $'if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; floor_src="s4-drain"; fi' $'if false; then merged_at="$drain_at"; floor_src="s4-drain"; fi' row_ow_drain_floor
 ow_mutate drain-earliest-not-latest $'[.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // ""' $'[.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | min // ""' row_ow_drain_floor
 ow_mutate drain-before-pr3a-wins $'if (( drain_epoch > merged_epoch )); then' $'if true; then' row_ow_drain_floor
 ow_mutate drain-read-failure-ignored $'|| fail_api "s4-drain pulls"\n' $'|| drain_json="[]"\n' row_ow_drain_errors
-ow_mutate drain-timestamp-unvalidated $'[[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] || fail_api "s4-drain pulls (parse)"' $'true' row_ow_drain_errors
+ow_mutate drain-timestamp-unvalidated $'[[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain pulls (parse)"' $'true' row_ow_drain_errors
 ow_mutate fork-null-head-repository-is-same-repo $'(.head_repository.full_name // "") != (.repository.full_name // "")' $'(.head_repository.full_name // .repository.full_name // "") != (.repository.full_name // "")' row_ow_resolve_scope
 ow_mutate unattributed-counts-fork-rows $'$2 == "pull_request" && $6 == 0 && $11 != 1' $'$2 == "pull_request" && $6 == 0' row_ow_resolve_scope
 ow_mutate green-pr-rows-zero $'green_pr_rows="$(awk -F\'\\t\' \'$2 == "pull_request" && $11 != 1 && $4 !~ /^canary-/\' "$GREEN" | grep -c .)"' $'green_pr_rows=0' row_ow_zero_pr_units
@@ -3726,6 +3740,12 @@ ow_mutate baseline-422-is-absent $'[ "$rc" -eq 44 ] && return 4' $'{ [ "$rc" -eq
 ow_mutate quota-lookup-candidates-count-forks $'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'$3 == "pull_request" && $8 == 0 && $5 !~ /^canary-/\'' row_ow_quota_shape
 ow_mutate quota-lookup-candidates-count-canaries $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0\'' row_ow_quota_shape
 ow_mutate quota-pr-estimate-counts-forks $'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/ { print "b" $5 }' $'$3 == "pull_request" && $8 == 0 && $5 !~ /^canary-/ { print "b" $5 }' row_ow_quota_shape
+ow_mutate drain-epoch-failure-ignored $'drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || fail_api "s4-drain pulls (parse)"' $'drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || drain_epoch=0' row_ow_drain_errors
+ow_mutate drain-array-guard-dropped $'if type != "array" then error("not an array") elif' $'if false then error("not an array") elif' row_ow_drain_errors
+ow_mutate drain-full-page-guard-dropped $'elif length >= 100 then error("full page")' $'elif false then error("full page")' row_ow_drain_errors
+ow_mutate drain-timestamp-regex-broad $'=~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]' $'=~ .* ]]' row_ow_drain_errors
+ow_mutate retry-deadline-budget-only $'(( SECONDS - T0 < BUDGET + FACTS_BUDGET ))' $'(( SECONDS - T0 < BUDGET ))' row_ow_retry
+ow_mutate retry-deadline-facts-only $'(( SECONDS - T0 < BUDGET + FACTS_BUDGET ))' $'(( SECONDS - T0 < FACTS_BUDGET ))' row_ow_retry
 ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
 ow_mutate retry-ignores-rate-flag $'[ ! -e "$RL_FLAG" ] && (( SECONDS - T0' $'(( SECONDS - T0' row_ow_retry
 ow_mutate baseline-read-unretried $'gh_get -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" || rc=$?' $'timeout 60 gh api -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" 2>/dev/null || rc=$?' row_ow_retry
@@ -5020,7 +5040,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1270   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 38 mutant kills) (measured below) + 20 added by the merged-PR resolution probe fix (6 rows, 25 mutants) and its review round (3 rows, 17 mutants), measured 1270 passes, floor kept equal to the measured count
+FLOOR_ASSERTIONS=1276   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 38 mutant kills) (measured below) + the merged-PR resolution probe fix, its review rounds and the restart floor (rows and mutants for the observation-window probe, itemised in the PR); floor kept equal to the measured count of 1276 passes
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
@@ -5033,7 +5053,7 @@ fi
 # every `mutate` line must have run (an exact reconciliation: a skipped or conditional line is a missing mutant)
 [[ "$MUT_RUN" -ge "$SITES_MUTATE" ]] || { printf '[FATAL] mutation floor: %s mutants ran but this file has %s mutate lines\n' "$MUT_RUN" "$SITES_MUTATE" >&2; exit 1; }
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"   # the observation-window section's own floor: every ow_mutate line must have run
-[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 102 && "$OW_MUT_KILLED" -eq "$OW_MUT_RUN" ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (at least 102 are required), %s were killed\n' "$OW_MUT_RUN" "$OW_SITES" "$OW_MUT_KILLED" >&2; exit 1; }
+[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 108 && "$OW_MUT_KILLED" -eq "$OW_MUT_RUN" ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (at least 108 are required), %s were killed\n' "$OW_MUT_RUN" "$OW_SITES" "$OW_MUT_KILLED" >&2; exit 1; }
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
 printf 'FAILED: %s\n' "${FAILED[@]}" >&2
