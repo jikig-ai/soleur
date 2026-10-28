@@ -156,7 +156,7 @@ for img in "${IMAGES[@]}"; do
     # or a failure with no ::error:: at all) resets — see ECR-DEAD LATCH.
     # No `grep -q` on a pipe: under pipefail an early match can SIGPIPE the
     # producer and read as a miss (grep-q-pipe-guard, #9217).
-    last_err_line=$(grep '^::error::' "$ecr_log" | tail -n 1)
+    last_err_line=$(awk '/^::error::/ { line = $0 } END { print line }' "$ecr_log")
     if [[ "${last_err_line,,}" == *toomanyrequests* ]]; then
       ecr_consec_throttle=$((ecr_consec_throttle + 1))
       if (( ecr_consec_throttle >= ECR_DEAD_AFTER )); then
