@@ -31,8 +31,8 @@ Inputs: brainstorm `knowledge-base/project/brainstorms/2026-10-27-hitl-approval-
 
 ### Premise Validation (Phase 0.6)
 
-- #4672, #10443, #5351, #9776, #10111, #9388, #5331, #10196 are all OPEN with no closing PR. The only collision hit (`prs=6640`) is the unrelated WIP PR "feat-eve-competitive-eval" matching the substring; no open PR touches `approval_request` or migration `179`.
-- `approval_request` appears nowhere on `origin/main`; the next free migration is `179` (latest `178_api_data_grants_narrowing`).
+- #4672, #10443, #5351, #9776, #10111, #9388, #5331, #10196 are all OPEN with no closing PR. The only collision hit (`prs=6640`) is the unrelated WIP PR "feat-eve-competitive-eval" matching the substring; no open PR touches `approval_request` or migration `180`.
+- `approval_request` appears nowhere on `origin/main`; the next free migration is `180` (latest `178_api_data_grants_narrowing`; `179` is held by an unmerged sibling worktree, `179_codex_dsar_column_grants`, so this work renumbered to `180` on 2026-10-28).
 - ADR ordinal: `ADR-305` (gated-tier platform tools never enter SDK `allowedTools`, the hotfix) and `ADR-306` are taken on `origin/main` (2026-10-28). Use `ADR-307` or higher and re-check against fresh `origin/main` immediately before merge (the ordinal is provisional; this plan's earlier `ADR-305` references now read `ADR-307`).
 - ADR corpus: no accepted ADR rejects durable server-side approval rows. ADR-284 chose a memory-less lane ("no new approval surface", "writes no acknowledgement and no cache entry"); a durable single-use request extends it and needs an amendment note. ADR-085 reserves `approval_required` for #4672 (source CHECK widening). ADR-060 rejects a bare `approved_at` column as forgeable and adopts a body-hash-bound single-use approval, which is the precedent for the binding here.
 
@@ -106,7 +106,7 @@ A durable `approval_request` row per exact action (`action_sha256` over the full
 agent tool call (slice-1 tool, flag on)
   -> createCanUseTool gated branch                       [permission-callback.ts]
        canonicalizeAction(tool, input, serverDerived)   -> canonical + sha256   [server/approval/canonical.ts]
-       create_approval_request RPC (+ inbox_item, same txn)                     [mig 179]
+       create_approval_request RPC (+ inbox_item, same txn)                     [mig 180]
        WS approval_request card + push dispatch (best effort, own op on failure)
        wait <= 5 min: resolver wake OR 5 s poll of get_approval_status
   decided in window  -> consume_approval(id, hash, conversation) -> allow
@@ -119,13 +119,13 @@ Owner decides:  chat card (WS approval_decide) | inbox row -> /dashboard/approva
 Cron every 5 min: expire_due_approvals() | flag_unanswered_approvals() | scrub_approval_text()
 ```
 
-### Data model (migration `179_approval_request.sql`, with `.down.sql` and `supabase/verify/179_approval_request.sql`)
+### Data model (migration `180_approval_request.sql`, with `.down.sql` and `supabase/verify/180_approval_request.sql`)
 
 `approval_request`: `id`, `workspace_id` (FK to the workspace table used by `inbox_item`, confirmed at work time), `requested_by_user_id` and `decided_by` (nullable, `ON DELETE SET NULL` carve-out as in `action_sends`), `conversation_id`, `tool_name` (CHECK over the eight slice-1 names), `action_sha256` (CHECK length 64), `canonical_action jsonb` (erasable; nulled by the scrub), `status` (`pending|approved|rejected|expired|consumed`), `expires_at`, `decided_at`, `consumed_at`, `unanswered_flagged_at` (set once by the sweep), `created_at`. Derived, not stored (plan review): the request count for a card header is a `count(*)` over the same conversation and hash across all statuses; an expiry's reason is `unanswered` when `decided_at IS NULL` and `unconsumed` when it is set; scrubbed text is `canonical_action IS NULL`; the expiry time is `expires_at` with status `expired`.
 
 Constraints and triggers: unique partial index on `(conversation_id, action_sha256)` where `status in ('pending','approved')`; a trigger allowing only `pending -> approved|rejected|expired` and `approved -> consumed|expired`, making `workspace_id`, `conversation_id`, `tool_name`, `action_sha256`, `expires_at`, `decided_*`, `consumed_at`, `expired_at` write-once, and refusing every write other than through the RPCs (GUC-gated scrub path for `canonical_action`). The trigger carries an explicit allowed-write matrix and the cascade carve-out that migration 162 (`162_action_sends_message_id_cascade_null_carveout`) added for `action_sends`: a row-level `SET NULL` of `requested_by_user_id` and `decided_by` from the user FK, and the workspace-cascade DELETE, are permitted; without them account erasure would be blocked by the write-once rule (Kieran P1; precedent: migration 162). RLS: Owner `SELECT` via `is_workspace_owner`; no INSERT/UPDATE/DELETE policy. Explicit grants or a `-- soleur:no-data-api:` sentinel per ADR-303, and a `table-grants.ts` classification.
 
-RPCs (all `SECURITY DEFINER SET search_path = public, pg_temp`, `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role`, then `GRANT EXECUTE`: `decide_approval` to `authenticated` only (Ruled by CTO agent 2026-10-27: one function, one authority, the actor comes from `auth.uid()` as in migration 177, never from a parameter; the HTTP route calls it with the user JWT and the WS path with the ws-handler's local `tenantFor(userId, "approval-decide")` wrapper over `lib/supabase/tenant.ts`, because the socket keeps only the verified `userId`; the handler reuses or exports that wrapper, confirmed at work time); every other RPC to `service_role` only. A sentinel test asserts that no module reachable from the MCP tool builders or the `canUseTool` deps imports the tenant-client or service-client decide path (the agent shares the process, so the boundary is code discipline and the sentinel is mandatory), and a test confirms the runtime tenant JWT passes the new function's `is_jti_denied_from_jwt()` check. The comment in migration 179 explains why the grant differs from the service-role RPCs):
+RPCs (all `SECURITY DEFINER SET search_path = public, pg_temp`, `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role`, then `GRANT EXECUTE`: `decide_approval` to `authenticated` only (Ruled by CTO agent 2026-10-27: one function, one authority, the actor comes from `auth.uid()` as in migration 177, never from a parameter; the HTTP route calls it with the user JWT and the WS path with the ws-handler's local `tenantFor(userId, "approval-decide")` wrapper over `lib/supabase/tenant.ts`, because the socket keeps only the verified `userId`; the handler reuses or exports that wrapper, confirmed at work time); every other RPC to `service_role` only. A sentinel test asserts that no module reachable from the MCP tool builders or the `canUseTool` deps imports the tenant-client or service-client decide path (the agent shares the process, so the boundary is code discipline and the sentinel is mandatory), and a test confirms the runtime tenant JWT passes the new function's `is_jti_denied_from_jwt()` check. The comment in migration 180 explains why the grant differs from the service-role RPCs):
 
 - `create_approval_request(...)` — idempotent on the live unique index; also inserts the `inbox_item` (`source='approval_required'`, `severity='action_required'`, `source_ref`, `dedup_key` = approval id) in the same transaction; returns the row; when the live row is already `approved` the caller consumes it immediately with no card and no wait; the request count is a count query across all statuses.
 - `decide_approval(p_id, p_decision)` — requires `expires_at > now()` and flips an overdue row to `expired` inline instead of recording `approved` (the cron is five minutes late at worst, never the authority); `is_workspace_owner(workspace, p_actor)` re-checked at decision time (an Owner who left or lost the role is refused); refuses when the conversation is archived or deleted ("conversation closed", nothing recorded as approved); idempotent for the same decision, refuses the opposite and returns the current row to the loser of a two-Owner race; in the same transaction moves the linked `inbox_item` out of the `action_required` count; `.select()`-checked.
@@ -179,7 +179,7 @@ Flagsmith `approval-queue`, default off, evaluated per workspace identity so a c
 ### Phase 1 — failing tests, then data layer
 
 - 1.1 Write failing tests first (Test Scenarios): canonicalization per tool, consume predicate, status machine, RPC owner check, gated-branch timeout deny, tool-map census.
-- 1.2 Migration 179 + down + verify SQL + `table-grants.ts` classification + RLS fuzz entry + `inbox_item` CHECK widening.
+- 1.2 Migration 180 + down + verify SQL + `table-grants.ts` classification + RLS fuzz entry + `inbox_item` CHECK widening.
 - 1.3 `server/approval/{canonical,render,service}.ts`.
 
 ### Phase 2 — gate wiring
@@ -428,7 +428,7 @@ Run against this plan (advisory, headless). No `Critical` finding, so no `compli
 
 | check_id | Severity | Finding | Plan response |
 |---|---|---|---|
-| GDPR-Art-6 | Important | New table columns need a `-- LAWFUL_BASIS:` annotation | Migration 179 annotates every personal-data column (`requested_by_user_id`, `decided_by`, `canonical_action`) with the basis recorded in the Art. 30 entry (performance of the user's own request for the action text; legitimate interest in an accountable audit trail for the decision fields); added to AC13 |
+| GDPR-Art-6 | Important | New table columns need a `-- LAWFUL_BASIS:` annotation | Migration 180 annotates every personal-data column (`requested_by_user_id`, `decided_by`, `canonical_action`) with the basis recorded in the Art. 30 entry (performance of the user's own request for the action text; legitimate interest in an accountable audit trail for the decision fields); added to AC13 |
 | GDPR-Art-5e | Important | Retention metadata for a personal-data table | Migration comment and Art. 30 entry state: `canonical_action` nulled 30 days after the terminal state; decision metadata follows the `action_sends` precedent (retained, anonymised on erasure). Because indefinite retention needs a stated purpose, the Art. 30 entry must name it (accountability for outward actions taken on a user's behalf) or set a bounded period; the CLO confirms in the Phase 5.3 task |
 | GDPR-Art-17 and GDPR-Art-17-caller | Important | FKs to users need erasure handling and every `anonymise_*` RPC needs a call site | Both user columns are `ON DELETE SET NULL`; `anonymise_approval_request` is called from `account-delete.ts` in this PR and a test asserts the call site (AC13) |
 | GDPR-Chapter-V | none | No new vendor or non-EEA transfer | Web push and Resend are existing processors; no LLM touches the action text in slice 1 |
@@ -485,8 +485,8 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 
 ## Files to Create
 
-- `apps/web-platform/supabase/migrations/179_approval_request.sql`, `179_approval_request.down.sql`
-- `apps/web-platform/supabase/verify/179_approval_request.sql`
+- `apps/web-platform/supabase/migrations/180_approval_request.sql`, `180_approval_request.down.sql`
+- `apps/web-platform/supabase/verify/180_approval_request.sql`
 - `apps/web-platform/server/approval/canonical.ts`, `render.ts`, `service.ts`, `waiters.ts`, `tools.ts` (`APPROVAL_REQUIRED_TOOLS` and the exempt set)
 - `apps/web-platform/server/inngest/functions/cron-approval-expiry.ts`
 - `apps/web-platform/components/chat/approval-request-card.tsx`
@@ -525,18 +525,18 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 - [ ] AC8. Each new Sentry op has its own static message; a grep test fails if two ops share a message string; `SOLEUR_APPROVAL_*` markers are admitted by the Vector allowlist (verified by reading the allowlist, not assumed).
 - [ ] AC9. The tool-map census (Guard 2) and the mutation battery (Guard 1, every matrix row plus the harness rows) are green, and every mutation lands RED on a pristine copy with a green unmutated control; `scripts/lint-guard-contract.py` passes on this plan.
 - [ ] AC10. The real-SDK probe, built through the real `buildAgentQueryOptions` path and pointed at the dev Supabase project only (`hr-dev-prd-distinct-supabase-projects`), was run before the build (Phase 0.1) and again on the finished branch; `phase-0-measurements.md` has one result line per slice-1 tool name and shows `canUseTool` invoked for every slice-1 tool name and the deny honoured, and records whether `allowedTools` short-circuited it (with the `buildAllowedTools` fix and census test if so). A census test asserts each slice-1 tool is registered in each runner or exempt with a reason.
-- [ ] AC11. Migration 179 applies and reverts cleanly; `table-grants.ts` classifies the table; the RLS fuzz and the grants gate are green; no INSERT/UPDATE/DELETE policy exists.
+- [ ] AC11. Migration 180 applies and reverts cleanly; `table-grants.ts` classifies the table; the RLS fuzz and the grants gate are green; no INSERT/UPDATE/DELETE policy exists.
 - [ ] AC12. ADR-307 exists (ordinal re-checked against fresh `origin/main`), C4 files edited and `model.likec4.json` regenerated, `c4-model-freshness`, `c4-count-parity` and the C4 render tests green.
-- [ ] AC13. Legal documents, Art. 30 entry, anonymise RPC and DSAR allowlist entry are in the PR and the `gdpr-gate` result is recorded; migration 179 carries `-- LAWFUL_BASIS:` annotations and a retention comment; `anonymise_approval_request` has a call site in `account-delete.ts` with a test; the Art. 30 entry states the retention purpose for the decision metadata; no copy claims "every outward action requires your approval".
+- [ ] AC13. Legal documents, Art. 30 entry, anonymise RPC and DSAR allowlist entry are in the PR and the `gdpr-gate` result is recorded; migration 180 carries `-- LAWFUL_BASIS:` annotations and a retention comment; `anonymise_approval_request` has a call site in `account-delete.ts` with a test; the Art. 30 entry states the retention purpose for the decision metadata; no copy claims "every outward action requires your approval".
 - [ ] AC13b. No site page, changelog entry, release note or epic text uses 'approval queue' or 'human-in-the-loop' as a coverage claim before the enabling-gate row closes.
 - [ ] AC14. The approved wireframe delta (Phase 0.2) is committed, and no card, thread line, notification or copy-deck string claims an outcome ("sent", "ran") or an execution on approve that slice 1 does not perform; a string-level test over the copy deck constants asserts the absence of the outcome words `sent`, `ran`, `executed` and `delivered` and the presence of "Released to your agent" (the approved consequence line legitimately contains "send", so the test is scoped to outcome words).
 - [ ] AC14b. `decide_approval` on an archived or deleted conversation returns "conversation closed" and records nothing; an approved-but-never-consumed request expires with `expired_reason='unconsumed'` and no push; a decision removes the linked inbox item from the `action_required` count; a second Owner deciding at the same time receives the final row ("already decided by <name>").
 - [ ] AC14c. `decide_approval` refuses an overdue row and flips it to `expired` inline; a re-proposal that finds an `approved` row consumes it at once with no card and no wait; account erasure succeeds against rows with set user columns (write-once trigger carve-out test).
-- [ ] AC15. `soleur:review` runs with `user-impact-reviewer` and the review findings are resolved; PR body carries `Closes #4672` and `Closes #5351`, and its first line answers 'does merging this alone mutate production?': it applies migration 179 to production and creates one Sentry cron monitor through the existing Sentry apply workflow, with the flag off and no behaviour change other than the timeout deny.
+- [ ] AC15. `soleur:review` runs with `user-impact-reviewer` and the review findings are resolved; PR body carries `Closes #4672` and `Closes #5351`, and its first line answers 'does merging this alone mutate production?': it applies migration 180 to production and creates one Sentry cron monitor through the existing Sentry apply workflow, with the flag off and no behaviour change other than the timeout deny.
 
 ### Post-merge (operator and verification)
 
-- [ ] AC16. Migration 179 is applied to production by the deploy pipeline (agent verifies through the deploy run, not by hand).
+- [ ] AC16. Migration 180 is applied to production by the deploy pipeline (agent verifies through the deploy run, not by hand).
 - [ ] AC17. The Flagsmith feature `approval-queue` is created through `soleur:flag-create` (typed-yes write handed to the operator, ADR-249); the flag is not flipped by this plan.
 - [ ] AC18. After the first deploy the Sentry cron monitor `cron-approval-expiry` shows a check-in (read by the agent from Sentry).
 - [ ] AC19. #10443 is closed as a duplicate of #4672 with a pointer to the PR; the consolidated deferral issue #11300 exists.

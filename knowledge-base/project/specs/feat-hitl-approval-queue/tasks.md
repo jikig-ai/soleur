@@ -10,17 +10,17 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 - [x] 0.1 (delivered by the gate-bypass hotfix, ADR-305) Write `apps/web-platform/scripts/dev-probe-approval-gate.ts` through the real `buildAgentQueryOptions` path; run it; record in `phase-0-measurements.md` whether `canUseTool` is invoked for each slice-1 tool and whether `allowedTools` short-circuits it
   - [x] 0.1.1 (delivered by the hotfix) If short-circuited: extract pure `buildAllowedTools`, drop `APPROVAL_REQUIRED_TOOLS` when the flag is on, add census test
 - [ ] 0.2 Wireframe delta via `soleur:product:design:ux-design-lead` (honest "Approve" copy, two approved states, copy-deck fixes, drop 04G and member landing variant, other items in plan Phase 0.2); scrub `fileToken`; operator approval
-- [ ] 0.3 Confirm per-tool canonical field lists against each tool's zod schema; record in test fixtures
+- [x] 0.3 Confirm per-tool canonical field lists against each tool's zod schema; record in test fixtures
 
 ## Phase 1: Failing tests, then data layer
 
-- [ ] 1.1 Write failing tests first: canonicalization per tool, consume predicate, status machine, `decide_approval` owner/expiry, gated-branch timeout deny, tool-map census, re-proposal on `approved` row
-- [ ] 1.2 `179_approval_request.sql` + `.down.sql` + `supabase/verify/179_approval_request.sql`
-  - [ ] 1.2.1 Table, constraints, partial unique index, write-once trigger with SET NULL and workspace-cascade carve-outs
-  - [ ] 1.2.2 RPCs: create, decide (authenticated, `auth.uid()`), consume, get status, sweep, anonymise; grants per plan
-  - [ ] 1.2.3 `inbox_item.source` CHECK widening (`NOT VALID` then `VALIDATE`); `-- LAWFUL_BASIS:` and retention comments
-  - [ ] 1.2.4 `test/rls-fuzz/table-grants.ts` classification; RLS fuzz entry; ADR-303 grants declaration
-- [ ] 1.3 `server/approval/{canonical,render,service,waiters,tools}.ts`
+- [x] 1.1 Write failing tests first: canonicalization per tool, consume predicate, status machine, `decide_approval` owner/expiry, tool-map census, re-proposal on `approved` row (the gated-branch timeout-deny test was delivered by the hotfix, ADR-305)
+- [x] 1.2 `180_approval_request.sql` + `.down.sql` + `supabase/verify/180_approval_request.sql`
+  - [x] 1.2.1 Table, constraints, partial unique index, write-once trigger with SET NULL and workspace-cascade carve-outs
+  - [x] 1.2.2 RPCs: create, decide (authenticated, `auth.uid()`), consume, get status, sweep, anonymise; grants per plan
+  - [x] 1.2.3 `inbox_item.source` CHECK widening (`NOT VALID` then `VALIDATE`); `-- LAWFUL_BASIS:` and retention comments
+  - [x] 1.2.4 `test/rls-fuzz/table-grants.ts` classification; RLS fuzz entry; ADR-303 grants declaration
+- [x] 1.3 `server/approval/{canonical,render,service,waiters,tools}.ts`
 
 ## Phase 2: Gate wiring
 
