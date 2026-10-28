@@ -7,7 +7,7 @@
 #
 # Why a dedicated workflow and not a follow-through sweeper directive: the sweeper comments
 # on every non-pass verdict with no dedup and exit 0 closes the issue (ruling F2 in
-# knowledge-base/project/specs/feat-one-shot-autonomous-start-followthroughs/decision-challenges.md).
+# knowledge-base/project/specs/archive/20261028-195636-feat-one-shot-autonomous-start-followthroughs/decision-challenges.md).
 # No ruling is made here either: the data comment says the next `soleur:go` session has the
 # CTO agent record the keep-off or turn-on ruling (F1). Run weekly by
 # .github/workflows/code-quality-followups-watch.yml (RETIREMENT block in its header).
