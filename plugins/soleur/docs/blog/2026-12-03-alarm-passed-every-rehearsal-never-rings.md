@@ -44,17 +44,17 @@ Three places, one shape. In each, the green checkmark was telling the truth abou
 
 ## Why we counted instead of fixing them one by one
 
-The obvious move was to fix the places we knew about and move on. We did fix them. But finding them one at a time is how the next one slips in. The first two were found by a reviewer who happened to be reading carefully that day. A system that depends on someone happening to notice will eventually miss one.
+The obvious move was to fix the places we knew about and move on. We did fix them. But finding them one at a time is how the next one slips in. The first two were found in review, not by any alarm. A system that depends on someone happening to notice will eventually miss one.
 
 So we counted instead. We wrote a lint, which is an automatic checker that reads the code and stops a change from shipping when it finds a pattern we have banned. This one works as a census, a full count of every place in the code that catches an error where a hand-off is involved, and then reads something about it.
 
 The checker sorts every one of those places into one of two piles.
 
-**The error already crossed the hand-off.** The code is reading the stamp on a note that has been rewritten. This is always wrong, because the stamp is gone. The checker flags it every time — a bare "is this an error at all" check aside, there is no way to excuse a place in this pile.
+**The error already crossed the hand-off.** The code is reading the stamp — the label — on a note that has been rewritten. This is always wrong, because the stamp is gone. The checker flags it every time. The only pass it gives is a bare "is this an error at all" check; beyond that, there is no way to excuse a place in this pile.
 
 **The error is still live inside the task.** Here the note has not been passed on yet, so the original is in hand, stamp and all. Reading the stamp is fine, and it is in fact the right place to do it: check the label while you still have it, then pass the verdict along as a plain result. But the checker only allows this in a short, written list of places. Adding a place to that list is a visible, deliberate act. The addition shows up in the change for a reviewer to see and challenge.
 
-It watches for three kinds of label reading: asking what kind of problem this is, asking what it is named, and asking for its numeric code. If any of those turns up on the wrong side of the hand-off, the change is stopped. Today the count comes back clean.
+It watches for three kinds of label reading: asking what kind of problem this is, asking what it is named, and asking for its numeric code. If any of those turns up on the wrong side of the hand-off, the change is stopped. The count comes back clean.
 
 The old way, a careful person had to notice. The new way, nobody has to. The bad pattern cannot come back silently, because coming back means failing a check in plain sight or adding a name to a list in plain sight.
 
