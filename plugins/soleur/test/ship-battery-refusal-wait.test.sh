@@ -526,7 +526,7 @@ echo "\$*" >> "\$REC/aff.argv"
 : > "\$REC/aff.running"
 "$REAL_SLEEP" 0.3
 rm -f "\$REC/aff.running"
-echo "stub battery log"
+echo "stub battery log \$(wc -l < "\$REC/aff.argv" | tr -d ' ')"
 exit "\$(cat "\$REC/aff.rc" 2>/dev/null || echo 4)"
 STUB
 assert_fixture_dir "$RPLUG"
@@ -537,10 +537,12 @@ cat > "$RPLUG/skills/ship/scripts/battery-refusal-wait.sh" <<'STUB'
 echo "$*" >> "$REC/wait.argv"
 [[ "$1" == "--log" && "$3" == "--state" ]] || { echo "wait stub: bad argv: $*" >&2; exit 64; }
 log="$2"; state="$4"
-[[ -s "$log" && "$(head -n 1 "$log")" == "stub battery log" ]] || { echo "wait stub: --log is not the battery log" >&2; exit 65; }
+[[ -s "$log" && "$(head -n 1 "$log")" == "stub battery log "* ]] || { echo "wait stub: --log is not the battery log" >&2; exit 65; }
 [[ -f "$state" ]] || { echo "wait stub: --state is not a file" >&2; exit 66; }
 echo "state=$state" >> "$REC/wait.state"
 if [[ -e "$REC/aff.running" ]]; then echo "running=1" >> "$REC/wait.state"; else echo "running=0" >> "$REC/wait.state"; fi
+# fresh=0: the log still belongs to an EARLIER launch (a stale rc file let the recipe read a verdict that was not this launch's)
+if [[ "$(head -n 1 "$log")" == "stub battery log $(wc -l < "$REC/aff.argv" | tr -d ' ')" ]]; then echo "fresh=1" >> "$REC/wait.state"; else echo "fresh=0" >> "$REC/wait.state"; fi
 echo "prev=<$(cat "$state")>" >> "$REC/wait.state"
 n="$(wc -l < "$REC/wait.argv" | tr -d ' ')"; echo "epoch-$n" > "$state"
 code="$(head -n 1 "$REC/wait.codes" 2>/dev/null)"; [[ -n "$code" ]] || code=11
@@ -562,7 +564,7 @@ run_recipe() { # <recipe-text> <FULL_BATTERY> <battery-rc> <wait codes...> ; set
 rec_res() { # a compact result: markers, battery launches, whether --full reached each script
   local m
   m="$(grep -oE 'BATTERY DONE|RELAUNCH|CONTINUE_CI_IS_THE_GATE|QUEUE_IN_LOCK|STOP' <<<"$REC_OUT" | tr '\n' ',')"
-  RES="$m aff=$(wc -l < "$REC/aff.argv" | tr -d ' ') afffull=$(grep -c -- '--full' "$REC/aff.argv") waitfull=$(grep -c -- '--full' "$REC/wait.argv") statepaths=$(sort -u "$REC/wait.state" | grep -c '^state=') carry=$(grep -c '^prev=<epoch' "$REC/wait.state") racy=$(grep -c '^running=1' "$REC/wait.state")"
+  RES="$m aff=$(wc -l < "$REC/aff.argv" | tr -d ' ') afffull=$(grep -c -- '--full' "$REC/aff.argv") waitfull=$(grep -c -- '--full' "$REC/wait.argv") statepaths=$(sort -u "$REC/wait.state" | grep -c '^state=') carry=$(grep -c '^prev=<epoch' "$REC/wait.state") racy=$(grep -c -E '^(running=1|fresh=0)' "$REC/wait.state")"
 }
 recipe_scn() { run_recipe "$RECIPE_UNDER_TEST" "$1" "$2" "${@:3}"; rec_res; }
 RECIPE_UNDER_TEST="$RECIPE"

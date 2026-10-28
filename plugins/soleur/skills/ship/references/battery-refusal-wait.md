@@ -6,7 +6,7 @@ Scope: only the sibling-run refusal (`refusing a full-gate run ... N sibling ful
 
 ## Recipe (one Monitor script)
 
-Launch first: a refusal exits within seconds, so there is no up-front capacity loop. Arm the Monitor with `persistent: true` (the default 5-minute timeout is shorter than the 30-minute budget). If the Monitor you have rejects `persistent`, arm it at its maximum timeout and, when it expires without a verdict, re-arm a tail-only script that reuses the same `$d` (the recipe prints `BATTERY_DIR=<d>` first; `$LOG`, `$RCF` and `$STATE` are `log`, `rc` and `state` inside it) (the detached battery keeps running and `$STATE` carries the budget); never re-run the recipe from its first line, which starts a new episode and a second battery. Run it from the repository root.
+Launch first: a refusal exits within seconds, so there is no up-front capacity loop. Arm the Monitor with `persistent: true` (the default 5-minute timeout is shorter than the 30-minute budget). If the Monitor you have rejects `persistent`, arm it at its maximum timeout and, when it expires without a verdict, re-arm a tail-only script: it sets `d` to the value the recipe printed as `BATTERY_DIR=<d>` on its first line, `LOG="$d/log"`, `RCF="$d/rc"`, `STATE="$d/state"` and `FULL` as on the second line, skips `launch`, and runs only the `until` wait and the wait-script call with its `case` below (its relaunch count restarts at 0). The detached battery keeps running and `$STATE` carries the budget. Never re-run the recipe from its first line, which starts a new episode and a second battery. Run it from the repository root.
 
 ```bash
 d="$(mktemp -d -t soleur-run.$$.XXXXXXXX)"; LOG="$d/log"; RCF="$d/rc"; STATE="$d/state"; : > "$STATE"; echo "BATTERY_DIR=$d"
