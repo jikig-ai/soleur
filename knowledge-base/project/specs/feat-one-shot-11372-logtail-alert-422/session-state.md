@@ -39,3 +39,7 @@
 - P3s: tuple phrasing + contingency qualifier → fixed inline; rest folded into #11388
 - shellcheck clean (semgrep substitute, bash-only source); gdpr-gate N/A (no regulated-data path); #11266 datapoint comment posted
 - Design pass: lever choice (query_period) upheld by all three seats
+
+## Fix Round + QA
+- Fix round: 3 targeted seats + 1 verification pass over 9008affb98..436ea714e2 — all clean, all findings CLOSED
+- QA: plan unit scenarios verified via guard suite (43/43 x3, incl. negative-control RED + 90000-widening mutant); e2e row is pyramid-justified deferred to live verify; AC-4 post-merge apply check pending at postmerge
