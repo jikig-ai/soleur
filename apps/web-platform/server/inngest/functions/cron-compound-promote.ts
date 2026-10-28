@@ -2221,7 +2221,7 @@ export async function cronCompoundPromoteHandler({
     const runCreateArm = async (): Promise<void> => {
       createArmRan = true;
       const capLeft = weekCapResult.remaining - clustersOpened;
-      const proposedStep: CreateStepVerdict = await step.run("create-propose", async () => {
+      const proposed: CreateStepVerdict = await step.run("create-propose", async () => {
         const octokit = new Octokit({ auth: installationToken });
         return runCreateProposeStep({
           repoRoot,
@@ -2241,10 +2241,8 @@ export async function cronCompoundPromoteHandler({
       });
       // The step output is memoized JSON that outlives a deploy, so `offered` is optional on read: an older memo has none,
       // and only a non-negative integer within the pattern bound reaches the marker (anything else yields no key).
-      const stamped: unknown = (proposedStep as { offered?: unknown }).offered;
+      const stamped: unknown = proposed.offered;
       createOffered = typeof stamped === "number" && Number.isInteger(stamped) && stamped >= 0 && stamped <= MAX_CREATE_OFFERED ? stamped : undefined;
-      // The stamp is for the marker only: strip it so the persist step and the PR body never see it.
-      const { offered: _offered, ...proposed } = proposedStep;
       if (proposed.kind === "refused") {
         recordCreateRefusal(proposed);
         return;

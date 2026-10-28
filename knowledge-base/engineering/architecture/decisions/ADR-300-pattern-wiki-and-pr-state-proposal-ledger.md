@@ -152,3 +152,7 @@ The flip decision, the effect measurement and the deferred deliverables are trac
 ## Addendum 2026-10-26 (#10550)
 
 The dark-launched create arm (ADR-092, create-only amendment of 2026-10-26) reuses this ADR's ledger, cluster-hash and branch and title shapes unchanged; the closed marker field `kind` (`edit` or `create`) distinguishes it, a refused create writes no ledger row, and the status stays `adopting`.
+
+## Addendum 2026-10-28 (#10550)
+
+The create arm's marker also carries `create_offered`, an integer count of the candidate patterns left after the same-run and ledger filters, and no text. The ledger-reader contract's "counts and closed enums only" sentence is scoped to that reader's own fields, so this line is the create arm's stated bound. The prompt, the qualification bar and the evidence the model sees are unchanged.
