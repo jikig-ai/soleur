@@ -144,15 +144,15 @@ No cross-domain implications detected: internal documentation append. Legal expo
 
 ## Acceptance Criteria
 
-- [ ] The ADR gains one new final section `## Addendum - 2026-10-28 (#9927)`; `git diff origin/main -- <ADR>` shows additions only (0 removed lines); the Status block and every dated cell are untouched.
-- [ ] The cancellation-page sentence is quoted only after the work-phase WebFetch confirmed it word for word, with the full URL, section name and fetch date 2026-10-28; if it did not match, the addendum records what was read and does not quote the old sentence.
-- [ ] The spec counts (paths, distinct top-level segments, project-named paths) and the token statement are the work-phase numbers from a fresh `jq` run on 2026-10-28, with the "groups" definition named.
-- [ ] The addendum states: no protection against project or account loss; no off-project copy; accepted residual; the 2026-10-23 posture stands; the sentence does not settle whether protection blocks a project delete.
-- [ ] The "Not measured" list has all four items (protected resources vs project delete in practice; which role may delete a project; account closure or suspension; member list, roles, owner/admin count, sign-in protection, console only, shared with A6).
-- [ ] The three follow-ups are named owner-side, "not started", none decided; no sentence picks an option.
-- [ ] No value, token, account id, member name or email in the addendum, plan or PR body.
+- [x] The ADR gains one new final section `## Addendum - 2026-10-28 (#9927)`; `git diff origin/main -- <ADR>` shows additions only (0 removed lines); the Status block and every dated cell are untouched.
+- [x] The cancellation-page sentence is quoted only after the work-phase WebFetch confirmed it word for word, with the full URL, section name and fetch date 2026-10-28; if it did not match, the addendum records what was read and does not quote the old sentence.
+- [x] The spec counts (paths, distinct top-level segments, project-named paths) and the token statement are the work-phase numbers from a fresh `jq` run on 2026-10-28, with the "groups" definition named.
+- [x] The addendum states: no protection against project or account loss; no off-project copy; accepted residual; the 2026-10-23 posture stands; the sentence does not settle whether protection blocks a project delete.
+- [x] The "Not measured" list has all four items (protected resources vs project delete in practice; which role may delete a project; account closure or suspension; member list, roles, owner/admin count, sign-in protection, console only, shared with A6).
+- [x] The three follow-ups are named owner-side, "not started", none decided; no sentence picks an option.
+- [x] No value, token, account id, member name or email in the addendum, plan or PR body.
 - [ ] `check-adr-ordinals.sh` and `sole-copy-drift-check.test.sh` exit 0; markdownlint on the ADR exits 0 or the refusal is stated and CI's markdownlint job is green; the PR body has Measured / Not measured with dates, `Ref #9927`, `Ref #10112`, and no closing keyword (`grep -iE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #' ` on the body returns nothing).
-- [ ] Only the ADR and files under `knowledge-base/project/{plans,specs}/` changed.
+- [x] Only the ADR and files under `knowledge-base/project/{plans,specs}/` changed.
 
 ## Test Scenarios
 
