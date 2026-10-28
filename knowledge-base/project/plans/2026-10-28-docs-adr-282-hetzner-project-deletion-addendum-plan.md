@@ -16,6 +16,14 @@ Detail level: MINIMAL. Docs only; one append to one file. PR #11414 (draft). Wor
 
 Append one dated addendum, `## Addendum - 2026-10-28 (#9927)`, at the end of `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` (currently ends with the `Addendum - 2026-10-26 (#9927)` block, last line the "Superseded (route only)" paragraph). It records, with evidence class and date, exactly what a re-read of two public Hetzner sources showed on 2026-10-28 and what stays unmeasured, and names three owner-side follow-ups as not started. Append-only: no edit to the 2026-10-23 addendum, any dated cell, the Status block, or the residuals. No new ordinal; status stays `accepted`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28 (light pass; docs-only). Halts checked: 4.6 User-Brand Impact present, threshold `none` with scope-out (path is not in the sensitive-path regex); 4.7, 4.9, 4.10, 4.11, 4.13 not triggered (no code, UI, store, guard or autonomous task); 4.8 PAT sweep clean; 4.12 Scope Check was missing and is now added. No domain, review or skill fan-out was spawned: the change is one append to an internal ADR with every fact pre-measured, so extra agents add cost without recall.
+
+- Cited rule id `wg-use-closes-n-in-pr-body-not-title-to` exists in `AGENTS.md`. Cited issues/PR checked live: #9927 open, #10112 open, #10889 merged.
+- Baseline measured at deepen time on the untouched ADR: `bash scripts/markdown-lint.sh <ADR>` prints "1 file(s) clean." (rc 0) and `bash scripts/check-adr-ordinals.sh` passes, so the pinned linter runs in this worktree and any later red is attributable to the append.
+- Plan-review panel not run: a one-file docs append with no mechanism to cut; the Property List and Cut List above carry the review question. Recorded as a decision in the session summary.
+
 ## Research Insights
 
 **Premise Validation (Phase 0.6).** Checked: #9927 OPEN, #10112 OPEN, #10889 MERGED (PR "docs(adr): ADR-282 Hetzner project-deletion residual is not established, record planning posture"). The ADR ends with the 2026-10-26 addendum as the brief says; the 2026-10-23 addendum (L366-382) holds the three-row question table, the "planning posture stands" paragraph and a CTO ruling of 2026-10-23. Collision pre-check: PRs #11404, #11374, #11284, #11378 also name #9927; none touches the ADR-282 file (`gh pr diff --name-only`, 0 hits each). Foreign `test-all.sh` processes belong to other worktrees; no overlap with this file.
@@ -99,6 +107,40 @@ Skipped: the addendum records evidence and an unchanged accepted residual; it ma
 **Domains relevant:** none
 
 No cross-domain implications detected: internal documentation append. Legal exposure is not changed (no new data-processing statement); the header-backup question stays legal-gated in the ADR and is not decided here.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "add a dated ADR-282 addendum to knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md" [brief] | Files to Edit entry; Implementation step 2 | mapped |
+| 2 | "append a new addendum dated 2026-10-28 (append-only; do not edit the 2026-10-23 addendum body or any dated cell; status stays accepted; no new ADR ordinal)" [brief] | Overview; Implementation step 2; AC 1 | mapped |
+| 3 | "RE-FETCH the page read-only (WebFetch) to confirm the sentence before quoting it, and date that fetch with today's date (2026-10-28)" [brief] | Implementation step 1 (first bullet); AC 2 | mapped |
+| 4 | "RE-FETCH read-only and confirm (count paths, search for a project path, read the token/project statement) before writing it; record your own counts and date" [brief] | Implementation step 1 (second bullet); AC 3 | mapped |
+| 5 | "Nothing protects the volume (id 106903269) if the whole project or account is lost; no copy of its data exists outside the project; stays an accepted residual." [brief] | Draft shape "Still true" paragraph; AC 4 | mapped |
+| 6 | "Not measured: whether protected resources block a project delete in practice; which role may delete a project; what account closure or suspension does; the member list, roles, owner/admin count and sign-in protection" [brief] | Draft shape "Not measured" paragraph; AC 5 | mapped |
+| 7 | "Name the three owner-side follow-ups as owner-side and NOT started ... Do not decide any." [brief] | Draft shape follow-ups paragraph; AC 6 | mapped |
+| 8 | "Run the repo's ADR/doc gates that apply to the touched file" [brief] | Implementation step 3; AC 8 | mapped |
+| 9 | "The PR body must state what was measured and not, with dates." [brief] | Implementation step 4; AC 8 | mapped |
+| 10 | "Ref #9927 and Ref #10112 only, never a closing keyword in the PR" [brief] | Implementation step 4; AC 8 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Edit ADR-282 (append only) | asks 1-2 | asked |
+| Re-fetch of cancellation page and spec | asks 3-4 | asked |
+| Local checks (markdownlint, adr-ordinals, drift suite) | ask 8 | asked |
+| Local run of `inngest-redis-luks-import-rehearsal.test.sh` | ask 8 ("any ADR lint"; this suite reads the ADR) | inferred - justification: the ADR path is in `infra-validation.yml`'s PR path list, so CI runs this suite on any ADR edit; running it locally is the cheapest way to see a red before CI does |
+| Plan file and `tasks.md` | ask 9 | inferred - justification: the plan skill's save-tasks contract requires `tasks.md` beside the plan so `soleur:work` has a task list |
+
+### Split Assessment
+
+- Subsystems touched: 1 - knowledge-base (ADR, plan, spec)
+- Planned files: 3 | Estimated changed lines: about 35 in the ADR plus plan and tasks
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Acceptance Criteria
 
