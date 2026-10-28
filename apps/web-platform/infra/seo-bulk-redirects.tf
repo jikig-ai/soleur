@@ -103,6 +103,7 @@ locals {
     "2026-11-10-test-the-migration-not-just-the-schema"             = "test-the-migration-not-just-the-schema"
     "2026-11-12-map-that-only-records-what-the-agent-saw"           = "map-that-only-records-what-the-agent-saw"
     "2026-11-17-flaky-test-passed-on-retry-quarantine"              = "flaky-test-passed-on-retry-quarantine"
+    "2026-11-19-first-we-made-green-mean-something"                 = "first-we-made-green-mean-something"
   }
 
   # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs
