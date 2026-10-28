@@ -353,6 +353,21 @@ the selected profile: the `doppler secrets get <profile token secret>` /
   all traffic simultaneously — platform-wide degradation, not one user's
   incident; recorded as decision-challenge D6 for the parent to confirm.
 
+> **Addendum — 2026-10-28 (user-impact review seat, PR #11383):** the first
+> bullet's named symptom set (cache rules, WAF, redirects) is the
+> `CF_API_TOKEN_RULESETS` drop-set; a `CF_API_TOKEN` REPLACE cannot touch it —
+> separate tokens, and nothing in the default-token flow re-runs the rulesets
+> profile. The artifact's REAL aggregate blast radius is **Tunnel, Access, DNS,
+> Notifications dropped on `CF_API_TOKEN`**: app.soleur.ai DNS management and the
+> origin tunnels behind it break at once. Two vectors this seat found carried
+> only by skill-surface prose, now named here: (a) the Read-vs-Edit green gate —
+> a REPLACE re-adding LB as Read-only reads assert-green (mitigation: SKILL.md
+> §Sharp Edges visual-confirmation; write-attesting probes cut per plan scope);
+> (b) the subscription-404 baseline stall — an un-subscribed LB add-on answers
+> 404 and hard-fails the pre-widen baseline while the token is fine (ruled
+> deliberate in D4; D5 pins it; flip-evidence named there). Threshold itself
+> stands (D6 ruling): both symptom sets are platform-wide, aggregate-pattern.
+
 ## Observability
 
 ```yaml
@@ -457,6 +472,12 @@ this block is what AC10 audits against:
   (recorded in the Phase-1 commit message).
 - D0 is pre-Phase-2 evidence (rc 2 at HEAD), not a permanent suite assertion; the tasks.md
   maintenance step ran at each phase's end.
+- Guard 2 M2 detector citation: the case that reddens when neutrality is read before the mode
+  flag is **D6** (assert-mode 403 -> rc 3); D7 is assert-GREEN and cannot redden under M2.
+  The Observability matrix's "D7-equivalent" phrasing reads as D6 likewise. (AC10 auditability.)
+- Pseudocode block (`classify_target` sketch, summary-lines sketch): bare `return`, hardcoded
+  `LB_OK==2`, and stderr placement there are superseded by addenda 4/3/1 — the CODE and the
+  D-series follow the addenda; the sketch stays as written literature.
 
 ## Implementation Phases
 

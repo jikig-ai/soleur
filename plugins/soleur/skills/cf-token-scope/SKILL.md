@@ -165,7 +165,9 @@ any other anomaly (404, degraded 200, wrong-shape 200, 5xx, 000, empty) is a
 hard fail in BOTH modes. In assert mode (`--expect-lb-scopes`) every target row
 must be authorized or the run exits 3 naming the still-absent 403s. The `target`
 vocabulary is default-token-local: the rulesets `--target-entrypoint` path keeps
-its own `TARGET_PRESENT` handling and never consults this classifier.
+its own `TARGET_PRESENT` handling and never consults this classifier. The baseline
+summary's verbatim literal (a stable grep target for the data channel):
+`NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it`.
 
 ## Exit codes
 

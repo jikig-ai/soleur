@@ -106,7 +106,9 @@ the token being edited. While the browser session is live:
 
 For a `CF_API_TOKEN` widen (the #11181 LB track) the flow uses the named profile
 instead of `--target-entrypoint`: pre-widen baseline `cf-token-scope.sh --profile default-token`
-(retained ledger green, both LB rows `not-yet-widened (403)`); the permissions to
+(retained ledger green; both LB rows EXPECTED to read `not-yet-widened (403)` — the first live
+baseline run records the LB status-family empiricism, the way #6746 did for rulesets phases;
+a `404` there hard-fails by design, it may mean an un-subscribed LB add-on); the permissions to
 append are Zone `soleur.ai` → `Load Balancers: Edit` AND Account → `Load Balancing:
 Monitors and Pools: Edit` (append, never rebuild — same three-dot → Edit → Add more
 path); post-widen assert `cf-token-scope.sh --profile default-token --expect-lb-scopes`

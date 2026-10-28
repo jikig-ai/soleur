@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # cf-token-scope — verify a Cloudflare API token's retained scope after a widen,
-# and (with --target-entrypoint) confirm a newly-added scope is live.
+# and confirm a newly-added scope is live (rulesets profile: --target-entrypoint;
+# default-token profile: --expect-lb-scopes).
 #
 # Deterministic, read-only probe. The widen itself is driven by Playwright MCP
 # per the skill (SKILL.md) — this script never touches the browser and never
@@ -16,14 +17,15 @@
 #                    .result is an array. A degraded 200 (e.g.
 #                    {"success":false,...} OR {"success":true,"result":null}) is a
 #                    FAIL. Never key on `.result | length` — jq reads null as 0.
-#   3. per-scheme control — the probes span two schemes: four zone phases and one
-#                    account list. The account list is itself the account-scheme
-#                    control (must be an authorized 200; an account 404 = FAIL). A
-#                    zone 404 (ADR-130's "phase exists, empty") is trusted ONLY for
-#                    http_config_settings — the one phase whose 403-on-missing was
-#                    empirically verified — and only under an authorized zone
-#                    control (http_request_dynamic_redirect). Every other phase's
-#                    404 fails closed (a dropped scope that 404s must not pass).
+#   3. per-scheme control — the RULESETS profile spans two schemes: four zone
+#                    phases and one account list. The account list is itself the
+#                    account-scheme control (must be an authorized 200; an account
+#                    404 = FAIL). A zone 404 (ADR-130's "phase exists, empty") is
+#                    trusted ONLY for http_config_settings — the one phase whose
+#                    403-on-missing was empirically verified — and only under an
+#                    authorized zone control (http_request_dynamic_redirect). Every
+#                    other phase's 404 fails closed (a dropped scope that 404s must
+#                    not pass). The default-token profile carries no trust404 row.
 #
 # The probe set is a CANARY for the whole-list REPLACE failure mode (a dashboard
 # "save" that replaces rather than appends drops every scope at once → every probe
@@ -104,6 +106,7 @@ DT_ROWS=(
 
 LB_EXPECT=0
 LB_OK=0
+# LB_NOTED is a LATCH (set to 1, never incremented) — its siblings are counters.
 LB_NOTED=0
 LB_MISSING=0
 LB_TOTAL=0
@@ -201,9 +204,18 @@ if [[ "$PROFILE" == "default-token" && -n "$TARGET" ]]; then
   echo "cf-token-scope: --target-entrypoint is a rulesets profile flag" >&2
   exit 2
 fi
+# charset gate (panel seat): TARGET interpolates into the probe URL path; a
+# '?'/.. value would silently retarget the read-only probe to another endpoint
+# (wrong attestation). Phase names are lowercase+underscore by Cloudflare contract.
+if [[ -n "$TARGET" && ! "$TARGET" =~ ^[a-z_]+$ ]]; then
+  echo "cf-token-scope: --target-entrypoint must be a ruleset phase name ([a-z_]+)" >&2
+  exit 2
+fi
 
 TOKEN_SECRET="$(profile_token_secret "$PROFILE")"
 if [[ -z "$TOKEN_SECRET" ]]; then
+  # future-drift tripwire: unreachable while PROFILES and the case arms stay in
+  # sync — if they ever diverge, an empty binding must refuse, never probe bare.
   echo "cf-token-scope: profile '$PROFILE' resolves no token secret" >&2
   exit 2
 fi
@@ -326,6 +338,9 @@ classify_target() {
   if [[ "$CODE" == "403" && "$LB_EXPECT" == "0" ]]; then
     local err
     err="$(printf '%s' "$BODY" | jq -r '.errors[0].code // empty' 2>/dev/null || true)"
+    # stdout is the documented data channel: only digits may ride the verdict line
+    # (a non-scalar errors[0].code could otherwise inject rows a grep-consumer reads).
+    [[ "$err" =~ ^[0-9]+$ ]] || err=""
     report "$label" "not-yet-widened (403${err:+, err $err})"
     LB_NOTED=1
     return 0
@@ -337,10 +352,34 @@ classify_target() {
 }
 
 FAILED=0
+# TARGET_PRESENT lives above the dispatch so the summary tail reads it under
+# every profile (panel seat: a future third profile must not hit set -u there).
+TARGET_PRESENT=0
 
-echo "cf-token-scope: probing $TOKEN_SECRET retained scope (read-only)"
+# Dispatch exhaustiveness + table-integrity pre-flight (structural-enumeration
+# seat, sandbox-mutant-verified): a run must never fall through to another
+# profile's rows, never mint neutrality from an unvalidated class field, and
+# never print a PASS it did not probe for.
+if [[ "$PROFILE" != "rulesets" && "$PROFILE" != "default-token" ]]; then
+  echo "cf-token-scope: profile '$PROFILE' has no probe dispatch (table/dispatch drift — refusing)" >&2
+  exit 2
+fi
+if [[ "$PROFILE" == "default-token" ]]; then
+  if [[ "${#DT_ROWS[@]}" -eq 0 ]]; then
+    echo "cf-token-scope: profile default-token declares no probe rows — refusing a vacuous pass" >&2
+    exit 2
+  fi
+  for pre_row in "${DT_ROWS[@]}"; do
+    pre_class="${pre_row%%|*}"
+    if [[ "$pre_class" != "retained" && "$pre_class" != "target" ]]; then
+      echo "cf-token-scope: DT_ROWS class '$pre_class' is neither retained nor target (table corruption — neutrality eligibility must not fall through)" >&2
+      exit 2
+    fi
+  done
+fi
 
 if [[ "$PROFILE" == "rulesets" ]]; then
+echo "cf-token-scope: probing $TOKEN_SECRET retained scope (read-only)"
 
 # 1. Zone control first — every zone 404's trust depends on it. The control must
 # be an authorized 200 (trust404=0: a control that only 404s proves nothing).
@@ -359,11 +398,11 @@ done
 check "$API/accounts/$ACCT/rulesets" account 0 || FAILED=1
 report "accounts/<acct>/rulesets" "$VERDICT"
 
-# 4. Target entrypoint (the newly-widened scope), if given. TARGET_PRESENT gates
-# the success line so it cannot print unless the target probe actually passed.
-# This rulesets path keeps its own handling; it never consults classify_target
-# (plan addendum 8 — the target-class vocabulary is default-token-local).
-TARGET_PRESENT=0
+# 4. Target entrypoint (the newly-widened scope), if given. TARGET_PRESENT (hoisted
+# above the dispatch) gates the success line so it cannot print unless the target
+# probe actually passed. This rulesets path keeps its own handling; it never
+# consults classify_target (plan addendum 8 — the target-class vocabulary is
+# default-token-local).
 if [[ -n "$TARGET" ]]; then
   if check "$API/zones/$ZONE/rulesets/phases/$TARGET/entrypoint" zone "$(trust404_for "$TARGET")"; then
     TARGET_PRESENT=1
@@ -377,10 +416,14 @@ else
 
 # default-token profile: retained ledger rows, then the two LB readiness rows —
 # iterated from DT_ROWS, the SAME table --dry-run printed (print/run parity).
+echo "cf-token-scope: probing $TOKEN_SECRET retained + LB-readiness scope (read-only)"
 for row in "${DT_ROWS[@]}"; do
   IFS='|' read -r r_class r_label r_url r_want r_scheme <<<"$row"
-  url="${r_url//\$ZONE/$ZONE}"
-  url="${url//\$ACCT/$ACCT}"
+  # Quoted replacements: bash >= 5.2 treats '&' in an UNQUOTED substitution
+  # replacement as the matched text — an id containing '&' would splice a literal
+  # '$ZONE' back into the URL (panel seat, measured).
+  url="${r_url//\$ZONE/"$ZONE"}"
+  url="${url//\$ACCT/"$ACCT"}"
   CHECK_RC=0
   check "$url" "$r_scheme" 0 "$r_want" || CHECK_RC=1
   if [[ "$r_class" == "retained" ]]; then
