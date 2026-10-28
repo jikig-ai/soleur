@@ -7,8 +7,8 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 
 ## Phase 0: Measurements and design deltas (stop point: 0.1 must pass before 2.x)
 
-- [ ] 0.1 Write `apps/web-platform/scripts/dev-probe-approval-gate.ts` through the real `buildAgentQueryOptions` path; run it; record in `phase-0-measurements.md` whether `canUseTool` is invoked for each slice-1 tool and whether `allowedTools` short-circuits it
-  - [ ] 0.1.1 If short-circuited: extract pure `buildAllowedTools`, drop `APPROVAL_REQUIRED_TOOLS` when the flag is on, add census test
+- [x] 0.1 (delivered by the gate-bypass hotfix, ADR-305) Write `apps/web-platform/scripts/dev-probe-approval-gate.ts` through the real `buildAgentQueryOptions` path; run it; record in `phase-0-measurements.md` whether `canUseTool` is invoked for each slice-1 tool and whether `allowedTools` short-circuits it
+  - [x] 0.1.1 (delivered by the hotfix) If short-circuited: extract pure `buildAllowedTools`, drop `APPROVAL_REQUIRED_TOOLS` when the flag is on, add census test
 - [ ] 0.2 Wireframe delta via `soleur:product:design:ux-design-lead` (honest "Approve" copy, two approved states, copy-deck fixes, drop 04G and member landing variant, other items in plan Phase 0.2); scrub `fileToken`; operator approval
 - [ ] 0.3 Confirm per-tool canonical field lists against each tool's zod schema; record in test fixtures
 
@@ -24,7 +24,7 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 
 ## Phase 2: Gate wiring
 
-- [ ] 2.1 Commit 1: `try/finally` deny-on-reject in the gated branch for all gated tools, with test
+- [x] 2.1 (delivered by the hotfix: shared `holdForUser` fail-closed lifecycle; verify on the rebased branch, add only what is missing) Commit 1: `try/finally` deny-on-reject in the gated branch for all gated tools, with test
 - [ ] 2.2 Approval flow behind the flag in `permission-callback.ts` via `deps.approval`; `tool-tiers.ts` `APPROVAL_REQUIRED_TOOLS`; deep-cloned snapshot hashed and passed to `allow()`; abort-aware poll; consume-on-approved
 - [ ] 2.3 WS types `approval_request`, `approval_status`, `approval_decide`; `ws-handler.ts` decide via `tenantFor`, reattach re-emit, waiter wake; `chat-state-machine.ts`; guard that `review_gate_response` cannot resolve an approval
 - [ ] 2.4 Static-message Sentry ops, `SOLEUR_APPROVAL_*` markers, `approval_id` tag; confirm Vector allowlist admits the marker family
@@ -44,7 +44,7 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 
 - [ ] 5.1 C4: `approvalStore` element and edge, description fixes, `views.c4` include, regenerate `model.likec4.json`, parity counts, render tests
 - [ ] 5.2 Legal (own commit): Art. 30 entry, DPD, GDPR Policy, Privacy Policy and mirrors, `legal-doc-shas.ts`, `account-delete.ts` call site, `dsar-export-allowlist.ts`, posture row and flag-refusal check
-- [ ] 5.3 ADR-305 (re-check ordinal against fresh `origin/main`), ADR-284 and ADR-085 amendment notes, "Adding a gated tool" checklist
+- [ ] 5.3 ADR-307 (re-check ordinal against fresh `origin/main`; 305 and 306 are taken), ADR-284 and ADR-085 amendment notes, "Adding a gated tool" checklist
 - [ ] 5.4 Guard 1 mutation battery (one dedicated file, pristine-copy harness) and census guard green; re-run the real-SDK probe on the finished branch
 
 ## Phase 6: Ship

@@ -18,6 +18,9 @@ pr: 11289
 
 # feat: durable, action-bound approval requests (HITL approval queue, slice 1)
 
+
+> **Reconciliation 2026-10-28 (rebase onto the gate-bypass hotfix).** The hotfix (issue #11303, merged 2026-10-28, ADR-305) now owns three items this plan listed: the real-SDK probe `dev-probe-approval-gate.ts` and its `buildAllowedTools` extraction (Phase 0.1 and 0.1.1: `allowedTools` short-circuited `canUseTool`, so gated tools are no longer pre-approved, unconditionally and with no flag), the gated-branch fail-closed lifecycle (`holdForUser`: timeout or abort denies with a static message; Phase 2.1's `try/finally` defect fix), and the census over gated tools. This branch does not re-implement them; slice 1 builds the durable approval flow on top of them. The measurement record stays in `phase-0-measurements.md`.
+
 ## Overview
 
 Replace the in-memory review gate for the highest-risk gated agent tools with a stored approval request the workspace Owner can answer later, in the product, bound to the exact action, single use, and expiring. #10443 (first-class approval primitive) is the same deliverable and is closed as a duplicate when this lands. #5351 (no liveness signal on an unanswered gate) is folded in as a precondition. Slice 1 covers eight gated tools; the existing path stays byte-identical for every other tool. The feature ships dark behind the Flagsmith flag `approval-queue`; the one flag-independent change is a defect fix (a gated-tool wait timeout or abort now returns a static deny instead of escaping `canUseTool`), shipped as its own first commit.
@@ -30,7 +33,7 @@ Inputs: brainstorm `knowledge-base/project/brainstorms/2026-10-27-hitl-approval-
 
 - #4672, #10443, #5351, #9776, #10111, #9388, #5331, #10196 are all OPEN with no closing PR. The only collision hit (`prs=6640`) is the unrelated WIP PR "feat-eve-competitive-eval" matching the substring; no open PR touches `approval_request` or migration `179`.
 - `approval_request` appears nowhere on `origin/main`; the next free migration is `179` (latest `178_api_data_grants_narrowing`).
-- ADR ordinal: `ADR-304` is taken by open PR #11225. Use `ADR-305` or higher and re-check against fresh `origin/main` immediately before merge (the ordinal is provisional).
+- ADR ordinal: `ADR-305` (gated-tier platform tools never enter SDK `allowedTools`, the hotfix) and `ADR-306` are taken on `origin/main` (2026-10-28). Use `ADR-307` or higher and re-check against fresh `origin/main` immediately before merge (the ordinal is provisional; this plan's earlier `ADR-305` references now read `ADR-307`).
 - ADR corpus: no accepted ADR rejects durable server-side approval rows. ADR-284 chose a memory-less lane ("no new approval surface", "writes no acknowledgement and no cache entry"); a durable single-use request extends it and needs an amendment note. ADR-085 reserves `approval_required` for #4672 (source CHECK widening). ADR-060 rejects a bare `approved_at` column as forgeable and adopts a body-hash-bound single-use approval, which is the precedent for the binding here.
 
 ### Verified code facts (repo-research, 2026-10-27)
@@ -198,7 +201,7 @@ Flagsmith `approval-queue`, default off, evaluated per workspace identity so a c
 
 Commit order in the one PR (so a revert stays surgical): (1) the timeout-deny defect fix, (2) migration, RPCs and service, (3) gate wiring and WS, (4) surfaces and notifications, (5) cron and flag, (6) C4, (7) legal, (8) ADR.
 
-- 5.1 ADR-305 (provisional) via `soleur:architecture`, plus ADR-284 and ADR-085 amendment notes.
+- 5.1 ADR-307 (provisional) via `soleur:architecture`, plus ADR-284 and ADR-085 amendment notes.
 - 5.2 C4: `approvalStore` element, edges, description fixes, `views.c4` include, regenerate `model.likec4.json`, parity counts +1 (monitors) in prose.
 - 5.3 Legal (own commit; Ruled by CLO agent 2026-10-27: public documents stay in this PR with 'not yet switched on' wording; no precedent defers them to a flip PR, and the flip is a Flagsmith toggle that nothing enforces as a PR): Art. 30 entry (or PA-14/PA-16 amendment), DPD §2.3, GDPR Policy, Privacy Policy and both mirrors with `legal-doc-shas.ts` (Privacy Policy, DPD and GDPR Policy only; no Terms change, no `TC_VERSION` bump), the anonymise RPC with its `account-delete.ts` call site, `dsar-export-allowlist.ts`, a `compliance-posture.md` header comment and an Active Items row 'Approval queue: public wording and enabling gate' (trigger: before `approval-queue` is ON for any workspace except a Jikigai-owned canary; gates enabling, not the merge). Wording: conditioned on the merge, never past tense; says the feature is switched off and nothing is processed until enabled; no present-tense control claim ('single-use', 'expires in 24 h', 'bound to the exact action') until probe-measured; never 'every outward action requires your approval'; states the retention purpose and the lawful basis per column; marked draft pending counsel review. The row closes only when (a) the Phase 5.4 probe passes and is recorded, (b) a CLO attestation is discharged in `knowledge-base/legal/audits/`, (c) a docs PR removes the qualifier sentence and re-pins the SHAs, and (d) `gdpr-gate` is recorded; `flag-create` and `flag-set-role` are made to refuse a non-canary ON while the qualifier string remains in the two policy files or the row is open.
 - 5.4 Run the real-SDK probe against the finished branch; record in the PR.
@@ -352,7 +355,7 @@ tasks:
 
 ### ADR
 
-Create ADR-305 (provisional; re-check against fresh `origin/main` before merge, 304 is claimed by PR #11225) "Durable, action-bound approval requests" via `soleur:architecture`: the decision (new table, consume in `canUseTool`, Owner-only decide, no server-side execution, flag-gated), alternatives (Cut List and Alternatives table), and the relationship to ADR-284 (memory-less lane unchanged), ADR-085 (source CHECK widened), ADR-060 (hash-bound single-use precedent), ADR-249/264 (operator TTY ack kept). Amend ADR-284 and ADR-085 with a dated note. Related ADRs also cited: ADR-027 and ADR-068 (process-local state and multi-host, which the waiter plus database read answers). The ADR records that the CTO ruling's 'extend `action_sends`' was superseded by a new table (`grant_id` NOT NULL, send-shaped) so it is not re-litigated, and carries an 'Adding a gated tool' checklist (canonical field list, render entry, zod cross-check, copy-deck string, `APPROVAL_REQUIRED_TOOLS` or exempt-with-reason; the census test failure message points at it). Flag lifecycle: owner and removal trigger are recorded in the ADR (remove `approval-queue` and the old in-memory path for the eight tools once the flag has been ON for all workspaces for 30 days with consume success above the agreed threshold). Status `adopting` until the flag is flipped and the path is measured.
+Create ADR-307 (provisional; re-check against fresh `origin/main` before merge, 305 and 306 are taken on main) "Durable, action-bound approval requests" via `soleur:architecture`: the decision (new table, consume in `canUseTool`, Owner-only decide, no server-side execution, flag-gated), alternatives (Cut List and Alternatives table), and the relationship to ADR-284 (memory-less lane unchanged), ADR-085 (source CHECK widened), ADR-060 (hash-bound single-use precedent), ADR-249/264 (operator TTY ack kept). Amend ADR-284 and ADR-085 with a dated note. Related ADRs also cited: ADR-027 and ADR-068 (process-local state and multi-host, which the waiter plus database read answers). The ADR records that the CTO ruling's 'extend `action_sends`' was superseded by a new table (`grant_id` NOT NULL, send-shaped) so it is not re-litigated, and carries an 'Adding a gated tool' checklist (canonical field list, render entry, zod cross-check, copy-deck string, `APPROVAL_REQUIRED_TOOLS` or exempt-with-reason; the census test failure message points at it). Flag lifecycle: owner and removal trigger are recorded in the ADR (remove `approval-queue` and the old in-memory path for the eight tools once the flag has been ON for all workspaces for 30 days with consume success above the agreed threshold). Status `adopting` until the flag is flipped and the path is measured.
 
 ### C4 views
 
@@ -469,7 +472,7 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 | `SOLEUR_APPROVAL_*` markers | "Put any new Sentry op in its own static message" (info events kept out of Sentry) | asked |
 | flag `approval-queue` | — | inferred — justification: a dark launch is required by the dark-launch rule for a gate on production agent actions, and the CTO ruling recorded it |
 | `email-triage-tools.ts` binding fix | "per-exact-action binding" | asked |
-| ADR-305, ADR-284/085 amendments, C4 edits | — | inferred — justification: architecture decisions are a plan deliverable (wg-architecture-decision-is-a-plan-deliverable) |
+| ADR-307, ADR-284/085 amendments, C4 edits | — | inferred — justification: architecture decisions are a plan deliverable (wg-architecture-decision-is-a-plan-deliverable) |
 | legal documents, anonymise RPC, DSAR allowlist | "gdpr-gate (persisted approval records)" | asked |
 | real-SDK probe | "SDK behaviour when canUseTool throws" | asked |
 
@@ -490,7 +493,7 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 - `apps/web-platform/app/(dashboard)/dashboard/approvals/[id]/page.tsx` (directory convention confirmed at work time)
 - `apps/web-platform/app/api/approvals/[id]/decide/route.ts`
 - `apps/web-platform/scripts/dev-probe-approval-gate.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-305-durable-action-bound-approval-requests.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-307-durable-action-bound-approval-requests.md`
 - `knowledge-base/project/specs/feat-hitl-approval-queue/phase-0-measurements.md`
 - Tests under `apps/web-platform/test/` (approval canonical, service, permission-callback gated branch, WS decide and reattach, cron, tool-map census, card, landing page, inbox row) and `apps/web-platform/test/rls-fuzz/` entries
 
@@ -523,7 +526,7 @@ Open `code-review` issues touching planned files: #3374 and #2191 (`ws-handler.t
 - [ ] AC9. The tool-map census (Guard 2) and the mutation battery (Guard 1, every matrix row plus the harness rows) are green, and every mutation lands RED on a pristine copy with a green unmutated control; `scripts/lint-guard-contract.py` passes on this plan.
 - [ ] AC10. The real-SDK probe, built through the real `buildAgentQueryOptions` path and pointed at the dev Supabase project only (`hr-dev-prd-distinct-supabase-projects`), was run before the build (Phase 0.1) and again on the finished branch; `phase-0-measurements.md` has one result line per slice-1 tool name and shows `canUseTool` invoked for every slice-1 tool name and the deny honoured, and records whether `allowedTools` short-circuited it (with the `buildAllowedTools` fix and census test if so). A census test asserts each slice-1 tool is registered in each runner or exempt with a reason.
 - [ ] AC11. Migration 179 applies and reverts cleanly; `table-grants.ts` classifies the table; the RLS fuzz and the grants gate are green; no INSERT/UPDATE/DELETE policy exists.
-- [ ] AC12. ADR-305 exists (ordinal re-checked against fresh `origin/main`), C4 files edited and `model.likec4.json` regenerated, `c4-model-freshness`, `c4-count-parity` and the C4 render tests green.
+- [ ] AC12. ADR-307 exists (ordinal re-checked against fresh `origin/main`), C4 files edited and `model.likec4.json` regenerated, `c4-model-freshness`, `c4-count-parity` and the C4 render tests green.
 - [ ] AC13. Legal documents, Art. 30 entry, anonymise RPC and DSAR allowlist entry are in the PR and the `gdpr-gate` result is recorded; migration 179 carries `-- LAWFUL_BASIS:` annotations and a retention comment; `anonymise_approval_request` has a call site in `account-delete.ts` with a test; the Art. 30 entry states the retention purpose for the decision metadata; no copy claims "every outward action requires your approval".
 - [ ] AC13b. No site page, changelog entry, release note or epic text uses 'approval queue' or 'human-in-the-loop' as a coverage claim before the enabling-gate row closes.
 - [ ] AC14. The approved wireframe delta (Phase 0.2) is committed, and no card, thread line, notification or copy-deck string claims an outcome ("sent", "ran") or an execution on approve that slice 1 does not perform; a string-level test over the copy deck constants asserts the absence of the outcome words `sent`, `ran`, `executed` and `delivered` and the presence of "Released to your agent" (the approved consequence line legitimately contains "send", so the test is scoped to outcome words).
