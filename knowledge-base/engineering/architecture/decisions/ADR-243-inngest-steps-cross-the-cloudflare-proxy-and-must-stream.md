@@ -219,3 +219,10 @@ re-ran with them). Phase 6 of the plan closes the edge difference on production.
 - ADR-033 (child-process spawn inside one `step.run`), ADR-030 (signing), ADR-108 (cost markers),
   ADR-218 (Terraform-managed Logs alerts), ADR-077 (routine run progress), ADR-078 (deploy cron
   drain), ADR-068 / ADR-143 (multi-host serving, which reopens §2).
+
+## Amendment — 2026-10-28 (#8628, executed)
+
+- **§1 executed:** `inngest@4` fixes `createStream` upstream — verified in the published `inngest@4.26.0` tarball (`cancel()` clears the heartbeat interval, a `closed` flag gates `enqueue`, a try/catch demotes late writes to `logger.debug`). `server/inngest/stream-detach.ts`, its test, and the route POST wrapper are deleted; `serve()` now uses `streaming: true` + `serveOrigin` (v4 renames), `signingKey` moved to the client.
+- The Alternatives row "Upgrade to `inngest@4` now" is marked EXECUTED. The "wrapper kept just in case" arm stays rejected — the upstream fix removes its precondition.
+- **Observability:** `inngest-stream-consumer-cancel` / `inngest-stream-drain-error` are retired (emitted only by the deleted wrapper). Drop coverage moves to the server-side `inngest_step_524` needle; the fnId/stepId/signed attribution loss is accepted and revisitable under #8613.
+- **Checkpointing:** ships `checkpointing: false` on the client (CTO ruling 2026-10-28) — v4 turns it on by default, self-hosted support on pinned v1.45.1 is upstream-docs-only, and the unit harness models one-new-step-per-request. Spike row S9 (both arms) is recorded as still-owed in `specs/feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md` — the environment could not complete the harness in-session, so S7's kill-proof has not run either; flip-on and the deletion's last evidence gate defer to that run.

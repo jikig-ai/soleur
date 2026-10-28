@@ -20,3 +20,5 @@ marked `pending - assumed: <default>` for the implementer/ship pipeline.
 ## Not Yet Specified
 
 (none)
+| inngest range floor: `^4.26.1` (npm latest) vs `^4.26.0` | technical | Ruled by CTO agent, 2026-10-28: `^4.26.0` — 4.26.1 was published 2026-10-27T18:50Z, inside the repo's `min-release-age=3` supply-chain floor (apps/web-platform/.npmrc, #1174/ADR-191) and uninstallable until 2026-10-30; 4.26.0 is the newest 4.x the floor admits, its tarball re-verified to carry the createStream fix, and `^4.26.0` resolves to 4.26.1+ once the floor lapses. Lockfile pins 4.26.0 |
+| `send()` `v:` field under v4's `SendEventPayload` (type omits `v`) | technical | Ruled by CTO agent, 2026-10-28: keep `v` on the wire via a type-widened payload where a consumer reads `event.v` (github route ×2 → workspace-reconcile-on-push/github-on-event deadletter gates; stripe → cfo-on-payment-failed); drop it where unread (resend-inbound → email-on-received has no schema gate). Evidence: v4 `Inngest.js _send` spreads `rest` keys verbatim into the posted envelope, so `v` still relays on our self-hosted server; the omission is type-level only (EventSchemas removal) |
