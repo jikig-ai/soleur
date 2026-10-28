@@ -37,6 +37,10 @@ Phase 1.4 fired on the `timeout` token. The failure is a job-budget exhaustion, 
 3. **L7 TLS/proxy.** [verified] Throttle responses are HTTP replies over working TLS to both registries in the same runs; SNI/cert path is fine (the signature is an application verdict, not a handshake failure).
 4. **L7 application layer.** [verified — this is the layer] The measured signature is `toomanyrequests` on pull attempts plus the job-level timeout-cancel at 30 min (runs 40653699076/40657761446). Same code in a calmer window succeeded end-to-end in ~20 min (run 40661730763), so the wiring is sound; the deficit is budget arithmetic, not a service defect.
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Checklist pass over the four layers: each layer above carries a concrete artifact (run IDs + the measured signature line) rather than "obvious/unlikely". No lower-layer gap remains open — the only live hypothesis is the L7 budget-arithmetic one this plan fixes.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -218,8 +222,36 @@ logs:
   retention: "GitHub run-log retention (~90 days)"
 
 discoverability_test:
-  command: bash .github/scripts/test/test-rls-fuzz-ghcr-resilience.sh
-  expected_output: "0 failed"
+  command: grep -c '::warning::ecr latch' .github/scripts/supabase-pre-pull-images.sh
+  expected_output: "1"
+```
+
+## Encryption Posture
+
+The plan writes into one existing store (the `actions/cache` image tarball at `${{ runner.temp }}/supabase-img-cache`, uploaded by the cache action's post step) and reuses two existing connections (anonymous `docker pull` against `public.ecr.aws` and `ghcr.io`). No new store or connection is introduced; the posture below declares the surfaces the diff touches.
+
+```yaml
+at_rest:
+  - store: actions/cache entry "supabase-imgs-*" (GitHub-hosted cache blob)
+    mechanism: provider-managed:GitHub Actions cache storage (GitHub Actions cache docs, retrieved 2026-10-28)
+    evidence: https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows
+    defends_against: direct object-store access outside the actions/cache API (repo-scoped cache isolation; forks get read-only base-branch entries)
+    does_not_defend: cache poisoning via a compromised same-repo workflow run, a leaked token with actions:write, or malicious tar content loaded by `docker load` in a later run — the tar holds public Supabase images only, and the loader is the same runner that built it
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable:requires a GitHub-hosted runner (cache API is not locally enumerable)
+in_transit:
+  - connection: runner -> public.ecr.aws / ghcr.io (docker pull)
+    enforced_at: .github/scripts/supabase-pre-pull-images.sh (docker daemon pull path)
+    tls: HTTPS TLS >= 1.2 via the docker daemon's registry transport
+    cert_verification: on
+    does_not_defend: content integrity beyond the registry's — no digest pinning; tag-to-tag pulls trust the registry's name mapping (pre-existing; unchanged by this plan)
+    disclosed_as: not-publicly-claimed
+  - connection: runner -> GitHub cache storage (actions/cache save/restore)
+    enforced_at: .github/workflows/rls-authz-fuzz.yml `uses: actions/cache@<sha>`
+    tls: HTTPS TLS >= 1.2 (actions/cache Azure-backed blob endpoint)
+    cert_verification: on
+    does_not_defend: cache-key prefix collisions under `restore-keys: supabase-imgs-` restoring stale-but-intended content
+    disclosed_as: not-publicly-claimed
 ```
 
 ## Guard Contract
@@ -320,3 +352,31 @@ All rows land in `.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh` (fixtur
 - Measured runs: 40653699076, 40657761446, 40661730763, plus the #10868 series 40525753531/40561028313/40572250940/40573437435/40574945720/40575928811 pinned in the workflow comment.
 - Files: `.github/scripts/supabase-pre-pull-images.sh`, `.github/scripts/ghcr-pull-with-retry.sh`, `.github/workflows/rls-authz-fuzz.yml`, `.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh`, `.github/scripts/test/run-all.sh`.
 - Learnings cited above in Research Insights.
+
+## Enhancement Summary
+
+deepen-plan pass, 2026-10-28 (harness: Devin subagent — no Task-spawn capability; gates and fan-outs executed inline):
+
+- Phase 4.4 precedent-diff: latch/circuit-breaker precedent found — the retry helper's own tail-classification (`ghcr-pull-with-retry.sh:79`) and ADR-257's latched retrying unit; the new stub arms follow the existing suite's stub convention in the same file. No scheduled job introduced; Inngest-vs-GHA-cron check N/A.
+- Phase 4.5 network-outage deep-dive: fired on `timeout`; all four layers carry artifacts (see `## Hypotheses` + `### Network-Outage Deep-Dive`). Telemetry emitted.
+- Phase 4.55 downtime/cutover: skipped — CI-config-only change; no serving surface goes offline.
+- Phase 4.6 user-brand halt: section present, `none` threshold, no sensitive-path match → pass.
+- Phase 4.7 observability: section present; `discoverability_test.command` rewritten during this pass from the suite invocation (matched the Check-10 suite-shape rejection) to `grep -c '::warning::ecr latch' …` expecting `1` — smallest command that proves the once-only signal surface exists.
+- Phase 4.8 PAT halt: zero hits.
+- Phase 4.9 UI wireframe: no UI-surface files → pass.
+- Phase 4.10 encryption posture: detection fires on the `cache` prose — `## Encryption Posture` added for the existing actions/cache store and the two registry/cache connections (no new store introduced).
+- Phase 4.11 guard contract: `scripts/lint-guard-contract.py` green (1 guard entry); assembly read as structural (the single pull-loop chokepoint, not a member list); matrix carries own-dispatch, second-member, reorder, and two must-PASS rows.
+- Phase 4.12 scope check: exactly one unfenced `## Scope Check`; all asks mapped; `inferred` rows carry justifications; split assessment `single PR`.
+- Phase 4.13 task-design: no new autonomous surface → pass.
+- Phases 3/4 research + Phase 5 review agents: no external-research value for a measured CI-script fix; institutional learnings applied inline (Research Insights). Review-panel checks applied inline: no AC depends on concurrent ambient state (all assert file contents or fixture-stub behavior); every mechanism maps to a Property-List item or is on the Cut List; spec-flow branch enumeration covered in Test Scenarios.
+
+### Key improvements made during deepen pass
+
+- `discoverability_test` probe fixed to a Check-10-compliant form.
+- `## Encryption Posture` section added (4.10 detection fires on the cache store).
+- `### Network-Outage Deep-Dive` subsection added per Phase 4.5.
+- AC7 corrected to merge-base diff form (`origin/main...HEAD`).
+
+### New considerations discovered
+
+- `actions/cache` post-job save semantics drive the FR-4 design: skipped on cancel, runs on failure — the reason partial progress is banked by a completing failed step, not incremental mid-run writes.
