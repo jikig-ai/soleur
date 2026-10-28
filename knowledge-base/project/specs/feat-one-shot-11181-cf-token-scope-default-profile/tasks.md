@@ -16,15 +16,15 @@ Plan: `knowledge-base/project/plans/2026-10-28-feat-cf-token-scope-default-token
 
 ## Phase 2: Script (`plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh`)
 
-- [ ] 2.1 Profile table: `PROFILES=(rulesets default-token)` + `profile_token_secret()` case; `TOKEN_SECRET` (line 64 constant) becomes profile-resolved; `DOPPLER_PROJECT`/`DOPPLER_CONFIG`/`ZONE_SECRET`/`ACCT_SECRET` shared (config-difference is a future table row, not a flag).
-- [ ] 2.2 argv: `--profile <name>` (validate ∈ `PROFILES` else usage+exit 2), `--expect-lb-scopes`; post-parse cross-validation gate BEFORE the dry-run block (mispaired flags print nothing).
-- [ ] 2.3 Generalize `check()` second arg to `want_type` (`object|array`); rulesets call sites pass exactly their scheme-mapped types (zone→object, account→array); trusted-404 conjunction (`trust404=1` + `ZONE_CONTROL_OK`) otherwise untouched.
-- [ ] 2.4 `default-token` retained loop over rows D0–D3 (`trust404=0` all), header line names the resolved secret; retained verdicts unchanged.
-- [ ] 2.5 `classify_target()` per plan pseudocode — the ONLY neutrality site; `LB_OK`/`LB_NOTED`/`LB_MISSING` counters; err-code suffix via `jq -r '.errors[0].code // empty'` on the captured 403 body.
-- [ ] 2.6 Summary lines: `NOTE:` (stdout, baseline-only), `PASS: LB scopes present —` (stdout, assert-green), `FAIL: LB scope still absent —` (stderr, assert-red) + final exit codes per the plan's exit-code contract table.
-- [ ] 2.7 `--dry-run` branch prints the selected profile's rows from the same table (print/run parity); recipes carry `--disable --noproxy '*'` and `-H @<(printf 'Authorization: Bearer %s' \"$TOK\")` forms verbatim (#7873/#6892 posture).
-- [ ] 2.8 `usage()`/`-h` text updated (profile flag, both flags, exit-code states); xtrace guard, env `unset` block, `cleanup()` trap unchanged; `bash -n` + shellcheck clean.
-- [ ] 2.9 Run the suite → D-series GREEN with C-series still GREEN; no real Doppler/CF call occurred (mock PATH held).
+- [x] 2.1 Profile table: `PROFILES=(rulesets default-token)` + `profile_token_secret()` case; `TOKEN_SECRET` (line 64 constant) becomes profile-resolved; `DOPPLER_PROJECT`/`DOPPLER_CONFIG`/`ZONE_SECRET`/`ACCT_SECRET` shared (config-difference is a future table row, not a flag).
+- [x] 2.2 argv: `--profile <name>` (validate ∈ `PROFILES` else usage+exit 2), `--expect-lb-scopes`; post-parse cross-validation gate BEFORE the dry-run block (mispaired flags print nothing).
+- [x] 2.3 Generalize `check()` second arg to `want_type` (`object|array`); rulesets call sites pass exactly their scheme-mapped types (zone→object, account→array); trusted-404 conjunction (`trust404=1` + `ZONE_CONTROL_OK`) otherwise untouched.
+- [x] 2.4 `default-token` retained loop over rows D0–D3 (`trust404=0` all), header line names the resolved secret; retained verdicts unchanged.
+- [x] 2.5 `classify_target()` per plan pseudocode — the ONLY neutrality site; `LB_OK`/`LB_NOTED`/`LB_MISSING` counters; err-code suffix via `jq -r '.errors[0].code // empty'` on the captured 403 body.
+- [x] 2.6 Summary lines: `NOTE:` (stdout, baseline-only), `PASS: LB scopes present —` (stdout, assert-green), `FAIL: LB scope still absent —` (stderr, assert-red) + final exit codes per the plan's exit-code contract table.
+- [x] 2.7 `--dry-run` branch prints the selected profile's rows from the same table (print/run parity); recipes carry `--disable --noproxy '*'` and `-H @<(printf 'Authorization: Bearer %s' \"$TOK\")` forms verbatim (#7873/#6892 posture).
+- [x] 2.8 `usage()`/`-h` text updated (profile flag, both flags, exit-code states); xtrace guard, env `unset` block, `cleanup()` trap unchanged; `bash -n` + shellcheck clean.
+- [x] 2.9 Run the suite → D-series GREEN with C-series still GREEN; no real Doppler/CF call occurred (mock PATH held).
 
 ## Phase 3: Docs
 
