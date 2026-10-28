@@ -38,7 +38,15 @@ concurrency:
 jobs:
   rls-fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # #11386: 30 could not fit cold-cache pull+save under sustained registry
+    # saturation — ~65s/image ECR dead tax on every ref + ~10 min of
+    # default-gzip tar write pushed pull+save past the deadline twice
+    # (cancelled, runs 40653699076/40657761446; control run 40661730763 fit
+    # ~20 min in a calmer window). 45 covers the post-latch worst case
+    # (~20-30 min throttled pulls + ~4 min pigz/gzip -1 write + ~10 min
+    # suite) with headroom; the pre-pull's partial save makes a residual
+    # overrun converge across runs rather than restart from zero.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read
