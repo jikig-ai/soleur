@@ -2986,8 +2986,11 @@ DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inng
 # rehearsal_<runid>).
 # 20 -> 16: #10112 retired the LUKS cutover trio (inngest-luks-cutover.sh carried three sites,
 # inngest-luks-cutover.service one).
-assert "inngest boot-path --config census is exactly 16 sites (unlisted site -> RED, #9175)" \
-  "[[ '$DCFG_N' == '16' ]]"
+# 16 -> 18: #5150 added two sites in inngest-bootstrap.sh — the retention unit
+# `doppler run --config @@DOPPLER_CONFIG@@` and the enable-path
+# `doppler run --config "$DOPPLER_CONFIG"` that runs --ensure-indexes.
+assert "inngest boot-path --config census is exactly 18 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '18' ]]"
 assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
   "[[ -z \"\$DCFG_BAD\" ]]"
 

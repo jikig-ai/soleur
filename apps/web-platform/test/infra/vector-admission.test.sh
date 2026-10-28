@@ -335,11 +335,11 @@ emit("S1 include_matches.PRIORITY is exactly {3,4}",
 emit("S2 include_matches.PRIORITY is exactly {0,1,2}",
      s2.get("include", {}).get("PRIORITY") == ["0", "1", "2"],
      "got: %s" % s2.get("include", {}).get("PRIORITY"))
-TWO_UNITS = ["inngest-server.service", "soleur-inngest-tls.service"]
-emit("S1 include_units == [inngest-server.service, soleur-inngest-tls.service]",
+TWO_UNITS = ["inngest-server.service", "inngest-trace-retention.service", "soleur-inngest-tls.service"]
+emit("S1 include_units == [inngest-server.service, inngest-trace-retention.service, soleur-inngest-tls.service]",
      s1.get("include", {}).get("_SYSTEMD_UNIT") == TWO_UNITS,
      "got: %s" % s1.get("include", {}).get("_SYSTEMD_UNIT"))
-emit("S2 exclude_units == the same two units (vector.service's crit path stays with S2; the units move together)",
+emit("S2 exclude_units == the same units (vector.service's crit path stays with S2; the units move together)",
      s2.get("exclude", {}).get("_SYSTEMD_UNIT") == TWO_UNITS,
      "got: %s" % s2.get("exclude", {}).get("_SYSTEMD_UNIT"))
 emit("S1 include_units and S2 exclude_units are set-equal (a unit added to one list only double-ships or silences)",
@@ -435,7 +435,7 @@ import re, sys
 
 mode, src_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(src_path, encoding="utf-8").read()
-BOTH = '["inngest-server.service", "soleur-inngest-tls.service"]'
+BOTH = '["inngest-server.service", "inngest-trace-retention.service", "soleur-inngest-tls.service"]'
 
 def swap(text, old, new, count=1):
     if old not in text:
@@ -451,11 +451,11 @@ elif mode == "drop_s2_unit":
     text = swap(text, "exclude_units = " + BOTH, 'exclude_units = ["inngest-server.service"]')
 elif mode == "third_unit_s1_only":
     text = swap(text, "include_units = " + BOTH,
-                'include_units = ["inngest-server.service", "soleur-inngest-tls.service", "zz-extra.service"]')
+                'include_units = ["inngest-server.service", "inngest-trace-retention.service", "soleur-inngest-tls.service", "zz-extra.service"]')
 elif mode == "rename_journald_types":
     text = swap(text, 'type = "journald"', 'type = "journaldx"', count=text.count('type = "journald"'))
 elif mode == "reverse_both_lists":
-    rev = '["soleur-inngest-tls.service", "inngest-server.service"]'
+    rev = '["soleur-inngest-tls.service", "inngest-trace-retention.service", "inngest-server.service"]'
     text = swap(text, "include_units = " + BOTH, "include_units = " + rev)
     text = swap(text, "exclude_units = " + BOTH, "exclude_units = " + rev)
 else:

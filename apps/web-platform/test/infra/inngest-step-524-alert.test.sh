@@ -274,12 +274,12 @@ check("runbooks/betterstack-log-query.md" in sec, "the incidents carry a clickab
 # (scripts/probe-inngest-524-count.sh prints unit_rows) before the alert can be trusted again.
 _vsrc = re.search(r"^\[sources\.inngest_journald\]\n(.*?)(?=^\[|\Z)", vector, re.S | re.M)
 _vbody = _vsrc.group(1) if _vsrc else ""
-check(re.search(r'^include_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]\s*$', _vbody, re.M) is not None
+check(re.search(r'^include_units = \["inngest-server\.service", "inngest-trace-retention\.service", "soleur-inngest-tls\.service"\]\s*$', _vbody, re.M) is not None
       and re.search(r'^include_matches\.PRIORITY = \["3", "4"\]\s*$', _vbody, re.M) is not None
       and re.search(r'^exclude_matches\.SYSLOG_IDENTIFIER = ', _vbody, re.M) is not None
       and re.search(r'^exclude_matches\.CONTAINER_NAME = \["soleur-web-platform", "soleur-egress-gw"\]\s*$', _vbody, re.M) is not None
       and len(re.findall(r"^include_matches\.", _vbody, re.M)) == 1,
-      "vector: the inngest_journald source is exactly the observed shape the 524 rows ship through (the two units + PRIORITY {3,4} + emitter/container excludes)")
+      "vector: the inngest_journald source is exactly the observed shape the 524 rows ship through (the three units + PRIORITY {3,4} + emitter/container excludes)")
 # Routing is a PARSE of the real file, not a regex over its text: the old `inputs = [...\"inngest_journald\"` regex
 # would now pass vacuously on the terminator filter's OWN `inputs = ["inngest_journald"]` line, whatever the PII
 # stage reads. The 524 rows are inngest-server.service rows, so they must still reach the PII chain, now THROUGH
@@ -427,7 +427,7 @@ s = s.replace(old, "")'
     "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_daily_burn\"', 'value               = local.claude_cost_daily_burn_usd', 'value               = 15')"
 
   mutate_red "V1: vector's inngest_journald source loses the inngest-server unit" VEC \
-    "s = s.replace('include_units = [\"inngest-server.service\", \"soleur-inngest-tls.service\"]', 'include_units = [\"inngest-other.service\", \"soleur-inngest-tls.service\"]', 1)"
+    "s = s.replace('include_units = [\"inngest-server.service\", \"inngest-trace-retention.service\", \"soleur-inngest-tls.service\"]', 'include_units = [\"inngest-other.service\", \"inngest-trace-retention.service\", \"soleur-inngest-tls.service\"]', 1)"
   mutate_red "V2: vector's inngest_journald PRIORITY filter changes" VEC \
     "s = s.replace('include_matches.PRIORITY = [\"3\", \"4\"]\n', 'include_matches.PRIORITY = [\"3\"]\n', 1)"
   mutate_red "V3: the PII stage reads the raw inngest_journald again (the terminator filter is unwired)" VEC \

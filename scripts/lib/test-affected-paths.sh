@@ -2797,6 +2797,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/image-cve-scan-window-9826.sh"
   "scripts/followthroughs/inngest-provision-unit-8562.sh"
   "scripts/followthroughs/inngest-tls-soak-10136.sh"
+  "scripts/followthroughs/inngest-trace-retention-5150.sh"
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
