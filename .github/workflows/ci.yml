@@ -1562,6 +1562,9 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks
+          # the tarball must not stay in the checkout: the trio census (T4) counts untracked
+          # files, so a leftover makes a baseline/ADR-only PR look like a wider change.
+          rm -f gitleaks.tgz
           chmod +x gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
@@ -1689,6 +1692,9 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks
+          # the tarball must not stay in the checkout: the trio census (T4) counts untracked
+          # files, so a leftover makes a baseline/ADR-only PR look like a wider change.
+          rm -f gitleaks.tgz
           chmod +x gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
