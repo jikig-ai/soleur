@@ -160,7 +160,7 @@ Every default-token row is `trust404=0` — all rows fail closed on 404 (the
 verified-404 exception stays exclusive to `http_config_settings`). `target`-class
 neutrality is minted at exactly ONE classifier site and ONLY in baseline mode: a
 clean `403` prints `not-yet-widened (403)` (with the parsed `errors[0].code`
-appended when present) and the run stays exit-neutral with a `NOTE:` summary;
+appended when present and numeric) and the run stays exit-neutral with a `NOTE:` summary;
 any other anomaly (404, degraded 200, wrong-shape 200, 5xx, 000, empty) is a
 hard fail in BOTH modes. In assert mode (`--expect-lb-scopes`) every target row
 must be authorized or the run exits 3 naming the still-absent 403s. The `target`-class
