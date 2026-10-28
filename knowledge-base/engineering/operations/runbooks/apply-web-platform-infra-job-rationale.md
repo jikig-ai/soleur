@@ -253,14 +253,17 @@ A NEW DISPATCH JOB INHERITS NOTHING (ADR-145). The per-PR `host_creates > 0` HAL
 a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
 one, so for this path the sourced birth gate is the ONLY check.
 
-THIS JOB CARRIES THREE MECHANICAL INTERLOCKS. ALL THREE CURRENTLY RELEASE.
+THIS JOB CARRIES THREE MECHANICAL INTERLOCKS PLUS THE PLAINTEXT-ID INTERLOCK (#11194). RUNG-2
+CURRENTLY HOLDS (the evidence has been stale since #11342 changed a bound payload) AND THE
+PLAINTEXT-ID INTERLOCK HOLDS UNTIL THE `git_data_volume_id = ""` CHANGE (#11449) MERGES.
 
 An earlier version of this header read "STILL HELD, BY TWO GATES". That inverted the
 moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting
 a live verdict invites -- so it now states what the gates ARE rather than what they
 currently answer. What held the route before the birth was the runbook's
 DO-NOT-DISPATCH banner (cleared by PR #8128, merged 2026-09-14) and the environment approval;
-the approval is the remaining hold, and it
+the approval was then the remaining hold (until 2026-10-27, when #11342 made the rung-2 evidence
+stale, and 2026-10-28, when the plaintext-id interlock was added). The environment approval
 reports prevent_self_review:false with a single reviewer (declared nowhere in this
 repo's Terraform, so that is the provider default rather than a chosen setting).
 
@@ -279,7 +282,9 @@ COMMENT said "the interlock is released", inviting the dispatch the banner forbi
 ADR-149's own Alternatives table rejects a capability held only by prose. So the rung-2
 precondition is now enforced here: git_data_rung2_rehearsal_gate requires committed boot
 evidence hash-bound to the template being dispatched, and re-holds automatically on any
-later edit to cloud-init-git-data.yml.
+later edit to cloud-init-git-data.yml. (Dated 2026-10-28: the evidence is stale again since
+#11342 changed a hash-bound payload, so this interlock holds the route today; a fresh rehearsal is
+the owner's paid-host act, tracked in a separate issue. `plan_only` also holds here.)
 
 Rung 2 — booting the rendered template once on a throwaway host outside the
 hcloud_server.git_data address — is carried as #7025's own precondition and was
@@ -322,7 +327,7 @@ explicitly targeted.
 
 ### Plaintext-id interlock placement (#11194)
 
-The interlock step is UNCONDITIONAL in both dispatch jobs: the census suite's G5c row (ADR-241 D-Guard-5) forbids any `if:` on a gate step, because a condition is a way to skip it. In `git_data_host_replace` a refusal is downgraded to a warning only when `PLAN_ONLY` is exactly the string `true` (unset, empty or any other value blocks), because a `plan_only` dispatch grades a real plan with the plaintext-free gate and stops before any apply, so there is no host to destroy; the verdict still prints (CTO ruling, `decision-challenges.md` row H). `git_data_host_create` has no `plan_only` input, so it blocks always. The step prints a verdict and a line number, never the value.
+The interlock step is UNCONDITIONAL in both dispatch jobs: the census suite's G5c row (ADR-241 D-Guard-5) forbids any `if:` on a gate step, because a condition is a way to skip it. In `git_data_host_replace` a refusal is downgraded to a warning only when `PLAN_ONLY` is exactly the string `true` (unset, empty or any other value blocks), because a `plan_only` dispatch grades a real plan with the plaintext-free gate and stops before any apply, so there is no host to destroy; the verdict still prints (CTO ruling, `decision-challenges.md` row H). `git_data_host_create` ignores `plan_only` (it is a workflow-level input the create job does not read) and always blocks. Both steps capture the function's output (`if ! v="$(git_data_plaintext_id_interlock ...)"`), echo it to the step log, and put the CR/LF-stripped verdict inside the `::warning::` / `::error::` text, because an annotation has no "verdict above"; the remedy in the annotation is generic ("usually: set git_data_volume_id to \"\" via #11449") since the function aborts for several reasons. The verdict carries a line number, never the value.
 
 ### #6453 stock preflight rationale (relocated from the `git_data_host_create` plan step, #11194)
 
@@ -598,7 +603,7 @@ which is exactly when you most want to know.
 
 ## git_data_host_replace
 
-> **Dispatch gating (#11194, ADR-239 Amendment 2026-10-28).** This job, `git_data_host_create` and the rotate selector no longer `-target` the retired plaintext volume and attachment, and their gates no longer demand them; either address appearing in a plan is refused as out-of-scope. Each runs a plaintext-id interlock before it plans and refuses while `git-data.tf` passes a non-empty `git_data_volume_id` to `module "git_data_userdata"` (that literal names the plaintext device destroyed on 2026-10-27); under `plan_only` this job reports the verdict without blocking and stops before any apply. Release sequence, the drift issue and the unrehearsed empty-id boot (#10296): the banner of `git-data-birth.md`.
+> **Dispatch gating (#11194, ADR-239 Amendment 2026-10-28).** This job, `git_data_host_create` and the rotate selector no longer `-target` the retired plaintext volume and attachment, and their gates no longer demand them; a create, update, delete or forget on either address is refused as out-of-scope (a `no-op` or `read` is not a change). Each runs a plaintext-id interlock before it plans and refuses while `git-data.tf` passes a non-empty `git_data_volume_id` to `module "git_data_userdata"` (that literal names the plaintext device destroyed on 2026-10-27); under `plan_only` this job reports the verdict without blocking and stops before any apply, and `git_data_host_create` ignores `plan_only` and always blocks. The verdict is echoed to the step log and carried inside the `::warning::` / `::error::` annotation (an annotation has no "verdict above"); the remedy text there is generic because the function aborts for several reasons (usually: set `git_data_volume_id` to `""` via #11449). The rung-2 evidence gate holds this job too (stale since #11342, and `plan_only` also holds there), so the interlock reaching PASS releases nothing by itself. Release sequence, the drift issue and the unrehearsed empty-id boot (#10296): the banner of `git-data-birth.md`.
 
 Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
 git-data-luks.tf + network.tf resources are OPERATOR_APPLIED_EXCLUSIONS (ADR-068) —
@@ -607,21 +612,20 @@ to the EXISTING web host so it cannot reprovision the git-data host at all. Befo
 git-data had ZERO non-SSH reprovision path (a standing hr-prod-host-config-change-immutable-
 redeploy gap on the fleet's most irreplaceable data store). This scoped -replace is the
 sanctioned non-SSH reprovision path (mirrors registry_host_replace / inngest_host_replace):
-it re-runs the git-data cloud-init WITHOUT SSH and WITHOUT touching either data volume.
+it re-runs the git-data cloud-init WITHOUT SSH and WITHOUT touching the data volume.
 
-5-target scope (server + its 4 id-referencing dependents; BOTH data volumes + the LUKS
-passphrase are PRESERVED BY OMISSION — an untargeted resource cannot be planned for destroy):
+Scope: the server + its 3 id-referencing dependents (plus the host-key pin pair, #7226); the
+LUKS data volume + the LUKS passphrase are PRESERVED BY OMISSION — an untargeted resource
+cannot be planned for destroy. (Until #11194 the scope also named the plaintext volume
+attachment; that address was destroyed on 2026-10-27 and is retired.)
   hcloud_server.git_data                   (-replace: force a fresh cloud-init boot)
-  hcloud_server_network.git_data           (network.tf:48 — server_id ForceNew → replace;
+  hcloud_server_network.git_data           (network.tf — server_id ForceNew → replace;
                                              else the new host has no private NIC 10.0.1.20)
-  hcloud_volume_attachment.git_data        (git-data.tf:275 — server_id ForceNew → replace;
-                                             else /mnt/git-data — plaintext bare-repo store —
-                                             boots UNMOUNTED)
   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf, `resource "hcloud_volume_attachment"
                                              "git_data_luks"` — server_id ForceNew → replace;
                                              else /mnt/git-data-luks — LUKS at-rest store —
                                              boots UNMOUNTED)
-  hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
+  hcloud_firewall_attachment.git_data      (git-data.tf — server_ids update-in-place;
                                              registry-style INCLUDE — else the fresh host boots
                                              NAKED on its public IPv4/IPv6)
 LUKS re-open on fresh boot is SAFE because the passphrase is unchanged: the idempotent isLuks
@@ -630,7 +634,7 @@ holds ONLY while random_password.git_data_luks / doppler_secret.git_data_luks_ke
 scope — the sourced git_data_host_replace_gate's luks_passphrase_touched backstop asserts it.
 
 The sourced git_data_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
-JSON and ABORTS unless the plan is EXACTLY this scoped recreate with BOTH volumes preserved.
+JSON and ABORTS unless the plan is EXACTLY this scoped recreate with the LUKS volume preserved.
 
 ## ci_ssh_token_replace
 

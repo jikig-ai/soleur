@@ -182,8 +182,9 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`. Its three mechanical interlocks all release now; the
-          environment approval is the remaining hold (self-approval is possible; job-rationale.md §git_data_host_create). Read
+          needs `confirm=BIRTH-GIT-DATA`. Three mechanical interlocks plus the plaintext-id one
+          gate it: rung-2 holds (evidence stale since #11342) and the plaintext-id one holds
+          until #11449 merges (job-rationale.md §git_data_host_create). Read
           knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
         required: false
         default: manual-rerun
@@ -3942,13 +3943,17 @@ jobs:
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
-          if ! git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf"; then
+          if ! v="$(git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf")"; then
+            echo "$v"
+            v="${v//[$'\r\n']/ }"
             if [[ "${PLAN_ONLY:-}" == "true" ]]; then
-              echo "::warning::plan_only: the plaintext-id interlock WOULD hold a real dispatch (verdict above); blank git_data_volume_id in git-data.tf (tracked on #11194) first."
+              echo "::warning::plan_only: the plaintext-id interlock WOULD hold a real dispatch: ${v} (usually: set git_data_volume_id to \"\" via #11449)."
             else
-              echo "::error::git-data-host-replace/-rotate is HELD: git-data.tf passes a non-empty git_data_volume_id (a volume destroyed on 2026-10-27), so a host from this tree boots into the plaintext_unverified FATAL. Set it to \"\" (tracked on #11194), merge, then dispatch. Nothing was planned or replaced."
+              echo "::error::git-data-host-replace/-rotate is HELD by the plaintext-id interlock: ${v} (usually: set git_data_volume_id to \"\" via #11449). Nothing was planned or replaced."
               exit 1
             fi
+          else
+            echo "$v"
           fi
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
@@ -5558,16 +5563,12 @@ jobs:
           authorization is this approval. Read these three first — each is measured, and each
           is a limit on what any green result downstream can tell you.
 
-          ### 1. Repositories are NOT encrypted at rest before the cutover
+          ### 1. `luks_mounted` is about the device, not what is stored on it
 
-          `luks_mounted` is about the **device**, not the repositories. `git-data-bootstrap.sh`
-          pins that wording itself, under AC30:
-
-          > `luks_mounted` is about the DEVICE. It says NOTHING about the repositories being
-          > encrypted at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume until the
-          > cutover.
-
-          A green boot is fully compatible with every repository sitting on plaintext storage.
+          `git-data-bootstrap.sh` pins that wording itself, under AC30: `luks_mounted` says the
+          mapper serves `$GIT_DATA_ROOT`. Since #8211 `REPO_ROOT` is on that device; the other
+          booleans (`fence_on_mapper`, `erasure_probe`, `plaintext_empty`) attest the rest, so read
+          those, not `luks_mounted` alone.
 
           ### 2. This approval is NOT two-party
 
@@ -5677,14 +5678,14 @@ jobs:
     permissions:
       contents: read
     # Budget: plan (~2m) + apply, whose dominant term is Hetzner provisioning the server
-    # plus two volumes (~6m), + the boot poll (20 reads x 30 s, each read capped at 45 s,
+    # plus the LUKS volume (~6m), + the boot poll (20 reads x 30 s, each read capped at 45 s,
     # worst case ~27m). No image pull on this path. Raised 20 -> 40 (#8178) so the poll
     # always reaches a VERDICT line instead of being cancelled mid-read.
     #
     # 40 -> 50 (#8178, pre-ship advisor consult). 2 + 6 + 27 = 35 priced only plan, apply
-    # and the poll, and left 5 minutes for ELEVEN steps that run before `Terraform plan`:
-    # checkout, setup-terraform, the Doppler install, `Validate dispatch inputs`, three
-    # interlocks that each reach Doppler / the GitHub API / Better Stack, keygen, `Verify
+    # and the poll, and left 5 minutes for TWELVE steps that run before `Terraform plan`:
+    # checkout, setup-terraform, the credential load, `Validate dispatch inputs`, four
+    # interlocks (three reach Doppler / the GitHub API / Better Stack), keygen, `Verify
     # required secrets present`, the R2 credential extraction and `terraform init`. If those
     # overrun, the job is cancelled MID-POLL and prints no VERDICT line at all — the exact
     # "could not tell" state this PR exists to remove, and one the follow-through probe then
@@ -5785,15 +5786,19 @@ jobs:
             exit 1
           fi
 
-      # (#11194) Plaintext-id interlock, UNCONDITIONAL on this route (no plan_only input); see the job-rationale runbook.
+      # (#11194) Plaintext-id interlock, UNCONDITIONAL; this job ignores plan_only and always blocks (job-rationale runbook).
       - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
         run: |
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
-          if ! git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf"; then
-            echo "::error::git-data-host-create is HELD: git-data.tf passes a non-empty git_data_volume_id (a volume destroyed on 2026-10-27), so a host from this tree boots into the plaintext_unverified FATAL. Set it to \"\" (tracked on #11194), merge, then dispatch. Nothing was created."
+          if ! v="$(git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf")"; then
+            echo "$v"
+            v="${v//[$'\r\n']/ }"
+            echo "::error::git-data-host-create is HELD by the plaintext-id interlock: ${v} (usually: set git_data_volume_id to \"\" via #11449). Nothing was created."
             exit 1
+          else
+            echo "$v"
           fi
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
@@ -5932,9 +5937,9 @@ jobs:
           fi
           # STOCK preflight, sourced AFTER the birth gate. Order is load-bearing: the birth
           # gate proves the plan IS the scoped birth, the preflight proves it is FEASIBLE.
-          # GATED rather than allowlisted, because terraform creates the two volumes BEFORE
+          # GATED rather than allowlisted, because terraform creates the LUKS volume BEFORE
           # the server — so an unorderable server_type does not fail cleanly here, it
-          # strands two billed volumes attached to nothing.
+          # strands a billed volume attached to nothing.
           #
           # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
           # OUTSIDE the `doppler run` wrapper above. Without this read the gate fails closed
@@ -5952,7 +5957,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            stock_abort_closing git-data-host-create "Refusing to apply — terraform creates both volumes before the server, so the create would fail AFTER leaving two stranded billed volumes (#6393). NO [ack-destroy] bypass."
+            stock_abort_closing git-data-host-create "Refusing to apply — terraform creates the LUKS volume before the server, so the create would fail AFTER leaving a stranded billed volume (#6393). NO [ack-destroy] bypass."
             exit 1
           fi
           echo "birth gate + stock preflight PASSED. Plan summary:"

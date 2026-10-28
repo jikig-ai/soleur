@@ -2394,7 +2394,9 @@ const GIT_DATA_RETIRED_ADDRESSES = ["hcloud_volume.git_data", "hcloud_volume_att
 // the `_luks` siblings never match). Comment lines are excluded.
 function retiredFlagLines(block: string): string[] {
   const alt = GIT_DATA_RETIRED_ADDRESSES.map((a) => a.replace(/\./g, "[.]")).join("|");
-  const re = new RegExp(`-(?:target|replace)=['"]?(?:${alt})(?![A-Za-z0-9_])`);
+  // `[= ]`: terraform accepts `-target addr` as well as `-target=addr`, and either spelling (also with
+  // a single leading dash) re-adds the line.
+  const re = new RegExp(`-{1,2}(?:target|replace)[= ]['"]?(?:${alt})(?![A-Za-z0-9_])`);
   return block.split("\n").filter((l) => !/^\s*#/.test(l) && re.test(l));
 }
 // The same scan, counting every git-data flag line it COULD have matched (non-vacuity).
@@ -2506,7 +2508,7 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volu
   });
 
   test("the apply step grades the saved plan through the mode-aware post-apply backstop (#10137)", () => {
-    // The apply step used to carry an inline loop asserting BOTH data volumes preserved, which failed
+    // The apply step used to carry an inline loop asserting the data volumes preserved, which failed
     // the rotate dispatch on its own intended LUKS replace. Every pin below runs on the step with
     // comments stripped, anchored on a non-comment line: a comment that quotes the construct (the
     // step documents all of them) must not satisfy a pin.
@@ -2542,7 +2544,7 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volu
     expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
     expect(gitDataJobBlock).toContain("Validate dispatch inputs (rotate confirm token)");
     // The rotate failure annotation is its own arm, and an unknown mode takes a neutral arm rather
-    // than the plain-replace claim that both volumes are preserved.
+    // than the plain-replace claim that the LUKS volume is preserved.
     expect(step).toMatch(/^\s*rotate\)\n\s*echo "::error::terraform apply \(git-data-host-rotate\) failed mid-replace/m);
     expect(step).toMatch(/^\s*\*\)\n\s*echo "::error::terraform apply \(git-data host\) failed mid-replace and the dispatch mode is unknown/m);
     // Exactly one call site in the job (the Observability probe counts it).
@@ -2588,6 +2590,34 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volu
     expect(retiredFlagLines("  -target='hcloud_volume.git_data_luks' \\")).toHaveLength(0);
     expect(retiredFlagLines("  -target='hcloud_volume_attachment.git_data_luks' \\")).toHaveLength(0);
     expect(retiredFlagLines("  # -target='hcloud_volume.git_data' (a comment)")).toHaveLength(0);
+    // The space spelling (`-target addr` / `-replace addr`, one or two dashes) is the same flag.
+    expect(retiredFlagLines("  -target hcloud_volume.git_data \\")).toHaveLength(1);
+    expect(retiredFlagLines("  --replace hcloud_volume_attachment.git_data \\")).toHaveLength(1);
+    expect(retiredFlagLines("  -target hcloud_volume.git_data_luks \\")).toHaveLength(0);
+  });
+
+  test("the retired plaintext pair is not DECLARED as a resource in apps/web-platform/infra/*.tf (#11194)", () => {
+    // A re-declared `hcloud_volume.git_data` would give the gates' retired-address refusal nothing to
+    // refuse against and silently re-create the plaintext store. The anchor is the quoted resource name
+    // followed by its opening brace, so the `git_data_luks` siblings can never match.
+    const declared = (src: string): string[] =>
+      src
+        .split("\n")
+        .filter((l) => !/^\s*#/.test(l))
+        .filter((l) => /^\s*resource\s+"(?:hcloud_volume|hcloud_volume_attachment)"\s+"git_data"\s*\{/.test(l));
+    const files = listInfraTfFiles();
+    expect(files.length).toBeGreaterThan(10);
+    // Non-vacuity: the scan reads the real declarations of the LUKS pair, which it must NOT flag.
+    const all = files.map((f) => readFileSync(f, "utf8")).join("\n");
+    expect(all).toMatch(/^\s*resource\s+"hcloud_volume"\s+"git_data_luks"\s*\{/m);
+    expect(all).toMatch(/^\s*resource\s+"hcloud_volume_attachment"\s+"git_data_luks"\s*\{/m);
+    expect(declared(all)).toEqual([]);
+    // Positive control: the detector flags each retired declaration and spares the siblings and comments.
+    expect(declared('resource "hcloud_volume" "git_data" {')).toHaveLength(1);
+    expect(declared('resource "hcloud_volume_attachment" "git_data" {')).toHaveLength(1);
+    expect(declared('resource "hcloud_volume" "git_data_luks" {')).toHaveLength(0);
+    expect(declared('resource "hcloud_volume_attachment" "git_data_luks" {')).toHaveLength(0);
+    expect(declared('# resource "hcloud_volume" "git_data" {')).toHaveLength(0);
   });
 
   test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
@@ -2639,11 +2669,11 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volu
 const IL_SOURCE_LINE =
   /^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-birth-readiness-gate\.sh"$/m;
 const IL_CALL =
-  /^ {10}if ! git_data_plaintext_id_interlock "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/git-data\.tf"; then\n([\s\S]*?)\n {10}fi$/m;
+  /^ {10}if ! v="\$\(git_data_plaintext_id_interlock "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/git-data\.tf"\)"; then\n([\s\S]*?)\n {10}fi$/m;
 // The replace job's refusal body: the strict `true` downgrade (warning, no exit) beside a blocking
 // else (error, exit 1). Both halves in one expression so neither can be dropped alone.
 const IL_REPLACE_BODY =
-  /^ {12}if \[\[ "\$\{PLAN_ONLY:-\}" == "true" \]\]; then\n {14}echo "::warning::[^\n]*"\n {12}else\n {14}echo "::error::[^\n]*"\n {14}exit 1\n {12}fi$/m;
+  /^ {12}if \[\[ "\$\{PLAN_ONLY:-\}" == "true" \]\]; then\n {14}echo "::warning::[^\n]*\$\{v\}[^\n]*"\n {12}else\n {14}echo "::error::[^\n]*\$\{v\}[^\n]*"\n {14}exit 1\n {12}fi$/m;
 
 /** The wiring predicate shared by the real-tree pin and its mutants. Returns the failed clauses. */
 function interlockStepProblems(stepRaw: string, opts: { replaceJob: boolean }): string[] {
@@ -2656,6 +2686,15 @@ function interlockStepProblems(stepRaw: string, opts: { replaceJob: boolean }): 
   if (/continue-on-error/.test(step)) bad.push("continue-on-error");
   // No `if:` on the step in either job (a condition is a way to skip a gate).
   if (/^ {8}if:/m.test(step)) bad.push("step-level if");
+  // The function's output is captured, echoed to the step log, CR/LF-stripped, and carried INSIDE every
+  // annotation (an annotation has no "verdict above"); the pass path echoes it too.
+  if (call) {
+    if (!call[1].startsWith('            echo "$v"\n')) bad.push("verdict echo");
+    if (!call[1].includes("v=\"${v//[$'\\r\\n']/ }\"")) bad.push("verdict CR/LF strip");
+    if (!call[1].endsWith('\n          else\n            echo "$v"')) bad.push("verdict pass echo");
+  }
+  const annotations = step.split("\n").filter((l) => /echo "::(?:warning|error)::/.test(l));
+  if (annotations.length !== (opts.replaceJob ? 2 : 1) || annotations.some((l) => !l.includes("${v}"))) bad.push("verdict in annotation");
   if (opts.replaceJob) {
     if (!/^ {8}env:\n {10}PLAN_ONLY: \$\{\{ inputs\.plan_only \}\}$/m.test(step)) bad.push("PLAN_ONLY env");
     if (!call || !IL_REPLACE_BODY.test(call[0])) bad.push("strict downgrade + blocking default");
@@ -2700,7 +2739,11 @@ describe("git-data dispatch jobs run the plaintext-id interlock before planning 
       ["a step-level if: skipping the gate", (t) => t.replace("        env:\n", "        if: inputs.plan_only != true\n        env:\n"), "step-level if"],
       ["a non-strict downgrade (!= \"false\")", (t) => t.replace('== "true" ]]; then', '!= "false" ]]; then'), "strict downgrade"],
       ["a downgrade that is always taken", (t) => t.replace('if [[ "${PLAN_ONLY:-}" == "true" ]]; then', "if true; then"), "strict downgrade"],
-      ["the blocking exit dropped from the else arm", (t) => t.replace("              exit 1\n            fi\n          fi", "            fi\n          fi"), "strict downgrade"],
+      ["the blocking exit dropped from the else arm", (t) => t.replace("              exit 1\n            fi\n", "            fi\n"), "strict downgrade"],
+      ["the verdict not echoed to the step log", (t) => t.replace('            echo "$v"\n            v=', "            v="), "verdict echo"],
+      ["the CR/LF strip removed", (t) => t.replace(/ {12}v="\$\{v\/\/[^\n]*\n/, ""), "verdict CR/LF strip"],
+      ["the verdict left out of the annotations", (t) => t.replace(/\$\{v\} \(usually/g, "(usually"), "verdict in annotation"],
+      ["the pass path no longer echoes the verdict", (t) => t.replace('\n          else\n            echo "$v"', ""), "verdict pass echo"],
       ["the call removed", (t) => t.replace(/git_data_plaintext_id_interlock "/, 'true "'), "call"],
       ["continue-on-error added", (t) => t.replace("        env:\n", "        continue-on-error: true\n        env:\n"), "continue-on-error"],
     ];
@@ -2734,17 +2777,25 @@ describe("git-data dispatch jobs run the plaintext-id interlock before planning 
         const r = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
         return { rc: r.status, out: `${r.stdout}${r.stderr}` };
       };
-      // CONTROL: an empty literal passes in every mode, so the refusals below are the literal's.
-      for (const po of [undefined, "false", "true"]) expect(run('""', po).rc, `empty literal, PLAN_ONLY=${po}`).toBe(0);
+      // CONTROL: an empty literal passes with PLAN_ONLY unset, false or true, so the refusals below are the literal's.
+      for (const po of [undefined, "false", "true"]) {
+        const ok = run('""', po);
+        expect(ok.rc, `empty literal, PLAN_ONLY=${po}`).toBe(0);
+        expect(ok.out).toContain("git_data_plaintext_id_interlock: PASS");
+      }
       for (const po of [undefined, "", "false", "TRUE", "1", "yes"]) {
         const r = run('"106867358"', po);
         expect([po, r.rc]).toEqual([po, 1]);
         expect(r.out).toContain("::error::");
+        // The verdict rides INSIDE the annotation (not "above" it), and in the step log.
+        expect(r.out).toMatch(/::error::[^\n]*plaintext-id interlock: [^\n]*ABORT[^\n]*non-empty \(line 2\)/);
+        expect(r.out).toMatch(/^git_data_plaintext_id_interlock: ABORT/m);
         expect(r.out, "the value must never reach the log").not.toContain("106867358");
       }
       const dg = run('"106867358"', "true");
       expect(dg.rc).toBe(0);
       expect(dg.out).toContain("::warning::plan_only");
+      expect(dg.out).toMatch(/::warning::plan_only[^\n]*ABORT[^\n]*non-empty \(line 2\)/);
       expect(dg.out).not.toContain("::error::");
       expect(dg.out, "the value must never reach the log").not.toContain("106867358");
     } finally {
@@ -5892,7 +5943,11 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // Non-vacuity floors: an extraction that found nothing would make the union assertion
     // below pass only by accident of the other terms.
     expect(presence.length).toBeGreaterThan(10);
-    expect(entailed.length).toBeGreaterThan(0);
+    // The entailed loop is EXACTLY these two members (not "some"): a third silently joining it would
+    // demand `creates == 1` of a resource a resumed dispatch legitimately re-plans as a no-op, and one
+    // silently leaving would stop demanding its create.
+    expect([...entailed].sort()).toEqual(["hcloud_server_network.git_data", "hcloud_volume_attachment.git_data_luks"]);
+    expect(entailed).toHaveLength(2);
 
     // The two members the gate handles by their own dedicated arms rather than by a loop:
     // the server (the `creates == 1` identity arm) and the firewall attachment (an
@@ -6164,7 +6219,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(interlockAt).toBeLessThan(planAt);
     expect(rung2At).toBeLessThan(planAt);
     expect(authmapAt).toBeLessThan(planAt);
-    // A job-level continue-on-error would make all three interlocks non-blocking at once,
+    // A job-level continue-on-error would make every interlock (the three mechanical ones and the plaintext-id one) non-blocking at once,
     // outside every step body the per-step loop inspects.
     expect(jobBlock).not.toMatch(/^\s{4}continue-on-error:/m);
   });
@@ -6217,7 +6272,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(rAuthmap).toBeLessThan(rPlan);
     expect(rAuthmap).toBeLessThan(rApply);
 
-    // H2 — A JOB-LEVEL `continue-on-error` DISARMS ALL THREE INTERLOCKS AT ONCE, and it
+    // H2 — A JOB-LEVEL `continue-on-error` DISARMS EVERY INTERLOCK AT ONCE, and it
     // sits outside every step body the assertions above read. The step-level loop claims to
     // pin "the three ways" a step can be disarmed; this is a fourth, one level up.
     expect(replaceBlock).not.toMatch(/^\s{4}continue-on-error:/m);
