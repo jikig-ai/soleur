@@ -41,7 +41,7 @@ delegates `--affected` / `--full` and maps the runner's exit codes:
 | 1 | a selected suite failed | rc 1 |
 | 2 | usage error / unrecognized flag | rc 4 `runner-refused` |
 | 3 | zero failed but ≥1 suite signal-killed or declined | rc 1 `runner-signal` |
-| 4 | refused — nothing ran | rc 4 `runner-refused` |
+| 4 | refused — nothing ran (when the log shows `N sibling full-gate run(s) already in flight`, the bounded wait in [battery-refusal-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/battery-refusal-wait.md) applies; every other cause stays stop-and-fix) | rc 4 `runner-refused` |
 
 `--print-selection` must print the affected selection and exit before any suite
 runs. A runner that cannot honour this table must not register the flag — the

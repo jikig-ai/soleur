@@ -1728,8 +1728,9 @@ assert "GuardD dispatch: the operator count is a positive integer (got '$GD_ALL_
   "[[ '$GD_ALL_PERMISSIVE' =~ ^[0-9]+$ ]] && (( GD_ALL_PERMISSIVE > 0 ))"
 assert "GuardD dispatch: every heredoc operator parsed (parsed $GD_ALL of $GD_ALL_PERMISSIVE)" \
   "(( GD_ALL == GD_ALL_PERMISSIVE ))"
+# #5150: two quoted heredocs (RETENTIONUNITEOF, RETENTIONTIMEREOF) raised the inventory 11 -> 13.
 assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
-  "(( GD_ALL == 11 ))"
+  "(( GD_ALL == 13 ))"
 # Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
 # why this counts every match rather than inspecting the first.
 # Unquoted == the delimiter carries neither ' nor ". Derived from the SAME scan as the
@@ -2421,8 +2422,34 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
 # #6780: 173 -> 175 (the AC6c cross-file pin-consistency block added 2 unconditional rows).
 # #4699/#7596: -> 192 (the AC6d wiring pins + GuardA3 at-tag block added 17 unconditional rows over 175).
+# #5150: 192 -> 203 (trace retention: 6 bootstrap pins, 3 STAGED words, 2 image-build pins).
+RETENTION_BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
+RETENTION_CLOUD_INIT="$SCRIPT_DIR/cloud-init-inngest.yml"
+RETENTION_IMAGE_YML="$SCRIPT_DIR/../../../.github/workflows/build-inngest-bootstrap-image.yml"
+assert "retention unit is rendered in the bootstrap" \
+  "grep -qF 'inngest-trace-retention.service' '$RETENTION_BOOTSTRAP'"
+assert "retention timer is OnCalendar=daily" \
+  "grep -qF 'OnCalendar=daily' '$RETENTION_BOOTSTRAP'"
+assert "retention timer is Persistent=false" \
+  "grep -qF 'Persistent=false' '$RETENTION_BOOTSTRAP'"
+assert "retention timer sets RandomizedDelaySec" \
+  "grep -qF 'RandomizedDelaySec=30min' '$RETENTION_BOOTSTRAP'"
+assert "retention ExecStart takes the flock lock" \
+  "grep -qF 'flock -n /run/lock/inngest-trace-retention.lock' '$RETENTION_BOOTSTRAP'"
+assert "retention ensure-indexes runs before the timer is enabled" \
+  "awk '/--ensure-indexes/ && !e {e=NR} /systemctl enable --now inngest-trace-retention\\.timer/ && !t {t=NR} END {exit !(e>0 && t>0 && e<t)}' '$RETENTION_BOOTSTRAP'"
+assert "STAGED names inngest-trace-retention.sh as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sh([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "STAGED names inngest-trace-retention.sql as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sql([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "STAGED names inngest-trace-retention.sqlite.sql as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sqlite\\.sql([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "bootstrap image build copies inngest-trace-retention.sh into the build context" \
+  "grep -qF 'cp apps/web-platform/infra/inngest-trace-retention.sh' '$RETENTION_IMAGE_YML'"
+assert "bootstrap image copies inngest-trace-retention.sh to the image root" \
+  "grep -qF 'COPY inngest-trace-retention.sh /inngest-trace-retention.sh' '$RETENTION_IMAGE_YML'"
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=192
+BOOTSTRAP_MIN_ASSERTIONS=203
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

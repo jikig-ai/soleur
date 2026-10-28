@@ -331,7 +331,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
-  # hourly, so a failing probe keeps a row inside the 3 h window and a fixed one clears in about 3 to 4 h.
+  # hourly, so a failing probe keeps a row inside the 1.5 h window and a fixed one clears in about 1.5 to 2.5 h.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
@@ -370,16 +370,25 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
   name           = "soleur-inngest-luks-key-probe-fail-prd"
 
-  # Presence-only, so safe before the probe is delivered (no rows, value 0). A 3 h window (a 25 h
-  # one would hold an incident open for a day): while any fail_ row is inside it the count stays
-  # above 0, which is the hysteresis against the next hourly re-probe re-opening an incident. The
-  # incident clears about 3 to 4 h after the LAST failing row (the window, then recovery_period),
-  # which is not proof of recovery: only a token=ok row is.
+  # Presence-only, so safe before the probe is delivered (no rows, value 0). The probe re-emits
+  # hourly after any non-ok token, so the window is an hour and a half: a failing row stays inside
+  # it that long and the next hourly re-probe lands with ~30 min of slack — the hysteresis against
+  # that re-probe re-opening an incident. The incident clears about 1.5 to 2.5 h after the LAST
+  # failing row (the window, then recovery_period), which is not proof of recovery: only a
+  # token=ok row is.
+  #
+  # #11372 — the Better Stack API 422'd this alert's apply as "too resource intensive" THREE times,
+  # every time at query_period 10800: check 300 (#11260), check 900 (#11384), check 3600 (#11404).
+  # The check_period ladder is exhausted — the ceiling binds on the data range scanned per
+  # evaluation. 300/5400 is the check/query tuple inngest_luks_wrong_volume already runs in applied
+  # state on this same source under a heavier GROUP BY query; if a 422 still fires, the next rung
+  # narrows query_period to 4500 (still ~15 min slack past the hourly re-probe; check stays 300;
+  # rides the same guard-pin update and is recorded on decision-challenges.md).
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
   check_period        = 300
-  query_period        = 10800
+  query_period        = 5400
   confirmation_period = 0
   recovery_period     = 3600
   on_missing_data     = "treat_as_zero"

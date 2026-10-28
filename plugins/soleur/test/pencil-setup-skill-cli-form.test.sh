@@ -42,4 +42,20 @@ rc=$?
 set -e
 assert_eq "0" "$rc" "SKILL.md includes a <!-- verified: --> annotation"
 
-print_results
+# The re-registration snippet must capture the old --pencil-binary= flag ONLY inside the
+# user-scope branch (the same gate as the Node probe): a flag from a project-scoped .mcp.json
+# entry must never be appended to the trusted `-s user` registration. Ordering-aware: comments
+# are stripped and the extraction line is anchored, so the bare variable name elsewhere (the
+# initialiser, the `claude mcp add` line) cannot satisfy it.
+flag_state=$(awk '
+  /^[[:space:]]*#/ { next }
+  { sub(/[[:space:]]+#.*$/, "") }
+  /^if \[\[ "\$existing_mode" == "headless_cli" \]\]; then/ { insnip=1; inuser=0; next }
+  insnip && /if \[\[ "\$scope" == "Scope: User" \]\]; then/ { inuser=1; next }
+  insnip && inuser && /^  else[[:space:]]*$/ { inuser=0; next }
+  insnip && /^fi[[:space:]]*$/ { insnip=0 }
+  insnip && /^[[:space:]]+pencil_binary_flag=\$\(.*grep -oE -- .--pencil-binary=\[\^ \]\+./ { print (inuser ? "user-branch" : "outside-user-branch") }
+' "$SKILL" | paste -sd, -)
+assert_eq "user-branch" "$flag_state" "pencil_binary_flag is extracted exactly once, inside the Scope: User branch"
+
+print_results 5

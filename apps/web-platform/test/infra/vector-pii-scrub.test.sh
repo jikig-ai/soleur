@@ -807,7 +807,7 @@ assert_grep "host_scripts_journald is an input of pii_scrub_drop_userdata (redac
 # refusal / failed-send crit row (`logger -p user.crit -t <unit>` lands as
 # PRIORITY=2 and this source admits PRIORITY 0-2 from ANY unit, so no per-unit
 # allowlist entry is needed). One row pins the three facts that sink depends
-# on — the PRIORITY set, the two-unit exclusion list (a widened exclusion
+# on — the PRIORITY set, the three-unit exclusion list (a widened exclusion
 # would silently drop a monitor), and membership in the scrub chain — scoped to
 # the [sources.system_journald] block so a same-named key elsewhere cannot
 # satisfy it.
@@ -817,18 +817,18 @@ if [[ -z "$SRC2_BLOCK" ]]; then
   fail "Source 2 drift (#7898): [sources.system_journald] block not found in vector.toml"
 elif ! grep -qE '^include_matches\.PRIORITY = \["0", "1", "2"\]$' <<<"$SRC2_BLOCK"; then
   fail "Source 2 drift (#7898): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\"] — the host-script crit rows (logger -p user.crit = PRIORITY 2) would stop shipping"
-elif ! grep -qE '^exclude_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]$' <<<"$SRC2_BLOCK"; then
-  fail "Source 2 drift (#7898): exclude_units widened/changed (it carries exactly the two units Source 1 includes) — a monitor unit added here would lose its off-box refusal path"
+elif ! grep -qE '^exclude_units = \["inngest-server\.service", "inngest-trace-retention\.service", "soleur-inngest-tls\.service"\]$' <<<"$SRC2_BLOCK"; then
+  fail "Source 2 drift (#7898): exclude_units widened/changed (it carries exactly the three units Source 1 includes) — a monitor unit added here would lose its off-box refusal path"
 elif ! grep -qE '^inputs = \[.*"system_journald".*\]' "$VECTOR_TOML"; then
   fail "Source 2 drift (#7898): system_journald is no longer an input of the pii_scrub chain"
 else
-  pass "Source 2 (system_journald) admits PRIORITY 0-2 from any unit (two exclusions) and feeds the scrub chain — the #7898 crit-row sink holds"
+  pass "Source 2 (system_journald) admits PRIORITY 0-2 from any unit (three exclusions) and feeds the scrub chain — the #7898 crit-row sink holds"
 fi
 
 # #9963 + #6551 partition: Source 1 (inngest_journald) is the admission arm the
 # SYSLOG_IDENTIFIER=systemd positive-control row rides. Under OR-over-record-fields
 # contains_match, `include_units` merges into include_matches._SYSTEMD_UNIT, so this
-# source admits `_SYSTEMD_UNIT=inngest-server.service` (ANY priority) OR
+# source admits the server, trace-retention, and TLS units (ANY priority) OR
 # `PRIORITY ∈ {3,4}` minus the exclude_matches sets (the #6551 static partition:
 # untagged PRIORITY 0-2 rows belong to Source 2 alone; S4 tags and container stderr
 # belong to their own arms — double-admission windows closed). Two facts are
@@ -844,14 +844,14 @@ if [[ -z "$SRC1_BLOCK" ]]; then
   fail "Source 1 drift (#9963): [sources.inngest_journald] block not found in vector.toml"
 elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["3", "4"\]$' >/dev/null; then
   fail "Source 1 drift (#9963 + #6551 partition): include_matches.PRIORITY is no longer exactly [\"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping; PRIORITY 0-2 moved to Source 2 under the partition (untagged rows)"
-elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]$' >/dev/null; then
+elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service", "inngest-trace-retention\.service", "soleur-inngest-tls\.service"\]$' >/dev/null; then
   fail "Source 1 drift (#9963): include_units changed — the unit's own rows at every priority stop shipping"
 elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_terminator_filter"')" = "0" ]; then
   fail "Source 1 drift (#9963): the terminator filter (the only reader of inngest_journald) is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
 elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_journald"')" != "0" ]; then
   fail "Source 1 drift (terminator filter): the raw inngest_journald is an input of the pii_scrub chain again, so the filter is bypassed"
 else
-  pass "Source 1 (inngest_journald) admits the inngest-server and TLS terminator units OR PRIORITY {3,4} from any unit and feeds the scrub chain through the terminator filter — the #9963+#6551 control-row arm holds"
+  pass "Source 1 (inngest_journald) admits the inngest-server, trace-retention, and TLS terminator units OR PRIORITY {3,4} from any unit and feeds the scrub chain through the terminator filter — the #9963+#6551 control-row arm holds"
 fi
 
 echo

@@ -2,8 +2,8 @@
 # Guard 7 — THE WEDGE (#10138, design-wipe-body-pr.md section 4, requirement 1; plan Phase 6).
 #
 # UPDATE 2026-10-26 (Option B): the plaintext volume and its attachment left the HCL (git-data.tf now
-# passes git_data_volume_id as a literal) and are deleted by .github/workflows/git-data-plaintext-volume-
-# destroy.yml, so the interim "wipe done, HCL still declares the volume" state this guard was written for
+# passes git_data_volume_id as a literal) and were deleted on 2026-10-27 by a Terraform destroy (ADR-239
+# Amendment 2026-10-27), so the interim "wipe done, HCL still declares the volume" state this guard was written for
 # can no longer produce a volume CREATE. What remains guarded is reachability of hcloud_server.git_data
 # (WEDGE_ADDRS) by any workflow without a refusing gate. The F1/F2 fixtures are kept as synthesized plan
 # content the gates are fed.
