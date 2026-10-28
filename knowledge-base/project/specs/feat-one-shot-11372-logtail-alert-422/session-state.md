@@ -23,3 +23,11 @@
 - `soleur:plan` (full run), `soleur:deepen-plan` halt-gate verification (4.4–4.13) — sequential-fallback inline
 - `soleur:engineering:research:repo-research-analyst`, `soleur:engineering:research:learnings-researcher`, `soleur:engineering:cto`, `soleur:operations:coo`, `soleur:plan-review` lenses — sequential-fallback inline
 - `lint-guard-contract.py`, `technical-ruling-gate.sh`, `collision-precheck.sh`, `markdownlint-cli2` run mechanically
+
+## Work Phase
+- Status: complete (commit 7d672b1535)
+- RED→GREEN: guard pin updated first (suite red on .tf still 10800), .tf moved to 5400 → 43/43 green incl. all mutation rows
+- Affected-test exit gate: AFFECTED_RC=6 budget-deferred (~154+ suites ran, 0 real failures) — CI authoritative per contract
+- terraform validate: not run locally (v1.9.8 vs CI-pinned 1.10.5, pre-existing mock_provider mismatch artifact); fmt -check clean; infra-validation.yml owns it
+- GDPR gate: N/A (alert window change on host-emitted probe rows; no regulated-data surface)
+- cto_spawns=1 (planning subagent, sequential-fallback)
