@@ -175,7 +175,7 @@ If Phase B shows the host broken beyond key material (incomplete cloud-init, ssh
 
 ## Files to Create
 
-- `scripts/probes/web2-ssh-pin-current.sh` — the Observability `discoverability_test` wrapper (below). Reads the committed pin, asserts exactly one non-comment `ecdsa-sha2-nistp256` key line, asserts the `# fingerprint:` header differs from the known-stale predecessor fingerprint (`SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE`), prints `PIN_CURRENT` on success, exits 1 with a named reason otherwise. Pure `bash`+`grep`+`awk` — no `ssh-keygen` dependency in the Check-10 sandbox.
+- `scripts/web2-ssh-pin-current.sh` — the Observability `discoverability_test` wrapper (below). Reads the committed pin, asserts exactly one non-comment `ecdsa-sha2-nistp256` key line, asserts the `# fingerprint:` header differs from the known-stale predecessor fingerprint (`SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE`), prints `PIN_CURRENT` on success, exits 1 with a named reason otherwise. Pure `bash`+`grep`+`awk` — no `ssh-keygen` dependency in the Check-10 sandbox.
 
 ## User-Brand Impact
 
@@ -214,7 +214,7 @@ logs:
   retention: "Actions run retention; journald persistent on host (journald_persistent_web2)"
 
 discoverability_test:
-  command: "bash scripts/probes/web2-ssh-pin-current.sh"
+  command: "bash scripts/web2-ssh-pin-current.sh"
   expected_output: "PIN_CURRENT"
 ```
 
@@ -283,7 +283,7 @@ No new architectural decision — the repair applies **ADR-237** (ssh host keys 
 
 ## Guard Contract
 
-### Guard 1 — web2-ssh-pin-current probe (`scripts/probes/web2-ssh-pin-current.sh`)
+### Guard 1 — web2-ssh-pin-current probe (`scripts/web2-ssh-pin-current.sh`)
 
 **Property.** The committed `apps/web-platform/infra/web-2-ssh-host-key.pub` is parseable pin material for the CURRENT web-2: exactly one non-comment `ecdsa-sha2-nistp256` key line, and its `# fingerprint:` header does not equal a fingerprint recorded for a predecessor host.
 
@@ -334,7 +334,7 @@ Not relevant — the mechanical UI-surface scan over `## Files to Edit`/`## File
 | Phase A pin re-capture + `web-2-ssh-host-key.pub` edit | "Restore CI-key authorized access on web-2" | asked (via the repair ask; mechanism chosen by evidence — the stale pin is the proven failure, and `web-host-replace.md` documents re-capture as the routine post-replace step) |
 | Phase B on-host diagnostic | "the soleur-web-platform firewall permits tcp/22 from admin addresses" | inferred — justification: evidence gate between the two authorized repair paths; read-only, and the run log cannot show which of the two remaining hypotheses (missing key vs sshd-layer) holds without it |
 | Phase C conditional `terraform_data.root_authorized_keys_web2` + census/test edits | "install the CI deploy pubkey via an admin-IP sshd path" | asked (conditional — only if Phase B shows the key absent; expressed through IaC per `hr-all-infrastructure-provisioning-servers` rather than a raw append) |
-| `scripts/probes/web2-ssh-pin-current.sh` | — | inferred — justification: Phase 2.9 observability gate requires a local, ssh-free discoverability command discriminating this plan's repaired artifact; `ssh-keygen`/whole-suite forms fail Check-10's sandbox constraints |
+| `scripts/web2-ssh-pin-current.sh` | — | inferred — justification: Phase 2.9 observability gate requires a local, ssh-free discoverability command discriminating this plan's repaired artifact; `ssh-keygen`/whole-suite forms fail Check-10's sandbox constraints |
 | Fallback re-replace arm | "a guarded web-2 re-replace baking the key in cloud-init" | asked (kept as documented fallback; workflow gates already enforce the stock preflight the brief demands) |
 
 ### Split Assessment
@@ -347,7 +347,7 @@ Not relevant — the mechanical UI-surface scan over `## Files to Edit`/`## File
 ## Acceptance Criteria
 
 - [ ] AC1 — `apps/web-platform/infra/web-2-ssh-host-key.pub` carries the post-rebirth key: `# fingerprint:` header ≠ `SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE` and matches the key web-2's sshd offered in run 40744937376 (`SHA256:OB3/fH+fWhoTolCCx9rNMtuW0shPUONHNbhYxRFyqic`), with a `# captured:` timestamp ≥ 2026-10-28.
-- [ ] AC2 — `bash scripts/probes/web2-ssh-pin-current.sh` exits 0 and prints `PIN_CURRENT`.
+- [ ] AC2 — `bash scripts/web2-ssh-pin-current.sh` exits 0 and prints `PIN_CURRENT`.
 - [ ] AC3 — The first `apply-web-platform-infra.yml` run on the merge commit completes the `SSH forward to web-2 through the web-1 bastion` step and runs `Terraform apply (SSH-provisioned resources, over the bridge)` to a non-skipped conclusion (verified via `gh run view`/`gh run list`, not the dashboard).
 - [ ] AC4 — Phase B evidence is recorded on #11445 (comment): authorized_keys key-presence verdict + the journal grep result + `cloud-init status` outcome — whichever arm it selected.
 - [ ] AC5 — If (and only if) Phase B found the pubkey absent: `terraform_data.root_authorized_keys_web2` exists in `ci-ssh-key.tf`, `EXCLUSION_ALLOWLIST` in `terraform-target-parity.test.ts` includes it, `web-host-provisioner-parity.test.sh` EXT_RESIDENCE includes it, and the host's `/root/.ssh/authorized_keys` contains `local.ci_ssh_pubkey` post-apply (operator-side grep output captured on the issue).
@@ -355,7 +355,7 @@ Not relevant — the mechanical UI-surface scan over `## Files to Edit`/`## File
 
 ## Test Scenarios
 
-1. `scripts/probes/web2-ssh-pin-current.sh` against the CURRENT stale pin → exits 1 (red before repair). After Phase A writes the new pin → exits 0, `PIN_CURRENT` (the probe discriminates the exact defect).
+1. `scripts/web2-ssh-pin-current.sh` against the CURRENT stale pin → exits 1 (red before repair). After Phase A writes the new pin → exits 0, `PIN_CURRENT` (the probe discriminates the exact defect).
 2. Shape: pin file has exactly one non-comment line matching `ecdsa-sha2-nistp256 AAAA…` — run `write-known-hosts.sh web-2 <pin> /tmp/kh` locally to prove the CI writer accepts it (the same shape check every CI consumer applies; runs locally, no host contact).
 3. Conditional arm only: `terraform-target-parity.test.ts` and `web-host-provisioner-parity.test.sh` (incl. its mutation suite's EXT_RESIDENCE arms) run green with the new twin registered; `terraform plan` on the root shows `terraform_data.root_authorized_keys_web2` create-only.
 
