@@ -29,7 +29,7 @@ case "$-" in
     ;;
 esac
 
-_bearer_ok() { case "${1:-}" in ''|*$'\n'*|*$'\r'*|*" "*) return 1 ;; esac; }
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then
   echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN absent or malformed — cannot verify" >&2
   exit 2
@@ -68,11 +68,10 @@ if [ "$FATALS" -gt 0 ]; then
 fi
 
 # Zero fatals alone is not proof — require a post-merge birth (dispatch success).
-BIRTH=$(gh run list --workflow=apply-web-platform-infra.yml --limit 30 \
-  --json conclusion,event,createdAt,displayTitle \
-  --jq '[.[] | select(.conclusion=="success" and .event=="workflow_dispatch")] | length' 2>/dev/null || echo -1)
+BIRTH=$(gh api "repos/{owner}/{repo}/actions/workflows/apply-web-platform-infra.yml/runs?per_page=30" \
+  --jq '[.workflow_runs[] | select(.conclusion=="success" and .event=="workflow_dispatch")] | length' 2>/dev/null || echo -1)
 if [ "$BIRTH" = "-1" ]; then
-  echo "TRANSIENT: gh run list failed" >&2
+  echo "TRANSIENT: gh api workflow-runs query failed" >&2
   exit 2
 fi
 if [ "$BIRTH" -lt 1 ]; then

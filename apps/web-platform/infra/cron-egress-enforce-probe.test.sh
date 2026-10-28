@@ -133,7 +133,7 @@ echo "-- gateway session-token mint contract (#11361) --"
 # on a fresh host. Anchored on the call form, not a bare token: a comment cannot mint.
 assert_grep "gw token mint writes the username (printf 'probe'), parity with cron-egress-resolve.sh" \
   "printf 'probe' > \"\\\$GW_TOKEN_DIR/\\\$GW_TOK\"" "$PROBE"
-if grep -qF ': > "$GW_TOKEN_DIR/$GW_TOK"' "$PROBE"; then
+if grep -qE ': > "\$GW_TOKEN_DIR/\$GW_TOK"' "$PROBE"; then
   CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: empty token mint (: >) present — file content never equals the presented username → 407 → gw_allow_fail"
 else
   CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: no empty token mint (: > GW_TOK) — content==user contract can hold"
