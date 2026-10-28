@@ -331,7 +331,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
-  # hourly, so a failing probe keeps a row inside the 3 h window and a fixed one clears in about 3 to 4 h.
+  # hourly, so a failing probe keeps a row inside the 1.5 h window and a fixed one clears in about 1.5 to 2.5 h.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
