@@ -56,10 +56,11 @@
 #    `secrets --json`, `substitute`, `secrets download`, `run -- printenv`, the Doppler REST API,
 #    Terraform `data "doppler_secrets"`, and the loader-delivered `$HCLOUD_TOKEN` env
 #    (`<<<"${HCLOUD_TOKEN:-}"` in .github/workflows/git-data-cutover.yml; git-data-wipe.sh `rw)`
-#    reads a stdin line).
-#  - Excluded classes production can execute: *.md (agents and runbooks copy-paste; 4 live bare reads
-#    exist in knowledge-base runbooks: grok-build-hetzner-dogfood.md:20, registry-luks-recut-6929.md:346
-#    and :408, the infra-credential-tiers-8209.md O2 row), test-class files CI runs (`test-*`, `*.test.*`, a test dir
+#    reads a stdin line; `HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"` at scripts/cutover-inngest.sh:1902,
+#    the #9755 op=backup arm reading the loader export).
+#  - Excluded classes production can execute: *.md (agents and runbooks copy-paste; 1 live bare read
+#    remains in knowledge-base runbooks: the infra-credential-tiers-8209.md O2 row — the #9755 review
+#    rewrote the other three to HCLOUD_TOKEN_READONLY), test-class files CI runs (`test-*`, `*.test.*`, a test dir
 #    outside tests/scripts/lib/). Files over 5 MB.
 #  - It cannot tell that a read/write token was stored UNDER the read-only name; that control is the
 #    O5 write-probe of knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.

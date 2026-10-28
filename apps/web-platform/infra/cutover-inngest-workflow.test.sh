@@ -2113,9 +2113,19 @@ assert "#7674 no step tolerates failure (a continue-on-error would green-light e
 assert "#9755 the workflow calls the infra-credentials loader" \
   "grep -qE 'uses:[[:space:]]*\\./\\.github/actions/infra-credentials' '$WF_YAML'"
 assert "#9755 the loader step is gated to op=backup (the whole-project export lands only on a backup dispatch)" \
-  "grep -qE 'if:[[:space:]]*inputs\\.op == .backup.' '$WF_YAML'"
+  "grep -qE \"if:[[:space:]]*inputs\\.op == 'backup'\" '$WF_YAML'"
 assert "#9755 the loader call passes the environment-scoped Tier-B token (the conditional with: mirrors the arm-token idiom and gives the parity row its extraction anchor)" \
-  "grep -qE 'doppler-token-infra-privileged:[[:space:]]*\\$\\{\\{[[:space:]]*\\(inputs\\.op == .backup.\\)[[:space:]]*&&[[:space:]]*secrets\\.DOPPLER_TOKEN_INFRA_PRIVILEGED' '$WF_YAML'"
+  "grep -qE 'doppler-token-infra-privileged:[[:space:]]*\\$\\{\\{[[:space:]]*\\(inputs\\.op == '\"'\"'backup'\"'\"'\\)[[:space:]]*&&[[:space:]]*secrets\\.DOPPLER_TOKEN_INFRA_PRIVILEGED' '$WF_YAML'"
+# The three greps above prove the lines exist, not that they sit on the SAME step — a `uses:` on
+# one step and an `if:`/`with:` on a sibling would satisfy all three while the loader call ran
+# ungated. Extract the step block that CONTAINS the `uses:` line (from its `      - ` item start
+# to the next step start) and assert the `if:` and the input are inside it.
+LOADER_STEP_BLOCK="$(awk '/^      - / { if (has) printf "%s", block; block=""; has=0 }
+                         { block = block $0 "\n" }
+                         /uses:[[:space:]]*\.\/\.github\/actions\/infra-credentials/ { has=1 }
+                         END { if (has) printf "%s", block }' "$WF_YAML")"
+assert "#9755 the loader step's own block carries BOTH the op=backup if: and the doppler-token-infra-privileged: input (co-located on one step)" \
+  "printf '%s' \"\$LOADER_STEP_BLOCK\" | grep -qE \"if:[[:space:]]*inputs\\.op == 'backup'\" && printf '%s' \"\$LOADER_STEP_BLOCK\" | grep -qE 'doppler-token-infra-privileged:'"
 assert "#9755 no doppler-token-legacy input anywhere in the file (a Tier-A fallback would defeat the gate)" \
   "! grep -qE 'doppler-token-legacy:' '$WF_YAML'"
 
@@ -5069,7 +5079,12 @@ _DISPATCHED=$((PASS + FAIL))
 #   exported-HCLOUD_TOKEN environment row adds two (verdict + zero curl + reads, sentinel absent) (+2): +5 in total.
 # 1134 -> 1135 (+1) at the #10664 review round 2, measured: one pin on the empty-token warning's remedy tail (`only if the secret is
 #   genuinely absent`, so a reword cannot drop the auth/network-first ordering).
-_EXACT_FLOOR=1156
+# 1135 -> 1156 (+21) at #9755, measured: backup env-gate + loader step + union parity + BKP behavioral battery
+# 1156 -> 1157 (+1) at the #9755 review round: the same-step co-location row — the loader step block
+#   carrying both the `if: inputs.op == 'backup'` gate and the `doppler-token-infra-privileged:` input
+#   (the uses:/if:/with: greps alone could not prove they sit on one step); the `.backup.` wildcards in
+#   the two sibling greps were tightened to the quoted literal 'backup' (same count).
+_EXACT_FLOOR=1157
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

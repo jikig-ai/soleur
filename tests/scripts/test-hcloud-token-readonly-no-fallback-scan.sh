@@ -47,7 +47,7 @@ SCAN_WRAP=()
 scan_in() {
   local d="$1" out="$2"; shift 2
   assert_fixture_dir "$out"
-  env -u GITHUB_ACTIONS -u HCLOUD_SCAN_ROOT -u HCLOUD_SCAN_TODAY HCLOUD_SCAN_ROOT="$d" "$@" ${SCAN_WRAP[@]+"${SCAN_WRAP[@]}"} bash "$SCANNER" > "$out" 2>&1; SCAN_RC=$?
+  env -u GITHUB_ACTIONS -u HCLOUD_SCAN_ROOT HCLOUD_SCAN_ROOT="$d" "$@" ${SCAN_WRAP[@]+"${SCAN_WRAP[@]}"} bash "$SCANNER" > "$out" 2>&1; SCAN_RC=$?
 }
 tree_md5() { assert_fixture_dir "$1" && (cd "$1" && find . -path ./.git -prune -o \( -type f -o -type l \) -print0 | LC_ALL=C sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1); }
 # expect_all <outfile> <~-separated expectations>: prints the failures (empty = all met); a leading ! = must be absent
@@ -200,7 +200,7 @@ MATRIX=(
 "D3|a lib segment outside tests/scripts/lib/ (tests/fixtures/lib, tests/lib) does not un-exclude|e_d3|0|!FINDING~$GREEN2"
 "D2|tests/other, fixtures, docs, a .spec. infix and *.md are not scanned|e_d2|0|!FINDING~$GREEN2"
 "T2|population by selection: yml, .service, .tf, .claude/hooks, an extensionless file and .github/workflows are each scanned|e_t2|1|F-literal x/deep/cloud-init.yml:1:~F-literal a.service:1:~F-literal main.tf:1:~F-literal .claude/hooks/h:1:~F-literal bin/runner:1:~F-literal .github/workflows/w.yml:1:~live: findings=6 scanned=8"
-"T3a|a second bare-name read in a different file after a compliant first is a second finding, one per file|e_t3a|1|FINDING F-literal scripts/other.sh:1:~live: findings=1"
+"T3a|a bare-name read reintroduced in a second file is a finding on top of the pristine fixture (findings=1)|e_t3a|1|FINDING F-literal scripts/other.sh:1:~live: findings=1"
 )
 if [ "$(id -u)" -eq 0 ]; then skip "E1: an unreadable regular file is FAIL SETUP (skipped: root reads any file)"
 else MATRIX+=("E1|an unreadable regular file is FAIL SETUP (rc 2), never skipped silently|e_u1|2|FAIL SETUP: cannot read scripts/ck.sh~!live:"); fi
@@ -235,9 +235,9 @@ scan_in "$PRISTINE" "$T/out/S2" GITHUB_ACTIONS=true
 verdict S2 "HCLOUD_SCAN_ROOT under GITHUB_ACTIONS is refused (rc 2), never honoured" 2 'FAIL SETUP: GITHUB_ACTIONS is set~!live:' "$T/out/S2"
 
 # U1 / X1: an argument is a usage error (rc 2); xtrace is refused (rc 78)
-env -u GITHUB_ACTIONS -u HCLOUD_SCAN_ROOT -u HCLOUD_SCAN_TODAY bash "$SCANNER" --bogus > "$T/out/U1" 2>&1; SCAN_RC=$?
+env -u GITHUB_ACTIONS -u HCLOUD_SCAN_ROOT bash "$SCANNER" --bogus > "$T/out/U1" 2>&1; SCAN_RC=$?
 verdict U1 "an argument is a usage error (rc 2), nothing scanned" 2 'usage:~!live:' "$T/out/U1"
-env -u GITHUB_ACTIONS -u HCLOUD_SCAN_ROOT -u HCLOUD_SCAN_TODAY HCLOUD_SCAN_ROOT="$PRISTINE" bash -x "$SCANNER" > "$T/out/X1" 2>&1; SCAN_RC=$?
+env -u GITHUB_ACTIONS -u HCLOUD_SCAN_ROOT HCLOUD_SCAN_ROOT="$PRISTINE" bash -x "$SCANNER" > "$T/out/X1" 2>&1; SCAN_RC=$?
 verdict X1 "xtrace on is refused (rc 78), nothing scanned" 78 'refusing to run while xtrace is on~!live:' "$T/out/X1"
 
 # O1: output order is FINDING lines, the live: summary, then the remedy line last
@@ -251,7 +251,7 @@ fi
 
 # L1: the scanner against the REAL tree, no override
 t0="$(date +%s.%N)"
-env -u HCLOUD_SCAN_ROOT -u HCLOUD_SCAN_TODAY bash "$SCANNER" > "$T/out/L1" 2>&1
+env -u HCLOUD_SCAN_ROOT bash "$SCANNER" > "$T/out/L1" 2>&1
 SCAN_RC=$?
 printf 'L1 scanner wall time: %s s\n' "$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN { printf "%.2f", b - a }')"
 verdict L1 "the scanner against the real tree is GREEN: no allowlisted read, zero findings" 0 "!FINDING~$GREEN scanned=" "$T/out/L1"
