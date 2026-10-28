@@ -57,15 +57,23 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh"
 bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" \
   --target-entrypoint http_config_settings
 
+# default-token profile — the #11181 CF_API_TOKEN widen precondition + post-check:
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" --profile default-token
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" \
+  --profile default-token --expect-lb-scopes
+
 # Print the probe commands without running them (token stays unexpanded):
 bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" --dry-run
 ```
 
-The token / zone / account (`CF_API_TOKEN_RULESETS`, `CF_ZONE_ID`,
-`CF_ACCOUNT_ID`) and Doppler config (`soleur` / `prd_terraform`) are hardcoded:
-the ADR-130 retained-scope URL set is meaningful only for the rulesets token, so
-a `--token-var` knob pointed elsewhere would run the wrong URLs against the wrong
-token.
+The token (`CF_API_TOKEN_RULESETS` or `CF_API_TOKEN`, resolved by `--profile`),
+zone / account (`CF_ZONE_ID`, `CF_ACCOUNT_ID`) and Doppler config
+(`soleur` / `prd_terraform`) are **profiles only, no raw token-var knob**: each
+probe set is meaningful only for the token it binds to, so a `--token-var` knob
+pointed at an arbitrary secret would run the wrong URLs against the wrong token.
+The named-profile table is the one sanctioned widening of that posture —
+`default-token` pairs the production default `CF_API_TOKEN` (the `cloudflare`
+provider alias) with its own ledger probe set.
 
 ## Execution — the 3-step widen flow
 
@@ -101,6 +109,19 @@ token.
    the tool prints "present", not "added" — confirm the transition against your
    step-1 baseline.
 
+### The same 3 steps for `CF_API_TOKEN` (the #11181 LB widen)
+
+1. **Pre-widen baseline:** `--profile default-token`. The four retained ledger
+   rows (Tunnel, Access, DNS, Notifications) must read `authorized (200)` — a
+   retained failure here means the widen precondition is unmet, halt. The two LB
+   target rows read `not-yet-widened (403)` and the run exits 0 with a `NOTE:`
+   line — that is the expected absent-scope state BEFORE the widen.
+2. **Widen** via the playbook to Zone `soleur.ai` → `Load Balancers: Edit` AND
+   Account → `Load Balancing: Monitors and Pools: Edit` (append, never rebuild).
+3. **Assert:** `--profile default-token --expect-lb-scopes` must exit 0 with
+   `PASS: LB scopes present`. `not-yet-widened` is neutral ONLY in the step-1
+   baseline — the widen is not verified until an assert run exits 0.
+
 ## Probe-set contract (three-layer fail-closed classifier)
 
 The probe set is the ADR-130 four-probe retained set plus Zone WAF — four **zone**
@@ -122,11 +143,46 @@ list (`accounts/<acct>/rulesets`). The classifier captures each response **body*
    other phase's `404` fails closed: 403-on-missing is unverified there, so a
    dropped scope that returned `404` must not read as green.
 
+Profile `default-token` — the `CF_API_TOKEN` set (the two LB rows are the
+readiness probes of exactly the granted permission surfaces of the #11181
+ruling; GETs attest the READ half):
+
+| class | label | GET | attests | trust404 |
+|---|---|---|---|---|
+| retained | accounts/<acct>/cfd_tunnel | `.../cfd_tunnel?per_page=1` | Tunnel | 0 |
+| retained | accounts/<acct>/access/apps | `.../access/apps?per_page=1` | Access | 0 |
+| retained | zones/<zone>/dns_records | `.../dns_records?per_page=1` | DNS, zone soleur.ai | 0 |
+| retained | accounts/<acct>/notification_policies | `.../notification_policies?per_page=1` | Notifications | 0 |
+| target | accounts/<acct>/lb/pools | `.../load_balancers/pools?per_page=1` | Account Monitors-and-Pools (read half) | 0 |
+| target | zones/<zone>/load_balancers | `.../load_balancers?per_page=1` | Zone Load Balancers (read half) | 0 |
+
+Every default-token row is `trust404=0` — all rows fail closed on 404 (the
+verified-404 exception stays exclusive to `http_config_settings`). `target`-class
+neutrality is minted at exactly ONE classifier site and ONLY in baseline mode: a
+clean `403` prints `not-yet-widened (403)` (with the parsed `errors[0].code`
+appended when present and numeric) and the run stays exit-neutral with a `NOTE:` summary;
+any other anomaly (404, degraded 200, wrong-shape 200, 5xx, 000, empty) is a
+hard fail in BOTH modes. In assert mode (`--expect-lb-scopes`) every target row
+must be authorized or the run exits 3 naming the still-absent 403s. The `target`-class
+vocabulary is default-token-local: the rulesets `--target-entrypoint` path keeps
+its own `TARGET_PRESENT` handling and never consults this classifier. The baseline
+summary's verbatim literal (a stable grep target for the data channel):
+`NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it`.
+
 ## Exit codes
 
-- `0` — every retained scope authorized (and the target, if given).
-- `2` — usage error, missing prerequisite (`curl` / `doppler` / `jq`), or an absent Doppler secret.
-- `3` — probe failed: a scope was dropped, degraded, or denied.
+- `0` — every retained scope authorized (and, per profile: the rulesets target,
+  if given; in `default-token` baseline, LB rows authorized OR reported
+  `not-yet-widened`; in `--expect-lb-scopes` assert mode, all LB rows authorized).
+- `2` — usage error (including an unknown `--profile`, a flag used with the
+  wrong profile, and a malformed `--target-entrypoint` phase name — all raised
+  before any secret read), missing prerequisite (`curl` / `doppler` / `jq`), an
+  absent Doppler secret, or a refused internal table-integrity tripwire (source
+  drift only, unreachable by argv; stderr-only and names the corruption).
+- `3` — probe failed: a scope was dropped, degraded, or denied (assert mode: an
+  LB row still `403` or anomalous).
+- `78` — the script REFUSED to run under shell tracing (`-x`) — a refusal, not a
+  probe verdict; see the STREAM CONTRACT in the script header (#7797).
 
 ## Sharp Edges
 
@@ -147,7 +203,21 @@ list (`accounts/<acct>/rulesets`). The classifier captures each response **body*
   ground truth (ADR-130).
 - **Update the scope ledger.** After a widen, add the new permission to the
   `apps/web-platform/infra/variables.tf` description of the widened token (ADR-130's
-  scope ledger), in the feature PR that consumes the widen.
+  scope ledger), in the feature PR that consumes the widen. For the `CF_API_TOKEN`
+  LB widen that is the post-widen follow-on: the two permissions join the
+  `cf_api_token` description — and ADR-130 gains its one-paragraph amendment note
+  pinning that the `CF_API_TOKEN` retained-scope re-check is the `default-token`
+  profile probe set — in the PR that consummates the widen, never before the
+  dashboard act has actually run.
+- **The LB readiness probes attest read reachability, not `:Edit`** — the same
+  one-click Read-vs-Edit trap as the rulesets probe: a dashboard REPLACE that
+  re-adds `Load Balancers` as Read-only returns an authorized `200` and reads as
+  green while the write capability was dropped. Visually confirm `Edit` on both
+  granted rows.
+- **`not-yet-widened` is neutral ONLY in baseline mode.** The widen is not
+  verified until an `--expect-lb-scopes` run exits 0. Reading a green baseline
+  (post-widen) as proof of the transition is the same present-not-added trap the
+  rulesets flow documents.
 - **Never print the Bearer token.** The script passes it from a private fd (not
   argv), `--dry-run` leaves it unexpanded, and it runs no `set -x`. When driving
   the widen, keep the full-power-session leak constraints above.

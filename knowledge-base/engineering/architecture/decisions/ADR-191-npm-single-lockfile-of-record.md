@@ -203,3 +203,25 @@ choice is visible rather than an omission.
 than re-pointed: `npm ci` deletes `node_modules` unconditionally, so caching it is worse
 than useless. `setup-node`'s `cache: npm` caches the npm download cache — the part `npm ci`
 can reuse — matching what `web-platform-build` already did.
+
+**Addendum 2026-10-26 (#11156): a fifth lockfile directory.** `plugins/soleur/skills/pencil-setup/scripts/pen-cli/`
+holds the committed lockfile pair for the pinned headless engine (`@pen.dev/cli`), installed by
+`check_deps.sh` with `npm ci --ignore-scripts` into its own prefix. It is a fifth `package-lock.json`
+directory, separate from the adapter's own `pencil-setup/scripts/` lockfile, so
+`lint-dual-lockfile.sh` (`MIN_PACKAGE_LOCK_DIRS=5`), `assert-dependabot-drain.py` (its `pen-cli`
+manifest and rows) and `close-superseded-dependabot-prs.sh` (`lockfile_for`, matched before the
+broader `*pencil-setup*` arm) all name it. It carries **no `.npmrc` supply-chain floor by design**:
+its single direct dependency is pinned to an exact version and every transitive version and
+integrity hash is fixed by the lockfile. That is an integrity control only: the lockfile fixes
+versions, an age floor protects freshness when the lockfile is regenerated (which this directory
+does not have), and undici needed an `overrides` entry to leave a vulnerable transitive version.
+The engine install is also keyed on a stamp of the lockfile's hash, not only on the version string,
+so a lockfile change reaches an install that is already at the pin.
+
+**Addendum 2026-10-27 (#11156): a second `overrides` entry, `sharp`.** The engine's own range is `sharp ^0.34.5`, and
+0.34.5 carries three HIGH advisories (GHSA-f88m-g3jw-g9cj, GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w; patched in 0.35.0, 0.35.4
+and 0.35.5), which the `dependency-review` required check rejects (`fail-on-severity: high`). `pen-cli/package.json` now
+overrides `sharp` to `0.35.5`, a minor step on a 0.x line and therefore outside the engine's declared range, so it is covered
+by the live `engine-contract-probe.sh` (exports in png, jpeg and webp, screenshots, load fidelity), not only by the audit
+(`npm audit --omit=dev` reports 0 vulnerabilities on the regenerated lockfile). Drop the override when the engine's own range
+reaches a patched `sharp`; bump it only after a green probe, as for `undici`.

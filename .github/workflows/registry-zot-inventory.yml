@@ -240,8 +240,8 @@ jobs:
         uses: ./.github/actions/cf-tunnel-registry-bridge
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
-          cloudflared-version: "2026.5.0"
-          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          cloudflared-version: "2026.10.4"
+          cloudflared-sha256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
           skip-docker-login: 'true'
           token-verdict: ${{ steps.token_preflight.outputs.verdict || 'unmeasured' }}
           token-checked-at: ${{ steps.token_preflight.outputs.checked_at || '' }}

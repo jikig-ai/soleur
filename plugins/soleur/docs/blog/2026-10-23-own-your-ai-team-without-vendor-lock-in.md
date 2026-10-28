@@ -36,7 +36,7 @@ Soleur gives a single founder the leverage of a full organization — eight depa
 
 The founder still decides everything that matters: strategy, approvals, budget, and which model provider to trust. Soleur's AI specialists handle the execution — drafting, planning, reviewing, and documenting across every department — while the institutional memory compounds with every session.
 
-The key architectural decision is separation. Your company's knowledge and your AI team's workflows are not tied to any single model or harness. They live in your repository as plain files. You can run Soleur on Claude Code, Grok Build, Codex, Devin CLI, or OpenCode — and switch between them without losing a single past decision.
+The key architectural decision is separation. Your company's knowledge and your AI team's workflows are not tied to any single model or harness. They live in your repository as plain files. You can run Soleur on Claude Code, Grok Build, Codex, Devin CLI, OpenCode, or Google Antigravity CLI — and switch between them without losing a single past decision.
 
 ## Why Open Weights Models Change the Equation
 

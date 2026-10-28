@@ -2496,28 +2496,15 @@ unset TOKEN
 
 ## SQLite event-store retention
 
-The Inngest SQLite store at `/var/lib/inngest/main.db` grows over time with retained events. There is no built-in rotation. At alpha-internal volume (~1k events/day × ~2KB avg), the store grows ~60MB/month — benign for ~1 year, then unbounded.
+Finished trace and log history is removed after 7 days by `inngest-trace-retention.service`, a status-gated oneshot on a daily timer. The job runs on the dedicated Inngest host after that host has been replaced onto an image that contains it. A host that has not yet been replaced onto that image is not yet pruning. Merging the mechanism does not run the first delete.
 
-**This procedure is SUPERSEDED on any host running the durable backend, which is every
-production host today.** Measured on web-1 (`hetzner-123931471`) while writing this:
-inngest-server logs `initialized database db=postgres` and `using external redis` on every
-start, so events live in Supabase Postgres and the queue/run-state lives in Redis —
-`/var/lib/inngest/main.db` is not the event store. `--sqlite-dir /var/lib/inngest` remains in
-argv in BOTH forms (`inngest-bootstrap.sh:799`), so the directory's continued existence is not
-evidence that it holds events. Deleting rows from it would reclaim nothing and stop nothing.
+The durable store is the dedicated Postgres project when `INNGEST_POSTGRES_URI` is set. A finished trace is eligible when `trace_runs.status` is in the terminal set and `ended_at` is older than 7 days; its spans, traces, and event batches are deleted first. Function-finish history is eligible from `function_finishes.created_at`, and history and function runs are deleted only when that finish row anchors them. An event is eligible from `received_at` only when no unfinished function run still references it. In-flight runs stay. Redis queue and in-flight run state are not deleted by age. Apps, functions, worker connections, and the migration tables are not deleted.
 
-**Monitoring, no SSH:** root-disk headroom is already reported by
-[§ Reading host state without SSH](#reading-host-state-without-ssh) as
-`.journald_storage.root_avail` and `.journald_storage.inngest_store_bytes`, and `disk-monitor.sh`
-pages independently on volume pressure. Read those rather than logging in to run `du`.
+The SQLite file `/var/lib/inngest/main.db` is the degraded fail-safe, and any leftover file from an earlier fail-safe. The same predicates run against that file when it exists. The job does not remove the file. `--sqlite-dir /var/lib/inngest` remains in argv on both arms, so the directory's existence is not evidence that the file holds events.
 
-**If a host is ever run on the SQLite form** (the #5547 fail-safe, i.e. `.reason` reads
-`success_degraded_durability`), the retention question returns and there is **no no-SSH verb for
-it today**: `ci-deploy.sh` accepts `deploy|restart|quiesce|enable` only, and adding a
-stop-VACUUM-start verb would widen the root-run allowlisted surface for a case that is currently
-hypothetical. That gap is tracked rather than papered over with a host login — see the
-follow-up issue linked from the #7286 PR. The correct response to a degraded-durability host is
-to fix the durability regression, not to prune its fallback store.
+Each pass is capped by batch size and a per-statement batch cap. When a child statement still has eligible rows after that cap, the pass skips that pipeline's anchor and continues with the other statements. A capped `spans`, `traces`, or `event_batches` statement skips `trace_runs`. A capped `history` or `function_runs` statement skips `function_finishes`. `history`, `events`, and the SQLite file still run. The pass reports `reason=batch_cap` and leaves the marker unset. The first nights after a host replace do not empty a multi-month backlog in one pass. A pass that succeeds writes a UTC-date marker and the journal line `INNGEST_TRACE_RETENTION_OUTCOME=ok` with counts only. A pass that refuses writes `INNGEST_TRACE_RETENTION_OUTCOME=error` and leaves the marker unset, so the next calendar fire retries. Bootstrap enables the timer only after `psql` is present and the retention indexes have been created. Those indexes include `soleur_events_received_at` on `events (received_at)`. The events delete orders by `received_at` so that index can bound the batch. A sequential scan of `events` refuses the pass before any delete. Success lines ship because the unit is on Vector `include_units`.
+
+Root-disk headroom stays on the existing no-SSH read: [§ Reading host state without SSH](#reading-host-state-without-ssh) reports `.journald_storage.root_avail` and `.journald_storage.inngest_store_bytes`. The live close of #5150 is the follow-through that reads the success marker after the host replace.
 
 ## Durable backend (Supabase Postgres + self-hosted Redis) — #5450
 

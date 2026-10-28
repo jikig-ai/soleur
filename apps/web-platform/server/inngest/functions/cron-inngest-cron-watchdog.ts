@@ -331,12 +331,10 @@ export const cronInngestCronWatchdog = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 */4 * * *" },
+      { event: "cron/inngest-cron-watchdog.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 */4 * * *" },
-    { event: "cron/inngest-cron-watchdog.manual-trigger" },
-  ],
-  cronInngestCronWatchdogHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronInngestCronWatchdogHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

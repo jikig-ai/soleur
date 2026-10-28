@@ -6,8 +6,10 @@ import { NonRetriableError, StepError, serializeError } from "inngest";
  * production shows a handler, and every one of them hid a shipped defect:
  *
  *   1. An error that exhausts a step's retries reaches the handler as the SDK's
- *      rebuilt `StepError` — `name === "Error"`, no custom class, no custom
- *      fields. `instanceof SomeCustomError` in the handler never matches.
+ *      rebuilt `StepError` — no custom class, no custom fields.
+ *      `instanceof SomeCustomError` in the handler never matches. (inngest@4:
+ *      the rebuilt StepError now PRESERVES the thrown error's `name` — v3
+ *      flattened it to `"Error"`. Still not the original class.)
  *   2. A NON-final step failure is never visible to handler code: the SDK ends
  *      the request and retries the step.
  *   3. After every new step the handler is re-entered from the top with memoized

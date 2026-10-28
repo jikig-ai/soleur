@@ -773,6 +773,16 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_REFUSAL_WAIT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh"
+  "plugins/soleur/skills/ship/references/battery-refusal-wait.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/scripts/lib/context-sanitize.sh"  # sourced by the script under test
+  "plugins/soleur/test/ship-battery-refusal-wait.test.sh"
+  "scripts/test-all.sh"  # the suite renders the refusal text from, and pins the infra literals against, the live runner
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PHASE_7_POLL_FIXTURES_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh"
@@ -813,7 +823,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
-  ".github/workflows/git-data-plaintext-volume-destroy.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -822,7 +831,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/cat-inngest-verify-state.sh"
   "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/ci-deploy.sh"
-  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/infra-config-apply.sh"
   "apps/web-platform/infra/infra-config-install.sh"
@@ -864,7 +872,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/ship-incident-pir-gate.sh"
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
-  "tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
@@ -1072,15 +1079,6 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "scripts/sentry-issue.sh"
   "tests/scripts/lib/git-data-birth-readiness-gate.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
-)
-
-# tests/scripts/git-data-plaintext-destroy-gate — derived edges could not reach its subject: the suite executes the destroy
-# workflow's run blocks and the read-only probe it names (the gate library itself is reached through the source closure).
-AFFECTED_TESTS_SCRIPTS_GIT_DATA_PLAINTEXT_DESTROY_GATE_PATHS=(
-  ".github/workflows/git-data-plaintext-volume-destroy.yml"
-  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
-  "scripts/lib/test-affected-paths.sh"
-  "tests/scripts/test-git-data-plaintext-destroy-gate.sh"
 )
 
 # tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
@@ -2344,6 +2342,47 @@ AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# #8231 parallel-scheduler family — three runner-SUT suites whose subject is
+# the dispatch/reap/render path in the runner and the lane classifier lib.
+AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_SCHEDULER_PATHS=(
+  "scripts/test-all-parallel-scheduler.test.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-contention.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"   # the lane table's `*` override subject
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_CONTENTION_PATHS=(
+  "scripts/test-all-parallel-contention.test.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-contention.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_TEST_ALL_PARALLEL_BENCHMARK_PATHS=(
+  "scripts/test-all-parallel-benchmark.test.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+# The lane-table census (glob-registered under scripts/lib/*.test.sh).
+AFFECTED_SCRIPTS_LIB_TEST_SUITE_LANES_TEST_SH_PATHS=(
+  "scripts/lib/test-suite-lanes.test.sh"
+  "scripts/lib/test-suite-lanes.sh"
+  "scripts/test-all.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"   # lane_declare `*` override subject — a rename stales it
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # --- #9763 fast-tier demotions: declared scopes for suites withdrawn from ALWAYS_ON whose
 # verdicts walk a corpus. The orphan lint refuses a demotion without a named scope; each array
 # names the trees the suite actually reads (edges are ^-prefixed path matches — a suffix walk
@@ -2756,6 +2795,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/image-cve-scan-window-9826.sh"
   "scripts/followthroughs/inngest-provision-unit-8562.sh"
   "scripts/followthroughs/inngest-tls-soak-10136.sh"
+  "scripts/followthroughs/inngest-trace-retention-5150.sh"
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
@@ -3009,6 +3049,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_ADAPTER_AUTH_HARD_FAIL_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+# plugins/soleur/test/pencil-post-save-gate.test.sh sources test-helpers.sh, which executes scripts/lib/scratch-root.sh
+# (test-helpers.sh:58-60), so the suite really reads it: the shared set, not an accept row.
+AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_POST_SAVE_GATE_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -3274,5 +3320,13 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CCLA_REPRESENTATIVE_ICLA_7922_PATHS=(
 )
 AFFECTED_SCRIPTS_TMPFS_GUARD_PATHS=(
   "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# scripts/followthroughs/parked-green-synthesis-11362 — the probe genuinely
+# reads the distribution file it watches via $REPO_ROOT/$DIST_REL (head/awk on
+# frontmatter), a var-built path no derivation channel reaches.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PARKED_GREEN_SYNTHESIS_11362_PATHS=(
+  "knowledge-base/marketing/distribution-content/2026-11-19-first-we-made-green-mean-something.md"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )

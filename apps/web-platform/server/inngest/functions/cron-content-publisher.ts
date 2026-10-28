@@ -838,12 +838,10 @@ export const cronContentPublisher = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 14 * * *" },
+      { event: "cron/content-publisher.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 14 * * *" },
-    { event: "cron/content-publisher.manual-trigger" },
-  ],
-  cronContentPublisherHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronContentPublisherHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

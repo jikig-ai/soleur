@@ -29,6 +29,9 @@
 #   G1-12 delete the closing-only permission exemption              Q4a flips pass -> block
 #   G1-17..22 CL4: authorization veto, awk emission, pre-filter, decision-noun gate, BUSINESS veto, EXTRA veto   A8a-rotation / B8b / B8b / A8c / A8b / A8e
 #   G1-13..16 leading-fragment drop, window size, first-12 judging, blank-line reset   W1b / W1d / L12b / E4b
+#   G1-23..37 the label arm (2026-10-26): the label judge, the pre-filter phrase, the cover flag (two sites), the inline fold, the label
+#         function's negation, BUSINESS, authorization, shared-permission, closing-permission and closing-extra vetoes, the phrase gate,
+#         the second phrase alternative, a blank-line cover reset, and two self-check lines   LB1 / LB2 / LP1a / LP2 / LP4 / LP6 / LP5b-e / LP3q / LB8 / LB6 / LP11
 #   G2-1  re-add a local RULING_PERM_RE to the closing hook         the definition-site census reports two
 #   G2-2  the pre-ask group (`shared+ask`) also sets closing=1       a pre-ask row (NR2a) flips allow -> deny
 #         (retarget: the pre-ask hook asks for `shared+ask`, so a mutant on the `shared)` line no longer widens it;
@@ -196,6 +199,28 @@ for cl4c in \
   row "A8f courtesy closer passes: ${cl4c:0:48}" pass "$STATUS $cl4c"
 done
 row "U1 an authorization first, a technical unit second" block "Do you authorize the rotation? Also, what is the best design for the migration?"
+# --- the label arm (2026-10-26): a final Blocked:/Paused: sentence that itself hands a technical ruling to the operator ---
+# INC_PAR and INC_LBL are the two paragraphs the 2026-10-26 closing ended with, synthesized (no run id, no PR number). LB2 is the
+# label sentence ALONE: no question mark and no CL4 phrase, so it reaches a verdict only if the pre-filter reads the label phrase.
+LBL_BODY="needs your ruling on whether the failure counts"
+LB2_MSG="Blocked: $LBL_BODY."
+INC_PAR="Your call, since the plan names the due date and any ruling on this slot as yours: accept slot A as a transient infra failure and proceed on slot B plus CI, or hold until a clean pair of slots exists and let the 2026-10-27 date slip."
+INC_LBL="Blocked: slot A (2026-10-26T18:00Z) read \`error\` on a CI run, so marking the Sentry routing PR ready needs your ruling on whether this transient Doppler CLI install failure counts."
+row "LB1 the 2026-10-26 incident closing: the final Blocked: sentence hands a technical ruling to the operator" block "$STATUS
+
+$INC_PAR
+
+$INC_LBL"
+row "LB2 the label sentence alone blocks (no question mark and no CL4 phrase: the pre-filter must read the label phrase)" block "$LB2_MSG"
+row "LB3 a bold Paused: label with awaiting your ruling on whether" block "$STATUS **Paused**: awaiting your ruling on whether the failure counts."
+row "LB4 an NBSP inside your ruling does not defeat the cue" block "Blocked: needs your"$'\xc2\xa0'"ruling on whether the failure counts."
+row "LB6 an Operator-only sentence separated from the label by a blank line does not release it" block "Operator-only (money): the second seat is a spend call.
+
+$LB2_MSG"
+row "LB7 pending your ruling on which design" block "Blocked: pending your ruling on which design."
+row "LB8 the second phrase alternative alone: your ruling on which design is still open" block "Blocked: your ruling on which design is still open."
+row "LP11u a label sentence that itself ends in a question mark blocks when nothing covers it" block "Blocked: it needs your ruling on whether the failure counts, right?"
+row "LP13 a cover consumed by an unrelated question unit does not carry over to the label" block "Operator-only (money): ok? $LB2_MSG"
 
 # --- MUST PASS --------------------------------------------------------------------------------------
 row "A1 an authorization to rotate" pass "$STATUS Do you authorize rotating HCLOUD_TOKEN now?"
@@ -285,6 +310,72 @@ for ec_c in money scope priority schedule irreversible production-mutating legal
 done
 if [[ -z "$ec_fail" ]]; then echo "  PASS: E2c all eight Operator-only categories release their own sentence (the reason teaches all eight)"; PASS=$((PASS+1)); else printf '  FAIL: E2c categories not recognised:%s\n' "$ec_fail" >&2; FAIL=$((FAIL+1)); fi
 row "N1g an ordering question with no technical noun passes" pass "$STATUS in what order is the report?"
+# --- the label arm, must-PASS (2026-10-26). Every release fixture is the two-line shape (the Operator-only sentence, ONE newline,
+# the label) with a label body byte-identical to LB2's, so LB2 is its blocking twin and the release is the only difference. ---
+TOTAL=$((TOTAL+1))
+lp1_fail=""
+for lp1_c in money scope priority schedule irreversible production-mutating legal-risk brand; do
+  spawn "$HOOK" "$(closing_json "Operator-only ($lp1_c): the second seat is a spend call.
+$LB2_MSG")"; [[ "$(verdict_from_out)" == "pass" ]] || lp1_fail="$lp1_fail $lp1_c"
+done
+if [[ -z "$lp1_fail" ]]; then echo "  PASS: LP1 all eight Operator-only categories release a label sentence that would otherwise block (LB2 is the twin)"; PASS=$((PASS+1))
+else printf '  FAIL: LP1 categories that did not release the label:%s\n' "$lp1_fail" >&2; FAIL=$((FAIL+1)); fi
+row "LP1a one category on its own row: the release is the only difference from LB2" pass "Operator-only (money): the second seat is a spend call.
+$LB2_MSG"
+row "LP2 the inline form: the label body itself carries the Operator-only label" pass "Blocked: Operator-only (scope): $LBL_BODY."
+row "LP2b the bold inline form" pass "**Blocked**: Operator-only (scope): $LBL_BODY."
+TOTAL=$((TOTAL+1))
+lp3_fail=""
+for lp3_m in "Blocked: waiting on CI." "Blocked: the merge queue is behind." "Paused: a third party has not replied." "Blocked: waiting on your go-ahead to merge." "Paused: the rehearsal window opens tomorrow."; do
+  spawn "$HOOK" "$(closing_json "$STATUS $lp3_m")"; [[ "$(verdict_from_out)" == "pass" ]] || lp3_fail="$lp3_fail [$lp3_m]"
+done
+if [[ -z "$lp3_fail" ]]; then echo "  PASS: LP3 ordinary waiting labels pass"; PASS=$((PASS+1)); else printf '  FAIL: LP3 blocked:%s\n' "$lp3_fail" >&2; FAIL=$((FAIL+1)); fi
+row "LP3q a question opens the pre-filter, a plain waiting label still passes (deleting the phrase gate flips it)" pass "Is CI green yet? Blocked: waiting on CI."
+row "LP4 negation: not awaiting your ruling" pass "Blocked: this is not awaiting your ruling, it only waits on CI."
+row "LP4b negation: we are not waiting on your ruling" pass "Blocked: we are not waiting on your ruling."
+row "LP4c negation: isn't awaiting your ruling" pass "Blocked: this isn't awaiting your ruling."
+row "LP4d negation: no need for your ruling on whether it counts" pass "Blocked: there is no need for your ruling on whether it counts."
+row "LP5b the authorization veto alone: whether to merge now" pass "Blocked: needs your ruling on whether to merge now."
+row "LP5c the shared permission shape alone: ok to" pass "Blocked: it is ok to keep waiting, but it $LBL_BODY."
+row "LP5e the closing-only permission shape alone: shall i arm" pass "Blocked: shall i arm slot b; it $LBL_BODY."
+row "LP5d the closing-extra veto alone: feature" pass "Blocked: the feature $LBL_BODY."
+row "LP6 the documented residual: a business word vetoes the label" pass "Blocked: the plan needs your ruling on whether the date slips."
+TOTAL=$((TOTAL+1))
+lp7_fail=""
+for lp7_m in "Blocked: needs your ruling on whether to spend on the second seat." "Blocked: needs your ruling on which priority comes first." "Blocked: awaiting your ruling on whether the date moves." "Blocked: awaiting your ruling on whether to delete the old volume." "Paused: pending your ruling on whether production takes the change." "Blocked: requires your ruling on whether the license text changes." "Blocked: needs your ruling on whether the brand voice holds."; do
+  spawn "$HOOK" "$(closing_json "$STATUS $lp7_m")"; [[ "$(verdict_from_out)" == "pass" ]] || lp7_fail="$lp7_fail [$lp7_m]"
+done
+if [[ -z "$lp7_fail" ]]; then echo "  PASS: LP7 label sentences that carry an operator-class word (money, priority, schedule, irreversible, production, legal, brand) pass"; PASS=$((PASS+1))
+else printf '  FAIL: LP7 blocked:%s\n' "$lp7_fail" >&2; FAIL=$((FAIL+1)); fi
+row "LP9 the label is not the final sentence: unjudged (documents the residual)" pass "Blocked: $LBL_BODY. Thanks for the patience."
+row "LP10 the phrase inside backticks in a non-label sentence" pass "Blocked: waiting on CI; the phrase the hook cues on is \`needs your ruling on whether\`."
+row "LP10b the label on a quoted line" pass "$STATUS
+> $LB2_MSG"
+row "LP11 an Operator-only sentence, then a label sentence that itself ends in a question mark" pass "Operator-only (money): the second seat is a spend call.
+Blocked: it needs your ruling on whether the failure counts, right?"
+row "LP12 the label sentence split by a full stop: unjudged (documents the residual)" pass "Blocked: CI read error. It needs your ruling on whether that counts."
+row "LP15 an abbreviation full stop inside the label sentence: unjudged (documents the residual)" pass "Blocked: CI (e.g. the install step) needs your ruling on whether the failure counts."
+row "LP2c the inline Operator-only form under a Paused: label" pass "Paused: Operator-only (scope): $LBL_BODY."
+# Every member of the phrase alternation blocks ALONE, and every negation member releases ALONE (review of 2026-10-26: six narrowing mutants survived).
+TOTAL=$((TOTAL+1))
+lb9_fail=""
+for lb9_m in "the failure needed your ruling." "it awaits your ruling." "it is awaiting your ruling." "we are waiting on your ruling." "we are waiting for your ruling." "it requires your ruling." "it is pending your ruling." "your ruling about whether it counts is open." "your ruling as to which design is open." "your ruling on if it counts is open."; do
+  spawn "$HOOK" "$(closing_json "Blocked: $lb9_m")"; [[ "$(verdict_from_out)" == "block" ]] || lb9_fail="$lb9_fail [$lb9_m]"
+done
+if [[ -z "$lb9_fail" ]]; then echo "  PASS: LB9 every member of the phrase alternation blocks alone"; PASS=$((PASS+1)); else printf '  FAIL: LB9 passed:%s\n' "$lb9_fail" >&2; FAIL=$((FAIL+1)); fi
+TOTAL=$((TOTAL+1))
+lb10_fail=""
+for lb10_m in "Blocked: needs **your ruling** on the design." "Blocked: needs _your ruling_ on the design." "Blocked: $LBL_BODY.   "; do
+  spawn "$HOOK" "$(closing_json "$STATUS $lb10_m")"; [[ "$(verdict_from_out)" == "block" ]] || lb10_fail="$lb10_fail [$lb10_m]"
+done
+if [[ -z "$lb10_fail" ]]; then echo "  PASS: LB10 emphasis inside the cue and trailing spaces do not defeat the label arm"; PASS=$((PASS+1)); else printf '  FAIL: LB10 passed:%s\n' "$lb10_fail" >&2; FAIL=$((FAIL+1)); fi
+TOTAL=$((TOTAL+1))
+lp14_fail=""
+for lp14_m in "it no longer awaits your ruling." "this never needed your ruling." "it is not awaiting your ruling, only CI." "it proceeds without awaiting your ruling." "nothing is awaiting your ruling." "nobody is waiting on your ruling." "no one is waiting for your ruling." "none pending your ruling." "it was previously awaiting your ruling, now ruled." "it is already pending your ruling no more." "this is not yet awaiting your ruling." "this isn"$'\xe2\x80\x99'"t awaiting your ruling."; do
+  spawn "$HOOK" "$(closing_json "Blocked: $lp14_m")"; [[ "$(verdict_from_out)" == "pass" ]] || lp14_fail="$lp14_fail [$lp14_m]"
+done
+if [[ -z "$lp14_fail" ]]; then echo "  PASS: LP14 every negation member and the curly apostrophe release a status line"; PASS=$((PASS+1)); else printf '  FAIL: LP14 blocked:%s\n' "$lp14_fail" >&2; FAIL=$((FAIL+1)); fi
+row "LP16 an inflected authorization verb vetoes the label arm (deleting)" pass "Blocked: needs your ruling on whether deleting the old volume is fine."
 # The 12-unit cap by VERDICT: B1 eleven units from the end is judged; B1 thirteen from the end is not.
 TINY11="$(printf 'a? %.0s' $(seq 1 11))"; TINY12="$(printf 'a? %.0s' $(seq 1 12))"
 row "L12a B1 followed by 11 tiny units is the 12th from the end: judged" block "$B1 $TINY11"
@@ -398,6 +489,31 @@ if [[ "$ml_ok" -eq 1 && "$ml_ctl" == "block" && "$ml_a" == "pass" && "$ml_b" == 
   echo "  PASS: ML1 a missing, empty or truncated lib fails open with a stderr line (control with the lib blocks)"; PASS=$((PASS+1))
 else printf '  FAIL: ML1 setup=%s control=%s missing=%s empty=%s truncated=%s\n' "$ml_ok" "$ml_ctl" "$ml_a" "$ml_b" "$ml_c" >&2; FAIL=$((FAIL+1)); fi
 
+# ML2: one lib copy per cause for the label arm. The control tree (full lib) must BLOCK the label-only closing; each copy loses one
+# thing (the function, the phrase regex, the negation regex) and must fail open with the stderr cause, never judge with an empty
+# regex (an EMPTY ERE matches every sentence, so the phrase variant would otherwise block every label).
+TOTAL=$((TOTAL+1))
+ML2="$WORK/ml2"; assert_fixture_dir "$ML2"
+ml2_ok=1; ml2_bad=""
+ml2_j="$(closing_json "$LB2_MSG")"
+for ml2_c in control nofunc nophrase noneg; do
+  ml2_d="$ML2/$ml2_c"; assert_fixture_dir "$ml2_d"
+  mkdir -p "$ml2_d/lib" || { ml2_ok=0; continue; }
+  cp "$HOOKS_DIR"/lib/*.sh "$ml2_d/lib/" || ml2_ok=0
+  cp "$HOOK" "$ml2_d/pre-closing-technical-fork-gate.sh" || ml2_ok=0
+  case "$ml2_c" in
+    nofunc) sed -i 's/^tfc_is_label_handoff()/tfc_is_label_handoff_gone()/' "$ml2_d/lib/technical-fork-cues.sh" || ml2_ok=0 ;;
+    nophrase) sed -i "s/^TFC_LABEL_PHRASE_ERE=.*/TFC_LABEL_PHRASE_ERE=''/" "$ml2_d/lib/technical-fork-cues.sh" || ml2_ok=0 ;;
+    noneg) sed -i "s/^TFC_LABEL_NEG_ERE=.*/TFC_LABEL_NEG_ERE=''/" "$ml2_d/lib/technical-fork-cues.sh" || ml2_ok=0 ;;
+  esac
+  [[ "$ml2_c" == control ]] || { cmp -s "$LIB" "$ml2_d/lib/technical-fork-cues.sh" && ml2_bad="$ml2_bad $ml2_c:nochange"; }
+  spawn "$ml2_d/pre-closing-technical-fork-gate.sh" "$ml2_j"; ml2_v="$(verdict_from_out)"
+  if [[ "$ml2_c" == control ]]; then [[ "$ml2_v" == "block" ]] || ml2_bad="$ml2_bad control:$ml2_v"
+  else { [[ "$ml2_v" == "pass" ]] && grep -qF 'cue lib missing or incomplete' <<<"$ERR"; } || ml2_bad="$ml2_bad $ml2_c:$ml2_v"; fi
+done
+if [[ "$ml2_ok" -eq 1 && -z "$ml2_bad" ]]; then echo "  PASS: ML2 a lib without the label function, or with an emptied phrase or negation regex, fails open with a stderr line (control blocks)"; PASS=$((PASS+1))
+else printf '  FAIL: ML2 setup=%s bad:%s\n' "$ml2_ok" "$ml2_bad" >&2; FAIL=$((FAIL+1)); fi
+
 # --- the block output: one JSON object, byte-constant text, no model text ------------------------------
 TOTAL=$((TOTAL+1))
 spawn "$HOOK" "$(closing_json "$STATUS $B1")"; j1_out="$OUT"; j1_reason="$(jq -r '.reason' <<<"$OUT" 2>/dev/null)"; j1_sys="$(jq -r '.systemMessage' <<<"$OUT" 2>/dev/null)"
@@ -433,6 +549,12 @@ if grep -qF 'SOLEUR_ACK_TECHNICAL_FORK=1' <<<"$j1_sys" && grep -qF 'Operator-onl
   echo "  PASS: R4 the systemMessage names the kill switch and the plain escape; the reason asks for a one-line why"; PASS=$((PASS+1))
 else echo "  FAIL: R4 systemMessage/reason lack the kill switch, the plain escape or the one-line request" >&2; FAIL=$((FAIL+1)); fi
 
+# R5: the reason must not teach that a Blocked:/Paused: label ends the check unconditionally (the label arm judges the labelled sentence).
+TOTAL=$((TOTAL+1))
+if grep -qF 'unless that sentence itself leaves a technical ruling' <<<"$j1_reason"; then
+  echo "  PASS: R5 the reason says a label ends the check unless that sentence itself leaves a technical ruling"; PASS=$((PASS+1))
+else echo "  FAIL: R5 the reason still teaches an unconditional label escape" >&2; FAIL=$((FAIL+1)); fi
+
 # LG1 — the ledger row carries the cue, a length and a hash and NEVER the unit text.
 TOTAL=$((TOTAL+1))
 lg_file="$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl"
@@ -441,6 +563,18 @@ if [[ -n "$lg_last" ]] && jq -e '.rule_id == "pre-closing-technical-fork-gate" a
    && ! grep -qiE 'census|credential|storage' <<<"$lg_last"; then
   echo "  PASS: LG1 a block records cue, length and sha256, never the unit text"; PASS=$((PASS+1))
 else printf '  FAIL: LG1 ledger row: %s\n' "$lg_last" >&2; FAIL=$((FAIL+1)); fi
+# LG2 — a label block records the cue name `label`, a length and a hash (of the text after the label colon) and none of the label's words.
+TOTAL=$((TOTAL+1))
+spawn "$HOOK" "$(closing_json "$STATUS
+
+$INC_PAR
+
+$INC_LBL")"
+lg2_last="$(tail -n 1 "$lg_file" 2>/dev/null)"
+if [[ -n "$lg2_last" ]] && jq -e '.rule_id == "pre-closing-technical-fork-gate" and .event_type == "deny" and .rule_text_prefix == "label" and (.command_snippet | test("^len=[0-9]+ sha256=[0-9a-f]{64}$"))' <<<"$lg2_last" >/dev/null 2>&1 \
+   && ! grep -qE 'ruling|doppler|slot' <<<"$lg2_last"; then
+  echo "  PASS: LG2 a label block records the cue label, a length and a sha256, never the label text"; PASS=$((PASS+1))
+else printf '  FAIL: LG2 ledger row: %s\n' "$lg2_last" >&2; FAIL=$((FAIL+1)); fi
 
 # --- bounds: unit COUNT is the scaling variable ----------------------------------------------------------
 now_ms() { date +%s%N | cut -b1-13; }
@@ -503,6 +637,16 @@ TOTAL=$((TOTAL+1))
 c_lib_dirty="$(grep -vE '^[[:space:]]*#' "$LIB" | grep -ciE 'emit_incident|\.claude/|CLAUDE_PROJECT_DIR|soleur|hcloud|g2' || true)"
 if [[ "$c_lib_dirty" == "0" ]]; then echo "  PASS: C2 the lib is pure: no emit_incident, no repo path, no repo-specific noun"; PASS=$((PASS+1))
 else printf '  FAIL: C2 the lib carries %s impure or repo-specific line(s)\n' "$c_lib_dirty" >&2; FAIL=$((FAIL+1)); fi
+# C5: the label function and its two *_ERE variables (C3's pattern does not match *_ERE=) are defined in exactly one file, and only the
+# closing hook calls the function (the pre-ask hook must not reach the label arm).
+TOTAL=$((TOTAL+1))
+c5_fn="$(for f in "${TRACKED_ARR[@]}"; do grep -qE '^tfc_is_label_handoff\(\)' "$f" 2>/dev/null && printf '%s\n' "$f"; done)"
+c5_var="$(for f in "${TRACKED_ARR[@]}"; do grep -qE '^TFC_LABEL_[A-Z0-9_]*_ERE=' "$f" 2>/dev/null && printf '%s\n' "$f"; done)"
+c5_callers="$(for f in "${TRACKED_ARR[@]}"; do case "$f" in *.test.sh|*/lib/technical-fork-cues.sh) continue ;; esac; grep -qE '(^|[^A-Za-z_])tfc_is_label_handoff([^A-Za-z_]|$)' "$f" 2>/dev/null && printf '%s\n' "$f"; done)"
+if [[ "$c5_fn" == "$REPO_ROOT/.claude/hooks/lib/technical-fork-cues.sh" && "$c5_var" == "$REPO_ROOT/.claude/hooks/lib/technical-fork-cues.sh" \
+   && "$c5_callers" == "$REPO_ROOT/.claude/hooks/pre-closing-technical-fork-gate.sh" ]]; then
+  echo "  PASS: C5 the label function and its two ERE variables have one definition site (the lib) and one caller (the closing hook)"; PASS=$((PASS+1))
+else printf '  FAIL: C5 function sites=[%s] variable sites=[%s] callers=[%s]\n' "$(tr '\n' ' ' <<<"$c5_fn")" "$(tr '\n' ' ' <<<"$c5_var")" "$(tr '\n' ' ' <<<"$c5_callers")" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
 v8_pinned='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
 # shellcheck disable=SC1090  # the lib path is a parameter: this reads the pristine and the mutant lib
@@ -576,7 +720,7 @@ N7A="_note \"SKIP""PED — input is not a JSON object\"; exit 0;"
 N7B="_note \"SKIP""PED — stop_hook_active absent, the once-per-turn guard cannot be verified\"; exit 0;"
 mut_row "G1-7a a fail-open arm blocks: bad JSON" hook "$N7A" 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS" false '{not json'
 mut_row "G1-8a delete the stop escape" hook "grep -qE '<stop>(operator-gate|blocked):" "grep -qE '<stop>(zzznever|zzznever2):" pass "$STATUS $B1 <stop>BLOCKED: waiting on the registry owner.</stop>"
-mut_row "G1-8b drop the empty-label exclusion" hook 'if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi' 'if [[ -n "$FINAL_SENT" ]]; then exit 0; fi' block "$STATUS $B1 Blocked: none."
+mut_row "G1-8b drop the empty-label exclusion" hook 'if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then' 'if [[ -n "$FINAL_SENT" ]]; then' block "$STATUS $B1 Blocked: none."
 mut_row "G1-9a remove the quoted-line strip" hook '/^[[:space:]]*>/ { next }' '' pass "$STATUS
 > $B1
 That quote is the hook's own fixture."
@@ -618,6 +762,65 @@ mut_row "G1-19 the pre-filter ignores a message with no question mark" hook '[[ 
 mut_row "G1-20 drop the CL4 decision-noun gate" lib 'grep -qE "$TFC_CL4_NOUN_RE" <<<"$unit" || return 1' ':' pass "the summary format is your call."
 mut_row "G1-21 drop the CL4 BUSINESS veto" lib 'grep -qE "$TFC_BUSINESS_RE" <<<"$unit" && return 1' ':' pass "the pricing design is your call."
 mut_row "G1-22 drop the CL4 closing EXTRA veto" lib 'grep -qE "$TFC_CLOSING_EXTRA_RE" <<<"$unit" && return 1' ':' pass "tell me to implement the export feature."
+
+# G1-23..37 (the label arm, 2026-10-26). Each anchor is ONE physical line (G1-25 a two-line one) asserted to occur exactly ONCE in the pristine
+# file before the mutation is applied: apply_mut replaces the FIRST occurrence, so a second occurrence would make the row mutate the wrong site.
+anchor_once() { # <file> <text>: 0 only if <text> occurs exactly once in <file>
+  local c rest; c="$(cat "$1"; printf x)"; c="${c%x}"; rest="${c//"$2"/}"
+  (( ${#2} > 0 && ${#c} - ${#rest} == ${#2} ))
+}
+mut_row1() { # <label> <hook|lib> <old> <new> <expect> <message> [active] [raw]: mut_row behind the exactly-once anchor assertion
+  local f
+  case "$2" in hook) f="$HOOK" ;; lib) f="$LIB" ;; *) echo "FATAL: bad mutation target" >&2; exit 2 ;; esac
+  if ! anchor_once "$f" "$3"; then TOTAL=$((TOTAL+1)); printf '  FAIL: %s — the anchor does not occur exactly once in the pristine file\n' "$1" >&2; FAIL=$((FAIL+1)); return 0; fi
+  mut_row "$@"
+}
+LP1A_MSG="Operator-only (money): the second seat is a spend call.
+$LB2_MSG"
+mut_row1 "G1-23 delete the label judge (the branch always exits 0)" hook 'tfc_is_label_handoff "$BODY" || exit 0' 'exit 0' block "$STATUS
+
+$INC_PAR
+
+$INC_LBL"
+mut_row1 "G1-24 the pre-filter drops the label phrase (own dispatch)" hook 'grep -E "$TFC_CL4_CANDIDATE_ERE|$TFC_LABEL_PHRASE_ERE"' 'grep -E "$TFC_CL4_CANDIDATE_ERE"' block "$LB2_MSG"
+mut_row1 "G1-25 break the carried-over cover in note_sentences" hook "      fin_cover = esc"$'\n'"    }" "      fin_cover = 0"$'\n'"    }" pass "$LP1A_MSG"
+mut_row1 "G1-26 delete the inline Operator-only fold on the label body" hook 'if (islabel(b)) cov = 1' 'if (0) cov = 1' pass "Blocked: Operator-only (scope): $LBL_BODY."
+mut_row1 "G1-27 delete the label negation veto" lib 'grep -qE "$TFC_LABEL_NEG_ERE" <<<"$sentence" && return 1' ':' pass "Blocked: this is not awaiting your ruling, it only waits on CI."
+mut_row1 "G1-28 delete the label BUSINESS veto" lib 'grep -qE "$TFC_BUSINESS_RE" <<<"$sentence" && return 1' ':' pass "Blocked: the plan needs your ruling on whether the date slips."
+mut_row1 "G1-29 delete the label authorization veto" lib 'grep -qE "$TFC_CL4_AUTH_RE" <<<"$sentence" && return 1' ':' pass "Blocked: needs your ruling on whether to merge now."
+mut_row1 "G1-32 delete the label shared permission veto" lib 'grep -qE "$RULING_PERM_RE" <<<"$sentence" && return 1' ':' pass "Blocked: it is ok to keep waiting, but it $LBL_BODY."
+mut_row1 "G1-32b delete the label closing-only permission veto" lib 'grep -qE "$TFC_CLOSING_PERM_RE" <<<"$sentence" && return 1' ':' pass "Blocked: shall i arm slot b; it $LBL_BODY."
+mut_row1 "G1-33 delete the label closing-extra veto" lib 'grep -qE "$TFC_CLOSING_EXTRA_RE" <<<"$sentence" && return 1' ':' pass "Blocked: the feature $LBL_BODY."
+mut_row1 "G1-31 never reset the Operator-only cover on a blank line (second member: an earlier paragraph covers the later label)" hook '    if (line ~ /^ *$/) { esc = 0; next }' '    if (line ~ /^ *$/) { next }' block "Operator-only (money): the second seat is a spend call.
+
+$LB2_MSG"
+mut_row1 "G1-34 delete the label phrase gate (a label function that blocks every label sentence)" lib 'grep -qE "$TFC_LABEL_PHRASE_ERE" <<<"$sentence" || return 1' ':' pass "Is CI green yet? Blocked: waiting on CI."
+mut_row1 "G1-35 break the cover carried by a question unit" hook 'fin_cover = esc; esc = 0' 'fin_cover = 0; esc = 0' pass "Operator-only (money): the second seat is a spend call.
+Blocked: it $LBL_BODY, right?"
+mut_row1 "G1-36 delete the second label phrase alternative" lib "|\\byour ruling (on|about|as to) (whether|if|which)\\b'" "'" block "Blocked: your ruling on which design is still open."
+# G1-30 / G1-37: the self-check lines. The control state is a lib that LOST what the line checks (an emptied phrase regex, a missing
+# function): the self-check must make the hook fail open with the cause on stderr. The mutant also deletes the check line, and the
+# cause must vanish from stderr (G1-30 then judges with an empty regex and blocks; G1-37 reaches a missing function and fails open
+# for the wrong reason, a bash diagnostic instead of the named cause).
+selfcheck_row() { # <label> <self-check line> <sed expression putting the lib in the broken state>
+  local label="$1" old="$2" sedx="$3" t ctl_v ctl_e mut_v mut_e cause='cue lib missing or incomplete'
+  TOTAL=$((TOTAL+1))
+  if ! anchor_once "$LIB" "$old"; then printf '  FAIL: %s — the anchor does not occur exactly once in the lib\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
+  mk_tree "${label//[^A-Za-z0-9]/_}" || { printf '  FAIL: %s — could not build the tree\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; }
+  t="$TREE/lib/technical-fork-cues.sh"
+  sed -i "$sedx" "$t" || { printf '  FAIL: %s — the broken-lib state did not apply\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; }
+  if cmp -s "$LIB" "$t"; then printf '  FAIL: %s — the broken-lib state is byte-identical to the pristine lib\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
+  spawn "$TREE/pre-closing-technical-fork-gate.sh" "$(closing_json "$LB2_MSG")"; ctl_v="$(verdict_from_out)"; ctl_e="$ERR"
+  if ! apply_mut "$t" "$old" ''; then printf '  FAIL: %s — the mutation did not land or the mutant does not parse\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
+  spawn "$TREE/pre-closing-technical-fork-gate.sh" "$(closing_json "$LB2_MSG")"; mut_v="$(verdict_from_out)"; mut_e="$ERR"
+  if [[ "$ctl_v" == "pass" && "$ctl_e" == *"$cause"* && "$mut_e" != *"$cause"* ]]; then
+    printf '  PASS: %s killed (control fails open with the cause, mutant verdict %s without it)\n' "$label" "$mut_v"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
+  else printf '  FAIL: %s — control=%s cause-in-control=%s cause-in-mutant=%s\n' "$label" "$ctl_v" "$([[ "$ctl_e" == *"$cause"* ]] && echo yes || echo no)" "$([[ "$mut_e" == *"$cause"* ]] && echo yes || echo no)" >&2; FAIL=$((FAIL+1)); fi
+  return 0
+}
+selfcheck_row "G1-30 delete the self-check line that requires both label regex variables" '[[ -n "${TFC_LABEL_PHRASE_ERE-}" && -n "${TFC_LABEL_NEG_ERE-}" ]] || return 1' "s/^TFC_LABEL_PHRASE_ERE=.*/TFC_LABEL_PHRASE_ERE=''/"
+selfcheck_row "G1-37 delete the self-check line that requires the label function" 'declare -f tfc_is_label_handoff >/dev/null 2>&1 || return 1' 's/^tfc_is_label_handoff()/tfc_is_label_handoff_gone()/'
+mut_row1 "G1-38 delete the label inflected-authorization veto" lib "  grep -qE '\\b(deleting|deleted|deletion|cancell?ed|cancell?ing|deploying|deployed|deployment|merging|merged|revoking|revoked|rotating|rotated|wiping|wiped|shipped|shipping|released|releasing|pushed|pushing|reverted|reverting|migrating|migrated|restarted|restarting|applied|applying)\\b' <<<\"\$sentence\" && return 1" ':' pass "Blocked: needs your ruling on whether deleting the old volume is fine."
 
 # G2-1: a second RULING_*_RE definition in the closing hook must make the census report two sites.
 TOTAL=$((TOTAL+1))
@@ -704,7 +907,7 @@ else printf '  FAIL: H1 neutered decider scored %s (want 0/3)\n' "$h1_res" >&2; 
 # --- dispatch non-vacuity: the named must-block rows were blocked with THIS hook's reason, and every spawn ran the SUT ---
 TOTAL=$((TOTAL+1))
 d_missing=""
-D_NAMES="B1 B2 B3 B4 B5a B5b B5c B6 B7 U1 E3b E4 E5b E5c E5d U2b E4b E4c E6a"
+D_NAMES="B1 B2 B3 B4 B5a B5b B5c B6 B7 U1 E3b E4 E5b E5c E5d U2b E4b E4c E6a LB1 LB2 LB3 LB4 LB6 LB7 LB8 LP11u LP13"
 for d_r in $D_NAMES; do
   d_found=0
   for d_n in $BLOCKED_BY_THIS_HOOK; do [[ "$d_n" == "$d_r" ]] && d_found=1; done
@@ -714,13 +917,13 @@ if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
   printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "$(wc -w <<<"$D_NAMES" | tr -d ' ')" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 35 ]]; then printf '  PASS: V6 %s mutants killed (floor 35)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 35)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 52 ]]; then printf '  PASS: V6 %s mutants killed (floor 52)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 52)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 175 ]]; then echo "  PASS: V1 full inventory ran (175 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 175 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 232 ]]; then echo "  PASS: V1 full inventory ran (232 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 232 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -729,7 +932,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=175
+MIN_CASES=232
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

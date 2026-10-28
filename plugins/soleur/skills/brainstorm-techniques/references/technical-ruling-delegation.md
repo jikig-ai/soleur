@@ -79,6 +79,8 @@ question. Architectural forks found mid-work (a plan's mechanism structurally bl
 traced from the ACTUAL producer) route here too; record the decision and the rejected alternatives in an ADR
 (`soleur:architecture`).
 
+A ruling that WIDENS a status, permission or approval guard needs the guard's history in the brief: `git log -S` of the guarded set and the tests that pin it, plus every writer of the status. **Why (guard widening):** #11303 — a ruling that let the abort finalize accept `waiting_for_user` re-opened the #3463 disconnect-after-result race and its test was rewritten to match; the next review round caught it. See `knowledge-base/project/learnings/security-issues/2026-10-27-the-allowlist-pre-approved-the-gated-tier-and-two-of-my-fixes-reopened-it.md`.
+
 **Why:** #5325 — the plan's `action_sends`-reuse mechanism was structurally blocked and the substrate choice (dedicated
 WORM table vs gate-only vs full reuse) was first offered to the operator before the CTO ruled. See
 `knowledge-base/project/learnings/workflow-patterns/2026-06-15-architectural-fork-decisions-route-to-cto-not-operator.md`.
@@ -163,6 +165,8 @@ fails CI.
 Both rules apply in every mode and are not approval gates, so they fire in pipeline mode too.
 
 **8.1 Final-report decision check (`soleur:review`, `soleur:work`).** Before a report, summary marker or closing message is written, list every decision it would leave to the operator ("Owner decisions", "Decision for you", "Your calls", an open question) and class each one (section 6 vocabulary): Mechanical (de minimis bound, section 2) is dropped from the list; `taste` renders under Model Dissents and is not asked; `operator (<category>)` stays only when it names one category of section 1 verbatim and states the ACTION being authorised; anything else is technical - spawn the owner per section 3, one batched spawn for all such items, and report each as `Ruled by CTO agent, <date>: ...`. A mixed item is split (section 2). `taste` is a user-visible preference only: an item with a durable schema, contract, security-model, substrate or status-flip consequence is technical whatever its label, and `operator (<category>)` is valid only when the item asks to authorise that category's ACTION.
+
+**8.1b Before a turn ends with `Blocked:` or `Paused:`** (any pipeline skill, `soleur:one-shot`, `soleur:ship` and `soleur:go` included): the label's reason is a decision list, so 8.1 runs on it first. List every decision the reason leaves to the operator, class each (technical, or `operator (<category>)` per section 1), spawn the owner once per section 3 for the technical ones with the evidence, record `Ruled by CTO agent`, and let the label name only the operator-only remainder. Technical: "does this transient failure count as evidence", "relax or keep a gate". Operator-only (schedule): "slip a date" (whether the failure counts is still the CTO's). The closing hook and the reminder in the ralph block are backstops, never substitutes.
 
 **8.2 Seat dissent from a ruling (`soleur:review`).**
 

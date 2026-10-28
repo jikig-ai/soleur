@@ -1919,6 +1919,10 @@ Appended; nothing above is changed. Consequences item 4 of the 2026-07 incident 
 
 Appended; nothing above is changed. The 2026-09-28 (#8562) provision-unit addendum's "FSM quiesce" bullet names both the flip and the LUKS cutover timers and services and the `frozen-active` hold. The LUKS cutover leg left the user_data template at #11080 (the image stopped baking it at `vinngest-v1.1.61`, #10966); see the addendum of the same date in ADR-257 for the current shape. Nothing else in this ADR changes.
 
+## Addendum — 2026-10-26 (#9927 item 2) — the terminal arms now run a bounded read-only probe
+
+Appended; nothing above is changed. The four terminal arms of `run_flip` (`done`, `rolled-back`, `aborted`, and an unset or unknown flag) still change no flag and emit no FSM row, but they now call a bounded read-only probe (`luks_key_probe_tick`); see ADR-282's addendum of 2026-10-26. Decision 6a's "idempotent no-ops" wording reads with that exception.
+
 ## Addendum — 2026-10-27 (#10540) — Decision 4 amendment: the app copy of the channel keys is now derived, and rotation has a route, ADR-304
 
 Appended; nothing above is changed, and no dated record is edited. The 2026-07-24 amendment to Decision 4 records that `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` are one shared app-to-host channel credential whose values in `soleur/prd` and `soleur-inngest/prd` must be equal, and that its live fix was a copy "out-of-band" into `soleur/prd`, with a reconcile that used "the Doppler copy (or `terraform apply -replace=random_id.inngest_{event,signing}_key_dedicated` + copy)". That description is superseded for how the app copy is produced; the shared-channel contract and the G3.5 parity gate it states are unchanged and still hold.

@@ -978,7 +978,7 @@ guard_all() {
   local t5_rm t5_cr
   t5_rm="$(at T5 '^docker rm -f soleur-inngest-bootstrap-extract$')"; t5_cr="$(at T5 '^docker create ')"
   _ta "$( [ -n "$t5_rm" ] && [ -n "$t5_cr" ] && [ "$t5_rm" -lt "$t5_cr" ] && echo 0 || echo 1)" "TA T5: the stale-name pre-clean precedes docker create"
-  _ta "$( [ "$(cnt T5 '^docker cp ')" -eq 10 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (want 10 = 1 bootstrap + 9 STAGED; update the count when STAGED changes) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
+  _ta "$( [ "$(cnt T5 '^docker cp ')" -eq 13 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (want 13 = 1 bootstrap + 12 STAGED; update the count when STAGED changes) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
 
   # T7 — an unnamed arm (the fatal docker cp of the bootstrap script) is still reported, FIRST.
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/cp_boot_rc"; run_sc T7; common T7 1

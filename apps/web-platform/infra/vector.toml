@@ -56,7 +56,7 @@ data_dir = "/var/lib/vector"
 # (excludes win over includes — `exclude_units` merges into
 # exclude_matches._SYSTEMD_UNIT). So this source admits a row iff:
 #
-#   ( _SYSTEMD_UNIT ∈ {inngest-server.service, soleur-inngest-tls.service} (ANY priority)
+#   ( _SYSTEMD_UNIT ∈ {inngest-server.service, inngest-trace-retention.service, soleur-inngest-tls.service} (ANY priority)
 #       OR
 #     PRIORITY ∈ {3,4} (ANY unit, ANY SYSLOG_IDENTIFIER) )
 #   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
@@ -96,6 +96,9 @@ data_dir = "/var/lib/vector"
 #     text, fail-open. Unit membership is a PAIR: the unit joins this list AND
 #     Source 2's exclude_units (vector-admission.test.sh pins both lists equal), or its
 #     CRIT records would ship through both sources.
+#   - inngest-trace-retention.service is the third member of that pair of lists. Its
+#     daily stdout (priority info) ships on this unit arm. The unit sets no
+#     SyslogIdentifier. `systemd` stays out of every SYSLOG_IDENTIFIER array.
 #   - The `systemd` identifier must NEVER join ANY SYSLOG_IDENTIFIER match array in
 #     EITHER direction: an INCLUDE entry (Source 4's allowlist) would also ship
 #     every PID-1 PRIORITY-6 Started/Stopped line — the quota trap the Source 4
@@ -106,7 +109,7 @@ data_dir = "/var/lib/vector"
 # 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
 [sources.inngest_journald]
 type = "journald"
-include_units = ["inngest-server.service", "soleur-inngest-tls.service"]
+include_units = ["inngest-server.service", "inngest-trace-retention.service", "soleur-inngest-tls.service"]
 include_matches.PRIORITY = ["3", "4"]
 # #6551 partition mirrors: BOTH exclude sets keep this source's {3,4} arm disjoint
 # from the owners of the overlapping classes. SYSLOG_IDENTIFIER below must equal
@@ -162,7 +165,7 @@ batch_size = 16
 # Same client-side evaluator as Source 1 (#9963): the journald source streams the
 # whole journal and filter_matches admits a record iff
 #   PRIORITY ∈ {0,1,2}
-#   AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service, soleur-inngest-tls.service}
+#   AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service, inngest-trace-retention.service, soleur-inngest-tls.service}
 #   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
 # (includes are OR'd over record fields; excludes then drop on any match —
 # excludes win over includes).
@@ -182,7 +185,7 @@ batch_size = 16
 # header). vector-admission.test.sh asserts the tag-set mirror verbatim.
 [sources.system_journald]
 type = "journald"
-exclude_units = ["inngest-server.service", "soleur-inngest-tls.service"]
+exclude_units = ["inngest-server.service", "inngest-trace-retention.service", "soleur-inngest-tls.service"]
 include_matches.PRIORITY = ["0", "1", "2"]
 # #6551 partition mirror — must equal Source 4's
 # include_matches.SYSLOG_IDENTIFIER EXACTLY (asserted tokenized by

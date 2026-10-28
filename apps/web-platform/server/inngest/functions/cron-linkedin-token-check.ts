@@ -322,12 +322,10 @@ export const cronLinkedinTokenCheck = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 11 * * 1" },
+      { event: "cron/linkedin-token-check.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 11 * * 1" },
-    { event: "cron/linkedin-token-check.manual-trigger" },
-  ],
-  cronLinkedinTokenCheckHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronLinkedinTokenCheckHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

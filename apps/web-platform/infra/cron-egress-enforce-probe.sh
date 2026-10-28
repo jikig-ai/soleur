@@ -187,7 +187,11 @@ case "$GW_IP" in
     ;;
 esac
 GW_TOK="probe-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-if ! : > "$GW_TOKEN_DIR/$GW_TOK" 2>/dev/null; then
+# #11361: the token FILE'S CONTENT must equal the presented username — egress-auth-helper.sh
+# answers OK iff `"$user" == "$(<"$TOKDIR/$pass")"`. An empty mint (the `: >` form this line
+# was) makes every CONNECT a 407 → gw_allow_fail → poweroff. Byte-parity with the sibling
+# mint in `apps/web-platform/infra/cron-egress-resolve.sh` (`printf 'probe' >`).
+if ! printf 'probe' > "$GW_TOKEN_DIR/$GW_TOK" 2>/dev/null; then
   PROBE_RESULT=gw_absent
   echo "ASSERT-FAILED: egress-gw-token-dir ($GW_TOKEN_DIR missing or unwritable — token mount did not land)"
   emit_fail

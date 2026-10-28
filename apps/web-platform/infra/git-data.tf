@@ -382,7 +382,7 @@ resource "doppler_secret" "git_data_ssh_host_key" {
 # rung-2 gate derives its hash-input set by grepping THAT file — see
 # tests/scripts/lib/git-data-birth-readiness-gate.sh.
 # git_data_volume_id below is a LITERAL (the retired plaintext volume):
-# SOLEUR-DEBT: literal id naming a device that the dispatched git-data-plaintext-volume-destroy workflow deletes at the provider API (it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendment 2026-10-26) and after that any host rebirth boots into the bootstrap plaintext_unverified FATAL; when #11194 merges (plaintext arms retired from the host replace/birth/rotate gates) set this to "" in a deliberate, owner-named host replace.
+# SOLEUR-DEBT: literal id naming a device that a Terraform destroy deleted at the provider API on 2026-10-27 (run 40478209838; it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendments 2026-10-26 and 2026-10-27) and so any host rebirth boots into the bootstrap plaintext_unverified FATAL; when #11194 merges (plaintext arms retired from the host replace/birth/rotate gates) set this to "" in a deliberate, owner-named host replace.
 module "git_data_userdata" {
   source = "./modules/git-data-userdata"
 
@@ -538,12 +538,11 @@ resource "hcloud_server" "git_data" {
 # --- Retired plaintext bare-repo block volume --------------------------------
 # hcloud_volume.git_data (name soleur-git-data-store, id 106867358) and its attachment were
 # declared here until the plaintext volume was retired (ADR-239 Amendment 2026-10-26, Option B).
-# The device is deleted by the dispatched, reviewer-gated workflow
-# .github/workflows/git-data-plaintext-volume-destroy.yml, whose plan gate
-# (tests/scripts/lib/git-data-plaintext-destroy-gate.sh) accepts only that exact delete. Removing
-# the HCL here changes nothing in production by itself: the state still holds both addresses until
-# that workflow runs, so untargeted plans show the two destroys in the meantime. The LUKS store is
-# hcloud_volume.git_data_luks (git-data-luks.tf).
+# The device was deleted at the provider API on 2026-10-27 by a reviewer-gated Terraform destroy
+# (run 40478209838); the state no longer holds either address. The record of the run, its read-back
+# and the claim limit are in the runbook section "Plaintext-volume destroy (Option B, #8211 / #6897)"
+# and in ADR-239 Amendment 2026-10-27. The LUKS store is hcloud_volume.git_data_luks
+# (git-data-luks.tf).
 
 # --- Deny-all PUBLIC ingress firewall ----------------------------------------
 # ZERO inbound rules = deny-all on the PUBLIC interface (P1). Hetzner firewalls

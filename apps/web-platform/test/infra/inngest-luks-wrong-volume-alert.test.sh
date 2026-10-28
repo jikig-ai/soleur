@@ -242,9 +242,9 @@ s = s.replace(old, "  paused = true\n")'
 assert s.count(old) == 1
 s = s.replace(old, "  paused = !var.inngest_luks_cutover_complete || true\n")'
   mutate_red "the window shrinks below the probe cadence" TF \
-    'old = "  query_period        = 5400"
+    'old = "  query_period        = 5400\n  confirmation_period = 0\n  recovery_period     = 10800"
 assert s.count(old) == 1
-s = s.replace(old, "  query_period        = 300")'
+s = s.replace(old, "  query_period        = 300\n  confirmation_period = 0\n  recovery_period     = 10800")'
   # Row 8 targets variables.tf: the arming default reverting to false is the silent-disarm this
   # guard now exists to catch — the .tf still reads `paused = !var…`, so every TF-anchored row
   # stays green while the RESOLVED value is `paused = true`. The edit is scoped to the variable

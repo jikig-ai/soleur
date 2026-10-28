@@ -341,12 +341,10 @@ export const cronGithubCidrRefresh = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "41 6 * * *" },
+      { event: "cron/github-cidr-refresh.manual-trigger" },
+    ],
   },
-  [
-    { cron: "41 6 * * *" },
-    { event: "cron/github-cidr-refresh.manual-trigger" },
-  ],
-  cronGithubCidrRefreshHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronGithubCidrRefreshHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

@@ -140,12 +140,10 @@ export const cronActionsQueueHealthDispatch = inngest.createFunction(
       { scope: "account", key: '"cron-dispatch"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "*/30 * * * *" },
+      { event: "cron/actions-queue-health-dispatch.manual-trigger" },
+    ],
   },
-  [
-    { cron: "*/30 * * * *" },
-    { event: "cron/actions-queue-health-dispatch.manual-trigger" },
-  ],
-  cronActionsQueueHealthDispatchHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronActionsQueueHealthDispatchHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

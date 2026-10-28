@@ -126,7 +126,7 @@ export class DeployInProgressError extends Error {
  *
  * With `maxAttempts` present it agrees with the SDK's choice between a
  * retriable StepError and a terminal StepFailed (`maxAttempts - 1 === attempt`
- * in inngest's components/execution/v1.js, the executor this app runs). With it
+ * in inngest's components/execution/engine.js, the executor this app runs). With it
  * ABSENT this reads "final" where the SDK would retry — deliberately: a caller
  * that plumbed nothing degrades to skipping one fire or over-paging, never to
  * masking a real failure.

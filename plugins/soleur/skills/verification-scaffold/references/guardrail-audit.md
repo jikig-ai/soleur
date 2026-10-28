@@ -76,6 +76,7 @@ template rather than shipping the monolith.
 | `prod-write-defer-gate.sh` | soleur-coupled | Soleur prod-write surface definitions. |
 | `rule-incident-marker-capture.sh` | soleur-coupled | Soleur rule-incident marker capture. |
 | `session-rules-loader.sh` | soleur-coupled | Loads `AGENTS.rules.md` — the Soleur rule corpus itself. |
+| `ship-cmo-content-gate.sh` | soleur-coupled | `soleur:ship` CMO content-opportunity gate. |
 | `ship-kb-archive-gate.sh` | soleur-coupled | `soleur:ship` KB-archive gate. |
 | `ship-net-issue-flow-gate.sh` | soleur-coupled | ship flow. |
 | `ship-operator-step-gate.sh` | soleur-coupled | ship flow. |
