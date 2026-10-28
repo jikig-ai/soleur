@@ -46,3 +46,8 @@
 
 ## Post-panel fix (CI-caught)
 - deploy-script-tests-fixed RED: my second `query_period = 5400` literal broke the SIBLING guard's file-scoped mutation anchor (`count==1`). Scoped its anchor to the sibling block via unique `recovery_period = 10800` context. Both guards re-verified: 23/23 + 43/43. Learning: a shared literal value across same-file alert resources must treat every guard's file-scoped anchors as a collision surface.
+
+## Merge-resolution (sibling fix #11384 landed first, then still 422'd)
+- #11384 merged 7d83c9021 (check 900/query 10800) at 11:16Z; its own post-merge apply run 40678688421 FAILED with the same 422 at 11:18Z — the ceiling binds on DATA RANGE, not cadence. This branch's 300/5400 is the needed fix.
+- Resolved 3 conflicts (tf comment+values, guard param pin, runbook line) toward this branch; resource comment updated to record BOTH 422s.
+- Re-verified merged tree: key-probe guard 43/43, wrong-volume guard 23/23.

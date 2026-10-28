@@ -151,6 +151,7 @@ declare -A ALLOW=(
   ["scripts/followthroughs/zot-upload-ceiling-7556.sh"]="field-scoped decode: the python decoder extracts inner['message']/dt and VALIDATE_PY rejects non-row shapes (:141-179); verdict arms key on parsed func/message fields"
   ["scripts/followthroughs/zot-log-channel-7440.sh"]="envelope-anchored on the DECODED message: awk keys verdict fields on index(m, envpfx) == 1 with envpfx 'SOLEUR_ZOT_LOG shipper=zot-log-shipper host=<h> ' (:139,:396) — a quoting row cannot satisfy the anchored prefix"
   ["scripts/probe-inngest-524-count.sh"]="field-scoped: the SQL WHERE binds JSONExtractString(raw,'_SYSTEMD_UNIT') (:35,:42) — unit-axis selection; the emitter axis is not what the count predicate reads"
+  ["scripts/followthroughs/inngest-trace-retention-5150.sh"]="field-scoped on the decoded journald object: _SYSTEMD_UNIT equality to inngest-trace-retention.service and message equality to INNGEST_TRACE_RETENTION_OUTCOME=ok. The unit sets no SyslogIdentifier, so the emitter axis is not what binds the verdict. A doppler row that quotes both tokens cannot satisfy the field equality; the suite proves that shape"
 
   # --- envelope-anchored readers (the #7569 producer-shape discriminator: '"raw":"{\"message\":"MARKER "'
   #     is a position-anchored prefix on the raw envelope; a journald/webhook row quoting the
