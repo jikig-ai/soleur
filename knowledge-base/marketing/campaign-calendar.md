@@ -17,8 +17,6 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
-| Soleur on OpenCode: run your AI organization on open-weights models | feature-launch | 2026-10-28 | discord, linkedin-company | scheduled |
-| A Property Test That Cannot Fail Teaches Nothing | pillar | 2026-10-28 | x, bluesky, discord, linkedin-personal | scheduled |
 | We Audited 102 Guardrails. Only Four Belong in Every Repository. | pillar | 2026-10-29 | x, bluesky, discord, linkedin-personal | scheduled |
 | The First Property Test We Wrote Found a Real Bug | pillar | 2026-11-03 | x, bluesky, discord, linkedin-personal | scheduled |
 | Before Your AI Team Takes a Recurring Job, It Answers Six Questions | spoke | 2026-11-04 | x, bluesky, discord, linkedin-personal | scheduled |
@@ -26,6 +24,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Test the Migration, Not Just the Schema | pillar | 2026-11-10 | x, bluesky, discord, linkedin-personal | scheduled |
 | The Map That Only Records What the Agent Saw | pillar | 2026-11-12 | x, bluesky, discord, linkedin-personal | scheduled |
 | A Flaky Test Passed on Retry and the Loop Called It Fixed | pillar | 2026-11-17 | x, bluesky, discord, linkedin-personal | scheduled |
+| Your Alarm Passed Every Rehearsal. In Real Life It Never Rings. | pillar | 2026-12-03 | x, bluesky, discord, linkedin-personal | scheduled |
 
 ## Stale Draft — needs approval
 
@@ -61,6 +60,8 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
+| Soleur on OpenCode: run your AI organization on open-weights models | feature-launch | 2026-10-28 | discord, linkedin-company | published |
+| A Property Test That Cannot Fail Teaches Nothing | pillar | 2026-10-28 | x, bluesky, discord, linkedin-personal | published |
 | Soleur on OpenCode: open-weights models, sovereign memory | feature-launch | 2026-10-27 | x, bluesky | published |
 | A Checklist for Trusting AI Work Was Just Published. We Shipped All of It. | pillar | 2026-10-24 | discord, x, bluesky, linkedin-personal | published |
 | Property-Based Testing Adopted — First Property Found a Real Bug | feature-tweet | 2026-10-22 | x, discord | published |

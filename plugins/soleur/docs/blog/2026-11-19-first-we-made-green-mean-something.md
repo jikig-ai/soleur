@@ -39,7 +39,7 @@ A check that fails one run in five teaches everyone to press "re-run" until it a
 
 A throwaway environment we build to run a check safely could, in one path, survive into the real one — a rehearsal space bleeding into the actual stage. The check wasn't just lying about the verdict; it was contaminating what it measured.
 
-And an error handler could pass every rehearsal and never fire in production. When work crosses a boundary — one system handing off to another — an error arrives rebuilt, stripped of everything the handler was watching for. So we built a census that counts every place an error can be swallowed crossing that line. A handler that only works in practice is not a handler.
+And an error handler could pass every rehearsal and never fire in production. When work crosses a boundary — one system handing off to another — an error arrives rebuilt, stripped of everything the handler was watching for. So we built a census that counts every place an error can be swallowed crossing that line. A handler that only works in practice is not a handler. The full story of that census — what the swallowed errors cost and how counting every catch site works — is told in [Your Alarm Passed Every Rehearsal. In Real Life It Never Rings.]({{ site.url }}/blog/alarm-passed-every-rehearsal-never-rings/).
 
 Seven repairs to what a verdict *means*. Six landed before any speed change shipped — and the flagship speed change was gated to land last of all.
 
