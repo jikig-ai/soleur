@@ -385,6 +385,17 @@ def env_arms(raw):
             return [""]
     s = str(raw)
     if "${{" in s:
+        # (#9755) `==`/`!=` comparison operands are predicate literals, never environment names
+        # the value can resolve to: `inputs.op == 'backup'` names an OP, `github.ref ==
+        # 'refs/heads/main'` names a REF. The cutover job's environment ternary carries one such
+        # comparison per gated op; reading them as arms would red G1c/G1j on 'arm', 'backup', ...
+        # which are not environments. Strip each comparison's quoted operand on either side
+        # before collecting RESULT literals — a result literal (the `&&`/`||` side) is still an
+        # arm, which is what g1-2 pins.
+        s = re.sub(r"'[^']*'\s*(?:==|!=)", "", s)
+        s = re.sub(r'"[^"]*"\s*(?:==|!=)', "", s)
+        s = re.sub(r"(?:==|!=)\s*'[^']*'", "", s)
+        s = re.sub(r'(?:==|!=)\s*"[^"]*"', "", s)
         arms = re.findall(r"'([^']*)'", s) + re.findall(r'"([^"]*)"', s)
         # an expression with a `||` fallback and no literal on that side falls through to empty
         if re.search(r"\|\|\s*''", s) or re.search(r'\|\|\s*""', s):
@@ -580,9 +591,19 @@ check("G1b: every Tier-B job declares an `environment:` key (AC2b; a Tier-B job 
       "environment secret and fails closed the moment the legacy fallback goes) [%d Tier-B jobs]" % len(tierb),
       not no_env, no_env[:8])
 
-bad_arm = sorted({"%s -> %r" % (j.id, a) for j in tierb if j.arms for a in j.arms if a not in TIER_B_ENVIRONMENTS})
-check("G1c: every arm of every Tier-B job's `environment:` is in tier_b_environments (scalar and "
-      "mapping forms both accepted; an empty `||` arm is an arm)", not bad_arm, bad_arm[:8])
+# (#9755) An EMPTY arm (`|| ''` / `|| ""`) is a resolvable outcome but not an environment NAME:
+# it binds no environment, so no environment secret resolves on it — a Tier-B job that lands on
+# it gets empty inputs and fails closed. That makes `''` safe ONLY because every path that could
+# still deliver privileged credentials on the unbound dispatch is separately banned: a
+# prd_terraform read of a tier_b_names entry (G1g), a state write against the privileged bucket
+# (G1h), and a loader call carrying a `doppler-token-legacy` fallback (G1j). The bad arms this
+# row collects are the NON-EMPTY result literals outside the set — comparison operands have
+# already been stripped by env_arms.
+bad_arm = sorted({"%s -> %r" % (j.id, a) for j in tierb if j.arms for a in j.arms if a and a not in TIER_B_ENVIRONMENTS})
+check("G1c: every non-empty arm of every Tier-B job's `environment:` is in tier_b_environments "
+      "(scalar, mapping and ${{ }} forms; ${{ }} ==/!= predicate operands are not environment "
+      "names; an empty `||` arm resolves to no environment — secrets are unreachable on it and "
+      "its ungated fallback paths are banned by G1g/G1h/G1j)", not bad_arm, bad_arm[:8])
 
 declared = {a for j in tierb if j.arms for a in j.arms if a}
 want_policy = sorted(TIER_B_ENVIRONMENTS | declared)
@@ -658,11 +679,19 @@ check("G1g: no workflow step reads a tier_b_names entry from `prd_terraform` (`-
 G1J_USES = re.compile(r"^[ \t]*-?[ \t]*uses:[ \t]*\./\.github/actions/infra-credentials/?[ \t]*(?:#.*)?$", re.M)
 g1j_jobs, g1j_bad = [], []
 for j in jobs:
-    if any(isinstance(st.get("uses"), str) and re.match(r"^\./\.github/actions/infra-credentials/?$", st["uses"].strip())
-           for st in j.steps):
+    lsteps = [st for st in j.steps
+              if isinstance(st.get("uses"), str) and re.match(r"^\./\.github/actions/infra-credentials/?$", st["uses"].strip())]
+    if lsteps:
         g1j_jobs.append(j.id)
-        if not (j.has_env_key and j.arms and all(a in TIER_B_ENVIRONMENTS for a in j.arms)):
+        if not (j.has_env_key and j.arms and all(a == "" or a in TIER_B_ENVIRONMENTS for a in j.arms)):
             g1j_bad.append("%s -> %r" % (j.id, j.arms))
+        # (#9755) The empty `||` arm is safe ONLY while the loader call carries no Tier-A
+        # fallback: on an unbound dispatch the Tier-B input resolves empty and the loader fails
+        # closed — unless a `doppler-token-legacy` is passed, in which case the legacy arm
+        # supplies credentials UNGATED on that dispatch.
+        elif "" in j.arms and any(str((st.get("with") or {}).get("doppler-token-legacy") or "") != ""
+                                  for st in lsteps):
+            g1j_bad.append("%s -> empty `||` arm while a doppler-token-legacy fallback is passed" % j.id)
 g1j_raw = sum(len(G1J_USES.findall(text)) for rel, (doc, text) in docs.items()
               if rel.startswith("workflows" + os.sep))
 g1j_steps = sum(1 for j in jobs for st in j.steps
@@ -2340,6 +2369,35 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform -- echo sync
 EOF
 
+# (#9755) The `${{ }}` environment form the live cutover job carries: a disjunction of
+# `inputs.op == '<name>'` PREDICATE literals guarding the gated ops, an `&&` result literal that
+# is a Tier-B environment, and a `|| ''` false arm resolving to NO environment for the ungated
+# ops. env_arms must read the predicate literals as comparisons (never environment names) and
+# the empty arm as "no environment" — on it no env-scoped secret resolves, the loader call is
+# if:-gated and, with no doppler-token-legacy, would fail closed even ungated. The whole shape
+# must stay GREEN: reading 'a'/'b' as environment names would red G1c/G1j, and it is the
+# control-side proof that the comparison-operand strip is in place.
+cat > "$FIX/tree/.github/workflows/tierb-conditional.yml" <<'EOF'
+name: fixture tier-b conditional env
+on:
+  workflow_dispatch:
+    inputs:
+      op:
+        type: choice
+        options: [a, b, c]
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    environment: ${{ (inputs.op == 'a' || inputs.op == 'b') && 'infra-privileged' || '' }}
+    steps:
+      - name: Load Tier-B credentials (fixture)
+        if: inputs.op == 'a'
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ (inputs.op == 'a') && secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED || '' }}
+      - run: echo done
+EOF
+
 cat > "$FIX/tree/.github/workflows/apply-git-data-root-key.yml" <<'EOF'
 name: fixture root key apply
 on: workflow_dispatch
@@ -3039,11 +3097,27 @@ if fixture_written g1-1-lowercase-no-environment "$MUTDIR/tree/.github/workflows
   mutant_red g1-1-lowercase-no-environment wf_row "$T/mut/g1-1.tsv" "G1b:"
 fi
 # Row 2 — REORDER: a compliant first job, then a SECOND job in the same workflow whose
-# `environment:` expression carries an EMPTY arm. The scan must not stop at the compliant one.
+# `environment:` expression resolves a NON-TIER-B result literal. The predicate operand
+# (`github.ref == 'refs/heads/main'`) is not an environment name — env_arms strips it — but
+# `not-a-tier-b-env` is a RESULT literal the expression can resolve to, and it is outside the
+# set. The scan must not stop at the compliant job, and the operand strip must not degenerate
+# into ignoring every quoted literal. (#9755: the empty `||` arm alone is no longer this row's
+# bad arm — it resolves to no environment, where env-scoped secrets are unreachable and the
+# remaining ungated fallback paths are policed by G1g, G1h and the G1j clause pinned by row
+# g1-2b below — so the literal this row pins is the non-Tier-B RESULT.)
 MUTDIR="$(fixcopy g1-2)"; assert_fixture_dir "$MUTDIR"
-if mutate g1-2-second-job-empty-arm "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 7 '$a\  second:\n    runs-on: ubuntu-24.04\n    environment: ${{ github.ref == '"'"'refs/heads/main'"'"' \&\& '"'"'infra-privileged'"'"' || '"''"' }}\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'; then
+if mutate g1-2-second-job-non-tierb-arm "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 7 '$a\  second:\n    runs-on: ubuntu-24.04\n    environment: ${{ github.ref == '"'"'refs/heads/main'"'"' \&\& '"'"'not-a-tier-b-env'"'"' || '"''"' }}\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'; then
   fixcensus "$MUTDIR" "$T/mut/g1-2.tsv" ""
-  mutant_red g1-2-second-job-empty-arm wf_row "$T/mut/g1-2.tsv" "G1c:"
+  mutant_red g1-2-second-job-non-tierb-arm wf_row "$T/mut/g1-2.tsv" "G1c:"
+fi
+# Row 2b — the empty `||` arm PLUS a legacy fallback is the ungated-Tier-A combination: on a
+# dispatch that resolves to no environment the loader's Tier-B input is empty and it would take
+# the legacy arm. Omitting `doppler-token-legacy` (the tierb-conditional fixture's shape, and the
+# live cutover job's #9755 shape) is what makes the empty arm fail-closed.
+MUTDIR="$(fixcopy g1-2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2b-empty-arm-legacy-fallback "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 1 '/doppler-token-infra-privileged:/a\          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2b.tsv" ""
+  mutant_red g1-2b-empty-arm-legacy-fallback wf_row "$T/mut/g1-2b.tsv" "G1j:"
 fi
 # Row 3 — delete the `workspaces_luks_cutover_main` policy while the environment stays in the set.
 MUTDIR="$(fixcopy g1-3)"; assert_fixture_dir "$MUTDIR"
@@ -4642,7 +4716,7 @@ fi
 # 145 -> 151 (#10990, AC7b limb 3): g1-k1 (fixture .sh writer, 1), g1-k2 (checker write-token set, 1),
 #   g1-k3 (second-member fixture .sh writer, 1), g1-k4 (half-set pair, 1), g1-k5 (checker
 #   classification key, 1), g1-k6 (read-only fixture .sh, 1). Measured: 151 ran.
-MUTANT_FLOOR=154
+MUTANT_FLOOR=155
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1

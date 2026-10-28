@@ -291,16 +291,16 @@ None.
 
 ## Acceptance Criteria
 
-- [ ] `cutover-inngest.yml`'s `environment:` expression resolves `inngest-cutover` for `inputs.op == 'backup'` (and only for the gated op set).
-- [ ] A step `if: inputs.op == 'backup'` invokes `uses: ./.github/actions/infra-credentials` with `doppler-token-infra-privileged` bound to `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED` and no `doppler-token-legacy` input.
-- [ ] `scripts/cutover-inngest.sh` contains zero `doppler secrets get` of the bare `HCLOUD_TOKEN` name; the `backup)` arm reads `${HCLOUD_TOKEN:-}` and refuses with `SOLEUR_CREDENTIAL_REFUSED` before any request when it is empty or mis-shaped.
-- [ ] `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` exits 0: membership loop covers `backup`; `ENV_OPS == union(arm-token ops, Tier-B loader ops)`; `backup` is absent from the arm-token expression; `_EXACT_FLOOR` matches the dispatched count.
-- [ ] `bash scripts/lint-hcloud-token-readonly-no-fallback.sh` exits 0 with `findings=0` and no surviving allowlist entry.
-- [ ] `bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh` exits 0.
-- [ ] `bash tests/scripts/test-infra-privileged-tier-census.sh` exits 0 with `env_arms()` stripping `==`/`!=` comparison operands — the post-change `cutover` job resolves to exactly `{inngest-cutover}` (plus the false-arm) — and the new mutation fixture (Tier-B job whose expression resolves a non-Tier-B result literal) still goes RED — and `bash tests/scripts/test-trio-baseline-census.sh` exits 0.
-- [ ] No non-comment line of `.github/workflows/cutover-inngest.yml` contains the literal `HCLOUD` (the suite's `WF_YAML` knob pin).
-- [ ] ADR-241 carries a new dated entry recording the re-plumb, the allowlist retirement, and the missed-deadline retrospective; the `infra-credential-tiers-8209.md` `op=backup` row and `inngest-server.md` step 0.5 are updated.
-- [ ] Actionlint/YAML parse of the edited workflow passes (the suite's `YAML parses` assertion plus CI's actionlint job).
+- [x] `cutover-inngest.yml`'s `environment:` expression resolves `inngest-cutover` for `inputs.op == 'backup'` (and only for the gated op set).
+- [x] A step `if: inputs.op == 'backup'` invokes `uses: ./.github/actions/infra-credentials` with `doppler-token-infra-privileged` bound to `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED` and no `doppler-token-legacy` input.
+- [x] `scripts/cutover-inngest.sh` contains zero `doppler secrets get` of the bare `HCLOUD_TOKEN` name; the `backup)` arm reads `${HCLOUD_TOKEN:-}` and refuses with `SOLEUR_CREDENTIAL_REFUSED` before any request when it is empty or mis-shaped.
+- [x] `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` exits 0: membership loop covers `backup`; `ENV_OPS == union(arm-token ops, Tier-B loader ops)`; `backup` is absent from the arm-token expression; `_EXACT_FLOOR` matches the dispatched count.
+- [x] `bash scripts/lint-hcloud-token-readonly-no-fallback.sh` exits 0 with `findings=0` and no surviving allowlist entry.
+- [x] `bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh` exits 0.
+- [x] `bash tests/scripts/test-infra-privileged-tier-census.sh` exits 0 with `env_arms()` stripping `==`/`!=` comparison operands — the post-change `cutover` job resolves to exactly `{inngest-cutover}` (plus the false-arm) — and the new mutation fixture (Tier-B job whose expression resolves a non-Tier-B result literal) still goes RED — and `bash tests/scripts/test-trio-baseline-census.sh` exits 0.
+- [x] No non-comment line of `.github/workflows/cutover-inngest.yml` contains the literal `HCLOUD` (the suite's `WF_YAML` knob pin).
+- [x] ADR-241 carries a new dated entry recording the re-plumb, the allowlist retirement, and the missed-deadline retrospective; the `infra-credential-tiers-8209.md` `op=backup` row and `inngest-server.md` step 0.5 are updated.
+- [x] Actionlint/YAML parse of the edited workflow passes (the suite's `YAML parses` assertion plus CI's actionlint job).
 
 ## Test Scenarios
 

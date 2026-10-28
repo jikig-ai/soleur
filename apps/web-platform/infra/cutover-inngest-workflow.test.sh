@@ -1691,7 +1691,7 @@ rsb_case "verdict=PASS trailing text is not literal PASS — fails closed"      
 assert "#9177 resume_bootstrap_decide scenarios dispatched (>=12)" "[[ '$RSB_EVALS' -ge 12 ]]"
 # ASSEMBLY — a refusal that does not abort BEFORE the write is a logger, not a gate.
 assert "#9177 resume) invokes the provisioning probe via doppler run prd_terraform" \
-  "grep -qF 'doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh' '$RESUME_FILE'"
+  "grep -qF 'doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh' '$RESUME_FILE'"
 # Anchored on the CALL (the `*)` refusal arm's message also names the function, so a bare
 # `resume_bootstrap_decide` grep counts 2 — measured).
 assert "#9177 resume) routes through resume_bootstrap_decide exactly once" \
@@ -2069,30 +2069,126 @@ assert "#6617 probe arms add NO retry loop (the one emit-file read loop is allow
 ENV_EXPR=$(grep -E '^[[:space:]]+environment:' "$WF" | sed -n '1p' || true)
 assert "#7228 the environment: expression was located (else these pins are vacuous)" \
   "[[ -n \"\$ENV_EXPR\" ]]"
-for _op in arm rollback resume reflush; do
-  assert "#7228 prod-writing op '\$_op' is INSIDE the required-reviewer gate" \
+# #9755 adds op=backup to the loop: a Hetzner create_image with a read/write token is the same
+# prod-write class as arm — it belongs INSIDE the reviewer gate, not outside it.
+for _op in arm rollback resume reflush backup; do
+  assert "#7228/#9755 prod-writing op '\$_op' is INSIDE the required-reviewer gate" \
     "printf '%s' \"\$ENV_EXPR\" | grep -cF \"inputs.op == '\$_op'\" >/dev/null"
 done
 assert "#7228 the gate still resolves to the inngest-cutover environment" \
   "printf '%s' \"\$ENV_EXPR\" | grep -cF \"'inngest-cutover'\" >/dev/null"
-# THE OP SET IS DUPLICATED IN TWO EXPRESSIONS AND NOTHING TIED THEM TOGETHER (#7674 review).
-# `environment:` decides WHO MUST APPROVE; the DOPPLER_TOKEN_INNGEST_ARM expression decides WHO
-# GETS THE PROD-WRITE TOKEN. Adding an op to the token expression but not the environment one
-# hands that op an arm-capable credential with NO required reviewer — and every pre-existing
-# assertion here passed, because they check the two expressions independently. Pin the SETS equal.
+# THE CREDENTIALED OP SET LIVES IN THREE EXPRESSIONS AND NOTHING TIED THEM TOGETHER (#7674 review,
+# widened by #9755). `environment:` decides WHO MUST APPROVE; the DOPPLER_TOKEN_INNGEST_ARM
+# expression decides WHO GETS THE ARM TOKEN; the infra-credentials step's
+# `doppler-token-infra-privileged:` input decides WHO GETS THE TIER-B EXPORTS. Adding an op to
+# either credential expression but not the environment one hands that op a prod-write-capable
+# credential with NO required reviewer; gating an op that has no credential delivery strands the
+# approval. Pin ENV_OPS == union(TOK_OPS, PRIV_OPS).
 ENV_OPS=$(printf '%s' "$ENV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
 TOK_EXPR=$(grep -E 'DOPPLER_TOKEN_INNGEST_ARM:' "$WF" | sed -n '1p') || true
 TOK_OPS=$(printf '%s' "$TOK_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
+PRIV_EXPR=$(grep -E 'doppler-token-infra-privileged:' "$WF_YAML" | sed -n '1p' || true)
+PRIV_OPS=$(printf '%s' "$PRIV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
+CRED_OPS=$(printf '%s\n%s\n' "$TOK_OPS" "$PRIV_OPS" | sort -u) || true
 assert "#7674 the token expression was located (else the parity row below is vacuous)" \
   "[[ -n '$TOK_EXPR' ]]"
+assert "#9755 the Tier-B loader input expression was located (else the parity row below is vacuous)" \
+  "[[ -n '$PRIV_EXPR' ]]"
 assert "#7674 the reviewer-gated op set is non-empty (anti-vacuity for the parity row)" \
   "[[ -n '$ENV_OPS' ]]"
-assert "#7674 environment: and DOPPLER_TOKEN_INNGEST_ARM gate the SAME op set (no ungated arm token)" \
-  "[[ '$ENV_OPS' == '$TOK_OPS' ]]"
+assert "#9755 environment: and the credentialed op set (arm-token UNION Tier-B loader) gate the SAME ops — a credentialed-but-ungated or a gated-but-uncredentialed op breaks the equality" \
+  "[[ '$ENV_OPS' == '$CRED_OPS' ]]"
+assert "#9755 op=backup is NOT in the arm-token ternary (over-grant: DOPPLER_TOKEN_INNGEST_ARM is soleur-inngest/prd scope, not Hetzner)" \
+  "! printf '%s' \"\$TOK_OPS\" | grep -cF \"inputs.op == 'backup'\" >/dev/null"
 # A single `continue-on-error: true` on the one run: step turns EVERY guard's exit 1 into a green
 # job — the whole gate sequence tolerated at once. Nothing forbade it.
 assert "#7674 no step tolerates failure (a continue-on-error would green-light every refused gate)" \
   "! grep -qE '^[[:space:]]*continue-on-error:' '$WF_YAML'"
+
+# #9755 — the Tier-B loader step (the ADR-241 O10 mechanism): gated to op=backup, calls the
+# infra-credentials composite, passes only the environment-scoped token, and carries NO
+# doppler-token-legacy anywhere in the file. A missing environment secret must be the loader's
+# verdict=no_credential_source refusal, never a silent Tier-A fallback — the
+# git-data-cutover.yml::wipe precedent for a must-never-fall-back op.
+assert "#9755 the workflow calls the infra-credentials loader" \
+  "grep -qE 'uses:[[:space:]]*\\./\\.github/actions/infra-credentials' '$WF_YAML'"
+assert "#9755 the loader step is gated to op=backup (the whole-project export lands only on a backup dispatch)" \
+  "grep -qE 'if:[[:space:]]*inputs\\.op == .backup.' '$WF_YAML'"
+assert "#9755 the loader call passes the environment-scoped Tier-B token (the conditional with: mirrors the arm-token idiom and gives the parity row its extraction anchor)" \
+  "grep -qE 'doppler-token-infra-privileged:[[:space:]]*\\$\\{\\{[[:space:]]*\\(inputs\\.op == .backup.\\)[[:space:]]*&&[[:space:]]*secrets\\.DOPPLER_TOKEN_INFRA_PRIVILEGED' '$WF_YAML'"
+assert "#9755 no doppler-token-legacy input anywhere in the file (a Tier-A fallback would defeat the gate)" \
+  "! grep -qE 'doppler-token-legacy:' '$WF_YAML'"
+
+# ── #9755: op=backup — the Hetzner snapshot writer, re-plumbed to Tier B ──────────────────
+# The arm is extracted from the REAL script and run under bash with the bearer transport stubbed,
+# so each row asserts the refusal BEFORE any request and the mask/request order on the success
+# path. The token arrives via the job env (the infra-credentials loader export), never via a
+# doppler read inside the arm — asserted on the arm's own bytes first.
+BKP_FILE="$(mktemp)"; BKP_DRV="$(mktemp)"; BKP_CALLS="$(mktemp)"; BKP_LOG="$(mktemp)"
+SCRATCH+=("$BKP_FILE" "$BKP_DRV" "$BKP_CALLS" "$BKP_LOG")
+awk '/^  backup\)$/{f=1;next} f&&/^    ;;$/{exit} f' "$BODY_SH" > "$BKP_FILE"
+BKP_N=$(wc -l < "$BKP_FILE" | tr -d '[:space:]')
+assert "#9755 backup) case arm extracted from the real script for behavioural driving (non-vacuity, got $BKP_N lines)" \
+  "[[ '$BKP_N' -gt 20 ]]"
+assert "#9755 the backup) arm carries NO doppler invocation on a non-comment line (the token comes from the loader-exported job env)" \
+  "! grep -vE '^[[:space:]]*#' '$BKP_FILE' | grep -qE 'doppler'"
+assert "#9755 the backup) arm reads the job-env HCLOUD_TOKEN (the loader-exported form, not a fetch)" \
+  "grep -qF 'HCLOUD_TOKEN=\"\${HCLOUD_TOKEN:-}\"' '$BKP_FILE'"
+assert "#9755 the refusal message names the Tier-B delivery (the loader or the inngest-cutover environment)" \
+  "grep -qE 'infra-credentials|inngest-cutover' '$BKP_FILE'"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'OP=backup'
+  grep -E '^_bearer_ok\(\)' "$BODY_SH"
+  printf '%s\n' '_bearer_curl() {'
+  printf '%s\n' '  local _tv="${1:-}"; shift'
+  printf '%s\n' '  _bearer_ok "${!_tv:-}" || { echo "_bearer_curl: ${_tv} unusable" >&2; return 2; }'
+  printf '%s\n' '  printf "BEARER_CURL %s\n" "$*" | tee -a "$BKP_CALLS" >&2'
+  printf '%s\n' '  local _all=" $* "; local _o=""; while [[ $# -gt 0 ]]; do case "$1" in -o) _o="$2"; shift 2;; *) shift;; esac; done'
+  printf '%s\n' '  case "$_all" in'
+  printf '%s\n' '    *"/actions/create_image "*) [[ -n "$_o" ]] && printf %s "$BKP_IMAGE_JSON" > "$_o"; printf %s "${BKP_CODE:-201}"; return 0 ;;'
+  printf '%s\n' '    *"/v1/actions/"*)         [[ -n "$_o" ]] && printf %s "$BKP_ACTION_JSON" > "$_o"; return 0 ;;'
+  printf '%s\n' '  esac'
+  printf '%s\n' '  return 0'
+  printf '%s\n' '}'
+  printf '%s\n' 'sleep() { :; }'
+  cat "$BKP_FILE"
+} > "$BKP_DRV"
+BKP_RC=0
+bkp_run() { # <HCLOUD_TOKEN value | __UNSET__> [stub create_image http code] — one drive of the arm
+  : > "$BKP_CALLS"; BKP_RC=0
+  if [[ "$1" == "__UNSET__" ]]; then
+    env -u HCLOUD_TOKEN BKP_CALLS="$BKP_CALLS" \
+      BKP_IMAGE_JSON='{"image":{"id":42},"action":{"id":7}}' \
+      BKP_ACTION_JSON='{"action":{"status":"success"}}' BKP_CODE="${2:-201}" \
+      bash "$BKP_DRV" > "$BKP_LOG" 2>&1 || BKP_RC=$?
+  else
+    HCLOUD_TOKEN="$1" BKP_CALLS="$BKP_CALLS" \
+      BKP_IMAGE_JSON='{"image":{"id":42},"action":{"id":7}}' \
+      BKP_ACTION_JSON='{"action":{"status":"success"}}' BKP_CODE="${2:-201}" \
+      bash "$BKP_DRV" > "$BKP_LOG" 2>&1 || BKP_RC=$?
+  fi
+}
+bkp_run __UNSET__
+assert "#9755 op=backup with HCLOUD_TOKEN unset refuses (exit 1) before any request" "[[ '$BKP_RC' == 1 ]]"
+assert "#9755 the refusal is SOLEUR_CREDENTIAL_REFUSED reason=token_shape" "grep -qF 'SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape' '$BKP_LOG'"
+assert "#9755 the refusal made ZERO curl calls (refused before the first request)" "[[ ! -s '$BKP_CALLS' ]]"
+bkp_run ''
+assert "#9755 an EXPORTED-EMPTY HCLOUD_TOKEN refuses the same way (the loader-exported var must carry a value)" "[[ '$BKP_RC' == 1 && ! -s '$BKP_CALLS' ]]"
+bkp_run 'RW TOKEN WITH SPACE'
+assert "#9755 a mis-shaped HCLOUD_TOKEN refuses at the shape gate before masking or any request" "[[ '$BKP_RC' == 1 && ! -s '$BKP_CALLS' ]]"
+bkp_run 'RW-SENTINEL.123_+/='
+assert "#9755 a shaped token runs the snapshot end to end (create_image + poll, exit 0)" "[[ '$BKP_RC' == 0 ]]"
+BKP_MASK_LN=$(grep -n 'add-mask::RW-SENTINEL' "$BKP_LOG" | head -1 | cut -d: -f1) || true
+BKP_REQ_LN=$(grep -n 'BEARER_CURL' "$BKP_LOG" | head -1 | cut -d: -f1) || true
+assert "#9755 the token is masked BEFORE the first request" \
+  "[[ -n '$BKP_MASK_LN' && -n '$BKP_REQ_LN' && '$BKP_MASK_LN' -lt '$BKP_REQ_LN' ]]"
+assert "#9755 the first request is the create_image snapshot POST" \
+  "head -1 '$BKP_CALLS' | grep -qE '/v1/servers/123931471/actions/create_image'"
+assert "#9755 the success path logs the image id" "grep -qF 'image id=42' '$BKP_LOG'"
+bkp_run 'RW-SENTINEL.123_+/=' 401
+assert "#9755 a non-201 create_image response fails with a named HTTP error" \
+  "[[ '$BKP_RC' == 1 ]] && grep -qF 'hcloud create_image returned HTTP 401' '$BKP_LOG'"
 
 assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -cE 'registry-probe|doublefire-probe' >/dev/null"
 
@@ -3442,7 +3538,7 @@ check_reader_returns_rc() {
   ( set +e; eval "$fn"; doppler() { return 7; }; _bs_query_rows 15m t 5 >/dev/null 2>&1; exit $? ) || rc=$?
   [[ "$rc" -eq 7 ]]
 }
-mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
+mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
 # Row 18 — the *) arm falls through. Property: the *) arm exits 1.
 check_star_arm_exits() {
   awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | awk '/^        \*\)$/{f=1} f' | sed -n '1,8p' | grep -cE 'exit 1 ;;' >/dev/null
@@ -4138,7 +4234,7 @@ assert "#6921 §9 poller: lock_contention to the end -> the timeout error names 
 # shellcheck disable=SC2034
 QW_POLL_CF="$(render_qw_poll 'quiesce_capture_failed:1')"
 assert "#6921 §9 poller: quiesce_capture_failed -> fails fast naming the Better Stack read, restart-inngest-server.yml and the re-dispatch" \
-  "qw_poll_failed \"\$QW_POLL_CF\" 1 'reason=quiesce_capture_failed' 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED' 'restart-inngest-server.yml' 'op=quiesce-web' 'NOTHING was stopped'"
+  "qw_poll_failed \"\$QW_POLL_CF\" 1 'reason=quiesce_capture_failed' 'doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED' 'restart-inngest-server.yml' 'op=quiesce-web' 'NOTHING was stopped'"
 # shellcheck disable=SC2034
 QW_POLL_CU="$(render_qw_poll 'quiesce_capture_unavailable:1')"
 assert "#6921 §9 poller: quiesce_capture_unavailable -> fails fast naming restart-inngest-server.yml, op=rollback (disabled_unattributed) and the re-quiesce" \
@@ -4973,7 +5069,7 @@ _DISPATCHED=$((PASS + FAIL))
 #   exported-HCLOUD_TOKEN environment row adds two (verdict + zero curl + reads, sentinel absent) (+2): +5 in total.
 # 1134 -> 1135 (+1) at the #10664 review round 2, measured: one pin on the empty-token warning's remedy tail (`only if the secret is
 #   genuinely absent`, so a reword cannot drop the auth/network-first ordering).
-_EXACT_FLOOR=1135
+_EXACT_FLOOR=1156
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
