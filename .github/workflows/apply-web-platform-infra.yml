@@ -3938,18 +3938,28 @@ jobs:
       # `git_data_volume_id` to module "git_data_userdata" the rendered user_data names that deleted
       # device and the new host would boot into the bootstrap's plaintext_unverified FATAL. This
       # step reads the same checkout the plan step plans and refuses before anything is planned or
-      # replaced. It prints a verdict and a line number, never the value. It is SKIPPED under plan_only:
-      # a plan_only dispatch grades a real plan with the plaintext-free gate and stops before any apply
-      # (the owner's verification path), so there is no host to destroy and nothing to refuse.
+      # replaced. It prints a verdict and a line number, never the value.
+      #
+      # UNCONDITIONAL (no `if:`; the census suite's G5c row, ADR-241 D-Guard-5, forbids any `if:` on a
+      # gate step because a condition is a way to skip it). Under plan_only a refusal is DOWNGRADED to
+      # a warning instead: a plan_only dispatch grades a real plan with the plaintext-free gate and
+      # stops before any apply (the owner's verification path), so there is no host to destroy, and the
+      # verdict still prints. The downgrade tests the exact string `true`; unset, empty or any other
+      # value stays blocking (CTO ruling, decision-challenges.md row H).
       - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
-        if: inputs.plan_only != true
+        env:
+          PLAN_ONLY: ${{ inputs.plan_only }}
         run: |
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf"; then
-            echo "::error::git-data-host-replace/-rotate is HELD: git-data.tf still passes a non-empty git_data_volume_id to module git_data_userdata, which names a plaintext volume destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap plaintext_unverified FATAL. The step log names the line. Set it to \"\" (the one-hunk change tracked on #11194), merge, then dispatch in one sitting. Nothing has been planned, replaced or created."
-            exit 1
+            if [[ "${PLAN_ONLY:-}" == "true" ]]; then
+              echo "::warning::plan_only: the plaintext-id interlock WOULD hold a real git-data-host-replace/-rotate dispatch (verdict above). This plan_only run stops before any apply, so it proceeds; blank git_data_volume_id in git-data.tf (the one-hunk change tracked on #11194) before the real dispatch."
+            else
+              echo "::error::git-data-host-replace/-rotate is HELD: git-data.tf still passes a non-empty git_data_volume_id to module git_data_userdata, which names a plaintext volume destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap plaintext_unverified FATAL. The step log names the line. Set it to \"\" (the one-hunk change tracked on #11194), merge, then dispatch in one sitting. Nothing has been planned, replaced or created."
+              exit 1
+            fi
           fi
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path

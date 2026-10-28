@@ -69,6 +69,7 @@ import {
   mkdtempSync,
   mkdirSync,
   rmSync,
+  symlinkSync,
 } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -95,9 +96,10 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
 // 297 -> 299 (2026-10-27 eMudhra cloudflared plan, +2; the 311 on main counted the +12 of #11179, whose destroy-workflow pins left with the workflow at #11195): the hardcoded 3-file PIN_WORKFLOWS test was replaced by the
 // .github/-wide pin census describe (census+parity, canonical source) plus its mutation-battery describe — 3 tests in, 1 out.
-// 299 -> 301 (#11194, +2): the plaintext-id interlock wire pins (replace job incl. rotate; create job). The retired-address
-// assertion REPLACED the GIT_DATA_PRESERVED_VOLUMES test one-for-one (declared count unchanged by it). Exact again: grep -cE '^\s*test\(' = 301.
-const TEST_FLOOR = 301;
+// 299 -> 303 (#11194, +4): the plaintext-id interlock wire pins (replace job incl. rotate; create job), the wiring-predicate
+// mutation battery and the executed-step test. The retired-address assertion REPLACED the GIT_DATA_PRESERVED_VOLUMES test
+// one-for-one (declared count unchanged by it). Exact again: grep -cE '^\s*test\(' = 303.
+const TEST_FLOOR = 303;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -2630,46 +2632,124 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volu
 // function nobody calls protects nothing, and the function's own verdicts live in
 // tests/scripts/test-git-data-birth-readiness-gate.sh. Each pin runs on the step with comments
 // stripped, anchored on a real top-level line a comment cannot produce.
+//
+// The step carries NO `if:` in either job (the census suite's G5c row, ADR-241 D-Guard-5, forbids
+// one on a gate step). In the replace job (which also serves rotate) a refusal is downgraded to a
+// warning only when PLAN_ONLY is the exact string `true`; everything else blocks.
+const IL_SOURCE_LINE =
+  /^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-birth-readiness-gate\.sh"$/m;
+const IL_CALL =
+  /^ {10}if ! git_data_plaintext_id_interlock "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/git-data\.tf"; then\n([\s\S]*?)\n {10}fi$/m;
+// The replace job's refusal body: the strict `true` downgrade (warning, no exit) beside a blocking
+// else (error, exit 1). Both halves in one expression so neither can be dropped alone.
+const IL_REPLACE_BODY =
+  /^ {12}if \[\[ "\$\{PLAN_ONLY:-\}" == "true" \]\]; then\n {14}echo "::warning::[^\n]*"\n {12}else\n {14}echo "::error::[^\n]*"\n {14}exit 1\n {12}fi$/m;
+
+/** The wiring predicate shared by the real-tree pin and its mutants. Returns the failed clauses. */
+function interlockStepProblems(stepRaw: string, opts: { replaceJob: boolean }): string[] {
+  const step = stripComments(stepRaw);
+  const bad: string[] = [];
+  if (!IL_SOURCE_LINE.test(step)) bad.push("source line");
+  const call = step.match(IL_CALL);
+  if (!call) bad.push("call");
+  if (!/^\s*set -euo pipefail$/m.test(step)) bad.push("set -euo pipefail");
+  if (/continue-on-error/.test(step)) bad.push("continue-on-error");
+  // No `if:` on the step in either job (a condition is a way to skip a gate).
+  if (/^ {8}if:/m.test(step)) bad.push("step-level if");
+  if (opts.replaceJob) {
+    if (!/^ {8}env:\n {10}PLAN_ONLY: \$\{\{ inputs\.plan_only \}\}$/m.test(step)) bad.push("PLAN_ONLY env");
+    if (!call || !IL_REPLACE_BODY.test(call[0])) bad.push("strict downgrade + blocking default");
+  } else {
+    // The create route has no verification mode: a plain blocking refusal, no downgrade.
+    if (!call || !/^\s*exit 1$/m.test(call[1])) bad.push("exit 1");
+    if (/PLAN_ONLY|plan_only/.test(step)) bad.push("create job must not read plan_only");
+  }
+  return bad;
+}
+
 describe("git-data dispatch jobs run the plaintext-id interlock before planning (#11194)", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-  const SOURCE_LINE =
-    /^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-birth-readiness-gate\.sh"$/m;
-  const CALL =
-    /^ {10}if ! git_data_plaintext_id_interlock "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/git-data\.tf"; then\n([\s\S]*?)\n {10}fi$/m;
 
-  function pinned(jobId: string, planTitle: RegExp): { step: string; raw: string; job: string } {
+  function stepOf(jobId: string, planTitle: RegExp): { raw: string; job: string } {
     const job = extractJobBlock(wf, jobId);
     const raw = extractStep(job, /Plaintext-id interlock/);
     expect(raw, `${jobId}: the interlock step must exist`).not.toBeNull();
-    const step = stripComments(raw!);
-    expect(step).toMatch(SOURCE_LINE);
-    const call = step.match(CALL);
-    expect(call, `${jobId}: the interlock call must be a top-level \`if ! … ; then … fi\``).not.toBeNull();
-    // The refusal body must exit 1 (an annotation alone lets the job go green) and must not
-    // print a value: only the function's own verdict reaches the log.
-    expect(call![1]).toMatch(/^\s*exit 1$/m);
-    expect(step).toMatch(/^\s*set -euo pipefail$/m);
-    expect(step, "a continue-on-error (any quoting) would turn a refusal into a tolerated failure").not.toMatch(/continue-on-error/);
     // It runs BEFORE the plan step: nothing has been planned or created when it refuses.
     const planRaw = extractStep(job, planTitle);
     expect(planRaw, `${jobId}: the plan step must exist`).not.toBeNull();
     expect(job.indexOf(raw!)).toBeGreaterThan(-1);
     expect(job.indexOf(raw!)).toBeLessThan(job.indexOf(planRaw!));
-    return { step, raw: raw!, job };
+    return { raw: raw!, job };
   }
 
-  test("git_data_host_replace (replace and rotate): the interlock precedes the plan and is skipped only under plan_only", () => {
-    const { step } = pinned("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
-    // The owner's verification path (CTO F3): a plan_only dispatch grades a REAL plan with the
-    // plaintext-free gate and stops before any apply, so the interlock must not block it.
-    expect(step).toMatch(/^ {8}if: inputs\.plan_only != true$/m);
+  test("git_data_host_replace (replace and rotate): the interlock precedes the plan, is unconditional, and downgrades only on plan_only == true", () => {
+    const { raw } = stepOf("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
+    expect(interlockStepProblems(raw, { replaceJob: true })).toEqual([]);
   });
 
-  test("git_data_host_create: the interlock precedes the plan and is UNCONDITIONAL", () => {
-    const { step } = pinned("git_data_host_create", /Terraform plan \(scoped git-data birth\)/);
-    // The create route documents no plan_only input and has no verification mode the interlock must
-    // leave open, so any `if:` on this step is a way to skip it.
-    expect(step).not.toMatch(/^ {8}if:/m);
+  test("git_data_host_create: the interlock precedes the plan and is plainly blocking", () => {
+    const { raw } = stepOf("git_data_host_create", /Terraform plan \(scoped git-data birth\)/);
+    expect(interlockStepProblems(raw, { replaceJob: false })).toEqual([]);
+  });
+
+  test("the wiring predicate reds on each way to disarm the replace-job step (mutation battery, control first)", () => {
+    const { raw } = stepOf("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
+    // CONTROL: the unmutated step is clean, so every red below is the mutation's.
+    expect(interlockStepProblems(raw, { replaceJob: true })).toEqual([]);
+    const mutants: Array<[string, (t: string) => string, string]> = [
+      ["a step-level if: skipping the gate", (t) => t.replace("        env:\n", "        if: inputs.plan_only != true\n        env:\n"), "step-level if"],
+      ["a non-strict downgrade (!= \"false\")", (t) => t.replace('== "true" ]]; then', '!= "false" ]]; then'), "strict downgrade"],
+      ["a downgrade that is always taken", (t) => t.replace('if [[ "${PLAN_ONLY:-}" == "true" ]]; then', "if true; then"), "strict downgrade"],
+      ["the blocking exit dropped from the else arm", (t) => t.replace("              exit 1\n            fi\n          fi", "            fi\n          fi"), "strict downgrade"],
+      ["the call removed", (t) => t.replace(/git_data_plaintext_id_interlock "/, 'true "'), "call"],
+      ["continue-on-error added", (t) => t.replace("        env:\n", "        continue-on-error: true\n        env:\n"), "continue-on-error"],
+    ];
+    for (const [label, mutate, clause] of mutants) {
+      const m = mutate(raw);
+      expect(m, `mutation did not land: ${label}`).not.toBe(raw);
+      expect(interlockStepProblems(m, { replaceJob: true }).join("|"), label).toContain(clause);
+    }
+    // The create job must NOT grow a downgrade: its pin reds when one appears.
+    const createRaw = stepOf("git_data_host_create", /Terraform plan \(scoped git-data birth\)/).raw;
+    const withDowngrade = createRaw.replace("        run: |", "        env:\n          PLAN_ONLY: ${{ inputs.plan_only }}\n        run: |");
+    expect(withDowngrade).not.toBe(createRaw);
+    expect(interlockStepProblems(withDowngrade, { replaceJob: false }).join("|")).toContain("create job must not read plan_only");
+  });
+
+  test("EXECUTED: the replace-job step blocks (rc 1) on a non-empty literal unless PLAN_ONLY is exactly `true` (then a warning, rc 0), and passes on an empty one", () => {
+    const { raw } = stepOf("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
+    const runBody = raw.split("\n").slice(raw.split("\n").findIndex((l) => /^ {8}run: \|$/.test(l)) + 1);
+    const script = runBody.map((l) => l.replace(/^ {10}/, "")).join("\n");
+    expect(script).toContain("git_data_plaintext_id_interlock");
+    const ws = mkdtempSync(resolve(tmpdir(), "il-wf-"));
+    try {
+      mkdirSync(resolve(ws, "tests/scripts"), { recursive: true });
+      mkdirSync(resolve(ws, "apps/web-platform/infra"), { recursive: true });
+      symlinkSync(resolve(REPO_ROOT, "tests/scripts/lib"), resolve(ws, "tests/scripts/lib"));
+      const tf = resolve(ws, "apps/web-platform/infra/git-data.tf");
+      const run = (literal: string, planOnly: string | undefined) => {
+        writeFileSync(tf, `module "git_data_userdata" {\n  git_data_volume_id = ${literal}\n}\n`);
+        const env: Record<string, string> = { PATH: process.env.PATH ?? "", GITHUB_WORKSPACE: ws };
+        if (planOnly !== undefined) env.PLAN_ONLY = planOnly;
+        const r = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+        return { rc: r.status, out: `${r.stdout}${r.stderr}` };
+      };
+      // CONTROL: an empty literal passes in every mode, so the refusals below are the literal's.
+      for (const po of [undefined, "false", "true"]) expect(run('""', po).rc, `empty literal, PLAN_ONLY=${po}`).toBe(0);
+      for (const po of [undefined, "", "false", "TRUE", "1", "yes"]) {
+        const r = run('"106867358"', po);
+        expect([po, r.rc]).toEqual([po, 1]);
+        expect(r.out).toContain("::error::");
+        expect(r.out, "the value must never reach the log").not.toContain("106867358");
+      }
+      const dg = run('"106867358"', "true");
+      expect(dg.rc).toBe(0);
+      expect(dg.out).toContain("::warning::plan_only");
+      expect(dg.out).not.toContain("::error::");
+      expect(dg.out, "the value must never reach the log").not.toContain("106867358");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
   });
 });
 

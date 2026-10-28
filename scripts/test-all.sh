@@ -6616,7 +6616,7 @@ if want_scripts; then
   # echoes `zotregistry.dev` must NOT pass. That is not hypothetical: it is the state production is
   # in right now, where a bare grep for that string returns 53 rows over 6h and every one is an echo.
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
-  # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
+  # git-data-host-replace scoped-recreate destroy-guard (#6242; preserves the LUKS data volume + LUKS passphrase by omission; the retired plaintext pair is refused as out_of_scope, #11194).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
   run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
