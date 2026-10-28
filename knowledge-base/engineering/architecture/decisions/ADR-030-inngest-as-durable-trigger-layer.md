@@ -220,3 +220,6 @@ ran). `signature-verify.test.ts` asserts the envelope. Anything that reads the H
 The SDK is now pinned **exactly** at `inngest` `3.54.2` (ADR-243 §1: its `createStream` heartbeat
 leak is worked around by `server/inngest/stream-detach.ts` and content-hash-pinned in that module's
 test), superseding the Context's `inngest@^3` range. The v4 upgrade is #8628.
+
+*Amendment 2026-10-28 (#8628 / PR #11381): the pin moved to `inngest` `^4.26.0`; `stream-detach.ts`
+is deleted (the upstream `createStream` fix is verified in the tarball). See ADR-243's §1 amendment.*

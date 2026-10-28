@@ -331,7 +331,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
-  # hourly, so a failing probe keeps a row inside the 1.5 h window and a fixed one clears in about 1.5 to 2.5 h.
+  # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows) and a fixed one clears in about 1.25 to 1.5 h.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
@@ -370,25 +370,31 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
   name           = "soleur-inngest-luks-key-probe-fail-prd"
 
-  # Presence-only, so safe before the probe is delivered (no rows, value 0). The probe re-emits
-  # hourly after any non-ok token, so the window is an hour and a half: a failing row stays inside
-  # it that long and the next hourly re-probe lands with ~30 min of slack — the hysteresis against
-  # that re-probe re-opening an incident. The incident clears about 1.5 to 2.5 h after the LAST
-  # failing row (the window, then recovery_period), which is not proof of recovery: only a
-  # token=ok row is.
+  # Presence-only, so safe before the probe is delivered (no rows, value 0). The window is 900 s
+  # because that is the largest query_period Better Stack has accepted for a per-row-parse alert
+  # since September (see the measured table below). The probe re-emits no sooner than hourly after any
+  # non-ok token, so while it fails a row is in the window for 900 s of every ~3600 s; the count
+  # reads 0 in between, but recovery_period (3600) is longer than that ~2700 s gap, so the incident
+  # stays open and does not re-page. It pages within about 5 min of the first failing row and
+  # clears about 1.25 to 1.5 h after the LAST failing row (the window, then recovery_period), which is
+  # not proof of recovery: only a token=ok row is. Any missed hourly failing row (a dying probe, or one
+  # indeterminate row between two failing ones) leaves a gap of up to ~6300 s with no failing row,
+  # longer than recovery_period, so the incident can resolve and re-page once.
   #
-  # #11372 — the Better Stack API 422'd this alert's apply as "too resource intensive" THREE times,
-  # every time at query_period 10800: check 300 (#11260), check 900 (#11384), check 3600 (#11404).
-  # The check_period ladder is exhausted — the ceiling binds on the data range scanned per
-  # evaluation. 300/5400 is the check/query tuple inngest_luks_wrong_volume already runs in applied
-  # state on this same source under a heavier GROUP BY query; if a 422 still fires, the next rung
-  # narrows query_period to 4500 (still ~15 min slack past the hourly re-probe; check stays 300;
-  # rides the same guard-pin update and is recorded on decision-challenges.md).
+  # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts), not inferred: this
+  # alert was refused 422 "too resource intensive" FOUR times at merge apply, at (check, query) =
+  # (300, 10800) #11260, (900, 10800) #11384, (3600, 10800) #11404 and (300, 5400) #11374. Live
+  # alerts with query_period above 900 are all September-created: luks_monitor_host_timer_dark
+  # 3600/97200, claude_cost_daily_burn and claude_cost_capture_dark 3600/86400, inngest_luks_wrong_volume
+  # 300/5400. Every alert created since 2026-10-01 has query_period <= 900 (registry_zot_log_credential_shape
+  # 300/900 on 10-15, egress_gw_probe_fail 300/900 on 10-12, web_nic_guard_unpinned_url 60/300 on 10-27).
+  # So an existing long window proves nothing about what the API accepts today. If 300/900 is refused
+  # too, stop iterating merges: the next step is an owner-authorized create-and-delete probe.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
   check_period        = 300
-  query_period        = 5400
+  query_period        = 900
   confirmation_period = 0
   recovery_period     = 3600
   on_missing_data     = "treat_as_zero"
@@ -697,7 +703,7 @@ resource "logtail_exploration_alert" "registry_clientip_not_rfc1918" {
 # ── #8611 / ADR-243: Anthropic spend — a step outliving the proxy, and the daily burn ───────────
 #
 # WHY THESE EXIST. The self-hosted Inngest server calls every step at the Cloudflare-proxied
-# serveHost, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
+# serveOrigin, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
 # outlives that gets a 524, `retries: 1` re-invokes it while the first Claude session is still
 # running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
 # top-up lasted ~39 h. Three standing alarms, one per question:

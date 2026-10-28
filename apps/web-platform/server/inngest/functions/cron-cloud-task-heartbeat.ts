@@ -582,12 +582,10 @@ export const cronCloudTaskHeartbeat = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "30 9 * * *" },
+      { event: "cron/cloud-task-heartbeat.manual-trigger" },
+    ],
   },
-  [
-    { cron: "30 9 * * *" },
-    { event: "cron/cloud-task-heartbeat.manual-trigger" },
-  ],
-  cronCloudTaskHeartbeatHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronCloudTaskHeartbeatHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

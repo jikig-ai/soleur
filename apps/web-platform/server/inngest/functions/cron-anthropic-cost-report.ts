@@ -355,12 +355,10 @@ export const cronAnthropicCostReport = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "17 6 * * *" },
+      { event: "cron/anthropic-cost-report.manual-trigger" },
+    ],
   },
-  [
-    { cron: "17 6 * * *" },
-    { event: "cron/anthropic-cost-report.manual-trigger" },
-  ],
-  cronAnthropicCostReportHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronAnthropicCostReportHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

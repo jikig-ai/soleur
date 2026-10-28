@@ -61,7 +61,7 @@ Live standing alarms over this source:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
 - **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
-  5400 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
   `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
   header, or is absent. `indeterminate` never pages. Merged but inert until the owner delivers the signed
   bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
@@ -103,9 +103,11 @@ Live standing alarms over this source:
     3. The Sentry ops that say what the single-flight guard did (feature `cron-claude-eval`):
        `claude-eval-singleflight-join` — a retry reached the live child (or its settled result),
        one marker, **the guard worked**; `claude-eval-singleflight-no-runid` — a spawn had no
-       well-formed run id, **the guard was bypassed**, investigate. Feature `inngest-serve`, op
-       `inngest-stream-consumer-cancel` — a step stream's consumer disconnected (one event per drop;
-       its tags name the function, step and whether the request was signed).
+       well-formed run id, **the guard was bypassed**, investigate.
+       (Retired, #8628 / PR #11381: feature `inngest-serve` op `inngest-stream-consumer-cancel`
+       used to fire on a step stream's consumer disconnect — its only emitter was
+       `stream-detach.ts`, deleted by the inngest@4 upgrade. Drops are now detected server-side
+       via the `inngest_step_524` needle above.)
   - **`logtail_exploration_alert.claude_cost_daily_burn`** (hourly, trailing 24 h) —
     `soleur-claude-cost-daily-burn-prd`. Pages when the cron `SOLEUR_CLAUDE_COST` markers' summed
     `cost_usd` exceeds **$25** (`local.claude_cost_daily_burn_usd`; recalibration on #8613). The sum

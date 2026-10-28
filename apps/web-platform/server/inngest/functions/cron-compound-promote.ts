@@ -2822,12 +2822,10 @@ export const cronCompoundPromote = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 0 * * 0" },
+      { event: "cron/compound-promote.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 0 * * 0" },
-    { event: "cron/compound-promote.manual-trigger" },
-  ],
-  cronCompoundPromoteHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronCompoundPromoteHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
