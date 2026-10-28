@@ -748,6 +748,13 @@ jobs:
       - name: Install nftables (for the git-data ruleset syntax gate, #7772)
         run: sudo apt-get update -qq -o Acquire::Retries=5 && sudo apt-get install -y -qq -o Acquire::Retries=5 nftables
 
+      # (#9927) inngest-luks-key-probe.test.sh drives the REAL cryptsetup against a file-backed
+      # LUKS2 container (no root). It FAILS under CI when cryptsetup is absent rather than
+      # skipping: a skip would drop the arm that proves `tr -d '\n'` is load-bearing while the
+      # suite's count pin shrank to match. ubuntu-24.04 does not ship cryptsetup.
+      - name: Install cryptsetup-bin (key-continuity probe real-tool arm, #9927)
+        run: sudo apt-get update -qq -o Acquire::Retries=5 && sudo apt-get install -y -qq -o Acquire::Retries=5 cryptsetup-bin
+
       # Many glob-derived suites on the leg consume a real docker daemon (the git-data
       # fixtures, the zot/cloud-init container legs) and self-skip when it is absent —
       # which on a leg would be a silent SKIP of the only thing they assert. This step is
@@ -876,6 +883,12 @@ jobs:
       # and six mutation rows that each require this guard to red.
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
+
+      # (#9927) The LUKS key-continuity probe paging alert: its SQL (token=fail_ present, indeterminate
+      # absent), parameters, both -target lines, a negative row that no dead-man resource ships here
+      # (ruling D12), and the mutation rows that each require this guard to red.
+      - name: Run inngest LUKS key-continuity probe alert drift guard (#9927)
+        run: bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh
 
       # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
       # conjuncts (read against the fire command's own logger line), the paging semantics, both

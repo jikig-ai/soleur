@@ -312,6 +312,98 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   }
 }
 
+# ── #9927 item 2: the on-host LUKS key-continuity probe (paging alert) ──────────────────────────
+# Once the owner delivers the signed bundle (#11266; merged, inert until then), the dedicated Inngest host
+# runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
+# that asks cryptsetup whether the key the host holds still unlocks the LUKS2 header behind
+# /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<where>`,
+# token in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
+# journald tag inngest-cutover-flip, and a curl-direct phone-home whose message BEGINS with the marker).
+# Rulings: decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
+# ships in a follow-up PR once an owner-authorized create-and-delete probe proves the API accepts
+# query_period = 2592000; tracked on the owner-hold issue #11266, a blocking prerequisite of the
+# bundle promotion), plan 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3.
+# Pinned by apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh.
+#
+# SQL RULES: the marker is anchored at message position 1, never a `raw LIKE` prefilter (webhook
+# payloads that quote the marker reach this source); the window filter is the `dt` COLUMN, never
+# the `time` alias; one whole-window aggregate, no GROUP BY.
+locals {
+  # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
+  # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
+  # hourly, so a failing probe keeps a row inside the 3 h window and a fixed one clears in about 3 to 4 h.
+  inngest_luks_key_probe_fail_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
+      AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
+  SQL
+
+  # The subsection is written by the same change (runbook section 5c, "Key-continuity probe (#9927 item 2)").
+  inngest_luks_key_probe_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md#key-continuity-probe-9927-item-2"
+}
+
+resource "logtail_exploration" "inngest_luks_key_probe_fail" {
+  name      = "soleur-inngest-luks-key-probe-fail-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.inngest_luks_key_probe_fail_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
+  exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
+  name           = "soleur-inngest-luks-key-probe-fail-prd"
+
+  # Presence-only, so safe before the probe is delivered (no rows, value 0). A 3 h window (a 25 h
+  # one would hold an incident open for a day): while any fail_ row is inside it the count stays
+  # above 0, which is the hysteresis against the next hourly re-probe re-opening an incident. The
+  # incident clears about 3 to 4 h after the LAST failing row (the window, then recovery_period),
+  # which is not proof of recovery: only a token=ok row is.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 10800
+  confirmation_period = 0
+  recovery_period     = 3600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  # #11068 convention (#9168 measured flip): push armed; revert to `push = false` if the apply refuses it.
+  email          = true
+  push           = true
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (token=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
+  metadata = {
+    runbook = local.inngest_luks_key_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
 # ── #8408 (a): the registry store is not on LUKS, or its escrow is not proven ───────────────────
 #
 # WHAT IT DETECTS. The registry host's */5 SOLEUR_ZOT_DISK heartbeat (a direct POST to this same

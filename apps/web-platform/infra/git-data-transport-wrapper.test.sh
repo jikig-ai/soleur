@@ -138,7 +138,16 @@ root=$(fresh_root); make_repo "$root" "ws-2"
 rc=$(run_wrap "$root" "git receive-pack '${root}/ws-2.git'")
 if [ "$rc" = "0" ]; then pass; else fail "T2 git receive-pack space-form: expected accept (0), got $rc"; fi
 out=$(run_wrap_out "$root" "git receive-pack '${root}/ws-2.git'")
-case "$out" in *"DRYRUN-EXEC git -c core.hooksPath=/mnt/git-data/hooks receive-pack ${root}/ws-2.git"*) pass ;; *) fail "T2 expected canonicalized exec of receive-pack through the hooksPath pin, got: $out" ;; esac
+case "$out" in *"DRYRUN-EXEC git -c core.hooksPath=/mnt/git-data/hooks -c receive.shallowUpdate=true receive-pack ${root}/ws-2.git"*) pass ;; *) fail "T2 expected canonicalized exec of receive-pack through the hooksPath + shallowUpdate pins, got: $out" ;; esac
+rm -rf "$root"
+
+# --- T2b (#8211 fix-forward 2): the shallow-acceptance flag is RECEIVE-PACK ONLY — the
+#     upload-pack DRYRUN argv stays byte-identical to the pre-change form (shallow
+#     updates are a receive-side concern; the ruling keeps the read argv untouched). ---
+root=$(fresh_root); make_repo "$root" "ws-noflag"
+out=$(run_wrap_out "$root" "git-upload-pack '${root}/ws-noflag.git'")
+case "$out" in *"DRYRUN-EXEC git -c core.hooksPath=/mnt/git-data/hooks upload-pack ${root}/ws-noflag.git"*) pass ;; *) fail "T2b upload-pack DRYRUN argv changed, got: $out" ;; esac
+case "$out" in *receive.shallowUpdate*) fail "T2b upload-pack DRYRUN carries receive.shallowUpdate: $out" ;; *) pass ;; esac
 rm -rf "$root"
 
 # --- T3: arbitrary / non-transport commands are REJECTED ---
@@ -231,8 +240,14 @@ root=$(fresh_root); make_repo "$root" "ws-pin"
 out=$(env -i PATH="$SPATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" GIT_DATA_HOOKS_DIR="/srv/h" \
   GIT_DATA_STORE_DEVICE="$STORE_SRC" GIT_DATA_STORE_VERIFIED="$SEAMS/marker" \
   GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 SSH_ORIGINAL_COMMAND="git-receive-pack '${root}/ws-pin.git'" bash "$WRAPPER" 2>/dev/null)
-case "$out" in *"git -c core.hooksPath=/srv/h receive-pack ${root}/ws-pin.git"*) pass ;; *) fail "T11 hooksPath seam: expected the overridden pin in the exec argv, got: $out" ;; esac
+case "$out" in *"git -c core.hooksPath=/srv/h -c receive.shallowUpdate=true receive-pack ${root}/ws-pin.git"*) pass ;; *) fail "T11 hooksPath seam: expected the overridden pin in the exec argv, got: $out" ;; esac
 if grep -qE '^exec git -c "core\.hooksPath=\$\{HOOKS_DIR\}" "\$\{verb#git-\}" "\$repo_real"$' "$WRAPPER"; then pass; else fail "T11 the live exec line does not pin core.hooksPath through git -c"; fi
+# (#8211 fix-forward 2) The receive-pack branch line is pinned too — the generic
+# line above stays verbatim for the production fence probe (pin_ex exact-match)
+# while receive-pack alone gains -c receive.shallowUpdate=true. The branch sits
+# inside its `if`, so it is indented — leading whitespace is allowed, the rest
+# of the line is byte-exact.
+if grep -qE '^[[:space:]]*exec git -c "core\.hooksPath=\$\{HOOKS_DIR\}" -c receive\.shallowUpdate=true receive-pack "\$repo_real"$' "$WRAPPER"; then pass; else fail "T11 the receive-pack exec branch does not pin receive.shallowUpdate through git -c"; fi
 rm -rf "$root"
 
 # --- T12 (#8043 review): the CUTOVER FREEZE sentinel refuses transport (both verbs), via
@@ -394,10 +409,11 @@ rm -f "$stub"; rm -rf "$mut_root"
 # --- Minimum-cardinality guard (a silent-empty extraction must fail loud) ---
 # 33 -> 53 with the C1 store rows (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20.
 # 54 measured + 16 for section U (#8211: U0 1, U0b 1, U1 3, U2 3, U3 2, U4 5, stub-loop input 1) = 70.
+# 70 + 3 (#8211 fix-forward 2: T2b 2, T11 receive-pack branch pin 1) = 73.
 # The floor is the measured total, so one dropped row reds.
 total=$((passes + fails))
-if [ "$total" -lt 70 ]; then
-  echo "FAIL: ran only ${total} assertions (<70) — suite did not execute fully" >&2
+if [ "$total" -lt 73 ]; then
+  echo "FAIL: ran only ${total} assertions (<73) — suite did not execute fully" >&2
   exit 1
 fi
 
