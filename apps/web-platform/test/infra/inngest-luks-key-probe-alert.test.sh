@@ -172,9 +172,9 @@ _nm="inngest_luks_key_probe_$_k"
     || no "$_k alert does not point metadata.runbook AND incident_cause at local.inngest_luks_key_probe_runbook_url"
 }
 
-param "$FAIL_AL" check_period 3600 && param "$FAIL_AL" query_period 10800 && param "$FAIL_AL" recovery_period 3600 \
-  && ok "paging alert window: check 3600 s, query 10800 s (3 h), recovery 3600 s" \
-  || no "paging alert windows are not check 3600 / query 10800 / recovery 3600"
+param "$FAIL_AL" check_period 300 && param "$FAIL_AL" query_period 5400 && param "$FAIL_AL" recovery_period 3600 \
+  && ok "paging alert window: check 300 s, query 5400 s (1.5 h), recovery 3600 s" \
+  || no "paging alert windows are not check 300 / query 5400 / recovery 3600"
 
 grep -qE '^[[:space:]]*inngest_luks_key_probe_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894\.md#key-continuity-probe-9927-item-2"[[:space:]]*$' "$TF" \
   && ok "the runbook local is the clickable URL of the 'Key-continuity probe (#9927 item 2)' subsection" \
@@ -306,7 +306,7 @@ PY
   mutate_red "paging SQL filters on the time alias" TF \
     's = edit(s, FAILSQL, "WHERE dt BETWEEN", "WHERE time BETWEEN", SQLEND)'
   mutate_red "paging window widens to 25 h (an incident would stay open for a day)" TF \
-    's = edit(s, FAILAL, "query_period        = 10800", "query_period        = 90000")'
+    's = edit(s, FAILAL, "query_period        = 5400", "query_period        = 90000")'
   mutate_red "paging alert reads missing data as ok-forever (treat_as_zero dropped)" TF \
     's = edit(s, FAILAL, chr(34)+"treat_as_zero"+chr(34), chr(34)+"treat_as_null"+chr(34))'
   mutate_red "the paging alert is dropped from the apply allowlist" WF \

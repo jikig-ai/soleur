@@ -93,11 +93,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
 // 279 -> 286 (#10175, +7): the rotate's store-never-written gate describe (real-tree pins, the wiring mutation battery, the no-other-flag-writer scan, the flag-seam credential enumeration, the census pin, and the two executed-step tests). The 2 rows of slack above are unchanged (declared 288).
 // 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
-// 297 -> 305 (#11179, +8): the plaintext git-data volume destroy workflow pins (dispatch-only trigger, validate/destroy job wiring, the two-address -target set, the saved-plan apply, the gate call, read-back/cleanup, single-sourced volume id).
-// 305 -> 309 (#11179 review, +4): the apply-step re-gate, the no-ignorable-refusal wiring (exact ifs, no continue-on-error, main-only), the read-back shape=gone / server-id-drift pin, and the by-name (not hard-coded) server and LUKS ids.
-// 309 -> 311 (2026-10-27 eMudhra cloudflared plan, +2): the hardcoded 3-file PIN_WORKFLOWS test was replaced by the
+// 297 -> 299 (2026-10-27 eMudhra cloudflared plan, +2; the 311 on main counted the +12 of #11179, whose destroy-workflow pins left with the workflow at #11195): the hardcoded 3-file PIN_WORKFLOWS test was replaced by the
 // .github/-wide pin census describe (census+parity, canonical source) plus its mutation-battery describe — 3 tests in, 1 out.
-const TEST_FLOOR = 311;
+const TEST_FLOOR = 299;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -2618,7 +2616,6 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-deploy-pipeline-fix.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
-  "git-data-plaintext-volume-destroy.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -2747,7 +2744,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(4);
+    expect(found.length).toBe(3);
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -8890,126 +8887,6 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(run("1", [[F, ["create"]], ["doppler_secret.inngest_tls_ca", ["update"]]])).not.toBe(0);
     expect(run("1", [["doppler_secret.inngest_link_tls_other[0]", ["create"]]])).not.toBe(0);
     expect(run("1", [[F, ["create", "delete"]]])).not.toBe(0); // a replace is not a create
-  });
-});
-
-describe("the plaintext git-data volume destroy workflow pins (Option B, ADR-239 Amendment 2026-10-26)", () => {
-  const DESTROY_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/git-data-plaintext-volume-destroy.yml");
-  const DESTROY_GATE = resolve(REPO_ROOT, "tests/scripts/lib/git-data-plaintext-destroy-gate.sh");
-  const raw = readFileSync(DESTROY_WORKFLOW, "utf8");
-  const wf = stripComments(raw);
-  const validateJob = extractJobBlock(wf, "validate");
-  const destroyJob = extractJobBlock(wf, "destroy");
-  const gateText = readFileSync(DESTROY_GATE, "utf8");
-
-  test("dispatch-only: no push, schedule, pull_request or workflow_run trigger", () => {
-    expectNonEmptyDispatch(wf.length, 1);
-    expect(/^on:\s*\n\s+workflow_dispatch:/m.test(wf)).toBe(true);
-    expect(/^\s{2}(push|schedule|pull_request|pull_request_target|workflow_run|workflow_call):/m.test(wf)).toBe(false);
-  });
-
-  test("validate runs before any approval: no environment, no concurrency, literal pins", () => {
-    expectNonEmptyDispatch(validateJob.length, 1);
-    expect(/^\s{4}environment:/m.test(validateJob)).toBe(false);
-    expect(/^\s{4}concurrency:/m.test(validateJob)).toBe(false);
-    expect(validateJob).toContain('"$EXPECTED_RAW" != "106867358"');
-    expect(validateJob).toContain('"$CONFIRM_RAW" != "DESTROY-PLAINTEXT-GIT-DATA-VOLUME"');
-  });
-
-  test("destroy is reviewer-gated and holds BOTH concurrency groups", () => {
-    expectNonEmptyDispatch(destroyJob.length, 1);
-    expect(/^\s{4}needs: validate\s*$/m.test(destroyJob)).toBe(true);
-    expect(/^\s{4}environment: web-platform-infra-apply\s*$/m.test(destroyJob)).toBe(true);
-    // job level: the mutex with git-data-cutover / rung-2 / root-key
-    expect(/^\s{4}concurrency:\s*\n\s{6}group: git-data-state\s*\n\s{6}cancel-in-progress: false/m.test(destroyJob)).toBe(true);
-    // workflow level: the serializer of the lockless R2 state
-    expect(/^concurrency:\s*\n\s{2}group: terraform-apply-web-platform-host\s*\n\s{2}cancel-in-progress: false/m.test(wf)).toBe(true);
-  });
-
-  test("the plan targets exactly the two retired addresses and the apply consumes the saved plan", () => {
-    const plan = extractStep(destroyJob, /Terraform plan \(only the two retired addresses\)/) ?? "";
-    expectNonEmptyDispatch(plan.length, 1);
-    const targets = [...plan.matchAll(/-target='([^']+)'/g)].map((m) => m[1]).sort();
-    expect(targets).toEqual(["hcloud_volume.git_data", "hcloud_volume_attachment.git_data"]);
-    const apply = extractStep(destroyJob, /Terraform apply \(destroy the retired plaintext volume\)/) ?? "";
-    expectNonEmptyDispatch(apply.length, 1);
-    expect(apply).toContain("terraform apply -no-color -input=false tfplan");
-    expect(apply).not.toContain("-target");
-    expect(apply).not.toContain("-auto-approve");
-  });
-
-  test("the gate is called with the dispatch input and the live server id, and its return code is checked", () => {
-    const plan = extractStep(destroyJob, /Terraform plan \(only the two retired addresses\)/) ?? "";
-    expect(plan).toContain('if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then');
-    expect(plan).toContain("EXPECTED_VOLUME_ID: ${{ inputs.expected_volume_id }}");
-    expect(plan).toContain("SERVER_ID: ${{ steps.pre.outputs.server_id }}");
-  });
-
-  test("the apply step re-judges the saved plan BEFORE it applies it, in the same step", () => {
-    const apply = extractStep(destroyJob, /Terraform apply \(destroy the retired plaintext volume\)/) ?? "";
-    expectNonEmptyDispatch(apply.length, 1);
-    const gateAt = apply.indexOf('if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then');
-    const applyAt = apply.indexOf("terraform apply -no-color -input=false tfplan");
-    expect(gateAt).toBeGreaterThan(-1);
-    expect(applyAt).toBeGreaterThan(gateAt);
-    expect(apply).toContain("terraform show -json tfplan > tfplan.json");
-    expect(apply).toContain("trap 'rm -f tfplan.json' EXIT");
-  });
-
-  test("no step or job can ignore a refusal: exact ifs, no continue-on-error, main-only", () => {
-    for (const re of [/Terraform plan \(only the two retired addresses\)/, /Terraform apply \(destroy the retired plaintext volume\)/]) {
-      const step = extractStep(destroyJob, re) ?? "";
-      expectNonEmptyDispatch(step.length, 1);
-      expect(/^\s{8}if: steps\.pre\.outputs\.already_gone == 'false'\s*$/m.test(step)).toBe(true);
-      expect(step).not.toMatch(/continue-on-error/);
-      expect(step).not.toMatch(/\b(always|failure|cancelled)\(/);
-    }
-    expect(destroyJob).not.toMatch(/^\s{4}continue-on-error/m);
-    expect(validateJob).not.toMatch(/continue-on-error/);
-    expect(/^\s{4}if: github\.ref == 'refs\/heads\/main'\s*$/m.test(destroyJob)).toBe(true);
-    expect(validateJob).toContain('"${GITHUB_REF}" != "refs/heads/main"');
-    expect(validateJob).toContain("verdict=not_main");
-  });
-
-  test("the read-back requires shape=gone and an unchanged server and LUKS id", () => {
-    const rb = extractStep(destroyJob, /Read-back \(404 by id/) ?? "";
-    expect(rb).toContain('"$shape" != "gone"');
-    expect(rb).toContain("verdict=server_id_drift");
-  });
-
-  test("the server and LUKS ids are resolved by name, never hard-coded", () => {
-    const probe = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/git-data-plaintext-volume-state.sh"), "utf8");
-    for (const body of [wf, gateText, probe]) {
-      expect(body).not.toContain("170370833");
-      expect(body).not.toContain("107140231");
-    }
-    expect(probe).toContain("SERVER_NAME=soleur-git-data");
-    expect(probe).toContain("LUKS_NAME=soleur-git-data-luks-store");
-    expect(probe).toContain('PINNED_VOLUME_ID=106867358');
-  });
-
-  test("the read-back runs on success AND failure; plan files are removed always and never uploaded", () => {
-    const rb = extractStep(destroyJob, /Read-back \(404 by id/) ?? "";
-    expectNonEmptyDispatch(rb.length, 1);
-    expect(/^\s{8}if: success\(\) \|\| failure\(\)\s*$/m.test(rb)).toBe(true);
-    const clean = extractStep(destroyJob, /Remove plan files/) ?? "";
-    expect(/^\s{8}if: always\(\)\s*$/m.test(clean)).toBe(true);
-    expect(clean).toContain("rm -f tfplan tfplan.json");
-    expect(wf).not.toMatch(/upload-artifact/);
-  });
-
-  test("no write permission scope and no ack-destroy bypass anywhere in the workflow or the gate", () => {
-    expect(wf).not.toMatch(/:\s*write\b/);
-    expect(raw).not.toContain("ack-destroy");
-    expect(gateText).not.toContain("ack-destroy");
-  });
-
-  test("the volume id pin is single-sourced across the gate, the workflow and git-data.tf", () => {
-    expect(gateText).toContain('pin_volume_id="106867358"');
-    expect(wf).toContain('"106867358"');
-    const tf = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/git-data.tf"), "utf8");
-    expect(tf).toContain('git_data_volume_id      = "106867358"');
-    expect(/resource "hcloud_volume(_attachment)?" "git_data" \{/.test(tf)).toBe(false);
   });
 });
 

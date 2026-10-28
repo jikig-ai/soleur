@@ -773,6 +773,16 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_REFUSAL_WAIT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh"
+  "plugins/soleur/skills/ship/references/battery-refusal-wait.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/scripts/lib/context-sanitize.sh"  # sourced by the script under test
+  "plugins/soleur/test/ship-battery-refusal-wait.test.sh"
+  "scripts/test-all.sh"  # the suite renders the refusal text from, and pins the infra literals against, the live runner
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PHASE_7_POLL_FIXTURES_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh"
@@ -813,7 +823,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
-  ".github/workflows/git-data-plaintext-volume-destroy.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -822,7 +831,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/cat-inngest-verify-state.sh"
   "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/ci-deploy.sh"
-  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/infra-config-apply.sh"
   "apps/web-platform/infra/infra-config-install.sh"
@@ -864,7 +872,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/ship-incident-pir-gate.sh"
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
-  "tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
@@ -1072,15 +1079,6 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "scripts/sentry-issue.sh"
   "tests/scripts/lib/git-data-birth-readiness-gate.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
-)
-
-# tests/scripts/git-data-plaintext-destroy-gate — derived edges could not reach its subject: the suite executes the destroy
-# workflow's run blocks and the read-only probe it names (the gate library itself is reached through the source closure).
-AFFECTED_TESTS_SCRIPTS_GIT_DATA_PLAINTEXT_DESTROY_GATE_PATHS=(
-  ".github/workflows/git-data-plaintext-volume-destroy.yml"
-  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
-  "scripts/lib/test-affected-paths.sh"
-  "tests/scripts/test-git-data-plaintext-destroy-gate.sh"
 )
 
 # tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
@@ -3322,5 +3320,13 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CCLA_REPRESENTATIVE_ICLA_7922_PATHS=(
 )
 AFFECTED_SCRIPTS_TMPFS_GUARD_PATHS=(
   "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# scripts/followthroughs/parked-green-synthesis-11362 — the probe genuinely
+# reads the distribution file it watches via $REPO_ROOT/$DIST_REL (head/awk on
+# frontmatter), a var-built path no derivation channel reaches.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PARKED_GREEN_SYNTHESIS_11362_PATHS=(
+  "knowledge-base/marketing/distribution-content/2026-11-19-first-we-made-green-mean-something.md"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
