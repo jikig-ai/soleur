@@ -17,6 +17,32 @@ requires_cpo_signoff: true
 
 > Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28 (deepen-plan, inline single-agent pass — this subagent
+harness offers no Task/agent spawn, so the fan-out phases 2/3/4/5 ran as direct
+repo greps, npm tarball inspection, and upstream-doc review in this session; the
+coverage disclosure is honest rather than claimed independent review).
+**Gates verified:** 4.6 User-Brand (single-user incident, sign-off flagged) ·
+4.7 Observability (5-field block, `jq` allowlisted probe, literal `^4`
+expected_output) · 4.8 PAT (clean) · 4.9 UI (no UI surface) · 4.10 Encryption
+(skipped — no new store/connection) · 4.11 Guard Contract (deliverable has no
+guard) · 4.12 Scope Check (1 unfenced section, all rows mapped/justified) ·
+4.13 Task Design (no new autonomous surface) · 4.55 Downtime & Cutover (no
+downtime-inducing operation — deploy path unchanged, ADR-078 drain intact).
+**New considerations discovered during deepening:**
+- v4 turns **checkpointing on by default** — a transport-shape change inside the
+  very mechanism ADR-243 was written to bound; promoted to risk R1 + spike row
+  S9 rather than left as an implicit behavior change.
+- `onRunError.isFinalAttempt` is a native v4 signal that can retire run-log's
+  manual `attempt >= maxAttempts - 1` approximation (kept as an option, not a
+  mandate).
+- Phase 4.5 (network-outage checklist) fired on the `timeout` keyword — the
+  match is the Cloudflare origin-timeout discussion, not a connectivity
+  diagnosis; no L3 firewall/DNS hypothesis is in scope and no SSH/service-layer
+  fix is proposed. Recorded for the aggregator (telemetry emitted); checklist
+  deep-dive not applicable.
+
 ## Overview
 
 PR #8611 turned on `serve({ streaming: "force" })` for `/api/inngest` (ADR-243) and
