@@ -104,6 +104,14 @@ the token being edited. While the browser session is live:
 3. Update the `variables.tf` scope ledger in the feature PR — see SKILL.md
    § Sharp Edges (a code edit, not this skill's runtime).
 
+For a `CF_API_TOKEN` widen (the #11181 LB track) the flow uses the named profile
+instead of `--target-entrypoint`: pre-widen baseline `cf-token-scope.sh --profile default-token`
+(retained ledger green, both LB rows `not-yet-widened (403)`); the permissions to
+append are Zone `soleur.ai` → `Load Balancers: Edit` AND Account → `Load Balancing:
+Monitors and Pools: Edit` (append, never rebuild — same three-dot → Edit → Add more
+path); post-widen assert `cf-token-scope.sh --profile default-token --expect-lb-scopes`
+must exit 0 with `PASS: LB scopes present`. Steps 2 and 3 above apply unchanged.
+
 ## New-phase entrypoint enumeration (only when the widen enables a NEW phase)
 
 If the widen enables a ruleset phase the zone did not previously have, enumerate

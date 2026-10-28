@@ -6,8 +6,10 @@
 # per the skill (SKILL.md) — this script never touches the browser and never
 # mutates anything (no Doppler write, no infra apply).
 #
-# It runs the ADR-130 retained-scope probe set against CF_API_TOKEN_RULESETS and
-# is fail-closed in three layers (per learning
+# It runs the selected profile's retained-scope probe set — the ADR-130 set
+# against CF_API_TOKEN_RULESETS by default, the CF_API_TOKEN ledger + LB
+# readiness set with `--profile default-token` —
+# and is fail-closed in three layers (per learning
 # 2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-and-control-probe-must-cover-every-scheme):
 #   1. status      — 403 / 000 / 5xx / empty / no-newline / non-numeric = FAIL.
 #   2. body-shape  — a 200 passes ONLY when the JSON body has success==true AND

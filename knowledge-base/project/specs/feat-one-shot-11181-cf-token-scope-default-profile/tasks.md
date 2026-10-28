@@ -28,22 +28,22 @@ Plan: `knowledge-base/project/plans/2026-10-28-feat-cf-token-scope-default-token
 
 ## Phase 3: Docs
 
-- [ ] 3.1 `SKILL.md` §Usage: default-token example lines (baseline + `--expect-lb-scopes`), profile table doc, posture re-word — **profiles only, no raw token-var knob** (replaces the §Usage hardcoding paragraph; the refusal rationale keeps its first sentence).
-- [ ] 3.2 `SKILL.md` §Probe-set contract: append the `default-token` table (D0–D3 retained / L0–L1 target) + expected-missing/assert semantics; three-layer classifier text unchanged (profile-independent).
-- [ ] 3.3 `SKILL.md` §Exit codes: extend 0/2/3 rows with the target-class states (no new numeric codes).
-- [ ] 3.4 `SKILL.md` §Execution: default-token variant of the 3-step widen flow (baseline → operator-typed widen → assert run green); §Sharp Edges: LB probes attest read-not-`Edit`; `not-yet-widened` is neutral only in baseline; ledger follow-on wording (description edit lands in the PR that consummates the widen).
-- [ ] 3.5 `references/widen-playbook.md` §After the widen: pointer lines — for the `CF_API_TOKEN` widen, step 1 = `cf-token-scope.sh --profile default-token --expect-lb-scopes`; permissions to append: Zone `soleur.ai` → `Load Balancers: Edit` AND Account → `Load Balancing: Monitors and Pools: Edit` (append, never rebuild; Edit not Read).
-- [ ] 3.6 SKILL.md frontmatter `description:` UNCHANGED; compliance greps green (no bare-backtick refs; third-person description intact); do NOT touch `plugins/soleur/cursor/skills/soleur-cf-token-scope/SKILL.md` (CI-managed mirror).
+- [x] 3.1 `SKILL.md` §Usage: default-token example lines (baseline + `--expect-lb-scopes`), profile table doc, posture re-word — **profiles only, no raw token-var knob** (replaces the §Usage hardcoding paragraph; the refusal rationale keeps its first sentence).
+- [x] 3.2 `SKILL.md` §Probe-set contract: append the `default-token` table (D0–D3 retained / L0–L1 target) + expected-missing/assert semantics; three-layer classifier text unchanged (profile-independent).
+- [x] 3.3 `SKILL.md` §Exit codes: extend 0/2/3 rows with the target-class states (no new numeric codes).
+- [x] 3.4 `SKILL.md` §Execution: default-token variant of the 3-step widen flow (baseline → operator-typed widen → assert run green); §Sharp Edges: LB probes attest read-not-`Edit`; `not-yet-widened` is neutral only in baseline; ledger follow-on wording (description edit lands in the PR that consummates the widen).
+- [x] 3.5 `references/widen-playbook.md` §After the widen: pointer lines — for the `CF_API_TOKEN` widen, step 1 = `cf-token-scope.sh --profile default-token --expect-lb-scopes`; permissions to append: Zone `soleur.ai` → `Load Balancers: Edit` AND Account → `Load Balancing: Monitors and Pools: Edit` (append, never rebuild; Edit not Read).
+- [x] 3.6 SKILL.md frontmatter `description:` UNCHANGED; compliance greps green (no bare-backtick refs; third-person description intact); do NOT touch `plugins/soleur/cursor/skills/soleur-cf-token-scope/SKILL.md` (CI-managed mirror).
 
 ## Phase 4: Verification & artifacts
 
-- [ ] 4.1 `timeout 120 bash plugins/soleur/test/cf-token-scope.test.sh` → `0 failed`, rc 0.
-- [ ] 4.2 `python3 scripts/lint-guard-contract.py <plan>` → rc 0 (green at plan time; re-verify post-edit); `python3 scripts/lint-infra-no-human-steps.py` over changed KB artifacts → rc 0.
-- [ ] 4.3 Credential-hygiene spot checks: `--profile default-token --dry-run` under a PATH without curl/doppler → rc 0, no secret-looking literals in combined output; xtrace refusal still exit 78.
-- [ ] 4.4 Diff census (AC11): changed paths ⊆ {`plugins/soleur/skills/cf-token-scope/**`, `plugins/soleur/test/cf-token-scope.test.sh`, `knowledge-base/project/{plans,specs}/**`}; zero hunks under `apps/web-platform/infra/` or `plugins/soleur/cursor/`.
-- [ ] 4.5 `bun test plugins/soleur/test/components.test.ts` → skill-description budget green (no description edit expected; verify, don't assume).
-- [ ] 4.6 CI registration: confirm the suite auto-runs via `scripts/test-all.sh` glob `plugins/soleur/test/*.test.sh` (no runner edit; `bash scripts/test-all.sh --print-suite-globs` receipt).
-- [ ] 4.7 `ship`: PR body `## Changelog` section; semver label decision at ship (new flag surface inside an existing skill — lean `semver:minor` per "new capabilities", ship owns it); `Closes:` none — the PR references #11181 without closing the epic.
+- [x] 4.1 `timeout 120 bash plugins/soleur/test/cf-token-scope.test.sh` → `0 failed`, rc 0.
+- [x] 4.2 `python3 scripts/lint-guard-contract.py <plan>` → rc 0 (green at plan time; re-verify post-edit); `python3 scripts/lint-infra-no-human-steps.py` over changed KB artifacts → rc 0.
+- [x] 4.3 Credential-hygiene spot checks: `--profile default-token --dry-run` under a PATH without curl/doppler → rc 0, no secret-looking literals in combined output; xtrace refusal still exit 78.
+- [x] 4.4 Diff census (AC11): changed paths ⊆ {`plugins/soleur/skills/cf-token-scope/**`, `plugins/soleur/test/cf-token-scope.test.sh`, `knowledge-base/project/{plans,specs}/**`}; zero hunks under `apps/web-platform/infra/` or `plugins/soleur/cursor/`.
+- [x] 4.5 `bun test plugins/soleur/test/components.test.ts` → skill-description budget green (no description edit expected; verify, don't assume).
+- [x] 4.6 CI registration: confirm the suite auto-runs via `scripts/test-all.sh` glob `plugins/soleur/test/*.test.sh` (no runner edit; `bash scripts/test-all.sh --print-suite-globs` receipt).
+- [x] 4.7 `ship`: PR body `## Changelog` section; semver label decision at ship (new flag surface inside an existing skill — lean `semver:minor` per "new capabilities", ship owns it); `Closes:` none — the PR references #11181 without closing the epic.
 
 ## Follow-on tasks (NOT in this PR — tracked here so they are not invisible)
 

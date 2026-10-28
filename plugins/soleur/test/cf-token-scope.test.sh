@@ -377,7 +377,6 @@ if cmp -s "$WORK/noflag.txt" "$OUTFILE"; then ok "D10 --profile rulesets dry-run
 # --- D11: parameterized table-size pins (Guard 1 M3 detector; never a hard-coded 6) ---
 run "$MOCKPATH" --dry-run
 assert_eq "D11a rulesets prints exactly 5 curl recipes" 5 "$(count_f 'curl --disable')"
-n="$(count_f 'curl --disable' || true)"
 run "$MOCKPATH" --target-entrypoint http_request_transform --dry-run
 assert_eq "D11b rulesets +target prints 6" 6 "$(count_f 'curl --disable')"
 run "$MOCKPATH" --profile default-token --dry-run
