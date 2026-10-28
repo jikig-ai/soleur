@@ -29,7 +29,7 @@
 #   `git worktree add --no-checkout --detach`, per commit `git update-ref --no-deref HEAD <first-parent>`
 #   then `git read-tree <commit>` into that worktree's own index (the gate unsets GIT_INDEX_FILE, so
 #   an env-var index would be ignored; read-tree replaces the whole index, so no reset is needed and
-#   the per-commit cost drops from about 0.5 s to about 0.13 s), a plain `git commit -m x` payload
+#   the per-commit cost roughly halves on a shared clone; machine-dependent), a plain `git commit -m x` payload
 #   on stdin, under `timeout -k 5 60`. The gate child runs under `env -i` with an ALLOWLIST: PATH,
 #   HOME (an empty scratch directory), LANG=C, TMPDIR (the run's scratch directory) and
 #   CLAUDE_PROJECT_DIR (another empty scratch directory, so no incident ledger is written), plus any
@@ -357,7 +357,7 @@ judge_gate() {
 }
 
 # canary: the positive control. Stage a synthetic off-palette UI file in the worktree's OWN index
-# (never a commit) and require the real gate to deny it. The loop's per-commit reset/read-tree
+# (never a commit) and require the real gate to deny it. The loop's per-commit update-ref/read-tree
 # replaces this index, so nothing of it reaches a real candidate.
 canary() {
   local csha why
@@ -516,7 +516,8 @@ if [[ "$WN_DRY_RUN" -eq 1 ]]; then
   # Like scripts 1 and 2: the dry-run read is read-only and never fatal. A failed read falls back to
   # the --print-state window start and treats every finding as unreported.
   if [[ "$rc" -eq 0 ]]; then
-    echo "dry-run: tracker #${ISSUE} state=${WN_STATE}; sentinels are per finding (trigger-1:v1, trigger-2:<sha>) and are checked while detecting"
+    notopen=""; [[ "$WN_STATE" == "OPEN" ]] || notopen=" (not OPEN: a real run would post nothing)"
+    echo "dry-run: tracker #${ISSUE} state=${WN_STATE}${notopen}; sentinels are per finding (trigger-1:v1, trigger-2:<sha>) and are checked while detecting"
   else
     echo "::warning::dry-run: could not read #${ISSUE} (${WN_ERR_HTTP:-rc ${rc}}); using the fallback window start ${PRINT_STATE_CREATED} and treating every finding as unreported"
     WN_STATE="UNKNOWN"; WN_CREATED="$PRINT_STATE_CREATED"
