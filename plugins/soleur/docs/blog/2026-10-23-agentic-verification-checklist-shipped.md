@@ -99,6 +99,8 @@ You stay the decision-maker. What changes is what deciding costs: evidence arriv
 
 For the technical write-up — every defect named, every fix shown — see [the public tracking record on GitHub](https://github.com/jikig-ai/soleur/issues/10397).
 
+The pattern continued after this post: the same write-the-lesson-into-the-machinery habit went on to rebuild the suite's own scoreboard — read the sequel, [First We Made 'Green' Mean Something. Then We Made It Fast.]({{ site.url }}/blog/first-we-made-green-mean-something/).
+
 ## Frequently Asked Questions
 
 ### What does "agentic verification" mean in plain terms?
