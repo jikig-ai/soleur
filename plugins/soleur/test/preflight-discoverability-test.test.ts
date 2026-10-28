@@ -3068,13 +3068,23 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command (`bash apps/web-platform/infra/git-data-plaintext-volume-state.sh`) reads the Hetzner API (volumes and servers by
   // name) with HCLOUD_TOKEN_READONLY from Doppler soleur/prd_terraform. NO SUBSTITUTE: the provider API has no unauthenticated read of
   // volume state, the host is no-SSH, and the offline suite drives the probe against a curl shim, not against the provider. Genuine.
+  // #11195 (2026-10-27): the probe command above is RETIRED (the script was deleted with the one-shot destroy workflow after run
+  // 40478209838). The declaration stays in the archived plan as history, so the count stays 85 and the TRUTH note above no longer holds.
   // #10550 (2026-10-26): +1 (84 -> 85) for `2026-10-26-feat-wikiskill-phase-2-gated-new-skill-creation-plan.md` (now under plans/archive/).
+  // #10550 (2026-10-27): +1 (85 -> 86) for `2026-10-27-fix-create-arm-reserve-week-cap-slot-plan.md` (now under plans/archive/): the same
+  // marker-stream probe as the entry above, for the same reason (the marker exists only in production logs; no unauthenticated read path). Genuine.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the command (`bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 5`) reads the
   // proposer's outcome marker rows from the Better Stack ClickHouse read connection (Better Stack Logs read token, Doppler). NO SUBSTITUTE:
   // the marker exists only in production logs and the warehouse has no unauthenticated read path; the offline suites prove the marker
   // grammar, not that the stored stream carries a run's rows. Genuine.
-  const BASELINE_DECLARED_PROBES = 85;
+  // #11303 (2026-10-27): +1 (86 -> 87) for `2026-10-27-fix-gated-tier-allowedtools-bypass-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-assert-absence.sh --host soleur-web-platform ...`) reads production log rows from the
+  // Better Stack ClickHouse read connection (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the
+  // `CAN_USE_TOOL_SHADOWED` rows exist only in production logs and the warehouse has no unauthenticated read path; the offline suites prove
+  // the probe's grading, not that the stored stream carries a session's rows. Genuine.
+  const BASELINE_DECLARED_PROBES = 87;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

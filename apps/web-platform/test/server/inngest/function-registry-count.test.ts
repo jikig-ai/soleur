@@ -20,6 +20,10 @@ const FUNCTIONS_DIR = resolve(
   __dirname,
   "../../../server/inngest/functions",
 );
+const CLIENT_PATH = resolve(
+  __dirname,
+  "../../../server/inngest/client.ts",
+);
 const CRON_MONITORS_TF = resolve(
   __dirname,
   "../../../infra/sentry/cron-monitors.tf",
@@ -59,6 +63,25 @@ function extractTfMonitorNames(): Set<string> {
   // satisfy the (c2)/(c3) guards for a monitor that is no longer declared.
   const code = tfSrc.replace(/^[ \t]*#.*$/gm, "");
   return new Set([...code.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+}
+
+// Files under server/inngest/functions/ whose source sets a `checkpointing`
+// (or deprecated-twin `experimentalCheckpointing`) object key. Comments are
+// stripped first — a `// e.g. { checkpointing: false }` comment must not count,
+// and a comment between the delimiter and the key must not hide it. Keyed and
+// shorthand forms are both caught (quoted keys included); a bare mention in a
+// string or identifier still does not count.
+function functionFilesWithCheckpointingKey(): string[] {
+  const KEYED_RE = /[{,]\s*["']?(experimental)?[Cc]heckpointing["']?\s*:/;
+  const SHORTHAND_RE = /\{\s*(experimental)?[Cc]heckpointing\s*[,}]/;
+  return readdirSync(FUNCTIONS_DIR)
+    .filter((f) => f.endsWith(".ts"))
+    .filter((f) => {
+      const src = readFileSync(resolve(FUNCTIONS_DIR, f), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+      return KEYED_RE.test(src) || SHORTHAND_RE.test(src);
+    });
 }
 
 const KNOWN_UNMONITORED_SLUGS = new Set([
@@ -358,28 +381,50 @@ describe("Inngest function registry — drift guards", () => {
   // impossible rather than test-enforced. Do NOT reintroduce them without first
   // reintroducing `-target=`.
 
-  // #5159: serve() must pin serveHost to the canonical public origin so EVERY
+  // #5159: serve() must pin the canonical public origin so EVERY
   // registration (boot, --poll-interval sync, loopback re-register PUT) reports
   // the public serve URL. Without this, a loopback PUT registers
   // http://127.0.0.1:3000 — accepted (HTTP 200) but never cron-planned (the
   // 2026-06-11 AC15 failure, surfaced by #5178's inngest_register_http=200 +
-  // inngest_crons:{} diagnostic).
+  // inngest_crons:{} diagnostic). inngest@4 renamed the option serveHost →
+  // serveOrigin; the pinned const is still SERVE_HOST.
   //
-  // serveHost MUST be the HARDCODED canonical origin gated on NODE_ENV, NOT
+  // The origin MUST be the HARDCODED canonical value gated on NODE_ENV, NOT
   // process.env.NEXT_PUBLIC_APP_URL: #5182 used NEXT_PUBLIC_APP_URL and was a
   // silent no-op because Next.js build-inlines process.env.NEXT_PUBLIC_* at
   // BUILD time and that var is not a Docker build ARG (→ inlined `undefined`).
   // Hardcoding matches the security-motivated server/cf-cache-purge.ts
   // convention (`const APP_ORIGIN = "https://app.soleur.ai"`).
-  it("(g) route.ts pins serveHost to the hardcoded prod origin gated on NODE_ENV (#5159)", () => {
+  it("(g) route.ts pins serveOrigin to the hardcoded prod origin gated on NODE_ENV (#5159)", () => {
     // The canonical origin is a string literal gated on NODE_ENV === production.
     expect(routeSrc).toMatch(
       /const SERVE_HOST\s*=\s*[\s\S]*process\.env\.NODE_ENV\s*===\s*["']production["'][\s\S]*["']https:\/\/app\.soleur\.ai["']/,
     );
-    expect(routeSrc).toMatch(/serveHost:\s*SERVE_HOST/);
+    expect(routeSrc).toMatch(/serveOrigin:\s*SERVE_HOST/);
     expect(routeSrc).toMatch(/servePath:\s*["']\/api\/inngest["']/);
-    // Must NOT derive serveHost from NEXT_PUBLIC_APP_URL — that build-inlines as
+    // Must NOT derive the origin from NEXT_PUBLIC_APP_URL — that build-inlines as
     // undefined in the prod container (the #5182 no-op regression class).
     expect(routeSrc).not.toMatch(/SERVE_HOST\s*=\s*process\.env\.NEXT_PUBLIC_APP_URL/);
+  });
+
+  // Checkpointing totality pin (#8628): the client ships `checkpointing: false`
+  // (CTO ruling 2026-10-28, recorded in server/inngest/client.ts and ADR-243's
+  // 2026-10-28 amendment) — but inngest@4 also accepts `checkpointing` as a
+  // per-function createFunction config key (InngestFunction.Options), which
+  // silently overrides the client pin for that one function. Exactly the kind
+  // of drift a flag flip PR can leave behind, so ZERO such keys may appear in
+  // any file under server/inngest/functions/ AND the client pin must stay —
+  // deleting the key compiles clean and flips checkpointing ON by v4 default
+  // (InngestFunction.js:179 `?? true`). A future flip-on is a deliberate client
+  // change, not a per-function one (see the ruling; it must re-run gdpr-gate
+  // and update the Art. 30 record first).
+  it("(h) no function file sets a per-function `checkpointing` config key", () => {
+    expect(functionFilesWithCheckpointingKey()).toEqual([]);
+  });
+
+  it("(h2) the client pin itself is still present (positive companion)", () => {
+    expect(readFileSync(CLIENT_PATH, "utf8")).toMatch(
+      /checkpointing:\s*false/,
+    );
   });
 });

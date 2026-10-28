@@ -1733,17 +1733,17 @@ export const agentOnSpawnSettle = inngest.createFunction(
     retries: 3,
     // Both payloads carry the ORPHANED run's id; one settle per run.
     idempotency: "event.data.run_id",
+    triggers: [
+      {
+        event: CANCELLED_EVENT,
+        // Literal `==`, so it never matches the SDK's own `…-failure` id. Built
+        // from the client id, which the SDK prefixes onto every function id.
+        if: `event.data.function_id == '${inngest.id}-${REQUESTED_FUNCTION_ID}'`,
+      },
+      { event: ORPHANED_EVENT },
+    ],
   } as unknown as Parameters<typeof inngest.createFunction>[0],
-  [
-    {
-      event: CANCELLED_EVENT,
-      // Literal `==`, so it never matches the SDK's own `…-failure` id. Built
-      // from the client id, which the SDK prefixes onto every function id.
-      if: `event.data.function_id == '${inngest.id}-${REQUESTED_FUNCTION_ID}'`,
-    },
-    { event: ORPHANED_EVENT },
-  ] as unknown as Parameters<typeof inngest.createFunction>[1],
-  agentOnSpawnSettleHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  agentOnSpawnSettleHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 
 // --- end lifecycle settle ---
@@ -1759,11 +1759,7 @@ export const agentOnSpawnRequested = inngest.createFunction(
     // #8803: a run that fails past its retries is forwarded to
     // agent-on-spawn-settle; a timeout or cancel reaches it directly.
     onFailure: agentOnSpawnRequestedOnFailure,
+    triggers: { event: "agent.spawn.requested" },
   } as unknown as Parameters<typeof inngest.createFunction>[0],
-  { event: "agent.spawn.requested" } as unknown as Parameters<
-    typeof inngest.createFunction
-  >[1],
-  agentOnSpawnRequestedHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  agentOnSpawnRequestedHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

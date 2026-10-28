@@ -87,6 +87,19 @@ afterEach(() => {
 });
 
 describe("triggerHeadlessSync — lease/auth retry resilience (AC3)", () => {
+  test("the headless sync session is started NON-INTERACTIVE (#11303): gated platform tools are denied at once", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { seams } = baseSeams(startAgentSession);
+
+    await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(startAgentSession).toHaveBeenCalledTimes(1);
+    const args = startAgentSession.mock.calls[0];
+    expect(args[4]).toBe("/soleur:sync --headless");
+    expect(args[7]).toBe(false); // skipSessionEnded
+    expect(args[8]).toBe(true); // nonInteractive: explicit, never inferred from the prompt
+  });
+
   test("retries once on RuntimeAuthError then succeeds; exactly ONE conversation INSERT", async () => {
     const startAgentSession = vi
       .fn()

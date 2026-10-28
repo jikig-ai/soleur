@@ -787,12 +787,10 @@ export const cronRulesetBypassAudit = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "13 6 * * *" },
+      { event: "cron/ruleset-bypass-audit.manual-trigger" },
+    ],
   },
-  [
-    { cron: "13 6 * * *" },
-    { event: "cron/ruleset-bypass-audit.manual-trigger" },
-  ],
-  cronRulesetBypassAuditHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronRulesetBypassAuditHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

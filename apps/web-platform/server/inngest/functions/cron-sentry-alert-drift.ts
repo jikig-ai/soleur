@@ -117,12 +117,10 @@ export const cronSentryAlertDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "15 7 * * *" },
+      { event: "cron/sentry-alert-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "15 7 * * *" },
-    { event: "cron/sentry-alert-drift.manual-trigger" },
-  ],
-  cronSentryAlertDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronSentryAlertDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

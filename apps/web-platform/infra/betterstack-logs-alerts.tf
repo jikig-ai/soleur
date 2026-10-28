@@ -312,6 +312,107 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   }
 }
 
+# ── #9927 item 2: the on-host LUKS key-continuity probe (paging alert) ──────────────────────────
+# Once the owner delivers the signed bundle (#11266; merged, inert until then), the dedicated Inngest host
+# runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
+# that asks cryptsetup whether the key the host holds still unlocks the LUKS2 header behind
+# /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<where>`,
+# token in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
+# journald tag inngest-cutover-flip, and a curl-direct phone-home whose message BEGINS with the marker).
+# Rulings: decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
+# ships in a follow-up PR once an owner-authorized create-and-delete probe proves the API accepts
+# query_period = 2592000; tracked on the owner-hold issue #11266, a blocking prerequisite of the
+# bundle promotion), plan 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3.
+# Pinned by apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh.
+#
+# SQL RULES: the marker is anchored at message position 1, never a `raw LIKE` prefilter (webhook
+# payloads that quote the marker reach this source); the window filter is the `dt` COLUMN, never
+# the `time` alias; one whole-window aggregate, no GROUP BY.
+locals {
+  # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
+  # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
+  # hourly, so a failing probe keeps a row inside the 1.5 h window and a fixed one clears in about 1.5 to 2.5 h.
+  inngest_luks_key_probe_fail_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
+      AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
+  SQL
+
+  # The subsection is written by the same change (runbook section 5c, "Key-continuity probe (#9927 item 2)").
+  inngest_luks_key_probe_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md#key-continuity-probe-9927-item-2"
+}
+
+resource "logtail_exploration" "inngest_luks_key_probe_fail" {
+  name      = "soleur-inngest-luks-key-probe-fail-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.inngest_luks_key_probe_fail_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
+  exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
+  name           = "soleur-inngest-luks-key-probe-fail-prd"
+
+  # Presence-only, so safe before the probe is delivered (no rows, value 0). The probe re-emits
+  # hourly after any non-ok token, so the window is an hour and a half: a failing row stays inside
+  # it that long and the next hourly re-probe lands with ~30 min of slack — the hysteresis against
+  # that re-probe re-opening an incident. The incident clears about 1.5 to 2.5 h after the LAST
+  # failing row (the window, then recovery_period), which is not proof of recovery: only a
+  # token=ok row is.
+  #
+  # #11372 — the Better Stack API 422'd this alert's apply as "too resource intensive" THREE times,
+  # every time at query_period 10800: check 300 (#11260), check 900 (#11384), check 3600 (#11404).
+  # The check_period ladder is exhausted — the ceiling binds on the data range scanned per
+  # evaluation. 300/5400 is the check/query tuple inngest_luks_wrong_volume already runs in applied
+  # state on this same source under a heavier GROUP BY query; if a 422 still fires, the next rung
+  # narrows query_period to 4500 (still ~15 min slack past the hourly re-probe; check stays 300;
+  # rides the same guard-pin update and is recorded on decision-challenges.md).
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 5400
+  confirmation_period = 0
+  recovery_period     = 3600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  # #11068 convention (#9168 measured flip): push armed; revert to `push = false` if the apply refuses it.
+  email          = true
+  push           = true
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (token=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
+  metadata = {
+    runbook = local.inngest_luks_key_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
 # ── #8408 (a): the registry store is not on LUKS, or its escrow is not proven ───────────────────
 #
 # WHAT IT DETECTS. The registry host's */5 SOLEUR_ZOT_DISK heartbeat (a direct POST to this same
@@ -596,7 +697,7 @@ resource "logtail_exploration_alert" "registry_clientip_not_rfc1918" {
 # ── #8611 / ADR-243: Anthropic spend — a step outliving the proxy, and the daily burn ───────────
 #
 # WHY THESE EXIST. The self-hosted Inngest server calls every step at the Cloudflare-proxied
-# serveHost, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
+# serveOrigin, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
 # outlives that gets a 524, `retries: 1` re-invokes it while the first Claude session is still
 # running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
 # top-up lasted ~39 h. Three standing alarms, one per question:
@@ -1837,6 +1938,95 @@ resource "logtail_exploration_alert" "faithful_canary_sandbox_broken" {
   incident_cause = "Report-only signal (the smoke does not gate the deploy): a canary build could not run one real wrapped Bash call through the real Agent SDK, the shim and the production sandbox config (reason sdk_bash_smoke_failed). The deploy was NOT rolled back and this build is promoted to production in the same run: treat hosted Bash as failing in production until the reason is read and cleared (the 2026-10-06 incident shape, #10445); if only the AF_UNIX variant fails the consequence applies only once the agent-sandbox-unix-deny flag is ON. The email has no row body: read the failure detail without SSH from the deploy-status field sdk_bash_smoke (reason carries the first sandbox error line) or the runbook's Query block. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.faithful_canary_sandbox_broken_runbook_url}"
   metadata = {
     runbook = local.faithful_canary_sandbox_broken_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9639 F8: the nic guard refused to POST the token to an unpinned ingest URL ────────────────
+#
+# WHAT IT DETECTS. web-private-nic-guard.sh refuses to send the Better Stack token to a
+# destination other than the pinned ingest URL: on its `[nic] unpinned_url:` stderr line the POST
+# is withheld AND the liveness beat lapses — the guard that cannot report must not claim health.
+# The line is journald-tagged SYSLOG_IDENTIFIER='web-nic-guard' at PRIORITY 6 — NOT a SOLEUR_*
+# PRIORITY-2 marker, so monitor_send_failed's predicate cannot see it; until this alert the
+# refusal mode was visible only through a post-merge query (betterstack-log-query.md's decode).
+#
+# NO host_name conjunct, deliberately: the guard timer runs on web-1 (SSH provisioner) and is
+# baked for web-2-class hosts (cloud-init.yml), and either host can refuse — the luks sibling's
+# host conjunct would blind half the fleet (the #8706 lesson in reverse: a threshold-any-row
+# alert, not a liveness count).
+#
+# Column shape: live positive control `doppler run -p soleur -c prd_terraform --
+# scripts/betterstack-query.sh` (2026-10-26, rc 0) returned rows carrying `dt`; the {{time}}
+# placeholder resolves to that column, same as every sibling above.
+locals {
+  web_nic_guard_unpinned_url_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'web-nic-guard'
+      AND position(JSONExtractString(raw, 'message'), 'unpinned_url') > 0
+    GROUP BY time
+  SQL
+
+  web_nic_guard_unpinned_url_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/web-nic-guard-unpinned-url-alert.md"
+}
+
+resource "logtail_exploration" "web_nic_guard_unpinned_url" {
+  name      = "soleur-web-nic-guard-unpinned-url-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.web_nic_guard_unpinned_url_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
+  exploration_id = logtail_exploration.web_nic_guard_unpinned_url.id
+  name           = "soleur-web-nic-guard-unpinned-url-prd"
+
+  # monitor_send_failed's paging semantics: any matching row in a 5-min bucket pages within a
+  # minute, one quiet 10-min window auto-resolves. treat_as_zero: a count query with no rows
+  # returns NO bucket — that must read as healthy or an open incident can never observe recovery.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  # Same note as monitor_send_failed: vendor-side pauses are re-armed by the next per-merge
+  # apply; the `logs_alert` arm of reconcile-live-heartbeats.ts is the drift detector.
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A web host's private-NIC guard refused to POST the Better Stack token to an unpinned ingest URL ([nic] unpinned_url) and withheld its beat — the host is healthy but cannot report, so its web_nic_guard heartbeat lapse will read as host-down on that beat. The runbook's readback names the row and the remediation (fix the Doppler value or the pin). This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.web_nic_guard_unpinned_url_runbook_url}"
+  metadata = {
+    runbook = local.web_nic_guard_unpinned_url_runbook_url
   }
 
   escalation_target {

@@ -7,9 +7,11 @@
 //            closed six-path set in `exactPaths` mode with the rendered bytes in `expectedContent`; it never posts
 //            the edit arm's `skill-security-scan PR gate` / `test` synthetic checks; the PR is a draft with the fixed
 //            `CREATE (new skill)` line and never claims a merge.
-//   CTO G2   The edit loop runs first; the arm shares the week cap (`remaining - editPrsOpenedThisRun`); one open
-//            create at a time (list failure refuses); two steps (memoized `create-propose`, single `create-persist`);
-//            deterministic branch from the memoized run date; replay finds its own open PR.
+//   CTO G2   The edit loop runs first and, on an `allow_create` run, is held to the free slots minus ONE so the arm
+//            always has a slot (`capLeft >= 1` by construction; amended 2026-10-27 after the live-fire refusal); the arm
+//            shares the week cap (`remaining - editPrsOpenedThisRun`); one open create at a time (list failure
+//            refuses); two steps (memoized `create-propose`, single `create-persist`); deterministic branch from the
+//            memoized run date; replay finds its own open PR.
 //
 // ASSEMBLY: drives the real `cronCompoundPromoteHandler` over a real cloned git repo; only the network edges
 // (Anthropic, the GitHub REST/search routes, the clone URL, the commit/PR helper) and the three SPAWN gates
@@ -46,6 +48,8 @@ const h = vi.hoisted(() => ({
   ownPrs: [] as unknown[],
   heads: [] as string[],
   calls: [] as string[],
+  /** `capLeft` handed to every `runCreateProposeStep` call (the slot the edit loop left the arm). */
+  capLefts: [] as number[],
 }));
 
 vi.mock("@/server/observability", async (importOriginal) => ({
@@ -97,6 +101,16 @@ vi.mock("@/server/compound-promote-marker", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/compound-promote-marker")>()),
   emitOutcomeMarker: (o: unknown) => h.marker(o),
 }));
+vi.mock("@/server/compound-promote-create-arm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/compound-promote-create-arm")>();
+  return {
+    ...actual,
+    runCreateProposeStep: (a: Parameters<typeof actual.runCreateProposeStep>[0]) => {
+      h.capLefts.push(a.capLeft);
+      return actual.runCreateProposeStep(a);
+    },
+  };
+});
 vi.mock("@/server/compound-promote-create-gates", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/compound-promote-create-gates")>()),
   runSkillScan: (...a: unknown[]) => h.scan(...a),
@@ -159,6 +173,9 @@ const CREATE_PATTERN_SLUG = String(PROPOSAL.pattern_slug);
 const CREATE_EVIDENCE = Ls(1, Q);
 const EDIT_EVIDENCE = Ls(Q + 1, Q);
 const EDIT_CLUSTER = { tier: "agents-core", target_path: "AGENTS.rules.md", source_learnings: EDIT_EVIDENCE, rationale: "RATIONALE-AGENTS" };
+/** A second, independent edit cluster (skill target, distinct evidence, distinct rationale token) so a run can try to open two edit PRs. */
+const EDIT_CLUSTER_B = { tier: "skill", target_path: "plugins/soleur/skills/work/SKILL.md", source_learnings: Ls(8, 5), rationale: "RATIONALE-SKILL-B" };
+const GOOD_SKILL_EDIT = { insert_after_line: "# work", new_lines: ["- Prefer small diffs. Reviewers read less."] };
 
 let remoteDir: string;
 let workRoot: string;
@@ -237,6 +254,7 @@ function stubModel() {
       return createReply;
     }
     if (prompt.includes("RATIONALE-AGENTS")) return { text: JSON.stringify(GOOD_AGENTS_EDIT), stopReason: "end_turn" };
+    if (prompt.includes("RATIONALE-SKILL-B")) return { text: JSON.stringify(GOOD_SKILL_EDIT), stopReason: "end_turn" };
     throw new Error("unstubbed prompt");
   });
 }
@@ -256,6 +274,7 @@ beforeEach(() => {
   h.ownPrs = [];
   h.heads.length = 0;
   h.calls.length = 0;
+  h.capLefts.length = 0;
   vi.mocked(reportSilentFallback).mockClear();
   createReply = { text: JSON.stringify(goodProposal()), stopReason: "end_turn" };
   editClusters = [EDIT_CLUSTER];
@@ -311,6 +330,12 @@ const CREATE_ONLY_KEYS = [
 ];
 const createKeys = (m: Record<string, unknown>) => Object.keys(m).filter((k) => k.startsWith("create_") || k === "kind");
 const ENTRY_HASH = createClusterHash(CREATE_EVIDENCE);
+/** A ledger row (an open PR by the bot) carrying the given cluster hash. */
+const ledgerOpenHash = (hash: string) => ({
+  title: promotePrTitle(hash, "2026-10-04"), state: "open", closed_at: null,
+  user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
+});
+const ledgerOpen = (evidence: string[]) => ledgerOpenHash(createClusterHash(evidence));
 
 // ---------------------------------------------------------------------------------------------------------
 describe("Guard 3 -- the arm is reachable ONLY for trigger=manual, input=patterns, allow_create===true", () => {
@@ -418,29 +443,94 @@ describe("Guard 3 -- the arm is reachable ONLY for trigger=manual, input=pattern
 });
 
 // ---------------------------------------------------------------------------------------------------------
-describe("the week cap (CTO G2): the edit loop runs first and shares the cap", () => {
-  it("with the REAL saturated cap (two open self-healing/auto PRs: #11230 and #11231 today) the run ends week-cap-reached BEFORE the arm", async () => {
+describe("the week cap (CTO G2, amended 2026-10-27): the edit loop runs first, holds one slot back for the arm, and shares the cap", () => {
+  const clusterPrompts = () =>
+    h.post.mock.calls
+      .map((c) => (c[0] as { messages: Array<{ content: string }> }).messages[0].content)
+      .filter((p) => p.includes("clustering agent"));
+  const applyStepsOf = (names: string[]) => names.filter((n) => n.startsWith("apply-and-pr-"));
+
+  it("with the REAL saturated cap (two open self-healing/auto PRs) the run ends week-cap-reached BEFORE the arm", async () => {
     h.openPrs = 2;
     const r = await run(PATTERNS_CREATE());
     expect(r.result.status).toBe("week-cap-reached");
     expect(r.names).not.toContain("create-propose");
     expect(createPrompts()).toHaveLength(0);
+    expect(h.capLefts).toEqual([]);
     // The request is visible on the early terminal row; the arm did not run.
     expect(r.last).toMatchObject({ status: "week-cap-reached", input_source: "patterns", create_requested: true });
     expect(r.last).not.toHaveProperty("create_arm");
   });
 
-  it("with ONE slot left and the edit loop spending it, the arm is refused class=week-cap: no model create call, no commit, mirrored to Sentry", async () => {
+  it("two free slots + allow_create: the cluster prompt asks for ONE and a model answering two opens at most one edit PR", async () => {
+    h.openPrs = 0;
+    editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B];
+    const r = await run(PATTERNS_CREATE());
+    expect(clusterPrompts()).toHaveLength(1);
+    expect(clusterPrompts()[0]).toMatch(/Return up to 1 qualifying/);
+    // the slice is the second line of defence: the model answered TWO clusters, only the first survives
+    expect(r.last).toMatchObject({ status: "completed", clusters_proposed: 1, clusters_opened: 1 });
+    expect(applyStepsOf(r.names)).toHaveLength(1);
+    expect(editCommits()).toHaveLength(1);
+  });
+
+  it("two free slots + allow_create: the arm is handed capLeft=1 and opens its draft (not refused week-cap)", async () => {
+    h.openPrs = 0;
+    editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B];
+    const r = await run(PATTERNS_CREATE());
+    expect(h.capLefts).toEqual([1]);
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "opened" });
+    expect(createCommits()).toHaveLength(1);
+    expect(r.last.refusals ?? []).not.toContain("create-refused");
+  });
+
+  it("one free slot + allow_create: the edit loop is skipped (no cluster model call, step id kept), the run ends no-qualifying-clusters with the create fields, capLeft=1", async () => {
     h.openPrs = 1;
     const r = await run(PATTERNS_CREATE());
-    expect(r.last).toMatchObject({ status: "completed", clusters_opened: 1, create_arm: "ran", create_outcome: "refused", create_refusal_class: "week-cap" });
-    expect(r.last.refusals).toContain("create-refused");
-    expect(createPrompts()).toHaveLength(0);
-    expect(createCommits()).toHaveLength(0);
-    expect(editCommits()).toHaveLength(1);
-    expect(r.names).toContain("create-propose");
-    expect(r.names).not.toContain("create-persist");
-    expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ feature: "cron-compound-promote", op: "create-refused", tags: { class: "week-cap" } }));
+    expect(r.result.status).toBe("no-qualifying-clusters");
+    expect(r.names).toContain("anthropic-cluster");
+    expect(clusterPrompts()).toHaveLength(0);
+    expect(editCommits()).toHaveLength(0);
+    expect(h.capLefts).toEqual([1]);
+    expect(r.last).toMatchObject({ status: "no-qualifying-clusters", clusters_proposed: 0, clusters_opened: 0, create_arm: "ran", create_outcome: "opened" });
+    expect(r.last.create_refusal_class).not.toBe("week-cap");
+    expect(createCommits()).toHaveLength(1);
+  });
+
+  it.each([
+    ["a scheduled run", () => CRON()],
+    ["a manual corpus run with allow_create:true", () => MANUAL({ input: "corpus", allow_create: true })],
+  ])("%s keeps the whole cap: the prompt asks for 2 and the slice keeps 2 of 3 (no reservation)", async (_label, event) => {
+    h.openPrs = 0;
+    editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B, { ...EDIT_CLUSTER, target_path: "plugins/soleur/skills/review/SKILL.md", source_learnings: Ls(3, 5), rationale: "RATIONALE-SKILL-B" }];
+    const r = await run(event());
+    expect(clusterPrompts()[0]).toContain("Return up to 2 qualifying clusters");
+    expect(r.last).toMatchObject({ clusters_proposed: 2 });
+    expect(r.names).not.toContain("create-propose");
+    expect(h.capLefts).toEqual([]);
+  });
+
+  it.each([
+    ["allow_create absent", {}],
+    ["allow_create false", { allow_create: false }],
+  ])("%s on a manual patterns run is UNCHANGED: the prompt asks for 2 (the whole cap) and the slice keeps 2 of 3", async (_label, extra) => {
+    h.openPrs = 0;
+    editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B, { ...EDIT_CLUSTER, target_path: "plugins/soleur/skills/review/SKILL.md", source_learnings: Ls(3, 5), rationale: "RATIONALE-SKILL-B" }];
+    const r = await run(MANUAL({ input: "patterns", ...extra }));
+    expect(clusterPrompts()[0]).toContain("Return up to 2 qualifying clusters");
+    expect(r.last).toMatchObject({ clusters_proposed: 2 });
+    expect(r.names).not.toContain("create-propose");
+    expect(h.capLefts).toEqual([]);
+  });
+
+  it.each([0, 1])("invariant: with allow_create and %i open PR(s) the arm is never refused week-cap and every capLeft is >= 1", async (open) => {
+    h.openPrs = open;
+    editClusters = [EDIT_CLUSTER, EDIT_CLUSTER_B];
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_arm: "ran" });
+    expect(r.last.create_refusal_class).not.toBe("week-cap");
+    expect(h.capLefts.length).toBeGreaterThan(0);
+    for (const c of h.capLefts) expect(c).toBeGreaterThanOrEqual(1);
   });
 
   it("the edit loop runs first: apply-and-pr precedes create-propose, and the edit PR is committed before any create step", async () => {
@@ -452,11 +542,12 @@ describe("the week cap (CTO G2): the edit loop runs first and shares the cap", (
     expect(editCommits()).toHaveLength(1);
   });
 
-  it("with the edit arm finding nothing (no qualifying clusters) the arm still runs, with the whole cap left", async () => {
+  it("with the edit arm finding nothing (no qualifying clusters) the arm still runs, with both slots left (capLeft=2)", async () => {
     editClusters = [];
     const r = await run(PATTERNS_CREATE());
     expect(r.result.status).toBe("no-qualifying-clusters");
     expect(r.names).toContain("create-propose");
+    expect(h.capLefts).toEqual([2]);
     expect(r.last).toMatchObject({ status: "no-qualifying-clusters", create_arm: "ran", create_outcome: "opened" });
   });
 });
@@ -578,7 +669,7 @@ describe("Step A: create-propose is ONE bounded model call, memoized, and never 
     }
   });
 
-  it("the evidence fixtures (#11230 / #11231 shapes) are refused prefer-patch with rank and top-1 as numbers", async () => {
+  it("the evidence fixtures (the two loop-opened proposals of 2026-10-26) are refused prefer-patch with rank and top-1 as numbers", async () => {
     // A cluster whose nearest skill is git-worktree: the description restates it.
     const cal = fixtureJson<{ evidence: Array<{ slug: string; description: string; when_to_use: string[]; target: string }> }>("calibration.json");
     const ev = cal.evidence[0];
@@ -589,12 +680,34 @@ describe("Step A: create-propose is ONE bounded model call, memoized, and never 
     expect(typeof r.last.create_nearest_rank).toBe("number");
   });
 
-  it("a pattern already proposed (ledger: an open PR carries its cluster hash) is SUPPRESSED, not refused: existing ledger-suppressed reason", async () => {
-    h.ledger.items = [{
-      title: promotePrTitle(ENTRY_HASH, "2026-10-04"), state: "open", closed_at: null,
-      user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
-    }];
+  it("H2: a ledger-owned pattern is not offered to the model; a different eligible pattern is offered and opens the draft PR", async () => {
+    h.ledger.items = [ledgerOpen(CREATE_EVIDENCE)];
+    createReply = { text: JSON.stringify(goodProposal({ pattern_slug: "zz-page-three" })), stopReason: "end_turn" };
     const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(1);
+    const prompt = String((createPrompts()[0][0] as { messages: Array<{ content: string }> }).messages[0].content);
+    expect(prompt).not.toContain(CREATE_PATTERN_SLUG);
+    expect(prompt).toContain("zz-page-three"); // page-two is the edit loop's this run, so only page three is left
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "opened", ledger_suppressed: 0 });
+    expect(createCommits()).toHaveLength(1);
+  });
+
+  it("H3: nothing left after the edit loop's pattern (same-run) and the ledger's two ends no_action(all-owned) with no create model call and no ledger_suppressed count", async () => {
+    // the ledger owns pages one and three; page two is the edit loop's this run
+    h.ledger.items = [ledgerOpen(CREATE_EVIDENCE), ledgerOpen(Ls(6, 7))];
+    const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(0);
+    expect(r.names).not.toContain("create-persist");
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "all-owned", ledger_suppressed: 0 });
+    expect(r.last).not.toHaveProperty("create_refusal_class");
+    expect(createCommits()).toHaveLength(0);
+  });
+
+  it("backstop: a model that names an unoffered ledger-owned pattern is SUPPRESSED, not refused: existing ledger-suppressed reason", async () => {
+    h.ledger.items = [ledgerOpenHash(ENTRY_HASH)];
+    const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(1); // precondition: the backstop path ran (the slug check below carries the pre-filter sensitivity)
+    expect(String((createPrompts()[0][0] as { messages: Array<{ content: string }> }).messages[0].content)).not.toContain(CREATE_PATTERN_SLUG);
     expect(r.last.refusals).toContain("ledger-suppressed");
     expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 1 });
     expect(r.last).not.toHaveProperty("create_refusal_class");
@@ -861,11 +974,8 @@ describe("review round -- the same-run collision, the token, the lost clone, the
     expect(r.last).toMatchObject({ create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 0 });
   });
 
-  it("G4: a hash the LEDGER suppresses (a prior PR) is still recorded once and counted once", async () => {
-    h.ledger.items = [{
-      title: promotePrTitle(ENTRY_HASH, "2026-10-04"), state: "open", closed_at: null,
-      user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
-    }];
+  it("G4 backstop: a hash the LEDGER suppresses (a prior PR) and the model names anyway is still recorded once and counted once", async () => {
+    h.ledger.items = [ledgerOpenHash(ENTRY_HASH)];
     const r = await run(PATTERNS_CREATE());
     const entries = (r.last.refusal_detail as Array<{ cluster_hash: string; reason: string }>).filter((e) => e.cluster_hash === ENTRY_HASH);
     expect(entries).toHaveLength(1);

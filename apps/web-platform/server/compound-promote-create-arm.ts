@@ -5,7 +5,7 @@
 // new synthetic-check list or step-callback shape. The create arm's own commit call lives HERE, outside `functions/`
 // (see the ADR-054 note and `cron-safe-commit-parity.test.ts`, which walks this file too):
 //
-//   Step A `create-propose`  runCreateProposeStep   week-cap -> index-empty -> same-run -> clone-present -> create-open -> budget -> prompt ->
+//   Step A `create-propose`  runCreateProposeStep   week-cap -> index-empty -> same-run -> ledger -> clone-present -> create-open -> budget -> prompt ->
 //                                                   ONE model call -> checkCreate. MEMOIZED and NEVER THROWS: every
 //                                                   failure is a returned refusal with a closed class.
 //   Step B `create-persist`  runCreatePersistStep   page lookup -> own-PR lookup -> clone check -> refresh the clone to main (R5) ->
@@ -322,6 +322,7 @@ export interface CreateProposeArgs {
   repoRoot: string;
   octokit: ArmOctokit;
   patterns: readonly PatternPage[];
+  /** The ledger read. Patterns it owns are not offered to the model, and it is the post-call backstop too. */
   ledgerEntries: readonly LedgerEntry[];
   /** The MEMOIZED run-start ISO timestamp (the ledger's TTL clock). */
   runStartedAt: string;
@@ -330,7 +331,8 @@ export interface CreateProposeArgs {
   /**
    * Cluster hashes the EDIT loop recorded this run (opened or attempted). Both arms build the branch
    * `self-healing/auto-<hash>-<date>`, so a create that chose one of these would collide with the edit PR it just
-   * opened. A pattern with such a hash is not offered to the model; one the model names anyway is `suppressed`.
+   * opened. A pattern with such a hash is not offered to the model (the ledger drop follows this one); one the model names
+   * anyway is `suppressed`.
    */
   sameRunHashes?: readonly string[];
   apiKey: string | undefined;
@@ -366,18 +368,25 @@ function openPrAgentOrCommandCollision(slug: string, openPrPaths: readonly strin
 }
 
 async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
-  // week-cap: the edit loop ran first and shares the cap (`remaining - editPrsOpenedThisRun`).
+  // week-cap: the edit loop ran first and shares the cap (`remaining - editPrsOpenedThisRun`). The handler holds the loop to
+  // the free slots minus one on an `allow_create` run, so `capLeft >= 1` here by construction; this refusal is a defensive backstop.
   if (!(a.capLeft > 0)) return fail("week-cap", "no-slot");
 
   // index-empty before any I/O: a create needs a pattern to be about.
   if (a.patterns.length === 0) return fail("index-empty", "no-open-patterns");
 
-  // A pattern the EDIT loop recorded this run already owns the branch `self-healing/auto-<hash>-<date>`: do not offer it
-  // to the model (no spend on a pattern that cannot be created). Nothing offerable is a clean no_action. The full list
-  // still goes to `checkCreate`, whose `isHashSuppressed` below stays as the backstop for a model that names one anyway.
+  // A pattern that is already owned cannot be created, so it is not offered to the model: the single call must not be
+  // spent on it. Two owners, two stages: the edit loop's branch this run (`sameRun`), then the ledger's prior PRs, judged
+  // by the same `decideSuppression` and the same memoized clock as the gate. Nothing offerable after the first stage is
+  // `other`; after the second it is `all-owned`. Both end before any I/O. The full list still goes to `checkCreate`,
+  // whose `isHashSuppressed` below stays as the backstop for a model that names an unoffered pattern anyway.
+  const runNow = new Date(a.runStartedAt);
   const sameRun = new Set(a.sameRunHashes ?? []);
-  const offered = a.patterns.filter((p) => !sameRun.has(createClusterHash(p.evidence)));
-  if (offered.length === 0) return { kind: "no_action", reason: "other" };
+  const ledgerOwned = (hash: string) => decideSuppression({ entries: a.ledgerEntries, hash, now: runNow });
+  const unclaimed = a.patterns.filter((p) => !sameRun.has(createClusterHash(p.evidence)));
+  if (unclaimed.length === 0) return { kind: "no_action", reason: "other" };
+  const offered = unclaimed.filter((p) => !ledgerOwned(createClusterHash(p.evidence)));
+  if (offered.length === 0) return { kind: "no_action", reason: "all-owned" };
 
   // The clone is the arm's only data source: a lost clone is its own named refusal, not a budget or slug symptom.
   if (!existsSync(a.repoRoot)) return fail("persist", "clone-missing");
@@ -432,7 +441,6 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
   const raw = parseCreateModelText(text);
   if (raw === undefined) return fail("model-invalid", "not-json");
 
-  const runNow = new Date(a.runStartedAt);
   const verdict = checkCreate(raw, {
     patterns: a.patterns,
     skills: measured.counted.records,
@@ -442,7 +450,7 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
     commandNames: measured.commandNames,
     openPrPaths,
     budget: { total: measured.counted.total, cap: measured.cap },
-    isHashSuppressed: (hash) => sameRun.has(hash) || decideSuppression({ entries: a.ledgerEntries, hash, now: runNow }),
+    isHashSuppressed: (hash) => sameRun.has(hash) || ledgerOwned(hash),
   });
   if (verdict.kind === "refused") return mirrored(verdict);
   if (verdict.kind === "create") {

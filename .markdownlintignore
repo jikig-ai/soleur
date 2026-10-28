@@ -49,3 +49,4 @@ plugins/soleur/skills/legal-generate/references/
 # comment; reformatting it to satisfy the linter (a URL in angle brackets, an extra blank line) changes the hash and voids the receipt.
 knowledge-base/engineering/operations/runbooks/delegated-merge-10663-envelope.md
 knowledge-base/engineering/operations/runbooks/delegated-merge-10789-envelope.md
+knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md

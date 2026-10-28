@@ -79,6 +79,7 @@ plugins/soleur/scripts/run-in-pid-namespace.sh|adopted — declare -F fallback o
 plugins/soleur/scripts/resolve-regenerable-conflicts.sh|adopted — declare -F fallback only
 plugins/soleur/scripts/domain-model-drift.sh|adopted — declare -F fallback only
 plugins/soleur/skills/ship/scripts/battery-owed.sh|adopted — declare -F fallback only
+plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh|adopted — declare -F fallback only
 plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh|adopted — declare -F fallback only
 plugins/soleur/skills/review/scripts/fix-round-seats.sh|adopted — declare -F fallback only (census-missed site, same class)
 plugins/soleur/skills/ship/scripts/hold-gate-eval.sh|superset — strips strictly more (cntrl + C1 + wider e2 classes + BOM); leave as-is

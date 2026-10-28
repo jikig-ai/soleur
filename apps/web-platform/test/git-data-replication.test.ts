@@ -68,13 +68,19 @@ afterEach(() => {
 });
 
 describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
-  it("composes an ssh:// URL under the reconciled /repositories path", () => {
-    expect(gitDataRemoteUrl(WS)).toBe(`ssh://git@10.0.1.20/repositories/${WS}.git`);
+  it("composes an absolute ssh:// URL under the git-data store bare-repo root", () => {
+    expect(gitDataRemoteUrl(WS)).toBe(`ssh://git@10.0.1.20/mnt/git-data/repositories/${WS}.git`);
   });
 
   it("rejects path-traversal / unsafe workspace ids (CWE-22)", () => {
-    for (const bad of ["..", ".", "a/b", "a b", "a;rm", ""]) {
+    for (const bad of ["..", ".", "a/b", "a b", "a;rm", "", "a..b", "..a", "a..", "a."]) {
       expect(() => assertSafeWorkspaceId(bad)).toThrow();
+    }
+  });
+
+  it("still accepts single-dot ids (positive control for the '..' rule)", () => {
+    for (const ok of ["a.b", ".a", "ws-uuid-123", "11111111-1111-4111-8111-111111111111"]) {
+      expect(() => assertSafeWorkspaceId(ok)).not.toThrow();
     }
   });
 });
@@ -140,6 +146,79 @@ describe("replicateToGitData — gated on", () => {
     const opts = reportSilentFallback.mock.calls[0][1] as { feature: string; op: string };
     expect(opts.feature).toBe("worktree_lease");
     expect(opts.op).toBe("git_data_replication_push");
+  });
+
+  // (#8211 fix-forward 2) ONE retry, on a POSITIVE-MATCH transient class only. The
+  // first push of 2+ refs from a shallow clone can hit `remote failure` /
+  // `failed to report status`; the fence accepts an equal lease-gen so the resent
+  // push is idempotent. Deterministic refusals (shallow reject, fence reject)
+  // are never retried — the match list is positive, so they fall through to the
+  // existing loud path. The classifier reads `err.stderr` — the surface the
+  // execFile rejection actually carries — so the fixtures put the trigger text
+  // there, not only in the message (the 2026-09-21 retry-flag learning).
+  it("retries the push ONCE on a transient remote failure (stderr), then reports replicated", async () => {
+    gitPush
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Command failed: git push"), {
+          stderr: "error: remote failure\nerror: failed to report status",
+        }),
+      )
+      .mockResolvedValueOnce(Buffer.from(""));
+
+    await expect(
+      replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 9 , userId: USER }),
+    ).resolves.toEqual({ status: "replicated" });
+
+    expect(gitPush).toHaveBeenCalledTimes(2);
+    // The retry re-issues the IDENTICAL argv — the same lease-gen fence option
+    // is what makes the resent push idempotent.
+    expect(gitPush.mock.calls[1][0]).toEqual(gitPush.mock.calls[0][0]);
+  });
+
+  it("does NOT retry on `shallow update not allowed` — a deterministic refusal", async () => {
+    gitPush.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "! [remote rejected] main -> refs/soleur/worktrees/wt/heads/main (shallow update not allowed)",
+        ),
+        {
+          stderr:
+            "! [remote rejected] main -> refs/soleur/worktrees/wt/heads/main (shallow update not allowed)",
+        },
+      ),
+    );
+
+    await expect(
+      replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 1 , userId: USER }),
+    ).rejects.toThrow(/shallow update not allowed/);
+    expect(gitPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry on a fence reject (stale lease generation)", async () => {
+    gitPush.mockRejectedValueOnce(
+      Object.assign(
+        new Error("remote: git-data fence: stale lease generation 3 < stored max 5 — rejected"),
+        { stderr: "remote: git-data fence: stale lease generation 3 < stored max 5 — rejected" },
+      ),
+    );
+
+    await expect(
+      replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 3 , userId: USER }),
+    ).rejects.toThrow(/stale lease generation/);
+    expect(gitPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fails after two consecutive transients — at most one retry", async () => {
+    gitPush.mockRejectedValue(
+      Object.assign(new Error("Command failed: git push"), { stderr: "remote failure" }),
+    );
+
+    await expect(
+      replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 1 , userId: USER }),
+    ).rejects.toThrow(/git push/);
+    expect(gitPush).toHaveBeenCalledTimes(2);
+    // The second failure takes the existing loud path.
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an unsafe workspace_id BEFORE any provision/push", async () => {

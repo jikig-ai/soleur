@@ -988,7 +988,7 @@ write_files:
       #   vector.toml — the journald -> Better Stack shipper's config (#6197)
       #   the cutover flip trio + arm-atomicity guard + state reader (#6178): inngest-bootstrap.sh
       #   gates their install on `-f /tmp/<asset>`
-      STAGED="inngest-redis.conf inngest-redis.service inngest-redis-bootstrap.sh vector.toml inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh"
+      STAGED="inngest-redis.conf inngest-redis.service inngest-redis-bootstrap.sh vector.toml inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh inngest-trace-retention.sh inngest-trace-retention.sql inngest-trace-retention.sqlite.sql"
       # ONE COMBINED EXIT TRAP, installed before the first command that can fail. In dash a later
       # `trap … EXIT` silently REPLACES an earlier one (measured), so the moved block's own
       # `trap cleanup EXIT` / `trap - EXIT` are gone and their cleanup lives here. `set +e` in the
@@ -1276,7 +1276,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.63@sha256:8a64642e1251f4cff8ee803b575c7215565db05eec68851b5951bd5ea61cde1a
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.64@sha256:e59b8461b6c5bee1a0ae59f8d0eaed5a4a19d24fa375e97d07cf5c1f45931cce
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1326,7 +1326,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.63@sha256:8a64642e1251f4cff8ee803b575c7215565db05eec68851b5951bd5ea61cde1a"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.64@sha256:e59b8461b6c5bee1a0ae59f8d0eaed5a4a19d24fa375e97d07cf5c1f45931cce"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log

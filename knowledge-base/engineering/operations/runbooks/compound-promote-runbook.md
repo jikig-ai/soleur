@@ -235,8 +235,11 @@ seed and consumes the week's `week-cap` slots. Until the flip tracker ships a dr
 1. **As of 2026-10-25: do not trigger a manual `input:"patterns"` run until the 2026-10-25 scheduled
    run's marker is recorded.** That run is the clean baseline; the first post-fix run that can reach
    the gates. The rule lifts once that marker is recorded.
-2. **Do not trigger one while any `self-healing/auto` PR is open** (it would stack drafts on the
-   week-cap and on an unreviewed proposal).
+2. **A `patterns` run without `allow_create` must not be triggered while any `self-healing/auto` PR is
+   open** (it would stack drafts on the week-cap and on an unreviewed proposal). **A `patterns` run with
+   `allow_create:true` may have at most ONE `self-healing/auto` PR open:** with one open the edit loop is
+   skipped and only the create arm runs (if that one open PR is itself an unreviewed create draft, the arm refuses
+   `create-open` and the run does nothing); with two open the run ends `week-cap-reached` before the arm.
 
 ### Marker fields (patterns path only)
 
@@ -251,7 +254,7 @@ recipe and the full field list: `betterstack-log-query.md`. The early terminal r
 | `input_source` | `patterns` (never emitted on the corpus arm) | On a manual patterns trigger, a row WITHOUT `input_source` means the option did not reach the handler (or the run was a deliberate manual corpus run, which the Inngest dashboard run-now sends). A row with only `input_source` and status `disabled`, `deduped` or `week-cap-reached` means the request did nothing: the capability is off, an open "[Scheduled] Compound Promotion" issue was created in the last 6 days (dedup), or open `self-healing/auto` PRs hold the week cap |
 | `patterns_open` | open pattern pages loaded (after the runtime PII, path and schema drops) | `0` ends the run `empty-corpus` (no fallback to the corpus). Sentry op `patterns-empty`, emitted once per run, tag `cause`: `no-open-patterns` (pages exist but none is open) or `dir-unreadable` (the patterns directory is absent, unreadable or aliased: a symlink at or below the repository root on its path). Compare with the page count in the repo: fewer than expected means pages were dropped (Sentry op `pattern-page-dropped`, tag `cause` = `schema`, `size` (over 16 KiB), `pii` or `evidence`). Individual evidence files dropped inside a surviving page are reported to Sentry and the pino error mirror only (op `pattern-evidence-dropped`, tag `cause` = `archived`, `retired`, `pii` or `unreadable`, `extra.count`; `unreadable` also covers an aliased or missing learnings root and a first-10-lines excerpt over 16 KiB); the marker has no per-key drops. A page left under 5 surviving evidence entries is dropped |
 | `ledger_read` | `ok` or `failed` | `failed` is a loud `status=error`, no Anthropic call. Read the Sentry message `ledger-read-failed` and its `cause` tag, one of seven: `http-5xx`, `rate-limit`, `page-cap`, `incomplete`, `unparseable`, `drift`, `transport`. The marker has no cause field: after Inngest retries (function `retries:1`, so deterministic causes are retried once and report twice) Better Stack shows `status=error`, `ledger_read=failed` and a static `error_message`. Key on `ledger_read=failed`: `error_class` is derived from `constructor.name`, which is `StepError` in the SDK's shape (an exhausted `step.run` reaches the handler as `StepError`, not `LedgerReadError`) but may be minified in a production bundle. `drift` fires only when a bot-authored (`soleur-ai[bot]`) hit exists and NO bot hit parses as a promote title (every bot PR was retitled): fix the title contract, do not retry blindly. Foreign-only hits (a fork or human PR on a `self-healing/auto-*` branch) read as an empty ledger and never fail; the `author:app/soleur-ai` qualifier keeps them out of the response today and the login check is the second layer. A `transport` failure can also be a 422: the query itself was rejected (for example the App slug changed). A zero-hit read is accepted as an empty ledger (the first patterns run is expected to read 0) |
-| `ledger_suppressed` | clusters dropped because the same recomputed hash is already proposed (open, merged, or closed unmerged within 60 days) | Each also appears as `ledger-suppressed` in `refusals[]` and `refusal_detail[]` (`{cluster_hash, reason}`). `status=no-qualifying-clusters` with `ledger_suppressed > 0` means every cluster was suppressed. `clusters_proposed` stays pre-suppression. Slot starvation (accepted): the patterns arm slices the model's clusters to the week-cap `remaining` (at most 2) BEFORE suppression and does not tell the model which hashes are suppressed, so a repeatedly proposed rejected or merged cluster, or a same-evidence duplicate (`cluster-duplicate`), can occupy the slots and end a week `no-qualifying-clusters` with `ledger_suppressed >= 1`. A second cluster with the same source set in one run is refused `cluster-duplicate` |
+| `ledger_suppressed` | clusters dropped because the same recomputed hash is already proposed (open, merged, or closed unmerged within 60 days); create-arm patterns removed before the model call are NOT counted (see Same-run collision) | Each also appears as `ledger-suppressed` in `refusals[]` and `refusal_detail[]` (`{cluster_hash, reason}`). `status=no-qualifying-clusters` with `ledger_suppressed > 0` means every cluster was suppressed. `clusters_proposed` stays pre-suppression. Slot starvation (accepted): the patterns arm slices the model's clusters to the week-cap `remaining` (at most 2; one less on an `allow_create` run, which holds a slot for the create arm) BEFORE suppression and does not tell the model which hashes are suppressed, so a repeatedly proposed rejected or merged cluster, or a same-evidence duplicate (`cluster-duplicate`), can occupy the slots and end a week `no-qualifying-clusters` with `ledger_suppressed >= 1`. A second cluster with the same source set in one run is refused `cluster-duplicate` |
 | `ledger_prs_scanned` | raw GitHub search hit count for `self-healing/auto-` PRs | The read takes up to 10 search pages of 100 and throws if the last page is full, so the usable ceiling is 999 hits. Past it every patterns run fails `page-cap`; plan state-split queries before then |
 | `ledger_title_skipped` | bot-authored search items skipped because the title did not match the anchored promote-cluster title regex | Warn-level; does not fail by itself (if every bot PR was retitled, the read fails `drift`). A human-retitled bot PR stops suppressing its cluster, so a non-zero value explains a re-proposal. Restore the title (`self-healing(auto): promote cluster <64-hex> <YYYY-MM-DD>`) to restore suppression |
 
@@ -277,12 +280,14 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
   `data.allow_create:true`. `allow_create` is an EVENT field, not a runtime flag: absent, or anything but the boolean
   `true`, means off, and no flag exists to flip. The scheduled run, a manual `corpus` run and a non-boolean
   `allow_create` leave the arm absent and the run unchanged. The edit loop runs first; the arm then uses what is left
-  of the week cap (it counts all open `self-healing/auto` PRs, not a calendar week).
+  of the week cap (it counts all open `self-healing/auto` PRs, not a calendar week). On an `allow_create` run the
+  edit loop gets the free slots minus one, so one slot is held for the arm. With one free slot the edit loop is
+  skipped and the run ends `no-qualifying-clusters` with the create fields.
 - **Output.** At most ONE create per run: a DRAFT PR adding a markdown-only skill (`SKILL.md`, `PURPOSE.md`,
   Cursor stub) plus two README counts and one ledger row, body line `CREATE (new skill)`. Never auto-merged.
 - **Preconditions for the first live fire (an operator-authorized production act, NOT performed by #10550):**
-  the evidence PRs #11230 and #11231 merged or closed (otherwise every manual fire ends `week-cap-reached` before
-  the arm); a runtime flag created through `soleur:flag-create` if the trigger-secret holder check in
+  at most one open `self-healing/auto` PR (none preferred, so the create draft is reviewed alone; with two open,
+  every manual fire ends `week-cap-reached` before the arm); a runtime flag created through `soleur:flag-create` if the trigger-secret holder check in
   `phase0-measurements.md` ever finds a non-operator holder; the deploy verified (`deploy-arm.sh find --wait`
   and the served build sha equal to the merge sha); the compliance-posture dated note read.
 - **Reading a refusal.** One refusal reason, `create-refused`, with a closed `class`; Sentry mirror op
@@ -291,7 +296,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 
 | `class` | Meaning | How to read it |
 |---|---|---|
-| `week-cap` | no week-cap slot left after the edit loop | expected while any `self-healing/auto` PR is open; close or merge the open drafts |
+| `week-cap` | No week-cap slot was left for the arm although the run started with at least one free slot | Not expected since the slot reservation: treat it as a defect (unless the run straddled the deploy of the reservation, or another `self-healing/auto` PR was opened after the run read the cap) and read `clusters_opened` and the open `self-healing/auto` PR count. Before that fix, the edit loop ran first and could take both slots, which refused the arm on a clean state (run `01M5YB28JD20JKKH4HG04CX2Z4`, 2026-10-27). A run that starts with two open `self-healing/auto` PRs never reaches the arm and ends `week-cap-reached` |
 | `create-open` | another open PR already carries the `CREATE (new skill)` line, or the open-PR list could not be read | one open create at a time; a list failure refuses rather than guesses |
 | `index-empty` | no open pattern page to read | defence in depth: the handler exits `empty-corpus` first, so this refusal is not expected in production; if it appears, check `patterns_open` |
 | `input-size` | pattern index plus skill list exceeds the input ceiling | refused, never truncated; trim the index or raise the ceiling by amending the ADR |
@@ -309,7 +314,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 
 | `class` | `create_detail` values |
 |---|---|
-| `week-cap` | `no-slot` (the edit loop used the last slot, or none was free; no number rides it) |
+| `week-cap` | `no-slot` (defensive backstop since the slot reservation: the arm found no slot; no number rides it) |
 | `create-open` | `open-create-pr`, `list-failed`, `list-incomplete`, `paths-unverifiable`, `paths-incomplete` |
 | `index-empty` | `no-open-patterns` |
 | `input-size` | `over-ceiling` (marker numbers `create_tokens`, `create_max`, `create_bytes`; the bound is bytes / 4) |
@@ -343,7 +348,9 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 - **An unreviewed create draft holds capacity.** The create PR is a draft nobody merges automatically. While it is
   open it (a) permanently blocks any further create (`create-open`: one open create at a time) and (b) holds one of
   the two shared `self-healing/auto` week-cap slots. NO alert fires for an ignored draft today. The operator closes
-  it (rejects the skill) or merges it after review; until then the arm and one edit slot are parked.
+  it (rejects the skill) or merges it after review; until then the arm is parked and one slot is held: a patterns run
+  without `allow_create` can still use the other slot, while an `allow_create` run does nothing (the edit loop is
+  skipped with one free slot and the arm refuses `create-open`).
 
 ### Create-arm marker fields
 
@@ -357,8 +364,8 @@ or a fixed phrase) that never carries model text. Query recipe: `betterstack-log
 | `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on every manual `patterns` row, including the early `disabled`, `deduped` and `week-cap-reached` rows. NOT present on a manual run without `input:"patterns"` (a manual corpus row stays byte-identical to before the arm), so an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace at all. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm: read `status`. `week-cap-reached`, `empty-corpus`, `deduped` and `disabled` are early exits; `anthropic-truncated` means the edit clustering answer was truncated and the arm is skipped on that path (it never spends the call). The scope: a manual `patterns` row gains EXACTLY this one key when the arm did not run |
 | `create_arm` | `ran`, emitted ONLY when the arm ran | Absent means off. With it, `kind` is `create` |
 | `kind` | `create` | Emitted only together with `create_arm` |
-| `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or the pattern is already proposed (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
-| `create_no_action_reason` | `no-pattern-qualifies`, `all-owned` or `other` | `other` also marks a suppressed (already proposed) pattern |
+| `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or no pattern was offerable (all owned: `all-owned` / `other`), or the model named an already-proposed pattern anyway (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
+| `create_no_action_reason` | `no-pattern-qualifies`, `all-owned` or `other` | `all-owned` also marks an offer the ledger emptied before the call (the model may also answer `all-owned` itself, so the field alone does not show whether a call was spent: the create call emits a `SOLEUR_CLAUDE_COST` row with the same source and run id as the edit-loop calls, with no create-specific token, so compare the row count against the edit drafts the run opened); `other` also marks a same-run-emptied offer (clusters the edit loop dropped as `ledger-suppressed` count as same-run, so they classify as `other`) and a suppressed (already proposed) pattern the model named anyway |
 | `create_refusal_class`, `create_detail` | the `class` table above and its closed token | The same pair is mirrored to Sentry (op `create-refused`, tag `class`, `extra.detail`) |
 | `create_words`, `create_cap`, `create_total` | description words requested, the budget cap and the current model-visible total | Budget refusals only; `cap - total` is the headroom the description must fit |
 | `create_top1`, `create_nearest_rank` | the best overlap score with an existing skill and the rank of the model's nearest skill | `prefer-patch` refusals only; compare with the refusal threshold in the PR body trailer |
@@ -369,9 +376,9 @@ or a fixed phrase) that never carries model text. Query recipe: `betterstack-log
 
 Where the create outcome sits: the arm runs AFTER the edit loop, so `status` is the edit loop's status
 (`completed`, or `no-qualifying-clusters` when the edit arm had nothing to open) and `clusters_opened` counts edit
-PRs only. A create PR is never counted there. A run whose edit loop already used the last week-cap slot ends with
-`create_refusal_class: "week-cap"`; a run that finds the cap saturated before the loop (today: #11230 and #11231 are
-two open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
+PRs only. A create PR is never counted there. Since the slot reservation the edit loop cannot take the arm's slot,
+so `create_refusal_class: "week-cap"` is a defect signal; a run that finds the cap saturated before the loop (two
+open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
 
 - **Where the cause is readable without SSH.** Better Stack: the marker row (recipe in `betterstack-log-query.md`).
   Sentry: one MESSAGE event per refusal, feature `cron-compound-promote`, op `create-refused`, tag `class`, with
@@ -387,10 +394,14 @@ two open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the 
   the PR body carries the `CREATE (new skill)` line, so a replay cannot open a second PR. A hit without the line is an
   EDIT PR (both arms use the same branch shape): `persist/branch-taken`.
 - **Same-run collision.** The create arm does not offer the model a pattern whose cluster hash the edit loop recorded
-  in the same run (opened or attempted): no model call is spent on it, and when every pattern is owned that way the
-  arm ends `no_action` (`create_no_action_reason: other`) without a call and with no `ledger_suppressed` increment.
-  A model that names an owned pattern anyway is the backstop: still `no_action` / `other`, and the hash is NOT
-  recorded a second time (one `refusal_detail` entry per hash, no extra `ledger_suppressed`).
+  in the same run (opened or attempted), nor (since 2026-10-28) one the ledger already owns (an open or merged PR, or
+  a closed one inside the 60-day window): no model call is spent on it. When every pattern is owned by the edit loop
+  the arm ends `no_action` (`create_no_action_reason: other`); when the ledger empties the offer it ends `no_action`
+  (`create_no_action_reason: all-owned`). Either way there is no call and no `ledger_suppressed` increment.
+  A model that names an unoffered owned pattern anyway is the backstop: a same-run hash is still `no_action` / `other`
+  and is NOT recorded a second time (one `refusal_detail` entry per hash, no extra `ledger_suppressed`); a ledger hash
+  is suppressed by the post-call gate (`ledger-suppressed`, counted once). An empty offer ends the step before the clone check and the
+  open-create lookup, so a missing clone (`persist/clone-missing`) or an open create PR (`create-open`) is not surfaced on such a run.
 - **Base moved.** Step B refreshes the clone to the current main, re-runs the admission checks on it, and, just
   before the commit (after a second fetch), compares the blob ids of `README.md`, `plugins/soleur/README.md`, the
   promotion log and the budget-cap file with the ones it used: `persist/base-moved` when ANY moved (an unrelated

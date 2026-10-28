@@ -123,8 +123,8 @@ env:
   # The fleet the same-version redeploy must cover — the fan-out peers literal pinned by
   # web-hosts-fanout-parity.test.sh against var.web_hosts.
   WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
 jobs:
   cutover:

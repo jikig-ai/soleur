@@ -147,8 +147,6 @@ plugins/soleur	.github/workflows/git-data-rung2-rehearsal.yml
 plugins/soleur	.github/workflows/infra-validation.yml
 plugins/soleur	.github/workflows/reusable-release.yml
 plugins/soleur	.github/workflows/web-platform-release.yml
-plugins/soleur	.github/workflows/workspaces-luks-cutover.yml
-plugins/soleur	.github/workflows/workspaces-luks-verify.yml
 plugins/soleur	.grok/commands/help.md
 plugins/soleur	.grok/commands/sync.md
 plugins/soleur	.grok/config.toml
