@@ -43,3 +43,6 @@
 ## Fix Round + QA
 - Fix round: 3 targeted seats + 1 verification pass over 9008affb98..436ea714e2 — all clean, all findings CLOSED
 - QA: plan unit scenarios verified via guard suite (43/43 x3, incl. negative-control RED + 90000-widening mutant); e2e row is pyramid-justified deferred to live verify; AC-4 post-merge apply check pending at postmerge
+
+## Post-panel fix (CI-caught)
+- deploy-script-tests-fixed RED: my second `query_period = 5400` literal broke the SIBLING guard's file-scoped mutation anchor (`count==1`). Scoped its anchor to the sibling block via unique `recovery_period = 10800` context. Both guards re-verified: 23/23 + 43/43. Learning: a shared literal value across same-file alert resources must treat every guard's file-scoped anchors as a collision surface.
