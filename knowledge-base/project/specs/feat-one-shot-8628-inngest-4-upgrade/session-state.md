@@ -100,3 +100,11 @@ Deferred (NOT fixed — filed as follow-up issues by the parent): guard-window e
   - semgrep-sast / performance-oracle / gdpr-gate: approve or P3-only (gdpr 2 P3 advisory notes)
 - Fixes: ffbe648624 (F1-F19, 26 files) + 532b3b792e (INNGEST_DEV hardening). Deferred: #11419 filed; op:"transformInput" rename + options-bag deferred in-text.
 - Fix-round seats (resolved by fix-round-seats.sh + conditional arms): security-sentinel, code-quality-analyst, git-history-analyzer, pattern-recognition-specialist, architecture-strategist, agent-native-reviewer, user-impact-reviewer, test-design-reviewer, structural-enumeration + semgrep-sast, gdpr-gate (conditional arms).
+
+## Fix Round 1→2 (post-panel)
+- Panel: 13/13 main + 12/12 fix-round seats (real spawns, --mode full). Main trailer b04319b1f4; fix-round trailer fee315d61b over 5ba9802499..
+- Round 1 fixes: ffbe648624 (F1–F19) + 532b3b792e (INNGEST_DEV refuse-non-off + it.each arms).
+- Round 2 fixes (fix-round findings): 3a525ef84d — (h) pin hardened (comment-strip + quoted/shorthand/experimental keys + positive (h2) companion asserting client pin persists), STEP_EXECUTOR_EXPORTS +3 (fastifyPlugin/loader/action), isDev source-pin, INNGEST_DEV trim+padded-off arms+value-echo in throw, dir-walk probe, comment-truthfulness batch (Context.Any, engine.js, 4.26.0 cites, SERVE_HOST wording, _cron-shared line ref, 3→4 template fix), session-state deferred-list reconciled.
+- Verification: tsc exit 0; vitest 7 files / 362 tests green.
+- Deferred ledger: #11419 (guard-window dirs + dynamic-load edges + trigger-set enumeration + GET/PUT assertions + v-relay note); op:"transformInput" rename; options-bag; Error.name convention promotion (gdpr P3).
+- Coverage consult absent-classes (ship residuals, not diff defects): prod serveOrigin arm unexercised (first live = first deploy), prod-packaging divergence (omit-dev/dist bundle), #10905 merge-order hazard, rung-2 main-side HOLD (deploy-script-tests-fixed red — pre-existing, non-required), rollback v4→v3 path unexamined, test-all 317 declined (CI full battery carries).
