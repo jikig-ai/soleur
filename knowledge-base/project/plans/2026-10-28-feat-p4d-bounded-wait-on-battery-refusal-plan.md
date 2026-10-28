@@ -340,19 +340,19 @@ Not touched (asserted in ACs): `apps/**`, `scripts/registry-restore-from-ghcr.sh
 
 <!-- founder-stated check: see plan-founder-check.md -->
 
-- [ ] AC1 With a sibling-refusal log, a capacity stub that never reports `CAPACITY_OK measured_runs=0` but does report a valid CONTENDED line, a non-infra diff, no `--full` and an elapsed budget, `battery-refusal-wait.sh` prints `BATTERY_REFUSAL_WAIT verdict=CI_IS_THE_GATE` and exits 42 (final `case` in `plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh`).
-- [ ] AC2 Every non-contention log (SOLEUR_SUBAGENT text, selection refusal, `[FAIL]`/`[KILLED]`, mixed, empty, missing) exits 11 `NOT_WAITABLE` without waiting; a degraded-affected log (`AFFECTED_FALLBACK` plus the sibling refusal) is contention.
-- [ ] AC3 A diff touching `apps/web-platform/infra/` or `.github/workflows/apply-web-platform-infra.yml` (committed, working-tree, untracked, or as a rename SOURCE), a failed `origin/main...HEAD` diff, or `--full`, never exits 42; after the budget it exits 12 `QUEUE_IN_LOCK`.
-- [ ] AC4 A `[contention] CAPACITY_OK ... measured_runs=0` line exits 10 `RETRY`; `CAPACITY_CONTENDED` (even with `measured_runs=0`), `CAPACITY_UNKNOWN`, `measured_runs=?` and a failed or hung call keep waiting; a budget that ends with no valid reading exits 11 `capacity-unreadable`; two invocations share one budget through `--state`; an empty state file starts a fresh episode; a non-integer or future epoch exits 2.
-- [ ] AC5 Defaults are 1800 s budget and 60 s interval via flags only (no env vars read); invalid values exit 2.
-- [ ] AC6 No exit status other than 42 continues: a stray 1, 127 or 130 from the script (wrapper stub) is treated as stop by the recipe's branch, and the suite asserts it.
-- [ ] AC7 `ship/SKILL.md` links `references/battery-refusal-wait.md`, no longer prescribes an unbounded "go back to waiting" or the unbounded up-front capacity loop, keeps the queue-in-lock command, the rc=4 "REFUSED - nothing ran" sentence and the pinned-dispatch text; net bytes < 0 and `lint-skill-body-budget.py --base origin/main` is OK. `review/SKILL.md` is byte-identical to base.
-- [ ] AC8 The reference file carries the exact PR Test plan line, which never contains the words "passed" or "verified", and uses `wait_rc` (not `rc`) for the script's status.
-- [ ] AC9 The suite's parity rows pass against the live `scripts/test-all.sh`; each mutation row (1-9) and H1 is demonstrated RED against its mutant; H2 inputs pass; the PASS floor is asserted.
-- [ ] AC10 `git diff --stat origin/main...HEAD` shows no change under `apps/`, none to `scripts/registry-restore-from-ghcr.sh`, `scripts/test-all.sh`, `affected-tests.sh`, `harness.ts`, `drain-prs/SKILL.md`, `monitor-pr-checks.sh`, `review/SKILL.md`, and none to `.github/workflows/apply-web-platform-infra.yml`.
-- [ ] AC11 Neighbour suites in Phase 4 are green; `lint-orphan-test-suites.sh` reports the new suite classified.
-- [ ] AC12 Real-log check: `--classify-only` prints `class=contention` for a log captured from a real sibling refusal and for a real degraded-affected refusal (fixtures built by the suite from a real `flock` holder, not hand-typed text only).
-- [ ] AC13 ADR-196 carries the 2026-10-28 addendum.
+- [x] AC1 With a sibling-refusal log, a capacity stub that never reports `CAPACITY_OK measured_runs=0` but does report a valid CONTENDED line, a non-infra diff, no `--full` and an elapsed budget, `battery-refusal-wait.sh` prints `BATTERY_REFUSAL_WAIT verdict=CI_IS_THE_GATE` and exits 42 (final `case` in `plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh`).
+- [x] AC2 Every non-contention log (SOLEUR_SUBAGENT text, selection refusal, `[FAIL]`/`[KILLED]`, mixed, empty, missing) exits 11 `NOT_WAITABLE` without waiting; a degraded-affected log (`AFFECTED_FALLBACK` plus the sibling refusal) is contention.
+- [x] AC3 A diff touching `apps/web-platform/infra/` or `.github/workflows/apply-web-platform-infra.yml` (committed, working-tree, untracked, or as a rename SOURCE), a failed `origin/main...HEAD` diff, or `--full`, never exits 42; after the budget it exits 12 `QUEUE_IN_LOCK`.
+- [x] AC4 A `[contention] CAPACITY_OK ... measured_runs=0` line exits 10 `RETRY`; `CAPACITY_CONTENDED` (even with `measured_runs=0`), `CAPACITY_UNKNOWN`, `measured_runs=?` and a failed or hung call keep waiting; a budget that ends with no valid reading exits 11 `capacity-unreadable`; two invocations share one budget through `--state`; an empty state file starts a fresh episode; a non-integer or future epoch exits 2.
+- [x] AC5 Defaults are 1800 s budget and 60 s interval via flags only (no env vars read); invalid values exit 2.
+- [x] AC6 No exit status other than 42 continues: a stray 1, 127 or 130 from the script (wrapper stub) is treated as stop by the recipe's branch, and the suite asserts it.
+- [x] AC7 `ship/SKILL.md` links `references/battery-refusal-wait.md`, no longer prescribes an unbounded "go back to waiting" or the unbounded up-front capacity loop, keeps the queue-in-lock command, the rc=4 "REFUSED - nothing ran" sentence and the pinned-dispatch text; net bytes < 0 and `lint-skill-body-budget.py --base origin/main` is OK. `review/SKILL.md` is byte-identical to base.
+- [x] AC8 The reference file carries the exact PR Test plan line, which never contains the words "passed" or "verified", and uses `wait_rc` (not `rc`) for the script's status.
+- [x] AC9 The suite's parity rows pass against the live `scripts/test-all.sh`; each mutation row (1-9) and H1 is demonstrated RED against its mutant; H2 inputs pass; the PASS floor is asserted.
+- [x] AC10 `git diff --stat origin/main...HEAD` shows no change under `apps/`, none to `scripts/registry-restore-from-ghcr.sh`, `scripts/test-all.sh`, `affected-tests.sh`, `harness.ts`, `drain-prs/SKILL.md`, `monitor-pr-checks.sh`, `review/SKILL.md`, and none to `.github/workflows/apply-web-platform-infra.yml`.
+- [x] AC11 Neighbour suites in Phase 4 are green; `lint-orphan-test-suites.sh` reports the new suite classified.
+- [x] AC12 Real-log check: `--classify-only` prints `class=contention` for a log captured from a real sibling refusal and for a real degraded-affected refusal (fixtures built by the suite from a real `flock` holder, not hand-typed text only).
+- [x] AC13 ADR-196 carries the 2026-10-28 addendum.
 - [ ] AC14 PR body has `Ref #9757` and `Ref #10924`, no closing keyword, names the narrowing; after merge the P4d checkbox in #10924 is ticked and #10924 / #9757 remain open.
 
 ## Test Scenarios
@@ -376,3 +376,12 @@ Not touched (asserted in ACs): `apps/**`, `scripts/registry-restore-from-ghcr.sh
 - Do not edit `scripts/test-all.sh` to "help" the classifier: its refusal text is pinned by `fanout-suite-scope.test.sh`; the parity row reads it, it does not own it.
 - A foreign `test-all.sh` from another worktree is running right now and can refuse this PR's own Phase 4 battery: use the new script's flow (or the affected set directly), never kill the sibling's process.
 - The recipe's Monitor must be armed with `persistent: true` (the Monitor tool default timeout is 5 minutes; the script's budget is 30).
+
+## Post-review amendments (2026-10-28)
+
+The 8-seat review and the CTO rulings R1-R5 (decision-challenges.md) amended the plan as follows; the ACs above were verified against the amended behavior (suite: 215 assertions, 57 mutant rows):
+
+- AC2/AC3: `AFFECTED_FALLBACK` is classified by reason (index-missing and enumerate-unavailable stop; force-all behaves like `--full`; an unparseable or unknown reason stops).
+- AC4: the state epoch must be exactly 10 digits, not future and not older than 6 h; the state path must be an absolute regular file; `--probe-timeout-s` is a flag.
+- AC7: SKILL.md is 273877 bytes against 273890 on the base; the recipe launches the pinned dispatch (`affected-tests.sh`).
+
