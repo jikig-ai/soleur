@@ -42,13 +42,20 @@ if (!IS_BUILD_PHASE) {
   // validates signatures; in dev mode it short-circuits validateSignature
   // to success (per node_modules/inngest/components/InngestCommHandler.js).
   // A Doppler prd misconfiguration setting INNGEST_DEV=1 would silently
-  // disable I4 — refuse to load.
+  // disable I4 — refuse to load. Widened (PR #11381 review): the SDK also
+  // enters dev mode on INNGEST_DEV="true" (parseAsBoolean) or ANY
+  // URL-parseable value (explicitDevUrl in Inngest.js), so refuse every
+  // value that isn't an explicit off — "0", "false", or unset/empty.
+  const inngestDev = process.env.INNGEST_DEV;
   if (
     process.env.NODE_ENV === "production" &&
-    process.env.INNGEST_DEV === "1"
+    inngestDev !== undefined &&
+    inngestDev !== "" &&
+    inngestDev !== "0" &&
+    inngestDev.toLowerCase() !== "false"
   ) {
     throw new Error(
-      "INNGEST_DEV=1 in production refuses to load: signature verification would be bypassed (ADR-030 I4)",
+      "INNGEST_DEV set in production refuses to load: signature verification would be bypassed (ADR-030 I4)",
     );
   }
 }

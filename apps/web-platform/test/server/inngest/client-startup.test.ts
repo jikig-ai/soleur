@@ -103,16 +103,32 @@ describe("server/inngest/client.ts — module-load env validation", () => {
 
   // Review P2-1 (security-sentinel multi-agent finding): production refuses
   // to load when INNGEST_DEV=1 — the SDK would short-circuit signature
-  // verification (ADR-030 I4 bypass).
-  it("throws at import when NODE_ENV=production and INNGEST_DEV=1 (I4 bypass guard)", async () => {
-    // @ts-expect-error NODE_ENV is typed readonly; mutation is allowed at runtime
-    // in test contexts and is exactly the misconfiguration shape we are testing.
-    process.env.NODE_ENV = "production";
-    process.env.INNGEST_DEV = "1";
-    await expect(import("@/server/inngest/client")).rejects.toThrow(
-      /INNGEST_DEV=1 in production/,
-    );
-  });
+  // verification (ADR-030 I4 bypass). Widened (PR #11381 review): the SDK
+  // also enters dev mode on "true" and on any URL-parseable value
+  // (explicitDevUrl), so every non-off value refuses.
+  it.each(["1", "true", "TRUE", "http://10.0.1.40:8288"])(
+    "throws at import when NODE_ENV=production and INNGEST_DEV=%s (I4 bypass guard)",
+    async (devValue) => {
+      // @ts-expect-error NODE_ENV is typed readonly; mutation is allowed at runtime
+      // in test contexts and is exactly the misconfiguration shape we are testing.
+      process.env.NODE_ENV = "production";
+      process.env.INNGEST_DEV = devValue;
+      await expect(import("@/server/inngest/client")).rejects.toThrow(
+        /INNGEST_DEV set in production/,
+      );
+    },
+  );
+
+  it.each(["0", "false", ""])(
+    "loads when NODE_ENV=production and INNGEST_DEV=%s (explicit off)",
+    async (devValue) => {
+      // @ts-expect-error see above.
+      process.env.NODE_ENV = "production";
+      process.env.INNGEST_DEV = devValue;
+      const mod = await import("@/server/inngest/client");
+      expect(mod.inngest).toBeDefined();
+    },
+  );
 
   it("loads when NODE_ENV=production and INNGEST_DEV unset (cloud mode default)", async () => {
     // @ts-expect-error see above.
