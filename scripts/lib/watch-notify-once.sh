@@ -65,22 +65,24 @@ wn_reached() {
 }
 
 # ------------------------------------------------------------------ scratch --
-# One owning scratch directory per process: stderr captures live inside it, and the EXIT trap below
+# One owning scratch directory per process, created here at source time from an absolute base so
+# every write and removal below is rooted at a binding the fixture scanner can resolve (the same
+# shape script 3 uses for its WORK directory). Stderr captures live inside it and the EXIT trap
 # removes it, so nothing is left behind if a caller dies between allocation and cleanup. A caller
 # that installs its own EXIT trap afterwards must call wn_cleanup from it (script 3 does).
-WN_TMPDIR=""
+WN_TMP_BASE=${TMPDIR:-/var/tmp}
+WN_TMPDIR="$(mktemp -d "$WN_TMP_BASE/wn.XXXXXXXX")" || { echo "::error::cannot create the watcher scratch directory" >&2; return 3; }
 WN_ERRF=""
 wn_cleanup() {
-  if [[ -n "${WN_TMPDIR:-}" ]]; then rm -rf "$WN_TMPDIR"; fi
+  [[ -n "$WN_TMPDIR" ]] || return 0
+  rm -rf "$WN_TMPDIR"
   WN_TMPDIR=""
 }
 trap wn_cleanup EXIT
 # wn_errfile: set WN_ERRF to a fresh empty file inside the scratch directory (current shell only:
-# the directory is created lazily, so never call this from a command substitution).
+# never call this from a command substitution, or the assignment is lost with the subshell).
 wn_errfile() {
-  if [[ -z "$WN_TMPDIR" ]]; then
-    WN_TMPDIR="$(mktemp -d "${TMPDIR:-/var/tmp}/wn.XXXXXXXX")" || { WN_TMPDIR=""; return 1; }
-  fi
+  [[ -n "$WN_TMPDIR" ]] || return 1
   WN_ERRF="$(mktemp "$WN_TMPDIR/err.XXXXXXXX")" || return 1
 }
 

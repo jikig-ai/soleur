@@ -68,7 +68,7 @@ name: code-quality follow-ups watch
 #   - scripts/watch-brand-hex-triggers-11177.sh and its .test.sh
 #   - the three run_suite lines in scripts/test-all.sh
 #   - the matching rows in scripts/suite-durations.tsv and scripts/suite-shard-legs.tsv
-#   - the false-positive accept rows for the two watch suites that need them (6 for 10515, 6 for 11177) in
+#   - the false-positive accept rows for the two watch suites that need them (6 for 10515, 5 for 11177) in
 #     scripts/ci-pr-affected-audit.accept.tsv (the replay ratchet fails on a stale accept row)
 #   - NOTE: scripts/watch-code-quality-reeval-9730.test.sh carries the ONE static forbidden-verb
 #     census; when that suite is deleted, move the census to the next surviving suite.

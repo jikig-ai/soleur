@@ -17,6 +17,12 @@ SUT="$SCRIPT_DIR/watch-brand-hex-triggers-11177.sh"
 LIBF="$SCRIPT_DIR/lib/watch-notify-once.sh"
 REAL_HOOKS="$SCRIPT_DIR/../.claude/hooks"
 WF="$SCRIPT_DIR/../.github/workflows/code-quality-followups-watch.yml"
+# Redirect incident telemetry into a per-suite sandbox BEFORE any scenario runs: the scenarios drive the
+# real brand-hex gate, which calls emit_incident on every DENY, and without this each run writes fixture
+# rows into the operator's live `.claude/.rule-incidents.jsonl` (the file compound Phase 1.5 reads as
+# deviation evidence). incident-sandbox-coverage.test.sh named this suite as a sixth member of its
+# unprotected set (ceiling 5) on CI shard test-scripts (6/8); a true positive.
+. "$SCRIPT_DIR/../.claude/hooks/lib/test-incident-sandbox.sh"
 
 PASS=0; FAIL=0; TOTAL=0
 
