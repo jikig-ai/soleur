@@ -5,7 +5,7 @@
 // covered without per-handler instrumentation.
 //
 // THE BUG CLASS. inngest's `ProxyLogger` methods open with
-// `if (!this.enabled) return;` (inngest@3.54.2 middleware/logger.js › ProxyLogger.info/warn/error/debug).
+// `if (!this.enabled) return;` (inngest@4.26.0 middleware/logger.js › ProxyLogger.info/warn/error/debug).
 // Detaching one — `const f = ctx.logger.info`, `p.catch(ctx.logger.error)`,
 // `setTimeout(ctx.logger.info, 0)` — drops the receiver, so strict-mode class
 // code sees `this === undefined` and throws
@@ -56,7 +56,7 @@ const boundCache = new WeakMap<object, WeakMap<object, unknown>>();
  */
 export function applyBoundLogger(raw: unknown): unknown {
   // FAIL OPEN, BUT NOT FAIL SILENT — those are separable, and only the first is
-  // forced. `new Proxy(undefined, …)` THROWS, and a throw inside transformInput
+  // forced. `new Proxy(undefined, …)` THROWS, and a throw inside transformFunctionInput
   // would red EVERY cron on the surface over a logging concern, so we must not
   // throw. That says nothing about whether we may REPORT.
   //
@@ -76,8 +76,8 @@ export function applyBoundLogger(raw: unknown): unknown {
   // ProxyLogger. `ctx.logger` being absent implies nothing about module-scope
   // pino, so the re-entrancy argument does not transfer.
   //
-  // Reachable by more than an SDK bump: reading ctx.logger from onFunctionRun
-  // instead of transformInput lands here too (see the note on that hook below),
+  // Reachable by more than an SDK bump: reading ctx.logger from a later hook
+  // (e.g. `wrapFunctionHandler`) instead of transformFunctionInput lands here too (see the note on that hook below),
   // and tsc cannot catch that — `raw` is `unknown` and InitialRunInfo is
   // loosely typed. A refactor is the likelier trigger than a vendor change.
   // `typeof raw === "function"` is ACCEPTED, not rejected: the callable-logger

@@ -103,9 +103,11 @@ Live standing alarms over this source:
     3. The Sentry ops that say what the single-flight guard did (feature `cron-claude-eval`):
        `claude-eval-singleflight-join` — a retry reached the live child (or its settled result),
        one marker, **the guard worked**; `claude-eval-singleflight-no-runid` — a spawn had no
-       well-formed run id, **the guard was bypassed**, investigate. Feature `inngest-serve`, op
-       `inngest-stream-consumer-cancel` — a step stream's consumer disconnected (one event per drop;
-       its tags name the function, step and whether the request was signed).
+       well-formed run id, **the guard was bypassed**, investigate.
+       (Retired, #8628 / PR #11381: feature `inngest-serve` op `inngest-stream-consumer-cancel`
+       used to fire on a step stream's consumer disconnect — its only emitter was
+       `stream-detach.ts`, deleted by the inngest@4 upgrade. Drops are now detected server-side
+       via the `inngest_step_524` needle above.)
   - **`logtail_exploration_alert.claude_cost_daily_burn`** (hourly, trailing 24 h) —
     `soleur-claude-cost-daily-burn-prd`. Pages when the cron `SOLEUR_CLAUDE_COST` markers' summed
     `cost_usd` exceeds **$25** (`local.claude_cost_daily_burn_usd`; recalibration on #8613). The sum

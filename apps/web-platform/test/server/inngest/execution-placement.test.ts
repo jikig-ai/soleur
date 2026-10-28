@@ -120,8 +120,24 @@ const CLASS_RULE =
   "volume-bound if it reads WORKSPACES_ROOT or reaches server/workspace*.ts; else host-affine if it spawns Claude or a child process, clones under CRON_WORKSPACE_ROOT, or takes the deploy lease; else portable";
 /** `inngest` itself and every subpath (`inngest/next`, `inngest/deno/fresh`, `inngest/connect`, …). */
 const INNGEST_MODULE_RE = /^inngest(\/.+)?$/;
-/** The SDK exports that execute steps for a remote Inngest server. */
-const STEP_EXECUTOR_EXPORTS: ReadonlySet<string> = new Set(["serve", "connect", "createServer", "InngestCommHandler"]);
+/**
+ * The SDK exports that execute steps for a remote Inngest server. Must track
+ * the SDK's executor-export surface — inngest@4 added the `endpointAdapter`
+ * family (`inngest/next`, `inngest/edge`, `inngest/node`), the node
+ * `serveEndpoint`/`createEndpointServer` pair, and the `inngest/internals`
+ * execution engine, each of which can register a step path the guard must see.
+ */
+const STEP_EXECUTOR_EXPORTS: ReadonlySet<string> = new Set([
+  "serve",
+  "connect",
+  "createServer",
+  "InngestCommHandler",
+  "endpointAdapter",
+  "serveEndpoint",
+  "createEndpointServer",
+  "InngestExecution",
+  "InngestExecutionEngine",
+]);
 const SOURCE_FILE_RE = /\.(ts|tsx|js|mjs|cjs)$/;
 const TEST_FILE_RE = /\.test\.(ts|tsx|js|mjs|cjs)$/;
 const VOLUME_LITERAL_PREFIXES = ["/workspaces", "/mnt/data"];
@@ -876,7 +892,7 @@ function serveAnchorViolations(fs: GraphFs): string[] {
   reaching.sort();
   if (reaching.length !== 1 || reaching[0] !== ROUTE_PATH) {
     out.push(
-      `modules reaching an Inngest step-executor API (serve / connect / createServer / InngestCommHandler, or an opaque load of an inngest module): [${reaching.join(", ")}] — expected exactly [${ROUTE_PATH}]. A second executor registers a second step path; revisit the ADR-033 #7230 placement rule first.`,
+      `modules reaching an Inngest step-executor API (the STEP_EXECUTOR_EXPORTS surface — serve / connect / createServer / InngestCommHandler / endpointAdapter / serveEndpoint / createEndpointServer / InngestExecution*, or an opaque load of an inngest module): [${reaching.join(", ")}] — expected exactly [${ROUTE_PATH}]. A second executor registers a second step path; revisit the ADR-033 #7230 placement rule first.`,
     );
   }
 
@@ -1023,7 +1039,7 @@ export function spawnClaudeEval(): SpawnResult {
 function fnSrc(exportName: string, id: string, head = "", body = "null"): string {
   return `import { inngest } from "@/server/inngest/client";
 ${head}
-export const ${exportName} = inngest.createFunction({ id: "${id}" }, { cron: "0 * * * *" }, async () => ${body});
+export const ${exportName} = inngest.createFunction({ id: "${id}", triggers: { cron: "0 * * * *" } }, async () => ${body});
 `;
 }
 
@@ -1175,11 +1191,11 @@ describe("Guard 1 — the manifest covers exactly the served set", () => {
   });
 
   it("an id that is not a literal or a same-file const — a call, a `let`, or a spread-overridable config — is RED", () => {
-    const call = `import { inngest } from "@/server/inngest/client";\nconst makeId = () => "cron-alpha";\nexport const cronAlpha = inngest.createFunction({ id: makeId() }, { cron: "0 * * * *" }, async () => null);\n`;
+    const call = `import { inngest } from "@/server/inngest/client";\nconst makeId = () => "cron-alpha";\nexport const cronAlpha = inngest.createFunction({ id: makeId(), triggers: { cron: "0 * * * *" } }, async () => null);\n`;
     expect(joined(runAll(withFiles({ "server/inngest/functions/cron-alpha.ts": call })).g1)).toContain("use a string literal or a same-file const");
-    const letId = `import { inngest } from "@/server/inngest/client";\nlet ID = "cron-alpha";\nexport const cronAlpha = inngest.createFunction({ id: ID }, { cron: "0 * * * *" }, async () => null);\n`;
+    const letId = `import { inngest } from "@/server/inngest/client";\nlet ID = "cron-alpha";\nexport const cronAlpha = inngest.createFunction({ id: ID, triggers: { cron: "0 * * * *" } }, async () => null);\n`;
     expect(joined(runAll(withFiles({ "server/inngest/functions/cron-alpha.ts": letId })).g1)).toContain("use a string literal or a same-file const");
-    const spread = `import { inngest } from "@/server/inngest/client";\nexport const cronAlpha = inngest.createFunction({ id: "cron-alpha", ...more }, { cron: "0 * * * *" }, async () => null);\n`;
+    const spread = `import { inngest } from "@/server/inngest/client";\nexport const cronAlpha = inngest.createFunction({ id: "cron-alpha", triggers: { cron: "0 * * * *" }, ...more }, async () => null);\n`;
     expect(joined(runAll(withFiles({ "server/inngest/functions/cron-alpha.ts": spread })).g1)).toContain("could override `id`");
   });
 
@@ -1205,14 +1221,12 @@ describe("Guard 1 — the manifest covers exactly the served set", () => {
     const pair = `import { inngest } from "@/server/inngest/client";
 const REQUESTED_ID = "agent-pair-requested";
 export const pairSettle = inngest.createFunction(
-  { id: "agent-pair-settle", retries: 3 } as unknown as Parameters<typeof inngest.createFunction>[0],
-  { event: "x" } as unknown as Parameters<typeof inngest.createFunction>[1],
-  (async () => null) as unknown as Parameters<typeof inngest.createFunction>[2],
+  { id: "agent-pair-settle", retries: 3, triggers: { event: "x" } } as unknown as Parameters<typeof inngest.createFunction>[0],
+  (async () => null) as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 export const pairRequested = inngest.createFunction(
-  { id: REQUESTED_ID } as unknown as Parameters<typeof inngest.createFunction>[0],
-  { event: "y" } as unknown as Parameters<typeof inngest.createFunction>[1],
-  (async () => null) as unknown as Parameters<typeof inngest.createFunction>[2],
+  { id: REQUESTED_ID, triggers: { event: "y" } } as unknown as Parameters<typeof inngest.createFunction>[0],
+  (async () => null) as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 `;
     const r = runAll(
@@ -1283,7 +1297,7 @@ describe("Guard 2 — the portable boundary", () => {
   });
 
   it("must-pass: a portable function whose client import is relative still satisfies the floor", () => {
-    const { files, manifest } = withGamma(`import { inngest } from "../client";\nexport const cronGamma = inngest.createFunction({ id: "cron-gamma" }, { cron: "0 * * * *" }, async () => null);\n`);
+    const { files, manifest } = withGamma(`import { inngest } from "../client";\nexport const cronGamma = inngest.createFunction({ id: "cron-gamma", triggers: { cron: "0 * * * *" } }, async () => null);\n`);
     expect(runAll(files, manifest).g2).toEqual([]);
   });
 

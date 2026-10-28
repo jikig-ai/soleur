@@ -61,6 +61,15 @@ function extractTfMonitorNames(): Set<string> {
   return new Set([...code.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
 }
 
+// Files under server/inngest/functions/ whose source sets a `checkpointing`
+// object key. The property shape (`{` or `,` then the key then `:`) keeps a
+// comment or string merely naming the flag from counting.
+function functionFilesWithCheckpointingKey(): string[] {
+  return readdirSync(FUNCTIONS_DIR)
+    .filter((f) => f.endsWith(".ts"))
+    .filter((f) => /[{,]\s*checkpointing\s*:/.test(readFileSync(resolve(FUNCTIONS_DIR, f), "utf8")));
+}
+
 const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-campaign-calendar",
   "scheduled-cloud-task-heartbeat",
@@ -382,5 +391,17 @@ describe("Inngest function registry — drift guards", () => {
     // Must NOT derive the origin from NEXT_PUBLIC_APP_URL — that build-inlines as
     // undefined in the prod container (the #5182 no-op regression class).
     expect(routeSrc).not.toMatch(/SERVE_HOST\s*=\s*process\.env\.NEXT_PUBLIC_APP_URL/);
+  });
+
+  // Checkpointing totality pin (#8628): the client ships `checkpointing: false`
+  // (CTO ruling 2026-10-28, recorded in server/inngest/client.ts and ADR-243's
+  // 2026-10-28 amendment) — but inngest@4 also accepts `checkpointing` as a
+  // per-function createFunction config key (FunctionConfig.checkpointing),
+  // which silently overrides the client pin for that one function. Exactly the
+  // kind of drift a flag flip PR can leave behind, so ZERO such keys may appear
+  // in any file under server/inngest/functions/. A future flip-on is a
+  // deliberate client change, not a per-function one (see the ruling).
+  it("(h) no function file sets a per-function `checkpointing` config key", () => {
+    expect(functionFilesWithCheckpointingKey()).toEqual([]);
   });
 });

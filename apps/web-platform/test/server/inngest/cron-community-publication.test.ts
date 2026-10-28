@@ -1231,49 +1231,40 @@ describe("contained-write P3 residuals (#8628)", () => {
     const ghostBase = join(root, "no-such-procfs", "fd");
     await expect(
       writeDigestFileContained(root, REL, "x", { hasProcFd: true, fdBase: ghostBase }),
-    ).rejects.toThrow(); // ENOENT propagates — deliberately NOT remapped
+    ).rejects.toThrow(/ENOENT/); // ENOENT propagates — deliberately NOT remapped
     // Nothing was created under the real tree: the write never fell back to
     // an unpinned join() path.
-    await expect(readFile(join(root, REL), "utf8")).rejects.toThrow();
+    await expect(readFile(join(root, REL), "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  // Mixed-seam probe: openContainedDir resolves `kb` via the JOIN arm
+  // (hasProcFd:false), then createContainedFile is handed the PINNED arm with
+  // a ghost base — the ENOENT proves the seam is threaded through
+  // createContainedFile, not swallowed after openContainedDir. A mutant that
+  // ignored the seam there would open via the REAL /proc/self/fd/<fd>/leaf and
+  // succeed — this row would go red.
+  it("createContainedFile threads the seam (ghost fdBase on the pinned arm is ENOENT)", async () => {
+    const ghostBase = join(root, "no-such-procfs", "fd");
+    const dir = await openContainedDir(root, ["kb"], { hasProcFd: false });
+    try {
+      await expect(
+        createContainedFile(dir, "leaf", undefined, { hasProcFd: true, fdBase: ghostBase }),
+      ).rejects.toThrow(/ENOENT/);
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
   });
 
   // (c) fh.close() lone-writeback masking: a successful write + failed close
   // surfaces the close error; a failed write + failed close still reports the
-  // write error.
+  // write error. Driven end-to-end through writeDigestFileContained via the
+  // closeFailsOnce seam — the SUT, not a test-body replica.
   it("a lone close() failure surfaces (write succeeded)", async () => {
-    const dir = await openContainedDir(root, ["knowledge-base"], { hasProcFd: false });
-    try {
-      const fh = await createContainedFile(dir, "leaf.md", undefined, { hasProcFd: false });
-      await fh.writeFile("wrote");
-      // Reproduce writeDigestFileContained's close discipline against a
-      // fh whose close throws once.
-      let closeCalls = 0;
-      const origClose = fh.close.bind(fh);
-      fh.close = (async () => {
-        closeCalls++;
-        await origClose().catch(() => {});
-        throw new Error("close writeback failed");
-      }) as typeof fh.close;
-      let writeErr: unknown;
-      let sawWriteErr = false;
-      try {
-        await fh.writeFile("again").catch((e) => { throw e; });
-      } catch (e) {
-        writeErr = e;
-        sawWriteErr = true;
-      }
-      let thrown: unknown;
-      try {
-        await fh.close();
-      } catch (closeErr) {
-        if (!sawWriteErr) thrown = closeErr;
-      }
-      if (sawWriteErr) throw writeErr;
-      expect(String(thrown)).toContain("close writeback failed");
-      expect(closeCalls).toBe(1);
-    } finally {
-      await dir.fh.close().catch(() => {});
-    }
+    await expect(
+      writeDigestFileContained(root, REL, "wrote", { hasProcFd: false, closeFailsOnce: true }),
+    ).rejects.toThrow(/close writeback failed/);
+    // The write itself landed — only the writeback close failed.
+    expect(await readFile(join(root, REL), "utf8")).toBe("wrote");
   });
 
   it("a write error wins over a close error (write error not masked)", async () => {

@@ -26,7 +26,7 @@
 //       not re-run the LLM, a finalize retry must not double-ping.
 //
 // Observability: function-final errors are captured by Layer 1
-// (server/inngest/middleware/sentry-correlation.ts transformOutput) — no
+// (server/inngest/middleware/sentry-correlation.ts onRunError) — no
 // per-function captureException needed for terminal errors. Statutory
 // notify failures are mirrored to Sentry INSIDE notifications.ts
 // (mirrorStatutoryNotifyFailure, tags feature=email-triage /
@@ -108,8 +108,9 @@ interface HandlerArgs {
     error: (...args: unknown[]) => void;
   };
   // Inngest's zero-indexed retry attempt + (optional) max attempt count, off
-  // BaseContext (the handler arg) — NOT onFunctionRun ctx, which is
-  // InitialRunInfo and lacks `attempt` (learning 2026-06-16). Optional so the
+  // BaseContext (the handler arg) — NOT a middleware hook ctx, which lacks
+  // `attempt` (learning 2026-06-16; the v3 note named onFunctionRun's
+  // InitialRunInfo ctx, same trap under v4 hook names). Optional so the
   // legacy/eager test shape (neither passed) reads attempt=0/maxAttempts=1 →
   // isFinalAttempt=true, identical to the pre-degraded-tail behavior. Shape
   // copied verbatim from _cron-shared.ts:107-108.

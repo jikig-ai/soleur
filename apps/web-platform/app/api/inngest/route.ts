@@ -6,8 +6,9 @@
 // and the SDK enforces HMAC validation on every inbound POST in cloud mode
 // (INNGEST_DEV unset or =0).
 //
-// Phase 2 ships with `functions: []`. Phase 3 will fill `cfoOnPaymentFailed`.
-// Once functions are registered, the signature gate (validateSignature in
+// The functions array below is the single served registry (count-pinned by
+// test/server/inngest/function-registry-count.test.ts and Guard 1 of
+// execution-placement.test.ts). Once functions are registered, the signature gate (validateSignature in
 // node_modules/inngest/components/InngestCommHandler.js) runs BEFORE any
 // function dispatches. Since #8611 (streaming) the 401 travels inside the
 // streamed JSON envelope under an HTTP 201 — asserted by

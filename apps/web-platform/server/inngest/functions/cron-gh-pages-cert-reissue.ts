@@ -23,7 +23,7 @@
 // control-flow throw that would run `finally` prematurely at the first
 // suspension. That reasoning is unchanged by the added sleeps: there is still no
 // `finally`. There was no in-repo `onFailure` precedent when this was written; the config key is
-// verified against pinned inngest 3.54.2.
+// verified against pinned inngest 4.26.0.
 // The read-only preflight lives in its OWN preceding step so the atomic mutating
 // step holds an HTTP connection only for the toggle→settle→reset window (the
 // Inngest executor callback goes through CF's ~100s origin-response timeout).
@@ -250,7 +250,7 @@ export interface ReissueResult {
   // set at the construction sites — derived once in `emitAndReturn` from the
   // run context, so the two cannot diverge.
   probeOnly: boolean;
-  // ‼️ `ok` and `errorSummary` are the ONLY fields `runLogMiddleware` reads off
+  // ‼️ `ok` and `errorSummary` are the ONLY fields `RunLogMiddleware` reads off
   // a handler's return value (`server/inngest/middleware/run-log.ts` projects
   // exactly `{ ok?: boolean; errorSummary?: string }`). Without them EVERY
   // outcome — including the deliberately-paging `dns_propagation_failed` and a
@@ -1783,7 +1783,7 @@ function emitTerminal(
     // post-deploy fire.
     //
     // #6703 UPDATE — this is now DEFENCE IN DEPTH, not the only guard.
-    // bound-logger.ts › boundLoggerMiddleware binds every function-valued
+    // bound-logger.ts › BoundLoggerMiddleware binds every function-valued
     // property of ctx.logger for all Inngest functions, so extraction is safe
     // fleet-wide and the warning above no longer describes a live crash here.
     // Keep it anyway: the middleware fails OPEN (if ctx.logger is ever absent
@@ -1921,7 +1921,7 @@ export async function cronGhPagesCertReissueOnFailure({
   // ‼️ THE ENVELOPE IS NOT THE ORIGINAL EVENT. Inngest registers onFailure as a
   // SEPARATE function triggered by `inngest/function.failed`, whose payload is
   // `{ name, data: { function_id, run_id, error, event: <originalEvent> } }`
-  // (verified against pinned inngest 3.54.2, `types.d.ts` FailureEventPayload).
+  // (verified against pinned inngest 4.26.0, `types.d.ts` FailureEventPayload).
   // Two consequences, both of which silently corrupt exactly the telemetry this
   // work exists to produce:
   //   - `resolveProbeOnly(event)` would read `event.data.probeOnly` → undefined

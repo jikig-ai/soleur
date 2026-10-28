@@ -38,7 +38,7 @@
 - **Gates:** `./node_modules/.bin/tsc --noEmit` green; vitest green on the 8 touched suites (run-log-middleware, bound-logger-middleware, sentry-correlation-middleware, signature-verify, signature-verify-dev-mode, client-startup, cron-email-ingress-probe, cron-community-publication — 186+113 pass). `test-all.sh --affected` NOT run here (long suite; left for the review/ship gate rather than fabricate).
 - **Phase 5a:** probe retired — script+test+run_suite+2 TSV rows+baseline row deleted; `git grep inngest-verify-clean-10390` → 0 in code paths.
 - **Phase 5b:** all four P3 items — ContainedFdSeam optional override (beforeOpen-precedent), procfs-absent loud-ENOENT probe, fh.close() track-and-rethrow, `writeDigestFileContained: op=<token>` family; 7 new tests green.
-- **Phase 4 spike:** NOT RUN — binaries fetched (inngest 1.45.1-9059f14a7, cloudflared) but the build+tunnel harness could not complete in-session; `streaming-spike-v4.md` records every S-row as not executed. S7 kill-proof still owed — do NOT merge treating it as evidence.
+- **Phase 4 spike:** NOT RUN — binaries fetched (inngest 1.45.1-9059f14a7, cloudflared) but the build+tunnel harness could not complete in-session; `streaming-spike-v4.md` records every S-row as not executed. S7 kill-proof still owed — do NOT merge treating it as evidence. *(superseded — see "Spike + Gates Phase" below; all rows executed, S7 PASS)*
 - **Phase 6:** ADR-243 amended in place; 2 new decision-challenges rulings appended.
 - **Files:** ~98 changed (71 function codemods, middleware×3, client, route, 3 webhook routes, 6 inngest test files, 5 registry/baseline files, ADR-243, spec artifacts).
 - **Commits:** `2f6baea` migration unit · `HEAD` residuals — see git log.
@@ -57,3 +57,31 @@
 - **Artifacts:** `streaming-spike-v4.md` rewritten from NOT-RUN to per-row verdicts; harness scripts/logs in `/tmp/spike-v4/` (server.mjs, proxy.mjs, fns.mjs, send.mjs, app/inngest/cloudflared/proxy logs).
 - **Deviations:** fixture fns on spike-only mounts (same `inngest@4.26.0` under test; real route exercised by unsigned-POST + PUT rows); S3 ran twice not thrice; crash handlers are the JS-equivalent two handlers (no Sentry DSN under env -i); `next.config.mjs` precompiled via the Dockerfile's esbuild line (deleted after the run — untracked artifact).
 - **SHAs:** `2e722ca97b` (this phase: spike record + session-state + 4 test fixes) on top of `5923033cf1`/`d93c56f768`/`4e5fd912d8` (work phase).
+
+## Resolve Round 1
+
+Review-panel findings on PR #11381 applied inline (F1-F19):
+
+- **F1** — `execution-placement.test.ts`: `STEP_EXECUTOR_EXPORTS` extended with v4's executor surface (`endpointAdapter`, `serveEndpoint`, `createEndpointServer`, `InngestExecution`, `InngestExecutionEngine` — all verified present in the installed `inngest@4.26.0` tarball) + must-track comment; Guard 4 offender message lists the widened surface.
+- **F2** — `function-registry-count.test.ts`: new `(h)` totality pin — zero `checkpointing` config keys under `server/inngest/functions/` (property-shape regex so a bare mention doesn't count); a per-function key silently overrides the client's `checkpointing: false`.
+- **F3** — ADR-243 amendment bullet rewritten: S7 PASS + S9 both-arms verdicts recorded per `streaming-spike-v4.md`; future flip-on must re-run `soleur:gdpr-gate` and update the Art. 30 record.
+- **F4** — `sentry-correlation-middleware.test.ts`: non-final-attempt gate test added (`isFinalAttempt: false` + thrown error → no `captureException`, warning `attempt error` breadcrumb emitted).
+- **F5** — `execution-placement.test.ts` fixtures migrated to the v4 idiom (`triggers:` inside arg0, handler is arg1; `[2]` casts renumbered to `[1]`). Guard semantics unchanged (arg0-only reads).
+- **F6** — `betterstack-log-query.md`: dead `inngest-stream-consumer-cancel` needle marked retired (#8628); drops now detected server-side via `inngest_step_524`.
+- **F7** — ADR-030: dated amendment line appended (pin now `^4.26.0`, stream-detach deleted, ADR-243 §1 pointer). History untouched.
+- **F8** — ADR-243 Alternatives row annotated `EXECUTED 2026-10-28 (PR #11381, spike S7 PASS)`.
+- **F9** — session-state Phase-4 NOT-RUN line annotated superseded (all rows executed, S7 PASS).
+- **F10** — `decision-challenges.md`: two ruled rows moved inside the Decision Classes table (above `## Not Yet Specified`).
+- **F11** — `oneshot-TEMPLATE.ts.template`: `// FILL` re-seated onto the `triggers:` line.
+- **F12** — `agent-on-spawn-requested.ts`: codemod indentation inside `triggers: [` fixed (col 4 → col 6).
+- **F13** — pin claims `3.54.2` → `4.26.0`: `cert-reissue-marker.ts` (substance corrected — v4 falls back to `ConsoleLogger`, `enabled` flips in `onMemoizationEnd()`, replay-suppression holds), `cron-gh-pages-cert-reissue.ts` ×2 (onFailure key + FailureEventPayload shape re-verified in installed 4.26.0), `schedule-reminder-route.test.ts` (original capture date kept, pin move noted), `bound-logger.ts` (`inngest@4.26.0 middleware/logger.js` — gate verified unchanged).
+- **F14** — `serveHost` → `serveOrigin` in `inngest-bootstrap.sh`, `betterstack-logs-alerts.tf`, `cat-deploy-state.sh` comments.
+- **F15** — v3 nomenclature swept at the enumerated sites (transformInput→transformFunctionInput, transformOutput→onRunError/writeTerminalRow, onFunctionRun→v4 equivalents, runLogMiddleware→RunLogMiddleware, boundLoggerMiddleware→BoundLoggerMiddleware, stale route.ts Phase-2 comment, five test titles/comments). Live Sentry token `op: "transformInput"` in bound-logger.ts left untouched (alert needle — deferred).
+- **F16** — bare `rejects.toThrow()` tightened to `/ENOENT/`.
+- **F17** — mixed-seam probe added: `openContainedDir` join arm + `createContainedFile` pinned arm with ghost `fdBase` → ENOENT (pins seam threading into createContainedFile).
+- **F18** — `closeFailsOnce` knob added to `ContainedFdSeam`, wired in `createContainedFile` (first close releases the fd then throws); lone-close test now drives `writeDigestFileContained` end-to-end instead of re-enacting the algorithm. The write-error-wins row stays a source pin (a writeFile failure is not reachable through the seam — plumbing a second knob would be disproportionate).
+- **F19** — `oneshot-TEMPLATE.ts.template` header: `Error.name` code-constant convention added (v4 preserves `name` in serialized envelopes → persisted run history/Sentry unscrubbed; same discipline as error_summary).
+
+Deferred (NOT fixed — filed as follow-up issues by the parent): `INNGEST_DEV=<URL>`/non-`"1"` prod bypass hardening; guard-window expansion to out-of-window dirs (components/scripts/e2e/etc.); trigger-set membership enumeration; GET/PUT signature assertions; `op: "transformInput"` token rename (live alert needle); options-bag for `createContainedFile`; `v` relay undocumented-spread note.
+
+**Verification (scoped):** `./node_modules/.bin/tsc --noEmit` → exit 0. `vitest run` on the 8 touched suites (execution-placement, function-registry-count, sentry-correlation-middleware, cron-community-publication, bound-logger-middleware, email-on-received, schedule-reminder-route, cron-gh-pages-cert-reissue) → **8 files / 463 tests passed**. `test-all.sh` not run (unscoped, per resolve-round rules).

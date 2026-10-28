@@ -694,7 +694,7 @@ resource "logtail_exploration_alert" "registry_clientip_not_rfc1918" {
 # ── #8611 / ADR-243: Anthropic spend — a step outliving the proxy, and the daily burn ───────────
 #
 # WHY THESE EXIST. The self-hosted Inngest server calls every step at the Cloudflare-proxied
-# serveHost, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
+# serveOrigin, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
 # outlives that gets a 524, `retries: 1` re-invokes it while the first Claude session is still
 # running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
 # top-up lasted ~39 h. Three standing alarms, one per question:

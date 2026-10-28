@@ -162,7 +162,7 @@ describe("applyBoundLogger — receiver-loss elimination", () => {
   });
 
   // AC3c — fail-open. `new Proxy(undefined, …)` THROWS, and a throw inside
-  // transformInput would red EVERY cron on the surface over a logging concern.
+  // transformFunctionInput would red EVERY cron on the surface over a logging concern.
   it("AC3c: a missing or non-object logger fails open rather than throwing", () => {
     for (const absent of [undefined, null, "not-an-object", 42]) {
       expect(() => applyBoundLogger(absent)).not.toThrow();

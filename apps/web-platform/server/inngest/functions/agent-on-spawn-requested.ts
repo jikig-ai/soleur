@@ -1739,8 +1739,8 @@ export const agentOnSpawnSettle = inngest.createFunction(
         // Literal `==`, so it never matches the SDK's own `…-failure` id. Built
         // from the client id, which the SDK prefixes onto every function id.
         if: `event.data.function_id == '${inngest.id}-${REQUESTED_FUNCTION_ID}'`,
-    },
-    { event: ORPHANED_EVENT },
+      },
+      { event: ORPHANED_EVENT },
     ],
   } as unknown as Parameters<typeof inngest.createFunction>[0],
   agentOnSpawnSettleHandler as unknown as Parameters<typeof inngest.createFunction>[1],

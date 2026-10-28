@@ -14,6 +14,10 @@
 // A oneshot gets NO Sentry cron monitor (it would false-alert on missed
 // check-ins); errors route via reportSilentFallback. The token is minted INSIDE
 // step.run and never returned into persisted step state.
+// `Error.name` must stay a code constant (never dynamic content) — inngest@4
+// preserves a thrown error's `name` in the serialized envelope, so it ships
+// into persisted run history and Sentry unscrubbed; same discipline as
+// error_summary.
 
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
@@ -102,8 +106,8 @@ export const oneshotFILL = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
-    triggers: { event: "oneshot/FILL-name.fire" },
-  }, // FILL
+    triggers: { event: "oneshot/FILL-name.fire" }, // FILL: the arming event name
+  },
   oneshotFILLHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 

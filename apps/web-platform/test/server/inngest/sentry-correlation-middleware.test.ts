@@ -93,7 +93,7 @@ async function runHooks(opts: {
 }
 
 describe("sentry-correlation middleware", () => {
-  it("tags scope with fn_id, run_id, event_name on transformInput", async () => {
+  it("tags scope with fn_id, run_id, event_name on transformFunctionInput", async () => {
     await runHooks({
       fnId: "cron-oauth-probe",
       runId: "run-42",
@@ -140,7 +140,7 @@ describe("sentry-correlation middleware", () => {
     expect(messages.some((m) => m.startsWith("final ok "))).toBe(true);
   });
 
-  it("captures final error to Sentry on transformOutput(error, no step)", async () => {
+  it("captures final error to Sentry on onRunError(error, final attempt)", async () => {
     const err = new Error("probe died");
     await runHooks({ finalResult: { error: err } });
     expect(sentryCalls.captureException).toHaveBeenCalledTimes(1);
@@ -154,6 +154,28 @@ describe("sentry-correlation middleware", () => {
         "inngest.event_name": expect.any(String),
       },
     });
+  });
+
+  it("non-final failed attempt is gated on the native isFinalAttempt flag (regression: dead gate)", async () => {
+    // A thrown error on a non-final attempt will retry — capturing it would
+    // file a Sentry ISSUE for a recoverable error. The gate lives on
+    // onRunError's native isFinalAttempt (sentry-correlation.ts), so a
+    // regression that ignores the flag is red here. Pattern mirrors
+    // run-log-middleware.test.ts's "non-final failed attempt" row.
+    await runHooks({
+      finalResult: { error: new Error("retry me") },
+      isFinalAttempt: false,
+    });
+    expect(sentryCalls.captureException).not.toHaveBeenCalled();
+    // The non-final attempt still records a warning breadcrumb, not silence.
+    const warningBreadcrumbs = sentryCalls.addBreadcrumb.mock.calls.filter(
+      ([b]) => (b as { level: string }).level === "warning",
+    );
+    expect(
+      warningBreadcrumbs.some(([b]) =>
+        (b as { message: string }).message.startsWith("attempt error "),
+      ),
+    ).toBe(true);
   });
 
   it("does NOT captureException on per-step error (Inngest retries — step is recoverable)", async () => {

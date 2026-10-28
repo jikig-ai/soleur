@@ -666,11 +666,14 @@ const containedHasProcFd = process.platform === "linux";
  * `beforeOpen?`). `hasProcFd` forces the path-resolution arm a non-Linux
  * runtime would take; `fdBase` points the pinned arm at a different base so a
  * test can simulate a Linux runtime with procfs absent (every pinned open
- * must then fail LOUD with ENOENT, never silently unpinned). A
+ * must then fail LOUD with ENOENT, never silently unpinned). `closeFailsOnce`
+ * makes the leaf handle's FIRST close() release the fd and then throw, so
+ * writeDigestFileContained's track-and-rethrow discipline can be driven
+ * end-to-end instead of re-enacted in a test body. A
  * `process.platform` module-mock would be load-order fragile — the const
  * evaluates at import — so the seam is a parameter (CTO ruling 2026-10-28).
  */
-export type ContainedFdSeam = { hasProcFd?: boolean; fdBase?: string };
+export type ContainedFdSeam = { hasProcFd?: boolean; fdBase?: string; closeFailsOnce?: boolean };
 
 /** Resolve the seam to the effective pair. */
 function containedFdResolve(seam?: ContainedFdSeam): { has: boolean; base: string } {
@@ -840,7 +843,21 @@ export async function createContainedFile(
     throw new Error("writeDigestFileContained: op=createLeaf: pinned dir handle closed during write");
   }
   try {
-    return await open(leafPath, leafFlags, 0o644);
+    const fh = await open(leafPath, leafFlags, 0o644);
+    if (seam?.closeFailsOnce) {
+      // Test seam: the first close() really releases the fd, THEN throws, so
+      // the simulated failure is an honest writeback error — not a leaked fd
+      // and not a failure a real close could never produce.
+      const orig = fh.close.bind(fh);
+      let armed = true;
+      fh.close = (async () => {
+        if (!armed) return orig();
+        armed = false;
+        await orig().catch(() => {});
+        throw new Error("close writeback failed (closeFailsOnce seam)");
+      }) as typeof fh.close;
+    }
+    return fh;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EEXIST" || code === "ELOOP") {

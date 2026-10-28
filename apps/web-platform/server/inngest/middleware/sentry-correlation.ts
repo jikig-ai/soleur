@@ -14,10 +14,10 @@
 //      "navigation"-style convention so the breadcrumb timeline reads as
 //      a step trace.
 //
-//   3. Capture `transformOutput` errors at the function-level (Inngest's
-//      final-failure path) so a function that returns `result.error`
-//      surfaces in Sentry's issues stream as a regular exception, NOT
-//      just as a missed Sentry-monitor checkin.
+//   3. Capture `onRunError` errors at the function level (Inngest's
+//      final-failure path, gated on the native `isFinalAttempt`) so a
+//      function that throws surfaces in Sentry's issues stream as a
+//      regular exception, NOT just as a missed Sentry-monitor checkin.
 //
 // Run-id is the load-bearing forensic key: every Sentry event tagged
 // `inngest.run_id:<id>` correlates to one entry in Inngest's dashboard
