@@ -61,7 +61,7 @@ Live standing alarms over this source:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
 - **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
-  5400 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
   `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
   header, or is absent. `indeterminate` never pages. Merged but inert until the owner delivers the signed
   bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
