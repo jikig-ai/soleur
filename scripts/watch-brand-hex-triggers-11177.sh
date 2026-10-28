@@ -150,6 +150,7 @@ WORK="$(mktemp -d "$TMP_BASE/watch-brand-hex.XXXXXXXX")" || { echo "::error::mkt
 cleanup() {
   if [[ -n "$WT" && -n "$REPO_ROOT" ]]; then gitx -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1; fi
   if [[ -n "$WORK" ]]; then rm -rf "$WORK"; fi
+  wn_cleanup
 }
 trap cleanup EXIT
 trap 'exit 130' INT

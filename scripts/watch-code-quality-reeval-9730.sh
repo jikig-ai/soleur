@@ -78,7 +78,8 @@ pv_chunk() {
     i=$((i + 1))
   done
   q+=" }"
-  errf="$(mktemp "${TMPDIR:-/var/tmp}/wcq-err.XXXXXXXX")" || { echo "::error::PR-volume search could not create a temp file" >&2; return 3; }
+  wn_errfile || { echo "::error::PR-volume search could not create a temp file" >&2; return 3; }
+  errf="$WN_ERRF"
   resp="$(gh api graphql -f query="$q" 2>"$errf")"; rc=$?
   err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
   if [[ "$rc" -ne 0 ]]; then

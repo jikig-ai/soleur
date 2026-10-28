@@ -64,11 +64,32 @@ wn_reached() {
   [[ "$now_e" -ge "$want_e" ]]
 }
 
+# ------------------------------------------------------------------ scratch --
+# One owning scratch directory per process: stderr captures live inside it, and the EXIT trap below
+# removes it, so nothing is left behind if a caller dies between allocation and cleanup. A caller
+# that installs its own EXIT trap afterwards must call wn_cleanup from it (script 3 does).
+WN_TMPDIR=""
+WN_ERRF=""
+wn_cleanup() {
+  if [[ -n "${WN_TMPDIR:-}" ]]; then rm -rf "$WN_TMPDIR"; fi
+  WN_TMPDIR=""
+}
+trap wn_cleanup EXIT
+# wn_errfile: set WN_ERRF to a fresh empty file inside the scratch directory (current shell only:
+# the directory is created lazily, so never call this from a command substitution).
+wn_errfile() {
+  if [[ -z "$WN_TMPDIR" ]]; then
+    WN_TMPDIR="$(mktemp -d "${TMPDIR:-/var/tmp}/wn.XXXXXXXX")" || { WN_TMPDIR=""; return 1; }
+  fi
+  WN_ERRF="$(mktemp "$WN_TMPDIR/err.XXXXXXXX")" || return 1
+}
+
 # ------------------------------------------------------------ issue + comments --
 wn_read_issue() {
   local n="$1" err errf out
   [[ "$n" =~ ^[1-9][0-9]*$ ]] || return 3
-  errf="$(mktemp "${TMPDIR:-/var/tmp}/wn-err.XXXXXXXX")" || return 3
+  wn_errfile || return 3
+  errf="$WN_ERRF"
   out="$(gh issue view "$n" --json state,createdAt,comments 2>"$errf")"
   local rc=$?
   err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
@@ -109,7 +130,7 @@ wn_sentinel_present() {
 # The one writer. Body on stdin.
 wn_post() {
   local n="$1" errf rc
-  errf="$(mktemp "${TMPDIR:-/var/tmp}/wn-err.XXXXXXXX")" || errf=/dev/null
+  if wn_errfile; then errf="$WN_ERRF"; else errf=/dev/null; fi
   gh issue comment "$n" --body-file - >/dev/null 2>"$errf"
   rc=$?
   if [[ "$rc" -ne 0 ]]; then
@@ -152,7 +173,8 @@ wn_billing_month() {
   local tag
   printf -v tag '%04d-%02d' "$y" "$((10#$m))"
   WN_BILL_STATUS=""; WN_BILL_JSON=""
-  errf="$(mktemp "${TMPDIR:-/var/tmp}/wn-err.XXXXXXXX")" || return 3
+  wn_errfile || return 3
+  errf="$WN_ERRF"
   out="$(gh api "orgs/${WN_ORG}/settings/billing/usage?year=${y}&month=${m}" 2>"$errf")"
   rc=$?
   err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"

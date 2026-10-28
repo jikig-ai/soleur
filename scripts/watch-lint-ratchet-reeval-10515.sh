@@ -93,10 +93,11 @@ run_search() {
     echo "::error::search for '${label}' failed (could not encode the query); posting nothing (the next run retries)" >&2
     return 3
   fi
-  errf="$(mktemp "${TMPDIR:-/var/tmp}/wlr-err.XXXXXXXX")" || {
+  wn_errfile || {
     echo "::error::search for '${label}' failed (no temp file); posting nothing (the next run retries)" >&2
     return 3
   }
+  errf="$WN_ERRF"
   raw="$(gh api "search/issues?q=${enc}&per_page=30&sort=created&order=desc" 2>"$errf")"
   rc=$?
   err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
