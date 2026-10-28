@@ -85,3 +85,18 @@ Review-panel findings on PR #11381 applied inline (F1-F19):
 Deferred (NOT fixed — filed as follow-up issues by the parent): `INNGEST_DEV=<URL>`/non-`"1"` prod bypass hardening; guard-window expansion to out-of-window dirs (components/scripts/e2e/etc.); trigger-set membership enumeration; GET/PUT signature assertions; `op: "transformInput"` token rename (live alert needle); options-bag for `createContainedFile`; `v` relay undocumented-spread note.
 
 **Verification (scoped):** `./node_modules/.bin/tsc --noEmit` → exit 0. `vitest run` on the 8 touched suites (execution-placement, function-registry-count, sentry-correlation-middleware, cron-community-publication, bound-logger-middleware, email-on-received, schedule-reminder-route, cron-gh-pages-cert-reissue) → **8 files / 463 tests passed**. `test-all.sh` not run (unscoped, per resolve-round rules).
+
+## Review Panel Ledger (PR #11381, PANEL_SHA=5ba9802499)
+- Panel: 13/13 seats ran (real subagent panel, --mode full). Findings→seat map for --finding-seats:
+  - git-history-analyzer: ADR-243 staleness (P2), EXECUTED row, runbook needle, template FILL
+  - test-design-reviewer: isFinalAttempt red-side (P2), lone-close replica, seam-threading arm, bare toThrow
+  - user-impact-reviewer: ADR-243 staleness (P2), indent drift, stale pins
+  - security-sentinel: INNGEST_DEV bypass (P3→fixed inline), skipSignatureValidation pin note
+  - architecture-strategist: ADR-243 staleness, ADR-030 pin, runbook, orphaned rows, indent nit
+  - agent-native-reviewer: ADR-243 staleness (P2), session-state stale line, stale export names
+  - pattern-recognition-specialist: ADR-243 staleness (P2), template FILL, stale pins
+  - code-quality-analyst: ADR-243 (P2), v3 fixtures (P2), nomenclature cluster, indent, FILL, lone-close note
+  - structural-enumeration: STEP_EXECUTOR_EXPORTS v4 members (P1), checkpointing override pin (P1), window gaps (→#11419), INNGEST_DEV URL bypass
+  - semgrep-sast / performance-oracle / gdpr-gate: approve or P3-only (gdpr 2 P3 advisory notes)
+- Fixes: ffbe648624 (F1-F19, 26 files) + 532b3b792e (INNGEST_DEV hardening). Deferred: #11419 filed; op:"transformInput" rename + options-bag deferred in-text.
+- Fix-round seats (resolved by fix-round-seats.sh + conditional arms): security-sentinel, code-quality-analyst, git-history-analyzer, pattern-recognition-specialist, architecture-strategist, agent-native-reviewer, user-impact-reviewer, test-design-reviewer, structural-enumeration + semgrep-sast, gdpr-gate (conditional arms).
