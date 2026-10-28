@@ -704,24 +704,33 @@ Before this arm, an engine exit 1 reached the `*)` arm, whose text claims every 
 enumerated and carried an aside naming exit 1 as the known exception. Exit 1 is the engine's
 input refusal: it exits 1 for an unknown argument, an option missing a value, the removed
 `--rehearse`, a missing `--target` or `--tags-from`, an unreadable `--tags-from`, a bad
-`--target`, a non-numeric `.floor`, a non-array `.entries`, zero required entries, and duplicate
-repo:tag pairs. Every one of those checks runs before any network call, so on this step an exit 1
-means nothing was written and the store is still empty.
+`--target`, a non-numeric `.floor`, an `.entries` that cannot be parsed or is not an array, zero
+required entries, and duplicate repo:tag pairs. Every one of those checks runs before any network
+call, so an exit 1 means THIS ATTEMPT wrote nothing. That is a statement about the attempt, not
+about the store: the restore job can chain against a store that was not empty (the refill flag is
+set before the apply, so an apply that fails before the destroy still chains it), which is why the
+arm says the store is "exactly as the previous step left it" and not "empty".
 
 Which of those can fire here is narrower than the list. The step passes fixed arguments (the
 local sink as `--target`, the downloaded pins file as `--tags-from`), so the argument checks cannot
 fire, and an unreadable file is near-impossible because the artifact download and its
 `if-no-files-found: error` fail earlier. What remains is a manifest-content fault (floor, entries,
 zero or duplicated required pairs). In a normal dispatch the uploaded `registry-restore-pins` bytes
-are the file the D10 verdict step wrote and the pull-path gate already ran the engine against, so an
-exit 1 here means the artifact was altered or this is the resume arm (the verdict step skipped, the
-manifest unrehearsed in this run).
+are the file the D10 verdict step wrote and the pull-path gate already ran the engine against, and
+no step between that upload and this download rewrites the file. The traceable route to an exit 1
+here is the resume arm: it skips the verdict step, so the engine never ran on this manifest in this
+run, and the gate's own manifest check is parse-only (it does not apply the engine's floor,
+zero-entry or duplicate checks). The other possibility is the gate and the engine disagreeing about
+a manifest shape, which is a defect.
 
 That is why the arm does not say "re-run this job": a re-run re-downloads the same artifact
 (seven-day retention) and fails identically. There is no restore-only dispatch input. A new
 `registry-luks-recut` with the NEW volume id re-derives and re-rehearses the manifest before it
 destroys anything, but that path is unmeasured for this failure, so the arm and the runbook row stay
-conservative: read the engine's own `::error::` line, capture it, file it.
+conservative: read the engine's own `::error::` line and fix the cause it names. The arm says "a
+correct refusal, not an engine defect", the same position as the rehearsal gate's own exit-1 arm,
+and the runbook row names the one case worth filing (the engine line names a check the rehearsal
+gate accepted on the same manifest).
 
 The step's own `exit 1` after a failed Doppler read happens before the retry loop and never reaches
 the `case`; the arm text says "engine" so the two exit-1 origins are not conflated. Ruling:
