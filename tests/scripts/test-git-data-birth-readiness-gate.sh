@@ -3135,6 +3135,27 @@ _il_chk() {
   fi
 }
 
+# _il_chk SELF-TEST — the probe the helper shipped without. _il_chk OWNS a verdict (it compares, then calls
+# pass or fail), so a helper whose condition is `if true` still moves a counter on every call and every
+# IL* row below stays green. Drive it with a deliberately WRONG expectation (the destroyed id cannot PASS)
+# and require that it FAILED; then unwind the counters and the ledger so the floor stays exact. The
+# observation is reported through an ordinary row, so the M0d harness row below sees it go red.
+_il_chk_self_test() {
+  local _p0=$passes _f0=$fails _l0=${#FAILURES[@]} _f1 _l1
+  _il_chk "__selftest" 0 "PASS" "$_il_dir/selftest-bad.tf" >/dev/null 2>&1
+  _f1=$fails; _l1=${#FAILURES[@]}
+  passes=$_p0; fails=$_f0
+  while [[ "${#FAILURES[@]}" -gt "$_l0" ]]; do unset "FAILURES[$(( ${#FAILURES[@]} - 1 ))]"; done
+  FAILURES=("${FAILURES[@]+"${FAILURES[@]}"}")
+  if [[ "$_f1" -eq $((_f0 + 1)) && "$_l1" -eq $((_l0 + 1)) ]]; then
+    pass "ILS _il_chk can FAIL: driven with a wrong expectation it recorded a failure (counters unwound)"
+  else
+    fail "ILS _il_chk cannot FAIL — every IL* row below would pass vacuously" "n/a" "fails ${_f0} -> ${_f1}, ledger ${_l0} -> ${_l1}"
+  fi
+}
+printf 'module "git_data_userdata" {\n  git_data_volume_id = "106867358"\n}\n' > "$_il_dir/selftest-bad.tf"
+_il_chk_self_test
+
 # --- must PASS (the canonical and every non-canonical shape of the same property) ---
 _IL_OK="$(_il_fix ok '  git_data_volume_id      = ""')"
 _il_chk "IL1 the empty literal => PASS" 0 "PASS" "$_IL_OK"
@@ -3177,6 +3198,54 @@ _il_chk "IL5b a non-empty assignment followed by an empty one => ABORT" 1 "more 
 { cat "$_IL_OK"; cat "$_IL_OK"; } > "$_il_dir/twoblocks.tf"
 _il_chk "IL5c two module blocks of the same name => ABORT" 1 "more than one module" "$_il_dir/twoblocks.tf"
 
+# --- (PR #11432 review) braces inside quoted strings must not move the depth ---
+# The repro: a string "}" inside a nested map closes the module early in a naive brace count, so the
+# nested `git_data_volume_id = ""` reads as the top-level argument and the REAL non-empty assignment that
+# follows the map's true close is left outside the block. Measured before the fix: rc 0, PASS.
+_IL_STRBRACE_BAD="$(_il_fix strbracebad '  for_each = {' '    a = "}"' '    git_data_volume_id = ""' '  }' '  git_data_volume_id = "106867358"')"
+_il_chk "IL6 a \"}\" string inside a nested map does not hide a later non-empty assignment => ABORT" 1 "non-empty (line" "$_IL_STRBRACE_BAD" "106867358"
+_IL_STRBRACE_OK="$(_il_fix strbraceok '  for_each = {' '    a = "}"' '  }' '  git_data_volume_id = ""')"
+_il_chk "IL6b control: a \"}\" string inside a nested map beside a genuine empty argument => PASS" 0 "PASS" "$_IL_STRBRACE_OK"
+_IL_STRESC_BAD="$(_il_fix stresc '  for_each = {' '    a = "\"}"' '    git_data_volume_id = ""' '  }' '  git_data_volume_id = "106867358"')"
+_il_chk "IL6c an escaped-quote string (\"\\\"}\") is one string: its brace is not a delimiter => ABORT" 1 "non-empty (line" "$_IL_STRESC_BAD" "106867358"
+_IL_OLDKEY="$_il_dir/oldkey.tf"
+printf 'module "git_data_userdata" {\n  source = "x"\n  old_git_data_volume_id = ""\n}\n' > "$_IL_OLDKEY"
+_il_chk "IL6d a DIFFERENT key sharing the suffix (old_git_data_volume_id = \"\") is not the argument => ABORT (kills dropping the line anchor)" 1 "no top-level git_data_volume_id" "$_IL_OLDKEY"
+# A pinned FAIL-CLOSED limitation of the SHARED comment stripper (_git_data_hcl_nocomment, not changed
+# here): a `<<TAG` token inside a `#` comment is read as a heredoc opener and blanks everything after it,
+# so the module call below vanishes. For THIS gate that is the safe direction (ABORT, never PASS); the
+# row pins it so that a future fix of the stripper is a deliberate act that updates this row, and so that
+# nobody "fixes" it in the direction of a PASS. Tracked: see the tracking issue filed for this review
+# (number added by the lead).
+_IL_HDOC="$_il_dir/hdoccmt.tf"
+printf '# an example (<<EOF) that is only a comment\nmodule "git_data_userdata" {\n  git_data_volume_id = ""\n}\n' > "$_IL_HDOC"
+_il_chk "IL6e a '# (<<EOF)' comment above the call: the shared stripper swallows it => ABORT (fail-closed, pinned)" 1 "no module" "$_IL_HDOC"
+# The live-tree EXTRACTOR invariant. This asserts only that the real git-data.tf is PARSEABLE by the
+# extractor, never what it says: the verdict (PASS or the non-empty ABORT) flips when the
+# `git_data_volume_id = ""` change merges, and this row must stay true on both sides of that merge.
+_IL_LIVE_OUT="$(git_data_plaintext_id_interlock "${ROOT}/apps/web-platform/infra/git-data.tf" 2>&1)" || true
+_IL_LIVE_BAD=""
+for _il_pe in "no module" "could not strip" "not brace-balanced" "no top-level" "more than one" "unclassified" "cannot read"; do
+  [[ "$_IL_LIVE_OUT" == *"$_il_pe"* ]] && _IL_LIVE_BAD="${_IL_LIVE_BAD}[${_il_pe}]"
+done
+if [[ -z "$_IL_LIVE_BAD" && "$_IL_LIVE_OUT" == *"git_data_plaintext_id_interlock: "* ]]; then
+  pass "IL6f the extractor parses the real git-data.tf (its verdict is never a parse/shape error; the PASS/non-empty value is not asserted)"
+else
+  fail "IL6f the extractor could not parse the real git-data.tf (${_IL_LIVE_BAD:-no verdict line})" "n/a" "$_IL_LIVE_OUT"
+fi
+
+# The "*)" arm: an extractor that prints something the case does not know (here: an awk that fails or
+# prints nothing for the extraction script only) must ABORT, never fall out of the case as a success.
+# The stub is a shell FUNCTION named awk, exported for the mutation helper's child shell, gated on an env
+# var so that it is inert everywhere else in the suite, and removed immediately after.
+awk() {
+  if [[ -n "${_IL_AWK_STUB:-}" && "$*" == *"function blank"* ]]; then return 3; fi
+  command awk "$@"
+}
+export -f awk
+_IL_AWK_STUB=1 _g "IL7 an extraction awk that fails/prints nothing => ABORT 'unclassified extractor verdict' (rc 1)" \
+  1 "unclassified extractor verdict" git_data_plaintext_id_interlock "$_IL_OK"
+
 # --- mutation: every arm of the function is load-bearing, aimed at the input it exists for ---
 # (An arm-neutering row asserts the mutant's rc flips to 0 AND that its output still carries the
 # arm's own text: the text proves the fixture really reaches that arm, so the flip is the arm's.)
@@ -3208,6 +3277,17 @@ MUTATE_G_NEEDLE="non-empty" mutate_g "IM8: comment stripping is load-bearing (ne
 MUTATE_G_NEEDLE="more than one top-level git_data_volume_id" mutate_g "IM9: the depth-1 scoping is load-bearing (neutered, a nested assignment is miscounted)" \
   's/_il_depth == 1 && //' \
   1 git_data_plaintext_id_interlock "$_IL_NEST"
+MUTATE_G_NEEDLE="unclassified extractor verdict" _IL_AWK_STUB=1 mutate_g "IM10: the unclassified-verdict arm is load-bearing (neutered, an extractor that yields no verdict returns 0)" \
+  '/^    \*) echo "git_data_plaintext_id_interlock: ABORT — unclassified/ s/return 1 ;;/return 0 ;;/' \
+  0 git_data_plaintext_id_interlock "$_IL_OK"
+unset -f awk
+MUTATE_G_NEEDLE="PASS" mutate_g "IM11: counting braces on the string-blanked copy is load-bearing (neutered, a \"}\" string hides a later non-empty assignment)" \
+  's/, "{", b)/, "{")/; s/, "}", b)/, "}")/' \
+  0 git_data_plaintext_id_interlock "$_IL_STRBRACE_BAD"
+# M0d — harness row: mutate THIS SUITE's _il_chk to `if true`. Without the ILS self-test no IL* row can
+# see it (every call would pass). The mutant must report at least one failure.
+mutate_suite "M0d: an _il_chk whose condition is 'if true' reds this suite (ILS is the probe)" \
+  's|^  if \[\[ "\$rc" -eq "\$want" \&\& "\$out" == \*"\$needle"\* \]\] \&\& { \[\[ -z "\$forbid" \]\] .*; then$|  if true; then|' 1
 
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
@@ -3399,7 +3479,19 @@ MUTATE_G_NEEDLE="more than one top-level git_data_volume_id" mutate_g "IM9: the 
 #                  real non-empty, duplicates in both orders, two blocks of the same name
 #     9  IM1-IM9   mutation: the empty-literal comparison, each of the six refusal arms, comment stripping (both directions: the
 #                  // refusal and the trailing-comment PASS), and the depth-1 scoping
-_FLOOR=291
+# RAISED 291 -> 302 (PR #11432 review round 1; observed 291 before, 302 after), ITEMISED:
+#     1  ILS       _il_chk can FAIL (driven with a wrong expectation, counters unwound)
+#     4  IL6-IL6d  strings blanked before braces are counted: a "}" string hiding a later non-empty assignment (ABORT), its
+#                  must-PASS control, the escaped-quote variant (ABORT), a different key sharing the suffix (ABORT)
+#     1  IL6e      pinned fail-closed: a `# (<<EOF)` comment above the call (the shared stripper's heredoc limit) => ABORT
+#     1  IL6f      the extractor parses the real git-data.tf (never a parse/shape error; the PASS/non-empty value is not asserted)
+#     1  IL7       the "*)" unclassified-verdict arm, driven through a stub awk function
+#     1  IM10      mutation: that arm is load-bearing
+#     1  IM11      mutation: brace counting on the string-blanked copy is load-bearing
+#     1  M0d       harness: an _il_chk whose condition is `if true` reds the suite
+#   ----
+#    11 (ILS 1 + IL6-IL6d 4 + IL6e 1 + IL6f 1 + IL7 1 + IM10 1 + IM11 1 + M0d 1)
+_FLOOR=302
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

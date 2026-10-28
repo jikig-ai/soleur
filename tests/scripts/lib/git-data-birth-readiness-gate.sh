@@ -2766,6 +2766,23 @@ _git_data_hcl_nocomment() {
 #
 # OUTPUT DISCIPLINE. Prints the verdict and the line number only; never the value (the log is public and
 # the value is an infrastructure id).
+#
+# STRINGS ARE BLANKED BEFORE BRACES ARE COUNTED (PR #11432 review). A `}` or `{` inside a quoted string
+# ("}" , "\"}") is not a block delimiter; counting it would close the module early and hide a later
+# genuine top-level assignment. The depth counts and the opener/assignment matches therefore read a
+# per-line copy with every string reduced to ""; the raw line is kept for value extraction.
+#
+# OUT OF SCOPE, on purpose (review findings D1 and D4; fixing either needs a deliberate edit by someone who
+# can already edit this gate, and #11433 retires the interlock rather than hardening it):
+#   D1  a SECOND module call that also feeds user_data (this reads only `module "git_data_userdata"`).
+#   D4  an id literal placed inside the module or the template by some other route than the
+#       `git_data_volume_id` argument.
+# A PR that edits git-data.tf in a way that adds either is already reviewed as an edit to the very file
+# this gate reads; the interlock is a tripwire for the known literal, not a proof about user_data.
+#
+# KNOWN SHARED-PARSER LIMIT (not changed here): `_git_data_hcl_nocomment` treats a `<<TAG` token inside a
+# `#` comment as a heredoc opener and blanks the following lines. The consequence is fail-closed for this
+# gate (a pinned fixture below asserts ABORT); it is tracked in the issue filed for the PR #11432 review.
 git_data_plaintext_id_interlock() {
   local tf="${1:-}" _il_src _il_out _il_verdict _il_line _il_val _il_empty='""'
   if [[ ! -r "$tf" ]]; then
@@ -2778,13 +2795,31 @@ git_data_plaintext_id_interlock() {
   fi
   _il_out="$(awk '
     function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+    # blank(s): s with the CONTENTS of every double-quoted string removed (each string becomes ""), so a
+    # brace inside a string ("}" , "\"}") cannot move the depth. State is per line (HCL strings do not
+    # span lines; a heredoc body is already blanked upstream). Char loop: mawk-portable.
+    function blank(s,   i, n, ch, o, ins) {
+      o = ""; ins = 0; n = length(s)
+      for (i = 1; i <= n; i++) {
+        ch = substr(s, i, 1)
+        if (ins) {
+          if (ch == "\\") { i++; continue }
+          if (ch == "\"") { ins = 0; o = o "\"\"" }
+          continue
+        }
+        if (ch == "\"") { ins = 1; continue }
+        o = o ch
+      }
+      return o
+    }
     BEGIN { depth = 0; inb = 0; blocks = 0; n = 0; closed = 0 }
     {
       _il_depth = depth
-      o = gsub(/[{]/, "{"); c = gsub(/[}]/, "}")
-      if (!inb && _il_depth == 0 && $0 ~ /^[[:space:]]*module[[:space:]]+"git_data_userdata"[[:space:]]*[{]/) {
+      b = blank($0)
+      o = gsub(/[{]/, "{", b); c = gsub(/[}]/, "}", b)
+      if (!inb && _il_depth == 0 && $0 ~ /^[[:space:]]*module[[:space:]]+"git_data_userdata"[[:space:]]*[{]/ && b ~ /^[[:space:]]*module[[:space:]]+""[[:space:]]*[{]/) {
         blocks++; inb = 1; closed = 0
-      } else if (inb && _il_depth == 1 && $0 ~ /^[[:space:]]*git_data_volume_id[[:space:]]*=/) {
+      } else if (inb && _il_depth == 1 && b ~ /^[[:space:]]*git_data_volume_id[[:space:]]*=/) {
         n++; line = NR; v = $0; sub(/^[[:space:]]*git_data_volume_id[[:space:]]*=/, "", v); val = trim(v)
       }
       depth += o - c
@@ -2803,7 +2838,7 @@ git_data_plaintext_id_interlock() {
     _il_line="${_il_out#assign:}"; _il_line="${_il_line%%:*}"
     _il_val="${_il_out#assign:*:}"
     if [[ "$_il_val" == "$_il_empty" ]]; then
-      echo "git_data_plaintext_id_interlock: PASS — git_data_volume_id in module \"git_data_userdata\" is the empty string (line ${_il_line}); the rendered user_data names no plaintext volume."
+      echo "git_data_plaintext_id_interlock: PASS — git_data_volume_id in module \"git_data_userdata\" is the empty string (line ${_il_line}); the rendered user_data names no plaintext volume. This check alone does not release a dispatch (the rung-2 evidence gate, the authorization-map gate and the environment approval are separate gates), and the empty-id boot has never run on a real host (#10296)."
       return 0
     fi
     echo "git_data_plaintext_id_interlock: ABORT — git_data_volume_id in module \"git_data_userdata\" is non-empty (line ${_il_line}). It names a plaintext volume that was destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap's plaintext_unverified FATAL. Set it to \"\" in git-data.tf (the one-hunk change tracked on #11194), merge, then dispatch. The value is not printed."
