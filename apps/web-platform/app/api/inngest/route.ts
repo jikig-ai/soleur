@@ -206,7 +206,7 @@ const handlers = serve({
   // "allow"/"force" enum with a boolean — `true` streams wherever the handler supports it, which
   // is what "force" selected for this Next.js route (evidence:
   // knowledge-base/project/specs/archive/20260923-200917-feat-anthropic-spend-reduction/streaming-spike.md
-  // + the v4 re-run in specs/feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md).
+  // + the v4 re-run in knowledge-base/project/specs/archive/20261028-165529-feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md).
   streaming: true,
   // #5159 (see SERVE_HOST note above): pin the registered serve URL to the
   // canonical public origin so a loopback re-register PUT plans crons. Omitted

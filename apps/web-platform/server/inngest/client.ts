@@ -80,7 +80,7 @@ export const inngest = new Inngest({
   // pinned v1.45.1 server is upstream-docs-only (unverified), so this PR
   // pins it OFF — spike row S9 measures both arms; flip-on is a future
   // one-flag decision (CTO ruling 2026-10-28,
-  // specs/feat-one-shot-8628-inngest-4-upgrade/decision-challenges.md).
+  // knowledge-base/project/specs/archive/20261028-165529-feat-one-shot-8628-inngest-4-upgrade/decision-challenges.md).
   checkpointing: false,
   // sentry-correlation middleware tags every Sentry event captured during
   // a function run with `inngest.run_id` + `inngest.fn_id` and emits per-

@@ -155,5 +155,5 @@ them truthfully about itself. Verify the checkout before diagnosing the instrume
 - `knowledge-base/project/learnings/2026-08-16-every-number-i-inherited-was-stale-and-the-panel-found-the-defect-class-inside-my-fix.md`
 - `knowledge-base/project/learnings/2026-09-18-every-defect-was-in-my-verification-not-the-feature.md`
 - `knowledge-base/project/learnings/2026-09-08-the-guard-was-deleted-the-plan-still-cited-it-and-the-linter-validated-the-citation.md`
-- Spec: `knowledge-base/project/specs/feat-one-shot-8628-inngest-4-upgrade/session-state.md`
+- Spec: `knowledge-base/project/specs/archive/20261028-165529-feat-one-shot-8628-inngest-4-upgrade/session-state.md`
   (Review Panel Ledger, Fix Round 1→2 sections)
