@@ -281,16 +281,16 @@ in_transit:
 
 ## Acceptance Criteria
 
-- [ ] AC1: `supabase-pre-pull-images.sh` skips the `public.ecr.aws` pull for remaining images after `SUPABASE_ECR_DEAD_AFTER` (default 2) *consecutive* ECR throttle-signature exhaustions in a run, and emits exactly one `::warning::ecr latch` annotation on the transition.
-- [ ] AC2: the consecutive counter resets to 0 on any non-throttle ECR outcome (success or deterministic failure), so a flapping-but-answering ECR never latches.
-- [ ] AC3: an exhausted per-image pull (ECR and ghcr both fail) is recorded and the loop continues over the remaining images; the script exits nonzero only after attempting every image.
-- [ ] AC4: the cache tar is written from `docker image inspect`-verified present refs only; on a partial pull the subset is saved and the script emits `::error::` naming the unfetched refs before `exit 1`; on zero present refs no `docker save` is attempted.
-- [ ] AC5: the tar write uses `pigz -1` when `command -v pigz` succeeds and `gzip -1` otherwise; never the default gzip level.
-- [ ] AC6: `rls-authz-fuzz.yml` carries `timeout-minutes: 45` with a comment citing runs 40653699076/40657761446.
-- [ ] AC7: `ghcr-pull-with-retry.sh` is unchanged on this branch (`git diff --name-only origin/main...HEAD -- .github/scripts/ghcr-pull-with-retry.sh` is empty — merge-base form, not the moving tip).
-- [ ] AC8: the resilience suite asserts the new contract — `wiring:timeout-45`, latch wiring greps, `ecr-throttle-ghcr-ok`/`ecr-flap`/`partial-fail` behavioral arms with exact pull counts, updated `c:exhaust-*` expectations — and prints `0 failed` locally.
-- [ ] AC9: pre-existing behavioral rows still hold: full cache hit (zero pulls), partial restore (`%d/%d` + only-missing pulls), glue-cut tag extraction, `MIN_IMAGES` floor, missing-CLI exit 2.
-- [ ] AC10: `MIN_ASSERTIONS` is raised to the new exact assertion count in the same diff (ADR-193) and `bash .github/scripts/test/run-all.sh` exits 0.
+- [x] AC1: `supabase-pre-pull-images.sh` skips the `public.ecr.aws` pull for remaining images after `SUPABASE_ECR_DEAD_AFTER` (default 2) *consecutive* ECR throttle-signature exhaustions in a run, and emits exactly one `::warning::ecr latch` annotation on the transition.
+- [x] AC2: the consecutive counter resets to 0 on any non-throttle ECR outcome (success or deterministic failure), so a flapping-but-answering ECR never latches.
+- [x] AC3: an exhausted per-image pull (ECR and ghcr both fail) is recorded and the loop continues over the remaining images; the script exits nonzero only after attempting every image.
+- [x] AC4: the cache tar is written from `docker image inspect`-verified present refs only; on a partial pull the subset is saved and the script emits `::error::` naming the unfetched refs before `exit 1`; on zero present refs no `docker save` is attempted.
+- [x] AC5: the tar write uses `pigz -1` when `command -v pigz` succeeds and `gzip -1` otherwise; never the default gzip level.
+- [x] AC6: `rls-authz-fuzz.yml` carries `timeout-minutes: 45` with a comment citing runs 40653699076/40657761446.
+- [x] AC7: `ghcr-pull-with-retry.sh` is unchanged on this branch (`git diff --name-only origin/main...HEAD -- .github/scripts/ghcr-pull-with-retry.sh` is empty — merge-base form, not the moving tip).
+- [x] AC8: the resilience suite asserts the new contract — `wiring:timeout-45`, latch wiring greps, `ecr-throttle-ghcr-ok`/`ecr-flap`/`partial-fail` behavioral arms with exact pull counts, updated `c:exhaust-*` expectations — and prints `0 failed` locally.
+- [x] AC9: pre-existing behavioral rows still hold: full cache hit (zero pulls), partial restore (`%d/%d` + only-missing pulls), glue-cut tag extraction, `MIN_IMAGES` floor, missing-CLI exit 2.
+- [x] AC10: `MIN_ASSERTIONS` is raised to the new exact assertion count in the same diff (ADR-193) and `bash .github/scripts/test/run-all.sh` exits 0.
 
 ## Test Scenarios
 
