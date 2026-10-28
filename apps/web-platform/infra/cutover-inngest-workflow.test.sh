@@ -2118,13 +2118,20 @@ assert "#9755 the loader call passes the environment-scoped Tier-B token (the co
   "grep -qE 'doppler-token-infra-privileged:[[:space:]]*\\$\\{\\{[[:space:]]*\\(inputs\\.op == '\"'\"'backup'\"'\"'\\)[[:space:]]*&&[[:space:]]*secrets\\.DOPPLER_TOKEN_INFRA_PRIVILEGED' '$WF_YAML'"
 # The three greps above prove the lines exist, not that they sit on the SAME step — a `uses:` on
 # one step and an `if:`/`with:` on a sibling would satisfy all three while the loader call ran
-# ungated. Extract the step block that CONTAINS the `uses:` line (from its `      - ` item start
-# to the next step start) and assert the `if:` and the input are inside it.
+# ungated. The union weakness is worse than that: LOADER_STEP_BLOCK concatenates EVERY block
+# holding the `uses:` line, so TWO loader calls — one carrying `if:`, the other `with:` —
+# would pass the block assertion while NEITHER step was both gated and credentialed. Pin the
+# `uses:` count to exactly one first (comments cannot inflate it — the anchor demands `uses:`
+# at line start modulo `- `); then the block below is THE ONE block and the two greps inside
+# it are a per-block assertion, not a union.
+LOADER_USES_N=$(grep -cE '^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*\./\.github/actions/infra-credentials' "$WF_YAML" || true)
+assert "#9755 exactly ONE infra-credentials uses: step in the workflow (a second caller would union the block assertions below)" \
+  "[[ '$LOADER_USES_N' -eq 1 ]]"
 LOADER_STEP_BLOCK="$(awk '/^      - / { if (has) printf "%s", block; block=""; has=0 }
                          { block = block $0 "\n" }
                          /uses:[[:space:]]*\.\/\.github\/actions\/infra-credentials/ { has=1 }
                          END { if (has) printf "%s", block }' "$WF_YAML")"
-assert "#9755 the loader step's own block carries BOTH the op=backup if: and the doppler-token-infra-privileged: input (co-located on one step)" \
+assert "#9755 the loader step's own block carries BOTH the op=backup if: and the doppler-token-infra-privileged: input (co-located on THE ONE step)" \
   "printf '%s' \"\$LOADER_STEP_BLOCK\" | grep -qE \"if:[[:space:]]*inputs\\.op == 'backup'\" && printf '%s' \"\$LOADER_STEP_BLOCK\" | grep -qE 'doppler-token-infra-privileged:'"
 assert "#9755 no doppler-token-legacy input anywhere in the file (a Tier-A fallback would defeat the gate)" \
   "! grep -qE 'doppler-token-legacy:' '$WF_YAML'"
@@ -5084,7 +5091,10 @@ _DISPATCHED=$((PASS + FAIL))
 #   carrying both the `if: inputs.op == 'backup'` gate and the `doppler-token-infra-privileged:` input
 #   (the uses:/if:/with: greps alone could not prove they sit on one step); the `.backup.` wildcards in
 #   the two sibling greps were tightened to the quoted literal 'backup' (same count).
-_EXACT_FLOOR=1157
+# 1157 -> 1158 (+1) at the #9755 review round 2: the uses-count pin — LOADER_STEP_BLOCK concatenates
+#   every uses-block, so a second loader call would union the if:/with: assertions across steps; the
+#   `-eq 1` row makes the block assertion per-THE-ONE-block. Same count for the block row itself.
+_EXACT_FLOOR=1158
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
