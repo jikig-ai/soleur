@@ -13,14 +13,29 @@ lane: single-domain
 
 # feat: P4d bounded wait, then CI is the gate, on a refused local battery (rc=4)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28
+**Method:** halt gates 4.6-4.13 run mechanically; citation, attribution and byte-budget claims re-verified live; no 40-agent fan-out (the plan already carries a CTO ruling set F1-F7, G1-G2, H1-H3, a 3-seat plan-review panel, a learnings sweep, a repo-research pass and a registry overlap check, and the change is one bash script plus prose).
+**Halt gates:** 4.6 User-Brand Impact present, threshold `none` with a scope-out reason and no sensitive-path file in the lists (pass); 4.7 Observability present, five fields, `discoverability_test.command` starts with `bash`, no ssh, finishes well inside 15 s, `expected_output` is the literal `class=not-waitable` (pass); 4.8 no PAT-shaped variable (pass); 4.9 no UI surface (skip); 4.10 no persistent store or new connection (skip); 4.11 `lint-guard-contract.py` green, Assembly names the chokepoint rather than today's members, matrix derived from the design (pass); 4.12 one unfenced Scope Check, three sub-sections, no `unmapped`/`BLOCKED` (pass); 4.13 no new autonomous-task surface (skip).
+
+### Key Improvements
+1. SKILL.md byte plan is now measured, not asserted: the two contention paragraphs (`ship/SKILL.md` lines 467-472 and 474) are about 1.7 KB; the replacement pointer that keeps the queue-in-lock command is about 0.9 KB, so net is roughly -0.7 KB against a 65-byte headroom. No test pins either paragraph (grep of `plugins/soleur/test`, `plugins/soleur/skills/*/test`, `.claude/hooks` for `TC_RUNTIME_CEILING_S`, `measured_runs=0`, "Under contention, wait" finds none).
+2. Citation corrections: ADR-292 (not ADR-262) owns the affected-tests rc contract; PR #8135 / #8354 are the shipping sessions ship `SKILL.md` records the observations from; the sanitize helper lives at `plugins/soleur/scripts/lib/context-sanitize.sh`.
+3. Live verification of every number cited: #10924 OPEN, #9757 OPEN, #6480 OPEN, #8800 OPEN, draft PR #11390 is this branch, ADR-133/196/262/292 files exist, the sibling-refusal line exists once on `origin/main` in `scripts/test-all.sh` and is pinned by `fanout-suite-scope.test.sh`, `battery-owed.sh` currently returns OWED (rc 0) on this branch.
+
+### New Considerations Discovered
+- `battery-owed.sh` returning OWED on a pre-push branch means the first Phase 4 run always happens locally, so the contended-start path this PR bounds is the normal first-run path, not a rare re-run path.
+- This session's own Phase 4 will probably hit the refusal (a foreign worktree's `test-all.sh` is live); the work phase should use the affected set directly and, if refused, the new script once it exists - and record the outcome honestly in the PR body.
+
 Ref #9757. Ref #10924 (checklist item P4d). Never a closing keyword: both stay open; the P4d box is ticked after merge.
 
 ## Overview
 
 `soleur:ship` Phase 4 runs a detached local battery (`affected-tests.sh`, which delegates `scripts/test-all.sh`).
 When another worktree already runs a full-gate battery, the runner refuses with rc=4 ("REFUSED, nothing ran").
-Today's recipe answers that with "go back to waiting" with no upper bound (PR #8135: two 3-hour Monitors;
-PR #8354: a 110-minute loop), then an hours-long queue-inside-the-lock escalation. P4d adds the missing
+Today's recipe answers that with "go back to waiting" with no upper bound (ship `SKILL.md` records, from shipping PR #8135, two 3-hour Monitors that
+still contended and, from PR #8354, a 110-minute zero-wait loop), then an hours-long queue-inside-the-lock escalation. P4d adds the missing
 bounded exit: wait a fixed wall-clock budget for the sibling to drain, and if the budget ends first, print a
 machine verdict that records "CI is the gate", add one honest line to the PR Test plan, and continue - except
 when the diff touches the infra surface or the operator typed `--full`, where the local run is the sole blocking gate
@@ -65,7 +80,7 @@ another worktree (feat-one-shot-8628-inngest-4-upgrade), no PR or issue duplicat
 exactly the contention this item addresses. ADR corpus: ADR-196 (a full-gate refusal binds to a measured condition,
 `rc=4` is the REFUSED class, point 6: "wait for the sibling, or re-run with the hatch" at the pipeline call site) and
 ADR-133 (advisory lock) are consistent with a bounded wait; neither lists a bounded wait or CI deferral as a
-rejected alternative. ADR-262/ADR-292 cover the affected gate and its rc 6; no conflict.
+rejected alternative. ADR-292 (plugin-generic affected test gate) owns the affected-tests rc contract including rc 6; ADR-262 (PR path gates for the mutation batteries) is unrelated to this change; no conflict.
 
 **Property List.**
 1. A contention-refused local battery never makes the pipeline wait without an upper bound.
@@ -266,7 +281,7 @@ Write the matrix (Guard Contract) first; the suite's rows come from it before th
   empty (before the first poll) => loop capacity every interval: `CAPACITY_OK` + `measured_runs=0` => 10; else keep
   waiting and note whether any valid CONTENDED/OK reading was seen; deadline reached => never-readable => 11
   `capacity-unreadable`; `--full` or infra/diff-unresolved => 12; else 42. Sanitize printed tokens
-  (`soleur_ctx_sanitize`); `set -uo pipefail`; no `eval`; no env-injected commands.
+  (`soleur_ctx_sanitize`, `plugins/soleur/scripts/lib/context-sanitize.sh` with a same-name fallback as `battery-owed.sh`); `set -uo pipefail`; no `eval`; no env-injected commands.
 
 ### Phase 3 - wiring and docs
 - `plugins/soleur/skills/ship/references/battery-refusal-wait.md` (new, short): the launch-first recipe as one Monitor
@@ -276,7 +291,7 @@ Write the matrix (Guard Contract) first; the suite's rows come from it before th
 - `plugins/soleur/skills/ship/SKILL.md`: replace the two contention paragraphs (the "wait, launch and retry in ONE
   Monitor script" one and the "`measured_runs=0` is unbounded" one) with one short pointer paragraph that keeps the
   `SOLEUR_ALLOW_FULL_GATE=1 TC_LOCK_TIMEOUT=14400 TC_RUNTIME_CEILING_S=39600 ... --full` queue-in-lock command (the
-  target of exit 12) and links the reference. Net bytes must be negative; verify with `python3 scripts/lint-skill-body-budget.py --base origin/main`.
+  target of exit 12) and links the reference. Measured: the two paragraphs are ~1.7 KB, the pointer ~0.9 KB (net about -0.7 KB). Net bytes must be negative; verify with `python3 scripts/lint-skill-body-budget.py --base origin/main`.
   Do NOT touch `review/SKILL.md`. Keep the "dispatch is pinned" text, the dispatch fenced block, and the rc=4 REFUSED sentence intact.
   Constraint checks: `fullsuite-merge-gate.test.ts` (fenced test-all/affected lines in `## Phase 4: Run Tests` must be unsharded and carry `--affected`/`--full`, QUERY_FLAGs such as `--capacity` exempt) and `ship-battery-owed.test.sh` T16 (dispatch block up to the first column-0 `fi`, `rc -eq 42`).
 - `plugins/soleur/skills/ship/references/affected-gate-contract.md`: rc 4 row gains one clause linking the reference
