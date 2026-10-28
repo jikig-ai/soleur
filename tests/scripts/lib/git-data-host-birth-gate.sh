@@ -427,7 +427,7 @@ git_data_host_birth_gate() {
     offenders=$(jq -r '[.resource_changes[]
       | select(.address == "hcloud_volume.git_data_luks")
       | select(.change.actions | index("update")) | .address] | join(", ")' < "$plan_json" 2>/dev/null)
-    echo "git_data_host_birth_gate: ABORT — VOLUME UPDATE: the plan updates ${offenders} in place. A birth CREATES these volumes, so an in-place update means the plan is grading against volumes that already exist — a resize or a retype riding a birth is a mis-scope signal, not a birth. Apply a volume change as its own operation, where the abort message can tell you what it will do to the data on it."
+    echo "git_data_host_birth_gate: ABORT — VOLUME UPDATE: the plan updates ${offenders} in place. A birth CREATES this volume, so an in-place update means the plan is grading against a volume that already exists — a resize or a retype riding a birth is a mis-scope signal, not a birth. Apply a volume change as its own operation, where the abort message can tell you what it will do to the data on it."
     return 1
   fi
 

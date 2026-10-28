@@ -10,14 +10,14 @@
 # in the -target set, so any positive action on them is out_of_scope), the new host positively
 # re-attached to its private NIC + the LUKS store + deny-all firewall, and no out-of-scope
 # change. The retired plaintext pair (hcloud_volume.git_data, hcloud_volume_attachment.git_data)
-# is in no allow-set: the RETIRED_ADDRS rows below prove any positive action on either is refused
-# in every mode. Do NOT simplify the gate to the registry or inngest shape.
+# is in no allow-set: the RETIRED_ADDRS rows below prove a create, update, delete or forget on
+# either is refused (a `no-op` or `read` is not a change), in replace and in rotate. Do NOT simplify the gate to the registry or inngest shape.
 #
 # Non-vacuity discipline (RED-verification for a gating primitive): each FAIL fixture
 # differs from the PASS fixture by ONE mutation of the exact class the gate must catch,
 # so a gate that ignored that class would wrongly pass. Deterministic; no network.
 # All fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only) — modeled on the scoped
-# -replace plan shape (server/network/both-attachments=delete+create,
+# -replace plan shape (server/network/LUKS-attachment=delete+create,
 # firewall_attachment=update, volumes/passphrase=no-op/absent). No captured real plan file.
 #
 # This suite also covers the POST-apply backstop git_data_host_post_apply_assert (#10137): rows PA1-PA8
@@ -132,8 +132,10 @@ else
   pass
 fi
 
-# --- Test 8: PASS — the volumes/passphrase appear as explicit ["no-op"] (still preserved; the retired
-# plaintext volume as a no-op is a data-source-style dependency read, not a positive action) ---
+# --- Test 8 (control: no-op/read on a retired address passes by design): PASS — the volumes/passphrase
+# appear as explicit ["no-op"] (still preserved). A `no-op` (or a `read`) on the retired plaintext
+# volume is not a change, so the positive-action out_of_scope filter does not fire; the RETIRED_ADDRS
+# rows below pin that the four changing verbs do. ---
 # A live scoped plan may list the untargeted resources as no-ops rather than omitting them; the
 # positive-action out_of_scope filter must EXCLUDE no-op, so the plan still PASSes.
 GVOL_NOOP="$(rc_obj 'hcloud_volume.git_data' '"no-op"')"
@@ -512,7 +514,7 @@ else
   pass "R9 rotate-oos: out_of_scope still binds in rotate mode"
 fi
 
-# ── RETIRED ADDRESSES (#11194) — the plaintext pair is in NO allow-set, in EVERY mode ────────
+# ── RETIRED ADDRESSES (#11194) — the plaintext pair is in NO allow-set (replace and rotate) ───
 # hcloud_volume.git_data and hcloud_volume_attachment.git_data were destroyed at the provider on
 # 2026-10-27 and left the HCL. The gate no longer demands them, and any positive action on either is
 # `out_of_scope` (they sit outside def allow:). ONE array drives every row, so a third retired
@@ -526,7 +528,7 @@ for _ra in "${RETIRED_ADDRS[@]}"; do
     if [[ "$_rmode" == rotate ]]; then _rbase="${ROT_PASS_SET}"; else _rbase="${PASS_SET}"; fi
     write_plan "${_rbase},$(rc_obj "$_ra" '"no-op"')"
     gate_check "RA control (${_rmode}): ${_ra} as a no-op beside the canonical plan -> PASS" git_data_host_replace_gate 0 "PASS" "$TMP/plan.json" "$_rmode"
-    for _rverb in create delete; do
+    for _rverb in create update delete forget; do
       write_plan "${_rbase},$(rc_obj "$_ra" "\"${_rverb}\"")"
       gate_check "RA (${_rmode}): ${_ra} ${_rverb} -> ABORT on out_of_scope" git_data_host_replace_gate 1 "out_of_scope=1 " "$TMP/plan.json" "$_rmode"
     done
@@ -550,7 +552,7 @@ write_plan "${PASS_SET}"
 gate_check "PA1 replace + LUKS volume absent -> PASS" git_data_host_post_apply_assert 0 "LUKS data volume preserved" "$TMP/plan.json" replace
 # PA1b (must-PASS, non-canonical): the volumes explicitly present as no-op.
 write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"no-op"'),$(rc_obj 'hcloud_volume.git_data_luks' '"no-op"')"
-gate_check "PA1b replace + volumes explicit no-op -> PASS" git_data_host_post_apply_assert 0 "LUKS data volume preserved" "$TMP/plan.json" replace
+gate_check "PA1b control: no-op on a retired address (and the LUKS volume) passes by design -> PASS" git_data_host_post_apply_assert 0 "LUKS data volume preserved" "$TMP/plan.json" replace
 # PA2 (must-PASS, the #10137 repro): rotate legitimately replaces the LUKS volume.
 write_plan "${ROT_PASS_SET}"
 gate_check "PA2 rotate + LUKS volume delete+create (the #10137 repro) -> PASS" git_data_host_post_apply_assert 0 "LUKS volume replaced as intended" "$TMP/plan.json" rotate
@@ -657,7 +659,7 @@ gate_mutate_and_check "PM3 private NIC create assertion (the empty-plan guard's 
   git_data_host_post_apply_assert "$TMP/pm3.json" replace
 write_plan "${SERVER_REPLACE},${PA_NIC}"; cp "$TMP/plan.json" "$TMP/pm4.json"
 gate_mutate_and_check "PM4 store-attachment create assertion" \
-  's/^    if \[\[ ! "\$att_creates" =~ \^\[1-9\]\[0-9\]\*\$ \]\]; then/    if false; then/' \
+  's/^  if \[\[ ! "\$att_creates" =~ \^\[1-9\]\[0-9\]\*\$ \]\]; then/  if false; then/' \
   git_data_host_post_apply_assert "$TMP/pm4.json" replace
 write_plan "${ROT_PASS_SET}"; cp "$TMP/plan.json" "$TMP/pm5.json"
 gate_mutate_and_check "PM5 unknown-mode arm (turned into a permissive default)" \
@@ -692,9 +694,9 @@ gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to th
 _ran=$((passes + fails))
 if [[ "$_ran" -lt 103 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 103 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 111 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 103)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 111)\n' "$_ran"
 fi
 
 echo ""

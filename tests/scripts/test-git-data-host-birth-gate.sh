@@ -625,29 +625,29 @@ rc_fw_attach_real() {
 rc_server_real() {
   printf '{"address":"hcloud_server.git_data","type":"hcloud_server","change":{"actions":["create"],"before":null,"after":{"name":"soleur-git-data","server_type":"cpx22","ignore_remote_firewall_ids":false,"ssh_keys":["1111","4242"]},"after_unknown":{"firewall_ids":true,"id":true,"ipv4_address":true,"ssh_keys":[false,false]}}}'
 }
-entailed_three_real() {
+entailed_members_real() {
   printf '%s,%s,%s' \
     "$(rc_entry 'hcloud_server_network.git_data' 'hcloud_server_network' '["create"]')" \
     "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
     "$(rc_fw_attach_real)"
 }
-mk_plan_cfg "$TMP/real-first-birth.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" "$(cfg_real)"
+mk_plan_cfg "$TMP/real-first-birth.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_members_real)" "$(rest_members)")" "$(cfg_real)"
 check "the REAL first-birth shape (server_ids + firewall_ids unknown, config references own server) => PASS" 0 "PASS" "$TMP/real-first-birth.json"
 
 # Same unknown server_ids, but the HCL fans the attachment out to a second server. Only
 # the configuration can see this at plan time.
-mk_plan_cfg "$TMP/real-attach-fanout.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
+mk_plan_cfg "$TMP/real-attach-fanout.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_members_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids.references = ["hcloud_server.git_data.id","hcloud_server.git_data","hcloud_server.web[\"web-1\"].id","hcloud_server.web"] else . end)')"
 check "unknown server_ids whose config references TWO servers => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-fanout.json"
 
 # Unknown server_ids with NO configuration block at all: the gate cannot see what the
 # attachment binds, so it must refuse rather than trust the unknown.
-mk_plan_nocfg "$TMP/real-attach-noconfig.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")"
+mk_plan_nocfg "$TMP/real-attach-noconfig.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_members_real)" "$(rest_members)")"
 check "unknown server_ids with no configuration to read => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-noconfig.json"
 
 # Unknown server_ids whose config is a LITERAL list (constant_value, no references): the
 # attachment is not bound to this plan's server by construction.
-mk_plan_cfg "$TMP/real-attach-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
+mk_plan_cfg "$TMP/real-attach-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_members_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids = {"constant_value":[111]} else . end)')"
 check "unknown server_ids whose config is a literal list => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-literal.json"
 
@@ -662,7 +662,7 @@ mk_plan_cfg "$TMP/attach-known-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids = {"constant_value":[9001]} else . end)')"
 check "KNOWN one-element server_ids whose config is a literal list => ABORT" 1 "bound to exactly one server" "$TMP/attach-known-literal.json"
 # Reference ORDER is not load-bearing: the same two references reversed still pass.
-mk_plan_cfg "$TMP/real-first-birth-refs-reversed.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
+mk_plan_cfg "$TMP/real-first-birth-refs-reversed.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_members_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids.references = ["hcloud_server.git_data","hcloud_server.git_data.id"] else . end)')"
 check "the REAL first-birth shape with the two references in the other order => PASS" 0 "PASS" "$TMP/real-first-birth-refs-reversed.json"
 
@@ -670,7 +670,7 @@ check "the REAL first-birth shape with the two references in the other order => 
 # firewall's own id plus a known permissive one collapses the whole set to unknown, so
 # `after.firewall_ids` is absent and the length-based arm alone reads it as empty. The
 # configuration discloses the expression.
-mk_plan_cfg "$TMP/real-server-inline-fw-unknown.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
+mk_plan_cfg "$TMP/real-server-inline-fw-unknown.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_members_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_server.git_data" then .expressions.firewall_ids = {"references":["hcloud_firewall.git_data.id","hcloud_firewall.git_data"]} else . end)')"
 check "inline firewall_ids set in the HCL but unknown at plan time => ABORT" 1 "firewall_ids inline" "$TMP/real-server-inline-fw-unknown.json"
 
@@ -950,25 +950,30 @@ unset GIT_DATA_ROOT_KEY_FINGERPRINT_FILE
 check "RK7 fingerprint env unset => refused with reason=fingerprint_file_missing (fail closed)" 1 "verdict=git_data_root_key_not_in_create reason=fingerprint_file_missing" "$TMP/happy.json"
 export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$_rk_saved"
 
-# ── RETIRED ADDRESSES (#11194) — the plaintext pair is in NO allow-set, presence loop or entailed loop ──
+# ── RETIRED ADDRESSES (#11194) — the plaintext pair is in NO allow-set (presence loop or entailed loop) ──
 # hcloud_volume.git_data and hcloud_volume_attachment.git_data were destroyed at the provider on
 # 2026-10-27 and left the HCL. ONE array drives every row (a third retired address is one entry).
 # Each ABORT row is pinned to the arm text it must produce, because the birth gate has TWO arms that
 # can refuse a retired address and they speak differently:
-#   create -> the out_of_scope arm (the address is in no allow-set), which names the offender;
-#   delete -> the GENERIC destroy arm (the named volume arm covers the LUKS volume only), which also
-#             names the offender but says "A birth is purely ADDITIVE".
+#   create, update -> the out_of_scope arm (the address is in no allow-set), which names the offender;
+#   delete, forget -> the GENERIC destroy arm (the named volume arm covers the LUKS volume only), which
+#             also names the offender but says "A birth is purely ADDITIVE".
+# A `no-op` or `read` is not a change and passes by design (the control row).
 # Each is paired with the SAME plan carrying the address as a `no-op`, which must PASS, so an ABORT
 # cannot come from an unrelated failure.
 RETIRED_ADDRS=(hcloud_volume.git_data hcloud_volume_attachment.git_data)
 for _ra in "${RETIRED_ADDRS[@]}"; do
   _rtype="${_ra%%.*}"
   mk_plan "$TMP/ra-noop.json" "$(happy_changes | jq -c --argjson e "$(rc_entry "$_ra" "$_rtype" '["no-op"]')" '. + [$e]')"
-  check "RA control: ${_ra} as a no-op beside the full birth => PASS" 0 "PASS" "$TMP/ra-noop.json"
+  check "RA control: no-op/read on a retired address passes by design (${_ra} as a no-op beside the full birth) => PASS" 0 "PASS" "$TMP/ra-noop.json"
   mk_plan "$TMP/ra-create.json" "$(happy_changes | jq -c --argjson e "$(rc_entry "$_ra" "$_rtype" '["create"]')" '. + [$e]')"
   check "RA: ${_ra} create => ABORT on the out_of_scope arm, naming it" 1 "1 out-of-scope change(s), outside the birth fan-out: ${_ra}." "$TMP/ra-create.json"
+  mk_plan "$TMP/ra-update.json" "$(happy_changes | jq -c --argjson e "$(rc_entry "$_ra" "$_rtype" '["update"]')" '. + [$e]')"
+  check "RA: ${_ra} update => ABORT on the out_of_scope arm, naming it" 1 "1 out-of-scope change(s), outside the birth fan-out: ${_ra}." "$TMP/ra-update.json"
   mk_plan "$TMP/ra-delete.json" "$(happy_changes | jq -c --argjson e "$(rc_entry "$_ra" "$_rtype" '["delete"]')" '. + [$e]')"
   check "RA: ${_ra} delete => ABORT on the generic destroy arm, naming it" 1 "1 destroy/forget action(s): ${_ra}. A birth is purely ADDITIVE" "$TMP/ra-delete.json"
+  mk_plan "$TMP/ra-forget.json" "$(happy_changes | jq -c --argjson e "$(rc_entry "$_ra" "$_rtype" '["forget"]')" '. + [$e]')"
+  check "RA: ${_ra} forget => ABORT on the generic destroy arm, naming it" 1 "1 destroy/forget action(s): ${_ra}. A birth is purely ADDITIVE" "$TMP/ra-forget.json"
 done
 
 # ── MUTATION SECTION ──────────────────────────────────────────────────────────────
@@ -1299,11 +1304,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 139 ]]; then
+if [[ "$_ran" -lt 143 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 139. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 143. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 139)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 143)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

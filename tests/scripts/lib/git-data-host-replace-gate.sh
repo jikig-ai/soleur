@@ -40,10 +40,11 @@
 #
 # RETIRED ADDRESSES (#11194, ADR-239 Amendment 2026-10-28): the plaintext pair
 # hcloud_volume.git_data and hcloud_volume_attachment.git_data was destroyed at the provider on
-# 2026-10-27 and left the HCL. Neither is in the allow-set, so a create/update/delete/forget on
-# either is `out_of_scope` in every mode; there is deliberately NO separate counter for them (the
-# single `out_of_scope` filter is the brake, and a second one could only disagree with it). The
-# suite's RETIRED_ADDRS rows pin that refusal.
+# 2026-10-27 and left the HCL. Neither is in the allow-set, so a create, update, delete or forget
+# on either is `out_of_scope` (a `no-op` or `read` is not a change and passes by design); there is
+# deliberately NO separate counter for them (the single `out_of_scope` filter is the brake, and a
+# second one could only disagree with it). The suite's RETIRED_ADDRS rows pin that refusal for each
+# of the four verbs, in replace and in rotate.
 #
 # LUKS-passphrase safety (CTO High-if-mis-scoped risk): random_password.git_data_luks and
 # doppler_secret.git_data_luks_key are ALSO out of the allow-set. A rotated passphrase would
@@ -360,15 +361,14 @@ git_data_host_post_apply_assert() {
     echo "::error::hcloud_server_network.git_data shows no create action in the saved plan that was applied — the new host would have no private NIC. This should have been caught by the guard; failing hard."
     return 1
   fi
-  for att in hcloud_volume_attachment.git_data_luks; do
-    att_creates=$(jq --arg a "$att" '[.resource_changes[]?
-      | select(.address == $a)
-      | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || att_creates=""
-    if [[ ! "$att_creates" =~ ^[1-9][0-9]*$ ]]; then
-      echo "::error::${att} shows no create action in the saved plan that was applied — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
-      return 1
-    fi
-  done
+  att=hcloud_volume_attachment.git_data_luks
+  att_creates=$(jq --arg a "$att" '[.resource_changes[]?
+    | select(.address == $a)
+    | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || att_creates=""
+  if [[ ! "$att_creates" =~ ^[1-9][0-9]*$ ]]; then
+    echo "::error::${att} shows no create action in the saved plan that was applied — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
+    return 1
+  fi
   if [[ "$mode" = rotate ]]; then
     echo "LUKS volume replaced as intended by the rotate arm; private NIC + LUKS store attachment re-attached (create present) in the saved plan."
   else

@@ -41,9 +41,10 @@
 # COST (as written for the wipe-then-PR-C ordering): until PR-C merges, the gates refuse every
 # web-platform apply on main, security fixes included. Under Option B the cost was the reverse (the
 # replace/birth/rotate routes disabled, ADR-239 Amendment 2026-10-26); #11194 retired the plaintext
-# arms from those gates (ADR-239 Amendment 2026-10-28), so the routes are gated only by the
-# plaintext-id interlock until git_data_volume_id is blanked in git-data.tf, and F1/F2 below are still
-# refused through the replace gate's `out_of_scope` (the retired addresses sit in no allow-set).
+# arms from those gates (ADR-239 Amendment 2026-10-28). The routes stay behind the other interlocks
+# (rung-2 evidence, authorization map, environment approval) AND the plaintext-id interlock, which
+# holds until git_data_volume_id is blanked in git-data.tf (#11449); F1/F2 below are still refused
+# through the replace gate's `out_of_scope` (the retired addresses sit in no allow-set).
 #
 # Non-vacuity: a mutation matrix on COPIES of the workflows (and synthetic ones) proves each way to
 # open the wedge goes RED for the right reason; harness rows prove an emptied fixture loader or an
