@@ -5,13 +5,13 @@ category: logic-errors
 tags: [compound-promote, create-arm, ledger, single-call, reachability]
 ---
 
-# A filter that runs after the single decision cannot protect the decision
+# Learning: a filter that runs after the single decision cannot protect the decision
 
 ## Problem
 
-The compound-promote create arm makes ONE model call over the offered patterns, then `checkCreate` applies the ledger (gate 5, `isHashSuppressed`). The model is never told which hashes the ledger owns, so it can pick an owned pattern: the gate refuses it, the run ends `no_action` / `other`, and the other eligible patterns were never evaluated. Live-fire 2026-10-28: one owned pattern among seven ended the run with `create_pr=null`.
+The compound-promote create arm makes ONE model call over the offered patterns, then `checkCreate` applies the ledger (gate 5, `isHashSuppressed`). The model is never told which hashes the ledger owns, so it can pick an owned pattern: the gate refuses it, the run ends `no_action` / `other`, and the other eligible patterns were never evaluated. Live-fire 2026-10-28 (run `01M60XZRYG9ADVEWAY07HEQ5JK`, marker `create_arm=ran`, `create_outcome=no_action`, `create_no_action_reason=other`, `ledger_suppressed=1`, `patterns_open=7`): one owned pattern among seven ended the run with `create_pr=null`.
 
-Same shape as the slot starvation fixed on 2026-10-27 ([a shared cap let the mandatory loop starve the gated arm](2026-10-27-a-shared-cap-let-the-mandatory-loop-starve-the-gated-arm.md)): the gate was correct, and the arm still could not reach its goal.
+Same shape as the create-arm slot starvation fixed on 2026-10-27 (a cap reservation) ([a shared cap let the mandatory loop starve the gated arm](2026-10-27-a-shared-cap-let-the-mandatory-loop-starve-the-gated-arm.md)): the gate was correct, and the arm still could not reach its goal.
 
 ## Solution
 
