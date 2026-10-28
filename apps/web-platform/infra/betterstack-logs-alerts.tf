@@ -377,8 +377,9 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # reads 0 in between, but recovery_period (3600) is longer than that ~2700 s gap, so the incident
   # stays open and does not re-page. It pages within about 5 min of the first failing row and
   # clears about 1.25 to 1.5 h after the LAST failing row (the window, then recovery_period), which is
-  # not proof of recovery: only a token=ok row is. A dying probe can leave a gap of up to ~6300 s
-  # with no failing row, longer than recovery_period, so the incident can resolve and re-page once.
+  # not proof of recovery: only a token=ok row is. Any missed hourly failing row (a dying probe, or one
+  # indeterminate row between two failing ones) leaves a gap of up to ~6300 s with no failing row,
+  # longer than recovery_period, so the incident can resolve and re-page once.
   #
   # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts), not inferred: this
   # alert was refused 422 "too resource intensive" FOUR times at merge apply, at (check, query) =

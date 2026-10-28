@@ -28,11 +28,16 @@ on the first try), then per hit classify as consumer-of-the-value vs unrelated
 constant. The guard pins literals, not comments — so a missed comment can never
 redden anything; it only misleads the next operator or a mis-briefed agent.
 
-Adjacent datapoint worth reusing: BetterStack's 422 "too resource intensive"
-is a ratio ceiling (check-vs-query window-per-check). Measured on this repo:
-rejected at ratio 36 (300/10800), applied at 18–27 (300/5400, 3600/86400,
-3600/97200). Recorded on #11266 because the ruled dead-man tuple (ratio 720)
-will 422 on its gated probe — re-plan `check_period`, not only the window.
+Adjacent datapoint worth reusing (CORRECTED 2026-10-28): BetterStack's 422
+"too resource intensive" is NOT a plain check-vs-query ratio ceiling. This
+paragraph first claimed ratio 36 (300/10800) rejected and 18–27 applied; that
+was refuted — 300/5400 and 3600/10800 were refused for the same alert too, while
+older alerts hold 3600/86400 and 3600/97200. A read-only GET of the live alerts
+shows every alert with query_period above 900 was created in September and every
+one created since 2026-10-01 has query_period of 900 or less (see the
+2026-10-27 learning's measured table). Recorded on #11266: the ruled dead-man
+tuple (query_period 2592000) will 422 on its gated probe, so it needs the
+owner-authorized create-and-delete probe, not a re-planned `check_period`.
 
 Structural-enumeration note: the alert-guard family pins literal params but
 not effective-config paths (override.tf, meta-arguments, unpinned attrs,
