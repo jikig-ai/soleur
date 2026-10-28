@@ -5,12 +5,13 @@ Issue: #10932 (`Ref` only; umbrella #9757 stays open). Draft PR: #11438. Pipelin
 
 ## Phase 0 — Preflight (no edits)
 
-- 0.1 Confirm `git diff --stat origin/main -- apps scripts/registry-restore-from-ghcr.sh` is empty.
+- 0.1 Confirm `git diff --stat origin/main...HEAD -- apps scripts/registry-restore-from-ghcr.sh` is empty.
 - 0.2 Baseline: `bash tests/scripts/test-registry-d10-workflow-wiring.sh` ends `39 passed, 0 failed`; workflow is 489,888 bytes.
 - 0.3 Record the STOP for item (a): the engine header is a comment block but any edit changes the file; do not edit it.
 
 ## Phase 1 — RED tests first (`tests/scripts/test-registry-d10-workflow-wiring.sh`)
 
+- 1.0 Start from the measured prototype: `git apply knowledge-base/project/specs/feat-one-shot-10932-restore-exit-1/w9-prototype.diff`, then review it.
 - 1.1 Re-key the `*)` fall-through flag from `$hdr` to `$tested`.
 - 1.2 Add the exit-1 content pin (`manifest`) to the per-code `case`.
 - 1.3 Extend `W9_PY`: `drop1`, `envswap`, `jobif`, `jobcoe` mutations; `env` and `job` read modes.
@@ -36,6 +37,6 @@ Issue: #10932 (`Ref` only; umbrella #9757 stays open). Draft PR: #11438. Pipelin
 
 - 4.1 Suites: d10-workflow-wiring (43 passed), pull-path-health, restore-from-ghcr, `bun test plugins/soleur/test/workflow-file-size.test.ts`.
 - 4.2 Manual once: delete the `1)` arm and confirm the suite fails with "exit 1 fell"; restore it.
-- 4.3 `git diff --stat origin/main` for `apps`, the engine, the pull-path-health script and suite, and the header lib: all empty.
+- 4.3 `git diff --stat origin/main...HEAD` for `apps`, the engine, the pull-path-health script and suite, and the header lib: all empty.
 - 4.4 Pre-ready gates: `python3 -I scripts/ci-pr-affected-replay.py ratchet`; `bunx vitest run --project repo-wide test/plugin-root-anchoring.test.ts` (from `apps/web-platform`); `plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh`.
 - 4.5 Commit, push, update PR #11438 body (`Ref #9757`, `Ref #10932`, no closing keyword; state (a) not done and the residual classification). STOP: no `gh pr ready`, no auto-merge.

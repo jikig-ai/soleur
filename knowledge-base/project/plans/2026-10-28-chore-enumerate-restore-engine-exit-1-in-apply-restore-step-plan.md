@@ -24,7 +24,7 @@ arm, so exit 1 reaches the `*)` arm, whose text claims every engine code is enum
 "exit 1 is the known exception (#10932, already filed)" aside. The runbook's "Restore exit codes" table also
 lacks a `1` row. This plan adds the `1)` arm (modelled on `scripts/registry-pull-path-health.sh` A2),
 keeps the workflow under its 490,000-byte gate by relocating prose, adds the runbook row, and extends the
-behavioural W9 test so exit 1 is covered and the six residual gaps from the #10932 comment are each
+behavioural W9 test so exit 1 is covered and the residual gaps from the #10932 comment (six bullets; G2 splits into G2a/G2b and G7 is a planning addition) are each
 classified. It is a separate PR for this one item; the umbrella #9757 and #10932 stay open (the engine
 header row, task item (a), cannot ride this PR — see Premise Validation).
 
@@ -60,7 +60,7 @@ by a test, not by review. (P5) the engine's bytes are unchanged.
 
 Mechanisms named by the ask: the `1)` arm (buys P1, nothing existing covers it); the runbook row (P2); prose
 relocation (P3); the header-derived test (P4 — the derived population already exercises exit 1 via the union,
-what is missing is the fall-through flag, see Phase 2); the engine header row (buys documentation only, and is
+what is missing is the fall-through flag, see Phase 1); the engine header row (buys documentation only, and is
 blocked by P5). Cut List: none cut; the header row is deferred, not cut (stays on #10932).
 
 ### Applicable learnings
@@ -106,7 +106,7 @@ blocked by P5). Cut List: none cut; the header row is deferred, not cut (stays o
 | "add an exit-1 row to the header table WITHOUT changing the script's code" | Header is a comment block, but any edit changes the engine file's bytes; the engine path arms the ~860 s registry mutation battery | STOP per instruction: (a) not done here; stays on #10932 |
 | "let the header-derived enumeration test cover it" | The lib already unions {1} into `$tested` and strips 1 from the header-vs-emit compare; the fall-through flag at W9 line ~474 keys on `$hdr`, which never holds 1 | Re-key that flag on `$tested` and add a `drop1` control (test-only, no lib edit) |
 | "the assertion-count floor is the only backstop for a W9 verdict swap" | The floor catches removal/silencing, not a swap | Residual G4; correction recorded in the PR body and on #10932 |
-| Workflow headroom | 489,888 bytes, gate 490,000: 112 bytes | Relocate the 766-byte `if:` rationale block; net size roughly neutral |
+| Workflow headroom | 489,888 bytes, gate 490,000: 112 bytes | Relocate the 891-byte `if:` rationale block; net size roughly neutral |
 
 ## Scope Check
 
@@ -115,10 +115,10 @@ blocked by P5). Cut List: none cut; the header row is deferred, not cut (stays o
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
 | 1 | "add an exit-1 row to the header exit-code table of scripts/registry-restore-from-ghcr.sh WITHOUT changing the script's code" [brief] | Phase 0 STOP check | descoped — justification: the header edit changes the engine's bytes; the brief's own rule says STOP and report; stays on #10932 |
-| 2 | "add a `1)` arm to the restore-step `case \"$rc\" in` (registry_store_restore) in .github/workflows/apply-web-platform-infra.yml, modelled on the `1)` arm in scripts/registry-pull-path-health.sh A2" [brief] | Phase 3 (workflow `1)` arm) | mapped |
-| 3 | "add an exit-1 row to the runbook \"Restore exit codes\" table in registry-luks-recut-6929.md if missing" [brief] | Phase 4 (runbook row) | mapped |
-| 4 | "let the header-derived enumeration test cover it" [brief] | Phase 2 (W9 fall-through re-key + `drop1` control) | mapped |
-| 5 | "relocate prose to apply-web-platform-infra-job-rationale.md rather than grow the workflow" [brief] | Phase 3 (relocation of the job `if:` block) | mapped |
+| 2 | "add a `1)` arm to the restore-step `case \"$rc\" in` (registry_store_restore) in .github/workflows/apply-web-platform-infra.yml, modelled on the `1)` arm in scripts/registry-pull-path-health.sh A2" [brief] | Phase 2 (workflow `1)` arm) | mapped |
+| 3 | "add an exit-1 row to the runbook \"Restore exit codes\" table in registry-luks-recut-6929.md if missing" [brief] | Phase 3 (runbook row) | mapped |
+| 4 | "let the header-derived enumeration test cover it" [brief] | Phase 1 (W9 fall-through re-key + `drop1` control) | mapped |
+| 5 | "relocate prose to apply-web-platform-infra-job-rationale.md rather than grow the workflow" [brief] | Phase 2 (relocation of the job `if:` block) | mapped |
 | 6 | "Plan must classify each as picked-up-in-this-PR or left-as-residual with a reason" [brief] | Residual-Gap Classification table | mapped |
 | 7 | "The plan must record that the work edits .github/workflows/apply-web-platform-infra.yml (fires the production apply) and that the pipeline STOPS at a pushed draft PR" [brief] | Ship constraints | mapped |
 | 8 | "Plan must also list the pre-ready gates" [brief] | Ship constraints | mapped |
@@ -129,7 +129,7 @@ blocked by P5). Cut List: none cut; the header row is deferred, not cut (stays o
 |-----------|-----------------------------------|---------|
 | Workflow `1)` arm + `*)` wording | "add a `1)` arm to the restore-step `case \"$rc\" in`" | asked |
 | Rationale-doc subsection for the relocated `if:` block and for the exit-1 reasoning | "relocate prose to apply-web-platform-infra-job-rationale.md rather than grow the workflow" | asked |
-| Runbook row, lead-sentence fix, and the "then re-run that job" qualifier | "add an exit-1 row to the runbook \"Restore exit codes\" table" | asked (the qualifier is the same row's false advice, see Phase 4) |
+| Runbook row, lead-sentence fix, and the "then re-run that job" qualifier | "add an exit-1 row to the runbook \"Restore exit codes\" table" | asked (the qualifier is the same row's false advice, see Phase 3) |
 | W9 fall-through re-key and `drop1` control | "let the header-derived enumeration test cover it" | asked |
 | W9 credential-env pin and its control (G1) | "W9 ... does not assert the values of the credential env" / "are picked up with exit 1" | asked |
 | W9 job-level-key pin and its controls (G2a) | "does not cover job-level keys (`if`, `needs`, `continue-on-error`)" / "are picked up with exit 1" | asked |
@@ -183,13 +183,26 @@ concerns alert-window guards, a different concern and different workflow regions
 
 ### Phase 0 — Preflight checks (no edits)
 
-1. `git diff --stat origin/main -- apps scripts/registry-restore-from-ghcr.sh` prints nothing (baseline).
+1. `git diff --stat origin/main...HEAD -- apps scripts/registry-restore-from-ghcr.sh` prints nothing (baseline).
 2. Baseline suite: `bash tests/scripts/test-registry-d10-workflow-wiring.sh` ends `=== 39 passed, 0 failed ===`
    (measured green during planning); `wc -c .github/workflows/apply-web-platform-infra.yml` = 489,888.
 3. Re-confirm the STOP for task item (a): the header block is `#` lines 55-76 of the engine; any edit changes
    the file. Do not edit. Record in the PR body.
 
 ### Phase 1 — RED tests first (cq-write-failing-tests-before)
+
+A working, measured prototype of every edit below is committed as
+`knowledge-base/project/specs/feat-one-shot-10932-restore-exit-1/w9-prototype.diff` (unified diff against
+`tests/scripts/test-registry-d10-workflow-wiring.sh`, 114 lines). Planning ran it in a scratch tree: the original
+workflow gives 40 passed / 3 failed (main W9 row RED with "exit 1 fell to the *) arm", plus the `drop1` and `jobif`
+controls, expected RED before the arm exists); the dry-run workflow gives `43 passed, 0 failed`; all four controls
+bite with the expected phrase; reverting the flag to `$hdr` turns `drop1` RED. Apply it with `git apply`, then review
+it as code (do not trust it blindly). Findings folded into the design: the `jobif` mutation scopes to the job segment
+and uses `re.subn(r"!cancelled\(\)\s*&&\s*", "", job)` requiring exactly one hit (a whole-text anchor hit 6 times);
+the job `if` check collapses whitespace and anchors on the prefix `!cancelled() &&` (so `!cancelled() || ...` is
+refused); a bare `if: !cancelled() && ...` without `${{ }}` is a YAML parse error, so the read mode returns empty and
+the check fails closed; `drop1` against a workflow with no `1)` arm raises a Python `AttributeError` on stderr (the
+output is empty and the "mutation landed" row fails correctly - only seen in the RED phase).
 
 Edit `tests/scripts/test-registry-d10-workflow-wiring.sh` before the workflow:
 
@@ -224,11 +237,11 @@ Edit `tests/scripts/test-registry-d10-workflow-wiring.sh` before the workflow:
    clause; add that 126/127/137/143 are shell or runner codes (not found, not executable, killed, terminated), not
    engine codes. Target text: `...unenumerated exit ${rc}. Every exit code the restore engine emits is enumerated above, so a new one is a defect worth filing alongside the recovery; 126/127/137/143 are shell or runner codes (not found, not executable, killed, terminated), not engine codes.`
 3. Byte budget: move the 11-line `# EXPLICIT, not inherited ...` block above `if:` (workflow lines ~3531-3541,
-   766 bytes) verbatim to the rationale doc; leave a one-line stub of the form
+   891 bytes (measured in the dry-run)) verbatim to the rationale doc; leave a one-line stub of the form
    `# Why this if: is explicit, not inherited: see "Why the restore job's if: is explicit" in the registry_store_restore section of the rationale runbook.`
    No test anchors on the moved text (CTO grep, repo-wide). Re-check with a delete-and-rerun of the W9 and the
    workflow-structure suites listed in Verification, not with a regex list.
-4. Measure `wc -c`: target <= 489,950; hard gate 490,000. Expected net: +~600 (arm) +~60 (`*)`) +~120 (stub) -766.
+4. Measure `wc -c`: dry-run measured 489,797 (arm 607 + reworded `*)` + 155-byte stub - 891-byte block = -91 net); target <= 489,888 (no growth), hard gate 490,000.
 
 ### Phase 3 — Rationale doc and runbook
 
@@ -296,7 +309,7 @@ visible in the same diff as a reviewable pair, which is the integrity limit of a
 
 ### Guard 3 — W9 job-level key pin
 
-**Property.** Job `registry_store_restore` keeps `needs: registry_luks_recut`, an `if` that is `!cancelled()` and keyed on `store_refill_needed == 'true'`, and no job-level `continue-on-error`.
+**Property.** Job `registry_store_restore` keeps `needs: registry_luks_recut`, an `if` that is `!cancelled()` and keyed on `store_refill_needed == 'true'`, and no job-level `continue-on-error`, `defaults` or `strategy` (the job's measured key set today is `environment`, `if`, `needs`, `permissions`, `runs-on`, `steps`, `timeout-minutes`).
 
 **Assembly.** The job mapping in the parsed workflow (one job by key); the step-level FORBID list already blocks `if` / `continue-on-error` on the step, so the job level is the remaining surface. Members drift: any new job-level key that changes run semantics is out of the pin, so the pin asserts the named keys and the check lists the job's full key set in its failure message.
 
@@ -363,13 +376,27 @@ discoverability_test:
   expected_output: 1
 ```
 
+## Verification
+
+Run each gate with its own invocation (not a hand-enumerated input set):
+
+- `bash tests/scripts/test-registry-d10-workflow-wiring.sh` (the W9 suite; `43 passed, 0 failed`)
+- `bash tests/scripts/test-registry-pull-path-health.sh` and `bash tests/scripts/test-registry-restore-from-ghcr.sh` (unchanged inputs, shared extractor contract)
+- `bun test plugins/soleur/test/workflow-file-size.test.ts` (byte gate) and `bun test plugins/soleur/test/terraform-target-parity.test.ts` (reads the workflow's job text)
+- `bash tests/scripts/test-infra-privileged-tier-census.sh` (job/step census over the same workflow)
+- `python3 -I scripts/lint-infra-no-human-steps.py --changed --base origin/main`
+- The new env and job-level pins live INSIDE the existing `w9_check` function (one main W9 row), so the only new committed rows are the four controls: 39 + 4 = 43. If a pin is instead reported as its own row, the count differs; take it from the green run.
+
+Committed controls are exactly `drop1`, `envswap`, `jobif`, `jobcoe`. Guard Contract mutation rows beyond those are
+one-off scratch mutations run once in Phase 4 and summarised in the PR body (they are not committed rows).
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] `git diff --stat origin/main -- apps scripts/registry-restore-from-ghcr.sh scripts/registry-pull-path-health.sh tests/scripts/test-registry-pull-path-health.sh tests/scripts/lib/restore-engine-header.sh` prints nothing.
+- [ ] `git diff --stat origin/main...HEAD -- apps scripts/registry-restore-from-ghcr.sh scripts/registry-pull-path-health.sh tests/scripts/test-registry-pull-path-health.sh tests/scripts/lib/restore-engine-header.sh` prints nothing.
 - [ ] The diff is a subset of: the workflow, the rationale doc, the runbook, `tests/scripts/test-registry-d10-workflow-wiring.sh`, this plan, `specs/feat-one-shot-10932-restore-exit-1/{tasks,decision-challenges,session-state}.md`, and `knowledge-base/INDEX.md` if the pipeline regenerates it.
-- [ ] `wc -c .github/workflows/apply-web-platform-infra.yml` <= 490,000 (target <= 489,950) and `bun test plugins/soleur/test/workflow-file-size.test.ts` passes.
+- [ ] `wc -c .github/workflows/apply-web-platform-infra.yml` <= 490,000 (target <= 489,888; the planning dry-run measured 489,797) and `bun test plugins/soleur/test/workflow-file-size.test.ts` passes.
 - [ ] `bash tests/scripts/test-registry-d10-workflow-wiring.sh` ends `=== 43 passed, 0 failed ===` (count taken from the green run; the RED run in Phase 1 shows the exit-1 fall-through failure first).
 - [ ] With the `1)` arm deleted from the workflow, the same suite fails with "exit 1 fell to the *) arm" (the `drop1` control is the standing proof; do the manual delete once to see it).
 - [ ] The workflow contains `exit 1 (INPUT/MANIFEST fault)` exactly once and no longer contains `known exception (#10932`.
