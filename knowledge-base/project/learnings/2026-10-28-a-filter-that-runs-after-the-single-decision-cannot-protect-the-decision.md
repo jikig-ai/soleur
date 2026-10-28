@@ -24,4 +24,8 @@ A gate placed after a one-shot decision rejects, it does not redirect. When the 
 ## Session Errors
 
 - Plan subagent's `decision-challenges.md` rows failed `technical-ruling-gate.sh` (bad Ruling shape). **Prevention:** write rulings as `Ruled by CTO agent, <date>: ...` or class `taste`.
-- First handler tests assumed `page-two` was offerable; the edit loop owns it in the default fixture. **Prevention:** when asserting what is offered, derive it from the fixture's same-run hashes first.
+- First handler test (H2) assumed `page-two` was offerable; the edit loop owns it in the default fixture. **Prevention:** when asserting what is offered, derive it from the fixture's same-run hashes first.
+- H3 expected `ledger_suppressed: 0` but put a ledger row on the edit loop's own evidence, so the edit loop counted it. **Prevention:** a ledger row whose evidence matches an edit-loop cluster is counted by the edit loop, not the arm; leave that evidence out of arm-only fixtures.
+- A shared test helper was defined inside one `describe` and used from another (`ReferenceError`). **Prevention:** define fixtures used by more than one block at module scope.
+- Two P2s found by review were claims the tests did not pin: the gate's clock (`Date(0)`/`Date(NaN)` left the suites green) and a test titled "unoffered" that never asserted it. **Prevention:** for every "same clock" / "unoffered" / "inside the window" title, mutate the thing it names and confirm a red; pin a window at both edges.
+- A review seat created scratch files outside the tree while "report-only". **Prevention:** brief seats with a named scratch location, and check `git status` and the branch when the panel returns (done; the tree was clean).
