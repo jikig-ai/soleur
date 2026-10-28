@@ -289,7 +289,7 @@ the 21 hooks that can change whether a tool call proceeds:
 
 `guardrails` · `cla-signed-author-gate` · `context-reviewed-gate` ·
 `follow-through-directive-gate` · `prod-write-defer-gate` ·
-`ship-kb-archive-gate` · `ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-runbook-ssh-gate` ·
+`ship-kb-archive-gate` · `ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-cmo-content-gate` · `ship-runbook-ssh-gate` ·
 `ship-soak-followthrough-gate` · `ship-unpushed-commits-gate` ·
 `background-poll-prefer-monitor` · `brand-hex-commit-gate` ·
 `doppler-secrets-delete-redirect` · `git-commit-secret-scan` ·
@@ -1036,6 +1036,7 @@ to silence a narrow false positive is how a guard goes quietly dark.
 | `SOLEUR_ACK_FOLLOWTHROUGH_CLOSE=1` | `pre-merge-auto-close-scan.sh` | The `follow-through` label gate only; the prose-embedded arm stays armed. The correct hatch when a PR genuinely resolves a tracker. |
 | `SOLEUR_SKIP_SOAK_FOLLOWTHROUGH_GATE=1` | `ship-soak-followthrough-gate.sh` | The soak-enrollment deny on `gh pr ready` / `gh pr merge --auto`. |
 | `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` | `ship-operator-step-gate.sh` | The undeferred-operator-step deny. Reserved for the rare attestation case (`wg-block-pr-ready-on-undeferred-operator-steps`). |
+| `SOLEUR_SKIP_CMO_CONTENT_GATE=1` | `ship-cmo-content-gate.sh` | The CMO content-opportunity deny on feat PRs (`hr-before-shipping-ship-phase-5-5-runs`). |
 | `SOLEUR_SKIP_RUNBOOK_SSH_GATE=1` | `ship-runbook-ssh-gate.sh` | The `hr-no-ssh-fallback-in-runbooks` deny on runbook edits. |
 | `CLAUDE_HOOK_BYPASS=1` (+ `_REASON`) | `prod-write-defer-gate.sh` | The prod-write defer. Requires a reason and is audit-logged — see the F2 section above. |
 | `SOLEUR_DISABLE_GREP_REWRITE=1` | `grep-rewrite.sh` | The `grep()` prefix rewrite. Not a denial override — it disarms the **rewrite** disposition, restoring the ugrep shim and with it the 9.5 GB blowup (#7163). Listed here because it is the rollback lever for a hook on the hot path of every Bash call, and is read as the hook's first executable statement so it works even when the hook's own dependencies are broken. **Operator-only, and requires a session restart** — a PreToolUse hook is spawned by the `claude` process, so an inline `VAR=1 <cmd>` or an `export` from a Bash call cannot reach it (measured). An agent needing per-call escape uses `command grep`, which bypasses both the shim and this rewrite. |

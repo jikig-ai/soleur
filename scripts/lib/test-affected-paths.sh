@@ -2807,6 +2807,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/image-cve-scan-window-9826.sh"
   "scripts/followthroughs/inngest-provision-unit-8562.sh"
   "scripts/followthroughs/inngest-tls-soak-10136.sh"
+  "scripts/followthroughs/inngest-trace-retention-5150.sh"
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
@@ -3060,6 +3061,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_ADAPTER_AUTH_HARD_FAIL_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+# plugins/soleur/test/pencil-post-save-gate.test.sh sources test-helpers.sh, which executes scripts/lib/scratch-root.sh
+# (test-helpers.sh:58-60), so the suite really reads it: the shared set, not an accept row.
+AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_POST_SAVE_GATE_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )

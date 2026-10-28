@@ -61,6 +61,16 @@ npx @soleur/opencode install
 
 Verify the install with `npx @soleur/opencode install --check` — it prints `opencode-install ok` when the vendored payload in `~/.config/opencode/soleur/` matches. (From a local checkout of this repository, you can also run `bun plugins/soleur/scripts/install-opencode-adapter.ts` and keep the checkout in place.) Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because OpenCode has no `soleur:` namespace. Two guards decide shell commands on OpenCode, and both run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. Soleur's operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](plugins/soleur/opencode/INSTRUCTIONS.md).
 
+**Google Antigravity CLI (`agy`):**
+
+Soleur loads as an Antigravity plugin via `.antigravity-plugin/plugin.json`. From a repository root containing the plugin:
+
+```bash
+agy
+```
+
+Start an Antigravity session and use `/soleur:go <what you want to do>`. Tool calls are translated natively to Antigravity primitives (`view_file`, `write_to_file`, `replace_file_content`, `run_command`, `invoke_subagent`), with background polling handled reactively through `schedule` rather than foreground sleep loops. See the [Antigravity instructions](plugins/soleur/antigravity/INSTRUCTIONS.md) for full mapping and dynamic domain subagent delegation.
+
 **Claude Code (recommended, via the published marketplace):**
 
 ```bash
