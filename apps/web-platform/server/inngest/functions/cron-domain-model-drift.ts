@@ -109,12 +109,10 @@ export const cronDomainModelDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 8 * * 1" },
+      { event: "cron/domain-model-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 8 * * 1" },
-    { event: "cron/domain-model-drift.manual-trigger" },
-  ],
-  cronDomainModelDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronDomainModelDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

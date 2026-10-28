@@ -267,18 +267,16 @@ export const cronWorkspaceGc = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      // Every 6 hours — frequent enough to keep leaked clones from accumulating
+      // into an ENOSPC, infrequent enough to add negligible IO (a readdir + a few
+      // rm). (Cron literal kept OUT of the JSDoc header above: a `*/6` inside a
+      // `/** */` block closes the comment and breaks esbuild.)
+      { cron: "0 */6 * * *" },
+      // Enables on-demand firing via /soleur:trigger-cron with zero SSH — the
+      // disk-reclaim lever for un-wedging a full volume.
+      { event: "cron/workspace-gc.manual-trigger" },
+    ],
   },
-  [
-    // Every 6 hours — frequent enough to keep leaked clones from accumulating
-    // into an ENOSPC, infrequent enough to add negligible IO (a readdir + a few
-    // rm). (Cron literal kept OUT of the JSDoc header above: a `*/6` inside a
-    // `/** */` block closes the comment and breaks esbuild.)
-    { cron: "0 */6 * * *" },
-    // Enables on-demand firing via /soleur:trigger-cron with zero SSH — the
-    // disk-reclaim lever for un-wedging a full volume.
-    { event: "cron/workspace-gc.manual-trigger" },
-  ],
-  cronWorkspaceGcHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronWorkspaceGcHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

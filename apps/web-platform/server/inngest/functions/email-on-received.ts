@@ -26,7 +26,7 @@
 //       not re-run the LLM, a finalize retry must not double-ping.
 //
 // Observability: function-final errors are captured by Layer 1
-// (server/inngest/middleware/sentry-correlation.ts transformOutput) — no
+// (server/inngest/middleware/sentry-correlation.ts onRunError) — no
 // per-function captureException needed for terminal errors. Statutory
 // notify failures are mirrored to Sentry INSIDE notifications.ts
 // (mirrorStatutoryNotifyFailure, tags feature=email-triage /
@@ -108,11 +108,13 @@ interface HandlerArgs {
     error: (...args: unknown[]) => void;
   };
   // Inngest's zero-indexed retry attempt + (optional) max attempt count, off
-  // BaseContext (the handler arg) — NOT onFunctionRun ctx, which is
-  // InitialRunInfo and lacks `attempt` (learning 2026-06-16). Optional so the
+  // BaseContext (the handler arg). The v3 trap this comment recorded — a
+  // middleware hook ctx lacking `attempt` — is retired in v4: hook ctx is
+  // Context.Any and carries attempt/maxAttempts, so reading it off the handler
+  // arg is convention, not necessity (learning 2026-06-16). Optional so the
   // legacy/eager test shape (neither passed) reads attempt=0/maxAttempts=1 →
   // isFinalAttempt=true, identical to the pre-degraded-tail behavior. Shape
-  // copied verbatim from _cron-shared.ts:107-108.
+  // copied verbatim from _cron-shared.ts:284-285.
   attempt?: number;
   maxAttempts?: number;
 }
@@ -694,7 +696,7 @@ export const emailOnReceived = inngest.createFunction(
     // solo-operator volume (Inngest QUEUES, not drops, beyond the limit);
     // the daily LLM ceiling above caps total spend.
     throttle: { limit: 60, period: "1h" },
+    triggers: { event: EMAIL_INBOUND_RECEIVED_EVENT },
   },
-  { event: EMAIL_INBOUND_RECEIVED_EVENT },
-  emailOnReceivedHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  emailOnReceivedHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

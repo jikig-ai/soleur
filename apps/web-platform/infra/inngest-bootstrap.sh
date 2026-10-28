@@ -1567,7 +1567,7 @@ fi
 # interval — without a restart. This is what lets the #4650 watchdog demote its
 # restart-on-first-tick to a guarded backstop (#4652).
 # #5159: re-planning via this poll REQUIRES the SDK to register the canonical
-# PUBLIC serve URL (serveHost pinned in app/api/inngest/route.ts) — a
+# PUBLIC serve URL (serveOrigin pinned in app/api/inngest/route.ts) — a
 # 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
 # planned. Without that pin, neither this poll nor the loopback re-register PUT
 # re-plans crons after a restart (the 2026-06-11 cron-deplan incident).

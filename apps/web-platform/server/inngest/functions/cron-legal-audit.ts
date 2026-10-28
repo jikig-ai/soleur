@@ -373,10 +373,10 @@ export const cronLegalAudit = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 11 1 1,4,7,10 *" },
+      { event: "cron/legal-audit.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 11 1 1,4,7,10 *" },
-    { event: "cron/legal-audit.manual-trigger" },
-  ],
-  cronLegalAuditHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronLegalAuditHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

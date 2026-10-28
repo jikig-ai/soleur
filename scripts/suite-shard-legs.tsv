@@ -389,7 +389,6 @@ scripts/followthroughs/ci-draft-light-soak-9728	3
 scripts/followthroughs/ci-push-dedupe-soak-9512	3
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
 scripts/followthroughs/inngest-trace-retention-5150	1
-scripts/followthroughs/inngest-verify-clean-10390	1
 scripts/followthroughs/orphan-sweeps-relook-10972	1
 scripts/followthroughs/post-deploy-incident-soak	1
 scripts/followthroughs/pr-battery-gate-saving-9323	4

@@ -623,6 +623,10 @@ export async function POST(request: Request) {
                 inngest.send({
                   id: `stripe-${event.id}`,
                   name: "finance.payment_failed",
+                  // `v` is a type-level omission in inngest@4's
+                  // SendEventPayload but still relays on the wire;
+                  // cfo-on-payment-failed reads `event.v` for deadletter
+                  // gating.
                   v: "1",
                   data: {
                     founderId,
@@ -635,7 +639,7 @@ export async function POST(request: Request) {
                     tier: grant.tier,
                     payload,
                   },
-                }),
+                } as Parameters<typeof inngest.send>[0]),
               { feature: "stripe-webhook", eventId: event.id },
             );
           } catch (err) {

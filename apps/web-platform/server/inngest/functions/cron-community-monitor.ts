@@ -1541,10 +1541,10 @@ export const cronCommunityMonitor = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 8 * * *" },
+      { event: "cron/community-monitor.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 8 * * *" },
-    { event: "cron/community-monitor.manual-trigger" },
-  ],
-  cronCommunityMonitorHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronCommunityMonitorHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

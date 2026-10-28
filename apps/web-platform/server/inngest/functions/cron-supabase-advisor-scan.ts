@@ -119,12 +119,10 @@ export const cronSupabaseAdvisorScan = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "37 3 * * *" },
+      { event: "cron/supabase-advisor-scan.manual-trigger" },
+    ],
   },
-  [
-    { cron: "37 3 * * *" },
-    { event: "cron/supabase-advisor-scan.manual-trigger" },
-  ],
-  cronSupabaseAdvisorScanHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronSupabaseAdvisorScanHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
