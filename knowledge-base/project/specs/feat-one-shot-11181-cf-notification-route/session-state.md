@@ -21,7 +21,7 @@ Skills: `plan`, `deepen-plan`, `spec-templates`, `work`. Agent: `general` for pl
 
 ## Work Phase
 
-- Implementation and focused checks complete; Phase 4 commit/entry guard is pending.
+- Implementation and focused checks complete; feature implementation commit `d5688394f9` is present on the branch.
 - RED: the pre-change route failed the exact URL, baseline-retention, 404, degraded-200, and wrong-shape assertions (pre-change control: 137 passed / 26 failed).
 - GREEN: `bash plugins/soleur/test/cf-token-scope.test.sh` passed 163/163; `bash -n` and `git diff --check` passed.
 - `cf-token-scope.sh --profile default-token --dry-run` printed the documented URL with no query suffix and no token value; the test confirms no curl call occurs in dry-run.
