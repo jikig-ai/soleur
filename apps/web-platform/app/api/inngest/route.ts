@@ -210,7 +210,7 @@ const handlers = serve({
   streaming: true,
   // #5159 (see SERVE_HOST note above): pin the registered serve URL to the
   // canonical public origin so a loopback re-register PUT plans crons. Omitted
-  // when NEXT_PUBLIC_APP_URL is unset (dev/build) → SDK infers from the request.
+  // when SERVE_HOST is unset (dev/build) → SDK infers from the request.
   ...(SERVE_HOST ? { serveOrigin: SERVE_HOST, servePath: "/api/inngest" } : {}),
 });
 

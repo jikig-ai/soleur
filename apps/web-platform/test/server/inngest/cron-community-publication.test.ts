@@ -1255,6 +1255,17 @@ describe("contained-write P3 residuals (#8628)", () => {
     }
   });
 
+  // Dir-walk probe (test-design fix-round): the end-to-end row above ENOENTs
+  // on the LEAF pin too, so a mutant that silently falls back to join() only
+  // inside openContainedDir's ancestor walk would stay green through it.
+  // Isolate the walk: pinned arm + ghost base on openContainedDir itself.
+  it("openContainedDir's ancestor walk fails LOUD on the pinned arm (no silent join fallback)", async () => {
+    const ghostBase = join(root, "no-such-procfs", "fd");
+    await expect(
+      openContainedDir(root, ["kb"], { hasProcFd: true, fdBase: ghostBase }),
+    ).rejects.toThrow(/ENOENT/);
+  });
+
   // (c) fh.close() lone-writeback masking: a successful write + failed close
   // surfaces the close error; a failed write + failed close still reports the
   // write error. Driven end-to-end through writeDigestFileContained via the

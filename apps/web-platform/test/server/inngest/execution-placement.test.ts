@@ -137,6 +137,11 @@ const STEP_EXECUTOR_EXPORTS: ReadonlySet<string> = new Set([
   "createEndpointServer",
   "InngestExecution",
   "InngestExecutionEngine",
+  "fastifyPlugin",
+  // route-convention handler re-exports (inngest/remix `handler as loader`,
+  // inngest/sveltekit `handler as action`) — executor-shaped named bindings.
+  "loader",
+  "action",
 ]);
 const SOURCE_FILE_RE = /\.(ts|tsx|js|mjs|cjs)$/;
 const TEST_FILE_RE = /\.test\.(ts|tsx|js|mjs|cjs)$/;
@@ -892,7 +897,7 @@ function serveAnchorViolations(fs: GraphFs): string[] {
   reaching.sort();
   if (reaching.length !== 1 || reaching[0] !== ROUTE_PATH) {
     out.push(
-      `modules reaching an Inngest step-executor API (the STEP_EXECUTOR_EXPORTS surface — serve / connect / createServer / InngestCommHandler / endpointAdapter / serveEndpoint / createEndpointServer / InngestExecution*, or an opaque load of an inngest module): [${reaching.join(", ")}] — expected exactly [${ROUTE_PATH}]. A second executor registers a second step path; revisit the ADR-033 #7230 placement rule first.`,
+      `modules reaching an Inngest step-executor API (the STEP_EXECUTOR_EXPORTS surface — ${[...STEP_EXECUTOR_EXPORTS].join(" / ")}, or an opaque load of an inngest module): [${reaching.join(", ")}] — expected exactly [${ROUTE_PATH}]. A second executor registers a second step path; revisit the ADR-033 #7230 placement rule first.`,
     );
   }
 

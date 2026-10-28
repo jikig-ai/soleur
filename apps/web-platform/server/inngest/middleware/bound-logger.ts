@@ -78,8 +78,9 @@ export function applyBoundLogger(raw: unknown): unknown {
   //
   // Reachable by more than an SDK bump: reading ctx.logger from a later hook
   // (e.g. `wrapFunctionHandler`) instead of transformFunctionInput lands here too (see the note on that hook below),
-  // and tsc cannot catch that — `raw` is `unknown` and InitialRunInfo is
-  // loosely typed. A refactor is the likelier trigger than a vendor change.
+  // and tsc cannot catch that — `raw` is `unknown` and v4's hook ctx
+  // (Context.Any) is loosely typed. A refactor is the likelier trigger than a
+  // vendor change.
   // `typeof raw === "function"` is ACCEPTED, not rejected: the callable-logger
   // shape (a function with `info`/`warn`/`error` attached) is what debug, npmlog
   // and roarr hand you, and `new Proxy(fn, …)` is perfectly legal. Rejecting it

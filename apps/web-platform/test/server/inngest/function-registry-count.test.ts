@@ -20,6 +20,10 @@ const FUNCTIONS_DIR = resolve(
   __dirname,
   "../../../server/inngest/functions",
 );
+const CLIENT_PATH = resolve(
+  __dirname,
+  "../../../server/inngest/client.ts",
+);
 const CRON_MONITORS_TF = resolve(
   __dirname,
   "../../../infra/sentry/cron-monitors.tf",
@@ -62,12 +66,22 @@ function extractTfMonitorNames(): Set<string> {
 }
 
 // Files under server/inngest/functions/ whose source sets a `checkpointing`
-// object key. The property shape (`{` or `,` then the key then `:`) keeps a
-// comment or string merely naming the flag from counting.
+// (or deprecated-twin `experimentalCheckpointing`) object key. Comments are
+// stripped first — a `// e.g. { checkpointing: false }` comment must not count,
+// and a comment between the delimiter and the key must not hide it. Keyed and
+// shorthand forms are both caught (quoted keys included); a bare mention in a
+// string or identifier still does not count.
 function functionFilesWithCheckpointingKey(): string[] {
+  const KEYED_RE = /[{,]\s*["']?(experimental)?[Cc]heckpointing["']?\s*:/;
+  const SHORTHAND_RE = /\{\s*(experimental)?[Cc]heckpointing\s*[,}]/;
   return readdirSync(FUNCTIONS_DIR)
     .filter((f) => f.endsWith(".ts"))
-    .filter((f) => /[{,]\s*checkpointing\s*:/.test(readFileSync(resolve(FUNCTIONS_DIR, f), "utf8")));
+    .filter((f) => {
+      const src = readFileSync(resolve(FUNCTIONS_DIR, f), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+      return KEYED_RE.test(src) || SHORTHAND_RE.test(src);
+    });
 }
 
 const KNOWN_UNMONITORED_SLUGS = new Set([
@@ -396,12 +410,21 @@ describe("Inngest function registry — drift guards", () => {
   // Checkpointing totality pin (#8628): the client ships `checkpointing: false`
   // (CTO ruling 2026-10-28, recorded in server/inngest/client.ts and ADR-243's
   // 2026-10-28 amendment) — but inngest@4 also accepts `checkpointing` as a
-  // per-function createFunction config key (FunctionConfig.checkpointing),
-  // which silently overrides the client pin for that one function. Exactly the
-  // kind of drift a flag flip PR can leave behind, so ZERO such keys may appear
-  // in any file under server/inngest/functions/. A future flip-on is a
-  // deliberate client change, not a per-function one (see the ruling).
+  // per-function createFunction config key (InngestFunction.Options), which
+  // silently overrides the client pin for that one function. Exactly the kind
+  // of drift a flag flip PR can leave behind, so ZERO such keys may appear in
+  // any file under server/inngest/functions/ AND the client pin must stay —
+  // deleting the key compiles clean and flips checkpointing ON by v4 default
+  // (InngestFunction.js:179 `?? true`). A future flip-on is a deliberate client
+  // change, not a per-function one (see the ruling; it must re-run gdpr-gate
+  // and update the Art. 30 record first).
   it("(h) no function file sets a per-function `checkpointing` config key", () => {
     expect(functionFilesWithCheckpointingKey()).toEqual([]);
+  });
+
+  it("(h2) the client pin itself is still present (positive companion)", () => {
+    expect(readFileSync(CLIENT_PATH, "utf8")).toMatch(
+      /checkpointing:\s*false/,
+    );
   });
 });

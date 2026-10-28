@@ -1,7 +1,7 @@
 // COPY-FILL SCAFFOLD for a self-armed Inngest oneshot.
 // Extension is `.ts.template` (NOT `.ts`) so tsc / vitest / the route-registry
 // count regex do NOT pick it up. Copy to `oneshot-<name>.ts`, then fill the
-// `// FILL:` markers and complete the 3 integration points in the trailer.
+// `// FILL:` markers and complete the 4 integration points in the trailer.
 // Canonical precedent: oneshot-4650-monitor-close.ts. See the runbook
 // knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md
 //

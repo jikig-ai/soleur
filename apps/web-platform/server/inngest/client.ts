@@ -46,7 +46,7 @@ if (!IS_BUILD_PHASE) {
   // enters dev mode on INNGEST_DEV="true" (parseAsBoolean) or ANY
   // URL-parseable value (explicitDevUrl in Inngest.js), so refuse every
   // value that isn't an explicit off — "0", "false", or unset/empty.
-  const inngestDev = process.env.INNGEST_DEV;
+  const inngestDev = process.env.INNGEST_DEV?.trim();
   if (
     process.env.NODE_ENV === "production" &&
     inngestDev !== undefined &&
@@ -55,7 +55,7 @@ if (!IS_BUILD_PHASE) {
     inngestDev.toLowerCase() !== "false"
   ) {
     throw new Error(
-      "INNGEST_DEV set in production refuses to load: signature verification would be bypassed (ADR-030 I4)",
+      `INNGEST_DEV set in production refuses to load: signature verification would be bypassed (ADR-030 I4): ${JSON.stringify(process.env.INNGEST_DEV)}`,
     );
   }
 }
@@ -98,7 +98,7 @@ export const inngest = new Inngest({
   // 'enabled')`. Registered LAST so it wraps the ctx the earlier middlewares
   // have already finished composing. Deliberately NOT accompanied by a
   // `logger:` option — inngest wraps whatever you pass in ProxyLogger
-  // regardless (Inngest.js:673), so wiring one would not fix the receiver loss,
+  // regardless (Inngest.js:256), so wiring one would not fix the receiver loss,
   // and it would turn INFO ctx-logs into JSON that vector.toml then drops.
   middleware: [
     SentryCorrelationMiddleware,

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // PR-F Phase 2 (#3244, #3940). Module-load-time env-var validation for
@@ -119,7 +121,7 @@ describe("server/inngest/client.ts — module-load env validation", () => {
     },
   );
 
-  it.each(["0", "false", ""])(
+  it.each(["0", "false", "FALSE", "", " 0 ", " false "])(
     "loads when NODE_ENV=production and INNGEST_DEV=%s (explicit off)",
     async (devValue) => {
       // @ts-expect-error see above.
@@ -129,6 +131,18 @@ describe("server/inngest/client.ts — module-load env validation", () => {
       expect(mod.inngest).toBeDefined();
     },
   );
+
+  // Source pin (structural-enumeration R3): the SDK's `mode` reads
+  // `options.isDev` BEFORE env (Inngest.js:312) — a code-level `isDev: true`
+  // in the client options would flip to dev mode and bypass the env guard
+  // entirely. Nothing must pass it.
+  it("client.ts never passes isDev to new Inngest (code-level dev-mode pin)", () => {
+    const src = readFileSync(
+      new URL("../../../server/inngest/client.ts", import.meta.url),
+      "utf8",
+    );
+    expect(src).not.toMatch(/\bisDev\s*:/);
+  });
 
   it("loads when NODE_ENV=production and INNGEST_DEV unset (cloud mode default)", async () => {
     // @ts-expect-error see above.

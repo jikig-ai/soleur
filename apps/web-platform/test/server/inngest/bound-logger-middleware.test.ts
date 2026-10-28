@@ -1,7 +1,7 @@
 // Receiver-loss elimination for the Inngest ctx logger (#6703, Ref #6705).
 //
 // The crash this guards against: `ProxyLogger`'s methods open with
-// `if (!this.enabled) return;` (inngest@3.54.2
+// `if (!this.enabled) return;` (inngest@4.26.0
 // middleware/logger.js › ProxyLogger.info/warn/error/debug).
 // Detaching one (`const f = ctx.logger.info`) drops the receiver, so strict-mode
 // class code sees `this === undefined` and throws
