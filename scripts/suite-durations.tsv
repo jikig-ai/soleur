@@ -385,7 +385,6 @@ scripts/followthrough-varq-ban-live	1544	measured
 scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
-scripts/followthroughs/inngest-verify-clean-10390	1204	floor
 scripts/followthroughs/orphan-sweeps-relook-10972	1200	floor
 scripts/followthroughs/post-deploy-incident-soak	1200	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured

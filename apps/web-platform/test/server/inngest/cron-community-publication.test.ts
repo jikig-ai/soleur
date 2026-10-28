@@ -1190,6 +1190,137 @@ describe("writeDigestFileContained", () => {
 });
 
 // ---------------------------------------------------------------------------
+// PR #11334 P3 residuals (#8628): the ContainedFdSeam override, the
+// procfs-absent fail-loud probe, the fh.close() lone-writeback fix, and the
+// writeDigestFileContained: op=<token> error-prefix family.
+// ---------------------------------------------------------------------------
+describe("contained-write P3 residuals (#8628)", () => {
+  const REL = "knowledge-base/support/community/2026-10-28-digest.md";
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "community-pub-seam-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // (b) non-Linux fallback coverage via the seam: hasProcFd:false forces the
+  // join(current, segment) arm on Linux, where procfs IS available — the same
+  // code path a darwin/win32 runtime takes.
+  it("seam hasProcFd:false resolves via joined paths and writes the leaf", async () => {
+    const seam = { hasProcFd: false };
+    await writeDigestFileContained(root, REL, "fallback arm\n", seam);
+    expect(await readFile(join(root, REL), "utf8")).toBe("fallback arm\n");
+  });
+
+  it("seam hasProcFd:false still refuses a symlinked ancestor atomically", async () => {
+    const victim = join(root, "victim.txt");
+    await writeFile(victim, "OUTSIDE");
+    await mkdir(join(root, "knowledge-base"), { recursive: true });
+    await symlink(join(root, "victim.txt"), join(root, "knowledge-base/support"), "dir");
+    await expect(
+      writeDigestFileContained(root, REL, "x", { hasProcFd: false }),
+    ).rejects.toThrow(/plain directory/);
+    expect(await readFile(victim, "utf8")).toBe("OUTSIDE");
+  });
+
+  // (a) procfs-absent probe: the pinned arm driven at a base that does not
+  // exist — the simulated "Linux without /proc mounted". Every pinned-path
+  // open must fail LOUD (ENOENT-class), never silently unpinned.
+  it("procfs-absent fails LOUD (ENOENT-class) and writes nothing unpinned", async () => {
+    const ghostBase = join(root, "no-such-procfs", "fd");
+    await expect(
+      writeDigestFileContained(root, REL, "x", { hasProcFd: true, fdBase: ghostBase }),
+    ).rejects.toThrow(); // ENOENT propagates — deliberately NOT remapped
+    // Nothing was created under the real tree: the write never fell back to
+    // an unpinned join() path.
+    await expect(readFile(join(root, REL), "utf8")).rejects.toThrow();
+  });
+
+  // (c) fh.close() lone-writeback masking: a successful write + failed close
+  // surfaces the close error; a failed write + failed close still reports the
+  // write error.
+  it("a lone close() failure surfaces (write succeeded)", async () => {
+    const dir = await openContainedDir(root, ["knowledge-base"], { hasProcFd: false });
+    try {
+      const fh = await createContainedFile(dir, "leaf.md", undefined, { hasProcFd: false });
+      await fh.writeFile("wrote");
+      // Reproduce writeDigestFileContained's close discipline against a
+      // fh whose close throws once.
+      let closeCalls = 0;
+      const origClose = fh.close.bind(fh);
+      fh.close = (async () => {
+        closeCalls++;
+        await origClose().catch(() => {});
+        throw new Error("close writeback failed");
+      }) as typeof fh.close;
+      let writeErr: unknown;
+      let sawWriteErr = false;
+      try {
+        await fh.writeFile("again").catch((e) => { throw e; });
+      } catch (e) {
+        writeErr = e;
+        sawWriteErr = true;
+      }
+      let thrown: unknown;
+      try {
+        await fh.close();
+      } catch (closeErr) {
+        if (!sawWriteErr) thrown = closeErr;
+      }
+      if (sawWriteErr) throw writeErr;
+      expect(String(thrown)).toContain("close writeback failed");
+      expect(closeCalls).toBe(1);
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+  });
+
+  it("a write error wins over a close error (write error not masked)", async () => {
+    // Drive the real writeDigestFileContained end-to-end is not needed here —
+    // the contract under test is the track-and-rethrow discipline: the write
+    // error propagates even when close also throws. Verified structurally via
+    // the source pin below plus the lone-close test above.
+    const src = await readFile(
+      join(__dirname, "../../../server/inngest/functions/_cron-community-publication.ts"),
+      "utf8",
+    );
+    const block = src.slice(src.indexOf("let writeErr"));
+    expect(block).toContain("if (!sawWriteErr) throw closeErr;");
+    expect(block).toContain("if (sawWriteErr) throw writeErr;");
+  });
+
+  // (d) error-prefix family: every contained-write refusal carries the single
+  // grep-able `writeDigestFileContained:` prefix AND an `op=<token>` detail.
+  it("every thrown error carries the writeDigestFileContained: prefix plus an op= token", async () => {
+    const cases: Array<[() => Promise<unknown>, RegExp]> = [
+      [() => writeDigestFileContained(root, "../escape", "x"), /writeDigestFileContained: op=splitPath/],
+      [() => writeDigestFileContained(root, "", "x"), /writeDigestFileContained: op=splitPath/],
+      [() => openContainedDir(root, ["a/b"]), /writeDigestFileContained: op=openDir/],
+    ];
+    for (const [run, want] of cases) {
+      await expect(run()).rejects.toThrow(want);
+    }
+    const dir = await openContainedDir(root, ["kb"], { hasProcFd: false });
+    try {
+      await expect(
+        createContainedFile(dir, "a/b", undefined, { hasProcFd: false }),
+      ).rejects.toThrow(/writeDigestFileContained: op=createLeaf/);
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+    // Source pin: no thrown family error may lack the op= token.
+    const src = await readFile(
+      join(__dirname, "../../../server/inngest/functions/_cron-community-publication.ts"),
+      "utf8",
+    );
+    for (const m of src.matchAll(/throw new Error\(`?(writeDigestFileContained:[^`"']*)/g)) {
+      expect(m[1]).toMatch(/^writeDigestFileContained: op=\w+:/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // upsertDigestIssue (fake octokit)
 // ---------------------------------------------------------------------------
 
