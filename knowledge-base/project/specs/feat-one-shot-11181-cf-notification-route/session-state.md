@@ -74,13 +74,14 @@ Skills: `plan`, `deepen-plan`, `spec-templates`, `work`. Agent: `general` for pl
 
 - Cumulative fix range: `4fe6a0f962f2d3dbdcd5c37b9b4ddb7837ac316a..dfc47eeaa09c798c52c110e5373bb97ab9bea976`. Eight panel seats and the separate code-simplicity seat returned.
 - Pattern-recognition, architecture, and code-quality independently reported that `--proxy=`/`--preproxy=` values were recorded and dispatched as transfer URLs; the agent-native seat found `tasks.md` still called 170/170 the final focused result. Security and code-simplicity reported no findings. Structural enumeration's other mapped paths were separate rulesets/non-Notifications recipe coverage, outside Guard 1's named Notifications property.
-- Fix: ignore proxy-option values when recording transfer targets, add equals/separated proxy-only fallback fixtures, reject proxy overrides in D-conf argv, and update the tasks artifact's final result. This changes tests/docs only; the production probe, token binding, and classifier remain unchanged.
-- Final focused suite: 179 passed, 0 failed; Bash syntax, warning-severity ShellCheck, and `git diff --check` pass. Scratch mutants for proxy-as-target, proxy override, and proxy-as-target with the real URL removed were killed.
-- After committing and pushing this fix, run exactly one fresh-eyes verification pass. Do not start another panel or targeted round.
+- Fix: ignore proxy-option values when recording transfer targets, add proxy-only fallback fixtures, reject proxy overrides in D-conf argv, and update the tasks artifact's final result. This changes tests/docs only; the production probe, token binding, and classifier remain unchanged.
+- The single permitted verification pass found one P3 mismatch: plan row 8 named `--preproxy` and `-x`, while direct fixtures covered only `--proxy`. Added equals/separated `--proxy` and `--preproxy` cases plus separated/attached `-x` cases; no second verifier was spawned under the one-pass contract.
+- Final focused suite: 183 passed, 0 failed; Bash syntax, warning-severity ShellCheck, and `git diff --check` pass. Scratch mutants for proxy-as-target, proxy override, and proxy-as-target with the real URL removed were killed; the `--preproxy` and `-x` parser mutants were killed too.
 
 ### Review-Execution Errors
 
 - Initial scratch mutation setup omitted the adjacent skill docs; a subsequent setup selected a mutated copy as its baseline. Rebuilt complete scratch trees with a pristine baseline; no product files were changed by these attempts.
 - A scratch-mutation anchor was stale and a status banner used `printf` with a leading `--`; both commands failed before touching repository files and were corrected.
 - The first URL-parser run shifted the mock's positional parameters before D-conf captured argv (176 passed / 1 failed). Moved argv capture before parsing and reran the suite (177/177).
-- One scratch mutation assertion expected an outdated failure label; inspection showed the mutant had been killed under the updated diagnostic, and the expected output anchor was corrected.
+- Scratch mutation assertions twice expected an outdated failure label; inspection showed each mutant had been killed under the updated diagnostic, and the expected output anchors were corrected.
+- One read attempted a nonexistent `project-nope.md` path and returned not-found; this was read-only and no files changed.

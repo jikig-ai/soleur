@@ -360,21 +360,24 @@ else
   no "D2 mock observer missed or altered a URL operand"
 fi
 D2_PROXY_LOG="$WORK/d2-proxy-operand-log"
-for proxy_style in equals separated; do
+assert_proxy_only_falls_through() {
+  local label="$1"
+  shift
   : >"$D2_PROXY_LOG"
-  if [[ "$proxy_style" == "equals" ]]; then
-    PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
-      "$MOCKBIN/curl" "--proxy=$NOTIF_URL" >"$OUTFILE"
-  else
-    PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
-      "$MOCKBIN/curl" --proxy "$NOTIF_URL" >"$OUTFILE"
-  fi
+  PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+    "$MOCKBIN/curl" "$@" >"$OUTFILE"
   if [[ ! -s "$D2_PROXY_LOG" ]] && grep -Fxq -- '418' "$OUTFILE"; then
-    ok "D2 $proxy_style proxy value is not a transfer URL"
+    ok "$label"
   else
-    no "D2 $proxy_style proxy value masqueraded as a transfer URL"
+    no "$label"
   fi
-done
+}
+assert_proxy_only_falls_through "D2 --proxy= value is not a transfer URL" "--proxy=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --proxy value is not a transfer URL" --proxy "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --preproxy= value is not a transfer URL" "--preproxy=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --preproxy value is not a transfer URL" --preproxy "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 -x value is not a transfer URL" -x "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 attached -x value is not a transfer URL" "-x$NOTIF_URL"
 MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
 # RUN-PATH URL ASSEMBLY pin (design-pass P2): inspect the actual request URLs,
