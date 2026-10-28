@@ -33,7 +33,12 @@ downtime-inducing operation — deploy path unchanged, ADR-078 drain intact).
 **New considerations discovered during deepening:**
 - v4 turns **checkpointing on by default** — a transport-shape change inside the
   very mechanism ADR-243 was written to bound; promoted to risk R1 + spike row
-  S9 rather than left as an implicit behavior change.
+  S9 rather than left as an implicit behavior change. **Ruled by CTO agent,
+  2026-10-28:** this PR ships `checkpointing: false` on the client — self-hosted
+  support on pinned v1.45.1 is upstream-docs-only (unverified), and the unit
+  harness models one-new-step-per-request, so default-on would ship an execution
+  model no suite asserts. S9 runs as a measurement row; flip-on is a one-flag
+  follow-up once the measurements exist.
 - `onRunError.isFinalAttempt` is a native v4 signal that can retire run-log's
   manual `attempt >= maxAttempts - 1` approximation (kept as an option, not a
   mandate).
@@ -125,7 +130,7 @@ Single PR, five workstreams in order:
 | `serve({ serveHost, signingKey, streaming: "force" })` | `serve({ serveOrigin, servePath, streaming: true })`; `signingKey`/`baseUrl`/`fetch` move to the `Inngest` client | `route.ts`, `client.ts` |
 | `streaming: "force" \| "allow"` | `streaming: true \| false` (allow/force deprecated) | `route.ts` |
 | `ctx.logger` receiver-loss via `ProxyLogger.enabled` | `ProxyLogger` still exported, same `enabled` gate — bound-logger stays necessary | bound-logger, its test |
-| — | **checkpointing enabled by default** (`checkpointing: false` opt-out) | new — see risk R1 |
+| — | **checkpointing enabled by default upstream — this PR ships `checkpointing: false`** (CTO ruling 2026-10-28, see risk R1) | `client.ts` |
 | `INNGEST_SERVE_HOST` | `INNGEST_SERVE_ORIGIN` (`_HOST` still read, deprecation warning) | repo uses neither env — hardcoded `SERVE_HOST` const stays, key renamed |
 | mode inferred (dev default) | **cloud default** — `isDev`/`INNGEST_DEV=1` explicit for dev; prod requires signing key | `client.ts` already enforces both keys + refuses `INNGEST_DEV=1` in prod — aligned, but error ordering/messages may shift in tests |
 
@@ -228,13 +233,14 @@ production `installCrashHandlers()` installed for the S7 rows. Rows:
   server-side `error parsing SDK response stream`, retry joins or re-runs per
   `retries`. A `Controller is already closed` / `Invalid state` uncaughtException
   = v4 does not fix the defect → STOP, restore the wrapper, re-scope.
-- S9 (new) — checkpointing matrix: S2 shape run once with client-default
-  checkpointing and once with `checkpointing: false`; record inter-step latency,
-  whether the streamed response still heartbeats through a >100 s step, and any
-  server-side checkpoint errors. **Decision rule:** checkpointing stays
-  default-on only if every S-row passes under it AND a >100 s synchronous step
-  still beats the proxy timeout; else `checkpointing: false` on the client with
-  the spike row cited.
+- S9 (new) — checkpointing matrix, **measurement-only** (the flag decision is
+  already ruled: the PR ships `checkpointing: false`): S2 shape run once with
+  client-default checkpointing (expected to fail or degrade on the pinned
+  self-hosted server — record what breaks) and once with `checkpointing: false`
+  (the shipped configuration — must pass); record inter-step latency, whether
+  the streamed response still heartbeats through a >100 s step, and any
+  server-side checkpoint errors. These measurements are the evidence a future
+  one-flag flip-on decision needs — they do NOT change this PR's flag.
 - Unsigned-POST row — 201 HTTP + 401 in envelope; `x-inngest-sdk` headers.
 - Registration row — `PUT` sync → `modified:true`, crons planned (`inngest_crons`
   non-empty on the dev-server dashboard API if reachable) — the #5159 invariant
@@ -242,7 +248,8 @@ production `installCrashHandlers()` installed for the S7 rows. Rows:
 
 Artifact: `knowledge-base/project/specs/feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md`
 — same table format as the 2026-09-23 record, plus a versions line and the
-checkpointing verdict.
+S9 checkpointing measurements (both arms recorded; shipped flag is
+`checkpointing: false` per the CTO ruling).
 
 #### Phase 5 — Residuals
 
@@ -291,7 +298,8 @@ live-code footprint, each needs a disposition):
   `inngest@4` now" row is marked executed; the Observability table drops
   `inngest-stream-consumer-cancel` / `inngest-stream-drain-error` with a note that
   drop coverage moved to the server-side `inngest_step_524` needle; a
-  checkpointing line records the S9 verdict.
+  checkpointing line records the `checkpointing: false` ruling and the S9
+  measurements.
 - Sweep: `git grep -n "stream-detach\|inngest-stream-\|serveHost" -- apps/ scripts/`
   → only intended hits; `git grep -n "3.54.2"` → only KB/history.
 
@@ -301,7 +309,7 @@ live-code footprint, each needs a disposition):
 |---|---|
 | Stay on 3.54.2 + keep the wrapper | The pin blocks every v4 fix/feature forever and keeps a re-streaming workaround the upstream already made dead code. |
 | Pin `4.21.x` exactly (version the issue names) | Issue says "inngest@4"; `4.21.0` contains the fix but later 4.x carries more fixes — `^4` restore is the ask, so track latest stable and pin the lockfile. |
-| `checkpointing: false` unconditionally | Cheap insurance, but forfeits the inter-step latency win without evidence — the spike can answer it on the pinned server (supported per upstream docs matrix: self-hosted ✅). Decided by S9, not by default. |
+| ~~`checkpointing: false` unconditionally~~ **EXECUTED — this is the CTO ruling** | The stricter option won: self-hosted support on pinned v1.45.1 is upstream-docs-only (unverified) and the unit harness models one-new-step-per-request, so default-on would ship an execution model no suite asserts. S9 still runs to measure both arms; flip-on is a future one-flag decision. |
 | Split the codemod from the deletion | Both halves are gated on the same dependency; a partial v4 tree (old signature + new SDK) doesn't compile — one PR or no PR. |
 | Keep a thin `inngest-stream-*` telemetry shim in v4 | The wrapper's drop attribution (fnId/stepId) is gone either way; the server-side `inngest_step_524` needle already detects drops — a shim buys attribution the open `retries` decision (#8613) can revisit if needed. Accepted coverage shift; recorded in ADR-243's observability table. |
 | Wrapper kept "just in case" under v4 | Dead machinery whose precondition (leaky `createStream`) is gone; the S7 control row proves the case against it. |
@@ -347,8 +355,8 @@ failure_modes:
   - mode: "v4 registration regression: PUT sync 200 but inngest_crons empty (the #5159 shape)"
     detection: "verify_inngest_health post-deploy diagnostic (inngest_register_http + inngest_crons dump)"
     alert_route: "deploy failure → operator"
-  - mode: "checkpointing incompatibility on pinned server v1.45.1"
-    detection: "S9 spike row before merge; post-merge: step errors in Sentry + routine_runs failed rows"
+  - mode: "checkpointing incompatibility if a future flip-on is attempted (this PR ships `checkpointing: false`)"
+    detection: "S9 measurement row before merge; post-flip-on: step errors in Sentry + routine_runs failed rows"
     alert_route: "Sentry issue + cron monitor red"
   - mode: "stream drop post-upgrade (no wrapper)"
     detection: "inngest-server 'error parsing SDK response stream' / 'reset the connection' → inngest_step_524 Better Stack alert (server-side needle; the app-side inngest-stream-* ops are retired)"
@@ -430,7 +438,7 @@ planned path:
 | Phase 2 middleware rewrite | same quote | asked |
 | Phase 3 stream-detach deletion | "delete server/inngest/stream-detach.ts + its test + the route wrapper" | asked |
 | Phase 4 S1–S8 spike | "re-run the streaming spike rows S1-S8 … against the pinned self-hosted server" | asked |
-| Phase 4 S9 checkpointing row | — | inferred — justification: v4 turns checkpointing ON by default; it rewrites the step-execution transport the spike exists to verify, so the spike cannot certify the change without measuring it |
+| Phase 4 S9 checkpointing row | — | inferred — justification: v4 turns checkpointing ON by default; it rewrites the step-execution transport the spike exists to verify, so the spike measures both arms (flag decision already ruled: ship `checkpointing: false`) |
 | Phase 5a retirement census | "Remove the script and any registry/manifest references to it." | asked |
 | Phase 5b P3 items | "Deferred P3 review items … (a)–(d)" | asked |
 | Phase 6 ADR-243 amendment | — | inferred — justification: `wg-architecture-decision-is-a-plan-deliverable` — the plan reverses a mechanism ADR-243 recorded as its Decision, so the record must move with the code |
@@ -451,11 +459,11 @@ planned path:
 - [ ] **AC4.** `route.ts` uses `serveOrigin`/`servePath`/`streaming: true`; `signingKey` lives on the `Inngest` client; `serve({` remains the ONLY inngest serve mount (existing census test passes, updated comment).
 - [ ] **AC5.** All three middlewares are `Middleware.BaseMiddleware` subclasses registered as classes in `client.ts`; their suites pass with the same behavioral contract (run-log: thrown-non-final suppressed, returned-`ok:false` written immediately, thrown-final written; bound-logger: detached-method binding, frozen-prop pass-through, fail-open report once-per-process; sentry-correlation: scope tags + final-error capture).
 - [ ] **AC6.** `tsc --noEmit`, `eslint`, and `scripts/test-all.sh --affected` green (do not commit while a `--affected` run is in flight in this worktree).
-- [ ] **AC7.** `streaming-spike-v4.md` exists under `knowledge-base/project/specs/feat-one-shot-8628-inngest-4-upgrade/` with all S1–S8 rows run against `inngest start` v1.45.1, the S7 no-wrapper cut showing **no** `Invalid state: Controller is already closed` uncaughtException, and the S9 checkpointing verdict + client flag decision recorded.
+- [ ] **AC7.** `streaming-spike-v4.md` exists under `knowledge-base/project/specs/feat-one-shot-8628-inngest-4-upgrade/` with all S1–S8 rows run against `inngest start` v1.45.1, the S7 no-wrapper cut showing **no** `Invalid state: Controller is already closed` uncaughtException, and the S9 checkpointing measurements recorded for both arms (shipped flag is `checkpointing: false` per the CTO ruling).
 - [ ] **AC8.** `git grep -n "inngest-verify-clean-10390" -- scripts/ .github/ plugins/ apps/ infra/` returns zero; `scripts/test-all.sh` no longer registers the suite.
 - [ ] **AC9.** The four `_cron-community-publication.ts` P3 items are implemented: a designed seam covers the non-Linux fallback in tests; the procfs-absent path is probed and its fail-loud behavior asserted; a lone `fh.close()` writeback error is no longer masked; the error-prefix decision is encoded and pinned by tests.
 - [ ] **AC10.** `signature-verify.test.ts` + `signature-verify-dev-mode.test.ts` pass and still assert the 401-in-201-envelope contract; the wrapper-wiring test is gone with the wrapper.
-- [ ] **AC11.** ADR-243 amended in place (§1 v4 upstream fix + wrapper deletion + retired ops + S9 checkpointing verdict); `git grep -n "inngest-stream-consumer-cancel\|inngest-stream-drain-error" -- apps/ knowledge-base/engineering/architecture/` returns zero outside historical learnings.
+- [ ] **AC11.** ADR-243 amended in place (§1 v4 upstream fix + wrapper deletion + retired ops + the `checkpointing: false` ruling and S9 measurements); `git grep -n "inngest-stream-consumer-cancel\|inngest-stream-drain-error" -- apps/ knowledge-base/engineering/architecture/` returns zero outside historical learnings.
 - [ ] **AC12.** `INNGEST_DEV=1`-in-production refusal and the missing-key startup throws still fire (client-startup.test.ts green, updated only for v4 error text if the SDK's own message pre-empts ours).
 - [ ] **AC13.** PR body carries `Closes #8628` and names the two attached residuals (followthrough retirement, P3 fd-pinning items) so the epic's "still owed" line resolves.
 
@@ -479,13 +487,13 @@ planned path:
 
 ## Dependencies & Risks
 
-- **R1 (highest): v4 checkpointing default-on.** It executes steps eagerly inside a
-  request and checkpoints via API — a different transport shape than the one
-  ADR-243's streaming decision was measured against. If a >100 s synchronous step
-  behaves differently under checkpointing (request held without streamed
-  heartbeats, or checkpoint calls blocked), the 524 class returns. **Mitigation:**
-  S9 spike row decides on evidence; `checkpointing: false` on the client is the
-  documented opt-out. Self-hosted support is claimed by upstream docs.
+- **R1 (mitigated by ruling): v4 checkpointing default-on upstream.** It executes
+  steps eagerly inside a request and checkpoints via API — a different transport
+  shape than the one ADR-243's streaming decision was measured against.
+  **Mitigation (CTO ruling 2026-10-28):** the PR ships `checkpointing: false` —
+  self-hosted support on pinned v1.45.1 is unverified and the unit harness
+  models one-new-step-per-request. S9 measures both arms so a future one-flag
+  flip-on decision has evidence; residual risk is deferred to that decision.
 - **R2: middleware behavioral drift.** The v3 hook semantics (InitialRunInfo vs
   BaseContext traps, transformOutput step-vs-final split) map to different v4
   hooks; a wrong mapping silently degrades run-logging or Sentry tagging.
@@ -540,9 +548,10 @@ lockfile; (2) all call sites compile on the v4 API; (3) the three middlewares
 preserve their tested contracts on the new hook model; (4) `serve()` keeps the
 #5159 registration pin and ADR-030 I4 signature gate under v4 options; (5) the
 SDK heartbeat-leak workaround is deleted **only with spike evidence** the
-upstream fix holds on the pinned server; (6) checkpointing's default-on is an
-evidence-gated decision, not an assumption; (7) the followthrough probe and its
-registry rows are fully retired; (8) the four P3 review items ship.
+upstream fix holds on the pinned server; (6) checkpointing is pinned off this
+PR (CTO ruling — flip-on is a measured follow-up, not an assumption either
+way); (7) the followthrough probe and its registry rows are fully retired;
+(8) the four P3 review items ship.
 
 **Cut List.** No proposed mechanism was cut — the asks are deletions, a codemod,
 and evidence. One candidate was evaluated and rejected by the minimalism ladder:
@@ -558,8 +567,9 @@ bypass); `server/inngest/middleware/{sentry-correlation,run-log,bound-logger}.ts
 `server/inngest/functions/*.ts` (71 `createFunction` sites incl.
 `_cron-community-publication.ts` fd-pinning block ~lines 635–862);
 `test/server/inngest/cron-community-publication.test.ts`;
-`test/helpers/inngest-step-harness.ts` (models async step semantics — comment +
-behavior under checkpointing decision);
+`test/helpers/inngest-step-harness.ts` (models async step semantics — its
+one-new-step-per-request model is why checkpointing ships off; comment updated
+to name the ruling);
 `scripts/followthroughs/inngest-verify-clean-10390.{sh,test.sh}`,
 `scripts/test-all.sh`, `scripts/suite-durations.tsv`,
 `scripts/suite-shard-legs.tsv`,
@@ -599,8 +609,8 @@ always promised; the "Upgrade to `inngest@4` now" Alternatives row is marked
 executed with the spike artifact cited; the Observability table retires
 `inngest-stream-consumer-cancel`/`inngest-stream-drain-error` (drop coverage
 moves to the server-side `inngest_step_524` needle, attribution loss accepted);
-the S9 checkpointing verdict is recorded. Status stays Accepted + amendment date
-line.
+the `checkpointing: false` ruling and the S9 measurements are recorded. Status
+stays Accepted + amendment date line.
 
 ### C4 views
 

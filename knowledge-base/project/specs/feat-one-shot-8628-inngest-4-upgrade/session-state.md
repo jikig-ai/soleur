@@ -20,3 +20,8 @@
 
 ### Components Invoked
 - soleur:plan (full), soleur:deepen-plan (fan-outs inlined); cloud-detect.sh, collision-precheck.sh; commits fa1c5128ef + a492b57d5a.
+
+## Technical-Ruling Gate (pre-work)
+- cto_spawns=1 (one batched spawn, 6 items — max 2 for the pipeline)
+- Outcome: Item A OVERTURNED planner default → ship `checkpointing: false`, S9 measurement-only. Items B–F confirmed/refined (no telemetry replacement; exported-for-test seam; single error-prefix family + op token; `streaming: true`; `^4.<latest>`; no bun.lock).
+- Row 18 recategorized: `operator (challengeable)` → `operator (brand)` (closed category list).
