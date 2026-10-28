@@ -163,7 +163,7 @@ clean `403` prints `not-yet-widened (403)` (with the parsed `errors[0].code`
 appended when present) and the run stays exit-neutral with a `NOTE:` summary;
 any other anomaly (404, degraded 200, wrong-shape 200, 5xx, 000, empty) is a
 hard fail in BOTH modes. In assert mode (`--expect-lb-scopes`) every target row
-must be authorized or the run exits 3 naming the still-absent 403s. The `target`
+must be authorized or the run exits 3 naming the still-absent 403s. The `target`-class
 vocabulary is default-token-local: the rulesets `--target-entrypoint` path keeps
 its own `TARGET_PRESENT` handling and never consults this classifier. The baseline
 summary's verbatim literal (a stable grep target for the data channel):
@@ -174,9 +174,11 @@ summary's verbatim literal (a stable grep target for the data channel):
 - `0` — every retained scope authorized (and, per profile: the rulesets target,
   if given; in `default-token` baseline, LB rows authorized OR reported
   `not-yet-widened`; in `--expect-lb-scopes` assert mode, all LB rows authorized).
-- `2` — usage error (including an unknown `--profile` and a flag used with the
-  wrong profile — always raised before any secret read), missing prerequisite
-  (`curl` / `doppler` / `jq`), or an absent Doppler secret.
+- `2` — usage error (including an unknown `--profile`, a flag used with the
+  wrong profile, and a malformed `--target-entrypoint` phase name — all raised
+  before any secret read), missing prerequisite (`curl` / `doppler` / `jq`), an
+  absent Doppler secret, or a refused internal table-integrity tripwire (source
+  drift only, unreachable by argv; stderr-only and names the corruption).
 - `3` — probe failed: a scope was dropped, degraded, or denied (assert mode: an
   LB row still `403` or anomalous).
 - `78` — the script REFUSED to run under shell tracing (`-x`) — a refusal, not a

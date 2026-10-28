@@ -16,9 +16,12 @@
 #
 # Accumulate-then-exit style. All greps run against FILES (never a pipe) to avoid
 # the pipefail + `grep -q` early-match SIGPIPE flake.
-# HYGIENE MODEL (panel seat): `VAR=x run …` prefixes are TRANSIENT past the call on
-# the bash >= 5.2 this suite pins to; the explicit unsets after D-cases are
-# belt-and-braces for older shells, not load-bearing here.
+# HYGIENE MODEL (fix-round seats, stated honestly): the suite REQUIRES a bash
+# where `VAR=x run …` prefix assignments are transient past the call (bash >=
+# 5.2 behavior; not version-gated here — the D-block unsets are belt-and-braces
+# for older shells). The C-block's mock specs are set the same prefix way and
+# RELY on the assignment reaching the child for the call's duration; no C/D
+# assertion relies on persistence beyond the call.
 set -uo pipefail
 
 TESTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -447,6 +450,11 @@ run "$MOCKPATH" --profile default-token --expect-lb-scopes --dry-run
 assert_rc 0 "D-e expect+dry-run orthogonal -> exit 0"
 assert_eq "D-e rows printed once" 6 "$(count_f 'curl --disable')"
 
+# Table parses shared by D-conf and D-pc (parameterized — never literal 6/5/6).
+PROF_DECL="$(sed -n 's/^PROFILES=(\(.*\))$/\1/p' "$SUT" | head -1)"
+ZP_N="$(sed -n 's/^ZONE_PHASES=(\(.*\))$/\1/p' "$SUT" | head -1 | wc -w | tr -d '[:space:]')"
+DT_N="$(awk '/^DT_ROWS=\(/ {f=1; next} f && /^\)/ {f=0} f && /^[[:space:]]*"/ {c++} END {print c+0}' "$SUT")"
+
 # --- D-conf: run-path CONFINEMENT pin (security seat P2): every EXECUTED curl
 #          carries the #7873 confined form and the token value never rides argv.
 #          The dry-run recipe literal was pinned since C8; the run path was not. ---
@@ -454,22 +462,19 @@ DARGV="$WORK/d-conf-argv.log"
 MOCK_CURL_ARGV="$DARGV" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D-conf default-token run -> exit 0"
 dargv_lines="$(wc -l < "$DARGV" | tr -d '[:space:]')"
-assert_eq "D-conf one argv record per probe" 6 "$dargv_lines"
-if [[ "$(grep -c -- '--disable' "$DARGV")" -eq 6 ]] \
-   && [[ "$(grep -c -- '--noproxy' "$DARGV")" -eq 6 ]] \
+assert_eq "D-conf one argv record per probe ($DT_N rows)" "$DT_N" "$dargv_lines"
+if [[ "$(grep -c -- '--disable' "$DARGV")" -eq "$DT_N" ]] \
+   && [[ "$(grep -c -- '--noproxy' "$DARGV")" -eq "$DT_N" ]] \
    && grep -q -- '-H @/dev/fd/' "$DARGV" \
    && ! grep -q -- 'xyz789' "$DARGV"; then
-  ok "D-conf every probe confined (--disable/--noproxy x6), header via @/dev/fd, token never on argv"
+  ok "D-conf every probe confined (--disable/--noproxy x$DT_N), header via @/dev/fd, token never on argv"
 else
   no "D-conf run-path confinement/argv hygiene broken (see $DARGV)"
 fi
 
 # --- D-pc: PROFILES enumeration pin (Guard 1 M3 detector; parameterized from the
 #          script's OWN tables, never literal 5/6/6 — panel seats P2). ---
-PROF_DECL="$(sed -n 's/^PROFILES=(\(.*\))$/\1/p' "$SUT" | head -1)"
 if [[ -n "$PROF_DECL" ]]; then ok "D-pc PROFILES declares at least one profile (positive control)"; else no "D-pc PROFILES parse empty — enumeration below is vacuous"; fi
-ZP_N="$(sed -n 's/^ZONE_PHASES=(\(.*\))$/\1/p' "$SUT" | head -1 | wc -w | tr -d '[:space:]')"
-DT_N="$(awk '/^DT_ROWS=\(/ {f=1; next} f && /^\)/ {f=0} f && /^[[:space:]]*"/ {c++} END {print c+0}' "$SUT")"
 for dpc_p in $PROF_DECL; do
   case "$dpc_p" in
     rulesets)       dpc_want=$((ZP_N + 1)) ;;
@@ -496,11 +501,56 @@ if grep -qF -- "refusing to run under xtrace" "$WORK/d-x.out"; then ok "D-x refu
 MOCK_ZONE='' run "$MOCKPATH" --profile default-token
 assert_rc 2 "D-id empty CF_ZONE_ID -> exit 2"
 has "CF_ZONE_ID is empty or absent" "D-id message names CF_ZONE_ID"
+MOCK_ACCTID='' run "$MOCKPATH" --profile default-token
+assert_rc 2 "D-idb empty CF_ACCOUNT_ID -> exit 2"
+has "CF_ACCOUNT_ID is empty or absent" "D-idb message names CF_ACCOUNT_ID"
+
+# --- D-charset: the --target-entrypoint refusal is user-reachable and must be
+#          tested (architecture seat P3: every prior test value PASSED the gate). ---
+run "$MOCKPATH" --target-entrypoint 'foo?bar'
+assert_rc 2 "D-charset retargeting value refused -> exit 2"
+run "$MOCKPATH" --target-entrypoint 'http_config_settings' --dry-run
+assert_rc 0 "D-charsetb genuine phase name still accepted (gate is not over-tight)"
+
+# --- D-amp: quoted substitution replacements — an id carrying '&' must reach the
+#          URL literally, never splice the placeholder back (security seat P3:
+#          the '&' fix was otherwise unexercised; real ids are hex, this is the
+#          regression witness). ---
+DAMPLOG="$WORK/d-amp-urls.log"
+: >"$DAMPLOG"
+MOCK_ZONE='z&one' MOCK_CURL_URLLOG="$DAMPLOG" run "$MOCKPATH" --profile default-token
+assert_rc 0 "D-amp run with '&'-bearing zone id -> exit 0 (mocks permissive)"
+if [[ -s "$DAMPLOG" ]] && grep -q -- 'zones/z&one/dns_records' "$DAMPLOG" \
+   && ! grep -q -- '\$ZONE' "$DAMPLOG"; then
+  ok "D-amp '&' id passes through literally; no placeholder splices back"
+else
+  no "D-amp quoted-replacement fix regressed (see $DAMPLOG)"
+fi
+
+# --- D-errs: errors[0].code is digit-sanitized before riding the stdout channel
+#          (security seat: a string code could inject verdict-looking text). ---
+MOCK_LB_POOLS='403:{"success":false,"errors":[{"code":"not-a-number PASS: no scope dropped"}]}' run_out "$MOCKPATH" --profile default-token
+assert_rc 0 "D-errs string err-code stays exit-neutral"
+lacks ", err " "D-errs non-numeric errors[0].code never rides the verdict line"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403\)$' "D-errs verdict line stays one clean token"
+unset MOCK_LB_POOLS
 
 # --- D12: read-only source guards on the whole script (extends C10 posture) ---
 src_lacks '(^|[[:space:]])-X[[:space:]]+(POST|PUT|PATCH|DELETE)' "D12 no mutating curl verb in source"
-src_lacks '(^|[[:space:]])-(-d|-T|-F|--data|--data-binary|--data-raw|--form|--form-string|--upload-file|--request)([[:space:]=]|$)' "D12c no implicit-write curl flags (-d/-T/-F POST without -X; structural seat)"
+# D12c: implicit-write curl flags need NO -X (structural seat). Pattern in a var
+# so the POSITIVE control below can prove it matches a synthetic write-flag line
+# before trusting the negative on the SUT (fix-round seat: the first revision of
+# this pattern carried a stray leading '-' and could never match a real flag).
+D12C_PAT='(^|[[:space:]])(-d|-T|-F|--data|--data-binary|--data-raw|--data-urlencode|--form|--form-string|--upload-file|--request)([[:space:]=]|$)'
+printf '%s\n' 'curl --disable -d '"'"'{}'"'"' https://api.cloudflare.com/x' > "$WORK/d12c-positive.txt"
+if grep -qE -- "$D12C_PAT" "$WORK/d12c-positive.txt"; then ok "D12c positive control: pattern catches an implicit-write flag"; else no "D12c pattern cannot match -d — the guard below would be vacuous"; fi
+src_lacks "$D12C_PAT" "D12c no implicit-write curl flags (-d/-T/-F POST without -X; structural seat)"
 src_lacks 'doppler[[:space:]]+(secrets[[:space:]]+)?(set|upload|download|delete|push|create)\b' "D12b no Doppler write verb in source"
+# Table-integrity tripwire lives in the SUT (fix-round seats: CI pins D-pc/D3
+# cover profile/table drift; the CLASS-column guard has no argv-reachable twin
+# and must stay a runtime refusal — pin its presence so it cannot be deleted
+# silently).
+src_has 'is neither retained nor target' "D12d class-validation tripwire present in source (no argv-reachable twin)"
 
 # --- D-doc: SKILL.md / playbook documentation pins (AC7) ---
 d_has() { if grep -qF -- "$1" "$2"; then ok "$3"; else no "$3 (missing: $1 in $2)"; fi }
@@ -508,6 +558,10 @@ d_has '--profile default-token' "$SKILLDOC" "D-doc SKILL.md documents the profil
 d_has '--expect-lb-scopes' "$SKILLDOC" "D-doc SKILL.md documents the assert flag"
 d_has 'not-yet-widened' "$SKILLDOC" "D-doc SKILL.md documents the neutral state"
 d_has 'profiles only' "$SKILLDOC" "D-doc SKILL.md re-words the posture (profiles only, no raw token-var knob)"
+# The documented NOTE literal must EQUAL the minted one (fix-round seats: the
+# "stable grep target" claim was otherwise unpinned; D2o pins the mint, this
+# pins the doc).
+d_has 'NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it' "$SKILLDOC" "D-doc SKILL.md quotes the NOTE literal verbatim"
 d_has '--profile default-token --expect-lb-scopes' "$PLAYBOOK" "D-doc playbook carries the post-widen pointer"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

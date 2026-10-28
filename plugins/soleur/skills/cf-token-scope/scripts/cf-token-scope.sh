@@ -153,8 +153,9 @@ Flags:
 Exit codes:
   0  every retained scope authorized (and, per profile: the rulesets target if
      given; the default-token LB rows authorized, or 403-noted in baseline mode)
-  2  usage error (including profile/flag mismatch), missing prerequisite binary,
-     or absent Doppler secret
+  2  usage error (including profile/flag mismatch and a malformed phase name),
+     missing prerequisite binary, absent Doppler secret, or a refused internal
+     table-integrity tripwire (source drift; stderr-only, names the corruption)
   3  probe failed — a scope was dropped, degraded, or denied (assert mode: an LB
      row still 403 or anomalous)
   78 refused to run under shell tracing — a refusal, not a probe verdict (#7797)
@@ -352,27 +353,24 @@ classify_target() {
 }
 
 FAILED=0
-# TARGET_PRESENT lives above the dispatch so the summary tail reads it under
-# every profile (panel seat: a future third profile must not hit set -u there).
+# TARGET_PRESENT lives above the dispatch so the summary tail always reads an
+# initialized value — defensive against branch reordering, not argv-reachable
+# behavior (fix-round seats: cross-validation forces TARGET empty under
+# default-token).
 TARGET_PRESENT=0
 
-# Dispatch exhaustiveness + table-integrity pre-flight (structural-enumeration
-# seat, sandbox-mutant-verified): a run must never fall through to another
-# profile's rows, never mint neutrality from an unvalidated class field, and
-# never print a PASS it did not probe for.
-if [[ "$PROFILE" != "rulesets" && "$PROFILE" != "default-token" ]]; then
-  echo "cf-token-scope: profile '$PROFILE' has no probe dispatch (table/dispatch drift — refusing)" >&2
-  exit 2
-fi
+# Table-integrity pre-flight (structural seat, sandbox-mutant-verified): a class
+# value outside {retained,target} must NEVER fall through to the target branch —
+# that route mints neutrality for a retained row's genuine 403 loss. This is the
+# runtime defense with no argv-reachable twin (D12d pins its presence); profile/
+# table drift beyond this has CI pins (D-pc enumeration, D3 per-arm loop) rather
+# than a second runtime arm here (fix-round consolidation: pin wins over
+# tripwire).
 if [[ "$PROFILE" == "default-token" ]]; then
-  if [[ "${#DT_ROWS[@]}" -eq 0 ]]; then
-    echo "cf-token-scope: profile default-token declares no probe rows — refusing a vacuous pass" >&2
-    exit 2
-  fi
-  for pre_row in "${DT_ROWS[@]}"; do
-    pre_class="${pre_row%%|*}"
-    if [[ "$pre_class" != "retained" && "$pre_class" != "target" ]]; then
-      echo "cf-token-scope: DT_ROWS class '$pre_class' is neither retained nor target (table corruption — neutrality eligibility must not fall through)" >&2
+  for r_row in "${DT_ROWS[@]}"; do
+    r_class="${r_row%%|*}"
+    if [[ "$r_class" != "retained" && "$r_class" != "target" ]]; then
+      echo "cf-token-scope: DT_ROWS class '$r_class' is neither retained nor target (table corruption — neutrality eligibility must not fall through)" >&2
       exit 2
     fi
   done

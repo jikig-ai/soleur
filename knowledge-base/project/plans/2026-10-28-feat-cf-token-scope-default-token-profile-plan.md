@@ -472,6 +472,16 @@ this block is what AC10 audits against:
   (recorded in the Phase-1 commit message).
 - D0 is pre-Phase-2 evidence (rc 2 at HEAD), not a permanent suite assertion; the tasks.md
   maintenance step ran at each phase's end.
+- Guard 1 M3 detector: the backing assertion is **D-pc** (PROFILES/ZONE_PHASES/DT_ROWS parsed
+  from the SUT's own text — parameterized, with a positive control); D11's literal 5/6/6 counts
+  stay as the shape-complement, not the M3 witness.
+- D2c mixed-baseline pins the accepted NOTE wording; the RED-count enumeration's "D2c-assembly"
+  entry reads as D2's URL-assembly pin (the mixed case is D2c proper).
+- Fix-round consolidation (code-simplicity seat, up-held): the dispatch-drift and empty-table
+  RUNTIME arms were cut — D-pc's sentinel + DT_N floor are their CI twins ("pin wins over
+  tripwire"); the CLASS-column loop stays (no argv-reachable twin; presence pinned by D12d).
+  Round-1's D12c pattern shipped vacuous (stray leading dash) — corrected with a positive
+  control; D-conf counts parameterized to DT_N.
 - Guard 2 M2 detector citation: the case that reddens when neutrality is read before the mode
   flag is **D6** (assert-mode 403 -> rc 3); D7 is assert-GREEN and cannot redden under M2.
   The Observability matrix's "D7-equivalent" phrasing reads as D6 likewise. (AC10 auditability.)
@@ -631,7 +641,7 @@ Verdict-channel and classifier semantics (override the Guard Contract table/pseu
 5. `check()` publishes `CODE`, `BODY`, `CHECK_RC` as globals in the same edit that generalizes `want_type` (verdict semantics stay byte-identical; confirm no C-pin depends on their locality). Failing `check()` calls at the probe loop use `if …; then/else` form under `set -e`.
 6. `--profile` argv arms mirror the script's existing shapes: usage-error = `echo msg >&2; usage >&2; exit 2` (no `exit 2 "message"`), and `--profile` with a missing value exits 2 exactly like `--target-entrypoint` (D9 pins).
 7. `profile_token_secret()` carries a fail-closed `*)` arm (unknown/undeclared profile ⇒ exit 2 naming the profile, not an empty variable); Guard 1 matrix gains a drift row: every `PROFILES` member resolves a non-empty secret.
-8. The rulesets path keeps its own `--target-entrypoint`/TARGET_PRESENT handling and never calls `classify_target`; the `target` class vocabulary is default-token-local (add the one-line hedge next to the existing "profile" vocabulary hedge).
+8. The rulesets path keeps its own `--target-entrypoint`/TARGET_PRESENT handling and never calls `classify_target`; the `target`-class vocabulary is default-token-local (add the one-line hedge next to the existing "profile" vocabulary hedge).
 9. The trailing zone-control stderr block (script 249-251) is gated on `PROFILE == rulesets`; a default-token failure must not print a line naming a probe that never ran (pin: default-token failure case `lacks "zone control"`).
 10. Implementation Phases step 5 names ONE mechanism: keep the existing `trust404`+`ZONE_CONTROL_OK` conjunction and pass `want_type` as an added `check()` parameter (no `scheme` replacement) — the C5a/C5b 404-trust exclusivity gate is untouched.
 
