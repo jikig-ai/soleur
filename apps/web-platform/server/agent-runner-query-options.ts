@@ -38,6 +38,7 @@ import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
 import { mirrorWarnWithDebounce, warnSilentFallback } from "./observability";
+import { isPreApprovable, parsePluginWildcard } from "./tool-tiers";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import {
   checkSeccompAgreement,
@@ -165,7 +166,11 @@ export interface AgentQueryOptionsArgs {
   sessionId?: string;
   /** Per-call MCP server registration. Legacy: `{ soleur_platform: ... }` when platform tools register; cc: `{}`. */
   mcpServers?: Record<string, unknown>;
-  /** Per-call allowedTools list (legacy: platform tool names + plugin MCP wildcards; cc: omitted at V1). */
+  /**
+   * Per-call allowedTools list = the SDK PRE-APPROVAL list (legacy: `buildAllowedTools` output, i.e. auto-approve platform
+   * tool names + plugin MCP wildcards; cc: built-in auto-approve tools). The SDK approves a bare entry before it consults
+   * `canUseTool`, so `assertAllowedToolsPreApprovalSafe` rejects anything else that looks like an `mcp__` entry (#11303).
+   */
   allowedTools?: string[];
   /**
    * Per-call disallowedTools extension (#3338). Merged with the canonical
@@ -261,6 +266,50 @@ export interface AgentQueryOptionsArgs {
   skills?: string[];
 }
 
+/** The Bash family after trim + lower-casing: bare `bash`, or `bash(...)` with optional whitespace before the paren. */
+const BASH_FAMILY_RE = /^bash(\s*\(|$)/;
+
+/** An offending allowedTools entry is echoed in the error at most this many characters (it is a server-built string). */
+const ENTRY_ECHO_MAX = 120;
+
+/**
+ * #11303 — fail-closed second line of defence behind `buildAllowedTools`.
+ *
+ * The SDK auto-approves a bare `allowedTools` entry BEFORE it consults `canUseTool`, so a gated platform tool (or the bare
+ * server entry `mcp__soleur_platform`, or `mcp__*`, or a rule-content form such as `...email_send(*)`) in this list silently
+ * removes its review gate. Allowlist, not denylist: any entry that looks like an MCP entry after trimming and lower-casing
+ * must be (a) an exact FQN that passes the shared keep-rule `isPreApprovable` (looked up with no trimming or normalising), or
+ * (b) a valid plugin wildcard (`parsePluginWildcard`); everything else throws. The Bash family (`Bash`, `Bash(...)`, any
+ * case) throws too: a pre-approved Bash skips the Bash review gate. Entries that are not MCP or Bash entries (`Read`,
+ * `WebFetch`, ...) pass; a full non-MCP allowlist is a follow-up. `permissionMode` may only be undefined or `"default"`:
+ * `bypassPermissions`, `acceptEdits`, `dontAsk` and `plan` all decide before `canUseTool`. The message names the offending
+ * entry only (a server-controlled string), never a tool input.
+ */
+export function assertAllowedToolsPreApprovalSafe(args: {
+  allowedTools?: readonly string[];
+  permissionMode?: SDKOptions["permissionMode"];
+}): void {
+  if (args.permissionMode !== undefined && args.permissionMode !== "default") {
+    throw new Error(
+      `buildAgentQueryOptions: permissionMode ${JSON.stringify(String(args.permissionMode).slice(0, 40))} would pre-approve tools ahead of canUseTool; only "default" is allowed`,
+    );
+  }
+  for (const entry of args.allowedTools ?? []) {
+    const normalised = entry.trim().toLowerCase();
+    if (BASH_FAMILY_RE.test(normalised)) {
+      throw new Error(
+        `buildAgentQueryOptions: allowedTools entry would pre-approve Bash ahead of canUseTool: ${JSON.stringify(entry.slice(0, ENTRY_ECHO_MAX))}`,
+      );
+    }
+    if (!normalised.startsWith("mcp__")) continue;
+    if (!isPreApprovable(entry) && parsePluginWildcard(entry) === null) {
+      throw new Error(
+        `buildAgentQueryOptions: allowedTools entry would pre-approve a tool ahead of canUseTool: ${JSON.stringify(entry.slice(0, ENTRY_ECHO_MAX))}`,
+      );
+    }
+  }
+}
+
 /**
  * Build the canonical SDK Options object both consumers pass to
  * `query({ prompt, options })`. The returned object is structurally
@@ -273,6 +322,8 @@ export function buildAgentQueryOptions(
   args: AgentQueryOptionsArgs,
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options has many optional fields not all present in our subset
 ): SDKOptions & Record<string, any> {
+  // #11303 — before any side effect (temp dirs, env): a pre-approval that would skip canUseTool fails the session start.
+  assertAllowedToolsPreApprovalSafe(args);
   const subagentOverride = args.subagentStartPayloadOverride;
   const sanitizeFn = subagentOverride?.sanitizer ?? defaultSubagentSanitize;
   const extraLogFields = subagentOverride?.extraLogFields ?? {};

@@ -45,6 +45,10 @@ export type StartAgentSessionFn = (
   arg3: undefined,
   arg4: undefined,
   prompt: string,
+  arg6: undefined,
+  arg7: undefined,
+  skipSessionEnded: boolean,
+  nonInteractive: boolean,
 ) => Promise<void>;
 
 export interface TriggerHeadlessSyncSeams {
@@ -202,6 +206,11 @@ export async function triggerHeadlessSync(
         undefined,
         undefined,
         HEADLESS_SYNC_PROMPT,
+        undefined,
+        undefined,
+        false,
+        // #11303 — nobody is present to answer a review card in background sync: gated platform tools are denied at once.
+        true,
       );
       return "started"; // success
     } catch (err) {

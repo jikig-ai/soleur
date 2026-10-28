@@ -89,7 +89,7 @@ import {
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
-import { createCanUseTool } from "./permission-callback";
+import { createCanUseTool, gateStatusWriteOp } from "./permission-callback";
 import { reportSilentFallback, hashUserId } from "./observability";
 import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
@@ -150,8 +150,9 @@ function resolveSessionErrorCode(
   return undefined;
 }
 
+import { ACTIVE_STATUSES_FOR_FINALIZE } from "./conversation-finalize-statuses";
 import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
-import { summarizeOutboundEmailInput } from "./tool-tiers";
+import { buildAllowedTools, summarizeOutboundEmailInput } from "./tool-tiers";
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
@@ -560,16 +561,6 @@ async function updateConversationStatus(
 }
 
 /**
- * Status set the race-safe finalize helper guards on. Pinned to a
- * `Conversation["status"]` literal subset via `satisfies` so a future
- * widening of the conversation-status enum is a TS error here rather
- * than silent semantic drift at every guarded site.
- */
-const ACTIVE_STATUSES_FOR_FINALIZE = [
-  "active",
-] as const satisfies ReadonlyArray<Conversation["status"]>;
-
-/**
  * Race-safe variant of {@link updateConversationStatus} for the
  * abort/result-branch finalization sites: writes the new status only
  * when the row's current `status` is `active`. A row that already
@@ -610,14 +601,36 @@ async function updateConversationStatusIfActive(
   conversationId: string,
   status: Conversation["status"],
 ): Promise<void> {
+  await updateConversationStatusIfIn(
+    userId,
+    conversationId,
+    status,
+    ACTIVE_STATUSES_FOR_FINALIZE,
+    "updateConversationStatusIfActive",
+  );
+}
+
+/**
+ * Compare-and-set for the gate lifecycle (`createCanUseTool` deps): write `status` only when the current status is in
+ * `from`. The review-gate restore uses `["waiting_for_user"]`, so a late restore never overwrites `completed`/`failed`
+ * or a status the abort branch already wrote. A 0-rows outcome is the success case (no Sentry mirror). The
+ * active-only abort finalize ({@link updateConversationStatusIfActive}) is a caller of this helper too.
+ */
+async function updateConversationStatusIfIn(
+  userId: string,
+  conversationId: string,
+  status: Conversation["status"],
+  from: ReadonlyArray<Conversation["status"]>,
+  op: string,
+): Promise<void> {
   const result = await updateConversationFor(
     userId,
     conversationId,
     { status, last_active: new Date().toISOString() },
     {
       feature: "agent-runner",
-      op: "updateConversationStatusIfActive",
-      onlyIfStatusIn: ACTIVE_STATUSES_FOR_FINALIZE,
+      op,
+      onlyIfStatusIn: from,
     },
   );
 
@@ -939,6 +952,8 @@ async function startAgentSessionInner(
    *  Used by dispatchToLeaders so the orchestrator sends a single
    *  session_ended after all leaders finish (see #2428). */
   skipSessionEnded?: boolean,
+  /** #11303 — no human is present to answer a review card (the auto-sync seam): gated platform tools are denied at once. */
+  nonInteractive?: boolean,
 ): Promise<void> {
   // #8211 quiet-window — refuse a NEW agent session while the kill-switch is on.
   // MUST be the first statement, ABOVE the repo-readiness read and the
@@ -1626,7 +1641,10 @@ the exact recipient and body before anything sends. You MUST supply the
 compliance fields (postal address, opt-out line, FTC material-connection
 disclosure, and — for EU/UK or unknown jurisdiction — all six Art.14 disclosure
 elements); the send is refused without them. You cannot send to a suppressed
-recipient, and suppression is permanent (no un-suppress).`;
+recipient, and suppression is permanent (no un-suppress).
+
+Write tools pause for the user to Approve or Reject. If a tool result says the
+action was not performed, tell the user that and do not retry it.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -2116,13 +2134,10 @@ are the requirements to implement.`;
     // disallowedTools). Per-call divergent fields (maxTurns, mcpServers,
     // allowedTools) flow through args. Drift-guarded by
     // `agent-runner-query-options.test.ts`. See #2922.
-    const allowedToolsList =
-      platformToolNames.length > 0 || pluginMcpServerNames.length > 0
-        ? [
-            ...platformToolNames,
-            ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
-          ]
-        : undefined;
+    // #11303 — `allowedTools` is the SDK PRE-APPROVAL list: the SDK runs a bare entry before it consults `canUseTool`, so
+    // a gated tool listed here never shows its review card. Only auto-approve platform tools and plugin MCP wildcards
+    // go in; `createCanUseTool` below still receives the UNFILTERED `platformToolNames` (its own allowlist).
+    const allowedToolsList = buildAllowedTools(platformToolNames, pluginMcpServerNames);
 
     // Thread-shape guard for #3250 — drop `resume:` when the persisted
     // SDK session ends on `assistant`. Domain leaders default to
@@ -2202,7 +2217,7 @@ are the requirements to implement.`;
         // `Options.abortController` (sdk.d.ts:816).
         abortController: controller,
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(allowedToolsList ? { allowedTools: allowedToolsList } : {}),
+        ...(allowedToolsList.length > 0 ? { allowedTools: allowedToolsList } : {}),
         // Permission callback (SDK chain step 5). File-tool checks are
         // defense-in-depth — PreToolUse hooks (step 1) are the primary
         // enforcement. See #891. The callback body lives in
@@ -2219,15 +2234,26 @@ are the requirements to implement.`;
           repoName,
           session,
           controllerSignal: controller.signal,
+          nonInteractive,
           deps: {
             abortableReviewGate,
             sendToClient,
             notifyOfflineUser,
             // Closure captures `userId` from the enclosing runAgentSession
-            // scope so the deps interface stays at (conversationId, status)
+            // scope so the deps interface stays at (conversationId, status[, guard])
             // — see plan §"Transitive Coverage via deps.updateConversationStatus".
-            updateConversationStatus: (convId, status) =>
-              updateConversationStatus(userId, convId, status as Conversation["status"]),
+            // A guard makes the write a compare-and-set (#11303 gate hold/restore).
+            updateConversationStatus: (convId, status, guard) =>
+              guard
+                ? updateConversationStatusIfIn(
+                    userId,
+                    convId,
+                    status as Conversation["status"],
+                    guard.onlyIfStatusIn,
+                    // Distinct hold/restore ops (see gateStatusWriteOp).
+                    gateStatusWriteOp(status),
+                  )
+                : updateConversationStatus(userId, convId, status as Conversation["status"]),
           },
         }),
       })),
@@ -2777,6 +2803,10 @@ are the requirements to implement.`;
         // state regardless of whether this write or the result branch's
         // wins, so a no-op is semantically equivalent. The
         // `session_ended:user_aborted` ack below is unconditional.
+        // #11303 / ADR-305: this finalize is active-only BY DESIGN (#3463): a row already at `waiting_for_user`
+        // (the result branch's normal turn-end status, or a pending gate card's hold) is left untouched. A disconnect
+        // or Stop while a review card is pending therefore leaves the row `waiting_for_user`: that state is resumable
+        // and the 2-hour sweep completes it. The gate restore skips on abort, so nothing else writes either.
         await updateConversationStatusIfActive(
           userId,
           conversationId,

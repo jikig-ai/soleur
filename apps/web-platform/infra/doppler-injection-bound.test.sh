@@ -214,11 +214,12 @@ MIN_POPULATION = 5
 # Row R3's "non-seam read-set" is the script's read-set MINUS the names Guard 1's in-script argv
 # gate unsets. Re-deriving it here would invert the intent: a naive read-set would demand every
 # fixture seam appear in `--only-secrets`, i.e. that the unit INJECT the very names the gate
-# exists to strip. These are the 32 names Guard 1's gates unset (15 measured 2026-09-03 +
+# exists to strip. These are the 38 names Guard 1's gates unset (15 measured 2026-09-03 +
 # CUTOVER_BOOT_ID added by #7777's latch-clear record, which stamps the boot the clear was
 # recorded under, + CUTOVER_NOOP_THROTTLE_S added by #7696's noop-heartbeat throttle, +
 # CUTOVER_NFT_CMD and CUTOVER_PHONE_HOME_CMD added by #10382's measured nftables re-read on
-# the noop emit, + the thirteen #6780 REFRESH_* seams); when a Guard-1 gate's list changes,
+# the noop emit, + the six LUKS key-probe seams added by #9927, + the thirteen #6780 REFRESH_*
+# seams); when a Guard-1 gate's list changes,
 # this copy moves with it.
 GUARD1_UNSET = {
     'CUTOVER_BOOT_ID', 'CUTOVER_CURL_CMD', 'CUTOVER_DONE_OWNER_MARKER', 'CUTOVER_FLAG_SET_CMD',
@@ -226,6 +227,10 @@ GUARD1_UNSET = {
     'CUTOVER_NFT_CMD', 'CUTOVER_NOOP_THROTTLE_S', 'CUTOVER_PHONE_HOME_CMD',
     'CUTOVER_REDIS_CLI_CMD', 'CUTOVER_REDIS_DBSIZE',
     'CUTOVER_SYSTEMCTL_CMD',
+    # #9927 — the LUKS key-continuity probe's six fixture seams (key path, stamp path, cryptsetup,
+    # findmnt, meminfo, oom_score_adj path), unset by the same --fixture-seams argv gate.
+    'CUTOVER_CRYPTSETUP_CMD', 'CUTOVER_FINDMNT_CMD', 'CUTOVER_LUKS_KEY_FILE',
+    'CUTOVER_LUKS_PROBE_STAMP', 'CUTOVER_MEMINFO', 'CUTOVER_OOM_ADJ_PATH',
     'CUTOVER_VERIFY_INTERVAL_S', 'CUTOVER_VERIFY_WINDOW_S', 'INNGEST_CUTOVER_LATCH',
     'INNGEST_CUTOVER_LATCH_MOUNT', 'INNGEST_CUTOVER_STATE',
     # #6780 — the thirteen REFRESH_* fixture seams inngest-config-refresh.sh's own
@@ -238,7 +243,15 @@ GUARD1_UNSET = {
     'REFRESH_STATE_DIR', 'REFRESH_TRUSTED_ROOT', 'REFRESH_VERIFY_TIMEOUT_S',
     'REFRESH_ZOT_ENV_FILE',
 }
-GUARD1_UNSET_CARDINALITY = 32
+GUARD1_UNSET_CARDINALITY = 38
+
+# The presence test of an xtrace refusal, `${INNGEST_REDIS_LUKS_KEY:+x}`, is not a read of the value.
+# lint-shell-trace-credential-refusal requires that test for EVERY credential name the file references,
+# so the flip script's refusal covers INNGEST_REDIS_LUKS_KEY even though the script reads the key from
+# the root-only /etc/default/inngest-luks (a pipe to cryptsetup) and the unit's environment must NOT
+# carry it (#9927 item 2). Only this exact SHAPE is removed before the read scan; any other expansion
+# of the name still counts as a read and still fails the read-set check.
+XTRACE_PRESENCE_TEST_RE = re.compile(r'\$\{INNGEST_REDIS_LUKS_KEY:\+x\}')
 
 # ── the ack list: AUTHORED, each entry carrying WHY, cardinality pinned ───────────────────────
 ACK_REASONS = {
@@ -730,7 +743,7 @@ FORVAR_RE = re.compile(r'\bfor\s+([A-Z][A-Z0-9_]{2,})\s+in\b')
 
 
 def read_set_lower_bound(body):
-    src = strip_comments(body)
+    src = XTRACE_PRESENCE_TEST_RE.sub('', strip_comments(body))
     reads = set()
     for m in READ_RE.finditer(src):
         reads.add(m.group(1) or m.group(2))
