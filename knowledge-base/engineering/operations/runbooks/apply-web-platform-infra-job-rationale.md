@@ -680,6 +680,53 @@ This was LATENT behind the D10 gate: A2 had never once passed, so this leg had n
 run. Fixing A2 did not create this bug, it exposed it -- a saga only ever surfaces its
 FIRST broken step.
 
+### Why the restore job's if: is explicit
+
+Moved from the comment block above the job's `if:` (ADR-231 section 2), verbatim:
+
+EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip
+the RESUME arm — and the resume arm IS the empty-store state this job exists to end. It
+keys on the upstream FLAG rather than on `needs.<job>.result` so it does not fire on paths
+where the store was never emptied (most visibly a legitimate D10 refusal, where the store
+is intact).
+
+`!cancelled()` rather than `always()`: on a genuine cancellation the store's state is
+unknown, and starting a multi-GB write into it is not obviously safe.
+
+The `== 'true'` comparison is safe against the Actions loose-equality trap: an UNSET
+output is null, and `null == 'true'` casts to `0 == NaN`, which is false. The failure
+direction is therefore "skip the restore", which is visible in the run's job list — not
+"run it unexpectedly".
+
+### Why exit 1 has its own restore-step arm (#10932)
+
+Before this arm, an engine exit 1 reached the `*)` arm, whose text claims every engine code is
+enumerated and carried an aside naming exit 1 as the known exception. Exit 1 is the engine's
+input refusal: it exits 1 for an unknown argument, an option missing a value, the removed
+`--rehearse`, a missing `--target` or `--tags-from`, an unreadable `--tags-from`, a bad
+`--target`, a non-numeric `.floor`, a non-array `.entries`, zero required entries, and duplicate
+repo:tag pairs. Every one of those checks runs before any network call, so on this step an exit 1
+means nothing was written and the store is still empty.
+
+Which of those can fire here is narrower than the list. The step passes fixed arguments (the
+local sink as `--target`, the downloaded pins file as `--tags-from`), so the argument checks cannot
+fire, and an unreadable file is near-impossible because the artifact download and its
+`if-no-files-found: error` fail earlier. What remains is a manifest-content fault (floor, entries,
+zero or duplicated required pairs). In a normal dispatch the uploaded `registry-restore-pins` bytes
+are the file the D10 verdict step wrote and the pull-path gate already ran the engine against, so an
+exit 1 here means the artifact was altered or this is the resume arm (the verdict step skipped, the
+manifest unrehearsed in this run).
+
+That is why the arm does not say "re-run this job": a re-run re-downloads the same artifact
+(seven-day retention) and fails identically. There is no restore-only dispatch input. A new
+`registry-luks-recut` with the NEW volume id re-derives and re-rehearses the manifest before it
+destroys anything, but that path is unmeasured for this failure, so the arm and the runbook row stay
+conservative: read the engine's own `::error::` line, capture it, file it.
+
+The step's own `exit 1` after a failed Doppler read happens before the retry loop and never reaches
+the `case`; the arm text says "engine" so the two exit-1 origins are not conflated. Ruling:
+`knowledge-base/project/specs/feat-one-shot-10932-restore-exit-1/decision-challenges.md`.
+
 ## confirm and the gate model
 
 Relocated from `apply-web-platform-infra.yml`'s `confirm:` field label (ADR-231 byte

@@ -464,7 +464,8 @@ and they need different fixes:
   while the store is empty or partial — a partial store is **worse than an empty one**, because tag
   lookups succeed for some refs and fail for others, so the symptom presents as a confusing
   per-image outage rather than an obvious total one. Look at the `registry_store_restore` job, map
-  its exit code in the table below, then **re-run that job** (the engine is resumable).
+  its exit code in the table below, then **re-run that job** (the engine is resumable; except exit 1,
+  which re-runs identically — see its row).
 
 - **It refused the volume.** Recoverable — *after a successful recut* the volume is encrypted, so
   `registry-host-replace` is the right tool for this. (It was **not** available before the first
@@ -481,14 +482,16 @@ doppler run -p soleur -c prd_terraform -- \
 
 #### Restore exit codes — one operator action each
 
-`scripts/registry-restore-from-ghcr.sh` enumerates every failure it can have except exit 1 (input
-faults, #10932). Codes consumed
+`scripts/registry-restore-from-ghcr.sh` enumerates every failure it can have; its header table does
+not yet list exit 1 (input faults, tracked on #10932), but the restore step annotates it and it has
+a row below. Codes consumed
 as a single boolean would be a contract nobody can act on, so each maps to exactly one action.
 The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 
 | Code | Meaning | What to do |
 |---|---|---|
 | `0` | Every required reference restored **and** blob-verified, signature present. | Nothing. The window is closed. |
+| `1` | **Input or manifest fault** — the engine refused its arguments or the pin manifest (floor, entries, zero or duplicated required pairs, an unreadable file) **before any network call**. A correct refusal, not an engine defect. | Nothing was written: on the real restore the store is still empty. **Re-running the job fails identically** — it re-downloads the same `registry-restore-pins` artifact. The restore step passes fixed arguments, so the cause is the manifest. In a normal dispatch the same bytes already passed the D10 rehearsal, so suspect an altered artifact, or the resume arm (the rehearsal skipped, the manifest unrehearsed this run). Read the engine's own `::error::` line above the annotation, capture it, and file it. There is no restore-only dispatch; a new `registry-luks-recut` with the NEW volume id re-derives and re-rehearses the manifest before destroying anything, but that path is unmeasured for this failure. At the rehearsal (D10 A2) the same code aborts with nothing destroyed: fix the cause and re-dispatch. |
 | `2` | **Source unavailable** — GHCR could not be read. | Treat the store as unverified: exit 2 can fire after earlier entries were copied (while resolving a later entry's source, or reading a signature). Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. A message beginning *the crane login command for ghcr.io ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); it is not a statement about the images. |
 | `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
 | `4` | **Verification failed OR the engine could not verify the shape** — a digest mismatched (including the new GHCR↔sink *signature* digest parity check), a blob is missing (including an *attestation* or *signature-bundle* child's blob), a **layer's content does not match its declared mediaType**, a signature is absent, or the engine met an artifact shape it declines to walk (see the ENGINE-CAPABILITY note below). | **Read the message before deploying anything — exit 4 now covers two different situations.** If the message names a digest mismatch, a missing blob or an absent signature, the store contents are not trustworthy: do not deploy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. For those SHAPE failures "re-run the job" is the wrong advice — they reproduce identically; capture the per-entry line and file it. |
