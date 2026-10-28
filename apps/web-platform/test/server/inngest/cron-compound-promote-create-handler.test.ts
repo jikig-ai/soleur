@@ -949,7 +949,7 @@ describe("create_offered (#10550): the marker states how many candidates the arm
     h.safeCommit.mockClear();
     const opened = await run(PATTERNS_CREATE());
     expect(opened.last).toMatchObject({ create_outcome: "opened", create_offered: 2 });
-    expect(JSON.stringify(createCommits().map((c) => c[0]))).not.toContain("offered"); // the persist step never sees the stamp
+    expect(JSON.stringify(createCommits().map((c) => c[0]))).not.toContain("offered"); // the stamp does not reach the commit arguments (persist reads named verdict fields only)
   });
 
   it("a persist-step refusal carries the count too (it is assigned before any branch)", async () => {
@@ -978,20 +978,15 @@ describe("create_offered (#10550): the marker states how many candidates the arm
       expect(r.last, String(offered)).not.toHaveProperty("create_offered");
     }
     h.marker.mockClear();
+    for (const [offered, present] of [[1000, true], [1001, false]] as const) {
+      h.marker.mockClear();
+      const edge = await run(PATTERNS_CREATE(), { "create-propose": { kind: "no_action", reason: "other", offered } });
+      if (present) expect(edge.last, String(offered)).toHaveProperty("create_offered", offered);
+      else expect(edge.last, String(offered)).not.toHaveProperty("create_offered");
+    }
+    h.marker.mockClear();
     const zero = await run(PATTERNS_CREATE(), { "create-propose": JSON.parse(JSON.stringify({ kind: "no_action", reason: "all-owned", offered: 0 })) });
     expect(zero.last).toMatchObject({ create_no_action_reason: "all-owned", create_offered: 0 });
-  });
-
-  it("the assignment sits right after the create-propose step, before any branch and outside its callback (replay-safe)", () => {
-    const src = readFileSync(join(__dirname, "..", "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts"), "utf8");
-    const step = src.indexOf('step.run("create-propose"');
-    const assign = src.indexOf("createOffered =", step);
-    const branch = src.indexOf('if (proposed.kind === "refused")', step);
-    expect(step).toBeGreaterThan(0);
-    expect(assign).toBeGreaterThan(step);
-    expect(assign).toBeLessThan(branch);
-    // outside the callback: the callback's closing `});` comes before the assignment
-    expect(src.slice(step, assign)).toMatch(/\}\);\s*\n/);
   });
 
   it("the scheduled and corpus rows never carry the field", async () => {

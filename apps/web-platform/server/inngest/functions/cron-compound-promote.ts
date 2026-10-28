@@ -97,7 +97,7 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 const WEEK_CAP_DEFAULT = 2;
 export const MAX_DIFF_BYTES = 16384;
-/** Sanity bound for the `create_offered` count read back from a memoized step output (far above any real pattern-page count). */
+/** Sanity bound (not a product limit) for the `create_offered` count read back from a memoized step output; a value above it yields no key. */
 const MAX_CREATE_OFFERED = 1000;
 /**
  * The quorum: the fewest DISTINCT, corpus-resolved source learnings a cluster may cite and
@@ -1734,7 +1734,7 @@ export async function cronCompoundPromoteHandler({
   let createNoAction: Extract<CreateVerdict, { kind: "no_action" }>["reason"] | undefined;
   let createRefusal: CreateRefusal | undefined;
   let createPr: number | undefined;
-  // #10550 -- the number of candidate patterns the create arm sent to the model (a count, never text). Assigned from the
+  // #10550 -- the number of candidate patterns the create arm offered to the model (a count, never text). Assigned from the
   // MEMOIZED step return, outside the step callback, so a replay still reports it; absent when the memo has none.
   let createOffered: number | undefined;
   const createMarker = (): Partial<CompoundPromoteOutcome> => {

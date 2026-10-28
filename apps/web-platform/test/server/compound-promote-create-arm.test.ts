@@ -548,6 +548,24 @@ describe("Step A with a valid create proposal", () => {
       expect(v).toMatchObject({ kind: "suppressed", clusterHash: createClusterHash(LEDGER.evidence), offered: 2 });
     });
 
+    it("the count is the filtered set, not set arithmetic: a pattern both same-run AND ledger-owned counts once, and stray hashes matching no pattern count for nothing", async () => {
+      const both = createClusterHash(SAME_RUN.evidence);
+      const overlap = await runCreateProposeStep(createArgs({
+        patterns: [PATTERN, SAME_RUN, SECOND],
+        sameRunHashes: [both],
+        ledgerEntries: [{ hash: both, state: "merged" as const }],
+        post: declines() as never,
+      }));
+      expect(overlap).toMatchObject({ kind: "no_action", offered: 2 }); // arithmetic (3 - 1 - 1) would say 1
+      const stray = await runCreateProposeStep(createArgs({
+        patterns: [PATTERN, SECOND],
+        sameRunHashes: ["e".repeat(64)],
+        ledgerEntries: [{ hash: "d".repeat(64), state: "merged" as const }],
+        post: declines() as never,
+      }));
+      expect(stray).toMatchObject({ kind: "no_action", offered: 2 }); // arithmetic (2 - 1 - 1) would say 0
+    });
+
     it("a pre-call no_action is 0 (the call was never spent): all-owned and other", async () => {
       expect(await runCreateProposeStep(createArgs({ patterns: [LEDGER], ledgerEntries: four().ledgerEntries }))).toEqual({ kind: "no_action", reason: "all-owned", offered: 0 });
       expect(await runCreateProposeStep(createArgs({ patterns: [SAME_RUN], sameRunHashes: four().sameRunHashes }))).toEqual({ kind: "no_action", reason: "other", offered: 0 });
@@ -558,7 +576,7 @@ describe("Step A with a valid create proposal", () => {
       expect(await runCreateProposeStep(createArgs({ patterns: [] }))).not.toHaveProperty("offered");
     });
 
-    it("a defect inside the count is the returned internal refusal, mirrored, and carries NO offered key", async () => {
+    it("a defect while selecting the candidates is the returned internal refusal, mirrored, and carries NO offered key", async () => {
       const v = await runCreateProposeStep(createArgs({ patterns: [{ ...PATTERN, evidence: null as never }] }));
       expect(v).toMatchObject({ kind: "refused", class: "model-invalid", detail: "internal" });
       expect(v).not.toHaveProperty("offered");
@@ -589,7 +607,11 @@ describe("Step A with a valid create proposal", () => {
         markerSource: CREATE_ARM_FEATURE,
         markerRunId: "RUN",
       });
-      // the one prompt fact no other suite pins: the bar sentence the model is held to
+    });
+
+    it("the prompt keeps the bar sentence the model is held to (the one prompt fact no other suite pins)", () => {
+      const prepared = prepareCreate({ patterns: [PATTERN], skills: SKILLS, nonce: "fixednonce00" });
+      if (prepared.kind !== "ready") throw new Error("prepareCreate refused");
       expect(prepared.prompt).toContain("Return no_action unless a pattern is mature, no existing skill owns it, and a patch to the nearest skill would bury it.");
     });
   });

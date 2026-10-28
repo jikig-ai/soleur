@@ -346,9 +346,12 @@ export interface CreateProposeArgs {
 
 /**
  * The step's output: a verdict plus, once the arm got past the week-cap and index-empty refusals, `offered`, the number of
- * candidate patterns left after the same-run and ledger filters. Whenever a model call was made it is exactly the number the
- * model saw; on a pre-call refusal it is the candidate count and no call was spent; on a pre-call `no_action` it is 0.
- * Optional on read: the step output is memoized JSON that outlives a deploy, so an older memo has no `offered`.
+ * candidate patterns left after the same-run and ledger filters. Whenever a model call was made it is the number offered to
+ * the model; on a pre-call refusal it is the candidate count and no call was spent (pre-call refusals are told apart by
+ * class and detail, not by this field); on a pre-call `no_action` it is 0. A defect inside the step returns the closed
+ * internal refusal with no `offered`. Optional on read: the step output is memoized JSON that outlives a deploy, so an older
+ * memo has none. It is stamped FLAT on the verdict (not a `{verdict, offered}` wrapper) so an old in-flight memo and a
+ * rollback to older code both keep reading the same shape.
  */
 export type CreateStepVerdict = CreateVerdict & { offered?: number };
 

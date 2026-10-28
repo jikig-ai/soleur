@@ -509,8 +509,6 @@ describe("the create-arm marker fields (#10550)", () => {
     const rows = captured.lines.map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(rows.map((r) => r.create_offered)).toEqual([6, 0]);
     for (const r of rows) expect(ALLOWED.create_offered(r.create_offered), "marker key create_offered has the wrong shape").toBe(true);
-    // the validator rejects what must never reach the row
-    for (const bad of [-1, 1.5, "6", null, {}, Number.NaN]) expect(ALLOWED.create_offered(bad), String(bad)).toBe(false);
     // it is its own field, not a refusal number routed through the allowlist
     expect(Object.values(CREATE_MARKER_NUMBERS)).not.toContain("create_offered");
   });

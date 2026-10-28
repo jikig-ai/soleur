@@ -155,4 +155,4 @@ The dark-launched create arm (ADR-092, create-only amendment of 2026-10-26) reus
 
 ## Addendum 2026-10-28 (#10550)
 
-The create arm's marker also carries `create_offered`, an integer count of the candidate patterns left after the same-run and ledger filters, and no text. The ledger-reader contract's "counts and closed enums only" sentence is scoped to that reader's own fields, so this line is the create arm's stated bound. The prompt, the qualification bar and the evidence the model sees are unchanged.
+The create arm's marker also carries `create_offered`, an integer count of the candidate patterns left after the same-run and ledger filters, and no text; a count is within the marker's "counts and closed enums only" bound. The field is optional on read because the step output is memoized. This supersedes the 2026-10-28 ledger pre-filter plan's "no new marker field" cut: its premise (`patterns_open` plus `create_no_action_reason=all-owned` give the signal) fails when the filters leave some but not all patterns, which is the case the field makes observable. The prompt, the qualification bar and the evidence the model sees are unchanged.
