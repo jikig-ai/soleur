@@ -153,16 +153,22 @@ case "$path" in */logs) [ "$esc" = 1 ] || { echo "STUB-MISS no --allow-escape-se
 # SLOW_<key>: wait SLOW_S seconds BEFORE answering (the real fixture, or an ERR_ failure: a slow failing read keeps two workers in flight at once). HANG_ answers an empty run
 # list, so a delayed unit would vanish. The probe's budget clock is SECONDS (one-second granularity), so a budget row needs a read longer than the budget; the pid is recorded
 # for the trap row and S/E lines for the concurrency row.
-if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; echo "S $$" >> "$GH_LOG.conc"; sleep "${SLOW_S:-1}"; echo "E $$" >> "$GH_LOG.conc"; fi
+if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; echo "S $$" >> "$GH_LOG.conc"; command -p sleep "${SLOW_S:-1}"; echo "E $$" >> "$GH_LOG.conc"; fi
+if [ -f "$GH_FIX/ERR_ONCE_$key" ]; then rm -f "$GH_FIX/ERR_ONCE_$key"; echo "gh: HTTP 502" >&2; exit 1; fi   # the first call fails, later calls fall through to the fixture (or to a later ERR_ handler)
 if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+if [ -f "$GH_FIX/ERR422_$key" ]; then echo "gh: No commit found for SHA (HTTP 422)" >&2; exit 1; fi
+if [ -f "$GH_FIX/ERR401EXIT4_$key" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 4; fi   # gh exits 4 itself on an authentication failure
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR429RL_$key" ]; then echo "gh: Too Many Requests (HTTP 429)" >&2; exit 1; fi
-if [ -f "$GH_FIX/HANG_$key" ]; then sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
+if [ -f "$GH_FIX/HANG_$key" ]; then command -p sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
 GHSTUB
 chmod +x "$BIN/gh"
+# a no-op `sleep` that only logs its argv: the probe retries once after a fixed `sleep 2`; ow_probe and ow_probe_split put this directory first on PATH (the gh stub above uses `command -p sleep`)
+mkdir -p "$BIN/nosleep"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$GH_LOG.sleeps"\n' > "$BIN/nosleep/sleep"; chmod +x "$BIN/nosleep/sleep"
 export GH_LOG="$GHLOG" GH_FIX="$GHFIX"
 
 R=jikig-ai/soleur
@@ -3010,9 +3016,13 @@ ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> 
   printf '{"id":%s,"head_sha":"%s","head_branch":"%s","created_at":"%s","run_attempt":%s,"event":"%s","conclusion":"%s","pull_requests":[%s],"repository":{"full_name":"jikig-ai/soleur"},"head_repository":{"full_name":"%s"}}' \
     "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$([[ "$8" != 0 ]] && printf '{"number":%s}' "$8")" "$([[ "${9:-0}" == 1 ]] && echo someone/soleur || echo jikig-ai/soleur)"
 }
+ow_sha() { printf '%040d' "$1"; }   # a 40-hex head sha for a synthetic run (digits are hex); never a tracked path
+ow_pr_obj() {   # ow_pr_obj <n> <branch> [head repo] [base repo]: one element of GET commits/<sha>/pulls
+  printf '{"number":%s,"state":"closed","head":{"ref":"%s","repo":{"full_name":"%s"}},"base":{"repo":{"full_name":"%s"}}}' "$1" "$2" "${3:-jikig-ai/soleur}" "${4:-jikig-ai/soleur}"
+}
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/ERR*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
   printf '{"resources":{"core":{"limit":5000,"remaining":%s,"used":100,"reset":1900000000}}}' "${OW_RL_REMAINING:-4900}" | fx "rate_limit"   # the probe reads the API quota before it reads any run
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
@@ -3058,6 +3068,27 @@ ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a me
   [[ "${OW_BL_TIP_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=main")"
   [[ "${OW_BL_MERGE_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=$OW_MSHA")"
   [[ "${OW_BL_TIP_FAIL:-}" != 1 ]] || fx_err "$OW_BL_PATH?ref=main"
+  local r rid rprn rbr rmode rkey   # the commit lookups of the runs whose own pull_requests is empty: "<run id> <pr> <branch> [mode]"
+  for r in "${OW_RESOLVE[@]}"; do
+    read -r rid rprn rbr rmode <<<"$r"
+    rkey="repos/$R/commits/$(ow_sha "$rid")/pulls?per_page=2"
+    case "${rmode:-ok}" in
+      ok) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr")" | fx "$rkey" ;;
+      once) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr")" | fx "$rkey"; : > "$GHFIX/ERR_ONCE_$(keyof "$rkey")" ;;
+      empty) printf '[]' | fx "$rkey" ;;
+      two) printf '[%s,%s]' "$(ow_pr_obj "$rprn" "$rbr")" "$(ow_pr_obj 99 "$rbr")" | fx "$rkey" ;;
+      headrepo) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr" someone/soleur)" | fx "$rkey" ;;
+      baserepo) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr" jikig-ai/soleur jikig-ai/other)" | fx "$rkey" ;;
+      ref) printf '[%s]' "$(ow_pr_obj "$rprn" other/ref)" | fx "$rkey" ;;
+      object) printf '{"message":"Not a list"}' | fx "$rkey" ;;
+      e404) fx_err404 "$rkey" ;;
+      e422) : > "$GHFIX/ERR422_$(keyof "$rkey")" ;;
+      e502) fx_err "$rkey" ;;
+      e403) fx_err403rl "$rkey" ;;
+      e429) fx_err429rl "$rkey" ;;
+      exit4) : > "$GHFIX/ERR401EXIT4_$(keyof "$rkey")" ;;
+    esac
+  done
 }
 ow_json_files() {   # ow_json_files <n> <prefix>: a files array of n entries
   local i out=""; for i in $(seq 1 "$1"); do out="${out:+$out,}{\"filename\":\"$2$i.ts\"}"; done; printf '[%s]' "$out"
@@ -3080,14 +3111,14 @@ ow_bytes_over() {   # ow_bytes_over <limit> <request path>: the fixture the STUB
 }
 OW_ATT1=""; OW_ENV=(); OWERR="$SANDBOX/ow.err"
 ow_probe() {   # ow_probe [now epoch]: RC, OWOUT (stdout and stderr merged). The SOAK_ seams of a developer's shell never reach the probe.
-  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN/nosleep:$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
   OW_RCS+=("$RC")
 }
 ow_probe_split() {   # ow_probe_split: RC, OWOUT (stdout only), OWERR (the stderr file)
-  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN/nosleep:$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
   OW_RCS+=("$RC")
 }
-ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$OWERR"
+ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; OW_RESOLVE=(); rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$GHLOG.sleeps" "$OWERR"
   unset OW_BL_TIP; OW_BL_TIP_ABSENT=""; OW_BL_MERGE_ABSENT=""; OW_BL_TIP_FAIL=""; ow_base_units; }
 ow_variant() {   # ow_variant <fn that edits OW_UNITS or globals>: rebuild the fixtures and run the probe
   ow_case; "$1"; ow_write; ow_probe "${OW_NOW:-}"
@@ -3166,6 +3197,7 @@ row_ow_xtrace() { RC=0; OWOUT="$(env GH_TOKEN=fake PATH="$BIN:$PATH" bash -x "$O
 row_ow_read_only() { ow_case; ow_write; : > "$GHLOG"; ow_probe; ! grep -qE 'STUB-MISS' "$GHLOG" && [[ "$(grep -c '^REQ' "$GHLOG")" -gt 10 ]]; }
 row_ow_static() {   # the header states the exit contract and the provisional ceilings; no jq program splices a shell variable; the oracle list is the SUT's
   grep -q 'Exit 1 is NOT USED' "$OW_SCRIPT" && grep -q 'ceilings are PROVISIONAL' "$OW_SCRIPT" && grep -q '^P95_MAX=210 ' "$OW_SCRIPT" && grep -q '^MAX_MAX=270 ' "$OW_SCRIPT" || return 1
+  grep -q 'SOAK_FACTS_BUDGET_S:-180' "$OW_SCRIPT" && ! grep -qF '${#PR_EXCLUDED' "$OW_SCRIPT" && grep -q '1,000-result' "$OW_SCRIPT" && ! grep -qE 'evidence latches|oldest runs never change|names no PR' "$OW_SCRIPT" || return 1
   ! grep -qF "\"'\"\$merged_at\"'\"" "$OW_SCRIPT" && grep -qF -- '--arg m "$merged_at"' "$OW_SCRIPT" || return 1
   local line list; line="$(sed -n 's/^ORACLE=(\(.*\))$/\1/p' "$OW_SCRIPT")"; [[ -n "$line" ]] || return 1
   list="$(BASELINE=scripts/ci-pr-affected-audit.baseline.tsv; eval "o=($line)"; printf '%s\n' "${o[@]}")"
@@ -3215,7 +3247,7 @@ for line in text.splitlines():
 PY
 }
 row_ow_argv() {   # only small scalars may ride on a jq argv: an API payload on one raises E2BIG at 128 KiB (MAX_ARG_STRLEN)
-  local ctl got allowed="m=\$merged_at ev=\$ev n=\$JOB s=\$STEP oracle=\$ORACLE_JSON kb=knowledge-base t=\$t cur=\${PR_CURDRAFT[\$n]}" pair found=0
+  local ctl got allowed="m=\$merged_at ev=\$ev n=\$JOB s=\$STEP oracle=\$ORACLE_JSON kb=knowledge-base t=\$t cur=\${PR_CURDRAFT[\$n]} repo=\$REPO branch=\$branch" pair found=0
   ctl="$SANDBOX/ow-argv-control.sh"; printf '%s\n' '  files="$(jq -c -n --argjson b "$page" "$b")"' > "$ctl"
   [[ "$(ow_scan_argv "$ctl")" == 'b=$page' ]] || return 1   # instrument control: the scan must flag a payload on argv
   printf '%s\n' '  jq -n --argjson c \' '      "$payload" x' > "$ctl"
@@ -3225,7 +3257,7 @@ row_ow_argv() {   # only small scalars may ride on a jq argv: an API payload on 
     [[ -n "$pair" ]] || continue; found=$((found + 1))
     [[ " $allowed " == *" $pair "* ]] || return 1
   done <<<"$got"
-  [[ "$found" -eq 8 ]] && grep -qF '{filename}' "$OW_SCRIPT"
+  [[ "$found" -eq 10 ]] && grep -qF '{filename}' "$OW_SCRIPT"
 }
 row_ow_progress() {
   ow_case; ow_write; ow_probe_split
@@ -3314,21 +3346,25 @@ row_ow_facts_clock() {   # the facts allowance starts at the facts phase: a 5 s 
   OW_ENV=(SOAK_FACTS_BUDGET_S=4 SOAK_PARALLEL=4 SLOW_S=5); ow_probe
   [[ "$RC" -eq 0 ]] && grep -q 'truncated=0' <<<"$OWOUT" && ! grep -q 'PR-facts phase' <<<"$OWOUT" && grep -q 'soleur_pulls_11$' "$GHLOG"
 }
-row_ow_quota() {   # need = 2 * runs to read + 5 * PRs + 200; the base fixture reads 8 runs of 5 PRs
+row_ow_quota() {   # need = ceil(1.5 * runs to read) + ceil(lookup candidates / 2) + 3 * PRs + 100; the base fixture reads 8 runs of 5 PRs (12 + 0 + 15 + 100), the resolved one 9 runs, 5 candidates, 4 PRs (14 + 3 + 12 + 100)
   ow_case; OW_RL_REMAINING=100; ow_write; ow_probe
-  [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: API quota (remaining=100, need=241, resets at 20[0-9][0-9]-' <<<"$OWOUT" && ! grep -q 'actions_runs_[0-9]' "$GHLOG" || return 1
+  [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: API quota (remaining=100, need=127, resets at 20[0-9][0-9]-' <<<"$OWOUT" && ! grep -q 'actions_runs_[0-9]' "$GHLOG" || return 1
   ow_case; ow_write; fx_err "rate_limit"; ow_probe
   [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: GitHub API read failed (rate_limit' <<<"$OWOUT" || return 1
   ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
   [[ "$RC" -eq 3 ]] && grep -q 'HTTP 403' <<<"$OWOUT" && ! grep -q 'actions_runs_6002_jobs\|actions_runs_5001_jobs' "$GHLOG" || return 1
   ow_case; ow_write; fx_err429rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
   [[ "$RC" -eq 3 ]] && grep -q 'HTTP 429' <<<"$OWOUT" || return 1
-  ow_case; OW_RL_REMAINING=243; ow_write; ow_probe   # need 241 + the 2 listing calls: exactly enough
+  ow_case; OW_RL_REMAINING=129; ow_write; ow_probe   # need 127 + the 2 listing calls: exactly enough
   [[ "$RC" -eq 0 ]] || return 1
-  ow_case; OW_RL_REMAINING=242; ow_write; ow_probe   # one request short
-  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=242, need=241' <<<"$OWOUT" || return 1
+  ow_case; OW_RL_REMAINING=128; ow_write; ow_probe   # one request short
+  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=128, need=127' <<<"$OWOUT" || return 1
+  ow_case; OW_RL_REMAINING=131; ow_u_resolved; ow_write; ow_probe   # the resolved fixture: need 129 + 2 listing calls
+  [[ "$RC" -eq 0 ]] || return 1
+  ow_case; OW_RL_REMAINING=130; ow_u_resolved; ow_write; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=130, need=129' <<<"$OWOUT" || return 1
   ow_case; ow_write; ow_probe
-  [[ "$RC" -eq 0 ]] && grep -q '^quota: used_delta=0 limit=5000 remaining=4900$' <<<"$OWOUT"
+  [[ "$RC" -eq 0 ]] && grep -q '^quota: used_delta=0 limit=5000 remaining=4900 planned=127$' <<<"$OWOUT"
 }
 row_ow_seam_caps() {
   ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=9); ow_probe; [[ "$RC" -eq 3 ]] || return 1
@@ -3363,6 +3399,98 @@ row_ow_trap() {   # SIGTERM while a slow read is in flight: exit 143, no worker 
   [[ "$RC" -eq 143 && "$alive" -eq 0 && "$before" -eq "$after" && $((SECONDS - t_kill)) -lt 10 ]]
 }
 row_ow_never_one() { local n=0 rc; for rc in "${OW_RCS[@]}"; do n=$((n + 1)); [[ "$rc" -ne 1 ]] || return 1; done; [[ "$n" -ge 30 ]]; }   # exit 1 is unreachable by design: no stub scenario of this section returned it
+# ---- the merged-PR resolution (a run whose own pull_requests is empty), the bounded retry and the zero-PR-unit abort ---------------------------------------------
+OW_RM=ok
+ow_u_resolved() {   # the five base pull_request units become prn-0 runs with 40-hex shas; a sixth run on PR 11's branch carries a second sha (it must not raise the distinct count)
+  OW_UNITS[0]="5001 pull_request $(ow_sha 5001) feat/a 2031-02-02T01:00:00Z 1 0 0 150"; OW_UNITS[1]="5002 pull_request $(ow_sha 5002) docs/b 2031-02-02T02:00:00Z 1 0 0 140"
+  OW_UNITS[2]="5003 pull_request $(ow_sha 5003) feat/c 2031-02-02T03:00:00Z 1 0 0 160"; OW_UNITS[3]="5004 pull_request $(ow_sha 5004) bot/d 2031-02-02T04:00:00Z 1 0 0 155"
+  OW_UNITS[4]="5005 pull_request $(ow_sha 5005) canary-x 2031-02-02T05:00:00Z 1 0 0 150"; OW_UNITS+=("5007 pull_request $(ow_sha 5007) feat/a 2031-02-02T01:30:00Z 1 0 0 150")
+  OW_RESOLVE=("5001 11 feat/a" "5002 12 docs/b" "5003 13 feat/c" "5004 14 bot/d" "5007 11 feat/a")
+}
+ow_u_unres() { ow_u_resolved; OW_RESOLVE[2]="5003 13 feat/c $OW_RM"; }   # the run of PR 13 (the only DRAFT PR) resolves in the mode $OW_RM
+ow_req_count() { grep -c "^REQ $(keyof "$1")$" "$GHLOG"; }   # how many times the stub saw this exact request path
+ow_sleeps() { if [[ -s "$GHLOG.sleeps" ]]; then wc -l < "$GHLOG.sleeps"; else echo 0; fi; }
+ow_cpath() { printf 'repos/%s/commits/%s/pulls?per_page=2' "$R" "$(ow_sha "$1")"; }
+row_ow_resolve_merged() {
+  ow_variant ow_u_resolved
+  [[ "$RC" -eq 0 ]] && grep -q '^PASS: ' <<<"$OWOUT" && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=0$' <<<"$OWOUT" || return 1
+  local id; for id in 5001 5002 5003 5004 5007; do [[ "$(ow_req_count "$(ow_cpath $id)")" -eq 1 ]] || return 1; done   # one lookup per unit
+  [[ "$(ow_req_count "$(ow_cpath 5005)")" -eq 0 ]]   # the canary branch spends no request
+}
+row_ow_resolve_unresolvable() {
+  local m
+  for m in empty two headrepo baserepo ref e404 e422; do
+    OW_RM=$m; ow_variant ow_u_unres
+    [[ "$RC" -eq 2 ]] && grep -q 'no green DRAFT PR run' <<<"$OWOUT" && grep -q 'green_pr_units_distinct_prs=3 ' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=1$' <<<"$OWOUT" || return 1
+    [[ "$(ow_req_count "$(ow_cpath 5003)")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1   # an answered 404 or 422 is unresolved: asked once, never retried, never an abort
+  done
+  OW_RM=ok
+}
+row_ow_resolve_errors() {
+  local m want n
+  for m in e502 e403 e429 object exit4; do
+    OW_RM=$m; ow_variant ow_u_unres
+    [[ "$RC" -eq 3 ]] || return 1
+    case "$m" in
+      object) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls (parse))'; n=1 ;;
+      e403) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls; HTTP 403)'; n=1 ;;
+      e429) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls; HTTP 429)'; n=1 ;;
+      e502) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls)'; n=2 ;;
+      exit4) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls)'; n=1 ;;
+    esac
+    grep -qxF "$want" <<<"$OWOUT" && [[ "$(grep -c '^CANNOT ESTABLISH' <<<"$OWOUT")" -eq 1 ]] && ! grep -q 'feat/c' <<<"$OWOUT" || return 1
+    [[ "$(ow_req_count "$(ow_cpath 5003)")" -eq "$n" ]] || return 1   # gh's own exit 4 (an authentication failure) is NOT an unresolved answer
+  done
+  OW_RM=ok
+}
+ow_u_scope() {   # prn-0 runs that must NOT spend a lookup: not green, an incident, a fork run, a run with its own PR, a non-hex sha, a merge_group run
+  ow_u_resolved
+  OW_UNITS+=("5101 pull_request $(ow_sha 5101) feat/a 2031-02-02T08:01:00Z 1 0 1 150" "5102 pull_request $(ow_sha 5102) feat/a 2031-02-02T08:02:00Z 2 0 0 150"
+    "5103 pull_request $(ow_sha 5103) feat/a 2031-02-02T08:03:00Z 1 0 0 150" "5104 pull_request $(ow_sha 5104) feat/a 2031-02-02T08:04:00Z 1 11 0 150"
+    "5105 pull_request nothex5105 feat/a 2031-02-02T08:05:00Z 1 0 0 150" "6101 merge_group $(ow_sha 6101) gh-readonly-queue/main/pr-14-z 2031-02-03T04:00:00Z 1 0 0 150")
+  OW_RUNFORK=5103
+}
+row_ow_resolve_scope() {
+  ow_variant ow_u_scope
+  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
+  local id; for id in 5101 5102 5103 5104 5105 6101 5005; do [[ "$(ow_req_count "$(ow_cpath $id)")" -eq 0 ]] || return 1; done
+  [[ "$(ow_req_count "$(ow_cpath 5001)")" -eq 1 ]]   # the control: a compliant run does call
+}
+ow_u_mg_only() { local u keep=(); for u in "${OW_UNITS[@]}"; do [[ "$u" != *" pull_request "* ]] && keep+=("$u"); done; OW_UNITS=("${keep[@]}"); }
+row_ow_zero_pr_units() {   # no PR unit at all: the phase line still prints and the verdict is NOT YET (bash 5.3 aborted on ${#PR_EXCLUDED[@]} of an empty associative array)
+  local m
+  ow_case; ow_u_mg_only; ow_write; ow_probe_split
+  [[ "$RC" -eq 2 ]] && grep -q 'only 0 distinct green pull_request PR' <<<"$OWOUT" && ! grep -q 'unbound variable' "$OWERR" && grep -q 'phase=facts-done prs=0 ' "$OWERR" || return 1
+  ow_case; ow_u_resolved; for m in 0 1 2 3 4; do OW_RESOLVE[m]="${OW_RESOLVE[m]% *} empty"; done; ow_write; ow_probe_split   # every PR run unresolved
+  OW_RESOLVE=()
+  [[ "$RC" -eq 2 ]] && grep -q 'only 0 distinct green pull_request PR(s) (need 3) (5 runs could not be attributed to a PR)' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=5$' <<<"$OWOUT" && ! grep -q 'unbound variable' "$OWERR" || return 1
+  ow_case; ow_write; ow_probe_split   # the base fixture: five PRs read
+  [[ "$RC" -eq 0 ]] && grep -q 'phase=facts-done prs=5 ' "$OWERR"
+}
+row_ow_retry() {
+  local jp1="repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest" jp2="repos/$R/actions/runs/6002/jobs?per_page=100&filter=latest" jp3="repos/$R/actions/runs/6003/jobs?per_page=100&filter=latest" m
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp1")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # fail once: the normal verdict, the path asked twice, one fixed sleep
+  [[ "$RC" -eq 0 ]] && grep -q '^PASS: ' <<<"$OWOUT" && [[ "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] && grep -qx 2 "$GHLOG.sleeps" || return 1
+  ow_case; ow_write; fx_err "$jp3"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # persistent 502: exactly one retry, then exit 3
+  [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp3")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  for m in 403 429 404; do   # never retried
+    ow_case; ow_write; "fx_err${m}$([[ $m == 404 ]] || echo rl)" "$jp3"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+    [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp3")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
+  done
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp3")"; fx_err403rl "$jp3"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # 502 then 403: two requests, the flag set, exit 3
+  [[ "$RC" -eq 3 ]] && grep -q 'HTTP 403' <<<"$OWOUT" && [[ "$(ow_req_count "$jp3")" -eq 2 ]] || return 1
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$OW_BL_PATH?ref=main")"; ow_probe   # the baseline contents read goes through the same retry
+  [[ "$RC" -eq 0 && "$(ow_req_count "$OW_BL_PATH?ref=main")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; fx_err "$jp2"; : > "$GHFIX/SLOW_$(keyof "$jp2")"   # a flagged run: the 403 lands while the 502 read sleeps
+  OW_ENV=(SOAK_PARALLEL=2 SLOW_S=1); ow_probe
+  [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]]   # the retry is skipped while the rate flag is set
+}
+chk "window probe: a run whose own pull_requests is empty (a merged PR) is attributed by its head commit, counted once per PR, and the canary run spends no lookup" row_ow_resolve_merged
+chk "window probe: an unresolvable run (empty, two PRs, a foreign head or base repository, another head ref, HTTP 404 or 422) is excluded and counted, never an abort and never retried" row_ow_resolve_unresolvable
+chk "window probe: a failed lookup (502 after one retry, 403, 429, a non-array payload, gh's own exit 4) is CANNOT ESTABLISH with one fixed line" row_ow_resolve_errors
+chk "window probe: a non-green, incident, fork, own-PR, non-hex-sha or merge_group run spends no lookup" row_ow_resolve_scope
+chk "window probe: a sweep with no pull_request unit prints its facts line and exits 2 (bash 5.3 aborted on the empty PR_EXCLUDED); unresolved runs are counted in the NOT YET text" row_ow_zero_pr_units
+chk "window probe: one retry after a fixed sleep on a 5xx or timeout; never on 403, 429 or 404; never while the rate flag is set; the baseline read is covered" row_ow_retry
 chk "window probe: a healthy window passes (the canary is excluded from the 4 distinct PRs, the echoed run: source in the logs is not read as a marker)" row_ow_pass
 chk "window probe: PR3a not merged is NOT YET (exit 2)" row_ow_notmerged
 chk "window probe: a missing GH_TOKEN is CANNOT ESTABLISH (exit 3), never a pass" row_ow_no_token
@@ -3493,7 +3621,7 @@ ow_mutate hb-modulus $'(( done_n % 25 == 0 ))' $'(( done_n % 5 == 0 ))' row_ow_h
 ow_mutate jq-detail-allows-at $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 _:,()@#-\' \'?\'' row_ow_jq_error_text
 ow_mutate par-regex-zero $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[0-9]+$ && "$PAR" -le 8 ]]' row_ow_seam_caps
 ow_mutate branch-field-unguarded $'((.head_branch // "") | if . == "" then "-" else . end)' $'(.head_branch // "")' row_ow_empty_branch
-ow_mutate facts-clock-from-probe-start $'FACTS_CUT=0; TF0=$SECONDS;' $'FACTS_CUT=0; TF0=$T0;' row_ow_facts_clock
+ow_mutate facts-clock-from-probe-start $'FACTS_CUT=0; facts_prs=0; TF0=$SECONDS;' $'FACTS_CUT=0; facts_prs=0; TF0=$T0;' row_ow_facts_clock
 ow_mutate facts-regex-dropped $'[[ "$FACTS_BUDGET" =~ ^[1-9][0-9]*$ && "$FACTS_BUDGET" -le 300 ]]' $'[[ "$FACTS_BUDGET" -le 300 ]]' row_ow_seam_caps
 ow_mutate jq-detail-allows-dot $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 ._:,()-\' \'?\'' row_ow_jq_error_text
 ow_mutate jq-detail-allows-slash $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 /_:,()-\' \'?\'' row_ow_jq_error_text
@@ -3501,6 +3629,31 @@ ow_mutate branch-guard-empty-only $'((.head_branch // "") | if . == "" then "-" 
 ow_mutate run-id-anchor-loose $'$1 !~ /^[0-9]+$/ || $6' $'$1 !~ /[0-9]+$/ || $6' row_ow_run_id
 ow_mutate prn-unvalidated $' || $7 !~ /^[0-9]+$/ { bad = 1 }' $' { bad = 1 }' row_ow_run_id
 ow_mutate attempt-unvalidated $' || $6 !~ /^[0-9]+$/' $'' row_ow_run_id
+ow_mutate resolve-length-loosened $'elif length == 1 and ' $'elif length >= 1 and ' row_ow_resolve_unresolvable
+ow_mutate resolve-head-ref-dropped $'and (.[0].head.ref // "") == $branch' $'and true' row_ow_resolve_unresolvable
+ow_mutate resolve-head-repo-dropped $'(.[0].head.repo.full_name // "") == $repo' $'true' row_ow_resolve_unresolvable
+ow_mutate resolve-base-repo-dropped $'(.[0].base.repo.full_name // "") == $repo' $'true' row_ow_resolve_unresolvable
+ow_mutate resolver-never-called $'if [ "$ev" = pull_request ] && [ "$prn" = 0 ]' $'if false && [ "$prn" = 0 ]' row_ow_resolve_merged
+ow_mutate resolver-event-unscoped $'if [ "$ev" = pull_request ] && [ "$prn" = 0 ]' $'if [ "$prn" = 0 ]' row_ow_resolve_scope
+ow_mutate resolver-own-pr-unscoped $' && [ "$prn" = 0 ] && [ "$fork" != 1 ]' $' && [ "$fork" != 1 ]' row_ow_resolve_scope
+ow_mutate resolver-fork-unscoped $' && [ "$fork" != 1 ] && [ "$ex" = 0 ]' $' && [ "$ex" = 0 ]' row_ow_resolve_scope
+ow_mutate resolver-green-unscoped $' && [ "$ex" = 0 ] && [ "$cls" = plain ]' $' && [ "$cls" = plain ]' row_ow_resolve_scope
+ow_mutate resolver-class-unscoped $' && [ "$cls" = plain ] && [[ "$branch" != canary-* ]]' $' && [[ "$branch" != canary-* ]]' row_ow_resolve_scope
+ow_mutate resolver-canary-unscoped $' && [[ "$branch" != canary-* ]] && [[ "$sha"' $' && [[ "$sha"' row_ow_resolve_merged
+ow_mutate resolver-sha-shape-unscoped $' && [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then' $'; then' row_ow_resolve_scope
+ow_mutate resolve-404-aborts $'44|45) return 0 ;;' $'44|45) fail_api "run $id commit pulls" ;;' row_ow_resolve_unresolvable
+ow_mutate resolve-gh-exit-4-is-unresolved $'case "$rc" in 0) ;; 44|45) return 0 ;;' $'case "$rc" in 0) ;; 4|44|45) return 0 ;;' row_ow_resolve_errors
+ow_mutate distinct-per-run-not-per-pr $'  [ -z "${SEEN_KEY[$prn]+x}" ] || continue' $'  :' row_ow_resolve_merged
+ow_mutate facts-prs-not-counted $'  facts_prs=$((facts_prs + 1))\n' $'  :\n' row_ow_zero_pr_units
+ow_mutate unattributed-not-counted $'$2 == "pull_request" && $6 == 0 && $11 != 1' $'$2 == "pull_request" && $6 == 99 && $11 != 1' row_ow_zero_pr_units
+ow_mutate unattributed-note-dropped $'(( distinct == 0 && unattr > 0 )) && nosuffix=' $'false && nosuffix=' row_ow_zero_pr_units
+ow_mutate quota-lookups-unplanned $'(res_cands + 1) / 2 + ' $'' row_ow_quota
+ow_mutate quota-prs-unplanned $'3 * pr_est + ' $'' row_ow_quota
+ow_mutate retry-5xx-unrecognised $'HTTP 5[0-9][0-9]|EOF' $'EOF' row_ow_retry
+ow_mutate retry-404-recognised $'HTTP 5[0-9][0-9]|EOF' $'HTTP 5[0-9][0-9]|HTTP 404|EOF' row_ow_retry
+ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
+ow_mutate retry-ignores-rate-flag $'[ ! -e "$RL_FLAG" ] && transient_err' $'transient_err' row_ow_retry
+ow_mutate baseline-read-unretried $'gh_get -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" || rc=$?' $'timeout 60 gh api -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" 2>/dev/null || rc=$?' row_ow_retry
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
 # ---------------------------------------------------------------------------------------------------------------------
