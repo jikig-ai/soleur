@@ -15,6 +15,24 @@ requires_cpo_signoff: false
 
 # infra: web-2 CI SSH repair after the 2026-10-28 rebirth — stale host-key pin, not an auth rejection
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive), Proposed Solution (precedent diff), plus gate-required additions `## Downtime & Cutover` and `## Guard Contract`
+**Research agents used:** none — no agent-spawning tool exists in this harness; the deep-dive, precedent-diff, verify-the-negative, and self-audit passes ran orchestrator-side.
+
+### Key Improvements
+
+1. Root cause re-verified against the run log, not the issue's conclusion: `Host key verification failed.` against the stale committed pin (run 40744937376) — the issue's "auth rejection" frame is corrected on the record (AC6).
+2. Repair arms re-ordered by evidence: pin re-capture unconditional → on-host diagnostic → conditional IaC twin → re-replace as documented fallback only.
+3. Conditional arm designed to the repo's own contract set (`EXCLUSION_ALLOWLIST`, EXT_RESIDENCE, host-fan-out twin class, `%RAND%` script_path, dual-mode `private_key`/`agent`).
+
+### New Considerations Discovered
+
+- `terraform_data.deploy_pipeline_fix_web2`'s `triggers_replace` includes the pin file — the pin merge itself re-delivers the birth-frozen deploy-pipeline set (verification comes free with the merge).
+- The pin file is in `apply-deploy-pipeline-fix.yml`'s push paths AND under `apply-web-platform-infra.yml`'s `apps/web-platform/infra/**` glob — one merge verifies both consumers.
+- cx33 fleet-stranding history (#6393/#6400) is already enforced in-band by `stock_preflight_gate` — the fallback needs no new guard machinery.
+
 ## Overview
 
 The 2026-10-28 web-2 rebirth (`web_host_replace` run 40720815376, host created 16:01:04Z) rotated web-2's sshd host key, while the committed pin `apps/web-platform/infra/web-2-ssh-host-key.pub` still carries the predecessor host's key (captured 2026-10-07T20:11:48Z, PR #9733). Every merge-triggered `apply-web-platform-infra.yml` run since has failed at the `SSH forward to web-2 through the web-1 bastion` step — the end-to-end probe aborts on **`Host key verification failed.`** during kex, before authentication is ever attempted (run 40744937376, `apply` job log). The follow-on `Terraform apply (SSH-provisioned resources, over the bridge)` step then skips, leaving web-2's SSH-delivered infra set undelivered and every merge red.
@@ -77,6 +95,17 @@ The repair is the documented routine post-replace re-key that was never run for 
 3. **L7 — TLS/proxy.** [not applicable] — SSH path, no TLS intermediary; opt-out justification: the kex transcript reached host-key presentation.
 4. **L7 — Application (sshd auth).** [partially verified → scheduled diagnostic] the pin mismatch is *proven* (offered `SHA256:OB3/…` ≠ pinned `SHA256:prjb…`). Whether the CI pubkey is *additionally* absent is unproven — `cloud-init.yml`'s `ssh_authorized_keys` block should have delivered it at birth, but the run log never reached auth, so no `Failed publickey` line exists to check. Scheduled: operator-side journal + authorized_keys read in Phase B.
 
+### Network-Outage Deep-Dive
+
+| Layer | Status | Verification artifact |
+|---|---|---|
+| L3 — firewall allow-list | verified | Run 40744937376 `apply` log: `ssh -N -L` forward established through web-1 (`web-2 forward is up on 127.0.0.1:2223`) and web-2's sshd presented its ECDSA host key on the forwarded channel — a firewall drop cannot present a key. Operator half: `hcloud_firewall.web` `dynamic "rule"` over `var.admin_ips` permits tcp/22; egress membership is re-proven at capture time by the keyscan itself (script refuses on failure). |
+| L3 — DNS / routing | verified | Numeric IPs only — web-2's public/private addresses are read from `terraform show -json` (`hcloud_server.web["web-2"].ipv4_address`, `hcloud_server_network.web["web-2"].ip`); the forward delivered kex bytes end-to-end. |
+| L7 — TLS / proxy | not applicable | SSH path; no TLS intermediary. Opt-out artifact: the kex transcript reached host-key presentation in the run log. |
+| L7 — application (sshd auth) | partially verified → Phase B closes it | `Host key verification failed.` is a client-side verdict; web-2's sshd log (`Connection closed by 10.0.1.10 port 58066 [preauth]`, quoted in #11445) is the matching server-side view — client aborted post-kex, before auth. No `Failed publickey` line is quoted, so the missing-key hypothesis is NOT yet refuted; Phase B's journal + authorized_keys read is the discriminating evidence. |
+
+**Gap before implementation:** none blocking Phase A — the stale pin is proven by repo state + run log alone. Phase B exists precisely to close the L7 half before any conditional arm ships.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec/issue claim | Verified reality | Plan response |
@@ -115,6 +144,8 @@ Only if Phase B shows the pubkey absent:
 3. `apps/web-platform/infra/web-host-provisioner-parity.test.sh`: add the EXT_RESIDENCE entry `terraform_data.root_authorized_keys_web2 → hosts:["web-2"], reason: <named>` (census at the `ci-ssh-key.tf` block; stale-entry arm requires it).
 4. `apps/web-platform/infra/server.tf`: update the running-web-2 delivery census comment on `egress_gateway_web2` (per `plan-host-fanout.md` "Mechanical enforcement") and the `deploy_pipeline_fix_web2` header's "recovery: operator ADMIN_IPS append" note to name the twin.
 5. Operator step (local worktree; agent auth via `hcloud_ssh_key.default`; firewall tcp/22 admin path): `cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -target=terraform_data.root_authorized_keys_web2 -input=false`. Idempotent; re-verifiable.
+
+**Precedent diff (Phase 4.4 gate):** the twin is pattern-bound with two sibling precedents — `terraform_data.root_authorized_keys` (ci-ssh-key.tf: same trigger-shape, same `grep -qxF … || echo … >>` idempotent inline, same operator-local classification) and `egress_gateway_web2` (server.tf: the web-2 connection shape — `private_key`/`agent` dual-mode, `local.web_2_ssh_host_key`, `%RAND%` script_path, 15m timeout). The diff from the web-1 twin is exactly `host`/`host_key`/`script_path`/timeout/`server_id` trigger — nothing else varies. No novel pattern.
 
 ### Phase D — Verification (the merge is the trigger)
 
@@ -241,6 +272,34 @@ in_transit:
 No new architectural decision — the repair applies **ADR-237** (ssh host keys are pinned; re-capture is the routine re-key path) exactly as written, and the conditional arm reuses the **ADR-220** SSH-delivery shape (dedicated terraform_data, pinned host key, credential-tiered key material).
 
 **C4 check (completeness mandate executed):** enumerated (a) external human actors — none added (the operator already exists); (b) external systems — none added (Hetzner, existing); (c) containers/data-stores — none added (a repo file + a provisioner resource on an existing host); (d) actor↔surface relationships — unchanged (the admin-IP SSH edge operator→web-2 already exists for `hcloud_ssh_key.default`). The work phase MUST re-run the three-file read (`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`) before writing "no C4 impact" into the PR, and cite the elements checked; expected impact: none.
+
+## Downtime & Cutover
+
+**Offline-inducing operation.** The unconditional path (pin re-capture + commit) mutates no running resource — zero downtime. The conditional arm appends one line to `/root/.ssh/authorized_keys` on web-2 — no restart, no service contact.
+
+**Serving-surface evaluation.** web-2 is the standby host at Cloudflare LB weight 0 (`lb-weight-gate.sh`; ADR-143 keeps it unpooled until the runtime-bind gate opens) — nothing it does or fails to do serves traffic, so even the fallback `web-host-replace` dispatch takes no serving surface offline. Zero-downtime is the *default state* of every arm here, not a cutover design requirement: there is no in-flight request surface on the host.
+
+**Residual risk.** The fallback re-replace destroys-then-creates a *standby* resource — a fleet-capacity (HA-margin) event, not a serving event; `web_host_replace_gate` + `stock_preflight_gate` bound it, and the workspaces volumes survive by omission (`prevent_destroy` + gate backstops). Authorization for that arm comes from the `web-platform-infra-apply` environment reviewer — the workflow's existing gate, unchanged.
+
+## Guard Contract
+
+### Guard 1 — web2-ssh-pin-current probe (`scripts/probes/web2-ssh-pin-current.sh`)
+
+**Property.** The committed `apps/web-platform/infra/web-2-ssh-host-key.pub` is parseable pin material for the CURRENT web-2: exactly one non-comment `ecdsa-sha2-nistp256` key line, and its `# fingerprint:` header does not equal a fingerprint recorded for a predecessor host.
+
+**Assembly.** Every consumer of web-2's host identity flows through this one file: `local.web_2_ssh_host_key` (server.tf regex) feeds every `terraform_data` connection dialing `hcloud_server.web["web-2"]`, and `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh` renders it into the known_hosts for BOTH CI forwards (`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`). Single chokepoint — the committed file itself.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Pin file's `# fingerprint:` header equals the predecessor fingerprint `SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE` (the stale-pin defect — file is parseable, property still fails) | RED |
+| 2 | Pin file contains zero non-comment key lines (emptied by a bad write — the guard's own "0 checked" shape) | RED |
+| 3 | Pin file contains two non-comment key lines (a second member appended after a compliant first) | RED |
+| 4 | Probe edited so its key-line extraction drops the `!/^#/` comment filter — a header line then counts as a key line | RED — harness row: the probe's own extraction is mutated, not the artifact |
+| 5 | A valid post-rebirth pin (any fingerprint outside the predecessor set, exactly one ecdsa key line — e.g. the captured `SHA256:OB3/…` file) | PASS — must-pass input differing from the incumbent stale file in exactly the way the contract permits |
+
+**Anchor.** The predecessor fingerprint is a probe constant anchored to the incident's own evidence OUTSIDE the commit — run 40744937376's log (`SHA256:OB3/…` offered) plus the pre-fix committed file (`SHA256:prjb…` pinned). A diff weakening both file and probe constant is the residual risk; the run-log artifact is the anchor. The probe encodes "not a known-predecessor fingerprint", not "equals today's" — the next legitimate re-capture stays green without editing the probe.
 
 ## Domain Review
 
