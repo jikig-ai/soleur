@@ -118,8 +118,8 @@ An individual beta tester's Art. 17 erasure request is fulfilled via the auditab
 > **Addendum 2026-10-28 (#11303; Ruled by CLO agent, 2026-10-28).** The last trigger above fired
 > **inadvertently**: in the hosted legacy agent runner the `crm_*` write tools were pre-approved by SDK
 > `allowedTools` from their introduction (2026-07-08) to the PR #11304 fix (ADR-305 records that the
-> cc-soleur-go path ran them through the gate). The gate operates on the verified host(s); soleur-web-2
-> unconfirmed. Measured small (one contact and one stage transition written in the window) and not
+> cc-soleur-go path ran them through the gate). The fix was reported serving at the 2026-10-28T17:53Z
+> check (host unidentified); soleur-web-2 unconfirmed. Measured small (one contact and one stage transition written in the window) and not
 > closed: UI and agent writes are indistinguishable. The voiding consequence is overridden: the store is
 > owner-private, there is no third-party recipient, and the exposure is alteration within the owner's
 > own tenant, not disclosure. "Every store owner is Jikigai personnel" is inherited from the records of
