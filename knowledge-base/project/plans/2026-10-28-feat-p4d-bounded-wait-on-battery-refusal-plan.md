@@ -358,6 +358,7 @@ Not touched (asserted in ACs): `apps/**`, `scripts/registry-restore-from-ghcr.sh
 ## Test Scenarios
 
 (All are `unit`/`integration` shell suites; no e2e. Every scenario runs on a synthetic fixture; none depends on other sessions' processes.)
+
 - Given a sibling-refusal log and a capacity stub that reports `CONTENDED` forever, when the budget (small, via flag) elapses on a non-infra diff without `--full`, then exit 42 and the verdict line [integration].
 - Given the same log and `CAPACITY_OK measured_runs=0` on the third poll, then exit 10 after two WAITING lines [integration].
 - Given the same log and a diff touching `.github/workflows/apply-web-platform-infra.yml`, or one that renames a file OUT of `apps/web-platform/infra/`, then exit 12 and never 42 [integration].
@@ -384,4 +385,3 @@ The 8-seat review and the CTO rulings R1-R5 (decision-challenges.md) amended the
 - AC2/AC3: `AFFECTED_FALLBACK` is classified by reason (index-missing and enumerate-unavailable stop; force-all behaves like `--full`; an unparseable or unknown reason stops).
 - AC4: the state epoch must be exactly 10 digits, not future and not older than 6 h; the state path must be an absolute regular file; `--probe-timeout-s` is a flag.
 - AC7: SKILL.md is 273877 bytes against 273890 on the base; the recipe launches the pinned dispatch (`affected-tests.sh`).
-
