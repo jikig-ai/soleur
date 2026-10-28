@@ -16,6 +16,7 @@ Ref #9927, Ref #10112. No closing keyword. Do not edit the #9927 body; post no c
 
 - 2.1 `flag_set` anchor in `apps/web-platform/infra/inngest-cutover-flip.sh` and `access = "read/write"` on `doppler_service_token.inngest` in `inngest-host.tf`.
 - 2.2 `gh issue view <n> --json title,state` for 6890, 8528, 7671, 11265, 11266, 9927, 10112 (titles only).
+- 2.4 Cite `flag_set` by function name and effect only (never the command line); word follow-ups (1) and (2) as "classified owner-side by the invoking brief", not "verified unautomatable".
 - 2.3 #9927 body item 1b text and the 2026-10-15 triage comment rows 1 and 3 (read-only; print only what is needed).
 
 ## Phase 3: Write

@@ -23,6 +23,21 @@ Append ONE section, `## Addendum - 2026-10-28 (#9927), second`, at the end of `k
 
 The rulings are inputs. The CTO and the CLO are NOT re-run here.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28 (light pass; docs-only, every fact pre-measured). No domain, skill or review agent fan-out was spawned: the change is one append to an internal ADR, the CTO and CLO rulings are inputs, and extra agents add cost without recall. Plan-review panel not run: one file, no mechanism to cut; the Property List and Cut List carry that question.
+
+**Halts checked.** 4.6 User-Brand Impact present, threshold `none` with scope-out (the ADR path is not in the sensitive-path regex). 4.7, 4.9, 4.11, 4.13 not triggered (no code, UI, guard or autonomous task). 4.8 PAT sweep: no hits. 4.10 not triggered: the plan introduces no store or connection (it records a deferred, unbuilt one). 4.12 Scope Check present once (unfenced), no `unmapped` row, Split Assessment has a Recommendation line.
+
+**Verified live this pass.** Rule ids cited exist in `AGENTS.md` (`cq-cite-content-anchor-not-line-number`, `cq-assert-anchor-not-bare-token`). PRs #11260, #11414, #10889, #10524 are MERGED. Baseline on the untouched ADR: `bash scripts/markdown-lint.sh <ADR>` prints "1 file(s) clean." and `bash scripts/check-adr-ordinals.sh` passes, so a later red is attributable to the append. Collision pre-check for #9927: open PRs naming it are #11434 (this one), #11427 (key-probe alert window) and #11381 (inngest@4 upgrade); `gh pr diff --name-only` shows neither of the other two touches the ADR-282 file. Open code-review overlap on the ADR path: none (200-issue snapshot).
+
+**New considerations from this pass (folded into the sections below).**
+
+- **Owner-only classification (`hr-never-label-any-step-as-manual-without`).** The brief assigns follow-ups (b) and (c) to the owner. Basis recorded for the addendum: the Hetzner console member list has no API endpoint (first 2026-10-28 addendum, "console only"), and the console sits behind login and sign-in protection, which is credential entry; the support question must be sent from the owner's Hetzner account. A browser attempt was NOT made at plan time (the browser MCP servers failed to connect in this session), so the addendum must say "classified owner-side by the invoking brief and the first 2026-10-28 addendum", not "verified unautomatable". Do not strengthen it.
+- **Hook pitfall.** The plan-write guard blocked the first draft of this file because it reproduced a Doppler secret-write command string from `flag_set`. The ADR text must also cite `flag_set` by function name and effect ("writes `INNGEST_CUTOVER_FLIP` under the host token"), never the command line.
+- **Two heading styles coexist.** Older addenda use an em dash; the 2026-10-26 and first 2026-10-28 headings use a hyphen. The new heading uses the hyphen exactly as briefed (`## Addendum - 2026-10-28 (#9927), second`).
+- **Provider-doc sentence scope.** The index "Delete Protection" sentence about the provider lifting the lock concerns Terraform destroy; it is the repo's own design premise and not evidence about Console project deletion (already in Sharp Edges).
+
 ## Research Insights
 
 **Premise Validation (Phase 0.6, run 2026-10-28, plan time).** Cited issues, checked with `gh issue view <n> --json title,state` (titles only): #9927 OPEN; #10112 OPEN; #8528 OPEN ("legal: Art. 17 erasure reaches neither copy of the Inngest Redis AOF ... CLO determination on processing scope"); #7671 OPEN ("legal: the LUKS-header R2 bucket (Cloudflare US custody) appears in no Art. 30 activity"); #6890 CLOSED, NOT_PLANNED, closed 2026-10-24T18:48:10Z ("hardening: split write capability off the deploy-readable Inngest boot token (root-only flip token via systemd drop-in)"); #11266 OPEN (owner hold, probe delivery); #11265 OPEN (standalone keeper at the next host replace); #10889 MERGED; #11414 MERGED (first 2026-10-28 addendum); #10524 MERGED (item 5). Collision pre-check for the ADR path is repeated at deepen time. No premise was stale.
@@ -190,3 +205,5 @@ No executable browser or API steps. Verification is the shell checks in Implemen
 - The ADR path is in `infra-validation.yml`'s PR path list: CI runs the infra guard suites on this docs-only PR. A red there is not caused by the append unless an anchor the suites grep for was edited (none is touched).
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan` Phase 4.6; this one declares `none` with a scope-out reason.
 - Rc 6 is not a pass. Work only in this worktree, never the root checkout.
+- Owner-side wording: say "classified owner-side by the invoking brief" for follow-ups (1) and (2); no browser attempt was made at plan time, so do not write "verified unautomatable" (`hr-never-label-any-step-as-manual-without`).
+- Cite `flag_set` by function name and effect; do not paste the Doppler command line into the ADR (the plan-write guard blocks it in plans, and the string adds nothing the anchor does not).
