@@ -15,4 +15,5 @@ None blocking. Plan-skill research fan-out / domain-leader spawns ran inline (se
 - Title default = headline #4 per issue title and proposed pipeline row
 
 ### Components Invoked
+soleur:engineering:cto (Rule mode, 1 batched spawn; cto_spawns=1)
 soleur:plan (inline), soleur:deepen-plan (inline), collision-precheck.sh, markdownlint-cli2, gh
