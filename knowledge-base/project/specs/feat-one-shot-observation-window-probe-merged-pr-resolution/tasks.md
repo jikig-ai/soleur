@@ -6,7 +6,7 @@ Plan: `knowledge-base/project/plans/2026-10-28-fix-observation-window-probe-merg
 
 - 1.1 Stub `gh` heredoc in `plugins/soleur/test/ci-pr-affected-replay.test.sh`: add `ERR422_<key>` and `ERR_ONCE_<key>` handlers; change the stub's own `sleep` calls to `command -p sleep`.
 - 1.2 Add the no-op logging `sleep` stub directory and prepend it to PATH inside `ow_probe` and `ow_probe_split` only.
-- 1.3 Extend `ow_write` cleanup globs (`*_commits_*_pulls_*`, `ERR422_*`, `ERR_ONCE_*`); add helpers `ow_commit_pulls`, `ow_pr_obj`, `ow_u_resolved`.
+- 1.3 Extend `ow_write` cleanup globs (`*_commits_*_pulls_*`, `ERR422_*`, `ERR_ONCE_*`); add helpers `ow_commit_pulls`, `ow_pr_obj`, `ow_u_resolved` (four resolvable runs, the canary run, and a sixth run on PR 11's branch with a second sha that must not raise the distinct count; one run is a bot PR created 4 s before its run).
 - 1.4 Add rows: `row_ow_resolve_merged`, `row_ow_resolve_unresolvable` (table loop incl. 404/422), `row_ow_resolve_errors` (incl. gh exit 4), `row_ow_resolve_scope`, `row_ow_zero_pr_units` (incl. `prs=5` on the base fixture), `row_ow_retry` (incl. flagged-run and 502-then-403 cases); update `row_ow_quota` (127/126, `planned=`), `row_ow_static`, `row_ow_argv`.
 - 1.5 Add the mutants listed in the plan's Test Scenarios; run the suite and record the new rows RED on the unmodified probe.
 
@@ -24,6 +24,8 @@ Plan: `knowledge-base/project/plans/2026-10-28-fix-observation-window-probe-merg
 - 3.1 Rewrite the "Reads are bounded and oldest-first" and "Forgery bound" bullets in `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`; state the time arithmetic once; add the dated 2026-10-28 observation-log entry.
 
 ## 4. Local gates and live verification
+
+- 4.0 Run the plan's `discoverability_test` once: `env -u GH_TOKEN bash scripts/followthroughs/ratchet-observation-window-10865.sh` prints a line starting `CANNOT ESTABLISH` (exit 3) without any API call.
 
 - 4.1 Replay suite; `fixture-relative-assert.test.sh`; `lint-shell-trace-credential-refusal.py` (positional path) and its test; `lint-guard-contract.py` on the plan; `python3 -I scripts/ci-pr-affected-replay.py ratchet`; `bash -n` / `shellcheck`.
 - 4.2 ONE live read-only run (token via `read -r`, no command substitution); gate: exit 0 or 2, `green_pr_units_distinct_prs > 0`, `green_pr_rows > 0`, `pr_unattributed_runs * 4 < green_pr_rows`; record `quota: used_delta` vs `planned`.

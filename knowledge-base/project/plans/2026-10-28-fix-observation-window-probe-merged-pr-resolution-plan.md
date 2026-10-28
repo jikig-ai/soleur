@@ -13,6 +13,21 @@ lane: cross-domain
 
 Spec lacks valid lane: no `spec.md` exists for this branch, so `lane` defaulted to `cross-domain` (TR2 fail-closed). PR text uses `Ref #10865`, `Ref #11306`, `Ref #10861`, `Ref #10448` only; this plan has no `closes:` key on purpose.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28
+**Sections enhanced:** 6 (Observability added, precedent diff added, Guard 1 row 6 made coherent, exit-code claims verified, shared literals reconciled, tasks.md propagated)
+**Research agents used:** CTO (rulings F1-F5, re-ruling R1-R6), learnings-researcher, plan-review panel (DHH, Kieran, code-simplicity); deepen-plan ran its halt gates 4.6-4.13 inline and live read-only probes instead of a 40-agent fan-out (the change is one bash file plus its stub suite).
+
+### Key Improvements
+1. `## Observability` section with the 5-field schema and a sandbox-safe `discoverability_test` (the unauthenticated probe run prints `CANNOT ESTABLISH`), replacing the earlier "not triggered" paragraph.
+2. Precedent diff against `scripts/registry-delivery-change.sh` `resolve_pr_for_sha` (same endpoint, stricter acceptance rule, reason stated).
+3. Verified live: gh's own exit codes are 0, 1, 2, 4 (`gh help exit-codes`; 8 for pending checks), so the probe's return codes 44/45 cannot collide; `timeout` uses 124-127 and 137.
+
+### New Considerations Discovered
+- A mutation row cannot say "must stay green" inside a must-go-RED matrix; Guard 1 row 6 is now a per-PR-vs-per-run counting mutant killed by a second run on the same PR in `ow_u_resolved`.
+- `phase=facts-done` carries the live gate's denominator on stderr only, so `row_ow_progress`'s token ban and 500-byte cap stay valid (the line grows by about 20 bytes).
+
 ## Overview
 
 The follow-through probe `scripts/followthroughs/ratchet-observation-window-10865.sh` (tracker #10865, series #10861, epic #10448) reads each pull_request run's PR from the run's own
@@ -138,7 +153,7 @@ PR title and body use `Ref #10865` only. Comment on #11306 (never #10865) the F4
 
 ## Test Scenarios
 
-All rows live in `plugins/soleur/test/ci-pr-affected-replay.test.sh` section `ratchet observation window (#10865)`; fixtures use synthetic names and 40-hex shas (`OW_H13=cccc...`), never a tracked path. Helper `ow_u_resolved` turns the five base pull_request units into prn-0 runs with 40-hex shas whose `commits/<sha>/pulls?per_page=2` fixtures return the matching PR object (`head.ref` = the unit's branch, base and head repo `jikig-ai/soleur`); one of them is a bot PR created 4 seconds before its run (the measured live shape) and must resolve.
+All rows live in `plugins/soleur/test/ci-pr-affected-replay.test.sh` section `ratchet observation window (#10865)`; fixtures use synthetic names and 40-hex shas (`OW_H13=cccc...`), never a tracked path. Helper `ow_u_resolved` turns the five base pull_request units into prn-0 runs with 40-hex shas (plus a sixth run on PR 11's branch with a second sha, which must not raise the distinct count) whose `commits/<sha>/pulls?per_page=2` fixtures return the matching PR object (`head.ref` = the unit's branch, base and head repo `jikig-ai/soleur`); one of them is a bot PR created 4 seconds before its run (the measured live shape) and must resolve.
 
 | Row | Scenario | Expected |
 |---|---|---|
@@ -170,7 +185,7 @@ Mutants (`ow_mutate`, each old-string unique after the single retry site): ident
 | 3 | drop the head-repository or the base-repository equality (two mutants) | RED (`row_ow_resolve_unresolvable`) |
 | 4 | drop each pre-call fork / canary / green / sha-shape test, separately | RED (`row_ow_resolve_scope`) |
 | 5 | the dispatch of the resolver itself: replace the call condition with `false` (a resolver that reports 0 attributed and exits 0 is vacuous) | RED (`row_ow_resolve_merged`: distinct 4 and `pr_unattributed_runs=0` fail) |
-| 6 | add a SECOND unit after a compliant first whose branch is a copy of the first's (two runs, same branch, different sha, same PR) | must stay green: distinct counts the PR once (a must-PASS non-canonical input, `row_ow_resolve_merged`); a mutant counting per run RED |
+| 6 | add a SECOND unit after a compliant first on the same PR (same branch, different sha; `ow_u_resolved` carries it): a mutant that counts distinct per resolved run instead of per PR (drop the `SEEN_KEY` test) | RED (`row_ow_resolve_merged`: distinct must stay 4) |
 | 7 | HTTP 404/422 mapped to `fail_api` instead of unresolved; and gh's exit 4 mapped to unresolved | RED (`row_ow_resolve_unresolvable`, `row_ow_resolve_errors`) |
 
 Harness row: the stub's `commits_..._pulls` fixtures are per path, so a stub that answered one PR for every sha cannot exist; the harness edit that must go RED is removing the 4-second bot-PR fixture's `head.ref` (the unit must then be unattributed), and the must-PASS non-canonical input is that bot PR.
@@ -257,11 +272,53 @@ Anchor: the guard compares no stored value (nothing persists between sweeps), so
 
 No cross-domain implications detected - internal CI follow-through tooling and its runbook (engineering-only, no user-facing surface, no spend change beyond reads on an already-allocated token).
 
-## Observability, Task Design, Encryption, ADR/C4, GDPR
+## Observability
 
-Not triggered. `scripts/followthroughs/` is outside the Phase 2.9 code-path set and the probe is itself the observability artifact (its status line, three phase lines on stderr and the `quota:` line are the discoverable output, readable from the sweeper comment without any host access); the PR adds no workflow, store, connection, regulated-data surface or architectural decision (no ADR/C4 impact: the C4 views model no probe element; `plugins/soleur/test/c4-count-parity.test.sh` is unaffected because no count in `model.c4` derives from this file).
+The probe is itself the observability artifact for tracker #10865; this section declares how a broken probe is noticed without host access (layer: the CI follow-through sweeper, `hr-observability-layer-citation` - the sweeper job log and the tracker comment).
+
+```yaml
+liveness_signal:
+  what: the nightly sweeper comment on #10865 (a verdict line starting NOT YET, PASS or CANNOT ESTABLISH plus the status line with pr_unattributed_runs and the quota line with planned and used_delta)
+  cadence: daily
+  alert_target: the #10865 tracker comment stream and the sweeper job log
+  configured_in: .github/workflows/scheduled-followthrough-sweeper.yml
+
+error_reporting:
+  destination: the sweeper's tracker comment (stdout and exit code of the probe); stderr carries only counts
+  fail_loud: exit 3 with a first token CANNOT ESTABLISH (quota shortfall, failed read, resolver non-array payload), exit 78 under xtrace, exit 2 with NOT YET; exit 1 is unreachable by design
+
+failure_modes:
+  - mode: planned reads exceed the hourly token quota
+    detection: the first stdout line CANNOT ESTABLISH API quota with remaining, need and the reset time
+    alert_route: the tracker comment
+  - mode: the resolver attributes most green runs to no PR (a head-ref or repository mismatch, or GitHub changing the endpoint)
+    detection: pr_unattributed_runs on the status line and, at zero distinct PRs, the NOT YET text naming the count of runs that could not be attributed
+    alert_route: the tracker comment
+  - mode: one transient 5xx or timeout on a read
+    detection: one retry; a second failure ends the sweep with the single fixed line CANNOT ESTABLISH naming the run and the read
+    alert_route: the tracker comment
+  - mode: the facts phase is cut by its 180 s allowance
+    detection: NOT YET read budget ended in the PR-facts phase, and truncated=1 on the status line
+    alert_route: the tracker comment
+
+logs:
+  where: the sweeper workflow job log and the tracker comments
+  retention: GitHub Actions log retention for the job log; the comments are permanent
+
+discoverability_test:
+  command: bash scripts/followthroughs/ratchet-observation-window-10865.sh
+  expected_output: CANNOT ESTABLISH
+```
+
+The `discoverability_test` runs the probe with no `GH_TOKEN` (the sandbox holds no credential), so it refuses at once with `CANNOT ESTABLISH: GH_TOKEN is not set ...` (or, when a tool is absent from the sandbox, `CANNOT ESTABLISH: <tool> is not installed`); it finishes in well under the 15 s cap, uses the allowlisted verb `bash` on a committed repo-relative script, contains no `ssh`, and declares no `credentials_required`, so no declared-probe ratchet moves.
+
+## Gates not triggered
+
+Task Design (no new autonomous task: the sweeper and the tracker directive already exist), Encryption Posture (no store or connection), ADR/C4 (no architectural decision: the C4 views model no probe element, and `plugins/soleur/test/c4-count-parity.test.sh` is unaffected because no count in `model.c4` derives from this file), GDPR (no regulated-data surface), Infrastructure-as-Code (none), Downtime & Cutover (none: a nightly read-only probe), PAT-shaped variables (none: the probe holds the sweeper-provided `GH_TOKEN` only).
 
 ## Risks and Sharp Edges
+
+- **Precedent diff (deepen Phase 4.4).** `scripts/registry-delivery-change.sh` `resolve_pr_for_sha` already resolves a sha through `commits/<sha>/pulls`, takes `[.[] | select(.merged_at != null)][0].number` and falls back to the commit subject suffix `(#N)`. Ours differs on purpose: that helper produces a WRITE target, so it prefers a merged entry and tolerates a first-of-many; this probe is read-only and must not guess, so it accepts only `length == 1` with both repositories and the head ref matching, has no subject fallback (the suffix is contributor text), and treats an answered `[]`, HTTP 404 and HTTP 422 as unresolved while any other failure is exit 3. `scripts/main-push-duplicate-skip.sh` is the other consumer; neither is edited.
 
 - **The new weights are provisional.** The R4 coefficients (1.5 per row, half a lookup per candidate, 3 per PR, reserve 100) come from two days of measurements; the live run's `used_delta` vs `planned=` is the check, and the CTO flip trigger (`used_delta` above or within 10% of `planned`) is a stop, not a pass.
 - **The head-ref identity check is the load-bearing one.** Measured 25 of 25 returned PRs (and 23 resolved) carried a `head.ref` equal to the run's branch; the live gate (`pr_unattributed_runs * 4 < green_pr_rows`) is what catches a systematic mismatch, and if it fails the identity checks are NOT loosened - re-measure on the 25-sample first.
