@@ -284,7 +284,7 @@ precondition is now enforced here: git_data_rung2_rehearsal_gate requires commit
 evidence hash-bound to the template being dispatched, and re-holds automatically on any
 later edit to cloud-init-git-data.yml. (Dated 2026-10-28: the evidence is stale again since
 #11342 changed a hash-bound payload, so this interlock holds the route today; a fresh rehearsal is
-the owner's paid-host act, tracked in a separate issue. `plan_only` also holds here.)
+the owner's paid-host act, `plan_only` holding it is tracked in #11460. `plan_only` also holds here.)
 
 Rung 2 — booting the rendered template once on a throwaway host outside the
 hcloud_server.git_data address — is carried as #7025's own precondition and was

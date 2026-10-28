@@ -3215,8 +3215,7 @@ _il_chk "IL6d a DIFFERENT key sharing the suffix (old_git_data_volume_id = \"\")
 # here): a `<<TAG` token inside a `#` comment is read as a heredoc opener and blanks everything after it,
 # so the module call below vanishes. For THIS gate that is the safe direction (ABORT, never PASS); the
 # row pins it so that a future fix of the stripper is a deliberate act that updates this row, and so that
-# nobody "fixes" it in the direction of a PASS. Tracked: see the tracking issue filed for this review
-# (number added by the lead).
+# nobody "fixes" it in the direction of a PASS. Tracked: #11458.
 _IL_HDOC="$_il_dir/hdoccmt.tf"
 printf '# an example (<<EOF) that is only a comment\nmodule "git_data_userdata" {\n  git_data_volume_id = ""\n}\n' > "$_IL_HDOC"
 _il_chk "IL6e a '# (<<EOF)' comment above the call: the shared stripper swallows it => ABORT (fail-closed, pinned)" 1 "no module" "$_IL_HDOC"
