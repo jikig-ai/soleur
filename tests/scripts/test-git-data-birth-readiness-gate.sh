@@ -3105,6 +3105,110 @@ mutate_suite "M0b: a _stub_run that ignores its conclusion= key reds this suite"
 mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument reds this suite" \
   's|"\$2" "\$3" "\$4" "\${5:-none}" "\${6-CLEAN}" > "\$1"|"$2" "$3" "$4" "${5:-none}" "CLEAN" > "$1"|' 1
 
+# ── (#11194, ADR-239 Amendment 2026-10-28) Guard 4 — the plaintext-id interlock ───────────────────
+#
+# git_data_plaintext_id_interlock <git-data.tf> refuses a git-data host replace/rotate/create dispatch
+# while the `module "git_data_userdata"` call renders a NON-EMPTY `git_data_volume_id`. The plaintext
+# volume it named was destroyed at the provider on 2026-10-27; the retired gates no longer notice, so a
+# dispatch between the gate-retirement PR and the PR that blanks the literal would replace the live host
+# into the bootstrap's `plaintext_unverified` FATAL. EVERY ROW BELOW READS A SYNTHESIZED FIXTURE, never
+# the live git-data.tf (this suite's rule: no arm asserts a verdict on the live tree, whose green would
+# depend on which of the two PRs has merged). The verdict is: empty literal => PASS; anything else,
+# including every shape the extractor cannot read with confidence => ABORT. An extractor that finds
+# nothing must ABORT, never PASS (rows IL3*).
+_il_dir="$TMP/il"; mkdir -p "$_il_dir"; assert_fixture_dir "$_il_dir"
+# _il_fix <name> <module-body-lines...> — a git-data.tf whose userdata module call carries the lines
+_il_fix() {
+  local f="$_il_dir/$1.tf"; shift
+  { printf 'module "git_data_userdata" {\n  source = "./modules/git-data-userdata"\n'; printf '%s\n' "$@"; printf '  git_data_luks_volume_id = hcloud_volume.git_data_luks.id\n}\n'; } > "$f"
+  printf '%s' "$f"
+}
+# _il_chk <name> <want_rc> <needle> <file> [forbidden-substring] — the verdict, its text, and (optionally)
+# that a given value never reaches the output (the log is public).
+_il_chk() {
+  local name="$1" want="$2" needle="$3" f="$4" forbid="${5:-}" out rc=0
+  out="$(git_data_plaintext_id_interlock "$f" 2>&1)" || rc=$?
+  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]] && { [[ -z "$forbid" ]] || [[ "$out" != *"$forbid"* ]]; }; then
+    pass "$name"
+  else
+    fail "$name (want rc=$want containing '$needle'${forbid:+, never '$forbid'})" "$rc" "$out"
+  fi
+}
+
+# --- must PASS (the canonical and every non-canonical shape of the same property) ---
+_IL_OK="$(_il_fix ok '  git_data_volume_id      = ""')"
+_il_chk "IL1 the empty literal => PASS" 0 "PASS" "$_IL_OK"
+_IL_CMT="$(_il_fix cmt '  git_data_volume_id = "" # the retired plaintext volume {was 106867358}')"
+_il_chk "IL1b a trailing comment (with braces) after the empty literal => PASS" 0 "PASS" "$_IL_CMT"
+_IL_WS="$(_il_fix ws '  git_data_volume_id=""   ')"
+_il_chk "IL1c no/extra whitespace around = => PASS" 0 "PASS" "$_IL_WS"
+_IL_OTHER="$_il_dir/other.tf"
+{ printf 'module "git_data_rehearsal" {\n  source = "./modules/git-data-userdata"\n  git_data_volume_id = "123456"\n}\n'; cat "$_IL_OK"; } > "$_IL_OTHER"
+_il_chk "IL1d a non-empty literal in a DIFFERENT module block is not read => PASS" 0 "PASS" "$_IL_OTHER"
+_IL_NEST="$(_il_fix nest '  tags = {' '    git_data_volume_id = "1"' '  }' '  git_data_volume_id = ""')"
+_il_chk "IL1e a nested (depth 2) assignment is not the module argument => PASS" 0 "PASS" "$_IL_NEST"
+_IL_BRACE="$(_il_fix brace '  # } a stray close brace in a comment' '  git_data_volume_id = ""')"
+_il_chk "IL1f braces inside comments do not move the depth => PASS" 0 "PASS" "$_IL_BRACE"
+
+# --- must ABORT ---
+_IL_BAD="$(_il_fix bad '  git_data_volume_id = "106867358"')"
+_il_chk "IL2 the destroyed plaintext volume id => ABORT, naming only 'non-empty' and a line" 1 "non-empty (line" "$_IL_BAD" "106867358"
+_IL_EXPR="$(_il_fix expr '  git_data_volume_id = var.plaintext_volume_id')"
+_il_chk "IL2b a non-literal expression => ABORT (anything but the empty literal)" 1 "non-empty (line" "$_IL_EXPR" "plaintext_volume_id"
+printf 'resource "hcloud_server" "git_data" {\n}\n' > "$_il_dir/noblock.tf"
+_il_chk "IL3 no module block at all => ABORT (an extractor that finds nothing must not PASS)" 1 "no module" "$_il_dir/noblock.tf"
+printf 'module "git_data_userdata" {\n  git_data_volume_id = ""\n' > "$_il_dir/unclosed.tf"
+_il_chk "IL3b an unclosed block => ABORT (unparsable)" 1 "not brace-balanced" "$_il_dir/unclosed.tf"
+_IL_ZERO="$_il_dir/zero.tf"; printf 'module "git_data_userdata" {\n  source = "x"\n  git_data_luks_volume_id = "7"\n}\n' > "$_IL_ZERO"
+_il_chk "IL3c a block with no git_data_volume_id assignment => ABORT" 1 "no top-level git_data_volume_id" "$_IL_ZERO"
+_IL_ONLYCMT="$_il_dir/onlycmt.tf"; printf 'module "git_data_userdata" {\n  # git_data_volume_id = ""\n  source = "x"\n}\n' > "$_IL_ONLYCMT"
+_il_chk "IL3d the assignment only in a comment => ABORT" 1 "no top-level git_data_volume_id" "$_IL_ONLYCMT"
+_il_chk "IL3e an unreadable path => ABORT" 1 "cannot read" "$_il_dir/does-not-exist.tf"
+printf '// not HCL comment syntax this parser handles\nmodule "git_data_userdata" {\n  git_data_volume_id = ""\n}\n' > "$_il_dir/slashes.tf"
+_il_chk "IL3f a // comment (unsupported syntax) => ABORT (never guess)" 1 "could not strip comments" "$_il_dir/slashes.tf"
+printf 'module "git_data_userdata" { git_data_volume_id = "" }\n' > "$_il_dir/oneline.tf"
+_il_chk "IL3g a single-line block => ABORT (unparsable with confidence)" 1 "no top-level git_data_volume_id" "$_il_dir/oneline.tf"
+_IL_CMTABOVE="$(_il_fix cmtabove '  # git_data_volume_id = ""' '  git_data_volume_id = "106867358"')"
+_il_chk "IL4 a commented empty literal ABOVE a real non-empty one => ABORT" 1 "non-empty (line" "$_IL_CMTABOVE" "106867358"
+_IL_DUP="$(_il_fix dup '  git_data_volume_id = ""' '  git_data_volume_id = "106867358"')"
+_il_chk "IL5 an empty literal followed by a second non-empty assignment => ABORT" 1 "more than one top-level git_data_volume_id" "$_IL_DUP" "106867358"
+_IL_DUP2="$(_il_fix dup2 '  git_data_volume_id = "106867358"' '  git_data_volume_id = ""')"
+_il_chk "IL5b a non-empty assignment followed by an empty one => ABORT" 1 "more than one top-level git_data_volume_id" "$_IL_DUP2" "106867358"
+{ cat "$_IL_OK"; cat "$_IL_OK"; } > "$_il_dir/twoblocks.tf"
+_il_chk "IL5c two module blocks of the same name => ABORT" 1 "more than one module" "$_il_dir/twoblocks.tf"
+
+# --- mutation: every arm of the function is load-bearing, aimed at the input it exists for ---
+# (An arm-neutering row asserts the mutant's rc flips to 0 AND that its output still carries the
+# arm's own text: the text proves the fixture really reaches that arm, so the flip is the arm's.)
+printf '\nmutation checks — plaintext-id interlock\n'
+MUTATE_G_NEEDLE="PASS" mutate_g "IM1: the empty-literal comparison is load-bearing (neutered, a destroyed volume id PASSes)" \
+  's/^    if \[\[ "\$_il_val" == "\$_il_empty" \]\]; then/    if true; then/' \
+  0 git_data_plaintext_id_interlock "$_IL_BAD"
+MUTATE_G_NEEDLE="no module" mutate_g "IM2: the no-block arm is load-bearing (neutered, an extractor that finds nothing PASSes)" \
+  '/^    noblock)/ s/return 1 ;;/return 0 ;;/' \
+  0 git_data_plaintext_id_interlock "$_il_dir/noblock.tf"
+MUTATE_G_NEEDLE="no top-level git_data_volume_id" mutate_g "IM3: the zero-assignment arm is load-bearing" \
+  '/^    zero)/ s/return 1 ;;/return 0 ;;/' \
+  0 git_data_plaintext_id_interlock "$_IL_ZERO"
+MUTATE_G_NEEDLE="more than one top-level git_data_volume_id" mutate_g "IM4: the duplicate-assignment arm is load-bearing (an empty literal beside a non-empty one)" \
+  '/^    multiple)/ s/return 1 ;;/return 0 ;;/' \
+  0 git_data_plaintext_id_interlock "$_IL_DUP2"
+MUTATE_G_NEEDLE="more than one module" mutate_g "IM5: the duplicate-block arm is load-bearing" \
+  '/^    multiblock)/ s/return 1 ;;/return 0 ;;/' \
+  0 git_data_plaintext_id_interlock "$_il_dir/twoblocks.tf"
+MUTATE_G_NEEDLE="not brace-balanced" mutate_g "IM6: the unclosed-block arm is load-bearing" \
+  '/^    unclosed)/ s/return 1 ;;/return 0 ;;/' \
+  0 git_data_plaintext_id_interlock "$_il_dir/unclosed.tf"
+MUTATE_G_NEEDLE="PASS" mutate_g "IM7: the comment-syntax refusal is load-bearing (neutered, a // file is read as if clean)" \
+  's/^  if ! _il_src="$(_git_data_hcl_nocomment "$tf")"; then/  _il_src="$(cat "$tf")"; if false; then/' \
+  0 git_data_plaintext_id_interlock "$_il_dir/slashes.tf"
+MUTATE_G_NEEDLE="non-empty" mutate_g "IM8: comment stripping is load-bearing (neutered, a trailing comment turns a PASS into a refusal)" \
+  's/^  if ! _il_src="$(_git_data_hcl_nocomment "$tf")"; then/  _il_src="$(cat "$tf")"; if false; then/' \
+  1 git_data_plaintext_id_interlock "$_IL_CMT"
+MUTATE_G_NEEDLE="more than one top-level git_data_volume_id" mutate_g "IM9: the depth-1 scoping is load-bearing (neutered, a nested assignment is miscounted)" \
+  's/_il_depth == 1 && //' \
+  1 git_data_plaintext_id_interlock "$_IL_NEST"
+
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
@@ -3287,7 +3391,15 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #     1  RES-err  absent-dir extract failure returns RUN_HASH_UNCOMPUTABLE
 #     1  RES-zero  zero rung2-archive.* entries in the private TMPDIR after both calls
 #     1  RES-disarm  RETURN trap self-disarms (trap -p RETURN empty after the calls)
-_FLOOR=263
+# RAISED 263 -> 291 (#11194), ITEMISED — Guard 4, git_data_plaintext_id_interlock (observed 263 before, 291 after; no slack either side):
+#     6  IL1-IL1f  must-PASS: the empty literal, trailing comment with braces, whitespace variants, a non-empty literal in a DIFFERENT
+#                  module block, a nested depth-2 assignment, braces inside comments
+#    13  IL2-IL5c  must-ABORT: the destroyed id (value never printed), an expression, no block, an unclosed block, zero assignments,
+#                  the assignment only in a comment, an unreadable path, a // comment, a single-line block, a commented empty above a
+#                  real non-empty, duplicates in both orders, two blocks of the same name
+#     9  IM1-IM9   mutation: the empty-literal comparison, each of the six refusal arms, comment stripping (both directions: the
+#                  // refusal and the trailing-comment PASS), and the depth-1 scoping
+_FLOOR=291
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

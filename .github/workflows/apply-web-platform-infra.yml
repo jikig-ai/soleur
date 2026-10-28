@@ -3716,14 +3716,12 @@ jobs:
   #   hcloud_server.git_data                   (-replace: force a fresh cloud-init boot)
   #   hcloud_server_network.git_data           (network.tf:48 — server_id ForceNew → replace;
   #                                              else the new host has no private NIC 10.0.1.20)
-  #   hcloud_volume_attachment.git_data        (git-data.tf:275 — server_id ForceNew → replace;
-  #                                              else /mnt/git-data — plaintext bare-repo store —
-  #                                              boots UNMOUNTED)
   #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf, `resource "hcloud_volume_attachment"
   #                                              "git_data_luks"` — server_id ForceNew → replace;
   #                                              else /mnt/git-data-luks — LUKS at-rest store —
   #                                              boots UNMOUNTED)
-  #   hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
+  #   hcloud_firewall_attachment.git_data      (git-data.tf, `resource "hcloud_firewall_attachment"
+  #                                              "git_data"` — server_ids update-in-place;
   git_data_host_replace:
     environment: infra-privileged
     # (#8211 PR2) git-data-host-rotate runs THIS job: same host replace plus the LUKS
@@ -3934,6 +3932,26 @@ jobs:
             exit 1
           fi
 
+      # (#11194, ADR-239 Amendment 2026-10-28) THE PLAINTEXT-ID INTERLOCK. The plaintext git-data
+      # volume was destroyed at the provider on 2026-10-27 and the gates above no longer demand it, so
+      # they PASS a correct plaintext-free plan; but while git-data.tf still passes a non-empty
+      # `git_data_volume_id` to module "git_data_userdata" the rendered user_data names that deleted
+      # device and the new host would boot into the bootstrap's plaintext_unverified FATAL. This
+      # step reads the same checkout the plan step plans and refuses before anything is planned or
+      # replaced. It prints a verdict and a line number, never the value. It is SKIPPED under plan_only:
+      # a plan_only dispatch grades a real plan with the plaintext-free gate and stops before any apply
+      # (the owner's verification path), so there is no host to destroy and nothing to refuse.
+      - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
+        if: inputs.plan_only != true
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf"; then
+            echo "::error::git-data-host-replace/-rotate is HELD: git-data.tf still passes a non-empty git_data_volume_id to module git_data_userdata, which names a plaintext volume destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap plaintext_unverified FATAL. The step log names the line. Set it to \"\" (the one-hunk change tracked on #11194), merge, then dispatch in one sitting. Nothing has been planned, replaced or created."
+            exit 1
+          fi
+
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
         # satisfies var.ssh_key_path (never consumed by the scoped git-data replace — the host is
@@ -3985,8 +4003,8 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Scoped -replace of the git-data server + its 4 id-referencing dependents. In plain replace
-        # the two data volumes + the LUKS passphrase are PRESERVED BY OMISSION (not -targeted →
+        # Scoped -replace of the git-data server + its id-referencing dependents. In plain replace
+        # the LUKS data volume + the LUKS passphrase are PRESERVED BY OMISSION (not -targeted →
         # cannot be planned for destroy); the rotate arm adds the LUKS trio below. The sourced
         # git_data_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan JSON and
         # ABORTS unless the plan is EXACTLY the scoped recreate.
@@ -4016,7 +4034,6 @@ jobs:
               "${EXTRA_REPLACE[@]}" \
               -target='hcloud_server.git_data' \
               -target='hcloud_server_network.git_data' \
-              -target='hcloud_volume_attachment.git_data' \
               -target='hcloud_volume_attachment.git_data_luks' \
               -target='hcloud_firewall_attachment.git_data' \
               -target='doppler_secret.git_data_ssh_host_key' \
@@ -4037,9 +4054,9 @@ jobs:
           export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"
           if ! git_data_host_replace_gate tfplan.json "$GATE_MODE"; then
             if [[ "$GATE_MODE" = rotate ]]; then
-              echo "::error::git-data-host-rotate destroy-guard ABORTED: the plan is not the exact scoped ROTATE set — host + dependents + LUKS volume/passphrase/key moving together (the plaintext volume hcloud_volume.git_data is still preserved). An incomplete rotation — passphrase without volume, or volume without the key re-publish — is a stranding, not a rotate, and refuses. NO [ack-destroy] bypass on this path."
+              echo "::error::git-data-host-rotate destroy-guard ABORTED: the plan is not the exact scoped ROTATE set — host + dependents + LUKS volume/passphrase/key moving together (no retired plaintext address is touched). An incomplete rotation — passphrase without volume, or volume without the key re-publish — is a stranding, not a rotate, and refuses. NO [ack-destroy] bypass on this path."
             else
-              echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate, or the root-key arm refused it (a git-data-root-key-arm annotation then names the reason and the step log its remedy). Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
+              echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate, or the root-key arm refused it (a git-data-root-key-arm annotation then names the reason and the step log its remedy). Refusing to apply. Specifically verify: the LUKS data volume (hcloud_volume.git_data_luks) is preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, the LUKS store attachment (hcloud_volume_attachment.git_data_luks) is re-created, no retired plaintext address (hcloud_volume.git_data, hcloud_volume_attachment.git_data) appears in the plan, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
             fi
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
@@ -4107,15 +4124,15 @@ jobs:
         # Apply the saved, guarded plan. The post-apply backstop (git_data_host_post_apply_assert,
         # tests/scripts/lib/git-data-host-replace-gate.sh) re-reads the SAVED plan (the exact plan
         # we applied) under the mode the plan step's gate accepted (its gate_mode output): the
-        # plaintext data volume carries 0 delete/forget actions in BOTH modes, the LUKS volume too
-        # in plain replace (the rotate arm replaces it ON PURPOSE, #10137), and the private NIC +
-        # BOTH store attachments show a create (re-attached) — belt-and-suspenders to the guard.
+        # LUKS data volume carries 0 delete/forget actions in plain replace (the rotate arm replaces
+        # it ON PURPOSE, #10137), and the private NIC + the LUKS store attachment show a create
+        # (re-attached) — belt-and-suspenders to the guard.
         run: |
           set -euo pipefail
           # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
           # leaves git-data DOWN with the writer-side CAS fence offline. UNLIKE registry (GHCR
           # fallback) / inngest (paused reminders), git-data has NO serving fallback — in plain
-          # replace BOTH volumes are preserved (guarded), so re-dispatch recovers from them; the
+          # replace the LUKS volume is preserved (guarded), so re-dispatch recovers from it; the
           # rotate arm replaces the LUKS volume by design. Writes FAIL, not
           # corrupt (single-writer at replicas=1 → no split-brain). Emit a self-documenting
           # recovery annotation, then fail hard (gating behavior unchanged).
@@ -4126,11 +4143,11 @@ jobs:
             stock_recovery_report git-data-host-replace tfplan.json --probe-state
             case "${GATE_MODE:-}" in
               replace)
-                echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them" ;;
+                echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); the LUKS volume is preserved — re-dispatch git-data-host-replace to recover from it" ;;
               rotate)
-                echo "::error::terraform apply (git-data-host-rotate) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail. The plaintext volume is preserved (guarded); the LUKS volume, its passphrase and its published key are replaced or re-published TOGETHER by design on this arm, so a mid-apply failure can leave any of them replaced and the others not (the stranding state the gate header describes). This message does not prescribe a recovery: read the stock-recovery report above and knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md before re-dispatching." ;;
+                echo "::error::terraform apply (git-data-host-rotate) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail. The LUKS volume, its passphrase and its published key are replaced or re-published TOGETHER by design on this arm, so a mid-apply failure can leave any of them replaced and the others not (the stranding state the gate header describes). This message does not prescribe a recovery: read the stock-recovery report above and knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md before re-dispatching." ;;
               *)
-                echo "::error::terraform apply (git-data host) failed mid-replace and the dispatch mode is unknown (the plan step's gate_mode output is empty) — git-data may be DOWN. Do not assume which volumes were preserved: read the stock-recovery report above before re-dispatching." ;;
+                echo "::error::terraform apply (git-data host) failed mid-replace and the dispatch mode is unknown (the plan step's gate_mode output is empty) — git-data may be DOWN. Do not assume the LUKS volume was preserved: read the stock-recovery report above before re-dispatching." ;;
             esac
             exit 1
           fi
@@ -4213,7 +4230,7 @@ jobs:
           {
             echo "## git-data-host-replace readiness (non-SSH)"
             echo ""
-            echo "In-job gates: the destroy-guard + post-apply asserts (plaintext volume preserved, and the LUKS volume too in plain replace; NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
+            echo "In-job gates: the destroy-guard + post-apply asserts (the LUKS volume preserved in plain replace; NIC + the LUKS store attachment re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
             echo ""
             echo "Not yet checked: that git transport SERVES. The web-host \`git ls-remote\` probe is #5274 PR C; the existing web-host probe only proves :22 is open. git-data is a deny-all blind host (no SSH)."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -5791,6 +5808,24 @@ jobs:
             exit 1
           fi
 
+      # (#11194, ADR-239 Amendment 2026-10-28) THE PLAINTEXT-ID INTERLOCK. The plaintext git-data
+      # volume was destroyed at the provider on 2026-10-27 and the gates above no longer demand it, so
+      # they PASS a correct plaintext-free plan; but while git-data.tf still passes a non-empty
+      # `git_data_volume_id` to module "git_data_userdata" the rendered user_data names that deleted
+      # device and the new host would boot into the bootstrap's plaintext_unverified FATAL. This
+      # step reads the same checkout the plan step plans and refuses before anything is planned or
+      # replaced. It prints a verdict and a line number, never the value. UNCONDITIONAL on this route:
+      # it documents no plan_only input and has no verification mode the interlock must leave open.
+      - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf"; then
+            echo "::error::git-data-host-create is HELD: git-data.tf still passes a non-empty git_data_volume_id to module git_data_userdata, which names a plaintext volume destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap plaintext_unverified FATAL. The step log names the line. Set it to \"\" (the one-hunk change tracked on #11194), merge, then dispatch in one sitting. Nothing has been planned, replaced or created."
+            exit 1
+          fi
+
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway
         # key satisfies var.ssh_key_path. It is never consumed: the git-data host is
@@ -5860,7 +5895,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # Purely ADDITIVE: no -replace anywhere, and NO [ack-destroy] bypass on this path.
         #
-        # The twenty -targets are the whole birth fan-out and MUST stay in lockstep with
+        # The -targets below are the whole birth fan-out and MUST stay in lockstep with
         # `def allow:` in tests/scripts/lib/git-data-host-birth-gate.sh, with that gate's
         # SEPARATE presence loop, and with GIT_DATA_BIRTH_TARGET_BASES in
         # plugins/soleur/test/terraform-target-parity.test.ts. That test asserts all of them
@@ -5873,11 +5908,15 @@ jobs:
         # entailed loop: entailed demands `creates == 1`, and on a resumed dispatch these
         # legitimately re-plan as no-ops, so requiring a create would be a permanent wedge.
         #
-        # Four of them are DOWNSTREAM of the server and so are NOT auto-pulled by
+        # (#11194) The retired plaintext pair (hcloud_volume.git_data and
+        # hcloud_volume_attachment.git_data, destroyed at the provider on 2026-10-27) is no longer
+        # targeted; terraform-target-parity.test.ts asserts neither returns.
+        #
+        # Three of them are DOWNSTREAM of the server and so are NOT auto-pulled by
         # -target's upstream closure — omitting any one is a distinct catastrophe:
-        #   hcloud_server_network.git_data      -> no private IP (#6416), unrepairable
-        #   hcloud_firewall_attachment.git_data -> host NAKED on public IPv4/IPv6
-        #   hcloud_volume_attachment.git_data*  -> store boots with its volume unmounted
+        #   hcloud_server_network.git_data           -> no private IP (#6416), unrepairable
+        #   hcloud_firewall_attachment.git_data      -> host NAKED on public IPv4/IPv6
+        #   hcloud_volume_attachment.git_data_luks   -> store boots with its volume unmounted
         # Five more would not be pulled by the server's own graph. Note this PR's two
         # depends_on edits changed their DIRECTION even though it does not change the
         # conclusion: the three doppler_secret SSH halves are now DOWNSTREAM of the server
@@ -5893,9 +5932,7 @@ jobs:
             terraform plan -no-color -input=false -out=tfplan \
               -target='hcloud_server.git_data' \
               -target='hcloud_server_network.git_data' \
-              -target='hcloud_volume.git_data' \
               -target='hcloud_volume.git_data_luks' \
-              -target='hcloud_volume_attachment.git_data' \
               -target='hcloud_volume_attachment.git_data_luks' \
               -target='hcloud_firewall.git_data' \
               -target='hcloud_firewall_attachment.git_data' \
@@ -6104,7 +6141,7 @@ jobs:
             echo ""
             echo "### What a green run gives you — and what it does not"
             echo ""
-            echo "It gives you: the twenty-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
+            echo "It gives you: the birth fan-out CREATED IN TERRAFORM — the server, the LUKS volume and its attachment, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
             echo ""
             echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step FAILED with the credentials-absent or unreadable-signal error, you are back to the old state and must verify manually before trusting this birth."
             echo ""

@@ -2738,3 +2738,83 @@ _git_data_hcl_nocomment() {
     }
   ' "$f"
 }
+
+# git_data_plaintext_id_interlock <git-data.tf> — 0 = PASS, 1 = ABORT. (#11194, ADR-239 Amendment 2026-10-28)
+#
+# THE PLAINTEXT-ID INTERLOCK. Refuses a git-data host replace / rotate / create dispatch while the
+# `module "git_data_userdata"` call in git-data.tf renders a NON-EMPTY `git_data_volume_id`.
+#
+# WHY IT EXISTS. The plaintext volume that literal names (id 106867358) was destroyed at the provider on
+# 2026-10-27. The replace, rotate and birth gates no longer demand the retired plaintext addresses, so
+# they PASS a correct plaintext-free plan — but while the literal is non-empty the rendered user_data
+# still tells the new host to expect that device, and the bootstrap's `plaintext_unverified` arm FATALs
+# the boot: a gate-green dispatch would destroy the live host into a host that cannot come up. The gates
+# grade the plan document, which cannot see a rendered string, so this reads the SOURCE the plan was made
+# from. The one-hunk change that satisfies it (`git_data_volume_id = ""`) ships separately; this stays
+# afterwards as a regression guard against the literal ever naming a device again.
+#
+# WHAT IT READS. The checked-out file the dispatch's plan step is about to plan — the same bytes — with
+# `#` comments stripped QUOTE-AWARE (_git_data_hcl_nocomment, which refuses `//` and `/*` rather than
+# guess). It extracts the block by BRACE DEPTH, and only a top-level (depth 1) assignment counts: a
+# commented-out line, a nested map's key and a different module's argument are all not the argument.
+#
+# FAIL-CLOSED. The verdict is PASS only when exactly one `module "git_data_userdata"` block is found,
+# is brace-balanced, and carries exactly one top-level `git_data_volume_id` whose value is the empty
+# string literal. A missing block, an unclosed block, zero or several assignments, a `//` comment, an
+# unreadable file and ANY other value (a literal id, an expression) ABORT. An extractor that finds
+# nothing must never read as "empty".
+#
+# OUTPUT DISCIPLINE. Prints the verdict and the line number only; never the value (the log is public and
+# the value is an infrastructure id).
+git_data_plaintext_id_interlock() {
+  local tf="${1:-}" _il_src _il_out _il_verdict _il_line _il_val _il_empty='""'
+  if [[ ! -r "$tf" ]]; then
+    echo "git_data_plaintext_id_interlock: ABORT — cannot read ${tf:-<unset>}; refusing (an unreadable module call is not an empty one)."
+    return 1
+  fi
+  if ! _il_src="$(_git_data_hcl_nocomment "$tf")"; then
+    echo "git_data_plaintext_id_interlock: ABORT — could not strip comments from $(basename "$tf") (a // or /* comment outside a string, which this parser does not handle); refusing rather than guess what the module call renders."
+    return 1
+  fi
+  _il_out="$(awk '
+    function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+    BEGIN { depth = 0; inb = 0; blocks = 0; n = 0; closed = 0 }
+    {
+      _il_depth = depth
+      o = gsub(/[{]/, "{"); c = gsub(/[}]/, "}")
+      if (!inb && _il_depth == 0 && $0 ~ /^[[:space:]]*module[[:space:]]+"git_data_userdata"[[:space:]]*[{]/) {
+        blocks++; inb = 1; closed = 0
+      } else if (inb && _il_depth == 1 && $0 ~ /^[[:space:]]*git_data_volume_id[[:space:]]*=/) {
+        n++; line = NR; v = $0; sub(/^[[:space:]]*git_data_volume_id[[:space:]]*=/, "", v); val = trim(v)
+      }
+      depth += o - c
+      if (inb && depth <= 0) { inb = 0; closed = 1 }
+    }
+    END {
+      if (blocks == 0) print "noblock"
+      else if (blocks > 1) print "multiblock"
+      else if (!closed) print "unclosed"
+      else if (n == 0) print "zero"
+      else if (n > 1) print "multiple:" line
+      else print "assign:" line ":" val
+    }' <<< "$_il_src")"
+  _il_verdict="${_il_out%%:*}"
+  if [[ "$_il_verdict" == assign ]]; then
+    _il_line="${_il_out#assign:}"; _il_line="${_il_line%%:*}"
+    _il_val="${_il_out#assign:*:}"
+    if [[ "$_il_val" == "$_il_empty" ]]; then
+      echo "git_data_plaintext_id_interlock: PASS — git_data_volume_id in module \"git_data_userdata\" is the empty string (line ${_il_line}); the rendered user_data names no plaintext volume."
+      return 0
+    fi
+    echo "git_data_plaintext_id_interlock: ABORT — git_data_volume_id in module \"git_data_userdata\" is non-empty (line ${_il_line}). It names a plaintext volume that was destroyed on 2026-10-27, so a host created from this tree boots into the bootstrap's plaintext_unverified FATAL. Set it to \"\" in git-data.tf (the one-hunk change tracked on #11194), merge, then dispatch. The value is not printed."
+    return 1
+  fi
+  case "$_il_verdict" in
+    noblock) echo "git_data_plaintext_id_interlock: ABORT — no module \"git_data_userdata\" block found in $(basename "$tf"); refusing (an extractor that finds nothing is not an empty literal)."; return 1 ;;
+    multiblock) echo "git_data_plaintext_id_interlock: ABORT — more than one module \"git_data_userdata\" block in $(basename "$tf"); refusing (Terraform rejects a duplicate module name, so this file is not the one that will be planned)."; return 1 ;;
+    unclosed) echo "git_data_plaintext_id_interlock: ABORT — the module \"git_data_userdata\" block in $(basename "$tf") is not brace-balanced; refusing."; return 1 ;;
+    zero) echo "git_data_plaintext_id_interlock: ABORT — the module \"git_data_userdata\" block carries no top-level git_data_volume_id assignment; refusing (an absent argument is not an empty one)."; return 1 ;;
+    multiple) echo "git_data_plaintext_id_interlock: ABORT — more than one top-level git_data_volume_id assignment in the module \"git_data_userdata\" block (last at line ${_il_out#multiple:}); refusing rather than guess which one Terraform keeps."; return 1 ;;
+    *) echo "git_data_plaintext_id_interlock: ABORT — unclassified extractor verdict; refusing."; return 1 ;;
+  esac
+}

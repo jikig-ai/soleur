@@ -95,7 +95,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
 // 297 -> 299 (2026-10-27 eMudhra cloudflared plan, +2; the 311 on main counted the +12 of #11179, whose destroy-workflow pins left with the workflow at #11195): the hardcoded 3-file PIN_WORKFLOWS test was replaced by the
 // .github/-wide pin census describe (census+parity, canonical source) plus its mutation-battery describe — 3 tests in, 1 out.
-const TEST_FLOOR = 299;
+// 299 -> 301 (#11194, +2): the plaintext-id interlock wire pins (replace job incl. rotate; create job). The retired-address
+// assertion REPLACED the GIT_DATA_PRESERVED_VOLUMES test one-for-one (declared count unchanged by it). Exact again: grep -cE '^\s*test\(' = 301.
+const TEST_FLOOR = 301;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1169,7 +1171,7 @@ function stripDispatchJobs(workflowText: string): string {
   // either, and is left folded-in historically; registry_host_replace is stripped explicitly
   // here as the current best practice for a new dispatch job.
   // git_data_host_replace (#6242, ADR-103): the same current best practice — its 5 -targets are
-  // ALL git-data OPERATOR_APPLIED_EXCLUSIONS (server + network + both volume attachments +
+  // ALL git-data OPERATOR_APPLIED_EXCLUSIONS (server + network + the LUKS volume attachment +
   // firewall attachment), so stripping it does not change the coverage anchor today, but keeps
   // the parity boundary uniform so a FUTURE git-data -target that is NOT already an exclusion
   // cannot silently mask a per-merge miss.
@@ -1283,10 +1285,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_private_key.git_provision",
   "doppler_secret.git_provision_ssh_private_key",
   "hcloud_server.git_data",
-  "hcloud_volume.git_data",
-  "hcloud_volume_attachment.git_data",
   "hcloud_firewall.git_data",
   "hcloud_firewall_attachment.git_data",
+  // (#11194) hcloud_volume.git_data and hcloud_volume_attachment.git_data left this set: both were
+  // destroyed at the provider on 2026-10-27 and are in no .tf file. GIT_DATA_RETIRED_ADDRESSES
+  // (below) pins them ABSENT from every git-data dispatch job's -target/-replace lines.
   // betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd left this set
   // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
   // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
@@ -1338,8 +1341,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // #5274 Sub-PR 3.D (ADR-068) — the fresh LUKS git-data volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's MAINTENANCE-WINDOW cutover apply
   // (the volume attaches to the RUNNING git-data host; guest-side cryptsetup unlocks it
-  // at boot), NOT the #5566 per-PR-CI class. Same class as hcloud_volume.git_data + the
-  // git-data doppler_secrets above.
+  // at boot), NOT the #5566 per-PR-CI class. Same class as the git-data doppler_secrets above.
   //   `doppler_service_token.git_data` is an OPERATOR-APPLIED token exception (see
   //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below): unlike doppler_service_token.write /
   //   .kb_drift (whose `.key` is published into a paired github_actions_secret consumed
@@ -2350,19 +2352,19 @@ describe("registry-host-replace dispatch -target/-replace set (scoped; store pre
 });
 
 // The `apply_target=git-data-host-replace` dispatch job (`git_data_host_replace`, #6242, ADR-103)
-// runs a SCOPED, GUARDED `terraform apply -replace='hcloud_server.git_data'` + 5 `-target`s
-// (server + private NIC + BOTH volume attachments + firewall attachment) to re-run the git-data
-// host's cloud-init WITHOUT SSH. UNLIKE registry, BOTH data volumes (hcloud_volume.git_data* ) and
-// the LUKS passphrase are PRESERVED BY OMISSION — deliberately NOT in the -target set. This guard
-// pins the target/replace set to EXACTLY the 5 git-data addresses, proves NEITHER data volume is in
-// the set (the omission that preserves them), and asserts the dispatch job is stripped from the
-// per-merge coverage anchor. It locks the load-bearing invariant that the workflow's 5 `-target`
-// lines correspond 1:1 to the gate's 5-member allow-set (a drift on either side would otherwise
-// only surface at live-dispatch time).
+// runs a SCOPED, GUARDED `terraform apply -replace='hcloud_server.git_data'` + its `-target`s
+// (server + private NIC + the LUKS volume attachment + firewall attachment + the host-key pin) to
+// re-run the git-data host's cloud-init WITHOUT SSH. UNLIKE registry, the LUKS data volume
+// (hcloud_volume.git_data_luks) and the LUKS passphrase are PRESERVED BY OMISSION — deliberately
+// NOT in the base -target set. This guard pins the target/replace set to EXACTLY the git-data
+// addresses below, proves the retired plaintext pair is in NO -target/-replace line of either
+// git-data dispatch job, and asserts the dispatch job is stripped from the per-merge coverage
+// anchor. It locks the load-bearing invariant that the workflow's `-target` lines correspond 1:1
+// to the gate's allow-set (a drift on either side would otherwise only surface at live-dispatch
+// time).
 const GIT_DATA_REPLACE_TARGETS = [
   "hcloud_server.git_data",
   "hcloud_server_network.git_data",
-  "hcloud_volume_attachment.git_data",
   "hcloud_volume_attachment.git_data_luks",
   "hcloud_firewall_attachment.git_data",
   // (#7226, ADR-237) The pin is re-published by the replace that rotates the key.
@@ -2380,14 +2382,25 @@ const GIT_DATA_ROTATE_TARGETS = [
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
 ];
-// The data volumes preserved by OMISSION from the BASE set — the LUKS volume joins the set
-// only inside the rotate arm's conditional, so each is asserted ABSENT from the
-// unconditional -target lines and PRESENT in the rotate arm.
-const GIT_DATA_PRESERVED_VOLUMES = [
-  "hcloud_volume.git_data",
-];
+// (#11194) The plaintext pair destroyed at the provider on 2026-10-27 and removed from the HCL. It
+// must appear in NO `-target`/`-replace` line of either git-data dispatch job: a `-target` that
+// matches nothing exits 0 silently (terraform), so only this assertion — not the plan — notices a
+// re-added line. (The LUKS volume is preserved by omission from the BASE set and joins only inside
+// the rotate arm's EXTRA_ conditional; that half is pinned by the rotate-trio test below.)
+const GIT_DATA_RETIRED_ADDRESSES = ["hcloud_volume.git_data", "hcloud_volume_attachment.git_data"];
+// Every `-target=`/`-replace=` flag in a job block that names a retired address (exact address, so
+// the `_luks` siblings never match). Comment lines are excluded.
+function retiredFlagLines(block: string): string[] {
+  const alt = GIT_DATA_RETIRED_ADDRESSES.map((a) => a.replace(/\./g, "[.]")).join("|");
+  const re = new RegExp(`-(?:target|replace)=['"]?(?:${alt})(?![A-Za-z0-9_])`);
+  return block.split("\n").filter((l) => !/^\s*#/.test(l) && re.test(l));
+}
+// The same scan, counting every git-data flag line it COULD have matched (non-vacuity).
+function gitDataFlagLines(block: string): string[] {
+  return block.split("\n").filter((l) => !/^\s*#/.test(l) && /-(?:target|replace)=['"]?[a-z_]+[.]git_data/.test(l));
+}
 
-describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext volume preserved by omission)", () => {
+describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volume preserved by omission; plaintext pair retired)", () => {
   let gitDataTargets: string[];
   let gitDataJobBlock: string;
   let replaceAddrs: string[];
@@ -2414,7 +2427,7 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     rotateReplaces = extractReplaceAddrs(rotateBlock);
   });
 
-  test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources (5 + the host-key pin)", () => {
+  test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources", () => {
     expect([...gitDataTargets].sort()).toEqual(
       [...GIT_DATA_REPLACE_TARGETS].sort(),
     );
@@ -2556,14 +2569,23 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     expect(gitDataJobBlock.split("steps.plan.outputs.gate_mode").length - 1).toBe(1);
   });
 
-  test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
-    // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
-    // untargeted resource cannot be planned for destroy, so omission is what preserves it.
-    // The LUKS volume is NOT here — rotate legitimately replaces it, inside the EXTRA_ arm.
-    for (const vol of GIT_DATA_PRESERVED_VOLUMES) {
-      expect(gitDataTargets).not.toContain(vol);
-      expect(gitDataRotateTargets).not.toContain(vol);
-    }
+  test("neither retired plaintext address is in ANY -target/-replace line of the replace job or the create job (#11194)", () => {
+    // The retired pair is in no .tf file, so a re-added line would match nothing and terraform
+    // would exit 0 silently; the gates' allow-sets would then also have to be widened to PASS it,
+    // which the retired-address rows in their suites refuse. This is the workflow half.
+    const createBlock = extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "git_data_host_create");
+    // Non-vacuity: the scan sees real git-data flag lines in BOTH jobs, so "none retired" is a
+    // property of those lines rather than of an empty extraction.
+    expect(gitDataFlagLines(gitDataJobBlock).length).toBeGreaterThan(3);
+    expect(gitDataFlagLines(createBlock).length).toBeGreaterThan(10);
+    expect(retiredFlagLines(gitDataJobBlock)).toEqual([]);
+    expect(retiredFlagLines(createBlock)).toEqual([]);
+    // Detector control: the scan DOES flag a retired flag line, and spares the LUKS siblings.
+    expect(retiredFlagLines("  -target='hcloud_volume_attachment.git_data' \\")).toHaveLength(1);
+    expect(retiredFlagLines("  -replace='hcloud_volume.git_data' \\")).toHaveLength(1);
+    expect(retiredFlagLines("  -target='hcloud_volume.git_data_luks' \\")).toHaveLength(0);
+    expect(retiredFlagLines("  -target='hcloud_volume_attachment.git_data_luks' \\")).toHaveLength(0);
+    expect(retiredFlagLines("  # -target='hcloud_volume.git_data' (a comment)")).toHaveLength(0);
   });
 
   test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
@@ -2595,6 +2617,59 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     for (const addr of GIT_DATA_REPLACE_TARGETS) {
       expect(MOVED_OPERATOR_CONSUMED.has(addr)).toBe(false);
     }
+  });
+});
+
+// ─── (#11194, ADR-239 Amendment 2026-10-28) the plaintext-id interlock on both git-data dispatch jobs ──
+//
+// Between the PR that retires the plaintext arms from the gates and the PR that blanks
+// `git_data_volume_id` in git-data.tf, the gates PASS a plaintext-free plan while the module call
+// still renders a destroyed device id into `user_data`: a dispatch in that window would replace the
+// live host into the bootstrap's `plaintext_unverified` FATAL. `git_data_plaintext_id_interlock`
+// (tests/scripts/lib/git-data-birth-readiness-gate.sh) refuses it. These pins hold the WIRING: a
+// function nobody calls protects nothing, and the function's own verdicts live in
+// tests/scripts/test-git-data-birth-readiness-gate.sh. Each pin runs on the step with comments
+// stripped, anchored on a real top-level line a comment cannot produce.
+describe("git-data dispatch jobs run the plaintext-id interlock before planning (#11194)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const SOURCE_LINE =
+    /^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-birth-readiness-gate\.sh"$/m;
+  const CALL =
+    /^ {10}if ! git_data_plaintext_id_interlock "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/git-data\.tf"; then\n([\s\S]*?)\n {10}fi$/m;
+
+  function pinned(jobId: string, planTitle: RegExp): { step: string; raw: string; job: string } {
+    const job = extractJobBlock(wf, jobId);
+    const raw = extractStep(job, /Plaintext-id interlock/);
+    expect(raw, `${jobId}: the interlock step must exist`).not.toBeNull();
+    const step = stripComments(raw!);
+    expect(step).toMatch(SOURCE_LINE);
+    const call = step.match(CALL);
+    expect(call, `${jobId}: the interlock call must be a top-level \`if ! … ; then … fi\``).not.toBeNull();
+    // The refusal body must exit 1 (an annotation alone lets the job go green) and must not
+    // print a value: only the function's own verdict reaches the log.
+    expect(call![1]).toMatch(/^\s*exit 1$/m);
+    expect(step).toMatch(/^\s*set -euo pipefail$/m);
+    expect(step, "a continue-on-error (any quoting) would turn a refusal into a tolerated failure").not.toMatch(/continue-on-error/);
+    // It runs BEFORE the plan step: nothing has been planned or created when it refuses.
+    const planRaw = extractStep(job, planTitle);
+    expect(planRaw, `${jobId}: the plan step must exist`).not.toBeNull();
+    expect(job.indexOf(raw!)).toBeGreaterThan(-1);
+    expect(job.indexOf(raw!)).toBeLessThan(job.indexOf(planRaw!));
+    return { step, raw: raw!, job };
+  }
+
+  test("git_data_host_replace (replace and rotate): the interlock precedes the plan and is skipped only under plan_only", () => {
+    const { step } = pinned("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
+    // The owner's verification path (CTO F3): a plan_only dispatch grades a REAL plan with the
+    // plaintext-free gate and stops before any apply, so the interlock must not block it.
+    expect(step).toMatch(/^ {8}if: inputs\.plan_only != true$/m);
+  });
+
+  test("git_data_host_create: the interlock precedes the plan and is UNCONDITIONAL", () => {
+    const { step } = pinned("git_data_host_create", /Terraform plan \(scoped git-data birth\)/);
+    // The create route documents no plan_only input and has no verification mode the interlock must
+    // leave open, so any `if:` on this step is a way to skip it.
+    expect(step).not.toMatch(/^ {8}if:/m);
   });
 });
 
@@ -5560,7 +5635,7 @@ describe("registry recut step order is a safety property", () => {
 // `apply_target=git-data-host-create` (ADR-149) is the ONLY automated route that can
 // create the git-data store. It is NOT a widened git-data-host-replace: that gate
 // requires actions ⊇ {delete,create}, fires its luks_passphrase_touched arm on a CREATE,
-// and rests its 5-member allow-set on "preserved by OMISSION" — an argument that INVERTS
+// and rests its allow-set on "preserved by OMISSION" — an argument that INVERTS
 // on a birth, where an omitted address is a MISSING resource rather than a protected one.
 // So the two -target sets stay separately pinned, and the job is asserted below to borrow
 // neither the sibling gate nor its allow-set.
@@ -5577,11 +5652,9 @@ const GIT_DATA_BIRTH_TARGET_BASES = [
   // private-net IP (#6416). runcmd is once-per-instance and ADR-115 bars git-data from
   // the reboot primitive, so that host must be REPLACED, not repaired.
   "hcloud_server_network.git_data",
-  "hcloud_volume.git_data",
   "hcloud_volume.git_data_luks",
-  // DOWNSTREAM — omit either and the store boots with its volume unmounted. For the LUKS
-  // one that means at-rest encryption is absent while every artifact claims it present.
-  "hcloud_volume_attachment.git_data",
+  // DOWNSTREAM — omit it and the store boots with its volume unmounted: at-rest encryption is
+  // absent while every artifact claims it present.
   "hcloud_volume_attachment.git_data_luks",
   // UPSTREAM of its own attachment (the attachment references .id), which is why it is in
   // the set at all — and why the gate needs a separate firewall-CONTENT arm: being in the
@@ -5679,7 +5752,9 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
 
   test("the -target set equals the constant, exactly", () => {
     const targets = [...extractAllTargets(jobBlock)].sort();
-    // Non-vacuity: the extraction must actually find the twenty members.
+    // Non-vacuity: the extraction must actually find the members (the count follows the constant;
+    // a hard-coded number here is what went stale when the plaintext pair left).
+    expect(targets.length).toBeGreaterThan(10);
     expect(targets.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
     expect(targets).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
   });
@@ -5737,7 +5812,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // Non-vacuity floors: an extraction that found nothing would make the union assertion
     // below pass only by accident of the other terms.
     expect(presence.length).toBeGreaterThan(10);
-    expect(entailed.length).toBe(3);
+    expect(entailed.length).toBeGreaterThan(0);
 
     // The two members the gate handles by their own dedicated arms rather than by a loop:
     // the server (the `creates == 1` identity arm) and the firewall attachment (an
@@ -5752,6 +5827,9 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     ].sort();
 
     expect(union).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
+    // The partition is DISJOINT: the loops' sizes plus the two dedicated-arm members add up to the
+    // target set exactly, so the entailed count follows the lists rather than a hard-coded number.
+    expect(presence.length + entailed.length + 2).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
 
     // (AC8b) The two #6982 additions must join the PRESENCE half specifically. In the
     // entailed loop they would demand `creates == 1`, which a resumed dispatch cannot
@@ -5806,7 +5884,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
 
   test("stripDispatchJobs removes the job's targets from the coverage set", () => {
     const stripped = extractAllTargets(stripDispatchJobs(wf));
-    // All twenty are exclusions, so folding them in would assert per-merge coverage for
+    // All are exclusions, so folding them in would assert per-merge coverage for
     // a fan-out the per-merge apply deliberately never touches.
     expect(stripped.has("doppler_config.git_data_prd")).toBe(false);
     // Non-vacuity for the strip: the job block genuinely carries the target.
@@ -6149,7 +6227,8 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
           .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+$/.test(a)),
       ),
     ].sort();
-    // Non-vacuity: the extraction must actually find the twenty members.
+    // Non-vacuity: the extraction must actually find the members.
+    expect(gateBases.length).toBeGreaterThan(10);
     expect(gateBases.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
     expect(gateBases).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
   });
