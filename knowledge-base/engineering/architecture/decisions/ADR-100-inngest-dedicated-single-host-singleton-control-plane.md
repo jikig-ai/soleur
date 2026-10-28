@@ -1918,3 +1918,7 @@ Appended; nothing above is changed. Consequences item 4 of the 2026-07 incident 
 ## Addendum — 2026-10-26 (#11080) — the provision unit's quiesce is the flip FSM only
 
 Appended; nothing above is changed. The 2026-09-28 (#8562) provision-unit addendum's "FSM quiesce" bullet names both the flip and the LUKS cutover timers and services and the `frozen-active` hold. The LUKS cutover leg left the user_data template at #11080 (the image stopped baking it at `vinngest-v1.1.61`, #10966); see the addendum of the same date in ADR-257 for the current shape. Nothing else in this ADR changes.
+
+## Addendum — 2026-10-26 (#9927 item 2) — the terminal arms now run a bounded read-only probe
+
+Appended; nothing above is changed. The four terminal arms of `run_flip` (`done`, `rolled-back`, `aborted`, and an unset or unknown flag) still change no flag and emit no FSM row, but they now call a bounded read-only probe (`luks_key_probe_tick`); see ADR-282's addendum of 2026-10-26. Decision 6a's "idempotent no-ops" wording reads with that exception.

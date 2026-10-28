@@ -72,11 +72,10 @@
 # the allow-set, which would silence the backstop but not this. Both are real reasons;
 # neither is "nothing else catches it".
 #
-# The `placement_group_id` half is now LIVE (GA window): server.tf no longer carries
-# `placement_group_id` in `lifecycle { ignore_changes = [...] }` (removed in the GA
-# maintenance-window PR, ADR-068 #5887), so terraform CAN emit that delta and the
-# gate must catch a birth that would power-cycle a live host. Keep the arm — it is
-# now load-bearing coverage, not dead code.
+# The `placement_group_id` half is currently UNREACHABLE: server.tf carries
+# `lifecycle { ignore_changes = [..., placement_group_id] }`, so terraform never emits
+# that delta. Kept because the arm should not silently narrow to one attribute if that
+# ignore_changes entry is ever removed — but do not read it as live coverage.
 #
 # WHY AN ALLOW-SET RATHER THAN NESTED-BLOCK COUNTERS. The sibling per-PR guard counts
 # deletions *inside* five Cloudflare block arrays, because that path legitimately

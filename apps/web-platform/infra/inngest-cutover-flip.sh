@@ -21,7 +21,8 @@
 #   flushed     POST-flush resume (crash after the DBSIZE assert, before/at start): ensure
 #               started -> set done. Does NOT re-FLUSHALL — the queue may be on prod (#5450).
 #   rollback    STOP inngest-server -> set terminal `rolled-back`            (P0-1)
-#   done / rolled-back / aborted / unset   idempotent no-op, exit 0
+#   done / rolled-back / aborted / unset   no flag change, no FSM row, exit 0; each then runs the bounded read-only
+#                                          LUKS key-continuity probe (luks_key_probe_tick, #9927 item 2, ADR-282 addendum)
 #
 # LOAD-BEARING invariants:
 #   * Order is stop -> FLUSHALL -> assert -> flushed -> start (P1-4): the dark server is
@@ -48,6 +49,11 @@
 #     marker rides the on-host Vector->Better Stack journald shipper (commit c890464ce),
 #     the no-SSH state channel the operator reads; and writes a host-path state slot for
 #     cat-inngest-cutover-state.sh (on-host debug aid ONLY, never the operator gate).
+#     SECOND EXCEPTION (#9927): the LUKS key-continuity probe emits ONE plain-text row per attempt,
+#     `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<literal>` (never JSON, never an FSM row),
+#     from luks_key_probe_tick, which the four terminal noop arms call at their tail (at most once
+#     per 24h after an ok, hourly after any other token). It can never change this script's exit
+#     status, the flag, or an FSM row: subshell, disarmed ERR trap, every external under timeout.
 #     ONE EXCEPTION (#7696): the terminal noop-* arms fire on every 30s timer tick for
 #     the host's whole life — unthrottled that was ~2,040 rows/day of "nothing happened".
 #     noop-* rows are throttled to once per NOOP_THROTTLE_S (300s default) via an mtime
@@ -66,11 +72,13 @@
 # path). Real sources: the env-delivered flag, `systemctl`, `redis-cli`, `doppler`.
 #
 # EVERY ONE OF THOSE IS INERT UNLESS THE SCRIPT IS INVOKED WITH `--fixture-seams` (#7761). The
-# gate below unsets all NINETEEN seam names — the seven listed above plus CUTOVER_BOOT_ID,
+# gate below unsets all TWENTY-FIVE seam names — the seven listed above plus CUTOVER_BOOT_ID,
 # CUTOVER_CURL_CMD, CUTOVER_DONE_OWNER_MARKER, CUTOVER_GQL_URL, CUTOVER_HEALTH_URL,
 # CUTOVER_NFT_CMD and CUTOVER_PHONE_HOME_CMD (#10382), CUTOVER_NOOP_THROTTLE_S (#7696),
 # CUTOVER_VERIFY_INTERVAL_S, CUTOVER_VERIFY_WINDOW_S,
-# INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT — when the flag
+# INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT, and the six LUKS key-probe seams
+# (#9927: CUTOVER_CRYPTSETUP_CMD, CUTOVER_FINDMNT_CMD, CUTOVER_LUKS_KEY_FILE,
+# CUTOVER_LUKS_PROBE_STAMP, CUTOVER_MEMINFO, CUTOVER_OOM_ADJ_PATH) — when the flag
 # is absent, which is how production always runs. This list is prose and the gate's list is the
 # contract: the suite derives the seam set from this file by shape and asserts it equals the
 # gate's, so if the two disagree the gate wins and the suite reds.
@@ -84,7 +92,7 @@ set -Eeuo pipefail
 # enumerating the ways to turn it on, two of which carry no `-x` token at all.
 case "$-" in
   *x*)
-    if [ -n "${INNGEST_REDIS_PASSWORD:+x}" ]; then
+    if [ -n "${INNGEST_REDIS_LUKS_KEY:+x}${INNGEST_REDIS_PASSWORD:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -134,7 +142,7 @@ readonly SERVER_UNIT="inngest-server.service"
 # short-circuit, and a `|| true` on the logger call.
 if [[ "${1:-}" != "--fixture-seams" ]]; then
   _seams_present=0
-  # THE SEAM LIST — sixteen names, and its completeness is not trusted to review.
+  # THE SEAM LIST — twenty-five names, and its completeness is not trusted to review.
   # inngest-cutover-flip.test.sh derives the seam set from THIS FILE by shape and asserts it equals
   # this list plus INNGEST_CUTOVER_FLIP, so adding a seam read without adding it here reds the
   # suite. Keep one name per line and keep `do` on its own line — the tripwire extracts this list
@@ -150,15 +158,21 @@ if [[ "${1:-}" != "--fixture-seams" ]]; then
   # Redis). Both are real inputs delivered by --only-secrets, not seams.
   for _seam in \
     CUTOVER_BOOT_ID \
+    CUTOVER_CRYPTSETUP_CMD \
     CUTOVER_CURL_CMD \
     CUTOVER_DONE_OWNER_MARKER \
+    CUTOVER_FINDMNT_CMD \
     CUTOVER_FLAG_SET_CMD \
     CUTOVER_FLIP_FLAG \
     CUTOVER_GQL_URL \
     CUTOVER_HEALTH_URL \
     CUTOVER_LOGGER_CMD \
+    CUTOVER_LUKS_KEY_FILE \
+    CUTOVER_LUKS_PROBE_STAMP \
+    CUTOVER_MEMINFO \
     CUTOVER_NFT_CMD \
     CUTOVER_NOOP_THROTTLE_S \
+    CUTOVER_OOM_ADJ_PATH \
     CUTOVER_PHONE_HOME_CMD \
     CUTOVER_REDIS_CLI_CMD \
     CUTOVER_REDIS_DBSIZE \
@@ -425,6 +439,12 @@ verify_serving() {
 # inngest-server-flip-guard.test.sh's `flag_set`-literal EXPECTED_START_SITES derivation are
 # both untouched — which was the original constraint.
 DONE_OWNER_MARKER="${CUTOVER_DONE_OWNER_MARKER:-/var/lib/inngest-cutover/done-owner}"
+
+# The LUKS key-continuity probe's cadence stamp (#9927). Under the unit's StateDirectory
+# (host-lifetime, kept across reboots, lost on a host replace so a replaced host probes on its
+# first tick). Content is `<token> <epoch-seconds>`; the age is read from the content, never from
+# an mtime, so the probe needs no stat.
+LUKS_PROBE_STAMP="${CUTOVER_LUKS_PROBE_STAMP:-/var/lib/inngest-cutover/luks-key-probe.stamp}"
 
 # Not `|| true`: an unrecordable marker leaves the guard unable to tell this host's `done` from
 # an inherited one, which is the exact state the marker exists to end. Fail LOUD.
@@ -859,6 +879,275 @@ run_preflush_flip() {
   emit_state 0 "$dbsize" "flip-complete" "done"
 }
 
+# --- LUKS key-continuity probe (#9927 item 2, ADR-282) -----------------------------------------
+# Proves, between boots, that the key held in /etc/default/inngest-luks still unlocks a keyslot of
+# the LUKS2 header behind the /mnt/data mapper — the first proof used to be the next reboot, where
+# a failure is also the outage. Called ONLY as `( luks_key_probe_tick ) >/dev/null 2>&1 || true`
+# from the tail of the four terminal noop arms of run_flip, after each arm's own emit_state;
+# never from armed/flipping/flushed/reflush/rollback, never inside emit_state or flag_set.
+#
+# ISOLATION (the whole design constraint: this script is the only control channel of the sole
+# scheduler). The call runs in a subshell; inside it errexit and the ERR trap are disarmed (in the
+# `|| true` context they are suppressed anyway, the disarm is defence in depth for a call outside
+# it); every external command runs under `timeout -k 5 <n>`; there is no sleep, no retry and no
+# flag_set; every step tests its own rc and EVERY path returns 0. The probe's verdict is a plain
+# text row, never JSON and never an FSM row (the FSM-row counter in cutover-inngest-workflow.test.sh
+# counts only rows whose message parses to an object).
+#
+# THE KEY. It reaches cryptsetup ONLY on a stdin pipe: never in a variable, argv, here-string, log
+# line, marker, state file or child environment. The presence test is a bare `grep -q`; the proof
+# is the one `sed | head | tr | cryptsetup --key-file -` pipeline below. `tr -d '\n'` is
+# load-bearing: a trailing newline on the passphrase makes the right key fail (measured, rc 2).
+# Assumption: the value is random_password with special=false, i.e. [A-Za-z0-9], so raw sed and
+# systemd's EnvironmentFile parsing (the reboot path) read the same bytes.
+#
+# VERDICT TOKENS (closed set; the alert SQL, the runbook table and the suite enumerate the same):
+#   ok / fail_passphrase / fail_header / fail_key_absent / indeterminate, each with an at= literal
+#   (died key mount status uuid mem shield kdf). fail_header only when `cryptsetup isLuks` ALSO exits 1:
+#   rc 1 is a default errno bucket, so a second independent read must agree before a page.
+#   Anything the probe could not measure (tool absent, timeout, not on a mapper, low memory,
+#   shield refused) is indeterminate and never pages on its own.
+#
+# CADENCE. Stamp written FIRST as `pending` (a non-ok token): a probe that dies mid-run can never
+# re-run every 30s. If that write fails the probe SKIPS — an unrecordable stamp must never mean a
+# KDF every 30s. Due when no stamp, or `ok` and >= 24h old, or any other token and >= 1h old.
+#
+# One `local x=` per line: the command-position sweep in inngest-cutover-flip.test.sh derives its
+# suppressor from `(local )?NAME=` at line start.
+
+# luks_probe_stamp_write <token> — `<token> <epoch>`; non-zero when the stamp is unrecordable.
+luks_probe_stamp_write() {
+  local now=0
+  printf -v now '%(%s)T' -1 2>/dev/null || return 1
+  printf '%s %s\n' "$1" "$now" 2>/dev/null > "$LUKS_PROBE_STAMP"
+}
+
+# luks_probe_due — 0 when a probe should run now. A clock that cannot be read skips (the
+# conservative direction: no KDF on an unmeasurable cadence); an unparsable or future-dated stamp
+# is due ONCE (the pending write that follows replaces it with a well-formed one).
+luks_probe_due() {
+  local now=0
+  local tok=""
+  local ts=""
+  local limit=3600
+  printf -v now '%(%s)T' -1 2>/dev/null || return 1
+  [[ -f "$LUKS_PROBE_STAMP" ]] || return 0
+  read -r tok ts 2>/dev/null < "$LUKS_PROBE_STAMP" || true
+  case "$ts" in ''|*[!0-9]*|0[0-9]*|????????????*) return 0 ;; esac
+  if [[ "$ts" -gt "$now" ]]; then return 0; fi
+  if [[ "$tok" == "ok" ]]; then limit=86400; fi
+  [[ $((now - ts)) -ge "$limit" ]]
+}
+
+# luks_probe_finish <token> <rc> <at> — record the verdict in the stamp, then emit the ONE row
+# twice: the journald tag Vector already admits, and the curl-direct phone-home (independent of
+# Vector at the credential level). The detail key is `at=`, never `stage=`: the phone-home builds
+# `<marker> stage=<arg> <detail>`. The row carries no key, UUID, device id, hash or stderr.
+luks_probe_finish() {
+  local tok="$1"
+  local rc="$2"
+  local at="$3"
+  local row="token=${tok} rc=${rc} at=${at}"
+  luks_probe_stamp_write "$tok" || true
+  timeout -k 5 2 "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "SOLEUR_INNGEST_LUKS_KEY_PROBE ${row}" >/dev/null 2>&1 || true
+  timeout -k 5 10 "${CUTOVER_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}" "luks-key-probe" "$row" SOLEUR_INNGEST_LUKS_KEY_PROBE >/dev/null 2>&1 || true
+  return 0
+}
+
+# luks_probe_max_memory_kib <luksDump text> — the largest keyslot `Memory:` value in KiB; none
+# (pbkdf2, LUKS1) is 0. A bounded read over the dump text; the text carries no key.
+luks_probe_max_memory_kib() {
+  local line=""
+  local best=0
+  local re='^[[:space:]]*Memory:[[:space:]]*([0-9]{1,12})'
+  while IFS= read -r line; do
+    if [[ "$line" =~ $re ]]; then
+      if [[ "${BASH_REMATCH[1]}" -gt "$best" ]]; then best="${BASH_REMATCH[1]}"; fi
+    fi
+  done < <(printf '%s\n' "$1")
+  printf '%s' "$best"
+}
+
+# luks_probe_mem_available_kib <meminfo path> — MemAvailable in KiB, empty when unreadable.
+luks_probe_mem_available_kib() {
+  local key=""
+  local val=""
+  while read -r key val _; do
+    case "$key" in
+      MemAvailable:) printf '%s' "$val"; return 0 ;;
+    esac
+  done 2>/dev/null < "$1"
+  return 0
+}
+
+luks_key_probe_tick() {
+  trap - ERR EXIT
+  set +eEx
+  set +o pipefail
+  ulimit -c 0 2>/dev/null || true
+  local pst=()
+  local prev=""
+  local keyfile="${CUTOVER_LUKS_KEY_FILE:-/etc/default/inngest-luks}"
+  local cs="${CUTOVER_CRYPTSETUP_CMD:-cryptsetup}"
+  local fm="${CUTOVER_FINDMNT_CMD:-findmnt}"
+  local meminfo="${CUTOVER_MEMINFO:-/proc/meminfo}"
+  local oomadj="${CUTOVER_OOM_ADJ_PATH:-/proc/self/oom_score_adj}"
+  local re=$'(^|\n)[[:space:]]*device:[[:space:]]+([^[:space:]]+)'
+  local src=""
+  local mapper=""
+  local dev=""
+  local out=""
+  local rc=0
+  local rc2=0
+  local need=0
+  local avail=""
+
+  luks_probe_due || return 0
+  read -r prev _ 2>/dev/null < "$LUKS_PROBE_STAMP" || true
+  luks_probe_stamp_write pending || return 0
+  # A `pending` stamp on entry means the previous run never reached luks_probe_finish (OOM kill,
+  # unit stop, abort) or its final stamp write failed. Say so once, then wait the hourly retry: the
+  # died tick returns here so it adds no KDF to a tick the last run may have just exhausted.
+  if [[ "$prev" == "pending" ]]; then
+    luks_probe_finish indeterminate 0 died
+    return 0
+  fi
+
+  # 2. key presence — the value is never read into a variable here.
+  timeout -k 5 2 grep -q '^INNGEST_REDIS_LUKS_KEY=.' "$keyfile" 2>/dev/null
+  rc=$?
+  case "$rc" in
+    0) ;;
+    124|126|127|137) luks_probe_finish indeterminate "$rc" key; return 0 ;;
+    1) luks_probe_finish fail_key_absent "$rc" key; return 0 ;;
+    *)
+      # rc 2 is a missing file OR a read error (EIO, ENOMEM): only a missing file is "key absent".
+      if [[ -e "$keyfile" ]]; then
+        luks_probe_finish indeterminate "$rc" key
+      else
+        luks_probe_finish fail_key_absent "$rc" key
+      fi
+      return 0
+      ;;
+  esac
+
+  # 3. the device behind /mnt/data. Under ReadWritePaths=/mnt/data systemd may bind-mount the path
+  # onto itself and findmnt can print more than one line; the last is the kernel-served layer.
+  src="$(timeout -k 5 4 "$fm" -no SOURCE -T /mnt/data 2>/dev/null)"
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    luks_probe_finish indeterminate "$rc" mount
+    return 0
+  fi
+  src="${src##*$'\n'}"
+  case "$src" in
+    /dev/mapper/?*) ;;
+    *) luks_probe_finish indeterminate 0 mount; return 0 ;;
+  esac
+  mapper="${src#/dev/mapper/}"
+  mapper="${mapper%%\[*}"
+  out="$(timeout -k 5 4 "$cs" status --disable-locks "$mapper" 2>/dev/null)"
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    luks_probe_finish indeterminate "$rc" status
+    return 0
+  fi
+  if [[ "$out" =~ $re ]]; then
+    dev="${BASH_REMATCH[2]}"
+  fi
+  if [[ -z "$dev" ]]; then
+    luks_probe_finish indeterminate 0 status
+    return 0
+  fi
+
+  # 4. header: rc 1 is fail_header only when isLuks, a second independent read, also exits 1.
+  out="$(timeout -k 5 6 "$cs" luksUUID --disable-locks "$dev" 2>/dev/null)"
+  rc=$?
+  if [[ "$rc" -eq 1 ]]; then
+    timeout -k 5 4 "$cs" isLuks --disable-locks "$dev" >/dev/null 2>&1
+    rc2=$?
+    if [[ "$rc2" -eq 1 ]]; then
+      luks_probe_finish fail_header 1 uuid
+    else
+      luks_probe_finish indeterminate "$rc2" uuid
+    fi
+    return 0
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    luks_probe_finish indeterminate "$rc" uuid
+    return 0
+  fi
+  if [[ -z "$out" ]]; then
+    luks_probe_finish indeterminate 0 uuid
+    return 0
+  fi
+
+  # 5. memory pre-check: the keyslot's KDF memory (luksDump) against MemAvailable plus 256 MiB of
+  # headroom. Short means indeterminate NOW — no sleep, no retry: this runs inside the only
+  # control poll, and the hourly re-probe after a non-ok token is the retry.
+  out="$(timeout -k 5 6 "$cs" luksDump --disable-locks "$dev" 2>/dev/null)"
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    luks_probe_finish indeterminate "$rc" mem
+    return 0
+  fi
+  need="$(luks_probe_max_memory_kib "$out")"
+  avail="$(luks_probe_mem_available_kib "$meminfo")"
+  out=""
+  case "$avail" in
+    ''|*[!0-9]*) luks_probe_finish indeterminate 0 mem; return 0 ;;
+  esac
+  need=$((need + 262144))
+  if [[ "$avail" -lt "$need" ]]; then
+    luks_probe_finish indeterminate 0 mem
+    return 0
+  fi
+
+  # 6. shield: the cryptsetup child inherits oom_score_adj=1000, so under pressure the probe is
+  # the first victim, never the FSM or the scheduler. The write lands on THIS subshell only.
+  printf '%s' 1000 2>/dev/null > "$oomadj"
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    luks_probe_finish indeterminate "$rc" shield
+    return 0
+  fi
+
+  # 7. proof. --disable-locks because under ProtectSystem=strict the /run/cryptsetup lock
+  # directory is read-only, and the test only reads the header. The key never enters a variable.
+  timeout -k 5 2 sed -n 's/^INNGEST_REDIS_LUKS_KEY=//p' "$keyfile" 2>/dev/null \
+    | timeout -k 5 2 head -n 1 \
+    | timeout -k 5 2 tr -d '\n' \
+    | timeout -k 5 30 "$cs" luksOpen --test-passphrase --disable-locks --key-file - "$dev" >/dev/null 2>&1
+  pst=("${PIPESTATUS[@]}")
+  rc="${pst[3]:-1}"
+  # An upstream stage that died or timed out fed cryptsetup a short or empty key: that is not a
+  # verdict on the key. With SIGPIPE at its default sed may legitimately take 141 once head has its
+  # line, and tr does when cryptsetup exits before reading (its own rc, e.g. 4, then stays the
+  # verdict). A unit starts with SIGPIPE IGNORED (systemd IgnoreSIGPIPE=yes): the same events then
+  # surface as EPIPE write errors (sed 4, tr 1), which land in the default arm below as
+  # indeterminate at=key, a safe verdict that merely carries a less precise rc.
+  case "${pst[0]:-1}:${pst[1]:-1}:${pst[2]:-1}" in
+    0:0:0|141:0:0|0:0:141) ;;
+    *)
+      if [[ "${pst[0]:-1}" != 0 && "${pst[0]:-1}" != 141 ]]; then
+        rc="${pst[0]:-1}"
+      elif [[ "${pst[1]:-1}" != 0 ]]; then
+        rc="${pst[1]:-1}"
+      else
+        rc="${pst[2]:-1}"
+      fi
+      luks_probe_finish indeterminate "$rc" key
+      return 0
+      ;;
+  esac
+  case "$rc" in
+    0) luks_probe_finish ok 0 kdf ;;
+    2) luks_probe_finish fail_passphrase 2 kdf ;;
+    *) luks_probe_finish indeterminate "$rc" kdf ;;
+  esac
+  return 0
+}
+
 # --- ERR trap: any unhandled non-zero (flag_set/stop_server/start_server failure) must
 # fail LOUD, not silently exit with NO marker (the #5934 class — and a stop_server failure
 # after flag->flipping would otherwise leave the flag mid-transition and enable a later
@@ -970,15 +1259,19 @@ run_flip() {
       ;;
     done)
       emit_state 0 "" "noop-done" "done"
+      ( luks_key_probe_tick ) >/dev/null 2>&1 || true
       ;;
     rolled-back)
       emit_state 0 "" "noop-rolled-back" rolled-back
+      ( luks_key_probe_tick ) >/dev/null 2>&1 || true
       ;;
     aborted)
       emit_state 0 "" "noop-aborted" aborted
+      ( luks_key_probe_tick ) >/dev/null 2>&1 || true
       ;;
     *)
       emit_state 0 "" "noop-unset" "${flag:-unset}"
+      ( luks_key_probe_tick ) >/dev/null 2>&1 || true
       ;;
   esac
 }

@@ -267,8 +267,8 @@ env:
   # documentation or AI output per the 2026-03-21 server-provisioning learning,
   # Session Error #4; re-verified at /work time). Kept byte-identical to
   # apply-deploy-pipeline-fix.yml's pins so both bridges install the same binary.
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
 jobs:
   preflight:
@@ -652,6 +652,8 @@ jobs:
               -target=logtail_exploration_alert.monitor_send_failed \
               -target=logtail_exploration.inngest_luks_wrong_volume \
               -target=logtail_exploration_alert.inngest_luks_wrong_volume \
+              -target=logtail_exploration.inngest_luks_key_probe_fail \
+              -target=logtail_exploration_alert.inngest_luks_key_probe_fail \
               -target=logtail_exploration.registry_store_not_luks \
               -target=logtail_exploration_alert.registry_store_not_luks \
               -target=logtail_exploration.registry_clientip_not_rfc1918 \
@@ -826,7 +828,7 @@ jobs:
             echo "::error::    test -n \"\$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain)\" || { echo 'EMPTY SENTRY_DSN — do NOT create the host'; exit 1; }   # MANDATORY (#6575, ADR-128 R1). The pre-extraction boot stages read ONLY the baked \${sentry_dsn}; doppler is not installed yet, so its fallback is dead. An empty DSN means the host boots DARK: no telemetry, no page, no signal that it died. The web-host-create job asserts this automatically — this line exists for the break-glass path, where nothing does."
             echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096)"
             echo "::error::    Do not substitute 'just run the preflight' for this chain: the preflight REFUSES a mutable tag by design, so it is only actionable once DIGEST is resolved. And do not skip it — an incoherent pin destroys nothing at plan time, it strands you with a booted host that never passes verify."
-            echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image] (server.tf; placement_group_id removed in GA window, ADR-068 #5887). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
+            echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
             grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
@@ -3597,8 +3599,8 @@ jobs:
           # and `secrets: inherit` does not apply because this is not a reusable-workflow call.
           doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
           # Kept in step with reusable-release.yml's invocation; both are SHA-pinned.
-          cloudflared-version: "2026.5.0"
-          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          cloudflared-version: "2026.10.4"
+          cloudflared-sha256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
       - name: Restore production's pinned image set from GHCR
         # NO `continue-on-error`. This is the step that ends the empty-store window; a
@@ -5699,7 +5701,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # (#8043 NFR2 / Guard 4) The rung-2 interlock below reads the evidence file's commit provenance; its ARM 1 HOLDs on a shallow clone, so omitting this fails closed rather than open.
+          # (#8043 Guard 4) The rung-2 interlock's ARM 1 HOLDs on a shallow clone.
           fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0

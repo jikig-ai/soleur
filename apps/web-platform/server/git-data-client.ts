@@ -248,6 +248,14 @@ export async function fetchFromGitData(params: {
   await gitWithPrivateKeyAuth(
     [
       "fetch",
+      // (#8211 fix-forward 2) The workspace clone is always `--depth 1`, and the
+      // store itself is shallow once it accepts shallow pushes
+      // (receive.shallowUpdate): a pack cut at the store's boundary carries
+      // objects that need new shallow roots, which `git fetch` refuses by
+      // default (`shallow roots are not allowed to be updated` — quietly, with
+      // no ref landed). `--update-shallow` updates .git/shallow and accepts such
+      // refs; on a non-shallow or boundary-agnostic fetch it is inert.
+      "--update-shallow",
       remoteUrl,
       `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
       `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
