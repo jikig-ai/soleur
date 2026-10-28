@@ -563,6 +563,25 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "satisfied by ON DELETE CASCADE from public.workspaces (no anonymise RPC " +
     "needed — the row has zero audit lineage; proven by the AC5 " +
     "cascade integration test). No DSAR export surface.",
+
+  // #4672 (migration 180): durable approval requests. requested_by_user_id /
+  // decided_by identify the data subject; canonical_action is the Owner-only
+  // action text (nulled 30 days after the terminal state). The table is
+  // RPC-only (no service_role table grant), the feature ships dark behind the
+  // `approval-queue` flag, and the export chain is wired in the legal task of
+  // the same PR (plan Phase 5.3: Art. 30 entry, allowlist promotion with
+  // ownerField requested_by_user_id + additionalOwnerFields [decided_by], the
+  // four legal documents). This is a TRACKED GAP, not a claim of no personal data.
+  approval_request:
+    "Migration 180 table (#4672), dark behind the approval-queue flag. " +
+    "Art. 17: ON DELETE SET NULL on requested_by_user_id/decided_by plus " +
+    "anonymise_approval_request (nulls the user columns and the action text) " +
+    "called from account-delete.ts in the legal task. Holds user ids and the " +
+    "Owner-only action text (scrubbed 30 days after the terminal state). " +
+    "Promote to DSAR_TABLE_ALLOWLIST (requested_by_user_id, " +
+    "additionalOwnerFields [decided_by], Art. 15) with the export chain in " +
+    "the same PR's legal task, and before approval-queue is enabled for any " +
+    "workspace outside the Jikigai canary.",
 };
 
 /**
