@@ -5,7 +5,8 @@
 #
 # Refuses iff a `terraform show -json` plan would RE-WEDGE the retired plaintext
 # store — the post-delete and detached-not-deleted shapes the destroy workflow
-# (git-data-plaintext-volume-destroy.yml, ADR-239 Option B) exists to remove:
+# (git-data-plaintext-volume-destroy.yml, ADR-239 Option B; ran 2026-10-27 and was
+# deleted at #11195, see the runbook "Plaintext-volume destroy") existed to remove:
 #
 #   hcloud_volume.git_data             any entry whose actions contain "create"
 #                                      (a wiped store being born empty again)

@@ -605,7 +605,6 @@ tests/scripts/git-data-birth-readiness-gate	4
 tests/scripts/git-data-boot-signal-poll	6
 tests/scripts/git-data-host-birth-gate	7
 tests/scripts/git-data-host-replace-gate	4
-tests/scripts/git-data-plaintext-destroy-gate	1
 tests/scripts/git-data-root-key-arm	5
 tests/scripts/git-data-root-token-census	2
 tests/scripts/git-data-rung2-evidence-capture	6
