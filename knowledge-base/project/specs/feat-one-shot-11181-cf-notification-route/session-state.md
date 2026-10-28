@@ -47,3 +47,15 @@ Skills: `plan`, `deepen-plan`, `spec-templates`, `work`. Agent: `general` for pl
 | raw finding | canonical defect key | reporting seat(s) | planned fix commit |
 |---|---|---|---|
 | Substring URL assertions and broad mock dispatch accept a suffixed route; dry-run route lacks an exact terminal assertion | `notifications-url-exactness` | `pattern-recognition-specialist`, `code-quality-analyst`, `test-design-reviewer`, `code-simplicity-reviewer`, `structural-enumeration` | `review: pin exact Notifications URL (P2)` |
+| URL-log/mock evidence captured only the last curl argument; dry-run line count did not count URL arguments | `complete-url-argument-observation` | `test-design-reviewer`, `structural-enumeration` | pending targeted fix-round 2 |
+| A widened Notifications mock matcher was not directly exercised with a suffixed path | `notifications-mock-suffix-boundary` | `test-design-reviewer`, `structural-enumeration` | pending targeted fix-round 2 |
+
+## Targeted Fix-Review Round 1
+
+- Panel base: `4fe6a0f962f2d3dbdcd5c37b9b4ddb7837ac316a`; review head: `35afb1c4a154d28c3ada1211b8116d1ee326fa2f`.
+- Six report-only seats returned: pattern-recognition, code-quality, test-design, code-simplicity, security, and structural-enumeration. Pattern, quality, and security reported no findings.
+- Test-design and structural-enumeration identified incomplete test evidence: URL logging retained only the last URL argument, the dry-run count counted matching lines rather than URL occurrences, and matcher broadening was not directly driven. Those findings are being fixed in a second targeted round.
+- The code-simplicity suggestion to remove the five non-Notifications exact URL pins was not adopted: the full panel's test-design seat had specifically requested Tunnel/Access route pins, and the six-route assertion retains that requested coverage.
+- The existing `cf-token-scope.test.sh` now passes 171/171. ShellCheck at warning severity passes. Full/style severity reports only SC2016 informational findings (baseline 6; current 4), so this fix adds none.
+- Scratch mutations for a suffixed SUT route, broadened mock matcher, extra live `--url` argument, and extra dry-run URL were each killed; the clean scratch baseline passed 171/171.
+- `scripts/test-all.sh --capacity` found two active sibling full-gate runs; no local affected gate was started. The earlier affected-gate result remains budget-deferred, not passed; required CI `test` remains authoritative.

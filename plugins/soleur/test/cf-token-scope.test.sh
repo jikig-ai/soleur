@@ -60,12 +60,17 @@ EOF
 cat >"$MOCKBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 # Mock curl: emit "<body>\n<code>" to match the SUT's -w '\n%{http_code}'.
-# The URL is the last positional argument. A spec of "NONE" emits nothing at all
-# (models a total curl failure -> empty response, the no-newline path).
+# Log every absolute URL argument (not just the last one), so an extra --url
+# cannot hide behind a canonical final argument. A spec of "NONE" emits nothing
+# at all (models a total curl failure -> empty response, the no-newline path).
 [[ -n "${MOCK_CURL_MARKER:-}" ]] && printf 'called\n' >>"$MOCK_CURL_MARKER"
 url=""
-for a in "$@"; do url="$a"; done
-[[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$url" >>"$MOCK_CURL_URLLOG"
+for a in "$@"; do
+  if [[ "$a" == https://* ]]; then
+    url="$a"
+    [[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$a" >>"$MOCK_CURL_URLLOG"
+  fi
+done
 # %q keeps multi-line arg values (the -w format) on ONE log line: the argv shape
 # is what the confinement pins below read.
 [[ -n "${MOCK_CURL_ARGV:-}" ]] && printf '%q ' "$@" >>"$MOCK_CURL_ARGV" && printf '\n' >>"$MOCK_CURL_ARGV"
@@ -74,6 +79,9 @@ for a in "$@"; do url="$a"; done
 # per-scheme body-shape check is exercised against the true contract (#6892 QA).
 ZONE_AUTH='200:{"success":true,"result":{"id":"r","kind":"zone","phase":"p","rules":[]}}'
 ACCT_AUTH='200:{"success":true,"result":[]}'
+if [[ "$url" =~ ^https://api\.cloudflare\.com/client/v4/accounts/[^/]+/alerting/v3/policies$ ]]; then
+  spec="${MOCK_NOTIF:-$ACCT_AUTH}"
+else
 case "$url" in
   *http_config_settings*)          spec="${MOCK_CONFIG:-$ZONE_AUTH}" ;;
   *http_request_dynamic_redirect*) spec="${MOCK_DYNREDIR:-$ZONE_AUTH}" ;;
@@ -86,12 +94,12 @@ case "$url" in
   *cfd_tunnel*)                    spec="${MOCK_TUNNEL:-$ACCT_AUTH}" ;;
   *access/apps*)                   spec="${MOCK_ACCESS:-$ACCT_AUTH}" ;;
   *dns_records*)                   spec="${MOCK_DNS:-$ACCT_AUTH}" ;;
-  https://api.cloudflare.com/client/v4/accounts/*/alerting/v3/policies) spec="${MOCK_NOTIF:-$ACCT_AUTH}" ;;
   *load_balancers/pools*)          spec="${MOCK_LB_POOLS:-$ACCT_AUTH}" ;;
   *load_balancers*)                spec="${MOCK_LB_ZONE:-$ACCT_AUTH}" ;;
   */rulesets)                      spec="${MOCK_ACCT:-$ACCT_AUTH}" ;;
   *)                               spec="${MOCK_OTHER:-$ZONE_AUTH}" ;;
 esac
+fi
 [[ "$spec" == "NONE" ]] && exit 0   # no output at all
 code="${spec%%:*}"
 body="${spec#*:}"
@@ -281,8 +289,11 @@ has "doppler secrets get CF_API_TOKEN " "D1 dry-run resolves the token secret to
 for u in cfd_tunnel access/apps dns_records alerting/v3/policies "load_balancers/pools" 'zones/$ZONE/load_balancers'; do
   has "$u" "D1 dry-run prints the $u row"
 done
-if grep -qE '^curl .* https://api\.cloudflare\.com/client/v4/accounts/\$ACCT/alerting/v3/policies$' "$OUTFILE" \
-   && [[ "$(grep -cE '^curl .*accounts/\$ACCT/alerting/v3/policies' "$OUTFILE" || true)" == "1" ]]; then
+D1_EXPECTED_NOTIF_URL="https://api.cloudflare.com/client/v4/accounts/\$ACCT/alerting/v3/policies"
+D1_NOTIF_RECIPES=$(grep -F -- "$D1_EXPECTED_NOTIF_URL" "$OUTFILE" || true)
+D1_NOTIF_RECIPE_COUNT=$(printf '%s\n' "$D1_NOTIF_RECIPES" | grep -c '^curl ' || true)
+D1_NOTIF_URL_COUNT=$(printf '%s\n' "$D1_NOTIF_RECIPES" | grep -oF 'https://' | wc -l | tr -d '[:space:]')
+if [[ "$D1_NOTIF_RECIPE_COUNT" == "1" && "$D1_NOTIF_URL_COUNT" == "1" && "$D1_NOTIF_RECIPES" == *"$D1_EXPECTED_NOTIF_URL" ]]; then
   ok "D1 dry-run prints exactly one Notifications URL with no query or suffix"
 else
   no "D1 dry-run Notifications recipe is not the exact documented URL"
@@ -316,6 +327,15 @@ DNS_URL='https://api.cloudflare.com/client/v4/zones/zone0123456789abcdef/dns_rec
 NOTIF_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/alerting/v3/policies'
 LB_POOLS_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/load_balancers/pools?per_page=1'
 LB_ZONE_URL='https://api.cloudflare.com/client/v4/zones/zone0123456789abcdef/load_balancers?per_page=1'
+# Directly exercise the mock's negative route boundary; broadening its matcher
+# must not let a suffixed path receive the Notifications success fixture.
+PATH="$MOCKPATH" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+  "$MOCKBIN/curl" "$NOTIF_URL/extra" >"$OUTFILE"
+if grep -Fxq -- '418' "$OUTFILE"; then
+  ok "D2 mock dispatch rejects a suffixed Notifications URL"
+else
+  no "D2 mock dispatch accepted a suffixed Notifications URL"
+fi
 MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
 # RUN-PATH URL ASSEMBLY pin (design-pass P2): inspect the actual request URLs,
