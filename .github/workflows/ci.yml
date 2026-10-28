@@ -940,7 +940,7 @@ jobs:
       - name: Regenerate package-lock.json (root)
         run: npm install --package-lock-only
 
-      # All FOUR tracked lockfile directories, not the two that happen to carry the most
+      # All tracked lockfile directories (four, plus the pen-cli prefix below), not the two that happen to carry the most
       # alerts. pencil-setup/scripts holds 9 of the 39 baseline alerts and is bumped by
       # this change, so leaving it ungated would drift exactly where the drain lands.
       # Both were verified to regenerate byte-identically under npm@11 before being gated,
@@ -953,9 +953,18 @@ jobs:
         working-directory: spike
         run: npm install --package-lock-only
 
+      # Fifth directory (ADR-191 procedure): the headless Pencil engine's own lockfile-pinned
+      # install prefix. check_deps.sh copies this pair to ~/.local/share/pen-cli and runs
+      # `npm ci` there, so an unsynced lockfile would ship an install that cannot reproduce.
+      # No .npmrc floor here by design: the pin is exact and the lockfile fixes every
+      # transitive version (--package-lock-only against an existing lock resolves nothing new).
+      - name: Regenerate package-lock.json (pen-cli prefix)
+        working-directory: plugins/soleur/skills/pencil-setup/scripts/pen-cli
+        run: npm install --package-lock-only
+
       - name: Check lockfile sync
         run: |
-          if ! git diff --exit-code apps/web-platform/package-lock.json package-lock.json plugins/soleur/skills/pencil-setup/scripts/package-lock.json spike/package-lock.json; then
+          if ! git diff --exit-code apps/web-platform/package-lock.json package-lock.json plugins/soleur/skills/pencil-setup/scripts/package-lock.json plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json spike/package-lock.json; then
             echo "::error::A package-lock.json is out of sync with its package.json."
             echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in the affected directory (apps/web-platform/ and/or the repo root) and commit the result. (CI pins npm@11 — a different npm version locally produces a divergent lockfile shape.)"
             exit 1

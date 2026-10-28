@@ -3054,6 +3054,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_ADAPTER_AUTH_HARD_FAIL_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# plugins/soleur/test/pencil-post-save-gate.test.sh sources test-helpers.sh, which executes scripts/lib/scratch-root.sh
+# (test-helpers.sh:58-60), so the suite really reads it: the shared set, not an accept row.
+AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_POST_SAVE_GATE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_SETUP_SKILL_CLI_FORM_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
