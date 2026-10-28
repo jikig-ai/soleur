@@ -55,7 +55,7 @@ Here is the detail that makes this story more than a list of repairs: the scoreb
 
 Twelve consecutive changes rebuilt the accounting, the map, the boundaries, and the scheduler. Each one was judged by the very suite it was repairing. The arbiter adjudicated its own rebuild — twelve merges, zero broken mains. A bootstrap problem with a working answer: fix the measuring stick while the measuring stick is checking you.
 
-This is also why the work compounds instead of repeating. Every repaired lie is now a permanent, automatic check — a ratchet that can only tighten. The next "skipped counts as passed" doesn't get a second chance, because the scoreboard itself now guards the counting. We've written before about turning hard-won lessons into standing rules; extending that habit to the suite that judges everything else was the obvious next turn of the same ratchet. The pattern set out in [our last post on the theme](https://soleur.ai/blog/agentic-verification-checklist-shipped/) — catch the lesson, write it into the machinery — now covers the machinery's own verdicts.
+This is also why the work compounds instead of repeating. Every repaired lie is now a permanent, automatic check — a ratchet that can only tighten. The next "skipped counts as passed" doesn't get a second chance, because the scoreboard itself now guards the counting. We've written before about turning hard-won lessons into standing rules; extending that habit to the suite that judges everything else was the obvious next turn of the same ratchet. The pattern set out in [our last post on the theme]({{ site.url }}/blog/agentic-verification-checklist-shipped/) — catch the lesson, write it into the machinery — now covers the machinery's own verdicts.
 
 ## The honest limits
 
@@ -105,7 +105,7 @@ Ask what the tool does when it is uncertain, and whether its record is auditable
       "name": "What does a green check mark actually prove?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Only what its accounting is worth. A green verdict means the checks that ran reported no failures — but that can hide checks that never ran, checks that were counted wrong, or known failures quietly excused. Before trusting a green, it is worth asking what 'passed' and 'skipped' actually counted for."
+        "text": "Only what its accounting is worth. A green verdict means the checks that ran reported no failures — but that can hide checks that never ran, checks that were counted wrong, or known failures quietly excused. Before trusting a green, it is worth asking what \"passed\" and \"skipped\" actually counted for."
       }
     },
     {
@@ -113,7 +113,7 @@ Ask what the tool does when it is uncertain, and whether its record is auditable
       "name": "Can an automated check itself be wrong?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Yes — in specific, enumerable ways. Ours had at least four: a skipped check counted as a pass, a finder that could not see a whole directory of checks, a map that forgot a guard the moment its file was deleted, and a baseline that made green mean 'no worse than the mess we stopped counting.' Every kind of check machinery has an equivalent list worth auditing."
+        "text": "Yes — in specific, enumerable ways. Ours had at least four: a skipped check counted as a pass, a finder that could not see a whole directory of checks, a map that forgot a guard the moment its file was deleted, and a baseline that made green mean \"no worse than the mess we stopped counting.\" Every kind of check machinery has an equivalent list worth auditing."
       }
     },
     {
@@ -129,7 +129,7 @@ Ask what the tool does when it is uncertain, and whether its record is auditable
       "name": "How do I know whether to trust my AI tool's results?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Ask what the tool does when it is uncertain, and whether its record is auditable. Trust signals to look for: it says 'not yet' when evidence is thin rather than guessing, its past claims can be checked against what actually happened, and the rules it learned from its own mistakes are written down where you can see them."
+        "text": "Ask what the tool does when it is uncertain, and whether its record is auditable. Trust signals to look for: it says \"not yet\" when evidence is thin rather than guessing, its past claims can be checked against what actually happened, and the rules it learned from its own mistakes are written down where you can see them."
       }
     }
   ]
