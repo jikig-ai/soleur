@@ -378,9 +378,10 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # token=ok row is.
   #
   # #11372 — the window was 10800 (3 h): the Better Stack API 422'd this alert's first apply as
-  # "too resource intensive" and held the targeted apply red. 5400 is the check-300/query tuple
+  # "too resource intensive" and held the targeted apply red. 300/5400 is the check/query tuple
   # inngest_luks_wrong_volume already runs in applied state on this same source under a heavier
-  # GROUP BY query; if a 422 still fires, the next rung is check_period 900 then 3600.
+  # GROUP BY query; if a 422 still fires, the next rung is check_period 900 then 3600 (query_period
+  # stays 5400; each step rides the same guard-pin update and is recorded on decision-challenges.md).
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0

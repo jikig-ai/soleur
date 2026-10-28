@@ -31,3 +31,11 @@
 - terraform validate: not run locally (v1.9.8 vs CI-pinned 1.10.5, pre-existing mock_provider mismatch artifact); fmt -check clean; infra-validation.yml owns it
 - GDPR gate: N/A (alert window change on host-emitted probe rows; no regulated-data surface)
 - cto_spawns=1 (planning subagent, sequential-fallback)
+
+## Review Phase
+- Status: complete — 12 seats (3 design-pass + 6 class panel + user-impact + structural-enum + test-design), tier aggregate pattern (declared; mismatch note: one-number diff)
+- P1: none in-diff; structural-enum uncovered paths are pre-existing guard-model gaps → deferred scope-out → issue #11388 (meta/machinery)
+- P2: stale 3h-window locals comment (:334) → fixed 9008affb98
+- P3s: tuple phrasing + contingency qualifier → fixed inline; rest folded into #11388
+- shellcheck clean (semgrep substitute, bash-only source); gdpr-gate N/A (no regulated-data path); #11266 datapoint comment posted
+- Design pass: lever choice (query_period) upheld by all three seats
