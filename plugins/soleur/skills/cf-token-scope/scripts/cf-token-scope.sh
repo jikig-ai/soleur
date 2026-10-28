@@ -154,6 +154,7 @@ Exit codes:
      or absent Doppler secret
   3  probe failed — a scope was dropped, degraded, or denied (assert mode: an LB
      row still 403 or anomalous)
+  78 refused to run under shell tracing — a refusal, not a probe verdict (#7797)
 EOF
 }
 
@@ -279,7 +280,10 @@ ZONE_CONTROL_OK=0
 # ps / /proc/<pid>/cmdline).
 check() {
   local url="$1" scheme="$2" trust404="${3:-0}" want_type="${4:-}" resp
-  [[ -n "$want_type" ]] || { want_type="object"; [[ "$scheme" == "account" ]] && want_type="array"; }
+  if [[ -z "$want_type" ]]; then
+    want_type="object"
+    if [[ "$scheme" == "account" ]]; then want_type="array"; fi
+  fi
   CODE=""; BODY=""
   resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' \
     -H @<(printf 'Authorization: Bearer %s' "$TOK") "$url" 2>/dev/null || true)"
@@ -376,7 +380,7 @@ else
 for row in "${DT_ROWS[@]}"; do
   IFS='|' read -r r_class r_label r_url r_want r_scheme <<<"$row"
   url="${r_url//\$ZONE/$ZONE}"
-  url="${r_url//\$ACCT/$ACCT}"
+  url="${url//\$ACCT/$ACCT}"
   CHECK_RC=0
   check "$url" "$r_scheme" 0 "$r_want" || CHECK_RC=1
   if [[ "$r_class" == "retained" ]]; then

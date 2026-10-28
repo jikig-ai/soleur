@@ -177,6 +177,8 @@ its own `TARGET_PRESENT` handling and never consults this classifier.
   (`curl` / `doppler` / `jq`), or an absent Doppler secret.
 - `3` — probe failed: a scope was dropped, degraded, or denied (assert mode: an
   LB row still `403` or anomalous).
+- `78` — the script REFUSED to run under shell tracing (`-x`) — a refusal, not a
+  probe verdict; see the STREAM CONTRACT in the script header (#7797).
 
 ## Sharp Edges
 

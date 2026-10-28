@@ -59,6 +59,7 @@ cat >"$MOCKBIN/curl" <<'EOF'
 [[ -n "${MOCK_CURL_MARKER:-}" ]] && printf 'called\n' >>"$MOCK_CURL_MARKER"
 url=""
 for a in "$@"; do url="$a"; done
+[[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$url" >>"$MOCK_CURL_URLLOG"
 # Real CF shapes: a zone .../entrypoint returns a single ruleset OBJECT; the
 # account /rulesets list returns an ARRAY. The mock must mirror this so the
 # per-scheme body-shape check is exercised against the true contract (#6892 QA).
@@ -111,8 +112,8 @@ assert_rc() { if [[ "$RC" == "$1" ]]; then ok "$2"; else no "$2 (want rc=$1 got 
 has() { if grep -qF -- "$1" "$OUTFILE"; then ok "$2"; else no "$2 (missing: $1)"; fi; }
 lacks() { if grep -qF -- "$1" "$OUTFILE"; then no "$2 (present: $1)"; else ok "$2"; fi; }
 # refute / require a literal in the SUT source (grep on a FILE, never a pipe).
-src_lacks() { if grep -qE "$1" "$SUT"; then no "$2"; else ok "$2"; fi; }
-src_has() { if grep -qE "$1" "$SUT"; then ok "$2"; else no "$2 (missing anchor: $1)"; fi; }
+src_lacks() { if grep -qE -- "$1" "$SUT"; then no "$2"; else ok "$2"; fi; }
+src_has() { if grep -qE -- "$1" "$SUT"; then ok "$2"; else no "$2 (missing anchor: $1)"; fi; }
 
 # --- C1: all authorized + target authorized -> exit 0, "present" line ---
 run "$MOCKPATH" --target-entrypoint http_request_transform
@@ -287,10 +288,24 @@ assert_rc 0 "D1H default-token dry-run under no-curl PATH -> exit 0 (print/run p
 # --- D2: baseline with both LB rows 403 -> exit-neutral not-yet-widened, BOTH
 #         rows asserted per-label (Guard 2 M3: no first-member-only pass). ---
 D2MARK="$WORK/d2-doppler-requests"
+D2URLS="$WORK/d2-curl-urls"
 : >"$D2MARK"
 LB403='403:{"success":false,"errors":[{"code":10000}]}'
-MOCK_DOPPLER_MARKER="$D2MARK" MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
+# RUN-PATH URL ASSEMBLY pin (design-pass P2): the mock-substring arms match on
+# path fragments, so a broken $ZONE/$ACCT placeholder substitution would sail
+# through every verdict assertion. Assert the ACTUAL requested URLs carry the
+# resolved ids and no literal placeholder survives.
+if [[ -s "$D2URLS" ]] \
+   && grep -q "zones/zone0123456789abcdef/dns_records" "$D2URLS" \
+   && grep -q "zones/zone0123456789abcdef/load_balancers" "$D2URLS" \
+   && grep -q "accounts/acct9876543210fedcba/load_balancers/pools" "$D2URLS" \
+   && ! grep -q '\$ZONE\|\$ACCT' "$D2URLS"; then
+  ok "D2 run-path URLs carry resolved ZONE/ACCT ids, no literal placeholder reaches curl"
+else
+  no "D2 run-path URL assembly broken (see $D2URLS)"
+fi
 has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 pools row prints per-row not-yet-widened (403, err 10000)"
 has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 zone-LB row prints not-yet-widened too (per-row, not aggregate)"
 has "PASS: no scope dropped" "D2 baseline still PASSes the retained ledger"
@@ -305,6 +320,8 @@ fi
 MOCK_TUNNEL="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 3 "D3 retained (tunnel) 403 -> exit 3, neutrality never consults retained rows"
 lacks "PASS: no scope dropped" "D3 omits 'no scope dropped'"
+# addendum 9: the zone-control diagnostic names a probe default-token never issues.
+lacks "zone control" "D3 default-token failure prints no rulesets-only zone-control line"
 unset MOCK_TUNNEL
 
 # --- D4: fail-closed layers hold on the new endpoints ---
@@ -388,7 +405,7 @@ assert_rc 0 "D-e expect+dry-run orthogonal -> exit 0"
 assert_eq "D-e rows printed once" 6 "$(count_f 'curl --disable')"
 
 # --- D12: read-only source guards on the whole script (extends C10 posture) ---
-src_lacks '-X[[:space:]]+(POST|PUT|PATCH|DELETE)' "D12 no mutating curl verb in source"
+src_lacks '(^|[[:space:]])-X[[:space:]]+(POST|PUT|PATCH|DELETE)' "D12 no mutating curl verb in source"
 src_lacks 'doppler[[:space:]]+(secrets[[:space:]]+)?(set|upload|download|delete)\b' "D12b no Doppler write verb in source"
 
 # --- D-doc: SKILL.md / playbook documentation pins (AC7) ---

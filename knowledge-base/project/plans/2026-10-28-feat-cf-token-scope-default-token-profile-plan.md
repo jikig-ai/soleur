@@ -434,6 +434,30 @@ Both matrices are written from this design, before the implementation exists
 (plan Phase 2.12 ordering rule); `python3 scripts/lint-guard-contract.py` over
 this plan is a verification task in Phase 4.
 
+**Guard Contract amendments — 2026-10-28 advisor consult (BINDING supersessions; not a third guard).**
+Append per the dated-record doctrine; the matrix rows quoted below are superseded AS LITERATURE,
+this block is what AC10 audits against:
+- Guard 1 M4 detector: C3d/C4 (the account-scheme pins), NOT "C9 baseline" (C9 is the token-leak
+  pin, insensitive to row deletion).
+- Guard 1 H1 replaced: harness mutation = mock `doppler` answering ANY secret name with the same
+  token; RED detector = the D2 binding pin (requested-name log must contain CF_API_TOKEN and never
+  CF_API_TOKEN_RULESETS). The always-authorized-LB-mock row MOVED to Guard 2 as its H1 (it tests
+  the neutrality property; RED detector D2's explicit per-row 403 mocks).
+- Guard 1 M5 added: `profile_token_secret()` drops the `default-token` arm (empty binding) ⇒ RED —
+  D1 rc + the empty-secret guard exit 2 naming the profile.
+- Vocabulary table: the assert-mode row "still missing" emits `FAIL: LB scope still absent` on
+  STDOUT (disposition 1, pinned by D6 via the stdout-only capture), NOT stderr.
+- Vocabulary table gains the unlisted state: target row, baseline, NON-403 anomaly ⇒ retained-style
+  verdict (`denied (<code>)` / `degraded (…)`) + exit 3 (D5, D4b; classifier third arm).
+- Default-token probe table carries `trust404=0` per row (already true in prose and in SKILL.md's
+  delivered table).
+- Phase 1 step 2 RED-count: green-by-construction at HEAD were D9a-d (unknown-arg rc 2 pre-
+  implementation), D12/D12b and the D2b/D7 default-mock rc shapes; genuine RED targets: D1, D1b,
+  D1H, D2, D2c-assembly, D3, D4a/b, D5, D6, D7-assert-line, D8, D-mint, D10, D11, D-e, D-doc
+  (recorded in the Phase-1 commit message).
+- D0 is pre-Phase-2 evidence (rc 2 at HEAD), not a permanent suite assertion; the tasks.md
+  maintenance step ran at each phase's end.
+
 ## Implementation Phases
 
 Sequenced for `soleur:work` with `cq-write-failing-tests-before` (tests first).
