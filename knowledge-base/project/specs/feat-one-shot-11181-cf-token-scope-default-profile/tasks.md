@@ -4,15 +4,15 @@ Plan: `knowledge-base/project/plans/2026-10-28-feat-cf-token-scope-default-token
 
 ## Phase 1: Tests, RED-first (cq-write-failing-tests-before)
 
-- [ ] 1.1 `plugins/soleur/test/cf-token-scope.test.sh` — mock `doppler`: add `CF_API_TOKEN) printf '%s' "${MOCK_API_TOKEN-default-token-xyz789}" ;;` arm (synthesized value only, `cq-test-fixtures-synthesized-only`).
-- [ ] 1.2 Mock `curl` — add URL-substring arms BEFORE the catch-all, in this order: `*cfd_tunnel*` (`MOCK_TUNNEL`), `*access/apps*` (`MOCK_ACCESS`), `*dns_records*` (`MOCK_DNS`), `*notification_policies*` (`MOCK_NOTIF`), `*load_balancers/pools*` (`MOCK_LB_POOLS`), `*load_balancers*` (`MOCK_LB_ZONE`) — pools BEFORE zone-LB (superstring collision); defaults `200:{"success":true,"result":[]}` (array shape). Existing arms byte-identical.
-- [ ] 1.3 RED-by-construction pin: run the suite against the UNMODIFIED script; record the failure set (D0 documented; D1–D12 + D-doc fail; C1–C14 pass). Evidence line for the PR work log.
-- [ ] 1.4 Add D1/D1b/D10/D11: dry-run per-profile (rc 0; `doppler secrets get CF_API_TOKEN` literal; all six URLs; `"$TOK"` unexpanded; private-fd form present; `CF_API_TOKEN_RULESETS` forbidden in the default-token run; rulesets dry-run unchanged; parameterized table-size row count).
-- [ ] 1.5 Add D2–D5 baseline: both LB rows `not-yet-widened (403` per-row assertions + `NOTE:` line + rc 0 + `PASS: no scope dropped`; D3 retained 403 ⇒ rc 3; D4 degraded-200 and wrong-shape ⇒ rc 3; D5 LB 404 ⇒ rc 3.
-- [ ] 1.6 Add D6–D8 assert mode: `--expect-lb-scopes` with 403 ⇒ rc 3 + `FAIL: LB scope still absent`, lacks `PASS: LB scopes present`; with both authorized ⇒ rc 0 + present line; half-green ⇒ rc 3 (per-row gating).
-- [ ] 1.7 Add D9 + D-mint usage errors: unknown profile; `default-token`+`--target-entrypoint`; `rulesets`+`--expect-lb-scopes`; `--profile` with no value — all rc 2, before any secret read; empty `MOCK_API_TOKEN` ⇒ rc 2 naming `CF_API_TOKEN`.
-- [ ] 1.8 Add D12 read-only source guards (no `-X POST|PUT|PATCH|DELETE` in SUT; no Doppler verb other than `secrets get`) and D-doc SKILL.md/playbook grep pins (`--profile default-token`, `--expect-lb-scopes`, `not-yet-widened`, `profiles only`).
-- [ ] 1.9 Keep C1–C14 verbatim (D13 = back-compat pin); `bash -n` the test file; run — confirm RED exactly where expected.
+- [x] 1.1 `plugins/soleur/test/cf-token-scope.test.sh` — mock `doppler`: add `CF_API_TOKEN) printf '%s' "${MOCK_API_TOKEN-default-token-xyz789}" ;;` arm (synthesized value only, `cq-test-fixtures-synthesized-only`).
+- [x] 1.2 Mock `curl` — add URL-substring arms BEFORE the catch-all, in this order: `*cfd_tunnel*` (`MOCK_TUNNEL`), `*access/apps*` (`MOCK_ACCESS`), `*dns_records*` (`MOCK_DNS`), `*notification_policies*` (`MOCK_NOTIF`), `*load_balancers/pools*` (`MOCK_LB_POOLS`), `*load_balancers*` (`MOCK_LB_ZONE`) — pools BEFORE zone-LB (superstring collision); defaults `200:{"success":true,"result":[]}` (array shape). Existing arms byte-identical.
+- [x] 1.3 RED-by-construction pin: run the suite against the UNMODIFIED script; record the failure set (D0 documented; D1–D12 + D-doc fail; C1–C14 pass). Evidence line for the PR work log.
+- [x] 1.4 Add D1/D1b/D10/D11: dry-run per-profile (rc 0; `doppler secrets get CF_API_TOKEN` literal; all six URLs; `"$TOK"` unexpanded; private-fd form present; `CF_API_TOKEN_RULESETS` forbidden in the default-token run; rulesets dry-run unchanged; parameterized table-size row count).
+- [x] 1.5 Add D2–D5 baseline: both LB rows `not-yet-widened (403` per-row assertions + `NOTE:` line + rc 0 + `PASS: no scope dropped`; D3 retained 403 ⇒ rc 3; D4 degraded-200 and wrong-shape ⇒ rc 3; D5 LB 404 ⇒ rc 3.
+- [x] 1.6 Add D6–D8 assert mode: `--expect-lb-scopes` with 403 ⇒ rc 3 + `FAIL: LB scope still absent`, lacks `PASS: LB scopes present`; with both authorized ⇒ rc 0 + present line; half-green ⇒ rc 3 (per-row gating).
+- [x] 1.7 Add D9 + D-mint usage errors: unknown profile; `default-token`+`--target-entrypoint`; `rulesets`+`--expect-lb-scopes`; `--profile` with no value — all rc 2, before any secret read; empty `MOCK_API_TOKEN` ⇒ rc 2 naming `CF_API_TOKEN`.
+- [x] 1.8 Add D12 read-only source guards (no `-X POST|PUT|PATCH|DELETE` in SUT; no Doppler verb other than `secrets get`) and D-doc SKILL.md/playbook grep pins (`--profile default-token`, `--expect-lb-scopes`, `not-yet-widened`, `profiles only`).
+- [x] 1.9 Keep C1–C14 verbatim (D13 = back-compat pin); `bash -n` the test file; run — confirm RED exactly where expected.
 
 ## Phase 2: Script (`plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh`)
 
