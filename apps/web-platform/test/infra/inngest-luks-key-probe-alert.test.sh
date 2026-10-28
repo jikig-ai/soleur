@@ -21,8 +21,10 @@
 #   * The paging SQL carries `token=fail_` and NOT `indeterminate`: an unmeasured verdict must never
 #     page on its own (a transient low-memory skip would page a day).
 #   * The paging SQL anchors the marker at message position 1 (`position(...)=1`) and never uses a
-#     `raw LIKE` prefilter: webhook payloads that QUOTE the marker (a PR body, the runbook) reach
-#     this source and would count as live probe rows.
+#     `raw LIKE`: webhook payloads that QUOTE the marker (a PR body, the runbook) reach this source
+#     and would count as live probe rows. A plain `position(raw, marker) > 0` conjunct ahead of the
+#     anchor is allowed (it only narrows, to cut the per-row JSON parse Better Stack refused); the
+#     anchor must still gate every row.
 #   * It filters on the `dt` COLUMN, never the `time` alias (the alias is a single end-of-window
 #     value; a filter on it would test the wrong thing).
 #   * One whole-window aggregate, no GROUP BY: a per-bucket form reads "no bucket" as "no row".
@@ -94,7 +96,7 @@ param() {  # param <block> <key> <value-ERE>
 
 FAIL_SQL="$(sql_local inngest_luks_key_probe_fail_sql)"
 
-FAIL_CANON="SELECTtoDateTime({{end_time}})AStime,count(*)ASvalueFROM{{source}}WHEREdtBETWEEN{{start_time}}AND{{end_time}}ANDposition(JSONExtractString(raw,'message'),'${MARKER}')=1ANDposition(JSONExtractString(raw,'message'),'token=fail_')>0"
+FAIL_CANON="SELECTtoDateTime({{end_time}})AStime,count(*)ASvalueFROM{{source}}WHEREdtBETWEEN{{start_time}}AND{{end_time}}ANDposition(raw,'${MARKER}')>0ANDposition(JSONExtractString(raw,'message'),'${MARKER}')=1ANDposition(JSONExtractString(raw,'message'),'token=fail_')>0"
 ANCHOR="position(JSONExtractString(raw,'message'),'${MARKER}')=1"
 
 # ── presence rows: the SQL locals ─────────────────────────────────────────────────────────────
@@ -116,6 +118,10 @@ grep -qiF 'indeterminate' <<< "$FAIL_SQL" \
 grep -qF "$ANCHOR" <<< "$FAIL_SQL" \
   && ok "paging SQL anchors the marker at message position 1" \
   || no "paging SQL does not anchor the marker with position(...)=1"
+case "${FAIL_SQL%%"$ANCHOR"*}" in
+  *"position(raw,'${MARKER}')>0"*) ok "paging SQL has the plain-substring prefilter AHEAD of the anchor" ;;
+  *) no "paging SQL lacks the position(raw, marker) > 0 prefilter ahead of the anchor" ;;
+esac
 grep -qiE 'LIKE|GROUPBY' <<< "$FAIL_SQL" \
   && no "paging SQL has a LIKE or GROUP BY (a quoting webhook row could page; a bucketed form reads no-bucket as no-row)" \
   || ok "paging SQL has no raw LIKE prefilter and no GROUP BY"
@@ -302,7 +308,9 @@ PY
   mutate_red "paging SQL loses its position-1 marker anchor" TF \
     's = edit(s, FAILSQL, Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") = 1", Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") > 0", SQLEND)'
   mutate_red "paging SQL marker renamed (the rule would watch a row nobody emits)" TF \
-    's = edit(s, FAILSQL, "SOLEUR_INNGEST_LUKS_KEY_PROBE", "SOLEUR_INNGEST_LUKS_KEY_PROBX", SQLEND)'
+    's = edit(s, FAILSQL, Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") = 1", Q+"SOLEUR_INNGEST_LUKS_KEY_PROBX"+Q+") = 1", SQLEND)'
+  mutate_red "paging SQL prefilter becomes a raw LIKE (a quoting webhook row could page)" TF \
+    's = edit(s, FAILSQL, "position(raw, "+Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") > 0", "raw LIKE "+Q+"%SOLEUR_INNGEST_LUKS_KEY_PROBE%"+Q, SQLEND)'
   mutate_red "paging SQL filters on the time alias" TF \
     's = edit(s, FAILSQL, "WHERE dt BETWEEN", "WHERE time BETWEEN", SQLEND)'
   mutate_red "paging window widens to 25 h (an incident would stay open for a day)" TF \
@@ -332,8 +340,8 @@ fi
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer run
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
-PRESENCE_ROWS=30
-MUT_ROWS=13
+PRESENCE_ROWS=31
+MUT_ROWS=14
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))

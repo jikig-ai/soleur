@@ -325,9 +325,11 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 # bundle promotion), plan 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3.
 # Pinned by apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh.
 #
-# SQL RULES: the marker is anchored at message position 1, never a `raw LIKE` prefilter (webhook
-# payloads that quote the marker reach this source); the window filter is the `dt` COLUMN, never
-# the `time` alias; one whole-window aggregate, no GROUP BY.
+# SQL RULES: the marker is anchored at message position 1 and that anchor always gates every row;
+# a plain `position(raw, marker) > 0` conjunct AHEAD of it is allowed because it only narrows, but
+# never a `raw LIKE` and never a prefilter as the sole filter (webhook payloads that quote the marker
+# reach this source); the window filter is the `dt` COLUMN, never the `time` alias; one whole-window
+# aggregate, no GROUP BY.
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
@@ -336,6 +338,7 @@ locals {
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND position(raw, 'SOLEUR_INNGEST_LUKS_KEY_PROBE') > 0
       AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
       AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
   SQL
@@ -376,14 +379,16 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # hysteresis against the next re-probe re-opening an incident. The incident clears about 2.5 to 3 h
   # after the LAST failing row (the window, the wait for the next check, then recovery_period), which is
   # not proof of recovery: only a token=ok row is. It pages within about 15 min of the first failing row.
-  # query_period 5400, not 10800: Better Stack refused this alert THREE times with 422 "too resource
-  # intensive ... reduce the data range" (#11260, #11384, #11404 merge applies) at check 300, 900 and 3600
-  # over 10800, so the lever is the data range, not the check period. 5400 is the window of
-  # inngest_luks_wrong_volume, the one accepted alert that also parses JSON on every row (position over
-  # JSONExtractString); every accepted window above 5400 (86400, 97200) sits behind a cheap `raw LIKE`
-  # prefilter, which this SQL must not use (see the SQL RULES above). If 5400 is refused too, stop
-  # guessing: have the owner run a create-and-delete probe, or move the marker match to a prefilter plus
-  # the position anchor.
+  # query_period 5400, not 10800: Better Stack refused this alert three times with 422 "too resource
+  # intensive ... reduce the data range" (the #11260, #11384 and #11404 merge applies) at check 300, 900
+  # and 3600 over 10800, so the check period is not the lever. 5400 is the window of
+  # inngest_luks_wrong_volume, the closest accepted form, and the plain-substring `position(raw, marker)`
+  # conjunct lets most rows skip the JSON parse (it only narrows; the position-1 anchor still gates every
+  # row, see the SQL RULES above). This is a best fit, NOT proven: luks_monitor_host_timer_dark (97200 s)
+  # parses JSON per row with no prefilter and is accepted. If this is refused too, stop iterating
+  # merges: take the -target out of apply-web-platform-infra.yml and have the owner run a
+  # create-and-delete probe on a paused throwaway alert. A persistent fault with a dying probe can leave
+  # a gap longer than recovery_period and re-page once; accepted and documented in the runbook.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
