@@ -22,3 +22,7 @@ marked `pending - assumed: <default>` for the implementer/ship pipeline.
 ## Not Yet Specified
 
 (none)
+
+| Recurring-vendor-expense gate signal (`upgrade` token in PR body) — false positive vs abort | technical | Ruled by CTO agent, 2026-10-28: override recorded — `inngest` is a version bump of an existing MIT-licensed OSS dependency, not a new vendor; the Inngest server is self-hosted with no plan tier, so there is no recurring vendor expense to ledger. `<!-- gate-override: wg-record-recurring-vendor-expense-before-ready -->` + justification appended to the PR body |
+
+| Incident-PIR gate fired (INCIDENT-SIGNAL on body+plan corpus) — no live event took place | technical | Ruled by CTO agent, 2026-10-28: no PIR owed — this is a dependency-upgrade chore (#8628, `type/chore`); the v3 `createStream` defect was upstream SDK behavior already compensated by the stream-detach wrapper, never a detected Soleur production outage. The signal matched cited-precedent vocabulary (issue body's past-tense defect description, plan `failure_modes` rows citing the #5159 shape as design precedent). Authoring a PIR would fabricate an incident record |

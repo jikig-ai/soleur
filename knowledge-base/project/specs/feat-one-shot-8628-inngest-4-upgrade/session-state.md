@@ -121,3 +121,20 @@ Deferred (NOT fixed — filed as follow-up issues by the parent): guard-window e
 - Route-to-definition proposal (NOT applied — write set limited to learnings + this file): at `plugins/soleur/skills/review/SKILL.md` trailer call-out (~line 1090), add: "Run it from the PR's own checkout. A `--since ... is not an ancestor of HEAD` failure with correct args, or a `pipeline-tally.sh` tally that disagrees with what you posted, means the shell's git context is a sibling checkout — verify `git rev-parse --show-toplevel` and `git branch --show-current` before retrying; the tally ledger is shared repo-wide keyed by branch, so a wrong checkout reads a real ledger, not an error."
 - Auto-consolidation archival: DEFERRED to `soleur:ship` Phase 6.45 — ship Phase 6 step 2.5 reads `decision-challenges.md` live from this spec dir, so archiving now would orphan it (the #7490 ordering).
 - Phase 1.6 token-efficiency: skipped by the report itself (small diff, <50 lines).
+
+## Ship Phase
+
+**Advisor consult (Phase 5.5, inline — no advisor-tier spawn available in this subagent harness):** Curated payload reviewed inline: diff stat (104 files: inngest@4 port across ~70 fn files + 3 middlewares + route deletion + infra probe retirement + KB artifacts), zero unresolved review findings (13/13 + fix-round 12/12, deferred ledger → #11419), ACs (AC13 body contract met). Completeness opinion: genuinely complete — residuals named (followthrough probe retired, four #11334 fd-pinning P3s resolved inline), no unhandled failure mode beyond the documented ship-residual classes (prod serveOrigin first-deploy, #10905 merge-order watch, rung-2 pre-existing HOLD). CPO sign-off surface: operator(brand) row filed as action-required issue #11425.
+
+**Phases + verdicts:**
+- P0 context + trailer gate: PASS (rc=0)
+- P1 artifacts: PASS (plan + spec committed)
+- P1.5 review evidence: PASS (Reviewed-By-Soleur + Reviewed-Coverage `full 13/13 agents`, Risk-Tier `single-user incident`, Fix-Round `full 12/12 agents`)
+- P2 learnings: BRANCH_LEARNING=present (compound f959806927)
+- P3 README counts: PASS (in sync)
+- P4 test gate: battery OWED per script (origin/main not ancestor — merge queue carries); local `--affected` run executed earlier: exit 3 UNRESOLVED, 365/7/317-declined on ceiling; 4 diff-caused fixed+reverified, 3 environmental. #8247 shortcut applies once required checks green on identical SHA.
+- P5.4 preflight: 4 PASS-critical (headers/env-isolation/lockfiles/encodings/encryption), Check 6 PASS (single-user incident), Check 10 PASS (sandboxed probe `^4.26.0`), others SKIP — no FAIL.
+- P5.5 gates: review-completion PASS; findings-exit 0 unresolved; net-issue-flow +1 OVERRIDDEN (recorded, per-issue justifications); undeferred-operator none; soak skip (no Ref/Tracks); technical-ruling --branch PASS + --pr-body PASS; merge-base lints OK; ADR ordinals skip (M not A); gdpr auto-label applied `compliance/critical`; gdpr-ack skip (#8628 not compliance/critical); counsel skip; retro skip; DPF fires → tracking comment posted; CMO/COO gates not triggered; vendor-expense signal FALSE-POSITIVE → gate-override recorded; PIR gate signal fired → Ruled by CTO agent: no live event, no PIR owed (decision-challenges.md); hold-gate-eval exit 1 — 2 operator-reserved holds stand, each tracked in filed issues (#10382, Bucket-2 set) per prompt's explicit scope.
+- P6: body+title written; auto-close scan clean (only intended `Closes #8628`); labels semver:patch + app:web-platform + compliance/critical; tally rendered; overlap preflight rc=13 (continue; #10905 merge-order watch noted); decision-challenge issue #11425 filed for the operator(brand) row.
+- Final SHA before archive: f959806927bb13cebce16fccb2c927a4286b1a49
+- Merge SHA: TBD (filled post-merge)
