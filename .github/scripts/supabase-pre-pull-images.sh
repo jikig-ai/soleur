@@ -117,18 +117,26 @@ fi
 # same pattern as the helper's). `ecr_dead` is in-memory only — a false latch
 # costs ECR upside for the rest of ONE run, never the next.
 ECR_DEAD_AFTER="${SUPABASE_ECR_DEAD_AFTER:-2}"
+# Gate the env before arithmetic touches it: a non-numeric value aborts the
+# run on `unbound variable` under set -u (`(( x >= banana ))`), an
+# octal-looking one (`08`) makes the trip check silently never true — the
+# latch would go inert with no fatal — and the value is interpolated into
+# the ::warning:: below, so it must be digit-shaped before either use.
+if [[ ! "$ECR_DEAD_AFTER" =~ ^[0-9]+$ ]]; then
+  printf '::warning::ecr latch: SUPABASE_ECR_DEAD_AFTER is not a non-negative integer — defaulting to 2\n'
+  ECR_DEAD_AFTER=2
+fi
+ECR_DEAD_AFTER=$((10#$ECR_DEAD_AFTER))
 ecr_consec_throttle=0
 ecr_dead=0
 failed=()
 ecr_log_dir="$(mktemp -d "${TMPDIR:-/tmp}/supabase-pre-pull-ecr.XXXXXX")"
 trap 'rm -rf "$ecr_log_dir"' EXIT
 
-refs=()
 img_idx=0
 for img in "${IMAGES[@]}"; do
   ecr="public.ecr.aws/$img"
   ghcr="ghcr.io/$img"
-  refs+=("$ghcr")
   img_idx=$((img_idx + 1))
   if docker image inspect "$ghcr" >/dev/null 2>&1; then
     printf 'pre-pull: %s already cached\n' "$img"
@@ -169,12 +177,12 @@ for img in "${IMAGES[@]}"; do
   printf 'pre-pull: %s via ghcr\n' "$img"
 done
 
-# Save the inspect-verified PRESENT subset, never the intended refs[] — a
+# Save the inspect-verified PRESENT subset, never the intended image set — a
 # single absent ref makes `docker save` die, forfeiting the whole partial.
 present_refs=()
-for ref in "${refs[@]}"; do
-  if docker image inspect "$ref" >/dev/null 2>&1; then
-    present_refs+=("$ref")
+for img in "${IMAGES[@]}"; do
+  if docker image inspect "ghcr.io/$img" >/dev/null 2>&1; then
+    present_refs+=("ghcr.io/$img")
   fi
 done
 
@@ -182,9 +190,18 @@ if [[ -n "${SUPABASE_IMG_CACHE_DIR:-}" && ${#present_refs[@]} -gt 0 ]]; then
   mkdir -p "$SUPABASE_IMG_CACHE_DIR"
   # Fastest first: pigz parallelizes; level 1 is enough for an image-set tar
   # (the default level cost ~10 min on this set — run 40657761446).
-  if command -v pigz >/dev/null 2>&1; then Z=(pigz -1); else Z=(gzip -1); fi
-  docker save "${present_refs[@]}" | "${Z[@]}" > "$CACHE_TAR"
-  printf 'pre-pull: wrote %s (%d refs)\n' "$CACHE_TAR" "${#present_refs[@]}"
+  if command -v pigz >/dev/null 2>&1; then COMPRESS=(pigz -1); else COMPRESS=(gzip -1); fi
+  # Write via .tmp + mv: a mid-save failure must not clobber the tar the
+  # cache action restored — that partial set is still warm for the next run.
+  # A failed save degrades to a warning (the run's images are pulled and the
+  # suite can proceed); only unfetched refs fail the step below.
+  if docker save "${present_refs[@]}" | "${COMPRESS[@]}" > "$CACHE_TAR.tmp"; then
+    mv "$CACHE_TAR.tmp" "$CACHE_TAR"
+    printf 'pre-pull: wrote %s (%d refs)\n' "$CACHE_TAR" "${#present_refs[@]}"
+  else
+    rm -f "$CACHE_TAR.tmp"
+    printf '::warning::pre-pull: cache tar write failed — restored tar left intact\n'
+  fi
 fi
 
 if (( ${#failed[@]} > 0 )); then

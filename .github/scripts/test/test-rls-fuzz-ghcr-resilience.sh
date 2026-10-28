@@ -615,7 +615,7 @@ printf '%s\n' \
 chmod +x "$BIN/docker"
 
 ORIG_PATH="$PATH"
-run_prepull() { # name path-prefix [docker-mode]
+run_prepull() { # name path-prefix [docker-mode] [ENV=val ...]
   local name="$1" pfx="$2" mode="${3:-ok}"
   LAST_OUT="$TMP/$name.out"
   LAST_CACHE="$TMP/$name-cache"
@@ -624,6 +624,7 @@ run_prepull() { # name path-prefix [docker-mode]
       TMPDIR="$RUNNER_TEMP_FIXTURE" DOCKER_MODE="$mode" \
       SUPABASE_IMG_CACHE_DIR="$LAST_CACHE" \
       PATH="$pfx:$ORIG_PATH" \
+      "${@:4}" \
       bash "$PREPULL" > "$LAST_OUT" 2>&1
   LAST_RC=$?
 }
@@ -741,6 +742,39 @@ assert_out_count "c:latch-warn-once" '::warning::ecr latch' 1
 assert_out_count "c:latch-skip-lines" 'ecr skipped (latch)' 10
 assert_out_has "c:latch-saves" 'pre-pull: wrote'
 
+# The env seam is DRIVEN, not merely grep-pinned (#11386): an implementation
+# that ignores SUPABASE_ECR_DEAD_AFTER and hardcodes 2 must not pass. With
+# the threshold at 1 the FIRST exhaustion trips the latch — img-a burns its
+# 3 ECR pulls, the other 11 refs go straight to ghcr.
+run_prepull pp-latch1 "$FAKE_BIN_DIR:$BIN" ecr-throttle-ghcr-ok SUPABASE_ECR_DEAD_AFTER=1
+assert_rc "c:latch1-rc" 0
+if [[ "$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS" || true)" == 3 ]]; then pass "c:latch1-ecr-pulls"
+else fail "c:latch1-ecr-pulls" "ecr pulls=$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS") want 3 — SUPABASE_ECR_DEAD_AFTER=1 not honored"; fi
+assert_out_count "c:latch1-warn-once" 'consecutive ECR throttle exhaustions' 1
+assert_out_count "c:latch1-skip-lines" 'ecr skipped (latch)' 11
+
+# Invalid env fails soft, not fatal: a non-numeric value would abort the run
+# on `unbound variable` under set -u inside the trip arithmetic. The gate
+# coerces to the default 2 with a ::warning:: — same shape as the default
+# latch arm (6 ECR pulls, warn once, no crash).
+run_prepull pp-latch-badenv "$FAKE_BIN_DIR:$BIN" ecr-throttle-ghcr-ok SUPABASE_ECR_DEAD_AFTER=banana
+assert_rc "c:latchbad-rc" 0
+assert_out_has "c:latchbad-warn" 'SUPABASE_ECR_DEAD_AFTER is not a non-negative integer'
+if [[ "$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS" || true)" == 6 ]]; then pass "c:latchbad-ecr-pulls"
+else fail "c:latchbad-ecr-pulls" "ecr pulls=$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS") want 6 — invalid env did not fall back to default 2"; fi
+assert_out_count "c:latchbad-latch-warn" 'consecutive ECR throttle exhaustions' 1
+
+# Octal-shaped env (`08`) is digit-valid but arithmetic-fatal-in-context
+# (`(( x >= 08 ))` errors, silently taking the false branch — the latch
+# would NEVER trip). Base-10 normalization must preserve the threshold:
+# 8 consecutive exhaustions trips at img-g — ECR pulls == 24, 4 refs skip.
+run_prepull pp-latch-octal "$FAKE_BIN_DIR:$BIN" ecr-throttle-ghcr-ok SUPABASE_ECR_DEAD_AFTER=08
+assert_rc "c:latchoct-rc" 0
+if [[ "$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS" || true)" == 24 ]]; then pass "c:latchoct-ecr-pulls"
+else fail "c:latchoct-ecr-pulls" "ecr pulls=$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS") want 24 — '08' did not normalize to base-10 8"; fi
+assert_out_count "c:latchoct-warn-once" 'consecutive ECR throttle exhaustions' 1
+assert_out_count "c:latchoct-skip-lines" 'ecr skipped (latch)' 4
+
 # Latch reset on a deterministic answer (refs pull in `sort -u` order —
 # edge, img-a..img-j, old): edge serves ECR cleanly (pull 1), img-a
 # throttles (counter 1, pulls 3), img-b answers `name unknown` (counter
@@ -788,7 +822,7 @@ assert_out_re "c:nobin-error" '^::error::.*not on PATH'
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=163
+MIN_ASSERTIONS=175
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
