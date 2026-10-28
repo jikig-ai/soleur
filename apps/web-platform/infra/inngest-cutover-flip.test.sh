@@ -224,6 +224,7 @@ run_flip() {
       CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" \
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
+      CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
       ${extra[@]+"${extra[@]}"} \
       bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
@@ -937,13 +938,13 @@ EXPECTED="$(printf '%s\nINNGEST_CUTOVER_FLIP\n' "$UNSET_LIST" | grep -vE '^$' | 
 assert_eq "derived seam set == unset list + INNGEST_CUTOVER_FLIP (the completeness tripwire)" \
   "$DERIVED" "$EXPECTED"
 # A FLOOR on the list's size, so the tripwire cannot be satisfied by an EMPTY gate agreeing with an
-# empty derivation. Measured at 15 seams this session; a floor, never -eq, so adding a seam and its
+# empty derivation. Measured at 25 seams (#9927 item 2 added six); a floor, never -eq, so adding a seam and its
 # list entry together stays green.
 UNSET_COUNT="$(printf '%s\n' "$UNSET_LIST" | grep -cE '^(CUTOVER_|INNGEST_CUTOVER_)' || true)"
-if [[ "$UNSET_COUNT" -ge 15 ]]; then
-  pass "the gate unsets at least 15 seam names (got $UNSET_COUNT)"
+if [[ "$UNSET_COUNT" -ge 25 ]]; then
+  pass "the gate unsets at least 25 seam names (got $UNSET_COUNT)"
 else
-  fail "the gate's unset list holds only $UNSET_COUNT names, expected >= 15"
+  fail "the gate's unset list holds only $UNSET_COUNT names, expected >= 25"
 fi
 assert_absent "INNGEST_REDIS_PASSWORD is NOT unset (it is a real input, not a seam)" \
   "$UNSET_LIST" "INNGEST_REDIS_PASSWORD"
@@ -996,7 +997,9 @@ ASSIGNED_VARS="$(grep -oE '^[[:space:]]*(local |readonly |export )?[A-Za-z_][A-Z
 UNGOVERNED=""
 while IFS= read -r v; do
   [[ -n "$v" ]] || continue
-  case "$v" in CUTOVER_*|INNGEST_CUTOVER_*) continue ;; esac
+  # PIPESTATUS is set by bash itself after every pipeline (the key-continuity probe copies it, #9927);
+  # it is not an externally-supplied name.
+  case "$v" in CUTOVER_*|INNGEST_CUTOVER_*|PIPESTATUS) continue ;; esac
   if ! printf '%s\n' "$ASSIGNED_VARS" | grep -cxF "$v" >/dev/null; then
     UNGOVERNED="$UNGOVERNED $v"
   fi
@@ -1097,6 +1100,7 @@ EOF
 chmod +x "$CANARY_STUB"
 rc=0
 env CUTOVER_LOGGER_CMD="$CANARY_STUB" CUTOVER_FLIP_FLAG="" \
+    CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
     bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
 assert_eq "an authorised run exits 0" "0" "$rc"
 if [[ -e "$CANARY" ]]; then
@@ -1138,6 +1142,7 @@ EOF
 chmod +x "$ALT_STUB"
 rc=0
 env CUTOVER_LOGGER_CMD="$ALT_STUB" CUTOVER_FLIP_FLAG="" \
+    CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
     bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
 assert_eq "the alternate-root authorised run exits 0" "0" "$rc"
 if [[ -e "$ALT_CANARY" ]]; then
@@ -1261,13 +1266,13 @@ unset _wt _w _covered
 echo "TEST: #7761 the unit does not set any gated seam in Environment="
 # The LAST name in the list carries no trailing backslash, so a regex that requires one silently
 # drops it — and the dropped name is whichever seam happens to sort last. Match the continuation
-# as OPTIONAL and floor the count at the full fifteen.
+# as OPTIONAL and floor the count at the full twenty-five.
 GATE_SEAMS="$(sed -n '/^  for _seam in/,/^  do$/p' "$TARGET" | grep -oE '^[[:space:]]+[A-Z_]+[[:space:]]*\\?$' | tr -d ' \\' | grep -v '^$' || true)"
 GS_COUNT="$(printf '%s\n' "$GATE_SEAMS" | grep -c '^[A-Z]' || true)"
-if [[ "$GS_COUNT" -ge 15 ]]; then
-  pass "read ${GS_COUNT} seam names out of the gate itself (>=15)"
+if [[ "$GS_COUNT" -ge 25 ]]; then
+  pass "read ${GS_COUNT} seam names out of the gate itself (>=25)"
 else
-  fail "read only ${GS_COUNT} of 15 seam names out of the gate — the extractor is broken"
+  fail "read only ${GS_COUNT} of 25 seam names out of the gate — the extractor is broken"
 fi
 UNIT_ENV="$(grep -E '^Environment=' "$UNIT_SRC" || true)"
 _env_seam_hits=0
@@ -1372,10 +1377,15 @@ fi
 # 187 -> 190: +3 for review fixes — the positional argv3 marker pin, the logger-side
 # `unavailable` assert on the failure arm, and a miscount corrected.
 # 190 -> 194: +4 for the >4000-char bound fixture (Test 5o).
+# 194 -> 195: +1 for #9927 — the LUKS key-probe stamp default (/var/lib/inngest-cutover/...) is a
+# derived write target and lands inside the unit's StateDirectory (the containment loop above).
+# The probe itself is exercised by inngest-luks-key-probe.test.sh; this suite points the stamp seam
+# at a directory that does not exist, so the probe SKIPS (an unrecordable stamp never probes) and
+# every row/trace count here stays exactly what it was.
 # EXACT, not a floor with slack (the cloud-init suite's C0 convention): the assertion
 # inventory is fixed by this file, so a count that drifts — an assertion deleted, a block
 # silently skipped — is itself a RED. Bump it in the same edit that adds an assertion.
-EXPECTED_ASSERTIONS=194
+EXPECTED_ASSERTIONS=195
 if [[ "$PASS" -ne "$EXPECTED_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the count through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

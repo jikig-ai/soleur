@@ -598,7 +598,7 @@ if command -v terraform >/dev/null 2>&1; then
   TF_AVAILABLE=1
   RENDER_SCRATCH=$(mktemp -d)
   # Render the web cloud-init into $2. $1 = web_colocate_inngest; $3 = web_tunnel_connector
-  # (defaults true = web-1, the connector host, so AC7's call sites stay two-arg).
+  # (defaults true = web-2, the connector host, so AC7's call sites stay two-arg).
   # All map vars are placeholders EXCEPT the toggles; keep in sync with server.tf's
   # templatefile map — a new map var breaks this render (the intended tripwire).
   # stderr is NOT swallowed: a render error must surface, not present as an empty file
@@ -798,12 +798,18 @@ PY
   # burn the full budget and emit a false private_nic_timeout.
   assert "render web_tunnel_connector=false OMITS the NIC wait entirely (#6441)" \
     "! grep -qF 'soleur-wait-nic' '$CONN_OFF'"
-  # The apt install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
-  # keeps the binary and stays promotable without an image change.
-  assert "render web_tunnel_connector=false RETAINS ungated 'apt-get install -y cloudflared'" \
-    "grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
+  # The binary install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
+  # keeps the binary and stays promotable without an image change. The install is the pinned
+  # .deb + sha256 fail-closed arm (eMudhra advisory: an unpinned apt install can resurrect a
+  # below-floor binary on the next host birth), so BOTH its tokens must survive the render.
+  assert "render web_tunnel_connector=false RETAINS the ungated pinned cloudflared .deb install" \
+    "grep -qF 'cloudflared-linux-amd64.deb' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false RETAINS the cloudflared checksum fail-closed guard" \
+    "grep -qF 'soleur-boot-emit cloudflared_checksum fatal' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false carries NO unpinned 'apt-get install -y cloudflared' (eMudhra)" \
+    "! grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
   # RETENTION TOKENS BELOW THE endif — the assertions above cannot constrain the gate's LOWER
-  # boundary, because the apt-install token sits ABOVE the `%{ if }`. Without these, moving the
+  # boundary, because the .deb-install token sits ABOVE the `%{ if }`. Without these, moving the
   # `%{ endif ~}` DOWN swallows the webhook install + its fail-closed :9000 poll and every
   # assertion here still passes — a de-pooled host would boot permanently undeployable and
   # would not even fail closed (the poll it needs to fail on is inside the swallowed region).
@@ -818,9 +824,11 @@ PY
   assert "render web_tunnel_connector=false is valid YAML (column-0 directive hazard)" \
     "render_yaml_ok '$CONN_OFF'"
   # The render cannot see WHICH host maps to which toggle value — and that mapping is the
-  # risk that darkens web-1 (AC5's inverted-predicate catastrophe). Pin it at the source.
-  assert "server.tf pins the connector predicate to web-1 (each.key == \"web-1\")" \
-    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-1\"' '$SCRIPT_DIR/server.tf'"
+  # risk that darkens the connector host (AC5's inverted-predicate catastrophe). Pin it at
+  # the source: the connector lives on web-2, the replaceable cattle standby — web-1 is
+  # LUKS-pinned and `web-host-replace` refuses it, so it can never carry a binary fix.
+  assert "server.tf pins the connector predicate to web-2 (each.key == \"web-2\")" \
+    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-2\"' '$SCRIPT_DIR/server.tf'"
 
   rm -rf "$RENDER_SCRATCH"
 else

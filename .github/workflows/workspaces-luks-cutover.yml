@@ -90,8 +90,8 @@ permissions:
 
 env:
   INFRA_DIR: apps/web-platform/infra
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
   # web-1 private IP — single source for BOTH the bridge `server-ip` (NAT redirect
   # scope) and the Run step `WEB_HOST` (dial target). They MUST match or the
   # redirect misses the SSH; defining once removes that drift foot-gun.

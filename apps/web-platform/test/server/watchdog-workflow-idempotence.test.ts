@@ -111,8 +111,9 @@ describe("tracker lookups list by label, never search (#8495)", () => {
   it("finds every lookup site in both workflows (anti-vacuity)", () => {
     expect(lookups.length).toBeGreaterThanOrEqual(19);
     // The title-filtered set is the #8495 rewrite (15 converted sites) plus the two standing
-    // fill-rate create-or-comment steps (#7521): 17.
-    expect(lookups.filter((l) => l.line.includes("select(.title")).length).toBe(17);
+    // fill-rate create-or-comment steps (#7521) plus the connector-version dedupe lookup
+    // (ci/tunnel-connector-version, eMudhra floor): 18.
+    expect(lookups.filter((l) => l.line.includes("select(.title")).length).toBe(18);
     expect(new Set(lookups.map((l) => l.file)).size).toBe(2);
     for (const l of lookups) expect(l.title, l.line).toMatch(/^\[ci\/[a-z0-9-]+\] /);
   });

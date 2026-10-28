@@ -50,6 +50,8 @@ vi.mock("@/lib/supabase/tenant", () => ({
 }));
 
 import { ensureGitDataRemote, gitDataRemoteUrl } from "../server/git-data-replication";
+import { fetchFromGitData } from "../server/git-data-client";
+import { gitWithPrivateKeyAuth } from "../server/git-auth";
 
 const APP_ROOT = resolve(__dirname, "..");
 const INFRA = join(APP_ROOT, "infra");
@@ -58,6 +60,7 @@ const APP_TS = join(APP_ROOT, "server", "git-data-replication.ts");
 
 const WS = "11111111-1111-4111-8111-111111111111";
 const WT = "55555555-5555-4555-8555-555555555555";
+const USER = "77777777-7777-4777-8777-777777777777";
 const STORE_PREFIX = "/mnt/git-data/repositories";
 // The pre-fix prefix (the incident), used only by the negative control and R-STALE.
 const OLD_PREFIX = "/repositories";
@@ -137,6 +140,28 @@ function makeClone(name: string): string {
   expect(git(dir, ["symbolic-ref", "HEAD", "refs/heads/main"]).status).toBe(0);
   expect(git(dir, ["commit", "-q", "--allow-empty", "-m", name]).status).toBe(0);
   expect(git(dir, ["tag", "v1"]).status).toBe(0);
+  return dir;
+}
+
+// (#8211 fix-forward 2) The app's workspace clones are ALWAYS `git clone --depth 1`
+// (ensure-workspace-repo.ts), so the store must accept pushes whose history bottoms out
+// at the client's shallow boundary, and the overlay fetch must accept a pack cut at the
+// STORE's shallow boundary. A `file://` clone with --depth goes through the real transport
+// (no hardlink shortcut), so the shallowness is real protocol state — asserted, because a
+// full-clone fixture would let every shallow case pass vacuously (Guard-1 mutation row 5).
+function makeShallowClone(name: string): string {
+  const origin = join(work, `${name}-origin`);
+  mkdirSync(origin, { recursive: true });
+  expect(git(origin, ["init", "-q"]).status).toBe(0);
+  expect(git(origin, ["symbolic-ref", "HEAD", "refs/heads/main"]).status).toBe(0);
+  // >=3 commits so the clone's boundary actually truncates history.
+  for (const m of ["a", "b", "c"]) {
+    expect(git(origin, ["commit", "-q", "--allow-empty", "-m", `${name}-${m}`]).status).toBe(0);
+  }
+  const dir = join(work, name);
+  const c = git(work, ["clone", "-q", "--depth", "1", `file://${origin}`, dir]);
+  expect(c.status, c.stderr).toBe(0);
+  expect(git(dir, ["rev-parse", "--is-shallow-repository"]).stdout.trim()).toBe("true");
   return dir;
 }
 
@@ -318,6 +343,96 @@ describe("R-PUSH / R-FETCH / R-STALE: real git -> real wrapper", () => {
     expect(dialedCommands()).toContain(`git-upload-pack '${STORE_PREFIX}/${WS}.git'`);
     expect(git(fetcher, ["rev-parse", "refs/remotes/git-data/main"]).stdout.trim()).toBe(
       git(pusher, ["rev-parse", "refs/heads/main"]).stdout.trim(),
+    );
+  });
+
+  it("R-PUSH-SHALLOW: a --depth 1 workspace clone's push is accepted by the store", () => {
+    const bare = makeBare(WS);
+    const shallow = makeShallowClone("shallow-push");
+    ensureGitDataRemote(shallow, WS);
+    // A session's work: the pushed tip is new, not just the cloned boundary.
+    expect(git(shallow, ["commit", "-q", "--allow-empty", "-m", "session-work"]).status).toBe(0);
+    const push = git(
+      shallow,
+      ["push", "--force", "git-data", `refs/heads/*:refs/soleur/worktrees/${WT}/heads/*`],
+      transportEnv(),
+    );
+    expect(push.status, push.stderr).toBe(0);
+    const sha = git(shallow, ["rev-parse", "refs/heads/main"]).stdout.trim();
+    expect(
+      git(bare, ["rev-parse", `refs/soleur/worktrees/${WT}/heads/main`]).stdout.trim(),
+    ).toBe(sha);
+
+    // Guard-1 mutation row 3: a second shallow clone, different origin and a different
+    // worktree id — the flag rides the verb, never this fixture's identity.
+    const WT2 = "66666666-6666-4666-8666-666666666666";
+    const shallow2 = makeShallowClone("shallow-push-2");
+    ensureGitDataRemote(shallow2, WS);
+    const push2 = git(
+      shallow2,
+      ["push", "--force", "git-data", `refs/heads/*:refs/soleur/worktrees/${WT2}/heads/*`],
+      transportEnv(),
+    );
+    expect(push2.status, push2.stderr).toBe(0);
+    expect(
+      git(bare, ["rev-parse", `refs/soleur/worktrees/${WT2}/heads/main`]).stdout.trim(),
+    ).toBe(git(shallow2, ["rev-parse", "refs/heads/main"]).stdout.trim());
+  });
+
+  it("R-FETCH-OVERLAY: production fetchFromGitData lands git-data/* in a shallow clone when the store pack is boundary-cut", async () => {
+    const bare = makeBare(WS);
+    // The store is shallow because it accepted a shallow push — the state the
+    // wrapper's `-c receive.shallowUpdate=true` produces. Seeded on the fixture
+    // repo directly (the repo-local equivalent of the exec-time flag) so this
+    // case's RED pins the FETCH argv, not the receive half — R-PUSH-SHALLOW
+    // covers the receive half end-to-end through the real wrapper.
+    expect(git(bare, ["config", "receive.shallowUpdate", "true"]).status).toBe(0);
+    const pusher = makeShallowClone("overlay-pusher");
+    expect(git(pusher, ["commit", "-q", "--allow-empty", "-m", "replicated-work"]).status).toBe(
+      0,
+    );
+    const pushedSha = git(pusher, ["rev-parse", "refs/heads/main"]).stdout.trim();
+    const seed = git(pusher, [
+      "push",
+      `file://${bare}`,
+      `refs/heads/*:refs/soleur/worktrees/${WT}/heads/*`,
+    ]);
+    expect(seed.status, seed.stderr).toBe(0);
+    // The fetcher is shallow too and holds NONE of the pushed objects (its own
+    // origin), so the pack the store sends is cut at the store's shallow root —
+    // the fetch must update .git/shallow, which git refuses without
+    // --update-shallow (and it refuses QUIETLY: fetch exits 0 with the
+    // `shallow roots are not allowed to be updated` warning and lands no ref).
+    const fetcher = makeShallowClone("overlay-fetcher");
+
+    vi.stubEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY", "transport-key");
+    // Real-git passthrough of gitWithPrivateKeyAuth: the PRODUCTION argv
+    // (fetchFromGitData's own flag order) drives a real `git fetch` through the
+    // ssh shim into the REAL wrapper's upload-pack — a canned answer would leave
+    // the ref-landing assertion unexercised (Guard-2 mutation row 5).
+    const passthrough: typeof gitWithPrivateKeyAuth = async (args, _key, _pin, opts = {}) => {
+      const r = spawnSync("git", args, {
+        cwd: opts.cwd,
+        env: transportEnv(),
+        encoding: "utf8",
+      });
+      if (r.status !== 0) {
+        throw Object.assign(new Error(`git ${args[0]} exited ${r.status}: ${r.stderr}`), {
+          stderr: r.stderr,
+        });
+      }
+      return Buffer.from(r.stdout ?? "");
+    };
+    vi.mocked(gitWithPrivateKeyAuth).mockImplementation(passthrough);
+
+    await fetchFromGitData({
+      userId: USER,
+      workspaceId: WS,
+      worktreeId: WT,
+      workspacePath: fetcher,
+    });
+    expect(git(fetcher, ["rev-parse", "refs/remotes/git-data/main"]).stdout.trim()).toBe(
+      pushedSha,
     );
   });
 

@@ -293,10 +293,15 @@ fi
 assert_no_grep "C.1c: dns.tf does NOT reference hcloud_server.web[\"web-2\"] (literal defense-in-depth)" dns.tf \
   'hcloud_server\.web\["web-2"\]'
 
-# C.2 — the single tunnel connector predicate still gates registration to web-1 (each.key=="web-1"),
-#       so web-2 never registers as a tunnel connector (ADR-114 I1 — no coin-flipped ingress).
-assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-1\"" server.tf \
-  'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-1"'
+# C.2 — the single tunnel connector predicate gates registration to web-2 (each.key=="web-2").
+#       The connector moved off web-1 permanently (LUKS-pinned, `web-host-replace` refuses it —
+#       it could never carry the cloudflared >= 2026.10.2 eMudhra fix). A connector on web-2 is
+#       NOT pooling: it serves management-plane ingress only, proxying to the origin-relative
+#       private IPs (deploy./ssh. → web-1's 10.0.1.10, registry. → 10.0.1.30) — it puts no
+#       app.soleur.ai weight on web-2. The predicate's pin matters the other way now: exactly
+#       ONE host registers (ADR-114 I1), and it must be the replaceable one.
+assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-2\"" server.tf \
+  'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-2"'
 
 # C.3 — no cloudflare_load_balancer pools web-2 at weight>0 (pre-flip). With the LB now
 #       landed (Phase 6 overlay-add, ADR-068 §(b)), the assertion tightens to: no pool origin

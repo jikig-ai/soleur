@@ -20,8 +20,12 @@ on:
       - "apps/web-platform/test/rls-fuzz/**"
       - "apps/web-platform/scripts/rls-parity-check.ts"
       - "apps/web-platform/scripts/supabase-local.sh"
+      - "apps/web-platform/supabase/config.toml"
       - "apps/web-platform/package.json"
       - ".github/workflows/rls-authz-fuzz.yml"
+      - ".github/scripts/ghcr-pull-with-retry.sh"
+      - ".github/scripts/supabase-pre-pull-images.sh"
+      - ".github/scripts/test/test-rls-fuzz-ghcr-resilience.sh"
   workflow_dispatch: {}
 
 permissions:
@@ -34,7 +38,10 @@ concurrency:
 jobs:
   rls-fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
     env:
       # The local disposable stack DSN (loopback — the harness DSN allowlist enforces it).
       RLS_FUZZ_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:54322/postgres
@@ -46,6 +53,34 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # #10868: GHCR's anonymous pull bucket for the `supabase` org namespace is
+      # shared across every GitHub-hosted runner (`allowed: 44000/minute`,
+      # measured). Logging in first moves `supabase start`'s image pulls onto
+      # the authenticated path — the Supabase CLI reads ~/.docker/config.json
+      # via GetRegistryAuth() (internal/utils/docker.go upstream) and attaches
+      # it as RegistryAuth on every pull. The default post-step logout removes
+      # the token at job end — deliberately left unconfigured.
+      #
+      # Same-repo refs only: `pull_request` runs fork code, and login
+      # materializes the GITHUB_TOKEN into ~/.docker/config.json for the whole
+      # job — a fork PR touching in-scope files could read it. Forks keep the
+      # anonymous path plus the retry helper below, which is exactly its
+      # fallback purpose.
+      - name: Log in to GHCR (authenticated pulls for the Supabase image set)
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No reachability probe: every registry (ghcr, ECR) throttles even
+      # single manifest calls on a shared runner IP — measured across runs
+      # 40525753531/40561028313/40572250940/40573437435/40574945720/
+      # 40575928811. A probe is a guaranteed failure source, not a signal —
+      # the pre-pull loop IS the control (a cache hit issues zero requests;
+      # a miss tries ECR then ghcr per image through the retry helper).
+
       # Pin the CLI/GoTrue version to prod's — the ADR-111 parity contract (the
       # diff catches catalog shape; the version pin controls claim-parsing behavior).
       - name: Install Supabase CLI
@@ -53,13 +88,36 @@ jobs:
         with:
           version: 2.84.2
 
+      # #10868 (measured runs 40525753531/40561028313/40572250940/40573437435):
+      # the 44000/min org bucket AND the ECR bandwidth cap are shared-IP
+      # lotteries — auth, whole-command retry, AND registry rotation all lose
+      # to sustained contention. The image-set tarball cache restores the last
+      # pulled set from disk: a hit issues ZERO registry requests
+      # (forks get the base branch's read-only cache). On a miss the script
+      # pulls each image SERIALLY through the retry helper — ECR mirror first,
+      # ghcr fallback — then rewrites the tarball for the next run.
+      - name: Restore Supabase image cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/supabase-img-cache
+          key: supabase-imgs-${{ hashFiles('.github/scripts/supabase-pre-pull-images.sh', 'apps/web-platform/supabase/config.toml') }}
+          restore-keys: supabase-imgs-
+      - name: Pre-pull Supabase image set (serial, per-image retry)
+        working-directory: apps/web-platform
+        env:
+          SUPABASE_IMG_CACHE_DIR: ${{ runner.temp }}/supabase-img-cache
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/supabase-pre-pull-images.sh"
+
       # Started via the wrapper, NOT bare `supabase start`. The CLI has no
       # bind-address setting (supabase/cli#4613 closed unmerged on policy), so a
       # bare start publishes every service on 0.0.0.0 + ::. The wrapper applies a
       # loopback-bound Docker network. See ADR-153.
+      # #10868: bounded retry gated on the daemon's `toomanyrequests` token —
+      # deterministic failures (incl. the wrapper's rc-2 class) still exit on
+      # attempt 1. Contract: .github/scripts/ghcr-pull-with-retry.sh.
       - name: Start local Supabase stack (loopback-bound)
         working-directory: apps/web-platform
-        run: ./scripts/supabase-local.sh start
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" ./scripts/supabase-local.sh start
 
       # Fail the job if the stack is reachable off-loopback. Runs BEFORE the
       # bootstrap step so a mis-bound runner never gets seeded with fixture data.

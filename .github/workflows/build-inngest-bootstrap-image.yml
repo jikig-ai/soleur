@@ -622,8 +622,8 @@ jobs:
           # scoped to the `prd_terraform` branch and cannot read prd root. DOPPLER_TOKEN_PRD is
           # the prd-scoped token (see reusable-release.yml for the full rationale).
           doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
-          cloudflared-version: "2026.5.0"
-          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          cloudflared-version: "2026.10.4"
+          cloudflared-sha256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
       - name: Mirror inngest image GHCR→zot (crane, digest-preserving)
         id: zot_mirror

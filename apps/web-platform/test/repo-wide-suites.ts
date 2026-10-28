@@ -29,6 +29,7 @@
 export const REPO_WIDE_SUITES: readonly string[] = [
   "test/agent-outer-wrap.test.ts",
   "test/agent-runner-system-prompt.test.ts",
+  "test/build-allowed-tools-census.test.ts",
   "test/c4-canonical-mirror.test.ts",
   "test/c4-config-name-parity.test.ts",
   "test/c4-diagram-path-scope.test.ts",
