@@ -9,6 +9,7 @@ status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the controller for the third-party personal data recorded, as this activity runs today — every store owner is Jikigai personnel (corrected 2026-08-11, #7349 B4; the operator-as-controller / Jikigai-as-processor split assessed at first issue applies only if a non-Jikigai operator ever runs the store)"
 processing_activity: "Owner-private beta-tester / prospect CRM capture store — Article 30 register Processing Activity 30"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
+addenda: ["2026-10-28 (#11303) — the agent write-path approval gate was not enforced in the hosted legacy runner during the exposure window"]
 data_subjects: "Beta testers / prospects the operator converses with (involuntary third-party data subjects); the operator (owner)"
 related:
   - knowledge-base/legal/article-30-register.md (PA-30)
@@ -113,6 +114,17 @@ An individual beta tester's Art. 17 erasure request is fulfilled via the auditab
 - Any outbound send authority to the CRM contacts is added (defer to / merge with the outbound-email LIA).
 - Retention horizon changes, or the store gains a non-owner (workspace-shared) visibility mode.
 - The agent write path is de-gated (auto-approve) — the human-approval gate is a load-bearing safeguard in this balancing.
+
+> **Addendum 2026-10-28 (#11303, CLO determination).** The last trigger above fired **inadvertently**:
+> in the hosted legacy agent runner the `crm_*` write tools were pre-approved by SDK `allowedTools`
+> and ungated during the exposure window (2026-04-06 to 2026-10-28, caller-supplied and unverified
+> by the CLO; fixed by PR #11304 / ADR-305; ADR-305 records that the cc-soleur-go path ran them
+> through the gate). The statements above that agent writes are human-gated describe the design and
+> the position from the fix. No telemetry measures whether any CRM write ran ungated (NOT MEASURED).
+> The balancing is not voided: the store is owner-private, every store owner is Jikigai personnel,
+> there is no third-party recipient, and the exposure is within-tenant alteration by the owner's own
+> agent rather than disclosure. No re-run is required on present evidence. Determination:
+> `knowledge-base/legal/audits/2026-10-28-clo-determination-11303-gated-tier-allowedtools-bypass.md`.
 
 ---
 

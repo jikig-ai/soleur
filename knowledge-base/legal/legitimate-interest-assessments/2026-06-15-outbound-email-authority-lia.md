@@ -8,7 +8,7 @@ status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"
 processing_activity: "Agent-assisted, human-approved outbound cold email for founder 1:1 outreach (`outbound.soleur.ai`) — Article 30 register Processing Activity 28"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
-addenda: ["2026-09-23 (#8617) — plaintext footprint outside the outbound tables"]
+addenda: ["2026-09-23 (#8617) — plaintext footprint outside the outbound tables", "2026-10-28 (#11303) — the per-send approval gate was not enforced in the hosted legacy runner during the exposure window"]
 data_subjects: "Outbound recipients (involuntary data subjects whose contact details were NOT obtained from them — Art. 14 applies); the founder/operator"
 related:
   [
@@ -239,6 +239,24 @@ protective of the data subject or fails the purpose.
 > accountability record all survive. The larger footprint sits in conversation content already
 > covered by the Web Platform processing activity. The #3418 disclosure and erasure gap is a
 > named residual.
+
+> **Addendum 2026-10-28 (#11303, CLO determination) — the per-send human-approval gate was not
+> enforced in the hosted legacy agent runner during the exposure window; the conclusion stands.**
+> The Re-evaluation trigger "any move to auto-send (removal or bypass of the per-send human-approval
+> gate)" fired **inadvertently**: SDK `allowedTools` pre-approved `email_send`, `email_reply` and
+> `email_suppress`, so the review card was skipped (window 2026-04-06 to 2026-10-28, caller-supplied
+> and unverified by the CLO; fixed by PR #11304 / ADR-305). Every statement above that the gate
+> operates ("the decisive safeguard", "human-approved") describes the design and the position from
+> the fix; it did not describe the window. Why the balancing is not voided: the chokepoint
+> `sendCompliantOutbound` stayed the only send path (the other trigger, "a second send path that
+> bypasses `sendCompliantOutbound`", did not fire), `outbound_sends` held 0 rows for all time on
+> 2026-10-28 so no send is recorded in the window, the send path was enabled
+> (`OUTBOUND_SENDING_DOMAIN_VERIFIED` = `true`, read 2026-10-28), Sentry shows no
+> `outbound.record_error` or `outbound.send_error` for the last 90 days, and the gate operates again.
+> That is PROVISIONAL on the earlier part of the window (before about 2026-07-30), which rests on
+> the empty ledger alone because the audit row is written after the Resend dispatch. No re-run of
+> the balancing is required on present evidence; it is required if any later evidence shows a send
+> in the window. Determination: `knowledge-base/legal/audits/2026-10-28-clo-determination-11303-gated-tier-allowedtools-bypass.md`.
 
 ---
 
