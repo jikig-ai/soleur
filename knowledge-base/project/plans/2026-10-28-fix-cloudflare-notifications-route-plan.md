@@ -108,7 +108,7 @@ The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and s
 ### Phase 1: Correct the retained Notifications route
 
 1. In `plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh`, change only the Notifications `DT_ROWS` row's URL and displayed label to `$API/accounts/$ACCT/alerting/v3/policies`; keep `retained`, the account scheme, array response type, and `trust404=0` semantics.
-2. In `plugins/soleur/test/cf-token-scope.test.sh`, retarget the stub curl matcher to the documented path and add URL-log assertions that resolve the account ID and prove the old path is absent.
+2. In `plugins/soleur/test/cf-token-scope.test.sh`, dispatch the Notification mock only for the path-ending documented URL; assert the complete dry-run Notification recipe and all six live default-token URLs exactly, including each resolved account/zone ID and the Notification no-query requirement.
 3. Add a Notifications-only 200 fixture with a synthesized policy object in an array; assert the Notification row says `authorized (200)`, the run exits 0, and the existing expected LB 403 rows remain neutral in baseline mode.
 4. Add a Notifications-only 404 fixture with LB rows still 403; assert exit 3, the Notification row is `denied (404, unverified — fail-closed)`, and `PASS: no scope dropped` is absent.
 5. Add Notification degraded-200 cases (`success: false` with an array result and `success: true` with an object result) that exit 3, pinning both classifier conditions on this endpoint.
@@ -123,7 +123,7 @@ The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and s
 ### Files to Edit
 
 - `plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh` — the Notifications row's URL and displayed label only.
-- `plugins/soleur/test/cf-token-scope.test.sh` — curl dispatch fixture, route assertions, success/404/degraded scenarios, and sibling-profile regressions.
+- `plugins/soleur/test/cf-token-scope.test.sh` — exact Notification mock dispatch, whole-line dry-run/live URL assertions for all six default-token rows, success/404/degraded/wrong-shape scenarios, and sibling-profile regressions.
 - `plugins/soleur/skills/cf-token-scope/SKILL.md` — matching route in the documented endpoint table.
 
 ### Files to Create
@@ -138,7 +138,7 @@ The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and s
 
 **Property.** The default-token Notifications row displays and requests Cloudflare's documented account Alerting API path, and is green only when the existing classifier accepts an authorized array-shaped 200; every 404 remains a hard failure.
 
-**Assembly.** `DT_ROWS` is the single source for dry-run output and the default-token runtime loop; `plugins/soleur/test/cf-token-scope.test.sh` observes the emitted URL through its curl URL log, routes the mock response by URL, and checks retained-row verdicts and exit status. The rulesets branch is separate and remains covered by its existing C-series and D10 back-compat scenarios.
+**Assembly.** `DT_ROWS` is the single source for dry-run output and the default-token runtime loop; `plugins/soleur/test/cf-token-scope.test.sh` requires all six live default-token URLs as whole lines, pins the dry-run Notifications URL with an end-of-line assertion, dispatches the Notifications mock only for the path-ending URL, and checks retained-row verdicts and exit status. The rulesets branch is separate and remains covered by its existing C-series and D10 back-compat scenarios.
 
 **Mutation matrix:**
 
@@ -148,10 +148,11 @@ The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and s
 | 2 | Remove the Notifications row from `DT_ROWS` after a passing row | RED: the test's explicit documented-route assertion and expected default-token dispatch fail |
 | 3 | Change the Notifications row's expected response type from `array` to `object` | RED: the array-shaped Notification 200 fixture no longer classifies as authorized |
 | 4 | Make a retained Notification 404 neutral or print the success summary after it | RED: the Notification 404 scenario requires exit 3 and no `PASS: no scope dropped` |
+| 5 | Append `/extra` to the Notifications URL or allow an arbitrary suffix in the mock case | RED: exact dry-run/runtime URL assertions fail and the URL no longer reaches the Notifications mock |
 
 **Harness rows:**
 
-- Suite mutation that must be RED: change the mock curl dispatch case to match a different path while leaving the exact URL assertion intact; the test run must fail rather than fall through to a generic authorized response.
+- Suite mutation that must be RED: append `/extra` to the route in a scratch copy; the exact dry-run and runtime URL assertions must fail, and the mock must fall through rather than answer an authorized Notification response.
 - Must-PASS non-canonical input: return `200: {"success":true,"result":[{"id":"synthetic-policy-id"}]}` for Notifications while the two LB rows return their expected baseline 403; the Notification row must still classify authorized.
 
 **Anchor.** The expected route is grounded in Cloudflare's official List Notification policies reference, which is outside this commit. Keep its URL cited beside the test scenario so a coordinated code+fixture path change cannot be presented as independent evidence that a nonexistent route is valid.
@@ -228,10 +229,10 @@ None. `gh issue list --label code-review --state open` returned no issue whose b
 ## Acceptance Criteria
 
 - [x] The `default-token` Notifications row dispatches `GET /accounts/{account_id}/alerting/v3/policies` through `DT_ROWS`; no old `/notification_policies` path remains in the source, test dispatch, or profile documentation.
-- [x] The curl URL-log test proves the exact documented path is requested with the resolved account ID and is the route selected by the mock.
+- [x] The curl URL-log test proves all six complete default-token URLs and resolved IDs; the Notification route is exact and occurs once, dry-run prints the exact path without a query or suffix, and the mock selects only the path-ending route.
 - [x] An authorized Notification 200 with `success: true` and array-valued `result` is reported as `authorized (200)` and can pass the default-token baseline when all retained rows authorize and LB 403 rows are at baseline.
 - [x] A Notification 404 remains `denied (404, unverified — fail-closed)`, returns exit 3, and cannot be neutralized by the expected LB 403 rows; degraded/wrong-shape 200 responses also fail.
-- [x] Existing Tunnel, Access, DNS, account LB pools, zone Load Balancers, and rulesets profile URL/classification regression cases remain green with their existing behavior.
+- [x] Existing Tunnel, Access, DNS, account LB pools, zone Load Balancers, and rulesets profile URL/classification regression cases remain green with their exact existing request URLs.
 - [x] The learning file is included byte-identically with the supplied SHA-256, and its source copy is not removed or modified.
 - [x] `bash plugins/soleur/test/cf-token-scope.test.sh` passes with zero failures.
 - [x] No Cloudflare permissions/token, Doppler value, infrastructure, workflow, cutover, or web-2 weight/structural-exclusion state is changed; verify the infra/workflow diff is empty with `git diff --quiet origin/main...HEAD -- apps/web-platform/infra .github/workflows`; epic #11181 remains open (PR references it without a close keyword).
@@ -253,11 +254,12 @@ Run the focused shell suite:
 bash plugins/soleur/test/cf-token-scope.test.sh
 ```
 
-- **unit — URL dispatch:** Given `--profile default-token`, when the stub curl URL log is captured, then the Notification request is exactly `https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/alerting/v3/policies`, includes the resolved account ID, contains no pagination suffix, and the displayed row label matches the documented path.
+- **unit — URL dispatch:** Given `--profile default-token`, when the stub curl URL log is captured, then all six default-token request URLs match their expected complete lines and resolved IDs, including the Notification request `https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/alerting/v3/policies` exactly once, with no query suffix; the mock arm is anchored to the path ending.
+- **unit — dry-run route:** Given `--profile default-token --dry-run`, then exactly one Notifications recipe ends in `https://api.cloudflare.com/client/v4/accounts/$ACCT/alerting/v3/policies` with no query or extra path, and no curl request is issued.
 - **unit — successful Notification 200:** Given a Notification response of `200` with `success: true` and a non-empty array `result`, while both LB rows return baseline 403, when the default-token profile runs, then Notifications is `authorized (200)`, the process exits 0, and the LB rows remain `not-yet-widened` without masking retained-row failures.
 - **unit — Notification 404 fail-closed:** Given the Notification URL returns 404 and the LB target rows return baseline 403, when the default-token profile runs, then it exits 3, reports `denied (404, unverified — fail-closed)`, and omits `PASS: no scope dropped`.
-- **unit — degraded/wrong-shape Notification responses:** Given a Notification 200 with `success: false` and an array result, or `success: true` and an object result, when the default-token profile runs, then it exits 3 and does not report Notifications authorized.
-- **unit — default-token route regressions:** Given successful mock responses, when the profile runs, then Tunnel, Access, DNS, account LB pools, and zone Load Balancers are requested with their existing route paths and resolved IDs; the LB baseline-neutrality and `--expect-lb-scopes` cases keep their prior results.
+- **unit — degraded/wrong-shape Notification responses:** Given both LB rows return baseline 403 and a Notification 200 has `success: false` with an array result or `success: true` with an object result, when the default-token profile runs, then it exits 3 and does not report Notifications authorized.
+- **unit — default-token route regressions:** Given successful mock responses, when the profile runs, then Tunnel, Access, DNS, account LB pools, and zone Load Balancers each match their exact existing URL and resolved ID; the LB baseline-neutrality and `--expect-lb-scopes` cases keep their prior results.
 - **unit — rulesets profile regression:** Given no profile flag or explicit `--profile rulesets`, when the existing rulesets scenarios run, then dry-run output remains identical and the C-series behavior remains unchanged.
 - **unit — docs/profile parity:** Given the updated skill documentation, when reviewing the route table alongside the implementation, then both name `/accounts/{account_id}/alerting/v3/policies` and no stale Notifications path remains in the profile documentation.
 - **artifact integrity:** Given the learning source and PR copy, when the PR copy's SHA-256 is computed, then it equals `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250` and the source copy remains present and unchanged.

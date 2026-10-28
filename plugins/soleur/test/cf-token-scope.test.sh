@@ -86,7 +86,7 @@ case "$url" in
   *cfd_tunnel*)                    spec="${MOCK_TUNNEL:-$ACCT_AUTH}" ;;
   *access/apps*)                   spec="${MOCK_ACCESS:-$ACCT_AUTH}" ;;
   *dns_records*)                   spec="${MOCK_DNS:-$ACCT_AUTH}" ;;
-  *alerting/v3/policies*) spec="${MOCK_NOTIF:-$ACCT_AUTH}" ;;
+  https://api.cloudflare.com/client/v4/accounts/*/alerting/v3/policies) spec="${MOCK_NOTIF:-$ACCT_AUTH}" ;;
   *load_balancers/pools*)          spec="${MOCK_LB_POOLS:-$ACCT_AUTH}" ;;
   *load_balancers*)                spec="${MOCK_LB_ZONE:-$ACCT_AUTH}" ;;
   */rulesets)                      spec="${MOCK_ACCT:-$ACCT_AUTH}" ;;
@@ -281,6 +281,12 @@ has "doppler secrets get CF_API_TOKEN " "D1 dry-run resolves the token secret to
 for u in cfd_tunnel access/apps dns_records alerting/v3/policies "load_balancers/pools" 'zones/$ZONE/load_balancers'; do
   has "$u" "D1 dry-run prints the $u row"
 done
+if grep -qE '^curl .* https://api\.cloudflare\.com/client/v4/accounts/\$ACCT/alerting/v3/policies$' "$OUTFILE" \
+   && [[ "$(grep -cE '^curl .*accounts/\$ACCT/alerting/v3/policies' "$OUTFILE" || true)" == "1" ]]; then
+  ok "D1 dry-run prints exactly one Notifications URL with no query or suffix"
+else
+  no "D1 dry-run Notifications recipe is not the exact documented URL"
+fi
 src_lacks 'notification_policies' "D1 source no longer contains the legacy Notifications route"
 # shellcheck disable=SC2016  # the literal, unexpanded '$TOK' is exactly the assertion
 has '"$TOK"' "D1 dry-run keeps the token var unexpanded"
@@ -304,24 +310,31 @@ D2MARK="$WORK/d2-doppler-requests"
 D2URLS="$WORK/d2-curl-urls"
 : >"$D2MARK"
 LB403='403:{"success":false,"errors":[{"code":10000}]}'
+TUNNEL_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/cfd_tunnel?per_page=1'
+ACCESS_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/access/apps?per_page=1'
+DNS_URL='https://api.cloudflare.com/client/v4/zones/zone0123456789abcdef/dns_records?per_page=1'
+NOTIF_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/alerting/v3/policies'
+LB_POOLS_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/load_balancers/pools?per_page=1'
+LB_ZONE_URL='https://api.cloudflare.com/client/v4/zones/zone0123456789abcdef/load_balancers?per_page=1'
 MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
-# RUN-PATH URL ASSEMBLY pin (design-pass P2): the mock-substring arms match on
-# path fragments, so a broken $ZONE/$ACCT placeholder substitution would sail
-# through every verdict assertion. Assert the ACTUAL requested URLs carry the
-# resolved ids and no literal placeholder survives.
+# RUN-PATH URL ASSEMBLY pin (design-pass P2): inspect the actual request URLs,
+# not only the mock's response, so wrong IDs, suffixes, or path/query drift red.
 if [[ -s "$D2URLS" ]] \
-   && grep -q "zones/zone0123456789abcdef/dns_records" "$D2URLS" \
-   && grep -q "zones/zone0123456789abcdef/load_balancers" "$D2URLS" \
-   && grep -q "accounts/acct9876543210fedcba/load_balancers/pools" "$D2URLS" \
-   && grep -qF -- 'https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/alerting/v3/policies' "$D2URLS" \
-   && ! grep -qF -- '/notification_policies' "$D2URLS" \
-   && ! grep -qF -- 'alerting/v3/policies?' "$D2URLS" \
-   && ! grep -q '\$ZONE\|\$ACCT' "$D2URLS"; then
-  ok "D2 run-path URLs carry resolved ids; Notifications uses the exact documented URL without the legacy route or query suffix"
+   && grep -Fxq -- "$TUNNEL_URL" "$D2URLS" \
+   && grep -Fxq -- "$ACCESS_URL" "$D2URLS" \
+   && grep -Fxq -- "$DNS_URL" "$D2URLS" \
+    && grep -Fxq -- "$NOTIF_URL" "$D2URLS" \
+   && grep -Fxq -- "$LB_POOLS_URL" "$D2URLS" \
+   && grep -Fxq -- "$LB_ZONE_URL" "$D2URLS" \
+    && ! grep -qF -- '/notification_policies' "$D2URLS" \
+    && ! grep -q '\$ZONE\|\$ACCT' "$D2URLS"; then
+  ok "D2 all six run-path URLs are exact; Notifications has no legacy route or query suffix"
 else
-  no "D2 run-path URL assembly or Notifications route is wrong (see $D2URLS)"
+  no "D2 run-path URL assembly or profile route is wrong (see $D2URLS)"
 fi
+assert_eq "D2 logs exactly six profile URLs" 6 "$(wc -l < "$D2URLS" | tr -d '[:space:]')"
+assert_eq "D2 logs exactly one exact Notifications URL" 1 "$(grep -Fxc -- "$NOTIF_URL" "$D2URLS" || true)"
 has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+authorized \(200\)' "D2 Notifications array-shaped 200 remains authorized with both LB rows at baseline 403"
 has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 pools row prints per-row not-yet-widened (403, err 10000)"
 has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 zone-LB row prints not-yet-widened too (per-row, not aggregate)"
@@ -371,18 +384,22 @@ lacks "PASS: no scope dropped" "D3n Notifications 404 prevents the retained-scop
 unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
 
 # --- D3m: a degraded Notification 200 is not authorization. ---
-MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":false,"result":[]}' run "$MOCKPATH" --profile default-token
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":false,"result":[]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 3 "D3m degraded Notifications 200 -> exit 3"
 has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3m degraded Notifications 200 is reported, not authorized"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3m expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3m expected zone LB 403 remains baseline-neutral"
 lacks "PASS: no scope dropped" "D3m degraded Notifications response prevents the retained-scope PASS"
-unset MOCK_NOTIF
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
 
 # --- D3w: a Notification 200 with an object result violates the account-array contract. ---
-MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":true,"result":{"id":"synthetic-policy-id"}}' run "$MOCKPATH" --profile default-token
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":true,"result":{"id":"synthetic-policy-id"}}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 3 "D3w wrong-shape Notifications 200 -> exit 3"
 has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3w Notifications object result is rejected by the array contract"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3w expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3w expected zone LB 403 remains baseline-neutral"
 lacks "PASS: no scope dropped" "D3w wrong-shape Notifications response prevents the retained-scope PASS"
-unset MOCK_NOTIF
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
 
 # --- D4: fail-closed layers hold on the new endpoints ---
 MOCK_DNS='200:{"success":true,"result":null}' run "$MOCKPATH" --profile default-token
