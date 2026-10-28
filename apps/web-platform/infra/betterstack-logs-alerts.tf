@@ -370,16 +370,22 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
   name           = "soleur-inngest-luks-key-probe-fail-prd"
 
-  # Presence-only, so safe before the probe is delivered (no rows, value 0). A 3 h window (a 25 h
-  # one would hold an incident open for a day): while any fail_ row is inside it the count stays
-  # above 0, which is the hysteresis against the next hourly re-probe re-opening an incident. The
-  # incident clears about 3 to 4 h after the LAST failing row (the window, then recovery_period),
-  # which is not proof of recovery: only a token=ok row is.
+  # Presence-only, so safe before the probe is delivered (no rows, value 0). The probe re-emits
+  # hourly after any non-ok token, so the window is an hour and a half: a failing row stays inside
+  # it that long and the next hourly re-probe lands with ~30 min of slack — the hysteresis against
+  # that re-probe re-opening an incident. The incident clears about 1.5 to 2.5 h after the LAST
+  # failing row (the window, then recovery_period), which is not proof of recovery: only a
+  # token=ok row is.
+  #
+  # #11372 — the window was 10800 (3 h): the Better Stack API 422'd this alert's first apply as
+  # "too resource intensive" and held the targeted apply red. 5400 is the check-300/query tuple
+  # inngest_luks_wrong_volume already runs in applied state on this same source under a heavier
+  # GROUP BY query; if a 422 still fires, the next rung is check_period 900 then 3600.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
   check_period        = 300
-  query_period        = 10800
+  query_period        = 5400
   confirmation_period = 0
   recovery_period     = 3600
   on_missing_data     = "treat_as_zero"
