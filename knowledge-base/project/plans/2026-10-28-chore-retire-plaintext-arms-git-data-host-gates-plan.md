@@ -24,7 +24,7 @@ requires_cpo_signoff: true
 
 ### Verified at deepen time
 
-- Rung-2 hash set (`git_data_rung2_bound_files`): `cloud-init-git-data.yml`, `modules/git-data-userdata/main.tf` and its `file()` payloads; `git-data.tf`, the gate libs and the readiness-gate lib are outside it, so PR-1 and PR-2 leave rung-2 evidence valid.
+- Rung-2 hash set (`git_data_rung2_bound_files`): `cloud-init-git-data.yml`, `modules/git-data-userdata/main.tf` and its `file()` payloads; `git-data.tf`, the gate libs and the readiness-gate lib are outside it, so PR-1 and PR-2 leave rung-2 evidence valid. **Correction 2026-10-28 (PR #11432 review):** "valid" holds only against the pre-#11342 baseline; the rung-2 evidence has been stale since #11342 (2026-10-27) changed the bound payload `git-data-transport-wrapper.sh`, independently of PR-1 and PR-2. Neither PR is the cause, and neither releases the hold.
 - `plan_only` is a `workflow_dispatch` input documented for the replace routes; the create job honors it only in later steps, so the interlock runs unconditionally there.
 - #11194, #10296 and #11433 are OPEN; no open PR other than this branch's draft names #11194.
 
@@ -114,7 +114,7 @@ Cut List (mechanism → property → what already covers it):
 - Parity: `plugins/soleur/test/terraform-target-parity.test.ts` (`GIT_DATA_REPLACE_TARGETS`, `GIT_DATA_PRESERVED_VOLUMES`, `GIT_DATA_BIRTH_TARGET_BASES`, `OPERATOR_APPLIED_EXCLUSIONS`, `TEST_FLOOR`).
 - Second consumer of the replace gate's fixtures: `tests/scripts/test-git-data-wipe-wedge.sh` (its `PASS_SET` carries `VA_REPLACE`, its control row H2 and the SANCTIONED check require the real replace gate to PASS that plan): a full edit, not comment-only.
 - Interlock home: `tests/scripts/lib/git-data-birth-readiness-gate.sh` (already sourced by both dispatch jobs; not in the rung-2 hash set) and its suite `tests/scripts/test-git-data-birth-readiness-gate.sh`.
-- Rung-2 hash input set: `git_data_rung2_bound_files` = `cloud-init-git-data.yml` + `modules/git-data-userdata/main.tf` + its `file()` payloads. `git-data.tf` and the gate files are NOT bound, so PR-1 and PR-2 leave rung-2 evidence valid.
+- Rung-2 hash input set: `git_data_rung2_bound_files` = `cloud-init-git-data.yml` + `modules/git-data-userdata/main.tf` + its `file()` payloads. `git-data.tf` and the gate files are NOT bound, so PR-1 and PR-2 leave rung-2 evidence valid. **Correction 2026-10-28 (PR #11432 review):** "valid" holds only against the pre-#11342 baseline; the rung-2 evidence has been stale since #11342 (2026-10-27) changed the bound payload `git-data-transport-wrapper.sh`, independently of PR-1 and PR-2. Neither PR is the cause, and neither releases the hold.
 - Per-merge/drift: git-data resources are `OPERATOR_APPLIED_EXCLUSIONS`; `scheduled-terraform-drift.yml` runs an untargeted `terraform plan -detailed-exitcode` and files `infra: drift detected in web-platform` (report-only).
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -234,7 +234,7 @@ Order is test-first (`cq-write-failing-tests-before`): fixtures and parity pins 
 
 ### Phase 6 — PR-2 (separate worktree/branch off `main`)
 
-6.1 `apps/web-platform/infra/git-data.tf`: `git_data_volume_id = ""`, delete the `SOLEUR-DEBT:` marker line and the "is a LITERAL (the retired plaintext volume)" comment line. Update the `git_data_volume_id` variable description in `modules/git-data-userdata/variables.tf` only if it is wrong for the empty case (a description edit is not a rendered-byte change; verify with the suites, not by assumption).
+6.1 `apps/web-platform/infra/git-data.tf`: `git_data_volume_id = ""`, delete the `SOLEUR-DEBT:` marker line and the "is a LITERAL (the retired plaintext volume)" comment line. Update the `git_data_volume_id` variable description in `modules/git-data-userdata/variables.tf` only if it is wrong for the empty case (a description edit is not a rendered-byte change; verify with the suites, not by assumption). **Added 2026-10-28 (PR #11432 review): PR-2 MUST NOT edit `modules/git-data-userdata/variables.tf`** (it is in `git_data_rung2_bound_files`, so a description edit changes the hash and would re-stale the evidence the owner has just refreshed). If the variable description is wrong for the empty id, leave it and record the wrongness on #11433.
 6.2 Run the infra suites that read the module call; fix only what is red.
 6.3 PR-2 body: `Ref #11194`; first line "merging this PR alone changes no production resource"; the PR changes `user_data` so `hcloud_server.git_data` plans a replace at the dispatch and `scheduled-terraform-drift.yml` files a drift issue until then; the empty-id branch is unrehearsed (coverage: `git-data-bootstrap-store-verify.test.sh`, `git-data-store-device-census.test.sh`, the cloud-init empty-id guard; data risk nil because the LUKS volume is preserved, availability risk only); #10296 status; merge only after PR-1; run `plan_only` before any real dispatch; the real dispatch is tracked by the open #11194. No claim of end-to-end proof: `plan_only` stops before apply, so it does not exercise boot.
 6.4 The pipeline leaves PR-2 ready with CI green (the replace job is `workflow_dispatch`-only, so merging it cannot replace the host) and merges/dispatches nothing.
