@@ -911,7 +911,8 @@ sentry-checkins-3859|fixed-tmp|/tmp/ck.json|writes the fixed path /tmp/ck.json, 
 sync-health-residual-5689|fixed-tmp|/tmp/sh5689.json|writes the fixed path /tmp/sh5689.json, which a hermetic row must not touch
 cron-machinery-soak-9272|gh-chained|gh|its second and third credentialed curls (-D header file, paging) are reachable only through a gh issue/pr/api model; the fail-closed gh stub makes it exit TRANSIENT after the first call
 zot-soak-6122|gh-chained|gh|its credentialed curl sits behind START-anchor and blocker arms that call gh pr/issue view; unreachable under a fail-closed gh stub
-workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call it chains into betterstack-query.sh, a second credentialed tool with basic auth that this shim does not model'
+workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call it chains into betterstack-query.sh, a second credentialed tool with basic auth that this shim does not model
+egress-enforce-probe-11361|gh-chained|gh|its second credentialed read (the post-merge birth evidence) is a gh api workflow-runs query, reachable only through a gh model the fail-closed gh stub does not provide'
 
 # DELEGATED: name | owning test (extended in place by the conversion; not re-modelled here).
 DELEGATED_MANIFEST='post-deploy-incident-soak|scripts/followthroughs/post-deploy-incident-soak.test.sh

@@ -1,19 +1,38 @@
 // pencil-adapter-roundtrip.mjs — shared driver that runs the INSTALLED adapter
 // copy over real MCP stdio. The stub integration test points it at
 // fixtures/pencil-stub-repl.mjs; engine-contract-probe.sh points it at the
-// real `pencil` binary. Same driver on both sides keeps the stub honest.
+// real `pen` binary. Same driver on both sides keeps the stub honest.
+//
+// Engine binary: `connectAdapter({ penBinary })` is the ONE way a test or the probe chooses the
+// binary: it adds the `--pencil-binary=<abs>` argv flag the adapter honours (an env var is ignored by
+// design). An empty/absent penBinary leaves the adapter on its default resolution.
+// The adapter looks for the default binary under the passwd home first, then $HOME; `passwdHome`
+// (default: the HOME the adapter gets) is what os.userInfo().homedir reports inside the adapter
+// process (passwd-home-preload.mjs), so a test HOME is the only prefix searched.
+//
+// Credential: `connectAdapter({ keys })` sets EXACTLY the key names given (the
+// adapter accepts PEN_CLI_KEY, with PENCIL_CLI_KEY as the deprecated fallback; an
+// empty string is allowed and means "set but unset-equivalent"). The default is
+// `{ PEN_CLI_KEY: "stub-key" }`. A live-engine caller passes its resolved key
+// explicitly; there is no stub default against a real engine.
+// Crash simulation: `killAndWait(pid)` SIGKILLs and polls `kill(pid, 0)` until ESRCH
+// instead of sleeping a fixed time. `stubPid(outFile, tag)` reads the stub's pid file.
 
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { sideFile, taggedStub } from "./stub-tag.mjs";
+
+export { sideFile, taggedStub };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const SCRIPTS_DIR = resolve(HERE, "../../skills/pencil-setup/scripts");
 
 /** Install the adapter copy via copy_adapter.sh (runs `npm ci`). Throws on failure. */
 export function installAdapter(installDir) {
-  // npm ci runs here: it must not inherit the credential
-  const { PENCIL_CLI_KEY: _credential, ...inherited } = process.env;
+  // npm ci runs here: it must not inherit the credential, under either name
+  const { PEN_CLI_KEY: _k1, PENCIL_CLI_KEY: _k2, ...inherited } = process.env;
   const r = spawnSync("bash", [join(SCRIPTS_DIR, "copy_adapter.sh")], {
     env: { ...inherited, PENCIL_ADAPTER_INSTALL_DIR: installDir },
     encoding: "utf8",
@@ -27,27 +46,76 @@ export function installAdapter(installDir) {
 }
 
 /**
+ * The environment handed to the adapter process: PATH/HOME/TMPDIR, exactly the credential names in
+ * `keys`, then `extraEnv`. `key` is the legacy single-value form (PEN_CLI_KEY). It carries no engine
+ * binary: that travels in argv (adapterArgs).
+ */
+export function buildAdapterEnv({ keys, key, extraEnv = {} }) {
+  const credential = keys ?? { PEN_CLI_KEY: key ?? "stub-key" };
+  return {
+    PATH: process.env.PATH ?? "",
+    HOME: process.env.HOME ?? "",
+    TMPDIR: process.env.TMPDIR ?? "",
+    ...credential,
+    ...extraEnv,
+  };
+}
+
+/** The node argv for the installed adapter: the passwd-home preload, the adapter, then `--pencil-binary=<abs>` when given. */
+export function adapterArgs({ installDir, penBinary, passwdHome }) {
+  const preload = pathToFileURL(join(HERE, "passwd-home-preload.mjs"));
+  preload.searchParams.set("home", passwdHome);
+  return [
+    "--import",
+    preload.href,
+    join(installDir, "pencil-mcp-adapter.mjs"),
+    ...(penBinary ? [`--pencil-binary=${penBinary}`] : []),
+  ];
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code !== "ESRCH";
+  }
+};
+
+/** SIGKILL `pid` and wait until it is gone (polls kill(pid,0) every 20 ms, 5 s ceiling). Returns once ESRCH. */
+export async function killAndWait(pid, { signal = "SIGKILL", intervalMs = 20, ceilingMs = 5000 } = {}) {
+  try {
+    process.kill(pid, signal);
+  } catch (e) {
+    if (e.code === "ESRCH") return;
+    throw e;
+  }
+  const t0 = Date.now();
+  while (alive(pid)) {
+    if (Date.now() - t0 > ceilingMs) throw new Error(`process ${pid} still alive ${ceilingMs} ms after ${signal}`);
+    await sleep(intervalMs);
+  }
+}
+
+/** The stub's pid for `outFile` (and `tag`, when the session has one). */
+export const stubPid = (outFile, tag = "") => Number(readFileSync(sideFile(outFile, "pid", tag), "utf8"));
+
+/**
  * Connect an MCP client to the installed adapter.
  * @returns {{ call: (name: string, args?: object) => Promise<{text: string, isError: boolean}>,
  *             stderr: () => string, close: () => Promise<void> }}
  */
-export async function connectAdapter({ installDir, binary, key = "stub-key", extraEnv = {}, cwd, nodeBin }) {
+export async function connectAdapter({ installDir, penBinary, keys, key, extraEnv = {}, cwd, nodeBin, passwdHome }) {
   const sdk = (rel) => import(pathToFileURL(join(installDir, "node_modules/@modelcontextprotocol/sdk/dist/esm", rel)).href);
   const { Client } = await sdk("client/index.js");
   const { StdioClientTransport } = await sdk("client/stdio.js");
 
-  const env = {
-    PATH: process.env.PATH ?? "",
-    HOME: process.env.HOME ?? "",
-    TMPDIR: process.env.TMPDIR ?? "",
-    PENCIL_CLI_KEY: key,
-    PENCIL_BINARY: binary,
-    ...extraEnv,
-  };
+  const env = buildAdapterEnv({ keys, key, extraEnv });
   const transport = new StdioClientTransport({
     command: nodeBin || process.env.NODE_BIN || "node",
     ...(cwd ? { cwd } : {}),
-    args: [join(installDir, "pencil-mcp-adapter.mjs")],
+    args: adapterArgs({ installDir, penBinary, passwdHome: passwdHome ?? env.HOME }),
     env,
     stderr: "pipe",
   });

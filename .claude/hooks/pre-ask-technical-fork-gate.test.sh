@@ -1046,7 +1046,7 @@ if [[ "$m1_fail" -eq 0 && "$m1_ctl" == "deny" && "$m1_dec" == "allow" ]] && grep
   echo "  PASS: ML1 a missing cue lib allows with a stderr line (control with the lib still denies)"; PASS=$((PASS+1))
 else printf '  FAIL: ML1 missing-lib: setup_fail=%s control=%s without_lib=%s (want 0/deny/allow plus the stderr line)\n' "$m1_fail" "$m1_ctl" "$m1_dec" >&2; FAIL=$((FAIL+1)); fi
 
-# ML3 — a lib that lost one of its ask constants is parse doubt: an EMPTY TFC_ASK_VETO_RE would veto every segment and an empty
+# ML3 — a lib that lost one of its ask constants (or one of the two label-arm regexes tfc_self_check also requires) is parse doubt: an EMPTY TFC_ASK_VETO_RE would veto every segment and an empty
 # ROUTE/RECORD would match every line, so tfc_self_check must refuse each of the three and the ruling arm must be skipped
 # with the stderr line (R1, a plain ruling question, is allowed under every variant).
 TOTAL=$((TOTAL+1))
@@ -1054,7 +1054,7 @@ m3_root="${SOLEUR_TEST_INCIDENT_ROOT:?sandbox root unset}/m3-empty-ask-constant"
 m3_bad=""
 assert_fixture_dir "$m3_root"
 mkdir -p "$m3_root" || m3_bad="$m3_bad setup"
-for m3_c in TFC_ASK_ROUTE_RE TFC_ASK_RECORD_RE TFC_ASK_VETO_RE; do
+for m3_c in TFC_ASK_ROUTE_RE TFC_ASK_RECORD_RE TFC_ASK_VETO_RE TFC_LABEL_PHRASE_ERE TFC_LABEL_NEG_ERE; do
   m3_dir="$m3_root/$m3_c"
   assert_fixture_dir "$m3_dir"
   mkdir -p "$m3_dir/lib" || { m3_bad="$m3_bad $m3_c:mkdir"; continue; }
