@@ -364,8 +364,8 @@ or a fixed phrase) that never carries model text. Query recipe: `betterstack-log
 | `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on every manual `patterns` row, including the early `disabled`, `deduped` and `week-cap-reached` rows. NOT present on a manual run without `input:"patterns"` (a manual corpus row stays byte-identical to before the arm), so an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace at all. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm: read `status`. `week-cap-reached`, `empty-corpus`, `deduped` and `disabled` are early exits; `anthropic-truncated` means the edit clustering answer was truncated and the arm is skipped on that path (it never spends the call). The scope: a manual `patterns` row gains EXACTLY this one key when the arm did not run |
 | `create_arm` | `ran`, emitted ONLY when the arm ran | Absent means off. With it, `kind` is `create` |
 | `kind` | `create` | Emitted only together with `create_arm` |
-| `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or the pattern is already proposed (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
-| `create_no_action_reason` | `no-pattern-qualifies`, `all-owned` or `other` | `other` also marks a suppressed (already proposed) pattern |
+| `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or no pattern was offerable (all owned: `all-owned` / `other`), or the model named an already-proposed pattern anyway (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
+| `create_no_action_reason` | `no-pattern-qualifies`, `all-owned` or `other` | `all-owned` also marks an offer the ledger emptied before the call; `other` also marks a same-run-emptied offer and a suppressed (already proposed) pattern the model named anyway |
 | `create_refusal_class`, `create_detail` | the `class` table above and its closed token | The same pair is mirrored to Sentry (op `create-refused`, tag `class`, `extra.detail`) |
 | `create_words`, `create_cap`, `create_total` | description words requested, the budget cap and the current model-visible total | Budget refusals only; `cap - total` is the headroom the description must fit |
 | `create_top1`, `create_nearest_rank` | the best overlap score with an existing skill and the rank of the model's nearest skill | `prefer-patch` refusals only; compare with the refusal threshold in the PR body trailer |
@@ -394,10 +394,13 @@ open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
   the PR body carries the `CREATE (new skill)` line, so a replay cannot open a second PR. A hit without the line is an
   EDIT PR (both arms use the same branch shape): `persist/branch-taken`.
 - **Same-run collision.** The create arm does not offer the model a pattern whose cluster hash the edit loop recorded
-  in the same run (opened or attempted): no model call is spent on it, and when every pattern is owned that way the
-  arm ends `no_action` (`create_no_action_reason: other`) without a call and with no `ledger_suppressed` increment.
-  A model that names an owned pattern anyway is the backstop: still `no_action` / `other`, and the hash is NOT
-  recorded a second time (one `refusal_detail` entry per hash, no extra `ledger_suppressed`).
+  in the same run (opened or attempted), nor (since 2026-10-28) one the ledger already owns (an open or merged PR, or
+  a closed one inside the 60-day window): no model call is spent on it. When every pattern is owned by the edit loop
+  the arm ends `no_action` (`create_no_action_reason: other`); when the ledger empties the offer it ends `no_action`
+  (`create_no_action_reason: all-owned`). Either way there is no call and no `ledger_suppressed` increment.
+  A model that names an unoffered owned pattern anyway is the backstop: a same-run hash is still `no_action` / `other`
+  and is NOT recorded a second time (one `refusal_detail` entry per hash, no extra `ledger_suppressed`); a ledger hash
+  is suppressed by the post-call gate (`ledger-suppressed`, counted once).
 - **Base moved.** Step B refreshes the clone to the current main, re-runs the admission checks on it, and, just
   before the commit (after a second fetch), compares the blob ids of `README.md`, `plugins/soleur/README.md`, the
   promotion log and the budget-cap file with the ones it used: `persist/base-moved` when ANY moved (an unrelated

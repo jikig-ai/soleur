@@ -674,7 +674,34 @@ describe("Step A: create-propose is ONE bounded model call, memoized, and never 
     expect(typeof r.last.create_nearest_rank).toBe("number");
   });
 
-  it("a pattern already proposed (ledger: an open PR carries its cluster hash) is SUPPRESSED, not refused: existing ledger-suppressed reason", async () => {
+  const ledgerOpen = (evidence: string[]) => ({
+    title: promotePrTitle(createClusterHash(evidence), "2026-10-04"), state: "open", closed_at: null,
+    user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
+  });
+
+  it("H2: a ledger-owned pattern is not offered to the model; a different eligible pattern is offered and opens the draft PR", async () => {
+    h.ledger.items = [ledgerOpen(CREATE_EVIDENCE)];
+    createReply = { text: JSON.stringify(goodProposal({ pattern_slug: "zz-page-three" })), stopReason: "end_turn" };
+    const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(1);
+    const prompt = String((createPrompts()[0][0] as { messages: Array<{ content: string }> }).messages[0].content);
+    expect(prompt).not.toContain(CREATE_PATTERN_SLUG);
+    expect(prompt).toContain("zz-page-three"); // page-two is the edit loop's this run, so only page three is left
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "opened", ledger_suppressed: 0 });
+    expect(createCommits()).toHaveLength(1);
+  });
+
+  it("H3: nothing left after the edit loop's pattern (same-run) and the ledger's two ends no_action(all-owned) with no create model call and no ledger_suppressed count", async () => {
+    h.ledger.items = [ledgerOpen(CREATE_EVIDENCE), ledgerOpen(Ls(6, 7))]; // page-two is the edit loop's this run
+    const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(0);
+    expect(r.names).not.toContain("create-persist");
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "all-owned", ledger_suppressed: 0 });
+    expect(r.last).not.toHaveProperty("create_refusal_class");
+    expect(createCommits()).toHaveLength(0);
+  });
+
+  it("backstop: a model that names an unoffered ledger-owned pattern is SUPPRESSED, not refused: existing ledger-suppressed reason", async () => {
     h.ledger.items = [{
       title: promotePrTitle(ENTRY_HASH, "2026-10-04"), state: "open", closed_at: null,
       user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },

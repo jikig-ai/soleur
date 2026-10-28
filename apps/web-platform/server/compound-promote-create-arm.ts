@@ -373,12 +373,17 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
   // index-empty before any I/O: a create needs a pattern to be about.
   if (a.patterns.length === 0) return fail("index-empty", "no-open-patterns");
 
-  // A pattern the EDIT loop recorded this run already owns the branch `self-healing/auto-<hash>-<date>`: do not offer it
-  // to the model (no spend on a pattern that cannot be created). Nothing offerable is a clean no_action. The full list
-  // still goes to `checkCreate`, whose `isHashSuppressed` below stays as the backstop for a model that names one anyway.
+  // A pattern that is already owned cannot be created, so it is not offered to the model: the single call must not be
+  // spent on it. Two owners, two stages: the edit loop's branch this run (`sameRun`), then the ledger's prior PRs, judged
+  // by the same `decideSuppression` and the same memoized clock as the gate. Nothing offerable after the first stage is
+  // `other`; after the second it is `all-owned`. Both end before any I/O. The full list still goes to `checkCreate`,
+  // whose `isHashSuppressed` below stays as the backstop for a model that names an unoffered pattern anyway.
+  const runNow = new Date(a.runStartedAt);
   const sameRun = new Set(a.sameRunHashes ?? []);
-  const offered = a.patterns.filter((p) => !sameRun.has(createClusterHash(p.evidence)));
-  if (offered.length === 0) return { kind: "no_action", reason: "other" };
+  const unclaimed = a.patterns.filter((p) => !sameRun.has(createClusterHash(p.evidence)));
+  if (unclaimed.length === 0) return { kind: "no_action", reason: "other" };
+  const offered = unclaimed.filter((p) => !decideSuppression({ entries: a.ledgerEntries, hash: createClusterHash(p.evidence), now: runNow }));
+  if (offered.length === 0) return { kind: "no_action", reason: "all-owned" };
 
   // The clone is the arm's only data source: a lost clone is its own named refusal, not a budget or slug symptom.
   if (!existsSync(a.repoRoot)) return fail("persist", "clone-missing");
@@ -433,7 +438,6 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
   const raw = parseCreateModelText(text);
   if (raw === undefined) return fail("model-invalid", "not-json");
 
-  const runNow = new Date(a.runStartedAt);
   const verdict = checkCreate(raw, {
     patterns: a.patterns,
     skills: measured.counted.records,
