@@ -92,7 +92,8 @@
 # and drift, not against a PR author who edits the suite itself.
 #
 # SEAMS. TRIO_REPO_ROOT (the tree the scan reads), TRIO_BASELINE, TRIO_BASE_REF (the ref merge-based against;
-# default refs/remotes/origin/main), TRIO_TODAY (default today, UTC), TRIO_ALLOW_NO_BASE=1 (local only, loud
+# default refs/remotes/origin/main; a merge_group run on refs/heads/gh-readonly-queue/* is judged against HEAD^1 instead, the entry's
+# own parent, #10540), TRIO_TODAY (default today, UTC), TRIO_ALLOW_NO_BASE=1 (local only, loud
 # banner), and the internal RF_* run knobs are test hooks. ALL of them are refused (FAIL SETUP) under
 # GITHUB_ACTIONS=true and the RF_* ones are scrubbed locally. That refusal is accident-proofing, not
 # authorization: a workflow step can unset GITHUB_ACTIONS. `--seams-check` also audits this file's own source,
@@ -1004,14 +1005,20 @@ _rbg() {
   return 0
 }
 
-# resolve_base <repo> <dir> <ref>  — the FAIL-CLOSED base resolution (F-B). Writes into <dir>:
+# resolve_base <repo> <dir> <ref> [<event> <eventref>]  — the FAIL-CLOSED base resolution (F-B). Writes into <dir>:
 #   status (ok|introduction|unresolved|skipped), arm (merge-base|head1|introduction), ref, msg, shallow, stale,
 #   base.tsv (the base copy), changed.z/untracked.z (name-status -M90% -z vs the base, plus untracked paths),
 #   adr.diff (the ADR-241 diff vs the base), addhist.txt (every `@allow` line added to the baseline since the base).
 # Every git call is checked: a failing subcommand is `status=unresolved` with the label that failed, never an empty
 # change list (which would read as "touches nothing") and never the green introduction arm.
+# QUEUE ENTRY (CTO ruling, #10540): under GITHUB_EVENT_NAME=merge_group on a refs/heads/gh-readonly-queue/* ref the base is
+# HEAD^1, the entry's own parent. A queue candidate is main + every entry ahead + this PR (SQUASH: one commit on the previous
+# candidate or main), so the merge-base with main would charge this entry with the files of the entries ahead of it and fail
+# the baseline/ADR-only predicates of T4 for an allow-only PR. It takes the existing head1 arm and its fail-closed message; every
+# other event, and merge_group on any other ref, keeps the merge-base arm.
 resolve_base() {
-  local repo="$1" d="$2" ref="$3" head="" mb="" base="" arm="merge-base" status="ok" msg="" shallow=false stale=0 r
+  local repo="$1" d="$2" ref="$3" ev="${4-}" evref="${5-}" head="" mb="" base="" arm="merge-base" status="ok" msg="" shallow=false stale=0 r q=0
+  case "$ev:$evref" in merge_group:refs/heads/gh-readonly-queue/*) q=1 ;; esac
   assert_fixture_dir "$repo"
   assert_fixture_dir "$d"
   mkdir -p "$d"
@@ -1020,16 +1027,17 @@ resolve_base() {
   if [ "$status" = ok ] && ! GITQ -C "$repo" rev-parse --verify -q "$ref^{commit}" > "$d/ref.txt" 2> "$d/ref.err"; then
     status=unresolved; msg="ref $ref does not resolve to a commit"
   fi
-  if [ "$status" = ok ]; then
+  if [ "$status" = ok ] && [ "$q" != 1 ]; then
     GITQ -C "$repo" merge-base HEAD "$ref" > "$d/mb.txt" 2> "$d/mb.err"; r=$?
     if [ "$r" -eq 0 ]; then mb="$(cat "$d/mb.txt")"
     elif [ "$r" -eq 1 ]; then status=unresolved; msg="no merge-base of HEAD and $ref"
     else status=unresolved; msg="git merge-base failed (rc $r): $(head -c 160 "$d/mb.err" | tr -d '\000-\037')"; fi
   fi
   if [ "$status" = ok ]; then
-    if [ "$mb" = "$head" ]; then
+    if [ "$q" = 1 ] || [ "$mb" = "$head" ]; then
       arm=head1
       if _rbg "rev-parse HEAD^1" "$d/b1.txt" rev-parse --verify -q 'HEAD^1^{commit}'; then base="$(cat "$d/b1.txt")"
+      elif [ "$q" = 1 ]; then msg="HEAD is a merge-queue entry ($evref) and has no first parent ($msg)"
       else msg="HEAD is $ref and has no first parent ($msg)"; fi
     else
       base="$mb"
@@ -1082,7 +1090,7 @@ run_full() {
   assert_fixture_dir "$repo"
   assert_fixture_dir "$out"
   rm -rf "$out.bd"
-  resolve_base "$repo" "$out.bd" "${RF_REF-refs/remotes/origin/main}" 2> "$out.bd.err"
+  resolve_base "$repo" "$out.bd" "${RF_REF-refs/remotes/origin/main}" "${RF_EVENT-}" "${RF_EVENTREF-}" 2> "$out.bd.err"
   py3 "${RF_PY:-$T/trio.py}" --repo "$repo" --baseline "$bl" --base-dir "$out.bd" --today "${RF_TODAY-$FIXTODAY}" \
     --event-name "${RF_EVENT-}" --event-ref "${RF_EVENTREF-}" --envs "${RF_ENVS-$FIXENVS}" --sibling "${RF_SIB-}" --ann "$out.ann" \
     --scanned-list "$out.scan" ${GITQ_ISO:+--git-iso} > "$out" 2> "$out.err"
@@ -2193,6 +2201,74 @@ printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n@allow\ts
 adr_add 'Allow: scripts/future.sh CF_ACCESS_CLIENT_ID reserved for the follow-on migration. Ruled by CTO'
 commit_all; landed_dir; mutant m72e T4 "D3: two new @allow lines with only one ruled (every new allow needs its own ruling)" "new @allow scripts/future2.sh CF_ACCESS_CLIENT_SECRET needs an ADR-241 line"
 
+# ── Q1-Q8 (#10540): a merge-queue entry is judged against its own parent (HEAD^1), not the merge-base with main ──────────
+# A queue candidate is main + every entry ahead + this PR. The fixture's earlier queue entry touches README.md; this entry adds an
+# ADR-ruled @allow. Against the merge-base the README change reads as THIS entry's, so the baseline/ADR-only predicate fails.
+QEV="RF_EVENT=merge_group RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-2-0123abcd"
+q_ahead() { printf 'landed by the entry ahead in the queue\n' > "$D/fx/README.md"; commit_all; }
+q_allow() {
+  printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"
+  adr_add 'Allow: scripts/future.sh CF_ACCESS_CLIENT_ID reserved for the follow-on migration. Ruled by CTO'
+}
+# q_revert_hist  — a PR whose LAST commit reverts an earlier commit's change and adds the @allow: the merge-base sees baseline/ADR only, HEAD^1 does not
+q_revert_hist() {
+  printf '# neighbour\n' >> "$D/fx/scripts/host-user.sh"; commit_all
+  gc -C "$D/fx" revert --no-commit HEAD > /dev/null 2>&1
+  q_allow; commit_all
+}
+# rb_gate_mut <old> <new>  — redefine resolve_base in this row's knobs with one edit of its gate (exact-once; else the row reads "unchanged")
+rb_gate_mut() {
+  sed -n '/^resolve_base() {/,/^}/p' "$SUITE" > "$D/rb.sh"
+  if edit "$D/rb.sh" "$1" "$2"; then cat "$D/rb.sh" >> "$D/menv"; else rm -f "$D/rb.sh"; fi
+}
+prep c_q1
+q_ahead; q_allow; commit_all
+knobs $QEV
+landed_dir; green c_q1 "Q1: a queue entry (event merge_group, ref gh-readonly-queue/*) with an unrelated file landed by an earlier entry and its own ADR-ruled @allow is green (judged against HEAD^1)" "" head1
+prep m_q2
+q_ahead; q_allow; printf '# touched\n' >> "$D/fx/scripts/host-user.sh"; commit_all
+knobs $QEV
+landed_dir; mutant m_q2 T4 "Q2: a queue entry whose @allow change also touches a third file is RED even against HEAD^1" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line" head1
+prep m_q3
+q_ahead
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"; commit_all
+knobs $QEV
+landed_dir; mutant m_q3 T4 "Q3: a queue entry adding an @allow with no ADR-241 Allow line is RED" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line" head1
+prep m_q4
+q_allow
+gc -C "$D/fx" checkout -q --orphan orphan-q && commit_all
+knobs $QEV
+landed_dir; mutant m_q4 T4 "Q4: a queue entry whose HEAD has no parent fails closed (base unresolved, never an empty change list)" "has no first parent" head1
+prep m_q5
+q_ahead; q_allow; commit_all
+knobs RF_EVENT=pull_request RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-2-0123abcd
+landed_dir; mutant m_q5 T4 "Q5: a pull_request event with the Q1 tree and a queue-shaped ref still uses the merge-base arm and is RED (the arm is gated on the event)" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line" merge-base
+prep m_q6
+q_ahead; q_allow; commit_all
+knobs RF_EVENT=merge_group RF_EVENTREF=refs/heads/feat-x
+landed_dir; mutant m_q6 T4 "Q6: merge_group on a non-queue ref uses the merge-base arm and is RED (the arm is gated on the ref)" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line" merge-base
+# the gate mutants: a revert-history PR is green on the merge-base arm (control), and RED once the event / ref gate is removed
+prep c_q7
+q_revert_hist
+knobs RF_EVENT=pull_request RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-2-0123abcd
+landed_dir; green c_q7 "Q7: a pull_request on a queue-shaped ref whose history reverts an intermediate change is green on the merge-base arm" "" merge-base
+prep m_q7
+q_revert_hist
+knobs RF_EVENT=pull_request RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-2-0123abcd
+rb_gate_mut 'merge_group:refs/heads/gh-readonly-queue/*)' '*:refs/heads/gh-readonly-queue/*)'
+landed_dir; [ -f "$D/rb.sh" ] || printf 'unchanged' > "$D/landed"
+mutant m_q7 T4 "Q7: with the EVENT gate removed from resolve_base the Q7 history is judged against HEAD^1 and goes RED" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line" head1
+prep c_q8
+q_revert_hist
+knobs RF_EVENT=merge_group RF_EVENTREF=refs/heads/feat-x
+landed_dir; green c_q8 "Q8: merge_group on a non-queue ref whose history reverts an intermediate change is green on the merge-base arm" "" merge-base
+prep m_q8
+q_revert_hist
+knobs RF_EVENT=merge_group RF_EVENTREF=refs/heads/feat-x
+rb_gate_mut 'merge_group:refs/heads/gh-readonly-queue/*)' 'merge_group:*)'
+landed_dir; [ -f "$D/rb.sh" ] || printf 'unchanged' > "$D/landed"
+mutant m_q8 T4 "Q8: with the REF gate removed from resolve_base the Q8 history is judged against HEAD^1 and goes RED" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line" head1
+
 # ── R14 (F-D): expiry formats and the boundary ────────────────────────────────────────────────────
 prep m39
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 20261130
@@ -3068,7 +3144,7 @@ if [ ! -e "$T/PWNED" ] && [ ! -e "$T/sp ace;touch PWNED/PWNED" ] && [ ! -e "$T/s
 if ! awk '/[\001-\010\013-\037\177]/ {bad = 1} END {exit bad ? 0 : 1}' "$T/mut/m82/out" 2>/dev/null; then pass "E6c: the T1 line for a file name with ESC and CR carries no control character"; else fail "E6c: the T1 line for a file name with ESC and CR carries no control character" "a control character reached the row output"; fi
 
 # Floors. MUTANT_FLOOR is exact.
-MUTANT_FLOOR=201
+MUTANT_FLOOR=208
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s -- a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3079,7 +3155,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=585
+FLOOR=602
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
