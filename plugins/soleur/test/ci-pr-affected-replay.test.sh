@@ -3505,7 +3505,7 @@ row_ow_retry() {
   local bf   # the deadline is the SUM of the two budgets: each budget alone, spent, must still allow the retry
   for bf in "SOAK_BUDGET_S=1 SOAK_FACTS_BUDGET_S=300" "SOAK_BUDGET_S=300 SOAK_FACTS_BUDGET_S=1"; do
     ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; : > "$GHFIX/ERR_ONCE_$(keyof "$jp2")"
-    # shellcheck disable=SC2086
+    # shellcheck disable=SC2206
     OW_ENV=(SOAK_PARALLEL=1 $bf SLOW_S=3); ow_probe
     [[ "$(ow_req_count "$jp2")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
   done
@@ -3522,6 +3522,8 @@ row_ow_drain_floor() {
     ow_case; OW_DRAIN="$d"; ow_write; ow_probe
     [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z ' <<<"$OWOUT" || return 1
   done
+  ow_case; OW_DRAIN="$(for _i in $(seq 1 99); do printf '2031-01-1%sT00:00:00Z ' $((_i % 10)); done)"; ow_write; ow_probe   # 99 labelled items still fit one page: accepted, the PR3a merge stays the floor
+  [[ "$RC" -eq 0 ]] && grep -q 'floor=pr3a ' <<<"$OWOUT" || return 1
   for d in "2031-01-15T00:00:00Z" "null" "null 2031-01-20T00:00:00Z" ""; do   # a drain merge before PR3a, a drain PR closed unmerged, or none: the PR3a merge stays the floor
     ow_case; OW_DRAIN="$d"; ow_write; ow_probe
     [[ "$RC" -eq 0 ]] && grep -q 'window opened=2031-02-01T00:00:00Z age_days=4 floor=pr3a green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1

@@ -159,7 +159,7 @@ merge_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pr_json" 2>/dev/null)" || f
 merged_epoch="$(date -u -d "$merged_at" +%s 2>/dev/null)" || fail_api "merge time $merged_at"
 age_days=$(( (NOW - merged_epoch) / 86400 ))
 # --- the restart floor: the window counts from the LATER of the PR3a merge and the latest merged `s4-drain` PR (a drain PR changes the baseline, the live set and the oracle; until now the closer applied
-# this by hand, #10949). One read of the (small) label list; `merged_at` is the floor from here on, so the run listing, the units and the status line all start there. age_days stays PR3a-based above.
+# this by hand, #10949). One read of the (small) label list, REFUSED when it is a full page (100 = the URL's per_page: the latest merge could be off the page); `merged_at` is the floor from here on, so the run listing, the units and the status line all start there. age_days stays PR3a-based above.
 floor_src="pr3a"   # which merge the floor came from, printed on the status line
 drain_json="$(api "repos/$REPO/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100")" || fail_api "s4-drain pulls"
 drain_at="$(jq -r 'if type != "array" then error("not an array") elif length >= 100 then error("full page") else ([.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // "") end' <<<"$drain_json" 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
