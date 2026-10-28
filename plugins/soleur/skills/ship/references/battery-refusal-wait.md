@@ -6,7 +6,7 @@ Scope: only the sibling-run refusal (`refusing a full-gate run ... N sibling ful
 
 ## Recipe (one Monitor script)
 
-Launch first: a refusal exits within seconds, so there is no up-front capacity loop. Arm the Monitor with `persistent: true` (the default 5-minute timeout is shorter than the 30-minute budget). If the Monitor you have rejects `persistent`, arm it at its maximum timeout and, when it expires without a verdict, re-arm it: the detached battery keeps running, and the wait script resumes from the same `$STATE` epoch. Run it from the repository root.
+Launch first: a refusal exits within seconds, so there is no up-front capacity loop. Arm the Monitor with `persistent: true` (the default 5-minute timeout is shorter than the 30-minute budget). If the Monitor you have rejects `persistent`, arm it at its maximum timeout and, when it expires without a verdict, re-arm a tail-only script that reuses the same `$d`, `$LOG`, `$RCF` and `$STATE` (the detached battery keeps running and `$STATE` carries the budget); never re-run the recipe from its first line, which starts a new episode and a second battery. Run it from the repository root.
 
 ```bash
 d="$(mktemp -d -t soleur-run.$$.XXXXXXXX)"; LOG="$d/log"; RCF="$d/rc"; STATE="$d/state"; : > "$STATE"
@@ -26,7 +26,7 @@ while :; do
   esac
   [ "$again" = 1 ] || break
   relaunches=$((relaunches + 1))
-  [ "$relaunches" -le 3 ] || { echo "STOP: capacity reads idle but the runner keeps refusing ($relaunches relaunches)"; break; }
+  [ "$relaunches" -le 3 ] || { echo "STOP: capacity reads idle but the runner keeps refusing (after $((relaunches - 1)) relaunches)"; break; }
 done
 ```
 
@@ -50,7 +50,9 @@ The `apps/web-platform/infra/` tree has no required CI check (#6480), so a diff 
 
 - Idle is read from `--capacity`, which still counts a stale orphan past `TC_RUNTIME_CEILING_S` and low `/tmp`, while the refusal counts fresh siblings only. After the fresh sibling drains, an orphan can hold capacity non-idle and the wait runs to the budget; the loss is bounded and ends in CI or the lock queue. A stale orphan is itself an operator-visible fault.
 - The wait can overshoot `--budget-s` by one capacity probe (`--probe-timeout-s`, default 30).
-- A capacity reading anywhere in the budget counts (a transient probe failure on the last poll does not turn a long wait into a stop).
+- A capacity reading anywhere in the budget counts (a transient probe failure on the last poll does not turn a long wait into a stop). A `--capacity` that is never readable is only discovered after the whole budget.
+- If no rc file ever appears the wrapper was reaped (no rc file means a harness reap, SKILL.md): stop the Monitor and read `$LOG`. `$d` lives under `TMPDIR` and is not removed.
+- Run from the repository root with an absolute `TMPDIR`: the script refuses a relative state path.
 
 ## See also
 

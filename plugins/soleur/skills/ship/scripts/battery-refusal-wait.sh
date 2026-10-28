@@ -38,7 +38,7 @@
 #                        infra trigger, no --full: record it and continue WITHOUT local evidence
 #   10  RETRY            capacity reports idle (CAPACITY_OK measured_runs=0): relaunch the battery
 #   12  QUEUE_IN_LOCK    the local run is the sole blocking gate (infra diff, unresolved diff) or
-#                        was asked for by name (--full, or SOLEUR_TEST_FORCE_ALL in the log):
+#                        was asked for by name (--full, or AFFECTED_FALLBACK reason=force-all in the log):
 #                        queue inside the lock instead
 #   11  NOT_WAITABLE     time cannot clear this refusal (or capacity was never readable): stop
 #    2  usage error, or a bad runtime input (state file, clock): stop
@@ -73,7 +73,10 @@
 # KNOWN LIMIT. Idle is read from `--capacity`, which still counts a stale orphan past the
 # runtime ceiling and low /tmp, while the refusal counts fresh siblings only. After the fresh
 # sibling drains an orphan can hold capacity non-idle, so the wait runs to the budget. That loss
-# is bounded and ends in CI or the lock queue.
+# is bounded and ends in CI or the lock queue. A `--capacity` that is never readable (a repo
+# without the Soleur runner) is only discovered after the whole budget: that wait ends in
+# NOT_WAITABLE. A state epoch older than 6 h is refused, so a budget above that cannot be shared
+# across a relaunch.
 #
 # Records, never claims: the PR Test plan line in references/battery-refusal-wait.md says the
 # local run was NOT executed. Suite: plugins/soleur/test/ship-battery-refusal-wait.test.sh.
@@ -81,7 +84,8 @@ set -uo pipefail
 
 # The runner clears these before its diffs; a stale export must not retarget ours.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
-  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH \
+  GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_EXTERNAL_DIFF
 
 RC_RETRY=10
 RC_NOT_WAITABLE=11
@@ -132,25 +136,29 @@ done
 # --- classifier: whole-log scan, CR stripped, full refusal shape required -----------------------
 # echoes `contention`, `contention:force-all` or `not-waitable:<reason>`.
 classify() { # <file>
-  local f="$1" body bad reasons r force=0
+  local f="$1" body bad r fb force=0
   [[ -f "$f" && -r "$f" ]] || { echo "not-waitable:log-missing"; return 0; }
   body="$(LC_ALL=C tr -d '\r' < "$f")"
   [[ -n "$body" ]] || { echo "not-waitable:log-empty"; return 0; }
   if grep -qE '\[FAIL\]|\[KILLED\]' <<<"$body"; then echo "not-waitable:battery-ran"; return 0; fi
   if grep -qE 'mise ERROR|command not found' <<<"$body"; then echo "not-waitable:toolchain"; return 0; fi
   if grep -qF 'AFFECTED_UNRESOLVED' <<<"$body"; then echo "not-waitable:selection-refusal"; return 0; fi
-  bad="$(grep -E 'AFFECTED_GATE_REFUSED reason=' <<<"$body" | grep -vE 'reason=runner-refused')"
+  bad="$(grep -E 'AFFECTED_GATE_REFUSED reason=' <<<"$body" | grep -vE 'reason=runner-refused([[:space:]]|$)')"
   if [[ -n "$bad" ]]; then echo "not-waitable:gate-refusal"; return 0; fi
   if grep -qF 'SOLEUR_SUBAGENT=1 is set' <<<"$body"; then echo "not-waitable:subagent-env"; return 0; fi
-  reasons="$(grep -oE 'AFFECTED_FALLBACK[[:space:]]+reason=[A-Za-z-]+' <<<"$body" | sed 's/.*reason=//')"
-  for r in $reasons; do
+  # Every line that mentions the token must be exactly `AFFECTED_FALLBACK <ws> reason=<known>`;
+  # a line that does not parse (empty or quoted reason, no reason, a reason glued to extra
+  # characters) is an unknown reason and stops.
+  while IFS= read -r fb; do
+    [[ -n "$fb" ]] || continue
+    if [[ "$fb" =~ ^AFFECTED_FALLBACK[[:space:]]+reason=([a-z-]+)([[:space:]]|$) ]]; then r="${BASH_REMATCH[1]}"; else r=""; fi
     case "$r" in
       index-missing|enumerate-unavailable) echo "not-waitable:affected-index-broken"; return 0 ;;
       force-all) force=1 ;;
       runner-changed|undecidable-diff) ;;
       *) echo "not-waitable:unknown-fallback-reason"; return 0 ;;
     esac
-  done
+  done < <(grep -F 'AFFECTED_FALLBACK' <<<"$body")
   if grep -qE '^ERROR: refusing a full-gate run .* [1-9][0-9]* sibling full-gate run\(s\) already in flight' <<<"$body"; then
     if (( force == 1 )); then echo "contention:force-all"; else echo "contention"; fi
     return 0
@@ -170,8 +178,10 @@ fi
 
 [[ -n "$LOG" ]] || usage "--log is required"
 [[ -n "$STATE" ]] || usage "--state is required"
-# The state path is absolute by contract (the recipe passes a mktemp path): refuse a relative one
-# rather than let it resolve against whatever cwd the caller has, and root it at / by construction.
+# The state path is absolute by contract (the recipe passes a mktemp path): the test below is the
+# control; it refuses a relative path rather than let it resolve against the caller's cwd. The
+# `/${STATE#/}` spelling that follows is behavior-neutral after that test; it exists so the
+# fixture-operand ratchet can see the operand as rooted at / (no baseline row).
 [[ "$STATE" == /* ]] || usage "--state must be an absolute path"
 STATE="/${STATE#/}"
 
@@ -227,11 +237,12 @@ poll_capacity() {
   [[ -f "$top/scripts/test-all.sh" ]] || return 0
   out="$(timeout -k 1 "$PROBE_TIMEOUT_S" bash "$top/scripts/test-all.sh" --capacity 2>&1)" || return 0
   line="$(grep -E '^(\[contention\][[:space:]]+)?(BANNER[[:space:]]+)?CAPACITY_(OK|CONTENDED|UNKNOWN)([[:space:]]|$)' <<<"$out" | head -1)"
-  case "$line" in
-    *CAPACITY_OK*)
-      if [[ "$line" =~ measured_runs=0([^0-9]|$) ]]; then CAP=idle; else CAP=ok; fi ;;
-    *CAPACITY_CONTENDED*) CAP=contended ;;
-    *CAPACITY_UNKNOWN*) CAP=unknown ;;
+  [[ "$line" =~ ^(\[contention\][[:space:]]+)?(BANNER[[:space:]]+)?CAPACITY_(OK|CONTENDED|UNKNOWN)([[:space:]]|$) ]] || return 0
+  case "${BASH_REMATCH[3]}" in
+    OK)
+      if [[ "$line" =~ (^|[[:space:]])measured_runs=0([^0-9]|$) ]]; then CAP=idle; else CAP=ok; fi ;;
+    CONTENDED) CAP=contended ;;
+    UNKNOWN) CAP=unknown ;;
   esac
   return 0
 }

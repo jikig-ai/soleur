@@ -120,12 +120,15 @@ build_repo() { # <out-var-work> <root>
     cat > scripts/test-all.sh <<'STUB'
 #!/usr/bin/env bash
 # stub capacity runner: argv-strict, replays CAP_DIR/q one line per call (last line repeats).
-# Tokens: HANG (block), FAIL (exit 1), MULTI:<text with \n escapes>, IDLEFAIL:<text> (print, exit 1).
+# Tokens: HANG (block), STUBBORN (block, ignoring TERM), FAIL (exit 1), STDERR:<text>, MULTI:<text with \n escapes>,
+# IDLEFAIL:<text> (print, exit 1).
 [[ "$*" == "--capacity" ]] || { echo "test-all stub: unexpected argv: $*" >&2; exit 64; }
 n="$(cat "$CAP_DIR/n" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "$n" > "$CAP_DIR/n"
 line="$(sed -n "${n}p" "$CAP_DIR/q")"; [[ -n "$line" ]] || line="$(tail -n 1 "$CAP_DIR/q")"
 case "$line" in
   HANG) exec tail -f /dev/null ;;
+  STUBBORN) trap '' TERM; exec tail -f /dev/null ;;
+  STDERR:*) printf '%s\n' "${line#STDERR:}" >&2; exit 0 ;;
   FAIL) exit 1 ;;
   MULTI:*) printf '%b\n' "${line#MULTI:}"; exit 0 ;;
   IDLEFAIL:*) printf '%s\n' "${line#IDLEFAIL:}"; exit 1 ;;
@@ -212,6 +215,17 @@ LOG_TEXT="$LOGROOT/text.log"; printf 'something entirely unrelated\n' > "$LOG_TE
 fb_log() { assert_fixture_dir "$LOGROOT"; printf 'AFFECTED_FALLBACK\treason=%s\n%s\n' "$1" "$SIB1" > "$LOGROOT/fb-$1.log"; printf '%s' "$LOGROOT/fb-$1.log"; }
 LOG_FB_FORCE="$(fb_log force-all)"; LOG_FB_INDEX="$(fb_log index-missing)"; LOG_FB_ENUM="$(fb_log enumerate-unavailable)"
 LOG_FB_RUNNER="$(fb_log runner-changed)"; LOG_FB_UNDEC="$(fb_log undecidable-diff)"; LOG_FB_UNKNOWN="$(fb_log brand-new-reason)"
+LOG_CNF="$LOGROOT/cnf.log"; { printf '%s\n' "$SIB1"; echo 'bash: bun: command not found'; } > "$LOG_CNF"
+LOG_RR_FOO="$LOGROOT/rrfoo.log"; { printf '%s\n' "$SIB1"; echo 'AFFECTED_GATE_REFUSED reason=runner-refused-foo'; } > "$LOG_RR_FOO"
+fb_raw() { assert_fixture_dir "$LOGROOT"; printf '%s\n%s\n' "$2" "$SIB1" > "$LOGROOT/fbraw-$1.log"; printf '%s' "$LOGROOT/fbraw-$1.log"; }
+LOG_FB_EMPTY="$(fb_raw empty "$(printf 'AFFECTED_FALLBACK\treason=')")"
+LOG_FB_GLUED="$(fb_raw glued "$(printf 'AFFECTED_FALLBACK\treason=runner-changed2')")"
+LOG_FB_NOREASON="$(fb_raw noreason "$(printf 'AFFECTED_FALLBACK\tsomething-else')")"
+LOG_FB_QUOTED="$(fb_raw quoted "$(printf 'AFFECTED_FALLBACK\treason="force-all"')")"
+assert_fixture_dir "$LOGROOT"
+LOG_FB_TWO_A="$LOGROOT/fbtwoa.log"; { printf 'AFFECTED_FALLBACK\treason=runner-changed\nAFFECTED_FALLBACK\treason=index-missing\n%s\n' "$SIB1"; } > "$LOG_FB_TWO_A"
+assert_fixture_dir "$LOGROOT"
+LOG_FB_TWO_B="$LOGROOT/fbtwob.log"; { printf 'AFFECTED_FALLBACK\treason=index-missing\nAFFECTED_FALLBACK\treason=runner-changed\n%s\n' "$SIB1"; } > "$LOG_FB_TWO_B"
 STATE="$LOGROOT/state"
 
 assert_eq "1" "$([[ "$SIB1" == *"1 sibling full-gate run(s) already in flight"* ]] && echo 1 || echo 0)" \
@@ -261,6 +275,14 @@ assert_eq "class=not-waitable" "$(classify "$LOG_FB_ENUM")" "A23 AFFECTED_FALLBA
 assert_eq "class=contention" "$(classify "$LOG_FB_RUNNER")" "A24 AFFECTED_FALLBACK reason=runner-changed stays waitable"
 assert_eq "class=contention" "$(classify "$LOG_FB_UNDEC")" "A25 AFFECTED_FALLBACK reason=undecidable-diff stays waitable"
 assert_eq "class=not-waitable" "$(classify "$LOG_FB_UNKNOWN")" "A26 an unknown AFFECTED_FALLBACK reason fails closed"
+assert_eq "class=not-waitable" "$(classify "$LOG_CNF")" "A27 sibling text + 'command not found' (a toolchain fault) is NOT waitable"
+assert_eq "class=not-waitable" "$(classify "$LOG_RR_FOO")" "A28 'reason=runner-refused-foo' is not the runner-refused exemption (anchored)"
+assert_eq "class=not-waitable" "$(classify "$LOG_FB_EMPTY")" "A29 AFFECTED_FALLBACK with an empty reason stops"
+assert_eq "class=not-waitable" "$(classify "$LOG_FB_GLUED")" "A30 AFFECTED_FALLBACK reason=runner-changed2 (a known name with a suffix) stops"
+assert_eq "class=not-waitable" "$(classify "$LOG_FB_NOREASON")" "A31 an AFFECTED_FALLBACK line with no reason= stops"
+assert_eq "class=not-waitable" "$(classify "$LOG_FB_QUOTED")" "A32 a quoted AFFECTED_FALLBACK reason stops"
+assert_eq "class=not-waitable" "$(classify "$LOG_FB_TWO_A")" "A33 runner-changed then index-missing: every fallback line is judged (the second stops)"
+assert_eq "class=not-waitable" "$(classify "$LOG_FB_TWO_B")" "A34 index-missing then runner-changed: every fallback line is judged (the first stops)"
 
 # --- B. wait loop ----------------------------------------------------------------------------
 start_arm; cap "$CAP_BUSY"
@@ -319,26 +341,31 @@ clock_at "$BASE"; : > "$STATE"; cap "$CAP_BUSY"
 run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" --budget-s 3 --interval-s 1 --probe-timeout-s 5
 assert_eq "42" "$RC" "B15 an empty state file starts a fresh episode"
 
-state_row() { # <label> <state-content> ; expects exit 2 with an ERROR verdict line
+state_row() { # <label> <state-content> <reason-fragment> ; expects exit 2 with an ERROR verdict line naming the reason
   assert_fixture_dir "$STATE"
   clock_at "$BASE"; cap "$CAP_BUSY"; printf '%s\n' "$2" > "$STATE"
   run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" --budget-s 3 --interval-s 1 --probe-timeout-s 5
-  assert_eq "2/ERROR" "$RC/$V" "B state file rejected with exit 2: $1"
+  assert_eq "2/ERROR/1" "$RC/$V/$([[ "$OUT" == *"reason=$3"* ]] && echo 1 || echo 0)" "B state file rejected with exit 2 (reason $3): $1"
 }
-state_row "non-integer" "garbage"
-state_row "future epoch" "$(( BASE + 500 ))"
-state_row "zero (would spend the whole budget)" "0"
-state_row "octal-looking leading zero" "010"
-state_row "64-bit wrap (20 digits)" "18446744073709551617"
-state_row "too short (7 digits)" "1000000"
-state_row "stale epoch (older than 6 h)" "$(( BASE - 30000 ))"
+state_row "non-integer" "garbage" "state-file-holds-a-malformed-epoch"
+state_row "future epoch" "$(( BASE + 500 ))" "state-file-holds-a-future-epoch"
+state_row "zero (would spend the whole budget)" "0" "state-file-holds-a-malformed-epoch"
+state_row "octal-looking leading zero" "010" "state-file-holds-a-malformed-epoch"
+state_row "64-bit wrap (20 digits)" "18446744073709551617" "state-file-holds-a-malformed-epoch"
+state_row "too short (7 digits)" "1000000" "state-file-holds-a-malformed-epoch"
+state_row "stale epoch (older than 6 h)" "$(( BASE - 30000 ))" "state-file-is-stale-create-a-fresh-one"
+state_row "stale by exactly one second past the bound" "$(( BASE - 21601 ))" "state-file-is-stale-create-a-fresh-one"
 clock_at "$BASE"; cap "$CAP_BUSY"
 run_wait "$W0" --log "$LOG_SIB1" --state "$LOGROOT" --budget-s 3 --interval-s 1 --probe-timeout-s 5
-assert_eq "2/ERROR" "$RC/$V" "B state path that is a directory is rejected with exit 2"
+assert_eq "2/ERROR/1" "$RC/$V/$([[ "$OUT" == *"reason=state-file-missing-or-not-a-file"* ]] && echo 1 || echo 0)" "B state path that is a directory is rejected with exit 2 (reason state-file-missing-or-not-a-file)"
 assert_fixture_dir "$STATE"
 clock_at "abc"; : > "$STATE"; cap "$CAP_BUSY"
 run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" --budget-s 3 --interval-s 1 --probe-timeout-s 5
-assert_eq "2/ERROR" "$RC/$V" "B a non-numeric clock is rejected with exit 2"
+assert_eq "2/ERROR/1" "$RC/$V/$([[ "$OUT" == *"reason=cannot-read-the-clock"* ]] && echo 1 || echo 0)" "B a non-numeric clock is rejected with exit 2 (reason cannot-read-the-clock)"
+# an epoch exactly at the bound is still accepted (the budget is spent at once, so it defers)
+clock_at "$BASE"; cap "$CAP_BUSY"; printf '%s\n' "$(( BASE - 21600 ))" > "$STATE"
+run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" --budget-s 3 --interval-s 1 --probe-timeout-s 5
+assert_eq "42" "$RC" "B a state epoch exactly 21600 s old is still accepted"
 
 # not-waitable logs never wait
 start_arm; cap "$CAP_BUSY"
@@ -372,6 +399,22 @@ start_arm; cap 'CAPACITY_OK measured_runs=0 measured_suites=0'
 wait_small "$LOG_SIB1"
 assert_eq "10" "$RC" "B27 an unprefixed CAPACITY_OK measured_runs=0 line (as the skills print it) is idle"
 
+start_arm; cap "$CAP_BUSY" "$CAP_BUSY" "$CAP_BUSY" "$CAP_OK_IDLE"
+wait_small "$LOG_SIB1"
+assert_eq "10/RETRY/3" "$RC/$V/$W" "B28 idle on the FINAL poll (elapsed == budget) is RETRY, not a deferral"
+start_arm; cap '[contention] CAPACITY_OKAY measured_runs=0'
+wait_small "$LOG_SIB1"
+assert_eq "11" "$RC" "B29 CAPACITY_OKAY is not the CAPACITY_OK banner (token boundary)"
+start_arm; cap "STDERR:$CAP_OK_IDLE"
+wait_small "$LOG_SIB1"
+assert_eq "10" "$RC" "B30 a capacity banner printed on stderr (as the runner prints its [contention] lines) is read"
+start_arm; cap STUBBORN
+run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" --budget-s 3 --interval-s 1 --probe-timeout-s 1
+assert_eq "11" "$RC" "B31 a probe that ignores TERM is killed by the escalation and ends as capacity-unreadable (exit 11)"
+start_arm; cap "$CAP_BUSY"
+run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" --budget-s 100000 --interval-s 100000 --probe-timeout-s 5
+assert_eq "42/100000" "$RC/$W" "B32 a six-digit budget is accepted"
+
 # --- C. infra carve-out, --full ---------------------------------------------------------------
 # Fixtures are built once per shape (the script only reads them) and reused by the mutation rows.
 infra_fixture() { # <out-var> <mutating-shell-snippet>
@@ -389,6 +432,9 @@ infra_fixture IW_NOREMOTE 'git update-ref -d refs/remotes/origin/main'
 infra_fixture IW_SUBSTR_IN 'mkdir -p docs/apps/web-platform/infra && printf x > docs/apps/web-platform/infra/notes.md && git add -A && git commit -qm sub'
 infra_fixture IW_SUBSTR_OUT 'printf x > apps/web-platform/infra-notes.md && git add -A && git commit -qm sub'
 infra_fixture IW_EMPTY 'git reset -q --hard origin/main'
+infra_fixture IW_CIYML 'mkdir -p .github/workflows && printf x > .github/workflows/ci.yml && git add -A && git commit -qm ci'
+infra_fixture IW_NEAR 'mkdir -p docs/web-platform/infra && printf x > docs/web-platform/infra/notes.md && git add -A && git commit -qm near'
+infra_fixture IW_IGNORED 'printf "build.log\n" > .gitignore && git add .gitignore && git commit -qm ignore && printf x > apps/web-platform/infra/build.log'
 infra_row() { # <label> <fixture-path> <expected-rc/verdict>
   start_arm; cap "$CAP_BUSY"
   run_wait "$2" --log "$LOG_SIB1" --state "$STATE" --budget-s 3 --interval-s 1 --probe-timeout-s 5
@@ -405,6 +451,9 @@ assert_eq "1" "$([[ "$OUT" == *"reason=diff-unresolved"* ]] && echo 1 || echo 0)
 infra_row "the infra path as an inner substring (docs/apps/web-platform/infra/x) is infra, as the runner's substring match says" "$IW_SUBSTR_IN" "12/QUEUE_IN_LOCK"
 infra_row "a sibling name that is not the infra prefix (apps/web-platform/infra-notes.md) is clean" "$IW_SUBSTR_OUT" "42/CI_IS_THE_GATE"
 infra_row "an empty change set is unresolved, never clean" "$IW_EMPTY" "12/QUEUE_IN_LOCK"
+infra_row "another workflow file (ci.yml) is clean: only the apply-infra workflow is a trigger" "$IW_CIYML" "42/CI_IS_THE_GATE"
+infra_row "web-platform/infra/ without the apps/ prefix is clean" "$IW_NEAR" "42/CI_IS_THE_GATE"
+infra_row "a gitignored file under infra is not a change" "$IW_IGNORED" "42/CI_IS_THE_GATE"
 RUN_CWD="$IW_UNTRACKED/apps"; infra_row "an untracked infra file is seen from a subdirectory cwd (repo-root git)" "$IW_UNTRACKED" "12/QUEUE_IN_LOCK"; RUN_CWD=""
 for fm in 'diff --name-only HEAD' 'diff --name-status -M HEAD' 'diff --name-status -M origin/main...HEAD' 'ls-files --others'; do
   FAIL_GIT_MATCH="$fm"; infra_row "a failing git read ($fm) fails closed to QUEUE_IN_LOCK" "$W0" "12/QUEUE_IN_LOCK"; FAIL_GIT_MATCH=""
@@ -425,13 +474,15 @@ assert_eq "11/NOT_WAITABLE" "$RC/$V" "C a broken affected index exits 11 without
 
 # --- D. arguments ----------------------------------------------------------------------------
 start_arm; cap "$CAP_BUSY"
-for bad in "--budget-s abc" "--budget-s -5" "--budget-s 0" "--budget-s 1234567" "--interval-s x" "--probe-timeout-s 0" "--bogus" "--budget-s"; do
+for bad in "--budget-s abc" "--budget-s -5" "--budget-s 0" "--budget-s 1234567" "--interval-s x" "--probe-timeout-s 0" "--bogus" "--budget-s" "--state"; do
   # shellcheck disable=SC2086
   run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" $bad
   assert_eq "2" "$RC" "D arg rejected with exit 2: $bad"
 done
 run_wait "$W0" --state "$STATE"
 assert_eq "2" "$RC" "D --log is required (exit 2)"
+run_wait "$W0" --state "$STATE" --log
+assert_eq "2" "$RC" "D --log with no value is rejected (exit 2)"
 run_wait "$W0" --log "$LOG_SIB1" --state relative-state
 assert_eq "2" "$RC" "D a relative --state path is rejected (exit 2)"
 start_arm; cap "$CAP_BUSY"
@@ -468,18 +519,30 @@ cat > "$RSTUB/sleep" <<STUB
 exec "$REAL_SLEEP" 0.05
 STUB
 assert_fixture_dir "$RPLUG"
-cat > "$RPLUG/scripts/affected-tests.sh" <<'STUB'
+cat > "$RPLUG/scripts/affected-tests.sh" <<STUB
 #!/usr/bin/env bash
-# scripted battery: records argv, prints a log, exits with $REC/aff.rc (default 4 = refused)
-echo "$*" >> "$REC/aff.argv"
+# scripted battery: records argv, marks itself running for 0.3 s, prints a log, exits with \$REC/aff.rc (default 4)
+echo "\$*" >> "\$REC/aff.argv"
+: > "\$REC/aff.running"
+"$REAL_SLEEP" 0.3
+rm -f "\$REC/aff.running"
 echo "stub battery log"
-exit "$(cat "$REC/aff.rc" 2>/dev/null || echo 4)"
+exit "\$(cat "\$REC/aff.rc" 2>/dev/null || echo 4)"
 STUB
 assert_fixture_dir "$RPLUG"
 cat > "$RPLUG/skills/ship/scripts/battery-refusal-wait.sh" <<'STUB'
 #!/usr/bin/env bash
-# scripted wait: records argv, pops the next code from $REC/wait.codes (default 11)
+# scripted wait: validates its argv like the real script (--log <battery log> --state <file> [--full]),
+# records whether the battery was still running and what the state file held, then pops the next code
 echo "$*" >> "$REC/wait.argv"
+[[ "$1" == "--log" && "$3" == "--state" ]] || { echo "wait stub: bad argv: $*" >&2; exit 64; }
+log="$2"; state="$4"
+[[ -s "$log" && "$(head -n 1 "$log")" == "stub battery log" ]] || { echo "wait stub: --log is not the battery log" >&2; exit 65; }
+[[ -f "$state" ]] || { echo "wait stub: --state is not a file" >&2; exit 66; }
+echo "state=$state" >> "$REC/wait.state"
+if [[ -e "$REC/aff.running" ]]; then echo "running=1" >> "$REC/wait.state"; else echo "running=0" >> "$REC/wait.state"; fi
+echo "prev=<$(cat "$state")>" >> "$REC/wait.state"
+n="$(wc -l < "$REC/wait.argv" | tr -d ' ')"; echo "epoch-$n" > "$state"
 code="$(head -n 1 "$REC/wait.codes" 2>/dev/null)"; [[ -n "$code" ]] || code=11
 tail -n +2 "$REC/wait.codes" > "$REC/wait.codes.new" 2>/dev/null; mv -f "$REC/wait.codes.new" "$REC/wait.codes" 2>/dev/null
 echo "BATTERY_REFUSAL_WAIT verdict=STUB code=$code"
@@ -491,7 +554,7 @@ run_recipe() { # <recipe-text> <FULL_BATTERY> <battery-rc> <wait codes...> ; set
   export REC="$RECROOT/rec"
   assert_fixture_dir "$REC"
   rm -rf "$REC"; mkdir -p "$REC"
-  printf '%s\n' "$arc" > "$REC/aff.rc"; : > "$REC/aff.argv"; : > "$REC/wait.argv"
+  printf '%s\n' "$arc" > "$REC/aff.rc"; : > "$REC/aff.argv"; : > "$REC/wait.argv"; : > "$REC/wait.state"
   assert_fixture_dir "$REC"
   if (( $# )); then printf '%s\n' "$@" > "$REC/wait.codes"; else : > "$REC/wait.codes"; fi
   REC_OUT="$( cd "$RWORK" && TMPDIR="$RECROOT/tmp" PATH="$RSTUB:$PATH" CLAUDE_PLUGIN_ROOT="$RPLUG" FULL_BATTERY="$fb" timeout 60 bash -c "$recipe" 2>&1 )"
@@ -499,19 +562,19 @@ run_recipe() { # <recipe-text> <FULL_BATTERY> <battery-rc> <wait codes...> ; set
 rec_res() { # a compact result: markers, battery launches, whether --full reached each script
   local m
   m="$(grep -oE 'BATTERY DONE|RELAUNCH|CONTINUE_CI_IS_THE_GATE|QUEUE_IN_LOCK|STOP' <<<"$REC_OUT" | tr '\n' ',')"
-  RES="$m aff=$(wc -l < "$REC/aff.argv" | tr -d ' ') afffull=$(grep -c -- '--full' "$REC/aff.argv") waitfull=$(grep -c -- '--full' "$REC/wait.argv")"
+  RES="$m aff=$(wc -l < "$REC/aff.argv" | tr -d ' ') afffull=$(grep -c -- '--full' "$REC/aff.argv") waitfull=$(grep -c -- '--full' "$REC/wait.argv") statepaths=$(sort -u "$REC/wait.state" | grep -c '^state=') carry=$(grep -c '^prev=<epoch' "$REC/wait.state") racy=$(grep -c '^running=1' "$REC/wait.state")"
 }
 recipe_scn() { run_recipe "$RECIPE_UNDER_TEST" "$1" "$2" "${@:3}"; rec_res; }
 RECIPE_UNDER_TEST="$RECIPE"
-recipe_scn false 4 42;                      assert_eq "CONTINUE_CI_IS_THE_GATE, aff=1 afffull=0 waitfull=0" "$RES" "E1 refused battery + wait 42 -> continue as CI is the gate"
-recipe_scn false 4 10 42;                   assert_eq "RELAUNCH,CONTINUE_CI_IS_THE_GATE, aff=2 afffull=0 waitfull=0" "$RES" "E2 wait 10 relaunches the battery, then 42 continues"
-recipe_scn false 4 11;                      assert_eq "STOP, aff=1 afffull=0 waitfull=0" "$RES" "E3 wait 11 stops"
-recipe_scn false 4 12;                      assert_eq "QUEUE_IN_LOCK, aff=1 afffull=0 waitfull=0" "$RES" "E4 wait 12 selects the queue-in-lock path"
-recipe_scn false 4 1;                       assert_eq "STOP, aff=1 afffull=0 waitfull=0" "$RES" "E5 a stray wait status 1 stops (the script crashed)"
-recipe_scn false 4 10 10 10 10 10;          assert_eq "RELAUNCH,RELAUNCH,RELAUNCH,RELAUNCH,STOP, aff=4 afffull=0 waitfull=0" "$RES" "E6 relaunches are capped at 3 (4 launches in all): the 4th request for a relaunch stops the recipe"
-recipe_scn true 4 42;                       assert_eq "CONTINUE_CI_IS_THE_GATE, aff=1 afffull=1 waitfull=1" "$RES" "E7 FULL_BATTERY=true launches the battery with --full and passes --full to the wait script"
-recipe_scn false 0;                         assert_eq "BATTERY DONE, aff=1 afffull=0 waitfull=0" "$RES" "E8 a battery that ran (rc 0) never calls the wait script"
-recipe_scn false 1;                         assert_eq "BATTERY DONE, aff=1 afffull=0 waitfull=0" "$RES" "E9 a red battery (rc 1) never calls the wait script"
+recipe_scn false 4 42;                      assert_eq "CONTINUE_CI_IS_THE_GATE, aff=1 afffull=0 waitfull=0 statepaths=1 carry=0 racy=0" "$RES" "E1 refused battery + wait 42 -> continue as CI is the gate"
+recipe_scn false 4 10 42;                   assert_eq "RELAUNCH,CONTINUE_CI_IS_THE_GATE, aff=2 afffull=0 waitfull=0 statepaths=1 carry=1 racy=0" "$RES" "E2 wait 10 relaunches the battery, then 42 continues"
+recipe_scn false 4 11;                      assert_eq "STOP, aff=1 afffull=0 waitfull=0 statepaths=1 carry=0 racy=0" "$RES" "E3 wait 11 stops"
+recipe_scn false 4 12;                      assert_eq "QUEUE_IN_LOCK, aff=1 afffull=0 waitfull=0 statepaths=1 carry=0 racy=0" "$RES" "E4 wait 12 selects the queue-in-lock path"
+recipe_scn false 4 1;                       assert_eq "STOP, aff=1 afffull=0 waitfull=0 statepaths=1 carry=0 racy=0" "$RES" "E5 a stray wait status 1 stops (the script crashed)"
+recipe_scn false 4 10 10 10 10 10;          assert_eq "RELAUNCH,RELAUNCH,RELAUNCH,RELAUNCH,STOP, aff=4 afffull=0 waitfull=0 statepaths=1 carry=3 racy=0" "$RES" "E6 relaunches are capped at 3 (4 launches in all): the 4th request for a relaunch stops the recipe"
+recipe_scn true 4 42;                       assert_eq "CONTINUE_CI_IS_THE_GATE, aff=1 afffull=1 waitfull=1 statepaths=1 carry=0 racy=0" "$RES" "E7 FULL_BATTERY=true launches the battery with --full and passes --full to the wait script"
+recipe_scn false 0;                         assert_eq "BATTERY DONE, aff=1 afffull=0 waitfull=0 statepaths=0 carry=0 racy=0" "$RES" "E8 a battery that ran (rc 0) never calls the wait script"
+recipe_scn false 1;                         assert_eq "BATTERY DONE, aff=1 afffull=0 waitfull=0 statepaths=0 carry=0 racy=0" "$RES" "E9 a red battery (rc 1) never calls the wait script"
 
 # --- F. parity + wiring ----------------------------------------------------------------------
 assert_eq "1" "$(grep -cF 'sibling full-gate run(s) already in flight' "$LIVE_RUNNER" | awk '{print ($1>=1)}')" "F1 the live runner carries the sibling-refusal clause"
@@ -522,14 +585,18 @@ done
 assert_eq "1" "$(grep -cF 'battery-refusal-wait.sh' "$SKILL_MD" | awk '{print ($1>=1)}')" "F3 SKILL.md names the script"
 assert_eq "1" "$(grep -cF '](./references/battery-refusal-wait.md)' "$SKILL_MD" | awk '{print ($1>=1)}')" "F4 SKILL.md links the reference"
 assert_eq "0" "$(grep -c 'go back to waiting' "$SKILL_MD")" "F5 the unbounded 'go back to waiting' prescription is gone"
-assert_eq "1" "$(grep -cF 'SOLEUR_ALLOW_FULL_GATE=1 TC_LOCK_TIMEOUT=14400 TC_RUNTIME_CEILING_S=39600' "$SKILL_MD" | awk '{print ($1>=1)}')" "F6 the queue-in-lock command (target of exit 12) is kept"
+assert_eq "1" "$(grep -cF 'SOLEUR_ALLOW_FULL_GATE=1 TC_LOCK_TIMEOUT=14400 TC_RUNTIME_CEILING_S=39600 bash scripts/test-all.sh --full' "$SKILL_MD" | awk '{print ($1>=1)}')" "F6 the queue-in-lock command (target of exit 12) is kept"
 assert_eq "1" "$(grep -cE 'rc=4. is REFUSED' "$SKILL_MD" | awk '{print ($1>=1)}')" "F7 the rc=4 REFUSED sentence is intact"
 PR_LINE="$(grep -F 'Local battery refused (sibling contention)' "$REF_MD" 2>/dev/null | head -1)"
 assert_eq "1" "$([[ "$PR_LINE" == *'CI "test" is the authoritative gate; local run NOT executed.'* ]] && echo 1 || echo 0)" "F8 the reference carries the fixed PR Test plan line"
 assert_eq "0" "$(grep -ciE 'passed|verified' <<<"$PR_LINE")" "F9 the PR Test plan line never says passed or verified"
 assert_eq "1" "$(grep -c 'wait_rc' "$REF_MD" 2>/dev/null | awk '{print ($1>=1)}')" "F10 the recipe names the script status wait_rc, not rc"
 POINTER="$(grep -F 'Under contention, launch first' "$SKILL_MD" | head -1)"
-assert_eq "1" "$([[ "$POINTER" == *'only 42 continues'* && "$POINTER" == *'42 (CI is the gate'* && "$POINTER" == *'10 (capacity idle: relaunch)'* && "$POINTER" == *'persistent: true'* ]] && echo 1 || echo 0)" "F11 the SKILL.md pointer states every exit's action, that only 42 continues, and the Monitor mode"
+assert_eq "1" "$([[ "$POINTER" == *'12 (queue inside the lock) or 11 (stop)'* && "$POINTER" == *'only 42 continues'* && "$POINTER" == *'42 (CI is the gate'* && "$POINTER" == *'10 (capacity idle: relaunch)'* && "$POINTER" == *'persistent: true'* ]] && echo 1 || echo 0)" "F11 the SKILL.md pointer states every exit's action, that only 42 continues, and the Monitor mode"
+# The infra trigger SET of the live runner equals the script's (a third runner trigger would otherwise go unnoticed).
+RUNNER_LITS="$(awk '/^_infra_in_diff=0/{f=1} f{print} f&&/^fi$/{exit}' "$LIVE_RUNNER" | grep -oE "grep -qF '[^']+'" | sed "s/grep -qF //" | sort | tr '\n' ' ')"
+SCRIPT_LITS="$(grep -E "for lit in " "$REAL_SCRIPT" | grep -oE "'[^']+'" | sort | tr '\n' ' ')"
+assert_eq "1" "$([[ -n "$RUNNER_LITS" && "$RUNNER_LITS" == "$SCRIPT_LITS" ]] && echo 1 || echo 0)" "F13 the live runner's infra trigger set equals the script's (runner: $RUNNER_LITS)"
 assert_eq "1" "$([[ -n "$RECIPE" && "$RECIPE" == *'affected-tests.sh'* && "$RECIPE" != *'test-all.sh'* ]] && echo 1 || echo 0)" "F12 the recipe launches the pinned dispatch (affected-tests.sh), never a bare test-all.sh"
 
 # --- G. mutation battery (mutants of a COPY; the real script is never touched) -----------------
@@ -603,6 +670,18 @@ scn_okbusy() { start_arm; cap "$CAP_OK_BUSY"; wait_small "$LOG_SIB1"; res; }
 scn_zeropad() { start_arm; cap '[contention] CAPACITY_OK measured_runs=05 measured_suites=0'; wait_small "$LOG_SIB1"; res; }
 scn_twoline() { start_arm; cap 'MULTI:[contention] CAPACITY_OK measured_runs=1\n[contention] CAPACITY_OK measured_runs=0'; wait_small "$LOG_SIB1"; res; }
 scn_idlefail() { start_arm; cap "IDLEFAIL:$CAP_OK_IDLE"; wait_small "$LOG_SIB1"; res; }
+scn_fb_malformed() { start_arm; cap "$CAP_BUSY"; wait_small "$LOG_FB_EMPTY"; res; }
+scn_rr_foo() { start_arm; cap "$CAP_BUSY"; wait_small "$LOG_RR_FOO"; res; }
+scn_cnf() { start_arm; cap "$CAP_BUSY"; wait_small "$LOG_CNF"; res; }
+scn_fb_two() { start_arm; cap "$CAP_BUSY"; wait_small "$LOG_FB_TWO_A"; res; }
+scn_idle_final() { start_arm; cap "$CAP_BUSY" "$CAP_BUSY" "$CAP_BUSY" "$CAP_OK_IDLE"; wait_small "$LOG_SIB1"; res; }
+scn_okay() { start_arm; cap '[contention] CAPACITY_OKAY measured_runs=0'; wait_small "$LOG_SIB1"; res; }
+scn_stderr() { start_arm; cap "STDERR:$CAP_OK_IDLE"; wait_small "$LOG_SIB1"; res; }
+scn_stale_edge() { assert_fixture_dir "$STATE"; clock_at "$BASE"; printf '%s\n' "$(( BASE - 21600 ))" > "$STATE"; cap "$CAP_BUSY"; wait_small "$LOG_SIB1"; res; }
+scn_big() { start_arm; cap "$CAP_BUSY"; run_wait "$W0" --log "$LOG_SIB1" --state "$STATE" --budget-s 100000 --interval-s 100000 --probe-timeout-s 5; res; }
+scn_ciyml() { scn_infra "$IW_CIYML"; }
+scn_near() { scn_infra "$IW_NEAR"; }
+scn_ignored() { scn_infra "$IW_IGNORED"; }
 real() { "$2"; printf -v "$1" '%s' "$RES"; }
 real REAL_DEFER scn_defer; real REAL_LOWTMP scn_lowtmp; real REAL_UNREAD scn_unread
 real REAL_MIXU scn_mixu; real REAL_MIXF scn_mixf; real REAL_SEL scn_sel; real REAL_SUB scn_sub
@@ -613,6 +692,9 @@ real REAL_GFA scn_gf_a; real REAL_GFB scn_gf_b; real REAL_GFC scn_gf_c; real REA
 real REAL_MIDLINE scn_midline; real REAL_ZERO scn_zero; real REAL_FBI scn_fb_index; real REAL_FBF scn_fb_force
 real REAL_DETAIL scn_detail; real REAL_OKBUSY scn_okbusy; real REAL_ZEROPAD scn_zeropad; real REAL_TWOLINE scn_twoline
 real REAL_IDLEFAIL scn_idlefail
+real REAL_FBM scn_fb_malformed; real REAL_RRFOO scn_rr_foo; real REAL_CNF scn_cnf; real REAL_FB2 scn_fb_two
+real REAL_IDLEFINAL scn_idle_final; real REAL_OKAY scn_okay; real REAL_STDERR scn_stderr; real REAL_STALEEDGE scn_stale_edge
+real REAL_BIG scn_big; real REAL_CIYML scn_ciyml; real REAL_NEAR scn_near; real REAL_IGNORED scn_ignored
 assert_eq "1" "$([[ "$REAL_DEFER" == 42/CI_IS_THE_GATE/3/3/* ]] && echo 1 || echo 0)" "G0 the unmutated control defers as designed (a red control voids every row)"
 assert_eq "1" "$([[ "$REAL_WF" == 12/QUEUE_IN_LOCK/3/3/* ]] && echo 1 || echo 0)" "G0b the unmutated control keeps the workflow-file diff out of the deferral"
 
@@ -632,7 +714,7 @@ mutate M4b 1 'elapsed=$(( now - EPOCH ))' 'elapsed=$(( now - CALL_START ))' && m
 mutate M5a 1 '# DISPATCH-ANCHOR' 'exit 42' && mrow M5a "the selection-refusal row (expects 11)" "$REAL_SEL" scn_sel
 mutate M5b 1 '# DISPATCH-ANCHOR' 'exit 10' && mrow M5b "the garbage-state row (expects 2)" "$REAL_GARB" scn_garbage
 # 6 capacity parse loosened / never-readable folded into deferral
-mutate M6a 1 '*CAPACITY_CONTENDED*) CAP=contended ;;' '*CAPACITY_CONTENDED*) if [[ "$line" =~ measured_runs=0([^0-9]|$) ]]; then CAP=idle; else CAP=contended; fi ;;' && mrow M6a "CONTENDED-with-zero keeps waiting" "$REAL_LOWTMP" scn_lowtmp
+mutate M6a 1 'CONTENDED) CAP=contended ;;' 'CONTENDED) if [[ "$line" =~ measured_runs=0([^0-9]|$) ]]; then CAP=idle; else CAP=contended; fi ;;' && mrow M6a "CONTENDED-with-zero keeps waiting" "$REAL_LOWTMP" scn_lowtmp
 mutate M6b 1 'verdict NOT_WAITABLE "$RC_NOT_WAITABLE" capacity-unreadable' 'verdict CI_IS_THE_GATE "$RC_CI" capacity-unreadable' && mrow M6b "never-readable capacity" "$REAL_UNREAD" scn_unread
 # 7 REORDER: the epoch is taken from this call and the state is written only AFTER the loop
 mutate M7 1 'init_episode  # EPISODE-INIT' 'EPOCH="$CALL_START"' 'infra="$(infra_state)"' 'init_episode; infra="$(infra_state)"' && mrow M7 "kill mid-wait then re-invoke" "$REAL_MID" scn_midkill
@@ -654,25 +736,42 @@ mutate M11 1 "'^ERROR: refusing a full-gate run" "'ERROR: refusing a full-gate r
 mutate M12 1 '[1-9][0-9]* sibling' '[0-9]* sibling' && mrow M12 "the '0 sibling' row" "$REAL_ZERO" scn_zero
 mutate M13 1 'index-missing|enumerate-unavailable)' 'never-a-reason)' && mrow M13 "the broken-index row (reason text)" "$REAL_FBI" scn_fb_index
 mutate M14 1 'force-all) force=1 ;;' 'force-all) ;;' && mrow M14 "the force-all row" "$REAL_FBF" scn_fb_force
-mutate M15 1 "grep -E '^(\\[contention\\][[:space:]]+)?(BANNER[[:space:]]+)?CAPACITY_" "grep -E 'CAPACITY_" && mrow M15 "the detail-row row" "$REAL_DETAIL" scn_detail
-mutate M16 1 '*CAPACITY_OK*)' '*CAPACITY_OK*) CAP=idle ;;
-    *CAPACITY_NEVER*)' && mrow M16 "the busy CAPACITY_OK row" "$REAL_OKBUSY" scn_okbusy
+mutate M15 1 "grep -E '^(\\[contention\\]" "grep -E '(\\[contention\\]" '[[ "$line" =~ ^(\[contention\]' '[[ "$line" =~ (\[contention\]' && mrow M15 "the detail-row row" "$REAL_DETAIL" scn_detail
+mutate M16 1 'else CAP=ok; fi ;;' 'else CAP=idle; fi ;;' && mrow M16 "the busy CAPACITY_OK row" "$REAL_OKBUSY" scn_okbusy
 mutate M17 1 'measured_runs=0([^0-9]|$) ]]; then CAP=idle; else CAP=ok' 'measured_runs=0 ]]; then CAP=idle; else CAP=ok' && mrow M17 "the measured_runs=05 row" "$REAL_ZEROPAD" scn_zeropad
 mutate M18 1 "| head -1)" ")" && mrow M18 "the two-banner-line row" "$REAL_TWOLINE" scn_twoline
 mutate M19 1 'out="$(timeout -k 1 "$PROBE_TIMEOUT_S" bash "$top/scripts/test-all.sh" --capacity 2>&1)" || return 0' 'out="$(timeout -k 1 "$PROBE_TIMEOUT_S" bash "$top/scripts/test-all.sh" --capacity 2>&1)"' && mrow M19 "the idle-line-then-nonzero-exit row" "$REAL_IDLEFAIL" scn_idlefail
+# 11 strict fallback parse, runner-refused anchoring, toolchain alternation, every fallback line judged
+mutate M20 1 'r="${BASH_REMATCH[1]}"; else r=""; fi' 'r="${BASH_REMATCH[1]}"; else r="runner-changed"; fi' && mrow M20 "a malformed AFFECTED_FALLBACK line" "$REAL_FBM" scn_fb_malformed
+mutate M21 1 "reason=runner-refused([[:space:]]|\$)')" "reason=runner-refused')" && mrow M21 "reason=runner-refused-foo" "$REAL_RRFOO" scn_rr_foo
+mutate M22 1 'mise ERROR|command not found' 'mise ERROR' && mrow M22 "the 'command not found' toolchain fault" "$REAL_CNF" scn_cnf
+mutate M23 1 "done < <(grep -F 'AFFECTED_FALLBACK' <<<\"\$body\")" "done < <(grep -F 'AFFECTED_FALLBACK' <<<\"\$body\" | head -1)" && mrow M23 "two fallback lines (only the first judged)" "$REAL_FB2" scn_fb_two
+# 12 idle on the final poll, token boundary, stderr, stale boundary, six-digit budget
+mutate M24 1 'idle) verdict RETRY "$RC_RETRY" capacity-idle ;;' 'idle) if (( elapsed >= BUDGET_S )); then BUDGET_DONE=1; break; fi; verdict RETRY "$RC_RETRY" capacity-idle ;;' && mrow M24 "idle on the final poll" "$REAL_IDLEFINAL" scn_idle_final
+mutate M25 1 "CAPACITY_(OK|CONTENDED|UNKNOWN)([[:space:]]|\$)'" "CAPACITY_(OK|CONTENDED|UNKNOWN)'" '|CONTENDED|UNKNOWN)([[:space:]]|$) ]] || return 0' '|CONTENDED|UNKNOWN) ]] || return 0' && mrow M25 "CAPACITY_OKAY" "$REAL_OKAY" scn_okay
+mutate M26 1 '--capacity 2>&1)"' '--capacity)"' && mrow M26 "a stderr-only capacity banner" "$REAL_STDERR" scn_stderr
+mutate M27 1 '(( CALL_START - cur <= STALE_S ))' '(( CALL_START - cur < STALE_S ))' && mrow M27 "the stale-epoch boundary" "$REAL_STALEEDGE" scn_stale_edge
+mutate M28 1 '{0,5}' '{0,4}' && mrow M28 "a six-digit budget" "$REAL_BIG" scn_big
+# 13 the infra clean side: widened triggers and --exclude-standard
+mutate M29 1 "'.github/workflows/apply-web-platform-infra.yml'" "'.github/workflows/'" && mrow M29 "the ci.yml (clean) row" "$REAL_CIYML" scn_ciyml
+mutate M30 1 "'apps/web-platform/infra/'" "'web-platform/infra/'" && mrow M30 "the web-platform/infra/ near miss" "$REAL_NEAR" scn_near
+mutate M31 1 'ls-files --others --exclude-standard' 'ls-files --others' && mrow M31 "the gitignored-file row" "$REAL_IGNORED" scn_ignored
 restore
 
 # Recipe mutants (of a COPY of the reference): each reverts one thing the glue must do.
-recipe_mutant() { # <id> <old> <new> ; sets RECIPE_UNDER_TEST to the mutated recipe
-  local id="$1" old="$2" new="$3"
+recipe_mutant() { # <id> <old> <new> [<old2> <new2>] ; sets RECIPE_UNDER_TEST to the mutated recipe
+  local id="$1" old="$2" new="$3" old2="${4:-}" new2="${5:-}"
   local m="$MROOT/ref-$id.md"
   assert_fixture_dir "$m"
   cp "$REAL_REF_MD" "$m"
-  if ! OLD="$old" NEW="$new" python3 -c '
+  if ! OLD="$old" NEW="$new" OLD2="$old2" NEW2="$new2" python3 -c '
 import os, sys
 p = sys.argv[1]; s = open(p).read()
-if s.count(os.environ["OLD"]) != 1: sys.exit(1)
-open(p, "w").write(s.replace(os.environ["OLD"], os.environ["NEW"]))' "$m"; then
+for o, n in ((os.environ["OLD"], os.environ["NEW"]), (os.environ["OLD2"], os.environ["NEW2"])):
+    if not o: continue
+    if s.count(o) != 1: sys.exit(1)
+    s = s.replace(o, n)
+open(p, "w").write(s)' "$m"; then
     assert_eq "landed" "did-not-land" "G $id: the recipe mutation lands exactly once"; return 1
   fi
   RECIPE_UNDER_TEST="$(recipe_block "$m")"
@@ -695,7 +794,15 @@ recipe_mutant R3 '${FULL:+--full}; wait_rc=$?' '; wait_rc=$?' && mrow_recipe R3 
 recipe_mutant R4 '= 4 ] || {' '= 0 ] || {' && mrow_recipe R4 "only a refused battery (rc 4) calls the wait script" "$REAL_R1" false 4 42
 recipe_mutant R5 '"$FULL" >/dev/null' '"" >/dev/null' && mrow_recipe R5 "FULL_BATTERY must launch the battery with --full" "$REAL_R7" true 4 42
 recipe_mutant R6 '[ "$relaunches" -le 3 ] ||' '[ "$relaunches" -le 99 ] ||' && mrow_recipe R6 "relaunches are capped" "$REAL_R6" false 4 10 10 10 10 10
+# The recipe's state-file creation statement, assembled so this file holds no literal redirect to it.
+STATE_INIT="$(printf 'STATE="$d/state"; : %s "$STATE"' '>')"
 recipe_mutant R7 'FULL=""; [ "${FULL_BATTERY:-}" = true ] && FULL=--full' 'FULL=""' && mrow_recipe R7 "FULL_BATTERY must map to --full" "$REAL_R7" true 4 42
+recipe_mutant R8 '--log "$LOG" --state' '--log "$RCF" --state' && mrow_recipe R8 "the wait script must get the battery log" "$REAL_R1" false 4 42
+recipe_mutant R9 '--state "$STATE" ${FULL' '--state "$d/other" ${FULL' && mrow_recipe R9 "the wait script must get the episode state file" "$REAL_R1" false 4 42
+recipe_mutant R10 "$STATE_INIT" 'STATE="$d/state"' && mrow_recipe R10 "the state file must exist before the wait script runs" "$REAL_R1" false 4 42
+recipe_mutant R11 'launch() { rm -f "$RCF"; ' 'launch() { ' && mrow_recipe R11 "a relaunch must clear the previous rc file" "$REAL_R2" false 4 10 42
+recipe_mutant R12 '> "$2" 2>&1; echo $? > "$3"' '> /dev/null 2>&1; echo $? > "$3"' && mrow_recipe R12 "the battery output must reach the log" "$REAL_R1" false 4 42
+recipe_mutant R13 "$STATE_INIT" 'STATE="$d/state"' 'launch() { rm -f "$RCF"; ' "launch() { : $(printf '>') \"\$STATE\"; rm -f \"\$RCF\"; " && mrow_recipe R13 "the state (budget) must survive a relaunch" "$REAL_R2" false 4 10 42
 restore
 
 # --- H. harness -------------------------------------------------------------------------------
@@ -714,4 +821,4 @@ assert_eq "$(( PASS + FAIL + 1 ))" "$H1_FLOOR" "H1b the numeric PASS floor equal
 
 # The floor counts the instrument self-test's two rows plus every row above. Set EQUAL to the
 # current count, not below it: slack is budget for a silently deleted row.
-print_results 176
+print_results 215
