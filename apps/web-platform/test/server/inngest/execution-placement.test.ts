@@ -900,15 +900,18 @@ function serveAnchorViolations(fs: GraphFs): string[] {
   }
   const hosts: ts.ObjectLiteralElementLike[] = [];
   const visit = (n: ts.Node): void => {
-    if ((ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) && ts.isIdentifier(n.name) && n.name.text === "serveHost") hosts.push(n);
+    // inngest@4 renamed the serve() option serveHost → serveOrigin; the
+    // pinned const is still SERVE_HOST and the production URL rule is
+    // unchanged.
+    if ((ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) && ts.isIdentifier(n.name) && n.name.text === "serveOrigin") hosts.push(n);
     ts.forEachChild(n, visit);
   };
   if (calls[0].arguments[0]) visit(calls[0].arguments[0]);
-  if (hosts.length === 0) out.push(`${ROUTE_PATH}: serve() sets no serveHost — it must be \`serveHost: SERVE_HOST\``);
+  if (hosts.length === 0) out.push(`${ROUTE_PATH}: serve() sets no serveOrigin — it must be \`serveOrigin: SERVE_HOST\``);
   for (const h of hosts) {
     const v = ts.isPropertyAssignment(h) ? unwrap(h.initializer) : undefined;
     if (!v || !ts.isIdentifier(v) || v.text !== "SERVE_HOST") {
-      out.push(`${ROUTE_PATH}: serve()'s serveHost is \`${h.getText(sf)}\` — it must be \`serveHost: SERVE_HOST\` so steps are called at ${PROD_SERVE_URL}`);
+      out.push(`${ROUTE_PATH}: serve()'s serveOrigin is \`${h.getText(sf)}\` — it must be \`serveOrigin: SERVE_HOST\` so steps are called at ${PROD_SERVE_URL}`);
     }
   }
   return out;
@@ -1028,7 +1031,7 @@ function routeSrc(opts: {
   imports: Array<[ident: string, mod: string]>;
   array: string[];
   prodBranch?: string;
-  serveHostProp?: string;
+  serveOriginProp?: string;
   serveHostDecl?: string;
   configExtra?: string;
   preamble?: string;
@@ -1045,7 +1048,7 @@ ${serveHostDecl}
 const handlers = serve({
   client: inngest,
   functions: [${opts.array.join(", ")}],
-  ...(SERVE_HOST ? { serveHost: ${opts.serveHostProp ?? "SERVE_HOST"}, servePath: "/api/inngest" } : {}),${opts.configExtra ?? ""}
+  ...(SERVE_HOST ? { serveOrigin: ${opts.serveOriginProp ?? "SERVE_HOST"}, servePath: "/api/inngest" } : {}),${opts.configExtra ?? ""}
 });
 export const { GET, POST, PUT } = handlers;
 ${opts.postamble ?? ""}`;
@@ -1509,8 +1512,8 @@ describe("Guard 4 — single step-executing host (serve-URL anchor)", () => {
     expect(joined(runAll(gone).g4)).toContain("`const SERVE_HOST` not found");
   });
 
-  it("serveHost not referencing SERVE_HOST is RED", () => {
-    expect(joined(runAll(route({ serveHostProp: "process.env.X" })).g4)).toContain("serve()'s serveHost is `serveHost: process.env.X`");
+  it("serveOrigin not referencing SERVE_HOST is RED", () => {
+    expect(joined(runAll(route({ serveOriginProp: "process.env.X" })).g4)).toContain("serve()'s serveOrigin is `serveOrigin: process.env.X`");
   });
 
   it.each([

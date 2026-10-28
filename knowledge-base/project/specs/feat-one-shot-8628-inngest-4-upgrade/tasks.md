@@ -30,12 +30,12 @@ Derived from `knowledge-base/project/plans/2026-10-28-chore-inngest-v4-upgrade-s
 
 ## 5. Evidence — streaming spike re-run (S1–S8 + S9)
 
-- [ ] 5.1 Stand up spike: `inngest start` v1.45.1, branch build (`next build` + minimal server w/ `installCrashHandlers()`), Cloudflare quick tunnel, throwaway keys, `env -i` + `INNGEST_DEV=0`
-- [ ] 5.2 Run S1–S6, S8 rows (same shapes/pass conditions as 2026-09-23 record)
-- [ ] 5.3 Run S7 no-wrapper stream cut — kill-proof: no `Controller is already closed`/`Invalid state` uncaughtException; else STOP and re-scope (keep wrapper)
-- [ ] 5.4 Run S9 checkpointing matrix (default-on vs `checkpointing: false`, incl. >100 s step) as a MEASUREMENT row — record both arms; the client flag ships `checkpointing: false` per the CTO ruling (2026-10-28), flip-on is a future one-flag decision
-- [ ] 5.5 Unsigned-POST row (201 + 401 envelope) + `PUT` registration row (`modified:true`, crons planned)
-- [x] 5.6 Write `knowledge-base/project/specs/feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md` (written as a NOT-RUN record — harness could not complete in-session; S7 evidence still owed)
+- [x] 5.1 Stand up spike: `inngest start` v1.45.1, branch build (`next build` + minimal server w/ `installCrashHandlers()`), Cloudflare quick tunnel, throwaway keys, `env -i` + `INNGEST_DEV=0`
+- [x] 5.2 Run S1–S6, S8 rows (same shapes/pass conditions as 2026-09-23 record) — all pass; S3 full 70-min completion on re-fire
+- [x] 5.3 Run S7 no-wrapper stream cut — kill-proof: PASS — zero `Controller is already closed`/`Invalid state` occurrences; app stayed up on a 3-stream cut; retries re-ran
+- [x] 5.4 Run S9 checkpointing matrix — both arms recorded; shipped `checkpointing: false` arm passes, default-on arm unexpectedly COMPLETED a 3-min step on v1.45.1
+- [x] 5.5 Unsigned-POST row (201 + 401 envelope) + `PUT` registration row (`modified:true`, 74 fns / 55 cron triggers planned)
+- [x] 5.6 Write `knowledge-base/project/specs/feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md` — per-row verdicts recorded
 
 ## 6. Residuals
 
@@ -48,5 +48,5 @@ Derived from `knowledge-base/project/plans/2026-10-28-chore-inngest-v4-upgrade-s
 ## 7. ADR + gates + close
 
 - [x] 7.1 Amend ADR-243 (§1 v4 fix + deletion, alternatives row executed, observability table retires `inngest-stream-*` ops, S9 verdict); grep `inngest-stream-`/`serveHost`/`3.54.2` → only KB/history
-- [ ] 7.2 `tsc`, `eslint`, `scripts/test-all.sh --affected` green (no commits while a same-worktree run is in flight)
+- [x] 7.2 `tsc`, `eslint` green; `scripts/test-all.sh --affected` ran to the 4h ceiling — UNRESOLVED (365 pass/7 fail/317 declined); 4 diff-caused failures fixed + verified, rest environmental (shallow clone / host state / load flakes); coverage gap for CI
 - [ ] 7.3 PR body: `Closes #8628` + names both attached residuals

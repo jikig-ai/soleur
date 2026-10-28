@@ -358,27 +358,28 @@ describe("Inngest function registry — drift guards", () => {
   // impossible rather than test-enforced. Do NOT reintroduce them without first
   // reintroducing `-target=`.
 
-  // #5159: serve() must pin serveHost to the canonical public origin so EVERY
+  // #5159: serve() must pin the canonical public origin so EVERY
   // registration (boot, --poll-interval sync, loopback re-register PUT) reports
   // the public serve URL. Without this, a loopback PUT registers
   // http://127.0.0.1:3000 — accepted (HTTP 200) but never cron-planned (the
   // 2026-06-11 AC15 failure, surfaced by #5178's inngest_register_http=200 +
-  // inngest_crons:{} diagnostic).
+  // inngest_crons:{} diagnostic). inngest@4 renamed the option serveHost →
+  // serveOrigin; the pinned const is still SERVE_HOST.
   //
-  // serveHost MUST be the HARDCODED canonical origin gated on NODE_ENV, NOT
+  // The origin MUST be the HARDCODED canonical value gated on NODE_ENV, NOT
   // process.env.NEXT_PUBLIC_APP_URL: #5182 used NEXT_PUBLIC_APP_URL and was a
   // silent no-op because Next.js build-inlines process.env.NEXT_PUBLIC_* at
   // BUILD time and that var is not a Docker build ARG (→ inlined `undefined`).
   // Hardcoding matches the security-motivated server/cf-cache-purge.ts
   // convention (`const APP_ORIGIN = "https://app.soleur.ai"`).
-  it("(g) route.ts pins serveHost to the hardcoded prod origin gated on NODE_ENV (#5159)", () => {
+  it("(g) route.ts pins serveOrigin to the hardcoded prod origin gated on NODE_ENV (#5159)", () => {
     // The canonical origin is a string literal gated on NODE_ENV === production.
     expect(routeSrc).toMatch(
       /const SERVE_HOST\s*=\s*[\s\S]*process\.env\.NODE_ENV\s*===\s*["']production["'][\s\S]*["']https:\/\/app\.soleur\.ai["']/,
     );
-    expect(routeSrc).toMatch(/serveHost:\s*SERVE_HOST/);
+    expect(routeSrc).toMatch(/serveOrigin:\s*SERVE_HOST/);
     expect(routeSrc).toMatch(/servePath:\s*["']\/api\/inngest["']/);
-    // Must NOT derive serveHost from NEXT_PUBLIC_APP_URL — that build-inlines as
+    // Must NOT derive the origin from NEXT_PUBLIC_APP_URL — that build-inlines as
     // undefined in the prod container (the #5182 no-op regression class).
     expect(routeSrc).not.toMatch(/SERVE_HOST\s*=\s*process\.env\.NEXT_PUBLIC_APP_URL/);
   });
