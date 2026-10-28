@@ -43,6 +43,10 @@ Correct the `cf-token-scope` default-token Notifications probe to use Cloudflare
 - No classifier relaxation, new profile, or unrelated route/permission coverage expansion.
 - No issue closure: reference epic #11181 but leave it open while the operator hold and unanswered AC4 remain unchanged.
 
+## Artifact Lifecycle
+
+- **Archival deferral:** Defer archiving this plan and its spec directory until after `soleur:ship` Phase 6 has completed. Ship reads the live task/session artifacts and performs the approved Phase 6.45 archive; compound must not archive them in this pre-ship phase.
+
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** a false-negative retained-scope baseline that blocks the Cloudflare LB follow-up from establishing whether Notifications remains authorized; web-2 remains excluded and at weight 0.
