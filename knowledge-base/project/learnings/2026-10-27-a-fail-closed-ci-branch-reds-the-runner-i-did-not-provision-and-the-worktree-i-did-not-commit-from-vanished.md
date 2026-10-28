@@ -36,6 +36,8 @@ A fix that tightens a check moves its failure to the places that were relying on
 - **Cheap repo-wide gates not run before the panel** — Recovery: fixed the reds the panel found — **Prevention:** already in the review skill; run them first.
 - **Briefs and filings blocked by hooks, scan misreads of `gate:` and "status flips"** (earlier in the session) — Recovery: Write-tool briefs, literal paths, reworded prose — **Prevention:** already recorded in the plan-phase learnings.
 
+- **Alert `check_period` 300 over `query_period` 10800 passed every offline gate and was refused at the merge apply** (Better Stack 422 "too resource intensive"; the exploration was created, the alert was not, and every later merge's apply then failed on it) — Recovery: a first fix to `check_period = 900` (12x, from a ratio theory) was refused with the same 422 at its own merge apply, costing a second multi-hour merge cycle; the second fix is `check_period = 3600`, the value the two accepted alerts with this exact query shape (`claude_cost_*`) run — **Prevention:** the limit is not a plain `query_period / check_period` ratio. Copy the `(check_period, query_period)` pair of an accepted alert that has the same query shape rather than deriving one, and treat any new pair as unverified until a merge apply accepts it; offline tests and `terraform plan` cannot see this vendor-side limit.
+
 ## Tags
 category: workflow-issues
 module: review, infra

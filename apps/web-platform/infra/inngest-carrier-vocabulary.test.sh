@@ -121,7 +121,8 @@ NEEDLES_PINNED='PLAIN_ID INNGEST_LUKS_PLAIN_VOLUME_ID STAGING_NAME inngest-redis
 TRIO_STEMS=(inngest-luks-cutover inngest_luks_cutover INNGEST_LUKS_CUTOVER_SH)
 # Floor on the derived carrier set, set to the MEASURED green count (never below it): a derivation that silently drops a
 # carrier must not read as clean. Retiring a carrier lowers this deliberately, in the same commit.
-CARRIER_FLOOR=10
+# 10 -> 13: #5150 bakes inngest-trace-retention.sh, .sql, and .sqlite.sql.
+CARRIER_FLOOR=13
 
 strip_comments() { grep -vE '^[[:space:]]*#' "$1" || true; }
 # strip_render <file>: what inngest_rationale_strip removes from the user_data render (a whole-line `#` followed by a space or
