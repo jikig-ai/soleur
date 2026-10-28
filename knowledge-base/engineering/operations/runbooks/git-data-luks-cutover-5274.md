@@ -1265,7 +1265,7 @@ Measured against `apply-web-platform-infra.yml` and `git-data.tf`, not asserted 
 
 ### If the fresh host fails a boot check after step 3
 
-> Routes disabled until #11194: if the git-data host itself is lost, the replace, rotate and create remedies named here are void; see "If the git-data host is lost (until #11194)" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)".
+> Replace, rotate and create gating: if the git-data host itself is lost, the replace, rotate and create remedies named here refuse (the plaintext-id interlock) until `git_data_volume_id` is blanked in `git-data.tf`; see "If the git-data host is lost" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)" and the banner of `git-data-birth.md`.
 
 Applies to `plaintext_unverified`, `plaintext_residue`, `luks_residue`, `fence_on_mapper=no` and
 `erasure_probe=no`.
@@ -1662,7 +1662,7 @@ The claim is limited to "device deleted at the provider API" (ADR-239 Amendment 
 
 **Drift.** After the destroy the state no longer holds the two retired addresses, so untargeted plans no longer show them. The drift issues titled `infra: drift detected in web-platform` that were open before 2026-10-27 predate the destroy. Close one only if its plan lists exactly those two destroys; the first drift run after the destroy that logs "No drift detected in web-platform" is the check.
 
-**If the git-data host is lost (until #11194).** Stop and escalate to the owner; the replace, rotate and create routes are disabled and the failure text that says "re-dispatch git-data-host-replace" is void. With the flag on, git push and pull and workspace provisioning fail (they do not corrupt), and the bare-repo part of an account deletion (Art. 17) stays `pending` with a Sentry alert while the one-month clock runs. The literal `git_data_volume_id` names a deleted device: a host rebirth boots into the bootstrap's `plaintext_unverified reason=source` FATAL until the id is set to `""`. A plain reboot is believed safe (the bootstrap runs from cloud-init `runcmd`, once per instance) but that is unverified on the live host. #11194 must end with either `id = ""` or a bootstrap that treats a nonexistent device as absent now that the volume is retired.
+**If the git-data host is lost.** The replace, rotate and create gates no longer demand the retired plaintext addresses (#11194, ADR-239 Amendment 2026-10-28), but each route refuses while `git-data.tf` passes a non-empty `git_data_volume_id` to `module "git_data_userdata"` (the plaintext-id interlock): that literal names the device deleted on 2026-10-27, and a host created from it boots into the bootstrap's `plaintext_unverified reason=source` FATAL. Stop and escalate to the owner. The remedy is the one-hunk change `git_data_volume_id = ""`, merged and followed by a dispatch in one sitting (about 24 hours; the tree and the live host's `user_data` differ in between and `infra: drift detected in web-platform` is filed until the dispatch), with `plan_only=true` run first (the interlock then prints its verdict without blocking and the job stops before any apply) and the result pasted on #11194. The empty-id boot has never run on a real host (#10296); the owner records acceptance on #11194 before the real dispatch. Until then the failure text that says "re-dispatch git-data-host-replace" does not apply. With the flag on, git push and pull and workspace provisioning fail (they do not corrupt), and the bare-repo part of an account deletion (Art. 17) stays `pending` with a Sentry alert while the one-month clock runs. A plain reboot is believed safe (the bootstrap runs from cloud-init `runcmd`, once per instance) but that is unverified on the live host.
 
 **Retention and public disclosure (CLO 2026-10-26 and 2026-10-27).** `docs/legal/**` was not edited by the destroy or by the record PR (#11284, Ref #11195): a dispatch is not a deletion, and the public sentence may change only after the verified read-back, which now exists. The DPD section 10.3(b) refresh is a CLO-owned dated item with its own pull request: bound 2026-11-03 (read-back plus 7 days; CLO 2026-10-27), outer limit 2026-11-11, escalation by a comment on #6897. Until it is live the public sentence overstates retention, which is the conservative direction. The ledger row for the device and its `expires_on` were retired by #11195 (ADR-239 Amendment 2026-10-27, item 6); the provider-retention gap they described is unmeasured, not closed.
 
@@ -1670,7 +1670,7 @@ The claim is limited to "device deleted at the provider API" (ADR-239 Amendment 
 
 ## Verdict map
 
-> Routes disabled until #11194: if the git-data host itself is lost, the replace, rotate and create remedies named here are void; see "If the git-data host is lost (until #11194)" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)".
+> Replace, rotate and create gating: if the git-data host itself is lost, the replace, rotate and create remedies named here refuse (the plaintext-id interlock) until `git_data_volume_id` is blanked in `git-data.tf`; see "If the git-data host is lost" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)" and the banner of `git-data-birth.md`.
 
 | Where you are | What the run reads | What to do |
 |---|---|---|
@@ -2185,7 +2185,7 @@ should page is a policy decision that stays on #8093.
 
 ## Rotation
 
-> Routes disabled until #11194: if the git-data host itself is lost, the replace, rotate and create remedies named here are void; see "If the git-data host is lost (until #11194)" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)".
+> Replace, rotate and create gating: if the git-data host itself is lost, the replace, rotate and create remedies named here refuse (the plaintext-id interlock) until `git_data_volume_id` is blanked in `git-data.tf`; see "If the git-data host is lost" in the section "Plaintext-volume destroy (Option B, #8211 / #6897)" and the banner of `git-data-birth.md`.
 
 The root-key root is additive-only, with no exception and no rotation input. **Any rotation, of the read
 token or of the key, is a reviewed PR** that adds a typed allowlist arm naming exactly the addresses it

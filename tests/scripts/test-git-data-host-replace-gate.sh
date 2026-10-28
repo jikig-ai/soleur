@@ -199,6 +199,18 @@ else
   pass
 fi
 
+# --- Test 14b: FAIL — server CREATED, not replaced (a birth shape on the replace route) ---
+# T14's update-only server is also refused by the root-key arm (no created server), so it cannot see
+# the server_replaced clause alone. A created server that carries both key ids passes that arm, which
+# leaves server_replaced==0 as the only refusal (#11194 mutation battery, G1-7).
+SERVER_CREATE_ONLY='{"address":"hcloud_server.git_data","change":{"actions":["create"],"after":{"ssh_keys":["1111","4242"]},"after_unknown":{"ssh_keys":[false,false]}}}'
+write_plan "${SERVER_CREATE_ONLY},${NET_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
+if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T14b: a create-only server (server_replaced==0, root-key arm satisfied) must ABORT (rc=1)"
+else
+  pass
+fi
+
 # --- Test 15: PASS — a data-source ["read"] AND an out-of-allow-set ["no-op"] ---
 # The positive-action out_of_scope filter must EXCLUDE both `read` (data source) and `no-op`
 # (a stray in-graph resource): neither is a positive action, so the plan still PASSes.
@@ -678,11 +690,11 @@ gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to th
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 102 ]]; then
+if [[ "$_ran" -lt 103 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 102 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 103 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 102)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 103)\n' "$_ran"
 fi
 
 echo ""

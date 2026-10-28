@@ -541,7 +541,7 @@ which is exactly when you most want to know.
 
 ## git_data_host_replace
 
-> **DISABLED from the Option B merge until #11194 (2026-10-26).** This job, `git_data_host_create` and the rotate selector `-target` the retired plaintext volume and attachment addresses and their gates demand those addresses, so every plan is refused. Escalate to the owner instead of re-dispatching; see ADR-239 Amendment 2026-10-26, item 4.
+> **Dispatch gating (#11194, ADR-239 Amendment 2026-10-28).** This job, `git_data_host_create` and the rotate selector no longer `-target` the retired plaintext volume and attachment, and their gates no longer demand them; either address appearing in a plan is refused as out-of-scope. Each runs a plaintext-id interlock before it plans and refuses while `git-data.tf` passes a non-empty `git_data_volume_id` to `module "git_data_userdata"` (that literal names the plaintext device destroyed on 2026-10-27); under `plan_only` this job reports the verdict without blocking and stops before any apply. Release sequence, the drift issue and the unrehearsed empty-id boot (#10296): the banner of `git-data-birth.md`.
 
 Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
 git-data-luks.tf + network.tf resources are OPERATOR_APPLIED_EXCLUSIONS (ADR-068) —
