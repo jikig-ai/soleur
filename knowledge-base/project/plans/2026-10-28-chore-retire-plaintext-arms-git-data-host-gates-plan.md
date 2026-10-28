@@ -13,6 +13,27 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28
+**Method:** the plan was already built on four research agents, a CTO ruling set (A-E, F1-F3), CPO/CLO consults and a five-agent plan review; deepen-plan re-ran every halt gate mechanically and re-verified the load-bearing claims against the tree instead of fanning out a second round of generic agents (the surface is one repo's bash+jq gates, with no external framework to research).
+
+### Gate results
+
+- 4.6 User-Brand Impact present, threshold `single-user incident`: pass. 4.7 Observability: all five fields present, command's first token `python3`, no SSH, finishes well under 15 s, literal `0`: pass (command run at plan time, printed `3` pre-change). 4.8 PAT-shaped variables: none. 4.9 UI wireframe: no UI surface, skipped. 4.10 Encryption Posture: triggered by the `.tf` comment edit, section added above. 4.11 Guard Contract: `lint-guard-contract.py` reports 4 entries, matrices carry the labeled `**Mutation matrix.**` field. 4.12 Scope Check: all asks mapped, no unjustified `inferred` row. 4.13 Task Design: no new autonomous task surface, skipped. 4.5 network-outage and 4.55 downtime halts: neither trigger fires (no SSH/timeout work; PR-1 changes no serving resource, and the host replace is an owner dispatch outside this plan).
+
+### Verified at deepen time
+
+- Rung-2 hash set (`git_data_rung2_bound_files`): `cloud-init-git-data.yml`, `modules/git-data-userdata/main.tf` and its `file()` payloads; `git-data.tf`, the gate libs and the readiness-gate lib are outside it, so PR-1 and PR-2 leave rung-2 evidence valid.
+- `plan_only` is a `workflow_dispatch` input documented for the replace routes; the create job honors it only in later steps, so the interlock runs unconditionally there.
+- #11194, #10296 and #11433 are OPEN; no open PR other than this branch's draft names #11194.
+
+### New considerations carried into the plan
+
+- Two independent reviewers found the same trap (a gate-green dispatch into a FATAL boot between PR-1 and PR-2): the interlock (Guard 4) is the fix.
+- `test-git-data-wipe-wedge.sh` is a second consumer of the replace gate's fixtures (P0 caught by architecture review).
+- Several mutation rows were equivalent mutants or bash-version-dependent and were cut or re-anchored.
+
 ## Overview
 
 The plaintext git-data volume (`hcloud_volume.git_data`, id 106867358) and its attachment were destroyed at the
@@ -194,7 +215,7 @@ Order is test-first (`cq-write-failing-tests-before`): fixtures and parity pins 
 
 3.1 `git-data-host-birth-gate.sh`: remove both addresses from `_GIT_DATA_BIRTH_ALLOW`, the entailed loop (`hcloud_volume_attachment.git_data`) and the presence loop (`hcloud_volume.git_data`); narrow `volume_destroys`/`volume_updates` selectors, the offender jq and the ABORT text (the line calling `hcloud_volume.git_data` "the plaintext store") to `hcloud_volume.git_data_luks`; delete number words ("twenty-two-address", "seventeen", "three ENTAILED", "all 15 presence members") and fix comments.
 3.2 `.github/workflows/apply-web-platform-infra.yml`: delete the three `-target` lines; fix the operator-facing text in the replace job: the rotate-abort `::error::` ("plaintext volume ... is still preserved"), the post-apply comment block and apply-failure annotations ("BOTH data volumes", "BOTH store attachments", "BOTH volumes are preserved"), the job-header target list comment (incl. the `git-data.tf:275` anchor) and the create job's "twenty -targets" prose. `scripts/test-all.sh` run_suite comment ("5-target, preserves BOTH data volumes") likewise. No dispatch-input edits.
-3.3 **Plaintext-id interlock (CTO F1).** New function `git_data_plaintext_id_interlock <path-to-git-data.tf>` in `tests/scripts/lib/git-data-birth-readiness-gate.sh`: extracts the `module "git_data_userdata"` block by brace depth, ignoring comment lines, requires exactly one top-level `git_data_volume_id` assignment inside it and that its value is the empty string; ABORTs on a non-empty value, a missing block, an unparsable block, zero or more than one assignment. Wired as a step before the plan step in `git_data_host_replace` (skipped when `inputs.plan_only == true`, so the F3 verification path is not blocked) and in `git_data_host_create` (mirroring that job's own `plan_only` conditionals); the step prints only the verdict and the line number, never a value other than "empty"/"non-empty". PR-2 satisfies it; it stays afterward as a regression guard. Not hash-bound (the lib is outside `git_data_rung2_bound_files`; assert this in the PR).
+3.3 **Plaintext-id interlock (CTO F1).** New function `git_data_plaintext_id_interlock <path-to-git-data.tf>` in `tests/scripts/lib/git-data-birth-readiness-gate.sh`: extracts the `module "git_data_userdata"` block by brace depth, ignoring comment lines, requires exactly one top-level `git_data_volume_id` assignment inside it and that its value is the empty string; ABORTs on a non-empty value, a missing block, an unparsable block, zero or more than one assignment. Wired as a step before the plan step in `git_data_host_replace` (skipped when `inputs.plan_only == true`, so the F3 verification path is not blocked) and in `git_data_host_create` (unconditional: the `plan_only` input is documented for the replace routes only, and a create has no verification mode the interlock must leave open); the step prints only the verdict and the line number, never a value other than "empty"/"non-empty". PR-2 satisfies it; it stays afterward as a regression guard. Not hash-bound (the lib is outside `git_data_rung2_bound_files`; assert this in the PR).
 
 ### Phase 4 — Floors and counters (same commit as the rows they follow)
 
@@ -350,6 +371,40 @@ logs:
 discoverability_test:
   command: python3 -c "print(len(__import__('re').findall(r'hcloud_volume(?:_attachment)?[.]git_data\x27', open('.github/workflows/apply-web-platform-infra.yml').read())))"
   expected_output: 0
+```
+
+## Encryption Posture
+
+This change introduces no persistent store and no new cross-component connection; it retires gate machinery around an existing, already-declared store. The posture of the one store the retired gates guarded is restated so the review can see it did not move.
+
+```yaml
+at_rest:
+  - store: hcloud_volume.git_data_luks (the serving git-data store; unchanged by this plan)
+    mechanism: luks
+    evidence: scripts/encryption-posture-ledger.json row hcloud_volume.git_data_luks, which cites the luksFormat/luksOpen calls and the /dev/mapper/git-data fstab line in cloud-init-git-data.yml; the gates keep luks_volume_destroyed, luks_passphrase_touched and luks_attachment_recreated as named LUKS backstops
+    defends_against: a seized, RMA'd or snapshot-imaged block volume is unreadable without the Doppler-held passphrase
+    does_not_defend: a leaked credential, an app-layer read on the unlocked host, exfiltration via a compromised git-data process; also, this plan does not measure what the provider retained of the deleted plaintext volume (ADR-239 Amendment 2026-10-27 claim limit)
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable:no per-volume host posture probe exists yet; tracked #6897
+  - store: hcloud_volume.rehearsal (rung-2 rehearsal root, plaintext mirror; row text retargeted only)
+    mechanism: plaintext-exception
+    evidence: scripts/encryption-posture-ledger.json row hcloud_volume.rehearsal (existing exception, expires_on 2026-12-31)
+    defends_against: nothing at the volume layer
+    does_not_defend: at-rest recovery of the detached rehearsal device; acceptable only because it is created empty and destroyed empty by the workflow teardown
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable:no user data ever reaches a rehearsal host
+in_transit:
+  - connection: none added or changed (the plaintext-id interlock reads a checked-out file; the gates read a local plan JSON)
+    tls: not applicable, no network connection introduced
+    cert_verification: on (unchanged for every existing connection)
+    does_not_defend: not applicable, nothing in transit is added; existing connections keep their ADR-220 posture
+    disclosed_as: not-publicly-claimed
+exception:
+  - store: hcloud_volume.rehearsal
+    justification: byte-for-byte mirror of the retired plaintext declaration so the rung-2 rehearsal boots what production would boot; the template arm it mirrors stays until the hash-bound removal
+    tracking_issue: "#11433"
+    reevaluate_when: "#11433 removes the dead plaintext arm from the cloud-init template and bootstrap, or the GIT_DATA_STORE_ENABLED cutover completes"
+    expires_on: 2026-12-31
 ```
 
 ## Domain Review
