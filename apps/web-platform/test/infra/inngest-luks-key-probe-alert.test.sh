@@ -172,9 +172,9 @@ _nm="inngest_luks_key_probe_$_k"
     || no "$_k alert does not point metadata.runbook AND incident_cause at local.inngest_luks_key_probe_runbook_url"
 }
 
-param "$FAIL_AL" check_period 900 && param "$FAIL_AL" query_period 10800 && param "$FAIL_AL" recovery_period 3600 \
-  && ok "paging alert window: check 900 s, query 10800 s (3 h), recovery 3600 s" \
-  || no "paging alert windows are not check 900 / query 10800 / recovery 3600"
+param "$FAIL_AL" check_period 3600 && param "$FAIL_AL" query_period 10800 && param "$FAIL_AL" recovery_period 3600 \
+  && ok "paging alert window: check 3600 s, query 10800 s (3 h), recovery 3600 s" \
+  || no "paging alert windows are not check 3600 / query 10800 / recovery 3600"
 
 grep -qE '^[[:space:]]*inngest_luks_key_probe_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894\.md#key-continuity-probe-9927-item-2"[[:space:]]*$' "$TF" \
   && ok "the runbook local is the clickable URL of the 'Key-continuity probe (#9927 item 2)' subsection" \

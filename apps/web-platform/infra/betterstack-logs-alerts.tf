@@ -331,7 +331,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
-  # hourly, so a failing probe keeps a row inside the 3 h window and a fixed one clears in about 3 to 4 h.
+  # hourly, so a failing probe keeps a row inside the 3 h window and a fixed one clears in about 4 to 5 h.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
@@ -373,14 +373,18 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # Presence-only, so safe before the probe is delivered (no rows, value 0). A 3 h window (a 25 h
   # one would hold an incident open for a day): while any fail_ row is inside it the count stays
   # above 0, which is the hysteresis against the next hourly re-probe re-opening an incident. The
-  # incident clears about 3 to 4 h after the LAST failing row (the window, then recovery_period),
-  # which is not proof of recovery: only a token=ok row is.
-  # check_period 900, not 300: Better Stack refused 300 over 10800 (a 36x ratio) with 422 "too resource
-  # intensive" at the #11260 merge apply. The highest-ratio accepted siblings run 18x to 27x (most run 3x to 5x); this is 12x.
+  # incident clears about 4 to 5 h after the LAST failing row (the window, the wait for the next hourly
+  # check, then recovery_period), which is not proof of recovery: only a token=ok row is. It pages within
+  # about 1 h of the first failing row.
+  # check_period 3600, not 300 or 900: Better Stack refused both over 10800 with 422 "too resource
+  # intensive" (the #11260 and #11384 merge applies), so the limit is not a plain period ratio. 3600 is
+  # what the three accepted alerts with this query shape run (claude_cost_daily_burn, claude_cost_capture_dark
+  # and luks_monitor_host_timer_dark: scalar aggregate, dt BETWEEN, checked hourly), over windows 8x or more
+  # longer than this one.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
-  check_period        = 900
+  check_period        = 3600
   query_period        = 10800
   confirmation_period = 0
   recovery_period     = 3600
