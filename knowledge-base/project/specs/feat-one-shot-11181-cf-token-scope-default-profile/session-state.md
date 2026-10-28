@@ -28,3 +28,11 @@
 - Advisor consult (D7): ONE bounded spawn (engineering/review/architecture-strategist, session-inherited model - disclosed tier substitution on OpenCode). Zero TECHNICAL findings; 19 TASTE/PROCESS dispositions recorded as the BINDING addendum "Advisor Consult Dispositions" in the plan (commit fac2734694).
 - technical-ruling-gate re-run: PASS (9 rows).
 - cto_spawns=1; agent_rounds=3 (plan child, CTO batch, consult).
+
+## Compound phase (2026-10-28)
+- Learning written: knowledge-base/project/learnings/2026-10-28-one-shot-on-opencode-depth-1-harness-adaptations.md (9 inventory items, all with Prevention lines; triage: 2 recurring-class items, both fix-now-inline — positive-control doctrine extension + export-not-declare note).
+- Deviation analyst: no new enforcement needed (items map to existing rules; behavioral recoveries in-session).
+- Rule budget: [WARN] B_ALWAYS=44390>=44000, exit 0 — no new AGENTS.md rule added this session.
+- Route-to-definition: operator ACCEPTED the bounded one-shot/SKILL.md depth-1 adaptation bullet (applied).
+- Constitution promotion: nothing to propose (no uncovered principle).
+- ARCHIVAL DEFERRED: run archive-kb.sh at ship Phase 6.45, not pre-ship — ship Phase 6 step 2.5 reads decision-challenges.md from knowledge-base/project/specs/<branch>/ on this branch (#7490 ordering).
