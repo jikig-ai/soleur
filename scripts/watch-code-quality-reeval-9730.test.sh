@@ -190,7 +190,9 @@ run_with() {
   local sut="$1"; shift
   OUT=""; ERR=""; RC=0
   assert_fixture_dir "$MOCKD"
-  ( cd "$ROOT" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" "TMPDIR=$ROOT/tmp" GH_REPO=jikig-ai/soleur "WATCH_NOW=$NOW" WATCH_CHUNK_PAUSE=0 bash "$sut" "$@" ) > "$MOCKD/stdout" 2> "$MOCKD/stderr"
+  local nowenv=("WATCH_NOW=$NOW")
+  [[ -z "${RUN_UNSET_NOW:-}" ]] || nowenv=(-u WATCH_NOW)
+  ( cd "$ROOT" && env "${nowenv[@]}" "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" "TMPDIR=$ROOT/tmp" GH_REPO=jikig-ai/soleur WATCH_CHUNK_PAUSE=0 bash "$sut" "$@" ) > "$MOCKD/stdout" 2> "$MOCKD/stderr"
   RC=$?
   OUT="$(cat "$MOCKD/stdout")"; ERR="$(cat "$MOCKD/stderr")"
 }
@@ -447,6 +449,8 @@ B="$(body)"; ok=1
 mkmock; flag gql_mode fail2; run
 [[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$(ncalls '^api orgs/')" -eq 0 && "$(ncalls '^api graphql ')" -eq 2 && "$ERR" != *"$SENTINEL"* ]] \
   && pass "S4a GraphQL fails on chunk 2: exit 3, no post, no sentinel, no billing work" || fail "S4a (rc=$RC posted=$(posted))"
+[[ "$ERR" == *"::error::#9730: gathering the data failed (exit 3); posting nothing, retrying next run"* ]] \
+  && pass "S4c the library's catch-all annotation follows a gather failure: '#9730: gathering the data failed (exit 3)'" || fail "S4c (err=$ERR)"
 for gm in partial errors nullcount floatcount; do
   mkmock; flag gql_mode "$gm"; run
   [[ "$RC" -eq 3 && "$(posted)" -eq 0 ]] && pass "S4b GraphQL '$gm' response: exit 3, nothing posted (never a partial result)" || fail "S4b $gm (rc=$RC posted=$(posted))"
@@ -887,6 +891,37 @@ mutcopy x6; mutsubst script 'exit "$rc"' 'for t in $(gh issue close "$TRACKER");
 exit "$rc"'
 [[ "$MUT_LANDED" -eq 1 && "$(census_count "$CTL_SUT")" -eq 0 && "$(census_count "$MUT_SUT")" -ge 1 ]] && pass "X6 a gh write hidden in a for-in command substitution: the census flags it (control clean)" || fail "X6 census for-in command substitution"
 
+# ---- S21: the clock fallback (WATCH_NOW unset): the date comes from `date`, never a constant ----
+mkmock; assert_fixture_dir "$MOCKD"
+{ printf '#!/usr/bin/env bash\nREAL=%q\n' "$(command -v date)"; cat <<'SHIM'
+if [[ "$*" == "-u +%Y-%m-%dT%H:%M:%SZ" ]]; then printf '2026-11-16T09:17:00Z\n'; exit 0; fi
+exec "$REAL" "$@"
+SHIM
+} > "$MOCKD/date"
+chmod +x "$MOCKD/date"
+RUN_UNSET_NOW=1; run; RUN_UNSET_NOW=""
+B="$(body)"
+[[ "$RC" -eq 0 && "$(posted)" -eq 1 && "$B" == *"1853 opened, 1097 merged"* && "$B" == *"| 2026-11-16 | 27 | 16 | 1 |"* && "$B" == *"(77 days)"* ]] \
+  && pass "S21a WATCH_NOW unset (date shim 2026-11-16): the gate opens and the body is dated from the clock (77 days, 1853 opened)" || fail "S21a (rc=$RC posted=$(posted))"
+d0="$(date -u +%F)"; mkmock; RUN_UNSET_NOW=1; run; RUN_UNSET_NOW=""; d1="$(date -u +%F)"
+[[ "$RC" -eq 0 && ( "$OUT$(body)" == *"$d0"* || "$OUT$(body)" == *"$d1"* ) && "$OUT$(body)" != *"2000-01-01"* ]] \
+  && pass "S21b WATCH_NOW unset with the real clock: exit 0 and today's date ($d0) appears in the output" || fail "S21b (rc=$RC today=$d0 out=${OUT:0:200})"
+
+# ---- Library rows through test-double variants (a scratch copy of the script with ONE edit to its gather; the real library runs unmodified) ----
+big_variant() { mutcopy "big$1"; mutsubst script 'WN_BODY+="Nothing was changed: no setting, label, state or file was touched, and Code Quality was not enabled."' "WN_BODY=\"\$(head -c $1 /dev/zero | tr \"\\0\" Z)\""; }
+TRUNC_NOTE="_(Truncated: the full data exceeded GitHub's comment size limit.)_"
+big_variant 60001; mkmock; run_with "$MUT_SUT"; B="$(body)"
+[[ "$MUT_LANDED" -eq 1 && "$RC" -eq 0 && "$(posted)" -eq 1 && "$OUT" == *"::warning::#9730: comment body truncated to fit GitHub's size limit"* && "$B" == *"$TRUNC_NOTE"* \
+   && "$(tr -cd Z <<<"$B" | wc -c | tr -d ' ')" -eq 60000 && "$(tail -n 1 "$MOCKD/bodies")" == "$SENTINEL" && "$(wc -c < "$MOCKD/bodies")" -lt 65536 ]] \
+  && pass "L-trunc a body of 60001 characters is cut to exactly 60000 plus a visible note, warned about, under GitHub's limit, the sentinel still the last line" || fail "L-trunc (landed=$MUT_LANDED rc=$RC out=${OUT:0:200})"
+big_variant 60000; mkmock; run_with "$MUT_SUT"; B="$(body)"
+[[ "$MUT_LANDED" -eq 1 && "$RC" -eq 0 && "$(posted)" -eq 1 && "$OUT" != *"truncated"* && "$B" != *"$TRUNC_NOTE"* && "$(tr -cd Z <<<"$B" | wc -c | tr -d ' ')" -eq 60000 && "$(tail -n 1 "$MOCKD/bodies")" == "$SENTINEL" ]] \
+  && pass "L-trunc0 a body of exactly 60000 characters is posted whole, with no note and no warning" || fail "L-trunc0 (landed=$MUT_LANDED rc=$RC)"
+mutcopy nogather; mutsubst script 'wn_notify_once_main "$TRACKER" "$EARLIEST" "$KEY" gather' 'wn_notify_once_main "$TRACKER" "$EARLIEST" "$KEY" gather_missing'
+mkmock; run_with "$MUT_SUT"
+[[ "$MUT_LANDED" -eq 1 && "$RC" -eq 3 && "$ERR" == *"::error::internal: gather function 'gather_missing' is not defined"* && ! -s "$MOCKD/calls" ]] \
+  && pass "L-undef an undefined gather function is exit 3 with an ::error:: naming it, before any gh call" || fail "L-undef (landed=$MUT_LANDED rc=$RC err=$ERR)"
+
 # Exit-gate check (behavioural): this same suite, re-run with ONE injected failure, must
 # exit EXACTLY 1. An `exit 0` placed before the gate, a reset FAIL counter, or a neutered
 # exit path would all give 0 here; the FATAL below runs before any of them can.
@@ -902,7 +937,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY
 # above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=155
+MIN_ASSERTIONS=161
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2

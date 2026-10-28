@@ -81,6 +81,8 @@ fi
 
 ISSUE=11177
 CREATED='2026-10-26T11:33:12Z'
+CREATED_EPOCH="$(date -u -d "$CREATED" +%s)"
+REAL_TIMEOUT="$(command -v timeout)"; [[ "$REAL_TIMEOUT" == /* ]] || fatal "timeout is not an absolute path"
 WIN_T0="$(date -u -d 2026-10-27T00:00:00Z +%s)"   # fixture commits inside the window start here
 OLD_T0="$(date -u -d 2026-10-20T00:00:00Z +%s)"   # fixture commits older than the tracker
 BASE_T0="$(date -u -d 2026-10-01T00:00:00Z +%s)"
@@ -224,6 +226,8 @@ put() { assert_fixture_dir "$REPO"; mkdir -p "$(dirname "$REPO/$1")"; printf '%s
 fc() { put "$1" "$2"; g add -- "$1" || fatal "add failed: $1"; gcommit "$3"; LAST="$(g rev-parse HEAD)"; }
 fc_old() { CLOCK_BASE="$OLD_T0" fc "$@"; CLOCK_BASE=""; }
 fc_skew() { CLOCK_BASE="$SKEW_T0" fc "$@"; CLOCK_BASE=""; }
+# fc_at PATH CONTENT SUBJECT AUTHOR_EPOCH COMMITTER_EPOCH: as fc, with explicit and DIFFERENT author and committer dates.
+fc_at() { put "$1" "$2"; g add -- "$1" || fatal "add failed: $1"; GIT_AUTHOR_DATE="@$4 +0000" GIT_COMMITTER_DATE="@$5 +0000" g commit -q -m "$3" || fatal "fixture commit failed: $3"; LAST="$(g rev-parse HEAD)"; }
 CLOCK_BASE=""
 offend() { K=$((K + 1)); fc "apps/web-platform/app/o$K.tsx" "$OFF_TSX" "${1:-offending $K}"; }
 clean() { K=$((K + 1)); fc "apps/web-platform/app/c$K.tsx" "$TOK_TSX" "${1:-clean $K}"; }
@@ -649,6 +653,99 @@ chk_print_badtime() { # a garbage WATCH_CREATED_AT is a usage error, not a whole
   mkrepo; RUN_ENV=(WATCH_CREATED_AT=garbage); run --print-state
   need '[[ "$RC" -eq 2 && "$ERR" == *"WATCH_CREATED_AT"* ]]'
 }
+chk_gitenv_rest() { # the rest of the scrubbed git location variables never reach a write either
+  mkrepo; clean; clean; use_wrapper
+  local other="$ROOT/other$N" objdir="$ROOT/objdir$N"
+  assert_fixture_dir "$other"; assert_fixture_dir "$objdir"
+  cp -a "$TPL" "$other" || fatal "cp other failed"
+  git -C "$other" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m "other tip" || fatal "other commit failed"
+  # The canary blob already exists in the OTHER repository, which is offered as an alternate object store: with the variable kept,
+  # `hash-object -w` finds it there and never stores it in the fixture repository itself.
+  local canary_blob; canary_blob="$(printf 'export const s = { color: "#ff00aa" };\n' | git -C "$other" hash-object -w --stdin)" || fatal "canary blob failed"
+  local before_o before_r objs_o; before_o="$(snap_repo "$other")"; before_r="$(snap_repo "$REPO")"
+  objs_o="$(find "$other/.git/objects" -type f | wc -l)"
+  RUN_ENV=(WATCH_GATE_X_FORCE=allow "GIT_COMMON_DIR=$other/.git" "GIT_OBJECT_DIRECTORY=$objdir" "GIT_ALTERNATE_OBJECT_DIRECTORIES=$other/.git/objects" GIT_NAMESPACE=zzns GIT_PREFIX=zz/); run
+  need '[[ "$RC" -eq 0 && "$OUT" == *"examined=2"* && "$(gate_runs)" -eq 2 ]]' || return 1
+  need '[[ "$(snap_repo "$other")" == "$before_o" && "$(find "$other/.git/objects" -type f | wc -l)" -eq "$objs_o" ]]' || return 1
+  need '[[ "$(snap_repo "$REPO")" == "$before_r" && ! -e "$objdir" ]]' || return 1
+  need 'git -C "$REPO" cat-file -e "$canary_blob"'
+}
+chk_window_dates() { # the window is by COMMITTER date, inclusive at createdAt: author-dates differ, createdAt-1s is out, createdAt is in
+  mkrepo
+  fc_at apps/web-platform/app/w1.tsx "$TOK_TSX" "committer 1s before createdAt, author far later" "$((CREATED_EPOCH + 100000))" "$((CREATED_EPOCH - 1))"
+  fc_at apps/web-platform/app/w2.tsx "$TOK_TSX" "committer exactly createdAt, author far earlier" "$((CREATED_EPOCH - 100000))" "$CREATED_EPOCH"
+  fc_at apps/web-platform/app/w3.tsx "$TOK_TSX" "committer 1s after createdAt" "$((CREATED_EPOCH + 1))" "$((CREATED_EPOCH + 1))"
+  run
+  need '[[ "$RC" -eq 0 && "$(posted)" -eq 0 && "$OUT" == *"scanned=2 candidates=2 examined=2"* ]]' || return 1
+  run --print-state
+  need '[[ "$RC" -eq 0 && "$OUT" == *"trigger2 since=$CREATED scanned=2 candidates=2 "* ]]'
+}
+mk_timeout_shim() { # a PATH shim that records the argv of every `timeout` call of the run, then runs the real one
+  assert_fixture_dir "$MOCKD"
+  cat > "$MOCKD/timeout" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$MOCKD/timeout.args"
+exec "$REAL_TIMEOUT" "\$@"
+SHIM
+  chmod +x "$MOCKD/timeout" || fatal "shim chmod failed"
+}
+timeout_args_ok() { # every recorded argv is `-k 5 SECS bash <repo>/.claude/hooks/brand-hex-commit-gate.sh`; at least two (canary + a candidate)
+  local n=0 l
+  [[ -s "$MOCKD/timeout.args" ]] || return 1
+  while IFS= read -r l; do
+    [[ "$l" == "-k 5 $1 bash "*"/.claude/hooks/brand-hex-commit-gate.sh" ]] || return 1
+    n=$((n + 1))
+  done < "$MOCKD/timeout.args"
+  [[ "$n" -ge 2 ]]
+}
+chk_budget_defaults() { # the documented defaults are 480 s (run budget) and 60 s (per gate), read through the warning and the timeout argv
+  mkrepo; clean; clean; clean; use_wrapper; mk_timeout_shim
+  RUN_ENV=(WATCH_GATE_X_FORCE=allow WATCH_ELAPSED_OFFSET=480); run
+  need '[[ "$RC" -eq 0 && "$OUT" == *"candidates=1 examined=1 truncated=1 budget=1"* && "$ERR" == *"::warning::the 480s run budget (measured from script start)"* ]]' || return 1
+  need 'timeout_args_ok 60' || return 1
+  mkrepo; clean; clean; use_wrapper; mk_timeout_shim
+  RUN_ENV=(WATCH_GATE_X_FORCE=allow WATCH_LOOP_BUDGET=900 WATCH_GATE_TIMEOUT=7 WATCH_ELAPSED_OFFSET=900); run
+  need '[[ "$RC" -eq 0 && "$ERR" == *"::warning::the 900s run budget"* ]]' && need 'timeout_args_ok 7'
+}
+chk_budget_inputs() { # 0 and non-numeric budgets/timeouts are exit 2 before any work (0 is NOT accepted); an offset of 0 and an empty budget are accepted
+  mkrepo; clean
+  local spec
+  for spec in WATCH_LOOP_BUDGET=0 WATCH_LOOP_BUDGET=abc WATCH_LOOP_BUDGET=-5 WATCH_LOOP_BUDGET=1.5 WATCH_LOOP_BUDGET=09 WATCH_LOOP_BUDGET=1000000 \
+              WATCH_GATE_TIMEOUT=0 WATCH_GATE_TIMEOUT=abc WATCH_GATE_TIMEOUT=100000 WATCH_ELAPSED_OFFSET=-1 WATCH_ELAPSED_OFFSET=abc; do
+    assert_fixture_dir "$MOCKD"; : > "$MOCKD/calls"; RUN_ENV=("$spec"); run
+    need '[[ "$RC" -eq 2 && "$ERR" == *"must be positive integers"* && ! -s "$MOCKD/calls" ]]' || { DIAG="$spec: $DIAG"; return 1; }
+  done
+  for spec in WATCH_ELAPSED_OFFSET=0 WATCH_LOOP_BUDGET= WATCH_GATE_TIMEOUT=5; do
+    RUN_ENV=("$spec"); run
+    need '[[ "$RC" -eq 0 && "$ERR" != *"must be positive integers"* ]]' || { DIAG="$spec: $DIAG"; return 1; }
+  done
+}
+chk_nonrepo() { # outside any git work tree: exit 3, never a scan of some other repository
+  mkrepo; local nr="$ROOT/norepo$N"; assert_fixture_dir "$nr"; mkdir -p "$nr" || fatal "mkdir failed"
+  need '! git -C "$nr" rev-parse --git-dir >/dev/null 2>&1' || return 1
+  REPO="$nr"; run
+  need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"not inside a git work tree"* ]]'
+}
+HCP_NAMES=(U+200B U+202E U+2066 U+0085 U+061C U+115F U+3164 U+180B U+FE0F U+E0001)
+HCP_VALS=("$(printf '\xe2\x80\x8b')" "$(printf '\xe2\x80\xae')" "$(printf '\xe2\x81\xa6')" "$(printf '\xc2\x85')" "$(printf '\xd8\x9c')" \
+          "$(printf '\xe1\x85\x9f')" "$(printf '\xe3\x85\xa4')" "$(printf '\xe1\xa0\x8b')" "$(printf '\xef\xb8\x8f')" "$(printf '\xf3\xa0\x80\x81')")
+chk_hostile_chars() { # invisible and format characters, a backtick and a 200-character run in a commit subject: stripped, one code span, cut at 100
+  mkrepo
+  local cps="" i run200 subj want bt=$'\x60'
+  for i in "${!HCP_VALS[@]}"; do cps+="${HCP_VALS[$i]}"; done
+  run200="$(printf 'Z%.0s' $(seq 1 200))"
+  subj="pre${cps}mid${bt}${run200}"
+  want="${bt}premid $(printf 'Z%.0s' $(seq 1 93))${bt}"
+  fc apps/web-platform/app/h1.tsx "$TOK_TSX" "$subj"; local sha="$LAST"
+  use_wrapper; RUN_ENV=(WATCH_GATE_X_FORCE=deny); run
+  local b line; b="$(cat "$(body_of 1)" 2>/dev/null)"; line="$(grep -m1 -F -- "- ${bt}${sha:0:12}${bt} " "$(body_of 1)" || true)"
+  need '[[ "$RC" -eq 0 && "$(posted)" -eq 1 && "$line" == "- ${bt}${sha:0:12}${bt} ${want}: "* ]]' || return 1
+  need '[[ "$(tr -cd "$bt" <<<"$line" | wc -c)" -eq 6 ]]' || return 1
+  for i in "${!HCP_VALS[@]}"; do
+    [[ "$b" != *"${HCP_VALS[$i]}"* ]] || { DIAG="${HCP_NAMES[$i]} survived into the posted body"; return 1; }
+  done
+  body_hygiene "$(body_of 1)"
+}
 chk_inject() { DIAG="deliberately failing scenario (exit-gate witness)"; return 1; }
 
 # ---- tracker states, modes, hygiene ----
@@ -772,6 +869,12 @@ scenario "an invalid UI_RE or EMAIL_RE is exit 3, not no-match" chk_regex
 scenario "a depth-1 clone is exit 3" chk_shallow
 scenario "--print-state with unenumerable hooks prints hooks=unknown and exits 3" chk_print_t1fail
 scenario "--print-state with a garbage WATCH_CREATED_AT is exit 2" chk_print_badtime
+scenario "gitx: an inherited GIT_COMMON_DIR/OBJECT_DIRECTORY/ALTERNATE/NAMESPACE/PREFIX never touches the other repository or creates a path" chk_gitenv_rest
+scenario "G4 window: committer date decides, inclusive at createdAt (createdAt-1s out, createdAt in, author dates ignored)" chk_window_dates
+scenario "G4 seams: the default run budget is 480 s and the default gate timeout is 60 s" chk_budget_defaults
+scenario "G4 seams: a 0 or non-numeric budget/timeout is exit 2 (0 is rejected); a 0 offset and an empty budget are accepted" chk_budget_inputs
+scenario "outside a git work tree is exit 3" chk_nonrepo
+scenario "hostile commit subject: format and invisible characters, a backtick and a 200-character run render as one 100-character code span" chk_hostile_chars
 if [[ -n "${WBH_INJECT_FAIL:-}" ]]; then scenario "exit-gate witness: a deliberately failing scenario" chk_inject; fi
 
 # ---------------------------------------------------- source facts the checks lean on
@@ -926,6 +1029,29 @@ if [[ -s "$SUT" ]]; then
     sut 'if ! t1_run 2>/dev/null; then' 't1_run 2>/dev/null; if false; then'
   mutation_row "PS-time" "--print-state accepts a garbage WATCH_CREATED_AT" chk_print_badtime \
     sut '|| { echo "::error::WATCH_CREATED_AT is not an ISO-8601 Z timestamp" >&2; exit 2; }' '|| true'
+  mutation_row "G4-gitenv-common" "git calls keep an inherited GIT_COMMON_DIR" chk_gitenv_rest sut ' GIT_COMMON_DIR' ''
+  mutation_row "G4-gitenv-objdir" "git calls keep an inherited GIT_OBJECT_DIRECTORY" chk_gitenv_rest sut ' GIT_OBJECT_DIRECTORY' ''
+  mutation_row "G4-gitenv-alt" "git calls keep an inherited GIT_ALTERNATE_OBJECT_DIRECTORIES" chk_gitenv_rest sut ' GIT_ALTERNATE_OBJECT_DIRECTORIES' ''
+  mutation_row "G4-win-author" "the window reads the author date instead of the committer date" chk_window_dates \
+    sut "log --first-parent --format='%H %ct' HEAD" "log --first-parent --format='%H %at' HEAD"
+  mutation_row "G4-win-edge-gt" "a commit exactly at createdAt falls out of the window" chk_window_dates \
+    sut '$2 + 0 >= c + 0' '$2 + 0 > c + 0'
+  mutation_row "G4-win-edge-minus1" "a commit one second before createdAt falls into the window" chk_window_dates \
+    sut '$2 + 0 >= c + 0' '$2 + 0 >= c - 1'
+  mutation_row "G4-budget-default" "the default run budget moves from 480 to 481" chk_budget_defaults \
+    sut 'BUDGET="${WATCH_LOOP_BUDGET:-480}"' 'BUDGET="${WATCH_LOOP_BUDGET:-481}"'
+  mutation_row "G4-timeout-default" "the default gate timeout moves from 60 to 61" chk_budget_defaults \
+    sut 'GATE_TIMEOUT="${WATCH_GATE_TIMEOUT:-60}"' 'GATE_TIMEOUT="${WATCH_GATE_TIMEOUT:-61}"'
+  mutation_row "G4-budget-zero" "a 0 budget is accepted" chk_budget_inputs \
+    sut '"$BUDGET" =~ ^[1-9][0-9]{0,5}$' '"$BUDGET" =~ ^[0-9]{0,5}$'
+  mutation_row "G4-nonrepo" "outside a git work tree no longer stops the run" chk_nonrepo \
+    sut '|| { echo "::error::not inside a git work tree; cannot establish" >&2; exit 3; }' '|| true'
+  mutation_row "G4-san-di" "the sanitizer drops its Default_Ignorable and extra strip classes" chk_hostile_chars \
+    lib '\p{Default_Ignorable_Code_Point}\x{0085}\x{061C}\x{115F}\x{3164}\x{180B}-\x{180F}\x{2800}\x{FE00}-\x{FE0F}\x{E0000}-\x{E007F}' ''
+  mutation_row "G4-san-len" "the sanitizer cuts at 120 characters instead of 100" chk_hostile_chars \
+    lib '$s = substr($s, 0, 100);' '$s = substr($s, 0, 120);'
+  mutation_row "G4-san-bt" "the sanitizer keeps a literal backtick" chk_hostile_chars \
+    lib '$s =~ s/[`<>&]/ /g;' '$s =~ s/[<>&]/ /g;'
   mutation_row "G2-r1" "do not skip a sentineled commit (re-run and re-post)" chk_sent_skip \
     sut 'skipped=$((skipped + 1)); continue; fi' 'skipped=$((skipped + 1)); fi'
   mutation_row "G2-r3" "stop at the first sentineled commit" chk_g2_r3 \
@@ -1014,6 +1140,7 @@ for name, job in jobs.items():
     for need_txt in ("github.repository == 'jikig-ai/soleur'", "github.event_name == 'schedule'", "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"):
         if need_txt not in cond: missing.append("if-guard:" + name)
     if job.get("permissions") != {"contents": "read", "issues": "write"}: missing.append("permissions:" + name)
+    if job.get("runs-on") != "ubuntu-latest": missing.append("runs-on:" + name)
     steps = job.get("steps") or []
     for st in steps:
         if "actions/checkout" in str(st.get("uses", "")):
@@ -1046,6 +1173,16 @@ PY
     if cmp -s "$WF" "$WFM"; then fail "workflow facet witness: the mutation did not land"
     elif [[ "$(python3 -I "$PYF" "$WFM" 2>&1)" == MISSING*if-guard* ]]; then pass "workflow facet witness: dropping the repository condition is caught"
     else fail "workflow facet witness: a guard without the repository condition stayed GREEN"; fi
+    assert_fixture_dir "$WFM"
+    sed "s/runs-on: ubuntu-latest/runs-on: macos-latest/" "$WF" > "$WFM"
+    if cmp -s "$WF" "$WFM"; then fail "workflow facet witness: the runs-on mutation did not land"
+    elif [[ "$(python3 -I "$PYF" "$WFM" 2>&1)" == MISSING*runs-on* ]]; then pass "workflow facet witness: a job off ubuntu-latest is caught"
+    else fail "workflow facet witness: a job off ubuntu-latest stayed GREEN"; fi
+    assert_fixture_dir "$WFM"
+    sed "s/17 9 \* \* 1/17 9 * * 2/" "$WF" > "$WFM"
+    if cmp -s "$WF" "$WFM"; then fail "workflow facet witness: the cron mutation did not land"
+    elif [[ "$(python3 -I "$PYF" "$WFM" 2>&1)" == MISSING*cron* ]]; then pass "workflow facet witness: a moved cron (17 9 * * 1 to 17 9 * * 2) is caught"
+    else fail "workflow facet witness: a moved cron stayed GREEN"; fi
   fi
 else
   fail "workflow facets: $WF does not exist"
@@ -1065,7 +1202,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY above the
 # `if`, not with the other constants: guard-vacuity-floor builds its mutant by slicing the floor
 # block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=136
+MIN_ASSERTIONS=157
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2

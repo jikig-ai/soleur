@@ -535,6 +535,23 @@ live="$(live_text "$BODY")"
 [[ "$(grep '^api search/issues' "$MOCKD/calls")" == "$base_queries" ]] \
   && pass "S8e the queries are identical with a hostile hit (no third-party text reaches a query)" || fail "S8e"
 
+# ---- S8f: invisible and format characters, a backtick and a 200-character run in a title and a login ----
+HCP_NAMES=(U+200B U+202E U+2066 U+0085 U+061C U+115F U+3164 U+180B U+FE0F U+E0001)
+HCP_VALS=("$(printf '\xe2\x80\x8b')" "$(printf '\xe2\x80\xae')" "$(printf '\xe2\x81\xa6')" "$(printf '\xc2\x85')" "$(printf '\xd8\x9c')" \
+          "$(printf '\xe1\x85\x9f')" "$(printf '\xe3\x85\xa4')" "$(printf '\xe1\xa0\x8b')" "$(printf '\xef\xb8\x8f')" "$(printf '\xf3\xa0\x80\x81')")
+hcps=""; for i in "${!HCP_VALS[@]}"; do hcps+="${HCP_VALS[$i]}"; done
+mkmock
+assert_fixture_dir "$MOCKD"
+jq -n --arg t "pre${hcps}mid${BT}$(printf 'Z%.0s' $(seq 1 200))" --arg l "ab${hcps}c" \
+  '{total_count:2,items:[{number:3101,state:"open",title:$t,created_at:"2026-10-25T00:00:00Z",user:{login:"u",type:"User"},author_association:"NONE"},{number:3102,state:"open",title:"plain",created_at:"2026-10-25T00:00:00Z",user:{login:$l,type:"User"},author_association:"NONE"}]}' > "$MOCKD/search_eslint.json"
+run
+hl="$(grep -m1 "^$(hp 3101)" <<<"$BODY" || true)"; hl2="$(grep -m1 "^$(hp 3102)" <<<"$BODY" || true)"
+want_title="${BT}premid $(printf 'Z%.0s' $(seq 1 93))${BT}"
+[[ "$RC" -eq 0 && "$hl" == *"**: ${want_title}" && "$hl2" == *"by ${BT}abc${BT} (association "* ]] \
+  && pass "S8f a title with 10 invisible/format characters, a backtick and a 200-character run is one exact 100-character code span; the same characters in a login vanish" || fail "S8f (rc=$RC line=$hl login-line=$hl2)"
+surv=""; for i in "${!HCP_VALS[@]}"; do [[ "$BODY" != *"${HCP_VALS[$i]}"* ]] || surv+=" ${HCP_NAMES[$i]}"; done
+[[ -z "$surv" ]] && pass "S8g none of U+200B U+202E U+2066 U+0085 U+061C U+115F U+3164 U+180B U+FE0F U+E0001 survives anywhere in the posted body" || fail "S8g survivors:$surv"
+
 # ---- S9: no closing keyword followed by #N in live text, in any posted body ----
 cl_bad=0
 for b in "$S2_BODY" "$BODY"; do
@@ -573,6 +590,22 @@ l4="$(grep "^$(hp 3204)" <<<"$s")"; l5="$(grep "^$(hp 3205)" <<<"$s")"; l6="$(gr
 
 chk_null_user && pass "S11d an author-less (user: null) hit renders as 'unknown' without 'null' and without failing" || fail "S11d null user"
 
+# S11e: COLLABORATOR is neither OWNER nor MEMBER (external); a Bot-typed author whose login lacks [bot] is still a bot; a missing type is not a bot.
+mkmock
+assert_fixture_dir "$MOCKD"
+jq -n '{total_count:5,items:[
+ {number:3211,state:"open",title:"t1",created_at:"2026-10-20T00:00:00Z",user:{login:"collab1",type:"User"},author_association:"COLLABORATOR"},
+ {number:3212,state:"open",title:"t2",created_at:"2026-10-20T00:00:00Z",user:{login:"robot-user",type:"Bot"},author_association:"NONE"},
+ {number:3213,state:"open",title:"t3",created_at:"2026-10-20T00:00:00Z",user:{login:"newbie",type:"User"},author_association:"FIRST_TIME_CONTRIBUTOR"},
+ {number:3214,state:"open",title:"t4",created_at:"2026-10-20T00:00:00Z",user:{login:"plain"},author_association:"NONE"},
+ {number:3215,state:"open",title:"t5",created_at:"2026-10-20T00:00:00Z",user:{login:"lower",type:"User"},author_association:"collaborator"}]}' > "$MOCKD/search_notebook.json"
+run; s="$(sec notebook)"
+m1="$(grep "^$(hp 3211)" <<<"$s")"; m2="$(grep "^$(hp 3212)" <<<"$s")"; m3="$(grep "^$(hp 3213)" <<<"$s")"; m4="$(grep "^$(hp 3214)" <<<"$s")"; m5="$(grep "^$(hp 3215)" <<<"$s")"
+[[ "$RC" -eq 0 && "$m1" == *"association ${BT}COLLABORATOR${BT})"* && "$m1" == *"**external**"* && "$m3" == *"FIRST_TIME_CONTRIBUTOR"* && "$m3" == *"**external**"* ]] \
+  && pass "S11e COLLABORATOR and FIRST_TIME_CONTRIBUTOR authors are marked external (only OWNER and MEMBER are not)" || fail "S11e ($m1 | $m3)"
+[[ "$m2" == *"by ${BT}robot-user${BT}"* && "$m2" != *external* && "$m4" == *"**external**"* && "$m5" == *"association ${BT}collaborator${BT})"* && "$m5" == *"**external**"* ]] \
+  && pass "S11f a Bot-typed author without [bot] in the login is never external; a missing user type is not a bot; a lower-case association is shown as a sanitized span and still external" || fail "S11f ($m2 | $m4 | $m5)"
+
 # ---- S12: ledger line and ADR headings, printed verbatim ----
 mkmock; run
 grep -qE '^\| GitHub Code Quality' <<<"$BODY" && pass "S12 the posted body carries the ledger line matching '^\\| GitHub Code Quality'" || fail "S12 ledger line missing"
@@ -591,6 +624,31 @@ else
   pass "S12e skipped: this checkout is shallow, and the script refuses a shallow history by design (see S13d)"
 fi
 
+# ---- S12f: a hostile ledger line is printed inert (first match only; comment markers broken; a fence marker is not printed) ----
+FIXL="$ROOT/fixledger"
+assert_fixture_dir "$FIXL"
+cp -a "$FIX" "$FIXL" || fatal "cp fixledger failed"
+ledger_with() { assert_fixture_dir "$FIXL"; printf '%s\n' "$@" > "$FIXL/knowledge-base/operations/expenses.md"; }
+ledger_run() { local keep="$WATCH_ROOT_OVERRIDE"; mkmock; WATCH_ROOT_OVERRIDE="$FIXL"; run; WATCH_ROOT_OVERRIDE="$keep"; }
+ledger_with '| Item | Vendor |' '| Other Vendor Line | Acme |' '| GitHub Code Quality <!-- hide --> tail --> end | 1.00 |' '| GitHub Code Quality DUPLICATE-LEDGER-ROW | 2.00 |'
+ledger_run
+[[ "$RC" -eq 0 && "$(grep -cxF '| GitHub Code Quality < !-- hide -- > tail -- > end | 1.00 |' <<<"$BODY")" -eq 1 && "$BODY" != *DUPLICATE-LEDGER-ROW* && "$BODY" != *"Other Vendor Line"* ]] \
+  && pass "S12f the ledger line is the FIRST match only (a duplicate '| GitHub Code Quality' row is not printed) and its '<!--' and '-->' are broken into '< !--' and '-- >'" || fail "S12f (rc=$RC)"
+[[ "$(grep -o '<!--' <<<"$BODY" | wc -l | tr -d ' ')" -eq 1 && "$(grep -o -- '-->' <<<"$BODY" | wc -l | tr -d ' ')" -eq 1 && "$(last_line "$BODY")" == "$SENTINEL" && "$(grep -c '~~~' <<<"$BODY")" -eq 4 ]] \
+  && pass "S12g with a hostile ledger line the body still holds exactly one '<!--' and one '-->' (the sentinel, last) and exactly four fence lines" || fail "S12g"
+ledger_with '| GitHub Code Quality ~~~ FENCE-ESCAPE-PAYLOAD | 1.00 |' '| GitHub Code Quality second row |'
+ledger_run
+[[ "$RC" -eq 0 && "$BODY" == *"(line contains a fence marker; not printed)"* && "$BODY" != *FENCE-ESCAPE-PAYLOAD* && "$BODY" != *"second row"* && "$(grep -c '~~~' <<<"$BODY")" -eq 4 && "$(grep -c '^~~~' <<<"$BODY")" -eq 4 ]] \
+  && pass "S12h a ledger line holding '~~~' is replaced by a placeholder (never printed), so it cannot close the fence; the fence lines stay the four the script opens and closes" || fail "S12h (rc=$RC)"
+# A non-numeric billing amount is refused (exit 3, nothing posted): the aggregate cannot round a string.
+mkmock; setfile bill_2026_10.json '{"usageItems":[{"product":"code_quality","date":"2026-10-05","grossAmount":"1; $(x)","netAmount":1}]}'; run
+[[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 && "$ERR" == *"::error::billing read for 2026-10 returned an unexpected shape"* ]] \
+  && pass "S12i a non-numeric billing amount is exit 3 with an ::error:: naming the month, nothing posted" || fail "S12i (rc=$RC posted=$(comments_posted) err=$ERR)"
+# A non-date billing date goes through the sanitizer: it never forges a comment marker.
+mkmock; setfile bill_2026_10.json '{"usageItems":[{"product":"code_quality","date":"<!-- x -->","grossAmount":1,"netAmount":1}]}'; run
+[[ "$RC" -eq 0 && "$BODY" == *"first ${BT} !-- x -- ${BT}, last ${BT} !-- x -- ${BT}"* && "$(grep -o '<!--' <<<"$BODY" | wc -l | tr -d ' ')" -eq 1 && "$(grep -o -- '-->' <<<"$BODY" | wc -l | tr -d ' ')" -eq 1 && "$(last_line "$BODY")" == "$SENTINEL" ]] \
+  && pass "S12j a hostile billing date is sanitized into a code span; the body keeps exactly one '<!--' and one '-->' (the sentinel)" || fail "S12j (rc=$RC)"
+
 # ---- S13: commits touching lint-ratchet.py since 2026-10-19 ----
 mkmock; run
 s="$(awk '/^### Commits/ {f=1; print; next} f && /^### / {exit} f {print}' <<<"$BODY")"
@@ -602,6 +660,14 @@ sl="$(grep -m1 octocat <<<"$s" || true)"
 
 chk_commits_cap && pass "S13c 21+ in-window commits and a merged side branch: exactly 20 first-parent lines, the merge once, the side-branch commit never" || fail "S13c commit cap / first-parent"
 chk_shallow && pass "S13d a shallow checkout: exit 3 with ::error::, nothing posted" || fail "S13d shallow guard"
+chk_nonrepo() { # a WATCH_REPO_ROOT that is not a git repository (git itself fails) is exit 3 as well, never an empty "None" history
+  local keep="$WATCH_ROOT_OVERRIDE" nr="$ROOT/norepo"
+  assert_fixture_dir "$nr"; mkdir -p "$nr" || fatal "mkdir failed"
+  ! git -C "$nr" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  mkmock; NOW="$NOW_AT"; WATCH_ROOT_OVERRIDE="$nr"; run; WATCH_ROOT_OVERRIDE="$keep"
+  [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 && "$ERR" == *"::error::"* && "$ERR" == *"not a repository"* && "$BODY" != *"None on the first-parent history"* ]]
+}
+chk_nonrepo && pass "S13e a root that is not a git repository (git fails, unlike a shallow clone): exit 3 with ::error::, nothing posted" || fail "S13e non-repository guard"
 
 # ---- S14: billing, readable ----
 NOW="$NOW_AT"
@@ -646,6 +712,9 @@ mkmock; setfile search_fail_notebook 'gh: API rate limit exceeded (HTTP 403)'; r
 [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 ]] && pass "S15b a search rate-limit: exit 3, nothing posted" || fail "S15b (rc=$RC)"
 mkmock; setfile search_telemetry.json '{"message":"oops"}'; run
 [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 ]] && pass "S15c a search reply without an items array: exit 3, nothing posted" || fail "S15c (rc=$RC)"
+mkmock; setfile search_fail_eslint 'gh: Validation Failed (HTTP 422)'; run
+[[ "$RC" -eq 3 && "$ERR" == *"::error::#10515: gathering the data failed (exit 3); posting nothing, retrying next run"* ]] \
+  && pass "S15e the library's catch-all annotation follows a gather failure: '#10515: gathering the data failed (exit 3)', exit 3" || fail "S15e (rc=$RC err=$ERR)"
 
 # ---- S16 (scenario 5 analogue): tracker state / comments / post failures ----
 mkmock; issue CLOSED '[]'; run
@@ -907,6 +976,33 @@ mutation_row mr_pad lib 'billing read for ${tag} failed (' 'billing read for ${y
 mutation_row mr_dc lib 'notopen=" (not OPEN: a real run would post nothing)"' 'notopen=""' chk_dry_closed "RF dry-run on a non-OPEN tracker says a real run would post nothing"
 mutation_row mr_clk lib '${WATCH_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}' '${WATCH_NOW:-2000-01-01T00:00:00Z}' chk_clock "RF the clock fallback reads date"
 
+# Library rows through test-double variants of the script (a scratch copy with ONE edit to its gather; the real library runs unmodified).
+lib_variant() { # NAME OLD NEW: rc 1 (and a FAIL) when the edit could not land
+  local f="$ROOT/mut_$1/scripts/watch-lint-ratchet-reeval-10515.sh"
+  mkcopy "$1"
+  if ! mutate "$f" "$2" "$3" || cmp -s "$SUT" "$f"; then fail "variant $1 did not land"; return 1; fi
+  SUT_RUN="$f"
+}
+big_variant() { lib_variant "big$1" 'WN_BODY="${BODY_ACC%' "WN_BODY=\"\$(head -c $1 /dev/zero | tr \"\\0\" Z)\"; : \"\${BODY_ACC%"; }
+TRUNC_NOTE="_(Truncated: the full data exceeded GitHub's comment size limit.)_"
+if big_variant 60001; then
+  mkmock; NOW="$NOW_AT"; run
+  [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$OUT" == *"::warning::#10515: comment body truncated to fit GitHub's size limit"* && "$BODY" == *"$TRUNC_NOTE"* \
+     && "$(tr -cd Z <<<"$BODY" | wc -c | tr -d ' ')" -eq 60000 && "$(last_line "$BODY")" == "$SENTINEL" && "$(wc -c < "$MOCKD/bodies")" -lt 65536 ]] \
+    && pass "L-trunc a body of 60001 characters is cut to exactly 60000 plus a visible note, warned about, under GitHub's limit, the sentinel still the last line" || fail "L-trunc (rc=$RC warn=${OUT:0:200})"
+fi
+if big_variant 60000; then
+  mkmock; NOW="$NOW_AT"; run
+  [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$OUT" != *"truncated"* && "$BODY" != *"$TRUNC_NOTE"* && "$(tr -cd Z <<<"$BODY" | wc -c | tr -d ' ')" -eq 60000 && "$(last_line "$BODY")" == "$SENTINEL" ]] \
+    && pass "L-trunc0 a body of exactly 60000 characters is posted whole, with no note and no warning" || fail "L-trunc0 (rc=$RC)"
+fi
+if lib_variant nogather 'wn_notify_once_main "$TRACKER" "$EARLIEST" "$KEY" gather' 'wn_notify_once_main "$TRACKER" "$EARLIEST" "$KEY" gather_missing'; then
+  mkmock; NOW="$NOW_AT"; run
+  [[ "$RC" -eq 3 && "$ERR" == *"::error::internal: gather function 'gather_missing' is not defined"* && "$(total_calls)" -eq 0 ]] \
+    && pass "L-undef an undefined gather function is exit 3 with an ::error:: naming it, before any gh call" || fail "L-undef (rc=$RC err=$ERR calls=$(total_calls))"
+fi
+SUT_RUN="$SUT"
+
 # Guard 1 #1: `gh issue close` added after the post -> the recorded argv set exposes it.
 mkcopy g1; SUT_RUN="$ROOT/mut_g1/scripts/watch-lint-ratchet-reeval-10515.sh"
 if mutate "$SUT_RUN" 'exit "$rc"' 'gh issue close 10515 >/dev/null 2>&1; exit "$rc"' && ! cmp -s "$SUT" "$SUT_RUN"; then g1_landed=1; else g1_landed=0; fi
@@ -934,7 +1030,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY
 # above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=152
+MIN_ASSERTIONS=166
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2
