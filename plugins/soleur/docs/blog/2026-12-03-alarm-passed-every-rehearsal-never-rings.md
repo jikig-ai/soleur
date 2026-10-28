@@ -46,11 +46,11 @@ Three places, one shape. In each, the green checkmark was telling the truth abou
 
 The obvious move was to fix the places we knew about and move on. We did fix them. But finding them one at a time is how the next one slips in. The first two were found by a reviewer who happened to be reading carefully that day. A system that depends on someone happening to notice will eventually miss one.
 
-So we counted instead. We wrote a lint, which is an automatic checker that reads the code and stops a change from shipping when it finds a pattern we have banned. This one works as a census, a full count of every place in the code that catches an error and then reads something about it.
+So we counted instead. We wrote a lint, which is an automatic checker that reads the code and stops a change from shipping when it finds a pattern we have banned. This one works as a census, a full count of every place in the code that catches an error where a hand-off is involved, and then reads something about it.
 
 The checker sorts every one of those places into one of two piles.
 
-**The error already crossed the hand-off.** The code is reading the stamp on a note that has been rewritten. This is always wrong, because the stamp is gone. The checker flags it, every time, with no exceptions. There is no way to excuse a place in this pile.
+**The error already crossed the hand-off.** The code is reading the stamp on a note that has been rewritten. This is always wrong, because the stamp is gone. The checker flags it every time — a bare "is this an error at all" check aside, there is no way to excuse a place in this pile.
 
 **The error is still live inside the task.** Here the note has not been passed on yet, so the original is in hand, stamp and all. Reading the stamp is fine, and it is in fact the right place to do it: check the label while you still have it, then pass the verdict along as a plain result. But the checker only allows this in a short, written list of places. Adding a place to that list is a visible, deliberate act. The addition shows up in the change for a reviewer to see and challenge.
 
@@ -76,7 +76,7 @@ The counter knows one tool's hand-off by name. It only looks at the folder of jo
 
 And what it proves is narrow. It proves that one particular lie cannot return silently. It does not prove that every alarm is correct. A clean count means that no code reads a stripped stamp. It says nothing about whether the response to a stamp is a good one.
 
-The trap itself is not unique to our tool. The same trap shows up in other tools in different forms. In some, the label is dropped. In others, the original arrives intact but tucked underneath a wrapper, so the code that catches the error sees the wrapper first and has to know to look inside. In both, code that expects the original kind of problem can be wrong without any test noticing. We are not saying any tool is broken, or that details are always stripped. We are saying the question is the same wherever work changes hands: queues (lists of waiting work), workflow engines (software that runs a chain of tasks) and calls between services (one program asking another).
+The trap itself is not unique to our tool. The same trap shows up in other tools in different forms. In our tool the label is dropped. In others, the original arrives intact but tucked underneath a wrapper, so the code that catches the error sees the wrapper first and has to know to look inside. In both, code that expects the original kind of problem can be wrong without any test noticing. We are not saying any tool is broken, or that details are always stripped. We are saying the question is the same wherever work changes hands: queues (lists of waiting work), workflow engines (software that runs a chain of tasks) and calls between services (one program asking another).
 
 The idea transfers, even if the implementation does not. List every place that catches an error. Sort each one into "the error already crossed a hand-off" or "it is still live". Make the second pile a short list that people have to argue to join. Your builders' version will look different from ours.
 
@@ -104,7 +104,7 @@ Work in software is often split into small tasks passed from one worker to the n
 
 ### Does this problem only affect one tool?
 
-No, although it looks different in different tools. In some, the label is dropped. In others, the original error arrives intact but wrapped, so the code that catches it sees the wrapper first. The common thread is that wherever work changes hands, the code that catches an error may not be looking at the original, and a test that skips the hand-off will not show it.
+No, although it looks different in different tools. In our tool the label is dropped. In others, the original error arrives intact but wrapped, so the code that catches it sees the wrapper first. The common thread is that wherever work changes hands, the code that catches an error may not be looking at the original, and a test that skips the hand-off will not show it.
 
 <script type="application/ld+json">
 {
@@ -132,7 +132,7 @@ No, although it looks different in different tools. In some, the label is droppe
       "name": "Does this problem only affect one tool?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "No, although it looks different in different tools. In some, the label is dropped. In others, the original error arrives intact but wrapped, so the code that catches it sees the wrapper first. The common thread is that wherever work changes hands, the code that catches an error may not be looking at the original, and a test that skips the hand-off will not show it."
+        "text": "No, although it looks different in different tools. In our tool the label is dropped. In others, the original error arrives intact but wrapped, so the code that catches it sees the wrapper first. The common thread is that wherever work changes hands, the code that catches an error may not be looking at the original, and a test that skips the hand-off will not show it."
       }
     }
   ]

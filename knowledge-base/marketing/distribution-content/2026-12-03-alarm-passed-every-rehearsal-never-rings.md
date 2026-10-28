@@ -17,8 +17,8 @@ Ours did. Errors handed from one worker to the next arrive rewritten — the lab
 **Tweet 2 -- 214 chars:**
 2/ Three places hid the flaw: a "release in progress, wait" signal read as a failure (false alarms), a leaked-credential alert filed as routine breakage, and a request that could never succeed re-sent as a timeout.
 
-**Tweet 3 -- 224 chars:**
-3/ Fixing them one by one is how the next slips in. So we counted: every place that catches an error, sorted into "the error already crossed the hand-off" (always wrong) vs "still live" (a short list you must argue to join).
+**Tweet 3 -- 243 chars:**
+3/ Fixing them one by one is how the next slips in. So we counted: every place that catches an error where a hand-off is involved, sorted into "the error already crossed it" (always wrong) vs "still live" (a short list you must argue to join).
 
 **Tweet 4 -- 143 chars:**
 4/ And we rebuilt the rehearsal to hand errors over the way the real system does — so the practice run can finally fail where failing is cheap.
@@ -46,7 +46,7 @@ https://soleur.ai/blog/alarm-passed-every-rehearsal-never-rings/
 
 → errors handed from one worker to the next arrive rewritten — the label the handler watches for is stripped
 → a "release in progress" signal read as a failure (false alarms), a leak alert filed as routine breakage, a doomed request re-sent as a timeout
-→ the fix: a census of every place an error is caught, sorted into "crossed the hand-off" (always wrong) vs "still live" (a short named list)
+→ the fix: a census of every place an error is caught where a hand-off is involved, sorted into "crossed it" (always wrong) vs "still live" (a short named list)
 → the other half: the rehearsal rebuilt to hand errors over the way the real system does
 
 The question to ask your builders: was this alarm ever tested against the real hand-off?
@@ -63,7 +63,7 @@ When work is handed from one worker to the next, an error arrives rewritten: the
 
 It hid in three places: a "release in progress, wait politely" signal read as a failure, producing false alarms; a leaked-credential alert filed as routine breakage; and a request that could never succeed re-sent as a timeout.
 
-Finding them one by one is how the next slips in. So we counted instead: every place that catches an error, sorted into "the error already crossed the hand-off" — always wrong, flagged every time — and "still live inside the task," allowed only on a short list that takes a deliberate, visible act to join. And we rebuilt the rehearsal to hand errors over the way the real system does, so the practice run can finally fail where failing is cheap.
+Finding them one by one is how the next slips in. So we counted instead: every place that catches an error where a hand-off is involved, sorted into "the error already crossed it" — flagged every time — and "still live inside the task," allowed only on a short list that takes a deliberate, visible act to join. And we rebuilt the rehearsal to hand errors over the way the real system does, so the practice run can finally fail where failing is cheap.
 
 One question for whoever builds your systems: was this alarm ever tested against the real hand-off, and has anyone counted every place an error can be swallowed?
 
