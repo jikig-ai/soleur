@@ -573,3 +573,28 @@ None — checked 2026-10-28 against `gh issue list --label code-review --state o
 - Plan-review advisor consult: **not run in this headless subagent run** (harness constraint) — recorded for the parent session; items pending at `knowledge-base/project/specs/feat-one-shot-11181-cf-token-scope-default-profile/decision-challenges.md` (D1–D7).
 
 **Note (lane default):** spec.md absent for this branch at plan time — `lane:` defaulted to `cross-domain` (TR2 fail-closed).
+
+## Advisor Consult Dispositions (plan finalization, 2026-10-28 — BINDING amendments)
+
+Scoped advisor consult (D7-routed; OpenCode harness: architecture-strategist on the session-inherited model, disclosed tier substitution; sequential-fallback coverage). **No TECHNICAL findings** — no follow-up CTO ruling batch was needed. TASTE/PROCESS findings adopted by the parent session; where an item below contradicts a section above, THIS section wins.
+
+Verdict-channel and classifier semantics (override the Guard Contract table/pseudocode):
+1. The assert-mode blocking verdict `FAIL: LB scope still absent` is emitted on **stdout**, not stderr (aligns the vocabulary table with Test Scenario D6 and the #7797 rationale: agent runtimes surface stdout and swallow stderr; the divergence from the retained-FAIL-on-stderr precedent is deliberate). Update the rc-3 table row and D6 to match.
+2. Neutrality/`LB_MISSING` counting gates on `CODE == 403` exactly (per D4); degraded-200, wrong-shape, 5xx, 404, 000 produce hard FAIL rows naming the observed status, never the still-absent wording — the final classifier arm must not assert a cause it did not establish.
+3. The assert-mode green condition compares `LB_OK` against the profile-declared target-row count (parameterized, never a hardcoded 2), per the D11 aggregate-floor discipline.
+4. `classify_target` ends with an unconditional `return 0` (a trailing false `[[ ]]` test would abort the run mid-ledger under `set -euo pipefail`).
+5. `check()` publishes `CODE`, `BODY`, `CHECK_RC` as globals in the same edit that generalizes `want_type` (verdict semantics stay byte-identical; confirm no C-pin depends on their locality). Failing `check()` calls at the probe loop use `if …; then/else` form under `set -e`.
+6. `--profile` argv arms mirror the script's existing shapes: usage-error = `echo msg >&2; usage >&2; exit 2` (no `exit 2 "message"`), and `--profile` with a missing value exits 2 exactly like `--target-entrypoint` (D9 pins).
+7. `profile_token_secret()` carries a fail-closed `*)` arm (unknown/undeclared profile ⇒ exit 2 naming the profile, not an empty variable); Guard 1 matrix gains a drift row: every `PROFILES` member resolves a non-empty secret.
+8. The rulesets path keeps its own `--target-entrypoint`/TARGET_PRESENT handling and never calls `classify_target`; the `target` class vocabulary is default-token-local (add the one-line hedge next to the existing "profile" vocabulary hedge).
+9. The trailing zone-control stderr block (script 249-251) is gated on `PROFILE == rulesets`; a default-token failure must not print a line naming a probe that never ran (pin: default-token failure case `lacks "zone control"`).
+10. Implementation Phases step 5 names ONE mechanism: keep the existing `trust404`+`ZONE_CONTROL_OK` conjunction and pass `want_type` as an added `check()` parameter (no `scheme` replacement) — the C5a/C5b 404-trust exclusivity gate is untouched.
+
+Test-scenario and matrix corrections (override Test Scenarios / Guard Contract as listed):
+11. Guard 1 M4 re-cites detecting pins C3d/C4 (the account-scheme controls), not C9 (token-leak pin, insensitive to row deletion).
+12. The always-authorized-LB-mock harness mutation moves to Guard 2 (it tests the neutrality property); Guard 1's harness row becomes a binding-shaped mutation (mock doppler answering any secret name ⇒ the misbound-profile pin still reddens).
+13. Add one assert-mode degraded-200 case (verdict channel pinned) — Guard 2's "non-403 anomalies fail in BOTH modes" property currently has no assert-mode witness.
+14. Vocabulary table gains the target-row baseline non-403 anomaly row (retained-style verdict strings; closes the AC9 additive-only gap for unlisted states); the default-token probe table gains the `trust404` column (0 in every row).
+15. Phase 1 step 2's RED claim corrected: name which D-cases are green-by-construction (D12's source/doc greps; D13 already listed) versus the genuine RED targets — AC12 evidence must match the prediction.
+16. Stream column of the vocabulary table is documentation-only UNLESS a stdout-only capture helper is added to the suite for the two channel-sensitive rows (finding 1 makes D6 channel-asserting; the suite's merged `2>&1` capture cannot otherwise distinguish). Either is acceptable; do not claim a pin that cannot run.
+17. D0 is declared pre-Phase-2 evidence-log (same argv asserts rc 0 in D1; D0's rc-2 is the pre-extension observation, not a permanent assertion); Implementation Phases gains the missing tasks.md maintenance step; step 13's PATH claim reworded to the true reason rc stays 0 (dry-run exits before the prerequisite loop).
