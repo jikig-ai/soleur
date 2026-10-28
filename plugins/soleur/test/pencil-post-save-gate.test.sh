@@ -11,7 +11,7 @@
 #     outstanding (the flag is 1 until the recovery NAMED FOR THE CODE completes: open_document
 #     + a clean replay for the reload codes, a clean `save` for save-failed/save-incomplete)
 #   - a flag that is neither 0 nor 1 (fail closed: an unset variable is not a pass)
-# The gate trusts the agent to report the flag (CTO ruling 5, ADR-304): a skipped
+# The gate trusts the agent to report the flag (CTO ruling 5, ADR-306): a skipped
 # replay is undetectable from the file, which this suite does not pretend to catch.
 # pyramid-justified: none needed; unit-level shell test over documented prose.
 

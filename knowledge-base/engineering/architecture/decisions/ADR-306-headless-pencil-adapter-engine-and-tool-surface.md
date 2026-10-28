@@ -7,7 +7,7 @@ supersedes: null
 related: [11168, 11143, 8964, 9310]
 ---
 
-# ADR-304: Headless Pencil adapter runs on @pen.dev/cli behind a stable tool surface, with a stale-file save guard
+# ADR-306: Headless Pencil adapter runs on @pen.dev/cli behind a stable tool surface, with a stale-file save guard
 
 ## Context
 

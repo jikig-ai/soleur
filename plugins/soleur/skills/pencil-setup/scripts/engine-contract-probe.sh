@@ -595,7 +595,7 @@ let engineGuideNames = [];
 
   // (a) no Node/host globals reach the DSL. The `typeof` of each name and two escape routes are
   // pinned: a different answer after a bump means the "QuickJS sandbox with no process, require,
-  // fetch" sentence in ADR-304 must be re-read.
+  // fetch" sentence in ADR-306 must be re-read.
   const DENY = ["process", "require", "fetch", "XMLHttpRequest", "Buffer", "module", "exports", "WebSocket", "Deno", "Bun",
     "console", "setTimeout", "setInterval", "setImmediate", "queueMicrotask", "importScripts", "navigator", "window", "self", "global", "std", "os"];
   const kinds = (await pr(`Print([${DENY.map((n) => `typeof ${n}`).join(",")}].join(","))`)).split(",");
@@ -705,7 +705,7 @@ let engineGuideNames = [];
   }
   note("batch_design host-function behaviour is RECORDED above and PINNED below; switch to a shadowing prelude only if Export overwrites arbitrary files or image urls read local files (CTO ruling 11.2)");
   // PINNED: the observed behaviour at the pin. A different answer after a bump FAILS here so the
-  // residual-risk statement in ADR-304 is re-read; it never silently drifts.
+  // residual-risk statement in ADR-306 is re-read; it never silently drifts.
   const PINNED = {
     exportOutside: "writes there",
     exportOverwrite: "yes (replaced the existing file)", // png/jpeg/webp/pdf: <nodeId>.<format> (export.pdf for several nodes) inside the chosen directory

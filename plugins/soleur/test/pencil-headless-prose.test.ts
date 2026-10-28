@@ -14,7 +14,7 @@ import * as saveGate from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
 // result) is the one the prose documents. Pure prose assertions; no engine, no adapter.
 // Only plugin-tree prose is read here: a read of a knowledge-base path would make this
 // suite a kb consumer (scripts/test-affected-kb-consumers ratchet); the constitution and
-// ADR-304 wording is checked by grep in the review notes instead.
+// ADR-306 wording is checked by grep in the review notes instead.
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const read = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf-8");
