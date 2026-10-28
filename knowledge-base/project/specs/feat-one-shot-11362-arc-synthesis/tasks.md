@@ -76,14 +76,32 @@ inverse: the plan prescribes them, the work phase executes them.
       JSON-LD.
 - [ ] 4.6 Probe dry runs: pre-window → exit 2; in-window + parked → exit 5;
       missing file → exit 3.
-- [ ] 4.7 At ship time: file the `<!-- soleur:followthrough
-      script=scripts/followthroughs/parked-green-synthesis-11362.sh
-      earliest=2026-11-19 secrets= -->` tracker + `follow-through` label on
-      #11362; PR body line 1 states the production mutation (bulk-redirect
-      list gains one item; post publishes via deploy-docs).
+- [ ] 4.7 At ship time: file the tracker on #11362 — add the directive
+      **unfenced at column 0** to the issue body and the `follow-through`
+      label:
+
+      `<!-- soleur:followthrough script=scripts/followthroughs/parked-green-synthesis-11362.sh earliest=2026-11-19T00:00:00Z secrets= -->`
+
+      Convention landmines (followthrough-convention.md): `earliest=` is the
+      full ISO-8601 form, not a bare date; the directive gate only intercepts
+      `gh issue create`, so adding it to this existing issue via `gh issue
+      edit` gets NO validation — after filing, verify enrolment by re-reading
+      the body (`gh issue view 11362 --json body`) for the column-0 unfenced
+      directive, and post-merge run the real sweeper dry
+      (`gh workflow run scheduled-followthrough-sweeper.yml -f dry_run=true`)
+      to see the probe's verdict line. If the publish slot moves, ALL SIX
+      date sites move (AC12): filename, frontmatter `date:`, redirect key,
+      `publish_date:`, probe `WINDOW_DATE`, and this directive's `earliest=`.
+      PR body line 1 states the production mutation (bulk-redirect list
+      gains one item; post publishes via deploy-docs).
 
 ## Phase 5 — Post-merge (window)
 
-- [ ] 5.1 On/after 2026-11-19: responder flips `status: parked → scheduled`
-      in a one-line commit so the daily publisher fires the file on the
-      window date; closes the tracker.
+- [ ] 5.1 The responder flips `status: parked → scheduled` in a one-line
+      commit and closes the tracker (also removes the `follow-through`
+      label). Timing matters: the publisher cron fires only the run where
+      `publish_date == today` (14:00 UTC). For a Nov 19 publish the flip must
+      land BEFORE 14:00 UTC on Nov 19; the probe's first ACTION REQUIRED
+      comment arrives at the 18:00 UTC sweep, so a flip made then or later
+      ALSO re-dates `publish_date` to a remaining window day (Nov 19–26) in
+      the same commit, or the file goes `stale` unpublished.

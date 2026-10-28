@@ -87,8 +87,11 @@ Produce one PR containing:
    REQUIRED on/after 2026-11-19 while the file is still `parked`; exit 3 =
    cannot establish) plus a `<!-- soleur:followthrough … -->` tracker directive
    and `follow-through` label on #11362. The flip `parked → scheduled` is the
-   documented one-line lever the probe wakes for — the publisher then fires
-   the file on Nov 19 14:00 UTC exactly.
+   documented one-line lever the probe wakes for. Same-day publication
+   requires the flip to land BEFORE the publisher's 14:00 UTC run on Nov 19 —
+   the sweeper's first ACTION REQUIRED comment lands at the 18:00 UTC sweep,
+   so a flip made on/after that wake also needs `publish_date` re-dated to a
+   remaining window day or the file goes `stale` unpublished.
 6. A one-sentence sequel-link edit inside the published arc hub
    (`plugins/soleur/docs/blog/2026-10-23-agentic-verification-checklist-shipped.md`,
    in its closing section) — facts-only refresh of a published post per the
@@ -756,9 +759,14 @@ plan can perform.
       `marketing-content-drift`, `distribution-content-format`,
       `blog-audience-contract` green; `npm run docs:build` clean; `bash
       scripts/validate-blog-links.sh` Guard-1 green.
-- [ ] AC12 — Filename date, frontmatter `date:`, redirect-pair key, and
-      distribution `publish_date:` all carry the same publish date; if the
-      date shifts at ship time, all four move together.
+- [ ] AC12 — Six date sites carry the same publish date: blog filename,
+      frontmatter `date:`, redirect-pair key, distribution `publish_date:`,
+      the probe's `WINDOW_DATE` literal
+      (`scripts/followthroughs/parked-green-synthesis-11362.sh`), and the
+      tracker directive's `earliest=` on #11362. If the slot moves at review
+      or ship time, all six move together — a stale `WINDOW_DATE` or
+      `earliest=` wakes the operator on the wrong day or sleeps through the
+      real window.
 - [ ] AC13 — PR body line 1 states the merge-mutates-production answer
       (bulk-redirect list gains one item via auto-apply; post publishes via
       deploy-docs).
