@@ -51,3 +51,8 @@
 - #11384 merged 7d83c9021 (check 900/query 10800) at 11:16Z; its own post-merge apply run 40678688421 FAILED with the same 422 at 11:18Z — the ceiling binds on DATA RANGE, not cadence. This branch's 300/5400 is the needed fix.
 - Resolved 3 conflicts (tf comment+values, guard param pin, runbook line) toward this branch; resource comment updated to record BOTH 422s.
 - Re-verified merged tree: key-probe guard 43/43, wrong-volume guard 23/23.
+
+## Merge-resolution round 2 (sibling fix #11404 also landed, also 422'd)
+- #11404 merged cd503b827 (check 3600/query 10800) at 13:40Z; its apply run 40698576985 FAILED with the same 422 at 13:41Z. All three check_period rungs at window 10800 are now empirically rejected (300, 900, 3600) — the ceiling binds on data range.
+- Resolved 4 conflicts toward this branch; resource comment now records all three failed applies; contingency rung re-aimed at query_period narrowing (4500) since check_period is exhausted.
+- Re-verified merged tree: key-probe guard 43/43, wrong-volume guard 23/23.

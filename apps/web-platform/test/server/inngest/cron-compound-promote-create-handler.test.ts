@@ -330,6 +330,12 @@ const CREATE_ONLY_KEYS = [
 ];
 const createKeys = (m: Record<string, unknown>) => Object.keys(m).filter((k) => k.startsWith("create_") || k === "kind");
 const ENTRY_HASH = createClusterHash(CREATE_EVIDENCE);
+/** A ledger row (an open PR by the bot) carrying the given cluster hash. */
+const ledgerOpenHash = (hash: string) => ({
+  title: promotePrTitle(hash, "2026-10-04"), state: "open", closed_at: null,
+  user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
+});
+const ledgerOpen = (evidence: string[]) => ledgerOpenHash(createClusterHash(evidence));
 
 // ---------------------------------------------------------------------------------------------------------
 describe("Guard 3 -- the arm is reachable ONLY for trigger=manual, input=patterns, allow_create===true", () => {
@@ -674,12 +680,34 @@ describe("Step A: create-propose is ONE bounded model call, memoized, and never 
     expect(typeof r.last.create_nearest_rank).toBe("number");
   });
 
-  it("a pattern already proposed (ledger: an open PR carries its cluster hash) is SUPPRESSED, not refused: existing ledger-suppressed reason", async () => {
-    h.ledger.items = [{
-      title: promotePrTitle(ENTRY_HASH, "2026-10-04"), state: "open", closed_at: null,
-      user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
-    }];
+  it("H2: a ledger-owned pattern is not offered to the model; a different eligible pattern is offered and opens the draft PR", async () => {
+    h.ledger.items = [ledgerOpen(CREATE_EVIDENCE)];
+    createReply = { text: JSON.stringify(goodProposal({ pattern_slug: "zz-page-three" })), stopReason: "end_turn" };
     const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(1);
+    const prompt = String((createPrompts()[0][0] as { messages: Array<{ content: string }> }).messages[0].content);
+    expect(prompt).not.toContain(CREATE_PATTERN_SLUG);
+    expect(prompt).toContain("zz-page-three"); // page-two is the edit loop's this run, so only page three is left
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "opened", ledger_suppressed: 0 });
+    expect(createCommits()).toHaveLength(1);
+  });
+
+  it("H3: nothing left after the edit loop's pattern (same-run) and the ledger's two ends no_action(all-owned) with no create model call and no ledger_suppressed count", async () => {
+    // the ledger owns pages one and three; page two is the edit loop's this run
+    h.ledger.items = [ledgerOpen(CREATE_EVIDENCE), ledgerOpen(Ls(6, 7))];
+    const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(0);
+    expect(r.names).not.toContain("create-persist");
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "all-owned", ledger_suppressed: 0 });
+    expect(r.last).not.toHaveProperty("create_refusal_class");
+    expect(createCommits()).toHaveLength(0);
+  });
+
+  it("backstop: a model that names an unoffered ledger-owned pattern is SUPPRESSED, not refused: existing ledger-suppressed reason", async () => {
+    h.ledger.items = [ledgerOpenHash(ENTRY_HASH)];
+    const r = await run(PATTERNS_CREATE());
+    expect(createPrompts()).toHaveLength(1); // precondition: the backstop path ran (the slug check below carries the pre-filter sensitivity)
+    expect(String((createPrompts()[0][0] as { messages: Array<{ content: string }> }).messages[0].content)).not.toContain(CREATE_PATTERN_SLUG);
     expect(r.last.refusals).toContain("ledger-suppressed");
     expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 1 });
     expect(r.last).not.toHaveProperty("create_refusal_class");
@@ -946,11 +974,8 @@ describe("review round -- the same-run collision, the token, the lost clone, the
     expect(r.last).toMatchObject({ create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 0 });
   });
 
-  it("G4: a hash the LEDGER suppresses (a prior PR) is still recorded once and counted once", async () => {
-    h.ledger.items = [{
-      title: promotePrTitle(ENTRY_HASH, "2026-10-04"), state: "open", closed_at: null,
-      user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
-    }];
+  it("G4 backstop: a hash the LEDGER suppresses (a prior PR) and the model names anyway is still recorded once and counted once", async () => {
+    h.ledger.items = [ledgerOpenHash(ENTRY_HASH)];
     const r = await run(PATTERNS_CREATE());
     const entries = (r.last.refusal_detail as Array<{ cluster_hash: string; reason: string }>).filter((e) => e.cluster_hash === ENTRY_HASH);
     expect(entries).toHaveLength(1);

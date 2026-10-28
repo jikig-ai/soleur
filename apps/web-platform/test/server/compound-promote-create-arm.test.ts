@@ -62,6 +62,8 @@ const PATTERN: PatternPage = {
   slug: String(PROPOSAL.pattern_slug), title: "Synthetic", summary: "Synthetic summary.", status: "open", openedOn: "2026-10-01", tags: ["retry"],
   evidence: [1, 2, 3, 4, 5].map((n) => `knowledge-base/project/learnings/2026-10-0${n}-synthetic-${n}.md`), requiredReading: false,
 };
+/** A second, distinct pattern (different evidence, hence a different cluster hash). */
+const OTHER_PATTERN: PatternPage = { ...PATTERN, slug: "other-pattern", evidence: [6, 7, 8, 9, 10].map((n) => `knowledge-base/project/learnings/2026-10-${n < 10 ? "0" : ""}${n}-synthetic-${n}.md`) };
 
 const roots: string[] = [];
 afterAll(() => {
@@ -414,7 +416,7 @@ describe("Step A with a valid create proposal", () => {
   });
 
   it("G4: an owned pattern is NOT offered to the model (the prompt lists only the others); the week cap still comes first", async () => {
-    const other: PatternPage = { ...PATTERN, slug: "other-pattern", evidence: [6, 7, 8, 9, 10].map((n) => `knowledge-base/project/learnings/2026-10-${n < 10 ? "0" : ""}${n}-synthetic-${n}.md`) };
+    const other = OTHER_PATTERN;
     const post = vi.fn(async (_a: unknown) => ({ text: JSON.stringify({ decision: "no_action", reason_class: "other" }), stopReason: "end_turn" }));
     await runCreateProposeStep(createArgs({ patterns: [PATTERN, other], sameRunHashes: [HASH], post: post as never }));
     const prompt = String((post.mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[0].content);
@@ -424,8 +426,75 @@ describe("Step A with a valid create proposal", () => {
   });
 
   it("G4 backstop: a model that names an owned pattern anyway (not offered, but present in the list) is still SUPPRESSED, never created", async () => {
-    const other: PatternPage = { ...PATTERN, slug: "other-pattern", evidence: [6, 7, 8, 9, 10].map((n) => `knowledge-base/project/learnings/2026-10-${n < 10 ? "0" : ""}${n}-synthetic-${n}.md`) };
+    const other = OTHER_PATTERN;
     expect(await runCreateProposeStep(createArgs({ patterns: [PATTERN, other], sameRunHashes: [HASH] }))).toEqual({ kind: "suppressed", clusterHash: HASH });
+  });
+
+  // A ledger-owned pattern must not be offered: the single model call cannot be spent on a pattern the post-call gate
+  // would refuse. OWNED is the ledger's; PATTERN (the one the fixture proposal names) is eligible.
+  const OWNED: PatternPage = { ...OTHER_PATTERN, slug: "ledger-owned-pattern" };
+  const OWNED_HASH = createClusterHash(OWNED.evidence);
+  const ownedEntry = (state: "open" | "merged" | "closed", closed_at?: string) => ({ hash: OWNED_HASH, state, ...(closed_at ? { closed_at } : {}) });
+  const promptOf = (spy: { mock: { calls: unknown[][] } }) => String((spy.mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[0].content);
+
+  it("T1: a ledger-owned pattern is NOT offered to the model, and a different eligible pattern reaches create", async () => {
+    const validPost = createArgs().post as unknown as (a: unknown) => Promise<{ text: string; stopReason: string }>;
+    const spy = vi.fn((a: unknown) => validPost(a));
+    const v = await runCreateProposeStep(createArgs({ patterns: [OWNED, PATTERN], ledgerEntries: [ownedEntry("merged")], post: spy as never }));
+    expect(v).toMatchObject({ kind: "create", clusterHash: HASH });
+    expect(promptOf(spy)).toContain(PATTERN.slug);
+    expect(promptOf(spy)).not.toContain(OWNED.slug);
+  });
+
+  it("T2: every pattern ledger-owned ends no_action(all-owned) before the clone check, any request or the model call", async () => {
+    const post = vi.fn();
+    const request = vi.fn();
+    // the nonexistent repoRoot would refuse persist/clone-missing at the next stage, so reaching all-owned proves the early exit
+    const a = createArgs({ repoRoot: "/nonexistent/repo-root-for-t2", patterns: [OWNED], ledgerEntries: [ownedEntry("open")], post: post as never, octokit: { request } as never });
+    expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "all-owned" });
+    expect(post).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("T3: the stage that empties the offer names the reason: ledger after the same-run drop is all-owned, one pattern in both sets is other", async () => {
+    const mixed = createArgs({ patterns: [PATTERN, OWNED], sameRunHashes: [HASH], ledgerEntries: [ownedEntry("merged")] });
+    expect(await runCreateProposeStep(mixed)).toEqual({ kind: "no_action", reason: "all-owned" });
+    const both = createArgs({ patterns: [OWNED], sameRunHashes: [OWNED_HASH], ledgerEntries: [ownedEntry("merged")] });
+    expect(await runCreateProposeStep(both)).toEqual({ kind: "no_action", reason: "other" });
+  });
+
+  describe("T4: the suppression clock is runStartedAt, at the 60-day edge, for the pre-filter AND the gate", () => {
+    const closedAt = "2026-10-01T00:00:00.000Z";
+    const runAt = (days: number) => new Date(Date.parse(closedAt) + days * 86_400_000).toISOString();
+    const named = { pattern_slug: OWNED.slug };
+
+    it("inside the window (59.9 days) the closed entry still owns the pattern: not offered", async () => {
+      const post = vi.fn();
+      const a = createArgs({ patterns: [OWNED], ledgerEntries: [ownedEntry("closed", closedAt)], runStartedAt: runAt(59.9), post: post as never });
+      expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "all-owned" });
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it("outside the window (60.1 days) the pattern is offered again and the gate, on the same clock, lets the model's create through", async () => {
+      const a = createArgs({ patterns: [OWNED, PATTERN], ledgerEntries: [ownedEntry("closed", closedAt)], runStartedAt: runAt(60.1) }, named);
+      const spy = vi.fn(a.post as never);
+      expect(await runCreateProposeStep({ ...a, post: spy as never })).toMatchObject({ kind: "create", clusterHash: OWNED_HASH });
+      expect(promptOf(spy)).toContain(OWNED.slug);
+    });
+
+    it("the gate reads the same clock: a model naming the owned pattern inside the window is suppressed, never created", async () => {
+      const a = createArgs({ patterns: [OWNED, PATTERN], ledgerEntries: [ownedEntry("closed", closedAt)], runStartedAt: runAt(59.9) }, named);
+      expect(await runCreateProposeStep(a)).toEqual({ kind: "suppressed", clusterHash: OWNED_HASH });
+    });
+  });
+
+  it("T5 backstop: a model that names an unoffered ledger-owned pattern is still SUPPRESSED, never created", async () => {
+    const proposed = { ...structuredClone(PROPOSAL), pattern_slug: OWNED.slug };
+    const post = vi.fn(async (_a: unknown) => ({ text: JSON.stringify(proposed), stopReason: "end_turn" }));
+    const v = await runCreateProposeStep(createArgs({ patterns: [OWNED, PATTERN], ledgerEntries: [ownedEntry("merged")], post: post as never }));
+    expect(promptOf(post)).not.toContain(OWNED.slug); // unoffered, yet named: only the post-call gate stops it
+    expect(v).toEqual({ kind: "suppressed", clusterHash: OWNED_HASH });
   });
 
   it("A: an unrelated same-run hash does not suppress", async () => {

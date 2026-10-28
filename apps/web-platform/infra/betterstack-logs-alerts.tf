@@ -377,13 +377,13 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # failing row (the window, then recovery_period), which is not proof of recovery: only a
   # token=ok row is.
   #
-  # #11372 — the Better Stack API 422'd this alert's apply as "too resource intensive" TWICE: first
-  # at 300/10800 (#11260 merge) and again at 900/10800 (#11384 merge) — widening check_period alone
-  # leaves the 3 h scan per evaluation, so the ceiling binds on the data range, not the cadence.
-  # 300/5400 is the check/query tuple inngest_luks_wrong_volume already runs in applied state on
-  # this same source under a heavier GROUP BY query; if a 422 still fires, the next rung is
-  # check_period 900 then 3600 (query_period stays 5400; each step rides the same guard-pin update
-  # and is recorded on decision-challenges.md).
+  # #11372 — the Better Stack API 422'd this alert's apply as "too resource intensive" THREE times,
+  # every time at query_period 10800: check 300 (#11260), check 900 (#11384), check 3600 (#11404).
+  # The check_period ladder is exhausted — the ceiling binds on the data range scanned per
+  # evaluation. 300/5400 is the check/query tuple inngest_luks_wrong_volume already runs in applied
+  # state on this same source under a heavier GROUP BY query; if a 422 still fires, the next rung
+  # narrows query_period to 4500 (still ~15 min slack past the hourly re-probe; check stays 300;
+  # rides the same guard-pin update and is recorded on decision-challenges.md).
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0

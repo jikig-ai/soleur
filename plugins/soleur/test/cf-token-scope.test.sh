@@ -16,6 +16,12 @@
 #
 # Accumulate-then-exit style. All greps run against FILES (never a pipe) to avoid
 # the pipefail + `grep -q` early-match SIGPIPE flake.
+# HYGIENE MODEL (fix-round seats, stated honestly): the suite REQUIRES a bash
+# where `VAR=x run …` prefix assignments are transient past the call (bash >=
+# 5.2 behavior; not version-gated here — the D-block unsets are belt-and-braces
+# for older shells). The C-block's mock specs are set the same prefix way and
+# RELY on the assignment reaching the child for the call's duration; no C/D
+# assertion relies on persistence beyond the call.
 set -uo pipefail
 
 TESTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,8 +47,10 @@ cat >"$MOCKBIN/doppler" <<'EOF'
 #!/usr/bin/env bash
 # doppler secrets get <NAME> -p soleur -c prd_terraform --plain
 name="$3"
+[[ -n "${MOCK_DOPPLER_MARKER:-}" ]] && printf '%s\n' "$name" >>"$MOCK_DOPPLER_MARKER"
 case "$name" in
   CF_API_TOKEN_RULESETS) printf '%s' "${MOCK_TOKEN-fake-secret-abc123xyz}" ;;
+  CF_API_TOKEN)          printf '%s' "${MOCK_API_TOKEN-default-token-xyz789}" ;;
   CF_ZONE_ID)            printf '%s' "${MOCK_ZONE-zone0123456789abcdef}" ;;
   CF_ACCOUNT_ID)         printf '%s' "${MOCK_ACCTID-acct9876543210fedcba}" ;;
   *)                     printf '' ;;
@@ -57,6 +65,10 @@ cat >"$MOCKBIN/curl" <<'EOF'
 [[ -n "${MOCK_CURL_MARKER:-}" ]] && printf 'called\n' >>"$MOCK_CURL_MARKER"
 url=""
 for a in "$@"; do url="$a"; done
+[[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$url" >>"$MOCK_CURL_URLLOG"
+# %q keeps multi-line arg values (the -w format) on ONE log line: the argv shape
+# is what the confinement pins below read.
+[[ -n "${MOCK_CURL_ARGV:-}" ]] && printf '%q ' "$@" >>"$MOCK_CURL_ARGV" && printf '\n' >>"$MOCK_CURL_ARGV"
 # Real CF shapes: a zone .../entrypoint returns a single ruleset OBJECT; the
 # account /rulesets list returns an ARRAY. The mock must mirror this so the
 # per-scheme body-shape check is exercised against the true contract (#6892 QA).
@@ -68,6 +80,15 @@ case "$url" in
   *http_request_cache_settings*)   spec="${MOCK_CACHE:-$ZONE_AUTH}" ;;
   *http_request_firewall_custom*)  spec="${MOCK_WAF:-$ZONE_AUTH}" ;;
   *http_request_transform*)        spec="${MOCK_TARGET:-$ZONE_AUTH}" ;;
+  # default-token profile rows (D-series). Authorized default is the ARRAY shape —
+  # every new endpoint returns a list. ORDERING IS LOAD-BEARING: the pools URL is a
+  # superstring of the zone-LB match, so pools must precede *load_balancers*.
+  *cfd_tunnel*)                    spec="${MOCK_TUNNEL:-$ACCT_AUTH}" ;;
+  *access/apps*)                   spec="${MOCK_ACCESS:-$ACCT_AUTH}" ;;
+  *dns_records*)                   spec="${MOCK_DNS:-$ACCT_AUTH}" ;;
+  *notification_policies*)         spec="${MOCK_NOTIF:-$ACCT_AUTH}" ;;
+  *load_balancers/pools*)          spec="${MOCK_LB_POOLS:-$ACCT_AUTH}" ;;
+  *load_balancers*)                spec="${MOCK_LB_ZONE:-$ACCT_AUTH}" ;;
   */rulesets)                      spec="${MOCK_ACCT:-$ACCT_AUTH}" ;;
   *)                               spec="${MOCK_OTHER:-$ZONE_AUTH}" ;;
 esac
@@ -100,8 +121,8 @@ assert_rc() { if [[ "$RC" == "$1" ]]; then ok "$2"; else no "$2 (want rc=$1 got 
 has() { if grep -qF -- "$1" "$OUTFILE"; then ok "$2"; else no "$2 (missing: $1)"; fi; }
 lacks() { if grep -qF -- "$1" "$OUTFILE"; then no "$2 (present: $1)"; else ok "$2"; fi; }
 # refute / require a literal in the SUT source (grep on a FILE, never a pipe).
-src_lacks() { if grep -qE "$1" "$SUT"; then no "$2"; else ok "$2"; fi; }
-src_has() { if grep -qE "$1" "$SUT"; then ok "$2"; else no "$2 (missing anchor: $1)"; fi; }
+src_lacks() { if grep -qE -- "$1" "$SUT"; then no "$2"; else ok "$2"; fi; }
+src_has() { if grep -qE -- "$1" "$SUT"; then ok "$2"; else no "$2 (missing anchor: $1)"; fi; }
 
 # --- C1: all authorized + target authorized -> exit 0, "present" line ---
 run "$MOCKPATH" --target-entrypoint http_request_transform
@@ -226,6 +247,322 @@ assert_rc 2 "C13 --target-entrypoint missing value -> exit 2"
 # --- C14: --help -> exit 0 ---
 run "$MOCKPATH" --help
 assert_rc 0 "C14 --help -> exit 0"
+
+# ============================================================================
+# D-series — default-token profile (plan 2026-10-28-feat-cf-token-scope-...;
+# written RED-first per cq-write-failing-tests-before). C1–C14 above are the
+# D13 back-compat pin (run before and after the script phase, unmodified).
+# ============================================================================
+
+# stdout-only capture for the channel-sensitive rows (plan addendum 1/16: the
+# assert-mode FAIL verdict moved to stdout — same #7797 rationale as the xtrace
+# refusal; the merged run() capture cannot pin a channel, this one can).
+run_out() {
+  local path="$1"
+  shift
+  PATH="$path" "$BASHBIN" "$SUT" "$@" >"$OUTFILE" 2>"$WORK/err.txt"
+  RC=$?
+}
+has_re() { if grep -qE -- "$1" "$OUTFILE"; then ok "$2"; else no "$2 (no match: $1)"; fi }
+has_err() { if grep -qF -- "$1" "$WORK/err.txt"; then ok "$2"; else no "$2 (missing on stderr: $1)"; fi }
+lacks_err() { if grep -qF -- "$1" "$WORK/err.txt"; then no "$2 (present on stderr: $1)"; else ok "$2"; fi }
+count_f() { grep -cF -- "$1" "$OUTFILE" || true; }
+assert_eq() { if [[ "$2" == "$3" ]]; then ok "$1"; else no "$1 (want $2 got $3)"; fi }
+
+SKILLDOC="$TESTDIR/../skills/cf-token-scope/SKILL.md"
+PLAYBOOK="$TESTDIR/../skills/cf-token-scope/references/widen-playbook.md"
+DOPREQ="$WORK/doppler-requests.log"
+
+# --- D1: default-token dry-run binds CF_API_TOKEN and prints all six rows ---
+DM1="$WORK/d1-curl-marker"
+MOCK_CURL_MARKER="$DM1" run "$MOCKPATH" --profile default-token --dry-run
+assert_rc 0 "D1 default-token dry-run -> exit 0"
+has "doppler secrets get CF_API_TOKEN " "D1 dry-run resolves the token secret to CF_API_TOKEN"
+for u in cfd_tunnel access/apps dns_records notification_policies "load_balancers/pools" 'zones/$ZONE/load_balancers'; do
+  has "$u" "D1 dry-run prints the $u row"
+done
+# shellcheck disable=SC2016  # the literal, unexpanded '$TOK' is exactly the assertion
+has '"$TOK"' "D1 dry-run keeps the token var unexpanded"
+has "printf 'Authorization: Bearer %s'" "D1 dry-run models the private-fd form"
+lacks "default-token-xyz789" "D1 dry-run leaks no token value"
+if [[ ! -e "$DM1" ]]; then ok "D1 dry-run never invoked curl"; else no "D1 dry-run invoked curl"; fi
+
+# --- D1b: binding pin (Guard 1 M1/M5 detector): this profile must NOT touch the
+#          rulesets secret name anywhere. ---
+lacks "CF_API_TOKEN_RULESETS" "D1b default-token dry-run never names the rulesets secret"
+
+# --- D1H: Guard 1 H2 (must-PASS, non-canonical): dry-run precedes the prereq
+#          loop — the NOCURLBIN PATH (no curl; doppler+jq still present) still
+#          exits 0. A suite that only passes with mocks present is over-fitted. ---
+run "$NOCURLBIN" --profile default-token --dry-run
+assert_rc 0 "D1H default-token dry-run under no-curl PATH -> exit 0 (print/run parity, not mock-overfitted)"
+
+# --- D2: baseline with both LB rows 403 -> exit-neutral not-yet-widened, BOTH
+#         rows asserted per-label (Guard 2 M3: no first-member-only pass). ---
+D2MARK="$WORK/d2-doppler-requests"
+D2URLS="$WORK/d2-curl-urls"
+: >"$D2MARK"
+LB403='403:{"success":false,"errors":[{"code":10000}]}'
+MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
+# RUN-PATH URL ASSEMBLY pin (design-pass P2): the mock-substring arms match on
+# path fragments, so a broken $ZONE/$ACCT placeholder substitution would sail
+# through every verdict assertion. Assert the ACTUAL requested URLs carry the
+# resolved ids and no literal placeholder survives.
+if [[ -s "$D2URLS" ]] \
+   && grep -q "zones/zone0123456789abcdef/dns_records" "$D2URLS" \
+   && grep -q "zones/zone0123456789abcdef/load_balancers" "$D2URLS" \
+   && grep -q "accounts/acct9876543210fedcba/load_balancers/pools" "$D2URLS" \
+   && ! grep -q '\$ZONE\|\$ACCT' "$D2URLS"; then
+  ok "D2 run-path URLs carry resolved ZONE/ACCT ids, no literal placeholder reaches curl"
+else
+  no "D2 run-path URL assembly broken (see $D2URLS)"
+fi
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 pools row prints per-row not-yet-widened (403, err 10000)"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 zone-LB row prints not-yet-widened too (per-row, not aggregate)"
+has "PASS: no scope dropped" "D2 baseline still PASSes the retained ledger"
+has "NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it" "D2 prints the NOTE summary line"
+if grep -qw CF_API_TOKEN "$D2MARK" && ! grep -q CF_API_TOKEN_RULESETS "$D2MARK"; then
+  ok "D2 run requested CF_API_TOKEN and never the rulesets secret (token binding)"
+else
+  no "D2 run requested the wrong secret (see $D2MARK)"
+fi
+# D2o: stdout-only channel pin (panel seat: NOTE/PASS were asserted through the
+# merged capture, so moving them to stderr would have stayed green).
+MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run_out "$MOCKPATH" --profile default-token
+assert_rc 0 "D2o stdout-only baseline -> exit 0"
+has "NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it" "D2o NOTE line is on STDOUT"
+has "PASS: no scope dropped" "D2o PASS line is on STDOUT"
+lacks_err "NOTE: LB scope" "D2o NOTE is not on stderr"
+# D2c mixed baseline (one authorized, one 403): per-row honesty; the set-level
+# NOTE stands — accepted wording (data-integrity seat), assert mode gates per-row.
+MOCK_LB_ZONE="$LB403" run_out "$MOCKPATH" --profile default-token
+assert_rc 0 "D2c mixed baseline exits 0 (neutrality is per-row)"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+authorized \(200\)' "D2c authorized pool row reads authorized"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened' "D2c missing zone row still reads not-yet-widened"
+has "NOTE: LB scope not-yet-widened" "D2c mixed state still prints the NOTE (accepted; gated per-row in assert mode)"
+unset MOCK_LB_POOLS MOCK_LB_ZONE MOCK_DOPPLER_MARKER MOCK_CURL_URLLOG
+
+# --- D3: a RETAINED capability at 403 is never excused by the neutrality arm —
+#         pinned PER ROW across all four retained arms (code-quality seat P2:
+#         one-row witness left 3 of 4 rows open to a class-column drift). ---
+for d3_var in MOCK_TUNNEL MOCK_ACCESS MOCK_DNS MOCK_NOTIF; do
+  export "$d3_var=$LB403"   # export (not declare): the mock child must inherit it
+  run "$MOCKPATH" --profile default-token
+  assert_rc 3 "D3 retained 403 on $d3_var -> exit 3, neutrality never consults retained rows"
+  unset "$d3_var"
+done
+lacks "PASS: no scope dropped" "D3 omits 'no scope dropped'"
+# addendum 9: the zone-control diagnostic names a probe default-token never issues.
+lacks "zone control" "D3 default-token failure prints no rulesets-only zone-control line"
+
+# --- D4: fail-closed layers hold on the new endpoints ---
+MOCK_DNS='200:{"success":true,"result":null}' run "$MOCKPATH" --profile default-token
+assert_rc 3 "D4a degraded 200 (result null) on a retained row -> exit 3"
+unset MOCK_DNS
+MOCK_LB_POOLS='200:{"success":true,"result":{"id":"x"}}' run "$MOCKPATH" --profile default-token
+assert_rc 3 "D4b wrong-shape 200 (object on array endpoint) on a target row -> exit 3, never not-yet-widened"
+lacks "not-yet-widened" "D4b wrong-shape prints no not-yet-widened row"
+unset MOCK_LB_POOLS
+MOCK_LB_POOLS='200:{"success":true,"result":null}' run "$MOCKPATH" --profile default-token
+assert_rc 3 "D4c result:null 200 on a target row (baseline) -> exit 3 (Guard 2 M4 spec literal)"
+lacks "not-yet-widened" "D4c prints no not-yet-widened row for the degraded shape"
+unset MOCK_LB_POOLS
+
+# --- D5: baseline LB 404 is a HARD fail (403 is the only expected-missing status) ---
+MOCK_LB_ZONE='404:{"success":false}' run "$MOCKPATH" --profile default-token
+assert_rc 3 "D5 baseline LB 404 -> exit 3 (fail-closed; Guard 2 M1 detector)"
+has_re 'zones/<zone>/load_balancers[[:space:]]+denied \(404, unverified' "D5 names the failing row and its cause (per-row attribution)"
+unset MOCK_LB_ZONE
+
+# --- D6: assert mode with LB still 403 -> exit 3, FAIL line on STDOUT (addendum 1) ---
+MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run_out "$MOCKPATH" --profile default-token --expect-lb-scopes
+assert_rc 3 "D6 assert mode 403 -> exit 3"
+has "FAIL: LB scope still absent — the widen was not applied to CF_API_TOKEN" "D6 FAIL verdict line present on stdout"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+denied \(403\)' "D6 per-row attribution: pools denied (403) on stdout"
+has_re 'zones/<zone>/load_balancers[[:space:]]+denied \(403\)' "D6 per-row attribution: zone-LB denied (403) on stdout"
+lacks "PASS: LB scopes present" "D6 omits the present line"
+has_err "FAIL: retained-scope probe failed" "D6 generic FAIL stays on stderr (stream contract unchanged)"
+lacks_err "LB scope still absent" "D6 still-absent verdict is stdout-only (addendum 1)"
+unset MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D7: assert mode green -> exit 0 + present line (no NOTE: presence is not absence) ---
+run "$MOCKPATH" --profile default-token --expect-lb-scopes
+assert_rc 0 "D7 assert mode both authorized -> exit 0"
+has "PASS: LB scopes present — confirm the 403->present transition against your pre-widen baseline" "D7 prints the present line"
+
+# --- D8: half-green assert -> exit 3 (per-row gating) ---
+MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token --expect-lb-scopes
+assert_rc 3 "D8 assert mode one-of-two 403 -> exit 3 (per-row)"
+has_re 'zones/<zone>/load_balancers[[:space:]]+denied \(403\)' "D8 names the blocking row (pools stays authorized)"
+unset MOCK_LB_ZONE
+
+# --- D2b: Guard 2 H2 (must-PASS): post-widen baseline, both LB authorized -> 0, no NOTE ---
+run "$MOCKPATH" --profile default-token
+assert_rc 0 "D2b baseline with LB already authorized -> exit 0 (neutrality is for absence, not presence)"
+lacks "NOTE: LB scope not-yet-widened" "D2b prints no NOTE when the scopes are present"
+
+# --- D14: assert-mode degraded-200 must NOT claim "still absent" wording (addendum 2:
+#          the still-absent line is minted only for a real 403). ---
+MOCK_LB_POOLS='200:{"success":false,"result":[]}' run_out "$MOCKPATH" --profile default-token --expect-lb-scopes
+assert_rc 3 "D14 assert-mode degraded-200 -> exit 3"
+lacks "FAIL: LB scope still absent" "D14 degraded-200 never asserts the still-absent cause"
+
+# --- D9: usage errors exit 2 BEFORE any secret read (addendum 6: --profile mirrors
+#          the --target-entrypoint missing-value arm shape). ---
+: >"$DOPREQ"
+MOCK_DOPPLER_MARKER="$DOPREQ" run "$MOCKPATH" --profile default-token
+assert_rc 0 "D9pc positive control: a valid run DOES reach Doppler"
+if [[ -s "$DOPREQ" ]]; then ok "D9pc marker mechanism live (D9's negatives are not vacuous)"; else no "D9pc marker never written — D9 negatives would pass vacuously"; fi
+: >"$DOPREQ"
+MOCK_DOPPLER_MARKER="$DOPREQ" run "$MOCKPATH" --profile bogus --dry-run
+assert_rc 2 "D9a unknown profile -> exit 2"
+lacks "# dry-run" "D9a unknown profile prints no recipes (the '# dry-run' block never starts)"
+MOCK_DOPPLER_MARKER="$DOPREQ" run "$MOCKPATH" --profile default-token --target-entrypoint http_config_settings
+assert_rc 2 "D9b default-token + --target-entrypoint -> exit 2"
+MOCK_DOPPLER_MARKER="$DOPREQ" run "$MOCKPATH" --profile rulesets --expect-lb-scopes
+assert_rc 2 "D9c rulesets + --expect-lb-scopes -> exit 2"
+MOCK_DOPPLER_MARKER="$DOPREQ" run "$MOCKPATH" --profile
+assert_rc 2 "D9d --profile with no value -> exit 2"
+if [[ ! -s "$DOPREQ" ]]; then ok "D9 all four usage errors precede any Doppler read"; else no "D9 a usage error reached Doppler first"; fi
+
+# --- D-mint: empty CF_API_TOKEN -> exit 2 naming the secret ---
+MOCK_API_TOKEN='' run "$MOCKPATH" --profile default-token
+assert_rc 2 "D-mint empty CF_API_TOKEN -> exit 2"
+has "CF_API_TOKEN is empty or absent" "D-mint message names CF_API_TOKEN"
+
+# --- D10: explicit --profile rulesets dry-run == no-flag dry-run (back-compat) ---
+run "$MOCKPATH" --dry-run
+cp "$OUTFILE" "$WORK/noflag.txt"
+run "$MOCKPATH" --profile rulesets --dry-run
+if cmp -s "$WORK/noflag.txt" "$OUTFILE"; then ok "D10 --profile rulesets dry-run identical to no-flag"; else no "D10 explicit rulesets dry-run diverged from no-flag"; fi
+
+# --- D11: parameterized table-size pins (Guard 1 M3 detector; never a hard-coded 6) ---
+run "$MOCKPATH" --dry-run
+assert_eq "D11a rulesets prints exactly 5 curl recipes" 5 "$(count_f 'curl --disable')"
+run "$MOCKPATH" --target-entrypoint http_request_transform --dry-run
+assert_eq "D11b rulesets +target prints 6" 6 "$(count_f 'curl --disable')"
+run "$MOCKPATH" --profile default-token --dry-run
+assert_eq "D11c default-token prints exactly 6" 6 "$(count_f 'curl --disable')"
+
+# --- D-e: orthogonal flags: assert flag with dry-run prints rows once, exit 0 ---
+run "$MOCKPATH" --profile default-token --expect-lb-scopes --dry-run
+assert_rc 0 "D-e expect+dry-run orthogonal -> exit 0"
+assert_eq "D-e rows printed once" 6 "$(count_f 'curl --disable')"
+
+# Table parses shared by D-conf and D-pc (parameterized — never literal 6/5/6).
+PROF_DECL="$(sed -n 's/^PROFILES=(\(.*\))$/\1/p' "$SUT" | head -1)"
+ZP_N="$(sed -n 's/^ZONE_PHASES=(\(.*\))$/\1/p' "$SUT" | head -1 | wc -w | tr -d '[:space:]')"
+DT_N="$(awk '/^DT_ROWS=\(/ {f=1; next} f && /^\)/ {f=0} f && /^[[:space:]]*"/ {c++} END {print c+0}' "$SUT")"
+
+# --- D-conf: run-path CONFINEMENT pin (security seat P2): every EXECUTED curl
+#          carries the #7873 confined form and the token value never rides argv.
+#          The dry-run recipe literal was pinned since C8; the run path was not. ---
+DARGV="$WORK/d-conf-argv.log"
+MOCK_CURL_ARGV="$DARGV" run "$MOCKPATH" --profile default-token
+assert_rc 0 "D-conf default-token run -> exit 0"
+dargv_lines="$(wc -l < "$DARGV" | tr -d '[:space:]')"
+assert_eq "D-conf one argv record per probe ($DT_N rows)" "$DT_N" "$dargv_lines"
+if [[ "$(grep -c -- '--disable' "$DARGV")" -eq "$DT_N" ]] \
+   && [[ "$(grep -c -- '--noproxy' "$DARGV")" -eq "$DT_N" ]] \
+   && grep -q -- '-H @/dev/fd/' "$DARGV" \
+   && ! grep -q -- 'xyz789' "$DARGV"; then
+  ok "D-conf every probe confined (--disable/--noproxy x$DT_N), header via @/dev/fd, token never on argv"
+else
+  no "D-conf run-path confinement/argv hygiene broken (see $DARGV)"
+fi
+
+# --- D-pc: PROFILES enumeration pin (Guard 1 M3 detector; parameterized from the
+#          script's OWN tables, never literal 5/6/6 — panel seats P2). ---
+if [[ -n "$PROF_DECL" ]]; then ok "D-pc PROFILES declares at least one profile (positive control)"; else no "D-pc PROFILES parse empty — enumeration below is vacuous"; fi
+for dpc_p in $PROF_DECL; do
+  case "$dpc_p" in
+    rulesets)       dpc_want=$((ZP_N + 1)) ;;
+    default-token)  dpc_want="$DT_N" ;;
+    *)              dpc_want=-1 ;;
+  esac
+  run "$MOCKPATH" --profile "$dpc_p" --dry-run
+  assert_rc 0 "D-pc dry-run for profile $dpc_p -> exit 0"
+  assert_eq "D-pc profile $dpc_p prints exactly its declared table ($dpc_want rows)" "$dpc_want" "$(count_f 'curl --disable')"
+done
+if [[ "$DT_N" -ge 2 ]]; then ok "D-pc default-token table declares >=2 target rows (assert mode has something to assert)"; else no "D-pc DT_ROWS under-declared"; fi
+
+# --- D-x: xtrace refusal BEHAVIORAL (panel seat: previously only source-grepped). ---
+XTLOG="$WORK/d-x-urls.log"
+: >"$XTLOG"
+( MOCK_CURL_URLLOG="$XTLOG" PATH="$MOCKPATH" "$BASHBIN" -x "$SUT" --profile default-token >"$WORK/d-x.out" 2>/dev/null )
+RC=$?
+assert_rc 78 "D-x running under bash -x -> exit 78 refusal"
+if [[ ! -s "$XTLOG" ]]; then ok "D-x refusal issues no probe"; else no "D-x probed under xtrace!"; fi
+if grep -qF -- "refusing to run under xtrace" "$WORK/d-x.out"; then ok "D-x refusal prints its FAIL verdict on stdout"; else no "D-x refusal printed no verdict line"; fi
+
+# --- D-id: the ZONE/ACCT id acquisition is pinned too (the substitution D2 guards
+#          depends on it; MOCK_ZONE/MOCK_ACCTID arms previously never exercised). ---
+MOCK_ZONE='' run "$MOCKPATH" --profile default-token
+assert_rc 2 "D-id empty CF_ZONE_ID -> exit 2"
+has "CF_ZONE_ID is empty or absent" "D-id message names CF_ZONE_ID"
+MOCK_ACCTID='' run "$MOCKPATH" --profile default-token
+assert_rc 2 "D-idb empty CF_ACCOUNT_ID -> exit 2"
+has "CF_ACCOUNT_ID is empty or absent" "D-idb message names CF_ACCOUNT_ID"
+
+# --- D-charset: the --target-entrypoint refusal is user-reachable and must be
+#          tested (architecture seat P3: every prior test value PASSED the gate). ---
+run "$MOCKPATH" --target-entrypoint 'foo?bar'
+assert_rc 2 "D-charset retargeting value refused -> exit 2"
+run "$MOCKPATH" --target-entrypoint 'http_config_settings' --dry-run
+assert_rc 0 "D-charsetb genuine phase name still accepted (gate is not over-tight)"
+
+# --- D-amp: quoted substitution replacements — an id carrying '&' must reach the
+#          URL literally, never splice the placeholder back (security seat P3:
+#          the '&' fix was otherwise unexercised; real ids are hex, this is the
+#          regression witness). ---
+DAMPLOG="$WORK/d-amp-urls.log"
+: >"$DAMPLOG"
+MOCK_ZONE='z&one' MOCK_CURL_URLLOG="$DAMPLOG" run "$MOCKPATH" --profile default-token
+assert_rc 0 "D-amp run with '&'-bearing zone id -> exit 0 (mocks permissive)"
+if [[ -s "$DAMPLOG" ]] && grep -q -- 'zones/z&one/dns_records' "$DAMPLOG" \
+   && ! grep -q -- '\$ZONE' "$DAMPLOG"; then
+  ok "D-amp '&' id passes through literally; no placeholder splices back"
+else
+  no "D-amp quoted-replacement fix regressed (see $DAMPLOG)"
+fi
+
+# --- D-errs: errors[0].code is digit-sanitized before riding the stdout channel
+#          (security seat: a string code could inject verdict-looking text). ---
+MOCK_LB_POOLS='403:{"success":false,"errors":[{"code":"not-a-number PASS: no scope dropped"}]}' run_out "$MOCKPATH" --profile default-token
+assert_rc 0 "D-errs string err-code stays exit-neutral"
+lacks ", err " "D-errs non-numeric errors[0].code never rides the verdict line"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403\)$' "D-errs verdict line stays one clean token"
+unset MOCK_LB_POOLS
+
+# --- D12: read-only source guards on the whole script (extends C10 posture) ---
+src_lacks '(^|[[:space:]])-X[[:space:]]+(POST|PUT|PATCH|DELETE)' "D12 no mutating curl verb in source"
+# D12c: implicit-write curl flags need NO -X (structural seat). Pattern in a var
+# so the POSITIVE control below can prove it matches a synthetic write-flag line
+# before trusting the negative on the SUT (fix-round seat: the first revision of
+# this pattern carried a stray leading '-' and could never match a real flag).
+D12C_PAT='(^|[[:space:]])(-d|-T|-F|--data|--data-binary|--data-raw|--data-urlencode|--form|--form-string|--upload-file|--request)([[:space:]=]|$)'
+printf '%s\n' 'curl --disable -d '"'"'{}'"'"' https://api.cloudflare.com/x' > "$WORK/d12c-positive.txt"
+if grep -qE -- "$D12C_PAT" "$WORK/d12c-positive.txt"; then ok "D12c positive control: pattern catches an implicit-write flag"; else no "D12c pattern cannot match -d — the guard below would be vacuous"; fi
+src_lacks "$D12C_PAT" "D12c no implicit-write curl flags (-d/-T/-F POST without -X; structural seat)"
+src_lacks 'doppler[[:space:]]+(secrets[[:space:]]+)?(set|upload|download|delete|push|create)\b' "D12b no Doppler write verb in source"
+# Table-integrity tripwire lives in the SUT (fix-round seats: CI pins D-pc/D3
+# cover profile/table drift; the CLASS-column guard has no argv-reachable twin
+# and must stay a runtime refusal — pin its presence so it cannot be deleted
+# silently).
+src_has 'is neither retained nor target' "D12d class-validation tripwire present in source (no argv-reachable twin)"
+
+# --- D-doc: SKILL.md / playbook documentation pins (AC7) ---
+d_has() { if grep -qF -- "$1" "$2"; then ok "$3"; else no "$3 (missing: $1 in $2)"; fi }
+d_has '--profile default-token' "$SKILLDOC" "D-doc SKILL.md documents the profile flag"
+d_has '--expect-lb-scopes' "$SKILLDOC" "D-doc SKILL.md documents the assert flag"
+d_has 'not-yet-widened' "$SKILLDOC" "D-doc SKILL.md documents the neutral state"
+d_has 'profiles only' "$SKILLDOC" "D-doc SKILL.md re-words the posture (profiles only, no raw token-var knob)"
+# The documented NOTE literal must EQUAL the minted one (fix-round seats: the
+# "stable grep target" claim was otherwise unpinned; D2o pins the mint, this
+# pins the doc).
+d_has 'NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it' "$SKILLDOC" "D-doc SKILL.md quotes the NOTE literal verbatim"
+d_has '--profile default-token --expect-lb-scopes' "$PLAYBOOK" "D-doc playbook carries the post-widen pointer"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
