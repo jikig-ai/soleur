@@ -39,8 +39,11 @@
 # the pre-wipe canonical plan, and REFUSE F1 with out_of_scope >= 1 in BOTH modes.
 #
 # COST (as written for the wipe-then-PR-C ordering): until PR-C merges, the gates refuse every
-# web-platform apply on main, security fixes included. Under Option B the cost is the reverse: the
-# replace/birth/rotate routes are disabled from the merge until #11194 (ADR-239 Amendment 2026-10-26).
+# web-platform apply on main, security fixes included. Under Option B the cost was the reverse (the
+# replace/birth/rotate routes disabled, ADR-239 Amendment 2026-10-26); #11194 retired the plaintext
+# arms from those gates (ADR-239 Amendment 2026-10-28), so the routes are gated only by the
+# plaintext-id interlock until git_data_volume_id is blanked in git-data.tf, and F1/F2 below are still
+# refused through the replace gate's `out_of_scope` (the retired addresses sit in no allow-set).
 #
 # Non-vacuity: a mutation matrix on COPIES of the workflows (and synthetic ones) proves each way to
 # open the wedge goes RED for the right reason; harness rows prove an emptied fixture loader or an
@@ -89,11 +92,10 @@ row() {
 rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 SERVER_REPLACE='{"address":"hcloud_server.git_data","change":{"actions":["delete","create"],"before":{"user_data":"SYNTH-OLD-USER-DATA"},"after":{"ssh_keys":["1111","4242"],"user_data":"SYNTH-NEW-USER-DATA-WITH-NEW-VOLUME-ID"},"after_unknown":{"ssh_keys":[false,false]}}}'
 NET_REPLACE="$(rc_obj 'hcloud_server_network.git_data' '"delete","create"')"
-VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.git_data' '"delete","create"')"
 VA_LUKS_REPLACE="$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"delete","create"')"
 FW_UPDATE="$(rc_obj 'hcloud_firewall_attachment.git_data' '"update"')"
 HK_SET="$(rc_obj 'tls_private_key.git_data_host_ssh' '"delete","create"'),$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"update"')"
-PASS_SET="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
+PASS_SET="${SERVER_REPLACE},${NET_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
 
 write_plan() { printf '{"prior_state":%s,"resource_changes":[%s]}' "$PRIOR_STATE" "$1" > "$2"; }
 
