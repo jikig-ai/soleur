@@ -174,8 +174,10 @@ suite_exit_class() {
 # test-cancel-superseded-pr-runs.sh; 12 on 2026-09-19; was 11 until
 # test-bump-inngest-bootstrap-pin.sh landed with #8359; 15 with
 # test-vinngest-digest-freshness.sh, #10272). Raise it when suites are added; lower
-# it deliberately, with a reason.
-MIN_SUITES=15
+# it deliberately, with a reason. 17 with test-rls-fuzz-ghcr-resilience.sh
+# (#10868) — the floor also lagged the real count by one before this suite
+# landed (16 suites vs floor 15).
+MIN_SUITES=17
 
 for t in "$DIR"/test-*.sh; do
   [[ -e "$t" ]] || continue

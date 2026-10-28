@@ -304,6 +304,17 @@ describe("buildEmailTriageTools", () => {
     }
   });
 
+  test("email_send / email_reply cap the body at 4000 and the subject at 200 (the review card shows the whole send)", async () => {
+    const tools = (await buildTools()) as unknown as Array<{ name: string; schema: Record<string, { safeParse: (v: unknown) => { success: boolean } }> }>;
+    for (const name of ["email_send", "email_reply"]) {
+      const schema = tools.find((t) => t.name === name)!.schema;
+      expect(schema.body.safeParse("b".repeat(4000)).success).toBe(true);
+      expect(schema.body.safeParse("b".repeat(4001)).success).toBe(false);
+      expect(schema.subject.safeParse("s".repeat(200)).success).toBe(true);
+      expect(schema.subject.safeParse("s".repeat(201)).success).toBe(false);
+    }
+  });
+
   test("email_triage_list mirrors the route's default filters (finalized + probe-excluded + archived-excluded + owner scope + L1 cap shape)", async () => {
     const list = await getTool("email_triage_list");
     await list.handler({});
@@ -565,7 +576,9 @@ describe("registration + tiering (AC11)", () => {
       };
     }
 
-    test("registers the read tools + three gated write tools in allowedTools (#5325)", async () => {
+    // #11303: the three outbound write tools are gated, so they must NOT be pre-approved via allowedTools (the SDK would
+    // run them before canUseTool and the review card would never appear); only the read tools are.
+    test("pre-approves the two read tools; the three gated write tools are absent from allowedTools (#5325, #11303)", async () => {
       const options = await bootSession();
       const emailTools = options.allowedTools.filter(
         (t) =>
@@ -575,9 +588,6 @@ describe("registration + tiering (AC11)", () => {
           t.includes("email_suppress"),
       );
       expect([...emailTools].sort()).toEqual([
-        "mcp__soleur_platform__email_reply",
-        "mcp__soleur_platform__email_send",
-        "mcp__soleur_platform__email_suppress",
         "mcp__soleur_platform__email_triage_get",
         "mcp__soleur_platform__email_triage_list",
       ]);

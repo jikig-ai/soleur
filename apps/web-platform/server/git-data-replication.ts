@@ -42,13 +42,19 @@ import { authorizeGitDataAccess, GitDataAuthorizationError } from "./git-data-cl
 
 const log = createChildLogger("git-data-replication");
 
-// The bare-repo root the git-data host exposes to the git-shell transport. The
-// bootstrap symlinks `/home/git/repositories → /mnt/git-data/repositories`, so a
-// URL path of `/repositories/<id>.git` resolves — through the transport (relative
-// to /home/git) AND the provision wrapper (absolute /mnt/...) — to the identical
-// `$GIT_DIR` the fence keys on (git-data-bootstrap.sh + the ADR provisioning
-// amendment's "repo-root reconcile" note).
-const GIT_DATA_REPO_PATH_PREFIX = "/repositories";
+// The bare-repo root on the git-data host, as an ABSOLUTE path. Git sends the path of an
+// `ssh://host/<path>` URL to the server unchanged and absolute, and the transport wrapper
+// (infra/git-data-transport-wrapper.sh) canonicalizes it with `readlink -f` and accepts only a
+// direct `<root>/<id>.git` child of `/mnt/git-data/repositories` — the same root the provision and
+// remove wrappers use. The earlier value `/repositories` was read as resolving "relative to
+// /home/git" through the bootstrap's `/home/git/repositories` symlink; that holds only for a
+// scp-style `host:repositories/<id>.git` URL. An ssh:// URL emits `'/repositories/<id>.git'`,
+// which does not exist at the host's filesystem root, so every fetch and push was refused with
+// `repo path does not resolve` (rehearsal R3, 2026-10-27, #8211). No env override on purpose: the
+// host path is fixed in immutable cloud-init and a client cannot reach the wrapper's
+// GIT_DATA_REPO_ROOT. Parity with the host-side literals is pinned by
+// test/git-data-remote-url-wrapper.test.ts.
+const GIT_DATA_REPO_PATH_PREFIX = "/mnt/git-data/repositories";
 
 // --- (#6982, W6) Client-side concurrency limiter -------------------------------------
 //
@@ -318,18 +324,26 @@ export function assertSafeWorkspaceId(workspaceId: string): void {
   if (
     workspaceId === "" ||
     workspaceId === "." ||
-    workspaceId === ".." ||
+    // The transport wrapper refuses any PATH containing two dots in a row, and the path ends in
+    // ".git": so "a..b" and also "a." (which becomes "a..git") would provision a repo that can
+    // then never be fetched or pushed. This also subsumes the exact id "..".
+    `${workspaceId}.git`.includes("..") ||
     workspaceId.includes("/") ||
     !WORKSPACE_ID_RE.test(workspaceId)
   ) {
     throw new Error(
       `git-data: refusing unsafe workspace_id '${workspaceId}' (must match ` +
-        `${WORKSPACE_ID_RE} and not be a dot/slash path — CWE-22).`,
+        `${WORKSPACE_ID_RE}, not be a dot/slash path, and not make '<id>.git' contain '..' — CWE-22).`,
     );
   }
 }
 
-/** The `ssh://` URL of a workspace's bare repo on the git-data host. */
+/**
+ * The `ssh://` URL of a workspace's bare repo on the git-data host. The path is ABSOLUTE (git
+ * sends it unchanged), so it must be the wrapper's own bare-repo root — see
+ * {@link GIT_DATA_REPO_PATH_PREFIX}. Both the session-end push remote (`ensureGitDataRemote`)
+ * and the session-start fetch (git-data-client.ts) build their URL here.
+ */
 export function gitDataRemoteUrl(workspaceId: string): string {
   assertSafeWorkspaceId(workspaceId);
   const host = resolveGitDataSshHost();
@@ -771,20 +785,54 @@ export async function replicateToGitData(params: {
     // depends on (#5817 review F1). NOT `--mirror`. Push-options ride THIS push
     // only, never origin/syncPush.
     via = "git";
-    await gitWithPrivateKeyAuth(
-      [
-        "push",
-        "--force",
-        "git-data",
-        `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
-        `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
-        `--push-option=lease-gen=${leaseGeneration}`,
-        `--push-option=worktree-id=${worktreeId}`,
-      ],
-      transportKey,
-      hostKeyPin,
-      { cwd: workspacePath, timeout: 60_000 },
-    );
+    const pushArgs = [
+      "push",
+      "--force",
+      "git-data",
+      `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
+      `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
+      `--push-option=lease-gen=${leaseGeneration}`,
+      `--push-option=worktree-id=${worktreeId}`,
+    ];
+    try {
+      await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+    } catch (pushErr) {
+      // (#8211 fix-forward 2) ONE retry on a POSITIVE-MATCH transient class: a
+      // first push of 2+ refs from a shallow clone can hit `remote failure` /
+      // `failed to report status`. The match list is positive, so the
+      // deterministic refusals — `shallow update not allowed` and fence rejects
+      // (`stale lease generation` / `remote: git-data fence:`) — fall through to
+      // the outer catch's loud path unretried. The execFile rejection carries
+      // git's stderr on `err.stderr`; `err.message` is the fallback surface.
+      // Resending is idempotent: the fence accepts an equal lease-gen.
+      const stderr = String(
+        (pushErr as { stderr?: string })?.stderr ??
+          (pushErr as Error)?.message ??
+          "",
+      );
+      if (!/remote failure|failed to report status/.test(stderr)) throw pushErr;
+      // Observability (review P3): the transient class this retry exists for
+      // must stay measurable — a silent resend reports "push complete" with no
+      // record that it ever fired, and its frequency is what decides whether
+      // one retry suffices. The phrase is deliberately disjoint from the
+      // Better Stack failure queries (`git-data replication push failed`,
+      // `git-data replication shed`).
+      log.warn(
+        {
+          workspaceIdHash: hashUserId(workspaceId),
+          worktreeIdHash: hashUserId(worktreeId),
+          leaseGeneration,
+        },
+        "git-data replication push transient — retrying once",
+      );
+      await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+    }
     log.info(
       {
         workspaceIdHash: hashUserId(workspaceId),

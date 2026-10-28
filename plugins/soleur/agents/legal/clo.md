@@ -109,6 +109,12 @@ agents` but NOT a bare `[0-9]+ agents`, so count divergence between the record a
 page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's <!-- markdownlint-disable-line MD038 -->
 plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
 
+**Correction/amendment notes quote the superseded phrase verbatim.** An absence grep on a corrected
+doc counts its own audit trail: strip `*( ... )*` italic-note spans with paren-depth tracking (the
+notes nest parens, e.g. "eu-west-1 (Ireland)"), and remember the `**Last Updated:**` amendment note
+also quotes — sed-stripping `*(corrected*)` alone leaves it standing (#10849). See
+`knowledge-base/project/learnings/workflow-patterns/2026-10-27-legal-correction-notes-quote-the-phrase-they-remove.md`.
+
 **The mirror is the published surface.** `docs/legal/<doc>.md` is the canonical record;
 `plugins/soleur/docs/pages/legal/<doc>.md` is what users read at soleur.ai/legal/. `docs/legal/`
 is in no Eleventy input tree and is read by no route, so a canonical-only edit changes nothing a

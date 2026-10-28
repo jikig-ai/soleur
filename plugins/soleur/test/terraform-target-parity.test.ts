@@ -59,7 +59,7 @@
 
 import { describe, test, expect, beforeAll } from "bun:test";
 import { parse as parseYaml } from "yaml";
-import { resolve, join, posix } from "path";
+import { resolve, join, posix, relative } from "path";
 import {
   readFileSync,
   existsSync,
@@ -95,7 +95,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
 // 297 -> 305 (#11179, +8): the plaintext git-data volume destroy workflow pins (dispatch-only trigger, validate/destroy job wiring, the two-address -target set, the saved-plan apply, the gate call, read-back/cleanup, single-sourced volume id).
 // 305 -> 309 (#11179 review, +4): the apply-step re-gate, the no-ignorable-refusal wiring (exact ifs, no continue-on-error, main-only), the read-back shape=gone / server-id-drift pin, and the by-name (not hard-coded) server and LUKS ids.
-const TEST_FLOOR = 309;
+// 309 -> 311 (2026-10-27 eMudhra cloudflared plan, +2): the hardcoded 3-file PIN_WORKFLOWS test was replaced by the
+// .github/-wide pin census describe (census+parity, canonical source) plus its mutation-battery describe — 3 tests in, 1 out.
+const TEST_FLOOR = 311;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1313,6 +1315,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
+  // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
+  // (monitor, web-1 pool, LB on app.soleur.ai). Provisioning requires both the
+  // Load Balancing add-on subscription and `Account: Load Balancers: Edit` +
+  // `Zone: Load Balancers: Edit` scopes on CF_API_TOKEN (measured 2026-10-27:
+  // the per-PR CI token returns Cloudflare code 10000 Authentication error on
+  // /load_balancers, so per-PR auto-targeting would 403 and wedge every merge
+  // apply — the #5566-inverse footgun). Rides the GA maintenance-window apply.
+  "cloudflare_load_balancer_monitor.web",
+  "cloudflare_load_balancer_pool.web_1",
+  "cloudflare_load_balancer.app",
   // #6657 (ADR-125 / AP-019) — the DNS-edit-only Cloudflare token for the GitHub
   // Pages cert-reissue routine + its prd doppler_secret. Minting a
   // cloudflare_api_token requires "User API Tokens: Edit", which the per-PR CI
@@ -1732,29 +1744,309 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
     expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
   });
 
-  // #6604: the pin is now replicated into the git-data + workspaces-luks cutover/verify workflows
-  // (all feed the same cf-tunnel-ssh-bridge composite). A pin bump that updated only the two apply
-  // workflows would leave these on a stale version/SHA — the bridge download fails CLOSED (aborts),
-  // not a silent hole, hence this is a drift tripwire. Assert EVERY workflow carrying the pin matches
-  // the canonical (apply-web-platform-infra) value.
-  test("the cloudflared pin matches across ALL workflows that declare it (#6604)", () => {
-    const grabPin = (rel: string) => {
-      const src = readFileSync(resolve(REPO_ROOT, rel), "utf8");
-      return {
-        version: /^\s*CLOUDFLARED_VERSION:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
-        sha256: /^\s*CLOUDFLARED_SHA256:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
-      };
-    };
-    const PIN_WORKFLOWS = [
-      ".github/workflows/git-data-cutover.yml",
-      ".github/workflows/workspaces-luks-cutover.yml",
-      ".github/workflows/workspaces-luks-verify.yml",
-    ];
-    for (const wf of PIN_WORKFLOWS) {
-      const pin = grabPin(wf);
-      expect(pin.version, `${wf} CLOUDFLARED_VERSION`).toBe(wpi.cloudflaredVersion);
-      expect(pin.sha256, `${wf} CLOUDFLARED_SHA256`).toBe(wpi.cloudflaredSha256);
+});
+
+// ─── cloudflared pin parity census — every pin site under .github/ ──────────
+// Guard 1 of the 2026-10-27 eMudhra plan (supersedes the #6604 hardcoded
+// PIN_WORKFLOWS list). The pin is replicated to 10 sites across 9 workflows —
+// 5 env-form `CLOUDFLARED_VERSION:`/`CLOUDFLARED_SHA256:` pairs AND 5
+// call-site literal `cloudflared-version:`/`cloudflared-sha256:` pairs inside
+// `with:` blocks. The old list only saw the env form in 3 named files: a
+// literal-site bump (e.g. apply-web-platform-infra.yml's own second pin in the
+// SAME file that owns the canonical env pair) was invisible, so a partial bump
+// stayed green. The census DISCOVERS sites by scanning
+// `.github/workflows/*.yml` + `.github/actions/*/action.yml`; no file list is
+// restated here, so an 11th pin site added anywhere under .github/ is caught
+// the day it lands. Canonical = apply-web-platform-infra.yml's env pin.
+//
+// A `cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}` site RESOLVES through
+// its own workflow's env pin — it is conformant iff that workflow declares a
+// CONCRETE env pin of the same kind (itself censused). A resolved site in a
+// file with no matching env declaration is flagged: at runtime it expands to
+// an empty string, which is the dangling-reference class. Other `${{ }}`
+// expressions (inputs.*, secrets.*) FORWARD a value supplied elsewhere — the
+// composite actions' `CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}`
+// lines are exactly that — and are conformant by construction: the producer
+// site (a caller's literal, or the caller's own env pin) is itself censused.
+
+/** The canonical source of truth — the env pair in this workflow. */
+const CANONICAL_PIN_WORKFLOW = ".github/workflows/apply-web-platform-infra.yml";
+
+/** Anti-vacuity floor: the MEASURED site count on main (5 env pairs + 5
+ *  literal pairs). `>=`, not `===`, so an added site never needs an edit here;
+ *  a census that finds ~nothing proves nothing. */
+const MIN_CLOUDFLARED_PIN_SITES = 10;
+
+interface CloudflaredPinSite {
+  file: string;
+  form: "env" | "literal";
+  kind: "version" | "sha256";
+  value: string;
+  /** true for ANY `${{ ... }}` expression — the value is supplied elsewhere. */
+  resolved: boolean;
+  /** true specifically for `${{ env.CLOUDFLARED_* }}` — needs a concrete env
+   *  pin of the same kind in the same file or it expands to "" at runtime. */
+  envRef: boolean;
+}
+
+/** Every file the census scans: `.github/workflows/*.yml` +
+ *  `.github/actions/<dir>/action.yml`, discovered (never listed). */
+function listGithubPinFiles(githubDir = resolve(REPO_ROOT, ".github")): string[] {
+  const files: string[] = [];
+  const wfDir = join(githubDir, "workflows");
+  for (const f of readdirSync(wfDir)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .sort()) {
+    files.push(join(wfDir, f));
+  }
+  const actionsDir = join(githubDir, "actions");
+  if (existsSync(actionsDir)) {
+    for (const d of readdirSync(actionsDir).sort()) {
+      const a = join(actionsDir, d, "action.yml");
+      if (existsSync(a) && lstatSync(a).isFile()) files.push(a);
     }
+  }
+  return files;
+}
+
+/** The live census input as a relpath→text map (the shape mutations perturb). */
+function readCloudflaredPinFileMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const abs of listGithubPinFiles()) {
+    map[relative(REPO_ROOT, abs).split("/").join("/")] = readFileSync(
+      abs,
+      "utf8",
+    );
+  }
+  return map;
+}
+
+// A pin declaration is a YAML mapping key at line start — a `#`-commented or
+// mid-line prose mention can never satisfy it. Values: quoted scalars,
+// `${{ ... }}` expressions, or bare scalars.
+const CLOUDFLARED_PIN_LINE_RE =
+  /^\s*(CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|cloudflared-version|cloudflared-sha256)\s*:\s*(?:"([^"]*)"|'([^']*)'|(\$\{\{[^}]*\}\})|([^\s#]+))/;
+
+const CLOUDFLARED_ENV_REF_RE =
+  /^\$\{\{\s*env\.(CLOUDFLARED_VERSION|CLOUDFLARED_SHA256)\s*\}\}$/;
+
+/** Discover every pin site in the given file map (pure — mutations inject or
+ *  perturb entries to prove the verdict discriminates). */
+function cloudflaredPinCensus(
+  files: Record<string, string>,
+): CloudflaredPinSite[] {
+  const sites: CloudflaredPinSite[] = [];
+  for (const [file, text] of Object.entries(files)) {
+    for (const line of text.split("\n")) {
+      const m = CLOUDFLARED_PIN_LINE_RE.exec(line);
+      if (!m) continue;
+      const key = m[1];
+      const value = m[2] ?? m[3] ?? m[4] ?? m[5] ?? "";
+      sites.push({
+        file,
+        form: key === key.toUpperCase() ? "env" : "literal",
+        kind: /VERSION$/i.test(key) ? "version" : "sha256",
+        value,
+        resolved: value.startsWith("${{"),
+        envRef: CLOUDFLARED_ENV_REF_RE.test(value),
+      });
+    }
+  }
+  return sites;
+}
+
+/** Canonical pin = the env pair in CANONICAL_PIN_WORKFLOW *of the map under
+ *  test* — mutating that file's env pin must red the whole census. */
+function canonicalCloudflaredPin(files: Record<string, string>): {
+  version: string | null;
+  sha256: string | null;
+} {
+  const text = files[CANONICAL_PIN_WORKFLOW];
+  const inv = text
+    ? extractWorkflowInvariants(text)
+    : { cloudflaredVersion: null, cloudflaredSha256: null };
+  return { version: inv.cloudflaredVersion, sha256: inv.cloudflaredSha256 };
+}
+
+/** Every way the census is RED, as named problems (empty = GREEN). */
+function cloudflaredPinVerdict(files: Record<string, string>): string[] {
+  const canonical = canonicalCloudflaredPin(files);
+  if (!canonical.version || !canonical.sha256) {
+    return [
+      `canonical-unreadable: ${CANONICAL_PIN_WORKFLOW} env pin did not parse`,
+    ];
+  }
+  const problems: string[] = [];
+  const sites = cloudflaredPinCensus(files);
+  const locations = new Set(sites.map((s) => `${s.file}#${s.form}`));
+  if (locations.size < MIN_CLOUDFLARED_PIN_SITES) {
+    problems.push(
+      `vacuous-census: only ${locations.size} pin sites discovered (< ${MIN_CLOUDFLARED_PIN_SITES})`,
+    );
+  }
+  for (const s of sites) {
+    if (s.envRef) {
+      // The ref resolves through this file's OWN env pin — conformant iff a
+      // CONCRETE (non-${{}}) env token of the same kind exists in that file
+      // (it is itself censused for parity). Absent, the ref expands to "" at
+      // runtime: the dangling-reference class.
+      const backed = sites.some(
+        (t) =>
+          t.file === s.file &&
+          t.form === "env" &&
+          t.kind === s.kind &&
+          !t.value.startsWith("${{"),
+      );
+      if (!backed) {
+        problems.push(
+          `${s.file}: ${s.form} ${s.kind} forwards to env.${s.value.match(/env\.(\w+)/)?.[1] ?? "?"} but the file declares no env pin`,
+        );
+      }
+      continue;
+    }
+    if (s.resolved) continue; // inputs.*/secrets.*/vars.* — forwards a value supplied elsewhere
+    const want = s.kind === "version" ? canonical.version : canonical.sha256;
+    if (s.value !== want) {
+      problems.push(
+        `${s.file}: ${s.form} ${s.kind} pin ${JSON.stringify(s.value)} != canonical ${JSON.stringify(want)}`,
+      );
+    }
+  }
+  for (const loc of locations) {
+    const kinds = new Set(
+      sites
+        .filter((s) => `${s.file}#${s.form}` === loc)
+        .map((s) => s.kind),
+    );
+    if (!kinds.has("version")) {
+      problems.push(`${loc}: sha256 declared with no version pin`);
+    }
+    if (!kinds.has("sha256")) {
+      problems.push(`${loc}: version declared with no sha256 pin`);
+    }
+  }
+  return problems;
+}
+
+describe("cloudflared pin parity census — every pin site under .github/ (#6604 superseded)", () => {
+  let files: Record<string, string>;
+  beforeAll(() => {
+    files = readCloudflaredPinFileMap();
+  });
+
+  test(`the census discovers >= ${MIN_CLOUDFLARED_PIN_SITES} pin sites (anti-vacuity)`, () => {
+    const locations = new Set(
+      cloudflaredPinCensus(files).map((s) => `${s.file}#${s.form}`),
+    );
+    // The canonical env pin must resolve from the live map — a verdict that
+    // cannot read its own reference point is detector-broken, not green.
+    const canonical = canonicalCloudflaredPin(files);
+    expect(canonical.version).not.toBeNull();
+    expect(canonical.sha256).not.toBeNull();
+    expect(locations.size).toBeGreaterThanOrEqual(MIN_CLOUDFLARED_PIN_SITES);
+    // Every discovered site is a COMPLETE pair — version and sha256 together.
+    for (const loc of locations) {
+      const kinds = new Set(
+        cloudflaredPinCensus(files)
+          .filter((s) => `${s.file}#${s.form}` === loc)
+          .map((s) => s.kind),
+      );
+      expect(kinds, `${loc} carries a half-pair`).toEqual(
+        new Set(["version", "sha256"]),
+      );
+    }
+  });
+
+  test("every pin site (env + literal forms) equals the canonical env pin", () => {
+    expect(cloudflaredPinVerdict(files)).toEqual([]);
+  });
+});
+
+describe("cloudflared pin census mutation battery", () => {
+  const mutate = (
+    live: Record<string, string>,
+    file: string,
+    fn: (text: string) => string,
+  ): Record<string, string> => ({ ...live, [file]: fn(live[file] ?? "") });
+
+  test("a divergent pin at ANY site turns the verdict RED; the resolved-ref row stays GREEN", () => {
+    const live = readCloudflaredPinFileMap();
+    const V = (files: Record<string, string>) => cloudflaredPinVerdict(files);
+
+    expect(V(live)).toEqual([]); // control: a RED below is the mutation's doing
+
+    // Row 1 — bump ONLY reusable-release.yml's literal pin (env pins untouched).
+    const row1 = mutate(
+      live,
+      ".github/workflows/reusable-release.yml",
+      (t) => t.replace(/cloudflared-version:\s*"[^"]+"/, 'cloudflared-version: "0.0.0-stale"'),
+    );
+    expect(V(row1).join("\n")).toMatch(/reusable-release\.yml/);
+
+    // Row 2 — bump ONLY the canonical ENV pin: every other site diverges.
+    const row2 = mutate(live, CANONICAL_PIN_WORKFLOW, (t) =>
+      t.replace(/CLOUDFLARED_VERSION:\s*"[^"]+"/, 'CLOUDFLARED_VERSION: "0.0.0-stale"'),
+    );
+    const v2 = V(row2);
+    expect(v2.length).toBeGreaterThan(0);
+    expect(v2.join("\n")).toMatch(/git-data-cutover\.yml/);
+
+    // Row 3 — an 11th workflow the old hardcoded list never named carries a
+    // stale literal pin: the census (not a file list) is what catches it.
+    const row3 = {
+      ...live,
+      ".github/workflows/zz-new-bridge-consumer.yml":
+        'name: x\njobs:\n  j:\n    steps:\n      - uses: ./.github/actions/cf-tunnel-ssh-bridge\n        with:\n          cloudflared-version: "0.0.0-stale"\n          cloudflared-sha256: "deadbeef"\n',
+    };
+    expect(V(row3).join("\n")).toMatch(/zz-new-bridge-consumer\.yml/);
+
+    // Row 4 — a scan that finds nothing is RED, never vacuous-green.
+    const renamed: Record<string, string> = {};
+    for (const [k, t] of Object.entries(live)) {
+      renamed[k] = t
+        .replaceAll("CLOUDFLARED_VERSION", "TUNNEL_VERSION")
+        .replaceAll("CLOUDFLARED_SHA256", "TUNNEL_SHA256")
+        .replaceAll("cloudflared-version", "tunnel-version")
+        .replaceAll("cloudflared-sha256", "tunnel-sha256");
+    }
+    const v4 = V(renamed);
+    expect(v4.length).toBeGreaterThan(0);
+    expect(v4.join("\n")).toMatch(/vacuous-census|canonical-unreadable/);
+
+    // Row 5 — a literal site MOVED to `${{ env.* }}` refs inside a workflow
+    // that declares the env pin stays GREEN (it resolves through canonical).
+    const row5 = mutate(live, CANONICAL_PIN_WORKFLOW, (t) =>
+      t
+        .replace(
+          /cloudflared-version:\s*"[^"]+"/,
+          "cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}",
+        )
+        .replace(
+          /cloudflared-sha256:\s*"[^"]+"/,
+          "cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}",
+        ),
+    );
+    expect(V(row5)).toEqual([]);
+
+    // Row 5b — the same ref in a file WITHOUT an env pin dangles: RED.
+    const row5b = mutate(
+      live,
+      ".github/workflows/reusable-release.yml",
+      (t) =>
+        t.replace(
+          /cloudflared-version:\s*"[^"]+"/,
+          "cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}",
+        ),
+    );
+    expect(V(row5b).join("\n")).toMatch(/no env pin/);
+
+    // Row 6 — a half-pair (version with no sha256) is RED wherever it sits.
+    const row6 = {
+      ...live,
+      ".github/workflows/zz-half-pair.yml":
+        'env:\n  CLOUDFLARED_VERSION: "0.0.0-stale"\n',
+    };
+    expect(V(row6).join("\n")).toMatch(/no sha256 pin/);
   });
 });
 
@@ -1788,10 +2080,12 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
 // `["web-1"]` for_each key. That wedged the targeted CI plan RED on every run.
 //
 // The fix is NOT to add these bases to the per-PR `-target=` allow-list:
-// `hcloud_server.web` carries `placement_group_id` + `for_each = var.web_hosts`
-// (server.tf), so targeting it in the UNATTENDED per-PR path forces a power-off
-// reboot of the running prod host (and transitively creates the placement group
-// / a second host). They are consumed by the operator's ADR-068 Phase-3
+// `hcloud_server.web` carries `for_each = var.web_hosts` (server.tf): a
+// reboot-class non-ignored delta (`server_type`) on it in the UNATTENDED per-PR
+// path forces a reboot of the running prod host, and targeting it would
+// transitively have created the placement group / a second host. (The placement_group_id attach
+// itself is suppressed while the attribute sits in lifecycle.ignore_changes —
+// the deferral this file's later describe pins.) They are consumed by the operator's ADR-068 Phase-3
 // MAINTENANCE-WINDOW apply, after which no pending moves remain and the targeted
 // CI plan self-heals with zero workflow change. This guard therefore asserts
 // every `moved` endpoint is EITHER `-target=`ed OR documented as operator-consumed

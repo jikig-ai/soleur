@@ -41,7 +41,23 @@
 #                       tunnel-routed surface (deploy./ssh./registry.) is dark. Distinct from
 #                       census_unavailable: here Cloudflare answered and said "none".
 #   census_unavailable  unreadable/failed census — soft, NEVER a page (see above)
+#
+# Version-floor verdicts (classify_conn_versions — eMudhra advisory, 2026-10-20):
+#   versions_ok           every live conn's client_version is >= the floor
+#   below_floor           >=1 live conn below the floor — PAGE-WORTHY (a conn on a
+#                         compromised-trust-store build can be MITM'd mid-management-plane)
+#   version_unreadable    a live conn whose client_version is absent/malformed, or a body the
+#                         floor cannot be evaluated against — soft breadcrumb, NEVER a page
+#                         (mirrors census_unavailable's posture)
+#   version_floor_invalid the floor constant itself does not parse — the detector refuses to
+#                         silently pass on a broken guard
 set -euo pipefail
+
+# Advisory floor: cloudflared < 2026.10.2 trusts the compromised eMudhra (emSign)
+# intermediates. Comparisons MUST be field-wise numeric — lexical order lies
+# ("2026.9.0" > "2026.10.2" as strings). A malformed constant must fail LOUD
+# (version_floor_invalid), never read as a clean bill.
+CLOUDFLARED_VERSION_FLOOR="2026.10.2"
 
 # classify_connector_census <http_code> <body> -> echoes "<verdict> <count>"
 # count is the connector count for well-formed censuses, or -1 when it is unknown (so a
@@ -84,10 +100,74 @@ classify_connector_census() {
   fi
 }
 
+# classify_conn_versions <body> -> echoes "<verdict> <below_n> <unreadable_n>"
+# A SECOND classifier over the SAME /connections body: the count check proves a connector is
+# live; this proves the live conns are not running a below-advisory-floor cloudflared. The
+# check is PER-CONN, not per-connector — a connector can hold conns at different
+# client_versions (a second member registered after a compliant first).
+#
+# Precedence: a body the floor cannot be evaluated against is version_unreadable (soft, never
+# a page — a token blip must not read as a vulnerable connector); a real below-floor conn is
+# below_floor (page). below_floor outranks version_unreadable when both occur.
+classify_conn_versions() {
+  local body="$1"
+  # Floor must parse as N.N.N — a dropped/corrupted constant must refuse to pass, not quietly
+  # classify everything as compliant.
+  if ! [[ "$CLOUDFLARED_VERSION_FLOOR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "version_floor_invalid -1 -1"
+    return 0
+  fi
+  # jq array comparison IS the field-wise numeric compare: [2026,9,0] < [2026,10,2] is true
+  # element-wise, where the lexical "2026.9.0" > "2026.10.2" would lie. client_version must be
+  # a 3-field numeric string — anything else (absent, null, non-string, wrong arity) is
+  # unreadable rather than assumed compliant.
+  local counts
+  counts=$(printf '%s' "$body" | jq -r --arg floor "$CLOUDFLARED_VERSION_FLOOR" '
+    def F: ($floor | split(".") | map(tonumber));
+    if (.result | type) != "array" then error("not a census body") else
+      [ .result[].conns[]?
+        | ( .client_version
+            | if (type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              then (if (split(".") | map(tonumber)) < F then "below" else "ok" end)
+              else "unreadable" end )
+      ]
+      | {below: ([.[] | select(. == "below")] | length),
+         unreadable: ([.[] | select(. == "unreadable")] | length)}
+      | "\(.below) \(.unreadable)"
+    end
+  ' 2>/dev/null || echo "-1 -1")
+  local below unread
+  read -r below unread <<<"$counts"
+  if [[ "$below" == "-1" ]]; then
+    # A body that is not a well-formed census cannot be evaluated — soft, never a page.
+    echo "version_unreadable -1 -1"
+  elif (( below > 0 )); then
+    echo "below_floor $below $unread"
+  elif (( unread > 0 )); then
+    echo "version_unreadable 0 $unread"
+  else
+    echo "versions_ok 0 0"
+  fi
+}
+
+# describe_conn_versions <body> -> "conn=<8-char> colo=<c> client_version=<v>" per live conn,
+# for the below_floor alert body. Sanitised to the same [A-Za-z0-9._-] alphabet as
+# describe_connectors (it crosses the same GITHUB_OUTPUT heredoc + markdown boundaries).
+describe_conn_versions() {
+  printf '%s' "$1" | jq -r '
+    def clean: tostring | gsub("[^A-Za-z0-9._-]"; "");
+    (.result // [])[]
+    | .conns[]?
+    | "conn=\((.id // "?")[0:8] | clean) colo=\(.colo_name // "?" | clean) client_version=\(.client_version // "ABSENT" | clean)"
+  ' 2>/dev/null || true
+}
+
 # describe_connectors <body> -> "id=<8-char> colos=a,b,c" per connector, for the alert body.
 # Colo geography is how a connector is attributed to a host: origin_ip is null on BOTH entries
-# (verified live), so identity is NOT assertable from this endpoint — ams*/hel* = hel1 = web-1,
-# fra* = fsn1 = web-2. Best-effort: never fails the census.
+# (verified live), so identity is NOT assertable from this endpoint — and cannot be: web-1
+# AND web-2 both sit in hel1 today, so an `ams*`/`hel*` colo names the DC, not the host (the
+# granted connector is web-2 — server.tf web_tunnel_connector). Best-effort: never fails the
+# census.
 #
 # The output is SANITISED to [A-Za-z0-9=,._ -] because it crosses two injection boundaries: a
 # GITHUB_OUTPUT heredoc (a line equal to the delimiter would break out and let the rest of the

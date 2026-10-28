@@ -144,7 +144,7 @@ describe("fetchFromGitData — authorized read", () => {
     expect(argv.some((a) => a.includes(":refs/heads/"))).toBe(false);
     // The transport target MUST be the EXPLICIT URL built from the authorized
     // workspaceId — never a local remote NAME that could point at another tenant.
-    expect(argv).toContain(`ssh://git@10.0.1.20/repositories/${WS_A}.git`);
+    expect(argv).toContain(`ssh://git@10.0.1.20/mnt/git-data/repositories/${WS_A}.git`);
     expect(argv).not.toContain("git-data");
   });
 

@@ -60,6 +60,15 @@ Live standing alarms over this source:
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
+- **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
+  10800 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
+  header, or is absent. `indeterminate` never pages. Merged but inert until the owner delivers the signed
+  bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
+  [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) "Key-continuity probe (#9927 item 2)".
+  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`).
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
@@ -298,6 +307,15 @@ Live standing alarms over this source:
   `zot-log-channel-7440.sh` probe's exit-1 arm performed. One row is an incident; rotate the
   affected credential FIRST, counts-only (never echo the value). Runbook:
   [`registry-zot-credential-shape-10321.md`](./registry-zot-credential-shape-10321.md).
+
+- **`logtail_exploration_alert.web_nic_guard_unpinned_url`** (#9639 F8, `higher_than 0` over 300 s,
+  checked every 60 s, missing data counts as zero): `soleur-web-nic-guard-unpinned-url-prd`. Pages
+  on ANY `SYSLOG_IDENTIFIER='web-nic-guard'` row whose message contains `unpinned_url` — the
+  private-NIC guard's refusal to POST the Better Stack token to an unpinned ingest URL. The
+  refusal also withholds the `web_nic_guard` liveness beat, so a page can coincide with that
+  beat's lapse on a healthy host. No host conjunct: the guard runs on web-1 and is baked for
+  web-2-class hosts. Runbook:
+  [`web-nic-guard-unpinned-url-alert.md`](./web-nic-guard-unpinned-url-alert.md).
 
 - **`logtail_exploration_alert.registry_clientip_not_rfc1918`** (#7530, `higher_than 0` over 900 s,
   checked every 300 s, missing data counts as zero): `soleur-registry-clientip-not-rfc1918-prd`. Emails
@@ -785,7 +803,7 @@ Reading it:
   | reason | what actually happened | probe class |
   |---|---|---|
   | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before the target file is read and before the phase-2 model call (the draft step's API-key check and always-loaded read still run first; ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers, also present on the mirrored error row (key `cluster_hash`), not on the `hash`-keyed warn line | N |
-  | `ledger-suppressed` | patterns arm only: the cluster's recomputed hash is already proposed (open, merged, or closed unmerged within 60 days). Counted in `ledger_suppressed`; `clusters_proposed` stays pre-suppression. The model's clusters are sliced to the week-cap `remaining` before suppression, so a repeated suppressed cluster can end a week `no-qualifying-clusters` (accepted) | N |
+  | `ledger-suppressed` | patterns arm only: the cluster's recomputed hash is already proposed (open, merged, or closed unmerged within 60 days). Counted in `ledger_suppressed`; `clusters_proposed` stays pre-suppression. The model's clusters are sliced to the week-cap `remaining` (one less on an `allow_create` run) before suppression, so a repeated suppressed cluster can end a week `no-qualifying-clusters` (accepted) | N |
   | `cluster-duplicate` | patterns arm only: a second cluster with the same source set in one run | N |
   | `create-refused` | create arm only (manual `patterns` + `allow_create`): a gate refused the one create; the closed `class` and `detail` are the marker fields `create_refusal_class` and `create_detail`, not part of this enum. Written once per refused create, no `refusal_detail` entry (no `diff_*` shape) | N |
 

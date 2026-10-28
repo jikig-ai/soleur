@@ -573,7 +573,8 @@ jobs:
           # mechanism this file's header condemns as defect B. Losing one line of
           # apt noise is cheaper than reintroducing the pattern.
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cloud-init
+          # cryptsetup-bin: inngest-luks-key-probe.test.sh fails (never skips) under CI without it (#9927).
+          sudo apt-get install -y -qq cloud-init cryptsetup-bin
 
       # ORDERED BEFORE the suite step, and that ordering is the invariant.
       # A registered infra suite whose tool is absent self-skips with exit 0,
@@ -586,6 +587,7 @@ jobs:
           command -v cloud-init
           command -v python3
           command -v jq
+          command -v cryptsetup
           docker info >/dev/null
 
       # 60-min step ceiling — see the TIMEOUT BUDGET block on this job. No JOBS
