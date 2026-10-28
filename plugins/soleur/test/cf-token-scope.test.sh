@@ -78,7 +78,9 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] && record_url "$1"
       ;;
-    --url=*|--proxy=*|--preproxy=*) record_url "${1#*=}" ;;
+    --url=*) record_url "${1#*=}" ;;
+    --proxy|--preproxy|-x) shift ;;
+    --proxy=*|--preproxy=*|-x*) ;;
     --max-time|-w|-H|--noproxy) shift ;;
     -* ) [[ "$1" == *://* ]] && record_url "$1" ;;
     *) record_url "$1" ;;
@@ -357,6 +359,22 @@ if [[ "$(wc -l < "$D2_OPERAND_LOG" | tr -d '[:space:]')" == "3" ]] \
 else
   no "D2 mock observer missed or altered a URL operand"
 fi
+D2_PROXY_LOG="$WORK/d2-proxy-operand-log"
+for proxy_style in equals separated; do
+  : >"$D2_PROXY_LOG"
+  if [[ "$proxy_style" == "equals" ]]; then
+    PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+      "$MOCKBIN/curl" "--proxy=$NOTIF_URL" >"$OUTFILE"
+  else
+    PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+      "$MOCKBIN/curl" --proxy "$NOTIF_URL" >"$OUTFILE"
+  fi
+  if [[ ! -s "$D2_PROXY_LOG" ]] && grep -Fxq -- '418' "$OUTFILE"; then
+    ok "D2 $proxy_style proxy value is not a transfer URL"
+  else
+    no "D2 $proxy_style proxy value masqueraded as a transfer URL"
+  fi
+done
 MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
 # RUN-PATH URL ASSEMBLY pin (design-pass P2): inspect the actual request URLs,
@@ -561,10 +579,11 @@ assert_eq "D-conf one argv record per probe ($DT_N rows)" "$DT_N" "$dargv_lines"
 if [[ "$(grep -c -- '--disable' "$DARGV")" -eq "$DT_N" ]] \
    && [[ "$(grep -c -- '--noproxy' "$DARGV")" -eq "$DT_N" ]] \
    && grep -q -- '-H @/dev/fd/' "$DARGV" \
+   && ! grep -Eq -- '(^|[[:space:]])--(pre)?proxy(=|[[:space:]]|$)|(^|[[:space:]])-x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
    && ! grep -q -- 'xyz789' "$DARGV"; then
-  ok "D-conf every probe confined (--disable/--noproxy x$DT_N), header via @/dev/fd, token never on argv"
+  ok "D-conf every probe confined (no proxy override), header via @/dev/fd, token never on argv"
 else
-  no "D-conf run-path confinement/argv hygiene broken (see $DARGV)"
+  no "D-conf run-path confinement, proxy policy, or argv hygiene broken (see $DARGV)"
 fi
 
 # --- D-pc: PROFILES enumeration pin (Guard 1 M3 detector; parameterized from the

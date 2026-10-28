@@ -50,6 +50,7 @@ Skills: `plan`, `deepen-plan`, `spec-templates`, `work`. Agent: `general` for pl
 | URL-log/mock evidence captured only the last curl argument; dry-run line count did not count URL arguments | `complete-url-argument-observation` | `test-design-reviewer`, `structural-enumeration` | `review: close Cloudflare URL assertion blind spots` |
 | A widened Notifications mock matcher was not directly exercised with a suffixed path | `notifications-mock-suffix-boundary` | `test-design-reviewer`, `structural-enumeration` | `review: close Cloudflare URL assertion blind spots` |
 | URL observation missed non-HTTPS and `--url=` operands; empty-object response shape lacked a negative fixture | `scheme-independent-url-operands-and-empty-object-shape` | `test-design-reviewer`, `structural-enumeration` | `review: enumerate curl URL operands` |
+| Proxy settings were logged as request URLs; task artifact retained a stale final test count | `proxy-value-as-request-url-and-stale-test-count` | `pattern-recognition-specialist`, `architecture-strategist`, `code-quality-analyst`, `agent-native-reviewer` | `review: separate transfer URLs from proxy settings` |
 
 ## Targeted Fix-Review Round 1
 
@@ -69,8 +70,17 @@ Skills: `plan`, `deepen-plan`, `spec-templates`, `work`. Agent: `general` for pl
 - Scratch mutations for `--url=HTTP`, separated `--url HTTP`, `--proxy=HTTP`, an extra dry-run URL, and an empty-object-accepting classifier were each killed; the clean scratch baseline passed 177/177.
 - Round 2 is the second and final targeted round. After committing and pushing this fix, run a full class panel over the cumulative fix range and exactly one verification pass; do not run a third targeted round.
 
+## Full Class-Panel Escalation
+
+- Cumulative fix range: `4fe6a0f962f2d3dbdcd5c37b9b4ddb7837ac316a..dfc47eeaa09c798c52c110e5373bb97ab9bea976`. Eight panel seats and the separate code-simplicity seat returned.
+- Pattern-recognition, architecture, and code-quality independently reported that `--proxy=`/`--preproxy=` values were recorded and dispatched as transfer URLs; the agent-native seat found `tasks.md` still called 170/170 the final focused result. Security and code-simplicity reported no findings. Structural enumeration's other mapped paths were separate rulesets/non-Notifications recipe coverage, outside Guard 1's named Notifications property.
+- Fix: ignore proxy-option values when recording transfer targets, add equals/separated proxy-only fallback fixtures, reject proxy overrides in D-conf argv, and update the tasks artifact's final result. This changes tests/docs only; the production probe, token binding, and classifier remain unchanged.
+- Final focused suite: 179 passed, 0 failed; Bash syntax, warning-severity ShellCheck, and `git diff --check` pass. Scratch mutants for proxy-as-target, proxy override, and proxy-as-target with the real URL removed were killed.
+- After committing and pushing this fix, run exactly one fresh-eyes verification pass. Do not start another panel or targeted round.
+
 ### Review-Execution Errors
 
 - Initial scratch mutation setup omitted the adjacent skill docs; a subsequent setup selected a mutated copy as its baseline. Rebuilt complete scratch trees with a pristine baseline; no product files were changed by these attempts.
 - A scratch-mutation anchor was stale and a status banner used `printf` with a leading `--`; both commands failed before touching repository files and were corrected.
 - The first URL-parser run shifted the mock's positional parameters before D-conf captured argv (176 passed / 1 failed). Moved argv capture before parsing and reran the suite (177/177).
+- One scratch mutation assertion expected an outdated failure label; inspection showed the mutant had been killed under the updated diagnostic, and the expected output anchor was corrected.
