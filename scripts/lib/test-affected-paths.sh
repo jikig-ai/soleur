@@ -773,6 +773,16 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_REFUSAL_WAIT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh"
+  "plugins/soleur/skills/ship/references/battery-refusal-wait.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/scripts/lib/context-sanitize.sh"  # sourced by the script under test
+  "plugins/soleur/test/ship-battery-refusal-wait.test.sh"
+  "scripts/test-all.sh"  # the suite renders the refusal text from, and pins the infra literals against, the live runner
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PHASE_7_POLL_FIXTURES_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh"
