@@ -4,24 +4,19 @@ Plan: `knowledge-base/project/plans/2026-10-28-infra-web2-ssh-preauth-after-rebi
 
 ## Phase 1 — Record correction + probe artifact
 
-- [ ] 1.1 Comment on #11445 with the root-cause correction (run 40744937376 `apply` log: `Host key for web-2 has changed and you have requested strict checking. / Host key verification failed.` — stale pin, not auth rejection). (AC6)
-- [ ] 1.2 Create `scripts/probes/web2-ssh-pin-current.sh`: asserts exactly one non-comment `ecdsa-sha2-nistp256` key line in `apps/web-platform/infra/web-2-ssh-host-key.pub` AND the `# fingerprint:` header ≠ `SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE`; prints `PIN_CURRENT`, exits 1 with named reason otherwise. Pure bash/grep/awk (Check-10 sandbox). (AC2)
-- [ ] 1.3 Verify the probe reds on the CURRENT stale pin before proceeding. (AC2)
+- [x] 1.1 Comment on #11445 with the root-cause correction (run 40744937376 `apply` log: `Host key for web-2 has changed and you have requested strict checking. / Host key verification failed.` — stale pin, not auth rejection). (AC6)
+- [x] 1.2 Create `scripts/probes/web2-ssh-pin-current.sh`: asserts exactly one non-comment `ecdsa-sha2-nistp256` key line in `apps/web-platform/infra/web-2-ssh-host-key.pub` AND the `# fingerprint:` header ≠ `SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE`; prints `PIN_CURRENT`, exits 1 with named reason otherwise. Pure bash/grep/awk (Check-10 sandbox). (AC2)
+- [x] 1.3 Verify the probe reds on the CURRENT stale pin before proceeding. (AC2)
 
 ## Phase 2 — Operator steps (admin-IP egress)
 
-- [ ] 2.1 Operator executes `bash scripts/capture-web-2-host-key.sh <web-2-public-ipv4>` in this worktree (egress ∈ `var.admin_ips`; `/soleur:admin-ip-refresh` first if not allowlisted). Commit the regenerated `apps/web-platform/infra/web-2-ssh-host-key.pub`. (AC1)
-- [ ] 2.2 Cross-check: regenerated `# fingerprint:` header equals `SHA256:OB3/fH+fWhoTolCCx9rNMtuW0shPUONHNbhYxRFyqic` (the key web-2 offered in run 40744937376). (AC1)
-- [ ] 2.3 Operator read-only diagnostic session to web-2 over the admin-IP tcp/22 rule: (a) `/root/.ssh/authorized_keys` vs `terraform output -raw ci_ssh_public_key_openssh`; (b) `journalctl -u ssh` window grep for `Failed publickey` vs `[preauth]` closes; (c) `cloud-init status --long`. Record all three on #11445. (AC4)
+- [x] 2.1 Operator executes `bash scripts/capture-web-2-host-key.sh <web-2-public-ipv4>` in this worktree (egress ∈ `var.admin_ips`; `/soleur:admin-ip-refresh` first if not allowlisted). Commit the regenerated `apps/web-platform/infra/web-2-ssh-host-key.pub`. (AC1) — ran from this session's egress `82.67.29.121` (∈ `ADMIN_IPS`); wrote `SHA256:OB3/…`, cross-check `no prior known_hosts entry`
+- [x] 2.2 Cross-check: regenerated `# fingerprint:` header equals `SHA256:OB3/fH+fWhoTolCCx9rNMtuW0shPUONHNbhYxRFyqic` (the key web-2 offered in run 40744937376). (AC1) — byte-identical
+- [x] 2.3 Operator read-only diagnostic session to web-2 over the admin-IP tcp/22 rule: (a) `/root/.ssh/authorized_keys` vs `terraform output -raw ci_ssh_public_key_openssh`; (b) `journalctl -u ssh` window grep for `Failed publickey` vs `[preauth]` closes; (c) `cloud-init status --long`. Record all three on #11445. (AC4) — pubkey EXACT_MATCH (root auth via DEPLOY_SSH_PRIVATE_KEY succeeded); `[preauth]` closes only; cloud-init `status: done`
 
 ## Phase 3 — Conditional: IaC twin (only if 2.3 shows pubkey absent)
 
-- [ ] 3.1 Add `terraform_data.root_authorized_keys_web2` to `apps/web-platform/infra/ci-ssh-key.tf` (web-2 host, `local.web_2_ssh_host_key`, `private_key`/`agent` dual-mode, `%RAND%` script_path, 15m timeout, `triggers_replace` = pubkey hash + server_id). (AC5)
-- [ ] 3.2 Update `plugins/soleur/test/terraform-target-parity.test.ts` (`EXCLUSION_ALLOWLIST` + census). (AC5)
-- [ ] 3.3 Update `apps/web-platform/infra/web-host-provisioner-parity.test.sh` EXT_RESIDENCE entry. (AC5)
-- [ ] 3.4 Update `apps/web-platform/infra/server.tf` census/recovery-note comments. (AC5)
-- [ ] 3.5 Run the parity + target-parity suites; `terraform plan` shows the twin create-only. (Test Scenario 3)
-- [ ] 3.6 Operator step: `cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -target=terraform_data.root_authorized_keys_web2 -input=false`; capture authorized_keys grep output on #11445. (AC5)
+- [ ] ~~3.1–3.6~~ **NOT TAKEN — evidence arm not reached.** Phase B proved the CI pubkey present and working (exact authorized_keys match + successful root auth); per the plan's decision rule, ship Phase A alone. Ruling: decision-challenges.md row 4, `Ruled by CTO agent, 2026-10-28` (pin-only on proven presence).
 
 ## Phase 4 — Verify + close
 
