@@ -5987,6 +5987,10 @@ if want_scripts; then
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # the soak tracker — an undetailed reason=pull row must not read as FAIL.
   run_suite "scripts/followthroughs/inngest-verify-clean-10390" bash scripts/followthroughs/inngest-verify-clean-10390.test.sh
+  # #5150: exit-code harness for the Inngest trace-retention close probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
+  # sweeper closes #5150, so a PASS on a webhook echo or on an empty read must redden CI.
+  run_suite "scripts/followthroughs/inngest-trace-retention-5150" bash scripts/followthroughs/inngest-trace-retention-5150.test.sh
   # #10390 (WS3): exit-code harness for the generic post-deploy alert-channel soak — zero new
   # Better Stack incidents AND zero new ci/ issues in [deploy_ts, +Nh], TRANSIENT on read failure.
   # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code

@@ -1152,7 +1152,7 @@
 },
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "description": {
-"txt": "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
+"txt": "Inngest config + run history. Finished trace and log history is removed after 7 days by a status-gated job once the host image contains that job; a host that has not yet been replaced is not yet pruning, in-flight runs stay, and Redis is not deleted by age (#5150). Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
 },
 "title": "Supabase PostgreSQL (Inngest)",
 "kind": "database",
@@ -18787,21 +18787,21 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
+"txt": "Inngest config + run history. Finished trace and log history is removed after 7 days by a status-gated job once the host image contains that job; a host that has not yet been replaced is not yet pruning, in-flight runs stay, and Redis is not deleted by age (#5150). Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
 },
 "tags": [],
 "notation": "Data store",
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 1114,
+"x": 1108,
 "y": 1744,
-"width": 335,
+"width": 346,
 "height": 200,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 299,
+"width": 310,
 "height": 139
 }
 },
@@ -18830,7 +18830,7 @@
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 1560,
+"x": 1564,
 "y": 1754,
 "width": 362,
 "height": 180,
@@ -20914,27 +20914,27 @@
 "label": "Config + run history",
 "points": [
 [
-1386,
+1387,
 1503
 ],
 [
-1366,
+1367,
 1524
 ],
 [
-1347,
+1348,
 1548
 ],
 [
-1333,
+1334,
 1573
 ],
 [
-1307,
+1308,
 1622
 ],
 [
-1294,
+1295,
 1682
 ],
 [
@@ -20943,7 +20943,7 @@
 ]
 ],
 "labelBBox": {
-"x": 1334,
+"x": 1335,
 "y": 1607,
 "width": 197,
 "height": 39
@@ -20964,24 +20964,24 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-1545,
+1546,
 1503
 ],
 [
-1586,
+1587,
 1574
 ],
 [
-1643,
+1645,
 1673
 ],
 [
-1685,
+1688,
 1746
 ]
 ],
 "labelBBox": {
-"x": 1648,
+"x": 1650,
 "y": 1607,
 "width": 167,
 "height": 39
@@ -23367,15 +23367,15 @@
 1733
 ],
 [
-3125,
+3128,
 1578
 ],
 [
-2983,
+2986,
 1573
 ],
 [
-2843,
+2846,
 1569
 ],
 [
@@ -23400,7 +23400,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6287,
+"x": 6288,
 "y": 1573,
 "width": 245,
 "height": 106
@@ -25182,12 +25182,12 @@
 1543
 ],
 [
-1734,
-1548
+1726,
+1544
 ],
 [
-5137,
-2383
+5146,
+2384
 ],
 [
 5149,
@@ -25219,7 +25219,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4017,
+"x": 4019,
 "y": 2004,
 "width": 254,
 "height": 106
@@ -46995,21 +46995,21 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
+"txt": "Inngest config + run history. Finished trace and log history is removed after 7 days by a status-gated job once the host image contains that job; a host that has not yet been replaced is not yet pruning, in-flight runs stay, and Redis is not deleted by age (#5150). Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
 },
 "tags": [],
 "notation": "Data store",
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 3270,
+"x": 3261,
 "y": 1713,
-"width": 335,
+"width": 346,
 "height": 200,
 "labelBBox": {
-"x": 19,
+"x": 18,
 "y": 27,
-"width": 299,
+"width": 310,
 "height": 139
 }
 },
@@ -47038,7 +47038,7 @@
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 3716,
+"x": 3717,
 "y": 1723,
 "width": 362,
 "height": 180,
@@ -48945,7 +48945,7 @@
 "label": "Config + run history",
 "points": [
 [
-3703,
+3704,
 1472
 ],
 [
@@ -48965,11 +48965,11 @@
 1590
 ],
 [
-3535,
+3534,
 1651
 ],
 [
-3502,
+3500,
 1703
 ]
 ],
@@ -49003,7 +49003,7 @@
 1524
 ],
 [
-3855,
+3854,
 1592
 ],
 [
@@ -49753,35 +49753,35 @@
 1482
 ],
 [
-3455,
+3454,
 1527
 ],
 [
-3411,
+3410,
 1508
 ],
 [
-3257,
+3255,
 1542
 ],
 [
-3071,
+3069,
 1583
 ],
 [
-3031,
+3029,
 1622
 ],
 [
-2843,
+2841,
 1652
 ],
 [
-2371,
+2370,
 1728
 ],
 [
-2232,
+2231,
 1594
 ],
 [
@@ -49802,7 +49802,7 @@
 ]
 ],
 "labelBBox": {
-"x": 3258,
+"x": 3256,
 "y": 1542,
 "width": 254,
 "height": 106
@@ -50201,19 +50201,19 @@
 1445
 ],
 [
-2794,
-1495
+2793,
+1494
 ],
 [
-2571,
+2569,
 1542
 ],
 [
-2358,
-1588
+2357,
+1587
 ],
 [
-2306,
+2305,
 1608
 ],
 [
@@ -50246,7 +50246,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2572,
+"x": 2570,
 "y": 1542,
 "width": 247,
 "height": 106
@@ -63128,7 +63128,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 3096,
+"width": 3107,
 "height": 1021
 },
 "nodes": [
@@ -63158,7 +63158,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__doppler",
-"x": 1607,
+"x": 1610,
 "y": 0,
 "width": 345,
 "height": 180,
@@ -63231,7 +63231,7 @@
 "technology": "Hetzner Cloud",
 "kind": "container",
 "navigateTo": "__platform_infra_hetzner",
-"x": 2063,
+"x": 2066,
 "y": 0,
 "width": 346,
 "height": 180,
@@ -63276,7 +63276,7 @@
 "notation": "Container",
 "technology": "Dedicated Hetzner host, private-net 10.0.1.40:8288/:8289",
 "kind": "container",
-"x": 2063,
+"x": 2066,
 "y": 410,
 "width": 346,
 "height": 180,
@@ -63453,21 +63453,21 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
+"txt": "Inngest config + run history. Finished trace and log history is removed after 7 days by a status-gated job once the host image contains that job; a host that has not yet been replaced is not yet pruning, in-flight runs stay, and Redis is not deleted by age (#5150). Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
 },
 "tags": [],
 "notation": "Data store",
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 2288,
+"x": 2289,
 "y": 821,
-"width": 335,
+"width": 346,
 "height": 200,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 299,
+"width": 310,
 "height": 139
 }
 },
@@ -63496,7 +63496,7 @@
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 2734,
+"x": 2745,
 "y": 831,
 "width": 362,
 "height": 180,
@@ -63516,36 +63516,36 @@
 "label": "Injects secrets — dedicated host's boot \ncredential is scoped to the SEPARATE \nDoppler project `soleur-inngest` (its \nown `prd` root holds only inngest \nsecrets: Postgres URI, freshly-rotated ",
 "points": [
 [
-1828,
+1831,
 180
 ],
 [
-1861,
+1864,
 234
 ],
 [
-1907,
+1910,
 302
 ],
 [
-1962,
+1965,
 350
 ],
 [
-1989,
+1992,
 375
 ],
 [
-2021,
+2024,
 397
 ],
 [
-2054,
+2057,
 416
 ]
 ],
 "labelBBox": {
-"x": 1963,
+"x": 1966,
 "y": 240,
 "width": 245,
 "height": 106
@@ -63582,15 +63582,15 @@
 650
 ],
 [
-945,
+946,
 578
 ],
 [
-1701,
+1703,
 530
 ],
 [
-2053,
+2055,
 511
 ]
 ],
@@ -63616,24 +63616,24 @@
 "label": "[...]",
 "points": [
 [
-2236,
+2239,
 180
 ],
 [
-2236,
+2239,
 245
 ],
 [
-2236,
+2239,
 333
 ],
 [
-2236,
+2239,
 401
 ]
 ],
 "labelBBox": {
-"x": 2237,
+"x": 2240,
 "y": 282,
 "width": 25,
 "height": 18
@@ -63654,27 +63654,27 @@
 "label": "ADOPTING (rides #6178 cutover, PR \n#6348): the config-refresh timer \nresolves INNGEST_CONFIG_DIGEST, pulls \nthe signed bundle @sha256 GHCR-direct, \ncosign-verify-blob OFFLINE against the ",
 "points": [
 [
-2063,
+2066,
 507
 ],
 [
-1748,
+1751,
 519
 ],
 [
-1099,
+1100,
 556
 ],
 [
-895,
+896,
 650
 ],
 [
-811,
+812,
 689
 ],
 [
-736,
+737,
 763
 ],
 [
@@ -63683,7 +63683,7 @@
 ]
 ],
 "labelBBox": {
-"x": 896,
+"x": 897,
 "y": 650,
 "width": 281,
 "height": 106
@@ -63704,36 +63704,36 @@
 "label": "Bootstrap downloads the pinned inngest \nCLI tarball \n(inngest_<ver>_linux_<arch>.tar.gz, arch \nfrom local.inngest_arch) and \nsha256-verifies it against the committed ",
 "points": [
 [
-2063,
+2066,
 518
 ],
 [
-1840,
+1843,
 541
 ],
 [
-1468,
+1471,
 588
 ],
 [
-1346,
+1349,
 650
 ],
 [
-1266,
+1269,
 691
 ],
 [
-1195,
+1197,
 763
 ],
 [
-1145,
+1146,
 822
 ]
 ],
 "labelBBox": {
-"x": 1347,
+"x": 1350,
 "y": 650,
 "width": 259,
 "height": 106
@@ -63754,36 +63754,36 @@
 "label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 (the journald includes, on a \nhost created from an image cut after PR \n#10975, the TLS terminator unit ",
 "points": [
 [
-2063,
-524
+2066,
+525
 ],
 [
-1961,
-544
+1964,
+545
 ],
 [
-1833,
-582
+1838,
+583
 ],
 [
-1738,
+1743,
 650
 ],
 [
-1677,
+1681,
 694
 ],
 [
-1629,
+1632,
 764
 ],
 [
-1596,
+1598,
 822
 ]
 ],
 "labelBBox": {
-"x": 1739,
+"x": 1744,
 "y": 650,
 "width": 254,
 "height": 106
@@ -63804,36 +63804,36 @@
 "label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
-2104,
+2111,
 590
 ],
 [
-2086,
+2092,
 608
 ],
 [
-2069,
+2075,
 628
 ],
 [
-2056,
+2062,
 650
 ],
 [
-2027,
+2033,
 702
 ],
 [
-2017,
+2021,
 767
 ],
 [
-2014,
+2017,
 821
 ]
 ],
 "labelBBox": {
-"x": 2057,
+"x": 2063,
 "y": 650,
 "width": 261,
 "height": 106
@@ -63854,11 +63854,11 @@
 "label": "Invokes function steps at the registered \nserve URL (Cloudflare-proxied; responses \nstream — 201 + 3 s heartbeat, ADR-243). \nEvery Inngest function executes on the \none step-executing host, web-1: ",
 "points": [
 [
-2063,
+2066,
 501
 ],
 [
-1584,
+1587,
 500
 ],
 [
@@ -63904,36 +63904,36 @@
 "label": "Config + run history",
 "points": [
 [
-2304,
+2309,
 590
 ],
 [
-2317,
-610
+2323,
+609
 ],
 [
-2331,
+2337,
 630
 ],
 [
-2342,
+2348,
 650
 ],
 [
-2370,
+2377,
 701
 ],
 [
-2396,
+2403,
 760
 ],
 [
-2416,
+2422,
 810
 ]
 ],
 "labelBBox": {
-"x": 2396,
+"x": 2402,
 "y": 684,
 "width": 197,
 "height": 39
@@ -63954,36 +63954,36 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-2409,
+2412,
 553
 ],
 [
-2478,
-578
+2482,
+577
 ],
 [
-2555,
+2561,
 610
 ],
 [
-2620,
+2627,
 650
 ],
 [
-2697,
+2705,
 698
 ],
 [
-2772,
-767
+2781,
+768
 ],
 [
-2827,
+2837,
 824
 ]
 ],
 "labelBBox": {
-"x": 2759,
+"x": 2768,
 "y": 684,
 "width": 167,
 "height": 39
@@ -64091,20 +64091,20 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
+"txt": "Inngest config + run history. Finished trace and log history is removed after 7 days by a status-gated job once the host image contains that job; a host that has not yet been replaced is not yet pruning, in-flight runs stay, and Redis is not deleted by age (#5150). Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
 },
 "tags": [],
 "notation": "Data store",
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
-"x": 5,
+"x": 0,
 "y": 343,
-"width": 335,
+"width": 346,
 "height": 200,
 "labelBBox": {
-"x": 19,
+"x": 18,
 "y": 28,
-"width": 299,
+"width": 310,
 "height": 139
 }
 }

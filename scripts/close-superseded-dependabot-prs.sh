@@ -58,6 +58,9 @@ sys.exit(0 if k(sys.argv[1]) >= k(sys.argv[2]) else 1)
 lockfile_for() { # map a PR title directory to its lockfile
   case "$1" in
     */apps/web-platform | *apps/web-platform*) echo "apps/web-platform/package-lock.json" ;;
+    # pen-cli sits UNDER the pencil-setup path (its own lockfile pair, #11156): it must be matched
+    # BEFORE the broader *pencil-setup* arm, or its PRs would read the adapter's lockfile.
+    *pencil-setup/scripts/pen-cli*) echo "plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json" ;;
     *pencil-setup*) echo "plugins/soleur/skills/pencil-setup/scripts/package-lock.json" ;;
     *) echo "package-lock.json" ;;
   esac
