@@ -3324,3 +3324,11 @@ AFFECTED_SCRIPTS_TMPFS_GUARD_PATHS=(
   "plugins/soleur/scripts/lib/tmp-classify.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+
+# scripts/followthroughs/parked-green-synthesis-11362 — the probe genuinely
+# reads the distribution file it watches via $REPO_ROOT/$DIST_REL (head/awk on
+# frontmatter), a var-built path no derivation channel reaches.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PARKED_GREEN_SYNTHESIS_11362_PATHS=(
+  "knowledge-base/marketing/distribution-content/2026-11-19-first-we-made-green-mean-something.md"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)

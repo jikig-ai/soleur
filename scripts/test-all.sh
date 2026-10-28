@@ -6032,6 +6032,13 @@ if want_scripts; then
   # sweeper reports NOT YET / CANNOT ESTABLISH / ACTION REQUIRED correctly — a
   # vacuous PASS would close the soak tracker on an unmeasured window.
   run_suite "scripts/watchdog-debounce-soak-9686" bash scripts/followthroughs/watchdog-debounce-soak-9686.test.sh
+  # #11362: exit-code harness for the arc-synthesis publish-window probe. Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The probe is
+  # notify-only (never 0/1); its arms drive whether the sweeper reports NOT YET /
+  # CANNOT ESTABLISH / ACTION REQUIRED correctly — a vacuous or mis-routed verdict
+  # would either sleep through the Nov 19–26 social window or cry wolf daily on the
+  # tracker. The plan's 5-row mutation matrix is driven here, not manually.
+  run_suite "scripts/followthroughs/parked-green-synthesis-11362" bash scripts/followthroughs/parked-green-synthesis-11362.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
