@@ -823,6 +823,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
+  # #10540: terraform-target-parity.test.ts reads the dispatch-only key-rotation workflow at runtime (existsSync-guarded, then parses its jobs).
+  ".github/workflows/inngest-key-rotate.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -1138,6 +1140,7 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   # G1 PR-4a (#10937): the parity script is the one HMAC surface this suite still EXECUTES directly under the shim
   # (live status arm, hostile-credential, xtrace, big-secret and mutant rows); it used to be reached only through the retired probes.
   "scripts/check-deploy-script-parity.sh"
+  "scripts/inngest-key-rotate.sh"
   "scripts/inngest-link-flip.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
