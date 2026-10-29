@@ -18,7 +18,8 @@ Plan: `knowledge-base/project/plans/2026-10-29-verify-web-host-replace-first-dep
 
 ## Phase 3 — Enrollment (ship-time, automated)
 
-- [ ] 3.1 Pre-merge: `gh workflow run scheduled-followthrough-sweeper.yml --ref <branch> -f dry_run=true`; read the new tracker's parse/exit line in the run log (no REQUIRED-SECRET-MISSING).
+- [ ] 3.1 Optional pre-merge smoke: run the probe standalone with the directive's env (`GH_TOKEN`, `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`) — it must exit in {5,2,3,78}, never 0/1. (A sweeper dry-run BEFORE the tracker exists cannot show a parse line for this probe: the sweeper enumerates directives from open `follow-through`-labeled issues, so enrollment is a precondition for the 3.3 check.)
 - [ ] 3.2 Post-merge: `gh issue create` the standing tracker — title `follow-through: every web-host replace/create owes a verified first deploy (watchdog for #10585)`, label `follow-through`, body with the column-0 unfenced directive `<!-- soleur:followthrough script=scripts/followthroughs/web-first-deploy-10585.sh earliest=<merge-ISO8601Z> secrets=GH_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`.
-- [ ] 3.3 `gh issue close 10585` citing the tracker + merge run; PR body uses `Ref #10585` (not `Closes`).
-- [ ] 3.4 Verify the first real sweep reports NOT YET or ACTION REQUIRED (never script-missing).
+- [ ] 3.3 `gh workflow run scheduled-followthrough-sweeper.yml -f dry_run=true`; read the new tracker's parse/exit line in the run log (no REQUIRED-SECRET-MISSING).
+- [ ] 3.4 `gh issue close 10585` citing the tracker + merge run; PR body uses `Ref #10585` (not `Closes`).
+- [ ] 3.5 Verify the first real sweep reports NOT YET or ACTION REQUIRED (never script-missing).

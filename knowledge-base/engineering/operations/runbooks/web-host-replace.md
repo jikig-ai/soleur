@@ -231,9 +231,10 @@ a reboot**. Do not put it into service — replace it again once the cause is fi
 `discriminate` fatal, which a replace cannot clear; see below).
 
 Verification extends past the boot trail to the host's FIRST deploy via the standing
-follow-through tracker (probe `scripts/followthroughs/web-first-deploy-10585.sh`, #10585): a
-proven-fresh host that lands no Deploy-succeeded-class journald row within 2 days of its boot
-surfaces there as ACTION REQUIRED.
+`follow-through`-labeled tracker (probe `scripts/followthroughs/web-first-deploy-10585.sh`,
+enrolled by #10585 — locate via `gh issue list -l follow-through`): a proven-fresh host that
+lands no Deploy-succeeded-class journald row within 2 days of its boot surfaces there as
+ACTION REQUIRED.
 
 ### web-2 boot failed — how to read it
 
