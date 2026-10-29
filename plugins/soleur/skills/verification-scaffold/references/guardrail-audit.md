@@ -113,7 +113,7 @@ template rather than shipping the monolith.
 | `lint-followthrough-varq-ban.sh` | soleur-coupled | Soleur probe-set/varq conventions. |
 | `lint-gh-argv-arg.py` | generic | Repo-wide `gh` argv vs jq-flag-token lint over workflows + `*.sh`; no Soleur coupling. |
 | `lint-guard-contract.py` | soleur-coupled | Soleur plan/SKILL.md guard-contract shape (deepen-plan §4.11). |
-| `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store and its one allowlisted `op=backup` read. |
+| `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store. Zero-tolerance — #9755 retired the `op=backup` allowlist entry. |
 | `lint-infra-no-human-steps.py` | soleur-coupled | `hr-no-ssh-fallback-in-runbooks` on `knowledge-base` docs. |
 | `lint-inngest-step-boundary.py` | soleur-coupled | `apps/web-platform/server/inngest/functions/` step-boundary error-identity census + named allowlist. |
 | `lint-integration-env-gates.sh` | soleur-coupled | `apps/web-platform/{test,lib}` env-gate wiring + `scheduled-integration-suites.yml`. |
