@@ -4,7 +4,8 @@
 // REMOVAL CHECKLIST (the diagnostic is temporary; deleting it is one pass):
 //   1. server/agent-auth-failure.ts and this file. KEEP server/agent-auth-match.ts (the pure matcher) and
 //      server/agent-auth-user-message.ts: the friendly error (#11086) calls the matcher, so the matcher is product code now.
-//      When deleting, re-point the imports of `matchAgentAuthFailure`/`AgentAuthMatchKind` to ./agent-auth-match;
+//      agent-auth-failure.ts only re-exports the matcher, and the only importer of that re-export is the matcher test
+//      that step 6 splits, so no server import needs re-pointing;
 //   2. in `claude-error-signatures.ts` delete only SDK_API_KEY_SOURCES. KEEP CLI_AUTH_FAILURE_REPLIES, SDK_AUTHENTICATION_FAILED,
 //      the `CliAuthFailureKind` type and the "REPLY signatures" paragraph of the file header (the matcher reads them);
 //   3. in agent-runner.ts and cc-dispatcher.ts: the import, `createAgentAuthFailureProbe` with its `let authProbe = NOOP_AGENT_AUTH_PROBE`

@@ -60,6 +60,7 @@ import {
   type QueryFactoryArgs,
   type DispatchArgs,
   type DispatchEvents,
+  type CloseQueryReason,
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps, readCcManagedWarnCap } from "./cc-cost-caps";
@@ -1526,7 +1527,7 @@ async function replicateAndReleaseCcWorktreeLease(
     // swallow so a replication failure never wedges the lease release below.
   } finally {
     if (opts?.skipRelease) {
-      // #9538 — the stale-resume arm detaches instead of releasing: the
+      // #9538 — the stale-resume arm (and #11086's auth-failed arm) detaches instead of releasing: the
       // recovery retry re-acquires same-host keep-gen, so a deferred
       // release would tombstone (`heartbeat_at = '-infinity'`) the row
       // out from under the fresh handle (migration-116 release matches
@@ -1772,7 +1773,7 @@ export function handleCcCloseQuery({
 }: {
   conversationId: string;
   userId: string;
-  reason?: "disconnected" | "stale-resume" | "auth-failed";
+  reason?: CloseQueryReason;
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
   // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
@@ -3894,7 +3895,13 @@ async function reportDispatchSoleurGoError(
   } else if (isOauthUnusableLeaseError(err)) {
     // #11086 — a lease refusal precedes any stream, so there is no `stream_end` to wait for: send the recovery frame now.
     // MUST sit above the generic `else` so it neither clears a resumable `session_id` nor re-mirrors.
+    // Sent for every persona: unlike the mid-stream path there is no friendly bubble to protect, and the support client falls
+    // back to its canned text on an error frame either way.
     ctx.sendToClient(ctx.userId, oauthUnusableFrame());
+    // An `auth-failed` close detached (not released) the worktree lease for the immediate re-acquire, and the credential
+    // lease refused before the factory's own cleanup could run: drop the kept record so it does not outlive the refusal.
+    // No-op when none is held; never throws.
+    void releaseCcWorktreeLease(ctx.userId, ctx.conversationId).catch(() => {});
   } else if (err instanceof RepoNotReadyError) {
     // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
     // user-facing message (and `repo_setup_failed` errorCode on the error

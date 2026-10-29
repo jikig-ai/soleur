@@ -4,16 +4,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // `onAgentAuthFailure` / `onTextTurnEnd` events the runner calls. The runner-level behavior has its own wire tests
 // (agent-auth-friendly-error-wire*.test.ts); THIS file pins what only the dispatcher does with it. Harness copied from
 // cc-dispatcher-repo-gate.test.ts (#5394).
-//
-// The factory-throw seam (a `cloning`/`error` repo throws RepoNotReadyError
-// BEFORE ensureWorkspaceRepoCloned / query()) is proven in
-// cc-dispatcher-real-factory.test.ts. THIS file pins what the dispatch catch
-// does with that thrown error: route an honest client message, preserve a
-// resumable session (the branch sits ABOVE the generic `session_id`-clearing
-// `else`), and SKIP the Sentry mirror (an expected transient state, not an
-// incident). The runner is stubbed via `__setCcRunnerForTests` so the error is
-// injected at the dispatch boundary — same seam cc-dispatcher.test.ts T19 uses
-// for the KeyInvalidError mapping.
 
 const {
   mockReportSilentFallback,
@@ -108,32 +98,10 @@ import {
   dispatchSoleurGo,
   __setCcRunnerForTests,
   __resetDispatcherForTests,
+  __registerCcWorktreeLeaseForTests,
 } from "@/server/cc-dispatcher";
 import { ByokLeaseError } from "@/server/byok-lease";
 import { authFailureCopy } from "@/server/agent-auth-user-message";
-
-type WsError = { type?: string; message?: string; errorCode?: string };
-
-function stubRunnerThrowing(err: unknown) {
-  return {
-    dispatch: vi.fn(async () => {
-      throw err;
-    }),
-    hasActiveQuery: () => false,
-    activeQueriesSize: () => 0,
-    reapIdle: () => 0,
-    closeConversation: () => {},
-    respondToToolUse: () => false,
-    notifyAwaitingUser: () => {},
-    // biome-ignore lint/suspicious/noExplicitAny: minimal stub
-  } as any;
-}
-
-function errorFrames(sendToClient: ReturnType<typeof vi.fn>): WsError[] {
-  return sendToClient.mock.calls
-    .map(([, msg]) => msg as WsError)
-    .filter((m) => m && typeof m === "object" && m.type === "error");
-}
 
 function dispatchMirrorCalls() {
   return mockReportSilentFallback.mock.calls.filter(
@@ -208,6 +176,21 @@ describe("cc-dispatcher — lease refusal for an unusable stored credential (#11
     ).toHaveLength(1);
   });
 
+  it("drops a worktree lease record kept by an auth-failed close, so a refused re-lease does not leak it", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    __registerCcWorktreeLeaseForTests(BASE.userId, BASE.conversationId, { leaseGeneration: 1, release, detach: vi.fn() });
+    __setCcRunnerForTests(
+      stubRunner(async () => {
+        throw new ByokLeaseError("oauth_unusable", "refused");
+      }),
+    );
+
+    await dispatchSoleurGo({ ...BASE, persona: "command_center", sendToClient: vi.fn().mockReturnValue(true) });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("positive control: any other lease cause takes the generic path (mirror + session clear)", async () => {
     __setCcRunnerForTests(
       stubRunner(async () => {
@@ -255,7 +238,7 @@ describe("cc-dispatcher — runner events for a terminal sign-in failure (#11086
     return sendToClient;
   }
 
-  it("forwards onAgentAuthFailure to the client AFTER stream_end", async () => {
+  it("forwards onAgentAuthFailure to the client (the runner wire test pins the stream_end ordering)", async () => {
     const sendToClient = await runTurn("command_center", true);
     const kinds = frames(sendToClient).map((f) => f.type);
     expect(kinds.indexOf("stream_end")).toBeGreaterThanOrEqual(0);

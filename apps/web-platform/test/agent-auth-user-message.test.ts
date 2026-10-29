@@ -42,10 +42,14 @@ describe("copy table", () => {
   it("never names a subscription token to a tenant (api_key scheme) or to an unknown scheme", () => {
     for (const kind of KINDS) {
       expect(authFailureCopy(kind, "api_key")).not.toMatch(/subscription|setup-token|oauth|claude max|claude pro|plan|claude\.ai/i);
-      expect(authFailureCopy(kind, null)).not.toMatch(/subscription|setup-token|oauth|claude max|claude pro|plan|claude\.ai|API key/i);
-      // Every cell is plain text with no CLI residue.
-      for (const scheme of ["api_key", "oauth_token", null, "weird"]) {
-        const text = authFailureCopy(kind, scheme);
+      // An unknown scheme (null, undefined, an unrecognised string) gets the neutral cell: no tenant sees operator wording.
+      for (const unknown of [null, undefined, "weird"]) {
+        expect(authFailureCopy(kind, unknown as never)).not.toMatch(/subscription|setup-token|oauth|claude max|claude pro|plan|claude\.ai|API key/i);
+      }
+      // Every cell is non-empty plain text with no CLI residue (a deny-regex alone is satisfied by an empty string).
+      for (const scheme of ["api_key", "oauth_token", null, undefined, "weird"]) {
+        const text = authFailureCopy(kind, scheme as never);
+        expect(text.length, `${kind} x ${String(scheme)}`).toBeGreaterThan(20);
         expect(text).not.toMatch(/`|\u00B7|\/login/);
       }
     }

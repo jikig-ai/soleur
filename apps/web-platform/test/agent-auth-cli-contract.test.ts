@@ -176,8 +176,9 @@ describe("bundled CLI credential-shape contract (#11086)", () => {
     ["embedded whitespace", "sk-ant-oat01-AAAA BBBB"],
   ];
 
-  it("offline drift tripwire: the lease classifier claims every value measured to be dropped, and no valid-shaped one", () => {
-    // Does not depend on egress, so the classifier table cannot silently rot when the network arms below skip.
+  it("offline classifier pin: the lease classifier claims every value measured to be dropped, and no valid-shaped one", () => {
+    // Pins the classifier to the table recorded above; it does NOT observe the CLI. Only the network arms below detect CLI
+    // drift on an SDK bump, and they skip visibly without egress, so re-run this file with egress on every SDK bump.
     for (const [, value] of DROPPED) expect(classifyCliDroppedValue(value), value).not.toBeNull();
     expect(classifyCliDroppedValue("sk-ant-oat01-FAKEfake_0123456789-abcdef")).toBeNull();
   });

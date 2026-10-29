@@ -18,6 +18,8 @@ const {
   mockMakeAuthModeResolver,
   mockLogWarn,
   mockMessagesInsert,
+  mockLogError,
+  mockNotifyTaskCompleted,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
@@ -30,6 +32,8 @@ const {
   mockMakeAuthModeResolver: vi.fn(),
   mockLogWarn: vi.fn(),
   mockMessagesInsert: vi.fn(() => ({ error: null })),
+  mockLogError: vi.fn(),
+  mockNotifyTaskCompleted: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -71,11 +75,16 @@ vi.mock("@/lib/supabase/tenant", () => ({
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: mockSendToClient }));
+// The "finished" nudge must be skipped for a terminal sign-in failure and still fire for an ordinary turn (control).
+vi.mock("../server/notifications", () => ({
+  notifyOfflineUser: vi.fn(),
+  notifyTaskCompleted: mockNotifyTaskCompleted,
+}));
 vi.mock("../server/logger", () => ({
   createChildLogger: () => ({
     info: vi.fn(),
     warn: mockLogWarn,
-    error: vi.fn(),
+    error: mockLogError,
   }),
 }));
 vi.mock("../server/byok", () => ({
@@ -306,6 +315,8 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
     ]);
     // One failed turn, one Sentry event: the lease already reported it, so the catch adds no raw capture.
     expect(vi.mocked(Sentry.captureException)).not.toHaveBeenCalled();
+    // Layer 2 would capture a `log.error({ err })` independently of the Sentry call above, so pin that too.
+    expect(mockLogError).not.toHaveBeenCalled();
   });
 
   test("any other error keeps the generic path (sanitized text, mapped code, no scheme)", async () => {
@@ -319,5 +330,35 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
     expect("credentialScheme" in errors[0]).toBe(false);
     // Positive control for the skip above: any other lease cause IS captured.
     expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledTimes(1);
+    expect(mockLogError).toHaveBeenCalledTimes(1);
+  });
+
+  test("a terminal sign-in failure is not announced as a finished task; an ordinary turn still is", async () => {
+    streamOf(stream(CLI_TEXT));
+    await startAgentSession(USER, "conv-no-nudge", "cpo", "session-s");
+    await vi.waitFor(() => expect(sent().some((f) => f.type === "stream_end")).toBe(true));
+    expect(mockNotifyTaskCompleted).not.toHaveBeenCalled();
+
+    // Positive control: the same harness DOES announce an ordinary completed turn, so the zero above is the guard, not a
+    // harness that can never reach the call.
+    mockSendToClient.mockClear();
+    streamOf([
+      { type: "system", subtype: "init", apiKeySource: "ANTHROPIC_API_KEY", session_id: "sess-2" },
+      { type: "assistant", message: { model: "claude-sonnet-4", content: [{ type: "text", text: "all done" }] }, session_id: "sess-2" },
+      { type: "result", session_id: "sess-2" },
+    ]);
+    await startAgentSession(USER, "conv-nudge-control", "cpo", "session-s");
+    await vi.waitFor(() => expect(mockNotifyTaskCompleted).toHaveBeenCalledTimes(1));
+  });
+
+  test("a session_expired reply after a terminal one keeps the recovery frame (first terminal frame wins)", async () => {
+    streamOf([
+      { type: "system", subtype: "init", apiKeySource: "none", session_id: "sess-1" },
+      cliAssistant(CLI_TEXT),
+      cliAssistant("Session expired. Please run /login to sign in again."),
+      { type: "result", session_id: "sess-1" },
+    ]);
+    await startAgentSession(USER, "conv-mixed", "cpo", "session-s");
+    expect(sent().filter((f) => f.type === "error")).toHaveLength(1);
   });
 });

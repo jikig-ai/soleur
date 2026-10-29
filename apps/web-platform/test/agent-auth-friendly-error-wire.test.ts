@@ -61,6 +61,7 @@ function recordingEvents(order: Order) {
   const events = makeRecordingEvents();
   const texts: string[] = [];
   const frames: unknown[] = [];
+  const turnEnds: unknown[] = [];
   events.onText = (t: string) => {
     texts.push(t);
     order.push("onText");
@@ -68,19 +69,26 @@ function recordingEvents(order: Order) {
   events.onResult = () => {
     order.push("onResult");
   };
-  events.onTextTurnEnd = () => {
+  events.onTextTurnEnd = (arg?: unknown) => {
+    turnEnds.push(arg);
     order.push("onTextTurnEnd");
   };
   events.onAgentAuthFailure = (frame) => {
     frames.push(frame);
     order.push("onAgentAuthFailure");
   };
-  return { events, texts, frames };
+  return { events, texts, frames, turnEnds };
 }
 
 /** A runner whose factory taps the mock Query with the REAL tap + REAL probe, exactly as cc-dispatcher does. */
-function makeRunner(mock: ReturnType<typeof createMockQuery>, scheme: "api_key" | "oauth_token" | null, factoryCalls?: { n: number }) {
+function makeRunner(
+  mock: ReturnType<typeof createMockQuery>,
+  scheme: "api_key" | "oauth_token" | null,
+  factoryCalls?: { n: number },
+  closeReasons?: Array<string | undefined>,
+) {
   return createSoleurGoRunner({
+    ...(closeReasons ? { onCloseQuery: ({ reason }: { reason?: string }) => void closeReasons.push(reason) } : {}),
     queryFactory: (args) => {
       if (factoryCalls) factoryCalls.n += 1;
       if (scheme) args.setAuthScheme?.(scheme);
@@ -194,9 +202,10 @@ describe("cc runner — friendly CLI auth-failure reply (#11086)", () => {
   it("a terminal failure makes the NEXT dispatch cold, so the credential is re-leased", async () => {
     const mock = createMockQuery();
     const calls = { n: 0 };
-    const runner = makeRunner(mock, "api_key", calls);
+    const closeReasons: Array<string | undefined> = [];
+    const runner = makeRunner(mock, "api_key", calls, closeReasons);
     const order: Order = [];
-    const { events, frames } = recordingEvents(order);
+    const { events, frames, turnEnds } = recordingEvents(order);
     await runner.dispatch(dispatchArgs(events));
     mock.emit(systemInit() as never);
     mock.emit(cliAssistant(CLI_TEXT) as never);
@@ -204,6 +213,10 @@ describe("cc runner — friendly CLI auth-failure reply (#11086)", () => {
     await flushMicrotasks(40);
     expect(frames).toHaveLength(1);
     expect(calls.n).toBe(1);
+    // The REAL runner tells the dispatcher the turn ended in an auth failure (the dispatcher test hand-feeds this flag, so
+    // each half is otherwise only tested against the other's fake).
+    expect(turnEnds).toEqual([{ authFailure: true }]);
+    expect(closeReasons).toEqual([]);
 
     // The failing turn's Query is NOT closed at the result (a queued message is never dropped)...
     expect(mock.closeSpy).not.toHaveBeenCalled();
@@ -211,6 +224,38 @@ describe("cc runner — friendly CLI auth-failure reply (#11086)", () => {
     await runner.dispatch(dispatchArgs(events));
     expect(calls.n).toBe(2);
     expect(mock.closeSpy).toHaveBeenCalledTimes(1);
+    // The eviction carries the `auth-failed` reason: the dispatcher keeps the worktree lease held for the immediate re-acquire
+    // for exactly this reason, and a bare/`disconnected` close would release + checkpoint it.
+    expect(closeReasons).toEqual(["auth-failed"]);
+  });
+
+  it("an ordinary turn and a session_expired turn end WITHOUT the auth-failure flag", async () => {
+    for (const text of ["a normal answer", EXPIRED_TEXT]) {
+      const mock = createMockQuery();
+      const runner = makeRunner(mock, "api_key");
+      const { events, turnEnds } = recordingEvents([]);
+      await runner.dispatch(dispatchArgs(events));
+      mock.emit(systemInit() as never);
+      mock.emit((text === EXPIRED_TEXT ? cliAssistant(text) : { type: "assistant", session_id: "sess-1", message: { model: "claude-sonnet-4", content: [{ type: "text", text }] } }) as never);
+      mock.emit(makeResult(0, "sess-1") as never);
+      await flushMicrotasks(40);
+      expect(turnEnds.length, text).toBeGreaterThan(0);
+      for (const arg of turnEnds) expect((arg as { authFailure?: boolean } | undefined)?.authFailure ?? false, text).toBe(false);
+    }
+  });
+
+  it("a trailing session_expired reply does not erase a pending terminal recovery frame", async () => {
+    const mock = createMockQuery();
+    const runner = makeRunner(mock, "api_key");
+    const { events, frames, turnEnds } = recordingEvents([]);
+    await runner.dispatch(dispatchArgs(events));
+    mock.emit(systemInit() as never);
+    mock.emit(cliAssistant(CLI_TEXT) as never);
+    mock.emit(cliAssistant(EXPIRED_TEXT) as never);
+    mock.emit(makeResult(0, "sess-1") as never);
+    await flushMicrotasks(40);
+    expect(frames).toHaveLength(1);
+    expect(turnEnds).toEqual([{ authFailure: true }]);
   });
 
   it("does not rewrite or emit for a forged reply (non-synthetic model, no CLI flag, no structured code)", async () => {

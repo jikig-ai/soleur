@@ -1321,6 +1321,7 @@ export interface SoleurGoRunnerDeps {
     // completion / idle reap / bare close leave it undefined (→ no checkpoint).
     // #9538 — "stale-resume" marks the dead-resume recovery close; the hook
     // replicates but keeps the lease HELD for the synchronous re-dispatch.
+    // #11086 — "auth-failed" (the next dispatch after a terminal sign-in failure) does the same.
     reason?: CloseQueryReason;
   }) => void;
 }
@@ -2508,9 +2509,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         deps.onCloseQuery({
           conversationId: state.conversationId,
           userId: state.userId,
-          // #5356 — only the grace-timer's `closeConversation(convId,
-          // "disconnected")` threads a reason this far; the other two callers
-          // (`emitWorkflowEnded`, `reapIdle`) pass none → no checkpoint.
+          // #5356 — the grace-timer's `closeConversation(convId,
+          // "disconnected")` threads a reason, as do the internal `stale-resume`
+          // and `auth-failed` closes; the other callers (`emitWorkflowEnded`,
+          // `reapIdle`) pass none → no checkpoint.
           reason,
         });
       } catch (err) {
@@ -2796,8 +2798,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         extra: { conversationId: state.conversationId },
       });
     }
-    state.pendingAuthFrame = friendly.frame;
-    // Closed fields only (kind and scheme enums, no text): the rewrite replaces the raw reply, which used to be the durable trace.
+    // Keep the first recovery frame of the turn: a `session_expired` reply (frame null, bubble only) must not erase a pending
+    // terminal frame. Same shape as the legacy runner.
+    if (friendly.frame) state.pendingAuthFrame = friendly.frame;
+    // Closed fields only (kind and scheme enums, no text). The rewrite replaces the raw reply, so this is a LOCAL
+    // (docker logs) breadcrumb only: the INFO level never ships to Better Stack. The warehoused signal is the agent-auth diagnostic.
     log.info(
       { conversationId: state.conversationId, kind: friendly.kind, scheme: state.authScheme },
       "agent-auth: replaced the CLI sign-in failure reply with server-authored copy",
@@ -3422,6 +3427,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       state.firstToolUseAt = null;
       state.lastBlockKind = null;
       state.lastBlockToolName = null;
+      // #11086 — a friendly reply from a turn that never produced a `result` must not leak its recovery frame into this turn.
+      state.pendingAuthFrame = null;
 
       // #3436 Phase 3.B KD-5 — stale-context check on reused sessions.
       // When `state.chapterChunkedContext` is set but the new turn's
