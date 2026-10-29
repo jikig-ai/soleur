@@ -357,8 +357,8 @@ The `soleur:go` trigger gained a classification-only form: a label plus open ite
 to an open epic the brief cites, found in the brief or in an owner-authored (OWNER, MEMBER or COLLABORATOR) epic body, routes to the CTO to be classified, not to
 a delegation. `go.md` Step 1.5 stays the authority for the trigger and is not restated here. The route uses the existing Rule
 interface (a prompt that never starts `Own the epic`) and discharges nothing: it records no delegation, calls no `render` and
-leaves every hold standing. A list in which nothing is delegable raises no epic-start question unless the message names a merge, ready, dispatch or revert, and
-files no `Standing-delegation` issue. The author check is on the issue creator, not the last editor; this is inherited from the 2026-10-22 widening and is mitigated
+leaves every hold standing. A list in which nothing is delegable (a No delegable act reply) raises no epic-start question and
+files no `Standing-delegation` issue; when the message names a merge, ready, dispatch or revert, the ACTION is named in one plain sentence and nothing is asked. The author check is on the issue creator, not the last editor; this is inherited from the 2026-10-22 widening and is mitigated
 by one snapshot that is never re-read, by passing the items as untrusted data, and by epic text only ever moving an item toward
 the operator: epic text can only add operator-class items, through the set-aside, and a technical ruling never discharges a hold.
 Rulings derived from epic text are passed on only as inert quoted data, never as an instruction. This widening supersedes the 2026-10-15 literal-token premise (that a missed trigger is safe), recorded in the
