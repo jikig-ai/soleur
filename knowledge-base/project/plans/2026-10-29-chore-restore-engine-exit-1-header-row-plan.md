@@ -16,6 +16,22 @@ brand_survival_threshold: none
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** 4 (Research Insights, Phase 1, Observability, Acceptance Criteria)
+**Method:** proportionate to a comment-only change: the mechanical halts 4.6-4.13 were run against the plan, and every claim the new header text makes was re-derived against the engine source (no broad agent fan-out; no skill, learning or framework surface applies beyond the two learnings already cited).
+
+### Key Improvements
+1. The "wrote nothing before any network call" claim is now evidenced: every `die 1` site is at engine lines 132-195 and the first real registry call (`crane_capture ... manifest`) is at line 370; the credential `die 5` checks sit between, still before it. The header row therefore states "this attempt wrote nothing" and nothing about the store.
+2. `## Observability` was rewritten to the 5-field schema with a probe Check 10 can run (`grep -c '^#   1  INPUT' scripts/registry-restore-from-ghcr.sh` -> `1`), and the Phase 1 text pins the row's first line so the probe cannot rot.
+3. Line references corrected: the runbook sentence wraps over lines 495-497; the A2 stale phrase ends at line 295.
+
+### New Considerations Discovered
+- The `tests?/` over-inclusive command-shape reject in Phase 4.7 would have refused a probe that ran the W9 suite; the one-line `grep` probe avoids it and stays inside the 15 s cap.
+- Halt results: 4.6 pass (threshold `none`, no sensitive path among the five files); 4.7 pass after the rewrite; 4.8 pass (no PAT shapes); 4.9, 4.10, 4.11, 4.13 not triggered (no UI file, no .tf/migration, no new guard, no new autonomous task); 4.12 pass (one unfenced `## Scope Check`, all three subsections, no `unmapped` row, justification present on the one `inferred` row); 4.55 not triggered (no host, DB or deploy operation).
+- Cited identifiers verified live: #10932 OPEN, #9757 OPEN, PR #11518 OPEN draft, PR #11438 MERGED, commit 11505d70c3 is an ancestor of `origin/main`; the only rule id cited (`wg-use-closes-n-in-pr-body-not-title-to`) is active in AGENTS.md.
+
 ## Overview
 
 `scripts/registry-restore-from-ghcr.sh` opens with a fully enumerated exit-code table (rows 0, 2, 3, 4, 5, 6, 78). The engine also exits 1 (`die 1`, `die 1` call sites at lines 132-195, all before the first network call), but the table has no row for it. This is item (a) of #10932, split out of the earlier PR (#11438, commit 11505d70c3) because a comment-only edit to the engine still changes its bytes and arms the ~860 s registry mutation battery (`scripts/lib/test-relevance-paths.sh` `REGISTRY_BATTERY_PATHS`, entry `SUT_ENGINE`). That earlier PR landed everything on the workflow side (the `1)` arm, the runbook row, W9 coverage); this PR is the header side only.
@@ -98,7 +114,7 @@ None. (Queried `gh issue list --label code-review --state open`; no body names a
 2. `tests/scripts/lib/restore-engine-header.sh` — rewrite lines 8-11 (the "EXIT 1 RULE" comment).
 3. `tests/scripts/test-registry-pull-path-health.sh` — A2 comment (lines ~290-295) and the fail message at line ~302.
 4. `tests/scripts/test-registry-d10-workflow-wiring.sh` — one message string at line ~495 ("fewer than 6" -> "fewer than 7").
-5. `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` — the sentence at ~lines 495-496 only.
+5. `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` — the sentence at ~lines 495-497 only (it wraps across three lines).
 
 **Files NOT touched (assert in review):** `.github/workflows/apply-web-platform-infra.yml` and anything under `apps/web-platform/infra/` (would fire the production apply), `apply-web-platform-infra-job-rationale.md`, `scripts/registry-pull-path-health.sh`, any test logic.
 
@@ -120,7 +136,7 @@ Insert after the `#   0  every required reference restored AND verified (blobs +
 #      not an engine defect — the `::error::` line names the check that fired.
 ```
 
-Constraints: ASCII quoting consistent with neighbours (the existing rows use `—` and backticks, so those are fine); the new text must not contain `docker pull`, and none of the battery's `py_replace` anchor fragments (code lines like `die 1 `, `if false; then`).
+Constraints: the row's first line must read exactly `#   1  INPUT ...` so the discoverability probe above matches; ASCII quoting consistent with neighbours (the existing rows use `—` and backticks, so those are fine); the new text must not contain `docker pull`, and none of the battery's `py_replace` anchor fragments (code lines like `die 1 `, `if false; then`).
 
 Verify (commands in Acceptance Criteria): comment-only diff; `bash -n`; extractor output; AC9 grep.
 
@@ -144,6 +160,7 @@ Run the three suites directly, then the battery through the affected-tests harne
 
 - [ ] `bash -c 'source tests/scripts/lib/restore-engine-header.sh; restore_header_codes < scripts/registry-restore-from-ghcr.sh | tr "\n" " "'` prints `1 2 3 4 5 6 78 `.
 - [ ] `restore_emit_codes < scripts/registry-restore-from-ghcr.sh | tr "\n" " "` prints `1 2 3 4 5 6 78 ` (unchanged vs `origin/main`: `diff <(git show origin/main:scripts/registry-restore-from-ghcr.sh | restore_emit_codes) <(restore_emit_codes < scripts/registry-restore-from-ghcr.sh)` is empty).
+- [ ] The Observability probe `grep -c '^#   1  INPUT' scripts/registry-restore-from-ghcr.sh` prints `1` (it prints `0` on `origin/main`).
 - [ ] The engine diff is comment-only: `diff <(git show origin/main:scripts/registry-restore-from-ghcr.sh | grep -vE '^[[:space:]]*#') <(grep -vE '^[[:space:]]*#' scripts/registry-restore-from-ghcr.sh)` is empty, and `bash -n scripts/registry-restore-from-ghcr.sh` exits 0.
 - [ ] `grep -cF 'docker pull' scripts/registry-restore-from-ghcr.sh` prints `0`.
 - [ ] `grep -n '10932' tests/scripts/lib/restore-engine-header.sh tests/scripts/test-registry-pull-path-health.sh` prints nothing.
@@ -182,7 +199,34 @@ No cross-domain implications detected — infrastructure/tooling comment change.
 
 ## Observability
 
-Skipped: comment/message-only change to an existing operator script and its tests; no new error path, log call or infra surface. The existing signals are unchanged (engine `::error::` lines; workflow `1)` arm; gate A2 abort).
+Comment/message-only change to an existing operator script and its tests: no new error path, log call or infra surface. The schema is declared anyway because the Files-to-Edit list is not pure-docs; every value below is an existing signal this PR leaves untouched or a probe of the one new artifact (the header row).
+
+```yaml
+liveness_signal:
+  what: the engine header table row for exit 1 exists and is extractor-visible (restore_header_codes yields 1)
+  cadence: on every run of the registry mutation battery and the W9/A2 suites (they derive their code population from the header)
+  alert_target: CI red on the PR/main (the mutation battery and the registry suites are required checks via the affected-tests harness)
+  configured_in: scripts/lib/test-relevance-paths.sh (REGISTRY_BATTERY_PATHS) and tests/scripts/lib/restore-engine-header.sh
+error_reporting:
+  destination: engine `::error::registry-restore-from-ghcr:` lines in the job log (unchanged); CI failure annotations for the suites
+  fail_loud: yes - a malformed row that the extractor cannot see leaves the header at 6 codes, and the A2 floor (-ge 7 with the union) plus the Phase 1 acceptance check surface it
+failure_modes:
+  - mode: header row written in a shape the extractor skips (single space after the code, digit-led first word)
+    detection: Phase 1 acceptance check prints the header population; it must read 1 2 3 4 5 6 78
+    alert_route: PR check failure before merge
+  - mode: new header text collides with a mutation-battery py_replace anchor
+    detection: battery aborts with exit 2 (non-unique anchor) on the PR run
+    alert_route: PR check failure before merge
+  - mode: header text contains the forbidden two-word container-pull command
+    detection: engine suite AC9 whole-file grep
+    alert_route: PR check failure before merge
+logs:
+  where: CI run logs of the affected-tests job (suite output and battery ledger)
+  retention: GitHub Actions default log retention
+discoverability_test:
+  command: grep -c '^#   1  INPUT' scripts/registry-restore-from-ghcr.sh
+  expected_output: "1"
+```
 
 ## Decisions (technical rulings)
 

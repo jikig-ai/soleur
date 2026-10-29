@@ -5,7 +5,7 @@ Plan: `knowledge-base/project/plans/2026-10-29-chore-restore-engine-exit-1-heade
 ## Phase 1 - Engine header row
 
 - 1.1 Re-check every `die 1` line precedes the first `crane` call (`grep -n 'die 1' scripts/registry-restore-from-ghcr.sh` vs first `$CRANE`/`crane_capture` line).
-- 1.2 Insert the exit-1 row between the `0` and `2` rows of the header table in `scripts/registry-restore-from-ghcr.sh` (letter-initial label, 3 spaces before the digit, 2 after; no continuation line starting with digits + 2 spaces; no `docker pull`; no battery anchor fragments).
+- 1.2 Insert the exit-1 row (first line must read exactly `#   1  INPUT ...`; the Observability probe is `grep -c "^#   1  INPUT"` -> 1) between the `0` and `2` rows of the header table in `scripts/registry-restore-from-ghcr.sh` (letter-initial label, 3 spaces before the digit, 2 after; no continuation line starting with digits + 2 spaces; no `docker pull`; no battery anchor fragments).
 - 1.3 Verify: extractor prints `1 2 3 4 5 6 78`; emit codes unchanged vs `origin/main`; non-comment lines identical to `origin/main`; `bash -n` clean.
 
 ## Phase 2 - Stale comments and messages (tests, text only)
@@ -16,7 +16,7 @@ Plan: `knowledge-base/project/plans/2026-10-29-chore-restore-engine-exit-1-heade
 
 ## Phase 3 - Runbook
 
-- 3.1 `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` ~495-496: replace the "does not yet list exit 1" sentence (only that sentence).
+- 3.1 `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` ~495-497: replace the "does not yet list exit 1" sentence (only that sentence).
 
 ## Phase 4 - Verify and ship
 
