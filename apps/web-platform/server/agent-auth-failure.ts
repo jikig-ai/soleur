@@ -18,8 +18,8 @@
 //     tenant's session). A swallowed fault is NOT silent: one constant-text logger.warn per probe, per tap or per process
 //     (the matcher, the tap install and the runners' probe-construction fallback), no err, no payload.
 //   - The text arm of the matcher needs a CLI-set field (the `<synthetic>` model or `is_api_error_message`), which the model
-//     cannot set: a tenant who makes the model reply with the exact CLI string must not be able to page the operator or
-//     mute the real outage's email. The structured `authentication_failed` code is alone sufficient.
+//     cannot set: a tenant who makes the model reply with the exact CLI string must not be able to forge or mute the real
+//     outage's event. The structured `authentication_failed` code is alone sufficient.
 //   - This module touches nothing from ./observability at import time (partial vi.mock factories in the runner tests would
 //     break), uses a local TTL map instead of TtlDedupMap, and imports no Supabase code (the authMode resolver is injected).
 //   - There is exactly ONE emit site below. Its first argument is the literal `null` (the #8629 pino-mirror dedupe class: an
