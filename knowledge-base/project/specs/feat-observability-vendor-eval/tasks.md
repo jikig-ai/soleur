@@ -9,9 +9,9 @@ status: pending
 
 ## Phase 1 — Enumerate
 
-- [ ] 1.1 Run `sentry-monitors-audit.sh` + `reconcile-live-heartbeats.ts`; write `monitor-prune-inventory.md` (keep/orphan-delete/needs-verdict per slug, citing surviving signal)
-- [ ] 1.2 Resolve `needs-verdict` rows using #6591 catch-value evidence; dead-man/self-watch monitors = KEEP
-- [ ] 1.3 Write `alert-ingest-map.md` — which sources/fields each of the 19 `logtail_exploration` queries reads
+- [x] 1.1 Static live-vs-declared diff done → `monitor-prune-inventory.md` (67 declared, ~all have producers; only `cron-egress-resolve` unmatched — verify live slug before any delete). **Remaining: live-API pass** — `sentry-monitors-audit.sh` + `reconcile-live-heartbeats.ts` with `SENTRY_IAC_AUTH_TOKEN`
+- [ ] 1.2 Resolve `needs-verdict` rows using #6591 catch-value evidence (needs Sentry API incident history); dead-man/self-watch monitors = KEEP — KEEP candidates shortlisted in inventory
+- [x] 1.3 Write `alert-ingest-map.md` — all 19 alerts read journald on source 2457081; **none consume host_metrics** → safe aggressive trim
 
 ## Phase 2 — Sentry prune (#6590)
 
