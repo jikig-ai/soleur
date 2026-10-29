@@ -1835,8 +1835,9 @@ window.
 
 1. Do not start until the soak (A4) has passed: the new key must never travel over `:8288` in plaintext. The route's `guard` job refuses
    `rotate` and `converge` unless the link flag reads `1` and tracker #11215 is closed as completed.
-2. Rehearse read-only first: `gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=both -f reason='rehearsal'`. It runs both plan
-   gates, reports the guard checks as booleans, refuses on none of them and writes nothing; expect `verdict=plan_ok`.
+2. Rehearse read-only first: `gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=both -f reason='rehearsal'` (it passes through the
+   `infra-privileged` environment approval, see "Who dispatches what"). It runs both plan gates, reports the guard checks as booleans, refuses
+   on none of them and writes nothing; expect `verdict=plan_ok` (or `plan_blocked` naming the first admission check that `rotate` would fail).
 3. The owner dispatches `rotate` under a fresh in-session go (see "Key rotation" for the lines and what the go must say). The route
    rotates the dedicated copy (`soleur-inngest/prd`), soft-reboots the dedicated host through the Hetzner control plane, waits for it to
    serve on a new boot, rotates the app copy (`soleur/prd`), and redeploys the web fleet canary-then-prod at once. Both copies take the
@@ -1875,6 +1876,7 @@ Added 2026-10-27 with the rotation route (#10540):
 |---|---|
 | #11292 | an HTTP-level "old key rejected" check after a rotation (non-blocking: a single-key server refuses the old key by construction) |
 | #11293 | remove the two orphaned, unreferenced `random_id.inngest_{signing,event}_key_prd` (a `removed {}` block; their destroy handling in the shape gate and parity tests is unverified) |
+| #11484 | no no-SSH hard-reset verb for a host that stays silent after the soft reboot (`host_silent`) |
 | #11294 | p1 security audit: existing dispatch jobs that print Terraform output unfiltered may have published the dedicated key pair in a public run log (a `random_id` id is the key in base64url) |
 
 The `https_to_http`, `lease_expired` and `canary_failed` events notify nobody today (#10556), and a wedged `/mnt/data/inngest-link` has no
@@ -1891,7 +1893,10 @@ The other generated secrets are covered under "Other generated secrets" at the e
 
 ### Who dispatches what
 
-- **`mode=plan`** is the read-only rehearsal (both Terraform plan gates, the guard checks reported as booleans, no write). Any session may dispatch it.
+- **`mode=plan`** is the read-only rehearsal (both Terraform plan gates, the guard checks reported as booleans, no write). It is not a free
+  read: its `apply1` job runs under the `infra-privileged` environment (a required-reviewer approval) and loads the Tier-B credentials to
+  plan against Terraform state. Dispatch it only when the owner asked for it or a standing delegation covers it, and approve its environment
+  gate the way any other `infra-privileged` run is approved. It may be re-run.
 - **`mode=rotate` and `mode=converge` are dispatched only by the owner.** Each needs a fresh, per-command, in-session go that names the mode, the
   keys and the typed confirm. A go on another issue does not count (a go on #10382 is not one), no delegation covers it, and an agent never
   runs either mode. The `confirm` string and the `quiet_window` input are typo-guards and a statement of fact, not the authorization.
@@ -1926,7 +1931,7 @@ action=off` with its extra confirm (see "Rollback" step 3) and a re-rotation fol
 
 | Job | What it does |
 |---|---|
-| `guard` | No writes. Refuses `rotate` and `converge` with a fixed verdict token unless: `run_attempt` is 1; the inputs and confirm are well-formed; `quiet_window` is true; the link flag (`INNGEST_LINK_TLS` in `soleur/prd_terraform`, read through `doppler run --preserve-env ... --name-transformer tf-var`) is `1` (`pending:*`, empty or anything else refuses); tracker #11215 is closed as completed; no run of `apply-web-platform-infra.yml`, `inngest-link-flip.yml`, `cutover-inngest.yml`, `deploy-inngest-image.yml`, `web-platform-release.yml` or another `inngest-key-rotate.yml` is in flight; exactly one server is named `soleur-inngest` and it has private IP `10.0.1.40`; for `rotate`, the host reads `SERVING=yes` with `listener=1`. It has no environment and uses the read-only Hetzner token. `converge` also derives the keys and `rotated_at` from the newest earlier non-plan run whose first apply succeeded (a refused run does not qualify) |
+| `guard` | No writes. Refuses `rotate` and `converge` with a fixed verdict token unless: `run_attempt` is 1; the inputs and confirm are well-formed; `quiet_window` is true; the link flag (`INNGEST_LINK_TLS` in `soleur/prd_terraform`, read with `doppler secrets get INNGEST_LINK_TLS --plain`) is `1` (`pending:*`, empty or anything else refuses); tracker #11215 is closed as completed; no run of `apply-web-platform-infra.yml`, `inngest-link-flip.yml`, `cutover-inngest.yml`, `deploy-inngest-image.yml`, `web-platform-release.yml` or another `inngest-key-rotate.yml` is in flight; exactly one server is named `soleur-inngest` and it has private IP `10.0.1.40`; for `rotate`, the host reads `SERVING=yes` with `listener=1`. It has no environment and uses the read-only Hetzner token. `converge` also derives the keys and `rotated_at` from the newest earlier non-plan run whose first apply succeeded (a refused run does not qualify) |
 | `apply1` | Phase 1. `-replace` the dedicated `random_id`(s), update the dedicated `doppler_secret`(s) in place, behind plan Gate A. `converge` skips it. The `soleur/prd` key that unrelated deploys read is untouched |
 | `reboot` | The one Hetzner control-plane soft reboot of the dedicated host (the only no-SSH lever that reaches 10.0.1.40), then the wait. Holds the Hetzner write token in the POST step only. One POST per run, no retry, no hard reset. Pass requires a NEW `boot_id` within 10 minutes of the POST, then `SERVING=yes` and a `tls-health` row with that `boot_id` and `listener=1` from Better Stack (15 minutes in all). Under the shared `deploy-inngest-restart` lock |
 | `apply2` | Phase 2. `-replace` the app `doppler_secret`(s) in `soleur/prd`, behind plan Gate B; their value derives from the already-replaced dedicated `random_id`. Asserts the two copies are equal by hashing on a pipe (booleans only) |
@@ -1943,7 +1948,7 @@ running). The in-flight-run refusal and the quiet-window attestation exist for t
 
 ### Evidence (Better Stack, not `deploy-status`)
 
-The dedicated host is read through Better Stack rows pinned to `host=soleur-inngest` and `host_role=dedicated`, never through the web hooks
+The dedicated host is read through Better Stack rows pinned to the `host` field `soleur-inngest` (the `tls-health` phone-home rows; that the live rows carry the `host` field is unverified, and a missing field is no verdict), never through the web hooks
 (`deploy-status` answers for web-1). A Hetzner reboot action reporting `success` only means the ACPI request reached the guest, so it is never
 the evidence. The evidence is: a `tls-health` row with a `boot_id` different from the pre-reboot one and `listener=1`
 ([Reading `tls-health` without SSH](#reading-tls-health-without-ssh)); `gh workflow run inngest-host-state.yml` reading `SERVING=yes`; and the
@@ -1952,19 +1957,45 @@ pastes the evidence block with the `S5-A5-DONE` line as their own comment on #10
 
 ### If a run fails after its first apply
 
-Every failure after a write prints one stop sentence with the exact `converge` command and files one `action-required` issue. **Do not retry and do
-not dispatch another `rotate`** (a second `rotate` is a new rotation with its own confirm and go). Recovery is `converge` under the owner's own
-per-command go; no agent runs it. `converge` never mints a key and resumes from the observed state: copies unequal means phase 1 is done and it
-continues at `apply2`; it issues no reboot POST when the newest boot began after `rotated_at` or a Hetzner reboot action is running or finished
-after it; it refuses to redeploy while the host reads NOT SERVING. There is no age limit: the copies-equal and boot-start checks decide what runs.
+Every failure after a write prints one stop sentence and files one `action-required` issue. **Do not retry the failed jobs and do not
+dispatch another `rotate` to "try again"** (a second `rotate` is a new rotation with its own confirm and go). The stop sentence names the
+recovery, and it depends on where the run stopped:
 
-| Verdict | Meaning and next step |
-|---|---|
-| `host_silent` | No probe row with a new `boot_id` within 10 minutes of the POST. The scheduler may still be down. Read the boot stage rows ([Provision unit (#8562)](#provision-unit-8562), [Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539)); a hard reset is a separate owner go and the route never does one |
-| `host_not_serving` | A new boot was seen but the host reads NOT SERVING or `listener` is not `1`. Sole scheduler down: treat as a P1; web keeps running on the old app key and was not redeployed. Recover the host from its stage rows, then `converge` |
-| `host_read_failed` | The Better Stack read failed (no verdict about the host). Re-read with `inngest-host-state.yml`; do not claim NOT SERVING from it |
-| `apply_failed`, `copies_differ` | A Terraform phase failed or the copies are unequal. `converge` resumes at the observed state |
-| `redeploy_failed` | The canary or fleet swap did not confirm; old containers keep the old key, the scheduler and Doppler hold the new one. `converge` runs the redeploy only |
+- **Phase 1 itself failed or could not be verified** (`apply_failed` from `apply1`, `copy_unreadable`, `value_unchanged` from `apply1`): the
+  scheduler and the app copy still hold the old key and nothing has rebooted. `converge` has no source to resume and refuses
+  (`converge_source_missing`). The recovery is a **fresh `rotate`** under a fresh owner go. Until then an unrelated restart of the
+  dedicated host loads whatever the dedicated copy holds now while the app holds the old key.
+- **Phase 1 landed and a later job failed** (everything else below): the recovery is `converge` under the owner's own per-command go; no
+  agent runs it. `converge` never mints a key and resumes from the observed state: copies unequal means phase 1 is done and it continues at
+  `apply2`; it issues no reboot POST when the newest boot began after `rotated_at` or a Hetzner reboot action is running or finished after
+  it; it refuses to redeploy while the host reads NOT SERVING. The key set and `rotated_at` are derived from the newest earlier `rotate` run, and only
+  that one (it never walks back to an older rotation); that run's `apply1` must have concluded `success`. A source whose first apply
+  finished more than 24 hours ago is refused (`converge_stale`); within that bound the copies-equal and boot-start checks decide what runs.
+
+| Verdict | Where | Meaning and next step |
+|---|---|---|
+| `apply_failed` | `apply1` | The phase 1 apply exited non-zero; the dedicated copy may be half-replaced, the app copy is untouched. Fresh `rotate`, not `converge`. Its output stays on the runner |
+| `copy_unreadable` | `apply1` | A dedicated copy could not be read for the value-silent comparison (before or after the apply). If before the apply, nothing was written and the run is simply refused; if after, phase 1 may have landed but could not be verified: fresh `rotate` |
+| `value_unchanged` | `apply1` | Phase 1 reported success but the dedicated copy's hash did not change. No key moved. Fresh `rotate`; investigate the `doppler_secret -replace` behaviour first (unverified, see ADR-307) |
+| `reboot_post_failed` | `reboot` | The Hetzner reboot POST was rejected or errored. No reboot happened: the dedicated copy is new, the scheduler runs the old keys, the app copy is old. `converge` (it issues the POST again under the new run; a prior POST that may have been accepted is checked by boot evidence and by the Hetzner action list before another is made) |
+| `reboot_action_failed` | `reboot` | The reboot action ended `error` or did not finish inside its bound. `success` would only mean the ACPI request reached the guest. The scheduler may still run the old keys. `converge` re-decides from boot evidence |
+| `reboot_refused_second_post` | `reboot` | The per-process latch refused a second POST in one run. This is a bug guard, not a host state; read the run, do not dispatch around it |
+| `host_silent` | `reboot` | No probe row with a new `boot_id` within 10 minutes of the POST. The scheduler may still be down. Read the boot stage rows ([Provision unit (#8562)](#provision-unit-8562), [Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539)). A hard reset is a separate owner go and the route never does one (see the gap note below) |
+| `host_not_serving` | `reboot` | A new boot was seen but the host reads NOT SERVING or `listener` is not `1`. Sole scheduler down: treat as a P1; web keeps running on the old app key and was not redeployed. Recover the host from its stage rows, then `converge` |
+| `host_read_failed` | `reboot` | The Better Stack read failed (no verdict about the host). Re-read with `inngest-host-state.yml`; do not claim NOT SERVING from it |
+| `apply_failed`, `copy_unreadable`, `value_unchanged`, `copies_differ` | `apply2` | A phase 2 Terraform step failed, the copies could not be compared, were already equal before phase 2 (`rotate` only: phase 1 did not land as expected), or are unequal after it. `converge` resumes at the observed state |
+| `redeploy_failed` | `redeploy` | The canary or fleet swap did not confirm; old containers keep the old key, the scheduler and Doppler hold the new one. `converge` runs the redeploy only |
+| `host_not_unique`, `link_flag_*`, `run_in_flight`, `run_list_unreadable`, `credential_absent`, `host_not_serving_pre` and the other admission tokens | `reboot` admit, after a write | The read-only re-admission before the POST (the environment approval can wait for hours) refused: the reboot was not requested. The stop sentence still names `converge`, since phase 1 landed. Fix the named condition first (for `link_flag_*`, the link flag must read `1`) |
+| `converge_source_missing` | `guard` (`converge`) | No earlier `rotate` run exists in the last 200 runs, or the newest one did not complete its first apply. Not resumable: dispatch a fresh `rotate` under a fresh go |
+| `converge_stale` | `guard` (`converge`) | The rotation being converged finished its first apply more than 24 hours ago; that is not an unfinished rotation. Decide by hand which state the copies are in (`mode=plan` reports the guard booleans), then a fresh `rotate` under a fresh go |
+| `converge_mismatch` | `guard` (`converge`) | The `keys` or `rotated_at` input disagrees with the run being converged (the inputs are cross-checks, never the source). Re-dispatch with the derived values |
+| `job_cancelled` | `notify` | A job was cancelled or never ran after a write. Treat as the stage it stopped at; the issue names it. `converge` |
+
+**Gap, filed as a follow-up: no no-SSH hard-reset verb.** If a soft reboot leaves the host silent (`host_silent`), the only next lever is a
+Hetzner hard reset, and no workflow performs one (and the route deliberately never does: the LUKS volume and the live scheduler make a hard
+reset an owner decision). Until a gated hard-reset verb exists, a silent host is recovered from the Better Stack stage rows plus an
+owner-run Hetzner console action; this is the known hole in the "no SSH" runbook rule (hr-no-ssh-fallback-in-runbooks) and is tracked in
+#11484.
 
 `bash scripts/inngest-key-rotate.sh --print-contract` lists every fixed verdict token (offline, no credentials).
 
@@ -3034,8 +3065,8 @@ ADR-100, amendment 2026-09-14.
      — and **refuses to arm** if either diverges. These keys are a **SHARED app↔host channel
      token** (ADR-100 §4 Amendment), so a mismatch is the exact #6178 cutover-502 (post-repoint
      every app `inngest.send()` to the host is rejected → `op=rearm` HTTP 502). On MISMATCH,
-     reconcile the app to the host's key + redeploy **before** re-running `op=arm` — see §2.4
-     key-reconcile below.
+     re-align the app to the host's key (the `inngest-key-rotate.yml` route, see "Key rotation";
+     step 2.4 below points there) and redeploy **before** re-running `op=arm`.
    - **G3.6 diagnostic-boot HARD GATE (#7462):** refuses to arm while `INNGEST_DIAGNOSTIC_BOOT` is
      set on `soleur-inngest/prd`, and fails closed if that value cannot be read. `inngest-bootstrap.sh`
      has stated this precondition in prose since the diagnostic path existed ("This is NOT a cutover
@@ -3224,30 +3255,9 @@ ADR-100, amendment 2026-09-14.
    > parity HARD GATE** now blocks the flip if they diverge — so reconcile happens BEFORE `op=arm`
    > passes, but the invariant belongs to this app-repoint step: the app must adopt the host's key.
    >
-   > **Because `soleur/prd`'s `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY` carry
-   > `lifecycle.ignore_changes = [value]` (inngest.tf), a naive `terraform apply` does NOT
-   > propagate a host-key change** — reconcile is the Doppler copy the `ignore_changes` lifecycle
-   > explicitly supports (or a `-replace` of the host `random_id` + copy), then a **web redeploy**
-   > (ci-deploy regenerates the env each deploy, so the app only bakes the new key on the next
-   > deploy). No secret value is echoed — read on the arm token, pipe on stdin:
->
-   > ```bash
-   > # Copy each host channel key INTO soleur/prd (value on STDIN, never argv/log):
-   > for K in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY; do
-   >   DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$K" -p soleur-inngest -c prd --plain \
-   >     | doppler secrets set "$K" -p soleur -c prd --silent --no-interactive   # DOPPLER_TOKEN_WRITE cannot reach prd root; use a prd-root write token / Doppler console
-   > done
-   > # then redeploy web-platform so the app adopts the shared keys, and re-run op=arm (G3.5 now MATCHes).
-   > ```
->
-   > (`DOPPLER_TOKEN_WRITE` is scoped to `soleur/prd_terraform` and cannot write the `prd` root
-   > config the app reads; the copy is a `prd`-root write — Doppler console or a prd-root r/w token.
-   > A future full automation would mint a narrow prd-root write token; the G3.5 gate is the
-   > recurrence-prevention that makes the divergence impossible to ship silently.)
-   >
-   > **Superseded for how the app copy is produced (2026-10-27, #10540, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md)); appended, the text above is unchanged.**
-   > The cutover completed on 2026-09-18, and since #10540 the `soleur/prd` copies derive from the dedicated `random_id` in Terraform, so
-   > there is no copy loop to run and no `prd`-root write token to find. Do not use the loop above today. The app copy is
+   > **How the app copy is produced today (2026-10-29, #10540, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md)).**
+   > The cutover completed on 2026-09-18. Since #10540 the `soleur/prd` copies derive from the dedicated `random_id` in Terraform, so there is no
+   > copy loop to run and no `prd`-root write token to find; the manual Doppler copy that this step used to describe is retired. The app copy is
    > re-aligned only by the dispatch-only `inngest-key-rotate.yml` route (see "Key rotation"), whose phase 2 replaces the app secrets and
    > whose `converge` mode finishes an interrupted run. The G3.5 gate above still holds, and it fails closed between the route's two phases.
 
