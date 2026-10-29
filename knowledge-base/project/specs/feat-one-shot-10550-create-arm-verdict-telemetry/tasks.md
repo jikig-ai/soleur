@@ -6,7 +6,7 @@ Docs only. Touch nothing outside `knowledge-base/`. Do not fire the cron or run 
 ## Phase 1 - Runbook
 
 - 1.1 Re-read `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md` around "Create-arm marker fields" and `### Review checklist for a create draft`.
-- 1.2 Insert `### Reading a live-fire row (model decline or gate refusal)` between them: the invariant (a gate never yields `no_action`; one call, one verdict), the nine-row reading table (includes the `other`-with-offered>0 backstop row and the `transport` row) from the plan, the "what the marker cannot show" note (instant versus deliberated needs `output_tokens`, blocked by the claude-cost-capture-dark incident), and the pointer replacing the brief's claim.
+- 1.2 Insert `### Reading a live-fire row (model decline or gate refusal)` between them: the precise invariant (`no-pattern-qualifies` is always the model's; the ledger backstop alone ends `no_action`/`other`; one call, one verdict), the nine-row reading table (includes the `other`-with-offered>0 backstop row and the `transport` row) from the plan, the "what the marker cannot show" note (instant versus deliberated needs `output_tokens`, blocked by the claude-cost-capture-dark incident), and the pointer replacing the brief's claim.
 - 1.3 Do not add or alter rows of the "`create_detail` values by class" table.
 - 1.4 Add one pointer sentence in `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` after the create-arm field paragraph; add no jq column.
 
