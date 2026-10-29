@@ -4717,7 +4717,7 @@ jobs:
           # The semver validator downstream is the CORRECTNESS guard; this is the injection
           # guard, and it runs first.
           if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
+            echo "::error::image_tag must be a release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
             exit 1
           fi
           printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
@@ -4883,6 +4883,7 @@ jobs:
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
+          # canonicalizes bare|v-prefixed (#11426)
           TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
           echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
@@ -5193,7 +5194,7 @@ jobs:
           # image_tag is optional, but if supplied it is interpolated into a docker ref and a
           # shell command, so it gets the same shape-before-use treatment as the host key.
           if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
+            echo "::error::image_tag must be a release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
             exit 1
           fi
           printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
@@ -5322,6 +5323,7 @@ jobs:
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
+          # canonicalizes bare|v-prefixed (#11426)
           TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
           echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the

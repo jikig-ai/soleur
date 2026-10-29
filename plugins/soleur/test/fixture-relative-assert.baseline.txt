@@ -300,7 +300,7 @@
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
 2	.github/scripts/ghcr-pull-with-retry.sh
-1	.github/scripts/supabase-pre-pull-images.sh
+2	.github/scripts/supabase-pre-pull-images.sh
 2	.github/scripts/test/test-mint-inngest-bootstrap-tag.sh
 1	.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
@@ -357,6 +357,7 @@
 1	plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh
 1	plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh
 1	plugins/soleur/skills/provision-github/scripts/provision-github.sh
+4	plugins/soleur/skills/registry-breakglass-mirror/scripts/mirror-ghcr-to-zot.sh
 1	plugins/soleur/skills/review/test/ensure-semgrep.test.sh
 1	plugins/soleur/skills/ship/scripts/hold-gate-eval.sh
 4	plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh

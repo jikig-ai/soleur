@@ -61,7 +61,7 @@ Live standing alarms over this source:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
 - **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
-  5400 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
   `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
   header, or is absent. `indeterminate` never pages. Merged but inert until the owner delivers the signed
   bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
@@ -718,7 +718,10 @@ manual `patterns` row `create_requested` (boolean) records whether the event car
 the early `disabled`, `deduped` and `week-cap-reached` rows; the scheduled row and a manual corpus row carry none of
 the create fields. When the arm ran the row also carries `create_arm` (`ran`, emitted ONLY then), `kind` (`create`),
 `create_outcome` (`no_action` | `refused` | `opened`) and, as the case needs, `create_no_action_reason`
-(`no-pattern-qualifies` | `all-owned` | `other`), `create_refusal_class` (one of `week-cap`, `create-open`,
+(`no-pattern-qualifies` | `all-owned` | `other`), `create_offered` (an integer count of the candidate patterns the arm would send to the
+model; whenever a call was made it is the number offered, on a pre-call refusal it is the candidate count and no call was
+spent, on a pre-call `no_action` it is `0`; absent on a `week-cap` or `index-empty` refusal, on `model-invalid/internal` (a step
+defect, Sentry op `create-propose-internal`) and on a row whose memoized step output predates the field), `create_refusal_class` (one of `week-cap`, `create-open`,
 `index-empty`, `input-size`, `model-invalid`, `shape`, `slug`, `prefer-patch`, `budget`, `scan`, `readme-sync`,
 `stub-drift`, `persist`), `create_detail` (a closed token, never model text), the numbers `create_words`,
 `create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, the refusal evidence numbers `create_tokens`,
@@ -741,7 +744,7 @@ doppler run -p soleur -c prd_terraform -- \
                  (.create_refusal_class//"-"), (.create_detail//"-"), (.create_no_action_reason//"-"),
                  (.create_words//"-"), (.create_cap//"-"), (.create_total//"-"), (.create_top1//"-"),
                  (.create_nearest_rank//"-"), (.create_tokens//"-"), (.create_path_index//"-"), (.create_file_index//"-"),
-                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-")] | @tsv'
+                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-"), (.create_offered//"-")] | @tsv'
 ```
 
 A row with `create_requested: true` and `-` in the `create_arm` column ended before the arm (read `status`: a saturated

@@ -39,14 +39,17 @@ import {
   type CreateProposeArgs,
   type CreateVerdictCreate,
 } from "@/server/compound-promote-create-arm";
+import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import {
   COMPONENTS_TEST_PATH,
   CREATE_MAX_TOKENS,
+  CREATE_OUTPUT_SCHEMA,
   CREATE_PR_BODY_LINE,
   PROMOTION_LOG_PATH,
   OVERLAP_REFUSE_THRESHOLD,
   countDescriptionWords,
   createClusterHash,
+  prepareCreate,
   proposalOverlapText,
   rankOverlap,
   type SkillRecord,
@@ -66,9 +69,11 @@ const PATTERN: PatternPage = {
 const OTHER_PATTERN: PatternPage = { ...PATTERN, slug: "other-pattern", evidence: [6, 7, 8, 9, 10].map((n) => `knowledge-base/project/learnings/2026-10-${n < 10 ? "0" : ""}${n}-synthetic-${n}.md`) };
 
 const roots: string[] = [];
+// Every `pluginTree()` is ~230 files; the cleanup removes dozens of them synchronously, which under a loaded runner can
+// exceed the 20s default hook timeout (the full-battery run timed out here), so the hook gets its own ceiling.
 afterAll(() => {
   for (const r of roots) rmSync(r, { recursive: true, force: true });
-});
+}, 120_000);
 
 beforeEach(() => {
   expect.hasAssertions();
@@ -227,7 +232,7 @@ describe("Step A runCreateProposeStep -- never throws, every refusal is a return
     const request = vi.fn();
     const post = vi.fn();
     const v = await runCreateProposeStep(args({ repoRoot: join(tmpdir(), "create-arm-gone-" + Date.now()), octokit: { request } as never, post: post as never }));
-    expect(v).toEqual({ kind: "refused", class: "persist", detail: "clone-missing" });
+    expect(v).toEqual({ kind: "refused", class: "persist", detail: "clone-missing", offered: 1 });
     expect(request).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
   });
@@ -307,7 +312,7 @@ describe("Step A runCreateProposeStep -- never throws, every refusal is a return
 
   it("a passing no_action returns the clean verdict and mirrors nothing", async () => {
     const v = await runCreateProposeStep(args());
-    expect(v).toEqual({ kind: "no_action", reason: "other" });
+    expect(v).toEqual({ kind: "no_action", reason: "other", offered: 1 });
     expect(reportSilentFallback).not.toHaveBeenCalled();
   });
 
@@ -354,9 +359,9 @@ describe("Step A runs its stages in CREATE_STAGE_ORDER.stepA (condition peeling)
     cur.capLeft = 1;
     expect(await run()).toMatchObject({ class: "index-empty" });
     cur.patterns = [PATTERN];
-    expect(await run()).toEqual({ kind: "no_action", reason: "other" }); // same-run: nothing offerable
+    expect(await run()).toEqual({ kind: "no_action", reason: "other", offered: 0 }); // same-run: nothing offerable
     cur.sameRunHashes = [];
-    expect(await run()).toEqual({ kind: "refused", class: "persist", detail: "clone-missing" });
+    expect(await run()).toEqual({ kind: "refused", class: "persist", detail: "clone-missing", offered: 1 });
     expect(events).toEqual([]); // none of the above reached a request, a scan or the model
     cur.repoRoot = root;
     expect(await run()).toMatchObject({ class: "create-open", detail: "open-create-pr" });
@@ -409,7 +414,7 @@ describe("Step A with a valid create proposal", () => {
     const post = vi.fn();
     const request = vi.fn();
     const a = createArgs({ sameRunHashes: [HASH], post: post as never, octokit: { request } as never });
-    expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "other" });
+    expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "other", offered: 0 });
     expect(post).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     expect(reportSilentFallback).not.toHaveBeenCalled(); // a clean outcome, nothing mirrored
@@ -427,7 +432,7 @@ describe("Step A with a valid create proposal", () => {
 
   it("G4 backstop: a model that names an owned pattern anyway (not offered, but present in the list) is still SUPPRESSED, never created", async () => {
     const other = OTHER_PATTERN;
-    expect(await runCreateProposeStep(createArgs({ patterns: [PATTERN, other], sameRunHashes: [HASH] }))).toEqual({ kind: "suppressed", clusterHash: HASH });
+    expect(await runCreateProposeStep(createArgs({ patterns: [PATTERN, other], sameRunHashes: [HASH] }))).toEqual({ kind: "suppressed", clusterHash: HASH, offered: 1 });
   });
 
   // A ledger-owned pattern must not be offered: the single model call cannot be spent on a pattern the post-call gate
@@ -451,7 +456,7 @@ describe("Step A with a valid create proposal", () => {
     const request = vi.fn();
     // the nonexistent repoRoot would refuse persist/clone-missing at the next stage, so reaching all-owned proves the early exit
     const a = createArgs({ repoRoot: "/nonexistent/repo-root-for-t2", patterns: [OWNED], ledgerEntries: [ownedEntry("open")], post: post as never, octokit: { request } as never });
-    expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "all-owned" });
+    expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "all-owned", offered: 0 });
     expect(post).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     expect(reportSilentFallback).not.toHaveBeenCalled();
@@ -459,9 +464,9 @@ describe("Step A with a valid create proposal", () => {
 
   it("T3: the stage that empties the offer names the reason: ledger after the same-run drop is all-owned, one pattern in both sets is other", async () => {
     const mixed = createArgs({ patterns: [PATTERN, OWNED], sameRunHashes: [HASH], ledgerEntries: [ownedEntry("merged")] });
-    expect(await runCreateProposeStep(mixed)).toEqual({ kind: "no_action", reason: "all-owned" });
+    expect(await runCreateProposeStep(mixed)).toEqual({ kind: "no_action", reason: "all-owned", offered: 0 });
     const both = createArgs({ patterns: [OWNED], sameRunHashes: [OWNED_HASH], ledgerEntries: [ownedEntry("merged")] });
-    expect(await runCreateProposeStep(both)).toEqual({ kind: "no_action", reason: "other" });
+    expect(await runCreateProposeStep(both)).toEqual({ kind: "no_action", reason: "other", offered: 0 });
   });
 
   describe("T4: the suppression clock is runStartedAt, at the 60-day edge, for the pre-filter AND the gate", () => {
@@ -472,7 +477,7 @@ describe("Step A with a valid create proposal", () => {
     it("inside the window (59.9 days) the closed entry still owns the pattern: not offered", async () => {
       const post = vi.fn();
       const a = createArgs({ patterns: [OWNED], ledgerEntries: [ownedEntry("closed", closedAt)], runStartedAt: runAt(59.9), post: post as never });
-      expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "all-owned" });
+      expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "all-owned", offered: 0 });
       expect(post).not.toHaveBeenCalled();
     });
 
@@ -485,7 +490,7 @@ describe("Step A with a valid create proposal", () => {
 
     it("the gate reads the same clock: a model naming the owned pattern inside the window is suppressed, never created", async () => {
       const a = createArgs({ patterns: [OWNED, PATTERN], ledgerEntries: [ownedEntry("closed", closedAt)], runStartedAt: runAt(59.9) }, named);
-      expect(await runCreateProposeStep(a)).toEqual({ kind: "suppressed", clusterHash: OWNED_HASH });
+      expect(await runCreateProposeStep(a)).toEqual({ kind: "suppressed", clusterHash: OWNED_HASH, offered: 1 });
     });
   });
 
@@ -494,11 +499,123 @@ describe("Step A with a valid create proposal", () => {
     const post = vi.fn(async (_a: unknown) => ({ text: JSON.stringify(proposed), stopReason: "end_turn" }));
     const v = await runCreateProposeStep(createArgs({ patterns: [OWNED, PATTERN], ledgerEntries: [ownedEntry("merged")], post: post as never }));
     expect(promptOf(post)).not.toContain(OWNED.slug); // unoffered, yet named: only the post-call gate stops it
-    expect(v).toEqual({ kind: "suppressed", clusterHash: OWNED_HASH });
+    expect(v).toEqual({ kind: "suppressed", clusterHash: OWNED_HASH, offered: 1 });
   });
 
   it("A: an unrelated same-run hash does not suppress", async () => {
     expect(await runCreateProposeStep(createArgs({ sameRunHashes: ["f".repeat(64)] }))).toMatchObject({ kind: "create" });
+  });
+
+  // -------------------------------------------------------------------------------------------------------
+  // #10550: `offered` is the number of candidates the arm would send (the number the model saw whenever a call was
+  // made). The fixture makes the three plausible miscounts differ: patterns = 4, unclaimed (after the same-run drop) = 3,
+  // offered (after the ledger drop) = 2.
+  describe("offered: the candidate count stamped on the step output", () => {
+    const ev = (start: number) => [0, 1, 2, 3, 4].map((i) => `knowledge-base/project/learnings/2026-10-${String(start + i).padStart(2, "0")}-synthetic-${start + i}.md`);
+    const SAME_RUN: PatternPage = { ...PATTERN, slug: "same-run-pattern", evidence: ev(11) };
+    const SECOND: PatternPage = { ...PATTERN, slug: "second-offered", evidence: ev(21) };
+    const LEDGER: PatternPage = { ...PATTERN, slug: "ledger-owned-here", evidence: ev(16) };
+    const four = (): Partial<CreateProposeArgs> => ({
+      patterns: [PATTERN, SAME_RUN, LEDGER, SECOND],
+      sameRunHashes: [createClusterHash(SAME_RUN.evidence)],
+      ledgerEntries: [{ hash: createClusterHash(LEDGER.evidence), state: "merged" as const }],
+    });
+    const declines = () => vi.fn(async (_a: unknown) => ({ text: JSON.stringify({ decision: "no_action", reason_class: "no-pattern-qualifies" }), stopReason: "end_turn" }));
+
+    it("a model no_action carries the offered count (2), not patterns (4) or unclaimed (3)", async () => {
+      const v = await runCreateProposeStep(createArgs({ ...four(), post: declines() as never }));
+      expect(v).toEqual({ kind: "no_action", reason: "no-pattern-qualifies", offered: 2 });
+    });
+
+    it("a post-call refusal, a create and a pre-call refusal all carry the same count", async () => {
+      const refused = await runCreateProposeStep(createArgs({ ...four(), post: (async () => ({ text: JSON.stringify({ ...structuredClone(PROPOSAL), slug: "x" }), stopReason: "end_turn" })) as never }));
+      expect(refused).toMatchObject({ kind: "refused", offered: 2 });
+      expect(refused).not.toMatchObject({ class: "model-invalid" });
+      expect(await runCreateProposeStep(createArgs(four()))).toMatchObject({ kind: "create", offered: 2 });
+      const open = { number: 5, body: CREATE_PR_BODY_LINE, head: { ref: `${CREATE_HEAD_PREFIX}${"a".repeat(64)}-2026-10-26`, repo: { full_name: "jikig-ai/soleur" } } };
+      const post = declines();
+      const preCall = await runCreateProposeStep(createArgs({ ...four(), octokit: { request: async () => ({ data: [open] }) } as never, post: post as never }));
+      expect(preCall).toMatchObject({ kind: "refused", class: "create-open", detail: "open-create-pr", offered: 2 });
+      expect(post).not.toHaveBeenCalled(); // a pre-call refusal: the count is the candidates, and no call was spent
+    });
+
+    it("the max-yield case: one owned pattern and nothing claimed by the edit loop still reaches the model, and the count excludes only the owned one", async () => {
+      const v = await runCreateProposeStep(createArgs({ patterns: [PATTERN, LEDGER, SECOND], sameRunHashes: [], ledgerEntries: four().ledgerEntries, post: declines() as never }));
+      expect(v).toMatchObject({ kind: "no_action", offered: 2 });
+    });
+
+    it("the suppressed backstop carries the count of what was offered (the model named an unoffered pattern)", async () => {
+      const named = { ...structuredClone(PROPOSAL), pattern_slug: LEDGER.slug };
+      const v = await runCreateProposeStep(createArgs({ ...four(), post: (async () => ({ text: JSON.stringify(named), stopReason: "end_turn" })) as never }));
+      expect(v).toMatchObject({ kind: "suppressed", clusterHash: createClusterHash(LEDGER.evidence), offered: 2 });
+    });
+
+    it("the count is the filtered set, not set arithmetic: a pattern both same-run AND ledger-owned counts once, and stray hashes matching no pattern count for nothing", async () => {
+      const both = createClusterHash(SAME_RUN.evidence);
+      const overlap = await runCreateProposeStep(createArgs({
+        patterns: [PATTERN, SAME_RUN, SECOND],
+        sameRunHashes: [both],
+        ledgerEntries: [{ hash: both, state: "merged" as const }],
+        post: declines() as never,
+      }));
+      expect(overlap).toMatchObject({ kind: "no_action", offered: 2 }); // arithmetic (3 - 1 - 1) would say 1
+      const stray = await runCreateProposeStep(createArgs({
+        patterns: [PATTERN, SECOND],
+        sameRunHashes: ["e".repeat(64)],
+        ledgerEntries: [{ hash: "d".repeat(64), state: "merged" as const }],
+        post: declines() as never,
+      }));
+      expect(stray).toMatchObject({ kind: "no_action", offered: 2 }); // arithmetic (2 - 1 - 1) would say 0
+    });
+
+    it("a pre-call no_action is 0 (the call was never spent): all-owned and other", async () => {
+      expect(await runCreateProposeStep(createArgs({ patterns: [LEDGER], ledgerEntries: four().ledgerEntries }))).toEqual({ kind: "no_action", reason: "all-owned", offered: 0 });
+      expect(await runCreateProposeStep(createArgs({ patterns: [SAME_RUN], sameRunHashes: four().sameRunHashes }))).toEqual({ kind: "no_action", reason: "other", offered: 0 });
+    });
+
+    it("a week-cap and an index-empty refusal carry NO offered key (toEqual ignores undefined, so assert the key itself)", async () => {
+      expect(await runCreateProposeStep(createArgs({ capLeft: 0 }))).not.toHaveProperty("offered");
+      expect(await runCreateProposeStep(createArgs({ patterns: [] }))).not.toHaveProperty("offered");
+    });
+
+    it("a defect while selecting the candidates is the returned internal refusal, mirrored, and carries NO offered key", async () => {
+      const v = await runCreateProposeStep(createArgs({ patterns: [{ ...PATTERN, evidence: null as never }] }));
+      expect(v).toMatchObject({ kind: "refused", class: "model-invalid", detail: "internal" });
+      expect(v).not.toHaveProperty("offered");
+      expect(reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ op: "create-propose-internal" }));
+    });
+
+    it("offered: 0 survives the memo's JSON round trip (a value set to undefined would be dropped)", async () => {
+      const v = await runCreateProposeStep(createArgs({ patterns: [LEDGER], ledgerEntries: four().ledgerEntries }));
+      expect(JSON.parse(JSON.stringify(v))).toHaveProperty("offered", 0);
+    });
+
+    // Characterization (written green against the pre-refactor code): the refactor must not change what the model is sent.
+    it("the model call is exactly prepareCreate over the OFFERED patterns, with the pinned call options", async () => {
+      const base = createArgs({ ...four(), nonce: "fixednonce00", post: declines() as never });
+      const post = base.post as unknown as ReturnType<typeof declines>;
+      await runCreateProposeStep(base);
+      const counted = countDescriptionWords(join(base.repoRoot, "plugins", "soleur"));
+      if (!counted.ok) throw new Error(counted.detail);
+      const prepared = prepareCreate({ patterns: [PATTERN, SECOND], skills: counted.records, nonce: "fixednonce00" });
+      if (prepared.kind !== "ready") throw new Error("prepareCreate refused");
+      expect(post.mock.calls[0][0]).toEqual({
+        apiKey: "k",
+        model: EXECUTION_MODEL,
+        maxTokens: prepared.maxTokens,
+        timeoutMs: CREATE_MODEL_TIMEOUT_MS,
+        messages: [{ role: "user", content: prepared.prompt }],
+        outputConfig: { format: { type: "json_schema", schema: CREATE_OUTPUT_SCHEMA } },
+        markerSource: CREATE_ARM_FEATURE,
+        markerRunId: "RUN",
+      });
+    });
+
+    it("the prompt keeps the bar sentence the model is held to (the one prompt fact no other suite pins)", () => {
+      const prepared = prepareCreate({ patterns: [PATTERN], skills: SKILLS, nonce: "fixednonce00" });
+      if (prepared.kind !== "ready") throw new Error("prepareCreate refused");
+      expect(prepared.prompt).toContain("Return no_action unless a pattern is mature, no existing skill owns it, and a patch to the nearest skill would bury it.");
+    });
   });
 
   it("E: an open PR that adds an agent or a command named like the slug refuses slug/open-pr-agent | open-pr-command", async () => {
