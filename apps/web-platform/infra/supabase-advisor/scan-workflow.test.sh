@@ -525,7 +525,7 @@ echo "== cross-file: the workflow's monitor-slug is declared or registered prune
 # all-members cohort; this row pins THIS workflow's slug specifically.
 wf_slug="$(grep -E '^\s*monitor-slug:' "$WORKFLOW" | sed -n '1p' | sed -E 's/.*monitor-slug:\s*//')"
 PRUNED_TS="$REPO_ROOT/apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
-if [[ -n "$wf_slug" ]] && { grep -qE "^[[:space:]]*name[[:space:]]*=[[:space:]]*\"$wf_slug\"" "$MONITORS_TF" || { [[ -f "$PRUNED_TS" ]] && grep -oE "^[[:space:]]*\"[a-z0-9-]+\",?[[:space:]]*$" "$PRUNED_TS" | tr -d ' ,"' | grep -qxF "$wf_slug"; }; }; then
+if [[ -n "$wf_slug" ]] && { grep -qE "^[[:space:]]*name[[:space:]]*=[[:space:]]*\"$wf_slug\"" "$MONITORS_TF" || { [[ -f "$PRUNED_TS" ]] && grep -qxF "$wf_slug" < <(grep -oE "^[[:space:]]*\"[a-z0-9-]+\",?[[:space:]]*$" "$PRUNED_TS" | tr -d ' ,"'); }; }; then
   pass "monitor-slug '$wf_slug' is declared in cron-monitors.tf or registered pruned"
 else
   fail "slug declaration" "workflow checks into '$wf_slug', which is neither a declared monitor nor a registered pruned slug"
