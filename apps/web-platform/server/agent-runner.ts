@@ -108,6 +108,7 @@ import {
 import { makeAuthModeResolver } from "./agent-auth-mode";
 import {
   authFailureFrameFromLeaseError,
+  isOauthUnusableLeaseError,
   rewriteAgentAuthFailure,
   type AuthFailureFrame,
 } from "./agent-auth-user-message";
@@ -2371,7 +2372,7 @@ are the requirements to implement.`;
         // inline). The helper builds a NEW content array, so the friendly text feeds `fullText`, the stream frame and the
         // persisted row while the SDK message stays untouched.
         const friendly = rewriteAgentAuthFailure(message, credential.scheme);
-        if (friendly?.terminal && pendingAuthFrame === null) pendingAuthFrame = friendly.frame;
+        if (friendly?.frame) pendingAuthFrame = friendly.frame;
         const content = friendly ? friendly.content : message.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -2599,6 +2600,7 @@ are the requirements to implement.`;
           }
           // #11086 — the recovery frame follows `stream_end`: the client tears the stream down on `key_invalid`, so sent any
           // earlier it would turn the friendly bubble into an interrupted chip.
+          const authFailedTurn = pendingAuthFrame !== null;
           if (pendingAuthFrame !== null) {
             sendToClient(userId, pendingAuthFrame);
             pendingAuthFrame = null;
@@ -2615,7 +2617,8 @@ are the requirements to implement.`;
           // Shared with the cc-soleur-go terminal via notifyTaskCompleted so the
           // two turn-boundary lineages cannot drift (arch review P1). Fire-and-
           // forget (never throws + self-mirroring).
-          if (assistantPersisted) {
+          // #11086: a turn that ended in a terminal sign-in failure is not a completion.
+          if (assistantPersisted && !authFailedTurn) {
             void notifyTaskCompleted({
               userId,
               conversationId,
@@ -2942,10 +2945,16 @@ are the requirements to implement.`;
         // workspace context.
         reportMissingByokKey(err);
         Sentry.captureException(err);
-      } else {
+      } else if (!isOauthUnusableLeaseError(err)) {
+        // #11086: an unusable stored credential was already reported by the lease (feature byok-lease, closed class only);
+        // a second raw capture would double the Sentry count for one failed turn (the cc path skips its mirror the same way).
         Sentry.captureException(err);
       }
-      log.error({ err, userId, conversationId }, "Session error");
+      if (isOauthUnusableLeaseError(err)) {
+        log.info({ userId, conversationId }, "Session refused: stored subscription credential is not usable by the CLI");
+      } else {
+        log.error({ err, userId, conversationId }, "Session error");
+      }
       const leaseFrame = authFailureFrameFromLeaseError(err);
       if (leaseFrame !== null) {
         sendToClient(userId, leaseFrame);
@@ -3222,11 +3231,13 @@ async function sendUserMessageInner(
     // BEFORE the generic captureException so the workspace context lands
     // on the trail. Returns; we still surface the WS error event below.
     if (err instanceof MissingByokKeyError) reportMissingByokKey(err);
-    Sentry.captureException(err);
-    log.error(
-      { err, userId, conversationId },
-      "sendUserMessage session error",
-    );
+    // #11086: the lease already reported an unusable stored credential; skip the duplicate raw capture and error log.
+    if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
+    if (isOauthUnusableLeaseError(err)) {
+      log.info({ userId, conversationId }, "sendUserMessage refused: stored subscription credential is not usable");
+    } else {
+      log.error({ err, userId, conversationId }, "sendUserMessage session error");
+    }
     // #4440 follow-up to #4418 — JWT-deny propagation. Detect a
     // mid-session `RuntimeAuthError("denied_jti")` BEFORE the generic
     // error frame fires so agents/API consumers receive the same

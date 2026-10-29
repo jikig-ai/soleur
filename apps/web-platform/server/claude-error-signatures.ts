@@ -7,7 +7,8 @@
  *
  *  Two kinds of signature live here: a THROWN-error signature (`SDK_STALE_RESUME_SESSION_ID`, echoed through the iterator's
  *  thrown error) and REPLY signatures (`CLI_AUTH_FAILURE_REPLIES`, `SDK_AUTHENTICATION_FAILED`: messages the CLI prints
- *  as ordinary stream messages when it has no usable credential), consumed by `agent-auth-failure.ts`.
+ *  as ordinary stream messages when it has no usable credential), consumed by `agent-auth-match.ts` (the permanent
+ *  matcher, which the diagnostic in `agent-auth-failure.ts` and the user-facing rewrite both call).
  */
 
 /** Echoed through the iterator's thrown error when `query({ resume })`

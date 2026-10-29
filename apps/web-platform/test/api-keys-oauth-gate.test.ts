@@ -133,6 +133,10 @@ describe("/api/keys — oauth_token shape gate (#11086)", () => {
     ["a dash-less oat prefix", "sk-ant-oatFAKEcanary0004"],
     ["a foreign-vendor key", "sk-proj-FAKEcanary0005"],
     ["arbitrary text", "not-a-token-FAKEcanary0006"],
+    ["a prefix-wrapped copy (no space)", "NAME=sk-ant-oat01-FAKEcanary0007"],
+    ["a one-digit version", "sk-ant-oat1-FAKEcanary0008"],
+    ["no version digits", "sk-ant-oat-FAKEcanary0009"],
+    ["an upper-cased token", "SK-ANT-OAT01-FAKECANARY0010"],
   ])("rejects %s with 400 + oauth_token_shape_invalid before any RPC", async (_label, value) => {
     h.user = { id: OPERATOR };
     const res = await post(value);

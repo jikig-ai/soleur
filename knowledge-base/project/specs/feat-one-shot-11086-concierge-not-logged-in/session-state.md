@@ -11,7 +11,7 @@
 - Operator's stored token not read (secret); shape unverified, plan covers both candidate shapes.
 
 ### Decisions
-- Root cause reproduced locally: lease prefers operator-only anthropic_oauth row regardless of authMode; /api/keys stores it unvalidated; bundled CLI drops sk- values not matching sk-ant-(oat|sid)NN-<non-space> and replies "Not logged in · Please run /login" with no network call.
+- Root cause reproduced locally: lease prefers operator-only anthropic_oauth row regardless of authMode; /api/keys stores it unvalidated; bundled CLI drops sk- values not matching sk-ant-(oat|sid)NN-<non-space> and replies "Not logged in · Please run /login" without using the value as a credential.
 - Part 1: strict allowlist at save boundary (400) + lease guard fails closed (oauth_unusable), no fallback to API key.
 - Part 2: both runners rewrite CLI auth-failure text to server-authored copy from closed match_kind + credential scheme; matcher extracted to permanent agent-auth-match.ts; raw message never mutated before matcher.
 - PR uses Ref (not Closes) for #11086, #10455, #11085; follow-ups #11524, #11525.

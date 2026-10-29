@@ -4,7 +4,7 @@ import { encryptKey } from "@/server/byok";
 import { validateToken } from "@/server/token-validators";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
-import { isAcceptableSubscriptionToken } from "@/server/oauth-token-shape";
+import { classifyCliDroppedValue, isAcceptableSubscriptionToken } from "@/server/oauth-token-shape";
 import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 
@@ -111,7 +111,7 @@ export async function POST(request: Request) {
     // storing a credential that can never work. The message never echoes any
     // part of the submitted value.
     if (!isAcceptableSubscriptionToken(apiKey)) {
-      const looksLikeApiKey = /^sk-ant-(api|admin)/.test(apiKey);
+      const looksLikeApiKey = classifyCliDroppedValue(apiKey) === "api_key_shaped";
       return NextResponse.json(
         {
           error: looksLikeApiKey

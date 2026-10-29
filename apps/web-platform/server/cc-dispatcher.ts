@@ -222,7 +222,7 @@ import {
   MissingByokKeyError,
   reportMissingByokKey,
 } from "./byok-lease";
-import { buildAuthFailureFrame, isOauthUnusableLeaseError } from "./agent-auth-user-message";
+import { isOauthUnusableLeaseError, oauthUnusableFrame } from "./agent-auth-user-message";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import {
@@ -1772,7 +1772,7 @@ export function handleCcCloseQuery({
 }: {
   conversationId: string;
   userId: string;
-  reason?: "disconnected" | "stale-resume";
+  reason?: "disconnected" | "stale-resume" | "auth-failed";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
   // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
@@ -1793,7 +1793,7 @@ export function handleCcCloseQuery({
   // released. The push-options ride the git-data push ONLY (never the in-sandbox
   // agent's GitHub origin push).
   void replicateAndReleaseCcWorktreeLease(userId, conversationId, {
-    skipRelease: reason === "stale-resume",
+    skipRelease: reason === "stale-resume" || reason === "auth-failed",
   });
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
@@ -3894,7 +3894,7 @@ async function reportDispatchSoleurGoError(
   } else if (isOauthUnusableLeaseError(err)) {
     // #11086 — a lease refusal precedes any stream, so there is no `stream_end` to wait for: send the recovery frame now.
     // MUST sit above the generic `else` so it neither clears a resumable `session_id` nor re-mirrors.
-    ctx.sendToClient(ctx.userId, buildAuthFailureFrame("oauth_unusable", "oauth_token"));
+    ctx.sendToClient(ctx.userId, oauthUnusableFrame());
   } else if (err instanceof RepoNotReadyError) {
     // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
     // user-facing message (and `repo_setup_failed` errorCode on the error
@@ -4844,7 +4844,7 @@ async function dispatchSoleurGoInner(
         });
       }
     },
-    onTextTurnEnd: () => {
+    onTextTurnEnd: (turn) => {
       // #3603 W2 + W4 — `consumeForComplete` returns `null` if the turn was
       // already persisted via the abort path (silent no-op so a late
       // `onTextTurnEnd` cannot double-write or overwrite the aborted row).
@@ -4868,7 +4868,8 @@ async function dispatchSoleurGoInner(
       // mirrors :3712). Shared helper so the two lineages cannot drift. Guarded
       // on workspacePath: an unresolved workspace can't attribute a workspace-
       // grain row, so skip the nudge rather than emit an unscoped one.
-      if (workspacePath) {
+      // #11086 — a turn that ended in a terminal sign-in failure is not a completion: no "finished" push or inbox card.
+      if (workspacePath && !turn?.authFailure) {
         void notifyTaskCompleted({
           userId,
           conversationId,
@@ -4900,6 +4901,9 @@ async function dispatchSoleurGoInner(
     // it rewrote to friendly copy. `key_invalid` makes the client stop reconnecting and offer the Settings action; the frame
     // is built server-side from the closed match kind x scheme, never from raw CLI text.
     onAgentAuthFailure: (frame) => {
+      // The support persona's SSE client treats any `error` frame as a canned-fallback trigger and would replace the friendly
+      // bubble; its surface keeps the friendly bubble only (the Settings recovery card is a Command Center affordance).
+      if (args.persona === "support") return;
       sendToClient(userId, frame);
     },
     onWorkflowDetected: (_workflow) => {

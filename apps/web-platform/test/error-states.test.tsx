@@ -172,6 +172,28 @@ describe("Error state clearing on remount (#1377)", () => {
     expect(screen.queryByText("Reconnect")).toBeNull();
   });
 
+  test("the scheme, never the message text, selects the card (#11086, CTO F7)", async () => {
+    // oauth scheme with a message that never says "subscription"; api_key scheme with a message that does.
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Please check your credentials.",
+      credentialScheme: "oauth_token",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    const { unmount } = await renderChatPage();
+    expect(screen.getByText("Claude Sign-in Failed")).toBeInTheDocument();
+    unmount();
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Your subscription token was rejected.",
+      credentialScheme: "api_key",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    await renderChatPage();
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+    expect(screen.queryByText("Claude Sign-in Failed")).toBeNull();
+  });
+
   test("api_key credentialScheme keeps the unchanged title and label (#11086)", async () => {
     wsReturn.lastError = {
       code: "key_invalid",

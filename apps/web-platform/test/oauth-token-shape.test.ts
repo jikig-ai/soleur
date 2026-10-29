@@ -6,18 +6,20 @@ import { classifyCliDroppedValue, isAcceptableSubscriptionToken } from "@/server
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
 
-/** Deterministic pseudo-random strings (an LCG) so the property is reproducible without a seed library. */
+/** Deterministic pseudo-random strings (mulberry32, so the whole 32-bit state is mixed) without a seed library. */
 function* generated(count: number): Generator<string> {
   let state = 11086;
   const next = (): number => {
-    state = (state * 1103515245 + 12345) & 0x7fffffff;
-    return state;
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   for (let i = 0; i < count; i += 1) {
-    const len = 1 + (next() % 120);
+    const len = 1 + Math.floor(next() * 120);
     let tail = "";
-    for (let j = 0; j < len; j += 1) tail += ALPHABET[next() % ALPHABET.length];
-    yield `sk-ant-oat${String(next() % 100).padStart(2, "0")}-${tail}`;
+    for (let j = 0; j < len; j += 1) tail += ALPHABET[Math.floor(next() * ALPHABET.length)];
+    yield `sk-ant-oat${String(Math.floor(next() * 100)).padStart(2, "0")}-${tail}`;
   }
 }
 
@@ -36,6 +38,10 @@ describe("isAcceptableSubscriptionToken (write boundary)", () => {
     ["an embedded tab", "sk-ant-oat01-AAAA\tBBBB"],
     ["an embedded newline", "sk-ant-oat01-AAAA\nBBBB"],
     ["a dotted tail", "sk-ant-oat01-A.B"],
+    ["a prefix-wrapped copy (no space)", "NAME=sk-ant-oat01-AAAA"],
+    ["a one-digit version", "sk-ant-oat1-AAAA"],
+    ["no version digits", "sk-ant-oat-AAAA"],
+    ["an upper-cased token", "SK-ANT-OAT01-AAAA"],
     ["blank", "   "],
     ["empty", ""],
     ["a session token", "sk-ant-sid01-AAAA"],
@@ -74,12 +80,16 @@ describe("classifyCliDroppedValue (lease boundary, measured classes only)", () =
 
   it("never classifies anything the strict allowlist accepts (consistency property)", () => {
     let seen = 0;
+    const chars = new Set<string>();
     for (const value of generated(500)) {
+      for (const c of value.slice(value.indexOf("-", 10) + 1)) chars.add(c);
       expect(isAcceptableSubscriptionToken(value)).toBe(true);
       expect(classifyCliDroppedValue(value)).toBeNull();
       seen += 1;
     }
     expect(seen).toBe(500); // the loop really ran
+    // The generator really spans the alphabet (a degenerate generator would make the property vacuous).
+    expect(chars.size).toBeGreaterThanOrEqual(ALPHABET.length - 2);
   });
 
   it("returns only members of the closed class list", () => {

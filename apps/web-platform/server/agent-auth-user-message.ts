@@ -12,7 +12,7 @@
 // key, `oauth_token` cells are for the scheme only the operator can hold (knowledge-base/legal/audits/2026-10-06-clo-9580-
 // live-anthropic-terms-subscription-auth.md), and an unknown scheme gets a neutral cell that names neither.
 
-import type { CredentialScheme } from "@/lib/credential-scheme";
+import { CREDENTIAL_SCHEMES, type CredentialScheme } from "@/lib/credential-scheme";
 
 import { matchAgentAuthFailure, type AgentAuthMatchKind } from "./agent-auth-match";
 
@@ -22,9 +22,12 @@ export type AuthFailureKind = AgentAuthMatchKind | "oauth_unusable";
 /** The recovery sentence of the neutral cell: used when the credential scheme is unknown, so it names neither credential. */
 const NEUTRAL = "check your credentials in Settings and try again";
 
+const INVALID_API_KEY_TENANT_COPY =
+  "Anthropic rejected your API key. Check that it is active and copied in full, then re-enter it in Settings.";
+
 type CopyCell = { readonly api_key: string; readonly oauth_token: string; readonly neutral: string };
 
-const COPY: Record<Exclude<AuthFailureKind, "oauth_unusable">, CopyCell> & { oauth_unusable: CopyCell } = {
+const COPY: Record<AuthFailureKind, CopyCell> = {
   not_logged_in: {
     api_key:
       "We couldn't sign in to Claude with your Anthropic API key, so nothing ran. Re-enter your API key in Settings and try again.",
@@ -33,16 +36,14 @@ const COPY: Record<Exclude<AuthFailureKind, "oauth_unusable">, CopyCell> & { oau
     neutral: `We couldn't sign in to Claude, so nothing ran. Please ${NEUTRAL}.`,
   },
   invalid_api_key: {
-    api_key:
-      "Anthropic rejected your API key. Check that it is active and copied in full, then re-enter it in Settings.",
+    api_key: INVALID_API_KEY_TENANT_COPY,
     oauth_token:
       "Anthropic rejected your saved credential. Generate a new token with claude setup-token and save it in Settings.",
     neutral: `Anthropic rejected your credential. Please ${NEUTRAL}.`,
   },
   oauth_token_revoked: {
-    // Unreachable for a tenant (an API key has no revocation reply); typed away by mapping to the invalid_api_key cell below.
-    api_key:
-      "Anthropic rejected your API key. Check that it is active and copied in full, then re-enter it in Settings.",
+    // Unreachable for a tenant (an API key has no revocation reply): the cell reuses the invalid-key copy.
+    api_key: INVALID_API_KEY_TENANT_COPY,
     oauth_token:
       "Your subscription token has been revoked or has expired. Generate a new one with claude setup-token and save it in Settings.",
     neutral: `Your credential has been revoked or has expired. Please ${NEUTRAL}.`,
@@ -71,19 +72,9 @@ const COPY: Record<Exclude<AuthFailureKind, "oauth_unusable">, CopyCell> & { oau
   },
 };
 
-/** Kinds after which the chat cannot continue without a credential change; `session_expired` is bubble-only. */
-const TERMINAL: Record<AuthFailureKind, boolean> = {
-  not_logged_in: true,
-  invalid_api_key: true,
-  oauth_token_revoked: true,
-  structured: true,
-  oauth_unusable: true,
-  session_expired: false,
-};
-
 /** The credential scheme a cell is chosen for, or undefined for the neutral cell. Anything else is treated as unknown. */
 function knownScheme(scheme: unknown): CredentialScheme | undefined {
-  return scheme === "api_key" || scheme === "oauth_token" ? scheme : undefined;
+  return CREDENTIAL_SCHEMES.find((s) => s === scheme);
 }
 
 /** The copy for one (kind, scheme). Total: every kind has a cell and an unknown scheme falls to the neutral one. */
@@ -91,13 +82,7 @@ export function authFailureCopy(kind: AuthFailureKind, scheme: unknown): string 
   const cell = COPY[kind];
   const known = knownScheme(scheme);
   if (known === undefined) return cell.neutral;
-  // A tenant API key has no revocation reply: map the unreachable cell to the invalid-key copy at lookup, not by dead data.
-  if (kind === "oauth_token_revoked" && known === "api_key") return COPY.invalid_api_key.api_key;
   return cell[known];
-}
-
-export function isTerminalAuthFailure(kind: AuthFailureKind): boolean {
-  return TERMINAL[kind];
 }
 
 /** The `error` frame for a credential the user has to fix. `credentialScheme` is present only for a known scheme. */
@@ -117,9 +102,14 @@ export function isOauthUnusableLeaseError(err: unknown): boolean {
   return err instanceof Error && err.name === "ByokLeaseError" && (err as { cause?: unknown }).cause === "oauth_unusable";
 }
 
+/** The recovery frame for a lease refusal: only the operator can hold an oauth row, so the scheme is always oauth_token. */
+export function oauthUnusableFrame(): AuthFailureFrame {
+  return buildAuthFailureFrame("oauth_unusable", "oauth_token");
+}
+
 /** The recovery frame for a lease refusal of an unusable stored credential, or null for any other error. */
 export function authFailureFrameFromLeaseError(err: unknown): AuthFailureFrame | null {
-  return isOauthUnusableLeaseError(err) ? buildAuthFailureFrame("oauth_unusable", "oauth_token") : null;
+  return isOauthUnusableLeaseError(err) ? oauthUnusableFrame() : null;
 }
 
 /** The ONE producer of this frame, used at every site that can emit it (both runners, the lease catch, the ws-handler catch). */
@@ -137,9 +127,11 @@ export interface AgentAuthRewrite {
   kind: AgentAuthMatchKind;
   /** A NEW content array holding the friendly text; the SDK message is never mutated. */
   content: [{ type: "text"; text: string }];
-  terminal: boolean;
-  /** The frame to send once the bubble is finalized; only meaningful when `terminal`. */
-  frame: AuthFailureFrame;
+  /**
+   * The recovery frame to send once the bubble is finalized, or null for `session_expired`, which is bubble-only (its copy
+   * says "start a new message", which a torn-down socket cannot honor). Non-null therefore means "terminal".
+   */
+  frame: AuthFailureFrame | null;
 }
 
 /**
@@ -155,8 +147,7 @@ export function rewriteAgentAuthFailure(rawMessage: unknown, scheme: unknown): A
   return {
     kind,
     content: [{ type: "text", text: authFailureCopy(kind, scheme) }],
-    terminal: isTerminalAuthFailure(kind),
-    frame: buildAuthFailureFrame(kind, scheme),
+    frame: kind === "session_expired" ? null : buildAuthFailureFrame(kind, scheme),
   };
 }
 

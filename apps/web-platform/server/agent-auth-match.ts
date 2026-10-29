@@ -16,12 +16,12 @@ export type Rec = Record<PropertyKey, unknown>;
 export const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
 
 
-export const MAX_REPLY_LENGTH = 200;
+const MAX_REPLY_LENGTH = 200;
 /** The model id the CLI stamps on messages it authors itself (measured from the real binary's stream). */
-export const CLI_SYNTHETIC_MODEL = "<synthetic>";
+const CLI_SYNTHETIC_MODEL = "<synthetic>";
 
 /** Cheap-first: type, then length, then the anchored regexes (no nested or overlapping quantifiers). */
-export function classifyReplyText(text: unknown): CliAuthFailureKind | null {
+function classifyReplyText(text: unknown): CliAuthFailureKind | null {
   if (typeof text !== "string") return null;
   if (text.length > MAX_REPLY_LENGTH) return null;
   const whole = text.trim();
@@ -32,7 +32,7 @@ export function classifyReplyText(text: unknown): CliAuthFailureKind | null {
 }
 
 /** The text of a message whose content is exactly ONE text block (a tool_use or a second block disqualifies it). */
-export function onlyTextBlock(inner: Rec): unknown {
+function onlyTextBlock(inner: Rec): unknown {
   const content = inner.content;
   if (!Array.isArray(content) || content.length !== 1) return undefined;
   const block: unknown = content[0];

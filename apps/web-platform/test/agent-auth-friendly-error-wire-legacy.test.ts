@@ -147,6 +147,7 @@ vi.mock("../server/agent-auth-mode", () => ({ makeAuthModeResolver: mockMakeAuth
 
 import { startAgentSession } from "../server/agent-runner";
 import { reportSilentFallback } from "../server/observability";
+import * as Sentry from "@sentry/nextjs";
 import { ByokLeaseError } from "../server/byok-lease";
 import { authFailureCopy } from "../server/agent-auth-user-message";
 import {
@@ -251,6 +252,21 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
     expect((authEmits()[0][1] as unknown as { tags: { match_kind: string } }).tags.match_kind).toBe("not_logged_in");
   });
 
+  test("an oauth_token lease gets the operator copy and scheme on the card, not the API-key copy", async () => {
+    vi.stubEnv("CC_OAUTH_ENABLED", "1");
+    try {
+      mockBuildAgentEnv.mockReturnValue({ CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth" });
+      streamOf(stream(CLI_TEXT));
+      await startAgentSession(USER, "conv-oauth-copy", "cpo", "session-s");
+      const frames = sent();
+      expect(frames.filter((f) => f.type === "stream")[0].content).toBe(authFailureCopy("not_logged_in", "oauth_token"));
+      const err = frames.find((f) => f.type === "error");
+      expect(err?.credentialScheme).toBe("oauth_token");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   test("session_expired is bubble-only: friendly text, no recovery frame", async () => {
     streamOf(stream("Session expired. Please run /login to sign in again."));
     await startAgentSession(USER, "conv-expired", "cpo", "session-s");
@@ -269,7 +285,8 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
     const frames = sent();
     expect(frames.filter((f) => f.type === "stream")[0].content).toBe(CLI_TEXT);
     expect(frames.some((f) => f.type === "error")).toBe(false);
-    await new Promise((r) => setTimeout(r, 20));
+    await vi.waitFor(() => expect(mockSendToClient.mock.calls.some((c) => (c[1] as { type: string }).type === "stream_end")).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
     expect(authEmits()).toHaveLength(0);
   });
 
@@ -287,6 +304,8 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
         credentialScheme: "oauth_token",
       },
     ]);
+    // One failed turn, one Sentry event: the lease already reported it, so the catch adds no raw capture.
+    expect(vi.mocked(Sentry.captureException)).not.toHaveBeenCalled();
   });
 
   test("any other error keeps the generic path (sanitized text, mapped code, no scheme)", async () => {
@@ -298,5 +317,7 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toBe("error"); // the mocked sanitizer
     expect("credentialScheme" in errors[0]).toBe(false);
+    // Positive control for the skip above: any other lease cause IS captured.
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledTimes(1);
   });
 });

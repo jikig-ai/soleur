@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   authFailureCopy,
   buildAuthFailureFrame,
-  isTerminalAuthFailure,
   rewriteAgentAuthFailure,
   type AuthFailureKind,
 } from "@/server/agent-auth-user-message";
@@ -40,22 +39,15 @@ function cliMessage(text: string, extra: Record<string, unknown> = {}): Record<s
 }
 
 describe("copy table", () => {
-  it("has a non-empty cell for every kind x scheme, including the neutral cell", () => {
-    for (const kind of KINDS) {
-      for (const scheme of ["api_key", "oauth_token", null, undefined, "weird"]) {
-        const text = authFailureCopy(kind, scheme);
-        expect(text.length).toBeGreaterThan(20);
-        expect(text).not.toMatch(/`/); // plain text only
-        expect(text).not.toContain("·"); // never the CLI separator
-        expect(text).not.toMatch(/\/login/); // never the CLI's own hint
-      }
-    }
-  });
-
   it("never names a subscription token to a tenant (api_key scheme) or to an unknown scheme", () => {
     for (const kind of KINDS) {
-      expect(authFailureCopy(kind, "api_key")).not.toMatch(/subscription|setup-token|oauth/i);
-      expect(authFailureCopy(kind, null)).not.toMatch(/subscription|setup-token|oauth|API key/i);
+      expect(authFailureCopy(kind, "api_key")).not.toMatch(/subscription|setup-token|oauth|claude max|claude pro|plan|claude\.ai/i);
+      expect(authFailureCopy(kind, null)).not.toMatch(/subscription|setup-token|oauth|claude max|claude pro|plan|claude\.ai|API key/i);
+      // Every cell is plain text with no CLI residue.
+      for (const scheme of ["api_key", "oauth_token", null, "weird"]) {
+        const text = authFailureCopy(kind, scheme);
+        expect(text).not.toMatch(/`|\u00B7|\/login/);
+      }
     }
   });
 
@@ -65,14 +57,6 @@ describe("copy table", () => {
       expect(authFailureCopy(kind, "oauth_token")).toMatch(/claude setup-token/);
     }
     expect(authFailureCopy("oauth_unusable", "oauth_token")).toContain("Nothing was billed to your API key.");
-  });
-
-  it("maps the unreachable revoked x api_key cell to the invalid-key copy", () => {
-    expect(authFailureCopy("oauth_token_revoked", "api_key")).toBe(authFailureCopy("invalid_api_key", "api_key"));
-  });
-
-  it("marks only session_expired as non-terminal", () => {
-    for (const kind of KINDS) expect(isTerminalAuthFailure(kind)).toBe(kind !== "session_expired");
   });
 });
 
@@ -98,8 +82,7 @@ describe("rewriteAgentAuthFailure", () => {
     expect(out).not.toBeNull();
     expect(out!.kind).toBe("not_logged_in");
     expect(out!.content).toEqual([{ type: "text", text: authFailureCopy("not_logged_in", "api_key") }]);
-    expect(out!.terminal).toBe(true);
-    expect(out!.frame.credentialScheme).toBe("api_key");
+    expect(out!.frame?.credentialScheme).toBe("api_key");
     // The input was deep-frozen: any in-place mutation would have thrown in strict mode. It is also unchanged.
     expect((raw.message as { content: Array<{ text: string }> }).content[0].text).toBe(CLI_TEXT);
     expect(out!.content).not.toBe((raw.message as { content: unknown }).content);
@@ -115,7 +98,11 @@ describe("rewriteAgentAuthFailure", () => {
       const out = rewriteAgentAuthFailure(cliMessage(text), "oauth_token");
       expect(out?.kind).toBe(kind);
     }
-    expect(rewriteAgentAuthFailure(cliMessage("Session expired. Please run /login to sign in again."), "api_key")!.terminal).toBe(false);
+    // session_expired is bubble-only: it carries no recovery frame; every other kind carries one.
+    expect(rewriteAgentAuthFailure(cliMessage("Session expired. Please run /login to sign in again."), "api_key")!.frame).toBeNull();
+    for (const text of [CLI_TEXT, "Invalid API key \u00B7 Please run /login", "OAuth token revoked \u00B7 Please run /login"]) {
+      expect(rewriteAgentAuthFailure(cliMessage(text), "api_key")!.frame).not.toBeNull();
+    }
   });
 
   it("rewrites a structured-only hit (authentication_failed, unrecognised wording)", () => {
@@ -127,7 +114,7 @@ describe("rewriteAgentAuthFailure", () => {
   it("uses the neutral cell and no scheme in the frame for an unknown scheme", () => {
     const out = rewriteAgentAuthFailure(cliMessage(CLI_TEXT), null);
     expect(out?.content[0].text).toBe(authFailureCopy("not_logged_in", null));
-    expect("credentialScheme" in out!.frame).toBe(false);
+    expect("credentialScheme" in out!.frame!).toBe(false);
   });
 
   it("leaves a multi-block or tool-bearing authentication_failed message raw", () => {

@@ -949,7 +949,7 @@ export interface DispatchEvents {
    * and shows raw markdown source. Optional so existing tests + non-cc
    * callers can ignore.
    */
-  onTextTurnEnd?: () => void;
+  onTextTurnEnd?: (turn?: { authFailure?: boolean }) => void;
   /**
    * #11086 — fires at most once per turn, AFTER `onTextTurnEnd` (the `stream_end`), when the CLI's own sign-in failure reply
    * was rewritten to friendly copy and the failure is terminal (everything but `session_expired`). The cc-dispatcher sends
@@ -1270,9 +1270,10 @@ export interface QueryFactoryArgs {
 export type QueryFactory = (args: QueryFactoryArgs) => Promise<Query> | Query;
 
 /** Why a query closed — threaded to `deps.onCloseQuery` so the cc hook can
- *  distinguish a dead-resume recovery close (keep the lease held; the retry
- *  re-acquires it) from a disconnect grace-abort (checkpoint in-flight work). */
-export type CloseQueryReason = "disconnected" | "stale-resume";
+ *  distinguish a dead-resume recovery close and an auth-failure teardown (both keep the
+ *  lease held; the cold re-dispatch that follows re-acquires it) from a disconnect
+ *  grace-abort (checkpoint in-flight work). */
+export type CloseQueryReason = "disconnected" | "stale-resume" | "auth-failed";
 
 export interface SoleurGoRunnerDeps {
   queryFactory: QueryFactory;
@@ -2795,7 +2796,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         extra: { conversationId: state.conversationId },
       });
     }
-    if (friendly.terminal && state.pendingAuthFrame === null) state.pendingAuthFrame = friendly.frame;
+    state.pendingAuthFrame = friendly.frame;
+    // Closed fields only (kind and scheme enums, no text): the rewrite replaces the raw reply, which used to be the durable trace.
+    log.info(
+      { conversationId: state.conversationId, kind: friendly.kind, scheme: state.authScheme },
+      "agent-auth: replaced the CLI sign-in failure reply with server-authored copy",
+    );
   }
 
   function handleResultMessage(state: ActiveQuery, msg: SDKResultMessage): void {
@@ -2875,7 +2881,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // first. Optional callback — guarded by optional-chaining so non-cc
     // tests that ignore it stay green.
     try {
-      state.events.onTextTurnEnd?.();
+      // #11086 — tell the dispatcher this turn ended in a terminal auth failure so it does not announce "finished".
+      state.events.onTextTurnEnd?.({ authFailure: state.pendingAuthFrame !== null });
     } catch (err) {
       reportSilentFallback(err, {
         feature: "soleur-go-runner",
@@ -3179,11 +3186,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // #11086 — a terminal auth failure ended the previous turn on this Query. It keeps the credential it was built with, so
     // reusing it would fail the same way after the user fixed it in Settings: tear it down and take the cold path, which
     // re-leases. Done at the NEXT dispatch (not at the result) so a message queued during the failing turn is never dropped,
-    // and with the `stale-resume` close reason so the worktree lease stays held for the immediate re-acquire (same shape as
+    // and with the `auth-failed` close reason so the worktree lease stays held for the immediate re-acquire (same shape as
     // the dead-resume re-dispatch).
     if (state && state.authFailedTerminal) {
       state.closed = true;
-      closeQuery(state, "stale-resume");
+      closeQuery(state, "auth-failed");
       state = undefined;
     }
     let queryReused = true;

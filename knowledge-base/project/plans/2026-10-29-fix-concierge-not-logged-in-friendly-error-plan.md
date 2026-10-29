@@ -56,7 +56,7 @@ Checked 2026-10-29. Held: #11086 OPEN, #10455 untouched context, #11085 OPEN ("d
 |---|---|---|
 | "Happens under both authentication modes (managed and api-key) and with a freshly validated key." | `byok-lease.ts fetchAgentCredentialIntoSlot` prefers the `anthropic_oauth` row whenever `CC_OAUTH_ENABLED` is on, **regardless of the conversation's persisted `authMode` binding**. The binding is an engine-egress-policy notion; no credential-choice code reads it. A validated API key is irrelevant while an oauth row exists. | Explains the "both modes" symptom. The binding/scheme mismatch (the brief's "first lead") is benign by design and **not** the cause; record it so nobody re-chases it. |
 | "BYOK customers who paid have no recovery path." | Only `ADMIN_USER_IDS` can store an oauth row (`/api/keys` returns 403 otherwise). The dead-credential class is operator-only; tenants reach the same raw-line symptom only through their own revoked/invalid API key. | Friendly error covers every matcher hit for both schemes; tenant copy names only the Anthropic API key (legal audit 2026-10-06). |
-| "Decode: the CLI saw no credential although the token was a non-empty string, so it points at the token itself or the hand-off." | **Measured** (Research Insights, table): the CLI silently drops a `CLAUDE_CODE_OAUTH_TOKEN` value that starts `sk-` but is not an `sk-ant-(oat\|sid)NN-<non-space>` token, or is blank, with **no network call**, and replies exactly `Not logged in · Please run /login`. | Root cause class = unusable stored value. Which of (API key pasted via the toggle, wrapped `claude setup-token` copy with an embedded space) the operator's row is stays **unverified** (secret, not read). |
+| "Decode: the CLI saw no credential although the token was a non-empty string, so it points at the token itself or the hand-off." | **Measured** (Research Insights, table): the CLI silently drops a `CLAUDE_CODE_OAUTH_TOKEN` value that starts `sk-` but is not an `sk-ant-(oat\|sid)NN-<non-space>` token, or is blank, without using it as a credential (only a blank value is answered with no inference request at all; the others make an unauthenticated API call whose 401 renders as the same line, re-measured 2026-10-29 by the review), and replies exactly `Not logged in · Please run /login`. | Root cause class = unusable stored value. Which of (API key pasted via the toggle, wrapped `claude setup-token` copy with an embedded space) the operator's row is stays **unverified** (secret, not read). |
 | Lead: "Not logged in. This session uses a Cloud gateway; ..." is uncovered by the matcher. | Bounded strings read of the bundled binary: both "Not logged in" variants sit in the `claude auth status` text renderer (`if(!S)g.push(T?"...Cloud gateway...":"Not logged in. Run claude auth login...")`), next to `loggedIn`/`orgName` keys. The stream reply is the `· Please run /login` constant. | Close the lead as "status renderer, not a stream reply" with that evidence; no matcher change. |
 | Brief: `Closes #11086` only if both parts ship. | Both parts ship, but the operator's stored row is unread; CTO ruling F6. | `Ref #11086`; closure criterion below; one `action-required` issue for the operator's re-save. |
 
@@ -114,8 +114,8 @@ Value placed in `CLAUDE_CODE_OAUTH_TOKEN` -> result text (system/init `apiKeySou
 | Value shape (synthesized) | Result |
 |---|---|
 | unset | `Not logged in · Please run /login` |
-| `sk-ant-api03-...`, `sk-ant-api02-...`, `sk-ant-admin01-...`, `sk-ant-X`, `sk-X`, `sk-proj-...` | `Not logged in · Please run /login` (dropped, no network) |
-| `sk-ant-oatAAAA` (no dash), `sk-ant-oat01-AAAA BBBB` (embedded space), tab-embedded, `" "` (blank), `" sk-ant-api03-X"` | `Not logged in · Please run /login` (dropped, no network) |
+| `sk-ant-api03-...`, `sk-ant-api02-...`, `sk-ant-admin01-...`, `sk-ant-X`, `sk-X`, `sk-proj-...` | `Not logged in · Please run /login` (dropped: not used as a credential) |
+| `sk-ant-oatAAAA` (no dash), `sk-ant-oat01-AAAA BBBB` (embedded space), tab-embedded, `" "` (blank), `" sk-ant-api03-X"` | `Not logged in · Please run /login` (dropped: not used as a credential) |
 | `sk-ant-oat01-...`, `sk-ant-oat02-...`, `sk-ant-oat01-` (empty tail), `sk-ant-oat01-A.B`, `sk-ant-oat01-A+B=`, leading/trailing whitespace around a valid oat value | used -> `Failed to authenticate. API Error: 401 OAuth access token is invalid.` |
 | `sk-ant-sid01-...` | used -> `...401 Credential is invalid.` |
 | non-`sk-` strings (`garbage`, `garbage with space`, quoted, `Bearer ...`, upper-case) | used -> `...401 Invalid bearer token.` |
@@ -336,24 +336,29 @@ Phase 7 - evidence and records: wording comment, ADR-048 addendum, post-mortem a
 liveness_signal:
   what: Sentry issue stream event feature=byok-lease op=oauth-credential-unusable (fires when a stored subscription credential is refused by the lease guard) plus the existing feature=agent-auth op=cli-auth-failure event
   cadence: per occurrence (one lease attempt per Concierge message while the row is bad; Sentry groups them into one issue)
-  alert_target: Sentry issue stream (level error, default high-priority workflow)
+  alert_target: Sentry issue stream (level error). Best-effort notification only: no managed rule routes feature=byok-lease, so it relies on Sentry's vendor-default high-priority workflow (recipients unverified, fires on a new issue only)
   configured_in: apps/web-platform/server/byok-lease.ts
 error_reporting:
   destination: Sentry project web-platform via reportSilentFallback (DSN env var SENTRY_DSN) with the pino second sink to Better Stack
   fail_loud: the Concierge turn ends with a key_invalid frame carrying the recovery copy; the lease throws ByokLeaseError oauth_unusable (no silent fallback)
 failure_modes:
   - mode: stored subscription credential is of a CLI-dropped shape
-    detection: lease guard event with closed shape_class tag
-    alert_route: Sentry issue stream
-  - mode: friendly-rewrite helper throws on an unreadable message
-    detection: one constant-text warn per process, raw message passes through, probe still emits
-    alert_route: Better Stack log line
+    detection: layer 2 (pino -> Sentry mirror) and the tagged reportSilentFallback event, closed shape_class tag, layer 5 release context for the regression window
+    alert_route: layer 2 Sentry issue stream (feature=byok-lease op=oauth-credential-unusable); the same call writes the pino line, so Better Stack (layer 3 shipper) is the second sink
+  - mode: the matcher cannot read an assistant message (hostile or malformed object)
+    detection: layer 2, one constant-text warn per process (auth-failure matcher: unreadable message skipped); the rewrite helper itself has no catch, it is a table lookup plus an array build, and a null match means the raw message passes through
+    alert_route: layer 2 Sentry breadcrumb plus Better Stack
+  - mode: a CLI sign-in failure reply was rewritten to server-authored copy
+    detection: layer 2, one closed-field log.info per rewrite (conversation id, kind enum, scheme enum; no text); the diagnostic's own event remains the deduplicated Sentry signal
+    alert_route: Better Stack (layer 3 shipper), no page
   - mode: a bundled-CLI upgrade changes the dropped-value behavior
-    detection: agent-auth-cli-contract test goes red in CI
+    detection: not a runtime layer: the agent-auth-cli-contract test (pins the table, runs its egress arms only when the network is reachable)
     alert_route: CI failure on the SDK bump PR
 logs:
   where: Better Stack (pino JSON from the web container), fields feature and op only
   retention: Better Stack plan retention
+closure_read_path: |
+  Sentry (read-only token): Discover query `feature:byok-lease op:oauth-credential-unusable` with field=timestamp field=shape_class (the infra/sentry README query shape, fields swapped). Better Stack fallback: `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep oauth-credential-unusable | jq -r '.raw | fromjson'`. The event carries no user id, so tie it to the operator's turn by timestamp.
 discoverability_test:
   command: rg -c "oauth-credential-unusable" apps/web-platform/server/byok-lease.ts
   expected_output: "1"
@@ -385,9 +390,9 @@ Layers: unit unless noted.
 - [x] `fetchAgentCredentialIntoSlot` throws `ByokLeaseError("oauth_unusable")` on a dropped class, zeroizes first, never reads the api row; `mapByokLeaseCauseToErrorCode` (`: never` rail) updated. `agent-on-spawn-requested.ts BYOK_LEASE_CAUSES` is deliberately NOT edited: that path calls `getRestApiKey()` only (verified at `agent-on-spawn-requested.ts:736`), so `oauth_unusable` cannot reach it.
 - [x] Lease event emitted with `feature=byok-lease op=oauth-credential-unusable` and only `shape_class`; canary test shows no value fragment in any sink.
 - [x] Both runners rewrite every matcher hit on a single-text-block message (all five kinds + `oauth_unusable`) to copy chosen from `kind x scheme`; unknown/null scheme uses the neutral cell; raw SDK message never mutated; a chapter-routed turn renders no chapter prefix on the friendly text; the frame is sent only for terminal kinds (`session_expired` is bubble-only) and after `stream_end`; a terminal failure evicts the warm Query (or the limitation is recorded).
-- [x] Wire tests: cc uses the REAL tap, legacy uses a REAL `createAgentAuthFailureProbe`; in both the probe emitted on the raw message AND user-visible/persisted text is friendly; `stream_end` precedes the `key_invalid` frame; one frame per turn; lease-time `oauth_unusable` produces exactly one Sentry event, no `session_id` clear, and the oauth-copy frame via the builder on the cc and both legacy producers.
+- [x] Wire tests: cc uses the REAL tap, legacy uses a REAL `createAgentAuthFailureProbe`; in both the probe emitted on the raw message AND user-visible/persisted text is friendly; `stream_end` precedes the `key_invalid` frame; one frame per turn. Dispatcher level (`cc-dispatcher-auth-failure-wiring.test.ts`): a lease-time `oauth_unusable` sends the oauth-copy frame, keeps `session_id`, adds no dispatcher mirror; `onAgentAuthFailure` reaches the client after `stream_end` (not for the support persona); an auth-failure turn is not announced as finished. Legacy: one Sentry event per lease refusal. NOT covered by a test (accepted, see Review Dispositions): the legacy `sendUserMessageInner` and ws-handler lease-refusal producers (same helper as the covered one), and a chapter-routed turn (the friendly path is a structural short-circuit past the chapter-prefix code).
 - [x] Client: `credentialScheme` added in schema and types together; scheme-less `key_invalid` path byte-identical (existing `error-states` and `ws-client-key-invalid-teardown` tests unchanged and green); scheme path renders scheme copy/title/label.
-- [x] Bundled-binary contract test present, runs offline arms only; absent binary = visible skip locally, hard FAIL under `CI`; a mutation row proves the `skipIf` call site is covered.
+- [x] Bundled-binary contract test present. Arms that need no egress (blank value, loopback stub, the offline classifier tripwire) always run; the four arms that call the live API skip visibly when `api.anthropic.com:443` is unreachable, even under `CI` (a network flake must not wedge the required check). An ABSENT binary is a hard FAIL under `CI`. It pins the measured table on every run with egress; it does not re-derive it.
 - [x] The Sentry rule, `infra/sentry/**` and the diagnostic's guard tests are untouched (`git diff --name-only $(git merge-base HEAD origin/main)` contains none of `apps/web-platform/infra/sentry/**`, `test/agent-auth-failure-*.test.ts`, `test/sentry-agent-auth-failure-*.test.ts`); `server/agent-auth-failure.ts` changes only by the import/re-export swap and a pointer comment; `agent-auth-mode.ts` only in its REMOVAL CHECKLIST text; `claude-error-signatures.ts` only in its comment. The matcher lives in `server/agent-auth-match.ts` and `agent-auth-import-boundary.test.ts` is green.
 - [x] ADR-048 addendum merged; post-mortem root-cause addendum merged; `c4-count-parity.test.sh` green; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` and the web-platform vitest suite (`package.json` `scripts.test`) green; `npx markdownlint-cli2` clean on the plan and `tasks.md`.
 - [ ] PR body: `Ref #11086`, `Ref #10455`, `Ref #11085` (never `Closes`); `## Changelog` section present.
@@ -397,6 +402,27 @@ Layers: unit unless noted.
 - [ ] One `action-required` issue filed at ship, BEFORE deploy where possible, with an owner (the operator) and a review date (deploy date + 3 days): the operator re-saves the subscription token as the bare `sk-ant-oat01-...` value in Settings (operator's own secret; this PR performs no production write).
 - [ ] #11086 closes on a dated pair of cited evidence taken on the FIRST operator-account Concierge turn after deploy: either the lease-guard event fires with its `shape_class` (an agent reads it with the README Discover query) or the turn completes without the raw line. No turn sent by the review date means still open, not evidence. If a turn is sent, no event fires and the raw line still appears, the row is valid-shaped, contradicting the mechanism: reopen the root-cause investigation.
 - [ ] One-line pointer comment on #11085 at ship: the removal checklist in `agent-auth-mode.ts` now keeps `agent-auth-match.ts` and `CLI_AUTH_FAILURE_REPLIES`.
+
+## Review Dispositions (2026-10-29 review panel, 13 seats)
+
+Fixed inline: legacy double Sentry mirror (three catch sites skip the raw capture for `oauth_unusable`, lease event is the one signal); dispatcher/ws wiring tests; support-persona SSE frame suppressed; no "finished" push/inbox card after a terminal sign-in failure; `auth-failed` close reason instead of reusing `stale-resume`; `BYOK_LEASE_CAUSES` lists `oauth_unusable`; removal-checklist steps 4 and 6 (split the matcher suite, rewrite the two wire tests' diagnostic imports); one closed-field log line per rewrite; allowlist reject rows and crossed card fixtures; contract-test hardening (offline tripwire, telemetry off, real-reply assertion); false "no network call" claims corrected; scheme literal, `looksLikeApiKey`, copy-table cells and the `terminal` field simplified.
+
+Accepted, with the reason:
+
+| Item | Disposition |
+|---|---|
+| No persisted explanation after a lease-time refusal (card is client state, lost on reload) | Accepted: operator-only surface, the next send re-fires the frame; persisting a synthetic assistant row would put server copy into history for a turn that never ran. |
+| F12 wording ("evict after the result is processed") vs eviction at the NEXT dispatch | Deliberate deviation, recorded here and in ADR-308: evicting at the result would drop a message queued during the failing turn; the next-dispatch form keeps the F12 conditions (queued message safe, session id kept: measured by the data-integrity seat, `--resume` of a failed first turn succeeds). |
+| Cold build after eviction throws before the factory's lease try-block (`oauth_unusable`, deleted key) | Bounded: the kept lease row expires in 240 s and the stale map record is overwritten by the next build; only with the git-data flag on. |
+| Eviction restarts the per-conversation cost-cap accumulator | Accepted: every cold start already does (idle reap, redeploy, stale-resume); persisted cost totals stay correct. |
+| `key_invalid` frame has no `conversationId`, so the client tears down all of the user's open streams | Pre-existing property of `key_invalid`; now reachable after a stream ends. Tracked with #11525. |
+| Delegated (BYOK-grantor) key: copy tells a member to re-enter a key they cannot edit | Accepted for now; delegation is flag-gated. A delegated cell is a follow-up if it is observed. |
+| Operator workaround besides re-saving the token: `CC_OAUTH_ENABLED` off makes the lease use the api_key row (billing basis flips) | Named here; an operator decision, not made by this PR. |
+| Strict write allowlist cannot save a future token shape; tail class `[A-Za-z0-9_-]` unverified against a real `claude setup-token` value | Recorded as an unverified assumption for the post-deploy check; the lease predicate is negative-only so an already-stored future shape still works. |
+| Legacy `hasStreamedPartials` skips the live friendly text after streamed tokens | Accepted: a synthetic auth reply carries no partials in the measured stream. |
+| Legacy and cc runners differ in a trailing `session_ended` after `key_invalid` | Pre-existing shape difference; documented in ADR-308. |
+| Lease event is per turn (no debounce) and carries no user id | Accepted: the lease event is the closure evidence; Sentry groups it into one issue. |
+| Contract test: network arms run serially (~21 s) | Accepted; the four live arms are the only ones that tell dropped from used values. |
 
 ## Domain Review
 

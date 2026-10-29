@@ -18,12 +18,12 @@ import { classifyCliDroppedValue } from "@/server/oauth-token-shape";
 // What was measured (SDK 0.3.284, CLI 2.1.284, linux-x64), default base URL:
 //   - sk-ant-api03-.., sk-ant-admin01-.., "sk-ant-oat01-.. BBBB" in the credential variable: reply is exactly the
 //     not-logged-in line, apiKeySource "none". The value is dropped, not sent as a credential.
-//   - blank/whitespace value: same reply, and it is answered locally with no API request at all.
+//   - blank/whitespace value: same reply, answered with no inference request (/v1/messages) at all.
 //   - valid-shaped sk-ant-oat01-<fake>: the value is USED, so the reply is the API's own auth failure
 //     ("Failed to authenticate. API Error: 401 ..."), never the not-logged-in line.
 //
-// Deviations from a pure "offline" arm, found while writing this (see the report that accompanied the change):
-//   - Only the blank class is answered with zero network. The other dropped classes make an unauthenticated API call
+// Deviations from a pure "offline" arm, measured while writing this:
+//   - Only the blank class is answered without an inference request. The other dropped classes make an unauthenticated API call
 //     (the CLI emits api_retry events) and render the 401 as the not-logged-in line, so those arms need egress to the
 //     real API host. They are guarded by a reachability probe: no egress => visible skip (even in CI, so a network flake cannot wedge the
 //     merge gate); an ABSENT BINARY is the hard CI failure, and the offline blank/stub arms still run.
@@ -62,7 +62,15 @@ interface CliRun {
 function runCli(binary: string, credential: string, extraEnv: Record<string, string> = {}): Promise<CliRun> {
   const home = mkdtempSync(path.join(tmpdir(), "cli-contract-"));
   // Equivalent of `env -i`: the child gets ONLY these variables.
-  const env = { HOME: home, PATH: "/usr/bin:/bin", [OAUTH_ENV_VAR]: credential, ...extraEnv } as unknown as NodeJS.ProcessEnv;
+  // Telemetry and non-essential traffic are switched off so a run sends only what the credential check itself needs.
+  const env = {
+    HOME: home,
+    PATH: "/usr/bin:/bin",
+    [OAUTH_ENV_VAR]: credential,
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    DISABLE_TELEMETRY: "1",
+    ...extraEnv,
+  } as unknown as NodeJS.ProcessEnv;
   return new Promise((resolve, reject) => {
     const child = spawn(
       binary,
@@ -168,6 +176,12 @@ describe("bundled CLI credential-shape contract (#11086)", () => {
     ["embedded whitespace", "sk-ant-oat01-AAAA BBBB"],
   ];
 
+  it("offline drift tripwire: the lease classifier claims every value measured to be dropped, and no valid-shaped one", () => {
+    // Does not depend on egress, so the classifier table cannot silently rot when the network arms below skip.
+    for (const [, value] of DROPPED) expect(classifyCliDroppedValue(value), value).not.toBeNull();
+    expect(classifyCliDroppedValue("sk-ant-oat01-FAKEfake_0123456789-abcdef")).toBeNull();
+  });
+
   describe.each(DROPPED)("dropped class: %s", (_label, value) => {
     it(
       "the CLI replies exactly the not-logged-in line, and the lease classifier claims the value",
@@ -201,6 +215,8 @@ describe("bundled CLI credential-shape contract (#11086)", () => {
         }
         const run = await runCli(binary, VALID);
         expectRealRun(run);
+        // A real reply, not a missing one (a null would satisfy a bare `not.toBe`).
+        expect(run.assistantText).toMatch(/Failed to authenticate|API Error/);
         expect(run.assistantText).not.toBe(NOT_LOGGED_IN);
         expect(run.resultText).not.toBe(NOT_LOGGED_IN);
         expect(classifyCliDroppedValue(VALID)).toBeNull();

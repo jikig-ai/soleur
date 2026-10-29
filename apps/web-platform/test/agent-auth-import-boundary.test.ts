@@ -6,12 +6,15 @@ import { describe, expect, it } from "vitest";
 
 const SERVER = resolve(__dirname, "../server");
 const PERMANENT = ["agent-auth-match.ts", "agent-auth-user-message.ts"];
+// Any module-loading form: static `from`, bare side-effect `import "x"`, dynamic `import("x")` and `require("x")`.
+const loads = (spec: string): RegExp =>
+  new RegExp(`(?:from\\s+|import\\s*\\(?\\s*|require\\s*\\(\\s*)["'][^"']*${spec}`);
 const FORBIDDEN: Array<[string, RegExp]> = [
-  ["agent-auth-failure", /from\s+["'][^"']*agent-auth-failure["']/],
-  ["agent-auth-mode", /from\s+["'][^"']*agent-auth-mode["']/],
-  ["@sentry", /from\s+["']@sentry\//],
+  ["agent-auth-failure", loads("agent-auth-failure")],
+  ["agent-auth-mode", loads("agent-auth-mode")],
+  ["@sentry", loads("@sentry\\/")],
   ["the probe", /createAgentAuthFailureProbe|tapAgentAuthFailure|NOOP_AGENT_AUTH_PROBE/],
-  ["observability", /from\s+["'][^"']*\/observability["']/],
+  ["observability", loads("[^\"']*\\/observability")],
 ];
 
 /** Strip comments so a header that DESCRIBES the boundary does not trip it. */

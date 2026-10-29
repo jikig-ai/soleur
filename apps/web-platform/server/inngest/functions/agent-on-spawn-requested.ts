@@ -1274,7 +1274,7 @@ const TRANSIENT_ANTHROPIC_CAUSES: readonly string[] = [
 
 // `ByokLeaseError.cause` values (server/byok-lease.ts).
 const BYOK_LEASE_CAUSES: ReadonlySet<string> = new Set(
-  ["fetch_failed", "decrypt_failed", "escape", "subscription_limit"] as const satisfies readonly ByokLeaseError["cause"][],
+  ["fetch_failed", "decrypt_failed", "escape", "subscription_limit", "oauth_unusable"] as const satisfies readonly ByokLeaseError["cause"][],
 );
 
 // Tags a retryable LIVE error inside `turn-${n}-claude` with its FailureReason,

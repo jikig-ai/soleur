@@ -10,13 +10,19 @@
 //   3. in agent-runner.ts and cc-dispatcher.ts: the import, `createAgentAuthFailureProbe` with its `let authProbe = NOOP_AGENT_AUTH_PROBE`
 //      try/catch and the `warnAgentAuthProbeUnavailable()` call, the `authProbe.bindOptions(` wrapper (re-indent the closing
 //      parens), the `observe` call, and `tapAgentAuthFailure(` around `sdkQuery(`;
-//   4. the comment in claude-code-message-translator.ts that names SDK_AUTHENTICATION_FAILED, and the "Wrapper note" comment
-//      in test/agent-sandbox-seccomp-selector.test.ts;
+//   4. in claude-code-message-translator.ts RETARGET (do not delete) the comment that names SDK_AUTHENTICATION_FAILED: the
+//      constant stays, because the matcher reads it. Delete the "Wrapper note" comment in
+//      test/agent-sandbox-seccomp-selector.test.ts;
 //   5. the Sentry rule `agent_auth_failure`: ONE PR deletes the rule from issue-alerts.tf, its alert-reference.json entry and the
 //      infra/sentry README counts, entry and decode table (the plan_pr gate requires the committed reference to equal the
 //      plan's projection in the same PR), with `[ack-destroy]` alone on a line in a commit BODY (infra/sentry/README.md);
 //   6. the tests: agent-auth-failure-{probe,tap,sentry-path}.test.ts, sentry-agent-auth-failure-alert-op-contract.test.ts
-//      (KEEP agent-auth-failure-matcher.test.ts and rename it to agent-auth-match.test.ts: it is the matcher's own suite),
+//      (SPLIT agent-auth-failure-matcher.test.ts: move its matcher describe blocks to a new test/agent-auth-match.test.ts
+//      importing from ../server/agent-auth-match, and delete the blocks that test deriveAgentAuthContext,
+//      buildAgentAuthPayload, the __reset* seam and the SDK_API_KEY_SOURCES parity: those import code step 1 deletes. The two
+//      friendly-error wire tests, agent-auth-friendly-error-wire{,-legacy}.test.ts, import the diagnostic's probe, tap and
+//      dedupe reset to prove the matcher saw the RAW message first: replace those imports with a test-local observer and
+//      keep every frame-order, persistence and one-frame assertion; the legacy one also drops its agent-auth-mode mock),
 //      the wiring cases (and their hoisted mocks and imports) in agent-runner-unix-deny-wire.test.ts and
 //      cc-dispatcher-real-factory.test.ts, and the widened regex in test/server/cc-dispatcher-bash-sandbox-mirror.test.ts
 //      (back to `options: recordCcSeccompArtifact(`).

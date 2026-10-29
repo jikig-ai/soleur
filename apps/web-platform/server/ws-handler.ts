@@ -33,7 +33,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
-import { authFailureFrameFromLeaseError } from "./agent-auth-user-message";
+import { authFailureFrameFromLeaseError, isOauthUnusableLeaseError } from "./agent-auth-user-message";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
@@ -2585,8 +2585,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           if (pendingLeader) {
             startAgentSession(userId, session.conversationId, pendingLeader, undefined, undefined, pendingContext).catch(
               (err) => {
-                Sentry.captureException(err);
-                log.error({ userId, err }, "startAgentSession error");
+                // #11086: the lease already reported an unusable stored credential; no duplicate raw capture.
+                if (isOauthUnusableLeaseError(err)) {
+                  log.info({ userId }, "startAgentSession refused: stored subscription credential is not usable");
+                } else {
+                  Sentry.captureException(err);
+                  log.error({ userId, err }, "startAgentSession error");
+                }
                 const errorCode: WSErrorCode | undefined = err instanceof KeyInvalidError
                   ? "key_invalid"
                   : err instanceof ByokDelegationError

@@ -3,15 +3,16 @@
 // (byok-lease.ts, a NEGATIVE predicate over classes the bundled CLI was measured to drop).
 //
 // Why this exists: the bundled Claude CLI silently drops a subscription-token value that is not shaped like a real one and
-// then replies "Not logged in · Please run /login" with no network call, so a stored API key or a wrapped copy of the token
-// produced a total outage with a message pointing at nothing. The measured table lives in
+// then replies "Not logged in · Please run /login" (it does not send the dropped value as a credential; only a blank value is
+// answered with no inference request at all), so a stored API key or a wrapped copy of the token produced a total outage
+// with a message pointing at nothing. The measured table lives in
 // test/agent-auth-cli-contract.test.ts and in the plan's Research Insights; RE-DERIVE ON EVERY SDK BUMP.
 //
 // Safety: nothing here returns, logs or throws a part of the value. The classifier returns a member of a closed list.
 // This module must not name the CLI's credential environment variable (test/oauth-token-injection-site.test.ts pins who may).
 
 /** What `claude setup-token` prints: `sk-ant-oat` + two digits + `-` + a non-empty URL-safe tail. */
-export const SUBSCRIPTION_TOKEN_ALLOWLIST = /^sk-ant-oat\d{2}-[A-Za-z0-9_-]+$/;
+const SUBSCRIPTION_TOKEN_ALLOWLIST = /^sk-ant-oat\d{2}-[A-Za-z0-9_-]+$/;
 
 /** The closed set of reasons the lease refuses a stored value. Telemetry carries only one of these. */
 export type CliDroppedClass = "api_key_shaped" | "embedded_whitespace" | "blank";

@@ -281,7 +281,7 @@ describe("getAgentCredential — oauth preference + gates", () => {
 
 // #11086 — a stored subscription credential the bundled CLI is known to drop
 // must fail loudly at the lease boundary (NOT be handed to the CLI, which
-// would answer "Not logged in" with no network call), and must never fall
+// would answer "Not logged in" without using the value as a credential), and must never fall
 // back to the api_key row.
 describe("getAgentCredential — unusable stored subscription credential (#11086)", () => {
   // Synthesized fakes only. One per class the classifier can return.
