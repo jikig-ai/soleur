@@ -234,6 +234,7 @@ scripts/test-all-pr-battery-gate	knowledge-base/engineering/architecture/diagram
 scripts/test-all-pr-battery-gate	knowledge-base/project
 scripts/watch-brand-hex-triggers-11177	knowledge-base/marketing/brand-guide.md
 scripts/watch-lint-ratchet-reeval-10515	knowledge-base/engineering/architecture/decisions
+scripts/web-first-deploy-10585	knowledge-base/engineering/operations/runbooks/web-host-replace.md
 scripts/web2-luks-live-6931	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/zot-upload-ceiling-7556	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/commands/sync-producer-reachability	knowledge-base/engineering/architecture/diagrams
