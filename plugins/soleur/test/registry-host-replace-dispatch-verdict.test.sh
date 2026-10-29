@@ -280,7 +280,7 @@ GCOMPARE="$(gcompare 300)"; run_gate
 # host is stale ("NOT live") or current ("unchanged since").
 run_verdict JOB_STATUS=failure GATE_OUTCOME=failure GATE_UNPROVEN=cap PREFLIGHT_OUTCOME=skipped DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped TARGETS= PRS= COMMITS=
 if [[ "$RC" -eq 0 ]] && grep -q 'kind=gate-unproven' "$GH_LOG" && ! grep -q 'kind=gate-failed' "$GH_LOG" && ! grep -q 'NOT live' "$GH_LOG" && ! grep -q 'unchanged since' "$GH_LOG"; then pass "V16: GATE_UNPROVEN=cap -> kind=gate-unproven, no NOT-live / unchanged-since claim"; else fail "V16: rc=$RC kinds=$(grep -o 'kind=[a-z-]*' "$GH_LOG" | tr '\n' ' ')"; fi
-grep -q 'issue create' "$GH_LOG" && [[ "$(tail -1 "$GH_LOG")" == *"<!-- registry-delivery run=1 kind=gate-unproven attempt=1 -->" ]] && pass "V16: owner issue created when nothing is derivable; marker is the LAST line" || fail "V16: owner issue / marker position"
+grep -q 'issue create' "$GH_LOG" && grep -qF -- 'kind=gate-unproven attempt=1 --> --label action-required' "$GH_LOG" && pass "V16: owner issue created when nothing is derivable; marker is the LAST line" || fail "V16: owner issue / marker position"
 grep -q 'UNPROVEN' "$GH_LOG" && grep -q '300' "$GH_LOG" && pass "V16: the body names the cap and says UNPROVEN" || fail "V16: wording"
 # V16b: a stale GATE_UNPROVEN without a gate failure must not select the arm.
 run_verdict JOB_STATUS=failure GATE_OUTCOME=success GATE_UNPROVEN=cap PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped

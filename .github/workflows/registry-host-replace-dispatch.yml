@@ -100,7 +100,10 @@ concurrency:
 # STEP MAP (#8279) — where each string lives, so the next editor does not read the whole file:
 #   gate      decides deliver=true|false by RENDERING the user_data at the watermark and the head
 #             (#7582); emits `watermark=` (head of the last successful run) and, when it delivers
-#             on the push arm, `render_changed=true` + `why=` (what it measured)
+#             on the push arm, `render_changed=true` + `why=` (what it measured); on a compare
+#             list truncated at the API's 300-file cap it compares the three render inputs by
+#             git blob instead, and when it cannot read them emits `unproven=cap` and exits 1
+#             (#10650: a cap hit never delivers by default)
 #   change    names the change(s) this run delivers — the helper's six keys `range=`,
 #             `range_note=`, `commits=`, `prs=`, `unattributed=`, `summary=` plus `targets=` —
 #             via scripts/registry-delivery-change.sh; never fails the job
@@ -282,22 +285,6 @@ jobs:
             exit 0
           fi
           changed="$(printf '%s' "$cmp_json" | jq -r '.files[]?.filename' 2>/dev/null)"
-          # THE COMPARE API CAPS `files` AT 300 and truncates with NO error field. So a merge
-          # touching >300 files that includes the config would fall through the `grep -qx` below
-          # and report "registration-only push" — byte-for-byte the silent non-delivery this
-          # workflow exists to remove, on the largest merges.
-          #
-          # There is no total-files count in the compare response to check against (`total_commits`
-          # counts commits, not files), so the cap itself is the signal: at exactly 300 the list
-          # MAY be complete and MAY be truncated, and those are indistinguishable here. Treat both
-          # as unproven and deliver — the preflight still gates, and an unnecessary
-          # volume-preserving replace is recoverable where an undelivered fix is silent.
-          n_files="$(printf '%s' "$cmp_json" | jq -r '(.files | length) // 0' 2>/dev/null || echo 0)"
-          if [[ "${n_files:-0}" -ge 300 ]]; then
-            echo "deliver=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::the compare API returned ${n_files} files, at or above its 300 cap, so the changed-file list may be TRUNCATED and cannot prove $CFG was untouched. Delivering rather than silently skipping. The preflight still gates."
-            exit 0
-          fi
           # (#7582) THE QUESTION IS WHETHER THE RENDERED user_data CHANGED, NOT WHETHER THE TEMPLATE DID.
           # The host boots base64gzip(replace(templatefile(cloud-init-registry.yml, {...}), strip, ""))
           # and that map also reads zot-registry.tf (zot_image, doppler_sha256, users, IP, ingest URL)
@@ -305,16 +292,76 @@ jobs:
           # cgroup cap and the arch). Comparing the template alone let a zot digest bump change the
           # bytes the host boots with deliver=false — the new zot then sat inert until an unrelated
           # apply replaced the host by surprise.
+          #
+          # Defined HERE (above the cap arm) because the cap arm reads them and `set -u` aborts the
+          # step on a use-before-define.
           INFRA=apps/web-platform/infra
           TF="$INFRA/zot-registry.tf"
           VARS="$INFRA/variables.tf"
+          # THE COMPARE API CAPS `files` AT 300 and truncates with NO error field. So a merge
+          # touching >300 files that includes a render input would fall through the `grep -qx`
+          # below and report "registration-only push" — the silent non-delivery this workflow
+          # exists to remove, on the largest merges.
+          #
+          # There is no total-files count in the compare response to check against (`total_commits`
+          # counts commits, not files), so the cap itself is the signal: at exactly 300 the list
+          # MAY be complete and MAY be truncated, and those are indistinguishable here.
+          #
+          # A CAP HIT NEVER DELIVERS BY DEFAULT (#10650, CTO ruling 2026-10-29). It used to
+          # (`deliver=true`, "an unnecessary volume-preserving replace is recoverable"), and after a
+          # stale watermark almost every range is over the cap — so the merge of PR #10501, which
+          # changed only an unrelated variable in variables.tf, destroyed and recreated the fleet's
+          # SOLE image-pull path. Instead of guessing, DERIVE the answer: compare the git BLOB sha of
+          # each of the three render inputs at the watermark and at the head through the contents
+          # API (a per-path answer; the truncated file list is not consulted again). Then:
+          #   * a blob differs      -> that input goes into `changed`, and the downstream arms
+          #                            (by-value variable compare, offline render, wiring text
+          #                            compare) decide `deliver` exactly as for a complete list;
+          #   * all blobs identical -> `deliver=false` (the host's inputs are byte-identical);
+          #   * any blob unreadable -> UNPROVEN: `unproven=cap` + exit 1. A red run does not
+          #                            advance the watermark and the verdict step files
+          #                            `kind=gate-unproven`, so nothing is silently skipped and
+          #                            nothing is replaced on a guess. Unreadable means ANY result
+          #                            that is not a 40-hex blob sha after three attempts (5xx, a
+          #                            directory, a bad shape, a path absent at exactly one ref).
+          # #9149's "or could not be computed => deliver" is about the DOWNSTREAM render arms
+          # (unchanged below); an unprovable touched-set is a different uncertainty and fails closed.
+          n_files="$(printf '%s' "$cmp_json" | jq -r '(.files | length) // 0' 2>/dev/null || echo 0)"
+          capped=0
+          if [[ "${n_files:-0}" -ge 300 ]]; then
+            capped=1
+            blob_at() {  # $1 = repo path, $2 = ref -> prints the 40-hex blob sha; rc 1 = unprovable
+              local n r
+              for n in 1 2 3; do
+                r="$(gh api "repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" --jq 'select(.type=="file")|.sha' 2>/dev/null)" \
+                  && [[ "$r" =~ ^[0-9a-f]{40}$ ]] && { printf '%s' "$r"; return 0; }
+                (( n < 3 )) && sleep "$n"
+              done
+              return 1
+            }
+            changed=""; unread=""
+            for _p in "$CFG" "$TF" "$VARS"; do
+              if ! _b="$(blob_at "$_p" "$BEFORE_SHA")" || ! _a="$(blob_at "$_p" "$AFTER_SHA")"; then unread="$_p"; break; fi
+              [[ "$_b" != "$_a" ]] && changed="${changed:+$changed$'\n'}$_p"
+            done
+            if [[ -n "$unread" ]]; then
+              echo "unproven=cap" >> "$GITHUB_OUTPUT"   # BEFORE the exit: the verdict step reads it
+              echo "::error::the compare API returned ${n_files} files (its 300 cap), so the changed-file list is TRUNCATED, and render input ${unread} could not be read as a file at both the watermark ${BEFORE_SHA:0:7} and the head ${AFTER_SHA:0:7} (only the first unreadable input is named). Refusing to dispatch a registry host replace on an unprovable diff: it neither delivers nor skips. Re-fire via workflow_dispatch once the API recovers; a re-fire replaces the host."
+              exit 1
+            fi
+            echo "::notice::compare list truncated at ${n_files} files; the three render inputs were compared by git blob at the watermark and the head (changed: ${changed:-none})."
+          fi
           tpl_changed=0; tf_changed=0; vars_changed=0
           grep -qx "$CFG" <<<"$changed" && tpl_changed=1
           grep -qx "$TF" <<<"$changed" && tf_changed=1
           grep -qx "$VARS" <<<"$changed" && vars_changed=1
           if (( tpl_changed + tf_changed + vars_changed == 0 )); then
             echo "deliver=false" >> "$GITHUB_OUTPUT"
-            echo "Nothing since the watermark ${BEFORE_SHA} touched a render input ($CFG, $TF, $VARS) — registration-only pushes. Not dispatching."
+            if (( capped )); then
+              echo "The compare list was truncated at ${n_files} files, but none of the render inputs ($CFG, $TF, $VARS) differs between the watermark ${BEFORE_SHA} and the head by git blob. Not dispatching."
+            else
+              echo "Nothing since the watermark ${BEFORE_SHA} touched a render input ($CFG, $TF, $VARS) — registration-only pushes. Not dispatching."
+            fi
             exit 0
           fi
           WORK="$(mktemp -d)"
@@ -756,6 +803,7 @@ jobs:
           TRACKER: ${{ inputs.tracker || '' }}
           RENDER_CHANGED: ${{ steps.gate.outputs.render_changed }}
           GATE_WHY: ${{ steps.gate.outputs.why }}
+          GATE_UNPROVEN: ${{ steps.gate.outputs.unproven }}
         run: |
           set -uo pipefail
           # `set -f`: the raw tracker is word-split below; nothing here may glob against the checkout.
@@ -846,6 +894,15 @@ jobs:
             WHAT="Delivery UNVERIFIED: apply run ${APPLY_RUN:-(not identified)} had no conclusion in the poll window"
             WHY="The dispatch was accepted and a replace may have run; this run could not read its conclusion."
             STATE="The delivering change's own follow-through is the authority on whether the host serves; read the apply run before re-firing."
+          elif [[ "${GATE_OUTCOME:-}" == "failure" && "${GATE_UNPROVEN:-}" == "cap" ]]; then
+            # (#10650) The compare list hit the API's 300-file cap AND a render input could not be
+            # read as a file at both revisions, so whether the host's inputs changed is UNPROVEN.
+            # Placed BEFORE the generic gate-failed arm. Nothing ran, so STATE overrides the default
+            # not-live sentence: the host is not known stale (and not known current).
+            KIND="gate-unproven"
+            WHAT="Delivery UNPROVEN: the compare API's file list was truncated and the render inputs could not be compared"
+            WHY="The compare API caps its changed-file list at 300 files and gave no truncation flag, so the gate compared the git blobs of the three render inputs instead, and could not read one of them (the gate's own \`::error::\` in the run names it). Nothing was dispatched."
+            STATE="Whether the registry host's user_data is current is UNPROVEN (not known to be stale). The delivery watermark did not advance, so the next push re-derives this range; a manual re-fire delivers (and replaces the host) once the three render inputs have been checked."
           elif [[ "${GATE_OUTCOME:-}" == "failure" ]]; then
             # The gate's own exit 1 (compare API unreadable, a watermark revision unreadable, or —
             # #7582 — the head render unmeasurable or over Hetzner's cap). Not the `else`: that arm would
