@@ -292,7 +292,7 @@ fi
 # The code list is DERIVED from the engine's header table by the extractor the workflow suite's W9
 # also reads (tests/scripts/lib/restore-engine-header.sh), with that lib's exit-1 rule: the header's
 # non-zero codes UNION {1}, deduped, so exit 1 is exercised whether or not the header lists it (the
-# gate has an arm for the engine's input fault; the workflow side is tracked in #10932).
+# gate has an arm for the engine's input fault, and so does the workflow).
 ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
 a2_codes="$({ echo 1; restore_header_codes < "$ENGINE"; } | sort -un | tr '\n' ' ')"
 a2_n=$(wc -w <<<"$a2_codes")
