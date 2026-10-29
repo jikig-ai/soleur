@@ -2132,7 +2132,7 @@ LOADER_STEP_BLOCK="$(awk '/^      - / { if (has) printf "%s", block; block=""; h
                          /uses:[[:space:]]*\.\/\.github\/actions\/infra-credentials/ { has=1 }
                          END { if (has) printf "%s", block }' "$WF_YAML")"
 assert "#9755 the loader step's own block carries BOTH the op=backup if: and the doppler-token-infra-privileged: input (co-located on THE ONE step)" \
-  "printf '%s' \"\$LOADER_STEP_BLOCK\" | grep -qE \"if:[[:space:]]*inputs\\.op == 'backup'\" && printf '%s' \"\$LOADER_STEP_BLOCK\" | grep -qE 'doppler-token-infra-privileged:'"
+  "grep -qE \"if:[[:space:]]*inputs\\.op == 'backup'\" <<<\"\$LOADER_STEP_BLOCK\" && grep -qE 'doppler-token-infra-privileged:' <<<\"\$LOADER_STEP_BLOCK\""
 assert "#9755 no doppler-token-legacy input anywhere in the file (a Tier-A fallback would defeat the gate)" \
   "! grep -qE 'doppler-token-legacy:' '$WF_YAML'"
 
@@ -2148,7 +2148,7 @@ BKP_N=$(wc -l < "$BKP_FILE" | tr -d '[:space:]')
 assert "#9755 backup) case arm extracted from the real script for behavioural driving (non-vacuity, got $BKP_N lines)" \
   "[[ '$BKP_N' -gt 20 ]]"
 assert "#9755 the backup) arm carries NO doppler invocation on a non-comment line (the token comes from the loader-exported job env)" \
-  "! grep -vE '^[[:space:]]*#' '$BKP_FILE' | grep -qE 'doppler'"
+  "! awk '/^[[:space:]]*#/{next} /doppler/{exit 0} END{exit 1}' '$BKP_FILE'"
 assert "#9755 the backup) arm reads the job-env HCLOUD_TOKEN (the loader-exported form, not a fetch)" \
   "grep -qF 'HCLOUD_TOKEN=\"\${HCLOUD_TOKEN:-}\"' '$BKP_FILE'"
 assert "#9755 the refusal message names the Tier-B delivery (the loader or the inngest-cutover environment)" \
@@ -2201,7 +2201,7 @@ BKP_REQ_LN=$(grep -n 'BEARER_CURL' "$BKP_LOG" | head -1 | cut -d: -f1) || true
 assert "#9755 the token is masked BEFORE the first request" \
   "[[ -n '$BKP_MASK_LN' && -n '$BKP_REQ_LN' && '$BKP_MASK_LN' -lt '$BKP_REQ_LN' ]]"
 assert "#9755 the first request is the create_image snapshot POST" \
-  "head -1 '$BKP_CALLS' | grep -qE '/v1/servers/123931471/actions/create_image'"
+  "[[ \"`head -1 \"$BKP_CALLS\"`\" == */v1/servers/123931471/actions/create_image* ]]"
 assert "#9755 the success path logs the image id" "grep -qF 'image id=42' '$BKP_LOG'"
 bkp_run 'RW-SENTINEL.123_+/=' 401
 assert "#9755 a non-201 create_image response fails with a named HTTP error" \

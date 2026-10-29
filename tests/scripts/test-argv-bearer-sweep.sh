@@ -1582,7 +1582,7 @@ bk_run() { # <rowname> <token> <create_status> <create_body_file> <action_body_f
   local name="$1" row="$ROWS/$1" drv="${6:-$BKDRV}"
   assert_fixture_dir "$row"; mkdir -p "$row/tmp" "$row/home" "$row/shim"
   ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" HOME="$row/home" TMPDIR="$row/tmp" BK_TMP="$row/tmp" BK_SHIM="$row/shim" \
-      BK_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
+      BK_TOKEN="$2" HCLOUD_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
       "$BASH_BIN" "$drv" < /dev/null > "$row/out" 2>&1 )
   BK_RC=$?
 }
