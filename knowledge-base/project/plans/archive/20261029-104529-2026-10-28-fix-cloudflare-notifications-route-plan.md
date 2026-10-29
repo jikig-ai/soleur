@@ -272,7 +272,7 @@ bash plugins/soleur/test/cf-token-scope.test.sh
 - **unit — default-token route regressions:** Given successful mock responses, when the profile runs, then Tunnel, Access, DNS, account LB pools, and zone Load Balancers each match their exact existing URL and resolved ID; the LB baseline-neutrality and `--expect-lb-scopes` cases keep their prior results.
 - **unit — rulesets profile regression:** Given no profile flag or explicit `--profile rulesets`, when the existing rulesets scenarios run, then dry-run output remains identical and the C-series behavior remains unchanged.
 - **unit — docs/profile parity:** Given the updated skill documentation, when reviewing the route table alongside the implementation, then both name `/accounts/{account_id}/alerting/v3/policies` and no stale Notifications path remains in the profile documentation.
-- **artifact integrity:** Given the learning source and PR copy, when the PR copy's SHA-256 is computed, then it equals `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250` and the source copy remains present and unchanged.
+- **artifact integrity at the original #11456 merge:** the learning copy's SHA-256 equaled `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`; that merge-time copy was later redacted in a separately authorized follow-up, without rewriting published history.
 
 ## Final Review Addendum
 

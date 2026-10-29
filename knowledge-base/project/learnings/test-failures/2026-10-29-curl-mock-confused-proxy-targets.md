@@ -396,6 +396,6 @@ the request rather than merely echoing a URL-shaped value.
 
 ## Related Issues
 
-- Related route correction: [2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md](../2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md) (included byte-identically; its source copy remains untouched).
+- Related route correction: [2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md](../2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md) (included byte-identically in the original #11456 merge; the current copy was later redacted without rewriting that history).
 - Related curl argv/mutation guidance: [2026-09-10-every-assertion-i-wrote-to-prove-the-fix-could-be-satisfied-while-the-defect-was-live.md](../2026-09-10-every-assertion-i-wrote-to-prove-the-fix-could-be-satisfied-while-the-defect-was-live.md).
 - Implementation and regression tests: `plugins/soleur/test/cf-token-scope.test.sh`.
