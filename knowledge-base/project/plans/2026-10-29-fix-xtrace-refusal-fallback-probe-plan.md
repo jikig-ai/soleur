@@ -118,8 +118,10 @@ marker required before a zero-count PASS; CREDENTIAL POSTURE + RETIREMENT header
 unfenced column-0 directive). `2026-04-22-passive-sentry-signal-closes-followthrough-verification.md`
 (passive Sentry read beats an active trigger). `2026-09-25-a-fixture-suite-cannot-see-that-the-probe-can-no-longer-take-its-reading.md`
 (dry-run the real sweeper on the branch before shipping the probe change).
-Sharp edge applied: `statsPeriod=30d` returns newest-first; `per_page=10` suffices
-because any `timestamp >= cutoff` event is in the newest 10 (see Decisions).
+Sharp edge applied (CTO ruling, 2026-10-29): newest-first is the observed default
+but NOT a documented contract (`get_orderby` returns None when `sort` is absent),
+so the events URL pins `&sort=-timestamp`; with it, `per_page=10` provably
+suffices because any `timestamp >= cutoff` event ranks within the newest 10.
 
 **CLI-verification gate.** `gh issue create` flags (`--label`, `--milestone`,
 `--body-file`) and `gh issue list`/`gh pr view` are standard documented forms; the
@@ -247,7 +249,7 @@ Body, in order:
    Zero qualifying files → `NOT YET` → `exit 2`.
 6. **Sentry:** `QUERY='feature:"cron-content-publisher" "DISCORD_BLOG_WEBHOOK_URL unset in publisher env"'`;
    `QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)`;
-   `URL="https://${API_HOST}/api/0/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=30d&per_page=10&field=title&field=timestamp"`;
+   `URL="https://${API_HOST}/api/0/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=30d&per_page=10&field=title&field=timestamp&sort=-timestamp"`;
    pinned-URL `case` gate; `_sentry_get -w '\nHTTP_STATUS:%{http_code}' -H
    "Accept: application/json" "$URL"`; non-200 or unparseable `.data` → CANNOT
    ESTABLISH (3). Any event with `timestamp` (`fromdateiso8601`) `>=` the
