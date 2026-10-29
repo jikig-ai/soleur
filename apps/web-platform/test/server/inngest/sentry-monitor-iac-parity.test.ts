@@ -275,10 +275,19 @@ describe("Sentry cron-monitor IaC parity", () => {
     const dead = [...PRUNED_MONITOR_SLUGS].filter((s) => !producers.has(s));
     expect(
       dead,
-      `pruned-set entries with no live producer (typo, retired emitter, or ` +
-        `re-added monitor) — remove the entry or re-declare the monitor: ` +
+      `pruned-set entries with no live producer (typo, retired emitter, ` +
+        `re-added monitor, or a third-universe emitter like a script beacon — ` +
+        `extend \`producers\` if a pruned beacon is legitimate): ` +
         `${dead.join(", ")}`,
     ).toEqual([]);
+  });
+
+  it("PRUNED_MONITOR_SLUGS is cardinality-pinned at the PR-B cohort size (43)", () => {
+    // A fresh never-declared slug slips past both stale-set assertions (∩
+    // declared = ∅ trivially; ⊆ producers if it has an emitter) — the
+    // "exempt a brand-new monitor" lane. The pin makes any change a
+    // deliberate act: pruning MORE monitors grows the set with a diff.
+    expect(PRUNED_MONITOR_SLUGS.size).toBe(43);
   });
 });
 

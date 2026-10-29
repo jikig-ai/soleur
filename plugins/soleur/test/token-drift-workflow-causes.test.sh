@@ -2431,7 +2431,7 @@ def r10(wf):
         if nslug != 1:
             out.append("slug %s has %d check-in steps in the workflow (want 1)" % (slug, nslug))
     if slug != "scheduled-orphan-sweeps":
-        out.append("%s heartbeat posts to %r, not the monitor scheduled-orphan-sweeps" % (jid, slug))
+        out.append("%s heartbeat posts to %r, not the slug scheduled-orphan-sweeps" % (jid, slug))
     mon = re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{((?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"scheduled-orphan-sweeps"(?:(?!\nresource\s)[\s\S])*)', tf_live)
     if mon:
         blk = mon.group(1).split("\n}", 1)[0]
@@ -2930,7 +2930,7 @@ _r10=$(python3 -c "$SWEEP_PY" r10 "$WF") || { echo "FATAL: the R10 scan crashed"
 _r10_bad=$(grep -c '^violation' <<<"$_r10") || _r10_bad=0
 _r10_pop=$(sed -n 's/^population=//p' <<<"$_r10")
 if [[ "$_r10_pop" =~ ^[0-9]+$ ]] && (( _r10_pop >= 2 )) && [[ "$_r10_bad" == "0" ]]; then
-  pass "R10 the aggregator covers all ${_r10_pop} orphan-sweep jobs: ok only when every sweep job succeeded, emails on every other result, reads contents only, names no Hetzner or Doppler credential, posts to a monitor declared in cron-monitors.tf"
+  pass "R10 the aggregator covers all ${_r10_pop} orphan-sweep jobs: ok only when every sweep job succeeded, emails on every other result, reads contents only, names no Hetzner or Doppler credential, posts to a monitor declared in cron-monitors.tf or a registered pruned slug"
 else
   fail "R10 (${_r10_pop:-?} jobs, ${_r10_bad} violation(s)): $(grep '^violation' <<<"$_r10" | cut -f2 | tr '\n' ';')"
 fi

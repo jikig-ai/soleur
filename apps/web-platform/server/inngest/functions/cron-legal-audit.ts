@@ -310,7 +310,7 @@ export async function cronLegalAuditHandler({
           feature: "cron-legal-audit",
           op: "claude-eval-fatal",
           message:
-            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red",
+            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red (destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-legal-audit", ...decision.sentryExtra },
         },
       );
@@ -325,7 +325,7 @@ export async function cronLegalAuditHandler({
           feature: "cron-legal-audit",
           op: "claude-eval-nonzero-noop",
           message:
-            "claude-eval exited non-zero (benign best-effort); cron monitor stays green (liveness, not success)",
+            "claude-eval exited non-zero (benign best-effort); cron monitor stays green (liveness, not success; destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-legal-audit", ...decision.sentryExtra },
         },
       );

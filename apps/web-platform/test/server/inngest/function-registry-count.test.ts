@@ -85,17 +85,20 @@ function functionFilesWithCheckpointingKey(): string[] {
     });
 }
 
-// #6590 PR-B note: ~12 entries here also sit in PRUNED_MONITOR_SLUGS — deliberate,
-// not redundant. The two sets carry DIFFERENT semantics ("never monitored —
-// findings alert elsewhere" vs "monitor destroyed — emitter void-posts per spec
-// NG4"); deduplicating either direction loses a distinction Guard (c) and the
-// stale-set assertions each enforce.
+// #6590 PR-B note: ~12 entries here now belong to the destroyed-monitor class
+// — they also sit in PRUNED_MONITOR_SLUGS (emitter void-posts by design, spec
+// NG4), while this set's remaining entries are the never-monitored class
+// (findings alert elsewhere). Keep the dual members in BOTH: guard (d) requires
+// every entry to name a live producer (they have one), and the stale-set
+// assertions police the PRUNED side — removing either would silently un-pin
+// one of those invariants.
 const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-campaign-calendar",
   "scheduled-cloud-task-heartbeat",
   // scheduled-content-generator REMOVED from exemption (#4684): it is a real
-  // output producer (creates a scheduled-content-generator issue every run) and
-  // now has a sentry_cron_monitor in cron-monitors.tf. Its prior exemption is
+  // output producer (creates a scheduled-content-generator issue every run).
+  // Its monitor was destroyed by the #6590 PR-B prune — the slug now sits in
+  // PRUNED_MONITOR_SLUGS (void-post by design, spec NG4). Its prior exemption is
   // exactly why its post-migration silence went unalerted at the per-function
   // layer — the monitor it checked into did not exist.
   "scheduled-content-publisher",

@@ -7,12 +7,13 @@
 // params below keep posting into the void BY DESIGN — the deliberate
 // void-post posture, not the #6374 gap the strict guards exist to catch.
 //
-// This is the single shared exemption for FIVE consumers: the three strict
+// This is the single shared exemption for SIX consumers: the three strict
 // vitest guards (sentry-monitor-iac-parity.test.ts code→IaC + workflow→IaC,
-// and function-registry-count.test.ts guard (c)) plus two shell suites that
-// regex the file bytes — prod-version-drift-check.test.sh B10g and
-// token-drift-workflow-causes.test.sh R10. FORMAT CONTRACT (load-bearing for
-// the shell consumers): entries are one `"kebab-slug"` literal per line
+// and function-registry-count.test.ts guard (c)) plus three shell suites that
+// regex the file bytes — prod-version-drift-check.test.sh B10g,
+// token-drift-workflow-causes.test.sh R10, and
+// infra/supabase-advisor/scan-workflow.test.sh. FORMAT CONTRACT (load-bearing for
+// the shell consumers): entries are one quoted kebab-slug literal per line
 // inside `new Set([…])`, and a quoted kebab token must NEVER appear in a
 // comment — the shell parses anchor on `^\s*"slug",?\s*$` but a slug quoted
 // inside comment prose is still one careless edit away from silently

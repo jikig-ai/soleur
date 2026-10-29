@@ -85,12 +85,15 @@ quiet cycles or mask genuine multi-cycle silence. They were removed deliberately
 | bug-fixer | Opens `bot-fix/*` PRs; never attaches a `scheduled-bug-fixer` label to an issue. |
 | strategy-review | **Conditional/idempotent producer (#4874):** opens an issue ONLY per knowledge-base file needing review (title-dedup, skips `up_to_date`), so a quiet week with everything up-to-date legitimately yields zero issues. Issue-presence is the wrong silence signal. |
 
-**Liveness for these (and every cron) is covered separately** by the
-per-function Sentry cron monitors (see Self-healing below and **#4708**) — the
-heartbeat was never their liveness signal. For strategy-review specifically, the
-liveness signal is the Sentry cron monitor `scheduled-strategy-review`. Do NOT
-"restore" any of them to `TASK_INVENTORY` to regain coverage; that coverage
-already exists in Sentry.
+**Liveness for these was covered separately** by the per-function Sentry cron
+monitors (see Self-healing below and **#4708**) — **#6590 PR-B caveat:** 43
+monitors were destroyed while their emitters kept posting (void-post by design,
+spec NG4; the cohort lives in `apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts`),
+and all four excluded non-producers (`daily-triage`, `ux-audit`, `bug-fixer`,
+`strategy-review`) are in it — the monitor path is gone for them; surviving
+signals are `reportSilentFallback` Sentry issues and the `cron-inngest-cron-watchdog`
+manifest check. Restoring any of them to `TASK_INVENTORY` is still the wrong
+lever — but the surviving-cover story changed, so verify before relying on it.
 
 The heartbeat does **not** and **cannot** use Inngest `/v1/*` run-history as a
 liveness signal: that introspection API is loopback-gated and unreachable from
@@ -485,7 +488,10 @@ and re-syncs (H9a) AND re-plans (H9b) any dropped/de-planned function within one
 interval, with no restart. This is the automatic, no-operator-action repair for
 both sub-modes.
 
-**Alerting** is the per-function Sentry cron monitors: each monitored cron has
+**Alerting** is the per-function Sentry cron monitors — **of the 24 retained
+after the #6590 PR-B prune** (43 were destroyed; their emitters void-post by
+design, spec NG4 — check `pruned-monitor-slugs.ts` before treating a slug as
+monitored): each monitored cron has
 its own `scheduled-*` monitor with `failure_issue_threshold`, so a cron that
 stops checking in pages on its own (that is how the original #4650 regression —
 `scheduled-community-monitor` / `scheduled-gh-pages-cert-state` missed check-ins

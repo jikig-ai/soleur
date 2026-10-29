@@ -1216,7 +1216,8 @@ done < "$class_c_out"
 # a tenth, and the #10952 scheduled-orphan-sweeps aggregator monitor an eleventh; #9304 deleted the
 # retired scheduled-gh-pages-cert-state monitor. This list names the additions
 # made since the 2026-08-19 live figure and is not a complete ledger, so the
-# declared count above (67) is the figure of record.
+# declared count above (67) is the figure of record — SUPERSEDED 2026-10-29
+# (67 → 24, #6590 PR-B destroy) by the addendum below.
 # Addendum 2026-10-29: …→ 24 `resource "sentry_cron_monitor"` blocks — the
 # #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed
 # the 43 low-catch-value monitors; the emitters stay (spec NG4 void-post).

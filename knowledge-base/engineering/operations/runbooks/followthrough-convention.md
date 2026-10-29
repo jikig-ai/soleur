@@ -328,7 +328,7 @@ A probe whose exit 0 closes the issue after a window of recurring check-ins must
 - **Allowlist statuses, never denylist.** An unrecognised status word is exit 3 (cannot establish), printed from a closed token set so response text never reaches the public comment.
 - **Pin the window and the clock in the probe.** The sweeper re-reads and honours an edited `earliest=`, so the probe refuses to judge before its own pinned window end. Validate the clock and bounds as `^[1-9][0-9]{0,15}$` (a leading zero is octal in bash arithmetic and falls through to PASS).
 - **Judge one JSON document** (`jq -s`, exactly one array), cap the reply (`--max-filesize` plus `--max-time`), and never echo the body.
-- Reference implementation and its mutation-proven suite: `scripts/followthroughs/orphan-sweeps-relook-10972.sh` and `.test.sh`.
+- Reference implementation and its mutation-proven suite: `scripts/followthroughs/git-data-rehearsal-evidence.test.sh` (the retired `orphan-sweeps-relook-10972` pair, deleted by the #6590 PR-B prune, was the prior reference — see git history for its curl-shim clock-injection pattern).
 
 ## Retiring a probe
 

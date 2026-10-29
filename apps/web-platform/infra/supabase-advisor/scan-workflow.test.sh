@@ -514,32 +514,21 @@ fi
 # and would rot the moment the resource is renamed. Cite the parity test rather
 # than duplicate it.
 
-echo "== cross-file: the Inngest schedule and the Sentry monitor window agree =="
-# The monitor's crontab defines the window in which a missed check-in pages. If
-# the dispatcher's cron and the monitor's crontab drift apart, the gate either
-# pages nightly for a run that arrived on time, or opens a blind window. Both
-# operands are extracted by shape — hardcoding either would re-create the drift
-# class this asserts against.
-fn_cron="$(grep -oE '\{ cron: "[^"]+" \}' "$INNGEST_FN" | sed -n '1p' | sed -E 's/.*"([^"]+)".*/\1/')"
-tf_cron="$(awk '/resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"/,/^}/' "$MONITORS_TF" |
-  grep -E '^\s*schedule\s*=' | sed -n '1p' | sed -E 's/.*crontab\s*=\s*"([^"]+)".*/\1/')"
-if [[ -n "$fn_cron" && "$fn_cron" == "$tf_cron" ]]; then
-  pass "Inngest cron '$fn_cron' == Sentry monitor crontab '$tf_cron'"
-else
-  fail "schedule agreement" "Inngest fn cron '${fn_cron:-<none>}' != monitor crontab '${tf_cron:-<none>}' — a missed check-in would page on a healthy run, or a blind window would open"
-fi
-
-echo "== cross-file: slugify(tf name) == workflow monitor-slug =="
-tf_name="$(awk '/resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"/,/^}/' "$MONITORS_TF" \
-  | grep -E '^\s*name\s*=' | sed -n '1p' | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
+echo "== cross-file: the workflow's monitor-slug is declared or registered pruned =="
+# #6590 PR-B: the scheduled_supabase_advisor_scan monitor was DESTROYED (the
+# prune's silence-doctrine verdict) while this workflow's emitter stays — the
+# deliberate void-post posture (spec NG4), so the crontab-agreement row and the
+# slugify(name)==monitor-slug row have no live subject anymore. What still
+# matters is the legal universe: the emitter's slug must be either a declared
+# monitor name or a registered pruned slug — anything else is the typo-class
+# the guards exist to catch. sentry-monitor-iac-parity.test.ts covers the
+# all-members cohort; this row pins THIS workflow's slug specifically.
 wf_slug="$(grep -E '^\s*monitor-slug:' "$WORKFLOW" | sed -n '1p' | sed -E 's/.*monitor-slug:\s*//')"
-# Sentry derives the slug by slugifying `name`; writing `name` already
-# slug-shaped makes the two literally equal.
-tf_slug="$(printf '%s' "$tf_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
-if [[ -n "$tf_slug" && "$tf_slug" == "$wf_slug" ]]; then
-  pass "slugify('$tf_name') == monitor-slug '$wf_slug'"
+PRUNED_TS="$REPO_ROOT/apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
+if [[ -n "$wf_slug" ]] && { grep -qE "^[[:space:]]*name[[:space:]]*=[[:space:]]*\"$wf_slug\"" "$MONITORS_TF" || { [[ -f "$PRUNED_TS" ]] && grep -oE "^[[:space:]]*\"[a-z0-9-]+\",?[[:space:]]*$" "$PRUNED_TS" | tr -d ' ,"' | grep -qxF "$wf_slug"; }; }; then
+  pass "monitor-slug '$wf_slug' is declared in cron-monitors.tf or registered pruned"
 else
-  fail "slug agreement" "tf name '$tf_name' slugifies to '$tf_slug' but the workflow checks into '$wf_slug'"
+  fail "slug declaration" "workflow checks into '$wf_slug', which is neither a declared monitor nor a registered pruned slug"
 fi
 
 echo "== cross-file: model.c4's enumeration matches live cron-monitors.tf =="

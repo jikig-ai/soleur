@@ -43,7 +43,10 @@
 # (follow-through), PR-3 #4227 closing issue #4211 (oauth-probe), PR-4
 # closing issue #4235 (github-app-drift-guard).
 #
-# CLAUDE-EVAL COHORT — 60-min margin (NOT 30). The 12 `max_runtime_minutes = 55`
+# CLAUDE-EVAL COHORT — 60-min margin (NOT 30). ALL 12 monitors below were
+# destroyed by the #6590 PR-B prune (their emitters void-post by design, spec
+# NG4); the margin rationale is retained because it is the documented sizing
+# basis other stanzas cite. The 12 `max_runtime_minutes = 55`
 # monitors (scheduled_bug_fixer, scheduled_community_monitor, scheduled_roadmap_review,
 # scheduled_legal_audit, scheduled_agent_native_audit, scheduled_competitive_analysis,
 # scheduled_content_generator, scheduled_ux_audit, scheduled_campaign_calendar,
