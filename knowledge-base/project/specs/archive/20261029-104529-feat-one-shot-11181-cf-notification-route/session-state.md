@@ -15,6 +15,15 @@
 - A later patch context was already superseded; its verification failure was investigated by re-reading the worktree, and no change was lost.
 - Two follow-up patches for the learning/session records failed verification because the expected text did not match the current recovery wording; neither failed attempt changed files. Re-read the exact text and reapplied with the matching context.
 - Status checks against the old `chore-learning-cf-token-route` worktree failed because it no longer existed. `gh pr view 11479` confirmed the PR had merged; the source blob was verified through `origin/main` instead.
+- A first post-merge `gh pr view` jq filter omitted the dot before `headRefName` and failed; corrected the object selector and verified the merged state.
+- The first `pipeline-tally.sh show` on the new follow-up branch reported a missing ledger; initialized the branch tally before continuing.
+- The first pre-push secret scan ran before a commit and reported `range=0 scanned=0`. It did not cover pending edits; rerun after commit and require a non-empty range.
+- The first deploy-arm lookup used `scripts/deploy-arm.sh` instead of `plugins/soleur/scripts/deploy-arm.sh`; the corrected plugin path found the release arm.
+- Two Phase 7 poll windows reached their 90-minute bounds while #11456 remained queued; a later re-armed canonical poll observed the merge.
+- A double-quoted `gh issue comment` body expanded backticks as command substitutions and stripped several inline-code phrases. Inspected the comment and corrected it using a quoted body file and `gh api --input`.
+- One absolute file read used stale line bounds after test edits (tool reported 568 lines; `wc -l` returned 763). Re-anchored with a shell read from the exact worktree.
+- One GraphQL queue query requested unsupported `MergeQueueEntry.headRefOid` and `baseRefOid` fields. Removed those fields; queue state was read with the supported position/state/enqueuedAt/PR-number selection.
+- One `ci-head-verdict.sh wait-ready-run` call returned `no-ready-event` because the PR had already transitioned to ready; the canonical verdict command located the full run in progress.
 - Review fixes were committed before the final-panel dedup ledger was persisted. Reconciled all findings and recorded the ledger below before starting the targeted round; no more fixes will be dispatched without a durable ledger.
 - Several combined plan/tasks/session-state patches failed verification because an expected count line belonged to another file or a long archive-path context was stale; no edits landed. Re-read each target and split updates by file.
 
@@ -112,7 +121,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 
 - The required `cleanup-merged` session-start run skipped its temp sweep because `/home/jean/.local/state/soleur/tmp-guard.lock` was contended. `lslocks` and `fuser` showed no holder by the time it was investigated; no temp cleanup was attempted outside the lock.
 - Hash verification initially looked for the learning source at the old `/data/.../soleur/knowledge-base/` checkout path and returned not-found; a broad recursive search timed out. A registered-worktree inventory scan found the source in `chore-learning-cf-token-route`; PR #11479 later merged the same blob to `origin/main` (SHA-256 still matches the feature copy).
-- The final-review security finding flagged account-specific token-inventory detail in the learning. PR #11479 was already merged to public `main`; the user authorized redaction. Redact it in a follow-up PR after #11456 merges, avoiding an add/add conflict on this stale feature branch and leaving published Git history intact.
+- The final-review security finding flagged account-specific operational detail in the learning. PR #11479 was already merged to public `main`; the user authorized redaction. This post-merge follow-up applies it after #11456, avoiding an add/add conflict on the stale feature branch and leaving published Git history intact.
 - A PR-body update command was interrupted before execution because its shell payload contained NUL sentinels. Live PR re-read confirmed the body and labels were unchanged; retry with `--body-file`.
 - The PR has no `Review-Evidence:` comment yet; arming requires evidence for the final pushed head after all fix commits and the targeted review/verifier.
 - Ship Phase 6.45 merge-mode overlap preflight exited 13 for the known shared learning with PR #11479; no changes were made to that PR. The plan and spec are archived under `knowledge-base/project/plans/archive/20261029-104529-2026-10-28-fix-cloudflare-notifications-route-plan.md` and `knowledge-base/project/specs/archive/20261029-104529-feat-one-shot-11181-cf-notification-route/`; the live-path reference sweep found no remaining references outside archives.
@@ -123,7 +132,18 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 - Final-head panel at `20fe76bd0c5244e0399481eedadccf015bbda5d3`: eight seats returned. Findings: P2 proxy-selector coverage; P3 mixed proxy/target, query-suffix, HTTP-201, and duplicate-guidance gaps; P3 token-inventory detail was verified pre-existing on `origin/main` after #11479 merged.
 - Fixed the test/design findings: mock and D-conf cover all supported curl proxy selectors, `--noproxy '*'` is exact, mixed-target and query-suffix controls exist, and 201 is denied. Removed duplicate sharp-edge guidance.
 - Focused suite passed 200/200; `bash -n`, warning-severity ShellCheck, and `git diff --check` pass. No affected full-gate pass is claimed; capacity remains contended and CI's required `test` is authoritative.
-- User authorized redaction of the pre-existing learning detail; apply it in a follow-up PR after #11456 merges to avoid an add/add conflict on this stale branch. Do not rewrite the already-published commit history.
+- User authorized redaction of the pre-existing learning detail; this follow-up applies it after #11456 merged, avoiding an add/add conflict. No already-published commit history is rewritten.
+
+## Post-Merge Verification and Redaction Follow-Up
+
+- PR #11456 merged as `c5fd25cb4f430e12c7063e9e3315f5e37cd60ec7`. Main CI run `40918403358` passed.
+- Deploy arm `40919197619` completed its deploy successfully; `deploy-arm.sh find` returned `MATCH=exact DEPLOY=success CI=success`, and `served` returned `CONTAINS BUILD_SHA=c5fd25cb4f430e12c7063e9e3315f5e37cd60ec7`. `/health` returned status `ok`, Supabase `connected`, and the same build SHA.
+- Post-merge observability: no open `ci/inngest-down` issue; no Sentry or Better Stack read-only token was present in environment, so those vendor checks were skipped without accessing Doppler. No Sentry issue was identified for error-delta measurement.
+- Live verification, browser verification, and sole-copy read-back were skipped because the PR changed no UI or triggering infra paths. KB archival read-back was clean: all added plan/spec artifacts were under `archive/`. Feature-tweet was ineligible because the PR is a fix.
+- Closed duplicate #11480 and posted the post-merge verification result. The stale merge-queue alert #11537 was closed as a false positive after confirming #11456 remained queued at position 2 and merge-group run `40907797551` was in progress.
+- The route learning had been byte-identical at the time #11456 merged. Per explicit user authorization, this follow-up redacts its account-specific operational detail while preserving the general credential-correlation lesson; the prior published commit history is unchanged.
+- Compound session-error inventory and recurring/one-off triage were completed before editing. The test-failure learning now records the resumed ship/post-merge and follow-up tooling errors with prevention guidance; total Session Errors: 36.
+- The pinned markdown-lint runner reported these knowledge-base files are excluded by `.markdownlintignore`; no markdownlint verdict is claimed. `git diff --check` passed. The current diff is documentation-only.
 
 ### Final-review dedup-before-fixing ledger
 
@@ -134,7 +154,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 | Direct mock boundary fixture rejected a path suffix but not a query suffix | `notifications-query-suffix-boundary` | `structural-enumeration` | `7c91fe2d1c` |
 | No Notification 2xx fixture proved that a valid array on HTTP 201 remains denied | `notifications-non200-2xx-status` | `structural-enumeration` | `7c91fe2d1c` |
 | Two identical curl-mock guidance bullets were present | `duplicate-curl-mock-guidance` | `git-history-analyzer`, `pattern-recognition-specialist`, `architecture-strategist`, `code-quality-analyst` | `7c91fe2d1c` |
-| The learning's token-inventory anecdote is on current public `main` via merged #11479 | `token-inventory-learning-disclosure` | `security-sentinel` | Separate redaction PR after #11456 merges; user authorized, no history rewrite |
+| Account-specific operational detail in the learning is on public `main` via merged #11479 | `token-inventory-learning-disclosure` | `security-sentinel` | This authorized post-merge redaction follow-up; no history rewrite |
 
 ## Targeted Fix-Review Round 1
 

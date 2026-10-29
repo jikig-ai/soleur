@@ -263,6 +263,69 @@ extra URL earlier in the argument vector.
 - **Prevention:** Inspect the aggregator's warning path before interpreting
   filtered rows as source-log deletion or complete telemetry.
 
+**Two bounded Phase 7 polls timed out while the PR remained queued.**
+
+- **Recovery:** Re-read the live queue and merge-group run; re-armed the canonical
+  poll, which eventually observed `MERGED`.
+- **Prevention:** Treat a bounded timeout as nonterminal; inspect queue/run state
+  and resume the canonical poll until explicit `MERGED` or queue removal.
+
+**The ready-run waiter returned `no-ready-event` after the PR was already ready.**
+
+- **Recovery:** Used `ci-head-verdict` to find the full CI run in progress and
+  followed that run through success.
+- **Prevention:** On a missing ready event, inspect current PR readiness and use
+  the CI-head verdict recovery path instead of retrying the ready action.
+
+**A GraphQL queue query requested unsupported `MergeQueueEntry` fields.**
+
+- **Recovery:** Removed `headRefOid` and `baseRefOid`; the supported queue-state
+  query returned position, state, enqueue time, and PR number.
+- **Prevention:** Start with fields documented by the live schema and expand a
+  GraphQL query only after the minimal query succeeds.
+
+**The first post-merge deploy-arm lookup used a repository-root path that did not exist.**
+
+- **Recovery:** Re-read the repository path and reran
+  `plugins/soleur/scripts/deploy-arm.sh` from the detached main worktree.
+- **Prevention:** Resolve helper paths from the repository tree before running
+  commands copied from a skill example.
+
+**A `gh pr view` jq filter omitted the object-field dot.**
+
+- **Recovery:** Corrected `branch:headRefName` to `branch:.headRefName`; the
+  follow-up query returned the merge commit and branch.
+- **Prevention:** Use dot-prefixed jq field selectors and validate the filter on
+  one response before relying on it.
+
+**Backticks in a double-quoted issue-comment argument triggered shell substitution.**
+
+- **Recovery:** Inspected the posted comment, then corrected it using a quoted
+  body file and `gh api --input`.
+- **Prevention:** Put Markdown comments in a body file; do not interpolate
+  backtick-containing prose into a double-quoted shell argument.
+
+**A file-read offset was stale after the test file changed.**
+
+- **Recovery:** Rechecked the current line count with `wc -l` and read the D-conf
+  block through the shell from the exact worktree.
+- **Prevention:** Recompute offsets after edits; when a tool reports stale bounds,
+  re-anchor on current content and verify from the same worktree.
+
+**The new follow-up branch's tally was read before its ledger was initialized.**
+
+- **Recovery:** Initialized the branch-local tally, then confirmed all counters
+  start at zero.
+- **Prevention:** Run `pipeline-tally.sh init` before `show`, `gate`, or `incr` on
+  a new branch.
+
+**The pre-push secret scan ran before the follow-up commit and scanned an empty range.**
+
+- **Recovery:** Recognized `range=0 scanned=0` as no coverage; rerun the scan after
+  committing and require a non-empty scanned range before pushing.
+- **Prevention:** Run the pre-push scan only after changes are committed; never
+  present an empty-range CLEAN result as a scan of pending edits.
+
 ## Solution
 
 The mock now distinguishes actual transfer-target forms from proxy settings:
