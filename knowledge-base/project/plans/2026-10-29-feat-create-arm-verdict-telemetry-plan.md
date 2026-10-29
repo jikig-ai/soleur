@@ -11,7 +11,7 @@ type: docs
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-29
-**Sections enhanced:** 3 (Phase 1 invariant, reading table, Acceptance Criteria unchanged)
+**Sections enhanced:** 3 (Phase 1 invariant, reading table (now in the runbook), Acceptance Criteria widened)
 **Passes run:** the always-on halts (4.6 user-brand present with threshold none and scope-out; 4.7 skipped, pure
 knowledge-base Files-to-Edit; 4.8 PAT sweep clean; 4.9, 4.10, 4.11, 4.13 not triggered; 4.12 one unfenced
 `## Scope Check`), a verify-the-negative sweep on the plan's negative claims against source, and a check that every
@@ -146,7 +146,7 @@ fields" and `### Review checklist for a create draft`. It states, in this order:
    create naming a pattern that was not offered, ends `no_action` with reason `other`, so `other` with `create_offered > 0` is either the model's own
    `other` or that backstop. Nothing on the marker reliably separates them: the same-run branch leaves neither
    `ledger_suppressed` nor a `refusal_detail` entry, and the edit loop also increments both, so a raised
-   `ledger_suppressed` can sit beside the model's own `other`. Read an unchanged or absent value as unknown, never as
+   `ledger_suppressed` can sit beside the model's own `other`. Read a zero or absent value as unknown, a non-zero one as a hint, never as
    the model's. The arm makes one call with one verdict, so there
    is nothing to count.
 2. The reading table. The runbook subsection is its single home (values taken verbatim from
@@ -260,8 +260,10 @@ consulted through the CTO ruling above, which is the technical-fork mechanism, n
 2. The runbook has exactly one `### Reading a live-fire row` heading, and every marker value named in its table
    exists in the types: run
    `grep -o '`[a-z_0-9-]*`' <(awk '/^### Reading a live-fire row/{f=1;next}/^### /{f=0}f' knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md) | sort -u`
-   and confirm each token is a `create_*` field, a member of `CREATE_NO_ACTION_REASONS`, `CREATE_REFUSAL_CLASSES`,
-   a `create_outcome` value, or a `create_detail` token the code emits (the parity census list).
+   and confirm each token is a `create_*` field, a marker key (`ledger_suppressed`, `refusal_detail`), a member of
+   `CREATE_NO_ACTION_REASONS` or `CREATE_REFUSAL_CLASSES`, a `create_outcome` value, a `create_detail` token the code
+   emits (the parity census list), or a named telemetry term (`SOLEUR_CLAUDE_COST`, `output_tokens`, `cost_usd`,
+   `extra.cause`, `extra.threshold`, `OVERLAP_REFUSE_THRESHOLD`).
 3. `cd apps/web-platform && npx vitest run test/server/compound-promote-runbook-parity.test.ts` passes
    unchanged (the "`create_detail` values by class" table has not been touched).
 4. The PR body says "Ref #10550", never "Closes", states that this is documentation only with no behaviour change,
