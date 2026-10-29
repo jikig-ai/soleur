@@ -248,7 +248,7 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
 
     // The REAL probe saw the original message: exactly one event, classified from the raw text.
     await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
-    expect((authEmits()[0][1] as { tags: { match_kind: string } }).tags.match_kind).toBe("not_logged_in");
+    expect((authEmits()[0][1] as unknown as { tags: { match_kind: string } }).tags.match_kind).toBe("not_logged_in");
   });
 
   test("session_expired is bubble-only: friendly text, no recovery frame", async () => {
