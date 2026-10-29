@@ -61,3 +61,9 @@ None blocking. Devin subagent has no Task/Skill tool — plan and deepen-plan fa
 - Filed: #11553 (deferred-scope-out + meta/machinery) — sibling-probe sort-pin census + candidate lint (step-3.6 null guardrail).
 - Deviation analyst: `cq-never-skip-hooks` bypass row on 89b20b10f noted (already incident-logged); rule budget [WARN] B_ALWAYS=44390; constitution 320/300 → no promotions, no AGENTS.md adds.
 - Spec archival DEFERRED to ship Phase 6.45 (ship Phase 6 step 2.5 reads decision-challenges.md live).
+
+## Ship Phase — CI failure diagnosis (checkpoint)
+- test-scripts (4/8) FAILED on merge head 12953c29d4: `scripts/test-affected-kb-consumers` — new argv-code edge `scripts/followthroughs/discord-blog-webhook-fallback → knowledge-base/marketing/distribution-content` uncovered by baseline.
+- Fix in flight: `bash scripts/test-affected-kb-consumers.test.sh --write-baseline` → commit + push.
+- PR #11543 ready, auto-merge ARMED; ship subagent (8a6f1e81) in Phase 7 poll.
+- Parent AC chain done: postmerge 347d3812 verified+commented; #11531 closed (fixed by dfd4fd48f4); tracker #11549 filed (sweeps from 2026-11-03T15:30Z).
