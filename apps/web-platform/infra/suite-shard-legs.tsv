@@ -12,6 +12,7 @@ apps/web-platform/infra/apex-single-node-replace.test.sh	2
 apps/web-platform/infra/apt-bounded.test.sh	1
 apps/web-platform/infra/arm-heartbeats.test.sh	3
 apps/web-platform/infra/audit-bwrap-uid.test.sh	3
+apps/web-platform/infra/betterstack-alert-structure.test.sh	2
 apps/web-platform/infra/bwrap-userns-sysctl.test.sh	3
 apps/web-platform/infra/canary-bundle-claim-check.test.sh	4
 apps/web-platform/infra/cat-deploy-state.test.sh	1

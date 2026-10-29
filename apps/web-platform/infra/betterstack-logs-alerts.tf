@@ -366,6 +366,13 @@ resource "logtail_exploration" "inngest_luks_key_probe_fail" {
   }
 }
 
+# AUTO-RESOLVE WINDOW (#11388; comment only, the attributes below are unchanged). An incident here resolves only after
+# the count has read 0 for a full recovery_period (3600 s). While the probe keeps failing it re-emits hourly, so each
+# failing row leaves a ~2700 s gap of zeros (900 s window, then silence), shorter than recovery_period, and the incident
+# stays open. After the LAST failing row it resolves about 4500 s (1.25 h) later, so at least one non-`fail_` hourly emit
+# (`ok` or `indeterminate`) has landed first, and a single non-`fail_` emit between two failing rows leaves a gap of up to
+# ~6300 s, which is enough to resolve and re-page once. Resolving is not proof of recovery: only a `token=ok` row is.
+# The same window is recorded in betterstack-log-query.md.
 resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
   name           = "soleur-inngest-luks-key-probe-fail-prd"

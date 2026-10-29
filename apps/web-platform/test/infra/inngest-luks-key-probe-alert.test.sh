@@ -209,7 +209,10 @@ done
 
 # Census over the .tf: the declared key-probe set is exactly the ONE paging pair (a second silently
 # added resource, the dead-man included, is a finding).
-_declared="$(sed -n 's/^resource "logtail_exploration\(_alert\)\{0,1\}" "\(inngest_luks_key_probe_[A-Za-z0-9_]*\)" {$/\2/p' "$TF" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
+# The stem is the bare `inngest_luks_key_probe` (so `inngest_luks_key_probe2_fail` and the bare stem are counted, #11388),
+# leading whitespace and a trailing comment after the brace do not hide a header, and a family-wide structural
+# suite (apps/web-platform/infra/betterstack-alert-structure.test.sh) independently enforces one alert per exploration.
+_declared="$(sed -n 's/^[[:space:]]*resource[[:space:]]\{1,\}"logtail_exploration\(_alert\)\{0,1\}"[[:space:]]\{1,\}"\(inngest_luks_key_probe[A-Za-z0-9_]*\)"[[:space:]]*{.*$/\2/p' "$TF" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
 [ "$_declared" = " 2 inngest_luks_key_probe_fail;" ] \
   && ok "the .tf declares exactly the one key-probe pair (the name once as an exploration and once as an alert)" \
   || no "declared key-probe resources are not exactly the one paging pair: $_declared"
@@ -295,6 +298,47 @@ PY
     esac
   }
 
+  # A must-PASS row: a legitimate edit (here a comment) must NOT red the guard (rc 0 is the only pass).
+  mutate_green() {  # mutate_green <label> <TF> <python-program-on-s>
+    local label="$1" which="$2" prog="$3" copy rc=0
+    [ "$which" = TF ] || { printf '[FATAL] mutate_green: only TF is wired\n' >&2; exit 2; }
+    copy="$MUT_DIR/betterstack-logs-alerts.tf"
+    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
+import sys
+p = sys.argv[1]
+$PRELUDE
+orig = open(p, encoding="utf-8").read()
+s = orig
+$prog
+assert s != orig, "mutation produced no change"
+open(p, 'w', encoding="utf-8").write(s)
+PY
+    KEYPROBE_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    case "$rc" in
+      0) ok "must-PASS stays green: $label" ;;
+      1) no "legitimate edit went RED: $label" ;;
+      *) no "must-PASS UNRESOLVED (inner rc=$rc): $label - instrument, not evidence" ;;
+    esac
+  }
+
+  # Raising PRESENCE_ROWS above what an inner run asserts must trip the assertion floor (the floor is
+  # pass+fail >= floor, so only a RAISE reds; lowering it cannot). The scratch copy gets every path through
+  # the override env, so nothing resolves relative to its own location.
+  mutate_floor_red() {  # mutate_floor_red <label>
+    local label="$1" copy rc=0
+    copy="$MUT_DIR/floor-mutated.test.sh"
+    sed 's/^PRESENCE_ROWS=30$/PRESENCE_ROWS=31/' "$SELF" > "$copy"
+    if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
+    KEYPROBE_GUARD_TF="$TF" KEYPROBE_GUARD_WF="$WF" KEYPROBE_GUARD_FLIP="$FLIP" KEYPROBE_GUARD_RB="$RB" \
+      MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      1) ok "mutation RED: $label" ;;
+      0) no "mutation SURVIVED: $label - the assertion floor pins nothing" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label - instrument, not evidence" ;;
+    esac
+  }
+
   mutate_red "paging SQL widens to every marker row (token=fail_ dropped)" TF \
     's = edit(s, FAILSQL, "\n      AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"token=fail_"+Q+") > 0", "", SQLEND)'
   mutate_red "paging SQL starts naming indeterminate (an unmeasured verdict would page)" TF \
@@ -323,6 +367,19 @@ s = s.replace(old, old + "              -target=logtail_exploration.inngest_luks
     's = s.replace("SOLEUR_INNGEST_LUKS_KEY_PROBE ${row}", "SOLEUR_INNGEST_LUKS_KEY_PROBX ${row}")'
   mutate_red "the script renames a paging token away from the fail_ prefix" FLIP \
     's = s.replace("luks_probe_finish fail_header 1 uuid", "luks_probe_finish bad_header 1 uuid")'
+  # #11388 declared-set census (widened stem): a sibling whose name only STARTS with the stem escaped the old
+  # `inngest_luks_key_probe_` census (probe2), as did the bare stem and a header with a trailing comment.
+  mutate_red "a second pair named inngest_luks_key_probe2_fail joins the .tf (the old census stem missed it)" TF \
+    's = s + "\nresource \"logtail_exploration\" \"inngest_luks_key_probe2_fail\" {\n}\n\nresource \"logtail_exploration_alert\" \"inngest_luks_key_probe2_fail\" {\n}\n"'
+  mutate_red "a pair named by the bare stem inngest_luks_key_probe joins the .tf after the compliant first" TF \
+    's = s + "\nresource \"logtail_exploration\" \"inngest_luks_key_probe\" {\n}\n\nresource \"logtail_exploration_alert\" \"inngest_luks_key_probe\" {\n}\n"'
+  mutate_red "the paging alert check_period widens from 300 to 3600" TF \
+    's = edit(s, FAILAL, "check_period        = 300", "check_period        = 3600")'
+  mutate_red "a probe2 header with a trailing comment after the opening brace (the census sed was anchored on the brace)" TF \
+    's = s + "\nresource \"logtail_exploration\" \"inngest_luks_key_probe2_fail\" { # trailing comment\n}\n"'
+  mutate_floor_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor"
+  mutate_green "the declared set is still the one pair; only a comment above the paging alert is reworded" TF \
+    's = s.replace("# Presence-only, so safe before the probe is delivered", "# Presence-only (reworded), so safe before the probe is delivered")'
   mutate_red "the dead-man is smuggled back: a dark SQL local joins the .tf" TF \
     'old = "  inngest_luks_key_probe_runbook_url ="
 assert s.count(old) == 1
@@ -333,7 +390,7 @@ fi
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
 PRESENCE_ROWS=30
-MUT_ROWS=13
+MUT_ROWS=19
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
