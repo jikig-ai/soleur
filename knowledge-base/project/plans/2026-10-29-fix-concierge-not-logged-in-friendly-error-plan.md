@@ -16,6 +16,25 @@ requires_cpo_signoff: true
 
 # fix: the Concierge shows the raw Claude CLI "Not logged in" line - root cause plus a friendly error
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** Research Insights (measured CLI table, plan-review dispositions), Part 1, Part 2, Guard Contract (3 guards), Observability, Domain Review, Acceptance Criteria.
+**Agents used:** learnings-researcher, CTO (rulings F1-F13, three rounds), CPO (two passes), plan-review panel of seven (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, UX lead, CPO), plus bounded local measurement (bundled CLI binaries, `env -i`, synthesized values) and code verification.
+
+### Key Improvements
+
+1. Root cause reproduced locally instead of inferred: the exact Sentry tuple is produced by a stored subscription-token value of an API-key shape or with an embedded space; the "Cloud gateway" lead is closed as the `claude auth status` renderer.
+2. Review-driven corrections that change behavior: the `key_invalid` frame is sent only for terminal kinds and only after `stream_end` (a mid-stream frame would turn the friendly bubble into an interrupted chip); the lease predicate is narrowed to measured classes so a future token shape is never locked out; the matcher is extracted into a permanent module so the #11085 removal checklist cannot delete what the friendly error depends on; one frame builder covers all four producers of the frame.
+3. Scope trimmed where reviewers showed no property bought (`BYOK_LEASE_CAUSES` edit, source-grep and logger-scan tests, a second warn latch); two real gaps filed as tracked follow-ups (#11524, #11525).
+
+### New Considerations Discovered
+
+- The legacy runner has no tap: it calls the probe inline, so the "matcher before rewrite" guarantee needs a per-runner test (Guard 2).
+- Old browser tabs parse the error frame with the previous strict schema and drop a frame carrying the new key (accepted for the rollout window; the persisted bubble still shows).
+- The deepen halts ran mechanically: Phase 4.6, 4.7, 4.8, 4.11 (`lint-guard-contract.py`: 3 entries, green), 4.12 pass; 4.10, 4.13, 4.55 not triggered (no store, no new autonomous task, no downtime operation). Phase 4.9 matches the UI glob superset through `components/chat/chat-surface.tsx` with no committed `.pen`; resolved as the "pure copy" exclusion and recorded as a challengeable taste row in `decision-challenges.md` because Pencil Desktop is unavailable here.
+- Cited issues verified live (all OPEN): #11086, #10455, #11085, #11524, #11525, #3242, #3243, #3374, #3280, #8629; cited rule ids verified active in `AGENTS.md`/`AGENTS.rules.md`.
+
 Spec lacks valid lane: - defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this one-shot branch.
 
 ## Overview
@@ -399,7 +418,7 @@ Layers: unit unless noted.
 **Decision:** auto-accepted (pipeline)
 **Agents invoked:** soleur:product:cpo
 **Skipped specialists:** none
-**Pencil available:** N/A (no new component or page; existing `ErrorCard` and settings form reused, title/label strings varied by enum)
+**Pencil available:** hard-blocked (Pencil Desktop not installed; `check_deps.sh --auto` did not complete). No `.pen` is committed: the only `components/**` edit is two strings (title, action label) chosen by an enum on the existing `ErrorCard` in `chat-surface.tsx`, which `ui-surface-terms.md` excludes as a pure copy tweak with no structural change; the UX lead advised no wireframe. Recorded as a challengeable taste row in `decision-challenges.md`; QA covers four visual states (tenant card, operator card, reloaded history, the Settings 400).
 
 #### Findings
 
