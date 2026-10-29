@@ -87,6 +87,7 @@ plugins/soleur/skills/preflight/SKILL.md|doc snippet — canonical form, recorde
 plugins/soleur/skills/preflight/references/check-13-founder-check.md|doc snippet — canonical form, recorded
 plugins/soleur/scripts/merge-effect-class.sh|measurement only — compares the byte count with and without NUL to refuse a NUL-bearing path list; never emits sanitized output
 plugins/soleur/scripts/lib/affected-tests/content-trigger.sh|parser input only — drops NUL bytes from git diff output before the awk added-line scan so a NUL cannot truncate a line; the stream is never emitted as sanitized output
+plugins/soleur/skills/registry-breakglass-mirror/scripts/mirror-ghcr-to-zot.sh|self-contained incident script — runs on a bare datacenter host with no repo lib to source; die() strips C0+DEL from registry/crane error text before echoing (escape-sequence refuse, same class)
 EOF
 )
 
