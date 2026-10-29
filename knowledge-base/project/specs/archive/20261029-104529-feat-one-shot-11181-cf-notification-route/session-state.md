@@ -18,7 +18,8 @@
 - A first post-merge `gh pr view` jq filter omitted the dot before `headRefName` and failed; corrected the object selector and verified the merged state.
 - The first `pipeline-tally.sh show` on the new follow-up branch reported a missing ledger; initialized the branch tally before continuing.
 - The first pre-push secret scan ran before a commit and reported `range=0 scanned=0`. It did not cover pending edits; rerun after commit and require a non-empty range.
-- The first deploy-arm lookup used `scripts/deploy-arm.sh` instead of `plugins/soleur/scripts/deploy-arm.sh`; the corrected plugin path found the release arm.
+- Initial deploy-arm and affected-tests lookups used `scripts/...` at repo root instead of `plugins/soleur/scripts/...`; a repository-scoped glob found the correct paths.
+- The correct affected-tests invocation emitted a Bun 1.4.4 vs expected 1.4.2 warning and exceeded the shell's 180s timeout while sibling suites were active. Its process later disappeared without a terminal marker; no local affected-test verdict is claimed.
 - Two Phase 7 poll windows reached their 90-minute bounds while #11456 remained queued; a later re-armed canonical poll observed the merge.
 - A double-quoted `gh issue comment` body expanded backticks as command substitutions and stripped several inline-code phrases. Inspected the comment and corrected it using a quoted body file and `gh api --input`.
 - One absolute file read used stale line bounds after test edits (tool reported 568 lines; `wc -l` returned 763). Re-anchored with a shell read from the exact worktree.
@@ -143,8 +144,10 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 - Live verification, browser verification, and sole-copy read-back were skipped because the PR changed no UI or triggering infra paths. KB archival read-back was clean: all added plan/spec artifacts were under `archive/`. Feature-tweet was ineligible because the PR is a fix.
 - After merge, duplicate #11480 was closed and the post-merge verification result was posted to it.
 - The route learning had been byte-identical at the time #11456 merged. Per explicit user authorization, this follow-up redacts its account-specific operational detail while preserving the general credential-correlation lesson; the prior published commit history is unchanged.
-- Compound session-error inventory and recurring/one-off triage were completed before editing. The test-failure learning now records the resumed ship/post-merge and follow-up tooling errors with prevention guidance; total Session Errors: 36.
+- Compound session-error inventory and recurring/one-off triage were completed before editing. The test-failure learning now records the resumed ship/post-merge and follow-up tooling errors with prevention guidance; total Session Errors: 37.
 - The pinned markdown-lint runner reported these knowledge-base files are excluded by `.markdownlintignore`; no markdownlint verdict is claimed. `git diff --check` passed. The current diff is documentation-only.
+- The local affected-test attempt produced no verdict under sibling-run contention; use the follow-up PR's required CI `test` result as the authoritative gate.
+- Redaction follow-up review found and fixed one P3 chronology ambiguity; commit `a1f99afad5` was verified by one targeted code-quality pass with no findings.
 
 ### Redaction follow-up review
 

@@ -284,12 +284,22 @@ extra URL earlier in the argument vector.
 - **Prevention:** Start with fields documented by the live schema and expand a
   GraphQL query only after the minimal query succeeds.
 
-**The first post-merge deploy-arm lookup used a repository-root path that did not exist.**
+**Two ship-helper lookups initially omitted the `plugins/soleur/` path prefix.**
 
-- **Recovery:** Re-read the repository path and reran
-  `plugins/soleur/scripts/deploy-arm.sh` from the detached main worktree.
+- **Recovery:** `scripts/deploy-arm.sh` and `scripts/affected-tests.sh` were not
+  found at repository root. Resolved both with a repository-scoped glob and used
+  `plugins/soleur/scripts/` paths.
 - **Prevention:** Resolve helper paths from the repository tree before running
   commands copied from a skill example.
+
+**The local affected-suite run timed out without producing a verdict.**
+
+- **Recovery:** Capacity was contended; the correct script emitted a Bun-version
+  warning and the shell call timed out before a terminal marker. The child process
+  later disappeared; no local pass is claimed, and CI remains authoritative.
+- **Prevention:** Follow the gate's bounded refusal-wait protocol and preserve the
+  runner's terminal marker; a command timeout without a marker is unresolved, not
+  a pass or a test failure.
 
 **A `gh pr view` jq filter omitted the object-field dot.**
 
