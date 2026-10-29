@@ -308,7 +308,7 @@ resolve_for() { # $1=name $2=env-override $3=env-name → prints IPv4 or dies 2
 }
 
 # ── curl wrappers: TLS verification intact; credentials ride stdin only. ──────
-_bearer_ok() { local LC_ALL=C v="${1:-}"; v="${v%"${v##*[![:space:]]}"}"; case "$v" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
 RES=()   # per-command --resolve args, populated by resolve_ghcr_names()
 TOK=""   # the GHCR pull bearer; unset after the pull phase
