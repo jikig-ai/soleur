@@ -180,8 +180,8 @@ done
 
 [[ "$ZOT_TARGET" =~ ^[a-zA-Z0-9.-]+:[0-9]+$ ]] \
   || die 1 "ZOT_TARGET must look like host:port (got '${ZOT_TARGET}') — the push and the sink credentials would go to a host you did not name."
-[[ "${CRANE_TIMEOUT:-900}" =~ ^[0-9]+$ ]] \
-  || die 1 "CRANE_TIMEOUT must be a positive-integer second count (got '${CRANE_TIMEOUT:-}')."
+[[ "${CRANE_TIMEOUT:-900}" =~ ^[1-9][0-9]*$ ]] \
+  || die 1 "CRANE_TIMEOUT must be a positive-integer second count (got '${CRANE_TIMEOUT:-}') — 0 disables the bound."
 
 REPO="${1:-}"
 [[ $# -ge 1 ]] || { usage >&2; die 1 "<repo> and at least one <ref> are required."; }

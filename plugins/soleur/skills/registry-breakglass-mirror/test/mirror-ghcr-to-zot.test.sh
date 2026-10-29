@@ -94,7 +94,7 @@ exit 0
 EOF
 cat > "$STUB/crane" <<EOF
 #!/usr/bin/env bash
-echo "STUB-CRANE-INVOKED \$*" >> "\$CRANE_LOG"
+echo "STUB-CRANE-INVOKED \$*" >> "\${CRANE_LOG:-/dev/null}"
 sub="\$1"; shift 2>/dev/null || true
 ref=""
 for a in "\$@"; do case "\$a" in *@sha256:*|*:sha256-*) ref="\$a" ;; esac; done
