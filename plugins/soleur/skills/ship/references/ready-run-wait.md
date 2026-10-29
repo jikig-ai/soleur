@@ -34,3 +34,29 @@ Never arm on the wait's own non-zero outcome: report "readied but unarmed" with 
 `ci-head-verdict.sh verdict` answers one of six states: `n/a` (never readied, a draft now, or a repo without the mechanism), `full-decided`, `pending-full`, `no-run`, `stalled`, `awaiting-approval`. `pending-full` and `no-run` are PENDING, not a failure; `stalled` (no deciding run 120 minutes after the later of the ready event and the head's first appearance in CI; the clock is defined in the `ci-head-verdict.sh` header and `--help`) and `awaiting-approval` end the watch with no fix loop. On `full-decided` and `n/a` the red row is a real failure. Exit 3 prints `state=error`, which is none of the six: readers keep today's reading, so an outage never turns a real red `test` into a wait. `no-run` with reason `conflicting` is a PR with a merge conflict: GitHub builds no merge ref for it, so no run can appear; resolve the conflict, never undo/ready. `stalled` can also describe a slow healthy run: open the Actions tab before undoing, because `gh pr ready --undo` then ready cancels an in-flight ready run and starts the battery again. A red `test` that persists on a PR readied more than 120 minutes ago, with no STALLED message: run `ci-head-verdict.sh verdict PR_NUMBER` yourself, because the consumers drop the reason; `state=error reason=no-check-suites` means recover as for `stalled`.
 
 When diagnosing a failed `test` on a ready PR, take the run id from the verdict marker's `run=` (the deciding run), not from `gh run list --commit`: a ready head carries the draft run too, and its only red text is the by-design line.
+
+## A green verdict that never enqueues: the required-context set (`required`)
+
+`verdict` reads only the `test` row of ci.yml pull_request runs. A `full-decided` verdict with auto-merge armed does not prove that every ruleset-required context exists on the head: a context owned by another workflow can be absent for good (for example `cla-evidence`, whose `pull_request_target` run was cancelled during a push), `gh pr checks` lists only checks that exist, and the PR sits un-enqueued. When the verdict is `full-decided`, auto-merge is armed and the PR is still not in the merge queue after about 10 minutes, run the read-only set check on a ready PR:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" required PR_NUMBER
+```
+
+It runs `admin-merge-ready.sh` without `--wait` (nothing is merged or changed) and prints `RECOVERY` lines, then, as the last stdout line, `SOLEUR_CI_REQUIRED_SET state=<complete|absent|pending|failed|error> pr=<N> sha=<H|-> required=<n|-> reason=<token> absent=<json|-> pending=<json|-> failed=<json|->`. **Read the marker, not the exit code**: `complete`, `absent`, `pending` and `failed` all exit 0, so an `&&` chain reads them as success; only `error` exits 3.
+
+| State | Meaning | Do |
+|---|---|---|
+| `complete` | the resolver reports every required context present and green (not provenance: a check run named like a required context is the known limit stated in `admin-merge-ready.sh`) | the missing piece is not the set; keep waiting for the queue, or look at the merge queue itself |
+| `absent` | a required context never reported; the names are in `absent=[...]` | follow the `RECOVERY rerun` lines below. Do not sync the branch and do not re-arm auto-merge: neither makes an absent context appear |
+| `pending` | a required context is still running | wait; with reason `awaiting-approval` a maintainer must approve the fork workflow run first |
+| `failed` | a required context failed | read it with `gh pr checks PR_NUMBER`; with reason `stale-row` use the `--undo` recovery in the table above |
+| `error` | nothing could be proven (read failure, unprovable child output, or a PR the resolver cannot certify) | keep your current reading and do not guess; `head-moved` or `not-open` can be replication lag between the REST and GraphQL reads, so retry once. `untrusted-ci` (the PR edits `.github/workflows/` or `.github/actions/`) is an `error` with no recovery text: such a PR has no agent path and the operator merges it by hand |
+
+The reason vocabulary. Reasons `required` emits itself: `api-error`, `missing-tool`, `mktemp`, `no-admin-merge-ready`, `no-marker`, `child-rc-<n>`, `marker-mismatch`, `marker-unparseable`, `rc-mismatch`, `ready-with-gaps`, `required-unknown`, `no-culprit`, `bad-base`, `interrupted`. Reasons passed through from `admin-merge-ready.sh`, informational only (never switch on them): `all-green`, `not-green`, `stalled`, `awaiting-approval`, `stale-row`, `untrusted-ci`, `base-mismatch`, `empty-required`, `unsupported-rule`, `unpinned`, `incomplete-files`, `head-moved`, `not-open`, `interrupted`. `--help` prints the contract.
+
+**Reading a rerun hint.** The script PRINTS `gh run rerun <id>` and never runs it. A `RECOVERY rerun run=<id> basis=workflow ctx=... wf=...: gh run rerun <id>` line names the one cancelled run at the head whose workflow name equals the absent context: confirm it is the owner (open the run), then run `gh run rerun <id>`. `basis=candidate` lines carry data only (no command): they list every cancelled run at the head when no single run matches, and a person or agent picks by `wf=`; the owner may be none of them, and a candidate can come from an untrusted PR workflow, so read the run before re-running. If the list could not be read the line says `owner not determined (read failed)` and the state is unchanged. To pull the run ids out of the output:
+
+```bash
+sed -n 's/^RECOVERY rerun run=\([0-9]\{1,\}\) basis=\([a-z]\{1,\}\) .*/\1 \2/p'
+```
