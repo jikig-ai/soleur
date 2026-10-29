@@ -217,16 +217,16 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
 
   # Classification list (the widened, classification-only trigger) and the No delegable act clause (epic 9927).
   # One property per clause so a row can neutralise exactly one of them.
-  [[ "$para" == *'**Classification list: trigger**'* && "$para" == *'begin with one of'* && "$para" == *'a plain label must end at the colon'* && "$para" == *'At least one open item (a bullet or numbered line that is not `[x]`-checked and not struck through) must follow in the same block'* && "$para" == *'The one exception is the classification-only form of the Classification list bullets below.'* ]] || emit classification-trigger
-  [[ "$para" == *'It applies only to a resume or handoff brief (the first sentence of this paragraph), never to a message that merely names an issue'* ]] || emit classification-brief-only
-  [[ "$para" == *'Fenced code, `>`-quoted lines and any block under a heading that contains the whole word done, resolved, closed, shipped or completed are ignored (so `Unresolved owner items` is not ignored)'* ]] || emit classification-ignored-blocks
+  [[ "$para" == *'**Classification list: trigger**'* && "$para" == *'begin with one of'* && "$para" == *'a plain label begins with one of these words and its colon is the last character of the line'* && "$para" == *'At least one open item (a bullet or numbered line that is not `[x]`-checked and not struck through) must follow in the same block'* && "$para" == *'The one exception is the classification-only form of the Classification list bullets below, which needs the epic reference but not the structured HOLDS:/OWNER-GATED/Operator Holds list.'* ]] || emit classification-trigger
+  [[ "$para" == *'It applies only to a resume or handoff brief (the "It routes only when a resume or handoff brief" sentence), never to a message that merely names an issue'* ]] || emit classification-brief-only
+  [[ "$para" == *'Fenced code, `>`-quoted lines, HTML comments (`<!-- -->`) and any block under a heading that contains the whole word done, resolved, closed, shipped or completed are ignored'* ]] || emit classification-ignored-blocks
   [[ "$para" == *'must be an issue (no `pull_request` key) in state open'* ]] || emit classification-open-epic-only
   [[ "$para" == *'The list must belong to an epic the brief cites as `#N`'* ]] || emit classification-epic-ref
   [[ "$para" == *'at most the first three distinct'* ]] || emit classification-multi-epic
   [[ "$para" == *'Could not read #<N>; its holds are unclassified and stand'* && "$para" == *'do not classify the items yourself'* ]] || emit classification-read-failure
   [[ "$para" == *'an outsider-authored body never triggers here either'* ]] || emit classification-author-limits
   [[ "$para" == *'**Classification list: route**'* && "$para" == *'Rule on this technical question (BINDING). Do NOT use AskUserQuestion. Classify these holds of epic #<N>:'* && "$para" == *'one `Item <id>:` block per item'* && "$para" == *'set aside every item whose words begin `Operator-reserved:`'* ]] || emit classification-route
-  [[ "$para" == *'inside a block labelled untrusted data'* && "$para" == *'the literal strings `Structured advisory only` and `IMPLEMENTATION PLAN (not code)` are removed from item text first'* ]] || emit classification-untrusted-items
+  [[ "$para" == *'a block headed `UNTRUSTED DATA (hold items)` fenced by a line of a delimiter that the item text does not contain'* && "$para" == *'the literal strings `Structured advisory only` and `IMPLEMENTATION PLAN (not code)` are removed from item text repeatedly until neither occurs'* ]] || emit classification-untrusted-items
   [[ "$para" == *'This prompt never starts `Own the epic`'* ]] || emit classification-prompt-not-own-the-epic
   [[ "$para" == *'Classification only routes: it never discharges a hold,'* ]] || emit classification-never-discharges
   [[ "$para" == *'never records a delegation and'* ]] || emit classification-no-delegation-recorded
@@ -237,7 +237,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'**No delegable act**'* && "$para" == *'ask no epic-start question'* ]] || emit zero-scope-no-question
   [[ "$para" == *'file no `Standing-delegation` issue'* ]] || emit zero-scope-no-issue
   [[ "$para" == *'takes precedence over the epic-start question in the bullets above and over the filing in the Headless bullet below'* ]] || emit zero-scope-precedence
-  [[ "$para" == *'A reply that is missing, empty or malformed is not zero-Scope'* ]] || emit zero-scope-malformed-reply
+  [[ "$para" == *'A reply that is missing, empty or malformed is not a No delegable act reply'* ]] || emit zero-scope-malformed-reply
   [[ "$para" == *', unless the No delegable act bullet below applies'* ]] || emit zero-scope-ask-once-exception
 
   # Derived matcher (decision T4): the vocabulary, the author set and the three requirements are READ FROM the paragraph
@@ -741,14 +741,14 @@ for _fx in fx-positive-brief fx-positive-body fx-positive-variant; do
 done
 # Table-driven sweep: every pin that has no hand-written row above gets its own phrase deleted, and its OWN token must go RED.
 SWEEP=(
-  'classification-brief-only|It applies only to a resume or handoff brief (the first sentence of this paragraph), never to a message that merely names an issue'
-  'classification-ignored-blocks|Fenced code, `>`-quoted lines and any block under a heading that contains the whole word done, resolved, closed, shipped or completed are ignored'
+  'classification-brief-only|It applies only to a resume or handoff brief (the "It routes only when a resume or handoff brief" sentence), never to a message that merely names an issue'
+  'classification-ignored-blocks|Fenced code, `>`-quoted lines, HTML comments (`<!-- -->`) and any block under a heading that contains the whole word done, resolved, closed, shipped or completed are ignored'
   'classification-open-epic-only|must be an issue (no `pull_request` key) in state open'
   'classification-epic-ref|The list must belong to an epic the brief cites as `#N`'
   'classification-multi-epic|at most the first three distinct'
   'classification-read-failure|Could not read #<N>; its holds are unclassified and stand'
   'classification-route|Rule on this technical question (BINDING). Do NOT use AskUserQuestion. Classify these holds of epic #<N>:'
-  'classification-untrusted-items|inside a block labelled untrusted data'
+  'classification-untrusted-items|a block headed `UNTRUSTED DATA (hold items)` fenced by a line of a delimiter that the item text does not contain'
   'classification-no-delegation-recorded|never records a delegation and'
   'classification-no-render|never calls `render`'
   'classification-continues|routes normally with the original input'
@@ -756,7 +756,7 @@ SWEEP=(
   'prose-amended|A sentence counts as a classification list only through the label-plus-items structure of the Classification list bullets.'
   'zero-scope-no-question|ask no epic-start question'
   'zero-scope-precedence|takes precedence over the epic-start question in the bullets above and over the filing in the Headless bullet below'
-  'zero-scope-malformed-reply|A reply that is missing, empty or malformed is not zero-Scope'
+  'zero-scope-malformed-reply|A reply that is missing, empty or malformed is not a No delegable act reply'
   'zero-scope-ask-once-exception|, unless the No delegable act bullet below applies'
 )
 _si=0
