@@ -5334,8 +5334,7 @@ jobs:
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
-          # canonicalizes bare|v-prefixed (#11426)
-          TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
+                    TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
           echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
           # token never lands in argv.

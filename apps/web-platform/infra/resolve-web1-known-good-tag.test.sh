@@ -61,23 +61,23 @@ if [[ "$RC" -eq 0 && "$OUT" == "v0.200.2" ]]; then pass; else fail "(a2) live 0.
 
 # ── (b) empty version (unreachable /health, jq '.version // ""') → non-zero, no tag ──
 run_arg ""
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(b) empty → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(b) empty → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (c) non-released build ('dev' → 'vdev') → non-zero, no tag ─────────────────
 run_arg "dev"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(c) dev → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(c) dev → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (d) prerelease (1.2.3-rc1) → non-zero (the loose regex would wrongly accept) ──
 run_arg "1.2.3-rc1"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(d) 1.2.3-rc1 prerelease → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(d) 1.2.3-rc1 prerelease → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (e) the actual #6147 bug: an inngest restart stamps tag=latest → non-zero ──
 run_arg "latest"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(e) latest (the wedge value) → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(e) latest (the wedge value) → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (f) two-part semver (1.2) → non-zero (strict three-part required) ──────────
 run_arg "1.2"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(f) two-part 1.2 → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(f) two-part 1.2 → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (g) v-prefixed input canonicalizes (v1.2.3 → v1.2.3) → rc=0 ───────────────
 # Contract: input is strict three-part semver, bare or `v`-prefixed — the
@@ -92,7 +92,7 @@ if [[ "$RC" -eq 0 && "$OUT" == "v1.2.3" ]]; then pass; else fail "(g) v-prefixed
 # The strip removes exactly ONE leading v; vv1.2.3 → v1.2.3 → prepend → vv1.2.3,
 # which the strict guard still rejects. The double-v path stays loud.
 run_arg "vv1.2.3"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(g2) double-v vv1.2.3 → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(g2) double-v vv1.2.3 → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (g3) stdin seam parity: a v-prefixed version on stdin canonicalizes too ────
 run_stdin "v4.5.6"
@@ -104,15 +104,27 @@ if [[ "$RC" -eq 0 && "$OUT" == "v4.5.6" ]]; then pass; else fail "(h) stdin 4.5.
 
 # ── (h2) stdin reject parity: an invalid version on stdin rejects like the arg path ──
 run_stdin "latest"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(h2) stdin latest → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(h2) stdin latest → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (j) trailing whitespace → non-zero (pins the resolver's documented "no trimming" contract) ──
 run_arg "1.2.3 "
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(j) trailing-space '1.2.3 ' → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(j) trailing-space '1.2.3 ' → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
 # ── (k) four-part version → non-zero (pins the trailing \$ anchor) ─────────────
 run_arg "1.2.3.4"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(k) four-part 1.2.3.4 → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 && -z "$OUT" ]]; then pass; else fail "(k) four-part 1.2.3.4 → expected rc=1 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+
+# ── (g4) the rejection diagnostic names the caller's RAW input, not the normalized form ──
+STDERR_G4="$(bash "$SCRIPT" "vv1.2.3" 2>&1 >/dev/null)"
+if echo "$STDERR_G4" | grep -c "version='vv1.2.3'" >/dev/null; then pass; else fail "(g4) vv1.2.3 diagnostic → expected version='vv1.2.3' (raw input), got: $STDERR_G4"; fi
+
+# ── (g5) input-regex ↔ resolver-contract parity: the workflow's ^v? guard and the
+# resolver's normalize-then-strict-guard are a coupled pair — pin the literal at
+# BOTH workflow validation sites so a one-sided edit reintroducing the post-
+# approval vv* abort class fails here (#11426/#9669). ──
+WF="$(cd "$DIR/../../.." && pwd)/.github/workflows/apply-web-platform-infra.yml"
+HITS="$(grep -c 'v?\[0-9\]' "$WF" 2>/dev/null || true)"
+if [[ -f "$WF" && "$HITS" -ge 2 ]]; then pass; else fail "(g5) input-regex parity → expected >=2 ^v? semver guards in $WF, got $HITS"; fi
 
 # ── (i) diagnostic quality: rejection message names the rejected version inside the quoted slot + surfaces ::error:: ──
 STDERR="$(bash "$SCRIPT" "latest" 2>&1 >/dev/null)"

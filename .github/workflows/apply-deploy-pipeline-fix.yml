@@ -2293,6 +2293,7 @@ jobs:
           # CF-Access (same one web-platform-release.yml curls for its health gate).
           HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
           RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+          RUNNING_VERSION="${RUNNING_VERSION#v}" # canonicalize like the resolver — v-prefixed must not produce vv*
           TARGET_TAG="v${RUNNING_VERSION}"
 
           # Fail fast with the SAME semver shape ci-deploy.sh:713 enforces — never POST a

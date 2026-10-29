@@ -50,16 +50,20 @@ fi
 # caller may legitimately hand us `v1.2.3`. Strip exactly ONE leading v before
 # the prepend — `vv1.2.3` normalizes to `v1.2.3`, prepends to `vv1.2.3`, and the
 # strict guard below still rejects it (the double-v path stays loud). #11426.
+# RAW_VERSION keeps the caller's actual input so a rejection names what was
+# rejected, not the normalized form (#11426 diagnostic fidelity).
+RAW_VERSION="$RUNNING_VERSION"
 RUNNING_VERSION="${RUNNING_VERSION#v}"
 
 TARGET_TAG="v${RUNNING_VERSION}"
 
 if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  # Strip control chars from the untrusted /health value before echoing it into
-  # the runner log — a spoofed .version carrying an embedded newline could
-  # otherwise inject a `::workflow-command::` annotation line (log-annotation
-  # injection). The valid path never reaches here (validated semver has none).
-  SAFE_VERSION=$(printf '%s' "$RUNNING_VERSION" | tr -d '\000-\037')
+  # Strip control chars + DEL + the Unicode line separators U+2028/U+2029 from
+  # the untrusted /health value before echoing it into the runner log — a
+  # spoofed .version carrying an embedded newline or separator could otherwise
+  # inject a `::workflow-command::` annotation line (log-annotation injection).
+  # The valid path never reaches here (validated semver has none).
+  SAFE_VERSION=$(printf '%s' "$RAW_VERSION" | tr -d '\000-\037\177' | sed 's/\xe2\x80\xa8\|\xe2\x80\xa9//g')
   echo "::error::Cannot resolve a semver known-good tag for web-1's running container from /health (.version='${SAFE_VERSION}'). The container is not reporting a released BUILD_VERSION (expected strict vX.Y.Z). Trigger a normal web-platform release, confirm app/health reports the new version, then re-run this recreate." >&2
   exit 1
 fi

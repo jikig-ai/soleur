@@ -78,6 +78,14 @@
 #
 # Secrets transit via env/stdin only — never argv, never logged; the tokens are
 # unset after use and the private DOCKER_CONFIG is removed with the scratch dir.
+# Residual: SIGKILL skips the EXIT trap, leaving the 0700 $WORK (token.json,
+# dockercfg/config.json) on disk — bounded to same-UID readers; unclosable.
+#
+# NOTE — deliberate triplication: fetch_artifact / verify_blobs_of /
+# count_artifact (and verify_pushed's TSV variant) share the enumerate-children
+# / enumerate-blobs / count-check shape. This script is distributed
+# self-contained to an incident host, so the copies stay inline — keep all four
+# in lockstep when one changes.
 #
 # Exit codes (one operator action per code, mirroring the restore engine):
 #   0  every required reference pushed AND verified (manifest + blobs + signature)
@@ -150,9 +158,16 @@ die() { # $1 = exit code, rest = message (CR/LF flattened — registry text inte
   local code="$1"; shift
   local msg="$*"
   msg="${msg//[$'\r\n']/ }"
+  # Registry/crane error text is interpolated into messages — strip the rest of
+  # the C0 range + DEL too, so a hostile response cannot write escape sequences
+  # into the operator's terminal.
+  msg="$(printf '%s' "$msg" | tr -d '\000-\010\013-\037\177')"
   printf 'mirror-ghcr-to-zot: %s\n' "$msg" >&2
   exit "$code"
 }
+
+[[ "$ZOT_TARGET" =~ ^[a-zA-Z0-9.-]+:[0-9]+$ ]] \
+  || die 1 "ZOT_TARGET must look like host:port (got '${ZOT_TARGET}') — the push and the sink credentials would go to a host you did not name."
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -216,6 +231,7 @@ done
 command -v curl >/dev/null 2>&1 || die 6 "curl is required on this host."
 command -v jq   >/dev/null 2>&1 || die 6 "jq is required on this host."
 command -v sha256sum >/dev/null 2>&1 || die 6 "sha256sum is required on this host."
+command -v timeout >/dev/null 2>&1 || die 6 "timeout(1) is required on this host (bounds every crane call)."
 
 WORK="$(mktemp -d)" || die 6 "could not create a scratch directory."
 case "$WORK" in /*) ;; *) die 6 "scratch dir is not absolute — refusing to own its cleanup" ;; esac
@@ -234,8 +250,9 @@ if (( DRY_RUN == 0 )) && (( ghcr_token_set == 0 )); then
   die 5 "GHCR_TOKEN is unset or empty — the operator-supplied read:packages PAT is required at invocation. NEVER Doppler GHCR_READ_TOKEN: it is revoked BY DESIGN (ADR-096 §5.5/B3)."
 fi
 
-# ── crane, pinned. github.com is not in the sinkhole set. ─────────────────────
-if ! command -v "$CRANE" >/dev/null 2>&1; then
+# ── crane, pinned. github.com is not in the sinkhole set. Only the live path
+# invokes crane — a dry-run never needs the binary, so its fetch is skipped there.
+if (( DRY_RUN == 0 )) && ! command -v "$CRANE" >/dev/null 2>&1; then
   mkdir -p "$WORK/bin"
   asset="go-containerregistry_Linux_x86_64.tar.gz"
   if ! curl --disable --noproxy '*' -fsSL --proto '=https' --proto-redir '=https' \
@@ -342,6 +359,8 @@ token_exchange() {
   local code
   _bearer_ok "${GHCR_TOKEN:-}" \
     || die 5 "GHCR_TOKEN is outside the bearer charset — refusing to feed it to the auth-config channel."
+  [[ "$GHCR_USER" =~ ^[A-Za-z0-9._~-]+$ ]] \
+    || die 5 "GHCR_USER is outside the user charset — a quote or newline would corrupt the curl auth-config line."
   if ! code="$(curl --disable --noproxy '*' -sS --proto '=https' \
         --connect-timeout 10 --max-time 30 \
         "${RES[@]}" \
@@ -466,11 +485,11 @@ fetch_blob() { # <sha256:digest> — pull into $POOL with digest verification
 assemble_layout() {
   local dig="$1" ldir="$2" hex="${1#sha256:}" mt size h
   local mf="$POOL/$hex"
-  mkdir -p "$ldir/blobs/sha256"
+  mkdir -p "$ldir/blobs/sha256" || die 6 "could not create $ldir — filesystem fault."
   while IFS= read -r h; do
     [[ -n "$h" ]] || continue
     [[ -f "$POOL/$h" ]] || die 6 "layout assembly references $POOL/$h which was never materialised — a bug, not a registry state."
-    ln -f "$POOL/$h" "$ldir/blobs/sha256/$h"
+    ln -f "$POOL/$h" "$ldir/blobs/sha256/$h" || die 6 "could not hardlink $h into the layout — filesystem fault."
   done < <(sort -u "$CUR_BLOBS")
   mt="$(jq -r '.mediaType // empty' "$mf" 2>/dev/null || true)"
   if [[ -z "$mt" ]]; then
@@ -479,7 +498,7 @@ assemble_layout() {
       *)     mt="application/vnd.oci.image.manifest.v1+json" ;;
     esac
   fi
-  size="$(stat -c %s "$mf")"
+  size="$(stat -c %s "$mf")" || die 6 "could not stat $mf — filesystem fault."
   printf '{"imageLayoutVersion":"1.0.0"}' > "$ldir/oci-layout"
   jq -cn --arg mt "$mt" --arg d "$dig" --argjson sz "$size" \
     '{schemaVersion:2,mediaType:"application/vnd.oci.image.index.v1+json",
@@ -488,7 +507,16 @@ assemble_layout() {
 
 # ── sink side: crane helpers (condensed copies of the restore engine's — this
 # script is self-contained on the host; no imports). ────────────────────────────
-crane_capture() { local out="$1" err="$2"; shift 2; "$CRANE" "$@" >"$out" 2>"$err" </dev/null; }
+crane_capture() { # <outfile> <errfile> <crane args...> — bounded: a stalled
+  # private-net write must die as retryable NETWORK, never hang the run.
+  local out="$1" err="$2" rc; shift 2
+  timeout "${CRANE_TIMEOUT:-300}" "$CRANE" "$@" >"$out" 2>"$err" </dev/null
+  rc=$?
+  if (( rc == 124 )); then
+    printf 'crane invocation timed out after %ss (i/o timeout)\n' "${CRANE_TIMEOUT:-300}" >>"$err"
+  fi
+  return "$rc"
+}
 last_err() { tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\r\n' ' ' | sed 's/[[:space:]]*$//' || true; }
 classify() {
   local err="$1"
@@ -498,7 +526,7 @@ classify() {
     *UNAUTHORIZED*|*DENIED*|*"authentication required"*|*"denied:"*)   echo DENIED ;;
     *"no such host"*|*"dial tcp"*|*"connection refused"*|*"connection reset"*|\
     *"i/o timeout"*|*"TLS handshake"*|*"unexpected EOF"*|*EOF|\
-    *"502 "*|*"503 "*|*"504 "*)                                        echo NETWORK ;;
+    *"502 "*|*"503 "*|*"504 "*|*"502"|*"503"|*"504")                    echo NETWORK ;;
     *) echo UNKNOWN ;;
   esac
 }
@@ -597,8 +625,15 @@ verify_pushed() {
   kind="$(manifest_kind "$out")"
   case "$kind" in
     manifest)
-      crane_capture "$WORK/vp.val.out" "$WORK/vp.val.err" validate --insecure --remote "${repo}@${dig}" \
-        || sink_die "${what}" "$WORK/vp.val.err"
+      if [[ "$mode" == "signature" ]]; then
+        # A plain-manifest signature root: `crane validate` trips on the
+        # sigstore layer shape (#7378) — blob-presence + subject binding
+        # instead, same as signature index children.
+        verify_blobs_of "$repo" "${repo}@${dig}" "${what}" 0 "$expect_subject"
+      else
+        crane_capture "$WORK/vp.val.out" "$WORK/vp.val.err" validate --insecure --remote "${repo}@${dig}" \
+          || sink_die "${what}" "$WORK/vp.val.err"
+      fi
       ;;
     index)
       if ! children="$(jq -r '(.manifests // [])[] | [(.digest // "-"), (.mediaType // "-"), (.annotations["vnd.docker.reference.type"] // "-"), (.platform.architecture // "-"), (.artifactType // "-")] | @tsv' "$out" 2>"$WORK/vp.jqerr")"; then
@@ -647,7 +682,7 @@ verify_pushed() {
 count_artifact() { # <digest> <depth> → accumulates DC_MANIFESTS DC_BLOBS DC_BYTES DC_CHILDREN
   local dig="$1" depth="$2" hex="${1#sha256:}" code kind children c sz nb n
   local mf="$WORK/dry/$hex"
-  mkdir -p "$WORK/dry"
+  mkdir -p "$WORK/dry" || die 6 "could not create the dry-run store — filesystem fault."
   if [[ ! -f "$mf" ]]; then
     code="$(ghcr_get "https://ghcr.io/v2/${REPO}/manifests/${dig}" "$mf")"
     [[ "$(classify_code "$code")" == "OK" ]] || die_by_code "manifest ${dig} (dry-run)" "$code"
@@ -659,7 +694,9 @@ count_artifact() { # <digest> <depth> → accumulates DC_MANIFESTS DC_BLOBS DC_B
   case "$kind" in
     index)
       (( depth == 0 )) || die 4 "${dig} is a nested index (dry-run)."
-      children="$(jq -r '(.manifests // [])[] | (.digest // "-")' "$mf" 2>/dev/null || true)"
+      if ! children="$(jq -r '(.manifests // [])[] | (.digest // "-")' "$mf" 2>"$WORK/jq.err")"; then
+        die 4 "${dig}: its child list could not be fully enumerated (dry-run) — a truncated read would silently skip children."
+      fi
       while IFS= read -r c; do
         [[ -n "$c" ]] || continue
         DC_CHILDREN=$((DC_CHILDREN + 1))
@@ -670,8 +707,11 @@ count_artifact() { # <digest> <depth> → accumulates DC_MANIFESTS DC_BLOBS DC_B
       done <<< "$children"
       ;;
     manifest)
-      nb="$(jq -r '[ (if has("config") then [.config.size] else [] end), [(.layers // []) | .size] ] | flatten | "\(length) \((add // 0))"' "$mf" 2>/dev/null || printf '0 0')"
+      nb="$(jq -r '[ (if has("config") then [.config.size] else [] end), [(.layers // [])[] | .size] ] | flatten | "\(length) \((add // 0))"' "$mf" 2>/dev/null || printf '0 0')"
       read -r n sz <<<"$nb"
+      n_layers="$(jq -r '(.layers // []) | length' "$mf" 2>/dev/null || printf '0')"
+      (( n_layers > 0 )) \
+        || die 4 "${dig} declares NO layers — a config alone carries no payload (dry-run parity with the live path's check)."
       DC_BLOBS=$((DC_BLOBS + ${n:-0}))
       DC_BYTES=$((DC_BYTES + ${sz:-0}))
       ;;
@@ -700,10 +740,12 @@ if (( DRY_RUN )); then
     if [[ "${REF_KIND[$i]}" == "digest" ]]; then
       D="${REF_VAL[$i]}"
       mf="$WORK/dry/${D#sha256:}"
-      mkdir -p "$WORK/dry"
+      mkdir -p "$WORK/dry" || die 6 "could not create the dry-run store — filesystem fault."
       if [[ ! -f "$mf" ]]; then
         code="$(ghcr_get "https://ghcr.io/v2/${REPO}/manifests/${D}" "$mf")"
         [[ "$(classify_code "$code")" == "OK" ]] || die_by_code "manifest ${D} (dry-run)" "$code"
+        [[ "$(sha256_file "$mf")" == "${D#sha256:}" ]] \
+          || die 4 "manifest ${D} bytes do not hash to their digest (dry-run) — every pulled byte is verified at its sha256."
       fi
     else
       rv="${REF_VAL[$i]}"
@@ -712,7 +754,7 @@ if (( DRY_RUN )); then
       [[ "$(classify_code "$code")" == "OK" ]] || die_by_code "manifest for tag $rv (dry-run)" "$code"
       D="sha256:$(sha256_file "$mf")"
       # Seed the dry store under the content name so count_artifact reuses it.
-      [[ -f "$WORK/dry/${D#sha256:}" ]] || cp "$mf" "$WORK/dry/${D#sha256:}"
+      [[ -f "$WORK/dry/${D#sha256:}" ]] || cp "$mf" "$WORK/dry/${D#sha256:}" || die 6 "could not seed the dry-run store — filesystem fault."
       mf="$WORK/dry/${D#sha256:}"
     fi
     DC_MANIFESTS=0 DC_BLOBS=0 DC_BYTES=0 DC_CHILDREN=0
@@ -752,11 +794,11 @@ while (( i < N_REFS )); do
     [[ "$(classify_code "$code")" == "OK" ]] || die_by_code "manifest for tag $rv" "$code"
     D="sha256:$(sha256_file "$mf")"
     # Seed the pool under the content name so fetch_artifact reuses, not re-GETs.
-    mkdir -p "$POOL"
-    [[ -f "$POOL/${D#sha256:}" ]] || cp "$mf" "$POOL/${D#sha256:}"
+    mkdir -p "$POOL" || die 6 "could not create the blob pool — filesystem fault."
+    [[ -f "$POOL/${D#sha256:}" ]] || cp "$mf" "$POOL/${D#sha256:}" || die 6 "could not seed the manifest pool — filesystem fault."
   fi
   fetch_artifact "$D" 0
-  bl="$WORK/unit-${i}.blobs"; sort -u "$CUR_BLOBS" > "$bl"
+  bl="$WORK/unit-${i}.blobs"; sort -u "$CUR_BLOBS" > "$bl" || die 6 "could not write the unit blob list — filesystem fault."
   case "${REF_KIND[$i]}" in
     digest) UNIT_NAME+=("${REPO}@${D}") ;;
     tag)    UNIT_NAME+=("${REPO}:${REF_VAL[$i]}") ;;
@@ -781,14 +823,14 @@ while (( j < N_REFS )); do
   code="$(ghcr_get "https://ghcr.io/v2/${REPO}/manifests/${sig_tag}" "$WORK/sig-${j}.manifest")"
   case "$(classify_code "$code")" in
     OK) ;;
-    NOTFOUND) die 4 "no cosign signature (${sig_tag}) found at GHCR for ${REPO}@${D}. There is no unsigned-mirror arm: a mirrored image whose signature is absent fails cosign verify on the host." ;;
+    NOTFOUND) die 4 "no cosign signature (${sig_tag}) found at GHCR for ${REPO}@${D} — or not visible to this credential; GHCR returns 404 for both. There is no unsigned-mirror arm: a mirrored image whose signature is absent fails cosign verify on the host." ;;
     *) die_by_code "the signature ${sig_tag} for ${REPO}@${D} — this does NOT mean the signature is absent" "$code" ;;
   esac
   SIG_D="sha256:$(sha256_file "$WORK/sig-${j}.manifest")"
-  cp "$WORK/sig-${j}.manifest" "$POOL/${SIG_D#sha256:}"
+  cp "$WORK/sig-${j}.manifest" "$POOL/${SIG_D#sha256:}" || die 6 "could not pool the signature manifest — filesystem fault."
   printf '%s\n' "${SIG_D#sha256:}" >> "$CUR_BLOBS"
   fetch_artifact "$SIG_D" 0
-  bl="$WORK/unit-sig-${j}.blobs"; sort -u "$CUR_BLOBS" > "$bl"
+  bl="$WORK/unit-sig-${j}.blobs"; sort -u "$CUR_BLOBS" > "$bl" || die 6 "could not write the sig blob list — filesystem fault."
   UNIT_NAME+=("${REPO}:${sig_tag}")
   UNIT_DIGEST+=("$SIG_D")
   UNIT_BLOBS+=("$bl")

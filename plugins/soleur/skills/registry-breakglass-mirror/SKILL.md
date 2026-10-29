@@ -3,6 +3,10 @@ name: registry-breakglass-mirror
 description: "This skill should be used when the registry tunnel bridge is down and the zot store must be re-materialized from GHCR. Break-glass only."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
@@ -58,9 +62,26 @@ mutation.
 | `ZOT_PUSH_USER` | `doppler secrets get ZOT_PUSH_USER -p soleur -c prd --plain` | root `prd` config, not `prd_terraform`; never "rotate ZOT_PUSH_* first" — `/etc/zot/htpasswd` is baked at registry boot |
 | `ZOT_PUSH_TOKEN` | `doppler secrets get ZOT_PUSH_TOKEN -p soleur -c prd --plain` | second call — the multi-name form is an unverified CLI shape |
 | `GHCR_TOKEN` | **operator-supplied at invocation** — a `read:packages` PAT the operator types or pastes | the Doppler `GHCR_READ_TOKEN` copy is **revoked BY DESIGN** (ADR-096 §5.5/B3 — no host reads GHCR); never reach for it |
+| `GHCR_USER` | fixed | basic-auth username for the token exchange; default `operator`, charset-checked by the script |
 
 Two `doppler secrets get` calls for `ZOT_PUSH_*` — one per secret, mirroring the
 `scheduled-inngest-health.yml` credential pattern.
+
+Host prerequisites on the mirror host: `curl`, `jq`, `sha256sum` (the script
+die-6s on a missing one); `crane` is fetched pinned when absent.
+
+## Inputs — which repo, which refs
+
+- **Repo:** `jikig-ai/soleur-web-platform` (the only image set production
+  deploys pin).
+- **Refs:** the pinned image set. The canonical generator is
+  `scripts/registry-pull-path-health.sh --prepare --tags-out` — the same
+  `entries[]` manifest `registry-restore-from-ghcr.sh --tags-from` consumes —
+  or the `registry-restore-pins` workflow artifact from the last restore run.
+  Digest refs (`repo@sha256:<d>`) are preferred — they bind the pin exactly;
+  tag refs resolve to the digest GHCR serves at mirror time.
+- **Example:** `mirror-ghcr-to-zot.sh jikig-ai/soleur-web-platform \
+  jikig-ai/soleur-web-platform@sha256:<d1> jikig-ai/soleur-web-platform@sha256:<d2>`
 
 ## The mirror host's GHCR exception (what the script does)
 
@@ -102,7 +123,9 @@ warning. The signature rides the OCI referrers tag `sha256-<image-digest-hex>`
 as an OCI **index** whose *child* carries the `artifactType`
 (`application/vnd.dev.sigstore.bundle.v0.3+json`) — the #7410 lesson. Reading
 the tag as a plain manifest fail-closes a healthy signature; the script
-mirrors the index structure and checks the child's `.subject.digest` binding.
+mirrors the index structure and checks the child's `.subject.digest` binding
+**where present** (a `sha256-<hex>` referrers tag name already carries the
+binding).
 
 ## Procedure
 
@@ -114,9 +137,17 @@ mirrors the index structure and checks the child's `.subject.digest` binding.
    up).
 3. **Dry-run first.** `mirror-ghcr-to-zot.sh --dry-run <repo> <ref>...` prints
    the plan — resolved refs, blob counts, declared bytes, signature presence,
-   target — and pushes nothing.
-4. **Mirror.** Run the script on the host with `GHCR_TOKEN`, `ZOT_PUSH_USER`,
-   `ZOT_PUSH_TOKEN` in the environment. It pulls manifests+blobs via `curl
+   target — and pushes nothing. **Read the plan text, not just the exit code:**
+   a `sig=… ABSENT` verdict or `blobs=unmeasured` still exits 0 — both mean
+   "do not proceed" (supply `GHCR_TOKEN` for the count, and never mirror a ref
+   whose signature shows ABSENT).
+4. **Mirror.** Carry the environment to the host WITHOUT putting secrets on a
+   command line — never `ssh host 'GHCR_TOKEN=… bash …'` (the PAT lands on the
+   remote `bash -c` argv and the local `ssh` argv for the whole run). Write a
+   `0600` env file, `scp` it, then
+   `ssh deploy@<host> 'set -a; . ./mirror.env; set +a; ./mirror-ghcr-to-zot.sh …'`,
+   or feed env+invocation over `ssh host bash -s` stdin. The script pulls
+   manifests+blobs via `curl
    --resolve`, assembles each ref into an OCI layout, `crane push`es to
    `10.0.1.30:5000/<repo>` (plain-HTTP private net — `--insecure`, the standing
    `hetzner -> zotRegistry` posture), mirrors the `sha256-<hex>` signature ref,
@@ -126,8 +157,11 @@ mirrors the index structure and checks the child's `.subject.digest` binding.
    gc+dedupe.
 5. **Close out.** Exit `0` prints `mirror_summary ... result=ok`. Anything else
    is a non-zero exit with the failing ref named — do not treat the store as
-   usable. Afterward, verify a host pull resolves the digest on the deploy
-   path before declaring the window closed.
+   usable. Then verify the deploy path resolves the digest: from a second
+   `10.0.1.0/24` member,
+   `crane digest --insecure 10.0.1.30:5000/jikig-ai/soleur-web-platform@sha256:<d>`
+   must return the same `sha256:<d>` (or `ssh deploy@<host> 'docker manifest
+   inspect 10.0.1.30:5000/jikig-ai/soleur-web-platform@sha256:<d>'`).
 
 ## Failure vocabulary
 
