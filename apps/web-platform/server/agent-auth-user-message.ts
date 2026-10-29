@@ -102,6 +102,22 @@ export function isOauthUnusableLeaseError(err: unknown): boolean {
   return err instanceof Error && err.name === "ByokLeaseError" && (err as { cause?: unknown }).cause === "oauth_unusable";
 }
 
+/**
+ * Log a failed session. A lease refusal of an unusable stored credential was already reported once by the lease (a closed
+ * class, no value), so it logs at INFO: an ERROR line carrying `err` would reach Sentry a second time through the logger.
+ * Everything else keeps the ERROR line it always had. `ctx` is spread into the log object at the top level, where the pino
+ * formatter pseudonymises `userId` (ADR-029); callers pass it through rather than naming the field on a log line.
+ */
+export function logSessionFailure(
+  log: { info: (obj: object, msg: string) => void; error: (obj: object, msg: string) => void },
+  err: unknown,
+  ctx: Record<string, unknown>,
+  messages: { refused: string; failed: string },
+): void {
+  if (isOauthUnusableLeaseError(err)) log.info(ctx, messages.refused);
+  else log.error({ err, ...ctx }, messages.failed);
+}
+
 /** The recovery frame for a lease refusal: only the operator can hold an oauth row, so the scheme is always oauth_token. */
 export function oauthUnusableFrame(): AuthFailureFrame {
   return buildAuthFailureFrame("oauth_unusable", "oauth_token");

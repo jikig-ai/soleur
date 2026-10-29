@@ -109,6 +109,7 @@ import { makeAuthModeResolver } from "./agent-auth-mode";
 import {
   authFailureFrameFromLeaseError,
   isOauthUnusableLeaseError,
+  logSessionFailure,
   rewriteAgentAuthFailure,
   type AuthFailureFrame,
 } from "./agent-auth-user-message";
@@ -2950,11 +2951,10 @@ are the requirements to implement.`;
         // a second raw capture would double the Sentry count for one failed turn (the cc path skips its mirror the same way).
         Sentry.captureException(err);
       }
-      if (isOauthUnusableLeaseError(err)) {
-        log.info({ userId, conversationId }, "Session refused: stored subscription credential is not usable by the CLI");
-      } else {
-        log.error({ err, userId, conversationId }, "Session error");
-      }
+      logSessionFailure(log, err, { userId, conversationId }, {
+        refused: "Session refused: stored subscription credential is not usable by the CLI",
+        failed: "Session error",
+      });
       const leaseFrame = authFailureFrameFromLeaseError(err);
       if (leaseFrame !== null) {
         sendToClient(userId, leaseFrame);
@@ -3233,11 +3233,10 @@ async function sendUserMessageInner(
     if (err instanceof MissingByokKeyError) reportMissingByokKey(err);
     // #11086: the lease already reported an unusable stored credential; skip the duplicate raw capture and error log.
     if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
-    if (isOauthUnusableLeaseError(err)) {
-      log.info({ userId, conversationId }, "sendUserMessage refused: stored subscription credential is not usable");
-    } else {
-      log.error({ err, userId, conversationId }, "sendUserMessage session error");
-    }
+    logSessionFailure(log, err, { userId, conversationId }, {
+      refused: "sendUserMessage refused: stored subscription credential is not usable",
+      failed: "sendUserMessage session error",
+    });
     // #4440 follow-up to #4418 — JWT-deny propagation. Detect a
     // mid-session `RuntimeAuthError("denied_jti")` BEFORE the generic
     // error frame fires so agents/API consumers receive the same

@@ -1,10 +1,11 @@
 // #11086: the closed copy table and the rewrite helper. The helper must be total over (kind x scheme), never mutate the SDK
 // message, rewrite only a single-text-block message, and never surface raw CLI text or subscription wording to a tenant.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   authFailureCopy,
   buildAuthFailureFrame,
+  logSessionFailure,
   rewriteAgentAuthFailure,
   type AuthFailureKind,
 } from "@/server/agent-auth-user-message";
@@ -156,5 +157,26 @@ describe("rewriteAgentAuthFailure", () => {
   it("never carries any raw CLI text in its output", () => {
     const out = rewriteAgentAuthFailure(cliMessage(CLI_TEXT), "api_key")!;
     expect(JSON.stringify(out)).not.toContain("Please run /login");
+  });
+});
+
+describe("logSessionFailure", () => {
+  const messages = { refused: "refused", failed: "failed" };
+  const mkLog = () => ({ info: vi.fn(), error: vi.fn() });
+  const refusal = Object.assign(new Error("x"), { name: "ByokLeaseError", cause: "oauth_unusable" });
+
+  it("logs an unusable-credential refusal at INFO, never ERROR, and keeps the context", () => {
+    const log = mkLog();
+    logSessionFailure(log, refusal, { userId: "u", conversationId: "c" }, messages);
+    expect(log.info).toHaveBeenCalledWith({ userId: "u", conversationId: "c" }, "refused");
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("logs anything else at ERROR with the error attached and the context spread at the top level", () => {
+    const log = mkLog();
+    const other = new Error("boom");
+    logSessionFailure(log, other, { userId: "u" }, messages);
+    expect(log.error).toHaveBeenCalledWith({ err: other, userId: "u" }, "failed");
+    expect(log.info).not.toHaveBeenCalled();
   });
 });
