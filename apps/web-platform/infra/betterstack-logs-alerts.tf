@@ -331,7 +331,8 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
-  # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows) and a fixed one clears in about 1.25 to 1.5 h.
+  # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows). When and why it
+  # resolves is recorded once, in the AUTO-RESOLVE WINDOW comment above logtail_exploration_alert.inngest_luks_key_probe_fail.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
@@ -366,13 +367,16 @@ resource "logtail_exploration" "inngest_luks_key_probe_fail" {
   }
 }
 
-# AUTO-RESOLVE WINDOW (#11388; comment only, the attributes below are unchanged). An incident here resolves only after
-# the count has read 0 for a full recovery_period (3600 s). While the probe keeps failing it re-emits hourly, so each
-# failing row leaves a ~2700 s gap of zeros (900 s window, then silence), shorter than recovery_period, and the incident
-# stays open. After the LAST failing row it resolves about 4500 s (1.25 h) later, so at least one non-`fail_` hourly emit
-# (`ok` or `indeterminate`) has landed first, and a single non-`fail_` emit between two failing rows leaves a gap of up to
-# ~6300 s, which is enough to resolve and re-page once. Resolving is not proof of recovery: only a `token=ok` row is.
-# The same window is recorded in betterstack-log-query.md.
+# AUTO-RESOLVE WINDOW (#11388; comment only, the attributes below are unchanged). THIS IS THE ONE AUTHORITATIVE COPY of
+# the arithmetic; betterstack-log-query.md and the cutover runbook point here. The incident resolves once the count has
+# read 0 for a full recovery_period (3600 s). While the probe keeps failing it re-emits hourly (luks_probe_due: limit 3600
+# for any stamp that is not `ok`), so each failing row sits in the 900 s window for 900 s and leaves ~2700 s of zeros, shorter
+# than recovery_period, and the incident stays open.
+# The incident resolves on time alone, about 4500 to 4800 s (1.25 to 1.33 h; the 300 s check cadence adds up to 300 s)
+# after the last failing row; no later row is needed, so a silent probe also resolves it. At most one hourly row (at about
+# +3600 s) can land before it resolves. Resolution is therefore not evidence of recovery; only a `token=ok` row is.
+# After an `indeterminate` the next row is hourly too, so fail, indeterminate, fail leaves ~6300 s of zeros, longer than
+# recovery_period: the incident resolves and re-pages once. After an `ok` the next row is 24 h later (limit 86400).
 resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
   name           = "soleur-inngest-luks-key-probe-fail-prd"
@@ -380,13 +384,9 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # Presence-only, so safe before the probe is delivered (no rows, value 0). The window is 900 s
   # because that is the largest query_period Better Stack has accepted for a per-row-parse alert
   # since September (see the measured table below). The probe re-emits no sooner than hourly after any
-  # non-ok token, so while it fails a row is in the window for 900 s of every ~3600 s; the count
-  # reads 0 in between, but recovery_period (3600) is longer than that ~2700 s gap, so the incident
-  # stays open and does not re-page. It pages within about 5 min of the first failing row and
-  # clears about 1.25 to 1.5 h after the LAST failing row (the window, then recovery_period), which is
-  # not proof of recovery: only a token=ok row is. Any missed hourly failing row (a dying probe, or one
-  # indeterminate row between two failing ones) leaves a gap of up to ~6300 s with no failing row,
-  # longer than recovery_period, so the incident can resolve and re-page once.
+  # non-ok token, so while it fails the incident stays open and does not re-page. It pages within about
+  # 5 min of the first failing row. When it resolves, and why that is not recovery, is in the
+  # AUTO-RESOLVE WINDOW comment above this resource.
   #
   # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts), not inferred: this
   # alert was refused 422 "too resource intensive" FOUR times at merge apply, at (check, query) =
@@ -395,8 +395,13 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # 3600/97200, claude_cost_daily_burn and claude_cost_capture_dark 3600/86400, inngest_luks_wrong_volume
   # 300/5400. Every alert created since 2026-10-01 has query_period <= 900 (registry_zot_log_credential_shape
   # 300/900 on 10-15, egress_gw_probe_fail 300/900 on 10-12, web_nic_guard_unpinned_url 60/300 on 10-27).
-  # So an existing long window proves nothing about what the API accepts today. If 300/900 is refused
-  # too, stop iterating merges: the next step is an owner-authorized create-and-delete probe.
+  # So an existing long window proves nothing about what the API accepts today. The (300, 900) pair set
+  # below was applied by #11427 (744396abbb): push run 40782617701 on 04cad4e8e0, which descends from
+  # 744396abbb, shows the Terraform apply step succeeded with this alert in its -target list; I did not
+  # read the per-resource result separately. Four (check, query) tuples were refused 422, all at a
+  # query_period of 5400 s or more: 300/10800, 900/10800, 3600/10800 and 300/5400. Live alerts created in
+  # September carry 5400, 86400 and 97200 s. 604800 s and 2592000 s were never tried, so whether a 30-day
+  # dead-man can exist is unknown; a try needs an owner-authorized create-and-delete probe.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
@@ -408,7 +413,8 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
 
   paused = false
 
-  # #11068 convention (#9168 measured flip): push armed; revert to `push = false` if the apply refuses it.
+  # #11068 convention (#9168 measured flip): push armed. History: the original plan was to revert to
+  # `push = false` if the apply refused it; the apply accepted it (live read 2026-10-29: push true).
   email          = true
   push           = true
   call           = false
