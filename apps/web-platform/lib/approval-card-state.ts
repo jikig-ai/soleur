@@ -138,9 +138,10 @@ export function hasNewerPendingRequest(
 // like the one the Owner expects. Known cost: an emoji written with VS16 (U+FE0F) or a ZWJ sequence is revealed too,
 // marker by marker; over-revealing is the safe direction. Written with escapes only, so the source never contains the
 // characters themselves (cq-regex-unicode-separators-escape-only). The `u` flag is required for \p{..} and the astral
-// ranges.
+// ranges. The combining and variation-selector ranges sit in their own single-range classes: ESLint's
+// no-misleading-character-class rejects a combining character that follows another member of the SAME class.
 const INVISIBLE_RE =
-  /[\p{Cf}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069\u061C\u200B-\u200F\u2060-\u2064\u00AD\u180E\uFEFF\u{E0000}-\u{E007F}\uFE00-\uFE0F\u{E0100}-\u{E01EF}\u034F\u115F\u1160\u3164\uFFA0\u180B-\u180D\u2800]|(?![\t\n]|\r\n)\p{Cc}/gu;
+  /[\p{Cf}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069\u061C\u200B-\u200F\u2060-\u2064\u00AD\u180E\uFEFF\u115F\u1160\u3164\uFFA0\u2800]|[\u{E0000}-\u{E007F}]|[\uFE00-\uFE0F]|[\u{E0100}-\u{E01EF}]|[\u180B-\u180D]|[\u034F]|(?![\t\n]|\r\n)\p{Cc}/gu;
 
 /**
  * Replace invisible direction/zero-width controls with a visible `<U+XXXX>` marker; everything else is untouched. The
