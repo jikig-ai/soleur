@@ -1378,6 +1378,12 @@ describe("create candidates: the prompt shows the gate's own ranking (Ref #10550
     return null;
   }
 
+  function mustIdfPopulation(): { skills: SkillRecord[]; p: PatternPage; pushedDown: string } {
+    const found = idfPopulation();
+    if (!found) throw new Error("precondition: a population where all-skills and visible-only candidate sets differ");
+    return found;
+  }
+
   it("IDF population: candidates follow the ranking over ALL skills (hidden ones count), as the gate ranks", () => {
     const found = idfPopulation();
     expect(found, "precondition: a population where all-skills and visible-only candidate sets differ").not.toBeNull();
@@ -1388,11 +1394,38 @@ describe("create candidates: the prompt shows the gate's own ranking (Ref #10550
   });
 
   it("the PROMPT lists the all-skills ranking at the call site (not a visible-only re-rank)", () => {
-    const { skills, p } = idfPopulation()!;
+    const { skills, p } = mustIdfPopulation();
     const v = prepareCreate({ patterns: [p], skills, nonce });
     if (v.kind !== "ready") throw new Error("ready expected");
     expect(v.prompt).toContain(expectedBlock([p], skills));
   });
+
+  it("a hidden skill inside the all-skills top 3 never costs a candidate slot", () => {
+    const skills = [
+      sk("hidden-top", "Quartz marble lantern tundra velvet", true),
+      sk("a-one", "Quartz marble lantern"),
+      sk("b-two", "Quartz marble"),
+      sk("c-three", "Quartz velvet"),
+      sk("d-four", "Quartz tundra"),
+    ];
+    const pat = page("slot-probe", "Quartz marble lantern tundra", "quartz velvet", []);
+    const raw = rankOverlap(patternOverlapText(pat), skills).filter((r) => r.score > 0).map((r) => r.name);
+    expect(raw.slice(0, OVERLAP_TOP_K), "precondition: the hidden skill ranks inside the top slots").toContain("hidden-top");
+    expect(raw.filter((n) => n !== "hidden-top").length, "precondition: enough positive visible skills to fill the list").toBeGreaterThan(OVERLAP_TOP_K);
+    const got = createCandidates(pat, skills);
+    expect(got).toHaveLength(OVERLAP_TOP_K);
+    expect(got).not.toContain("hidden-top");
+    expect(got).toEqual(expectedNames(pat, skills));
+  });
+
+  it.each([["a, b"], ["a: b"], ["A"], ["a_b"], ["-a"], ["a b"], ["a.b"]])(
+    "a skill name outside the repo charset (%j) is never listed",
+    (bad) => {
+      const skills = [sk(bad, "Quartz quartz quartz marble lantern"), sk("good-one", "Quartz marble")];
+      const pat = page("charset-table", "Quartz marble lantern", "quartz", []);
+      expect(createCandidates(pat, skills)).toEqual(["good-one"]);
+    },
+  );
 
   it("a skill name outside the repo charset is never listed (it cannot forge a block line)", () => {
     const skills = [
@@ -1558,7 +1591,7 @@ describe("create candidates: the prompt shows the gate's own ranking (Ref #10550
     });
 
     it("counts the candidates over ALL skills at the gate (hidden skills still shape the IDF), matching what the prompt showed", () => {
-      const { skills, p, pushedDown } = idfPopulation()!;
+      const { skills, p, pushedDown } = mustIdfPopulation();
       const cx = ctx({ patterns: [p], skills, skillDirs: skills.map((x) => x.name) });
       const raw = proposal({ slug: e.slug, description: e.description, when_to_use: e.when_to_use, nearest_skill: pushedDown, pattern_slug: p.slug });
       const v = checkCreate(raw, cx);
@@ -1566,6 +1599,10 @@ describe("create candidates: the prompt shows the gate's own ranking (Ref #10550
       if (v.kind !== "refused") return;
       expect([v.class, v.detail]).toEqual(["prefer-patch", "nearest-not-top3"]);
       expect(v.numbers?.nearest_in_offered).toBe(1);
+      // the proposal has no word overlap with the synthetic skills, so every visible skill ties at 0 and the rank is the
+      // alphabetical position among the VISIBLE skills (hidden ones do not count)
+      const visibleAlpha = skills.filter((x) => !x.disableModelInvocation).map((x) => x.name).sort((a, b) => a.localeCompare(b));
+      expect(v.numbers?.nearest_rank).toBe(visibleAlpha.indexOf(pushedDown) + 1);
     });
 
     it("absent on the other prefer-patch refusals (overlap, nearest-missing, open-pr-nearest)", () => {

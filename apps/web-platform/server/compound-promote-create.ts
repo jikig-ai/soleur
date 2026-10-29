@@ -694,7 +694,7 @@ export function patternOverlapText(p: { title: string; summary: string; tags: re
   return `${p.title} ${p.summary} ${p.tags.join(" ")}`;
 }
 
-/** The skills the model is not shown (user-invoked). Shared by `createCandidates` and `checkCreate`'s rank, so the two cannot disagree about which skills are hidden. */
+/** The skills the model is not shown (user-invoked). Used by `createCandidates` and by `checkCreate`'s rank. The prompt's shown-skill list and the `nearest-missing` check still spell the same predicate themselves. */
 export function hiddenSkillNames(skills: readonly SkillRecord[]): Set<string> {
   return new Set(skills.filter((s) => s.disableModelInvocation).map((s) => s.name));
 }
@@ -871,8 +871,9 @@ export function checkCreate(raw: unknown, c: CreateContext): CreateVerdict {
   const nearestRank = ranked.filter((r) => !hidden.has(r.name)).findIndex((r) => r.name === p.nearest_skill) + 1;
   const top1 = round3(ranked[0].score);
   if (nearestRank > OVERLAP_TOP_K) {
-    // Sentry-only: whether the model ignored the candidates it was shown (0) or the listed skill did not survive the
-    // gate's re-rank of the proposal text (1). Absent when no candidates were offered for the named pattern.
+    // Sentry-only. 0: the named skill is not among the candidates listed for the pattern the model named (a skill listed
+    // only under another pattern, or outside the candidate charset, also reads 0). 1: it was listed for that pattern and
+    // the gate's re-rank of the proposal text pushed it out. Absent when no candidates were offered for the named pattern.
     const offered = createCandidates(page, c.skills);
     return refuse("prefer-patch", "nearest-not-top3", {
       nearest_rank: nearestRank,
