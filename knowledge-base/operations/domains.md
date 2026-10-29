@@ -33,7 +33,7 @@ last_updated: 2026-09-09
 
 | Setting | Value |
 |---------|-------|
-| SSL Mode | Full (Strict) |
+| SSL Mode | Full (Strict) zone default. **Not for `app.soleur.ai`:** a Configuration Rule (`set_config`, described "Flexible SSL for web platform", in `apps/web-platform/infra/seo-config-rules.tf`) sets `ssl = "flexible"` for that host, so Cloudflare speaks plain HTTP to the origin there (configuration read; the live mode is not yet measured, #10479). The apex and `www` carry a separate `full` rule — see "Apex TLS: the proxy/certificate conflict" below. Fix ruled by the CLO, not accepted as a risk: Origin CA certificate, `strict` for `app.soleur.ai` and a recorded handshake probe, target 2026-11-12, hard stop 2026-11-19 (#10479). |
 | Always Use HTTPS | Off (zone toggle); path-aware via Rule 10 of `cloudflare_ruleset.seo_page_redirects` — see "Always Use HTTPS exception" below |
 | Minimum TLS Version | 1.2 |
 | HSTS | max-age=63072000; includeSubDomains; preload (source of truth: `apps/web-platform/infra/cloudflare-settings.tf` + `apps/web-platform/lib/security-headers.ts`) |
