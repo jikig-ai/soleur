@@ -350,3 +350,14 @@ epic names. `go.md` Step 1.5 is the authority for the trigger. The trigger only 
 check is weaker than the delegation's admin-author rule and grants no authority: every production act still needs a valid
 recorded Standing Delegation, verified by `delegation-verify.sh`, or an in-session per-command go (the runbook's Production
 Envelope for the Inngest TLS acts records which acts are envelope-delegable and which are in-session go only).
+
+## Addendum 2026-10-29 (#9927)
+
+The `soleur:go` trigger gained a classification-only form: a label plus open items (owner-side, blocked or waiting) that belongs
+to an open epic the brief cites, found in the brief or in an owner-authored epic body, routes to the CTO to be classified, not to
+a delegation. `go.md` Step 1.5 stays the authority for the trigger and is not restated here. The route uses the existing Rule
+interface (a prompt that never starts `Own the epic`) and discharges nothing: it records no delegation, calls no `render` and
+leaves every hold standing. A list in which nothing is delegable raises no epic-start question and files no `Standing-delegation`
+issue. The author check is on the issue creator, not the last editor; this is inherited from the 2026-10-22 widening and is closed
+by one snapshot that is never re-read, by passing the items as untrusted data, and by epic text only ever moving an item toward
+the operator.

@@ -163,6 +163,10 @@ _re='starts `(Own the epic)`'
 GO_OWN_CUE=""
 _go_para="$(awk '/^## Step 1\.5: Hold routing/ { f = 1; next } f && /^## / { f = 0 } f { print }' "$GO_MD")"
 [[ "$_go_para" =~ $_re ]] && GO_OWN_CUE="${BASH_REMATCH[1]}"
+# The classification route (epic 9927) spawns the CTO with a Rule prompt, never an Own the epic one: its cue is read out of the same paragraph.
+_re='starts `(Rule on this technical question[^`]*)`'
+GO_CLASSIFY_CUE=""
+[[ "$_go_para" =~ $_re ]] && GO_CLASSIFY_CUE="${BASH_REMATCH[1]}"
 
 # The FULL plan-review prompt for the `cto` named-panel reviewer, rebuilt from plan-review.workflow.js itself
 # (reviewPrompt()): the opening sentence with the lens substituted, then the named-panel guidance block. The
@@ -340,6 +344,7 @@ ck; [[ "${#PLAN_REVIEW_FULL}" -ge 900 && "$PLAN_REVIEW_FULL" == *'Structured adv
 ck; [[ "${#PLAN_REVIEW_PLAIN}" -ge 400 && "$PLAN_REVIEW_PLAIN" == *'Structured advisory only'* && "$PLAN_REVIEW_PLAIN" != *'NAMED CEO'* ]] \
   && ok "rebuilt the plan-review engineering-reviewer prompt (${#PLAN_REVIEW_PLAIN} bytes)" || bad "could not rebuild the non-named reviewPrompt text (${#PLAN_REVIEW_PLAIN} bytes)"
 ck; [[ -n "$GO_OWN_CUE" ]] && ok "extracted go.md's hold-routing spawn cue: \`$GO_OWN_CUE\`" || bad "go.md's hold-routing paragraph names no 'starts \`Own the epic\`' cue"
+ck; [[ -n "$GO_CLASSIFY_CUE" ]] && ok "extracted go.md's hold-classification spawn cue: \`$GO_CLASSIFY_CUE\`" || bad "go.md's hold-routing paragraph names no 'starts \`Rule on this technical question ...\`' classification cue"
 
 # --- C. each existing caller's phrase selects the intended interface ----------------------------------
 CL_LABEL=(); CL_WANT=(); CL_PROMPT=()
@@ -357,6 +362,7 @@ add_caller 'plan-review FULL reviewPrompt for an engineering reviewer' assess "$
 add_caller 'plan-review full prompt even if its sentence were capitalised like the Rule cue' assess "${PLAN_REVIEW_FULL//do NOT use AskUserQuestion/Do NOT use AskUserQuestion}"
 add_caller 'go hold routing' own-the-epic "$GO_OWN_CUE #9757: complete the epic from the resume brief."
 add_caller 'go hold routing that also says Do NOT use AskUserQuestion' own-the-epic "$GO_OWN_CUE #9757: finish it. Do NOT use AskUserQuestion."
+add_caller 'go hold classification' rule "${GO_CLASSIFY_CUE//<N>/9757} Item h1: an example owner-side hold. Item h2: an example blocked hold."
 add_caller 'unrecognised prompt falls back to the existing behaviour' assess 'What should we think about before building the export feature?'
 add_caller 'empty prompt falls back to the existing behaviour' assess ' '
 caller_n=0
@@ -596,6 +602,9 @@ row "S4b assess-first cues removed" "$M/s4.md" "$BASE_REF" selector-assess-cue-s
 sed 's/`BINDING`/`BINDING`, `binding`/' "$CTO" > "$M/s5.md"
 misroute_row "S5 lowercase 'binding' cue (a feature about key binding settings)" "$M/s5.md" "${DOMAIN_PROMPT//\{desc\}/key binding settings}" assess; nrows=$((nrows + 1))
 row "S5b lowercase 'binding' cue" "$M/s5.md" "$BASE_REF" selector-lowercase-binding; nrows=$((nrows + 1))
+# S7 all three Rule cues removed: the go classification prompt (epic 9927) loses its Rule selection
+sed -e 's/`Rule on this technical question`/`zz-gone-r`/' -e 's/`[Dd]o NOT use AskUserQuestion`/`zz-gone-a`/g' -e 's/`BINDING`/`zz-gone-b`/' "$CTO" > "$M/s7.md"
+misroute_row "S7 all three Rule cues removed (go classification prompt)" "$M/s7.md" "${GO_CLASSIFY_CUE//<N>/9757} Item h1: an example owner-side hold." rule; nrows=$((nrows + 1))
 # S6 the assess rule moved after the Rule rule
 awk '/^2\. The prompt contains `Structured/ { held = $0; next } held != "" && /^3\. / { print; print held; held = ""; next } { print }' "$CTO" > "$M/s6.md"
 row "S6 assess rule placed after the Rule rule" "$M/s6.md" "$BASE_REF" selector-assess-after-rule; nrows=$((nrows + 1))
@@ -617,8 +626,8 @@ ck; [[ "$(printf '%s\n' "$SURFACES" | grep -c . || true)" -ge 8 ]] && ok "cto sp
 # (2) ABSOLUTE: the count of a green run, committed with ZERO slack. A derived floor moves with the rows it
 #     guards (delete six rows and the floor drops with them), so this constant is the one that bites. Raise it
 #     in the same commit that adds rows, never ahead of them.
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 8 + caller_n + 1 + 4 + 15 + nrows + 1 + 1 ))
-ABSOLUTE_FLOOR=167
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 9 + caller_n + 1 + 4 + 15 + nrows + 1 + 1 ))
+ABSOLUTE_FLOOR=170
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' "$asserted" "$MIN_ASSERTIONS" >&2
