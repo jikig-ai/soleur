@@ -227,7 +227,7 @@ async function uploadFindings(args: {
       feature: "cron-ux-audit",
       op: "zero-screenshots",
       message:
-        "findings uploaded but zero screenshots captured — Playwright MCP may have failed to connect; cron monitor stays green (liveness, not success)",
+        "findings uploaded but zero screenshots captured — Playwright MCP may have failed to connect; cron monitor stays green (liveness, not success; destroyed #6590 PR-B — void-post)",
       extra: { fn: "cron-ux-audit", findingsUploaded: true },
     });
   }
@@ -443,7 +443,7 @@ export async function cronUxAuditHandler({
           feature: "cron-ux-audit",
           op: "claude-eval-fatal",
           message:
-            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red",
+            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red (destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-ux-audit", ...decision.sentryExtra },
         },
       );

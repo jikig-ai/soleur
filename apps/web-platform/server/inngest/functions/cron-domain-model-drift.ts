@@ -31,6 +31,9 @@
  *    (ok on rc 0/1, error on rc 2/3 or empty-stale anomaly). A weekly-cadence
  *    cron's absence-based liveness is too weak on its own, so this workflow
  *    provisions its own monitor (unlike Design A dev-migration-drift).
+ *    That monitor was destroyed by the #6590 PR-B prune — the heartbeat now
+ *    void-posts by design (spec NG4), and dispatch-error cover is the
+ *    reportSilentFallback path below.
  *  - Dispatch error path: an Octokit `workflow_dispatch` failure is caught and
  *    reported loudly to the Sentry issues stream via `reportSilentFallback`
  *    (token redacted). A token-mint failure occurs BEFORE the try/catch and

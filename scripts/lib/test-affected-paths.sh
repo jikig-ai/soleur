@@ -388,6 +388,14 @@ AFFECTED_INFRA_RUNNER_PATHS=(
 # suites enumerate their subjects as data, not as sourced code. Array name is
 # the registration label uppercased with non-alphanumerics mapped to `_`.
 
+# scripts/prod-version-drift-check (#6590 PR-B) — B10g copies the shared pruned
+# set into its sandbox ($REPO_ROOT-indirected, so derivation cannot see it).
+AFFECTED_SCRIPTS_PROD_VERSION_DRIFT_CHECK_PATHS=(
+  "apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
+  "scripts/prod-version-drift-check.test.sh"             # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                   # THIS FILE
+)
+
 # tests/hooks/drop-sentinel-parity — parity over the producer/consumer file sets
 # it enumerates internally (PRODUCER_FILES / CONSUMER_FILES).
 AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
