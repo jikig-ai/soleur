@@ -78,6 +78,7 @@ import {
   runCreatePersistStep,
   runCreateProposeStep,
   type CreatePersistResult,
+  type CreateStepVerdict,
   type CreateVerdictCreate,
 } from "@/server/compound-promote-create-arm";
 import type { CreateRefusal, CreateVerdict } from "@/server/compound-promote-create";
@@ -96,6 +97,8 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 const WEEK_CAP_DEFAULT = 2;
 export const MAX_DIFF_BYTES = 16384;
+/** Sanity bound (not a product limit) for the `create_offered` count read back from a memoized step output; a value above it yields no key. */
+const MAX_CREATE_OFFERED = 1000;
 /**
  * The quorum: the fewest DISTINCT, corpus-resolved source learnings a cluster may cite and
  * still be drafted. The phase-1 prompt, the refusal in `draftAdditiveEdit` and the
@@ -624,7 +627,7 @@ export const ANTHROPIC_MAX_TOKENS = 16384;
 // Structured-output schema (#5186): the model returns clusters wrapped in an
 // object (structured-output roots are objects, not top-level arrays). Every
 // object needs `additionalProperties: false`; numeric/array constraints are
-// NOT supported by the API — the slice(0, remaining) cap stays a post-parse TS
+// NOT supported by the API — the slice(0, editCap) cap stays a post-parse TS
 // slice. The prompt and the parse-site read are kept in lockstep with this wrapper.
 export const CLUSTER_OUTPUT_SCHEMA = {
   type: "object",
@@ -1731,6 +1734,9 @@ export async function cronCompoundPromoteHandler({
   let createNoAction: Extract<CreateVerdict, { kind: "no_action" }>["reason"] | undefined;
   let createRefusal: CreateRefusal | undefined;
   let createPr: number | undefined;
+  // #10550 -- the number of candidate patterns the create arm offered to the model (a count, never text). Assigned from the
+  // MEMOIZED step return, outside the step callback, so a replay still reports it; absent when the memo has none.
+  let createOffered: number | undefined;
   const createMarker = (): Partial<CompoundPromoteOutcome> => {
     if (!createArmRan) return {};
     const n = createRefusal?.numbers ?? {};
@@ -1739,6 +1745,7 @@ export async function cronCompoundPromoteHandler({
       create_arm: "ran",
       ...(createOutcome === undefined ? {} : { create_outcome: createOutcome }),
       ...(createNoAction === undefined ? {} : { create_no_action_reason: createNoAction }),
+      ...(createOffered === undefined ? {} : { create_offered: createOffered }),
       ...(createRefusal === undefined ? {} : { create_refusal_class: createRefusal.class, create_detail: createRefusal.detail }),
       // Only these numbers reach the marker (an allowlist: a number the pure module adds is Sentry-only until named here).
       ...Object.fromEntries(Object.entries(CREATE_MARKER_NUMBERS).flatMap(([from, to]) => (n[from] === undefined ? [] : [[to, n[from]]]))),
@@ -1890,6 +1897,14 @@ export async function cronCompoundPromoteHandler({
       return { ok: true, status: "week-cap-reached" };
     }
 
+    // #10550 -- slots the EDIT loop may use. On an `allow_create` run one free slot is held back for the create arm
+    // (amended 2026-10-27 after the live-fire refusal: the loop used to take both slots, so with two qualifying edit
+    // clusters the arm was unreachable and ended `create-refused` class `week-cap`). `allowCreate` is false on every
+    // scheduled, corpus and non-`true` run, so for those `editCap === weekCapResult.remaining` and the prompt text and the
+    // slice below are byte-identical to before. With one free slot `editCap` is 0 and the cluster step returns empty
+    // without a model call.
+    const editCap = allowCreate ? Math.max(weekCapResult.remaining - 1, 0) : weekCapResult.remaining;
+
     // #8293 patterns path only: read the bot's prior proposal outcomes from PR state. The scheduled path has
     // no new step, no new error path and no new marker field. Fail-closed-loud: an unprovable read ends the
     // run `status=error` with `ledger_read=failed`, never as silent zero output.
@@ -2037,6 +2052,8 @@ export async function cronCompoundPromoteHandler({
 
     // FR7/FR8: Anthropic cluster call (I3: wall-clock guard)
     const clusterResult = await step.run("anthropic-cluster", () => withTimeout(async () => {
+      // One free slot on an `allow_create` run is reserved for the arm: nothing to cluster, no model call.
+      if (editCap === 0) return { clusters: [] as ProposedCluster[], truncated: false };
       const apiKey = process.env.ANTHROPIC_API_KEY;
       if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -2050,7 +2067,7 @@ export async function cronCompoundPromoteHandler({
       const patternsArm = inputSource === "patterns";
       const nonce = randomBytes(8).toString("hex");
       const prompt = [
-        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=${PROMOTION_QUORUM} source learnings; the server refuses a cluster with fewer, so do not return one).`,
+        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${editCap} qualifying clusters (each with >=${PROMOTION_QUORUM} source learnings; the server refuses a cluster with fewer, so do not return one).`,
         `Schema: {clusters:[{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], rationale:string}]}. Each source_learnings entry must be an exact path key from the corpus, ${PROMOTION_QUORUM} or more distinct ones per cluster. You do NOT write any diff: a later step edits the file.`,
         `Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.rules.md.`,
         `Current always-loaded payload (AGENTS.md + AGENTS.rules.md) is ${alwaysLoadedNow} bytes; propose against a budget of ${PROPOSE_ALWAYS_LOADED_BUDGET} bytes (the warn floor — leave headroom, do not aim for the hard ceiling).`,
@@ -2118,14 +2135,14 @@ export async function cronCompoundPromoteHandler({
 
       // Known consequence (ADR-092 Amendment 2026-10-20): this slice runs BEFORE the
       // normalisation below, so a cluster the server later refuses `quorum-not-met` still
-      // occupies one of the `remaining` proposal slots. Moving the quorum filter ahead of
+      // occupies one of the `editCap` proposal slots. Moving the quorum filter ahead of
       // the slice would need the corpus-key check inside this step (replay risk) and would
       // hide refusals from the marker, so it is documented, not fixed. The same applies to #8293
       // suppression on the patterns arm: a cluster that a prior PR already covers also occupies one of
-      // the (at most two) slots, and the model is not told which hashes are suppressed, so a repeatedly
+      // the (at most two; one on an `allow_create` run) slots, and the model is not told which hashes are suppressed, so a repeatedly
       // proposed rejected or merged cluster can end a week `no-qualifying-clusters` (ruling C3, slot
       // top-up cut; trigger tracked in #10977).
-      return { clusters: (parsed.clusters as ProposedCluster[]).slice(0, weekCapResult.remaining), truncated: false };
+      return { clusters: (parsed.clusters as ProposedCluster[]).slice(0, editCap), truncated: false };
     }, MAX_RUN_DURATION_MS));
 
     // Summaries for phase 2 come from the corpus already collected, keyed by path. A
@@ -2191,8 +2208,9 @@ export async function cronCompoundPromoteHandler({
 
     // #10550 -- the gated create arm. Reached ONLY when `readRunOptions` said so (trigger=manual, input=patterns,
     // allow_create===true); on every other run `allowCreate` is false and none of this code executes. It runs AFTER
-    // the edit loop (it shares the week cap with whatever the loop opened) and is two steps: a memoized, never-throwing
-    // `create-propose` and ONE `create-persist`. The work lives in `compound-promote-create-arm.ts` so this source
+    // the edit loop and shares the week cap with whatever the loop opened; because the loop is held to `editCap`
+    // (the free slots minus one on this path), `capLeft` below is at least 1 whenever the arm is reached. It is two
+    // steps: a memoized, never-throwing `create-propose` and ONE `create-persist`. The work lives in `compound-promote-create-arm.ts` so this source
     // gains no commit call and no synthetic-check list of its own; every outcome is accumulated HERE, from the
     // MEMOIZED step returns, so a replay still reports it.
     const recordCreateRefusal = (r: CreateRefusal): void => {
@@ -2203,7 +2221,7 @@ export async function cronCompoundPromoteHandler({
     const runCreateArm = async (): Promise<void> => {
       createArmRan = true;
       const capLeft = weekCapResult.remaining - clustersOpened;
-      const proposed: CreateVerdict = await step.run("create-propose", async () => {
+      const proposed: CreateStepVerdict = await step.run("create-propose", async () => {
         const octokit = new Octokit({ auth: installationToken });
         return runCreateProposeStep({
           repoRoot,
@@ -2221,6 +2239,10 @@ export async function cronCompoundPromoteHandler({
           },
         });
       });
+      // The step output is memoized JSON that outlives a deploy, so `offered` is optional on read: an older memo has none,
+      // and only a non-negative integer within the pattern bound reaches the marker (anything else yields no key).
+      const stamped: unknown = proposed.offered;
+      createOffered = typeof stamped === "number" && Number.isInteger(stamped) && stamped >= 0 && stamped <= MAX_CREATE_OFFERED ? stamped : undefined;
       if (proposed.kind === "refused") {
         recordCreateRefusal(proposed);
         return;
@@ -2811,12 +2833,10 @@ export const cronCompoundPromote = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 0 * * 0" },
+      { event: "cron/compound-promote.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 0 * * 0" },
-    { event: "cron/compound-promote.manual-trigger" },
-  ],
-  cronCompoundPromoteHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronCompoundPromoteHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

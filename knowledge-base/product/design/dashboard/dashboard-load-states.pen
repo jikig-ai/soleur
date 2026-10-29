@@ -63,10 +63,10 @@
           "alignItems": "center",
           "justifyContent": "center",
           "children": [
-            { "type": "rect", "id": "aSk1", "name": "sk-logo", "width": 44, "height": 44, "fill": "#3A2E18", "cornerRadius": 8 },
-            { "type": "rect", "id": "aSk2", "name": "sk-line1", "width": 180, "height": 12, "fill": "#1F1F22", "cornerRadius": 4 },
-            { "type": "rect", "id": "aSk3", "name": "sk-line2", "width": 240, "height": 10, "fill": "#1F1F22", "cornerRadius": 4 },
-            { "type": "rect", "id": "aSk4", "name": "sk-input", "width": 280, "height": 36, "fill": "#1A1A1D", "cornerRadius": 10 }
+            { "type": "rectangle", "id": "aSk1", "name": "sk-logo", "width": 44, "height": 44, "fill": "#3A2E18", "cornerRadius": 8 },
+            { "type": "rectangle", "id": "aSk2", "name": "sk-line1", "width": 180, "height": 12, "fill": "#1F1F22", "cornerRadius": 4 },
+            { "type": "rectangle", "id": "aSk3", "name": "sk-line2", "width": 240, "height": 10, "fill": "#1F1F22", "cornerRadius": 4 },
+            { "type": "rectangle", "id": "aSk4", "name": "sk-input", "width": 280, "height": 36, "fill": "#1A1A1D", "cornerRadius": 10 }
           ]
         }
       ]
@@ -99,10 +99,10 @@
           "alignItems": "center",
           "children": [
             { "type": "ellipse", "id": "bN0", "name": "logo", "width": 22, "height": 22, "fill": "#F5B95F" },
-            { "type": "rect", "id": "bN1", "name": "nav1", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
-            { "type": "rect", "id": "bN2", "name": "nav2", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
-            { "type": "rect", "id": "bN3", "name": "nav3", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
-            { "type": "rect", "id": "bN4", "name": "nav4-admin-in-html", "width": 30, "height": 8, "fill": "#2F3A4A", "cornerRadius": 3 }
+            { "type": "rectangle", "id": "bN1", "name": "nav1", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rectangle", "id": "bN2", "name": "nav2", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rectangle", "id": "bN3", "name": "nav3", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rectangle", "id": "bN4", "name": "nav4-admin-in-html", "width": 30, "height": 8, "fill": "#2F3A4A", "cornerRadius": 3 }
           ]
         },
         {
@@ -124,9 +124,9 @@
               "layout": "vertical",
               "gap": 8,
               "children": [
-                { "type": "rect", "id": "bR1", "name": "row1", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
-                { "type": "rect", "id": "bR2", "name": "row2", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
-                { "type": "rect", "id": "bR3", "name": "row3", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 }
+                { "type": "rectangle", "id": "bR1", "name": "row1", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rectangle", "id": "bR2", "name": "row2", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rectangle", "id": "bR3", "name": "row3", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 }
               ]
             },
             {
@@ -176,10 +176,10 @@
           "alignItems": "center",
           "children": [
             { "type": "ellipse", "id": "cN0", "name": "logo", "width": 22, "height": 22, "fill": "#F5B95F" },
-            { "type": "rect", "id": "cN1", "name": "nav1", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
-            { "type": "rect", "id": "cN2", "name": "nav2", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
-            { "type": "rect", "id": "cN3", "name": "nav3", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
-            { "type": "rect", "id": "cN4", "name": "nav4", "width": 30, "height": 8, "fill": "#2F3A4A", "cornerRadius": 3 }
+            { "type": "rectangle", "id": "cN1", "name": "nav1", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rectangle", "id": "cN2", "name": "nav2", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rectangle", "id": "cN3", "name": "nav3", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rectangle", "id": "cN4", "name": "nav4", "width": 30, "height": 8, "fill": "#2F3A4A", "cornerRadius": 3 }
           ]
         },
         {
@@ -193,7 +193,7 @@
           "padding": 16,
           "children": [
             { "type": "text", "id": "cH", "name": "h1", "fill": "#F5F5F5", "content": "Dashboard", "fontFamily": "Inter", "fontSize": 17, "fontWeight": "600" },
-            { "type": "rect", "id": "cB", "name": "today-banner", "width": "fill_container", "height": 28, "fill": "#1E2A3A", "cornerRadius": 7 },
+            { "type": "rectangle", "id": "cB", "name": "today-banner", "width": "fill_container", "height": 28, "fill": "#1E2A3A", "cornerRadius": 7 },
             {
               "type": "frame",
               "id": "cConv",
@@ -202,9 +202,9 @@
               "layout": "vertical",
               "gap": 8,
               "children": [
-                { "type": "rect", "id": "cR1", "name": "row1", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
-                { "type": "rect", "id": "cR2", "name": "row2", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
-                { "type": "rect", "id": "cR3", "name": "row3", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 }
+                { "type": "rectangle", "id": "cR1", "name": "row1", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rectangle", "id": "cR2", "name": "row2", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rectangle", "id": "cR3", "name": "row3", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 }
               ]
             }
           ]

@@ -385,7 +385,7 @@ scripts/followthrough-varq-ban-live	1544	measured
 scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
-scripts/followthroughs/inngest-verify-clean-10390	1204	floor
+scripts/followthroughs/inngest-trace-retention-5150	1204	floor
 scripts/followthroughs/orphan-sweeps-relook-10972	1200	floor
 scripts/followthroughs/post-deploy-incident-soak	1200	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
@@ -554,6 +554,9 @@ scripts/tunnel-connector-census	132	measured
 scripts/verify-agent-security-slice1	1194	measured
 scripts/verify-lockfile-guards	107	measured
 scripts/verify-marketplace-ruleset	1373	measured
+scripts/watch-brand-hex-triggers-11177	150000	floor
+scripts/watch-code-quality-reeval-9730	45000	floor
+scripts/watch-lint-ratchet-reeval-10515	140000	floor
 scripts/watch-live-verify-pass	172	measured
 scripts/watch-registration-narrowing-9564	10976	measured
 scripts/watchdog-arm-soak-9237	2199	measured
@@ -601,7 +604,6 @@ tests/scripts/git-data-birth-readiness-gate	159595	measured
 tests/scripts/git-data-boot-signal-poll	2829	measured
 tests/scripts/git-data-host-birth-gate	20765	measured
 tests/scripts/git-data-host-replace-gate	2649	measured
-tests/scripts/git-data-plaintext-destroy-gate	1200	floor
 tests/scripts/git-data-root-key-arm	5960	measured
 tests/scripts/git-data-root-token-census	22452	measured
 tests/scripts/git-data-rung2-evidence-capture	14744	measured

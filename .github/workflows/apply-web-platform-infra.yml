@@ -267,8 +267,8 @@ env:
   # documentation or AI output per the 2026-03-21 server-provisioning learning,
   # Session Error #4; re-verified at /work time). Kept byte-identical to
   # apply-deploy-pipeline-fix.yml's pins so both bridges install the same binary.
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
 jobs:
   preflight:
@@ -652,6 +652,8 @@ jobs:
               -target=logtail_exploration_alert.monitor_send_failed \
               -target=logtail_exploration.inngest_luks_wrong_volume \
               -target=logtail_exploration_alert.inngest_luks_wrong_volume \
+              -target=logtail_exploration.inngest_luks_key_probe_fail \
+              -target=logtail_exploration_alert.inngest_luks_key_probe_fail \
               -target=logtail_exploration.registry_store_not_luks \
               -target=logtail_exploration_alert.registry_store_not_luks \
               -target=logtail_exploration.registry_clientip_not_rfc1918 \
@@ -3597,8 +3599,8 @@ jobs:
           # and `secrets: inherit` does not apply because this is not a reusable-workflow call.
           doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
           # Kept in step with reusable-release.yml's invocation; both are SHA-pinned.
-          cloudflared-version: "2026.5.0"
-          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          cloudflared-version: "2026.10.4"
+          cloudflared-sha256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
       - name: Restore production's pinned image set from GHCR
         # NO `continue-on-error`. This is the step that ends the empty-store window; a
@@ -4726,7 +4728,7 @@ jobs:
           # The semver validator downstream is the CORRECTNESS guard; this is the injection
           # guard, and it runs first.
           if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
+            echo "::error::image_tag must be a release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
             exit 1
           fi
           printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
@@ -4892,6 +4894,7 @@ jobs:
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
+          # canonicalizes bare|v-prefixed (#11426)
           TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
           echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
@@ -5202,7 +5205,7 @@ jobs:
           # image_tag is optional, but if supplied it is interpolated into a docker ref and a
           # shell command, so it gets the same shape-before-use treatment as the host key.
           if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
+            echo "::error::image_tag must be a release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
             exit 1
           fi
           printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
@@ -5331,6 +5334,7 @@ jobs:
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
+          # canonicalizes bare|v-prefixed (#11426)
           TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
           echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
@@ -5699,7 +5703,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # (#8043 NFR2 / Guard 4) The rung-2 interlock below reads the evidence file's commit provenance; its ARM 1 HOLDs on a shallow clone, so omitting this fails closed rather than open.
+          # (#8043 Guard 4) The rung-2 interlock's ARM 1 HOLDs on a shallow clone.
           fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0

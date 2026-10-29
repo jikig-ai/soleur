@@ -597,10 +597,10 @@ export const cronFollowThroughMonitor = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 9 * * 1-5" },
+      { event: "cron/follow-through-monitor.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 9 * * 1-5" },
-    { event: "cron/follow-through-monitor.manual-trigger" },
-  ],
-  cronFollowThroughMonitorHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronFollowThroughMonitorHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

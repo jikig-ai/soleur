@@ -79,6 +79,7 @@ plugins/soleur/scripts/run-in-pid-namespace.sh|adopted — declare -F fallback o
 plugins/soleur/scripts/resolve-regenerable-conflicts.sh|adopted — declare -F fallback only
 plugins/soleur/scripts/domain-model-drift.sh|adopted — declare -F fallback only
 plugins/soleur/skills/ship/scripts/battery-owed.sh|adopted — declare -F fallback only
+plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh|adopted — declare -F fallback only
 plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh|adopted — declare -F fallback only
 plugins/soleur/skills/review/scripts/fix-round-seats.sh|adopted — declare -F fallback only (census-missed site, same class)
 plugins/soleur/skills/ship/scripts/hold-gate-eval.sh|superset — strips strictly more (cntrl + C1 + wider e2 classes + BOM); leave as-is
@@ -86,6 +87,7 @@ plugins/soleur/skills/preflight/SKILL.md|doc snippet — canonical form, recorde
 plugins/soleur/skills/preflight/references/check-13-founder-check.md|doc snippet — canonical form, recorded
 plugins/soleur/scripts/merge-effect-class.sh|measurement only — compares the byte count with and without NUL to refuse a NUL-bearing path list; never emits sanitized output
 plugins/soleur/scripts/lib/affected-tests/content-trigger.sh|parser input only — drops NUL bytes from git diff output before the awk added-line scan so a NUL cannot truncate a line; the stream is never emitted as sanitized output
+plugins/soleur/skills/registry-breakglass-mirror/scripts/mirror-ghcr-to-zot.sh|self-contained incident script — runs on a bare datacenter host with no repo lib to source; die() strips C0+DEL from registry/crane error text before echoing (escape-sequence refuse, same class)
 EOF
 )
 

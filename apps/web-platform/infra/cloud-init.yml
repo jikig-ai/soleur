@@ -277,12 +277,8 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # Cloudflare apt repository source list for cloudflared.
-  - path: /etc/apt/sources.list.d/cloudflare-main.list
-    content: |
-      deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared noble main
-    owner: root:root
-    permissions: '0644'
+  # (No Cloudflare apt source list: cloudflared installs below as a pinned .deb — see the
+  # install block; the apt repo is unpinned and can resurrect a below-advisory-floor binary.)
 
   # fail2ban sshd tuning drop-in (issue #2654).
   # Loads after /etc/fail2ban/jail.d/defaults-debian.conf (alphabetic order).
@@ -409,12 +405,6 @@ runcmd:
   - |
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    # cloudflare-main.list is active from boot (write_files) but its keyring is only fetched at the
-    # cloudflared install far below — so apt-get update here would DETERMINISTICALLY fail on the
-    # missing signed-by keyring (noble exit 100, NOT retryable by Acquire::Retries) and mask the
-    # real cause. Fetch it FIRST, before any apt-get update sees the cloudflare source.
-    STAGE=cf_apt_key
-    n=0; until curl --connect-timeout 5 -m 20 -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg; do n=$((n+1)); [ "$n" -ge 3 ] && exit 1; sleep 5; done
     # DPkg::Lock::Timeout waits out the apt-daily timer (holds the lock minutes on a fresh boot)
     # instead of hard-failing; the outer `timeout` still bounds a true hang → named fatal. 2
     # attempts keeps the named fatal near the ~640s provision poll — the Sentry fatal is durable
@@ -461,7 +451,7 @@ runcmd:
   - printf 'SOLEUR_SENTRY_DSN=%s\nDOPPLER_TOKEN=%s\nLUKS_MONITOR_PROFILE=standby\n' '${sentry_dsn}' '${workspaces_luks_fresh_boot_token}' > /etc/default/luks-monitor
 
   # Install Docker via official APT repository with GPG key verification (#1615).
-  # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
+  # Replaces pipe-to-shell (curl | sh) with a signed APT repo.
   - STAGE=docker_apt  # (#6090) name the stage for the top-armed on_err fatal
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -577,11 +567,17 @@ runcmd:
   # Set after recursive chown so it isn't overridden
   - chown 1001:1001 /mnt/data/workspaces
 
-  # Install cloudflared from Cloudflare apt repository. The signing keyring (rotated Oct 2025) is
-  # now fetched in the early apt block above (stage=cf_apt_key) — the cloudflare source is active
-  # from boot, so its key must precede the FIRST apt-get update, not just this cloudflared install.
-  - apt-get update
-  - apt-get install -y cloudflared
+  # Install cloudflared as a pinned .deb + sha256 — NOT the rotating apt repo (eMudhra floor
+  # 2026.10.2; unpinned apt can resurrect a below-floor binary). Ungated like webhook: only
+  # registration is gated below, so a de-pooled host keeps the binary and stays promotable.
+  - |
+    CLOUDFLARED_VERSION="2026.10.4"
+    CLOUDFLARED_SHA256="3d73cd9f085de5a947fce8a72d0acc34a6a18cb23f369549b1cd0efc51121e98"
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/$${CLOUDFLARED_VERSION}/cloudflared-linux-amd64.deb" -o /tmp/cloudflared.deb
+    # #6090: checksum fail-CLOSED independent of H3 set +e (mismatch aborts).
+    echo "$${CLOUDFLARED_SHA256}  /tmp/cloudflared.deb" | sha256sum -c - || { soleur-boot-emit cloudflared_checksum fatal; exit 1; }
+    dpkg -i /tmp/cloudflared.deb || { soleur-boot-emit cloudflared_install fatal; exit 1; }
+    rm /tmp/cloudflared.deb
 
   # Register cloudflared as a systemd service with the tunnel token.
   # The token encodes tunnel configuration managed remotely via Terraform.
@@ -716,11 +712,11 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.63@sha256:8a64642e1251f4cff8ee803b575c7215565db05eec68851b5951bd5ea61cde1a
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.66@sha256:5f3efad2f6621c06984264bf13ae6c7e4eb871d88ac55c5552638f6ba02664a0
     # #8036 1d: IREF above is the pin carrier (bump bot + AC6), never pulled. zot is the only
     # source (the seed item's zot login is reused); a miss is fatal, no second registry.
     ZURL='${registry_endpoint}'  # baked (#8651/#6985)
-    ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.63@sha256:8a64642e1251f4cff8ee803b575c7215565db05eec68851b5951bd5ea61cde1a"
+    ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.66@sha256:5f3efad2f6621c06984264bf13ae6c7e4eb871d88ac55c5552638f6ba02664a0"
     if timeout 180 docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_pull_fatal fatal; exit 1; fi
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }

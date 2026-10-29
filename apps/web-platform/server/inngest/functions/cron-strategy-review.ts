@@ -667,12 +667,10 @@ export const cronStrategyReview = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 8 * * 1" },
+      { event: "cron/strategy-review.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 8 * * 1" },
-    { event: "cron/strategy-review.manual-trigger" },
-  ],
-  cronStrategyReviewHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronStrategyReviewHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

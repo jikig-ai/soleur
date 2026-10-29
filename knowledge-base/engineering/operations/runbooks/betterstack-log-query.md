@@ -60,6 +60,15 @@ Live standing alarms over this source:
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
+- **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
+  header, or is absent. `indeterminate` never pages. Merged but inert until the owner delivers the signed
+  bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
+  [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) "Key-continuity probe (#9927 item 2)".
+  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`).
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
@@ -94,9 +103,11 @@ Live standing alarms over this source:
     3. The Sentry ops that say what the single-flight guard did (feature `cron-claude-eval`):
        `claude-eval-singleflight-join` — a retry reached the live child (or its settled result),
        one marker, **the guard worked**; `claude-eval-singleflight-no-runid` — a spawn had no
-       well-formed run id, **the guard was bypassed**, investigate. Feature `inngest-serve`, op
-       `inngest-stream-consumer-cancel` — a step stream's consumer disconnected (one event per drop;
-       its tags name the function, step and whether the request was signed).
+       well-formed run id, **the guard was bypassed**, investigate.
+       (Retired, #8628 / PR #11381: feature `inngest-serve` op `inngest-stream-consumer-cancel`
+       used to fire on a step stream's consumer disconnect — its only emitter was
+       `stream-detach.ts`, deleted by the inngest@4 upgrade. Drops are now detected server-side
+       via the `inngest_step_524` needle above.)
   - **`logtail_exploration_alert.claude_cost_daily_burn`** (hourly, trailing 24 h) —
     `soleur-claude-cost-daily-burn-prd`. Pages when the cron `SOLEUR_CLAUDE_COST` markers' summed
     `cost_usd` exceeds **$25** (`local.claude_cost_daily_burn_usd`; recalibration on #8613). The sum
@@ -707,7 +718,10 @@ manual `patterns` row `create_requested` (boolean) records whether the event car
 the early `disabled`, `deduped` and `week-cap-reached` rows; the scheduled row and a manual corpus row carry none of
 the create fields. When the arm ran the row also carries `create_arm` (`ran`, emitted ONLY then), `kind` (`create`),
 `create_outcome` (`no_action` | `refused` | `opened`) and, as the case needs, `create_no_action_reason`
-(`no-pattern-qualifies` | `all-owned` | `other`), `create_refusal_class` (one of `week-cap`, `create-open`,
+(`no-pattern-qualifies` | `all-owned` | `other`), `create_offered` (an integer count of the candidate patterns the arm would send to the
+model; whenever a call was made it is the number offered, on a pre-call refusal it is the candidate count and no call was
+spent, on a pre-call `no_action` it is `0`; absent on a `week-cap` or `index-empty` refusal, on `model-invalid/internal` (a step
+defect, Sentry op `create-propose-internal`) and on a row whose memoized step output predates the field), `create_refusal_class` (one of `week-cap`, `create-open`,
 `index-empty`, `input-size`, `model-invalid`, `shape`, `slug`, `prefer-patch`, `budget`, `scan`, `readme-sync`,
 `stub-drift`, `persist`), `create_detail` (a closed token, never model text), the numbers `create_words`,
 `create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, the refusal evidence numbers `create_tokens`,
@@ -730,7 +744,7 @@ doppler run -p soleur -c prd_terraform -- \
                  (.create_refusal_class//"-"), (.create_detail//"-"), (.create_no_action_reason//"-"),
                  (.create_words//"-"), (.create_cap//"-"), (.create_total//"-"), (.create_top1//"-"),
                  (.create_nearest_rank//"-"), (.create_tokens//"-"), (.create_path_index//"-"), (.create_file_index//"-"),
-                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-")] | @tsv'
+                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-"), (.create_offered//"-")] | @tsv'
 ```
 
 A row with `create_requested: true` and `-` in the `create_arm` column ended before the arm (read `status`: a saturated
@@ -794,7 +808,7 @@ Reading it:
   | reason | what actually happened | probe class |
   |---|---|---|
   | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before the target file is read and before the phase-2 model call (the draft step's API-key check and always-loaded read still run first; ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers, also present on the mirrored error row (key `cluster_hash`), not on the `hash`-keyed warn line | N |
-  | `ledger-suppressed` | patterns arm only: the cluster's recomputed hash is already proposed (open, merged, or closed unmerged within 60 days). Counted in `ledger_suppressed`; `clusters_proposed` stays pre-suppression. The model's clusters are sliced to the week-cap `remaining` before suppression, so a repeated suppressed cluster can end a week `no-qualifying-clusters` (accepted) | N |
+  | `ledger-suppressed` | patterns arm only: the cluster's recomputed hash is already proposed (open, merged, or closed unmerged within 60 days). Counted in `ledger_suppressed`; `clusters_proposed` stays pre-suppression. The model's clusters are sliced to the week-cap `remaining` (one less on an `allow_create` run) before suppression, so a repeated suppressed cluster can end a week `no-qualifying-clusters` (accepted) | N |
   | `cluster-duplicate` | patterns arm only: a second cluster with the same source set in one run | N |
   | `create-refused` | create arm only (manual `patterns` + `allow_create`): a gate refused the one create; the closed `class` and `detail` are the marker fields `create_refusal_class` and `create_detail`, not part of this enum. Written once per refused create, no `refusal_detail` entry (no `diff_*` shape) | N |
 

@@ -48,7 +48,7 @@ trap 'rm -rf "$SANDBOX_ROOT"' EXIT
 # SET UP must abort rather than silently produce a confident wrong verdict about the SUT.
 make_repo() {
   local name="$1"
-  local n="${2:-4}"
+  local n="${2:-5}"
   local d="$SANDBOX_ROOT/$name"
   mkdir -p "$d" || return 2
   git -C "$d" init -q -b main || return 2
@@ -106,23 +106,23 @@ expect_pass() {
 }
 
 # --- CONTROL: a clean synthetic repo must PASS, or every RED row below is meaningless. ---
-CLEAN=$(make_repo clean 4) || {
+CLEAN=$(make_repo clean 5) || {
   echo "FATAL: sandbox setup failed" >&2
   exit 2
 }
-expect_pass "$CLEAN" "CONTROL clean repo (4 package-lock dirs, no bun.lock)"
+expect_pass "$CLEAN" "CONTROL clean repo (5 package-lock dirs, no bun.lock)"
 
 # H3 must-PASS: the clean state reports a NON-ZERO scanned count, so it is distinguishable
 # from a broken enumeration.
 asserted=$((asserted + 1))
-if guard_out "$CLEAN" | grep -cE >/dev/null '4 package-lock\.json director'; then
+if guard_out "$CLEAN" | grep -cE >/dev/null '5 package-lock\.json director'; then
   pass "H3 clean tree reports a non-zero scanned count"
 else
   fail "H3 clean tree did not report its scanned count"
 fi
 
 # --- Row 1: restore apps/web-platform/bun.lock ---
-R1=$(make_repo row1 4)
+R1=$(make_repo row1 5)
 : "${R1:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$R1/apps/web-platform"
 printf 'lockfile\n' > "$R1/apps/web-platform/bun.lock"
@@ -130,20 +130,20 @@ git -C "$R1" add -A
 expect_red "$R1" "row1 apps/web-platform/bun.lock restored" "apps/web-platform/bun.lock"
 
 # --- Row 2: restore root bun.lock ---
-R2=$(make_repo row2 4)
+R2=$(make_repo row2 5)
 : "${R2:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf 'lockfile\n' > "$R2/bun.lock"
 git -C "$R2" add -A
 expect_red "$R2" "row2 root bun.lock restored" "tracked bun lockfile: bun.lock"
 
 # --- Row 3: enumeration broken (zero package-lock.json) → RED via the floor, not exit 0 ---
-R3=$(make_repo row3 4)
+R3=$(make_repo row3 5)
 : "${R3:?fixture dir is empty; git -C <empty> would retarget this write}"
-git -C "$R3" rm -q --cached package-lock.json pkg1/package-lock.json pkg2/package-lock.json pkg3/package-lock.json
+git -C "$R3" rm -q --cached package-lock.json pkg1/package-lock.json pkg2/package-lock.json pkg3/package-lock.json pkg4/package-lock.json
 expect_red "$R3" "row3 empty package-lock enumeration" "below the floor"
 
 # --- Row 4: a THIRD bun.lock while both known directories stay clean ---
-R4=$(make_repo row4 4)
+R4=$(make_repo row4 5)
 : "${R4:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$R4/spike"
 printf 'lockfile\n' > "$R4/spike/bun.lock"
@@ -151,7 +151,7 @@ git -C "$R4" add -A
 expect_red "$R4" "row4 spike/bun.lock (whole-set quantification)" "spike/bun.lock"
 
 # --- Row 5: a bun.lock in a directory with NO package-lock.json ---
-R5=$(make_repo row5 4)
+R5=$(make_repo row5 5)
 : "${R5:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$R5/lonely"
 printf 'lockfile\n' > "$R5/lonely/bun.lock"
@@ -159,7 +159,7 @@ git -C "$R5" add -A
 expect_red "$R5" "row5 bun.lock with no sibling package-lock.json" "lonely/bun.lock"
 
 # --- Row 6: reintroduce [install] into a bunfig.toml ---
-R6=$(make_repo row6 4)
+R6=$(make_repo row6 5)
 : "${R6:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[install]\nminimumReleaseAge = 259200\n\n[test]\npreload = "./x.ts"\n' > "$R6/bunfig.toml"
 git -C "$R6" add -A
@@ -167,14 +167,14 @@ expect_red "$R6" "row6 [install] section reintroduced" "declares an [install] se
 
 # Row 6b: a bunfig.toml with ONLY [test] must PASS — the guard must not reject bun as a
 # test runner. Without this, row 6 would also pass against a guard that rejects any bunfig.
-R6B=$(make_repo row6b 4)
+R6B=$(make_repo row6b 5)
 : "${R6B:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[test]\npreload = "./x.ts"\n' > "$R6B/bunfig.toml"
 git -C "$R6B" add -A
 expect_pass "$R6B" "row6b bunfig.toml with only [test] (bun stays the test runner)"
 
 # Row 6c: `[install.scopes]` — a sub-table must redden too, or the clause is bypassable.
-R6C=$(make_repo row6c 4)
+R6C=$(make_repo row6c 5)
 : "${R6C:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[install.scopes]\n"@x" = "https://y"\n' > "$R6C/bunfig.toml"
 git -C "$R6C" add -A
@@ -183,7 +183,7 @@ expect_red "$R6C" "row6c [install.scopes] sub-table" "declares an [install] sect
 # Rows 6d-6g: TOML admits several spellings of the same table. The original anchor saw only
 # the canonical `[install]`, so each of these declared install config and passed green.
 for spelling in "[ install ]" '["install"]' 'install.registry = "https://reg"'; do
-  RS=$(make_repo "row6-$(printf '%s' "$spelling" | tr -cd '[:alnum:]')" 4)
+  RS=$(make_repo "row6-$(printf '%s' "$spelling" | tr -cd '[:alnum:]')" 5)
   : "${RS:?fixture dir is empty; git -C <empty> would retarget this write}"
   printf '%s\nminimumReleaseAge = 259200\n' "$spelling" > "$RS/bunfig.toml"
   git -C "$RS" add -A
@@ -191,7 +191,7 @@ for spelling in "[ install ]" '["install"]' 'install.registry = "https://reg"'; 
 done
 
 # Row 6h: bun also reads bunfig.local.toml, which was outside the scanned set entirely.
-R6H=$(make_repo row6h 4)
+R6H=$(make_repo row6h 5)
 : "${R6H:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[install]\nminimumReleaseAge = 259200\n' > "$R6H/bunfig.local.toml"
 git -C "$R6H" add -A
@@ -199,14 +199,17 @@ expect_red "$R6H" "row6h bunfig.local.toml is scanned" "declares an [install] se
 
 # --- Row 7: the floor must be ASSERTED, not decorative. ---
 asserted=$((asserted + 1))
-if grep -qE '^MIN_PACKAGE_LOCK_DIRS=[4-9][0-9]*$' "$GUARD"; then
-  pass "row7 floor constant is >= 4 (not lowered to a decorative value)"
+if grep -qE '^MIN_PACKAGE_LOCK_DIRS=([5-9]|[1-9][0-9]+)$' "$GUARD"; then
+  pass "row7 floor constant is >= 5 (root, web-platform, pencil-setup, pen-cli, spike) (not lowered to a decorative value)"
 else
-  fail "row7 MIN_PACKAGE_LOCK_DIRS is missing or below 4 — the floor is decorative"
+  fail "row7 MIN_PACKAGE_LOCK_DIRS is missing or below 5 — the floor is decorative"
 fi
 # ...and behaviorally: a repo with fewer dirs than the floor must RED even when clean.
 R7=$(make_repo row7 2)
 expect_red "$R7" "row7 clean repo below the floor still REDs" "below the floor"
+# ...and the pre-pen-cli count (4) is below the floor now: dropping the fifth directory REDs.
+R7B=$(make_repo row7b 4)
+expect_red "$R7B" "row7b a clean repo with only four lockfile directories REDs (pen-cli is the fifth)" "below the floor"
 
 # --- Row 8: the retained sdk-bump-sandbox-gate PRESENCE arm. ---
 # Guard 1 does not own this check; the row exists so that retiring the bun half of
@@ -223,8 +226,27 @@ else
   fail "row8 could not read $SDK_GATE"
 fi
 
+# --- Row 9: the sibling lockfile wiring agrees with the floor (pen-cli is the fifth directory). ---
+# close-superseded-dependabot-prs.sh maps a Dependabot PR title to a lockfile; the pen-cli prefix
+# sits UNDER the pencil-setup path, so a `*pencil-setup*` arm placed first would swallow it and
+# read the wrong lockfile. The function is extracted from the real script (never re-declared here).
+CLOSER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/close-superseded-dependabot-prs.sh"
+LOCKFILE_FOR_SRC=$(sed -n '/^lockfile_for() {/,/^}/p' "$CLOSER")
+for row in \
+  "bump hono from 4.1 to 4.2 in /plugins/soleur/skills/pencil-setup/scripts/pen-cli|plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json" \
+  "bump hono from 4.1 to 4.2 in /plugins/soleur/skills/pencil-setup/scripts|plugins/soleur/skills/pencil-setup/scripts/package-lock.json"; do
+  asserted=$((asserted + 1))
+  title="${row%%|*}"; want="${row##*|}"
+  got=$(bash -c "$LOCKFILE_FOR_SRC"'; lockfile_for "$1"' _ "$title")
+  if [[ "$got" == "$want" ]]; then
+    pass "row9 lockfile_for maps '${title##* in }' to $want"
+  else
+    fail "row9 lockfile_for maps '${title##* in }' to '$got', expected '$want'"
+  fi
+done
+
 # --- H2 must-PASS: an npm-only directory, never dual. ---
-H2=$(make_repo h2 4)
+H2=$(make_repo h2 5)
 : "${H2:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$H2/pencil-scripts"
 printf '{"name":"pencil","lockfileVersion":3}\n' > "$H2/pencil-scripts/package-lock.json"
@@ -261,7 +283,7 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   fi
   exit 1
 fi
-MIN_ASSERTIONS=18
+MIN_ASSERTIONS=21
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] H1 only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
   exit 1

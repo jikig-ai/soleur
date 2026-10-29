@@ -126,6 +126,24 @@ assert_grep "probe_result discriminates hypotheses (negative_fail — the exfil 
 assert_grep "probe_result discriminates hypotheses (positive_fail — over-blocking)" \
   'PROBE_RESULT=positive_fail' "$PROBE"
 
+echo "-- gateway session-token mint contract (#11361) --"
+# The mint MUST write the presented username INTO the token file: egress-auth-helper.sh
+# answers OK iff `"$user" == "$(<"$TOKDIR/$pass")"` — an empty mint (the `: >` form the
+# defect shipped) produces a 407 on every CONNECT, which is `gw_allow_fail` → poweroff
+# on a fresh host. Anchored on the call form, not a bare token: a comment cannot mint.
+assert_grep "gw token mint writes the username (printf 'probe'), parity with cron-egress-resolve.sh" \
+  "printf 'probe' > \"\\\$GW_TOKEN_DIR/\\\$GW_TOK\"" "$PROBE"
+if grep -qE ': > "\$GW_TOKEN_DIR/\$GW_TOK"' "$PROBE"; then
+  CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: empty token mint (: >) present — file content never equals the presented username → 407 → gw_allow_fail"
+else
+  CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: no empty token mint (: > GW_TOK) — content==user contract can hold"
+fi
+if grep -qF '"$user" == "$(<"$TOKDIR/$pass")"' "$SCRIPT_DIR/egress-auth-helper.sh"; then
+  CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: egress-auth-helper contract the mint must satisfy (file content == username)"
+else
+  CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: egress-auth-helper contract line missing (\"\$user\" == \"\$(<\"\$TOKDIR/\$pass\")\") — the anchor this pin binds moved"
+fi
+
 echo "-- Sentry TRANSPORT parity with soleur-host-bootstrap.sh emit_fail (drift guard) --"
 # The tag-schema check above locks WHAT tags are sent; this locks that the TRANSPORT (DSN
 # parse + store endpoint + auth header) is byte-identical to the bootstrap emit_fail, so a
@@ -222,7 +240,7 @@ mk_stub docker "$LOGLINE
 case \"\$1\" in
   ps) if [ -n \"\${STUB_PS_NAMES+x}\" ]; then printf '%s\n' \"\$STUB_PS_NAMES\"; else printf '%s\n' soleur-web-platform soleur-egress-gw; fi ;;
   inspect) echo '172.18.0.9' ;;
-  exec) case \"\$*\" in *169.254.169.254*) exit \"\${STUB_GW_DENY_RC:-7}\" ;; *api.github.com*) case \"\$*\" in *--proxy*) printf '%s' \"\${STUB_GW_ALLOW_CODE:-200}\" ;; esac; exit 0 ;; *example.com*) exit 28 ;; esac; echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
+  exec) case \"\$*\" in *169.254.169.254*) exit \"\${STUB_GW_DENY_RC:-7}\" ;; *api.github.com*) case \"\$*\" in *--proxy*) _argv=\"\$*\"; _p=\"\${_argv##*--proxy http://}\"; _p=\"\${_p%%@*}\"; _u=\"\${_p%%:*}\"; _t=\"\${_p#*:}\"; if [ -f \"\$EGRESS_GW_TOKEN_DIR/\$_t\" ] && [ \"\$(cat \"\$EGRESS_GW_TOKEN_DIR/\$_t\")\" = \"\$_u\" ]; then printf 'gw-auth user=%s verdict=ok\n' \"\$_u\" >> \"\$STUB_CALLS\"; printf '%s' \"\${STUB_GW_ALLOW_CODE:-200}\"; else printf 'gw-auth user=%s verdict=407\n' \"\$_u\" >> \"\$STUB_CALLS\"; printf '%s' '407'; fi ;; esac; exit 0 ;; *example.com*) exit 28 ;; esac; echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
   *) echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
 esac"
 mk_stub nft "$LOGLINE
@@ -335,6 +353,12 @@ check "P4-6 healthy run inspects the gw and runs the metadata deny leg once" \
   '[[ "$(grep -c "^docker.inspect" "$STUB_CALLS" || true)" -ge 1 && "$(grep -c "169.254.169.254" "$STUB_CALLS" || true)" -eq 1 ]]'
 check "P4-6 non-vacuity: that healthy run printed both gw legs before egress-enforce-ok" \
   '[[ "$OUT" == *egress-gw-allow-ok* && "$OUT" == *egress-gw-deny-ok* && "$OUT" == *egress-enforce-ok* ]]'
+# #11361: the stub's --proxy arm now enforces the REAL helper contract (token-file content
+# must equal the presented username) at CONNECT time, so an empty mint reproduces the prod
+# failure end-to-end. The healthy run above already proves the compliant mint passes; this
+# row pins that the evaluation actually happened rather than being skipped.
+check "P4-7 the --proxy arm evaluated auth on the minted token (gw-auth verdict logged, not skipped)" \
+  '[[ "$(grep -c "^gw-auth user=probe verdict=ok" "$STUB_CALLS" || true)" -ge 1 ]]'
 
 # --- #9639 F5: the failure emitters READ the webhook-deploy token; they never source it as root ------------
 # /etc/default/webhook-deploy is chowned to the deploy user, so `. file` in a root context executes whatever the
@@ -533,7 +557,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). A call site recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=103
+MIN_CASES=107
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

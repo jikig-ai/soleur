@@ -14,3 +14,5 @@ apps/web-platform/infra/workspaces-luks-provision.test.sh	P	[ -f "$st/crash_afte
 apps/web-platform/infra/workspaces-luks-provision.test.sh	P	[ -f "$st/crash_after_mkfs" ] && kill -9 "$PPID"
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	W	p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
 plugins/soleur/test/roadmap-reconcile.test.sh	W	top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+plugins/soleur/test/ship-battery-refusal-wait.test.sh	P	if (( n > 400 )); then kill -KILL "$PPID"; exit 0; fi
+plugins/soleur/test/ship-battery-refusal-wait.test.sh	P	if [[ -f "$d/die_after" && "$n" -ge "$(cat "$d/die_after")" ]]; then kill -KILL "$PPID"; exit 0; fi

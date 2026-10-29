@@ -26,7 +26,8 @@
 # deploy-status-fanout-verify.{sh,test.sh} seam precedent.
 #
 # CONTRACT:
-#   input  : the bare /health `.version` string, via $1 (preferred) or stdin.
+#   input  : strict three-part semver, bare or `v`-prefixed — normalized to bare
+#            before the prepend. Via $1 (preferred) or stdin. (#11426, #9669)
 #   output : `v<version>` on stdout + exit 0, IFF it is strict three-part semver.
 #   failure: exit 1 with a `::error::` diagnostic on stderr naming the rejected
 #            version + a remediation. Emits NO tag on stdout.
@@ -45,14 +46,26 @@ else
   RUNNING_VERSION="$(cat || true)"
 fi
 
+# Canonicalize: the workflow input regex accepts `v?`-prefixed spellings, so a
+# caller may legitimately hand us `v1.2.3`. Strip exactly ONE leading v before
+# the prepend — `vv1.2.3` normalizes to `v1.2.3`, prepends to `vv1.2.3`, and the
+# strict guard below still rejects it (the double-v path stays loud). #11426.
+# RAW_VERSION keeps the caller's actual input so a rejection names what was
+# rejected, not the normalized form (#11426 diagnostic fidelity).
+RAW_VERSION="$RUNNING_VERSION"
+RUNNING_VERSION="${RUNNING_VERSION#v}"
+
 TARGET_TAG="v${RUNNING_VERSION}"
 
 if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  # Strip control chars from the untrusted /health value before echoing it into
-  # the runner log — a spoofed .version carrying an embedded newline could
-  # otherwise inject a `::workflow-command::` annotation line (log-annotation
-  # injection). The valid path never reaches here (validated semver has none).
-  SAFE_VERSION=$(printf '%s' "$RUNNING_VERSION" | tr -d '\000-\037')
+  # Strip everything but printable ASCII from the untrusted /health value
+  # before echoing it into the runner log — a spoofed .version carrying an
+  # embedded newline, C0 control, DEL, or a Unicode separator (U+2028/29)
+  # could otherwise inject a `::workflow-command::` annotation line
+  # (log-annotation injection). The valid path never reaches here (validated
+  # semver has none). `LC_ALL=C tr -cd '[:print:]'` is the portable form —
+  # GNU/BSD safe, unlike sed \x escapes.
+  SAFE_VERSION=$(printf '%s' "$RAW_VERSION" | LC_ALL=C tr -cd '[:print:]')
   echo "::error::Cannot resolve a semver known-good tag for web-1's running container from /health (.version='${SAFE_VERSION}'). The container is not reporting a released BUILD_VERSION (expected strict vX.Y.Z). Trigger a normal web-platform release, confirm app/health reports the new version, then re-run this recreate." >&2
   exit 1
 fi

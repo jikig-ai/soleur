@@ -891,7 +891,7 @@ export const cronBugFixer = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [{ cron: "0 6 * * *" }, { event: "cron/bug-fixer.manual-trigger" }],
   },
-  [{ cron: "0 6 * * *" }, { event: "cron/bug-fixer.manual-trigger" }],
-  cronBugFixerHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronBugFixerHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

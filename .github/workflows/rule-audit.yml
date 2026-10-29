@@ -26,11 +26,12 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    # Sized for worst-case serial slack: rule-audit.sh + model-drift + two
-    # 2-minute-bounded pin-drift poll steps. A job timeout marks the running step
+    # Sized for worst-case serial slack: rule-audit.sh + model-drift + four
+    # 2-minute-bounded pin-drift poll steps (zot, egress-gw, inngest, cloudflared).
+    # A job timeout marks the running step
     # `cancelled`, and `if: failure()` does NOT fire on cancellation — an
     # undersized budget here is the exact silence shape the steps exist to kill.
-    timeout-minutes: 8
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -666,6 +667,215 @@ jobs:
             gh issue create --label inngest-pin-drift --label action-required \
               --title "inngest-pin-drift: self-hosted CLI pin needs attention" \
               --body-file "$RUNNER_TEMP/inngest-pin-drift-body.md"
+          fi
+
+          # A probe that could not run is a DETECTOR failure: exit non-zero so the ops
+          # email fires. Drift alone exits 0 — the issue is the channel for that.
+          if [ -n "$PROBLEMS" ]; then
+            echo "one or more probes could not complete; see the filed issue." >&2
+            exit 1
+          fi
+
+      # DETECTION half of the cloudflared pin cadence (2026-10-27 eMudhra
+      # remediation). Enforcement is
+      # apps/web-platform/infra/cloudflared-pin-staleness.test.sh (offline, 0
+      # fresh / 10 drift / 2 detector-failure) plus the terraform-target-parity
+      # census that pins every .github/ site equal. This step is the
+      # PR-cadence-independent trigger, cloned from `Detect inngest CLI pin
+      # drift` — same two-condition split: (1) offline age/coherence catches
+      # "the analysis went stale", (2) the live upstream poll catches "upstream
+      # moved and we are behind". Both are needed: (2) alone rebuilds a single
+      # point of failure (a dead poll reads as healthy); (1) alone is a
+      # fresh-looking sidecar months behind.
+      #
+      # Advisory only — this NEVER edits the pin. It files one idempotent
+      # `cloudflared-pin-drift` + `action-required` issue; a human opens the
+      # real, CI-gated PR. The thresholds are DELIBERATELY not "any delta":
+      # cloudflared ships ~monthly, so latest-only would mint a permanently-open
+      # ticket days after every bump. File when releases_behind >= 5 OR the
+      # pinned release is >= 45 days old. The same numbers live in
+      # cloudflared.provenance.md — keep them identical.
+      - name: Detect cloudflared pin staleness
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          WF=.github/workflows/apply-web-platform-infra.yml
+          PROV=apps/web-platform/infra/cloudflared.provenance.md
+          DRIFT=""; PROBLEMS=""; NOTES=""
+
+          # --- (1) offline staleness + coherence --------------------------------------
+          # Assignment-then-$? would ABORT here: a GitHub `run:` block defaults to
+          # `bash -eo pipefail`, so a non-zero command substitution kills the step at that
+          # line and every diagnosis below it never runs.
+          set +e
+          OUT="$(bash apps/web-platform/infra/cloudflared-pin-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "cloudflared-pin-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ]; then
+            echo "cloudflared-pin-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+
+          # --- (2) the pinned version --------------------------------------------------
+          # ANCHORED on the env assignment, exactly as the offline gate parses it — an
+          # unanchored grep is satisfied by a comment. Two halves of one detector must not
+          # parse the same fact by different rules. cloudflared tags are BARE semver (no
+          # v prefix).
+          set +e
+          PINNED="$(grep -oE '^[[:space:]]*CLOUDFLARED_VERSION:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$WF" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          set -e
+          if [ -z "$PINNED" ]; then
+            echo "could not parse the pinned cloudflared version from $WF (anchored on the env assignment); failing step." >&2
+            exit 2
+          fi
+
+          # --- (3) live upstream poll: ONE paginated releases read ----------------------
+          # A single `releases` listing answers all three questions: latest stable tag,
+          # the releases-behind delta, and the pinned release's published_at for the age
+          # leg. The jq filter drops drafts, prereleases, and non-semver rows per page;
+          # `sort -V` then reorders by VERSION — the wire order is release-object
+          # created_at desc, NOT version order. Counting RELEASES, a tag with no
+          # published release cannot inflate the delta, and index-based counting cannot
+          # go negative — a tag-order delta can when upstream retracts.
+          set +e
+          REL="$(gh api --paginate 'repos/cloudflare/cloudflared/releases?per_page=100' \
+                 --jq '.[] | select((.draft|not) and (.prerelease|not) and (.tag_name | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | [.tag_name, .published_at] | @tsv' \
+                 2>"$RUNNER_TEMP/cloudflared-poll.err" | sort -t$'\t' -k1,1Vr)"
+          API_RC=$?
+          set -e
+          LATEST=""; BEHIND=""; PIN_DATE=""
+          if [ "$API_RC" -ne 0 ] || [ -z "$REL" ]; then
+            # A dead poll must NOT discard an offline verdict we already hold. Record it
+            # and keep going; the non-zero exit at the end still fires the ops email.
+            POLL_ERR="$(tail -1 "$RUNNER_TEMP/cloudflared-poll.err" 2>/dev/null || true)"
+            PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC${POLL_ERR:+: \`$POLL_ERR\`}); this run cannot tell whether we are behind."$'\n'
+            LATEST="(unavailable)"
+          else
+            LATEST="$(printf '%s\n' "$REL" | head -1 | cut -f1)"
+            # 1-based line number of PINNED in the semver-descending stable list, minus
+            # one = count of strictly-newer stable releases.
+            P_LINE="$(printf '%s\n' "$REL" | cut -f1 | grep -nxF "$PINNED" | cut -d: -f1 || true)"
+            if [ -n "$P_LINE" ]; then
+              BEHIND=$((P_LINE - 1))
+            else
+              PROBLEMS="${PROBLEMS}- pinned tag \`$PINNED\` absent from the stable release list; releases-behind not measured."$'\n'
+            fi
+            PIN_DATE="$(printf '%s\n' "$REL" | awk -F'\t' -v t="$PINNED" '$1==t {print $2; exit}')"
+            if [ -z "$PIN_DATE" ]; then
+              PROBLEMS="${PROBLEMS}- could not read the pinned release's published_at for \`$PINNED\`; age leg not measured."$'\n'
+            fi
+          fi
+          AGE_DAYS=""
+          if [ -n "$PIN_DATE" ]; then
+            if ! printf '%s' "$PIN_DATE" | grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' >/dev/null; then
+              # Upstream-shaped string heading for the issue body — do not embed it raw.
+              PROBLEMS="${PROBLEMS}- pinned release published_at is not ISO-shaped; age leg not measured."$'\n'
+              PIN_DATE=""
+            else
+              PIN_EPOCH="$(date -d "$PIN_DATE" +%s 2>/dev/null || true)"
+              if [ -n "$PIN_EPOCH" ]; then
+                AGE_DAYS=$(( ($(date +%s) - PIN_EPOCH) / 86400 ))
+              else
+                PROBLEMS="${PROBLEMS}- pinned release published_at is unparsable; age leg not measured."$'\n'
+                PIN_DATE=""
+              fi
+            fi
+          fi
+          # Threshold: >= 5 releases behind OR pinned release >= 45 days old.
+          if { [ -n "$BEHIND" ] && [ "$BEHIND" -ge 5 ]; } || { [ -n "$AGE_DAYS" ] && [ "$AGE_DAYS" -ge 45 ]; }; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+            NOTES="${NOTES}- pinned \`$PINNED\` vs upstream \`$LATEST\`: releases-behind=${BEHIND:-unmeasured}, release-age-days=${AGE_DAYS:-unmeasured} (threshold: >=5 behind OR >=45 days)."$'\n'
+          fi
+
+          # --- (4) release-asset existence probe (bridge binary + cloud-init .deb) -------
+          # The CI bridges download cloudflared-linux-amd64 and the web-host cloud-init
+          # downloads cloudflared-linux-amd64.deb at the pinned tag, each sha256-verified
+          # against the committed values, so a deleted/replaced asset is a latent outage
+          # that surfaces only at the NEXT bridge run or host provision. A coherent
+          # pin+sidecar edit passes every offline check — nothing binds the names to
+          # upstream ground truth — so the probe is the only scheduled check that sees
+          # it. It verifies EXISTENCE, not hash: a coherent same-version sha swap is
+          # bounded by each consumer's own fail-closed sha256 verify, not by this step.
+          for ASSET in cloudflared-linux-amd64 cloudflared-linux-amd64.deb; do
+            set +e
+            CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I \
+              "https://github.com/cloudflare/cloudflared/releases/download/$PINNED/$ASSET")"
+            PROBE_RC=$?
+            set -e
+            if [ "$PROBE_RC" -ne 0 ] || [ -z "$CODE" ] || [ "$CODE" = "000" ]; then
+              PROBLEMS="${PROBLEMS}- could not probe the $ASSET release asset (network/probe failure); this run cannot rule out a missing asset."$'\n'
+            elif [ "$CODE" = "404" ]; then
+              DRIFT="${DRIFT:+$DRIFT+}missing-$ASSET"
+              PROBLEMS="${PROBLEMS}- **the pinned $ASSET release asset does not exist upstream (HTTP 404).** Coherent-swap signature: the pin looks internally consistent but the download is gone and the next bridge run or host provision goes dark. Do NOT apply."$'\n'
+            elif [ "$CODE" != "200" ] && [ "$CODE" != "302" ]; then
+              PROBLEMS="${PROBLEMS}- unexpected HTTP $CODE probing the $ASSET release asset; treat as unverified."$'\n'
+            fi
+          done
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ] && [ -z "$NOTES" ]; then
+            echo "cloudflared pin is current enough ($PINNED vs $LATEST; behind=${BEHIND:-?}, age=${AGE_DAYS:-?}d), both release assets resolve, and the offline analysis is coherent+fresh."
+            exit 0
+          fi
+
+          # --- file/update ONE idempotent issue -----------------------------------------
+          # `action-required` is load-bearing: it is the ONLY label the weekly operator
+          # digest reads. gh label create --force is the idempotent path (zot precedent).
+          gh label create cloudflared-pin-drift --color FBCA04 \
+            --description "the committed cloudflared pin is stale, behind upstream, or a release asset is unverifiable (eMudhra remediation)" \
+            --force >/dev/null 2>&1 || true
+          {
+            echo "The pinned cloudflared release needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned (\`apply-web-platform-infra.yml\` env pair) | \`$PINNED\` |"
+            echo "| Upstream latest | \`$LATEST\` |"
+            echo "| Releases behind | ${BEHIND:-unmeasured} |"
+            echo "| Pinned release age | ${AGE_DAYS:-unmeasured} days |"
+            echo "| Advisory floor | \`2026.10.2\` (eMudhra intermediate-CA compromise) |"
+            echo
+            if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
+            if [ -n "$NOTES" ]; then echo "$NOTES"; echo; fi
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation — follow \`## Bump procedure\` in"
+            echo "\`$PROV\` (the sidecar is authoritative; it reconciles every"
+            echo "\`.github/\` pin site — the terraform-target-parity census pins"
+            echo "them all equal). **Never bump below the 2026.10.2 advisory"
+            echo "floor.** Agent entry point:"
+            echo
+            echo '```'
+            echo "/soleur:one-shot \"refresh the cloudflared pin provenance sidecar per apps/web-platform/infra/cloudflared.provenance.md section 'Bump procedure'\""
+            echo '```'
+            echo
+            echo "_Filed automatically by rule-audit.yml cloudflared-pin drift detection (eMudhra remediation)._"
+          } > "$RUNNER_TEMP/cloudflared-pin-drift-body.md"
+          EXISTING="$(gh issue list --label cloudflared-pin-drift --state open --search 'sort:created-asc' --limit 100 --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            # Oldest labeled issue is canonical; re-assert the digest label — a stripped
+            # `action-required` would otherwise drop it from the weekly digest while
+            # comments kept landing on it.
+            gh issue edit "$EXISTING" --add-label cloudflared-pin-drift --add-label action-required >/dev/null 2>&1 || true
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/cloudflared-pin-drift-body.md"
+            echo "Updated existing cloudflared-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label cloudflared-pin-drift --label action-required \
+              --title "cloudflared-pin-drift: CI pin needs attention" \
+              --body-file "$RUNNER_TEMP/cloudflared-pin-drift-body.md"
           fi
 
           # A probe that could not run is a DETECTOR failure: exit non-zero so the ops

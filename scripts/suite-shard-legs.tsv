@@ -388,7 +388,7 @@ scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/ci-draft-light-soak-9728	3
 scripts/followthroughs/ci-push-dedupe-soak-9512	3
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
-scripts/followthroughs/inngest-verify-clean-10390	1
+scripts/followthroughs/inngest-trace-retention-5150	1
 scripts/followthroughs/orphan-sweeps-relook-10972	1
 scripts/followthroughs/post-deploy-incident-soak	1
 scripts/followthroughs/pr-battery-gate-saving-9323	4
@@ -557,6 +557,9 @@ scripts/tunnel-connector-census	3
 scripts/verify-agent-security-slice1	5
 scripts/verify-lockfile-guards	2
 scripts/verify-marketplace-ruleset	3
+scripts/watch-brand-hex-triggers-11177	1
+scripts/watch-code-quality-reeval-9730	1
+scripts/watch-lint-ratchet-reeval-10515	1
 scripts/watch-live-verify-pass	7
 scripts/watch-registration-narrowing-9564	3
 scripts/watchdog-arm-soak-9237	5
@@ -604,7 +607,6 @@ tests/scripts/git-data-birth-readiness-gate	4
 tests/scripts/git-data-boot-signal-poll	6
 tests/scripts/git-data-host-birth-gate	7
 tests/scripts/git-data-host-replace-gate	4
-tests/scripts/git-data-plaintext-destroy-gate	1
 tests/scripts/git-data-root-key-arm	5
 tests/scripts/git-data-root-token-census	2
 tests/scripts/git-data-rung2-evidence-capture	6

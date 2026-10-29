@@ -1567,7 +1567,7 @@ fi
 # interval — without a restart. This is what lets the #4650 watchdog demote its
 # restart-on-first-tick to a guarded backstop (#4652).
 # #5159: re-planning via this poll REQUIRES the SDK to register the canonical
-# PUBLIC serve URL (serveHost pinned in app/api/inngest/route.ts) — a
+# PUBLIC serve URL (serveOrigin pinned in app/api/inngest/route.ts) — a
 # 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
 # planned. Without that pin, neither this poll nor the loopback re-register PUT
 # re-plans crons after a restart (the 2026-06-11 cron-deplan incident).
@@ -1891,6 +1891,71 @@ systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-
 # a probe failure from failing the whole bootstrap: this is observability, never a gate.
 systemctl enable --now inngest-server-probe.timer
 systemctl start inngest-server-probe.service || log "warn: server-probe oneshot non-zero (timer will retry hourly)"
+
+# #5150: 7-day status-gated trace retention. Dedicated host only. A host that has not
+# been replaced onto an image carrying these assets is not yet pruning. Missing assets
+# log and skip; they do not fail bootstrap. The timer is enabled only after psql is
+# present and --ensure-indexes succeeds. enable --now applies to the TIMER. The oneshot
+# is not started here, and Persistent=false so a fresh boot does not catch up.
+if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
+  if [[ -f /tmp/inngest-trace-retention.sh \
+        && -f /tmp/inngest-trace-retention.sql \
+        && -f /tmp/inngest-trace-retention.sqlite.sql ]]; then
+    install -d -o deploy -g deploy -m 0750 /var/lib/inngest
+    install -d -m 0755 /usr/local/lib/soleur/inngest-trace-retention
+    install -m 0755 /tmp/inngest-trace-retention.sh /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sh
+    install -m 0644 /tmp/inngest-trace-retention.sql /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sql
+    install -m 0644 /tmp/inngest-trace-retention.sqlite.sql /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sqlite.sql
+    cat > /etc/systemd/system/inngest-trace-retention.service <<'RETENTIONUNITEOF'
+[Unit]
+Description=Expire finished Inngest trace and log history after 7 days (#5150)
+ConditionPathExists=/etc/default/inngest-server
+
+[Service]
+Type=oneshot
+User=deploy
+Group=deploy
+PrivateTmp=true
+EnvironmentFile=/etc/default/inngest-server
+ExecStart=/usr/bin/flock -n /run/lock/inngest-trace-retention.lock @@DOPPLER_BIN@@ run --config @@DOPPLER_CONFIG@@ -- /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sh
+RETENTIONUNITEOF
+    cat > /etc/systemd/system/inngest-trace-retention.timer <<'RETENTIONTIMEREOF'
+[Unit]
+Description=Daily Inngest trace retention (#5150)
+
+[Timer]
+OnCalendar=daily
+Persistent=false
+RandomizedDelaySec=30min
+AccuracySec=15min
+
+[Install]
+WantedBy=timers.target
+RETENTIONTIMEREOF
+    sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@DOPPLER_CONFIG@@|${DOPPLER_CONFIG}|" /etc/systemd/system/inngest-trace-retention.service
+    if ! command -v psql >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -y || log "warn: apt-get update failed; trace retention timer stays disabled (#5150)"
+      DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client || log "warn: postgresql-client install failed; trace retention timer stays disabled (#5150)"
+    fi
+    if ! command -v psql >/dev/null 2>&1 || [[ -z "${DOPPLER_BIN}" ]]; then
+      log "warn: trace retention timer not enabled (psql or doppler missing) (#5150)"
+    elif (
+      set -a
+      # The token stays in this subshell. doppler run injects the database URI into the child.
+      . /etc/default/inngest-server
+      set +a
+      exec "$DOPPLER_BIN" run --config "$DOPPLER_CONFIG" -- /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sh --ensure-indexes
+    ); then
+      systemctl daemon-reload
+      systemctl enable --now inngest-trace-retention.timer || log "warn: trace retention timer enable failed (#5150)"
+      log "trace retention timer enabled (#5150)"
+    else
+      log "warn: trace retention indexes were not ensured; timer not enabled (#5150)"
+    fi
+  else
+    log "warn: trace retention assets not staged at /tmp; timer not installed (#5150)"
+  fi
+fi
 
 # #6178: enable the cutover flip poll timer (dedicated host only; daemon-reload above
 # already picked up the new units). It SHIPS ENABLED and is NEVER disabled for the host's
