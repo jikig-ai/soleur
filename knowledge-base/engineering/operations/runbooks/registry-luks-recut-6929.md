@@ -340,10 +340,15 @@ gate, because it gets read as evidence.
    half, which it deliberately cannot see (reading Doppler is what this change removed from the
    gate).
 
-2. **Both Hetzner probes return the shape the gate parses.**
+2. **Both Hetzner probes return the shape the gate parses.** The read/write `HCLOUD_TOKEN` was
+   evicted from `prd_terraform` at ADR-241 O10 — a `doppler secrets get` of it resolves empty.
+   These probes are GETs, so the Read-permission `HCLOUD_TOKEN_READONLY` (still in
+   `prd_terraform`) is the credential; the read/write name is Tier-B only, delivered to
+   workflows through the `infra-credentials` loader on a Tier-B environment (see
+   `inngest-server.md` step 0.5 / `infra-credential-tiers-8209.md`).
 
    ```bash
-   HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
+   HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)
    curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
      'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq '.volumes[0].id'
    curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $HCLOUD_TOKEN" \
@@ -405,10 +410,15 @@ One command. (Do **not** look for this in a drift run's logs — it is not there
 captures its plan into a variable, so the `Refreshing state... [id=...]` line never reaches the log.)
 
 ```bash
-HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
+HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)
 curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
   'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'
 ```
+
+The lookup is a GET, so the Read-permission `HCLOUD_TOKEN_READONLY` is sufficient. The read/write
+`HCLOUD_TOKEN` was evicted from `prd_terraform` at ADR-241 O10 (a `doppler secrets get` of it
+resolves empty) and reaches workflows only through the `infra-credentials` loader on a Tier-B
+environment — see `inngest-server.md` step 0.5 / `infra-credential-tiers-8209.md`.
 
 ## Step 2 — Fire it
 
