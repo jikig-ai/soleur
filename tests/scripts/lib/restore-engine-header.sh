@@ -5,9 +5,9 @@
 # Both functions read the ENGINE TEXT on stdin and print one code per line, sorted and unique.
 #
 # EXIT 1 RULE (identical in both suites): the codes a suite exercises are the header's non-zero
-# codes UNION {1}, deduped, so exit 1 is tested whether or not the header ever lists it. The
-# workflow arm for exit 1 is tracked in #10932. The header-vs-emit-sites comparison ignores 1 on
-# BOTH sides, so adding a header row for 1 turns nothing red.
+# codes UNION {1}, deduped, so exit 1 is tested whether or not the header lists it. The header now
+# lists 1 and the workflow has its arm for it. The header-vs-emit-sites comparison still ignores 1
+# on BOTH sides, so dropping the header row for 1 turns nothing red.
 
 # The non-zero codes of the engine's leading header table. A row is `#   N  LABEL` (two or more
 # spaces after the code, which prose such as `#   1. as a REHEARSAL` or `#   10 attempts` lacks);
