@@ -19,3 +19,11 @@
 - soleur:plan, soleur:deepen-plan (read + run in-process)
 - cloud-detect.sh, collision-precheck.sh, precommit-guard.sh, lint-guard-contract.py, markdownlint-cli2
 - gh CLI (issue/PR/epic state reads)
+
+## Work Phase
+- Status: complete — pushed b49abe78b2 to origin/feat-one-shot-11526-vector-down-fallback (draft PR #11559).
+- Tier: C sequential (guard + .tf tightly coupled; no spawn batch, no agent_rounds spend).
+- Live-probe (doppler prd_terraform, 48h): A=49, B=27 stages/1700 rows (vector-down=1 real row), C=0, D=50, E=1/0/1/0 — numbers in the .tf LIVE-PROBED comment.
+- Mid-work fork T4 (decision-challenges.md, `pending - assumed:`): prescribed leg-B conjuncts could not deliver the ruled detail-absent fail-loud (host_role `> 0` rejects on `''` first — measured E3=0); shipped `detail = '' OR (…)` disjunct, parent to confirm at review.
+- Guard extended to 41/21 (extra disjunct presence+mutation row; host_role/devid needles pinned per-leg after one measured surviving mutation).
+- Phase 3 items (PR body disclosure, post-merge apply check, `gh issue close`) belong to ship — not run here.
