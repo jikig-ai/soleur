@@ -301,6 +301,20 @@ extra URL earlier in the argument vector.
   runner's terminal marker; a command timeout without a marker is unresolved, not
   a pass or a test failure.
 
+**The preflight DNS probe found `dig` unavailable.**
+
+- **Recovery:** Used the documented `resolvectl query --type=CNAME` fallback and
+  confirmed the production hostname resolves to a canonical Supabase host.
+- **Prevention:** When the preferred DNS utility is missing, use the preflight
+  fallback instead of treating tool absence as a DNS verdict.
+
+**A Check 9 probe used an invalid ripgrep `-nE` option combination.**
+
+- **Recovery:** The initial error was obscured by a non-pipefail filter pipeline;
+  reran with `rg -n -e` and `pipefail`, which produced a valid no-match verdict.
+- **Prevention:** Use ripgrep's explicit `-e` pattern flag and propagate pipeline
+  failures before interpreting an empty result as PASS.
+
 **A `gh pr view` jq filter omitted the object-field dot.**
 
 - **Recovery:** Corrected `branch:headRefName` to `branch:.headRefName`; the
