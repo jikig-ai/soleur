@@ -6002,6 +6002,14 @@ if want_scripts; then
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
   run_suite "scripts/followthroughs/sdk-bash-smoke-verdict-10548" bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
+  # #11211: exit-code + row-class harness for the dispatch-recovery sweeper re-evaluation probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The probe is notify-only (never 0/1) and runs with a broad
+  # Supabase token, so a stray exit 0/1, a body echo or a non-literal query must redden CI.
+  run_suite "scripts/followthroughs/dispatch-recovery-sweeper-11211" bash scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh
+  # #11265: exit-code + row-class harness for the LUKS keeper dark-probe (the dead-man conversion trigger). Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Notify-only (never 0/1): a quoting row counted
+  # as a measurement, an indeterminate row counted as health, or a stray exit 0/1 must redden CI.
+  run_suite "scripts/followthroughs/inngest-luks-keeper-dark-11265" bash scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh
   # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
   # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.

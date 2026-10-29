@@ -393,6 +393,8 @@ scripts/followthrough-varq-ban-live	1544	measured
 scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1200	floor
+scripts/followthroughs/dispatch-recovery-sweeper-11211	84000	measured
+scripts/followthroughs/inngest-luks-keeper-dark-11265	77000	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/inngest-trace-retention-5150	1204	floor
 scripts/followthroughs/orphan-sweeps-relook-10972	1200	floor
