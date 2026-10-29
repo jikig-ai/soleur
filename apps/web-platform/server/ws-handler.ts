@@ -33,6 +33,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
+import { authFailureFrameFromLeaseError } from "./agent-auth-user-message";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
@@ -2591,11 +2592,16 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
                   : err instanceof ByokDelegationError
                     ? `delegation_${err.reason}` as WSErrorCode
                     : undefined;
-                sendToClient(userId, {
-                  type: "error",
-                  message: sanitizeErrorForClient(err),
-                  errorCode,
-                });
+                // #11086 — a lease refusal of an unusable stored credential gets the recovery frame, not the generic text.
+                const leaseFrame = authFailureFrameFromLeaseError(err);
+                sendToClient(
+                  userId,
+                  leaseFrame ?? {
+                    type: "error",
+                    message: sanitizeErrorForClient(err),
+                    errorCode,
+                  },
+                );
               },
             );
           }

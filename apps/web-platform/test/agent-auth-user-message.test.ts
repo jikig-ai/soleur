@@ -1,0 +1,169 @@
+// #11086: the closed copy table and the rewrite helper. The helper must be total over (kind x scheme), never mutate the SDK
+// message, rewrite only a single-text-block message, and never surface raw CLI text or subscription wording to a tenant.
+import { describe, expect, it } from "vitest";
+
+import {
+  authFailureCopy,
+  buildAuthFailureFrame,
+  isTerminalAuthFailure,
+  rewriteAgentAuthFailure,
+  type AuthFailureKind,
+} from "@/server/agent-auth-user-message";
+
+const KINDS: AuthFailureKind[] = [
+  "not_logged_in",
+  "invalid_api_key",
+  "oauth_token_revoked",
+  "session_expired",
+  "structured",
+  "oauth_unusable",
+];
+
+const CLI_TEXT = "Not logged in · Please run /login";
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v);
+  }
+  return value;
+}
+
+function cliMessage(text: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: "assistant",
+    error: "authentication_failed",
+    is_api_error_message: true,
+    message: { model: "<synthetic>", content: [{ type: "text", text }] },
+    ...extra,
+  };
+}
+
+describe("copy table", () => {
+  it("has a non-empty cell for every kind x scheme, including the neutral cell", () => {
+    for (const kind of KINDS) {
+      for (const scheme of ["api_key", "oauth_token", null, undefined, "weird"]) {
+        const text = authFailureCopy(kind, scheme);
+        expect(text.length).toBeGreaterThan(20);
+        expect(text).not.toMatch(/`/); // plain text only
+        expect(text).not.toContain("·"); // never the CLI separator
+        expect(text).not.toMatch(/\/login/); // never the CLI's own hint
+      }
+    }
+  });
+
+  it("never names a subscription token to a tenant (api_key scheme) or to an unknown scheme", () => {
+    for (const kind of KINDS) {
+      expect(authFailureCopy(kind, "api_key")).not.toMatch(/subscription|setup-token|oauth/i);
+      expect(authFailureCopy(kind, null)).not.toMatch(/subscription|setup-token|oauth|API key/i);
+    }
+  });
+
+  it("names the recovery in words for the operator scheme", () => {
+    for (const kind of KINDS) {
+      if (kind === "session_expired") continue;
+      expect(authFailureCopy(kind, "oauth_token")).toMatch(/claude setup-token/);
+    }
+    expect(authFailureCopy("oauth_unusable", "oauth_token")).toContain("Nothing was billed to your API key.");
+  });
+
+  it("maps the unreachable revoked x api_key cell to the invalid-key copy", () => {
+    expect(authFailureCopy("oauth_token_revoked", "api_key")).toBe(authFailureCopy("invalid_api_key", "api_key"));
+  });
+
+  it("marks only session_expired as non-terminal", () => {
+    for (const kind of KINDS) expect(isTerminalAuthFailure(kind)).toBe(kind !== "session_expired");
+  });
+});
+
+describe("buildAuthFailureFrame", () => {
+  it("is a key_invalid error frame carrying the scheme only when it is known", () => {
+    expect(buildAuthFailureFrame("not_logged_in", "oauth_token")).toEqual({
+      type: "error",
+      message: authFailureCopy("not_logged_in", "oauth_token"),
+      errorCode: "key_invalid",
+      credentialScheme: "oauth_token",
+    });
+    const neutral = buildAuthFailureFrame("not_logged_in", null);
+    expect(neutral.errorCode).toBe("key_invalid");
+    expect("credentialScheme" in neutral).toBe(false);
+    expect("credentialScheme" in buildAuthFailureFrame("structured", "garbage")).toBe(false);
+  });
+});
+
+describe("rewriteAgentAuthFailure", () => {
+  it("rewrites a CLI reply to the friendly copy and builds a NEW content array", () => {
+    const raw = deepFreeze(cliMessage(CLI_TEXT));
+    const out = rewriteAgentAuthFailure(raw, "api_key");
+    expect(out).not.toBeNull();
+    expect(out!.kind).toBe("not_logged_in");
+    expect(out!.content).toEqual([{ type: "text", text: authFailureCopy("not_logged_in", "api_key") }]);
+    expect(out!.terminal).toBe(true);
+    expect(out!.frame.credentialScheme).toBe("api_key");
+    // The input was deep-frozen: any in-place mutation would have thrown in strict mode. It is also unchanged.
+    expect((raw.message as { content: Array<{ text: string }> }).content[0].text).toBe(CLI_TEXT);
+    expect(out!.content).not.toBe((raw.message as { content: unknown }).content);
+  });
+
+  it("classifies each text kind", () => {
+    const cases: Array<[string, AuthFailureKind]> = [
+      ["Invalid API key · Please run /login", "invalid_api_key"],
+      ["OAuth token revoked · Please run /login", "oauth_token_revoked"],
+      ["Session expired. Please run /login to sign in again.", "session_expired"],
+    ];
+    for (const [text, kind] of cases) {
+      const out = rewriteAgentAuthFailure(cliMessage(text), "oauth_token");
+      expect(out?.kind).toBe(kind);
+    }
+    expect(rewriteAgentAuthFailure(cliMessage("Session expired. Please run /login to sign in again."), "api_key")!.terminal).toBe(false);
+  });
+
+  it("rewrites a structured-only hit (authentication_failed, unrecognised wording)", () => {
+    const out = rewriteAgentAuthFailure(cliMessage("Failed to authenticate. API Error: 401 Invalid bearer token."), "oauth_token");
+    expect(out?.kind).toBe("structured");
+    expect(out?.content[0].text).toBe(authFailureCopy("structured", "oauth_token"));
+  });
+
+  it("uses the neutral cell and no scheme in the frame for an unknown scheme", () => {
+    const out = rewriteAgentAuthFailure(cliMessage(CLI_TEXT), null);
+    expect(out?.content[0].text).toBe(authFailureCopy("not_logged_in", null));
+    expect("credentialScheme" in out!.frame).toBe(false);
+  });
+
+  it("leaves a multi-block or tool-bearing authentication_failed message raw", () => {
+    const multi = cliMessage(CLI_TEXT);
+    (multi.message as { content: unknown[] }).content.push({ type: "text", text: "more" });
+    expect(rewriteAgentAuthFailure(multi, "api_key")).toBeNull();
+
+    const tool = cliMessage(CLI_TEXT);
+    (tool.message as { content: unknown[] }).content = [{ type: "tool_use", id: "t", name: "Bash", input: {} }];
+    expect(rewriteAgentAuthFailure(tool, "api_key")).toBeNull();
+  });
+
+  it("does not rewrite a forged reply (non-synthetic model, no CLI flag, no structured code)", () => {
+    const forged = {
+      type: "assistant",
+      message: { model: "claude-sonnet-4", content: [{ type: "text", text: CLI_TEXT }] },
+    };
+    expect(rewriteAgentAuthFailure(forged, "api_key")).toBeNull();
+  });
+
+  it("returns null for non-matching and malformed input, and never throws on a hostile getter", () => {
+    expect(rewriteAgentAuthFailure(null, "api_key")).toBeNull();
+    expect(rewriteAgentAuthFailure("string", "api_key")).toBeNull();
+    expect(rewriteAgentAuthFailure({ type: "assistant", message: { content: [{ type: "text", text: "hello" }] } }, "api_key")).toBeNull();
+    const hostile = {
+      type: "assistant",
+      get message(): never {
+        throw new Error("boom");
+      },
+    };
+    expect(() => rewriteAgentAuthFailure(hostile, "api_key")).not.toThrow();
+    expect(rewriteAgentAuthFailure(hostile, "api_key")).toBeNull();
+  });
+
+  it("never carries any raw CLI text in its output", () => {
+    const out = rewriteAgentAuthFailure(cliMessage(CLI_TEXT), "api_key")!;
+    expect(JSON.stringify(out)).not.toContain("Please run /login");
+  });
+});

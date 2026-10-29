@@ -64,6 +64,7 @@ import {
   mirrorWithDebounce,
 } from "./observability";
 import { stripStopGateMarkup } from "./stop-gate-markup";
+import { isOauthUnusableLeaseError, rewriteAgentAuthFailure, type AuthFailureFrame } from "./agent-auth-user-message";
 import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 // #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
 // block (re-thrown to the dispatch catch, which emits the honest client message).
@@ -950,6 +951,14 @@ export interface DispatchEvents {
    */
   onTextTurnEnd?: () => void;
   /**
+   * #11086 — fires at most once per turn, AFTER `onTextTurnEnd` (the `stream_end`), when the CLI's own sign-in failure reply
+   * was rewritten to friendly copy and the failure is terminal (everything but `session_expired`). The cc-dispatcher sends
+   * the frame as a `key_invalid` error so the client offers the recovery action. It MUST follow `stream_end`: the client
+   * tears the stream down on `key_invalid`, and a frame sent mid-stream would turn the friendly bubble into an interrupted
+   * chip. Optional so non-cc callers and existing tests ignore it.
+   */
+  onAgentAuthFailure?: (frame: AuthFailureFrame) => void;
+  /**
    * #3266 — fires exactly once per active state on the first
    * `SDKResultMessage` carrying a non-empty `session_id`. The
    * cc-dispatcher wires this to a `conversations.session_id` write so
@@ -1835,6 +1844,11 @@ interface ActiveQuery {
    * `null` = unknown — enforcement fails toward protective.
    */
   authScheme: AgentAuthScheme | null;
+  /** #11086 — the frame to send after this turn's `stream_end`; set when a terminal auth failure was rewritten. Per-turn latch. */
+  pendingAuthFrame: AuthFailureFrame | null;
+  /** #11086 — a terminal auth failure ended a turn on this Query: the next dispatch builds a cold Query so it re-leases the
+   *  credential the user just fixed in Settings (a warm Query keeps the env it was built with). */
+  authFailedTerminal: boolean;
   /** Persisted `conversations.cc_cost_cap_usd` override; takes precedence
    *  over `capFor(costCaps, workflow)` when set. */
   costCapOverrideUsd: number | null;
@@ -2762,6 +2776,28 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     }
   }
 
+  /**
+   * #11086 — deliver the friendly replacement for the CLI's sign-in failure reply. Deliberately a short-circuit past
+   * `handleAssistantMessage`: the stop-gate strip, the chapter-prefix/rotation logic and the runaway re-arm must not touch it
+   * (a chapter-routed turn would otherwise render "[Answering from chapter ...] We couldn't sign in ...", and the turn ends at
+   * the `result` right after). The text goes to `onText` once, paired with the `onTextTurnEnd` the result message fires.
+   */
+  function handleFriendlyAuthMessage(
+    state: ActiveQuery,
+    friendly: NonNullable<ReturnType<typeof rewriteAgentAuthFailure>>,
+  ): void {
+    try {
+      state.events.onText(friendly.content[0].text);
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "soleur-go-runner",
+        op: "onText",
+        extra: { conversationId: state.conversationId },
+      });
+    }
+    if (friendly.terminal && state.pendingAuthFrame === null) state.pendingAuthFrame = friendly.frame;
+  }
+
   function handleResultMessage(state: ActiveQuery, msg: SDKResultMessage): void {
     // #9648 B-0 — absent/non-finite SDK cost rides NaN into onResult →
     // persistTurnCost (fail-closed + Sentry) instead of a silent 0.
@@ -2847,6 +2883,22 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         extra: { conversationId: state.conversationId },
       });
     }
+    // #11086 — the recovery frame goes out AFTER `stream_end` so the finalized bubble survives the client teardown. The
+    // latch resets here; `authFailedTerminal` makes the next dispatch cold (see `dispatch`).
+    const authFrame = state.pendingAuthFrame;
+    if (authFrame !== null) {
+      state.pendingAuthFrame = null;
+      state.authFailedTerminal = true;
+      try {
+        state.events.onAgentAuthFailure?.(authFrame);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "onAgentAuthFailure",
+          extra: { conversationId: state.conversationId },
+        });
+      }
+    }
     // feat-cc-cap-raise-resume — managed sessions skip enforcement
     // entirely (soft-warn telemetry instead); enforced sessions get the
     // resumable prompt path (legacy `cost_ceiling` only when the prompt
@@ -2871,6 +2923,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
 
         if (msg.type === "assistant") {
           // SDKAssistantMessage carries content in `message.content`.
+          // #11086 — the matcher runs on the RAW message inside the helper; this consumer sits behind the tapped Query, so the
+          // diagnostic probe already observed the original object. The helper builds a NEW content array and never mutates `msg`.
+          const friendly = rewriteAgentAuthFailure(msg, state.authScheme);
+          if (friendly !== null) {
+            handleFriendlyAuthMessage(state, friendly);
+            continue;
+          }
           const content = (msg as { message?: { content?: unknown } }).message?.content;
           handleAssistantMessage(state, content, persistActiveWorkflow);
         } else if (msg.type === "result") {
@@ -3117,6 +3176,16 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const { conversationId, userId, userMessage, events, persistActiveWorkflow } = args;
 
     let state = activeQueries.get(conversationId);
+    // #11086 — a terminal auth failure ended the previous turn on this Query. It keeps the credential it was built with, so
+    // reusing it would fail the same way after the user fixed it in Settings: tear it down and take the cold path, which
+    // re-leases. Done at the NEXT dispatch (not at the result) so a message queued during the failing turn is never dropped,
+    // and with the `stale-resume` close reason so the worktree lease stays held for the immediate re-acquire (same shape as
+    // the dead-resume re-dispatch).
+    if (state && state.authFailedTerminal) {
+      state.closed = true;
+      closeQuery(state, "stale-resume");
+      state = undefined;
+    }
     let queryReused = true;
 
     if (!state) {
@@ -3208,9 +3277,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // reset-to-empty-solo) is also an expected, benign block — skip the
         // mirror here too (the dispatch catch emits the honest client message;
         // the divergence breadcrumb fires separately, deduped).
+        // #11086 — a lease refusal for an unusable stored credential already reported its own closed-class event; a second
+        // mirror here would double the Sentry count for one failed turn.
         if (
           !(err instanceof RepoNotReadyError) &&
-          !(err instanceof WorkspaceNotReadyError)
+          !(err instanceof WorkspaceNotReadyError) &&
+          !isOauthUnusableLeaseError(err)
         ) {
           reportSilentFallback(err, {
             feature: "soleur-go-runner",
@@ -3288,6 +3360,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         events,
         closed: false,
         authScheme: capturedAuthScheme,
+        pendingAuthFrame: null,
+        authFailedTerminal: false,
         costCapOverrideUsd: args.costCapOverrideUsd ?? null,
         managedWarnFired: false,
         capPromptId: null,

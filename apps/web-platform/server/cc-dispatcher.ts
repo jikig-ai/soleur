@@ -222,6 +222,7 @@ import {
   MissingByokKeyError,
   reportMissingByokKey,
 } from "./byok-lease";
+import { buildAuthFailureFrame, isOauthUnusableLeaseError } from "./agent-auth-user-message";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import {
@@ -3798,6 +3799,18 @@ async function reportDispatchSoleurGoError(
       },
       "repo-readiness gate: blocked dispatch (repo not ready)",
     );
+  } else if (isOauthUnusableLeaseError(err)) {
+    // #11086 — the lease already reported its own closed-class event (feature byok-lease); a second mirror would double
+    // the Sentry count for one failed turn.
+    log.info(
+      {
+        feature: "cc-dispatcher",
+        op: "oauth-credential-unusable-gate",
+        userIdHash: hashUserId(ctx.userId),
+        conversationId: ctx.conversationId,
+      },
+      "lease refused a stored credential the CLI cannot use",
+    );
   } else if (err instanceof WorkspaceNotReadyError) {
     // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
     // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
@@ -3878,6 +3891,10 @@ async function reportDispatchSoleurGoError(
       message: "Your API key is invalid — set up a fresh key to continue.",
       errorCode: "key_invalid",
     });
+  } else if (isOauthUnusableLeaseError(err)) {
+    // #11086 — a lease refusal precedes any stream, so there is no `stream_end` to wait for: send the recovery frame now.
+    // MUST sit above the generic `else` so it neither clears a resumable `session_id` nor re-mirrors.
+    ctx.sendToClient(ctx.userId, buildAuthFailureFrame("oauth_unusable", "oauth_token"));
   } else if (err instanceof RepoNotReadyError) {
     // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
     // user-facing message (and `repo_setup_failed` errorCode on the error
@@ -4878,6 +4895,12 @@ async function dispatchSoleurGoInner(
         type: "stream_end",
         leaderId: CC_ROUTER_LEADER_ID,
       });
+    },
+    // #11086 — the runner fires this AFTER onTextTurnEnd (so after the `stream_end` above) for a terminal CLI auth failure
+    // it rewrote to friendly copy. `key_invalid` makes the client stop reconnecting and offer the Settings action; the frame
+    // is built server-side from the closed match kind x scheme, never from raw CLI text.
+    onAgentAuthFailure: (frame) => {
+      sendToClient(userId, frame);
     },
     onWorkflowDetected: (_workflow) => {
       // Stage 3 emits a dedicated `workflow_started` WS event; for now
