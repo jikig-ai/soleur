@@ -353,7 +353,7 @@ jobs:
             done
             if [[ -n "$unread" ]]; then
               echo "unproven=cap" >> "$GITHUB_OUTPUT"   # BEFORE the exit: the verdict step reads it
-              echo "::error::the compare API returned ${n_files} files (its 300 cap), so the changed-file list is TRUNCATED, and render input ${unread} could not be read as a file at both the watermark ${BEFORE_SHA:0:7} and the head ${AFTER_SHA:0:7}: $(cat "$WHY_FILE") (only the first unreadable input is named). Refusing to dispatch a registry host replace on an unprovable diff: it neither delivers nor skips. If the cause is transient, re-run this run (gh run rerun) or wait for the next push, which re-derives the range. A workflow_dispatch re-fire delivers unconditionally and REPLACES the host: use it only for a confirmed add, delete or rename of a render input."
+              echo "::error::the compare API returned ${n_files} files (its 300 cap), so the changed-file list is TRUNCATED, and render input ${unread} could not be read as a file at both the watermark ${BEFORE_SHA:0:7} and the head ${AFTER_SHA:0:7}: $(cat "$WHY_FILE") (only the first unreadable input is named). Refusing to dispatch a registry host replace on an unprovable diff: it neither delivers nor skips. To retry without replacing the host, re-run this run (gh run rerun) or wait for the next push, which re-derives the range. A workflow_dispatch re-fire delivers unconditionally and REPLACES the host: use it only for a confirmed add, delete or rename of a render input."
               exit 1
             fi
             echo "::notice::compare list truncated at ${n_files} files; the three render inputs were compared by git blob at the watermark and the head (changed: ${changed:-none})."
