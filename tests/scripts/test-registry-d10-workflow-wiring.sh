@@ -339,9 +339,17 @@ fi
 # it was not started traced). A text parse of the `case` was bypassed in two consecutive review
 # rounds; running it cannot be, so none is kept. The engine's own behaviour belongs to its suite.
 #
-# NOT covered here: job-level keys (`if`, `needs`, `continue-on-error`) and the Restore summary
-# step, the values of the credential env the workflow passes in, and a `die "$x"` whose code is
-# computed (the derived population reads literal `die N` / `exit N` only).
+# Also pinned: the step's env is EXACTLY DOPPLER_TOKEN (secrets.DOPPLER_TOKEN_PRD) and
+# GH_TOKEN_FOR_ENGINE (secrets.GITHUB_TOKEN), the job's `if` is exactly the normalized expression
+# below, and the job carries exactly the keys it has today (so no `container`, `services`, `env`,
+# `defaults`, `strategy`, `continue-on-error`, `concurrency` or `outputs` can appear unnoticed).
+# The VALUES of environment / runs-on / permissions / timeout-minutes are not pinned here: they are
+# the workflow's own to change, and a value pin would only mirror the workflow into this file.
+# Exit 1 is added to the tested population (the header does not list it) and must not fall to the
+# `*)` arm; its annotation must name the manifest.
+#
+# NOT covered here: the Restore summary step and a `die "$x"` whose code is computed (the derived
+# population reads literal `die N` / `exit N` only).
 #
 # The population is DERIVED (tests/scripts/lib/restore-engine-header.sh): the engine's header
 # table must equal the codes its own `die N` / `exit N` sites emit. Exit 1 follows the rule in
@@ -378,6 +386,36 @@ if mode in ("extract", "keys"):
     if mode == "keys": sys.stdout.write("\n".join(k for k in FORBID if k in hits[0][1]))
     else: sys.stdout.write(hits[0][1].get("run") or "")
     raise SystemExit(0)
+if mode in ("env", "job"):
+    jobs = yaml.safe_load(text).get("jobs") or {}
+    j = jobs.get("registry_store_restore")
+    if j is None: raise SystemExit(5)
+    if mode == "job":
+        n = j.get("needs"); n = [n] if isinstance(n, str) else list(n or [])
+        jif = " ".join(str(j.get("if", "")).split())
+        if jif.startswith("${{ ") and jif.endswith(" }}"): jif = jif[4:-3]
+        print("needs=" + ",".join(n)); print("if=" + jif); print("keys=" + " ".join(sorted(j)))
+        raise SystemExit(0)
+    hits = [s for s in (j.get("steps") or []) if s.get("name") == name]
+    if len(hits) != 1: raise SystemExit(3)
+    for k, v in sorted((hits[0].get("env") or {}).items()): print("%s=%s" % (k, v))
+    raise SystemExit(0)
+if mode in ("mutate:jobif", "mutate:jobcoe", "mutate:jobctr", "mutate:ifor"):
+    jh = "\n  registry_store_restore:\n"
+    if text.count(jh) != 1: raise SystemExit("job header found %d times" % text.count(jh))
+    a = text.index(jh) + len(jh)
+    m = re.search(r"\n  [A-Za-z_][A-Za-z0-9_-]*:", text[a:])
+    b = a + m.start() if m else len(text)
+    job = text[a:b]
+    if mode == "mutate:jobcoe": job = "    continue-on-error: true\n" + job
+    elif mode == "mutate:jobctr": job = "    container: ubuntu:20.04\n" + job
+    elif mode == "mutate:ifor":
+        job, n = re.subn(r"(store_refill_needed == 'true')", r"\1 || always()", job)
+        if n != 1: raise SystemExit("anchor store_refill_needed found %d times in the job" % n)
+    else:
+        job, n = re.subn(r"!cancelled\(\)\s*&&\s*", "", job)
+        if n != 1: raise SystemExit("anchor !cancelled() && found %d times in the job" % n)
+    sys.stdout.write(text[:a] + job + text[b:]); raise SystemExit(0)
 head = "      - name: " + name
 if text.count(head) != 1: raise SystemExit("step header found %d times" % text.count(head))
 a = text.index(head)
@@ -390,6 +428,12 @@ def once(old, new):
 arm = re.search(r'\n( *78\) echo [^\n]*)', seg).group(1)
 k = mode.split(":", 1)[1]
 if k == "drop78": once("\n" + arm, "")
+elif k == "drop1": once("\n" + re.search(r'\n( *1\) echo [^\n]*)', seg).group(1), "")
+elif k == "manifest":
+    a1 = re.search(r'\n( *1\) echo [^\n]*)', seg).group(1)
+    once(a1, re.sub("(?i)manifest", "pin set", a1))
+elif k == "envextra": once("GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}", "GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}\n          SHELLOPTS: xtrace")
+elif k == "envswap": once("DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}", "DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}")
 elif k == "dead": once("\n" + arm, ""); once('\n          case "$rc" in', '\n          if false; then echo "::error::restore FAILED exit 78 (TRACED INVOCATION)"; fi\n          case "$rc" in')
 elif k == "nested": once(arm, '            9) case "$zz" in 78) echo "::error::restore FAILED exit 78 (TRACED INVOCATION)" ;; esac ;;')
 elif k == "subject": once('case "$rc" in', 'case "${zz:-}" in')
@@ -442,7 +486,7 @@ w9_parse() { # <w9_run result>: sets w9_rc w9_calls w9_first w9_out
 }
 w9_add() { w9_p="${w9_p}${w9_p:+$'\n'}$1"; }
 w9_check() { # <workflow text> <engine text>: prints one problem per line; no output means the contract holds
-  local wf="$1" eng="$2" body hdr emit maxv code line want tested keys xrc
+  local wf="$1" eng="$2" envm jobm jif body hdr emit maxv code line want tested keys xrc
   w9_p=""
   [[ -n "$eng" ]] || { echo "the restore engine is missing or empty at ${RESTORE_ENGINE}"; return; }
   hdr="$(restore_header_codes <<<"$eng" | grep -vx 1)"; emit="$(restore_emit_codes <<<"$eng" | grep -vx 1)"
@@ -454,6 +498,15 @@ w9_check() { # <workflow text> <engine text>: prints one problem per line; no ou
   [[ -n "$body" ]] || { w9_add "the restore step has no run: body"; printf '%s' "$w9_p"; return; }
   keys="$(timeout 30 python3 -I -c "$W9_PY" keys "$RESTORE_STEP" <<<"$wf")"
   [[ -z "$keys" ]] || w9_add "the restore step has step keys (${keys//$'\n'/ }) that change how it runs and that this harness does not model"
+  envm="$(timeout 30 python3 -I -c "$W9_PY" env "$RESTORE_STEP" <<<"$wf")" || envm=""
+  [[ "$envm" == $'DOPPLER_TOKEN=${{ secrets.DOPPLER_TOKEN_PRD }}\nGH_TOKEN_FOR_ENGINE=${{ secrets.GITHUB_TOKEN }}' ]] \
+    || w9_add "the restore step's credential env drifted: want exactly DOPPLER_TOKEN from secrets.DOPPLER_TOKEN_PRD and GH_TOKEN_FOR_ENGINE from secrets.GITHUB_TOKEN and no other key (got: ${envm//$'\n'/ ; })"
+  jobm="$(timeout 30 python3 -I -c "$W9_PY" job "$RESTORE_STEP" <<<"$wf")" || jobm=""
+  jif="$(sed -n 's/^if=//p' <<<"$jobm")"
+  [[ "$jif" == "!cancelled() && needs.registry_luks_recut.outputs.store_refill_needed == 'true'" ]] \
+    || w9_add "the job-level if of registry_store_restore drifted: want exactly !cancelled() && needs.registry_luks_recut.outputs.store_refill_needed == 'true' (got: ${jif:-nothing})"
+  [[ "$(sed -n 's/^needs=//p' <<<"$jobm")" == registry_luks_recut && "$(sed -n 's/^keys=//p' <<<"$jobm")" == "environment if needs permissions runs-on steps timeout-minutes" ]] \
+    || w9_add "the job-level keys of registry_store_restore drifted: want needs registry_luks_recut and exactly the keys environment if needs permissions runs-on steps timeout-minutes (got: ${jobm//$'\n'/ ; })"
   maxv="$(sed -nE 's/^[[:space:]]*max=([0-9]+)[[:space:]]*$/\1/p' <<<"$body" | head -1)"
   [[ -n "$maxv" ]] || { w9_add "the restore step has no max= retry bound"; maxv=1; }
   for code in 0 $tested 137; do
@@ -471,9 +524,10 @@ w9_check() { # <workflow text> <engine text>: prints one problem per line; no ou
       [[ "$line" == restore:* ]] || w9_add "exit 0 printed no success line"; continue
     fi
     [[ "$line" =~ exit\ ${code}([^0-9]|$) ]] || { w9_add "exit ${code} printed no annotation naming it (got: ${line:-nothing})"; continue; }
-    if grep -qx "$code" <<<"$hdr" && grep -qiF 'unenumerated' <<<"$line"; then w9_add "exit ${code} fell to the *) arm"; fi
+    if grep -qx "$code" <<<"$tested" && grep -qiF 'unenumerated' <<<"$line"; then w9_add "exit ${code} fell to the *) arm"; fi
     case "$code" in
       2|5) grep -qiF 'failed locally' <<<"$line" || w9_add "the annotation for exit ${code} does not name the local login failure" ;;
+      1)   grep -qiF 'manifest' <<<"$line" || w9_add "the annotation for exit 1 does not name the manifest fault" ;;
       78)  grep -qiF 'traced invocation' <<<"$line" || w9_add "the annotation for exit 78 does not say traced invocation" ;;
     esac
   done
@@ -497,7 +551,9 @@ fi
 # mutation landed, and requires the same check to refuse it with a message naming the right thing.
 for w9_c in "drop78|exit 78 fell" "dead|exit 78 fell" "nested|exit 78 fell" "subject|fell to the *) arm" \
   "clobber|step exited 0" "sticky3|recovered retry" "exit0|step exited 0" "trap|step exited 0" "max0|recovered retry" \
-  "wrongscript|engine called 0 times" "dopabort|doppler failure" "traced|invoked traced" "args|wrong arguments" "stepkeys|step keys"; do
+  "wrongscript|engine called 0 times" "dopabort|doppler failure" "traced|invoked traced" "args|wrong arguments" "stepkeys|step keys" \
+  "drop1|exit 1 fell" "manifest|does not name the manifest fault" "envswap|credential env" "envextra|credential env drifted" \
+  "jobif|job-level if" "ifor|job-level if" "jobcoe|job-level keys" "jobctr|job-level keys"; do
   w9_mut="$(timeout 30 python3 -I -c "$W9_PY" "mutate:${w9_c%%|*}" "$RESTORE_STEP" <<<"$RESTORE_WF_TEXT")"
   if [[ -z "$w9_mut" || "$w9_mut" == "$RESTORE_WF_TEXT" ]]; then
     _report "W9 control ${w9_c%%|*}: the mutation landed" fail "the mutation did not change the workflow"; continue
@@ -517,7 +573,7 @@ else _report "W9 control engine-extra-code: refused" fail "expected a refusal na
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
 # suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
 # single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
-EXPECTED_ASSERTIONS=39
+EXPECTED_ASSERTIONS=47
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"

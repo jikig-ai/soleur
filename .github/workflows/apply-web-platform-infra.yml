@@ -3528,19 +3528,7 @@ jobs:
   registry_store_restore:
     environment: infra-privileged
     needs: registry_luks_recut
-    # EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip
-    # the RESUME arm — and the resume arm IS the empty-store state this job exists to end. It
-    # keys on the upstream FLAG rather than on `needs.<job>.result` so it does not fire on paths
-    # where the store was never emptied (most visibly a legitimate D10 refusal, where the store
-    # is intact).
-    #
-    # `!cancelled()` rather than `always()`: on a genuine cancellation the store's state is
-    # unknown, and starting a multi-GB write into it is not obviously safe.
-    #
-    # The `== 'true'` comparison is safe against the Actions loose-equality trap: an UNSET
-    # output is null, and `null == 'true'` casts to `0 == NaN`, which is false. The failure
-    # direction is therefore "skip the restore", which is visible in the run's job list — not
-    # "run it unexpectedly".
+    # History: "Why the restore job's if: is explicit" in the registry_store_restore section of the rationale runbook.
     if: ${{ !cancelled() && needs.registry_luks_recut.outputs.store_refill_needed == 'true' }}
     runs-on: ubuntu-24.04
     # Its OWN budget, deliberately larger than the recut's and unrelated to it. The wall-clock
@@ -3670,6 +3658,7 @@ jobs:
           # exit codes consumed as a single boolean would be a contract nobody can act on.
           case "$rc" in
             0) echo "restore: production's full required pin set is present and blob-verified in the rebuilt store." ;;
+            1) echo "::error::restore FAILED exit 1 (INPUT/MANIFEST fault) — the engine refused its arguments or the pin manifest before any network call, so this attempt wrote nothing and the store is unchanged by this step. This step passes fixed arguments, so check the manifest (floor, entries, zero or duplicated required pairs) or an unreadable file: read the engine's own ::error:: line above, it names the check. This is a correct refusal, not an engine defect, and re-running this job re-downloads the SAME registry-restore-pins artifact and fails identically. Follow the runbook row for exit 1 in registry-luks-recut-6929.md." ;;
             2) echo "::error::restore FAILED exit 2 (SOURCE unavailable) — GHCR could not be read, so there is nothing to restore from, OR the runner's ghcr.io login command failed locally. This step did not measure which: read the engine's own ::error:: line above first. A login command that failed locally points at runner tooling (crane version, DOCKER_CONFIG); otherwise GHCR gives the same error for an absent image and one not visible to this credential, so check the job's 'packages: read' permission and GHCR's status before concluding either. The store is EMPTY or only partly refilled. This is NOT proof the images were deleted." ;;
             3) echo "::error::restore FAILED exit 3 (SINK unavailable) after ${max} attempts — the rebuilt registry did not accept the write and the tunnel did not converge within the backoff. The store is EMPTY. Verify the registry host is serving, then re-run this job." ;;
             4) echo "::error::restore FAILED exit 4 (VERIFICATION mismatch) — images were copied but a digest did not match, a blob is missing, or a signature is absent. The store contents are NOT trustworthy. Do not deploy; re-run this job and read the per-entry lines above." ;;
@@ -3678,7 +3667,7 @@ jobs:
             5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — read the engine's own ::error:: line above first; this step did not measure which cause applies. If it says the sink login command failed locally, that points at runner tooling (crane version, DOCKER_CONFIG) and rotating changes nothing. Otherwise the sink rejected the credential or it was unreadable, and retrying will not clear it. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating makes the rejection permanent until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
             6) echo "::error::restore FAILED exit 6 (COULD NOT CLASSIFY) — the engine hit a failure it could not name. Read the crane stderr in the per-entry line above before acting; do not assume the images are absent." ;;
             78) echo "::error::restore FAILED exit 78 (TRACED INVOCATION) — the engine refused to run under xtrace with a registry credential in the environment, before any network call, so this attempt wrote nothing and the store is still EMPTY. Remove the trace (bash -x, an exported SHELLOPTS=xtrace, or a BASH_ENV file that sets -x); a re-run replays this same workflow file, so if the trace is in it, fix it in a new commit and dispatch a new run." ;;
-            *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every documented exit code of the restore engine is enumerated above, so a new code is itself a defect worth filing alongside the recovery; exit 1 is the known exception (#10932, already filed)." ;;
+            *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every exit code the restore engine emits is enumerated above, so a new one is a defect worth filing alongside the recovery; 126/127/137/143 are shell or runner codes (not found, not executable, killed, terminated), not engine codes." ;;
           esac
           exit "$rc"
 
