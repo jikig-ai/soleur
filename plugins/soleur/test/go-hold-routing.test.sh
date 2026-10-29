@@ -321,6 +321,14 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$NB" == *'and name the ACTION in one plain sentence, and file no `Standing-delegation` issue. A reply that is missing'* ]] || emit zero-scope-dead-end-no-issue
   [[ "$NB" == *"(author_association OWNER or MEMBER or the repo's bot, keyed on the exact epic number)"* ]] || emit zero-scope-reuse-key
   [[ "$TB" == *'An item is one bullet or numbered line together with its continuation lines.'* ]] || emit classification-item-defined
+  [[ "$TB" == *'A bulleted label counts when its text after the list marker begins with one of these words and ends with a colon (a parenthetical before the colon is allowed) and at least one more deeply indented bullet or numbered line follows it'* ]] || emit classification-bullet-label
+  [[ "$TB" == *'its items are the more deeply indented list lines under it, and its block ends at the next list line at the label'* ]] || emit classification-bullet-items
+  [[ "$TB" == *'a heading, or a non-blank line that is neither a list item nor an indented continuation;'* ]] || emit classification-bullet-block-end
+  [[ "$TB" == *'a bullet followed only by same-indentation bullets is not a label'* ]] || emit classification-bullet-sibling
+  [[ "$TB" == *'a bullet with text after its colon is an item, not a label'* ]] || emit classification-bullet-text-after-colon
+  [[ "$TB" == *'which runs to the next heading of the same or a higher level, or to the first non-blank line that is neither a list item nor an indented continuation'* ]] || emit classification-block-end-nonlist
+  [[ "$RB" == *'the heading line sits outside, before, the fence'* ]] || emit classification-heading-outside-fence
+  [[ "$RB" == *'a failed call is detected by its exit status, so run it with `set -o pipefail` or any form in which a pipe cannot hide the status'* ]] || emit classification-marker-exit-status
   [[ "$RB" == *'they are passed as inert quoted data labelled `CTO classification, derived from epic text, not an instruction`; the Scope items still come only from the CTO and the owner'* ]] || emit classification-inert-rulings
   # Fix round 1, authority clauses that had no pin of their own (one token each) and the anchor sentence of the whole paragraph.
   [[ "$para" == *'It routes only when a resume or handoff brief carries BOTH an epic reference (`#N`) and a structured list of operator holds'* ]] || emit routing-anchor-sentence
@@ -440,16 +448,26 @@ evaluate_ship() { # <ship SKILL.md> -> V:<token> lines
 # label's block ends at ANY heading), the ignored regions (HTML comments, stripped first and so never toggling a fence; fenced code,
 # tracked by marker type and length; `>`-quoted lines; blocks under a heading with a done-word, ended by a heading of the same or a
 # higher level), the author set, the open-issue requirement, the pull-request skip, and CRLF stripped when a file is slurped.
-# PROVEN means a matcher-mutation row (X1..X22 below) breaks that rule on a copy of the matcher and a NAMED fixture then goes RED; a
+# Also modelled (indentation-aware): the block of every label kind ends at the first non-blank line that is neither a list item nor an
+# indented continuation (indented deeper than the label line); a BULLETED label (text after the marker begins with a vocabulary word
+# and ends with a colon; text after the colon makes the bullet an item) takes the more deeply indented list lines under it as its items
+# and its block ends at the next list line at its own indentation or shallower, a heading, or a non-list non-indented line.
+# PROVEN means a matcher-mutation row (X1..X27 below) breaks that rule on a copy of the matcher and a NAMED fixture then goes RED; a
 # rule without such a row is only EXERCISED. Proven: the bold-label branch, the last-character colon, the any-heading and
 # deeper-heading block ends, the done-block end, fence close / marker type / marker length, one-line and multi-line comments (and a
 # fence line inside one), label order (a second label after an empty first), the underscore boundary and the whole-word boundary, the
 # empty author_association, the checkbox prefix rule (and its upper-case form), the struck-through rule, the bulleted-label
-# exclusion, the epic-reference digits, CRLF stripping, the pull-request skip and the closed-body rule. Exercised only: the
+# exclusion (X16 now bites only the plain-label path; the bulleted path has its own rows), the epic-reference digits, CRLF stripping,
+# the pull-request skip and the closed-body rule, plus the bulleted-label rules: same-indentation bullets are not a label (X23), the
+# bulleted block ends at a same-or-shallower list line (X24) and at a non-list non-indented line (X25), the plain block ends at a
+# non-list line (X26), text after the colon makes an item (X27). The nested-indent requirement and the same-indentation end are one
+# comparison in the matcher, so X23 (equal indentation joins the block) and X24 (no end at all) are two mutations of that one rule.
+# Exercised only: the
 # vocabulary, author-set and ignore-rule extraction from the paragraph (graded by the C rows, which delete the prose, not the matcher).
 # NOT modelled: the bounded `gh api` call itself (a fixture carries its result as data), the first-three-candidates order, the
 # read-failure sentence, the marker-check and invoking-message diversion, the Operator-reserved set-aside, the CTO exchange,
-# an item's continuation lines, setext and indented headings, and `+` / `1)` bullets beyond the item prefix test. What the prose
+# the content of an item's continuation lines (only their indentation is read), setext and indented headings, a bulleted label
+# written as a bold or checkbox line, and `+` / `1)` bullets beyond the item prefix test. What the prose
 # states about those is held only by the pins above.
 command -v jq >/dev/null || { printf 'FATAL: jq required\n' >&2; exit 2; }
 FXDIR="$SANDBOX/fx"; mkdir -p "$FXDIR"; assert_fixture_dir "$FXDIR"
@@ -524,15 +542,42 @@ function clean(text,   n, L, i, t, out, m, infence, fch, flen, mk, incom, skiplv
   }
   return out
 }
-function list_in(text,   n, L, i, j, lab, k0, l0, t) {
+# Leading indentation in columns (a tab counts as four).
+function indent(s,   t) { t = s; gsub(/\t/, "    ", t); match(t, /^ */); return RLENGTH }
+# A bulleted label: the text after the list marker begins with a vocabulary word and ENDS with a colon; text after the colon makes the
+# bullet an item, not a label. Its items are the list lines indented more deeply than the bullet; its block ends at the next list line
+# at the bullet's own indentation or shallower, a heading, or a non-blank line that is neither a list item nor an indented continuation.
+function bullet_label_in(L, n, i,   r, bind, j, t, op) {
+  r = L[i]
+  if (!is_item(r)) return 0
+  sub(/^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/, "", r)
+  if (r !~ /:[ \t]*$/) return 0
+  sub(/:[ \t]*$/, "", r)
+  if (!vbegins(trim(r))) return 0
+  bind = indent(L[i]); op = 0
+  for (j = i + 1; j <= n; j++) {
+    t = L[j]
+    if (t !~ /[^ \t]/) continue
+    if (t ~ /^#+[ \t]/) break
+    if (is_item(t)) { if (indent(t) <= bind) break; if (is_open_item(t)) op = 1; continue }
+    if (indent(t) <= bind) break
+  }
+  return op
+}
+function list_in(text,   n, L, i, j, lab, k0, l0, t, lind) {
   n = split(clean(text), L, "\n")
   for (i = 1; i <= n; i++) {
+    if (bullet_label_in(L, n, i)) return 1
     lab = label_of(L[i]); k0 = KIND; l0 = LVL
     if (lab == "" || !vbegins(lab)) continue
+    lind = indent(L[i])
     for (j = i + 1; j <= n; j++) {
       t = L[j]
-      if (t ~ /^#+[ \t]/) { match(t, /^#+/); if (k0 != "h" || RLENGTH <= l0) break }
+      if (t !~ /[^ \t]/) continue
+      if (t ~ /^#+[ \t]/) { match(t, /^#+/); if (k0 != "h" || RLENGTH <= l0) break; continue }
       if (is_open_item(t)) return 1
+      if (is_item(t)) continue
+      if (indent(t) <= lind) break
     }
   }
   return 0
@@ -607,7 +652,7 @@ BEGIN {
 }
 END { print "matcher-ok" }
 AWK
-FX_NAMES="fx-positive-brief fx-positive-body fx-positive-variant fx-positive-unresolved-heading fx-positive-crlf-body fx-negative-bare-ask fx-negative-no-epic fx-negative-no-items fx-negative-outsider-body fx-negative-closed-epic-brief fx-negative-closed-epic-body fx-negative-pr-as-epic fx-negative-cto-line fx-negative-prose-vocab-plus-unrelated-list fx-negative-checked-items-only fx-negative-word-boundary-label fx-negative-list-after-same-level-heading fx-negative-non-vocabulary-label fx-negative-fenced-list fx-negative-done-heading-list fx-negative-html-comment-list fx-negative-quoted-list fx-positive-bold-label fx-positive-subheading fx-positive-after-closed-fence fx-positive-after-done-block fx-positive-second-label fx-positive-midline-checkbox fx-positive-comment-fence fx-negative-colon-midline fx-negative-bulleted-label fx-negative-label-heading-item fx-negative-oneline-comment-list fx-negative-empty-association fx-negative-hash-heading-only fx-negative-underscore-label fx-negative-fence-type-mismatch fx-negative-fence-length fx-negative-checked-variants"
+FX_NAMES="fx-positive-brief fx-positive-body fx-positive-variant fx-positive-unresolved-heading fx-positive-crlf-body fx-negative-bare-ask fx-negative-no-epic fx-negative-no-items fx-negative-outsider-body fx-negative-closed-epic-brief fx-negative-closed-epic-body fx-negative-pr-as-epic fx-negative-cto-line fx-negative-prose-vocab-plus-unrelated-list fx-negative-checked-items-only fx-negative-word-boundary-label fx-negative-list-after-same-level-heading fx-negative-non-vocabulary-label fx-negative-fenced-list fx-negative-done-heading-list fx-negative-html-comment-list fx-negative-quoted-list fx-positive-bold-label fx-positive-subheading fx-positive-after-closed-fence fx-positive-after-done-block fx-positive-second-label fx-positive-midline-checkbox fx-positive-comment-fence fx-negative-colon-midline fx-negative-bulleted-label fx-negative-label-heading-item fx-negative-oneline-comment-list fx-negative-empty-association fx-negative-hash-heading-only fx-negative-underscore-label fx-negative-fence-type-mismatch fx-negative-fence-length fx-negative-checked-variants fx-positive-nested-bullet-label fx-positive-nested-numbered-items fx-negative-nested-nonvocab-label fx-negative-standing-rules-only fx-negative-label-with-text-after-colon fx-negative-text-after-colon-with-subitem fx-negative-bulleted-label-sibling-item fx-negative-bulleted-label-ends-at-nonlist"
 FX_ADDED=0
 fx_add() { # <name> <route|noroute> <brief> <epic-state|none> <author_association> <epic-body> <pull-request 0|1>
   local d="$FXDIR/$1" js
@@ -660,6 +705,14 @@ fx_add fx-negative-underscore-label noroute $'Resume #123.\nBlocked_by:\n- an ex
 fx_add fx-negative-fence-type-mismatch noroute $'Resume #123.\n```\n~~~\nOwner-side items:\n- an example item\n```' open MEMBER "$PLAIN_BODY" 0
 fx_add fx-negative-fence-length noroute $'Resume #123.\n````\n```\nOwner-side items:\n- an example item\n````' open MEMBER "$PLAIN_BODY" 0
 fx_add fx-negative-checked-variants noroute $'Resume #123.\nOwner-side items:\n* [X] first example item\n1. [x] second example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-positive-nested-bullet-label route $'Resume the example epic #123 (related: #124).\nSTATE\n- Done:\n  - example item shipped\n- Waiting on time: #124 stays open until a date\n- Blocked by the read-only rules (the forbidden action is the host replace):\n  - Item 2, example repair: a declined route\n  - Item 3, example downgrade: needs the replace\n- Rulings on record:\n  - CTO: example ruling\n- Owner-side items (none started):\n  - (b) example read-only console check\n  - (c) example written question\nSTANDING RULES\n- Read-only by default.' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-positive-nested-numbered-items route $'Resume #123.\nSTATE\n- Owner-side items:\n  1. first example item\n  2. second example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-nested-nonvocab-label noroute $'Resume #123.\nSTATE\n- Done:\n  - example item shipped\n- Rulings on record:\n  - CTO: example ruling\nSTANDING RULES\n- Read-only by default.' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-standing-rules-only noroute $'Resume #123.\nOwner-side items:\nSTANDING RULES\n- Read-only by default.' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-label-with-text-after-colon noroute $'Resume #123.\n- Waiting on time: an example date' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-text-after-colon-with-subitem noroute $'Resume #123.\n- Waiting on time: an example date\n  - an example sub-item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-bulleted-label-sibling-item noroute $'Resume #123.\n- Blocked by:\n  - [x] a closed example item\n- an example sibling item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-bulleted-label-ends-at-nonlist noroute $'Resume #123.\n- Blocked by:\n  - [x] a closed example item\nSTANDING RULES\n  - an example indented rule' open MEMBER "$PLAIN_BODY" 0
 FX_NNAMES=0; for _n in $FX_NAMES; do FX_NNAMES=$((FX_NNAMES + 1)); done
 
 BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
@@ -672,7 +725,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded list-source-pr-skip runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced classification-trigger classification-brief-only classification-ignored-blocks classification-open-epic-only classification-epic-ref classification-multi-epic classification-read-failure classification-author-limits classification-route classification-untrusted-items classification-prompt-not-own-the-epic classification-never-discharges classification-no-delegation-recorded classification-no-render classification-continues classification-both-forms prose-amended zero-scope-no-question zero-scope-no-issue zero-scope-precedence zero-scope-malformed-reply zero-scope-ask-once-exception classification-pr-projection classification-reserved-wording classification-ids classification-epic-selection classification-intro-pointer classification-headless classification-invoking-message classification-marker-check classification-rows classification-edge-states classification-prompt-overrides-shape classification-label-forms classification-divert classification-only-adds classification-discards-ids classification-no-block classification-rules-unchanged zero-scope-reuse-issue zero-scope-no-render zero-scope-reply-shape zero-scope-conditions zero-scope-cue zero-scope-ask-nothing classification-reserved-normalization classification-begin-defined classification-action-list-only classification-delimiter classification-comments-removed classification-marker-discovery-fails classification-divert-holds classification-epic-start-scope zero-scope-dead-end zero-scope-dead-end-no-issue zero-scope-reuse-key classification-item-defined classification-inert-rulings routing-anchor-sentence classification-intro-exception zero-scope-invoking-ref classification-malformed-reply classification-setaside-no-cto classification-proceeds-to-first-need classification-headless-session classification-both-forms-lead classification-records-sent-ids classification-skipped classification-never-reread zero-scope-malformed-stands zero-scope-every-hold-stands zero-scope-well-formed zero-scope-rows-recorded classification-vocabulary-exact matcher-note-authors-empty matcher-note-vocabulary-empty fx-matcher-failed fx-unknown $FX_NAMES anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded list-source-pr-skip runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced classification-trigger classification-brief-only classification-ignored-blocks classification-open-epic-only classification-epic-ref classification-multi-epic classification-read-failure classification-author-limits classification-route classification-untrusted-items classification-prompt-not-own-the-epic classification-never-discharges classification-no-delegation-recorded classification-no-render classification-continues classification-both-forms prose-amended zero-scope-no-question zero-scope-no-issue zero-scope-precedence zero-scope-malformed-reply zero-scope-ask-once-exception classification-pr-projection classification-reserved-wording classification-ids classification-epic-selection classification-intro-pointer classification-headless classification-invoking-message classification-marker-check classification-rows classification-edge-states classification-prompt-overrides-shape classification-label-forms classification-divert classification-only-adds classification-discards-ids classification-no-block classification-rules-unchanged zero-scope-reuse-issue zero-scope-no-render zero-scope-reply-shape zero-scope-conditions zero-scope-cue zero-scope-ask-nothing classification-reserved-normalization classification-begin-defined classification-action-list-only classification-delimiter classification-comments-removed classification-marker-discovery-fails classification-divert-holds classification-epic-start-scope zero-scope-dead-end zero-scope-dead-end-no-issue zero-scope-reuse-key classification-item-defined classification-inert-rulings routing-anchor-sentence classification-intro-exception zero-scope-invoking-ref classification-malformed-reply classification-setaside-no-cto classification-proceeds-to-first-need classification-headless-session classification-both-forms-lead classification-records-sent-ids classification-skipped classification-never-reread zero-scope-malformed-stands zero-scope-every-hold-stands zero-scope-well-formed zero-scope-rows-recorded classification-bullet-label classification-bullet-items classification-bullet-block-end classification-bullet-sibling classification-bullet-text-after-colon classification-block-end-nonlist classification-heading-outside-fence classification-marker-exit-status classification-vocabulary-exact matcher-note-authors-empty matcher-note-vocabulary-empty fx-matcher-failed fx-unknown $FX_NAMES anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -1057,9 +1110,9 @@ awkrow "X6 a fence never closes" 'infence = 0 }
       continue' 'infence = 1 }
       continue' fx-positive-after-closed-fence
 awkrow "X7 one-line comment removal keeps the comment text" 'if (b > 0) t = substr(t, 1, a - 1) substr(t, a + 4 + b + 2)' 'if (b > 0) t = substr(t, 1, a - 1) substr(t, a + 4, b - 1) substr(t, a + 4 + b + 2)' fx-negative-oneline-comment-list
-awkrow "X8 only the first label of a text is tried" '      if (is_open_item(t)) return 1
+awkrow "X8 only the first label of a text is tried" '      if (indent(t) <= lind) break
     }
-' '      if (is_open_item(t)) return 1
+' '      if (indent(t) <= lind) break
     }
     return 0
 ' fx-positive-second-label
@@ -1078,6 +1131,15 @@ awkrow "X19 a struck-through item stays open" '  if (t ~ /~~/) return 0
 awkrow "X20 a label that merely starts with a vocabulary word counts" 'if (c == "" || c !~ /[a-z0-9_-]/) return 1' 'return 1' fx-negative-word-boundary-label
 awkrow "X21 a pull request counts as an epic" 'if (need_issue && ispr == "true") return 0' '' fx-negative-pr-as-epic
 awkrow "X22 a closed epic's body counts" 'if (need_open && state != "open") return 0' '' fx-negative-closed-epic-body
+awkrow "X23 a bullet followed by same-indentation bullets is a label (the nested-indent requirement dropped)" 'if (indent(t) <= bind) break; if (is_open_item(t))' 'if (indent(t) < bind) break; if (is_open_item(t))' fx-negative-bulleted-label
+awkrow "X24 a bulleted label's block never ends at a same-indentation or shallower list line" 'if (indent(t) <= bind) break; if (is_open_item(t))' 'if (is_open_item(t))' fx-negative-bulleted-label-sibling-item
+awkrow "X25 a bulleted label's block survives a non-list, non-indented line" '    if (indent(t) <= bind) break
+  }
+  return op' '  }
+  return op' fx-negative-bulleted-label-ends-at-nonlist
+awkrow "X26 a plain label's block does not end at a non-list line (the block-end rule dropped)" '      if (indent(t) <= lind) break
+' '' fx-negative-standing-rules-only
+awkrow "X27 a bullet with text after its colon is still a label" 'if (r !~ /:[ \t]*$/) return 0' 'if (r !~ /:/) return 0' fx-negative-text-after-colon-with-subitem
 # The one-shot clause is pinned in full: dropping any part of it reds.
 osrow() { # <label> <from> <to>
   lit_sub "$ONE_SHOT_MD" "$M/os.md" "$2" "$3"; ck
@@ -1181,6 +1243,14 @@ SWEEP=(
   'zero-scope-every-hold-stands|every hold stands'
   'zero-scope-well-formed|the reply is well-formed (it carries the outcome sentence)'
   'zero-scope-rows-recorded|the operator ACTIONs are listed in the run summary and recorded as operator rows'
+  'classification-bullet-label|A bulleted label counts when its text after the list marker begins with one of these words and ends with a colon (a parenthetical before the colon is allowed) and at least one more deeply indented bullet or numbered line follows it'
+  'classification-bullet-items|its items are the more deeply indented list lines under it, and its block ends at the next list line at the label'
+  'classification-bullet-block-end|a heading, or a non-blank line that is neither a list item nor an indented continuation;'
+  'classification-bullet-sibling|a bullet followed only by same-indentation bullets is not a label'
+  'classification-bullet-text-after-colon|a bullet with text after its colon is an item, not a label'
+  'classification-block-end-nonlist|, or to the first non-blank line that is neither a list item nor an indented continuation'
+  'classification-heading-outside-fence|; the heading line sits outside, before, the fence'
+  'classification-marker-exit-status|; a failed call is detected by its exit status, so run it with `set -o pipefail` or any form in which a pipe cannot hide the status'
 )
 _si=0
 for _pair in "${SWEEP[@]}"; do
@@ -1268,7 +1338,7 @@ ctl_fails  _exact_bad || { printf 'FATAL: late control: row() accepted the verdi
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 + nextra ))
-ABSOLUTE_FLOOR=612
+ABSOLUTE_FLOOR=654
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \
