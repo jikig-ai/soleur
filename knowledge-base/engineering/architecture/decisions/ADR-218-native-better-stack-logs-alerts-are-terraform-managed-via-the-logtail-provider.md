@@ -558,3 +558,41 @@ event for the deploy signal; the refusal would fail the whole push apply, so it 
   predicate against fixture rows in the real `raw` shape, censuses every logtail alert's `-target=` lines, and carries mutation rows.
 - **Wake path.** Email on the free tier; the Slack wake of ADR-260 is not verified for Logs alerts (recorded in the runbook).
   Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` and `canary-probe-set.md`.
+
+## Amendment — 2026-10-29 (#11526): the dual-channel predicate convention
+
+Not a new alert — a new predicate shape on an existing one, and the convention it establishes for
+the alert family. `logtail_exploration_alert.inngest_luks_wrong_volume` now counts rows on BOTH
+delivery channels the dedicated Inngest host's probe can take: leg A is the journald path
+(`SYSLOG_IDENTIFIER='inngest-server-probe'` + the position-1 marker, unchanged conjuncts), leg B
+is the curl-direct phone-home fallback that fires only while Vector is down — identified by
+envelope-field equality (`shipper='cloud-init-phone-home'` + `stage='inngest-server-probe-vector-down'`)
+with the probe fields read out of `detail`, never `marker` or `message` (the fallback envelope's
+`marker` is always `SOLEUR_INNGEST_BOOT_STAGE` and its `message` is marker-prefixed).
+
+**The convention:** an alert that consumes a dual-channel emitter's rows must enumerate EVERY
+channel the emitter can take — journald AND the curl-direct phone-home — and must pin row
+identity on the markerless channel's envelope fields (`shipper`+`stage` equality, the
+`inngest-tls-soak-10136.sh` contract), because the channel exists precisely when journald-only
+signals are dark and `on_missing_data = "treat_as_zero"` would read the empty set as health.
+CTO ruling T1 (ACCEPT, `decision-challenges.md` for branch
+`feat-one-shot-11526-vector-down-fallback`) recorded the dissent correction that ships in the
+`.tf` comment: the jq-failure fallback payload carries no `shipper`, so it is silently uncounted
+— leg B's fail-loud property holds only for rows carrying the `shipper`+`stage` identity with
+`detail` absent. The self-attested `dt` edge is recorded as residual.
+
+This is the pattern #11527 applies to `inngest_luks_key_probe_fail` (a sibling dual-channel
+emitter — its marker already names a curl-direct phone-home copy) and #11528 pins in the guard
+family. Both are deliberately out of scope here.
+
+- **Enforcement.** `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` derives
+  the stage needle from the emit site in `inngest-bootstrap.sh` (a coordinated rename that misses
+  the `.tf` goes red), carries per-leg presence rows (`message`-anchored on leg A,
+  `detail`-anchored on leg B — a shared substring is permitted duplication, never ambiguity) and
+  mutation rows for each leg-B conjunct plus deletion of the whole `OR (…)` arm.
+- **Verification.** Pre-merge live-probe controls A–E per the #8874 precedent — population,
+  fallback census by `stage`, quiet control with the live alias, positive control with a wrong
+  alias, and synthetic-raw leg-B evaluations — recorded in the `.tf` LIVE-PROBED comment.
+- **Apply path.** Unchanged: merge-triggered `apply-web-platform-infra.yml` updates the stored
+  exploration SQL in place (`Ref #11526`, never `Closes` — the merge-triggered apply is part of
+  the remediation; the issue closes after the apply lands).

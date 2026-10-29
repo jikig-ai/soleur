@@ -26,6 +26,12 @@
 #     defect class, measured 50 quoting rows vs 6 real probe rows in one 6h window) can never
 #     count. The start-of-message anchor excluded them only because every such row happens to
 #     begin with `{` — a payload-formatting accident, not a control (#8874).
+#   * The predicate admits the probe's vector-down PHONE-HOME fallback on its own envelope.
+#     While Vector is down the probe POSTs the identical field row curl-direct to the same
+#     source under shipper='cloud-init-phone-home' + stage='inngest-server-probe-vector-down'
+#     with the field row in `detail` — a second OR leg admits those rows on envelope-field
+#     equality, so a Vector outage no longer blinds the alert (#11526). An unreadable
+#     fallback row (detail absent or renamed) FIRES, same as leg A's negated devid check.
 #
 # WHAT THIS FILE DOES NOT PROVE (stated so the name is not read as more than it is): that the
 # alert is armed IN PRODUCTION. Armed-ness there is decided by the RESOLVED variable — a Doppler
@@ -99,6 +105,14 @@ unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
 source "$REPO/scripts/lib/inngest-probe-row.sh" || { printf '[FATAL] cannot source scripts/lib/inngest-probe-row.sh — the emitter needle has no canonical source\n' >&2; exit 2; }
 export MUT_EMITTER="$INNGEST_PROBE_EMITTER"
 
+# The leg-B `stage` literal is a CALL-SITE literal with no canonical lib — its authority is the
+# emit site in inngest-bootstrap.sh (#11526). Deriving the needle from there mirrors the
+# MUT_EMITTER contract: a coordinated stage rename that misses the .tf conjunct goes red rather
+# than quietly re-pinning the guard to a dead literal.
+export MUT_STAGE
+MUT_STAGE="$(grep -oE 'inngest-server-probe-vector-down' "$REPO/apps/web-platform/infra/inngest-bootstrap.sh" | head -1)"
+[ -n "$MUT_STAGE" ] || { printf '[FATAL] no inngest-server-probe-vector-down literal in inngest-bootstrap.sh — the stage needle has no canonical source\n' >&2; exit 2; }
+
 # The predicate heredoc, extracted from the FIRST UNCOMMENTED opening line. An earlier form
 # started at the first match anywhere, so a commented-out copy of the heredoc above `locals {`
 # would have become the extracted body and let the live one be gutted freely.
@@ -127,8 +141,10 @@ line_is "$TF" 'inngest_luks_wrong_volume_alias[[:space:]]*=[[:space:]]*"scsi-0HC
   && ok "the watched alias is built from hcloud_volume.inngest_redis_luks.id, never a literal id" \
   || no "the alias is not derived from the resource id — a re-created volume would silence the rule"
 
-printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "data_mount_devid=\${local.inngest_luks_wrong_volume_alias} " \
-  && ok "the field is matched WITH its key and a trailing space (…_1234 is a prefix of …_12345)" \
+# Anchored on the message leg specifically — a bare `data_mount_devid=<alias> ` needle matches
+# BOTH legs now, so a dropped trailing space on either could hide behind the other's copy.
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'message'), 'data_mount_devid=\${local.inngest_luks_wrong_volume_alias} '" \
+  && ok "the field is matched WITH its key and a trailing space on leg A (…_1234 is a prefix of …_12345)" \
   || no "the devid match is not key-anchored and space-terminated"
 
 printf '%s' "$LOCAL_SQL" | grep -cE >/dev/null "position\(JSONExtractString\(raw, 'message'\), 'data_mount_devid=[^']*'\) = 0" \
@@ -143,9 +159,64 @@ printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'SYSLOG_I
   && ok "scoped to the probe's own emitter (needle derived from INNGEST_PROBE_EMITTER — a coordinated tag rename that misses this SQL goes red, not quiet) — a doppler row merely QUOTING the marker can never count" \
   || no "the emitter conjunct is missing: marker-quoting rows under another SYSLOG_IDENTIFIER would count (#8874)"
 
-printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "host_role=dedicated " \
-  && ok "scoped to host_role=dedicated — the co-located web host emits the same marker" \
-  || no "no host_role=dedicated scope: web-1 rows would drive this alert"
+# Anchored on the message leg specifically — a bare `host_role=dedicated ` needle matches BOTH
+# legs now, so dropping leg A's conjunct would hide behind leg B's `detail` copy (measured:
+# the mutation survived while this row was unanchored).
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0" \
+  && ok "leg A scopes host_role=dedicated on message — the co-located web host emits the same marker" \
+  || no "no host_role=dedicated scope on the journald leg: web-1 rows would drive this alert"
+
+# ── Leg B (#11526): the vector-down phone-home fallback ────────────────────────────────────────
+# While Vector is down the probe POSTs the identical field row curl-direct to the same source.
+# The envelope carries shipper/stage/detail, never SYSLOG_IDENTIFIER and never the position-1
+# marker — so leg B pins row identity on the ENVELOPE fields and reads the probe fields out of
+# `detail`, the same identity contract the inngest-tls-soak-10136.sh phone-home consumer selects
+# on. An unreadable fallback row (identity fields present, detail absent) fails LOUD: the
+# negated devid check evaluates position('') = 0 and counts it — the schema-drop class must page,
+# never read healthy (the jq-failure payload carries no shipper at all and is recorded as a
+# silently-uncounted residual edge, per the CTO's T1 dissent).
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'" \
+  && ok "leg B pins shipper='cloud-init-phone-home' — the emitter class of the phone-home envelope" \
+  || no "the shipper equality conjunct is missing: phone-home rows cannot reach leg B"
+
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'stage') = '${MUT_STAGE}'" \
+  && ok "leg B pins stage='${MUT_STAGE}' — needle derived from the emit site, not re-pinned" \
+  || no "the stage equality conjunct is missing or pinned to a stale literal"
+
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'detail'), 'host_role=dedicated ') > 0" \
+  && ok "leg B scopes host_role=dedicated read from detail — the envelope's field row, never the marker-prefixed message" \
+  || no "the detail-anchored host_role scope is missing on leg B"
+
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'detail'), 'data_mount_devid=\${local.inngest_luks_wrong_volume_alias} ') = 0" \
+  && ok "leg B carries the same NEGATED devid check on detail — an identity-pinned row with detail absent/renamed FIRES" \
+  || no "the detail-anchored negated devid check is missing — a malformed fallback row would read healthy"
+
+# The detail='' disjunct is the piece that makes a detail-ABSENT row fire: on an empty detail
+# BOTH field checks evaluate position('') = 0, and the host_role `> 0` gate would reject the row
+# before the negated devid could count it (measured on synthetic raw pre-merge — the
+# conjunct-only form returned 0 for that arm, exactly the class this arm exists to page on).
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'detail') = ''" \
+  && ok "leg B counts a detail-ABSENT identity-pinned row via the detail='' disjunct — the schema-drop fail-loud arm" \
+  || no "the detail='' disjunct is missing — a detail-absent fallback row would read healthy again"
+
+# The two-leg SHAPE, not just the tokens: two `OR (` groups inside the single grouped predicate
+# (the leg-B arm plus its nested detail-check group), the first opened right after leg A's last
+# conjunct (next line is the shipper conjunct) and the whole structure closed before
+# `GROUP BY time`. "Leg B's tokens exist somewhere in the file" cannot satisfy this while the
+# arm that admits them is gone.
+_or_open="$(printf '%s' "$LOCAL_SQL" | grep -cE '^[[:space:]]+OR \($' || true)"
+_or_next="$(printf '%s' "$LOCAL_SQL" | grep -m1 -A1 -E '^[[:space:]]+OR \($' | tail -1 || true)"
+if [ "$_or_open" = "2" ] \
+  && printf '%s' "$_or_next" | grep -qF "JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'" \
+  && [ "$(printf '%s' "$LOCAL_SQL" | tail -5 | head -1)" = "            )" ] \
+  && [ "$(printf '%s' "$LOCAL_SQL" | tail -4 | head -1)" = "          )" ] \
+  && [ "$(printf '%s' "$LOCAL_SQL" | tail -3 | head -1)" = "        )" ] \
+  && [ "$(printf '%s' "$LOCAL_SQL" | tail -2 | head -1)" = "      )" ] \
+  && [ "$(printf '%s' "$LOCAL_SQL" | tail -1)" = "    GROUP BY time" ]; then
+  ok "the predicate is one grouped (leg-A journald) OR (leg-B phone-home) pair under the shared time filter"
+else
+  no "the OR-arm structure is broken (OR( lines=${_or_open:-?}) — leg-B tokens outside the arm count nothing"
+fi
 
 line_is "$TF" 'paused[[:space:]]*=[[:space:]]*!var\.inngest_luks_cutover_complete' \
   && ok "paused is exactly !var.inngest_luks_cutover_complete on its own line (no suffix, not a comment)" \
@@ -245,16 +316,19 @@ PY
 assert s.count(old) == 1
 s = s.replace(old, "scsi-0HC_Volume_106261946")
 assert s.count("inngest_luks_wrong_volume_alias = \"scsi-0HC_Volume_106261946\"") == 1'
+  # The two devid needles are anchored on the `message` extraction: the bare
+  # `data_mount_devid=<alias> ') = 0` now occurs TWICE (leg A `message` AND leg B `detail`),
+  # so an unanchored needle would trip the count==1 self-check and FATAL every run.
   mutate_red "the devid match loses its trailing space" TF \
-    'old = "data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) = 0"
+    'old = "JSONExtractString(raw, \x27message\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) = 0"
 assert s.count(old) == 1
-s = s.replace(old, "data_mount_devid=${local.inngest_luks_wrong_volume_alias}\x27) = 0")'
+s = s.replace(old, "JSONExtractString(raw, \x27message\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias}\x27) = 0")'
   mutate_red "the negation flips to a positive match (fires on the RIGHT volume)" TF \
-    'old = "inngest_luks_wrong_volume_alias} \x27) = 0"
+    'old = "JSONExtractString(raw, \x27message\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) = 0"
 assert s.count(old) == 1
-s = s.replace(old, "inngest_luks_wrong_volume_alias} \x27) > 0")'
+s = s.replace(old, "JSONExtractString(raw, \x27message\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) > 0")'
   mutate_red "the host_role scope is dropped (web-1 rows drive the alert)" TF \
-    'old = "      AND position(JSONExtractString(raw, \x27message\x27), \x27host_role=dedicated \x27) > 0\n"
+    'old = "        AND position(JSONExtractString(raw, \x27message\x27), \x27host_role=dedicated \x27) > 0\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
   mutate_red "paused becomes a constant true (armed never)" TF \
@@ -293,36 +367,80 @@ assert s.count(old) == 1
 s = s.replace(old, "")'
   # #8874 rows — the row set is pinned to the probe's own emitter, so a marker-quoting row under
   # any other SYSLOG_IDENTIFIER can never satisfy the predicate. Three different weakenings; each
-  # must redden the presence row above, never just move it.
+  # must redden the presence row above, never just move it. Since #11526 the emitter conjunct is
+  # the FIRST line inside the parenthesized group — it carries no leading `AND` and sits at the
+  # deeper indent, which is the shape these needles now target.
   mutate_red "the emitter conjunct is dropped (quoting rows count again)" TF \
     'import os
 em = os.environ["MUT_EMITTER"]
-old = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27\n"
+old = "        JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
   mutate_red "the emitter literal flips to doppler (the offender becomes the counted set)" TF \
     'import os
 em = os.environ["MUT_EMITTER"]
-old = "SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27"
+old = "        JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27"
 assert s.count(old) == 1
-s = s.replace(old, "SYSLOG_IDENTIFIER\x27) = \x27doppler\x27")'
+s = s.replace(old, "        JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27doppler\x27")'
   mutate_red "the emitter equality weakens to a containment check" TF \
     'import os
 em = os.environ["MUT_EMITTER"]
-old = "JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27"
+old = "        JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27"
 assert s.count(old) == 1
-s = s.replace(old, "position(JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27), \x27" + em + "\x27) > 0")'
+s = s.replace(old, "        position(JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27), \x27" + em + "\x27) > 0")'
   mutate_red "the alert is repointed at a different exploration" TF \
     'old = "exploration_id = logtail_exploration.inngest_luks_wrong_volume.id"
 assert s.count(old) == 1
 s = s.replace(old, "exploration_id = logtail_exploration.monitor_send_failed.id")'
+
+  # #11526 rows — the phone-home fallback arm. Five weakenings; each must redden a presence row.
+  mutate_red "the leg-B shipper conjunct is dropped (any stage's phone-home row counts)" TF \
+    'old = "          JSONExtractString(raw, \x27shipper\x27) = \x27cloud-init-phone-home\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the leg-B stage conjunct is dropped (every phone-home row counts)" TF \
+    'import os
+stage = os.environ["MUT_STAGE"]
+old = "          AND JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the leg-B stage literal flips to a foreign stage" TF \
+    'import os
+stage = os.environ["MUT_STAGE"]
+old = "JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27"
+assert s.count(old) == 1
+s = s.replace(old, "JSONExtractString(raw, \x27stage\x27) = \x27inngest-server-probe-other\x27")'
+  mutate_red "the leg-B detail devid check flips to a positive match (fires on the RIGHT volume via the fallback)" TF \
+    'old = "JSONExtractString(raw, \x27detail\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) = 0"
+assert s.count(old) == 1
+s = s.replace(old, "JSONExtractString(raw, \x27detail\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) > 0")'
+  mutate_red "the detail='' fail-loud disjunct is neutralized (detail-absent rows go quiet again)" TF \
+    'old = "JSONExtractString(raw, \x27detail\x27) = \x27\x27"
+assert s.count(old) == 1
+s = s.replace(old, "false")'
+  mutate_red "the whole OR arm is deleted (the #11526 regression — legs collapse to journald-only)" TF \
+    'import os
+stage = os.environ["MUT_STAGE"]
+old = ("        OR (\n"
+       "          JSONExtractString(raw, \x27shipper\x27) = \x27cloud-init-phone-home\x27\n"
+       "          AND JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27\n"
+       "          AND (\n"
+       "            JSONExtractString(raw, \x27detail\x27) = \x27\x27\n"
+       "            OR (\n"
+       "              position(JSONExtractString(raw, \x27detail\x27), \x27host_role=dedicated \x27) > 0\n"
+       "              AND position(JSONExtractString(raw, \x27detail\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) = 0\n"
+       "            )\n"
+       "          )\n"
+       "        )\n")
+assert s.count(old) == 1
+s = s.replace(old, "")'
 fi
 
-# 29 = 15 presence rows + 14 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
+# 41 = 21 presence rows + 20 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
 # an inner run asserts only those, and the instrument control above is what catches a floor that
 # drifts past them (that control, not this comment, is the guard against a dead battery).
-_floor=29
-[ -n "${MUT_SKIP:-}" ] && _floor=15
+_floor=41
+[ -n "${MUT_SKIP:-}" ] && _floor=21
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi

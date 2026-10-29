@@ -215,7 +215,8 @@ locals {
 
   # The probe row is a space-separated key=value message, so the field is matched WITH its key and
   # WITH a trailing space — `data_mount_devid=scsi-0HC_Volume_1234` is a prefix of
-  # `…_12345`, and the row has a field after this one on every emitted path. The negation is over
+  # `…_12345`, and the row has a field after this one on every emitted path (the emitted row ends
+  # `data_mount_devid=… registry_fns=…`, true in `message` and in the fallback's `detail`). The negation is over
   # the whole predicate, so a row that cannot be matched at all (a schema change that drops or
   # renames the field) FIRES rather than going quiet: an unreadable answer is not a clean one.
   # The row set is also pinned to the probe's OWN EMITTER (the first conjunct below, #8874):
@@ -225,19 +226,62 @@ locals {
   # narrower event-log subset; both are 2026-09-25 measurements). The start-of-message anchor
   # alone excluded those rows only because every one happens to begin with `{` — a payload
   # accident, not a control.
-  # Three residual edges this conjunct does not close, recorded so they are not re-derived:
+  # Residual edges leg A does not close, recorded so they are not re-derived:
   #   * the emitted tag is now load-bearing — a probe-tag rename that misses this SQL leaves the
   #     population permanently zero, which reads as health; the drift guard derives its needle
   #     from the canonical lib so a coordinated rename that skips this file goes red;
   #   * unlike the negated devid check, the conjunct fails QUIET — a raw schema change that drops
   #     or renames SYSLOG_IDENTIFIER excludes every row and reads healthy;
-  #   * the vector-down phone-home fallback emits marker=SOLEUR_INNGEST_BOOT_STAGE /
-  #     stage=inngest-server-probe-vector-down with the field row in `detail` and no
-  #     SYSLOG_IDENTIFIER — it was already invisible to this alert via the pre-existing
-  #     marker-at-position-1 anchor, a pre-existing blind edge, not a regression (CTO ruling,
-  #     PR #11519). The marker anchor also lacks the canonical def's trailing space — a
-  #     hypothetical `SOLEUR_INNGEST_SERVER_PROBEX` prefix would count here but not per
-  #     `inngest_probe_row`; latent, fail-loud.
+  #   * the marker anchor lacks the canonical def's trailing space — a hypothetical
+  #     `SOLEUR_INNGEST_SERVER_PROBEX` prefix would count here but not per `inngest_probe_row`;
+  #     latent, fail-loud.
+  #
+  # CLOSED 2026-10-29 (#11526): the vector-down blind edge. While Vector is down the probe POSTs
+  # the identical field row curl-direct to this same source (inngest-bootstrap.sh, gated on
+  # vector_active != "active") as marker=SOLEUR_INNGEST_BOOT_STAGE /
+  # stage=inngest-server-probe-vector-down with the field row in `detail`,
+  # shipper='cloud-init-phone-home', and no SYSLOG_IDENTIFIER — the marker-at-position-1 anchor
+  # made it invisible, so during a Vector outage the alert read an empty row set and
+  # treat_as_zero reported health in exactly the degraded states (rebuilds, restores, partial
+  # boots) where a wrong-volume mount is most plausible. A pre-existing blind edge, not a
+  # regression (CTO ruling, PR #11519). Leg B below admits those rows on envelope-field equality
+  # (shipper + stage) with the field checks on `detail`, never `marker` — nothing emits
+  # marker='SOLEUR_INNGEST_SERVER_PROBE' on this call site.
+  # Residual edges on leg B, recorded so they are not re-derived:
+  #   * a fallback row carrying the shipper+stage identity with `detail` absent or renamed
+  #     counts as wrong-volume — the `detail = ''` disjunct below exists precisely because the
+  #     field conjuncts alone cannot express it: on an absent detail both field checks evaluate
+  #     position('') = 0, and the host_role `> 0` gate rejects the row BEFORE the negated devid
+  #     check can count it (measured pre-merge on synthetic raw: detail-absent returned 0 under
+  #     the conjunct-only form, 1 with the disjunct). Deliberate fail-loud for the schema-drop
+  #     class, same philosophy as leg A's negated devid. The mirror edge stands too: a `detail`
+  #     present but missing `host_role` reads quiet — the same coverage boundary leg A has for
+  #     a dropped host_role field;
+  #   * the jq-failure fallback payload (cloud-init-inngest.yml — `{"message","marker","stage",
+  #     "host"}`, no `detail`, no `shipper`) never satisfies the shipper conjunct, so it is
+  #     silently uncounted, NOT counted — the fail-loud property holds only for rows carrying
+  #     the shipper+stage identity (CTO T1 dissent);
+  #   * the phone-home envelope POSTs its own `dt` — whether the warehouse honors the
+  #     self-attested value over receive-time is unmeasured (#9784); a severely skewed host
+  #     clock could place a real wrong-volume row outside this alert's 5400 s window;
+  #   * the leg-B literals are load-bearing — `stage` is a call-site literal whose authority is
+  #     the emit site in inngest-bootstrap.sh; the drift guard derives its needle from there, so
+  #     a coordinated rename that misses this SQL goes red rather than quietly re-pinning.
+  # LIVE-PROBED 2026-10-29 (dual-path predicate, #11526), 48h window over the hot remote() UNION
+  # s3Cluster archive — controls A–E measured against the shipped shape:
+  #   A leg-A population (emitter + marker + host_role=dedicated)    -> 49 rows
+  #   B shipper=cloud-init-phone-home census                        -> 27 stages, 1700 rows;
+  #     stage=inngest-server-probe-vector-down                      ->  1 row
+  #     (a real fallback row at 2026-10-29 08:44Z — a fresh boot still activating Vector;
+  #      its detail carries host_role=dedicated + the live alias, so it does NOT count)
+  #   C full dual-path predicate, live alias                        ->  0 rows  (quiet control)
+  #   D full predicate, devid needle = scsi-0HC_Volume_0            -> 50 rows  (49 leg-A + the
+  #     1 real leg-B row — both channels verified counting live, not just on synthetics)
+  #   E leg-B on synthetic raw envelopes (live alias in the needle): wrong devid -> 1,
+  #     live alias -> 0, shipper+stage identity with detail absent -> 1, jq-failure shape
+  #     (no shipper) -> 0. The detail-absent arm is what the detail='' disjunct below exists
+  #     for — under the conjunct-only form it returned 0 (the host_role `> 0` gate rejected
+  #     the row before the negated devid could count it), so the disjunct is load-bearing.
   # LIVE-PROBED 2026-10-29 after adding the emitter conjunct, 48h window over the hot remote()
   # UNION s3Cluster archive:
   #   population  (emitter + marker + host_role=dedicated)   -> 49 rows
@@ -258,10 +302,23 @@ locals {
     SELECT {{time}} AS time, count(*) AS value
     FROM {{source}}
     WHERE time BETWEEN {{start_time}} AND {{end_time}}
-      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
-      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
-      AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
-      AND position(JSONExtractString(raw, 'message'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
+        AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
+        AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
+        AND position(JSONExtractString(raw, 'message'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'inngest-server-probe-vector-down'
+          AND (
+            JSONExtractString(raw, 'detail') = ''
+            OR (
+              position(JSONExtractString(raw, 'detail'), 'host_role=dedicated ') > 0
+              AND position(JSONExtractString(raw, 'detail'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
+            )
+          )
+        )
+      )
     GROUP BY time
   SQL
 
