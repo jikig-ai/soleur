@@ -34,3 +34,14 @@ NEXT: re-run the 3 suites; if green, commit; then soleur:review → resolve → 
 soleur:compound → soleur:ship → merge #11535 → postmerge (apply-plan 43 destroys, sentry-audit
 post-merge, heartbeat fire-test AC3). test-all.sh --affected degraded to full-gate (runner
 files touched) — refused by sibling contention; run targeted suites instead.
+
+## Resume checkpoint 2026-10-29 (post-review, HEAD 7699192cec)
+
+Review complete: 3-seat design pass (mechanism survives; ~$33.54/mo verified) +
+6-seat panel + P1/P2/P3 resolution committed. Green: vitest 40/40 (incl.
+cardinality pin), c4 13/13, token-drift 402/402, PVDC 163/163, scan-workflow,
+sentry-monitors-audit 82/82, argv-bearer 827/827.
+NEXT: soleur:qa → soleur:compound → soleur:ship → merge #11535 → postmerge
+(apply-plan 43 destroys; sentry-audit post-merge; retained heartbeat fire-test
+AC3; close #10972 OBE + drop follow-through label; check #9372/#10390 unrouted
+preconditions; #8160 comment; #7577 row-rate 24-48h).
