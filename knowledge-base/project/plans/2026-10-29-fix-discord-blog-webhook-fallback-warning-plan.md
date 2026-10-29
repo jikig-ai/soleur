@@ -12,6 +12,47 @@ brand_survival_threshold: none
 
 # fix: Warn when Discord blog webhook falls back to general channel
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** Observability (alert-route honesty), Technical
+Considerations (emit-arg contract); halt gates 4.6–4.13 all passed
+(User-Brand Impact, Observability 5-field schema, PAT sweep, UI-wireframe
+n/a, Encryption n/a, Guard Contract lint green, Scope Check compliant,
+Task-Design n/a). Subagent fan-outs unavailable in this pipeline context —
+each prescribed role (learnings sweep, verify-the-negative, per-lens review)
+was executed sequentially inline.
+
+### Key Improvements
+
+1. **Emit-arg contract pinned**: `warnSilentFallback(null, …)` — the `null`
+   keeps the emit on `captureMessage`, preserving `feature`/`op` tags; an
+   `Error` arg would lose them to `checkOrSetAlreadyCaught` dedup (#8629
+   mechanism, per the 2026-09-23 alert-routing learning).
+2. **Alert-route honesty**: corrected "Sentry warning + pino" to state the
+   full three-hop truth — the warn-level event lands in the Sentry issue
+   stream + container logs but no `sentry_alert` rule routes it to a person;
+   declared proportionate, not a paging claim.
+3. **Probe mechanics verified live**: the `discoverability_test.command`
+   shape (`source` + stub `curl` + env-prefixed `post_discord`) was executed
+   against the unmodified script and reaches the fallback path cleanly —
+   it prints nothing today, which is the defect under fix.
+
+### New Considerations Discovered
+
+- `learnings/2026-09-23-the-alert-i-was-told-paged-routed-to-nobody.md` —
+  the `reportAnthropicCreditExhausted` precedent (one named marker →
+  `reportSilentFallback(null, …)`-family emit at two chokepoints) is the
+  exact shape this plan mirrors; contract-test pinning of the literal is
+  Guard 1 row 4.
+- `learnings/2026-07-20-the-fix-for-an-evidence-discarding-gate-discarded-its-evidence.md`
+  — the discarded-stderr class this plan is an instance of (evidence
+  captured then dropped).
+- `scripts/content-publisher.test.sh` (the residue suite, test-all.sh:5682)
+  unsets both webhook vars and does not exercise `post_discord` resolution —
+  no change needed; recorded so the implementer doesn't search for a second
+  suite to extend.
+
 ## Overview
 
 `post_discord()` in `scripts/content-publisher.sh` resolves its webhook as
@@ -189,6 +230,13 @@ Two coordinated, value-free emits:
   the established pattern (:584, :599). Return shape stays deterministic.
 - **allowed_mentions suppression** (`{parse: []}`) and avatar/username payload
   are untouched.
+- **`warnSilentFallback(null, …)`, never `new Error(…)`**: passing `null`
+  keeps the emit on the `captureMessage` path, which preserves the
+  `feature`/`op` tags — an `Error` argument hits `checkOrSetAlreadyCaught`
+  dedup and drops the tagged capture (proven by
+  `learnings/2026-09-23-the-alert-i-was-told-paged-routed-to-nobody.md`, the
+  same learning whose `reportAnthropicCreditExhausted` precedent this design
+  mirrors: one named marker, one `reportSilentFallback(null, …)`-family emit).
 - **Replay safety**: `step.run` memoizes the return; the mirror fires once on
   first execution — same as existing mirrors in this handler.
 - **NFR**: observability (hr-observability-as-plan-quality-gate,
@@ -241,7 +289,7 @@ error_reporting:
 failure_modes:
   - mode: DISCORD_BLOG_WEBHOOK_URL absent/misnamed in the publisher spawn env → post goes to #general
     detection: SOLEUR_PUBLISHER_FALLBACK marker on captured stderr, grepped inside run-publisher-script step
-    alert_route: warnSilentFallback → Sentry warning + pino log line
+    alert_route: warnSilentFallback(null, …) → warn-level Sentry issue + pino warn line. Honest three-hop read (per learnings/2026-09-23-the-alert-i-was-told-paged-routed-to-nobody.md): the event lands in the Sentry issue stream and container logs — no dedicated sentry_alert rule routes it to a person. That is proportionate for an intended-design degraded path that self-resolves once the prd secret lands; a dedicated alert rule is a deliberate non-goal here.
   - mode: marker emit or grep regresses (warning never fires)
     detection: unit tests asserting marker presence/absence per env combination
     alert_route: CI test failure on PR

@@ -11,6 +11,8 @@
 | Brand-survival threshold `none` while diff touches `apps/web-platform/server` (sensitive path) | technical | pending - assumed: none — emit sites are value-free fixed strings; no credential/user-data/tenancy surface altered (scope-out reason in plan's User-Brand Impact). |
 | Prod `DISCORD_BLOG_WEBHOOK_URL` Doppler secret (`soleur/prd`) | operator (production-mutating authorization) | Handled outside this branch per the one-shot brief — dedicated webhook already minted on channel `1481578783000629329`; operator sets the Doppler secret separately. No plan action; the warning self-silences once it lands. |
 | Second-posting-path fixes (social-distribute interactive skill's identical `${BLOG:-GENERAL}` fallback) | technical | pending - assumed: out of scope per brief ("fix only the content-publisher path"); it is an interactive skill whose output is operator-visible. Census recorded in the plan's Research Insights. |
+| `warnSilentFallback` first arg `null` vs `new Error(…)` | technical | pending - assumed: `null` — keeps the emit on `captureMessage` so `feature`/`op` tags survive; `Error` args hit `checkOrSetAlreadyCaught` dedup and drop the tagged capture (#8629 mechanism). |
+| No dedicated `sentry_alert` routing rule for `op=discord-blog-webhook-fallback` | technical | pending - assumed: no rule — cron Sentry events route to no person by default (2026-09-23 learning); warn-level issue-stream + pino signal is proportionate for a self-resolving intended-design fallback. Escalate only if the fallback persists (Not Yet Specified). |
 
 ## Not Yet Specified
 
