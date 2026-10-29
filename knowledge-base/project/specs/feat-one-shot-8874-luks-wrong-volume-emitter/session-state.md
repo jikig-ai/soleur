@@ -51,3 +51,9 @@
 - Filings: #11526 fallback redesign, #11527 sibling key-probe emitter, #11528 guard coverage gaps (U1/U3-U5/U7) — all meta/machinery.
 - Doc fixes: betterstack-log-query.md:59 count removed; inngest-probe-row.test.sh:140 deferral note updated.
 - P3s disposed: comment edges recorded (.tf:228-240); reorder-must-PASS row skipped (no must-green harness); tasks.md checkbox convention = pipeline shape.
+
+## Fix rounds
+- Round 1 (b263684cdd): 8-seat targeted round — all P2s closed; convergent residual P3s (marker literal unchained; source skipped lib load-contract unset/failure-arm).
+- Round 2 (85d0180f7c): marker needle derived from INNGEST_PROBE_MARKER; unset+fatal-arm on the lib source. Guard 29/0, shellcheck clean.
+- git-history nit (ghcr OR-arm parenthetical) fixed in plan.md:44; test-design Finding-2 (lib-rename not battery-expressible) accepted as correct-by-construction note.
+- Seats clean: shellcheck, performance-oracle, verifier (all fixes close), pattern-recognition.
