@@ -17,6 +17,24 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 **Does merging this alone mutate production?** Yes — `betterstack-logs-alerts.tf` is under `apps/web-platform/infra/**`, so the merge fires the push-triggered apply, which updates the live exploration's stored SQL in Better Stack. The PR body's first line must state this (the merge click is the authorization act).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Agents used:** none — this deepen ran inside a pipeline subagent with no Task/Agent tool, so the §4 halt gates, the precedent-diff, and the verify-the-negative pass were executed inline by the planning agent instead of fanned out.
+
+### Key improvements
+
+1. **`Ref #8874`, not `Closes`** — the live change lands at the merge-triggered apply, so an auto-close at merge could mark the issue resolved before the apply ran or failed (the ops-remediation rule; "ARMING HAPPENS ON THE APPLY, NOT AT MERGE" is this file's own statement of it). Post-apply step closes the issue explicitly.
+2. **`discoverability_test` is a literal grep, not the guard suite** — a `.test.sh` command matches preflight Check 10's 15-second-cap suite reject (#8412); the declared probe now greps the conjunct (`grep -c` → `1`).
+3. **Guard-floor arithmetic re-verified** — 13+1 presence and 10+3 mutation rows → `_floor=27` / `MUT_SKIP` floor 14; the comment's `presence + mutation` decomposition updated to match.
+4. **Merge-mutates-production disclosure** — the apply fires on merge; the PR body's first line must say so.
+
+### New considerations discovered
+
+- `scripts/lint-betterstack-emitter-read.sh` (#8875's census) never enters this `.tf` — its population is files that invoke `betterstack-query.sh`, and a file that only *declares* SQL is outside it. No census edit needed.
+- `terraform_data.send_failed_alert_probe`/`monitor_send_failed_probe_rev` is the send_failed alert's own re-verification trigger; this alert has no such probe and needs no rev bump — verification is the pre-merge live-probe plus drift plan readback.
+- Open scope-out #11388 (drift guards pin literals but not effective-config paths) overlaps these files; acknowledged, not folded in — it is a pre-existing family-wide structural item deferred from PR #11374's own review.
+
 ## Overview
 
 The Better Stack Logs alert `logtail_exploration_alert.inngest_luks_wrong_volume` pages when the dedicated Inngest host's hourly probe row reports `/mnt/data` backed by a by-id alias that is not the LUKS-encrypted volume's — the tripwire for Redis writes landing unencrypted after the cutover. Its predicate (`local.inngest_luks_wrong_volume_sql` in `apps/web-platform/infra/betterstack-logs-alerts.tf`) selects rows by a start-of-message marker anchor plus `host_role=dedicated`, but not by the journald emitter — the same defect class #8846 fixed in every bash/jq/python consumer under #8873, deferred here only because a web-platform Terraform apply was in flight. #8874 re-enables the work: add the emitter conjunct, extend the drift guard, live-probe the new predicate, and let the normal apply path carry it to Better Stack.
@@ -178,8 +196,8 @@ logs:
   retention: "hot window ~40min + s3Cluster archive (~90 days per sibling probe comments)"
 
 discoverability_test:
-  command: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
-  expected_output: "0 failed"
+  command: grep -c "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'" apps/web-platform/infra/betterstack-logs-alerts.tf
+  expected_output: "1"
 ```
 
 ## Encryption Posture
