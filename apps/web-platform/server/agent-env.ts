@@ -1,4 +1,4 @@
-import type { CredentialScheme } from "@/lib/credential-scheme";
+import type { CredentialScheme } from "@/lib/auth-scheme";
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";

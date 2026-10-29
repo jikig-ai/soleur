@@ -2,7 +2,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { WorkflowName } from "@/server/conversation-routing";
 import type { InteractivePromptKind } from "@/server/pending-prompt-registry";
 import type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
-import type { CredentialScheme } from "@/lib/credential-scheme";
+import type { CredentialScheme } from "@/lib/auth-scheme";
 
 // Re-export so client code can import workflow-name and branded IDs from the
 // canonical wire-protocol module without reaching into server/* directly.

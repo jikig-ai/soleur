@@ -34,7 +34,7 @@ import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observabi
 import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
-import type { CredentialScheme } from "@/lib/credential-scheme";
+import type { CredentialScheme } from "@/lib/auth-scheme";
 import { C4_DIAGRAM_SAVED_EVENT } from "@/lib/c4-constants";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";

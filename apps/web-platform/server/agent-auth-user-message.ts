@@ -12,7 +12,7 @@
 // key, `oauth_token` cells are for the scheme only the operator can hold (knowledge-base/legal/audits/2026-10-06-clo-9580-
 // live-anthropic-terms-subscription-auth.md), and an unknown scheme gets a neutral cell that names neither.
 
-import { CREDENTIAL_SCHEMES, type CredentialScheme } from "@/lib/credential-scheme";
+import { CREDENTIAL_SCHEMES, type CredentialScheme } from "@/lib/auth-scheme";
 
 import { matchAgentAuthFailure, type AgentAuthMatchKind } from "./agent-auth-match";
 
