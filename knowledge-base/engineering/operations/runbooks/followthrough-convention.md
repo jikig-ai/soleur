@@ -19,6 +19,7 @@ verification passes — no human revisit required.
    - Exit 0 = PASS (close-criteria met → sweeper closes the issue)
    - Exit 1 = FAIL (criteria not met → sweeper comments, leaves open)
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
+   - **Per-probe wall-clock cap (#11215).** The sweeper runs every probe under `timeout -k 10 $FT_PROBE_TIMEOUT` (default **300 s**). A probe that outlives it is killed with its whole process group, logged as `<script> TIMED OUT after <N>s (rc 124 -> 3, CANNOT ESTABLISH)`, and rendered as CANNOT ESTABLISH (exit 3) on the tracker. A probe that routinely needs more than a few minutes is a defect in the probe (bound its own reads), not a reason to raise the cap; the job ceiling (`timeout-minutes` in `scheduled-followthrough-sweeper.yml`) must stay above the cap times the number of slow probes.
    - **Exit 78 = refused to run under shell tracing** (`EX_CONFIG`, #7797). It lands in the TRANSIENT bucket above, which is the fail-safe direction — never a false PASS — but it is a *configuration* signal, not a network one: the probe declined because tracing was on while a live credential was in scope. Re-run with the credential unset to trace safely. A probe stuck reporting 78 every sweep is a caller enabling `-x`, not a flaky dependency.
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
    - **A registered sub-vocabulary inside the TRANSIENT bucket, for NOTIFY-ONLY probes.** Some
