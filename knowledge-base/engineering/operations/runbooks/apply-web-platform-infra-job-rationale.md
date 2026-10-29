@@ -11,6 +11,8 @@ related_issues: [8361]
 
 # `apply-web-platform-infra.yml` job rationale
 
+<!-- markdownlint-disable MD046 -->
+
 This file exists because GitHub refuses to start any run of a workflow file larger than 512,000 bytes
 (zero jobs — conclusion `startup_failure` on a `workflow_dispatch`, plain `failure` on a push — and
 no message; #8361 measured it, and the bracket is recorded in the gate test's header).
@@ -363,7 +365,6 @@ new host's heartbeats paused, so it has no active heartbeat coverage until a
 later merge-to-main apply arms them. The Dispatch summary says so explicitly.
 
 ```
-
 
 ## web_host_create
 
