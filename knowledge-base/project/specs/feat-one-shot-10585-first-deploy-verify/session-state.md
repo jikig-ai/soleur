@@ -19,3 +19,12 @@
 ### Components Invoked
 - soleur:plan (full workflow), soleur:deepen-plan (inline, mechanical gates)
 - Parent: technical-ruling-gate.sh --branch (1 bad-class fixed: literal `|` escaped; 5 unruled-technical → CTO spawn)
+
+## Pipeline State (checkpoint)
+- Worktree: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-10585-first-deploy-verify (branch feat-one-shot-10585-first-deploy-verify, PR #11500 draft)
+- Plan complete; 5 CTO rulings recorded (all confirmed defaults).
+- Implementation: c138f07101 (probe+suite) + 8e0429035e (docs) — PANEL_SHA=8e0429035e
+- Review panel: 8 seats ran. Findings: 8 P2 + ~15 P3, ALL applied in fix commit 00f7bf046a (+307/−79), suite 51/0, all lints green. PUSHED.
+- IN FLIGHT: sweeper dry-run 40867419941 (branch ref); fix-round review pending next.
+- NEXT: fix-round seats over `git diff 8e0429035e..HEAD` → verify → compound → ship (ship runs postmerge; post-merge: file standing tracker w/ directive per plan §Follow-Through Enrollment, then gh issue close 10585).
+- tally: agent_rounds=3 (planner, cto, …); fix agent cce261c6.
