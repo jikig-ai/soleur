@@ -86,3 +86,7 @@ authoritative operator-authorization fence is the `/api/keys` route check
   classifier lands ("defer to first real hit").
 - Operator-only blast radius; the `oauth_token` gate-throws surface as
   fail-closed run failures captured by the runner's generic Sentry path.
+
+## Addendum — 2026-10-29 (#11086)
+
+A stored `anthropic_oauth` value of a class the bundled CLI is measured to drop (an API-key shape, an embedded space or tab, or blank) is refused at the lease with the fail-closed cause `oauth_unusable`, mapped to `key_invalid`; the read is still never a silent `api_key` fallback, which would change the billing basis without telling anyone. The write boundary (`POST /api/keys`, `credential_type=oauth_token`) validates the allowlist shape `sk-ant-oat<NN>-<url-safe tail>` before encryption. Rationale and the friendly-error half: ADR-308.
