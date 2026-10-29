@@ -164,7 +164,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 | raw finding | canonical defect key | reporting seat(s) | fix disposition |
 |---|---|---|---|
 | Archived session state disclosed environment-level vendor-token availability | `vendor-credential-posture-disclosure` | `security-sentinel` | Generalize to skipped vendor reads without stating credential presence |
-| Original byte-identical hash acceptance criterion read as current after redaction | `hash-criterion-time-scope` | `code-quality-analyst` | Qualify as the original #11456 merge-time condition |
+| Original byte-identical hash acceptance criterion read as current after redaction | `historical-hash-claims-not-time-scoped` | `code-quality-analyst` | Qualify as the original #11456 merge-time condition |
 - The initial wording corrections were applied; the targeted review below found two remaining P3 documentation gaps, now tracked in round 2.
 
 ### Redaction follow-up targeted-round-2 dedup ledger
@@ -172,8 +172,8 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 | raw finding | canonical defect key | reporting seat | planned correction |
 |---|---|---|---|
 | Sentry error-delta skip wording implied that an API read found no issue | `sentry-error-delta-skipped-not-no-issue` | `security-sentinel` | State that delta measurement was skipped because no Sentry issue was named in the PR/linked issue |
-| Archived plan acceptance criterion still stated byte-identity as a present condition | `historical-hash-acceptance-criterion` | `code-quality-analyst` | Reword as the original #11456 merge-time verification and note the later redaction |
-| Other archived planning/session prose described the original digest match without limiting it to merge time | `historical-hash-claims-not-time-scoped` | `code-quality-analyst` (final verifier) | Scope all matches to the original #11456 merge (fix in this working tree; commit pending) |
+| Archived plan acceptance criterion still stated byte-identity as a present condition | `historical-hash-claims-not-time-scoped` | `code-quality-analyst` | Reword as the original #11456 merge-time verification and note the later redaction |
+| Other archived planning/session prose described the original digest match without limiting it to merge time | `historical-hash-claims-not-time-scoped` | `code-quality-analyst` (final verifier) | Scope all matches to the original #11456 merge (fixed in `c28eefb85d`) |
 - The final verifier found this residual P3 after the single verification pass; all remaining hash/identity anchors were searched and qualified manually. No further review seat is dispatched under the capped-round contract.
 
 ### Final-review dedup-before-fixing ledger
