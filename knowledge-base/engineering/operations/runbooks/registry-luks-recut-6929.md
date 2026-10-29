@@ -492,10 +492,10 @@ doppler run -p soleur -c prd_terraform -- \
 
 #### Restore exit codes — one operator action each
 
-`scripts/registry-restore-from-ghcr.sh` exits with the codes below. Its own header table does not
-yet list exit 1 (input faults, tracked on #10932), but the restore step annotates it and it has a
-row here. Codes consumed
-as a single boolean would be a contract nobody can act on, so each maps to exactly one action.
+`scripts/registry-restore-from-ghcr.sh` exits with the codes below. Its own header table lists
+exit 1 (input or manifest faults), as do the restore step's annotation and the row below. Codes
+consumed as a single boolean would be a contract nobody can act on, so each maps to exactly one
+action.
 The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 
 | Code | Meaning | What to do |
