@@ -194,7 +194,7 @@ jobs:
     runs-on: ubuntu-24.04
     # (KR_ADMIT_S + KR_REBOOT_STEP_S + KR_VERIFY_STEP_S + KR_JOB_SLACK_S) / 60.
     timeout-minutes: 50
-    # The shared inngest mutex (cutover, image deploy, link flip and standalone deploys serialize on it).
+    # The shared inngest mutex (cutover-inngest, deploy-inngest-image and the inngest_host applies serialize on it; the link flip serializes on its own groups, so the in-flight refusal covers it).
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
