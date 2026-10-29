@@ -40,7 +40,7 @@ import {
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
-import { reportSilentFallback, warnSilentFallback } from "./observability";
+import { hashUserId, reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { ERR_ATTACHMENT_NOT_FOUND } from "./error-messages";
@@ -2856,7 +2856,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // registry is its own namespace (keyed by approval id) and only a recorded Owner decision wakes it; refusing
       // here (before any resolver is consulted) means an id that names an approval is never even looked up as a gate.
       if (typeof msg.gateId === "string" && hasApprovalWaiter(msg.gateId)) {
-        log.warn({ sec: true, userId, decision: "approval-cross-kind-refused" }, "review_gate_response carried an approval id; refused");
+        const crossKindUidHash = hashUserId(userId);
+        log.warn({ sec: true, userIdHash: crossKindUidHash, decision: "approval-cross-kind-refused" }, "review_gate_response carried an approval id; refused");
         sendToClient(userId, {
           type: "error",
           message: "This request is an approval and can only be answered from its approval card.",
