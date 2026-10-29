@@ -1,6 +1,6 @@
 ---
 name: registry-breakglass-mirror
-description: "This skill should be used when the registry tunnel bridge is down and the zot store must be re-materialized from GHCR. Break-glass only."
+description: "This skill should be used for GHCR-to-Zot break-glass mirrors."
 ---
 
 <!-- soleur-cloud-mode:start -->
