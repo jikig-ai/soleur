@@ -566,22 +566,36 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
 
   // #4672 (migration 180): durable approval requests. requested_by_user_id /
   // decided_by identify the data subject; canonical_action is the Owner-only
-  // action text (nulled 30 days after the terminal state). The table is
-  // RPC-only (no service_role table grant), the feature ships dark behind the
-  // `approval-queue` flag, and the export chain is wired in the legal task of
-  // the same PR (plan Phase 5.3: Art. 30 entry, allowlist promotion with
-  // ownerField requested_by_user_id + additionalOwnerFields [decided_by], the
-  // four legal documents). This is a TRACKED GAP, not a claim of no personal data.
+  // action text (nulled 30 days after the terminal state). This is a DECIDED,
+  // TRACKED GAP, not a claim that the table holds no personal data: the
+  // approval-queue flag is OFF by default and the table is empty until it is
+  // switched on. It is NOT promoted to DSAR_TABLE_ALLOWLIST in this PR because
+  // the export worker reads with service_role, and migration 180 grants
+  // service_role NO privilege on this table (RPC-only by design, ADR-307 and
+  // ADR-303). An allowlist entry plus a service.from("approval_request") read
+  // would fail with "permission denied" and break EVERY user's Art. 15 export
+  // from the day the migration applies, which is worse than the gap. Closing
+  // it needs an engineering decision (a service_role column grant or a
+  // read RPC, plus the reader, ownerField requested_by_user_id and
+  // additionalOwnerFields [decided_by]) and is a recorded condition of
+  // enabling the flag outside the Jikigai canary (compliance-posture.md,
+  // Active Items, "Approval queue: public wording and enabling gate"). The
+  // manual Art. 15 route is <legal@jikigai.com>; the four legal documents say
+  // so (Privacy Policy 4.15, GDPR Policy 3.17/5.3, DPD 2.3(ah)/5.3).
   approval_request:
-    "Migration 180 table (#4672), dark behind the approval-queue flag. " +
-    "Art. 17: ON DELETE SET NULL on requested_by_user_id/decided_by plus " +
-    "anonymise_approval_request (nulls the user columns and the action text) " +
-    "called from account-delete.ts in the legal task. Holds user ids and the " +
-    "Owner-only action text (scrubbed 30 days after the terminal state). " +
-    "Promote to DSAR_TABLE_ALLOWLIST (requested_by_user_id, " +
-    "additionalOwnerFields [decided_by], Art. 15) with the export chain in " +
-    "the same PR's legal task, and before approval-queue is enabled for any " +
-    "workspace outside the Jikigai canary.",
+    "Migration 180 table (#4672), dark behind the approval-queue flag (empty " +
+    "until it is switched on). Art. 17: ON DELETE SET NULL on " +
+    "requested_by_user_id/decided_by plus anonymise_approval_request (nulls " +
+    "the user columns and the action text), called from account-delete.ts " +
+    "(step 5.16). Holds user ids and the Owner-only action text (scrubbed 30 " +
+    "days after the terminal state). Excluded from the self-serve export " +
+    "because service_role has no table privilege on it (RPC-only), so a " +
+    "worker read would fail every export; manual Art. 15 route at " +
+    "legal@jikigai.com is disclosed in the Privacy Policy, GDPR Policy and " +
+    "DPD. Promote to DSAR_TABLE_ALLOWLIST (requested_by_user_id, " +
+    "additionalOwnerFields [decided_by], Art. 15) with a service-readable " +
+    "path BEFORE approval-queue is enabled for any workspace outside the " +
+    "Jikigai canary.",
 };
 
 /**

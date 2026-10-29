@@ -156,6 +156,17 @@ export interface DeleteAccountResult {
  *                             after the member-row anonymise step: the RPC only
  *                             erases a workspace that has no member left, so a
  *                             workspace that still has members keeps its history.
+ *   5.16 anonymise-approval-request —
+ *                             anonymise_approval_request RPC (migration 180,
+ *                             #4672). Expires the user's live requests, nulls
+ *                             requested_by_user_id / decided_by and the action
+ *                             text (canonical_action) where the user was the
+ *                             requester; the write-once metadata row (hash, tool,
+ *                             status, timestamps) is retained anonymised as the
+ *                             accountability record. Both FKs are ON DELETE
+ *                             SET NULL, so this step is not FK-driven: it exists
+ *                             to erase the action text now rather than within the
+ *                             30-day scrub, and to settle live requests.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -1257,6 +1268,39 @@ export async function deleteAccount(
       message: "erase_egress_audit_rollup threw — aborting deletion (Art. 17)",
     });
     return { success: false, error: "Account deletion failed at erase-egress-audit-rollup. Please try again." };
+  }
+
+  // 3.998 Anonymise approval_request rows for this user (migration 180, #4672,
+  //       step 5.16). Both user columns are ON DELETE SET NULL, so the auth-delete
+  //       would null them anyway; what the cascade does NOT do is erase the action
+  //       text (canonical_action: email bodies, recipients, repository names),
+  //       which the table otherwise keeps until the 30-day scrub. The RPC expires
+  //       the user's live requests, nulls requested_by_user_id / decided_by and, for
+  //       rows the user requested, the action text. Required step: a failure aborts
+  //       before auth-delete like the other Art. 17 steps, so a retry re-runs it.
+  //       Idempotent (a re-run touches only rows that still carry the user id).
+  try {
+    const { error: anonApprovalErr } = await service.rpc(
+      "anonymise_approval_request",
+      { p_user_id: userId },
+    );
+    if (anonApprovalErr) {
+      reportSilentFallback(anonApprovalErr, {
+        feature: "account-delete",
+        op: "anonymise-approval-request",
+        extra: { userId },
+        message: "anonymise_approval_request failed — aborting deletion (Art. 17)",
+      });
+      return { success: false, error: "Account deletion failed at anonymise-approval-request. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-approval-request",
+      extra: { userId },
+      message: "anonymise_approval_request threw — aborting deletion (Art. 17)",
+    });
+    return { success: false, error: "Account deletion failed at anonymise-approval-request. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

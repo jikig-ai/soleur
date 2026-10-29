@@ -922,6 +922,80 @@ describe("deleteAccount", () => {
     );
   });
 
+  test("Art. 17 — anonymise_approval_request runs for the user id, before auth-delete (#4672, step 5.16)", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+    let anonymisedWith: unknown;
+
+    mockRpc.mockImplementation(async (name: string, args?: unknown) => {
+      callOrder.push(`rpc:${name}`);
+      if (name === "anonymise_approval_request") anonymisedWith = args;
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth.deleteUser");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(anonymisedWith).toEqual({ p_user_id: "user-123" });
+    const anonIdx = callOrder.indexOf("rpc:anonymise_approval_request");
+    const authIdx = callOrder.indexOf("auth.deleteUser");
+    expect(anonIdx).toBeGreaterThanOrEqual(0);
+    expect(anonIdx).toBeLessThan(authIdx);
+  });
+
+  test("Art. 17 — anonymise_approval_request failure aborts cascade BEFORE auth-delete (#4672)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_approval_request") {
+        return { data: null, error: { message: "RPC unavailable" } };
+      }
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/anonymise-approval-request/);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "anonymise-approval-request",
+        extra: { userId: "user-123" },
+      }),
+    );
+  });
+
+  test("Art. 17 — anonymise_approval_request throwing aborts cascade BEFORE auth-delete (#4672)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_approval_request") throw new Error("network down");
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "account-delete", op: "anonymise-approval-request" }),
+    );
+  });
+
   test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {
     setupSupabaseMocks();
     const callOrder: string[] = [];
