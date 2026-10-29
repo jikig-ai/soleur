@@ -113,8 +113,8 @@ None. (Queried `gh issue list --label code-review --state open`; no body names a
 1. `scripts/registry-restore-from-ghcr.sh` — header table only (comment lines inside the leading `#` block; insert between the `0` row and the `2` row). No non-comment byte changes.
 2. `tests/scripts/lib/restore-engine-header.sh` — rewrite lines 8-11 (the "EXIT 1 RULE" comment).
 3. `tests/scripts/test-registry-pull-path-health.sh` — A2 comment (lines ~290-295) and the fail message at line ~302.
-4. `tests/scripts/test-registry-d10-workflow-wiring.sh` — one message string at line ~495 ("fewer than 6" -> "fewer than 7").
-5. `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` — the sentence at ~lines 495-497 only (it wraps across three lines).
+
+**Operator scope override (2026-10-29, supersedes CTO Q2 and the W9 message edit):** the brief authorizes the engine header row plus the stale-comment clearing in the two named test files only, and lists "wording owned elsewhere" as left open. So `tests/scripts/test-registry-d10-workflow-wiring.sh` (W9 message) and `registry-luks-recut-6929.md` (runbook sentence) are NOT edited here; Phase 3 and the W9 line in Phase 2 are dropped. The runbook sentence "does not yet list exit 1" becomes stale on merge — recorded in the PR body as a left-open residual on #10932.
 
 **Files NOT touched (assert in review):** `.github/workflows/apply-web-platform-infra.yml` and anything under `apps/web-platform/infra/` (would fire the production apply), `apply-web-platform-infra-job-rationale.md`, `scripts/registry-pull-path-health.sh`, any test logic.
 
@@ -164,11 +164,11 @@ Run the three suites directly, then the battery through the affected-tests harne
 - [ ] The engine diff is comment-only: `diff <(git show origin/main:scripts/registry-restore-from-ghcr.sh | grep -vE '^[[:space:]]*#') <(grep -vE '^[[:space:]]*#' scripts/registry-restore-from-ghcr.sh)` is empty, and `bash -n scripts/registry-restore-from-ghcr.sh` exits 0.
 - [ ] `grep -cF 'docker pull' scripts/registry-restore-from-ghcr.sh` prints `0`.
 - [ ] `grep -n '10932' tests/scripts/lib/restore-engine-header.sh tests/scripts/test-registry-pull-path-health.sh` prints nothing.
-- [ ] `grep -rn 'does not yet list exit 1' knowledge-base/engineering/operations/runbooks/` prints nothing.
+- [ ] (dropped by operator scope override) runbook sentence left untouched.
 - [ ] `grep -n 'grep -vx 1' tests/scripts/test-registry-d10-workflow-wiring.sh` still prints the two-sided ignore (line 492) and `EXPECTED_ASSERTIONS=47` is unchanged.
 - [ ] `bash tests/scripts/test-registry-restore-from-ghcr.sh`, `bash tests/scripts/test-registry-pull-path-health.sh` and `bash tests/scripts/test-registry-d10-workflow-wiring.sh` all exit 0 with the same pass counts as on `origin/main` (record both).
 - [ ] `bash tests/scripts/test-registry-gate-mutation-battery.sh` exits 0 (the ~860 s run the engine edit arms; run via `scripts/test-all.sh --affected` or directly with a backgrounded run, as the repo's runner conventions require). Exit 2 means an anchor went non-unique: fix the header text, never the battery.
-- [ ] `git diff origin/main --name-only` is exactly the five Files-to-Edit entries plus this plan, `tasks.md` and `decision-challenges.md`; in particular nothing under `.github/workflows/` or `apps/web-platform/infra/`.
+- [ ] `git diff origin/main --name-only` is exactly the three Files-to-Edit entries plus this plan, `tasks.md` and `decision-challenges.md`; in particular nothing under `.github/workflows/` or `apps/web-platform/infra/`.
 - [ ] PR body contains `Ref #9757` and `Ref #10932`, and `git log origin/main..HEAD --format=%B` plus the PR body match none of `(close[sd]?|fix(es|ed)?|resolve[sd]?) #`.
 
 ### Post-merge (operator)
