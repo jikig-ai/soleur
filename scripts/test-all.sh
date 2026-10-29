@@ -5996,6 +5996,14 @@ if want_scripts; then
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
   run_suite "scripts/followthroughs/sdk-bash-smoke-verdict-10548" bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
+  # #11211: exit-code + row-class harness for the dispatch-recovery sweeper re-evaluation probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The probe is notify-only (never 0/1) and runs with a broad
+  # Supabase token, so a stray exit 0/1, a body echo or a non-literal query must redden CI.
+  run_suite "scripts/followthroughs/dispatch-recovery-sweeper-11211" bash scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh
+  # #11265: exit-code + row-class harness for the LUKS keeper dark-probe (the dead-man conversion trigger). Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Notify-only (never 0/1): a quoting row counted
+  # as a measurement, an indeterminate row counted as health, or a stray exit 0/1 must redden CI.
+  run_suite "scripts/followthroughs/inngest-luks-keeper-dark-11265" bash scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh
   # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
   # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
@@ -6621,8 +6629,8 @@ if want_scripts; then
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
-  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential outside the one
-  # expiring op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
+  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential anywhere —
+  # zero-tolerance since #9755 retired the op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
   # auto-discovers tests/scripts/.
   run_suite "tests/scripts/hcloud-token-readonly-no-fallback-scan" bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh

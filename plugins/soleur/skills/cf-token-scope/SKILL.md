@@ -152,7 +152,7 @@ ruling; GETs attest the READ half):
 | retained | accounts/<acct>/cfd_tunnel | `.../cfd_tunnel?per_page=1` | Tunnel | 0 |
 | retained | accounts/<acct>/access/apps | `.../access/apps?per_page=1` | Access | 0 |
 | retained | zones/<zone>/dns_records | `.../dns_records?per_page=1` | DNS, zone soleur.ai | 0 |
-| retained | accounts/<acct>/notification_policies | `.../notification_policies?per_page=1` | Notifications | 0 |
+| retained | accounts/<acct>/alerting/v3/policies | `.../alerting/v3/policies` | Notifications | 0 |
 | target | accounts/<acct>/lb/pools | `.../load_balancers/pools?per_page=1` | Account Monitors-and-Pools (read half) | 0 |
 | target | zones/<zone>/load_balancers | `.../load_balancers?per_page=1` | Zone Load Balancers (read half) | 0 |
 

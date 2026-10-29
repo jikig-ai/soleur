@@ -2,13 +2,14 @@
 # group=infra
 # generated-from-runs=36327508617,36323335413,36249105039,36194570054,36186259058
 # default-weight-ms=1000
-# generated-at=2026-10-27T11:01:50Z
+# generated-at=2026-10-29T11:11:26Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	12000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
 apps/web-platform/infra/apt-bounded.test.sh	1000	floor
 apps/web-platform/infra/arm-heartbeats.test.sh	21000	measured
 apps/web-platform/infra/audit-bwrap-uid.test.sh	500	measured
+apps/web-platform/infra/betterstack-alert-structure.test.sh	124000	measured
 apps/web-platform/infra/bwrap-userns-sysctl.test.sh	0	measured
 apps/web-platform/infra/canary-bundle-claim-check.test.sh	6500	measured
 apps/web-platform/infra/cat-deploy-state.test.sh	6000	measured

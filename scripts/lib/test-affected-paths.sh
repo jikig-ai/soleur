@@ -645,6 +645,26 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #11211: the dispatch-recovery probe suite pins the send route's op tags and the replay cap constant
+# by reading their source, so an edit to either file must run it.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_DISPATCH_RECOVERY_SWEEPER_11211_PATHS=(
+  "scripts/followthroughs/dispatch-recovery-sweeper-11211.sh"
+  "scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh"
+  "apps/web-platform/app/api/dashboard/today/[id]/send/route.ts"
+  "apps/web-platform/server/action-sends/decide-replay.ts"
+  "scripts/lib/test-affected-paths.sh"
+)
+# #11265: the LUKS keeper dark-period probe suite pins the key-probe alert block and the flip script's
+# probe tokens by reading their source, and runs the Better Stack reader under a stub.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_INNGEST_LUKS_KEEPER_DARK_11265_PATHS=(
+  "scripts/followthroughs/inngest-luks-keeper-dark-11265.sh"
+  "scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh"
+  "apps/web-platform/infra/betterstack-logs-alerts.tf"
+  "apps/web-platform/infra/inngest-cutover-flip.sh"
+  "scripts/betterstack-query.sh"
+  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
@@ -3250,6 +3270,7 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
+  "apps/web-platform/infra/git-data.tf"
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )

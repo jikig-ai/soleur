@@ -921,7 +921,8 @@ cwv-field-rum-9178|scripts/followthroughs/cwv-field-rum-9178.test.sh
 send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097.test.sh
 betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh
 git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh
-orphan-sweeps-relook-10972|scripts/followthroughs/orphan-sweeps-relook-10972.test.sh'
+orphan-sweeps-relook-10972|scripts/followthroughs/orphan-sweeps-relook-10972.test.sh
+dispatch-recovery-sweeper-11211|scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh'
 
 # HMAC (S2-C): the probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
 # config channel: name | kind | hosts | min_calls | body | owning test. Only `delegated` rows remain, so the hosts, min_calls and
@@ -1582,7 +1583,7 @@ bk_run() { # <rowname> <token> <create_status> <create_body_file> <action_body_f
   local name="$1" row="$ROWS/$1" drv="${6:-$BKDRV}"
   assert_fixture_dir "$row"; mkdir -p "$row/tmp" "$row/home" "$row/shim"
   ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" HOME="$row/home" TMPDIR="$row/tmp" BK_TMP="$row/tmp" BK_SHIM="$row/shim" \
-      BK_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
+      BK_TOKEN="$2" HCLOUD_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
       "$BASH_BIN" "$drv" < /dev/null > "$row/out" 2>&1 )
   BK_RC=$?
 }

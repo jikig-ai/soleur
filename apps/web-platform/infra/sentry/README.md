@@ -51,12 +51,19 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
 ## Diagnostic rule: `agent-auth-failure` (temporary, #10455 / #10548)
 
-`sentry_alert.agent_auth_failure` (`issue-alerts.tf`, `frequency_minutes = 40`) emails `issue_owners` →
-`ActiveMembers` when the server observes the Claude CLI's auth-failure reply (`Not logged in · Please run /login`)
-on either runner. The emit is `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`
-in `server/agent-auth-failure.ts`; the literal `null` first argument keeps it off the pino-mirror path (#8629).
-It carries ten closed-enum tags and nothing else (no key material, env value, message body, user or workspace id, path).
-Email only: nobody is paged until the ADR-260 Slack path is verified.
+`sentry_alert.agent_auth_failure` (`issue-alerts.tf`, `frequency_minutes = 40`) routes the event that
+`server/agent-auth-failure.ts` records when the Claude CLI's auth-failure reply (`Not logged in · Please run /login`) is seen
+on either runner; the Sentry issue and the pino line come from that emit, not from this rule. Once this change is applied
+(merge, then `apply-sentry-infra.yml`) the rule's one action is an `issue_owners` email with the `NoOne` fallthrough (the
+provider rejects a rule with no action), which resolves to no recipient while the project has no Sentry ownership rule
+(last measured 2026-09-06; a retry with the read-only token on 2026-10-29 got 403, so it has not been re-measured).
+That covers this rule only. Sentry's vendor-default workflow "Send a notification for high priority issues" (id 566201, not
+managed by Terraform; captured 2026-09-09 as an `issue_owners` email with the `ActiveMembers` fallthrough, triggered by a new
+high-priority issue or by an existing one that Sentry re-marks as high priority) can still email active members, and the
+agent-auth issue (WEB-PLATFORM-C8) was `level=error`, priority `high` when read on 2026-10-29. The emit is
+`reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`; the literal `null` first argument keeps
+it off the pino-mirror path (#8629). It carries ten closed-enum tags and nothing else (no key material, env value, message
+body, user or workspace id, path). Read the events with the commands below; no scheduled check reads them.
 
 **Decode the event.** This README is the one copy of the decode table; `issue-alerts.tf` points here. Terms first:
 
@@ -87,13 +94,13 @@ Email only: nobody is paged until the ADR-260 Slack path is verified.
 | `seccomp_artifact`, `sandbox`, `has_egress` | Posture dimensions for comparing runs where the failure appears and where it does not (for example the `agent-sandbox-unix-deny` flag OFF vs ON). |
 | `match_kind` | `not_logged_in` (the CLI saw no credential); `invalid_api_key`, `oauth_token_revoked`, `session_expired` (a credential was presented and refused or lapsed); `structured` (the SDK's own `authentication_failed` code with no recognised text). |
 
-**When the email arrives (responder steps).**
+**When you read an event (responder steps).**
 
-1. Open the event in Sentry and read the ten tags with the table above. Do not look for a message body, user or path: none is sent.
-2. Record the tag tuple as a comment on #10455 (the first real tuple starts the lifecycle clock below).
+1. Open the event in Sentry (or run the read command below) and read the ten tags with the table above. Do not look for a message body, user or path: none is sent.
+2. Record a new tag tuple as a comment on #10455 (the lifecycle clock below runs from the first event, 2026-10-27T09:01Z).
 3. **Resolve the issue after recording the tuple; never archive or ignore it.** Every event shares one Sentry issue, and a
    benign one (a single tenant's own revoked key: `invalid_api_key` or `oauth_token_revoked`) groups with the real outage
-   signal, so an archived issue would also swallow the next real email.
+   signal, so an archived issue would also hide the next real event.
 4. The event is deduplicated, so its absence is not proof of health: at most one event per user and tuple per 5 minutes, at most
    10 per 5 minutes process-wide (a handful of accounts with a revoked key can fill that cap, because one account can hold
    several tuples), and the pdf chapter router and the scheduled Inngest agents are not observed. A cap-suppressed event
@@ -124,15 +131,16 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1
 A fault inside the diagnostic itself is visible as one constant `logger.warn` line per probe, per tap or per process
 (`auth-failure probe:` observer error or construction failure, `auth-failure tap:` observer error or "not installed" (the
 diagnostic is blind for that Query, for example after an SDK change), `auth-failure matcher:` unreadable message); these are
-breadcrumbs and never Sentry events, so search Better Stack for them by text. A silent rule is therefore not proof of health
+breadcrumbs and never Sentry events, so search Better Stack for them by text. An empty read is therefore not proof of health
 until none of these lines is present.
 
-**Lifecycle.** This is a temporary diagnostic. Within 48 hours of the first recorded real event (its tag tuple is recorded on
-#10455) a PR drops the rule's email action and keeps the Sentry issue and the pino line. The rule, its
-`alert-reference.json` entry, these README lines, both guard tests, the wiring pins, the widened source-pin regex and the
-other items of the removal checklist in the header of `server/agent-auth-mode.ts` are removed when the root-cause fix merges
-or 30 days after the first event, whichever comes first (#11085 tracks both steps). If no real event has been recorded by
-2026-11-30, #11085 is reviewed on that date rather than waiting on the event-driven clock.
+**Lifecycle.** This is a temporary diagnostic, and its clock runs from the first real event, 2026-10-27T09:01Z (its tag tuple
+was recorded on #10455 on 2026-10-29). Step 1 (#11085) takes effect when this change is applied on merge: the rule's push is
+dropped by changing its single action's fallthrough to `NoOne`, and the Sentry issue and the pino line are kept. Step 2 removes
+the rule, its `alert-reference.json` entry, these README lines, both guard tests, the wiring pins, the widened source-pin regex
+and the other items of the removal checklist in the header of `server/agent-auth-mode.ts`, when the root-cause fix merges or on
+2026-11-26 (30 days after the first event), whichever comes first. #11085 is reviewed on 2026-11-30 at the latest, whether or
+not step 2 has happened.
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 
@@ -308,8 +316,9 @@ red after a complete apply). So routing a new monitor takes two PRs:
 The routing-parity guard
 (`apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`)
 fails any PR that leaves a declared monitor in neither list. Until PR 2 lands,
-the audit's Class A lists the pending monitor with a `::warning::` on each
-`apply-sentry-infra.yml` run (and each release's audit). That audit runs BEFORE
+the audit's Class A lists the pending monitor in its dated report (the
+`class_a_pending_labels` partition — report-visible but `::warning::`-silent)
+on each `apply-sentry-infra.yml` run. That audit runs BEFORE
 the apply, so on the run that merges a routing change it still reports the
 pre-apply state.
 

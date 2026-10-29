@@ -24,6 +24,7 @@ export interface ExistingApprovalRow {
 // `idempotency: event.data.actionSendId` is the verified backstop) and the consumer can leave
 // acknowledged_at/failure_reason NULL on a run that executed, so an older replay could post a second
 // artifact. 23h leaves a 1h margin (CTO R1).
+// Mirrored as `interval '23 hours'` in scripts/followthroughs/dispatch-recovery-sweeper-11211.sh; its suite pins the equality.
 export const REPLAY_MAX_AGE_MS = 23 * 60 * 60 * 1000;
 
 // `clicked_at` is a DB-clock `DEFAULT now()` read against the app server's clock. A few hundred ms
