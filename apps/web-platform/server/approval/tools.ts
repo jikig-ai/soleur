@@ -6,10 +6,7 @@
  * `APPROVAL_EXEMPT_TOOLS` with a one-line reason, so a newly added gated tool cannot silently stay on the old
  * in-memory path: the census test (test/approval/tools-census.test.ts) fails until it is classified.
  *
- * Adding a gated tool (checklist): (1) add its canonical field list in `canonical.ts` and cross-check it against
- * the tool's zod schema (canonical-schema-drift test), (2) add its `renderApprovalView` entry in `render.ts`,
- * (3) add the copy-deck verb phrase, (4) list it here, or exempt it here with a reason, (5) widen the
- * `approval_request.tool_name` CHECK in a new migration.
+ * Adding a gated tool: follow the checklist in ADR-307 § Adding a gated tool (it owns it; do not restate it here).
  *
  * This module is dependency-free on purpose: the migration shape test, the canonicalizer and the (later)
  * permission callback all import it.

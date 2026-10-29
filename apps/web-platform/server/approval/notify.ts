@@ -10,9 +10,10 @@
  */
 
 import { createServiceClient } from "@/lib/supabase/service";
+import type { ApprovalNotifyKind } from "@/lib/approval-copy";
 import { dispatchInboxPush } from "../notifications";
 
-export async function notifyApprovalRequested(approvalId: string): Promise<boolean> {
+async function dispatchForApproval(approvalId: string, kind: ApprovalNotifyKind): Promise<boolean> {
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from("inbox_item")
@@ -22,5 +23,14 @@ export async function notifyApprovalRequested(approvalId: string): Promise<boole
     .maybeSingle();
   const id = (data as { id?: unknown } | null)?.id;
   if (error || typeof id !== "string") return false;
-  return dispatchInboxPush(id);
+  return dispatchInboxPush(id, { kind });
+}
+
+export function notifyApprovalRequested(approvalId: string): Promise<boolean> {
+  return dispatchForApproval(approvalId, "requested");
+}
+
+/** The expiry cron's generic "expired before it was decided" push (the `unanswered` case only). Same failure contract. */
+export function notifyApprovalExpired(approvalId: string): Promise<boolean> {
+  return dispatchForApproval(approvalId, "expired");
 }

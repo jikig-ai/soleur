@@ -73,7 +73,7 @@ describe("notifyApprovalRequested", () => {
       ["inbox_item.source", "approval_required"],
       ["inbox_item.dedup_key", APPROVAL_ID],
     ]);
-    expect(h.dispatch).toHaveBeenCalledWith("55555555-5555-4555-8555-555555555555");
+    expect(h.dispatch).toHaveBeenCalledWith("55555555-5555-4555-8555-555555555555", { kind: "requested" });
   });
 
   it("no inbox row (or a read error) means no dispatch and false", async () => {

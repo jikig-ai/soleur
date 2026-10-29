@@ -55,6 +55,10 @@ locals {
     # #10390 WS1 — the Better Stack incident mirror's liveness monitor, added under the two-PR rule:
     # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the
     # first measured check-in.
+    # #4672 — the approval-queue expiry sweep's liveness monitor, added under the two-PR rule: route it after
+    # its first apply. Real cover meanwhile: the unrouted monitor still opens a Sentry issue on a missed or
+    # failed check-in, and the gate_unanswered issue alert (issue-alerts.tf) covers a request nobody answered.
+    scheduled_approval_expiry = "route after first apply; the monitor still opens a Sentry issue and sentry_alert.approval_gate_unanswered covers an unanswered request (#4672)"
     scheduled_betterstack_incident_mirror = "the mirror's own ci/betterstack-incident GitHub issues are the primary channel; route after the first measured check-in (#10390)"
   }
 }

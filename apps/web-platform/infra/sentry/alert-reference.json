@@ -163,6 +163,60 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "approval-gate-unanswered": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "approval-queue"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "gate_unanswered"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 1443,
+    "name": "approval-gate-unanswered",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "art17-erasure-incomplete": {
     "actionFilters": [
       {

@@ -12,7 +12,7 @@
  *    the tool name only, never action text (the Vector user-content key drop is a backstop, not the control).
  *
  * The ops registry is the single place a message string lives; a test fails when two ops share an op name or a message.
- * Ops fired by the expiry cron (a later unit) are registered here too so the uniqueness check covers the whole family.
+ * Ops fired by the expiry cron are registered here too so the uniqueness check covers the whole family.
  */
 
 import { createChildLogger } from "../logger";
@@ -101,7 +101,13 @@ export const APPROVAL_OPS = {
     message: "Approval gate: the inbox could not read the approval requests behind its rows",
     level: "warn",
   },
-  /** Reserved for the expiry cron (15 minutes pending): alert-reference registers THIS op only. */
+  /** The expiry cron's `sweep_approvals()` call failed; the next 5-minute tick retries. */
+  sweepFailed: {
+    op: "approval-sweep-failed",
+    message: "Approval expiry cron: the sweep_approvals call failed; the next tick retries",
+    level: "error",
+  },
+  /** Fired by the expiry cron (15 minutes pending): issue-alerts registers THIS op only. */
   gateUnanswered: {
     op: "gate_unanswered",
     message: "Approval gate unanswered: a request has been pending for more than 15 minutes",

@@ -2974,3 +2974,42 @@ resource "sentry_alert" "haiku_no_text_block_rate" {
     ignore_changes = [environment]
   }
 }
+
+# Approval request nobody answered (#4672, ADR-307 provisional). The 5-minute expiry cron
+# (server/inngest/functions/cron-approval-expiry.ts) fires the `gate_unanswered` op ONCE per request, 15 minutes after
+# it was created while still pending (sweep_approvals() marks `unanswered_flagged_at`, so a request flags at most once).
+# The agent has stopped waiting at 5 minutes, so a request this old means the Owner's push/inbox nudge did not land.
+# This is the ONLY approval op with an issue alert: every other approval op is a Sentry warn event whose rate is the
+# rollout metric reviewed at the enabling gate, not a page. The op has its own static message (server/approval/ops.ts),
+# so the group is one condition; `approval_id` is a row UUID tag, not personal data.
+# frequency_minutes = 1443 re-emails a live group at most daily and is unused elsewhere in the root.
+resource "sentry_alert" "approval_gate_unanswered" {
+  organization      = var.sentry_org
+  name              = "approval-gate-unanswered"
+  enabled           = true
+  frequency_minutes = 1443
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "approval-queue" } },
+        { tagged_event = { key = "op", match = "eq", value = "gate_unanswered" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

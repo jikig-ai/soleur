@@ -1652,3 +1652,25 @@ resource "sentry_cron_monitor" "scheduled_supabase_watchdog" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# #4672 — Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-approval-expiry.ts`.
+# The 5-minute sweep of durable approval requests (expire due rows, flag requests nobody answered for
+# 15 minutes, scrub request text 30 days after a decision). A MISSED check-in means the sweep stopped
+# (scheduler dead / function dropped), so requests would neither expire nor be flagged; a ?status=error
+# heartbeat means the sweep_approvals() RPC failed (the next tick retries). The cron runs with the
+# `approval-queue` flag OFF as well, so the monitor is live from the first deploy. Pure database RPC plus
+# generic push, no claude-eval spawn: the 30-min margin and 10-min runtime of the Inngest small-cron
+# cohort. Slug MUST match SENTRY_MONITOR_SLUG in the handler. Routing to cron_monitor_failure follows the
+# two-PR rule (cron_monitor_alert_unrouted in cron-monitor-alerts.tf).
+resource "sentry_cron_monitor" "scheduled_approval_expiry" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-approval-expiry"
+  schedule                = { crontab = "*/5 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
