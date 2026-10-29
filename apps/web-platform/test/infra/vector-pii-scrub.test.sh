@@ -369,7 +369,8 @@ assert_grep() {
   fi
 }
 assert_grep "app_container_journald source exists" '^\[sources\.app_container_journald\]'
-assert_grep "warn filter reads the app_container source" '^inputs = \["app_container_journald"\]'
+assert_grep "compaction reduce reads the app_container source" '^inputs = \["app_container_journald"\]'
+assert_grep "warn filter reads the compaction output" '^inputs = \["app_container_compaction"\]'
 assert_grep "app container routed THROUGH pii_scrub (redaction path, not sink-direct)" \
   '^inputs = \["inngest_terminator_filter", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"\]'
 # The marker chain is the ONLY addition (#9545): it carries a workspace id and a count, never a host.
