@@ -15,6 +15,7 @@ import { CANONICAL_VERSION, computeActionHash, type CanonicalAction } from "./ca
 import { isApprovalQueueEnabled } from "./flag";
 import { reportApprovalOp } from "./ops";
 import { renderApprovalView } from "./render";
+import { hasWaiter } from "./waiters";
 import { listLiveApprovals, type ApprovalRpcClient } from "./service";
 import { isApprovalRequiredTool } from "./tools";
 
@@ -91,6 +92,8 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
         expiresAt: approval.expires_at,
         requestCount,
         viewerRole,
+        // True only when this process still holds the agent's live wait for the request (the session is on this host).
+        agentWaiting: hasWaiter(approval.id),
       });
       sent += 1;
     }

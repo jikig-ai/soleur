@@ -101,6 +101,9 @@ interface UseWebSocketReturn {
   resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
+  /** #4672 — the Owner's decision on a durable approval request. Returns false when the socket is not open (nothing was
+   *  sent): the card then shows a static error and never an optimistic state. The reply arrives as `approval_status`. */
+  sendApprovalDecide: (approvalId: string, decision: "approve" | "deny") => boolean;
   /** feat-bash-autonomous-default-on: client→server ack for the first-run
    *  autonomous-mode disclosure soft-gate. Selection is "Got it" /
    *  "Keep autonomous on" / "Ask me each time". Releases the held command. */
@@ -2051,6 +2054,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
+  const sendApprovalDecide = useCallback(
+    (approvalId: string, decision: "approve" | "deny"): boolean => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      // No optimistic dispatch: the card settles only from the server's approval_status reply (fail closed).
+      ws.send(JSON.stringify({ type: "approval_decide", approvalId, decision } satisfies WSMessage));
+      return true;
+    },
+    [],
+  );
+
   const sendAutonomousDisclosureResponse = useCallback(
     (gateId: string, selection: string) => {
       send({ type: "autonomous_disclosure_response", gateId, selection });
@@ -2151,6 +2165,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendApprovalDecide,
     sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
     resolveInteractivePrompt,

@@ -109,7 +109,7 @@ describe("the decide path is unreachable from anything the agent can reach", () 
     expect(hits).toEqual(["server/approval/decide.ts"]);
   });
 
-  test("decide.ts has exactly the allowlisted importers (the WebSocket handler; the HTTP route joins with task 3.1)", () => {
+  test("decide.ts has exactly the allowlisted importers (the WebSocket handler and the HTTP decide route)", () => {
     const importers: string[] = [];
     const walk = (dir: string) => {
       for (const ent of readdirSync(dir, { withFileTypes: true })) {
@@ -122,6 +122,6 @@ describe("the decide path is unreachable from anything the agent can reach", () 
       }
     };
     for (const d of ["server", "app", "lib", "components"]) walk(join(ROOT, d));
-    expect(importers.sort()).toEqual(["server/ws-handler.ts"]);
+    expect(importers.sort()).toEqual(["app/api/approvals/[id]/decide/route.ts", "server/ws-handler.ts"]);
   });
 });

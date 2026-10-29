@@ -118,3 +118,34 @@ describe("approval_status", () => {
     expect(r.messages[0]).toBe(gate);
   });
 });
+
+describe("agentWaiting (honest approved states, wireframes 04C vs 04D)", () => {
+  test("a card carries the server's wait flag; absent means the agent is NOT waiting (the safe reading)", () => {
+    const waiting = applyStreamEvent([], streams(), req({ agentWaiting: true }));
+    expect(waiting.messages[0]).toMatchObject({ agentWaiting: true });
+    const absent = applyStreamEvent([], streams(), req());
+    expect(absent.messages[0]).toMatchObject({ agentWaiting: false });
+  });
+
+  test("a status frame updates the wait flag when it carries one and keeps it when it does not", () => {
+    const a = applyStreamEvent([], streams(), req({ agentWaiting: true }));
+    const b = applyStreamEvent(a.messages, a.activeStreams, { ...status("pending"), agentWaiting: false });
+    expect(b.messages[0]).toMatchObject({ agentWaiting: false, status: "pending" });
+    const c = applyStreamEvent(a.messages, a.activeStreams, status("approved"));
+    expect(c.messages[0]).toMatchObject({ agentWaiting: true, status: "approved" });
+  });
+
+  test("a stale re-send of a card whose request already reached a terminal status is not 'waiting'", () => {
+    const a = applyStreamEvent([], streams(), req({ agentWaiting: true }));
+    const b = applyStreamEvent(a.messages, a.activeStreams, status("rejected"));
+    const c = applyStreamEvent(b.messages, b.activeStreams, req({ agentWaiting: true }));
+    expect(c.messages[0]).toMatchObject({ status: "rejected", agentWaiting: false });
+  });
+
+  test("a re-send keeps the outcome of this socket's own decide (a conflict does not vanish on reattach)", () => {
+    const a = applyStreamEvent([], streams(), req());
+    const b = applyStreamEvent(a.messages, a.activeStreams, status("approved", "conflict"));
+    const c = applyStreamEvent(b.messages, b.activeStreams, req({ status: "approved" }));
+    expect(c.messages[0]).toMatchObject({ decideOutcome: "conflict" });
+  });
+});

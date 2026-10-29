@@ -17,7 +17,13 @@ import {
 } from "@/server/observability";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { NOT_LEGAL_ADVICE_NOTICE } from "@/lib/email-triage/statutory-rules";
-import type { InboxItemSeverity } from "@/lib/inbox-severity";
+import { buildInboxDeepLink, type InboxItemSeverity, type InboxItemSource } from "@/lib/inbox-severity";
+import {
+  APPROVAL_NOTIFY_COPY,
+  approvalEmailFootnote,
+  approvalEmailLines,
+  type ApprovalNotifyKind,
+} from "@/lib/approval-copy";
 import type { FailureReason } from "@/lib/failure-reason";
 import type { WSMessage } from "@/lib/types";
 import { isConversationViewed } from "./session-registry";
@@ -125,6 +131,18 @@ export interface InboxItemNotificationPayload {
   /** action_required mirrors a missed dispatch to Sentry op=notify-inbox-action-required. */
   severity: InboxItemSeverity;
   deepLinkPath: string;
+  /**
+   * #4672 — set for an approval request. The push and email then use the fixed, content-free copy deck strings
+   * (lib/approval-copy.ts) and IGNORE `title`: no action type, recipient, repository, branch, document, subject or agent
+   * text can reach a lock screen or an inbox preview (privacy notice scope #8532). Only `firstName`, `workspaceName` and
+   * `expiresAt` are interpolated, and only into the email.
+   */
+  approvalCopy?: {
+    kind: ApprovalNotifyKind;
+    firstName?: string | null;
+    workspaceName?: string | null;
+    expiresAt?: string | null;
+  };
 }
 
 /**
@@ -316,6 +334,16 @@ async function emailFallback(
     );
     mirrorNotifyFailure(payload, userError?.message ?? "user email missing");
     return false;
+  }
+  if (payload.type === "inbox_item" && payload.approvalCopy && !payload.approvalCopy.firstName) {
+    // {first_name} for the approval email: the first token of the account's display name, sanitized; absent = "Hi,".
+    const meta = (userData.user.user_metadata ?? {}) as Record<string, unknown>;
+    const raw = [meta.given_name, meta.full_name, meta.name].find((v): v is string => typeof v === "string" && v.trim().length > 0);
+    const firstName = raw ? sanitizeDisplayString(raw.trim().split(/\s+/)[0] ?? "", 40) : "";
+    return sendEmailNotification(userData.user.email, {
+      ...payload,
+      approvalCopy: { ...payload.approvalCopy, firstName: firstName || null },
+    });
   }
   return sendEmailNotification(userData.user.email, payload);
 }
@@ -537,10 +565,13 @@ export async function sendPushNotifications(
     // matching email_triage). Deep link is a server-generated relative path;
     // sw.js re-validates same-origin on click. `inboxItemId` drives the
     // per-item sw.js tag so inbox pushes never collapse into one another.
+    // #4672 — an approval request carries fixed copy-deck strings; `payload.title` is never read for it.
+    const approvalPush = payload.approvalCopy ? APPROVAL_NOTIFY_COPY[payload.approvalCopy.kind] : null;
     body = JSON.stringify({
-      title: sanitizeDisplayString(payload.title),
-      body:
-        payload.severity === "action_required"
+      title: approvalPush ? approvalPush.pushTitle : sanitizeDisplayString(payload.title),
+      body: approvalPush
+        ? approvalPush.pushBody
+        : payload.severity === "action_required"
           ? "Something needs your decision."
           : "New update in your Soleur inbox.",
       data: {
@@ -784,6 +815,40 @@ async function sendInboxItemEmailNotification(
 ): Promise<boolean> {
   const resend = getResend();
   const deepLink = `${appUrl()}${payload.deepLinkPath}`;
+
+  // #4672 — an approval request: fixed copy-deck subject, heading, body and footnote. `payload.title` is never read.
+  // The only interpolations are first name, workspace name and the expiry date-time; each is sanitized and escaped.
+  if (payload.approvalCopy) {
+    const c = payload.approvalCopy;
+    const copy = APPROVAL_NOTIFY_COPY[c.kind];
+    const values = {
+      firstName: c.firstName ? sanitizeDisplayString(c.firstName, 40) : null,
+      workspaceName: c.workspaceName ? sanitizeDisplayString(c.workspaceName, 80) : null,
+      expiresAt: c.expiresAt ?? null,
+    };
+    const { error } = await resend.emails.send({
+      from: "Soleur <notifications@soleur.ai>",
+      to: [email],
+      subject: copy.emailSubject,
+      html: renderBrandedNotificationEmail({
+        heading: escapeHtml(copy.emailHeading),
+        bodyHtml: approvalEmailLines(c.kind, values)
+          .map((line) => escapeHtml(line))
+          .join("<br><br>"),
+        ctaLabel: copy.emailCta,
+        deepLink,
+        footnoteHtml: escapeHtml(approvalEmailFootnote(values.workspaceName)),
+      }),
+    });
+    if (error) {
+      log.error({ email, inboxItemId: payload.inboxItemId, err: error }, "Failed to send approval email notification");
+      mirrorNotifyFailure(payload, error);
+      return false;
+    }
+    log.info({ email, inboxItemId: payload.inboxItemId }, "Approval email notification sent");
+    return true;
+  }
+
   const safeTitle = sanitizeDisplayString(payload.title);
   const isActionRequired = payload.severity === "action_required";
   const heading = isActionRequired
@@ -822,6 +887,44 @@ async function sendInboxItemEmailNotification(
 // Operational inbox emit (feat-severity-ranked-inbox #6007)
 // ---------------------------------------------------------------------------
 
+/** Same-origin relative path only: a `//evil.host` or absolute URL must never reach a push or an email CTA. */
+function isSafeRelativePath(path: string): boolean {
+  return path.startsWith("/") && !path.startsWith("//");
+}
+
+/** Dispatch one payload to the row's recipient (targeted) or to every Owner of the workspace (broadcast). */
+async function dispatchToRecipients(
+  supabase: ReturnType<typeof createServiceClient>,
+  target: { workspaceId: string; userId: string | null },
+  payload: InboxItemNotificationPayload,
+  failOp: string,
+): Promise<boolean> {
+  if (target.userId) {
+    // notifyOfflineUser mirrors its own dispatch failures via
+    // mirrorNotifyFailure (op=notify-inbox-action-required for action_required).
+    return notifyOfflineUser(target.userId, payload);
+  }
+  // Broadcast: dispatch to every Owner of the workspace.
+  const { data: owners, error: ownersErr } = await supabase
+    .from("workspace_members")
+    .select("user_id")
+    .eq("workspace_id", target.workspaceId)
+    .eq("role", "owner");
+  if (ownersErr) {
+    reportSilentFallback(ownersErr, {
+      feature: "inbox",
+      op: failOp,
+      message: "inbox_item broadcast owner lookup failed",
+      extra: { workspaceId: target.workspaceId },
+    });
+    return false;
+  }
+  const results = await Promise.allSettled(
+    (owners ?? []).map((o) => notifyOfflineUser((o as { user_id: string }).user_id, payload)),
+  );
+  return results.some((r) => r.status === "fulfilled" && r.value === true);
+}
+
 /**
  * Insert an inbox_item row, then dispatch the push/email nudge. Never throws.
  * Returns the inserted row id (`null` on dedup/failure); `dispatch: false`
@@ -844,7 +947,7 @@ export async function notifyInboxItem(opts: {
   /** null = broadcast to every workspace Owner; set = targeted to one recipient. */
   userId: string | null;
   severity: InboxItemSeverity;
-  source: "task_completed" | "system";
+  source: InboxItemSource;
   /** Server-generated + sanitized. NEVER raw agent output / email content. */
   title: string;
   /** ids only (e.g. { conversationId }). The deep link is built from these. */
@@ -872,7 +975,7 @@ export async function notifyInboxItem(opts: {
   // origin re-check (unlike sw.js on click), so a `//evil.host` or absolute URL
   // must never reach a co-Owner-visible email/push. Server-generated ids can't
   // produce these today; this fails a future bad caller closed.
-  if (!opts.deepLinkPath.startsWith("/") || opts.deepLinkPath.startsWith("//")) {
+  if (!isSafeRelativePath(opts.deepLinkPath)) {
     reportSilentFallback(null, {
       feature: "inbox",
       op: "inbox-item-bad-deeplink",
@@ -930,33 +1033,7 @@ export async function notifyInboxItem(opts: {
       deepLinkPath: opts.deepLinkPath,
     };
 
-    if (opts.userId) {
-      // notifyOfflineUser mirrors its own dispatch failures via
-      // mirrorNotifyFailure (op=notify-inbox-action-required for action_required).
-      await notifyOfflineUser(opts.userId, payload);
-      return inboxItemId;
-    }
-
-    // Broadcast: dispatch to every Owner of the workspace.
-    const { data: owners, error: ownersErr } = await supabase
-      .from("workspace_members")
-      .select("user_id")
-      .eq("workspace_id", opts.workspaceId)
-      .eq("role", "owner");
-    if (ownersErr) {
-      reportSilentFallback(ownersErr, {
-        feature: "inbox",
-        op: failOp,
-        message: "inbox_item broadcast owner lookup failed",
-        extra: { workspaceId: opts.workspaceId },
-      });
-      return inboxItemId;
-    }
-    await Promise.allSettled(
-      (owners ?? []).map((o) =>
-        notifyOfflineUser((o as { user_id: string }).user_id, payload),
-      ),
-    );
+    await dispatchToRecipients(supabase, { workspaceId: opts.workspaceId, userId: opts.userId }, payload, failOp);
     return inboxItemId;
   } catch (err) {
     reportSilentFallback(err, {
@@ -966,6 +1043,100 @@ export async function notifyInboxItem(opts: {
       extra: { workspaceId: opts.workspaceId },
     });
     return null;
+  }
+}
+
+/**
+ * Push/email nudge for an inbox_item row that ALREADY EXISTS (#4672). The split half of `notifyInboxItem`: an approval
+ * request's row is inserted by the `create_approval_request` RPC in the request's own transaction, so the push is
+ * dispatched afterwards, from the stored row, and an insert can never be skipped because a push failed (or the reverse).
+ *
+ * Keeps the contract of `notifyInboxItem`'s dispatch half: the deep link is built from the stored `source_ref` ids at
+ * dispatch (never a stored URL) and passes the same relative-path guard; a failed dispatch is mirrored to Sentry
+ * (`notify-inbox-action-required` for action_required, through `notifyOfflineUser`). Never throws. Returns whether at
+ * least one recipient was reached on at least one channel.
+ *
+ * Approval rows (`source = approval_required`) get the fixed, content-free copy deck strings: `kind` selects requested
+ * (default) or expired. Nothing from the row's title, the request or the agent reaches the push or the email.
+ */
+export async function dispatchInboxPush(
+  inboxItemId: string,
+  opts: { kind?: ApprovalNotifyKind } = {},
+): Promise<boolean> {
+  try {
+    const supabase = createServiceClient();
+    const { data, error } = await supabase
+      .from("inbox_item")
+      .select("id, workspace_id, user_id, severity, source, title, source_ref")
+      .eq("id", inboxItemId)
+      .maybeSingle();
+    if (error || !data) {
+      reportSilentFallback(error ?? null, {
+        feature: "inbox",
+        op: "inbox-item-dispatch-lookup",
+        message: "dispatchInboxPush could not read the inbox_item row",
+        extra: { inboxItemId },
+      });
+      return false;
+    }
+    const row = data as {
+      id: string;
+      workspace_id: string;
+      user_id: string | null;
+      severity: InboxItemSeverity;
+      source: InboxItemSource;
+      title: string;
+      source_ref: Record<string, string> | null;
+    };
+    const failOp = row.severity === "action_required" ? "notify-inbox-action-required" : "inbox-item-insert";
+    const deepLinkPath = buildInboxDeepLink(row.source, row.source_ref);
+    if (!deepLinkPath || !isSafeRelativePath(deepLinkPath)) {
+      reportSilentFallback(null, {
+        feature: "inbox",
+        op: "inbox-item-bad-deeplink",
+        message: "dispatchInboxPush rejected a missing or non-relative deep link",
+        extra: { workspaceId: row.workspace_id, source: row.source },
+      });
+      return false;
+    }
+
+    const payload: InboxItemNotificationPayload = {
+      type: "inbox_item",
+      inboxItemId: row.id,
+      title: row.title,
+      severity: row.severity,
+      deepLinkPath,
+    };
+
+    if (row.source === "approval_required") {
+      // Only the two interpolated values the copy deck allows: the workspace name and the expiry date-time.
+      let workspaceName: string | null = null;
+      let expiresAt: string | null = null;
+      try {
+        const ws = await supabase.from("workspaces").select("name").eq("id", row.workspace_id).maybeSingle();
+        const n = (ws.data as { name?: unknown } | null)?.name;
+        workspaceName = typeof n === "string" && n.length > 0 ? n : null;
+        const approvalId = row.source_ref?.approvalId;
+        if (approvalId) {
+          const ap = await supabase.from("approval_request").select("expires_at").eq("id", approvalId).maybeSingle();
+          const e = (ap.data as { expires_at?: unknown } | null)?.expires_at;
+          expiresAt = typeof e === "string" ? e : null;
+        }
+      } catch {
+        // The copy degrades to "your workspace" and no date; it never blocks the nudge.
+      }
+      payload.approvalCopy = { kind: opts.kind ?? "requested", workspaceName, expiresAt };
+    }
+
+    return await dispatchToRecipients(supabase, { workspaceId: row.workspace_id, userId: row.user_id }, payload, failOp);
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "inbox",
+      op: "notify-inbox-action-required",
+      message: "dispatchInboxPush failed",
+      extra: { inboxItemId },
+    });
+    return false;
   }
 }
 

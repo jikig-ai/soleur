@@ -806,6 +806,54 @@ describe("every other failure is a deny with its own op", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Wait-state frames: the card must know what the agent is doing, never guess (wireframes 04C vs 04D).
+// ---------------------------------------------------------------------------
+
+describe("the card is told whether the agent is still waiting (honest approved states)", () => {
+  const statusFrames = (frames: Array<Record<string, unknown>>) => frames.filter((f) => f.type === "approval_status");
+
+  test("the card is sent with agentWaiting=true: the agent is inside its wait", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    await pending;
+    expect(requestFrame(h.frames)).toMatchObject({ type: "approval_request", agentWaiting: true });
+  });
+
+  test("a consumed approval is announced as consumed with the wait over", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    expect((await pending).behavior).toBe("allow");
+    expect(statusFrames(h.frames)).toEqual([expect.objectContaining({ status: "consumed", agentWaiting: false, approvalId: h.db.rows[0].id })]);
+  });
+
+  test("a wait that ends undecided tells the card the agent stopped waiting while the request stays pending", async () => {
+    const h = makeHarness({ deadlineMs: 40 });
+    await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(statusFrames(h.frames)).toEqual([expect.objectContaining({ status: "pending", agentWaiting: false })]);
+    expect(h.db.rows[0].status).toBe("pending");
+  });
+
+  test("a rejected request sends no wait-state frame of its own (the decide path settles the card)", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.createPr, sampleInput(TOOLS.createPr));
+    await decideWhenCardArrives(h, "rejected");
+    await pending;
+    expect(statusFrames(h.frames)).toEqual([]);
+  });
+
+  test("a consume that is rejected announces nothing as consumed", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    h.db.failConsume = "garbage";
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    expect((await pending).behavior).toBe("deny");
+    expect(statusFrames(h.frames).some((f) => f.status === "consumed")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Observability.
 // ---------------------------------------------------------------------------
 

@@ -475,10 +475,20 @@ export type WSMessage =
       expiresAt: string;
       requestCount: number;
       viewerRole: "owner" | "member";
+      /** True while the agent is still inside its in-session wait for this request. Absent = not waiting. */
+      agentWaiting?: boolean;
     }
   // #4672 — a status change of an approval request (server→client). `outcome` is set only on the reply to the socket
   // that sent `approval_decide`.
-  | { type: "approval_status"; approvalId: string; conversationId: string; status: ApprovalWireStatus; outcome?: ApprovalDecideOutcomeWire }
+  | {
+      type: "approval_status";
+      approvalId: string;
+      conversationId: string;
+      status: ApprovalWireStatus;
+      outcome?: ApprovalDecideOutcomeWire;
+      /** Set when the agent's in-session wait state changed (false once it stopped waiting). Absent = unchanged. */
+      agentWaiting?: boolean;
+    }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | {

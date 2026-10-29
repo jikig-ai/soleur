@@ -256,10 +256,26 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           expiresAt: submitted.approval.expires_at,
           requestCount: submitted.requestCount,
           viewerRole,
+          agentWaiting: true,
         });
       } catch (err) {
         reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "ws-card" } });
       }
+      // Tell the card what the agent is doing now, so it never claims "your agent is continuing" or "stopped waiting"
+      // from a guess (wireframe 04C vs 04D). Best effort: a failed frame is one op and the card keeps its last state.
+      const emitStatus = (status: "pending" | "expired" | "consumed", agentWaiting: boolean): void => {
+        try {
+          a.sendToClient(a.userId, {
+            type: "approval_status",
+            approvalId,
+            conversationId: a.conversationId,
+            status,
+            agentWaiting,
+          });
+        } catch (err) {
+          reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "ws-status" } });
+        }
+      };
       if (a.approval.onRequested) {
         try {
           await a.approval.onRequested({ approvalId, created: submitted.created });
@@ -303,6 +319,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
             return deny(APPROVAL_CONSUME_REJECTED_DENY);
           }
           // The approval is spent. If the session died while the consume was in flight it is spent for nothing: deny.
+          emitStatus("consumed", false);
           if (aborted()) return denyAborted();
           logApprovalMarker("SOLEUR_APPROVAL_CONSUMED", {
             approval_id: approvalId,
@@ -317,10 +334,12 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           a.logDecision(a.toolName, "deny", "approval rejected by the owner");
           return deny(APPROVAL_REJECTED_DENY);
         case "timeout":
+          emitStatus("pending", false);
           reportApprovalOp("waitTimeout", null, ctx);
           a.logDecision(a.toolName, "deny", "approval wait ended undecided");
           return deny(APPROVAL_PENDING_DENY);
         case "expired":
+          emitStatus("expired", false);
           reportApprovalOp("expired", null, ctx);
           logApprovalMarker("SOLEUR_APPROVAL_EXPIRED", { approval_id: approvalId, tool: a.toolName, conversation_id: a.conversationId, seen_by: "gate" });
           a.logDecision(a.toolName, "deny", "approval expired");

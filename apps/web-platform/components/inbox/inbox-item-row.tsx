@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { inboxRowEligibility } from "@/lib/inbox-archive-eligibility";
 import { relativeTime } from "@/lib/relative-time";
+import { APPROVAL_COPY, formatExpiry } from "@/lib/approval-copy";
 import {
   buildInboxDeepLink,
   type InboxItemRowData,
@@ -67,6 +68,18 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
 
   const href = buildInboxDeepLink(item.source, item.source_ref);
   const navigable = href !== null && !isArchived;
+
+  // #4672 — an approval row opens the request (the card decides; the row never carries Approve or Deny, because deciding
+  // without the full action in view is the failure this surface exists to prevent). While un-acted it can be neither
+  // marked done nor archived: it leaves NEEDS YOU only when decided or expired.
+  const isApproval = item.source === "approval_required";
+  const approvalPending = isApproval && item.approval?.status === "pending";
+  const expiry = approvalPending && item.approval ? formatExpiry(item.approval.expiresAt, Date.now()) : null;
+  const resolvedLine =
+    isApproval && item.approval && (item.approval.status === "expired" || item.approval.status === "rejected")
+      ? APPROVAL_COPY.resolvedNothing
+      : null;
+  const lockedApproval = isApproval && isActionRequired && !isActed;
 
   const { run: runAction, pending } = usePendingAction(
     async (action: "acted" | "archived") => {
@@ -146,13 +159,30 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
           </span>
         </div>
 
-        {!navigable && !isArchived && (
+        {isApproval && !isArchived && (expiry || resolvedLine || approvalPending) && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-soleur-text-secondary">
+            {expiry && expiry.text && (
+              <span
+                data-testid="approval-row-expiry"
+                suppressHydrationWarning
+                className={`rounded-md bg-soleur-bg-surface-2/70 px-2 py-0.5 font-medium ${
+                  expiry.urgent ? "text-amber-400" : "text-soleur-accent-gold-text"
+                }`}
+              >
+                {expiry.text}
+              </span>
+            )}
+            <span>{resolvedLine ?? "Open to see the exact action and decide"}</span>
+          </div>
+        )}
+
+        {!navigable && !isArchived && !isApproval && (
           <p className="text-xs text-soleur-text-muted">
             Nothing to open yet — this is just an update.
           </p>
         )}
 
-        {!isArchived && (
+        {!isArchived && !lockedApproval && (
           <div className="flex items-center justify-end gap-2">
             {actionError && (
               <p role="alert" className="text-xs font-medium text-red-500">

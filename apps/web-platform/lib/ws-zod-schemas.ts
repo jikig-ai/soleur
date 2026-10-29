@@ -423,6 +423,7 @@ const approvalRequestSchema = z.strictObject({
   expiresAt: z.string(),
   requestCount: z.number().int().nonnegative(),
   viewerRole: z.enum(["owner", "member"]),
+  agentWaiting: z.boolean().optional(),
 });
 const approvalStatusSchema = z.strictObject({
   type: z.literal("approval_status"),
@@ -430,6 +431,7 @@ const approvalStatusSchema = z.strictObject({
   conversationId: z.string(),
   status: z.enum(["pending", "approved", "rejected", "expired", "consumed"]),
   outcome: z.enum(["decided", "unchanged", "conflict", "expired", "closed"]).optional(),
+  agentWaiting: z.boolean().optional(),
 });
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),

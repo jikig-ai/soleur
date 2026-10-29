@@ -14,6 +14,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import type { ServerDerived } from "./canonical";
 import { isApprovalQueueEnabled } from "./flag";
+import { notifyApprovalRequested } from "./notify";
 import type { ApprovalGateDeps } from "./gate-types";
 import { consumeApproval, getApprovalStatus, submitApprovalRequest, type ApprovalRpcClient } from "./service";
 import type { WaitStatus } from "./waiters";
@@ -52,6 +53,8 @@ export interface CreateApprovalGateDepsArgs {
   serviceClient?: () => ApprovalRpcClient;
   tenantClient?: () => Promise<TenantLike>;
   headSha?: (workspacePath: string) => Promise<string>;
+  /** Push/email dispatch for a newly created request; false = nothing reached the Owner. */
+  notifyRequested?: (approvalId: string) => Promise<boolean>;
 }
 
 export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): ApprovalGateDeps {
@@ -99,6 +102,14 @@ export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): Approv
     },
 
     consume: (p) => consumeApproval(svc(), p),
+
+    async onRequested({ approvalId, created }) {
+      // A re-ask finds the existing request, whose row was already pushed when it was created: no second nudge.
+      if (!created) return;
+      const delivered = await (args.notifyRequested ?? notifyApprovalRequested)(approvalId);
+      // The gate reports this as its own approval-notify-failed op; the inbox row remains the fallback surface.
+      if (!delivered) throw new Error("approval notification not delivered");
+    },
 
     async viewerRole() {
       const t = await tenant();

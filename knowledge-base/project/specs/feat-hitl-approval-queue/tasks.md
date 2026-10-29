@@ -31,8 +31,8 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 
 ## Phase 3: Surfaces and notifications
 
-- [ ] 3.1 `components/chat/approval-request-card.tsx` (all states), landing page, decide route, inbox row, nav badge
-- [ ] 3.2 `notifications.ts`: widen `source` union (three-pattern grep), split `dispatchInboxPush`, generic push and email copy; copy-deck constants and the string test for forbidden outcome words
+- [x] 3.1 `components/chat/approval-request-card.tsx` (all states), landing page, decide route, inbox row, nav badge
+- [x] 3.2 `notifications.ts`: widen `source` union (three-pattern grep), split `dispatchInboxPush`, generic push and email copy; copy-deck constants and the string test for forbidden outcome words
 
 ## Phase 4: Cron, flag, infra
 

@@ -212,6 +212,8 @@ export interface ChatApprovalMessage extends ChatMessageBase {
   expiresAt: string;
   requestCount: number;
   viewerRole: "owner" | "member";
+  /** True while the agent is still inside its in-session wait; false once it stopped waiting. */
+  agentWaiting: boolean;
   /** Set on the reply to this socket's own `approval_decide` (conflict / expired / closed explain a refusal). */
   decideOutcome?: ApprovalDecideOutcomeWire;
 }
@@ -1579,13 +1581,18 @@ export function applyStreamEvent(
         expiresAt: event.expiresAt,
         requestCount: event.requestCount,
         viewerRole: event.viewerRole,
+        agentWaiting: event.agentWaiting === true,
       };
       if (existingIdx !== -1) {
         const old = prev[existingIdx];
         // A terminal status already folded in (rejected / expired / consumed) is never walked back by a stale re-send.
         const keepStatus = old.type === "approval_request" && old.status !== "pending" && old.status !== "approved";
         const updated = prev.slice();
-        updated[existingIdx] = keepStatus && old.type === "approval_request" ? { ...card, status: old.status } : card;
+        const keepOutcome = old.type === "approval_request" ? old.decideOutcome : undefined;
+        updated[existingIdx] =
+          keepStatus && old.type === "approval_request"
+            ? { ...card, status: old.status, decideOutcome: keepOutcome, agentWaiting: false }
+            : { ...card, decideOutcome: keepOutcome };
         return {
           messages: updated,
           activeStreams,
@@ -1622,7 +1629,12 @@ export function applyStreamEvent(
         return { messages: prev, activeStreams, workflow: priorWorkflow, spawnIndex: priorSpawnIndex };
       }
       const updated = prev.slice();
-      updated[idx] = { ...old, status: event.status, decideOutcome: event.outcome ?? old.decideOutcome };
+      updated[idx] = {
+        ...old,
+        status: event.status,
+        decideOutcome: event.outcome ?? old.decideOutcome,
+        agentWaiting: event.agentWaiting ?? old.agentWaiting,
+      };
       return { messages: updated, activeStreams, workflow: priorWorkflow, spawnIndex: priorSpawnIndex };
     }
 

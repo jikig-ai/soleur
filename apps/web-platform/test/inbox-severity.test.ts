@@ -164,8 +164,19 @@ describe("buildInboxDeepLink — from source_ref ids, null when target absent", 
       "/dashboard",
     );
   });
-  it("not-yet-shipped sources (approval_required/autopilot_run) are non-navigating", () => {
+  it("approval_required links to the landing page built from the approval id at render (#4672)", () => {
+    const id = "00000000-0000-4000-8000-000000000006";
+    expect(buildInboxDeepLink("approval_required", { approvalId: id, conversationId: "c1" })).toBe(
+      `/dashboard/approvals/${id}`,
+    );
+  });
+  it("approval_required with a missing or non-UUID id is non-navigating (never a path built from a free string)", () => {
+    expect(buildInboxDeepLink("approval_required", null)).toBeNull();
     expect(buildInboxDeepLink("approval_required", { any: "x" })).toBeNull();
+    expect(buildInboxDeepLink("approval_required", { approvalId: "../../admin" })).toBeNull();
+    expect(buildInboxDeepLink("approval_required", { approvalId: "https://evil.example" })).toBeNull();
+  });
+  it("not-yet-shipped autopilot_run is non-navigating", () => {
     expect(buildInboxDeepLink("autopilot_run", { any: "x" })).toBeNull();
   });
 });

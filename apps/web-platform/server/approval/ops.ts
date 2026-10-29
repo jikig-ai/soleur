@@ -89,6 +89,18 @@ export const APPROVAL_OPS = {
     message: "Approval gate: live approval cards could not be re-sent on session attach",
     level: "warn",
   },
+  /** The away-user landing page could not read the row (RLS read error, not a missing row). */
+  landingReadFailed: {
+    op: "approval-landing-read-failed",
+    message: "Approval gate: the landing page could not read the approval request",
+    level: "error",
+  },
+  /** GET /api/inbox could not read the approval requests behind the inbox rows; the rows keep their static title. */
+  inboxEnrichFailed: {
+    op: "approval-inbox-enrich-failed",
+    message: "Approval gate: the inbox could not read the approval requests behind its rows",
+    level: "warn",
+  },
   /** Reserved for the expiry cron (15 minutes pending): alert-reference registers THIS op only. */
   gateUnanswered: {
     op: "gate_unanswered",

@@ -309,6 +309,28 @@ describe("reattach re-send", () => {
     expect(card.view.fields.map((f) => f.value).join("|")).toContain("Updated pricing");
   });
 
+  it("flag on: agentWaiting reflects whether THIS process still holds the agent's wait for the request", async () => {
+    h.flagOn.value = true;
+    h.serviceRpc.mockResolvedValue({ data: [liveRow()], error: null });
+    const s1 = makeSession(CONVERSATION_ID);
+    await resume(s1);
+    await settle();
+    const idle = frames(s1).find((f) => f.type === "approval_request") as Extract<WSMessage, { type: "approval_request" }>;
+    expect(idle.agentWaiting).toBe(false);
+
+    const { registerWaiter, clearAllWaiters } = await import("@/server/approval/waiters");
+    registerWaiter(APPROVAL_ID);
+    try {
+      const s2 = makeSession(CONVERSATION_ID);
+      await resume(s2);
+      await settle();
+      const live = frames(s2).find((f) => f.type === "approval_request") as Extract<WSMessage, { type: "approval_request" }>;
+      expect(live.agentWaiting).toBe(true);
+    } finally {
+      clearAllWaiters();
+    }
+  });
+
   it("flag off: zero database reads and no card (dormant)", async () => {
     h.flagOn.value = false;
     h.serviceRpc.mockResolvedValue({ data: [liveRow()], error: null });

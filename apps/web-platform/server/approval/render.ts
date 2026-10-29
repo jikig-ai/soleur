@@ -10,6 +10,7 @@
 
 import type { CanonicalAction, CanonicalValue } from "./canonical";
 import type { ApprovalToolName } from "./tools";
+import { APPROVAL_COPY, AUTONOMOUS_CARD_COPY_PROVISIONAL as AUTONOMOUS } from "@/lib/approval-copy";
 
 export interface ApprovalViewRow {
   label: string;
@@ -33,24 +34,9 @@ export interface ApprovalView {
   danger: boolean;
 }
 
-/** Fixed strings other surfaces (card states, agent messages) reuse; asserted outcome-free by the copy test. */
-export const APPROVAL_COPY = {
-  approve: "Approve",
-  deny: "Deny",
-  releasedBadge: "Released to your agent",
-  releasedTitle: "Released, your agent is continuing",
-  approvedLate: "Approved. Ask your agent again.",
-  expiredUnanswered: "This request expired. Nothing was run.",
-  approvedNeverAsked: "You approved this, but your agent never asked again",
-  resolvedNothing: "Nothing was run. Saved for your agent. Asking again with the same arguments is allowed.",
-  newerRequestBanner: "A newer request from your agent exists",
-  nonOwnerWaiting: "Waiting for the workspace Owner",
-  conversationClosed: "This conversation is closed",
-  detailsRemoved: "Details removed per retention policy",
-  pendingSubline: (minutes: number) => `Your agent stopped waiting after ${minutes} minutes`,
-  requestCount: (n: number) => `The agent asked again, request ${n}`,
-  alreadyDecided: (name: string, role: string) => `Already decided by ${name} (${role})`,
-} as const;
+/** Fixed strings other surfaces (card states, agent messages) reuse; asserted outcome-free by the copy test. The home is the
+ * client-safe copy deck (lib/approval-copy.ts); re-exported here so existing server imports keep working. */
+export { APPROVAL_COPY };
 
 interface Phrase {
   verb: string;
@@ -77,7 +63,8 @@ const PHRASES: Record<ApprovalToolName, Phrase> = {
   mcp__soleur_platform__workspace_set_autonomous: {
     verb: "switch this setting",
     noun: "setting",
-    extra: "Once switched on, agents here stop asking you before they act on supported actions.",
+    // PROVISIONAL wording (needs CPO and CLO sign-off): lives in lib/approval-copy.ts AUTONOMOUS_CARD_COPY_PROVISIONAL.
+    extra: AUTONOMOUS.consequenceExtraOn,
   },
 };
 
@@ -170,8 +157,8 @@ function fieldRows(action: CanonicalAction): ApprovalViewRow[] {
       ];
     case "mcp__soleur_platform__workspace_set_autonomous":
       return [
-        row("SETTING", f.value === true ? "Agent approval: Ask first → Autonomous" : "Agent approval: Autonomous → Ask first"),
-        row("APPLIES TO", "All agents, all members, all connected accounts"),
+        row("SETTING", f.value === true ? AUTONOMOUS.settingOn : AUTONOMOUS.settingOff),
+        row("APPLIES TO", AUTONOMOUS.appliesTo),
       ];
   }
 }
@@ -182,7 +169,7 @@ export function renderApprovalView(action: CanonicalAction): ApprovalView {
   // The autonomy extra only applies to switching ON; switching OFF restores the ask-first behaviour.
   const extra =
     action.tool === "mcp__soleur_platform__workspace_set_autonomous" && action.fields.value !== true
-      ? "Once switched, agents here ask you before they act on supported actions."
+      ? AUTONOMOUS.consequenceExtraOff
       : phrase.extra;
   return {
     tool: action.tool,
@@ -195,4 +182,56 @@ export function renderApprovalView(action: CanonicalAction): ApprovalView {
     denyLabel: "Deny",
     danger: action.tool === "mcp__soleur_platform__workspace_set_autonomous",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Inbox row text (wireframe 06). Built from the same canonical object, so the row cannot name an action the card does
+// not show. Plain text only: the inbox row renders it as a React text node.
+// ---------------------------------------------------------------------------
+
+export type ApprovalInboxState = "pending" | "approved" | "rejected" | "consumed" | "expired" | "expired_after_approval";
+
+const sha7 = (v: CanonicalValue | undefined): string => str(v).slice(0, 7);
+
+/** "send email to a@b.c, subject “…”": the verb and the primary target in full, never ellipsised. */
+export function summarizeApprovalAction(action: CanonicalAction): string {
+  const f = action.fields;
+  switch (action.tool) {
+    case "mcp__soleur_platform__email_send":
+      return `send email to ${str(f.to)}, subject “${str(f.subject)}”`;
+    case "mcp__soleur_platform__email_reply":
+      return `send reply to ${str(f.recipient)}, subject “${str(f.subject)}”`;
+    case "mcp__soleur_platform__email_suppress":
+      return `block address ${str(f.recipient)}`;
+    case "mcp__soleur_platform__github_push_branch":
+      return `push commit ${sha7(f.headSha)} to branch ${str(f.branch)} in ${str(f.repo)}`;
+    case "mcp__soleur_platform__create_pull_request":
+      return `open pull request ${str(f.head)} into ${str(f.base)} in ${str(f.repo)}`;
+    case "mcp__soleur_platform__github_trigger_workflow":
+      return `start workflow ${str(f.workflow_id)} on ${str(f.ref)} in ${str(f.repo)}`;
+    case "mcp__soleur_platform__kb_share_create":
+      return `create a public link for ${str(f.documentPath)}`;
+    case "mcp__soleur_platform__workspace_set_autonomous":
+      return f.value === true ? "switch this workspace to autonomous" : "switch this workspace back to ask first";
+  }
+}
+
+/** The inbox row title. `null` canonical (details removed) falls back to the static, content-free stored title. */
+export function renderApprovalInboxTitle(action: CanonicalAction | null, state: ApprovalInboxState, fallback: string): string {
+  if (!action) return fallback;
+  const what = summarizeApprovalAction(action);
+  switch (state) {
+    case "pending":
+      return `Approval needed: ${what}`;
+    case "approved":
+      return `You approved: ${what}`;
+    case "rejected":
+      return `You denied: ${what}`;
+    case "consumed":
+      return `Released to your agent: ${what}`;
+    case "expired":
+      return `Approval expired: ${what}. Nothing was run.`;
+    case "expired_after_approval":
+      return `${APPROVAL_COPY.approvedNeverAsked}: ${what}. Nothing was run.`;
+  }
 }

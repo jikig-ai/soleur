@@ -1,0 +1,26 @@
+/**
+ * The push/email nudge for a freshly created approval request (#4672, task 3.2).
+ *
+ * `create_approval_request` writes the inbox_item row in the request's own transaction; this runs AFTER it returns, finds
+ * that row by its dedup key (the approval id) and hands it to `dispatchInboxPush`, which sends the fixed, content-free
+ * copy deck strings (never the row title, never the action). A failure returns false so the gate reports its own
+ * `approval-notify-failed` op; the inbox row already exists, so the request is never invisible.
+ *
+ * Never imports the decide path (gate side).
+ */
+
+import { createServiceClient } from "@/lib/supabase/service";
+import { dispatchInboxPush } from "../notifications";
+
+export async function notifyApprovalRequested(approvalId: string): Promise<boolean> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("inbox_item")
+    .select("id")
+    .eq("source", "approval_required")
+    .eq("dedup_key", approvalId)
+    .maybeSingle();
+  const id = (data as { id?: unknown } | null)?.id;
+  if (error || typeof id !== "string") return false;
+  return dispatchInboxPush(id);
+}

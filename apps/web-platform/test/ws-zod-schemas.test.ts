@@ -536,6 +536,14 @@ describe("approval frames (#4672)", () => {
     expect(parseWSMessage({ ...st, status: "maybe" }).ok).toBe(false);
   });
 
+  test("agentWaiting is an optional boolean on both server frames", () => {
+    expect(parseWSMessage({ ...request, agentWaiting: true }).ok).toBe(true);
+    expect(parseWSMessage({ ...request, agentWaiting: "yes" }).ok).toBe(false);
+    const st = { type: "approval_status", approvalId: ID, conversationId: "c", status: "pending" };
+    expect(parseWSMessage({ ...st, agentWaiting: false }).ok).toBe(true);
+    expect(parseWSMessage({ ...st, agentWaiting: 0 }).ok).toBe(false);
+  });
+
   test("the discriminator literal set admits the three approval frames", () => {
     const types = wsMessageTypeLiterals();
     for (const t of ["approval_request", "approval_status", "approval_decide"]) expect(types.has(t)).toBe(true);
