@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11181-cf-notification-route/knowledge-base/project/plans/2026-10-28-fix-cloudflare-notifications-route-plan.md
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11181-cf-notification-route/knowledge-base/project/plans/archive/20261029-104529-2026-10-28-fix-cloudflare-notifications-route-plan.md
 - Status: complete
 
 ### Errors
@@ -9,8 +9,9 @@
 - An incidental read of nonexistent `knowledge-base/project/project-nope.md` returned not-found; no repository files changed.
 - One test patch failed verification because its hunks were out of order; no edits landed from that call, and the patch was reapplied in file order.
 - Two `scripts/test-all.sh --print-selection` attempts exceeded their 30s and 120s bounds; they emitted only the local Bun-version warning and yielded no selection or test verdict.
-- During review, relative-path reads resolved against the main checkout and returned stale test content / missing untracked plan artifacts. These were read-only; all affected files were re-read by absolute worktree path before editing.
+- During review, relative-path reads resolved against the main checkout and returned stale test content / missing untracked plan artifacts. On ship resumption, an initial relative-path read of the plan/spec files also returned not-found. These were read-only; all affected files were re-read by absolute worktree path before editing.
 - A later patch context was already superseded; its verification failure was investigated by re-reading the worktree, and no change was lost.
+- Two follow-up patches for the learning/session records failed verification because the expected text did not match the current recovery wording; neither failed attempt changed files. Re-read the exact text and reapplied with the matching context.
 
 ### Decisions
 - Use the documented `/accounts/{account_id}/alerting/v3/policies` route without a pagination suffix.
@@ -92,12 +93,26 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 ## QA Phase
 
 - Plan scenarios are unit-level Given/When/Then cases with no executable `Browser:` or `API verify:` steps; per QA skill, browser/dev-server/API automation was skipped. The focused suite covers them and passed 183/183 on the current test code.
-- The local affected gate remains budget-deferred; the latest capacity probe found a sibling full-gate run, so no competing run was started. CI's required `test` check is authoritative and was queued at head `a77e904fe1` before compound artifacts.
+- Work Phase 2 and ship Phase 4 affected-gate attempts both returned rc 6 (`budget-deferred`); no affected-gate pass is claimed. CI's required `test` check is authoritative.
 - Epic #11181 was rechecked as `OPEN`. Infra/workflow diff is empty; permissions, tokens, Doppler, infrastructure, cutover, and web-2 were not changed.
+
+## Ship Phase 4
+
+- `battery-owed.sh` returned OWED because `origin/main` is not an ancestor of HEAD. The local `affected-tests.sh` attempt returned rc 6 with `ran=- of=-`; no local affected suites completed.
+- CI run 40841150757 on draft head `1b2f5a3302` had `test` aggregate FAILURE only because `test-scripts`, `test-webplat`, and `test-scripts-heavy` were skipped by draft-light; `test-bun`, `web-platform-build`, and e2e succeeded. Its log says `draft: full battery owed at ready`. This is not a code-test failure; wait for the full required `test` run after PR-ready.
+- The `scripts/lint-betterstack-emitter-read.sh` suite emitted pre-existing gawk `\.` escape warnings; verified that script is unchanged from `origin/main`. `agent-originality` also emitted its existing WARN threshold for functional-discovery/agent-finder; neither is a test failure in this PR.
+- PR body now intentionally closes duplicate route issue #11480 and references epic #11181 without a close keyword; both issue states were verified OPEN before merge.
+
+## Ship Phase 0: Resumption
+
+- The required `cleanup-merged` session-start run skipped its temp sweep because `/home/jean/.local/state/soleur/tmp-guard.lock` was contended. `lslocks` and `fuser` showed no holder by the time it was investigated; no temp cleanup was attempted outside the lock.
+- Hash verification initially looked for the learning source at the old `/data/.../soleur/knowledge-base/` checkout path and returned not-found; a broad recursive search timed out. A registered-worktree inventory scan found the unchanged source copy in `chore-learning-cf-token-route`; its digest matches the PR copy.
+- The PR has no `Review-Evidence:` comment despite the recorded full panel and verifier; Phase 5.5/arming requires review evidence for the final pushed head, so rerun review after final artifact commits and archival.
+- Ship Phase 6.45 merge-mode overlap preflight exited 13 for the known shared learning with PR #11479; no changes were made to that PR. The plan and spec are archived under `knowledge-base/project/plans/archive/20261029-104529-2026-10-28-fix-cloudflare-notifications-route-plan.md` and `knowledge-base/project/specs/archive/20261029-104529-feat-one-shot-11181-cf-notification-route/`; the live-path reference sweep found no remaining references outside archives.
 
 ## Compound Phase
 
-- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 17 Session Errors have Prevention lines.
+- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 22 Session Errors have Prevention lines.
 - Added one domain-scoped sharp-edge to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`; learning `synced_to: [work]` records the route. The related 2026-10-28 route learning and its main-checkout source copy remain byte-identical; the new learning links to it.
 - No project-level constitution/component/README proposals were warranted. The worktree plan explicitly defers plan/spec archival until after ship Phase 6; compound did not archive them.
 - Rule-budget linter returned `[WARN] B_ALWAYS=44390` and exit 0; no AGENTS rules were added. Token-efficiency report skipped because the diff was below its minimum size.

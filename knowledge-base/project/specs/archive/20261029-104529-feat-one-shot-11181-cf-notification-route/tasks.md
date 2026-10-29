@@ -26,6 +26,8 @@
   - The infra/workflow diff is empty; this session performed no Cloudflare permission/token/Doppler mutation, workflow dispatch, cutover action, or web-2 state change.
 - [x] 3.4 Run the work Phase 2 affected-suite gate once and record its terminal status.
   - `AFFECTED_GATE` returned rc 6 (`budget-deferred`) after sibling-run lock contention; no local affected suites ran. The required CI `test` check remains authoritative.
+- [x] 3.5 Re-run the ship Phase 4 affected gate on the committed final test tree.
+  - `battery-owed.sh` returned OWED because main was not an ancestor; `affected-tests.sh` then returned rc 6 (`budget-deferred`, `ran=- of=-`). CI run 40841150757's draft-light aggregate failure was due to skipped shards, not a failing test; the full required `test` run after ready is authoritative.
 
 ## Review Fixes
 

@@ -85,8 +85,9 @@ extra URL earlier in the argument vector.
 
 **Relative-path reads from a worktree returned stale content from another checkout.**
 
-- **Recovery:** Re-read all affected files by absolute worktree path before
-  editing.
+- **Recovery:** An initial ship-resumption read of the plan/spec files also
+  returned not-found; re-read all affected files by absolute worktree path
+  before editing.
 - **Prevention:** Use worktree-absolute paths for MCP/tool reads and writes.
 
 **Session-start cleanup warned that the separate root checkout could not fast-forward `main`.**
@@ -95,6 +96,28 @@ extra URL earlier in the argument vector.
   feature worktree was unaffected.
 - **Prevention:** Distinguish a cleanup warning about another checkout from the
   active feature worktree, and inspect the named checkout before changing it.
+
+**The session-start temp sweep skipped because its lock was contended.**
+
+- **Recovery:** Inspected the lock with `lslocks` and `fuser`; no holder remained
+  by the time of investigation. The sweep safely did not run without its lock.
+- **Prevention:** Treat lock contention as a skipped cleanup, inspect for an
+  active holder, and never bypass or remove the lock to force the sweep.
+
+**The assumed source-copy checkout path was absent, and a broad search timed out.**
+
+- **Recovery:** The recursive search exceeded its 30-second bound. A registered-
+  worktree inventory scan then located the unchanged source learning in
+  `chore-learning-cf-token-route`; its digest matches the PR copy.
+- **Prevention:** Resolve candidate roots from the current worktree inventory and
+  test the exact relative file path instead of recursively searching broad roots.
+
+**A knowledge-base patch failed verification on stale expected text.**
+
+- **Recovery:** Re-read the exact current recovery wording and reapplied the patch
+  with matching context; the failed patch made no edits.
+- **Prevention:** Anchor a patch to freshly read text and verify every expected
+  line before retrying.
 
 **Default-severity ShellCheck returned nonzero for informational `SC2016` notices.**
 
@@ -110,13 +133,15 @@ extra URL earlier in the argument vector.
 - **Prevention:** Preserve the original argument vector before a parser consumes
   positional parameters.
 
-**Scratch-mutation setup omitted adjacent documentation, selected a mutated tree as a baseline, and used stale anchors.**
+**Scratch-mutation setup and a shell status banner initially failed.**
 
-- **Recovery:** Rebuilt complete isolated copies from a pristine source tree and
-  checked each mutation anchor before applying it.
+- **Recovery:** Rebuilt complete isolated copies from a pristine source tree,
+  checked each mutation anchor before applying it, and corrected the banner
+  command after `printf` rejected a leading `--` format string. No repository
+  files were touched by the failed commands.
 - **Prevention:** Include every file the suite reads, construct a clean baseline
   separately from mutants, and assert each mutation anchor exists exactly where
-  expected.
+  expected; pass option-like text as data with a quoted `%s` format.
 
 **Scratch mutation checks sometimes expected outdated failure labels.**
 
@@ -134,12 +159,22 @@ extra URL earlier in the argument vector.
   for that exact option spelling; keep the final test count tied to the latest
   run.
 
-**The local affected gate returned budget-deferred under sibling-run contention.**
+**Work and ship affected gates returned budget-deferred under sibling-run contention.**
 
-- **Recovery:** Checked capacity, stopped before starting another full run, and
-  left CI's required `test` check as the authoritative result.
-- **Prevention:** Treat capacity contention as no local verdict; rely on the
-  tracked CI check rather than claiming a pass.
+- **Recovery:** Checked capacity and stopped before starting a competing full run;
+  both rc 6 results were recorded as deferred, with CI's required `test` as the
+  authoritative result.
+- **Prevention:** Treat rc 6 as no local verdict; use the prescribed capacity/
+  refusal flow and rely on the tracked CI check rather than claiming a pass.
+
+**The draft PR's required `test` aggregate failed after draft-light skipped its shards.**
+
+- **Recovery:** Inspected run 40841150757: `test-bun`, build, and e2e succeeded;
+  test-scripts, test-webplat, and test-scripts-heavy were skipped, and the
+  aggregator explicitly said `draft: full battery owed at ready`.
+- **Prevention:** Do not treat a draft-light aggregate failure as a suite failure
+  or as a full test verdict; after all gates, ready the PR and wait for the full
+  required `test` run.
 
 **Push output reported 80, then 87 open Dependabot alerts on the repository's default branch.**
 

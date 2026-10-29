@@ -5,7 +5,7 @@ date: 2026-10-28
 slug: fix-cloudflare-notifications-route
 branch: feat-one-shot-11181-cf-notification-route
 issue: 11181
-closes: none
+closes: 11480
 priority: p2-medium
 domain: engineering
 brand_survival_threshold: none
@@ -39,9 +39,9 @@ Correct the `cf-token-scope` default-token Notifications probe to use Cloudflare
 ## Non-Goals
 
 - No widening or other mutation of Cloudflare permissions or tokens; no Doppler write, infrastructure change, or workflow dispatch.
-- No cutover action or web-2 LB change; web-2 remains at weight 0 and structurally excluded until the cutover soak marker.
+- No cutover action or web-2 LB change is authorized. No soak-gated close criterion is introduced by this fix; web-2 remains at weight 0 and structurally excluded until the existing cutover soak marker.
 - No classifier relaxation, new profile, or unrelated route/permission coverage expansion.
-- No issue closure: reference epic #11181 but leave it open while the operator hold and unanswered AC4 remain unchanged.
+- Do not close epic #11181: reference it as `Ref #11181` and leave it open while the operator hold and unanswered AC4 remain unchanged. Close only the duplicate route issue #11480 in this corrective PR.
 
 ## Artifact Lifecycle
 
@@ -59,11 +59,12 @@ Correct the `cf-token-scope` default-token Notifications probe to use Cloudflare
 
 ### Premise Validation
 
-- `gh issue view 11181 --json state,title,closedByPullRequestsReferences` confirmed epic #11181 is OPEN with no closing PR references. The issue body identifies this as the non-cutover track and says web-2 remains structurally absent / weight 0 until the cutover soak marker.
+- `gh issue view 11181 --json state,title,closedByPullRequestsReferences` confirmed epic #11181 is OPEN with no closing PR references. The issue body identifies this as the non-cutover track and says web-2 remains structurally absent / weight 0 until the existing cutover marker; this plan does not create a soak-gated close criterion.
 - The user-provided latest epic status remains the planning premise: the `CF_API_TOKEN` widen is still on operator hold, AC4 has no cutover-session answer, and the read-only default-token baseline returned 404/error 10404 only for Notifications. The plan does not attempt a widen or claim AC4 is satisfied.
 - The active standing delegation does not authorize widening this token; it is irrelevant to this read-only code/test change.
 - Commits `f91f91af54` (AC2 envelope) and `a90442394a` (default-token profile tooling) exist in this worktree. The profile's successful deploy and the read-only 200 from the documented Notifications endpoint are supplied pipeline context, not repeated live operations in this planning phase.
-- Collision pre-check found the current branch's own draft PR and three foreign `test-all.sh` processes in other worktrees. The PR head matches this feature branch; no additional open PR was reported. This session did not dispatch or stop any process.
+- Planning collision pre-check found this branch's draft PR and three foreign `test-all.sh` processes; it reported no other open PR at that time. At ship-time re-probe, open PR #11479 was found to contain only the same byte-identical learning file; overlap preflight returned the non-blocking shared-file notice, and no changes to that PR were made.
+- Ship-time duplicate-issue search found #11480 OPEN with the same Notifications route defect. PR #11479 is a learning-only PR referenced from #11480; this code-fix PR closes #11480 while leaving epic #11181 open.
 - `websearch` returned an HTTP 404 tool error; the official Cloudflare API reference was fetched directly and verified at [List Notification policies](https://developers.cloudflare.com/api/resources/alerting/subresources/policies/methods/list/).
 - An initial lookup of `knowledge-base/INDEX.md` returned not-found; a follow-up glob confirmed this worktree has no `knowledge-base/**/INDEX.md`, so there is no index file to update.
 
@@ -122,7 +123,7 @@ The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and s
 
 1. Update the Notifications row in `plugins/soleur/skills/cf-token-scope/SKILL.md` to the documented endpoint.
 2. Add the specified learning file byte-identically at its repo path, verify its SHA-256 against the supplied digest, and do not remove or edit the source copy.
-3. Do not touch `apps/web-platform/infra/`, any workflow, Cloudflare permissions or token values, Doppler state, LB configuration, or cutover state. Leave web-2 at weight 0 and structurally excluded until the cutover soak marker.
+3. Do not touch `apps/web-platform/infra/`, any workflow, Cloudflare permissions or token values, Doppler state, LB configuration, or cutover state. Leave web-2 at weight 0 and structurally excluded until the existing cutover marker; this fix adds no soak-gated close criterion.
 
 ### Files to Edit
 
@@ -213,7 +214,7 @@ None. `gh issue list --label code-review --state open` returned no issue whose b
 | 2 | "Use Cloudflare's official endpoint GET /accounts/{account_id}/alerting/v3/policies; preserve fail-closed classification." | FR1–FR2; Guard Contract; URL, 200, and 404 scenarios | mapped |
 | 3 | "Do not widen or otherwise mutate Cloudflare permissions, tokens, Doppler, or infrastructure; do not dispatch workflows." | Non-Goals; Phase 2 scope boundary; AC6 | mapped |
 | 4 | "The current main checkout contains an untracked learning at `/data/git-repositories/jikig-ai/soleur/knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` (already read by the pipeline runner; SHA-256 871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250). It is not present in this worktree. Plan to include that file in the corrective PR byte-identically, without removing the source copy." | FR4; Phase 2.2; learning-file create entry; AC5 | mapped |
-| 5 | "preserve web-2 weight 0 / structural exclusion until the cutover soak marker; no infrastructure actions in this fix." | Non-Goals; Phase 2.3; AC6 | mapped |
+| 5 | "No soak-gated close criterion is introduced; preserve web-2 weight 0 / structural exclusion until the existing cutover marker; no infrastructure actions in this fix." | Non-Goals; Phase 2.3; AC6 | mapped |
 
 ### Plan-Item Provenance
 
@@ -224,7 +225,7 @@ None. `gh issue list --label code-review --state open` returned no issue whose b
 | endpoint row in `cf-token-scope/SKILL.md` | "Use Cloudflare's official endpoint GET /accounts/{account_id}/alerting/v3/policies" | asked |
 | Byte-identical learning copy | "Plan to include that file in the corrective PR byte-identically, without removing the source copy." | asked |
 | Plan, spec, and task artifacts | "Create only planning artifacts under `knowledge-base/project/plans/` and `knowledge-base/project/specs/` for this exact branch." | asked |
-| web-2 / no-mutation boundary | "preserve web-2 weight 0 / structural exclusion until the cutover soak marker; no infrastructure actions in this fix." | asked |
+| web-2 / no-mutation boundary | "No soak-gated closure is introduced; preserve web-2 weight 0 / structural exclusion until the existing cutover marker; no infrastructure actions in this fix." | asked |
 
 ### Split Assessment
 
@@ -243,7 +244,7 @@ None. `gh issue list --label code-review --state open` returned no issue whose b
 - [x] Existing Tunnel, Access, DNS, account LB pools, zone Load Balancers, and rulesets profile URL/classification regression cases remain green with their exact existing request URLs.
 - [x] The learning file is included byte-identically with the supplied SHA-256, and its source copy is not removed or modified.
 - [x] `bash plugins/soleur/test/cf-token-scope.test.sh` passes with zero failures.
-- [x] No Cloudflare permissions/token, Doppler value, infrastructure, workflow, cutover, or web-2 weight/structural-exclusion state is changed; verify the infra/workflow diff is empty with `git diff --quiet origin/main...HEAD -- apps/web-platform/infra .github/workflows`; epic #11181 remains open (PR references it without a close keyword).
+- [x] No Cloudflare permissions/token, Doppler value, infrastructure, workflow, cutover, or web-2 weight/structural-exclusion state is changed; verify the infra/workflow diff is empty with `git diff --quiet origin/main...HEAD -- apps/web-platform/infra .github/workflows`; close duplicate issue #11480 while leaving epic #11181 open (`Closes #11480` and `Ref #11181`).
 
 ## Domain Review
 
