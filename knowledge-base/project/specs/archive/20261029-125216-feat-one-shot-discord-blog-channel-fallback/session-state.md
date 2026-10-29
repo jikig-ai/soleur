@@ -19,3 +19,11 @@ None. (Plan/deepen-plan prescribed subagent fan-outs ran sequentially inline —
 ### Components Invoked
 - soleur:plan, soleur:deepen-plan (executed inline sequentially)
 - cloud-detect.sh, lint-guard-contract.py
+
+## Post-plan phases
+- Work: complete (commit 6ab18e9ff7 + review fixes 852f1a7137)
+- Review: 5-seat panel (simplicity, code-quality, security, observability, test-design) — 1 P1 (unpinned gate anchors), 1 P2 (mirror below exit-code throw), P3s — all resolved inline; verification pass green
+- QA: plan scenarios all unit-layer — 74 bun + 40 shell + 65 vitest + tsc green
+- Compound: learnings/workflow-patterns/2026-10-29-inngest-spawn-discards-stderr-marker-grep-mirror.md
+- Ship: PR #11504 ready via GraphQL (CMO hook blind to worktree CWD on Devin — trailer on branch, documented skip), auto-merge SQUASH armed 2026-10-29T11:55:43Z
+- cto_spawns=1; agent_rounds tally at ship
