@@ -807,8 +807,8 @@ if contains(tag, "structured") {
   # drops and the userId + credential keys stage 2 rewrites, in their textual
   # forms (`"key": "v"`, `key: 'v'`, `key: v`). Key-anchored (our own schema
   # keys), value-shaped to JSON quotes, inspect quotes, or bare tokens.
-  msg = replace(msg, r'(?i)([\x22\x27]?(body|content|message|userMessage|prompt|chat_message|userInput|user_input)[\x22\x27]?\s*:\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|\[[^\]]*\]|\{[^\}]*\}|[^\s,}\]]+)', "$${1}[redacted]")
-  msg = replace(msg, r'(?i)([\x22\x27]?(user_?id|userId|api_?key|apiKey|token|password|secret|passwd|credentials?)[\x22\x27]?\s*[:=]\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,}\]]+)', "$${1}[redacted]")
+  msg = replace(msg, r'(?i)([\x22\x27]?\b(body|content|message|userMessage|prompt|chat_message|userInput|user_input)[\x22\x27]?\s*:\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|\[[^\]]*\]|\{[^\}]*\}|[^\s,}\]]+)', "$${1}[redacted]")
+  msg = replace(msg, r'(?i)([\x22\x27]?\b(user_?id|api_?key|apiKey|token|password|secret|passwd|credentials?)[\x22\x27]?\s*[:=]\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,}\]]+)', "$${1}[redacted]")
   # OAuth query-param redaction (PR #4293 review F2): the /api/auth/callback/...
   # path carve-out preserves the discriminator but query params can carry
   # short-lived OAuth tokens (code, state, access_token, id_token, refresh_token).
