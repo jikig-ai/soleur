@@ -79,8 +79,8 @@ while [[ $# -gt 0 ]]; do
       [[ $# -gt 0 ]] && record_url "$1"
       ;;
     --url=*) record_url "${1#*=}" ;;
-    --proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5|--socks5-hostname|-x) shift ;;
-    --proxy=*|--proxy1.0=*|--preproxy=*|--socks4=*|--socks4a=*|--socks5=*|--socks5-hostname=*|-x*) ;;
+    --proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5|--socks5-hostname|-x|-sSx) shift ;;
+    --proxy=*|--proxy1.0=*|--preproxy=*|--socks4=*|--socks4a=*|--socks5=*|--socks5-hostname=*|-x*|-sSx*) ;;
     --max-time|-w|-H|--noproxy) shift ;;
     -* ) [[ "$1" == *://* ]] && record_url "$1" ;;
     *) record_url "$1" ;;
@@ -395,17 +395,42 @@ assert_proxy_only_falls_through "D2 --socks5-hostname= value is not a transfer U
 assert_proxy_only_falls_through "D2 separated --socks5-hostname value is not a transfer URL" --socks5-hostname "$NOTIF_URL"
 assert_proxy_only_falls_through "D2 -x value is not a transfer URL" -x "$NOTIF_URL"
 assert_proxy_only_falls_through "D2 attached -x value is not a transfer URL" "-x$NOTIF_URL"
+assert_proxy_only_falls_through "D2 clustered -sSx value is not a transfer URL" -sSx "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 attached clustered -sSx value is not a transfer URL" "-sSx$NOTIF_URL"
 D2_MIXED_PROXY_LOG="$WORK/d2-proxy-with-transfer-target"
-PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_MIXED_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_TUNNEL='418:{"success":false}' \
-  "$MOCKBIN/curl" --proxy "$NOTIF_URL" "$TUNNEL_URL" >"$OUTFILE"
-if [[ "$(wc -l < "$D2_MIXED_PROXY_LOG" | tr -d '[:space:]')" == "1" ]] \
-   && grep -Fxq -- "$TUNNEL_URL" "$D2_MIXED_PROXY_LOG" \
-   && ! grep -Fxq -- "$NOTIF_URL" "$D2_MIXED_PROXY_LOG" \
-   && grep -Fxq -- '418' "$OUTFILE"; then
-  ok "D2 proxy option beside a real target logs only the transfer URL"
-else
-  no "D2 proxy option beside a real target confused the transfer URL log"
-fi
+assert_proxy_with_target() {
+  local label="$1"
+  shift
+  : >"$D2_MIXED_PROXY_LOG"
+  PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_MIXED_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_TUNNEL='418:{"success":false}' \
+    "$MOCKBIN/curl" "$@" "$TUNNEL_URL" >"$OUTFILE"
+  if [[ "$(wc -l < "$D2_MIXED_PROXY_LOG" | tr -d '[:space:]')" == "1" ]] \
+     && grep -Fxq -- "$TUNNEL_URL" "$D2_MIXED_PROXY_LOG" \
+     && ! grep -Fxq -- "$NOTIF_URL" "$D2_MIXED_PROXY_LOG" \
+     && grep -Fxq -- '418' "$OUTFILE"; then
+    ok "$label"
+  else
+    no "$label"
+  fi
+}
+assert_proxy_with_target "D2 --proxy separated beside real target logs only transfer URL" --proxy "$NOTIF_URL"
+assert_proxy_with_target "D2 --proxy= beside real target logs only transfer URL" "--proxy=$NOTIF_URL"
+assert_proxy_with_target "D2 --proxy1.0 separated beside real target logs only transfer URL" --proxy1.0 "$NOTIF_URL"
+assert_proxy_with_target "D2 --proxy1.0= beside real target logs only transfer URL" "--proxy1.0=$NOTIF_URL"
+assert_proxy_with_target "D2 --preproxy separated beside real target logs only transfer URL" --preproxy "$NOTIF_URL"
+assert_proxy_with_target "D2 --preproxy= beside real target logs only transfer URL" "--preproxy=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4 separated beside real target logs only transfer URL" --socks4 "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4= beside real target logs only transfer URL" "--socks4=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4a separated beside real target logs only transfer URL" --socks4a "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4a= beside real target logs only transfer URL" "--socks4a=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5 separated beside real target logs only transfer URL" --socks5 "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5= beside real target logs only transfer URL" "--socks5=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5-hostname separated beside real target logs only transfer URL" --socks5-hostname "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5-hostname= beside real target logs only transfer URL" "--socks5-hostname=$NOTIF_URL"
+assert_proxy_with_target "D2 -x separated beside real target logs only transfer URL" -x "$NOTIF_URL"
+assert_proxy_with_target "D2 -x attached beside real target logs only transfer URL" "-x$NOTIF_URL"
+assert_proxy_with_target "D2 -sSx separated beside real target logs only transfer URL" -sSx "$NOTIF_URL"
+assert_proxy_with_target "D2 -sSx attached beside real target logs only transfer URL" "-sSx$NOTIF_URL"
 MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
 # RUN-PATH URL ASSEMBLY pin (design-pass P2): inspect the actual request URLs,
@@ -616,11 +641,13 @@ MOCK_CURL_ARGV="$DARGV" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D-conf default-token run -> exit 0"
 dargv_lines="$(wc -l < "$DARGV" | tr -d '[:space:]')"
 assert_eq "D-conf one argv record per probe ($DT_N rows)" "$DT_N" "$dargv_lines"
+DNOPROXY_COUNTS="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "--noproxy") { n++; if ($(i + 1) == "\\*") star++ } } END { printf "%d %d", n + 0, star + 0 }' "$DARGV")"
+read -r d_noproxy_count d_noproxy_star_count <<<"$DNOPROXY_COUNTS"
 if [[ "$(grep -c -- '--disable' "$DARGV")" -eq "$DT_N" ]] \
-   && [[ "$(grep -c -- '--noproxy' "$DARGV")" -eq "$DT_N" ]] \
-   && [[ "$(grep -Fc -- '--noproxy \*' "$DARGV")" -eq "$DT_N" ]] \
+   && [[ "$d_noproxy_count" -eq "$DT_N" ]] \
+   && [[ "$d_noproxy_star_count" -eq "$DT_N" ]] \
    && grep -q -- '-H @/dev/fd/' "$DARGV" \
-   && ! grep -Eq -- '(^|[[:space:]])(--proxy|--proxy1\.0|--preproxy|--socks4a?|--socks5(-hostname)?)(=|[[:space:]]|$)|(^|[[:space:]])-x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
+   && ! grep -Eq -- '(^|[[:space:]])(--proxy|--proxy1\.0|--preproxy|--socks4a?|--socks5(-hostname)?)(=|[[:space:]]|$)|(^|[[:space:]])-[^-][^[:space:]]*x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
    && ! grep -q -- 'xyz789' "$DARGV"; then
   ok "D-conf every probe confined (no proxy override), header via @/dev/fd, token never on argv"
 else

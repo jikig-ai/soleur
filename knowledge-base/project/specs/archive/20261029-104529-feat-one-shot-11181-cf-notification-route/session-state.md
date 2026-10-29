@@ -5,6 +5,7 @@
 - Status: complete
 
 ### Errors
+- Two targeted-round record patches failed verification against stale long/wrapped contexts; no edits landed. Re-read the current text and use short, file-specific anchors for follow-up.
 - Web search returned HTTP 404; the official Cloudflare API reference was fetched directly and verified.
 - An incidental read of nonexistent `knowledge-base/project/project-nope.md` returned not-found; no repository files changed.
 - One test patch failed verification because its hunks were out of order; no edits landed from that call, and the patch was reapplied in file order.
@@ -14,7 +15,7 @@
 - Two follow-up patches for the learning/session records failed verification because the expected text did not match the current recovery wording; neither failed attempt changed files. Re-read the exact text and reapplied with the matching context.
 - Status checks against the old `chore-learning-cf-token-route` worktree failed because it no longer existed. `gh pr view 11479` confirmed the PR had merged; the source blob was verified through `origin/main` instead.
 - Review fixes were committed before the final-panel dedup ledger was persisted. Reconciled all findings and recorded the ledger below before starting the targeted round; no more fixes will be dispatched without a durable ledger.
-- A combined plan/tasks/session-state patch failed verification because it expected a session-error count line in the learning file; no edits landed. Re-read each target and split updates by file.
+- Several combined plan/tasks/session-state patches failed verification because an expected count line belonged to another file or a long archive-path context was stale; no edits landed. Re-read each target and split updates by file.
 
 ### Decisions
 - Use the documented `/accounts/{account_id}/alerting/v3/policies` route without a pagination suffix.
@@ -132,6 +133,20 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 | No Notification 2xx fixture proved that a valid array on HTTP 201 remains denied | `notifications-non200-2xx-status` | `structural-enumeration` | `7c91fe2d1c` |
 | Two identical curl-mock guidance bullets were present | `duplicate-curl-mock-guidance` | `git-history-analyzer`, `pattern-recognition-specialist`, `architecture-strategist`, `code-quality-analyst` | `7c91fe2d1c` |
 | The learning's token-inventory anecdote is on current public `main` via merged #11479 | `token-inventory-learning-disclosure` | `security-sentinel` | Separate redaction PR after #11456 merges; user authorized, no history rewrite |
+
+## Targeted Fix-Review Round 1
+
+- At head `32b6d51c803bc8a5e3034862ea90e86aebd6871b`, 9 reviewer seats returned plus ShellCheck. The new findings were: exact `--noproxy` cardinality/value was not pinned (P2); clustered `-sSx` was not denied (P3); mixed-target fixtures covered only `--proxy` (P3).
+- Fix commit under review: add exact option-token/value counts, reject any short-option cluster containing `x`, and test every proxy selector and operand form both alone and beside a real transfer target.
+- The focused suite now passes 219/219; `bash -n`, warning-severity ShellCheck, and `git diff --check` pass. The capacity probe still reports sibling-run contention; no affected/full local gate is claimed.
+
+### Targeted Round 1 Dedup Ledger
+
+| raw finding | canonical defect key | reporting seat(s) | round-2 fix |
+|---|---|---|---|
+| `--noproxy` check counted matching lines and accepted duplicate or narrowed operands | `noproxy-option-cardinality-and-value` | `architecture-strategist`, `security-sentinel` | Count exact option tokens and exact `*` operands |
+| D-conf did not reject clustered `-sSx` proxy syntax | `clustered-x-proxy-option` | `security-sentinel` | Reject short-option clusters containing `x` |
+| Mixed-target fixtures covered only `--proxy` while docs claimed all selectors | `mixed-proxy-selector-target-coverage` | `pattern-recognition-specialist`, `architecture-strategist`, `security-sentinel`, `code-quality-analyst`, `test-design-reviewer`, `structural-enumeration` | Exercise every selector/form beside a real transfer target |
 
 ## Compound Phase
 

@@ -278,5 +278,7 @@ bash plugins/soleur/test/cf-token-scope.test.sh
 
 - Expanded curl mock coverage to all proxy selectors accepted by the installed curl (`--proxy`, `--proxy1.0`, `--preproxy`, SOCKS4/4a/5/5-hostname, and `-x`), both alone and with a real transfer target; D-conf pins `--noproxy '*'` and rejects each selector.
 - Added direct mock rejection for a Notifications query suffix and a fail-closed Notifications 201 fixture with an otherwise valid array response.
-- Removed duplicate curl-mock sharp-edge guidance. The final focused suite passed 200/200; Bash syntax, warning-severity ShellCheck, and `git diff --check` passed.
+- Removed duplicate curl-mock sharp-edge guidance. The final focused suite passed 219/219; Bash syntax, warning-severity ShellCheck, and `git diff --check` passed.
 - A separate P3 finding in the learning's session-anomaly prose was verified pre-existing on `origin/main` after PR #11479 merged. Per the user's authorization, redact that detail in a follow-up PR after this branch is synchronized/merged, avoiding an add/add conflict here; do not rewrite the already-published commit history.
+- The follow-up targeted round pins exactly one `--noproxy '*'` per probe and rejects clustered `-sSx`; mixed-target fixtures now exercise each proxy selector in separated/equal/attached forms.
+- Each mixed-target fixture asserts exactly one logged transfer target; the mock and D-conf also cover clustered short-form `-sSx` and duplicate/narrowed `--noproxy` mutations.

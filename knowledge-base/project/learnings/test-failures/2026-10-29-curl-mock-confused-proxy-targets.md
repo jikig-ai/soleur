@@ -134,10 +134,11 @@ extra URL earlier in the argument vector.
 - **Prevention:** Verify the complete patch context against the latest file before
   retrying; do not carry forward a stale line from the previous attempt.
 
-**A combined archive-record patch expected a count line in the wrong file.**
+**Several archive-record patches failed on mismatched context.**
 
-- **Recovery:** Re-read the individual targets and split the session-state and
-  learning updates into file-specific patches; the failed patch made no edits.
+- **Recovery:** One patch expected a count line in the wrong file; later ones
+  used stale long or wrapped contexts. Re-read the targets and split updates into
+  file-specific patches; failed calls made no edits.
 - **Prevention:** Keep each patch hunk scoped to the file that owns the expected
   text and verify the anchor in that file before applying.
 
@@ -256,8 +257,8 @@ The mock now distinguishes actual transfer-target forms from proxy settings:
 case "$1" in
   --url) shift; record_url "$1" ;;
   --url=*) record_url "${1#*=}" ;;
-  --proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5|--socks5-hostname|-x) shift ;; # consume proxy settings, not targets
-  --proxy=*|--proxy1.0=*|--preproxy=*|--socks4=*|--socks4a=*|--socks5=*|--socks5-hostname=*|-x*) ;; # attached/equal forms
+  --proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5|--socks5-hostname|-x|-sSx) shift ;; # consume proxy settings, not targets
+  --proxy=*|--proxy1.0=*|--preproxy=*|--socks4=*|--socks4a=*|--socks5=*|--socks5-hostname=*|-x*|-sSx*) ;; # attached/equal forms
   -H|-w|--max-time|--noproxy) shift ;;  # consume unrelated option values
   -*) [[ "$1" == *://* ]] && record_url "$1" ;;
   *) record_url "$1" ;;
@@ -266,8 +267,9 @@ esac
 
 Capture the original argv before parsing. Pin the complete dry-run recipe, all
 six live target URLs, exactly one Notifications URL, path/query suffix fall-
-through, and `--noproxy '*'` plus proxy-selector absence in the SUT argv. Test
-each selector alone and beside a real target. Cover valid array responses,
+through, and exactly one `--noproxy '*'` token/value per probe plus proxy-selector
+absence in the SUT argv. Test each selector and operand form alone and beside a
+real target, including clustered `-sSx`. Cover valid array responses,
 fail-closed 404/201, degraded, object, and empty-object responses.
 
 ## Why This Works
