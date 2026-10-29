@@ -57,6 +57,16 @@ extra URL earlier in the argument vector.
 
 ## Session Errors
 
+**The advisory `affected-index-ratchet` check failed on a stale baseline row.**
+
+- **Recovery:** Reproduced the same `stale-line` on a clean `origin/main`
+  worktree; confirmed the job is advisory and the baseline-deletion work is
+  already tracked by #10861 (broader S4 decision: #10448). No baseline or web-2
+  state was changed.
+- **Prevention:** Re-run a ratchet failure on clean main before attributing it
+  to a PR; reuse the existing baseline-maintenance tracker instead of changing
+  an unrelated baseline in a feature PR.
+
 **Cloudflare API search returned HTTP 404.**
 
 - **Recovery:** Fetched the official Cloudflare API reference directly and

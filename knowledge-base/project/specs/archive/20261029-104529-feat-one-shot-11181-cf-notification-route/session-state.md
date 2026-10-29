@@ -119,6 +119,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 
 ## Final Review Resumption
 
+- CI run 40875526334's `affected-index-ratchet` red was reproduced on a clean `origin/main` worktree (`stale-line`, 1513 live vs 1514 baseline). The job is advisory/non-required; existing issue #10861 tracks baseline deletion and #10448 tracks the wider S4 decision. No baseline, infra, or web-2 state was changed.
 - Final-head panel at `20fe76bd0c5244e0399481eedadccf015bbda5d3`: eight seats returned. Findings: P2 proxy-selector coverage; P3 mixed proxy/target, query-suffix, HTTP-201, and duplicate-guidance gaps; P3 token-inventory detail was verified pre-existing on `origin/main` after #11479 merged.
 - Fixed the test/design findings: mock and D-conf cover all supported curl proxy selectors, `--noproxy '*'` is exact, mixed-target and query-suffix controls exist, and 201 is denied. Removed duplicate sharp-edge guidance.
 - Focused suite passed 200/200; `bash -n`, warning-severity ShellCheck, and `git diff --check` pass. No affected full-gate pass is claimed; capacity remains contended and CI's required `test` is authoritative.
@@ -152,19 +153,21 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 ## Targeted Fix-Review Round 2
 
 - At HEAD `f6e88ea782f73f656c7afde11aa0903c0407d4ff`, eight reviewer agents returned and ShellCheck passed. Findings: aggregate `--noproxy` counts could hide per-probe imbalance or `--noproxy=` overrides (P2); the short-option deny regex missed standalone/attached `-x` (P2); `tasks.md` described 200/200 without marking it as an earlier checkpoint (P3).
+- Commit `3710d4f9c1` fixed the D-conf escapes; the single fresh-eyes verifier reviewed `f6e88ea782..3710d4f9c1` and returned no findings. Focused suite remains 219/219; the `Reviewed-Fix-Round` trailer and final-head PR comment are pending.
 - Fixes are now applied locally: D-conf validates each argv record, requires one separated `--noproxy '*'`, rejects equals overrides, and catches standalone/attached/clustered `-x`. The task artifact labels 200/200 as an intermediate checkpoint and 219/219 as latest. Focused suite: 219/219; one fresh-eyes verifier remains.
 
 ### Round 2 Dedup-before-fixing ledger
 
-| raw finding | canonical defect key | reporting seat(s) | planned fix |
+| raw finding | canonical defect key | reporting seat(s) | fix commit |
 |---|---|---|---|
-| D-conf aggregates `--noproxy` and wildcard counts across probes and ignores the equals form | `dconf-proxy-policy-not-per-invocation` | `architecture-strategist`, `security-sentinel`, `test-design-reviewer`, `pattern-recognition-specialist`, `structural-enumeration` | Validate exactly one token/value per argv record and reject `--noproxy=` |
-| Short-option regex misses `-x`, `-x<proxy>`, and clusters with `x` | `dconf-short-x-proxy-deny` | `security-sentinel`, `pattern-recognition-specialist`, `structural-enumeration` | Add explicit `-x` and clustered-option alternatives |
-| Task artifact presents the 200/200 intermediate result as the final run | `final-test-count-currentness` | `test-design-reviewer` | Mark 200/200 as an intermediate checkpoint and retain 219/219 as latest |
+| D-conf aggregates `--noproxy` and wildcard counts across probes and ignores the equals form | `dconf-proxy-policy-not-per-invocation` | `architecture-strategist`, `security-sentinel`, `test-design-reviewer`, `pattern-recognition-specialist`, `structural-enumeration` | `3710d4f9c1` |
+| Short-option regex misses `-x`, `-x<proxy>`, and clusters with `x` | `dconf-short-x-proxy-deny` | `security-sentinel`, `pattern-recognition-specialist`, `structural-enumeration` | `3710d4f9c1` |
+| Task artifact presents the 200/200 intermediate result as the final run | `final-test-count-currentness` | `test-design-reviewer` | `3710d4f9c1` |
+- Fix `3710d4f9c1` validates `--noproxy` count/value separately on every curl argv record, rejects `--noproxy=`, and catches standalone, attached, and clustered `-x`. The fresh-eyes verifier at the same HEAD returned no findings; focused suite 219/219.
 
 ## Compound Phase
 
-- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 26 Session Errors have Prevention lines.
+- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 27 Session Errors have Prevention lines.
 - Added one domain-scoped sharp-edge to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`; learning `synced_to: [work]` records the route. The related 2026-10-28 route learning and its main-checkout source copy remain byte-identical; the new learning links to it.
 - No project-level constitution/component/README proposals were warranted. The worktree plan explicitly defers plan/spec archival until after ship Phase 6; compound did not archive them.
 - Rule-budget linter returned `[WARN] B_ALWAYS=44390` and exit 0; no AGENTS rules were added. Token-efficiency report skipped because the diff was below its minimum size.
