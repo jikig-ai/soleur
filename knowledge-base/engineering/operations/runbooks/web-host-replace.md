@@ -230,6 +230,11 @@ If it reports a dark boot: `runcmd` is once-per-instance, so the host **cannot b
 a reboot**. Do not put it into service — replace it again once the cause is fixed (except a web-2
 `discriminate` fatal, which a replace cannot clear; see below).
 
+Verification extends past the boot trail to the host's FIRST deploy via the standing
+follow-through tracker (probe `scripts/followthroughs/web-first-deploy-10585.sh`, #10585): a
+proven-fresh host that lands no Deploy-succeeded-class journald row within 2 days of its boot
+surfaces there as ACTION REQUIRED.
+
 ### web-2 boot failed — how to read it
 
 On a host born with the guest-side LUKS path (ADR-263) a fatal provisioner step, or `/mnt/data` not
