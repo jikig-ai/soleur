@@ -258,7 +258,7 @@ export async function tearDownTenantUser(
  * then throws one aggregated error, keeping the failure fail-loud without
  * abandoning the rest of the batch.
  *
- * Stays sequential deliberately: the per-user anonymise sequence is ~22
+ * Stays sequential deliberately: the per-user anonymise sequence is ~23
  * RPCs under withGoTrueRetry, so parallelising would multiply the GoTrue
  * rate-limit burst it exists to absorb.
  *

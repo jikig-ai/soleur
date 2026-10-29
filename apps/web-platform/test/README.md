@@ -61,7 +61,7 @@ Every suite that creates synthetic auth users MUST tear them down through `tearD
 
 1. Emit emails as `<prefix>-<16 lowercase hex>@soleur.test` (`randomBytes(8).toString("hex")`).
 2. Register the prefix in `SYNTHETIC_PREFIXES` in the helper — it is fail-closed and refuses anything outside the allowlist.
-3. Call `tearDownTenantUser(service, { id, email })` in `afterAll` — it runs the parity-guarded 22-RPC anonymise cascade, verifies the id↔email binding against `auth.users`, then deletes. For a batch of users use `tearDownTenantUsers(service, users)` — a sequential singular loop abandons the remaining users on the first teardown failure (#10249).
+3. Call `tearDownTenantUser(service, { id, email })` in `afterAll` — it runs the parity-guarded 23-RPC anonymise cascade, verifies the id↔email binding against `auth.users`, then deletes. For a batch of users use `tearDownTenantUsers(service, users)` — a sequential singular loop abandons the remaining users on the first teardown failure (#10249).
 
 `test/server/teardown-deleteuser-sentinel.test.ts` censuses every `.ts` file under `test/` for deleteUser call shapes: any carrier outside the canonical helper, the reviewed `MANUAL_TEARDOWN_ALLOWLIST`, or the #10096 legacy drain set fails the always-on shard — and the per-file call counts are pinned, so adding a raw call inside an allowlisted file fails too.
 

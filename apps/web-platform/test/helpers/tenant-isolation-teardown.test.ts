@@ -118,10 +118,10 @@ describe("tearDownTenantUser fatality classes", () => {
       id: "user-1",
       email: SYNTHETIC_EMAIL,
     });
-    // 22 anonymise RPCs run, then exactly one deleteUser — and ordering is
+    // 23 anonymise RPCs run, then exactly one deleteUser — and ordering is
     // load-bearing: a regression that deletes first still satisfies a bare
     // call-count assertion.
-    expect(rpc.mock.calls.length).toBe(22);
+    expect(rpc.mock.calls.length).toBe(23);
     expect(deleteUser).toHaveBeenCalledOnce();
     const lastRpcOrder = Math.max(...rpc.mock.invocationCallOrder);
     expect(deleteUser.mock.invocationCallOrder[0]).toBeGreaterThan(
