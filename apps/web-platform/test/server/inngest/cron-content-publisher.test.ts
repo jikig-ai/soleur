@@ -251,10 +251,19 @@ describe("fallback-surfacing source-shape anchors", () => {
     ["SOLEUR_PUBLISHER_FALLBACK", "marker token the bash emit and grep share"],
     ['op: "discord-blog-webhook-fallback"', "Sentry warn op tag"],
     ["warnSilentFallback(null,", "null first arg keeps captureMessage tags"],
-    ["discordBlogFallback", "step return flag in the Inngest run record"],
-    ["publisherStderrSignals(result.stderr)", "grep site inside the step"],
   ])("source contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
+  });
+
+  // The conditional is the load-bearing wiring: presence-only anchors survive
+  // its deletion (warn fires every run) or constant-fold (warn never fires).
+  it.each([
+    [/stderrSignals\.includes\(\s*PUBLISHER_FALLBACK_MARKER/, "flag derives from marker grep"],
+    [/if \(discordBlogFallback\)/, "warn is gated on the flag"],
+    [/return \{ exitCode: result\.exitCode, discordBlogFallback \}/, "flag in step return"],
+    [/publisherStderrSignals\(result\.stderr\)/, "grep reads captured stderr"],
+  ])("source matches %s (%s)", (anchor) => {
+    expect(SUT_SOURCE).toMatch(anchor);
   });
 
   it("mirror message carries no raw stderr interpolation", () => {

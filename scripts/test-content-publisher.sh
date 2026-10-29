@@ -235,6 +235,29 @@ empty_fixture=$(make_empty_sections_fixture)
 assert_eq "discord-no-webhook-rc3" "3" \
   "$(unset DISCORD_WEBHOOK_URL DISCORD_BLOG_WEBHOOK_URL; rc_of post_discord "body")"
 
+# Discord: neither set → skip path's own warning, NO fallback marker.
+tmp_stderr=$(mktemp -p "$SUITE_TMP")
+( unset DISCORD_WEBHOOK_URL DISCORD_BLOG_WEBHOOK_URL; post_discord "body" ) >/dev/null 2>"$tmp_stderr" || true
+if grep -q "SOLEUR_PUBLISHER_FALLBACK" "$tmp_stderr"; then
+  FAIL=$((FAIL + 1))
+  echo "FAIL: discord-skip-no-marker: unexpected SOLEUR_PUBLISHER_FALLBACK on skip path: $(cat "$tmp_stderr")" >&2
+else
+  PASS=$((PASS + 1))
+fi
+rm -f "$tmp_stderr"
+
+# Discord: DISCORD_BLOG_WEBHOOK_URL="" (empty) + general set → empty ≡ unset,
+# marker fires (matches ${VAR:-} resolution semantics).
+tmp_stderr=$(mktemp -p "$SUITE_TMP")
+( DISCORD_BLOG_WEBHOOK_URL="" DISCORD_WEBHOOK_URL="https://example.test/hook" post_discord "body" ) >/dev/null 2>"$tmp_stderr" || true
+if grep -q "SOLEUR_PUBLISHER_FALLBACK" "$tmp_stderr"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: discord-empty-blog-marker: expected SOLEUR_PUBLISHER_FALLBACK on empty-string arm, got: $(cat "$tmp_stderr")" >&2
+fi
+rm -f "$tmp_stderr"
+
 # Discord: webhook set + stubbed curl 2xx → rc 0 (success not mislabelled skip)
 assert_eq "discord-success-rc0" "0" \
   "$(DISCORD_WEBHOOK_URL="https://example.test/hook" rc_of post_discord "body")"

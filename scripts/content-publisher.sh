@@ -9,9 +9,8 @@
 #
 # Environment variables:
 #   DISCORD_BLOG_WEBHOOK_URL - Discord webhook for #blog channel (preferred; optional).
-#                            - Unset/empty while DISCORD_WEBHOOK_URL is set posts to
-#                              #general and emits a stderr warning carrying the
-#                              SOLEUR_PUBLISHER_FALLBACK marker.
+#                            - Unset/empty while DISCORD_WEBHOOK_URL is set posts to #general
+#                              and emits the SOLEUR_PUBLISHER_FALLBACK stderr marker.
 #   DISCORD_WEBHOOK_URL      - Discord webhook fallback (optional; skips if neither set)
 #   X_API_KEY              - X API key (optional; skips if unset)
 #   X_API_SECRET           - X API secret

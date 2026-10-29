@@ -723,20 +723,11 @@ export async function cronContentPublisherHandler({
         env,
       });
 
-      if (result.exitCode === 2) {
-        logger.warn(
-          { fn: "cron-content-publisher", exitCode: result.exitCode },
-          "Partial failure — some platforms failed but fallback issues were created",
-        );
-      } else if (result.exitCode !== 0 && result.exitCode !== null) {
-        throw new Error(
-          `content-publisher.sh failed (exit ${result.exitCode})`,
-        );
-      }
-
-      // Surface the script's fixed markers. spawnScriptCapture captures
-      // stderr but nothing downstream reads it — grep for the known token
-      // and mirror a fixed message (never raw stderr) to Sentry.
+      // Surface the script's fixed markers BEFORE the exit-code gate — a run
+      // that emitted the fallback marker and then hard-failed must still
+      // report the misroute. spawnScriptCapture captures stderr but nothing
+      // downstream reads it — grep for the known token and mirror a fixed
+      // message (never raw stderr) to Sentry.
       const stderrSignals = publisherStderrSignals(result.stderr);
       const discordBlogFallback = stderrSignals.includes(
         PUBLISHER_FALLBACK_MARKER,
@@ -746,9 +737,20 @@ export async function cronContentPublisherHandler({
           feature: "cron-content-publisher",
           op: "discord-blog-webhook-fallback",
           message:
-            "DISCORD_BLOG_WEBHOOK_URL unset in publisher env — Discord post went to the general-channel fallback webhook",
+            "DISCORD_BLOG_WEBHOOK_URL unset in publisher env — Discord post routed via the general-channel fallback webhook",
           extra: { fn: "cron-content-publisher" },
         });
+      }
+
+      if (result.exitCode === 2) {
+        logger.warn(
+          { fn: "cron-content-publisher", exitCode: result.exitCode },
+          "Partial failure — some platforms failed but fallback issues were created",
+        );
+      } else if (result.exitCode !== 0 && result.exitCode !== null) {
+        throw new Error(
+          `content-publisher.sh failed (exit ${result.exitCode})`,
+        );
       }
 
       return { exitCode: result.exitCode, discordBlogFallback };
