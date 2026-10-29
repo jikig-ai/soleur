@@ -2,7 +2,7 @@
 
 ## Problem
 
-A PR in the merge queue went UNMERGEABLE (conflict with a moving main). The fix was a merge-main commit pushed to the PR branch, and the push was rejected with `GH006` (the branch is protected while the PR sits in the queue). Retrying or force-pushing does not help.
+A PR in the merge queue went UNMERGEABLE (conflict with a moving main). The fix was a merge-main commit pushed to the PR branch, and the push was rejected with `GH006` (the branch is protected while the PR sits in the queue).
 
 ## Solution
 

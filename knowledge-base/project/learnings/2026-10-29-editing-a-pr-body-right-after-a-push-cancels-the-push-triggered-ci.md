@@ -2,7 +2,7 @@
 
 ## Problem
 
-During the G1 / git-data cutover PR series, a PR body was edited (`gh pr edit --body-file`) immediately after the branch was pushed. The edit fires `pull_request: edited` workflow runs, and those runs cancelled the in-flight push-triggered CI, so the PR showed cancelled checks and no verdict for the pushed commit. The cancellation mechanism (a shared concurrency group is the likely cause) was not measured.
+During the G1 / git-data cutover PR series, a PR body was edited immediately after the branch was pushed. The edit fires `pull_request: edited` workflow runs, and those runs cancelled the in-flight push-triggered CI, so the PR showed cancelled checks and no verdict for the pushed commit. The cancellation mechanism (a shared concurrency group is the likely cause) was not measured.
 
 ## Solution
 
