@@ -15,6 +15,23 @@ brand_survival_threshold: none
 
 # feat: datacenter-first break-glass OCI mirror skill + image_tag canonical-form fix + eMudhra census close-out
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-28
+**Sections enhanced:** Observability (minimal discoverability probe), Network-Outage Deep-Dive (4.5 subsection), Merge-blast answer (infra `on.push` trigger analysis)
+**Research agents used:** none — no Task/subagent tool in this environment; all gates executed inline (sequential-fallback disclosure: no independent agent review ran)
+
+### Key Improvements
+
+1. Discoverability probe narrowed from the 13-fixture suite to the smallest command printing the signal (`resolve-web1-known-good-tag.sh 1.2.3` → `v1.2.3`, measured 0.1 s — comfortably inside Check 10's 15 s cap and outside the suite-shape reject patterns).
+2. `on.push.paths: apps/web-platform/infra/**` merge-trigger analyzed: the push-fired auto-apply runs but resolves no resource changes from this diff (neither edited file is referenced by any `.tf`) — recorded in §Merge-blast answer for the PR body's first line.
+3. `doppler secrets get` invocation corrected to the two-call form mirroring `scheduled-inngest-health.yml:1298-1299` (sharp-edge: multi-name forms are unverified CLI shapes).
+
+### New Considerations Discovered
+
+- The push-triggered `apply` job (no reviewer gate since PR #4220) means *any* `infra/**` merge runs a live `terraform plan`+apply — even a wording/test diff pays the ~53-min serializer slot. Noted, accepted (same as every infra test-suite merge).
+- Fixture (g) inversion is a deliberate semantic flip (reject → accept), pinned alongside `vv1.2.3` rejection so the strict guard is visibly intact.
+
 ## Overview
 
 One PR (draft #11442, branch `feat-one-shot-11321-11424-11426`) bundles three tightly related registry/incident-response outcomes from the 2026-10-28 eMudhra session:
@@ -95,6 +112,19 @@ Claimed saving (issue body): recovery time from ~1 h+ of flaky residential uploa
 2. **L3 DNS/routing.** The sinkholed names (`ghcr.io`, `pkg-containers.githubusercontent.com`, `docker.pkg.github.com` — enumerated from `server.tf:1131` `ghcr_deny_sh`) resolve to `0.0.0.0`/`::` on the host BY DESIGN; the script supplies real addresses per-command via `--resolve`, so name resolution is a scripted input, not a hypothesis. Cloudflare API hostnames resolve publicly. [verified by design — the sinkhole set is enumerated from code, and the script must `--resolve` BOTH GHCR names, including the blob-redirect target]
 3. **L7 TLS/proxy.** `curl --resolve` changes only the dial address; SNI, the TLS handshake and certificate verification all still target `ghcr.io` — the script MUST NOT pass `-k`. [verified by design]
 4. **L7 application (census verdict).** The close-out evidence is the classifier's own verdict vocabulary (`versions_ok`/`below_floor`/`version_unreadable`) over the live `/cfd_tunnel/<id>/connections` body plus the latest scheduled run's `SOLEUR_ORIGIN_HOST_CHURN` breadcrumb — a service we can read directly, not a symptom chain. [verification commands in Phase 5]
+
+## Network-Outage Deep-Dive (deepen-plan 4.5 — trigger fired: SSH)
+
+Per `plan-network-outage-checklist.md`, layer-by-layer verification status:
+
+| Layer | Status | Evidence / gap |
+|---|---|---|
+| L3 firewall allow-list (operator egress → host SSH) | not-yet-verified — closed at work time | The skill's primary reach is the `ssh.soleur.ai` connector; the direct-SSH fallback requires the operator's egress IP in the allow-list — skill prescribes `soleur:admin-ip-refresh` as the fallback precondition. The #11321 census path needs NO SSH (public CF API HTTPS). |
+| L3 DNS/routing | verified by design | The sinkholed name set is enumerated from `server.tf:1131` (`ghcr_deny_sh`): `ghcr.io`, `pkg-containers.githubusercontent.com`, `docker.pkg.github.com`; the script supplies real addresses per-command via `--resolve` — name resolution is a scripted input, not ambient DNS. |
+| L7 TLS/proxy | verified by design | `curl --resolve` pins only the dial address; SNI/handshake/CA-verification still target the hostname; `-k`/`--insecure` is banned on the pull leg (AC5 greps it). |
+| L7 application | verified | The census close criterion uses the classifier's own verdict vocabulary over the live `/cfd_tunnel/<id>/connections` body + the run's `SOLEUR_ORIGIN_HOST_CHURN` breadcrumb — not a symptom chain. |
+
+No hypothesis is confirmed/refuted on unavailable data — the one unverified layer (L3 allow-list) names its work-time verification mechanism rather than asserting a result.
 
 ## User-Brand Impact
 
@@ -205,8 +235,8 @@ logs:
   where: "GHA run logs (::error:: lines + SOLEUR_ORIGIN_HOST_CHURN); the skill session transcript; zot access log on the registry host (journald CONTAINER_NAME=zot -> SOLEUR_ZOT_LOG)"
   retention: "GHA run retention policy; journald persistent on the registry host"
 discoverability_test:
-  command: "bash apps/web-platform/infra/resolve-web1-known-good-tag.test.sh"
-  expected_output: "0 failed"
+  command: "bash apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh 1.2.3"
+  expected_output: "v1.2.3"
 ```
 
 ## Encryption Posture
