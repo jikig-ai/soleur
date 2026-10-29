@@ -951,14 +951,12 @@ Only items that survive ALL three checks appear in "Filed as scope-out". **Targe
 - **Fixed inline:** N (commits: <sha>, <sha>, …)
 - **Filed as scope-out:** N (#NNN, #NNN — criteria listed below)
 - **Agents run:** <comma-separated list>
-- **NEXT (same response, no stop):** QA → compound → ship → merged PR. This marker is a checkpoint, never the deliverable.
+- **NEXT (same response):** QA → compound → ship → merge. Never end the turn here.
 
 [Optional 1-line table of scope-out issues with criteria, if any.]
 ```
 
-**The marker's last bullet is part of the template — never drop it and never end the turn on it.** A model that writes "Review Phase Complete … Next, QA" as its final text has stopped mid-pipeline (observed on #11483: the turn ended on the marker and the operator had to ask why). Write the marker and the next tool call in the SAME response.
-
-After emitting the marker, the calling skill's continuation gate takes over — control returns to one-shot step 5 / work Phase 4 in the SAME response.
+After the marker, control returns to one-shot step 5 / work Phase 4 in the SAME response.
 
 **Direct invocation summary (interactive mode only — no `soleur:work` or `soleur:one-shot` in conversation):** Use the verbose summary template below.
 

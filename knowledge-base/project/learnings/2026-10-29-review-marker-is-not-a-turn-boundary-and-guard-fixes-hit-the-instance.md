@@ -18,7 +18,7 @@ Two process failures on PR 11483 (a bundle of #11388, #11211, #11212, #11265):
 ## Solution
 
 - `plugins/soleur/skills/one-shot/SKILL.md` CONTINUATION GATE now names `## Review Phase Complete` explicitly.
-- `plugins/soleur/skills/review/SKILL.md` marker template carries a `NEXT (same response, no stop)` bullet and a sentence forbidding ending the turn on it.
+- `plugins/soleur/skills/review/SKILL.md` marker template carries a `NEXT (same response)` bullet. Both skill bodies sit at their `lint-skill-body-budget` ceilings, so the explanation lives here, not in the skill.
 - Fix round 1 (`c896a125ba`) allow-lists job and workflow keys, widens the guard-env pattern to bare `GUARD_*` names, rejects non-local root module sources, makes the header check cross-check every `logtail_exploration` line, binds `-target` to real arguments, makes the census transitive across root `.tf` files, and adds scorer negative controls. Probe fixes: object lines without `dt` and `raw` read as unreadable, and the canary reads an archive-only window (CTO ruling) so a dead archive arm cannot read as NOT YET.
 
 ## Key Insight
