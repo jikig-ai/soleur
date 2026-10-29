@@ -5,7 +5,7 @@ RECORD, NOT A SOURCE. This file is archived by ship with the rest of the branch 
 ```markdown
 ## Operator Holds
 
-Added 2026-10-29 (Ref #9927). Nothing here is delegable and nothing here is discharged by this text: no `Delegation:` or `Envelope:` line is recorded. The class of each hold is on the line under it (`technical` = the CTO rules; `operator (<category>)` = only the owner; `waiting (<UTC time>)` = a date). The text above this section is unchanged.
+Added 2026-10-29 (Ref #9927). Nothing here is delegable and nothing here is discharged by this text: no delegation or envelope is recorded. The class of each hold is on the line under it (`technical` = the CTO rules; `operator (<category>)` = only the owner; `waiting (<UTC time>)` = a date). `Class` is a routing label; it grants nothing and discharges nothing. The text above this section is unchanged.
 
 - Hold: Operator-reserved: read-only Hetzner console check of the project's members, roles and sign-in protection (counts and roles only, no names, no values). The A6 "no known access" record is owner-signed and is filed under knowledge-base/legal/audits/ per the runbook's A6 row; no delegation covers either.
   Class: operator (third-party system)
