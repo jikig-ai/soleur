@@ -21,9 +21,10 @@
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
 # WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
 # that PRESERVES the data volume (hcloud_volume.git_data_luks) and the LUKS passphrase by OMISSION.
-# DISABLED from the Option B merge until #11194 retires the plaintext arms from its gates: the
-# replace, rotate and create gates still demand the retired plaintext addresses, so they refuse every
-# plan (ADR-239 Amendment 2026-10-26, item 4). It is a maintenance-window dispatch, not a per-PR apply;
+# The replace, rotate and create gates no longer demand the retired plaintext addresses (#11194,
+# ADR-239 Amendment 2026-10-28), and each route refuses through a plaintext-id interlock while the
+# module call below passes a non-empty git_data_volume_id (ADR-239 Amendment 2026-10-26, item 4). It
+# is a maintenance-window dispatch, not a per-PR apply;
 # these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
 # ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
 # invariant that a boot-armed heartbeat needs such a path is mechanically enforced by

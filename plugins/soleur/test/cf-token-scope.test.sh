@@ -60,20 +60,41 @@ EOF
 cat >"$MOCKBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 # Mock curl: emit "<body>\n<code>" to match the SUT's -w '\n%{http_code}'.
-# The URL is the last positional argument. A spec of "NONE" emits nothing at all
-# (models a total curl failure -> empty response, the no-newline path).
+# Log positional URL operands and both --url forms across schemes, so an extra
+# target cannot hide behind a canonical final argument. A spec of "NONE" emits
+# nothing at all (models a total curl failure -> empty response, the no-newline path).
 [[ -n "${MOCK_CURL_MARKER:-}" ]] && printf 'called\n' >>"$MOCK_CURL_MARKER"
-url=""
-for a in "$@"; do url="$a"; done
-[[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$url" >>"$MOCK_CURL_URLLOG"
-# %q keeps multi-line arg values (the -w format) on ONE log line: the argv shape
-# is what the confinement pins below read.
+# %q keeps multi-line arg values (the -w format) on ONE log line: retain the
+# original argv before URL parsing shifts the positional parameters below.
 [[ -n "${MOCK_CURL_ARGV:-}" ]] && printf '%q ' "$@" >>"$MOCK_CURL_ARGV" && printf '\n' >>"$MOCK_CURL_ARGV"
+url=""
+record_url() {
+  url="$1"
+  [[ -n "${MOCK_CURL_URLLOG:-}" ]] && printf '%s\n' "$url" >>"$MOCK_CURL_URLLOG"
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url)
+      shift
+      [[ $# -gt 0 ]] && record_url "$1"
+      ;;
+    --url=*) record_url "${1#*=}" ;;
+    --proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5|--socks5-hostname|-x|-sSx) shift ;;
+    --proxy=*|--proxy1.0=*|--preproxy=*|--socks4=*|--socks4a=*|--socks5=*|--socks5-hostname=*|-x*|-sSx*) ;;
+    --max-time|-w|-H|--noproxy) shift ;;
+    -* ) [[ "$1" == *://* ]] && record_url "$1" ;;
+    *) record_url "$1" ;;
+  esac
+  shift
+done
 # Real CF shapes: a zone .../entrypoint returns a single ruleset OBJECT; the
 # account /rulesets list returns an ARRAY. The mock must mirror this so the
 # per-scheme body-shape check is exercised against the true contract (#6892 QA).
 ZONE_AUTH='200:{"success":true,"result":{"id":"r","kind":"zone","phase":"p","rules":[]}}'
 ACCT_AUTH='200:{"success":true,"result":[]}'
+if [[ "$url" =~ ^https://api\.cloudflare\.com/client/v4/accounts/[^/]+/alerting/v3/policies$ ]]; then
+  spec="${MOCK_NOTIF:-$ACCT_AUTH}"
+else
 case "$url" in
   *http_config_settings*)          spec="${MOCK_CONFIG:-$ZONE_AUTH}" ;;
   *http_request_dynamic_redirect*) spec="${MOCK_DYNREDIR:-$ZONE_AUTH}" ;;
@@ -86,12 +107,12 @@ case "$url" in
   *cfd_tunnel*)                    spec="${MOCK_TUNNEL:-$ACCT_AUTH}" ;;
   *access/apps*)                   spec="${MOCK_ACCESS:-$ACCT_AUTH}" ;;
   *dns_records*)                   spec="${MOCK_DNS:-$ACCT_AUTH}" ;;
-  *notification_policies*)         spec="${MOCK_NOTIF:-$ACCT_AUTH}" ;;
   *load_balancers/pools*)          spec="${MOCK_LB_POOLS:-$ACCT_AUTH}" ;;
   *load_balancers*)                spec="${MOCK_LB_ZONE:-$ACCT_AUTH}" ;;
   */rulesets)                      spec="${MOCK_ACCT:-$ACCT_AUTH}" ;;
   *)                               spec="${MOCK_OTHER:-$ZONE_AUTH}" ;;
 esac
+fi
 [[ "$spec" == "NONE" ]] && exit 0   # no output at all
 code="${spec%%:*}"
 body="${spec#*:}"
@@ -278,9 +299,18 @@ DM1="$WORK/d1-curl-marker"
 MOCK_CURL_MARKER="$DM1" run "$MOCKPATH" --profile default-token --dry-run
 assert_rc 0 "D1 default-token dry-run -> exit 0"
 has "doppler secrets get CF_API_TOKEN " "D1 dry-run resolves the token secret to CF_API_TOKEN"
-for u in cfd_tunnel access/apps dns_records notification_policies "load_balancers/pools" 'zones/$ZONE/load_balancers'; do
+for u in cfd_tunnel access/apps dns_records alerting/v3/policies "load_balancers/pools" 'zones/$ZONE/load_balancers'; do
   has "$u" "D1 dry-run prints the $u row"
 done
+D1_EXPECTED_NOTIF_URL="https://api.cloudflare.com/client/v4/accounts/\$ACCT/alerting/v3/policies"
+D1_EXPECTED_NOTIF_RECIPE="curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $D1_EXPECTED_NOTIF_URL"
+D1_NOTIF_RECIPE_COUNT=$(grep -Fc -- "$D1_EXPECTED_NOTIF_URL" "$OUTFILE" || true)
+if [[ "$D1_NOTIF_RECIPE_COUNT" == "1" ]] && grep -Fxq -- "$D1_EXPECTED_NOTIF_RECIPE" "$OUTFILE"; then
+  ok "D1 dry-run prints exactly one Notifications URL with no query or suffix"
+else
+  no "D1 dry-run Notifications recipe is not the exact documented URL"
+fi
+src_lacks 'notification_policies' "D1 source no longer contains the legacy Notifications route"
 # shellcheck disable=SC2016  # the literal, unexpanded '$TOK' is exactly the assertion
 has '"$TOK"' "D1 dry-run keeps the token var unexpanded"
 has "printf 'Authorization: Bearer %s'" "D1 dry-run models the private-fd form"
@@ -303,21 +333,124 @@ D2MARK="$WORK/d2-doppler-requests"
 D2URLS="$WORK/d2-curl-urls"
 : >"$D2MARK"
 LB403='403:{"success":false,"errors":[{"code":10000}]}'
-MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
-assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
-# RUN-PATH URL ASSEMBLY pin (design-pass P2): the mock-substring arms match on
-# path fragments, so a broken $ZONE/$ACCT placeholder substitution would sail
-# through every verdict assertion. Assert the ACTUAL requested URLs carry the
-# resolved ids and no literal placeholder survives.
-if [[ -s "$D2URLS" ]] \
-   && grep -q "zones/zone0123456789abcdef/dns_records" "$D2URLS" \
-   && grep -q "zones/zone0123456789abcdef/load_balancers" "$D2URLS" \
-   && grep -q "accounts/acct9876543210fedcba/load_balancers/pools" "$D2URLS" \
-   && ! grep -q '\$ZONE\|\$ACCT' "$D2URLS"; then
-  ok "D2 run-path URLs carry resolved ZONE/ACCT ids, no literal placeholder reaches curl"
+TUNNEL_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/cfd_tunnel?per_page=1'
+ACCESS_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/access/apps?per_page=1'
+DNS_URL='https://api.cloudflare.com/client/v4/zones/zone0123456789abcdef/dns_records?per_page=1'
+NOTIF_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/alerting/v3/policies'
+LB_POOLS_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/load_balancers/pools?per_page=1'
+LB_ZONE_URL='https://api.cloudflare.com/client/v4/zones/zone0123456789abcdef/load_balancers?per_page=1'
+# Directly exercise the mock's negative route boundary; broadening its matcher
+# must not let a suffixed path or query receive the Notifications success fixture.
+PATH="$MOCKPATH" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+  "$MOCKBIN/curl" "$NOTIF_URL/extra" >"$OUTFILE"
+if grep -Fxq -- '418' "$OUTFILE"; then
+  ok "D2 mock dispatch rejects a suffixed Notifications URL"
 else
-  no "D2 run-path URL assembly broken (see $D2URLS)"
+  no "D2 mock dispatch accepted a suffixed Notifications URL"
 fi
+PATH="$MOCKPATH" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+  "$MOCKBIN/curl" "$NOTIF_URL?per_page=1" >"$OUTFILE"
+if grep -Fxq -- '418' "$OUTFILE"; then
+  ok "D2 mock dispatch rejects a Notifications query suffix"
+else
+  no "D2 mock dispatch accepted a Notifications query suffix"
+fi
+D2_OPERAND_LOG="$WORK/d2-curl-operands"
+PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_OPERAND_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' \
+  "$MOCKBIN/curl" --url=http://example.invalid --url 'ftp://example.invalid/path' "$NOTIF_URL" >"$OUTFILE"
+if [[ "$(wc -l < "$D2_OPERAND_LOG" | tr -d '[:space:]')" == "3" ]] \
+   && grep -Fxq -- 'http://example.invalid' "$D2_OPERAND_LOG" \
+   && grep -Fxq -- 'ftp://example.invalid/path' "$D2_OPERAND_LOG" \
+   && grep -Fxq -- "$NOTIF_URL" "$D2_OPERAND_LOG"; then
+  ok "D2 mock observer records --url=, --url, and positional targets across schemes"
+else
+  no "D2 mock observer missed or altered a URL operand"
+fi
+D2_PROXY_LOG="$WORK/d2-proxy-operand-log"
+assert_proxy_only_falls_through() {
+  local label="$1"
+  shift
+  : >"$D2_PROXY_LOG"
+  PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+    "$MOCKBIN/curl" "$@" >"$OUTFILE"
+  if [[ ! -s "$D2_PROXY_LOG" ]] && grep -Fxq -- '418' "$OUTFILE"; then
+    ok "$label"
+  else
+    no "$label"
+  fi
+}
+assert_proxy_only_falls_through "D2 --proxy= value is not a transfer URL" "--proxy=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --proxy value is not a transfer URL" --proxy "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --proxy1.0= value is not a transfer URL" "--proxy1.0=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --proxy1.0 value is not a transfer URL" --proxy1.0 "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --preproxy= value is not a transfer URL" "--preproxy=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --preproxy value is not a transfer URL" --preproxy "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks4= value is not a transfer URL" "--socks4=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks4 value is not a transfer URL" --socks4 "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks4a= value is not a transfer URL" "--socks4a=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks4a value is not a transfer URL" --socks4a "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks5= value is not a transfer URL" "--socks5=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks5 value is not a transfer URL" --socks5 "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks5-hostname= value is not a transfer URL" "--socks5-hostname=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks5-hostname value is not a transfer URL" --socks5-hostname "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 -x value is not a transfer URL" -x "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 attached -x value is not a transfer URL" "-x$NOTIF_URL"
+assert_proxy_only_falls_through "D2 clustered -sSx value is not a transfer URL" -sSx "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 attached clustered -sSx value is not a transfer URL" "-sSx$NOTIF_URL"
+D2_MIXED_PROXY_LOG="$WORK/d2-proxy-with-transfer-target"
+assert_proxy_with_target() {
+  local label="$1"
+  shift
+  : >"$D2_MIXED_PROXY_LOG"
+  PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_MIXED_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_TUNNEL='418:{"success":false}' \
+    "$MOCKBIN/curl" "$@" "$TUNNEL_URL" >"$OUTFILE"
+  if [[ "$(wc -l < "$D2_MIXED_PROXY_LOG" | tr -d '[:space:]')" == "1" ]] \
+     && grep -Fxq -- "$TUNNEL_URL" "$D2_MIXED_PROXY_LOG" \
+     && ! grep -Fxq -- "$NOTIF_URL" "$D2_MIXED_PROXY_LOG" \
+     && grep -Fxq -- '418' "$OUTFILE"; then
+    ok "$label"
+  else
+    no "$label"
+  fi
+}
+assert_proxy_with_target "D2 --proxy separated beside real target logs only transfer URL" --proxy "$NOTIF_URL"
+assert_proxy_with_target "D2 --proxy= beside real target logs only transfer URL" "--proxy=$NOTIF_URL"
+assert_proxy_with_target "D2 --proxy1.0 separated beside real target logs only transfer URL" --proxy1.0 "$NOTIF_URL"
+assert_proxy_with_target "D2 --proxy1.0= beside real target logs only transfer URL" "--proxy1.0=$NOTIF_URL"
+assert_proxy_with_target "D2 --preproxy separated beside real target logs only transfer URL" --preproxy "$NOTIF_URL"
+assert_proxy_with_target "D2 --preproxy= beside real target logs only transfer URL" "--preproxy=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4 separated beside real target logs only transfer URL" --socks4 "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4= beside real target logs only transfer URL" "--socks4=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4a separated beside real target logs only transfer URL" --socks4a "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks4a= beside real target logs only transfer URL" "--socks4a=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5 separated beside real target logs only transfer URL" --socks5 "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5= beside real target logs only transfer URL" "--socks5=$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5-hostname separated beside real target logs only transfer URL" --socks5-hostname "$NOTIF_URL"
+assert_proxy_with_target "D2 --socks5-hostname= beside real target logs only transfer URL" "--socks5-hostname=$NOTIF_URL"
+assert_proxy_with_target "D2 -x separated beside real target logs only transfer URL" -x "$NOTIF_URL"
+assert_proxy_with_target "D2 -x attached beside real target logs only transfer URL" "-x$NOTIF_URL"
+assert_proxy_with_target "D2 -sSx separated beside real target logs only transfer URL" -sSx "$NOTIF_URL"
+assert_proxy_with_target "D2 -sSx attached beside real target logs only transfer URL" "-sSx$NOTIF_URL"
+MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
+# RUN-PATH URL ASSEMBLY pin (design-pass P2): inspect the actual request URLs,
+# not only the mock's response, so wrong IDs, suffixes, or path/query drift red.
+if [[ -s "$D2URLS" ]] \
+   && grep -Fxq -- "$TUNNEL_URL" "$D2URLS" \
+   && grep -Fxq -- "$ACCESS_URL" "$D2URLS" \
+   && grep -Fxq -- "$DNS_URL" "$D2URLS" \
+    && grep -Fxq -- "$NOTIF_URL" "$D2URLS" \
+   && grep -Fxq -- "$LB_POOLS_URL" "$D2URLS" \
+   && grep -Fxq -- "$LB_ZONE_URL" "$D2URLS" \
+    && ! grep -qF -- '/notification_policies' "$D2URLS" \
+    && ! grep -q '\$ZONE\|\$ACCT' "$D2URLS"; then
+  ok "D2 all six run-path URLs are exact; Notifications has no legacy route or query suffix"
+else
+  no "D2 run-path URL assembly or profile route is wrong (see $D2URLS)"
+fi
+assert_eq "D2 logs exactly six profile URLs" 6 "$(wc -l < "$D2URLS" | tr -d '[:space:]')"
+assert_eq "D2 logs exactly one exact Notifications URL" 1 "$(grep -Fxc -- "$NOTIF_URL" "$D2URLS" || true)"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+authorized \(200\)' "D2 Notifications array-shaped 200 remains authorized with both LB rows at baseline 403"
 has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 pools row prints per-row not-yet-widened (403, err 10000)"
 has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403, err 10000\)' "D2 zone-LB row prints not-yet-widened too (per-row, not aggregate)"
 has "PASS: no scope dropped" "D2 baseline still PASSes the retained ledger"
@@ -355,6 +488,51 @@ done
 lacks "PASS: no scope dropped" "D3 omits 'no scope dropped'"
 # addendum 9: the zone-control diagnostic names a probe default-token never issues.
 lacks "zone control" "D3 default-token failure prints no rulesets-only zone-control line"
+
+# --- D3n: Notifications 404 is not neutralized by the two expected baseline LB 403s. ---
+MOCK_NOTIF='404:{"success":false,"errors":[{"code":10404}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3n Notifications 404 with expected LB baseline 403s -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+denied \(404, unverified — fail-closed\)' "D3n Notification 404 remains fail-closed"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3n account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3n zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3n Notifications 404 prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D3s: only an HTTP 200 is authorized; a successful array body on 201 fails closed. ---
+MOCK_NOTIF='201:{"success":true,"result":[]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3s Notifications 201 with an otherwise valid array -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+denied \(201\)' "D3s non-200 Notifications response is denied"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3s expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3s expected zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3s Notifications 201 prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D3m: a degraded Notification 200 is not authorization. ---
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":false,"result":[]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3m degraded Notifications 200 -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3m degraded Notifications 200 is reported, not authorized"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3m expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3m expected zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3m degraded Notifications response prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D3w: a Notification 200 with an object result violates the account-array contract. ---
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":true,"result":{"id":"synthetic-policy-id"}}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3w wrong-shape Notifications 200 -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3w Notifications object result is rejected by the array contract"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3w expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3w expected zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3w wrong-shape Notifications response prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D3we: an empty object is still the wrong result shape for this account list. ---
+MOCK_OTHER='200:{"success":true,"result":[]}' MOCK_NOTIF='200:{"success":true,"result":{}}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3we empty-object Notifications 200 -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+degraded \(200 body not success/array\)' "D3we empty object is rejected by the array contract"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3we expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3we expected zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3we empty-object Notifications response prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
 
 # --- D4: fail-closed layers hold on the new endpoints ---
 MOCK_DNS='200:{"success":true,"result":null}' run "$MOCKPATH" --profile default-token
@@ -463,13 +641,28 @@ MOCK_CURL_ARGV="$DARGV" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D-conf default-token run -> exit 0"
 dargv_lines="$(wc -l < "$DARGV" | tr -d '[:space:]')"
 assert_eq "D-conf one argv record per probe ($DT_N rows)" "$DT_N" "$dargv_lines"
+DNP_BAD_ROWS="$(awk '
+  {
+    n = 0; star = 0; equals_form = 0
+    for (i = 1; i <= NF; i++) {
+      if ($i == "--noproxy") {
+        n++
+        if ($(i + 1) == "\\*") star++
+      }
+      if ($i ~ /^--noproxy=/) equals_form = 1
+    }
+    if (n != 1 || star != 1 || equals_form) bad++
+  }
+  END { print bad + 0 }
+' "$DARGV")"
 if [[ "$(grep -c -- '--disable' "$DARGV")" -eq "$DT_N" ]] \
-   && [[ "$(grep -c -- '--noproxy' "$DARGV")" -eq "$DT_N" ]] \
+   && [[ "$DNP_BAD_ROWS" -eq 0 ]] \
    && grep -q -- '-H @/dev/fd/' "$DARGV" \
+   && ! grep -Eq -- '(^|[[:space:]])(--proxy|--proxy1\.0|--preproxy|--socks4a?|--socks5(-hostname)?)(=|[[:space:]]|$)|(^|[[:space:]])-x[^[:space:]]*([[:space:]]|$)|(^|[[:space:]])-[^-][^[:space:]]*x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
    && ! grep -q -- 'xyz789' "$DARGV"; then
-  ok "D-conf every probe confined (--disable/--noproxy x$DT_N), header via @/dev/fd, token never on argv"
+  ok "D-conf every probe confined (no proxy override), header via @/dev/fd, token never on argv"
 else
-  no "D-conf run-path confinement/argv hygiene broken (see $DARGV)"
+  no "D-conf run-path confinement, proxy policy, or argv hygiene broken (see $DARGV)"
 fi
 
 # --- D-pc: PROFILES enumeration pin (Guard 1 M3 detector; parameterized from the
@@ -563,6 +756,8 @@ d_has 'profiles only' "$SKILLDOC" "D-doc SKILL.md re-words the posture (profiles
 # pins the doc).
 d_has 'NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it' "$SKILLDOC" "D-doc SKILL.md quotes the NOTE literal verbatim"
 d_has '--profile default-token --expect-lb-scopes' "$PLAYBOOK" "D-doc playbook carries the post-widen pointer"
+d_has 'accounts/<acct>/alerting/v3/policies' "$SKILLDOC" "D-doc SKILL.md documents the official Notifications route"
+if grep -qF -- 'accounts/<acct>/notification_policies' "$SKILLDOC"; then no "D-doc SKILL.md retains the legacy Notifications route"; else ok "D-doc SKILL.md has no legacy Notifications route"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
