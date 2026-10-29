@@ -17,3 +17,4 @@ None. Plan-review panel not run (docs-only; CTO ruling covered every fork; recor
 
 ### Components Invoked
 soleur:plan, soleur:deepen-plan, soleur:engineering:cto
+cto_spawns=2
