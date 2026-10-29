@@ -218,6 +218,34 @@ locals {
   # `…_12345`, and the row has a field after this one on every emitted path. The negation is over
   # the whole predicate, so a row that cannot be matched at all (a schema change that drops or
   # renames the field) FIRES rather than going quiet: an unreadable answer is not a clean one.
+  # The row set is also pinned to the probe's OWN EMITTER (the first conjunct below, #8874):
+  # the host's `doppler` event log ships to this same source and quotes the marker verbatim
+  # whenever GitHub webhooks in issue/PR text about the probe — the #8846 defect class, measured
+  # 50 quoting rows vs 6 real probe rows in one 6h window (the issue's own body counts 36 under a
+  # narrower event-log subset; both are 2026-09-25 measurements). The start-of-message anchor
+  # alone excluded those rows only because every one happens to begin with `{` — a payload
+  # accident, not a control.
+  # Three residual edges this conjunct does not close, recorded so they are not re-derived:
+  #   * the emitted tag is now load-bearing — a probe-tag rename that misses this SQL leaves the
+  #     population permanently zero, which reads as health; the drift guard derives its needle
+  #     from the canonical lib so a coordinated rename that skips this file goes red;
+  #   * unlike the negated devid check, the conjunct fails QUIET — a raw schema change that drops
+  #     or renames SYSLOG_IDENTIFIER excludes every row and reads healthy;
+  #   * the vector-down phone-home fallback emits marker=SOLEUR_INNGEST_BOOT_STAGE /
+  #     stage=inngest-server-probe-vector-down with the field row in `detail` and no
+  #     SYSLOG_IDENTIFIER — it was already invisible to this alert via the pre-existing
+  #     marker-at-position-1 anchor, a pre-existing blind edge, not a regression (CTO ruling,
+  #     PR #11519). The marker anchor also lacks the canonical def's trailing space — a
+  #     hypothetical `SOLEUR_INNGEST_SERVER_PROBEX` prefix would count here but not per
+  #     `inngest_probe_row`; latent, fail-loud.
+  # LIVE-PROBED 2026-10-29 after adding the emitter conjunct, 48h window over the hot remote()
+  # UNION s3Cluster archive:
+  #   population  (emitter + marker + host_role=dedicated)   -> 49 rows
+  #   emitter breakdown of marker-anchored rows              -> inngest-server-probe: 97
+  #     (49 dedicated + 48 web-1; no foreign-emitter rows in this window — the class the
+  #      conjunct excludes is latent by design, measured in #8846, not seen live today)
+  #   watched alias = the live encrypted alias (…_106903269) -> 0 rows  (quiet control)
+  #   watched alias = a wrong id (scsi-0HC_Volume_0)         -> 49 rows (positive control = population)
   # LIVE-PROBED 2026-09-18 against the ClickHouse table (the step-1 requirement above), 24h window:
   #   total=37248  probe_rows=22  host_role=dedicated rows=11
   #   watched alias = the live PLAINTEXT alias  -> 0 rows   (quiet when the field matches)
@@ -230,6 +258,7 @@ locals {
     SELECT {{time}} AS time, count(*) AS value
     FROM {{source}}
     WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
       AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
       AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
       AND position(JSONExtractString(raw, 'message'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
@@ -331,7 +360,8 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
-  # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows) and a fixed one clears in about 1.25 to 1.5 h.
+  # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows). When and why it
+  # resolves is recorded once, in the AUTO-RESOLVE WINDOW comment above logtail_exploration_alert.inngest_luks_key_probe_fail.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
@@ -366,20 +396,26 @@ resource "logtail_exploration" "inngest_luks_key_probe_fail" {
   }
 }
 
+# AUTO-RESOLVE WINDOW (#11388; comment only, the attributes below are unchanged). THIS IS THE ONE AUTHORITATIVE COPY of
+# the arithmetic; betterstack-log-query.md and the cutover runbook point here. The incident resolves once the count has
+# read 0 for a full recovery_period (3600 s). While the probe keeps failing it re-emits hourly (luks_probe_due: limit 3600
+# for any stamp that is not `ok`), so each failing row sits in the 900 s window for 900 s and leaves ~2700 s of zeros, shorter
+# than recovery_period, and the incident stays open.
+# The incident resolves on time alone, about 4500 to 4800 s (1.25 to 1.33 h; the 300 s check cadence adds up to 300 s)
+# after the last failing row; no later row is needed, so a silent probe also resolves it. At most one hourly row (at about
+# +3600 s) can land before it resolves. Resolution is therefore not evidence of recovery; only a `token=ok` row is.
+# After an `indeterminate` the next row is hourly too, so fail, indeterminate, fail leaves ~6300 s of zeros, longer than
+# recovery_period: the incident resolves and re-pages once. After an `ok` the next row is 24 h later (limit 86400).
 resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
   name           = "soleur-inngest-luks-key-probe-fail-prd"
 
   # Presence-only, so safe before the probe is delivered (no rows, value 0). The window is 900 s
   # because that is the largest query_period Better Stack has accepted for a per-row-parse alert
-  # since September (see the measured table below). The probe re-emits no sooner than hourly after any
-  # non-ok token, so while it fails a row is in the window for 900 s of every ~3600 s; the count
-  # reads 0 in between, but recovery_period (3600) is longer than that ~2700 s gap, so the incident
-  # stays open and does not re-page. It pages within about 5 min of the first failing row and
-  # clears about 1.25 to 1.5 h after the LAST failing row (the window, then recovery_period), which is
-  # not proof of recovery: only a token=ok row is. Any missed hourly failing row (a dying probe, or one
-  # indeterminate row between two failing ones) leaves a gap of up to ~6300 s with no failing row,
-  # longer than recovery_period, so the incident can resolve and re-page once.
+  # created since 2026-10-01 (see the measured table below). The probe re-emits no sooner than hourly after any
+  # non-ok token, so while it fails the incident stays open and does not re-page. It pages within about
+  # 5 min of the first failing row. When it resolves, and why that is not recovery, is in the
+  # AUTO-RESOLVE WINDOW comment above this resource.
   #
   # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts), not inferred: this
   # alert was refused 422 "too resource intensive" FOUR times at merge apply, at (check, query) =
@@ -388,8 +424,14 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # 3600/97200, claude_cost_daily_burn and claude_cost_capture_dark 3600/86400, inngest_luks_wrong_volume
   # 300/5400. Every alert created since 2026-10-01 has query_period <= 900 (registry_zot_log_credential_shape
   # 300/900 on 10-15, egress_gw_probe_fail 300/900 on 10-12, web_nic_guard_unpinned_url 60/300 on 10-27).
-  # So an existing long window proves nothing about what the API accepts today. If 300/900 is refused
-  # too, stop iterating merges: the next step is an owner-authorized create-and-delete probe.
+  # So an existing long window proves nothing about what the API accepts today. The (300, 900) pair set
+  # below was created by #11427 (744396abbb): push run 40744937376 on 744396abbb planned "+ query_period = 900"
+  # and "+ push = true" and logged "Creation complete" for this alert (id 888101/2988722350); that run later
+  # failed at an SSH step ("SSH forward to web-2 through the web-1 bastion"), fixed by 04cad4e8e0 (#11454). Push
+  # run 40782617701 on 04cad4e8e0, which descends from 744396abbb, refreshed this alert (it is in the -target
+  # list) and reported "No changes", so the live attributes matched this block at that time.
+  # 604800 s and 2592000 s were never tried, so whether a 30-day dead-man can exist is unknown; a try needs an
+  # owner-authorized create-and-delete probe.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
@@ -401,7 +443,9 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
 
   paused = false
 
-  # #11068 convention (#9168 measured flip): push armed; revert to `push = false` if the apply refuses it.
+  # #11068 convention (#9168 measured flip): push armed. History: the original plan was to revert to
+  # `push = false` if the apply refused it; the apply accepted it (run 40744937376 planned and created it
+  # with `push = true`; run 40782617701 refreshed it and reported "No changes").
   email          = true
   push           = true
   call           = false

@@ -81,6 +81,8 @@ export type CreateRefusalClass = (typeof CREATE_REFUSAL_CLASSES)[number];
 
 export const CREATE_NO_ACTION_REASONS = ["no-pattern-qualifies", "all-owned", "other"] as const;
 export type CreateNoActionReason = (typeof CREATE_NO_ACTION_REASONS)[number];
+/** The reason the prompt tells the model to return when none of the listed candidates is a genuine nearest skill. */
+const CREATE_NO_PATTERN_REASON: CreateNoActionReason = "no-pattern-qualifies";
 
 /** The `checkCreate` gates, in the order they run; a passing verdict lists those that ran (a vacuous pass is visible). */
 export const CREATE_GATES = [
@@ -687,6 +689,33 @@ export function rankOverlap(text: string, skills: readonly SkillRecord[]): Array
   return ranked.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
 
+/** The text of a pattern the server ranks skills against when it lists candidates: title, summary and tags. */
+export function patternOverlapText(p: { title: string; summary: string; tags: readonly string[] }): string {
+  return `${p.title} ${p.summary} ${p.tags.join(" ")}`;
+}
+
+/** The skills the model is not shown (user-invoked). Used by `createCandidates` and by `checkCreate`'s rank. The prompt's shown-skill list and the `nearest-missing` check still spell the same predicate themselves. */
+export function hiddenSkillNames(skills: readonly SkillRecord[]): Set<string> {
+  return new Set(skills.filter((s) => s.disableModelInvocation).map((s) => s.name));
+}
+
+/** The repo's skill directory charset. A name outside it is never listed, so one cannot break the `slug: a, b` line contract. */
+const CANDIDATE_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * The skills the server ranks closest to a pattern, for the prompt: the gate's own `rankOverlap` over EVERY skill
+ * (so the IDF population is the gate's), user-invoked skills dropped, a zero score never listed, first
+ * `OVERLAP_TOP_K`. The list is keyed on the PATTERN text while the gate later ranks the PROPOSAL text, so a listed
+ * skill can still fall outside the gate's top `OVERLAP_TOP_K`; the gate is unchanged.
+ */
+export function createCandidates(p: { title: string; summary: string; tags: readonly string[] }, skills: readonly SkillRecord[]): string[] {
+  const hidden = hiddenSkillNames(skills);
+  return rankOverlap(patternOverlapText(p), skills)
+    .filter((r) => !hidden.has(r.name) && r.score > 0 && CANDIDATE_NAME_RE.test(r.name))
+    .slice(0, OVERLAP_TOP_K)
+    .map((r) => r.name);
+}
+
 // =============================================================================
 // Ledger hash
 // =============================================================================
@@ -716,8 +745,13 @@ export function prepareCreate(args: { patterns: readonly PatternPage[]; skills: 
   const visible = args.skills.filter((s) => !s.disableModelInvocation);
   const skillList = visible.map((s) => `- ${s.name}: ${s.description.replace(/\s+/g, " ").trim()}`).join("\n");
   const index = renderPatternIndex(args.patterns, args.nonce);
+  const candidateLines = args.patterns
+    .map((p) => [p.slug, createCandidates(p, args.skills)] as const)
+    .filter(([, names]) => names.length > 0)
+    .map(([slug, names]) => `${slug}: ${names.join(", ")}`);
+  const candidateBlock = fenceBlock(args.nonce, "create-candidates", candidateLines.length > 0 ? candidateLines.join("\n") : "none");
   const skillBlock = fenceBlock(args.nonce, "skill-list", skillList);
-  const inputBytes = Buffer.byteLength(index, "utf8") + Buffer.byteLength(skillBlock, "utf8");
+  const inputBytes = Buffer.byteLength(index, "utf8") + Buffer.byteLength(candidateBlock, "utf8") + Buffer.byteLength(skillBlock, "utf8");
   const inputTokensBound = Math.ceil(inputBytes / CREATE_INPUT_BYTES_PER_TOKEN);
   if (inputTokensBound > CREATE_INPUT_MAX_TOKENS) {
     return refuse("input-size", "over-ceiling", { tokens: inputTokensBound, max: CREATE_INPUT_MAX_TOKENS, bytes: inputBytes });
@@ -743,9 +777,14 @@ export function prepareCreate(args: { patterns: readonly PatternPage[]; skills: 
     `- Never use these claim words: ${CREATE_CLAIM_WORDS.join(", ")}. Never restate or relax a hard rule.`,
     `- Never write instructions that ${INSTRUCTION_RISK_GROUPS.map((g) => g.label).join("; or that ")}.`,
     `- A server-side overlap check refuses a create whose overlap with any existing skill reaches ${OVERLAP_REFUSE_THRESHOLD.toFixed(2)}; your nearest_skill must be among the server's top ${OVERLAP_TOP_K} matches.`,
+    `- The create-candidates block lists, for each pattern, up to ${OVERLAP_TOP_K} existing skills the server ranks closest to that pattern by word overlap. Set nearest_skill to one listed for the pattern_slug you chose. The server then ranks your own slug, description and when_to_use against every skill, so a listed skill can still fall outside the top ${OVERLAP_TOP_K}. The "top ${OVERLAP_TOP_K} matches" rule above is that ranking of your own proposal.`,
+    `- A pattern with no line in the create-candidates block has no near skill the server can name: do not create from it. If no pattern qualifies, return no_action with reason_class ${CREATE_NO_PATTERN_REASON}.`,
+    `- If none of the listed skills is a genuine nearest skill for the pattern, return no_action with reason_class ${CREATE_NO_PATTERN_REASON}.`,
     "- pattern_slug must be exactly the slug of one pattern in the index.",
     "",
     index,
+    "",
+    candidateBlock,
     "",
     skillBlock,
   ].join("\n");
@@ -826,13 +865,21 @@ export function checkCreate(raw: unknown, c: CreateContext): CreateVerdict {
 
   // prefer-patch. One ranking over EVERY skill (a user-invoked skill still owns its area, so the threshold sees it);
   // the nearest skill is ranked among the skills the model was shown, because that is the list it chose from.
-  const hidden = new Set(c.skills.filter((s) => s.disableModelInvocation).map((s) => s.name));
+  const hidden = hiddenSkillNames(c.skills);
   if (!c.skills.some((s) => s.name === p.nearest_skill && !s.disableModelInvocation)) return refuse("prefer-patch", "nearest-missing");
   const ranked = rankOverlap(proposalOverlapText(p), c.skills);
   const nearestRank = ranked.filter((r) => !hidden.has(r.name)).findIndex((r) => r.name === p.nearest_skill) + 1;
   const top1 = round3(ranked[0].score);
   if (nearestRank > OVERLAP_TOP_K) {
-    return refuse("prefer-patch", "nearest-not-top3", { nearest_rank: nearestRank, top1 });
+    // Sentry-only. 0: the named skill is not among the candidates listed for the pattern the model named (a skill listed
+    // only under another pattern, or outside the candidate charset, also reads 0). 1: it was listed for that pattern and
+    // the gate's re-rank of the proposal text pushed it out. Absent when no candidates were offered for the named pattern.
+    const offered = createCandidates(page, c.skills);
+    return refuse("prefer-patch", "nearest-not-top3", {
+      nearest_rank: nearestRank,
+      top1,
+      ...(offered.length === 0 ? {} : { nearest_in_offered: offered.includes(p.nearest_skill) ? 1 : 0 }),
+    });
   }
   if (ranked[0].score >= OVERLAP_REFUSE_THRESHOLD) {
     return refuse("prefer-patch", "overlap", { top1, threshold: OVERLAP_REFUSE_THRESHOLD, nearest_rank: nearestRank });
