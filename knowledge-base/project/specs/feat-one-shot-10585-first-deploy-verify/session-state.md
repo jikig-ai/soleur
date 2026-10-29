@@ -34,3 +34,9 @@
 - Fix-round findings applied (60/0 suite). kb-consumers baseline row added. ci-pr-affected accept+regen done.
 - test-bun failure diagnosed: workflow-file-size gate (490KB) — compressed pointer echoes + comment prose → 489912B. Flakes seen: deploy-script-tests (4/4) all-green-steps.
 - NEXT: CI green on 19677780c3 → merge → post-merge Phase 3 (file standing tracker + directive per plan §Follow-Through Enrollment, gh issue close 10585) → postmerge verify → DONE.
+
+## Pipeline State (checkpoint 3)
+- HEAD 5d0a96f20a (pushed). All findings+CI fixes applied: cla re-author, affected-index accept+baseline, kb-consumers baseline, workflow-size gate (489912B), grep-q pipe guard.
+- Remaining CI failures were flakes: test-bun plugins/soleur (local green), deploy-script-tests (4/4) all-green-steps, test-scripts 6/8 grep-q-pipe-guard (REAL: fixed in 5d0a96f20a).
+- NEXT: CI green on 5d0a96f20a → gh pr merge (squash, repo convention) → post-merge Phase 3: `gh issue create` standing tracker, title "Standing watchdog: web-host first-deploy verification (#10585)", label `follow-through`, body carries UNFENCED column-0 directive `<!-- soleur:followthrough script=scripts/followthroughs/web-first-deploy-10585.sh earliest=<merge-ISO> secrets=GH_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->` → verify label+directive → `gh issue close 10585` citing tracker+run URL → postmerge verify → emit resume prompt.
+- tally agent_rounds: planner+cto+impl+8 panel+5 fixround+fix agent ≈ 17
