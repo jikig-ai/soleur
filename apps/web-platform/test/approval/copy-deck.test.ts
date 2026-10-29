@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { DEFAULT_WAIT_MS } from "@/server/approval/waiters";
 import { renderApprovalInboxTitle } from "@/server/approval/render";
 import { canonicalizeAction } from "@/server/approval/canonical";
-import { SAMPLES, TOOLS } from "./fixtures";
+import { SAMPLES } from "./fixtures";
 
 // "ran" is an outcome word EXCEPT in the negated form "ran nothing" (CLO round 2, ruling 8): that states what the platform knows.
 const OUTCOME_WORDS = /\b(sent|executed|delivered)\b|\bran\b(?! nothing\b)/i;
