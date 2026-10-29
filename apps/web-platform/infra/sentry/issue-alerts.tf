@@ -1810,16 +1810,17 @@ resource "sentry_alert" "masked_dir_precreate_failed" {
 # Contract: test/sentry-agent-auth-failure-alert-op-contract.test.ts (emit site <-> this block <-> alert-reference.json)
 # and test/agent-auth-failure-sentry-path.test.ts (real logger, real helper, secret canary).
 #
-# TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: the
-# email action is dropped within 48 hours of the first recorded real event (tag tuple recorded on #10455) and the
-# rule is removed when the root-cause fix merges or 30 days after the first event, whichever comes first. The
-# removal checklist is in the header of server/agent-auth-mode.ts.
+# TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: step 1
+# (the downgrade, 2026-10-29, first real event recorded on #10455) stopped the push: the provider rejects a rule with
+# no action, so the rule keeps ONE issue_owners email with the NoOne fallthrough, which lands in the issue stream and
+# is delivered to nobody. Step 2 removes the rule when the root-cause fix merges or 30 days after the first event,
+# whichever comes first. The removal checklist is in the header of server/agent-auth-mode.ts.
 #
-# GROUPING: the message is constant, so every event shares ONE Sentry issue and the 40-minute re-notify bounds the
-# email volume; the per-user 5-minute debounce and the process-wide cap (10 events per 5 minutes) bound the events.
-# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
-# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
-# are carried so a later diagnostic op under feature=agent-auth cannot notify by accident.
+# GROUPING: the message is constant, so every event shares ONE Sentry issue; the per-user 5-minute debounce and the
+# process-wide cap (10 events per 5 minutes) bound the events. NoOne delivers to nobody ONLY while the project has no
+# Sentry ownership rule: a rule that names owners would deliver to them, so re-check that before relying on it.
+# NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op) are carried so a later
+# diagnostic op under feature=agent-auth cannot notify by accident.
 #
 # DECODE KEY: README.md ("Diagnostic rule: agent-auth-failure") is the one copy of the tag decode table, the responder
 # steps and the read commands.
@@ -1846,7 +1847,7 @@ resource "sentry_alert" "agent_auth_failure" {
         { tagged_event = { key = "op", match = "eq", value = "cli-auth-failure" } },
       ]
       actions = [
-        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+        { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },
       ]
     },
   ]
