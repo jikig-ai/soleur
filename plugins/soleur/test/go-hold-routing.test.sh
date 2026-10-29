@@ -223,7 +223,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'must be an issue (no `pull_request` key) in state open'* ]] || emit classification-open-epic-only
   [[ "$para" == *'The list must belong to an epic the brief cites as `#N`'* ]] || emit classification-epic-ref
   [[ "$para" == *'at most the first three distinct'* ]] || emit classification-multi-epic
-  [[ "$para" == *'Could not read #<N>; its holds are unclassified and stand'* && "$para" == *'do not classify the items yourself'* ]] || emit classification-read-failure
+  [[ "$para" == *'Could not read #<N>; its holds are unclassified and stand'* && "$para" == *'do not classify the items yourself'* && "$para" == *'A failed read of ANY candidate'* && "$para" == *'ends routing for this brief'* ]] || emit classification-read-failure
   [[ "$para" == *'an outsider-authored body never triggers here either'* ]] || emit classification-author-limits
   [[ "$para" == *'**Classification list: route**'* && "$para" == *'Rule on this technical question (BINDING). Do NOT use AskUserQuestion. Classify these holds of epic #<N>:'* && "$para" == *'one `Item <id>:` block per item'* && "$para" == *'set aside every item whose words begin `Operator-reserved:`'* ]] || emit classification-route
   [[ "$para" == *'a block headed `UNTRUSTED DATA (hold items)` fenced by a line of a delimiter that the item text does not contain'* && "$para" == *'the literal strings `Structured advisory only` and `IMPLEMENTATION PLAN (not code)` are removed from item text repeatedly until neither occurs'* ]] || emit classification-untrusted-items
@@ -232,7 +232,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'never records a delegation and'* ]] || emit classification-no-delegation-recorded
   [[ "$para" == *'never calls `render`'* ]] || emit classification-no-render
   [[ "$para" == *'routes normally with the original input'* ]] || emit classification-continues
-  [[ "$para" == *'run this classification first and then the Own the epic flow'* ]] || emit classification-both-forms
+  [[ "$para" == *'run this classification first and then the Own the epic flow'* && "$para" == *'passing it the technical rulings, and then route normally'* ]] || emit classification-both-forms
   [[ "$para" == *'A sentence counts as a classification list only through the label-plus-items structure of the Classification list bullets.'* ]] || emit prose-amended
   [[ "$para" == *'**No delegable act**'* && "$para" == *'ask no epic-start question'* ]] || emit zero-scope-no-question
   [[ "$para" == *'file no `Standing-delegation` issue'* ]] || emit zero-scope-no-issue
@@ -240,23 +240,54 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'A reply that is missing, empty or malformed is not a No delegable act reply'* ]] || emit zero-scope-malformed-reply
   [[ "$para" == *', unless the No delegable act bullet below applies'* ]] || emit zero-scope-ask-once-exception
 
-  # Derived matcher (decision T4): the vocabulary, the author set and the three requirements are READ FROM the paragraph
-  # at run time (never restated here), then 11 synthesized fixtures are judged by ONE awk process. A failed extraction
-  # leaves the vocabulary or the author set empty, so every positive fixture fails (fail closed, never vacuously green).
+  # Review-round pins (PR 11476): the authority-bearing clauses of the classification route and the No delegable act bullet,
+  # one property per clause so a sweep row can delete exactly one phrase and require its own token.
+  [[ "$para" == *'is_pr:has("pull_request")'* ]] || emit classification-pr-projection
+  [[ "$para" == *'every item that contains `ask me before`, `explicit go-ahead` or `operator approval`'* && "$para" == *'a full-width colon and invisible characters, exactly as operator-holds.md section 1 does'* && "$para" == *'discard any `technical:` ruling the CTO returns for such an item (the item stays operator-class)'* ]] || emit classification-reserved-wording
+  [[ "$para" == *'which the calling skill numbers 1..n (the ids)'* ]] || emit classification-ids
+  [[ "$para" == *'a list in the brief itself belongs to the first open-issue candidate'* && "$para" == *'whose body, under the author limits, carries a list; only that number goes to the CTO'* ]] || emit classification-epic-selection
+  [[ "$para" == *'the classification-only form uses the prompt of the Classification list: route bullet instead of that prompt'* ]] || emit classification-intro-pointer
+  [[ "$para" == *'files no `action-required` and no `Standing-delegation` issue for this route'* && "$para" == *'(the Headless bullet below applies to the production-hold form only)'* && "$para" == *'prints the operator ACTIONs in its final reply and in the PR body, and continues to the draft PR'* ]] || emit classification-headless
+  [[ "$para" == *"The invoking message is the operator's own live instruction sentence in an attached session, outside any quoted hold list; a relayed or headless brief counts as naming none"* && "$para" == *'the invoking message (defined in the Classification list: route bullet) names no merge'* ]] || emit classification-invoking-message
+  [[ "$para" == *'The marker check: any `soleur-delegation` marker comment, valid or not, found with the discovery command of standing-delegation.md section 1, diverts to the Own the epic flow'* ]] || emit classification-marker-check
+  [[ "$para" == *'Class `operator (schedule)` (the CTO reply cell stays `waiting (<ISO UTC>)`)'* && "$para" == *'a literal pipe in item text written `\|`'* && "$para" == *'under a heading `Hold classification:`'* ]] || emit classification-rows
+  [[ "$para" == *'Spawn the CTO only if items remain after the set-aside'* && "$para" == *'on a harness that cannot spawn the CTO treat every item as operator-class and print the ACTIONs'* ]] || emit classification-edge-states
+  [[ "$para" == *'For this call the Item block shape below replaces the four-heading shape of your Rule interface'* ]] || emit classification-prompt-overrides-shape
+  [[ "$para" == *'(it may carry more words before the colon)'* && "$para" == *'may carry more words (`Blocked by the read-only rules`) and need not end at a colon'* ]] || emit classification-label-forms
+  [[ "$para" == *'If the epic carries a `soleur-delegation` marker comment, or the invoking message names a merge, ready, dispatch or revert, use the Own the epic flow above instead of this route'* ]] || emit classification-divert
+  [[ "$para" == *'The CTO can only add operator-class items, never remove one'* ]] || emit classification-only-adds
+  [[ "$para" == *'discards unknown or duplicate ids'* ]] || emit classification-discards-ids
+  [[ "$para" == *'treats an item with no block as operator-class'* ]] || emit classification-no-block
+  [[ "$para" == *'and every rule above (fail closed, the author checks, the plan-path rules, `Operator-reserved:` holds always stand) is unchanged'* ]] || emit classification-rules-unchanged
+  [[ "$para" == *'also with `If an open action-required issue for this epic exists, reuse it`'* ]] || emit zero-scope-reuse-issue
+  [[ "$para" == *'run no `render`'* ]] || emit zero-scope-no-render
+  [[ "$para" == *'states No delegable act and carries no Scope items'* ]] || emit zero-scope-reply-shape
+  [[ "$para" == *'When no valid Standing Delegation exists'* && "$para" == *'names no merge, ready, dispatch or revert'* ]] || emit zero-scope-conditions
+  [[ "$para" == *'If none of the holds is delegable, say No delegable act instead of the Scope items'* ]] || emit zero-scope-cue
+  [[ "$para" == *'ask nothing and route normally'* ]] || emit zero-scope-ask-nothing
+
+  # Derived matcher (decision T4): the vocabulary, the author set, the ignored-region rules (fence, quote, comment, done-words)
+  # and the three requirements are READ FROM the paragraph at run time (never restated here), then the synthesized fixtures are
+  # judged by ONE awk process. A failed extraction fails CLOSED: an empty vocabulary routes nothing, so every positive fixture
+  # goes RED (and the vocabulary note is raised); an empty author set only loses the body-borne positives (fx-positive-body and
+  # fx-positive-crlf-body go RED, the brief-borne ones keep routing) and raises the author-set note; a missing ignore rule lets
+  # its negative fixture route. An awk crash prints no sentinel and is itself a violation (fx-matcher-failed).
   printf '%s\n' "$para" > "$SANDBOX/para.cur"
-  local fxout
-  fxout="$(PARA_FILE="$SANDBOX/para.cur" FXDIR="$FXDIR" FX_NAMES="$FX_NAMES" awk -f "$MATCHER_AWK" </dev/null)"
-  ! grep -Fxq -- fx-positive-brief <<<"$fxout" || emit fx-positive-brief
-  ! grep -Fxq -- fx-positive-body <<<"$fxout" || emit fx-positive-body
-  ! grep -Fxq -- fx-positive-variant <<<"$fxout" || emit fx-positive-variant
-  ! grep -Fxq -- fx-negative-bare-ask <<<"$fxout" || emit fx-negative-bare-ask
-  ! grep -Fxq -- fx-negative-no-epic <<<"$fxout" || emit fx-negative-no-epic
-  ! grep -Fxq -- fx-negative-no-items <<<"$fxout" || emit fx-negative-no-items
-  ! grep -Fxq -- fx-negative-outsider-body <<<"$fxout" || emit fx-negative-outsider-body
-  ! grep -Fxq -- fx-negative-closed-epic-brief <<<"$fxout" || emit fx-negative-closed-epic-brief
-  ! grep -Fxq -- fx-negative-closed-epic-body <<<"$fxout" || emit fx-negative-closed-epic-body
-  ! grep -Fxq -- fx-negative-pr-as-epic <<<"$fxout" || emit fx-negative-pr-as-epic
-  ! grep -Fxq -- fx-negative-cto-line <<<"$fxout" || emit fx-negative-cto-line
+  local fxout fxl
+  fxout="$(PARA_FILE="$SANDBOX/para.cur" FXDIR="$FXDIR" FX_NAMES="$FX_NAMES" awk -f "$MATCHER_AWK" </dev/null 2>/dev/null)"
+  # Fail closed on the matcher itself: no sentinel means it crashed or never ran (empty output must never read as "no fixture mismatched"),
+  # and any output line that is not a fixture name, the sentinel, a vocab line or a note is an unknown token.
+  grep -Fxq -- matcher-ok <<<"$fxout" || emit fx-matcher-failed
+  for _fxn in $FX_NAMES; do  # fx-emit-loop
+    ! grep -Fxq -- "$_fxn" <<<"$fxout" || emit "$_fxn"
+  done
+  while IFS= read -r fxl; do
+    case "$fxl" in ""|matcher-ok|vocab:*|note:*) continue ;; esac
+    [[ " $FX_NAMES " == *" $fxl "* ]] || emit fx-unknown
+  done <<<"$fxout"
+  [[ "$(grep -m1 '^vocab:' <<<"$fxout")" == 'vocab:Owner-side|Open owner items|Blocked by|Blocked|Waiting on|Waiting for' ]] || emit classification-vocabulary-exact
+  if grep -Fxq -- note:authors-empty <<<"$fxout"; then emit matcher-note-authors-empty; fi
+  if grep -Fxq -- note:vocabulary-empty <<<"$fxout"; then emit matcher-note-vocabulary-empty; fi
 
   # Location: after the Step 1 heading, before the start marker, and never between the markers.
   start_ln="$(awk -v s="$BLOCK_START" 'index($0, s) { print NR; exit }' "$f")"
@@ -307,17 +338,30 @@ evaluate_ship() { # <ship SKILL.md> -> V:<token> lines
 
 # --- derived matcher and synthesized fixtures (decision T4) ---------------------------------------------------
 # Fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only): no real brief text, no repository path literal. The table is
-# written ONCE here; evaluate() runs one awk process over it per call. Epic JSON is built with `jq -n --arg` and read with
-# `jq -j` (never grepped), and fixture text reaches awk through files, never `awk -v`.
+# written ONCE here; evaluate() runs one awk process over it per call. The matcher reads FILES (brief.txt, body.txt, state, assoc,
+# ispr, expect, mode), never JSON: fx_add builds each epic as JSON with `jq -n --arg` and unpacks it with `jq -j` (never grepped) so a
+# body with newlines, quotes or a CRLF survives the round trip into those files, and fixture text reaches awk through files, never
+# `awk -v`. The spoof line inside fx-negative-outsider-body (a body that claims `author_association` MEMBER) is the fixture's point:
+# only the REAL association (CONTRIBUTOR) may count.
+#
+# MODELLED by the matcher, from the rules the paragraph states: the label vocabulary (read from the paragraph), whole-word label
+# match, heading / bold / plain-colon labels, open items (not `[x]`, not struck through), the block that ends at the next heading
+# of the same or a higher level, the ignored regions (fenced code, `>`-quoted lines, HTML comments, blocks under a heading with a
+# done-word), the author set, the open-issue requirement, the pull-request skip, and CRLF stripped when a file is slurped.
+# NOT modelled: the bounded `gh api` call itself (a fixture carries its result as data), the first-three-candidates order and the
+# read-failure sentence, the marker-check and invoking-message diversion, the Operator-reserved set-aside and the CTO exchange.
+# The rules the matcher hard-codes (checked items, word boundary, block end, plain-label colon, CRLF) are proven to be implemented
+# by the fixtures going green on the real paragraph; the prose that states them is held by the pins above.
 command -v jq >/dev/null || { printf 'FATAL: jq required\n' >&2; exit 2; }
 FXDIR="$SANDBOX/fx"; mkdir -p "$FXDIR"; assert_fixture_dir "$FXDIR"
 MATCHER_AWK="$SANDBOX/matcher.awk"
 cat > "$MATCHER_AWK" <<'AWK'
 function slurp(path,   line, out, n) {
   out = ""; n = 0
-  while ((getline line < path) > 0) { out = out (n++ ? "\n" : "") line }
+  while ((getline line < path) > 0) { sub(/\r$/, "", line); out = out (n++ ? "\n" : "") line }
   close(path); return out
 }
+function present(path,   x, r) { r = ((getline x < path) >= 0); close(path); return r }
 function count_of(h, key,   c, i) { c = 0; while ((i = index(h, key)) > 0) { c++; h = substr(h, i + length(key)) } return c }
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 function is_item(t) { return (t ~ /^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/) && (t !~ /\[[xX]\]/) && (t !~ /~~/) }
@@ -334,8 +378,42 @@ function vbegins(lab,   l, i, c) {
   for (i = 1; i <= nvoc; i++) if (index(l, voc[i]) == 1) { c = substr(l, length(voc[i]) + 1, 1); if (c == "" || c !~ /[a-z0-9-]/) return 1 }
   return 0
 }
+function done_in(h,   i, l) {
+  l = tolower(h)
+  for (i = 1; i <= ndone; i++) if (l ~ ("(^|[^a-z0-9])" done_w[i] "([^a-z0-9]|$)")) return 1
+  return 0
+}
+# The ignored regions the paragraph states: fenced code, `>`-quoted lines, HTML comments, and any block under a heading that
+# contains a done-word as a whole word (the block runs to the next heading of the same or a higher level).
+function clean(text,   n, L, i, t, out, m, infence, incom, skiplvl, lvl, a, b) {
+  n = split(text, L, "\n"); out = ""; m = 0; infence = 0; incom = 0; skiplvl = 0
+  for (i = 1; i <= n; i++) {
+    t = L[i]
+    if (ign_fence) {
+      if (t ~ /^[ \t]*(```|~~~)/) { infence = !infence; continue }
+      if (infence) continue
+    }
+    if (ign_comment) {
+      if (incom) { b = index(t, "-->"); if (b == 0) continue; t = substr(t, b + 3); incom = 0 }
+      while ((a = index(t, "<!--")) > 0) {
+        b = index(substr(t, a + 4), "-->")
+        if (b > 0) t = substr(t, 1, a - 1) substr(t, a + 4 + b + 2)
+        else { t = substr(t, 1, a - 1); incom = 1; break }
+      }
+    }
+    if (t ~ /^[ \t]*>/) { if (ign_quote) continue; sub(/^[ \t]*(>[ \t]*)+/, "", t) }   # a quote's content still parses as markdown unless the paragraph ignores quoted lines
+    if (t ~ /^#+[ \t]/) {
+      match(t, /^#+/); lvl = RLENGTH
+      if (skiplvl && lvl <= skiplvl) skiplvl = 0
+      if (!skiplvl && done_in(t)) { skiplvl = lvl; continue }
+    }
+    if (skiplvl) continue
+    out = out (m++ ? "\n" : "") t
+  }
+  return out
+}
 function list_in(text,   n, L, i, j, lab, k0, l0, t) {
-  n = split(text, L, "\n")
+  n = split(clean(text), L, "\n")
   for (i = 1; i <= n; i++) {
     lab = label_of(L[i]); k0 = KIND; l0 = LVL
     if (lab == "" || !vbegins(lab)) continue
@@ -360,7 +438,7 @@ function would_route(brief, mode, state, assoc, ispr, body) {
 }
 BEGIN {
   para = slurp(ENVIRON["PARA_FILE"]); dir = ENVIRON["FXDIR"]
-  nvoc = 0; nau = 0
+  nvoc = 0; nau = 0; ndone = 0
   key = "begin with one of"
   if (count_of(para, key) == 1) {
     seg = substr(para, index(para, key) + length(key)); e = index(seg, "(any case")
@@ -369,7 +447,7 @@ BEGIN {
       while ((a = index(seg, "`")) > 0) {
         seg = substr(seg, a + 1); b = index(seg, "`"); if (b == 0) break
         tk = trim(substr(seg, 1, b - 1)); seg = substr(seg, b + 1)
-        if (tk != "") voc[++nvoc] = tolower(tk)
+        if (tk != "") { voc[++nvoc] = tolower(tk); vocorig[nvoc] = tk }
       }
     }
   }
@@ -384,21 +462,42 @@ BEGIN {
       }
     }
   }
+  # The sentence that lists the ignored regions: it switches each ignore rule on, and its done-words are read from it.
+  ikey = "Fenced code,"; iseg = ""
+  if (count_of(para, ikey) == 1) {
+    iseg = substr(para, index(para, ikey)); e = index(iseg, " are ignored")
+    iseg = (e > 0) ? substr(iseg, 1, e - 1) : ""
+  }
+  ign_fence = (index(iseg, "Fenced code") > 0); ign_quote = (index(iseg, "`>`-quoted lines") > 0); ign_comment = (index(iseg, "HTML comments") > 0)
+  dkey = "contains the whole word "
+  if (count_of(iseg, dkey) == 1) {
+    seg = substr(iseg, index(iseg, dkey) + length(dkey)); gsub(/ or /, ", ", seg)
+    nd = split(seg, parts, ",")
+    for (i = 1; i <= nd; i++) { w = tolower(trim(parts[i])); if (w != "") done_w[++ndone] = w }
+  }
   need_epic  = (index(para, "cites as `#N`") > 0)
   need_issue = (index(para, "must be an issue (no `pull_request` key)") > 0)
   need_open  = (index(para, "must be an issue (no `pull_request` key) in state open") > 0)
+  voclist = ""; for (i = 1; i <= nvoc; i++) voclist = voclist (i > 1 ? "|" : "") vocorig[i]
   nf = split(ENVIRON["FX_NAMES"], names, " ")
   for (f = 1; f <= nf; f++) {
     d = dir "/" names[f]
+    if (!present(d "/expect") || !present(d "/brief.txt") || !present(d "/mode")) { print names[f]; continue }
     got = would_route(slurp(d "/brief.txt"), slurp(d "/mode"), slurp(d "/state"), slurp(d "/assoc"), slurp(d "/ispr"), slurp(d "/body.txt"))
     want = (slurp(d "/expect") == "route")
     if (got != want) print names[f]
   }
+  print "vocab:" voclist
+  if (nau == 0) print "note:authors-empty"
+  if (nvoc == 0) print "note:vocabulary-empty"
 }
+END { print "matcher-ok" }
 AWK
-FX_NAMES="fx-positive-brief fx-positive-body fx-positive-variant fx-negative-bare-ask fx-negative-no-epic fx-negative-no-items fx-negative-outsider-body fx-negative-closed-epic-brief fx-negative-closed-epic-body fx-negative-pr-as-epic fx-negative-cto-line"
+FX_NAMES="fx-positive-brief fx-positive-body fx-positive-variant fx-positive-unresolved-heading fx-positive-crlf-body fx-negative-bare-ask fx-negative-no-epic fx-negative-no-items fx-negative-outsider-body fx-negative-closed-epic-brief fx-negative-closed-epic-body fx-negative-pr-as-epic fx-negative-cto-line fx-negative-prose-vocab-plus-unrelated-list fx-negative-checked-items-only fx-negative-word-boundary-label fx-negative-list-after-same-level-heading fx-negative-non-vocabulary-label fx-negative-fenced-list fx-negative-done-heading-list fx-negative-html-comment-list fx-negative-quoted-list"
+FX_ADDED=0
 fx_add() { # <name> <route|noroute> <brief> <epic-state|none> <author_association> <epic-body> <pull-request 0|1>
   local d="$FXDIR/$1" js
+  FX_ADDED=$((FX_ADDED + 1))
   mkdir -p "$d"; printf '%s' "$2" > "$d/expect"; printf '%s' "$3" > "$d/brief.txt"
   if [[ "$4" == none ]]; then printf 'none' > "$d/mode"; return 0; fi
   printf 'read' > "$d/mode"
@@ -411,6 +510,8 @@ PLAIN_BODY=$'A plain epic body.\nNothing is listed here.'
 fx_add fx-positive-brief route $'Resume #123.\nOwner-side items:\n- rotate the example credential\n- confirm the example vendor answer\n## Blocked by the read-only rules\n- merge the example change' open MEMBER "$PLAIN_BODY" 0
 fx_add fx-positive-body route 'Resume #123 and continue' open MEMBER $'# Epic\n\n## Waiting on\n- an example vendor reply\n' 0
 fx_add fx-positive-variant route $'Resume #123.\nOWNER-SIDE ITEMS:\n1. first example item\n2. second example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-positive-unresolved-heading route $'Resume #123.\n## Blocked by unresolved questions\n- an example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-positive-crlf-body route 'Resume #123 and continue' open MEMBER $'Waiting on:\r\n- an example vendor reply\r\n' 0
 fx_add fx-negative-bare-ask noroute 'ask the operator before you continue' none "" "" 0
 fx_add fx-negative-no-epic noroute $'Owner-side items:\n- first example item\n- second example item' open MEMBER "$PLAIN_BODY" 0
 fx_add fx-negative-no-items noroute $'Resume #123.\nBlocked by the read-only rules:\n\nNothing is listed under it.' open MEMBER "$PLAIN_BODY" 0
@@ -419,6 +520,16 @@ fx_add fx-negative-closed-epic-brief noroute $'Resume #123.\nOwner-side items:\n
 fx_add fx-negative-closed-epic-body noroute 'Resume #123 and continue' closed MEMBER $'## Waiting on\n- an example item' 0
 fx_add fx-negative-pr-as-epic noroute $'Resume #123.\nOwner-side items:\n- an example item' open MEMBER "$PLAIN_BODY" 1
 fx_add fx-negative-cto-line noroute $'Resume #123.\nsoleur:engineering:cto decides every technical fork.' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-prose-vocab-plus-unrelated-list noroute $'Resume #123, we are waiting on the vendor.\nNotes:\n- an example note' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-checked-items-only noroute $'Resume #123.\nOwner-side items:\n- [x] first example item\n- ~~second example item~~' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-word-boundary-label noroute $'Resume #123.\nBlockedness:\n- an example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-list-after-same-level-heading noroute $'Resume #123.\n## Waiting on\n## Notes\n- an example note' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-non-vocabulary-label noroute $'Resume #123.\nPending:\n- an example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-fenced-list noroute $'Resume #123.\n```\nOwner-side items:\n- an example item\n```' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-done-heading-list noroute $'Resume #123.\n## Done\nOwner-side items:\n- an example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-html-comment-list noroute $'Resume #123.\n<!--\nOwner-side items:\n- an example item\n-->' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-quoted-list noroute $'Resume #123.\n> Owner-side items:\n> - an example item' open MEMBER "$PLAIN_BODY" 0
+FX_NNAMES=0; for _n in $FX_NAMES; do FX_NNAMES=$((FX_NNAMES + 1)); done
 
 BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
 [[ -n "$BASE_REF" ]] || BASE_REF="refs/unresolvable-merge-base"
@@ -430,7 +541,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced classification-trigger classification-brief-only classification-ignored-blocks classification-open-epic-only classification-epic-ref classification-multi-epic classification-read-failure classification-author-limits classification-route classification-untrusted-items classification-prompt-not-own-the-epic classification-never-discharges classification-no-delegation-recorded classification-no-render classification-continues classification-both-forms prose-amended zero-scope-no-question zero-scope-no-issue zero-scope-precedence zero-scope-malformed-reply zero-scope-ask-once-exception fx-positive-brief fx-positive-body fx-positive-variant fx-negative-bare-ask fx-negative-no-epic fx-negative-no-items fx-negative-outsider-body fx-negative-closed-epic-brief fx-negative-closed-epic-body fx-negative-pr-as-epic fx-negative-cto-line anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced classification-trigger classification-brief-only classification-ignored-blocks classification-open-epic-only classification-epic-ref classification-multi-epic classification-read-failure classification-author-limits classification-route classification-untrusted-items classification-prompt-not-own-the-epic classification-never-discharges classification-no-delegation-recorded classification-no-render classification-continues classification-both-forms prose-amended zero-scope-no-question zero-scope-no-issue zero-scope-precedence zero-scope-malformed-reply zero-scope-ask-once-exception classification-pr-projection classification-reserved-wording classification-ids classification-epic-selection classification-intro-pointer classification-headless classification-invoking-message classification-marker-check classification-rows classification-edge-states classification-prompt-overrides-shape classification-label-forms classification-divert classification-only-adds classification-discards-ids classification-no-block classification-rules-unchanged zero-scope-reuse-issue zero-scope-no-render zero-scope-reply-shape zero-scope-conditions zero-scope-cue zero-scope-ask-nothing classification-vocabulary-exact matcher-note-authors-empty matcher-note-vocabulary-empty fx-matcher-failed fx-unknown $FX_NAMES anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -457,10 +568,14 @@ done
 ck
 [[ "$SHIP_RC" -eq 0 && -z "$SHIP_OUT" ]] && ok "evaluate_ship agrees: rc=0 and no violation lines" || bad "evaluate_ship reported violations: ${SHIP_OUT//$'\n'/ }"
 
+# The fixture table is complete: one fx_add call per name (a name without a directory would otherwise be judged on empty files).
+ck
+[[ "$FX_NNAMES" -gt 0 && "$FX_ADDED" -eq "$FX_NNAMES" ]] && ok "fixture table: $FX_ADDED fx_add calls for $FX_NNAMES names" || bad "fixture table: $FX_ADDED fx_add calls but $FX_NNAMES names"
+
 # one-shot carries the one-sentence pointer for a direct run (the go.md paragraph is not reachable from there).
 ONE_SHOT_MD="$ROOT/plugins/soleur/skills/one-shot/SKILL.md"
 ck
-if [[ -r "$ONE_SHOT_MD" ]] && grep -Fq 'follows go.md Step 1.5 in headless form' "$ONE_SHOT_MD" && grep -Fq '`HOLDS:`' "$ONE_SHOT_MD"; then ok "one-shot points a direct HOLDS run at go.md Step 1.5 in headless form"
+if [[ -r "$ONE_SHOT_MD" ]] && grep -Fq 'follows go.md Step 1.5 in headless form' "$ONE_SHOT_MD" && grep -Fq '`HOLDS:`' "$ONE_SHOT_MD" && grep -Fq '(none if classification-only)' "$ONE_SHOT_MD"; then ok "one-shot points a direct HOLDS run at go.md Step 1.5 in headless form"
 else bad "one-shot lost its pointer to go.md Step 1.5 for a direct run with a HOLDS brief"; fi
 
 # Floor on the DERIVATION: exactly one hold-routing paragraph, non-trivial, and the block non-empty.
@@ -487,6 +602,7 @@ row() {
 
 M="$SANDBOX/m"; mkdir -p "$M"; assert_fixture_dir "$M"
 nrows=0
+nextra=1   # asserted outside row()/mrow(): the fixture-table completeness assertion; the matcher controls add 2 below
 
 # --- verdict-helper controls: a helper that can never fail turns every row below into noise ---------------
 # Each control feeds a helper a known-bad input in a subshell (its ledger is /dev/null) and requires that the
@@ -713,13 +829,12 @@ mrow "M77 the dedupe falls back to a title or body mention" "$M/m77.md" headless
 para_awk sub "$GO_MD" 'never a count' 'a count per page is fine' > "$M/m78.md"
 mrow "M78 the dedupe counts per page (a number per page, not a line per match)" "$M/m78.md" headless-dedupe-output
 # C1..C10: the Classification list rows (epic 9927). Ten hand-written rows, each with ONE primary token; `mrow` also asserts
-# the mutation LANDED. Every phrase is the FULL phrase of its own pin, because the short forms also occur elsewhere in the paragraph.
+# the mutation LANDED. Every phrase is a phrase inside its own pin's span (not always the pin's whole text), long enough that no other part of the paragraph carries it.
 para_awk dropline "$GO_MD" '**Classification list: trigger**' > "$M/c1a.md"
 para_awk dropline "$M/c1a.md" '**Classification list: route**' > "$M/c1.md"
 mrow "C1 strip the two Classification bullets (revert to the old trigger)" "$M/c1.md" classification-trigger
 row "C1b the measured shape is no longer routed once the bullets are gone" "$M/c1.md" "$BASE_REF" fx-positive-brief; nrows=$((nrows + 1))
-para_awk sub "$GO_MD" 'OWNER, MEMBER or COLLABORATOR' 'OWNER, MEMBER or COLLABORATOR, CONTRIBUTOR or NONE' > "$M/c2.md"
-mrow "C2 the author set is widened to CONTRIBUTOR or NONE" "$M/c2.md" fx-negative-outsider-body
+mrow "C2 the author set is widened to CONTRIBUTOR or NONE (the M39 mutation, reused)" "$M/m39.md" fx-negative-outsider-body
 para_awk sub "$GO_MD" 'an outsider-authored body never triggers here either' 'an outsider-authored body triggers here too' > "$M/c3.md"
 mrow "C3 the widened source accepts an outsider-authored body" "$M/c3.md" classification-author-limits
 para_awk sub "$GO_MD" 'cites as `#N`' '' > "$M/c4.md"
@@ -736,9 +851,32 @@ para_awk dropline "$GO_MD" '**No delegable act**' > "$M/c9.md"
 mrow "C9 the No delegable act bullet is deleted" "$M/c9.md" zero-scope-no-issue
 para_awk sub "$GO_MD" 'begin with one of' 'start with one of' > "$M/c10.md"
 mrow "C10 the vocabulary extraction is empty (own dispatch)" "$M/c10.md" classification-trigger
-for _fx in fx-positive-brief fx-positive-body fx-positive-variant; do
+for _fx in fx-positive-brief fx-positive-body fx-positive-variant fx-positive-unresolved-heading fx-positive-crlf-body; do
   row "C10 with an empty vocabulary the matcher fails closed: '$_fx' is RED" "$M/c10.md" "$BASE_REF" "$_fx"; nrows=$((nrows + 1))
 done
+row "C10b an empty vocabulary leaves a note" "$M/c10.md" "$BASE_REF" matcher-note-vocabulary-empty; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" '`Open owner items`' '`Open items`' > "$M/c11.md"
+mrow "C11 the extracted vocabulary is no longer the literal list" "$M/c11.md" classification-vocabulary-exact
+para_awk sub "$GO_MD" 'its `author_association` is' 'its `author_name` is' > "$M/c12.md"
+mrow "C12 the author set is empty: the body-borne positive goes RED" "$M/c12.md" fx-positive-body
+row "C12b an empty author set also loses the CRLF body-borne positive" "$M/c12.md" "$BASE_REF" fx-positive-crlf-body; nrows=$((nrows + 1))
+row "C12c an empty author set leaves a note" "$M/c12.md" "$BASE_REF" matcher-note-authors-empty; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'Fenced code, ' '' > "$M/c13.md"
+mrow "C13 the fenced-code ignore rule is gone: the fenced list routes" "$M/c13.md" fx-negative-fenced-list
+para_awk sub "$GO_MD" '`>`-quoted lines, ' '' > "$M/c14.md"
+mrow "C14 the quoted-line ignore rule is gone: the quoted list routes" "$M/c14.md" fx-negative-quoted-list
+para_awk sub "$GO_MD" ', HTML comments (`<!-- -->`)' '' > "$M/c15.md"
+mrow "C15 the HTML-comment ignore rule is gone: the commented list routes" "$M/c15.md" fx-negative-html-comment-list
+para_awk sub "$GO_MD" 'done, resolved, closed' 'resolved, closed' > "$M/c16.md"
+mrow "C16 the done-word list loses 'done': the Done-headed list routes" "$M/c16.md" fx-negative-done-heading-list
+# The matcher fails closed on itself: a crashed matcher prints no sentinel; a matcher that prints a stray token is an unknown token.
+printf 'BEGIN { this is not awk (\n' > "$M/crash.awk"
+printf 'BEGIN { print "stray-token" }\nEND { print "matcher-ok" }\n' > "$M/stray.awk"
+ck; _o="$(MATCHER_AWK="$M/crash.awk" evaluate "$GO_MD" "$BASE_REF" skip)"
+grep -Fxq 'V:fx-matcher-failed' <<<"$_o" && ok "a crashed matcher is a violation (fx-matcher-failed), never an empty pass" || bad "a crashed matcher did not raise fx-matcher-failed: ${_o//$'\n'/ }"
+ck; _o="$(MATCHER_AWK="$M/stray.awk" evaluate "$GO_MD" "$BASE_REF" skip)"
+grep -Fxq 'V:fx-unknown' <<<"$_o" && ok "a stray matcher output line is a violation (fx-unknown)" || bad "a stray matcher output line did not raise fx-unknown: ${_o//$'\n'/ }"
+nextra=$((nextra + 2))
 # Table-driven sweep: every pin that has no hand-written row above gets its own phrase deleted, and its OWN token must go RED.
 SWEEP=(
   'classification-brief-only|It applies only to a resume or handoff brief (the "It routes only when a resume or handoff brief" sentence), never to a message that merely names an issue'
@@ -758,6 +896,48 @@ SWEEP=(
   'zero-scope-precedence|takes precedence over the epic-start question in the bullets above and over the filing in the Headless bullet below'
   'zero-scope-malformed-reply|A reply that is missing, empty or malformed is not a No delegable act reply'
   'zero-scope-ask-once-exception|, unless the No delegable act bullet below applies'
+  'classification-trigger|a plain label begins with one of these words and its colon is the last character of the line'
+  'classification-trigger|, which needs the epic reference but not the structured HOLDS:/OWNER-GATED/Operator Holds list'
+  'classification-pr-projection|is_pr:has("pull_request")'
+  'classification-reserved-wording|every item that contains `ask me before`, `explicit go-ahead` or `operator approval`'
+  'classification-reserved-wording|discard any `technical:` ruling the CTO returns for such an item (the item stays operator-class)'
+  'classification-reserved-wording|exactly as operator-holds.md section 1 does'
+  'classification-ids|which the calling skill numbers 1..n (the ids)'
+  'classification-epic-selection|a list in the brief itself belongs to the first open-issue candidate'
+  'classification-epic-selection|whose body, under the author limits, carries a list; only that number goes to the CTO'
+  'classification-intro-pointer|the classification-only form uses the prompt of the Classification list: route bullet instead of that prompt'
+  'classification-headless|files no `action-required` and no `Standing-delegation` issue for this route'
+  'classification-headless|(the Headless bullet below applies to the production-hold form only)'
+  'classification-headless|prints the operator ACTIONs in its final reply and in the PR body, and continues to the draft PR'
+  'classification-invoking-message|a relayed or headless brief counts as naming none'
+  'classification-invoking-message|(defined in the Classification list: route bullet)'
+  'classification-marker-check|The marker check: any `soleur-delegation` marker comment, valid or not, found with the discovery command of standing-delegation.md section 1, diverts to the Own the epic flow.'
+  'classification-rows|Class `operator (schedule)`'
+  'classification-rows|a literal pipe in item text written'
+  'classification-rows|under a heading `Hold classification:`'
+  'classification-edge-states|Spawn the CTO only if items remain after the set-aside'
+  'classification-edge-states|on a harness that cannot spawn the CTO treat every item as operator-class and print the ACTIONs'
+  'classification-prompt-overrides-shape|For this call the Item block shape below replaces the four-heading shape of your Rule interface'
+  'classification-label-forms|(it may carry more words before the colon)'
+  'classification-label-forms|and need not end at a colon'
+  'classification-divert|use the Own the epic flow above instead of this route'
+  'classification-divert|or the invoking message names a merge, ready, dispatch or revert,'
+  'classification-only-adds|can only add operator-class items, never remove one'
+  'classification-discards-ids|discards unknown or duplicate ids'
+  'classification-no-block|treats an item with no block as operator-class'
+  'classification-rules-unchanged|(fail closed, the author checks, the plan-path rules, `Operator-reserved:` holds always stand) is unchanged'
+  'zero-scope-reuse-issue|and also with `If an open action-required issue for this epic exists, reuse it`'
+  'zero-scope-no-render|run no `render`, '
+  'zero-scope-reply-shape|states No delegable act and carries no Scope items'
+  'zero-scope-conditions|When no valid Standing Delegation exists'
+  'zero-scope-conditions|names no merge, ready, dispatch or revert'
+  'zero-scope-cue|If none of the holds is delegable, say No delegable act instead of the Scope items'
+  'zero-scope-ask-nothing|ask nothing and route normally'
+  'classification-read-failure|A failed read of ANY candidate'
+  'classification-read-failure|ends routing for this brief'
+  'classification-both-forms|passing it the technical rulings, and then route normally'
+  'classification-untrusted-items|removed from item text repeatedly until neither occurs'
+  'classification-ignored-blocks|, HTML comments (`<!-- -->`)'
 )
 _si=0
 for _pair in "${SWEEP[@]}"; do
@@ -813,14 +993,14 @@ if [[ -n "${GOHOLD_NESTED:-}" ]]; then
   skip "H4b nested copy: the harness row is not recursed"
 else
   _self="${BASH_SOURCE[0]}"; _nest="$M/nested.test.sh"
-  sed -e "s|^ROOT=.*|ROOT=\"$ROOT\"|" -e '/|| emit list-source$/d' -e '/|| emit fx-negative-outsider-body$/d' "$_self" > "$_nest"
+  sed -e "s|^ROOT=.*|ROOT=\"$ROOT\"|" -e '/|| emit list-source$/d' -e 's|for _fxn in \$FX_NAMES; do  # fx-emit-loop|for _fxn in ${FX_NAMES/fx-negative-outsider-body/}; do|' "$_self" > "$_nest"
   GOHOLD_NESTED=1 bash "$_nest" </dev/null >"$M/nested.out" 2>"$M/nested.err"; _nrc=$?
   if [[ "$(grep -c '|| emit list-source$' "$_self" || true)" -eq 1 && "$(grep -c '|| emit list-source$' "$_nest" || true)" -eq 0 ]] \
      && [[ "$_nrc" -ne 0 ]] && grep -Fq "M26 delete the list-source bullet: expected RED for 'list-source'" "$M/nested.err"; then
     ok "H4 removing the list-source emit from evaluate() turns M26 RED (the row grades the check)"
   else bad "H4 removing the list-source emit did not turn M26 RED (nested rc=$_nrc, emit lines in copy: $(grep -c '|| emit list-source$' "$_nest" || true))"; fi
-  if [[ "$(grep -c '|| emit fx-negative-outsider-body$' "$_self" || true)" -eq 1 && "$(grep -c '|| emit fx-negative-outsider-body$' "$_nest" || true)" -eq 0 ]] \
-     && [[ "$_nrc" -ne 0 ]] && grep -Fq "C2 the author set is widened to CONTRIBUTOR or NONE: expected RED for 'fx-negative-outsider-body'" "$M/nested.err"; then
+  if [[ "$(grep -c 'do  # fx-emit-loop$' "$_self" || true)" -eq 1 && "$(grep -c 'do  # fx-emit-loop$' "$_nest" || true)" -eq 0 ]] \
+     && [[ "$_nrc" -ne 0 ]] && grep -Fq "C2 the author set is widened to CONTRIBUTOR or NONE (the M39 mutation, reused): expected RED for 'fx-negative-outsider-body'" "$M/nested.err"; then
     ok "H4b removing the outsider-body fixture emit turns C2 RED (the row grades the fixture)"
   else bad "H4b removing the outsider-body fixture emit did not turn C2 RED (nested rc=$_nrc)"; fi
 fi
@@ -838,8 +1018,8 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     guards (delete six rows and the floor drops with them); this constant is the one that bites. Raise it in
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
-ABSOLUTE_FLOOR=304
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 + nextra ))
+ABSOLUTE_FLOOR=447
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \
