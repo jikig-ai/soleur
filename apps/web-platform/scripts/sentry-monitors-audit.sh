@@ -1217,6 +1217,9 @@ done < "$class_c_out"
 # retired scheduled-gh-pages-cert-state monitor. This list names the additions
 # made since the 2026-08-19 live figure and is not a complete ledger, so the
 # declared count above (67) is the figure of record.
+# Addendum 2026-10-29: …→ 24 `resource "sentry_cron_monitor"` blocks — the
+# #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed
+# the 43 low-catch-value monitors; the emitters stay (spec NG4 void-post).
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
