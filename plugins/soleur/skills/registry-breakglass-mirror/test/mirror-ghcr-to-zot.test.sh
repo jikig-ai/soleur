@@ -119,7 +119,7 @@ run_dry() { # <args...> → OUT/RC; stub PATH + token + CRANE_CMD
 # `[.layers | .size]` array-index bug class (must print blobs=3 bytes=7) ──
 HEX="$MHEX"
 run_dry jikig-ai/soleur-web-platform "jikig-ai/soleur-web-platform@sha256:${HEX}"
-if [[ "$RC" -eq 0 ]] && echo "$OUT" | grep -q "blobs=3"; then pass; else fail "(a) manifest dry-run → expected rc=0 blobs=3, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 0 ]] && [[ "$OUT" == *"blobs=3"* ]]; then pass; else fail "(a) manifest dry-run → expected rc=0 blobs=3, got rc=$RC OUT='$OUT'"; fi
 
 # ── (b) crane is never invoked under --dry-run (the fetch is gated) ──
 if [[ ! -s "$CRANE_LOG" ]]; then pass; else fail "(b) dry-run invoked crane: $(cat "$CRANE_LOG")"; fi
@@ -127,17 +127,17 @@ if [[ ! -s "$CRANE_LOG" ]]; then pass; else fail "(b) dry-run invoked crane: $(c
 # ── (c) tokenless dry-run prints blobs=unmeasured and exits 0 ──
 OUT="$(env -u GHCR_TOKEN PATH="$STUB:$PATH" CRANE_CMD="$STUB/crane" bash "$SCRIPT" --dry-run jikig-ai/soleur-web-platform v1.2.3 2>/dev/null)"
 RC=$?
-if [[ "$RC" -eq 0 ]] && echo "$OUT" | grep -q "blobs=unmeasured"; then pass; else fail "(c) tokenless dry-run → expected rc=0 blobs=unmeasured, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 0 ]] && [[ "$OUT" == *"blobs=unmeasured"* ]]; then pass; else fail "(c) tokenless dry-run → expected rc=0 blobs=unmeasured, got rc=$RC OUT='$OUT'"; fi
 
 # ── (d) malformed ref dies 1 (usage), never reaches the network leg ──
 OUT="$(env PATH="$STUB:$PATH" bash "$SCRIPT" --dry-run jikig-ai/soleur-web-platform 'not a ref' 2>&1 >/dev/null)"
 RC=$?
-if [[ "$RC" -eq 1 ]] && echo "$OUT" | grep -q "mirror-ghcr-to-zot:"; then pass; else fail "(d) malformed ref → expected rc=1 + diagnostic, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 ]] && [[ "$OUT" == *"mirror-ghcr-to-zot:"* ]]; then pass; else fail "(d) malformed ref → expected rc=1 + diagnostic, got rc=$RC OUT='$OUT'"; fi
 
 # ── (e) ZOT_TARGET shape guard fails closed on a hostile value ──
 OUT="$(env PATH="$STUB:$PATH" GHCR_TOKEN="x" ZOT_TARGET="evil host:5000" bash "$SCRIPT" --dry-run jikig-ai/soleur-web-platform v1.2.3 2>&1 >/dev/null)"
 RC=$?
-if [[ "$RC" -eq 1 ]] && echo "$OUT" | grep -q "ZOT_TARGET"; then pass; else fail "(e) hostile ZOT_TARGET → expected rc=1 naming ZOT_TARGET, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 1 ]] && [[ "$OUT" == *"ZOT_TARGET"* ]]; then pass; else fail "(e) hostile ZOT_TARGET → expected rc=1 naming ZOT_TARGET, got rc=$RC OUT='$OUT'"; fi
 
 # ── (h) LIVE path end-to-end with stubs: pull→layout→push→verify → result=ok.
 # Exercises verify_blobs_of's manifest arm (the signature child) — the
@@ -145,12 +145,12 @@ if [[ "$RC" -eq 1 ]] && echo "$OUT" | grep -q "ZOT_TARGET"; then pass; else fail
 OUT="$(env PATH="$STUB:$PATH" GHCR_TOKEN="test-pat" ZOT_PUSH_USER="u" ZOT_PUSH_TOKEN="t" CRANE_CMD="$STUB/crane" GHCR_IP="" PKGC_IP="" \
       bash "$SCRIPT" "jikig-ai/soleur-web-platform" "jikig-ai/soleur-web-platform@sha256:${MHEX}" 2>/dev/null)"
 RC=$?
-if [[ "$RC" -eq 0 ]] && echo "$OUT" | grep -q "result=ok" && echo "$OUT" | grep -q "mode=signature"; then pass; else fail "(h) live run → expected rc=0 result=ok + signature verify, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 0 ]] && [[ "$OUT" == *"result=ok"* && "$OUT" == *"mode=signature"* ]]; then pass; else fail "(h) live run → expected rc=0 result=ok + signature verify, got rc=$RC OUT='$OUT'"; fi
 
 # ── (f) GHCR_USER charset guard fails closed ──
 OUT="$(env PATH="$STUB:$PATH" GHCR_TOKEN="x" GHCR_USER='bad"user' bash "$SCRIPT" --dry-run jikig-ai/soleur-web-platform "jikig-ai/soleur-web-platform@sha256:${HEX}" 2>&1 >/dev/null)"
 RC=$?
-if [[ "$RC" -eq 5 ]] && echo "$OUT" | grep -q "GHCR_USER"; then pass; else fail "(f) bad GHCR_USER → expected rc=5 naming GHCR_USER, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 5 ]] && [[ "$OUT" == *"GHCR_USER"* ]]; then pass; else fail "(f) bad GHCR_USER → expected rc=5 naming GHCR_USER, got rc=$RC OUT='$OUT'"; fi
 
 echo "mirror-ghcr-to-zot: $passes passed, $fails failed"
 [ "$fails" -eq 0 ] || exit 1

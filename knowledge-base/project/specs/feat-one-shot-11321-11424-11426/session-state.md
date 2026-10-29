@@ -47,3 +47,13 @@
 - Fix-round 1: 8 seats resumed (same session ids) over `git diff 623f1b346d..HEAD`; reports at /var/tmp/soleur-11424-run/fixround/<seat>.out. fix_rounds=1.
 - New findings (round 1): P1 verify_blobs_of:578 same jq `[]` bug (fixed+live-stub fixture h); P2 (g5) vacuous grep → anchored `IMAGE_TAG_RAW" =~ \^v?` ==2; P3s: classify `" 502"` boundary, CRANE_TIMEOUT 900+docs+shape check, n_layers local, ZOT_TARGET guard after flag-parse, tr -cd '[:print:]' portable sanitizer, :5337 indent+comment restored (489,9xx), RAW_VERSION at track.sh+apply-deploy-pipeline-fix.yml, Run-comment path, (c) env -u GHCR_TOKEN, SKILL.md timeout prereq + mirror.env rm. suite-durations.tsv is generated → NO row.
 - Remaining: verify (fixture incl new live row (h) exercising verify_blobs_of; shellcheck; suites) → commit → 1 verification-pass seat (code-quality=ahead-production found the P1) → emit --fix-round --since 623f1b346d trailer → push → affected-gate rc → QA → compound → ship → DONE.
+
+## WS-R3 (pós fix-round, ~22:30)
+- Fix-round 1 completo: ff6a7cd2f9 + ccc9f7aea8 + trailer a08c566efe — PUSHED. Remote head = a08c566efe.
+- Verification pass (ahead-production): 9/9 VERIFIED + P1 confirmado; 2 residuais corrigidos.
+- GATE: test-all.log ~38k linhas, ainda rodando; rc file ainda vazio; seguir esperando `until [ -s test-all.rc ]`.
+- Próximo: gate rc → QA → compound → ship → DONE.
+
+## WS-R4 (gate wait, ~00:30)
+- Tudo pushed até a08c566efe (fix-round trailer). GATE test-all.log >51k linhas, suites na fase PASS-roll final (infra z-*); rc file ainda vazio — seguir polling `[ -s test-all.rc ]`.
+- Depois do gate: QA (fixture suites já 7/7 + 17/17 + devin-cloud-mode 42/42) → compound (learnings: 490KB ceiling, resolver-canonical D1, DoH/--resolve, devin -p seat mechanism, jq `[arr|.field]` bug class) → ship (Phase 6.45 archive-kb.sh; UNTRUSTED-CI: PR toca .github/workflows → sem --admin fallback) → postmerge → pipeline-tally show → DONE.
