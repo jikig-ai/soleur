@@ -82,6 +82,8 @@ REPO="jikig-ai/soleur"
 PLAN_LINE="gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=signing -f reason='A5 rehearsal'"
 ROTATE_LINE="gh workflow run inngest-key-rotate.yml -f mode=rotate -f keys=signing -f confirm=ROTATE-INNGEST-SIGNING-YYYY-MM-DD -f quiet_window=true -f reason='A5 (#10136)'"
 CONVERGE_LINE="gh workflow run inngest-key-rotate.yml -f mode=converge -f keys=signing -f confirm=CONVERGE-INNGEST-SIGNING-YYYY-MM-DD -f quiet_window=true -f reason='converge after a failed A5 run'"
+# Where the verdict of a run is read (the verdict lines are in the job log). The script prints the same recipe with the real run id.
+VERDICT_LINE="gh run view <run id> --log | grep 'inngest-key-rotate verdict='"
 
 say() { printf '%s\n' "$*"; }
 
@@ -241,10 +243,15 @@ main() {
   fi
   [ -z "$bad_note" ] || say "$bad_note"
   say "The rotation is one dispatch of the rotation workflow, and only you dispatch it. It needs your go in a session that names the exact line. A go on another issue does not count, and no agent runs it."
-  say "Rehearsal (read-only, any session may run it): $PLAN_LINE"
-  say "Rotation (your go must name this line; the date is the UTC date of the dispatch; use keys=both only if you also want the event key rotated in the same window): $ROTATE_LINE"
-  say "If a run fails after it started writing, do not retry the rotation. Finish it with this line, which needs its own go from you: $CONVERGE_LINE"
-  say "Your go should also say, in plain words, that the Inngest host is down for a few minutes during the reboot and one scheduled tick inside that gap may be skipped, and that the new key is live on the host a little before web catches up."
+  say "Rehearsal (read-only, any session may run it; its verdict is plan_ok only when every check the rotation needs, except your confirm and attestation, passes, otherwise plan_blocked naming the first failing check): $PLAN_LINE"
+  say "Rotation (your go must name this line; the date is the UTC date of the dispatch; keys=signing is the A5 set, keys=both is a superset that also rotates the event key in the same window): $ROTATE_LINE"
+  say "If a job after the first apply fails, do not retry the rotation. Finish it with this line, which needs its own go from you (the confirm date is the UTC date of that dispatch): $CONVERGE_LINE"
+  say "If the first apply itself fails, converge refuses; dispatch the rotation again under a fresh go instead, and until then an unrelated restart of the Inngest host would load the new key while web holds the old."
+  say "Your go should also say, in plain words: the Inngest host is down for a few minutes during the reboot (budget 10 to 15 minutes), and one scheduled cron tick inside that gap may be skipped and not replayed; the new key is live on the host before web catches up."
+  say "It should also say: until the web redeploy finishes (up to 80 minutes) an approved Concierge action or a Stripe payment_failed send can be rejected with a 401 and be lost or retried late, and a release deploying then fails its canary."
+  say "It should also say: the production Inngest host has never been rebooted with its LUKS volume and live scheduler, so the LUKS reopen is unverified; the rotation is key hygiene only and does not add TLS or close A6; the rollback is the link flip off with its extra confirmation, and a re-rotation follows."
+  say "And: approve only if still quiet. quiet_window=true is your statement at the moment you approve; the route re-reads the link flag, runs in flight and the host just before the reboot, but it cannot see a cron, an approved action or a payment in flight."
+  say "To read the verdict of any run: $VERDICT_LINE"
   say "When the rotation run is green it prints a line S5-A5-DONE: followed by the real UTC time. Post that line yourself as a comment on #$EPIC, with the run's evidence block. The workflow never posts it, and a line posted by an agent or by the workflow does not count. The line looks like this: S5-A5-DONE: $fmt"
   return 5
 }
