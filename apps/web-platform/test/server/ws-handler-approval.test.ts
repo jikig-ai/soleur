@@ -32,6 +32,8 @@ const h = vi.hoisted(() => ({
   /** When set, the flag is on only for this workspace id (a workspace-scoped cohort). */
   flagWorkspace: { value: null as string | null },
   flagCalls: [] as Array<{ userId: string; workspaceId: string | null }>,
+  /** When set, the attaching session's workspace resolution rejects with this error. */
+  resolveWorkspaceError: { value: null as Error | null },
   report: vi.fn(),
   warn: vi.fn(),
   logWarn: vi.fn(),
@@ -77,6 +79,17 @@ vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({ rpc: (...a: unknown[]) => h.serviceRpc(...a), from: vi.fn(), auth: { getUser: vi.fn() } }),
   serverUrl: "https://test.supabase.co",
 }));
+
+vi.mock("@/server/workspace-resolver", async (importActual) => {
+  const actual = await importActual<typeof import("@/server/workspace-resolver")>();
+  return {
+    ...actual,
+    resolveCurrentWorkspaceId: (...a: Parameters<typeof actual.resolveCurrentWorkspaceId>) => {
+      if (h.resolveWorkspaceError.value) return Promise.reject(h.resolveWorkspaceError.value);
+      return actual.resolveCurrentWorkspaceId(...a);
+    },
+  };
+});
 
 vi.mock("@/server/approval/flag", () => ({
   isApprovalQueueEnabled: async (id: { userId: string; workspaceId: string | null }) => {
@@ -158,6 +171,7 @@ beforeEach(() => {
   h.flagOn.value = false;
   h.flagWorkspace.value = null;
   h.flagCalls.length = 0;
+  h.resolveWorkspaceError.value = null;
   h.tenantRpc.mockImplementation(async (fn: string) => {
     if (fn === "decide_approval") return { data: { outcome: "decided", approval: row() }, error: null };
     if (fn === "is_workspace_owner") return { data: true, error: null };
@@ -367,7 +381,9 @@ describe("reattach re-send", () => {
   const liveRow = (over: Record<string, unknown> = {}, mutateHash = false) => {
     const sample = SAMPLES[TOOLS.emailSend];
     const action = canonicalizeAction(TOOLS.emailSend, sample.input, sample.server);
-    const hash = computeActionHash({ toolName: TOOLS.emailSend, workspaceId: WORKSPACE_ID, conversationId: CONVERSATION_ID, action });
+    // The hash is bound to the ROW's workspace, so a row of another workspace still verifies (only the flag can hide it).
+    const rowWorkspace = (over.workspace_id as string | undefined) ?? WORKSPACE_ID;
+    const hash = computeActionHash({ toolName: TOOLS.emailSend, workspaceId: rowWorkspace, conversationId: CONVERSATION_ID, action });
     return {
       approval: row({ status: "pending", decided_at: null, decided_by: null, canonical_action: action, action_sha256: mutateHash ? "b".repeat(64) : hash, ...over }),
       request_count: 2,
@@ -434,14 +450,57 @@ describe("reattach re-send", () => {
     });
   });
 
-  it("a row of a workspace the flag is OFF for is not shown, even when the attaching session's workspace is on", async () => {
+  // The attaching session's workspace is WORKSPACE_ID (the mocked conversation's current workspace). The early return
+  // covers a flag that is off THERE; the PER-ROW check is what hides a row of a different workspace, so these two
+  // tests put the flag on for the attaching workspace and vary it for the row's own workspace. Deleting the per-row
+  // check in reattach.ts turns the first one red.
+  it("per-row flag check: a row of ANOTHER workspace is not shown when the flag is on for the attaching session's workspace only", async () => {
+    h.flagOn.value = true;
+    h.flagWorkspace.value = WORKSPACE_ID;
+    h.serviceRpc.mockResolvedValue({ data: [liveRow({ workspace_id: OTHER_WORKSPACE_ID })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await resume(s);
+    await settle();
+    expect(h.serviceRpc).toHaveBeenCalledWith("list_live_approvals", { p_conversation: CONVERSATION_ID }); // the early return did NOT fire
+    expect(h.flagCalls.map((c) => c.workspaceId)).toEqual(expect.arrayContaining([WORKSPACE_ID, OTHER_WORKSPACE_ID]));
+    expect(frames(s).some((f) => f.type === "approval_request")).toBe(false);
+    // Hidden by the flag, not by a failed hash check: no reattach-failed op.
+    expect(h.warn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-reattach-failed")).toBe(false);
+  });
+
+  it("per-row flag check, converse: the same row IS shown when the flag is on for its workspace too", async () => {
+    h.flagOn.value = true;
+    h.serviceRpc.mockResolvedValue({ data: [liveRow({ workspace_id: OTHER_WORKSPACE_ID })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await resume(s);
+    await settle();
+    expect(frames(s).find((f) => f.type === "approval_request")).toMatchObject({ approvalId: APPROVAL_ID });
+  });
+
+  it("flag off for the attaching session's workspace: the early return reads no row (even if a row's workspace would be on)", async () => {
     h.flagOn.value = true;
     h.flagWorkspace.value = OTHER_WORKSPACE_ID;
+    h.serviceRpc.mockResolvedValue({ data: [liveRow({ workspace_id: OTHER_WORKSPACE_ID })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await resume(s);
+    await settle();
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    expect(frames(s).some((f) => f.type === "approval_request")).toBe(false);
+  });
+
+  it("a failure to resolve the attaching session's workspace is REPORTED (approval-reattach-failed, stage), never swallowed, and does not break the attach", async () => {
+    h.flagOn.value = true;
+    h.resolveWorkspaceError.value = Object.assign(new Error("tenant client down"), { code: "PGRST000" });
     h.serviceRpc.mockResolvedValue({ data: [liveRow()], error: null });
     const s = makeSession(CONVERSATION_ID);
     await resume(s);
     await settle();
-    expect(frames(s).some((f) => f.type === "approval_request")).toBe(false);
+    const op = h.warn.mock.calls.find((c) => (c[1] as { op?: string }).op === "approval-reattach-failed");
+    expect(op).toBeDefined();
+    expect((op![1] as { extra: Record<string, unknown> }).extra).toMatchObject({ stage: "resolve-workspace", code: "PGRST000" });
+    expect(JSON.stringify(op)).not.toContain("tenant client down");
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    expect(frames(s).some((f) => f.type === "error")).toBe(false);
   });
 
   it("flag on: live cards are re-sent from the table, built from the stored canonical action", async () => {

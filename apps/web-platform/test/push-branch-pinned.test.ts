@@ -1,5 +1,5 @@
 /**
- * #4672 R1 (CTO ruling 1): `pushBranch` with a pinned `commitSha` pushes exactly the approved commit, even when HEAD
+ * #4672 R1 (ADR-307, execution grants): `pushBranch` with a pinned `commitSha` pushes exactly the approved commit, even when HEAD
  * moved while the approval was pending. Real git, real temp repositories (a workspace and a bare "remote"); only the
  * credential-injecting wrapper is replaced by a plain `git <args>` run against the local bare repository.
  */
@@ -77,10 +77,13 @@ describe("pushBranch pinned commit (real git)", () => {
 
   test("a sha that is absent from the repository throws and the remote branch is not created", async () => {
     await expect(pushBranch(opts({ commitSha: "c".repeat(40) }))).rejects.toThrow(/not present/);
+    // Typed by NAME: github-tools.ts reports it as approval-grant-refused (commit_unavailable) by `err.name`.
+    await expect(pushBranch(opts({ commitSha: "c".repeat(40) }))).rejects.toMatchObject({ name: "ApprovedCommitUnavailableError" });
     expect(() => git(state.remote, "rev-parse", "refs/heads/feat-x")).toThrow();
   });
 
   test("an invalid sha throws", async () => {
     await expect(pushBranch(opts({ commitSha: "HEAD" }))).rejects.toThrow(/valid full commit sha/);
+    await expect(pushBranch(opts({ commitSha: "HEAD" }))).rejects.toMatchObject({ name: "ApprovedCommitUnavailableError" });
   });
 });

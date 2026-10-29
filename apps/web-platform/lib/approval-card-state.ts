@@ -69,6 +69,15 @@ export function deriveApprovalCardState(i: ApprovalCardStateInput): ApprovalCard
   }
 }
 
+/**
+ * A revoke that lost the race to the agent's repeat: the Owner tapped Revoke on an approved request, but the row had
+ * meanwhile been consumed, so the server answers `conflict` with status `consumed`. Only a revoke can produce that pair
+ * (the card offers no other decision on an approved or used request), and the card says so instead of staying silent.
+ */
+export function isRevokeTooLate(status: ApprovalWireStatus, decideOutcome: ApprovalDecideOutcomeWire | undefined): boolean {
+  return status === "consumed" && decideOutcome === "conflict";
+}
+
 /** States in which the Owner can still decide (the only states that render Approve and Deny). */
 export function isDecidable(state: ApprovalCardState, viewerRole: "owner" | "member"): boolean {
   return state === "pending_owner" && viewerRole === "owner";
@@ -108,13 +117,25 @@ export function hasNewerPendingRequest(
   return false;
 }
 
-// Characters that render as nothing (or reorder what is around them): bidi embedding/override/isolate controls
-// (U+202A-202E, U+2066-2069), the Arabic letter mark (U+061C), zero-width and directional marks (U+200B-200F), the word
-// joiner and invisible operators (U+2060-2064), the soft hyphen (U+00AD), the Mongolian vowel separator (U+180E), the
-// BOM (U+FEFF) and the tag characters (U+E0000-E007F). A right-to-left override inside a recipient or a branch name can
-// make a different value LOOK like the one the Owner expects. Written with escapes only, so the source never contains
-// the characters themselves (cq-regex-unicode-separators-escape-only). The `u` flag is required for the astral range.
-const INVISIBLE_RE = /[\u202A-\u202E\u2066-\u2069\u061C\u200B-\u200F\u2060-\u2064\u00AD\u180E\uFEFF\u{E0000}-\u{E007F}]/gu;
+// Characters that render as nothing, render identically to something else, or reorder what is around them. A denylist
+// of general categories plus the named gaps the categories miss:
+//   - \p{Cf} format characters: bidi embedding/override/isolate controls (U+202A-202E, U+2066-2069), the Arabic letter
+//     mark (U+061C), zero-width and directional marks (U+200B-200F), the word joiner and invisible operators
+//     (U+2060-2064), the soft hyphen (U+00AD), the Mongolian vowel separator (U+180E), the BOM (U+FEFF), the tag
+//     characters (U+E0001, U+E0020-E007F);
+//   - \p{Cc} control characters, EXCEPT tab, line feed and a carriage return that is part of CRLF: those are ordinary
+//     text in a multi-line body and are never mangled;
+//   - \p{Zl} / \p{Zp} (U+2028, U+2029) line and paragraph separators;
+//   - non-Cf characters that still render blank or invisibly: variation selectors (U+FE00-FE0F, U+E0100-E01EF), the
+//     combining grapheme joiner (U+034F), Hangul fillers (U+115F, U+1160, U+3164, U+FFA0), the Mongolian free variation
+//     selectors (U+180B-180D) and the braille blank (U+2800).
+// A right-to-left override or a blank look-alike inside a recipient or a branch name can make a different value LOOK
+// like the one the Owner expects. Known cost: an emoji written with VS16 (U+FE0F) or a ZWJ sequence is revealed too,
+// marker by marker; over-revealing is the safe direction. Written with escapes only, so the source never contains the
+// characters themselves (cq-regex-unicode-separators-escape-only). The `u` flag is required for \p{..} and the astral
+// ranges.
+const INVISIBLE_RE =
+  /[\p{Cf}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069\u061C\u200B-\u200F\u2060-\u2064\u00AD\u180E\uFEFF\u{E0000}-\u{E007F}\uFE00-\uFE0F\u{E0100}-\u{E01EF}\u034F\u115F\u1160\u3164\uFFA0\u180B-\u180D\u2800]|(?![\t\n]|\r\n)\p{Cc}/gu;
 
 /**
  * Replace invisible direction/zero-width controls with a visible `<U+XXXX>` marker; everything else is untouched. The

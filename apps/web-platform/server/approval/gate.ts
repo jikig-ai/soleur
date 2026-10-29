@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
-import type { ServerDerived } from "./canonical";
+import { COMMIT_SHA_RE, type ServerDerived } from "./canonical";
 import { isApprovalQueueEnabled } from "./flag";
 import { notifyApprovalRequested } from "./notify";
 import type { ApprovalGateDeps } from "./gate-types";
@@ -22,13 +22,11 @@ import type { WaitStatus } from "./waiters";
 
 const execFileAsync = promisify(execFile);
 
-const SHA_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
-
 /** The workspace HEAD that `pushBranch` pushes (`HEAD:refs/heads/<branch>`): binding it content-addresses the pushed commits. */
 async function gitHeadSha(workspacePath: string): Promise<string> {
   const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspacePath, timeout: 10_000 });
   const sha = stdout.trim();
-  if (!SHA_RE.test(sha)) throw new Error("workspace HEAD is not a commit sha");
+  if (!COMMIT_SHA_RE.test(sha)) throw new Error("workspace HEAD is not a commit sha");
   return sha;
 }
 

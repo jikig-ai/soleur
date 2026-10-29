@@ -301,17 +301,20 @@ import { isApprovalRequiredTool } from "./approval/tools";
 /**
  * Read CC_MCP_ALLOWLIST and return the cc-router's mcpServers config (#2909).
  *
- * Phase 1 deny-by-default scaffolding (this PR): returns `{}` for empty /
- * unset / whitespace-only env. Throws plain Error if any short-name in the
- * env resolves to a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
- * tools — cross-tenant credentials by construction). Phase 1 does NOT yet
- * build a populated `soleur_platform` server even when valid non-denylist
- * names are present — promotion is Phase 2 (#3722).
+ * Phase 1 deny-by-default scaffolding: returns `{}` for empty / unset /
+ * whitespace-only env. Throws a plain Error if any short-name in the env
+ * resolves to (a) a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
+ * tools — cross-tenant credentials by construction), or (b) an
+ * approval-required tool (`isApprovalRequiredTool`; ADR-307: the cc runner has
+ * no approval wiring, so a promoted approval tool would run on the legacy
+ * in-memory gate and skip the queue). Phase 1 does NOT yet build a populated
+ * `soleur_platform` server even when valid names are present — promotion is
+ * Phase 2 (#3722).
  *
- * Denylist-check-first ordering is pinned: a mixed env value like
+ * Denylist-check-first ordering is pinned per name: a mixed env value like
  * `"foo,plausible_create_site"` throws with the Plausible name in the
  * message regardless of position. Future unknown-name validation (Phase 2)
- * will fail-closed AFTER the denylist check.
+ * will fail-closed AFTER both checks.
  *
  * Exported for unit testability (`test/cc-mcp-tier-allowlist.test.ts`).
  *

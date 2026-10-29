@@ -483,7 +483,7 @@ describe.skipIf(!ENABLED)("migration 180 behaviour (rolled-back real rows)", () 
   });
 
   // -------------------------------------------------------------------------------------------------------------
-  // Review round: revoke, principal re-check, caps / notify, Art. 17 deletion of a memberless personal workspace.
+  // Revoke, principal re-check, caps / notify, Art. 17 deletion of a memberless personal workspace (ADR-307 invariants 2, 3, 9).
   // -------------------------------------------------------------------------------------------------------------
 
   const hashN = (n: number) => n.toString(16).padStart(2, "0").repeat(32);
@@ -791,6 +791,32 @@ describe.skipIf(!ENABLED)("migration 180 behaviour (rolled-back real rows)", () 
       expect(rb.requested_by_user_id).toBe(c.userA); // not an erased user's column
       expect((await t`select count(*)::int n from public.approval_request where workspace_id = ${c.wsA}`)[0].n).toBe(2); // wsA still has userA
       expect((await t`select count(*)::int n from public.inbox_item where workspace_id = ${c.wsA} and source = 'approval_required'`)[0].n).toBe(2);
+    });
+  });
+
+  test("Art. 17 (sole-member TEAM workspace): erasing its only member RETAINS every row with the user columns NULL (a memberless team workspace is not a personal workspace)", async () => {
+    // The accepted residual that made a row-level verify check unusable: workspace id != user id, zero members left.
+    await scenario(async (t, c) => {
+      const [org] = await t`select organization_id from public.workspaces where id = ${c.wsA}`;
+      const team = randomUUID();
+      const u = randomUUID();
+      await t`insert into auth.users (id, email) values (${u}, ${`team-${u}@example.test`})`;
+      await t`insert into public.workspaces (id, organization_id, name) values (${team}, ${org.organization_id}, 'sole-member team')`;
+      await t`insert into workspace_members (workspace_id, user_id, role) values (${team}, ${u}, 'owner')`;
+      expect(team).not.toBe(u);
+      const conv = randomUUID();
+      await t`insert into conversations (id, user_id, workspace_id, status, visibility) values (${conv}, ${u}, ${team}, 'active', 'workspace')`;
+      const pending = (await createFor(t, team, conv, u, hashN(1))).approval;
+      const approved = (await createFor(t, team, conv, u, hashN(2))).approval;
+      await decideFor(t, u, approved.id, "approve");
+      await removeMemberships(t, u);
+      expect(await anonymise(t, u)).toBeGreaterThanOrEqual(2);
+      // Rows RETAINED (the workspace still exists as a tenant), user columns and text gone.
+      expect((await t`select count(*)::int n from public.approval_request where workspace_id = ${team}`)[0].n).toBe(2);
+      for (const id of [pending.id, approved.id]) {
+        const r = await row(t, id);
+        expect(r).toMatchObject({ requested_by_user_id: null, decided_by: null, canonical_action: null, workspace_id: team });
+      }
     });
   });
 

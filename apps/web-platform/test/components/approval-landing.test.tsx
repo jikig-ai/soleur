@@ -33,10 +33,13 @@ const json = (body: unknown, ok = true, status = 200) => ({ ok, status, json: as
 const state = () => screen.getByTestId("approval-request-card").getAttribute("data-approval-state");
 
 describe("ApprovalLanding", () => {
-  it("renders the shared card in the landing layout with the 'agent stopped waiting' sub-line", () => {
+  it("renders the shared card in the landing layout with a state-neutral sub-line (no claim about the agent's wait)", () => {
     render(<ApprovalLanding approvalId={ID} view={view} initial={initial} requestCount={1} />);
     expect(state()).toBe("pending_owner");
-    expect(screen.getByTestId("approval-subline").textContent).toContain("stopped waiting after 5 minutes");
+    expect(screen.getByTestId("approval-subline").textContent).toBe(
+      "If your agent has stopped waiting, ask it again in this conversation once you have decided.",
+    );
+    expect(document.body.textContent).not.toMatch(/stopped waiting after|5 minutes/);
     expect(screen.getByRole("button", { name: "Approve" }).className).toContain("w-full");
   });
 
@@ -130,6 +133,11 @@ describe("ApprovalLanding", () => {
     );
     expect(state()).toBe("approved_late");
     expect(document.body.textContent).not.toMatch(/is continuing/);
+    // State-neutral: the page cannot see whether the agent is still waiting, so it makes no numeric claim.
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(
+      "Approved. If your agent is still waiting it will continue; if not, ask it again in this conversation.",
+    );
+    expect(document.body.textContent).not.toMatch(/stopped waiting after|5 minutes/);
   });
 
   it("a consumed row reads neutrally, never 'your agent is continuing'", () => {
@@ -162,6 +170,7 @@ describe("ApprovalLanding", () => {
       fireEvent.click(screen.getByRole("button", { name: "Revoke approval" }));
     });
     await waitFor(() => expect(state()).toBe("released"));
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Your revoke came too late: your agent had already used this approval");
     expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
   });
 

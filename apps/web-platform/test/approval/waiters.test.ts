@@ -119,7 +119,19 @@ describe("waitForDecision", () => {
     expect(outcome.kind).toBe("timeout");
     expect(read.mock.calls.length).toBeGreaterThan(1);
     // Every failed poll is counted and handed to the caller, which reports ONE op per wait with the count.
-    expect(outcome).toEqual({ kind: "timeout", readErrors: read.mock.calls.length });
+    expect(outcome).toMatchObject({ kind: "timeout", readErrors: read.mock.calls.length });
+  });
+
+  it("the last read error is kept on the outcome so the one per-wait report can carry its code", async () => {
+    const boom = Object.assign(new Error("db down"), { code: "57014" });
+    const { p } = run({
+      read: async () => {
+        throw boom;
+      },
+    });
+    const outcome = await p;
+    expect(outcome.kind).toBe("timeout");
+    expect((outcome as { lastReadError?: unknown }).lastReadError).toBe(boom);
   });
 
   it("read errors are also counted on an abort, and a clean wait counts none", async () => {
@@ -135,7 +147,7 @@ describe("waitForDecision", () => {
         if (n >= 2) ac.abort();
       },
     });
-    expect(await p).toEqual({ kind: "aborted", readErrors: 2 });
+    expect(await p).toMatchObject({ kind: "aborted", readErrors: 2 });
     const clean = run({ read: async () => "pending" });
     expect(await clean.p).toMatchObject({ kind: "timeout", readErrors: 0 });
   });

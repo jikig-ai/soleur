@@ -29,6 +29,7 @@ import {
   deriveApprovalCardState,
   isDecidable,
   isRevocable,
+  isRevokeTooLate,
   revealInvisible,
   type ApprovalCardState,
 } from "@/lib/approval-card-state";
@@ -60,6 +61,12 @@ export interface ApprovalRequestCardProps {
   revoked?: boolean;
   /** Render-time banner on an older pending card when a newer one exists for the same conversation and tool. */
   newerRequestExists?: boolean;
+  /**
+   * When the request reached its final state (the retention clock: consume, expiry, revoke or decision time). Lets the
+   * details-removed card name the day count only when the row is at least that many days past its end, i.e. the removal
+   * was the schedule; any other case (early removal on account erasure, unknown end) reads the neutral variant.
+   */
+  endedAt?: string | null;
   /** Right-hand meta of a resolved card, e.g. "Today 10:42 · by you". Built by the caller from data it holds. */
   decidedLabel?: string;
   /** Name and role of whoever decided first, for the loser state. Absent = the neutral wording (the wire does not carry it). */
@@ -270,6 +277,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
     expiredAfterApproval,
     revoked,
     newerRequestExists,
+    endedAt,
     decidedLabel,
     alreadyDecidedBy,
     onDecide,
@@ -352,13 +360,19 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       break;
     case "released":
       // The landing page has no live socket: it never says the agent "is continuing", only what the server recorded.
-      title = layout === "landing" ? APPROVAL_COPY.releasedTitleNeutral : APPROVAL_COPY.releasedTitle;
+      // A revoke that lost to the agent's repeat says so (the Owner's tap otherwise vanishes without a word).
+      title = isRevokeTooLate(status, decideOutcome)
+        ? APPROVAL_COPY.revokeTooLate
+        : layout === "landing"
+          ? APPROVAL_COPY.releasedTitleNeutral
+          : APPROVAL_COPY.releasedTitle;
       infoLine = `${APPROVAL_COPY.releasedBadge}. ${APPROVAL_STATE_COPY.releasedLine}`;
       infoIcon = "check";
       break;
     case "approved_late":
-      title = APPROVAL_COPY.approvedLate;
-      infoLine = APPROVAL_STATE_COPY.approvedLateLine(AGENT_WAIT_MINUTES);
+      // The landing page cannot see the agent's wait, so it makes no claim about it and states no duration.
+      title = layout === "landing" ? APPROVAL_COPY.approvedLateNeutral : APPROVAL_COPY.approvedLate;
+      infoLine = layout === "landing" ? APPROVAL_STATE_COPY.approvedLateNeutralLine : APPROVAL_STATE_COPY.approvedLateLine(AGENT_WAIT_MINUTES);
       infoIcon = "warn";
       break;
     case "denied":
@@ -394,7 +408,13 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       break;
     case "details_removed":
       title = APPROVAL_COPY.detailsRemoved;
-      infoLine = APPROVAL_STATE_COPY.detailsRemovedLine(APPROVAL_RETENTION_DAYS);
+      {
+        const ended = endedAt ? Date.parse(endedAt) : Number.NaN;
+        const scheduled = !Number.isNaN(ended) && now() - ended >= APPROVAL_RETENTION_DAYS * 86_400_000;
+        infoLine = scheduled
+          ? APPROVAL_STATE_COPY.detailsRemovedLine(APPROVAL_RETENTION_DAYS)
+          : APPROVAL_STATE_COPY.detailsRemovedNeutralLine;
+      }
       infoIcon = "x";
       break;
   }
@@ -465,7 +485,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
         </h3>
         {showSubline && (
           <p data-testid="approval-subline" className="mt-1 text-sm text-soleur-text-secondary">
-            {APPROVAL_COPY.pendingSubline(AGENT_WAIT_MINUTES)}
+            {landing ? APPROVAL_STATE_COPY.pendingSublineNeutral : APPROVAL_COPY.pendingSubline(AGENT_WAIT_MINUTES)}
           </p>
         )}
       </div>

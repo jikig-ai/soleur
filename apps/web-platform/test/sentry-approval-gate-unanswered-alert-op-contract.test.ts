@@ -5,8 +5,9 @@ import { describe, it, expect } from "vitest";
 
 import { APPROVAL_OPS } from "@/server/approval/ops";
 
-// #4672 — cross-artifact contract for the two approval-queue Sentry alerts:
+// #4672 — cross-artifact contract for the three approval-queue Sentry alerts:
 //   * sentry_alert.approval_gate_unanswered   feature=approval-queue, op=gate_unanswered
+//   * sentry_alert.approval_key_unavailable   feature=approval-queue, op=approval-key-unavailable (APPROVAL_OPS.keyUnavailable)
 //   * sentry_alert.art17_approval_anonymise_failed   feature=account-delete, op=anonymise-approval-request
 //
 // Both rules use `logic_type = "all"` on tag filters, so renaming a tag on either side silently zeroes the rule while
@@ -69,12 +70,16 @@ const GATE_UNANSWERED_OP = APPROVAL_OPS.gateUnanswered.op;
 
 const deleteSrc = stripJsComments(read("server/account-delete.ts"));
 // Every reportSilentFallback call in the anonymise step names its feature/op as string literals.
-const ANONYMISE_SITES = [...deleteSrc.matchAll(/reportSilentFallback\([^;]*?\bfeature:\s*"([^"]+)",\s*op:\s*"(anonymise-approval-request)"/g)].map((m) => ({
-  feature: m[1],
-  op: m[2],
+const ANONYMISE_SITES = [...deleteSrc.matchAll(/reportSilentFallback\(\s*([^,]+?)\s*,\s*\{[^;]*?\bfeature:\s*"([^"]+)",\s*op:\s*"(anonymise-approval-request)"/g)].map((m) => ({
+  firstArg: m[1],
+  feature: m[2],
+  op: m[3],
 }));
 
+const KEY_UNAVAILABLE_OP = APPROVAL_OPS.keyUnavailable?.op;
+
 const ruleGate = block("approval_gate_unanswered");
+const ruleKey = block("approval_key_unavailable");
 const ruleAnon = block("art17_approval_anonymise_failed");
 
 describe("approval-gate-unanswered alert op contract", () => {
@@ -137,6 +142,11 @@ describe("art17-approval-anonymise-failed alert op contract", () => {
     expect(new Set(ANONYMISE_SITES.map((s) => s.op)).size).toBe(1);
   });
 
+  it("BOTH emitters pass a literal null as reportSilentFallback's first argument (an Error argument makes the pino mirror steal the capture as feature=pino-mirror and this rule can never fire)", () => {
+    expect(ANONYMISE_SITES.length).toBeGreaterThanOrEqual(2);
+    for (const site of ANONYMISE_SITES) expect(site.firstArg).toBe("null");
+  });
+
   it("the rule exists and filters on exactly the literals the saga emits", () => {
     expect(ruleAnon).not.toBe("");
     expect(tagFilter(ruleAnon, "feature")).toBe(ANONYMISE_SITES[0].feature);
@@ -167,20 +177,74 @@ describe("art17-approval-anonymise-failed alert op contract", () => {
   });
 });
 
+describe("approval-key-unavailable alert op contract", () => {
+  it("the op is registered (F1 adds APPROVAL_OPS.keyUnavailable) at ERROR level with its own static message", () => {
+    expect(APPROVAL_OPS.keyUnavailable).toBeTruthy();
+    expect(KEY_UNAVAILABLE_OP).toBeTruthy();
+    expect(APPROVAL_OPS.keyUnavailable.level).toBe("error");
+    const same = Object.values(APPROVAL_OPS).filter((o) => o.op === KEY_UNAVAILABLE_OP);
+    expect(same).toHaveLength(1);
+    // Sentry groups message events by message: unique across the registry, and different from the shared gate-failed op.
+    const msgs = Object.values(APPROVAL_OPS).filter((o) => o.message === APPROVAL_OPS.keyUnavailable.message);
+    expect(msgs).toHaveLength(1);
+  });
+
+  it("the rule exists and filters on exactly the registry's feature and op", () => {
+    expect(ruleKey).not.toBe("");
+    expect(tagFilter(ruleKey, "feature")).toBe(APPROVAL_FEATURE);
+    expect(tagFilter(ruleKey, "op")).toBe(KEY_UNAVAILABLE_OP);
+  });
+
+  it("an emitter outside the registry reaches the op by its registry key (a rule whose op nothing emits is silent; red until the gate emits it)", () => {
+    const walk = (dir: string): string[] =>
+      readdirSync(join(root, dir), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(`${dir}/${e.name}`) : e.name.endsWith(".ts") ? [`${dir}/${e.name}`] : [],
+      );
+    const emitters = walk("server").filter((f) => f !== "server/approval/ops.ts");
+    const hits = emitters.filter((f) => /["']keyUnavailable["']/.test(stripJsComments(read(f))));
+    expect(hits.length).toBeGreaterThan(0);
+  });
+
+  it("re-pages per event: the three transition triggers plus event_frequency_count {1h, 0}", () => {
+    expect(ruleKey).toContain("{ first_seen_event = {} }");
+    expect(ruleKey).toContain("{ reappeared_event = {} }");
+    expect(ruleKey).toContain("{ regression_event = {} }");
+    expect(ruleKey).toContain('{ event_frequency_count = { interval = "1h", value = 0 } }');
+  });
+
+  it("the committed alert-reference.json entry equals the Terraform rule", () => {
+    const r = reference["approval-key-unavailable"];
+    expect(r).toBeTruthy();
+    expect(r.name).toBe("approval-key-unavailable");
+    expect(r.enabled).toBe(true);
+    expect(String(r.frequency)).toBe(freqOf(ruleKey));
+    expect(r.triggerLogicType).toBe("any-short");
+    expect(r.triggerConditions.map((c) => c.type).sort()).toEqual(
+      ["event_frequency_count", "first_seen_event", "reappeared_event", "regression_event"],
+    );
+    const [f] = r.actionFilters;
+    expect(f.logicType).toBe("all");
+    const byKey = Object.fromEntries(f.conditions.map((c) => [c.comparison.key, c.comparison]));
+    expect(byKey.feature).toMatchObject({ match: "eq", value: APPROVAL_FEATURE });
+    expect(byKey.op).toMatchObject({ match: "eq", value: KEY_UNAVAILABLE_OP });
+  });
+});
+
 describe("approval alerts: names and frequency_minutes", () => {
   it("each rule name is the live name (a rename destroys a live paging rule)", () => {
     expect(ruleGate).toContain('name              = "approval-gate-unanswered"');
     expect(ruleAnon).toContain('name              = "art17-approval-anonymise-failed"');
+    expect(ruleKey).toContain('name              = "approval-key-unavailable"');
   });
 
   it("frequency_minutes is unique root-wide for each rule (Sentry rejects a POST-time exact duplicate)", () => {
     const all = [...allTf.matchAll(/^\s*frequency_minutes\s*=\s*(\d+)/gm)].map((m) => m[1]);
     expect(all.length).toBeGreaterThan(2);
-    for (const rule of [ruleGate, ruleAnon]) {
+    for (const rule of [ruleGate, ruleAnon, ruleKey]) {
       const f = freqOf(rule);
       expect(f).toBeTruthy();
       expect(all.filter((x) => x === f)).toHaveLength(1);
     }
-    expect(freqOf(ruleGate)).not.toBe(freqOf(ruleAnon));
+    expect(new Set([freqOf(ruleGate), freqOf(ruleAnon), freqOf(ruleKey)]).size).toBe(3);
   });
 });

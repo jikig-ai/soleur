@@ -11,9 +11,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { APPROVAL_REQUIRED_TOOLS } from "@/server/approval/tools";
+import { stripComments } from "./source-scan";
 
 const ROOT = join(__dirname, "../..");
-const src = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
+/** Source with comments removed: every regex below must match CODE (a comment naming the wiring must not satisfy it). */
+const src = (rel: string) => stripComments(readFileSync(join(ROOT, rel), "utf8"));
 const SHORT = APPROVAL_REQUIRED_TOOLS.map((t) => t.replace("mcp__soleur_platform__", ""));
 const BUILDERS = ["email-triage-tools", "github-tools", "kb-share-tools", "workspace-settings-tools"];
 
@@ -31,7 +33,7 @@ describe("runner registration census", () => {
     expect(block).toMatch(/workspaceId:\s*activeWorkspaceId/);
   });
 
-  test("the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (R1)", () => {
+  test("the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (ADR-307 ExecutionGrants)", () => {
     const runner = src("server/agent-runner.ts");
     expect(runner.match(/new ExecutionGrants\(\)/g)).toHaveLength(1);
     const block = createCanUseToolBlock("server/agent-runner.ts");
@@ -58,3 +60,30 @@ describe("runner registration census", () => {
     expect(registered.length).toBeGreaterThan(0);
   });
 });
+
+describe("self-test: the census regexes see code, not comments (mutation list)", () => {
+  const WIRED = `createCanUseTool({ deps: { approval: createApprovalGateDeps({ grants: approvalGrants }), workspaceId: activeWorkspaceId } })`;
+  const wired = (text: string) => /approval:\s*createApprovalGateDeps\(/.test(stripComments(text));
+
+  test("the real wiring is seen", () => {
+    expect(wired(WIRED)).toBe(true);
+  });
+
+  test("wiring that exists only in a line or block comment is NOT seen (deleting the real wiring turns the census red)", () => {
+    expect(wired(`createCanUseTool({ deps: {} });\n// approval: createApprovalGateDeps({ grants: approvalGrants })`)).toBe(false);
+    expect(wired(`createCanUseTool({ deps: {} });\n/* approval: createApprovalGateDeps( */`)).toBe(false);
+    expect(wired(`createCanUseTool({ deps: {} }); /**\n * approval: createApprovalGateDeps(\n */`)).toBe(false);
+  });
+
+  test("a forbidden name in a comment does not trip the cc-runner negative checks, in a string it still does", () => {
+    const forbidden = (text: string) => /createApprovalGateDeps|ExecutionGrants/.test(stripComments(text));
+    expect(forbidden(`// no ExecutionGrants here\nconst x = 1;`)).toBe(false);
+    expect(forbidden(`const g = new ExecutionGrants();`)).toBe(true);
+    expect(forbidden(`const s = "createApprovalGateDeps";`)).toBe(true);
+  });
+
+  test("a URL with // inside a string literal is code and survives", () => {
+    expect(stripComments(`const u = "https://a/b"; // trailing`)).toContain('"https://a/b"');
+  });
+});
+

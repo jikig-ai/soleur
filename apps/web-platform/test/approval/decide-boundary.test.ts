@@ -3,24 +3,34 @@
  * code discipline: no MCP tool handler and nothing on the gate side may call the decide path.
  *
  * The plan asked for "no module reachable from the tool builders or the canUseTool deps imports decide.ts". As stated
- * that is unsatisfiable: `server/ws-handler.ts` (which MUST import decide.ts, it is the Owner's socket) is reachable
- * from `notifications.ts` -> `session-registry.ts`, so every module that sends a notification reaches it. The sentinel
- * is therefore a set of conjuncts that together pin the same property:
+ * that is unsatisfiable: `server/ws-handler.ts` (which MUST import decide.ts, it is the Owner's socket) is the process hub,
+ * and the runners and the cost writer import its `sendToClient`. The sentinel is therefore a set of conjuncts that
+ * together pin the same property (ADR-307, "Residual risk: sentinel discipline"):
  *   1. the `decide_approval` RPC name appears, in code (comments stripped, any quote style), in exactly one module;
  *   2. decide.ts has exactly the allowlisted importers (the WebSocket handler and the HTTP decide route);
- *   3. walking the real VALUE import graph (static, dynamic, `export ... from`, `require`; type-only imports are erased
- *      at compile time and are not edges) from the gate side, every module under server/approval/ except decide.ts, and
- *      every MCP tool builder (found by glob, with a floor so a rename cannot empty the walk), with the WebSocket handler
- *      treated as the process hub (not traversed), never reaches decide.ts;
+ *   3. walking the real VALUE import graph (static, dynamic, `export ... from`, `require`; a `.js` suffix is resolved to
+ *      its `.ts` source; type-only imports are erased at compile time and are not edges) from the gate side, every module
+ *      under server/approval/ except decide.ts, both runners (agent-runner.ts, cc-dispatcher.ts) and every MCP tool
+ *      builder never reaches decide.ts. The builder set is derived by CONTENT: a module under server/ (any depth) that
+ *      value-imports `tool` or `createSdkMcpServer` from the Agent SDK, with a floor so a refactor cannot empty the
+ *      walk. The WebSocket handler is the hub and is not traversed;
  *   4. the hub is not a back door: nothing outside tests imports `handleMessage` (the entry point that mints a tenant
- *      client and routes `approval_decide`), no gate-side or MCP-builder module value-imports ws-handler at all, and the
- *      only hub exports any reachable module may import are the two senders listed below.
+ *      client and routes `approval_decide`), no gate-side, approval or builder module value-imports ws-handler at all,
+ *      and every hub export any reachable module imports is one of the two senders listed below.
+ *
+ * Documented allowance (the hub is reachable, by design, only through these value-import chains): the runners import
+ * `sendToClient` directly (agent-runner.ts, cc-dispatcher.ts) and the cost writer does (cost-writer.ts, reached from
+ * agent-runner.ts). The one tool builder that reaches the hub is `account-tools.ts`, through account-delete.ts ->
+ * agent-runner.ts -> cost-writer.ts -> ws-handler.ts; it is the NAMED exemption below, and any other builder or
+ * approval module that starts reaching the hub fails the exemption test.
+ *
  * What this does NOT prove: a module that reaches the hub's allowed exports can still call code in the same process. The
  * real fix is moving the decide path out of the agent process (ADR-307 follow-up); this is the tripwire until then.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, test } from "vitest";
+import { stripComments } from "./source-scan";
 
 const ROOT = resolve(__dirname, "../..");
 const DECIDE = join(ROOT, "server/approval/decide.ts");
@@ -29,45 +39,6 @@ const HUB = join(ROOT, "server/ws-handler.ts");
 // ---------------------------------------------------------------------------
 // Source scanning helpers (exported shapes are exercised by the self-tests below).
 // ---------------------------------------------------------------------------
-
-/** Blank out comments, keeping string/template/regex-free-enough code intact. Newlines are preserved. */
-export function stripComments(src: string): string {
-  let out = "";
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i];
-    const d = src[i + 1];
-    if (c === "/" && d === "/") {
-      while (i < n && src[i] !== "\n") i++;
-    } else if (c === "/" && d === "*") {
-      i += 2;
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] === "\n") out += "\n";
-        i++;
-      }
-      i += 2;
-    } else if (c === '"' || c === "'" || c === "`") {
-      const quote = c;
-      out += c;
-      i++;
-      while (i < n && src[i] !== quote) {
-        if (src[i] === "\\") {
-          out += src[i];
-          i++;
-        }
-        if (i < n) out += src[i];
-        i++;
-      }
-      if (i < n) out += quote;
-      i++;
-    } else {
-      out += c;
-      i++;
-    }
-  }
-  return out;
-}
 
 export interface ImportEdge {
   spec: string;
@@ -119,7 +90,8 @@ function resolveImport(from: string, spec: string): string | null {
   if (spec.startsWith("@/")) base = join(ROOT, spec.slice(2));
   else if (spec.startsWith(".")) base = resolve(dirname(from), spec);
   else return null; // package
-  for (const cand of [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts")]) {
+  const noJs = base.replace(/\.js$/, ""); // ESM-style `./x.js` specifiers resolve to the `.ts` source
+  for (const cand of [base, noJs, `${base}.ts`, `${noJs}.ts`, `${base}.tsx`, `${noJs}.tsx`, join(base, "index.ts")]) {
     if (existsSync(cand) && /\.(ts|tsx)$/.test(cand)) return cand;
   }
   return null;
@@ -158,13 +130,25 @@ function walkSources(dirs: string[], include: (p: string) => boolean = () => tru
 
 const rel = (p: string) => relative(ROOT, p);
 
+/** The value-import edges of `file` that resolve to the hub. */
+const hubEdgesOf = (file: string): ImportEdge[] => valueEdges(readFileSync(file, "utf8")).filter((e) => resolveImport(file, e.spec) === HUB);
+
 // ---------------------------------------------------------------------------
-// The entry set: found by glob, never hand-listed (a rename or a new builder cannot silently leave the walk).
+// The entry set: derived by content, never hand-listed (a rename or a new builder cannot silently leave the walk).
 // ---------------------------------------------------------------------------
 
-const TOOL_BUILDERS = walkSources(["server"], (p) => /-tools\.ts$/.test(p) || /\/mcp-[^/]*\.ts$/.test(p));
-/** Floor = the number of builders on the day this sentinel was rewritten. A rename that drops below it fails here. */
-const TOOL_BUILDER_FLOOR = 16;
+const SDK_SPEC = "@anthropic-ai/claude-agent-sdk";
+const SDK_BUILDER_NAMES = new Set(["tool", "createSdkMcpServer"]);
+/** True when a module VALUE-imports `tool` or `createSdkMcpServer` from the Agent SDK (a tool builder or a runner). */
+const buildsSdkTools = (p: string): boolean =>
+  valueEdges(readFileSync(p, "utf8")).some((e) => e.spec === SDK_SPEC && e.names.some((n) => SDK_BUILDER_NAMES.has(n)));
+
+/** The two runners: they register builders and wire the gate, so they are walk roots in their own right. */
+const RUNNERS = ["server/agent-runner.ts", "server/cc-dispatcher.ts"].map((p) => join(ROOT, p));
+/** Builders found by content (any depth under server/), minus the runners. No filename glob: `narrate-tool.ts` has no `-tools` suffix. */
+const TOOL_BUILDERS = walkSources(["server"], (p) => buildsSdkTools(p) && !RUNNERS.includes(p));
+/** Floor = the number of builders on the day this sentinel was rewritten (16 SDK-importing modules minus the two runners = 14). */
+const TOOL_BUILDER_FLOOR = 14;
 
 const APPROVAL_MODULES = walkSources(["server/approval"], (p) => p !== DECIDE);
 const APPROVAL_MODULES_FLOOR = 14;
@@ -179,7 +163,7 @@ const ALLOWED_HUB_EXPORTS = new Set(["sendToClient", "forceDisconnectForTierChan
 // ---------------------------------------------------------------------------
 
 describe("the decide path is unreachable from anything the agent can reach", () => {
-  test("the entry set is found by glob and the floors hold (a rename cannot empty the walk)", () => {
+  test("the entry set is derived by content and the floors hold (a rename cannot empty the walk)", () => {
     expect(TOOL_BUILDERS.length).toBeGreaterThanOrEqual(TOOL_BUILDER_FLOOR);
     expect(APPROVAL_MODULES.length).toBeGreaterThanOrEqual(APPROVAL_MODULES_FLOOR);
     const names = TOOL_BUILDERS.map(rel);
@@ -192,12 +176,14 @@ describe("the decide path is unreachable from anything the agent can reach", () 
       "server/c4-concierge-tools.ts",
       "server/conversations-tools.ts",
       "server/auth-status-tools.ts",
-      "server/github-read-tools.ts",
       "server/workstream/workstream-tools.ts",
+      "server/narrate-tool.ts", // the content rule's reason for being: no `-tools` filename suffix
+      "server/account-tools.ts",
     ]) {
       expect(names, must).toContain(must);
     }
-    for (const f of GATE_SIDE) expect(existsSync(f), f).toBe(true);
+    for (const f of [...GATE_SIDE, ...RUNNERS]) expect(existsSync(f), f).toBe(true);
+    for (const r of RUNNERS) expect(buildsSdkTools(r), `${rel(r)} no longer value-imports createSdkMcpServer: the content rule would miss it`).toBe(true);
   });
 
   test("the walker is not vacuous: it reaches the known transitive imports and finds decide.ts from its own importers", () => {
@@ -214,6 +200,11 @@ describe("the decide path is unreachable from anything the agent can reach", () 
   });
 
   test.each(APPROVAL_MODULES.map(rel))("approval module %s cannot reach decide.ts", (file) => {
+    const g = reachable([join(ROOT, file)]);
+    expect(g.has(DECIDE), `decide.ts reached via ${g.get(DECIDE)}`).toBe(false);
+  });
+
+  test.each(RUNNERS.map(rel))("runner %s cannot reach decide.ts (the hub is not traversed)", (file) => {
     const g = reachable([join(ROOT, file)]);
     expect(g.has(DECIDE), `decide.ts reached via ${g.get(DECIDE)}`).toBe(false);
   });
@@ -255,8 +246,8 @@ describe("the hub (ws-handler) is not a back door", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("every module reachable from them imports only the allowlisted hub exports", () => {
-    const seen = reachable([...GATE_SIDE, ...APPROVAL_MODULES, ...TOOL_BUILDERS]);
+  test("every module reachable from them, and from the runners, imports only the allowlisted hub exports", () => {
+    const seen = reachable([...GATE_SIDE, ...APPROVAL_MODULES, ...TOOL_BUILDERS, ...RUNNERS]);
     const bad: string[] = [];
     for (const f of seen.keys()) {
       if (f === HUB) continue;
@@ -265,6 +256,34 @@ describe("the hub (ws-handler) is not a back door", () => {
       }
     }
     expect(bad).toEqual([]);
+  });
+});
+
+describe("the documented allowance: who may reach the hub", () => {
+  /** Builders and approval modules from which the hub is reachable by value imports (the hub itself is the sink). */
+  const reachesHub = (file: string): boolean => reachable([file]).has(HUB);
+
+  /** The ONLY tool builder allowed to reach the hub: account-tools -> account-delete -> agent-runner -> cost-writer -> ws-handler. */
+  const NAMED_BUILDER_EXEMPTION = ["server/account-tools.ts"];
+
+  test("the runners import `sendToClient` from the hub directly (so the walk's hub exemption is exercised, not vacuous)", () => {
+    for (const r of RUNNERS) {
+      const edges = hubEdgesOf(r);
+      expect(edges.length, rel(r)).toBeGreaterThan(0);
+      for (const e of edges) expect(e.names.every((n) => ALLOWED_HUB_EXPORTS.has(n)), `${rel(r)} imports ${e.names}`).toBe(true);
+    }
+  });
+
+  test("account-tools is the only builder that reaches the hub, and it does so through account-delete", () => {
+    expect(TOOL_BUILDERS.filter(reachesHub).map(rel).sort()).toEqual(NAMED_BUILDER_EXEMPTION);
+    const viaAccountDelete = reachable([join(ROOT, "server/account-tools.ts")]);
+    expect(viaAccountDelete.has(join(ROOT, "server/account-delete.ts"))).toBe(true);
+    expect(viaAccountDelete.has(join(ROOT, "server/agent-runner.ts"))).toBe(true);
+  });
+
+  test("no module under server/approval/ and no gate-side module reaches the hub", () => {
+    const offenders = [...GATE_SIDE, ...APPROVAL_MODULES].filter(reachesHub).map(rel);
+    expect(offenders).toEqual([]);
   });
 });
 
@@ -358,6 +377,23 @@ describe("self-tests: the scanners catch what they claim to (mutation list)", ()
     const e = valueEdges(`import {\n  sendToClient,\n  handleMessage as hm,\n} from "@/server/ws-handler";`);
     expect(e[0].names).toEqual(["sendToClient", "handleMessage"]);
     expect(valueEdges(`import type { handleMessage } from "@/server/ws-handler";`)).toEqual([]);
+  });
+
+  test("resolveImport strips a `.js` suffix to the `.ts` source, so an ESM-style specifier cannot hide an edge", () => {
+    const from = join(ROOT, "server/approval/gate-flow.ts");
+    expect(resolveImport(from, "./canonical.js")).toBe(join(ROOT, "server/approval/canonical.ts"));
+    expect(resolveImport(from, "./canonical")).toBe(join(ROOT, "server/approval/canonical.ts"));
+    expect(resolveImport(from, "@/server/ws-handler.js")).toBe(HUB);
+    expect(resolveImport(from, "./does-not-exist.js")).toBeNull();
+  });
+
+  test("the content rule: a value import of tool/createSdkMcpServer qualifies; a type-only import does not", () => {
+    const qualifies = (src: string) => valueEdges(src).some((e) => e.spec === SDK_SPEC && e.names.some((n) => SDK_BUILDER_NAMES.has(n)));
+    expect(qualifies(`import { tool } from "${SDK_SPEC}";`)).toBe(true);
+    expect(qualifies(`import { query as q, createSdkMcpServer } from "${SDK_SPEC}";`)).toBe(true);
+    expect(qualifies(`import { query, type tool } from "${SDK_SPEC}";`)).toBe(false);
+    expect(qualifies(`import type { tool } from "${SDK_SPEC}";`)).toBe(false);
+    expect(qualifies(`// import { tool } from "${SDK_SPEC}";`)).toBe(false);
   });
 
   test("the call-site parser sees calls with and without `approval:` and ignores the definition", () => {

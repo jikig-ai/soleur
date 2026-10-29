@@ -123,13 +123,19 @@ describe("resolved states (wireframe 04)", () => {
       expect(state()).toBe(expected);
       expect(screen.getByRole("heading").textContent).toMatch(title);
       expect(screen.queryAllByRole("button")).toHaveLength(0);
-      expect(card().textContent).not.toMatch(/\b(sent|ran|executed|delivered)\b/i);
+      expect(card().textContent).not.toMatch(/\b(sent|executed|delivered)\b|\bran\b(?! nothing\b)/i);
     });
   }
 
   it("a conflict on a request that was meanwhile used reads as released, not as a lost race", () => {
     render(<ApprovalRequestCard {...props({ status: "consumed", decideOutcome: "conflict" })} />);
     expect(state()).toBe("released");
+    expect(screen.getByRole("heading").textContent).toBe("Your revoke came too late: your agent had already used this approval");
+  });
+
+  it("a released card without a lost revoke keeps its ordinary title", () => {
+    render(<ApprovalRequestCard {...props({ status: "consumed" })} />);
+    expect(screen.getByRole("heading").textContent).toBe("Released, your agent is continuing");
   });
 
   it("the released card says what the agent does next is not reported", () => {
@@ -143,6 +149,22 @@ describe("resolved states (wireframe 04)", () => {
     expect(screen.getByRole("heading").textContent).toBe("Already decided");
     rerender(<ApprovalRequestCard {...props({ status: "approved", decideOutcome: "conflict", alreadyDecidedBy: { name: "Priya", role: "Owner" } })} />);
     expect(screen.getByRole("heading").textContent).toBe("Already decided by Priya (Owner)");
+  });
+
+  it("details removed names the day count only when the row is at least that many days past its end (the scheduled scrub); otherwise the neutral line", () => {
+    const now = Date.parse("2026-12-15T00:00:00Z");
+    const infoFor = (endedAt: string | null | undefined) => {
+      const { unmount } = render(<ApprovalRequestCard {...props({ view: null, endedAt, now: () => now })} />);
+      const t = screen.getByTestId("approval-info").textContent;
+      unmount();
+      return t;
+    };
+    expect(infoFor("2026-11-10T00:00:00Z")).toContain("removed 30 days after this request ended");
+    expect(infoFor("2026-11-20T00:00:00Z")).toBe(
+      "The action details have been removed. We keep the kind of action, its status and its times, and, unless that person's account has been erased, who asked and who decided.",
+    );
+    expect(infoFor(undefined)).not.toMatch(/\d+ days/);
+    expect(infoFor("not a date")).not.toMatch(/\d+ days/);
   });
 
   it("details removed shows no bound block and no stale values", () => {
@@ -319,6 +341,7 @@ describe("revoke: an approved, unconsumed request can be taken back (CTO ruling 
     });
     rerender(<ApprovalRequestCard {...props({ status: "consumed", decideOutcome: "conflict" })} />);
     expect(state()).toBe("released");
+    expect(screen.getByRole("heading").textContent).toBe("Your revoke came too late: your agent had already used this approval");
     expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
   });
 });

@@ -27,7 +27,8 @@ import { renderApprovalInboxTitle } from "@/server/approval/render";
 import { canonicalizeAction } from "@/server/approval/canonical";
 import { SAMPLES, TOOLS } from "./fixtures";
 
-const OUTCOME_WORDS = /\b(sent|ran|executed|delivered)\b/i;
+// "ran" is an outcome word EXCEPT in the negated form "ran nothing" (CLO round 2, ruling 8): that states what the platform knows.
+const OUTCOME_WORDS = /\b(sent|executed|delivered)\b|\bran\b(?! nothing\b)/i;
 
 /** Every string reachable from a constant, calling the function-valued entries with representative arguments. */
 function collect(v: unknown, out: string[] = []): string[] {
@@ -84,9 +85,36 @@ describe("copy deck: no outcome claim (AC14)", () => {
     expect(APPROVAL_LANDING_COPY.fromAgent).toBe("From your agent");
   });
 
+  it("the landing page's approved and pending lines are state-neutral: no wait duration, no 'stopped waiting' claim", () => {
+    expect(APPROVAL_COPY.approvedLateNeutral).toBe(
+      "Approved. If your agent is still waiting it will continue; if not, ask it again in this conversation.",
+    );
+    for (const t of [APPROVAL_COPY.approvedLateNeutral, APPROVAL_STATE_COPY.approvedLateNeutralLine, APPROVAL_STATE_COPY.pendingSublineNeutral]) {
+      expect(t, t).not.toMatch(/\d/);
+      expect(t, t).not.toMatch(/stopped waiting after/);
+    }
+    expect(APPROVAL_COPY.revokeTooLate).toBe("Your revoke came too late: your agent had already used this approval");
+  });
+
+  it("expiry and unanswered-request strings say the REQUEST ran nothing, never that nothing was run (CLO round 2, ruling 8)", () => {
+    expect(APPROVAL_COPY.resolvedNothing).toBe("This request ran nothing. Saved for your agent. Asking again with the same arguments is allowed.");
+    expect(APPROVAL_STATE_COPY.expiredLine("email")).toBe("This request expired and ran nothing. Ask your agent again if you still want this email.");
+    expect(APPROVAL_STATE_COPY.expiredAfterApprovalLine).toBe(
+      "This request ran nothing. This appears in your inbox and thread only: no push, no email. Ask your agent again if you still want this.",
+    );
+    expect(APPROVAL_STATE_COPY.memberLine).toContain("If nobody decides in time, this expires and the request runs nothing.");
+    expect(APPROVAL_NOTIFY_COPY.expired.pushBody).toBe("A request expired before it was decided. It ran nothing.");
+    expect(APPROVAL_NOTIFY_COPY.expired.emailSubject).toBe("Soleur: a request expired without being run");
+    expect(approvalEmailLines("expired", {})).toContain("This request ran nothing. If you still want it done, ask your agent again in Soleur.");
+    for (const s of all) expect(s, s).not.toMatch(/nothing was run|nothing is run/i);
+  });
+
   it("the guard itself bites: a planted outcome word is caught", () => {
     expect("The email was sent.").toMatch(OUTCOME_WORDS);
     expect("Your consent matters").not.toMatch(OUTCOME_WORDS);
+    expect("The workflow ran.").toMatch(OUTCOME_WORDS);
+    expect("It ran successfully, then ran nothing.").toMatch(OUTCOME_WORDS);
+    expect("This request ran nothing.").not.toMatch(OUTCOME_WORDS);
   });
 
   it("carries 'Released to your agent' and the approved two-state split", () => {
@@ -99,7 +127,7 @@ describe("copy deck: no outcome claim (AC14)", () => {
     for (const tool of Object.keys(SAMPLES)) {
       const s = SAMPLES[tool];
       const action = canonicalizeAction(tool, s.input, s.server);
-      for (const st of ["pending", "approved", "rejected", "consumed", "expired", "expired_after_approval"] as const) {
+      for (const st of ["pending", "approved", "rejected", "revoked", "consumed", "expired", "expired_after_approval"] as const) {
         const t = renderApprovalInboxTitle(action, st, "static");
         // The bound VALUES are the agent's own text (a subject can say anything); the framing words are ours.
         const framing = t.replace(/(to|for|address|commit|branch|in|pull request|into|workflow|on) [^,.]*/g, "");
@@ -167,6 +195,15 @@ describe("shared timing and countdown", () => {
     expect(APPROVAL_STATE_COPY.detailsRemovedLine(APPROVAL_RETENTION_DAYS)).toContain(`removed ${APPROVAL_RETENTION_DAYS} days after`);
     expect(APPROVAL_STATE_COPY.detailsRemovedLine(7)).toContain("removed 7 days after");
     expect(APPROVAL_STATE_COPY.detailsRemovedLine(7)).not.toContain("30 days");
+    // CLO round 2, ruling 6: what is kept is stated exactly (never "Only ..."), and the neutral variant carries no day count.
+    for (const t of [APPROVAL_STATE_COPY.detailsRemovedLine(7), APPROVAL_STATE_COPY.detailsRemovedNeutralLine]) {
+      expect(t, t).not.toContain("Only");
+      expect(t, t).toContain("We keep the kind of action, its status and its times, and, unless that person's account has been erased, who asked and who decided.");
+    }
+    expect(APPROVAL_STATE_COPY.detailsRemovedNeutralLine).toBe(
+      "The action details have been removed. We keep the kind of action, its status and its times, and, unless that person's account has been erased, who asked and who decided.",
+    );
+    expect(APPROVAL_STATE_COPY.detailsRemovedNeutralLine).not.toMatch(/\d/);
   });
 
   it("the retention days equal the scrub interval in migration 180 (lockstep)", () => {

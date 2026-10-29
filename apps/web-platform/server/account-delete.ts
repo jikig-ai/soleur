@@ -1299,19 +1299,23 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonApprovalErr) {
-      reportSilentFallback(anonApprovalErr, {
+      // First arg is a literal null: handing the helper an Error lets the pino mirror capture it first, WITHOUT the
+      // feature/op tags, and the art17_approval_anonymise_failed alert (feature=account-delete, op=anonymise-approval-request)
+      // could then never fire. The error contributes only its class and SQLSTATE in `extra` (database text can echo rows).
+      reportSilentFallback(null, {
         feature: "account-delete",
         op: "anonymise-approval-request",
-        extra: { userId },
+        extra: { userId, code: typeof anonApprovalErr.code === "string" ? anonApprovalErr.code : undefined },
         message: "anonymise_approval_request failed — aborting deletion (Art. 17)",
       });
       return { success: false, error: "Account deletion failed at anonymise-approval-request. Please try again." };
     }
   } catch (err) {
-    reportSilentFallback(err, {
+    // Literal null first arg, as above (an Error here would be captured by the pino mirror without the alert's tags).
+    reportSilentFallback(null, {
       feature: "account-delete",
       op: "anonymise-approval-request",
-      extra: { userId },
+      extra: { userId, errName: err instanceof Error ? err.name : typeof err },
       message: "anonymise_approval_request threw — aborting deletion (Art. 17)",
     });
     return { success: false, error: "Account deletion failed at anonymise-approval-request. Please try again." };

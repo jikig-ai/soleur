@@ -39,6 +39,7 @@ import {
 import { APPROVAL_REQUIRED_TOOLS } from "@/server/approval/tools";
 import {
   APPROVAL_ABORTED_DENY,
+  APPROVAL_ABORTED_SPENT_DENY,
   APPROVAL_CONSUME_REJECTED_DENY,
   APPROVAL_EXPIRED_DENY,
   APPROVAL_INVALID_INPUT_DENY,
@@ -617,7 +618,10 @@ describe("Guard 1: the consume gate is fail-closed and bound to hash, conversati
       const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
       const id = await decideWhenCardArrives(h, "approved");
       const res = await pending;
-      expect(res, reason).toEqual({ behavior: "deny", message: reason === "expired" ? APPROVAL_EXPIRED_DENY : APPROVAL_CONSUME_REJECTED_DENY });
+      expect(res, reason).toEqual({
+        behavior: "deny",
+        message: reason === "expired" ? APPROVAL_EXPIRED_DENY : reason === "not_approved" ? APPROVAL_REJECTED_DENY : APPROVAL_CONSUME_REJECTED_DENY,
+      });
       const ops = mockWarn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-consume-rejected");
       expect(ops, reason).toHaveLength(1);
       expect((ops[0][1] as { tags: Record<string, string> }).tags.approval_id).toBe(id);
@@ -955,7 +959,9 @@ describe("Guard 1: terminal outcomes and abort edges are denies, and the release
     });
     const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
     await decideWhenCardArrives(h, "approved");
-    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_DENY });
+    // The approval is spent: the text must not claim the request is still saved.
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_SPENT_DENY });
+    expect(APPROVAL_ABORTED_SPENT_DENY).not.toMatch(/saved/);
     expect(h.db.rows[0].status).toBe("consumed");
   });
 
@@ -976,7 +982,7 @@ describe("Guard 1: terminal outcomes and abort edges are denies, and the release
 });
 
 // ---------------------------------------------------------------------------
-// Review round (CTO rulings 1, 3, 4, 7, 11): grants, reason texts, caps, notification, honest frames, observability.
+// ADR-307 (grants, denies, caps, notification): grants, reason texts, caps, notification, honest frames, observability.
 // ---------------------------------------------------------------------------
 
 describe("consume reasons map to their own static text", () => {
@@ -987,7 +993,8 @@ describe("consume reasons map to their own static text", () => {
     ["requester_not_member", APPROVAL_PRINCIPAL_CHANGED_DENY],
     ["hash_mismatch", APPROVAL_CONSUME_REJECTED_DENY],
     ["wrong_conversation", APPROVAL_CONSUME_REJECTED_DENY],
-    ["not_approved", APPROVAL_CONSUME_REJECTED_DENY],
+    // The consume lost to a revoke: the honest text is the denial, not "arguments changed / already used".
+    ["not_approved", APPROVAL_REJECTED_DENY],
     ["already_consumed", APPROVAL_CONSUME_REJECTED_DENY],
     ["not_found", APPROVAL_CONSUME_REJECTED_DENY],
     ["bad_request", APPROVAL_CONSUME_REJECTED_DENY],
@@ -1020,7 +1027,7 @@ describe("consume reasons map to their own static text", () => {
 });
 
 describe("the hash key is a fail-closed dependency", () => {
-  test("an unset pepper denies with the unavailable text, reports approval-gate-failed with the code, and creates nothing", async () => {
+  test("an unset pepper denies with the unavailable text, reports its OWN approval-key-unavailable op with the code, and creates nothing", async () => {
     const h = makeHarness();
     const saved = process.env.SENTRY_USERID_PEPPER;
     delete process.env.SENTRY_USERID_PEPPER;
@@ -1032,9 +1039,11 @@ describe("the hash key is a fail-closed dependency", () => {
     }
     expect(h.approval.submit).not.toHaveBeenCalled();
     expect(h.db.rpcLog).toEqual([]);
-    const ops = mockReport.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-gate-failed");
+    const ops = mockReport.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-key-unavailable");
     expect(ops).toHaveLength(1);
     expect((ops[0][1] as { extra: Record<string, unknown> }).extra.code).toBe("key_unavailable");
+    // It no longer shares the generic gate-failure group.
+    expect(mockReport.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-gate-failed")).toBe(false);
   });
 });
 
@@ -1128,7 +1137,7 @@ describe("the released (re-proposal) path tells the open card it was consumed", 
     });
     log.warn.mockClear();
     const res = await h2.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
-    expect(res).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_DENY });
+    expect(res).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_SPENT_DENY });
     const consumed = log.warn.mock.calls.map((c) => String(c[1])).find((l) => l.startsWith("SOLEUR_APPROVAL_CONSUMED"));
     expect(consumed).toContain("path=reproposal");
     expect(consumed).toContain("aborted=true");
@@ -1311,5 +1320,116 @@ describe("concurrent gates for the same approval share one waiter (refcounted)",
     wakeWaiter(id, "approved");
     await Promise.all([a, b]);
     expect(waiterCount()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 (ADR-307 rollback / observability): sticky enforcing denies EVERY approval-required tool, the card never keeps
+// claiming "your agent is continuing" after a failed consume, and the failing RPC's code is not dropped.
+// ---------------------------------------------------------------------------
+
+describe("a flag that goes off (or fails to read) after the flow ran in this session denies every approval-required tool", () => {
+  test.each(TOOL_NAMES)("%s: flag on, then off, on ONE ExecutionGrants object -> terminal unavailable deny, no review card, no request", async (tool) => {
+    const on = makeHarness({ deadlineMs: 20 });
+    await on.call(tool, sampleInput(tool)); // the flow runs: grants.enforcing becomes true (the wait ends undecided)
+    expect(on.grants.enforcing).toBe(true);
+
+    for (const enabled of [false, () => Promise.reject(new Error("flagsmith down"))] as const) {
+      const off = makeHarness({ enabled });
+      off.approval.grants = on.grants; // the SAME per-session object, as agent-runner shares it
+      const res = await off.call(tool, sampleInput(tool));
+      expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+      // The legacy requester-answerable card must not come back.
+      expect(off.deps.abortableReviewGate).not.toHaveBeenCalled();
+      expect(off.frames.map((f) => f.type)).toEqual([]);
+      expect(off.approval.submit).not.toHaveBeenCalled();
+      expect(off.db.rpcLog).toEqual([]);
+    }
+  });
+
+  test("a session the flow NEVER ran in still falls back to the legacy gate when the flag is off", async () => {
+    const off = makeHarness({ enabled: false });
+    expect(off.grants.enforcing).toBe(false);
+    await off.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(off.deps.abortableReviewGate).toHaveBeenCalledTimes(1);
+  });
+
+  test("the terminal texts tell the agent not to retry in this conversation", () => {
+    expect(APPROVAL_UNAVAILABLE_DENY).toMatch(/Do not retry in this conversation/);
+    expect(APPROVAL_UNAVAILABLE_DENY).toMatch(/not performed/);
+  });
+});
+
+describe("a consume that does not release stops the card claiming the agent is continuing", () => {
+  test.each([
+    ["hash_mismatch", "approved"],
+    ["rpc_error", "approved"],
+    ["decider_not_owner", "approved"],
+    ["expired", "expired"],
+    ["not_approved", "rejected"],
+    ["already_consumed", "consumed"],
+  ] as const)("live path, reason %s -> approval_status %s with agentWaiting=false", async (reason, status) => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    h.approval.consume = vi.fn(async () => ({ consumed: false as const, reason }));
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    const id = await decideWhenCardArrives(h, "approved");
+    expect((await pending).behavior).toBe("deny");
+    expect(h.frames.filter((f) => f.type === "approval_status")).toEqual([
+      expect.objectContaining({ approvalId: id, status, agentWaiting: false }),
+    ]);
+  });
+
+  test("re-proposal path (consume rejected inside submit) emits the same settle frame", async () => {
+    const h = makeHarness();
+    h.approval.submit = vi.fn(async () => ({ kind: "consume_rejected" as const, approvalId: "x", reason: "hash_mismatch" }));
+    await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(h.frames.filter((f) => f.type === "approval_status")).toEqual([
+      expect.objectContaining({ approvalId: "x", status: "approved", agentWaiting: false }),
+    ]);
+  });
+
+  test("the byte-identical-arguments text names the server-derived commit for a push", () => {
+    expect(APPROVAL_CONSUME_REJECTED_DENY).toMatch(/commit the server derives from the workspace HEAD/);
+  });
+});
+
+describe("the failing RPC's code is kept (never its message)", () => {
+  test("a consume that throws with a code reports it in extra.code, and a coded rpc_error result does too", async () => {
+    const boom = Object.assign(new Error("db text that must never surface"), { code: "57014" });
+    for (const consume of [
+      async () => {
+        throw boom;
+      },
+      async () => ({ consumed: false as const, reason: "rpc_error", code: "57014" }),
+    ]) {
+      vi.clearAllMocks();
+      clearAllWaiters();
+      const h = makeHarness({ deadlineMs: 2000 });
+      h.approval.consume = vi.fn(consume);
+      const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+      await decideWhenCardArrives(h, "approved");
+      expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+      const op = mockWarn.mock.calls.find((c) => (c[1] as { op?: string }).op === "approval-consume-rejected");
+      expect((op![1] as { extra: Record<string, unknown> }).extra).toMatchObject({ reason: "rpc_error", code: "57014" });
+      expect(JSON.stringify(op)).not.toContain("db text that must never surface");
+    }
+  });
+
+  test("the real consumeApproval keeps the RPC error code on an rpc_error result", async () => {
+    const client = { rpc: async () => ({ data: null, error: { message: "x", code: "57014" } }) } as unknown as ApprovalRpcClient;
+    expect(await consumeApproval(client, { id: "a", hash: "a".repeat(64), conversationId: CONVERSATION_ID })).toEqual({
+      consumed: false,
+      reason: "rpc_error",
+      code: "57014",
+    });
+  });
+
+  test("poll read errors keep the last error's code on the one wait-read-failed op", async () => {
+    const db = new FakeDb();
+    db.failRead = true; // the fake answers { code: "XX000" }
+    const h = makeHarness({ db, deadlineMs: 80 });
+    await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    const op = mockWarn.mock.calls.find((c) => (c[1] as { op?: string }).op === "approval-wait-read-failed");
+    expect((op![1] as { extra: Record<string, unknown> }).extra).toMatchObject({ code: "XX000" });
   });
 });

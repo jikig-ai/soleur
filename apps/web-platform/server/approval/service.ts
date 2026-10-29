@@ -184,7 +184,8 @@ export type ConsumeRejectReason =
   | "bad_request"
   | "unknown";
 
-export type ConsumeResult = { consumed: true } | { consumed: false; reason: ConsumeRejectReason | string };
+/** `code` is the SQLSTATE / error class of an `rpc_error` (never the message): it lets the gate report WHY the consume failed. */
+export type ConsumeResult = { consumed: true } | { consumed: false; reason: ConsumeRejectReason | string; code?: string };
 
 const HASH_RE = /^[0-9a-f]{64}$/;
 
@@ -201,10 +202,10 @@ export async function consumeApproval(
   let res: RpcResult;
   try {
     res = await client.rpc("consume_approval", { p_id: p.id, p_hash: p.hash, p_conversation: p.conversationId });
-  } catch {
-    return { consumed: false, reason: "rpc_error" };
+  } catch (e) {
+    return { consumed: false, reason: "rpc_error", ...(e instanceof Error && e.name ? { code: e.name } : {}) };
   }
-  if (res.error) return { consumed: false, reason: "rpc_error" };
+  if (res.error) return { consumed: false, reason: "rpc_error", ...(res.error.code ? { code: res.error.code } : {}) };
   const d = res.data;
   if (isObj(d) && d.consumed === true) return { consumed: true };
   if (isObj(d) && d.consumed === false && typeof d.reason === "string") return { consumed: false, reason: d.reason };
@@ -214,7 +215,7 @@ export async function consumeApproval(
 export type SubmitResult =
   | { kind: "released"; approvalId: string; requestCount: number }
   | { kind: "wait"; approval: ApprovalRow; created: boolean; requestCount: number; notify: boolean; expiresAt: string }
-  | { kind: "consume_rejected"; approvalId: string; reason: string }
+  | { kind: "consume_rejected"; approvalId: string; reason: string; code?: string }
   | { kind: "not_waitable"; approval: ApprovalRow; requestCount: number }
   /** A pending cap was hit; nothing was saved. `scope` says which cap (5 per conversation, 20 per workspace). */
   | { kind: "cap_reached"; scope: ApprovalCapScope };
@@ -236,7 +237,7 @@ export async function submitApprovalRequest(client: ApprovalRpcClient, p: Create
     const c = await consumeApproval(client, { id: r.approval.id, hash: p.actionSha256, conversationId: p.conversationId });
     return c.consumed
       ? { kind: "released", approvalId: r.approval.id, requestCount: r.requestCount }
-      : { kind: "consume_rejected", approvalId: r.approval.id, reason: c.reason };
+      : { kind: "consume_rejected", approvalId: r.approval.id, reason: c.reason, ...(c.code ? { code: c.code } : {}) };
   }
   if (r.approval.status === "pending") {
     return {

@@ -17,11 +17,14 @@ export interface ApprovalFlagIdentity {
   workspaceId: string | null;
 }
 
-let readFailureReported = false;
+/** A persistent flag-service outage is re-reported at most this often, so it can neither flood Sentry nor stay silent after one event. */
+export const FLAG_READ_FAILURE_REPORT_TTL_MS = 10 * 60 * 1000;
+
+let lastReadFailureReportedAt: number | null = null;
 
 /** Test seam: forget that a read failure was already reported in this process. */
 export function resetFlagReadFailureReport(): void {
-  readFailureReported = false;
+  lastReadFailureReportedAt = null;
 }
 
 export async function isApprovalQueueEnabled(identity: ApprovalFlagIdentity): Promise<boolean> {
@@ -34,10 +37,12 @@ export async function isApprovalQueueEnabled(identity: ApprovalFlagIdentity): Pr
       subscriptionStatus: null,
     });
   } catch (err) {
-    // Fail closed AND visible: a silently-off flag would look like a healthy dormant feature. Once per process, so a
-    // flag-service outage cannot flood Sentry (the gate reads the flag on every gated call).
-    if (!readFailureReported) {
-      readFailureReported = true;
+    // Fail closed AND visible: a silently-off flag would look like a healthy dormant feature. Debounced (one report per
+    // TTL window per process), so a flag-service outage cannot flood Sentry (the gate reads the flag on every gated
+    // call) and a long outage still re-surfaces instead of latching silent after the first event.
+    const now = Date.now();
+    if (lastReadFailureReportedAt === null || now - lastReadFailureReportedAt >= FLAG_READ_FAILURE_REPORT_TTL_MS) {
+      lastReadFailureReportedAt = now;
       reportApprovalOp("flagReadFailed", err);
     }
     return false;

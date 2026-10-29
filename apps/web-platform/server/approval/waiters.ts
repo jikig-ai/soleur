@@ -79,9 +79,12 @@ export function clearAllWaiters(): void {
 
 export type WaitOutcome =
   | { kind: "decided"; status: Exclude<WaitStatus, "pending"> }
-  /** `readErrors` = status reads that failed during the wait (each one kept waiting; never an allow). */
-  | { kind: "timeout"; readErrors: number }
-  | { kind: "aborted"; readErrors: number };
+  /**
+   * `readErrors` = status reads that failed during the wait (each one kept waiting; never an allow). `lastReadError` is
+   * the most recent failure, so the one per-wait report can carry its code (the caller never reads its message).
+   */
+  | { kind: "timeout"; readErrors: number; lastReadError?: unknown }
+  | { kind: "aborted"; readErrors: number; lastReadError?: unknown };
 
 export interface WaitDeps {
   approvalId: string;
@@ -110,6 +113,7 @@ export async function waitForDecision(deps: WaitDeps): Promise<WaitOutcome> {
   let wake = deps.woken;
   let reads = 0;
   let readErrors = 0;
+  let lastReadError: unknown;
 
   // One abort listener for the whole wait (a listener per poll would pile up on the signal).
   const onAbort: { resolve: () => void } = { resolve: () => {} };
@@ -120,27 +124,29 @@ export async function waitForDecision(deps: WaitDeps): Promise<WaitOutcome> {
 
   try {
     while (true) {
-      if (deps.signal.aborted) return { kind: "aborted", readErrors };
+      if (deps.signal.aborted) return { kind: "aborted", readErrors, lastReadError };
 
       if (reads < MAX_POLL_READS) {
         reads += 1;
         try {
           const s = await deps.read();
           if (s && s !== "pending") return { kind: "decided", status: s };
-        } catch {
-          // Transient read error: keep waiting until the deadline. Never an allow. Counted, and reported once per wait.
+        } catch (err) {
+          // Transient read error: keep waiting until the deadline. Never an allow. Counted, and reported once per wait
+          // (with the last error, so its code is not lost).
           readErrors += 1;
+          lastReadError = err;
         }
       }
 
       const remaining = deadline - now();
-      if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "timeout", readErrors };
+      if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "timeout", readErrors, lastReadError };
 
       const nap = Math.min(jittered(random), remaining);
       const racers: Array<Promise<"slept" | "woken" | "aborted">> = [sleep(nap).then(() => "slept" as const), aborted];
       if (wake) racers.push(wake.then(() => "woken" as const));
       const r = await Promise.race(racers);
-      if (r === "aborted" || deps.signal.aborted) return { kind: "aborted", readErrors };
+      if (r === "aborted" || deps.signal.aborted) return { kind: "aborted", readErrors, lastReadError };
       // The hint is consumed once: a resolved promise must not turn the loop into a hot database poll.
       if (r === "woken") wake = undefined;
     }

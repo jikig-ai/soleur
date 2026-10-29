@@ -41,7 +41,7 @@ describe("renderApprovalView: the card is built from the SAME canonical object t
     });
   }
 
-  // CLO ruling 5 / CTO ruling 1: "this exact X" is a representation to the Owner at the moment of consent. It may only be
+  // ADR-307 § Bound versus executed: "this exact X" is a representation to the Owner at the moment of consent. It may only be
   // used where the whole X is bound; the three tools whose handler re-reads content at execution name only what is bound.
   describe("the single-use line claims no more than is bound", () => {
     it.each([
@@ -62,7 +62,7 @@ describe("renderApprovalView: the card is built from the SAME canonical object t
         "Creates a public link to this file as it is when your agent creates the link. The file's contents are not shown here.",
       );
       expect(view(TOOLS.createPr).consequence).toContain(
-        "Opens a pull request between these branches. The changes on the branch were approved when they were pushed, not here.",
+        "Opens a pull request between these branches. This approval covers opening the pull request only; it does not review the changes on the branch.",
       );
       expect(view(TOOLS.triggerWorkflow).consequence).toContain(
         "Runs the workflow as it exists on this branch or tag when it starts.",
@@ -125,7 +125,7 @@ describe("copy deck constants (AC14): no outcome is ever claimed", () => {
   };
 
   it("contains none of the outcome words sent, ran, executed, delivered", () => {
-    for (const s of strings()) expect(s).not.toMatch(/\b(sent|ran|executed|delivered)\b/i);
+    for (const s of strings()) expect(s).not.toMatch(/\b(sent|executed|delivered)\b|\bran\b(?! nothing\b)/i);
   });
 
   it("carries the approved 'Released to your agent' wording and the honest consequence line", () => {
@@ -143,6 +143,24 @@ describe("the inbox title reveals invisible direction controls (like the card)",
     const title = renderApprovalInboxTitle(action, "pending", "fallback");
     expect(title).not.toContain("\u202E");
     expect(title).toContain("<U+202E>");
+  });
+
+  it("a revoked row reads 'You revoked', distinct from 'You denied'", () => {
+    const s = SAMPLES[TOOLS.emailSend];
+    const action = canonicalizeAction(TOOLS.emailSend, s.input, s.server);
+    expect(renderApprovalInboxTitle(action, "revoked", "fallback")).toBe(
+      `You revoked: send email to ${String(s.input.to)}, subject “${String(s.input.subject)}”`,
+    );
+    expect(renderApprovalInboxTitle(action, "rejected", "fallback").startsWith("You denied: ")).toBe(true);
+  });
+
+  it("control characters beyond direction marks are revealed in the inbox title; a long value is not cut", () => {
+    const s = SAMPLES[TOOLS.emailSend];
+    const subject = "x".repeat(500) + "\u0001" + "\u3164";
+    const action = canonicalizeAction(TOOLS.emailSend, { ...s.input, subject }, s.server);
+    const title = renderApprovalInboxTitle(action, "pending", "fallback");
+    expect(title).toContain("<U+0001><U+3164>");
+    expect(title).toContain("x".repeat(500));
   });
 
   it("no stored action falls back to the static title", () => {

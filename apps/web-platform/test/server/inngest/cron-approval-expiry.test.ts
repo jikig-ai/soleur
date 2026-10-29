@@ -76,8 +76,18 @@ describe("cronApprovalExpiryHandler", () => {
 
   it("a throwing push is treated as a failed push", async () => {
     h.sweep.mockResolvedValue({ expired: [EXP("a1", "unanswered")], flagged: [], scrubbed: 0 });
-    h.notify.mockRejectedValue(new Error("boom"));
+    const boom = Object.assign(new Error("boom"), { code: "ECONNRESET" });
+    h.notify.mockRejectedValue(boom);
     await expect(cronApprovalExpiryHandler(args)).resolves.toMatchObject({ ok: true, notifyFailed: 1 });
+    // The cause is KEPT (the op reads its code / class name; never the message), and a plain not-delivered says so.
+    expect(h.op).toHaveBeenCalledWith("notifyFailed", boom, expect.objectContaining({ approvalId: "a1", extra: { kind: "expired", cause: "threw" } }));
+  });
+
+  it("a push that answers false is reported without an error and says why", async () => {
+    h.sweep.mockResolvedValue({ expired: [EXP("a1", "unanswered")], flagged: [], scrubbed: 0 });
+    h.notify.mockResolvedValue(false);
+    await cronApprovalExpiryHandler(args);
+    expect(h.op).toHaveBeenCalledWith("notifyFailed", null, expect.objectContaining({ extra: { kind: "expired", cause: "not-delivered" } }));
   });
 
   it("flagged rows are reported as unanswered ops and not pushed", async () => {
@@ -92,7 +102,8 @@ describe("cronApprovalExpiryHandler", () => {
     h.sweep.mockRejectedValue(new Error("rpc down"));
     const r = await cronApprovalExpiryHandler(args);
     expect(r).toMatchObject({ ok: false, expired: 0 });
-    expect(h.op).toHaveBeenCalledWith("sweepFailed", expect.any(Error), expect.anything());
+    // `extra.cron`, never `extra.fn`: `fn` is the failing RPC name the error contributes, and extra overwrites it.
+    expect(h.op).toHaveBeenCalledWith("sweepFailed", expect.any(Error), { extra: { cron: "cron-approval-expiry" } });
     expect(h.notify).not.toHaveBeenCalled();
     expect(stepRun.mock.calls.map((c) => c[0])).not.toContain("approval-notify");
     expect(h.heartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));

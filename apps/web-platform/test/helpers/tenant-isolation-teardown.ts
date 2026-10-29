@@ -141,6 +141,7 @@ const ANONYMISE_SEQUENCE: ReadonlyArray<
   ["anonymise_outbound_sends", "p_user_id", "restrict"],
   ["anonymise_routine_runs", "p_user_id", "restrict"],
   ["anonymise_agent_engine_data", "p_user_id", "restrict"],
+  ["anonymise_approval_request", "p_user_id", "set-null"],
 ];
 
 // A schema-cache miss (function not found) — distinct from a real failure.

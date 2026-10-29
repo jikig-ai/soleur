@@ -37,6 +37,7 @@ import { buildGithubTools } from "@/server/github-tools";
 import { buildKbShareTools } from "@/server/kb-share-tools";
 import { buildWorkspaceSettingsTools } from "@/server/workspace-settings-tools";
 import { canonicalizeAction } from "@/server/approval/canonical";
+import { ExecutionGrants } from "@/server/approval/grants";
 import { FIELD_LISTS, SAMPLES, USER_ID } from "./fixtures";
 
 buildEmailTriageTools({ userId: USER_ID });
@@ -47,9 +48,10 @@ buildGithubTools({
   defaultBranch: "main",
   workspacePath: "/tmp/none",
   workflowRateLimiter: {} as never,
+  grants: new ExecutionGrants(),
 });
-buildKbShareTools({ serviceClient: {} as never, userId: USER_ID, kbRoot: "/tmp/none", baseUrl: "https://example.test" });
-buildWorkspaceSettingsTools({ userId: USER_ID });
+buildKbShareTools({ serviceClient: {} as never, userId: USER_ID, kbRoot: "/tmp/none", baseUrl: "https://example.test", grants: new ExecutionGrants() });
+buildWorkspaceSettingsTools({ userId: USER_ID, grants: new ExecutionGrants() });
 
 const SHORT = (fq: string) => fq.replace("mcp__soleur_platform__", "");
 

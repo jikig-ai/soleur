@@ -1,7 +1,7 @@
 /**
  * #4672: the closed-conversation refusal of `decide_approval` (migration 180), pinned offline.
  *
- * Gap found by the Guard 1 mutation battery after the review round: `SELECT false INTO v_closed` (the archived-conversation
+ * Gap found by the Guard 1 mutation battery after review: `SELECT false INTO v_closed` (the archived-conversation
  * read replaced by a constant) survived every assertion in migration-180-approval-request.test.ts, because that file pins
  * the position of `IF NOT FOUND OR v_closed` but not what `v_closed` is assigned from. A decision on a pending request of an
  * archived conversation must record nothing and answer `closed`. The behavioural proof is the database-gated

@@ -211,25 +211,31 @@ describe("full-input fidelity (the preview was lossy; the canonical object is no
 describe("computeActionHash (HMAC-SHA256, keyed from SENTRY_USERID_PEPPER)", () => {
   // Known-answer vectors computed OUTSIDE this codebase (python hmac/hashlib over hand-written literals), so a
   // change to canonicalJson, the key derivation or the digest cannot move the expected value with it.
-  //   key  = HMAC-SHA256(pepper, "soleur:approval-request:action-sha256:v1")
+  //   key  = HKDF-SHA256(ikm = pepper, salt = empty, info = "soleur:approval-request:action-sha256:v1", 32 bytes)  (RFC 5869,
+  //          written out with python hmac: extract with a 32-zero-byte salt, one expand block)
   //   hash = HMAC-SHA256(key, text)
   const KAT_PEPPER = "kat-pepper-0123456789abcdef";
-  const KAT_KEY = "e0b7ffa054210ee9f4d17543d0a24981456a5c637c92134fedec60c9d59fe560";
-  const KAT_TEXT_HASH = "f30c86e4e7f037722726c0981bc86496c43605f7bd8983cd0d41ed32eeadeabe"; // over '{"a":1}'
+  const KAT_KEY = "102d3f77c667086949f43a60dc19f690199fe0acc5e97bab4e089a99f52fd1c0";
+  const KAT_TEXT_HASH = "b7ee274d3c52e581b04cebe266a48d4b4862d32d377614206848fd75a185a034"; // over '{"a":1}'
   const KAT_ACTION_TEXT =
     '{"action":{"fields":{"documentPath":"knowledge-base/pricing/q4.md"},"tool":"mcp__soleur_platform__kb_share_create","v":1},' +
     '"conversation_id":"00000000-0000-4000-8000-000000000003","tool_name":"mcp__soleur_platform__kb_share_create",' +
     '"workspace_id":"00000000-0000-4000-8000-000000000001"}';
-  const KAT_ACTION_HASH = "974b85df97f307b40371a1b15cc439ea37368753fd3fc12360d25d714faacc1a";
+  const KAT_ACTION_HASH = "2ecb4c23a304d5da9597caa71d86dcaaa3291baa1bb8f727e43403e59b67330a";
   const KAT_UNKEYED_SHA256 = "7d9d2ef31a3d1d1a678a991c9e112fddcf04a15c29596b9259297c96274e7579";
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("derives the key by domain separation from the pepper (known answer)", () => {
+  it("derives the key by HKDF-SHA256 from the pepper (known answer)", () => {
     expect(deriveApprovalHashKey(KAT_PEPPER).toString("hex")).toBe(KAT_KEY);
     expect(hmacActionText('{"a":1}', KAT_PEPPER)).toBe(KAT_TEXT_HASH);
+  });
+
+  it("the key is NOT HMAC(pepper, label): a plain HMAC of that literal under the pepper (what hashUserId would compute) is a different value", () => {
+    const naive = "e0b7ffa054210ee9f4d17543d0a24981456a5c637c92134fedec60c9d59fe560"; // python: hmac(pepper, label), the superseded derivation
+    expect(deriveApprovalHashKey(KAT_PEPPER).toString("hex")).not.toBe(naive);
   });
 
   it("hashes a real canonicalised action to the externally computed HMAC, and NOT to the unkeyed sha256", () => {

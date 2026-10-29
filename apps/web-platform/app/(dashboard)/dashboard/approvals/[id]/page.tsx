@@ -36,7 +36,7 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
   const { data, error } = await supabase.from("approval_request").select(ROW_COLUMNS).eq("id", id).maybeSingle();
   if (error) {
     // Static message, ids only: the error text can echo row content.
-    reportApprovalOp("landingReadFailed", error, { approvalId: id, userId: user.id });
+    reportApprovalOp("landingReadFailed", error, { approvalId: id, userId: user.id, extra: { read: "row" } });
     throw new Error("approval read failed");
   }
   if (!data) notFound();
@@ -53,7 +53,7 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
     .eq("conversation_id", row.conversation_id)
     .eq("action_sha256", row.action_sha256);
   if (counted.error) {
-    reportApprovalOp("landingReadFailed", counted.error, { approvalId: id, userId: user.id });
+    reportApprovalOp("landingReadFailed", counted.error, { approvalId: id, userId: user.id, extra: { read: "request-count" } });
   } else if (typeof counted.count === "number" && counted.count > 0) {
     requestCount = counted.count;
   }
@@ -80,6 +80,12 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
             decidedAt: row.decided_at,
             decidedByViewer: row.decided_by === user.id,
             revoked: row.revoked_at !== null,
+            // The retention scrub clock (migration 180): COALESCE(consumed_at, expired_at, revoked_at, decided_at). An expired
+            // row has no `expired_at` column in this read, so its expiry time stands in (the sweep stamps it within minutes).
+            endedAt:
+              row.status === "pending"
+                ? null
+                : (row.consumed_at ?? (row.status === "expired" ? row.expires_at : null) ?? row.revoked_at ?? row.decided_at),
           }}
         />
       )}

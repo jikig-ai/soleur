@@ -37,7 +37,7 @@ describe("isApprovalQueueEnabled", () => {
     expect(result).toBe(false);
   });
 
-  it("a read failure is mirrored to Sentry ONCE per process, tagged, with the static message; later failures stay quiet", async () => {
+  it("a read failure is mirrored to Sentry ONCE per debounce window, tagged, with the static message; later failures in the window stay quiet", async () => {
     getRuntimeFlag.mockImplementation(async () => {
       throw new Error("flagsmith down");
     });

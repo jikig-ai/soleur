@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **51 `sentry_alert` rules** (51 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672. 49 are
-  fully Terraform-owned (48 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **52 `sentry_alert` rules** (52 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672. 50 are
+  fully Terraform-owned (49 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`

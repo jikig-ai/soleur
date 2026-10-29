@@ -2979,8 +2979,9 @@ resource "sentry_alert" "haiku_no_text_block_rate" {
 # (server/inngest/functions/cron-approval-expiry.ts) fires the `gate_unanswered` op ONCE per request, 15 minutes after
 # it was created while still pending (sweep_approvals() marks `unanswered_flagged_at`, so a request flags at most once).
 # The agent has stopped waiting at 5 minutes, so a request this old means the Owner's push/inbox nudge did not land.
-# This is the ONLY approval op with an issue alert: every other approval op is a Sentry warn event whose rate is the
-# rollout metric reviewed at the enabling gate, not a page. The op has its own static message (server/approval/ops.ts),
+# Together with approval_key_unavailable (below) and the Art. 17 anonymise alert, this is one of the only approval
+# alerts: every other approval op is a Sentry warn event whose rate is the rollout metric reviewed at the enabling
+# gate, not a page. The op has its own static message (server/approval/ops.ts),
 # so the group is one condition; `approval_id` is a row UUID tag, not personal data.
 #
 # Triggers: the event is a message event with no stack trace, so Sentry groups it by message text and EVERY unanswered
@@ -3010,6 +3011,52 @@ resource "sentry_alert" "approval_gate_unanswered" {
       conditions = [
         { tagged_event = { key = "feature", match = "eq", value = "approval-queue" } },
         { tagged_event = { key = "op", match = "eq", value = "gate_unanswered" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#4672, ADR-307) The approval HMAC key is unavailable: SENTRY_USERID_PEPPER is unset or empty in the container, so
+# deriveApprovalHashKey (server/approval/canonical.ts) throws key_unavailable and the gate FAILS CLOSED for every
+# approval-gated tool call (no request is created, the agent is told approvals are unavailable). server/approval/ops.ts
+# registers it as its own op (`approval-key-unavailable`, ERROR level via reportSilentFallback(null, ...)) so it does not
+# disappear into the shared approval-gate-failed group. It is a deploy/config fault, not a user event: while the flag is
+# on, a missing pepper blocks every gated action for every workspace until the secret is restored, and the same fault
+# during a pepper ROTATION window invalidates live approvals. The op has its own static message, so the group is one
+# condition; the filter is `feature` + `op`.
+#
+# Triggers/actions copy approval_gate_unanswered (re-pages per event: the event is a message event with no stack trace,
+# so Sentry groups every occurrence into one issue and the three transition triggers alone would email once and then
+# stay silent while the issue is open). Distinct `frequency_minutes = 44` avoids Sentry POST-time exact-duplicate dedup
+# (re-verified root-wide and against origin/main: 5,10-43,60-63,120,240,1440-1442 taken). Resolve the issue after the
+# pepper is restored, never archive it.
+resource "sentry_alert" "approval_key_unavailable" {
+  organization      = var.sentry_org
+  name              = "approval-key-unavailable"
+  enabled           = true
+  frequency_minutes = 44
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "approval-queue" } },
+        { tagged_event = { key = "op", match = "eq", value = "approval-key-unavailable" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

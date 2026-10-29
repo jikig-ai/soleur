@@ -46,7 +46,7 @@ interface Phrase {
   /**
    * What the single-use line names when "this exact {noun}" would claim more than is bound: the approval binds
    * identifiers (a path, branch names, a workflow id and ref), not the content a handler re-reads at execution
-   * (CTO ruling 1, CLO ruling 5). Absent = the noun is fully bound.
+   * (ADR-307 § Bound versus executed). Absent = the noun is fully bound.
    */
   bound?: string;
   extra?: string;
@@ -62,7 +62,7 @@ const PHRASES: Record<ApprovalToolName, Phrase> = {
     verb: "open this pull request",
     noun: "pull request",
     bound: "these two branch names",
-    extra: "Nothing is merged by this approval. Opens a pull request between these branches. The changes on the branch were approved when they were pushed, not here.",
+    extra: "Nothing is merged by this approval. Opens a pull request between these branches. This approval covers opening the pull request only; it does not review the changes on the branch.",
   },
   mcp__soleur_platform__github_trigger_workflow: {
     verb: "start this workflow",
@@ -208,11 +208,15 @@ export function renderApprovalView(action: CanonicalAction): ApprovalView {
 // not show. Plain text only: the inbox row renders it as a React text node.
 // ---------------------------------------------------------------------------
 
-export type ApprovalInboxState = "pending" | "approved" | "rejected" | "consumed" | "expired" | "expired_after_approval";
+export type ApprovalInboxState = "pending" | "approved" | "rejected" | "revoked" | "consumed" | "expired" | "expired_after_approval";
 
 const sha7 = (v: CanonicalValue | undefined): string => str(v).slice(0, 7);
 
-/** "send email to a@b.c, subject “…”": the verb and the primary target in full, never ellipsised. */
+/**
+ * "send email to a@b.c, subject “…”": the verb and the primary target in full; this function never shortens a value.
+ * The inbox row passes approval titles through the display sanitizer WITHOUT its default 200-character cap
+ * (components/inbox/inbox-item-row.tsx), so the row shows the whole text too.
+ */
 function summarizeApprovalAction(action: CanonicalAction): string {
   const f = action.fields;
   switch (action.tool) {
@@ -247,11 +251,13 @@ export function renderApprovalInboxTitle(action: CanonicalAction | null, state: 
       return `You approved: ${what}`;
     case "rejected":
       return `You denied: ${what}`;
+    case "revoked":
+      return `You revoked: ${what}`;
     case "consumed":
       return `Released to your agent: ${what}`;
     case "expired":
-      return `Approval expired: ${what}. Nothing was run.`;
+      return `Approval expired: ${what}. This request ran nothing.`;
     case "expired_after_approval":
-      return `${APPROVAL_COPY.approvedNeverAsked}: ${what}. Nothing was run.`;
+      return `${APPROVAL_COPY.approvedNeverAsked}: ${what}. This request ran nothing.`;
   }
 }

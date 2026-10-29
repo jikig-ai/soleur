@@ -137,11 +137,30 @@ export const APPROVAL_OPS = {
     message: "Approval gate: the viewer role could not be read; the card shows the read-only view",
     level: "warn",
   },
-  /** The `approval-queue` flag read threw; the flag is treated as OFF. Reported once per process (flag.ts). */
+  /** The `approval-queue` flag read threw; the flag is treated as OFF. Debounced to one report per 10 minutes per process (flag.ts). */
   flagReadFailed: {
     op: "approval-flag-read-failed",
     message: "Approval gate: the approval-queue flag could not be read; the flag was treated as off",
     level: "warn",
+  },
+  /**
+   * An execution grant was refused at a tool handler (the approval flow ran in the session but the handler could not
+   * match what the Owner approved): the action was NOT performed. `extra.reason` is one of GRANT_REFUSED_REASONS and
+   * `extra.tool` is the tool; the approval id is not known to the handler. Low volume (a refusal is an abnormal path).
+   */
+  grantRefused: {
+    op: "approval-grant-refused",
+    message: "Approval gate: a tool handler refused to run because the execution grant did not match; the action was not performed",
+    level: "warn",
+  },
+  /**
+   * The keyed-hash secret (SENTRY_USERID_PEPPER) is unset or empty: no approval can be hashed, so EVERY gated call denies.
+   * Error level, own op, so one alert covers a mis-deployed container without sharing a group with other gate failures.
+   */
+  keyUnavailable: {
+    op: "approval-key-unavailable",
+    message: "Approval gate: the approval hash key is unavailable (SENTRY_USERID_PEPPER unset or empty); gated actions are denied",
+    level: "error",
   },
   /** Fired by the expiry cron (15 minutes pending): issue-alerts registers THIS op only. */
   gateUnanswered: {
@@ -152,6 +171,10 @@ export const APPROVAL_OPS = {
 } as const satisfies Record<string, ApprovalOp>;
 
 export type ApprovalOpKey = keyof typeof APPROVAL_OPS;
+
+/** The `extra.reason` values of the `approval-grant-refused` op (a closed set: the alert and the tests pin it). */
+export const GRANT_REFUSED_REASONS = ["grant_missing", "workspace_changed", "commit_mismatch", "commit_unavailable", "grant_error"] as const;
+export type GrantRefusedReason = (typeof GRANT_REFUSED_REASONS)[number];
 
 export interface ApprovalOpContext {
   approvalId?: string;

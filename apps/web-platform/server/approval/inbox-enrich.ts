@@ -24,6 +24,8 @@ const COLUMNS = "id, workspace_id, conversation_id, tool_name, action_sha256, st
 
 function stateOf(r: StoredApprovalRow): ApprovalInboxState {
   if (r.status === "expired") return r.decided_at ? "expired_after_approval" : "expired";
+  // An approval an Owner took back is stored as `rejected` with `revoked_at` set; it must not read "You denied".
+  if (r.status === "rejected" && r.revoked_at) return "revoked";
   return r.status;
 }
 

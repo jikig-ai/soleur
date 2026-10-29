@@ -36,9 +36,11 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 
 ## Phase 4: Cron, flag, infra
 
-- [ ] 4.1 `cron-approval-expiry.ts` with one `sweep_approvals()` step; register in `cron-manifest.ts`, `app/api/inngest/route.ts`, `execution-placement.ts`, `routine-metadata.ts`
-- [ ] 4.2 `infra/sentry/cron-monitors.tf`, `alert-reference.json`, `issue-alerts.tf`, `cutover-inngest.yml`
-- [ ] 4.3 Flag `approval-queue`: `lib/feature-flags/server.ts`, `.env.example`, `flip.sh` map and parity test; per-workspace identity; flag-create hand-over note
+- [x] 4.1 `cron-approval-expiry.ts` with one `sweep_approvals()` step; register in `cron-manifest.ts`, `app/api/inngest/route.ts`, `execution-placement.ts`, `routine-metadata.ts`
+- [x] 4.2 `infra/sentry/cron-monitors.tf`, `alert-reference.json`, `issue-alerts.tf`, `cutover-inngest.yml`
+- [x] 4.3 Flag `approval-queue`: `lib/feature-flags/server.ts`, `.env.example`, `flip.sh` map and parity test; per-workspace identity; flag-create hand-over note
+
+- [x] 4.4 Round-2 observability (ADR-307): `approval-key-unavailable` op plus `sentry_alert.approval_key_unavailable` (frequency 44, alert-reference.json entry, contract test), `art17_approval_anonymise_failed` emitters pass a literal `null` first argument, `verify/180` row-level erasure check removed (kept as an integration test), enabling gates copied into the flag-create hand-over
 
 ## Phase 5: Governance
 

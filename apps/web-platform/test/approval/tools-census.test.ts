@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { TOOL_TIER_MAP } from "@/server/tool-tiers";
 import {
   APPROVAL_EXEMPT_TOOLS,
@@ -69,14 +69,20 @@ describe("Guard 2 census: every gated tool is required or exempt-with-a-reason",
   });
 });
 
-describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_ALLOWLIST (CTO ruling 9(d))", () => {
+describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_ALLOWLIST (ADR-307, sentinel discipline)", () => {
   // The cc runner has no approval wiring: a promoted approval tool would run on the legacy in-memory gate and
   // silently skip the queue. readCcMcpAllowlist must therefore REFUSE every APPROVAL_REQUIRED_TOOLS short name.
-  // NOTE: requires the matching guard in server/cc-dispatcher.ts (not part of the migration/service unit).
+  // The guard lives in server/cc-dispatcher.ts. That module is a very large import graph (~13 s cold, measured), so it
+  // is imported ONCE here with its own generous budget instead of inside the first `it` (which flaked at the 16 s
+  // default under load); every test below then runs in microseconds.
+  let readCcMcpAllowlist: typeof import("@/server/cc-dispatcher").readCcMcpAllowlist;
+  beforeAll(async () => {
+    ({ readCcMcpAllowlist } = await import("@/server/cc-dispatcher"));
+  }, 120_000);
+
   for (const fqn of APPROVAL_REQUIRED_TOOLS) {
     const short = fqn.replace("mcp__soleur_platform__", "");
-    it(`CC_MCP_ALLOWLIST naming ${short} throws (static message, no env echo beyond the short name)`, async () => {
-      const { readCcMcpAllowlist } = await import("@/server/cc-dispatcher");
+    it(`CC_MCP_ALLOWLIST naming ${short} throws (static message, no env echo beyond the short name)`, () => {
       expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: short })).toThrow(/approval/i);
       expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `create_issue, ${short}` })).toThrow(/approval/i);
     });

@@ -16,6 +16,8 @@ export interface ApprovalLandingRow {
   decidedAt: string | null;
   /** True when the viewer is the one who decided (drives "by you"). */
   decidedByViewer: boolean;
+  /** The retention clock of the row (consume, expiry, revoke or decision time), or null while it is still open. */
+  endedAt?: string | null;
   /** True when the request was approved and then taken back (status `rejected` with `revoked_at` set). */
   revoked: boolean;
 }
@@ -95,6 +97,7 @@ export function ApprovalLanding({
       // continuing. An approved request is "ask your agent again" until the row says it was used (`consumed`).
       agentWaiting={false}
       decideOutcome={outcome}
+      endedAt={row.endedAt}
       expiredAfterApproval={row.status === "expired" && row.decidedAt !== null}
       revoked={row.revoked}
       decidedLabel={decidedLabel}

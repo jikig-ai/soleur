@@ -4,6 +4,7 @@ import {
   hasNewerPendingRequest,
   isDecidable,
   isRevocable,
+  isRevokeTooLate,
   revealInvisible,
   type ApprovalCardStateInput,
 } from "@/lib/approval-card-state";
@@ -72,6 +73,14 @@ describe("revoke and the loser states", () => {
     for (const st of ["pending", "rejected", "expired"] as const) expect(isRevocable("denied", st, "owner")).toBe(false);
   });
 
+  it("a revoke that loses to the agent's repeat (conflict on a consumed row) is recognised, nothing else is", () => {
+    expect(isRevokeTooLate("consumed", "conflict")).toBe(true);
+    expect(isRevokeTooLate("consumed", undefined)).toBe(false);
+    expect(isRevokeTooLate("consumed", "decided")).toBe(false);
+    expect(isRevokeTooLate("approved", "conflict")).toBe(false);
+    expect(isRevokeTooLate("rejected", "conflict")).toBe(false);
+  });
+
   it("a conflict on a request that was meanwhile used is released; any other conflict is the loser state", () => {
     expect(d({ status: "consumed", decideOutcome: "conflict" })).toBe("released");
     expect(d({ status: "rejected", decideOutcome: "conflict" })).toBe("already_decided");
@@ -105,10 +114,43 @@ describe("revealInvisible (cq-regex-unicode-separators-escape-only)", () => {
   });
 
   it("leaves neighbours of the ranges alone, and never touches visible text (emoji, CJK, accents)", () => {
-    for (const cp of [0x2029, 0x202f, 0x2065, 0x206a, 0x061b, 0x061d, 0x00ac, 0x00ae, 0x180d, 0x180f, 0xfefe, 0xe007f + 1, 0xdfff + 1]) {
+    for (const cp of [0x202f, 0x2065, 0x061b, 0x061d, 0x00ac, 0x00ae, 0x180f, 0x0020, 0x00a0, 0x2800 - 1, 0x2801, 0x034e, 0x0350, 0x115e, 0x1161, 0x3163, 0x3165, 0xff9f, 0xffa1, 0xfefe, 0xe007f + 1, 0xdfff + 1]) {
       expect(revealInvisible(`a${ch(cp)}b`), `U+${cp.toString(16)}`).toBe(`a${ch(cp)}b`);
     }
     expect(revealInvisible(ch(0x1f600) + "caf\u00e9")).toBe(ch(0x1f600) + "caf\u00e9");
+  });
+
+  it("also reveals the named gaps the categories miss: format, control, line/paragraph separators, selectors, fillers, braille blank", () => {
+    const cps = [
+      0x206a, 0x206f, 0xe0001, 0xe0020, // other Cf (deprecated format controls, tag space)
+      0x2028, 0x2029, // line and paragraph separators (Zl, Zp)
+      0x0000, 0x0001, 0x0008, 0x000b, 0x000c, 0x000e, 0x001f, 0x007f, 0x0080, 0x009f, // Cc, except tab / newline / CRLF
+      0xfe00, 0xfe0f, 0xe0100, 0xe01ef, // variation selectors
+      0x034f, // combining grapheme joiner
+      0x115f, 0x1160, 0x3164, 0xffa0, // Hangul fillers
+      0x180b, 0x180c, 0x180d, // Mongolian free variation selectors
+      0x2800, // braille blank
+    ];
+    for (const cp of cps) {
+      const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+      expect(revealInvisible(`a${ch(cp)}b`), `U+${hex}`).toBe(`a<U+${hex}>b`);
+    }
+  });
+
+  it("never mangles ordinary text: letters, digits, spaces, tabs, newlines and CRLF pass through unchanged", () => {
+    const text = "Hello, world 123\n\tindented line\r\nwindows line\n\nlast \u00e9 \u65e5\u672c \u00a0 end";
+    expect(revealInvisible(text)).toBe(text);
+    expect(revealInvisible("")).toBe("");
+  });
+
+  it("a lone carriage return (not part of CRLF) is revealed; a CRLF pair is not", () => {
+    expect(revealInvisible("a\rb")).toBe("a<U+000D>b");
+    expect(revealInvisible("a\r\nb")).toBe("a\r\nb");
+  });
+
+  it("flags an emoji ZWJ sequence marker by marker (over-revealing is the safe direction)", () => {
+    const family = ch(0x1f468, 0x200d, 0x1f469);
+    expect(revealInvisible(family)).toBe(ch(0x1f468) + "<U+200D>" + ch(0x1f469));
   });
 
   it("the source of this module holds no raw invisible character (escapes only)", async () => {

@@ -137,7 +137,7 @@ describe("dispatchInboxPush: the push", () => {
   it("the expired kind uses the expired copy", async () => {
     await dispatchInboxPush(INBOX_ID, { kind: "expired" });
     expect(pushBody().title).toBe("Approval request expired");
-    expect(pushBody().body).toBe("A request expired before it was decided. Nothing was run.");
+    expect(pushBody().body).toBe("A request expired before it was decided. It ran nothing.");
   });
 
   it("a broadcast row (user_id null) goes to every workspace Owner; a targeted row goes to that user", async () => {
@@ -194,8 +194,8 @@ describe("dispatchInboxPush: the email fallback", () => {
 
   it("the expired kind uses the expired subject and body", async () => {
     await dispatchInboxPush(INBOX_ID, { kind: "expired" });
-    expect(emailArg().subject).toBe("Soleur: a request expired and nothing was run");
-    expect(emailArg().html).toContain("Nothing was run. If you still want it done, ask your agent again in Soleur.");
+    expect(emailArg().subject).toBe("Soleur: a request expired without being run");
+    expect(emailArg().html).toContain("This request ran nothing. If you still want it done, ask your agent again in Soleur.");
   });
 });
 

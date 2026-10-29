@@ -12,7 +12,7 @@
  * Sequence (plan "Gated branch"):
  *   snapshot (deep clone, before the first await) -> flag (once) -> server-derived fields -> canonical + hash ->
  *   submit (create-or-find; an already-approved live row is consumed there, no card, no wait) -> card -> wait ->
- *   approved: consume(id, hash, conversation) -> execution grant (R1) -> allow(snapshot).
+ *   approved: consume(id, hash, conversation) -> execution grant -> allow(snapshot).
  *
  * Returns `null` ONLY when the flag is off (or unreadable): the caller then runs the in-memory review gate exactly as
  * it did before this module existed.
@@ -20,6 +20,7 @@
 
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { WSMessage } from "@/lib/types";
+import type { ApprovalWireStatus } from "@/lib/approval-wire";
 import {
   ApprovalCanonicalError,
   canonicalizeAction,
@@ -31,7 +32,7 @@ import type { ApprovalGateDeps } from "./gate-types";
 import { putGrant } from "./grants";
 import { logApprovalMarker, reportApprovalOp, type ApprovalOpContext } from "./ops";
 import { renderApprovalView } from "./render";
-import { registerWaiter, unregisterWaiter, waitForDecision } from "./waiters";
+import { registerWaiter, unregisterWaiter, waitForDecision, type WaitStatus } from "./waiters";
 
 // Static deny texts: no tool input, no database text. The agent reads these.
 export const APPROVAL_PENDING_DENY =
@@ -41,17 +42,23 @@ export const APPROVAL_REJECTED_DENY =
 export const APPROVAL_EXPIRED_DENY =
   "The approval request expired before it was used, so the action was not performed. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.";
 export const APPROVAL_CONSUME_REJECTED_DENY =
-  "The approval could not be applied to this call (the arguments changed, or it was already used), so the action was not performed. Do not retry with different arguments. Tell the user the exact action needs a new approval.";
+  "The approval could not be applied to this call (the arguments changed, or it was already used), so the action was not performed. An approval covers byte-identical arguments, and for a push also the commit the server derives from the workspace HEAD. Do not retry with different arguments. Tell the user the exact action needs a new approval.";
 export const APPROVAL_PRINCIPAL_CHANGED_DENY =
   "The approval can no longer be applied because workspace membership or roles changed after it was granted, so the action was not performed. Do not retry. Tell the user the action needs a new approval from a current workspace Owner.";
 export const APPROVAL_TOO_MANY_PENDING_DENY =
   "Too many approval requests are already waiting for the workspace Owner, so this one was not saved. Do not retry. Tell the user to answer or decline the pending requests first.";
 export const APPROVAL_ABORTED_DENY =
   "The session ended before the approval was applied, so the action was not performed. The request stays saved for the workspace Owner. Do not retry unless the user asks.";
+/** The abort landed AFTER the approval was consumed: the request is no longer saved, it is spent. */
+export const APPROVAL_ABORTED_SPENT_DENY =
+  "The session ended after the approval was used but before the action ran, so the action was not performed and that approval is spent. Do not retry unless the user asks; the action needs a new approval.";
 export const APPROVAL_UNAVAILABLE_DENY =
-  "Approval is unavailable right now, so the action was not performed. Do not retry. Tell the user the action was not performed.";
+  "Approval is unavailable right now, so the action was not performed. Do not retry in this conversation. Tell the user the action was not performed.";
 export const APPROVAL_INVALID_INPUT_DENY =
   "The arguments for this action cannot be approved as given (a field is missing, invalid or not part of the action), so it was not performed. Correct the arguments and ask again.";
+
+/** What the wait resolves to: a decided status (never `pending`), or the wait's own end. */
+type WaitSelection = Exclude<WaitStatus, "pending"> | "timeout" | "aborted";
 
 export interface RunApprovalGateArgs {
   toolName: string;
@@ -81,8 +88,25 @@ export function consumeRejectedDeny(reason: string): string {
     case "decider_not_owner":
     case "requester_not_member":
       return APPROVAL_PRINCIPAL_CHANGED_DENY;
+    case "not_approved":
+      // The consume lost to a revoke: the Owner denied it, so the honest text is the denial, not "arguments changed".
+      return APPROVAL_REJECTED_DENY;
     default:
       return APPROVAL_CONSUME_REJECTED_DENY;
+  }
+}
+
+/** What the card should show after a consume that did not release (the row's real state, so no "your agent is continuing"). */
+function consumeRejectedCardStatus(reason: string): "approved" | "rejected" | "expired" | "consumed" {
+  switch (reason) {
+    case "expired":
+      return "expired";
+    case "not_approved":
+      return "rejected";
+    case "already_consumed":
+      return "consumed";
+    default:
+      return "approved";
   }
 }
 
@@ -152,7 +176,16 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
   } catch {
     enabled = false;
   }
-  if (!enabled) return null;
+  if (!enabled) {
+    // A session that already ran the approval flow never falls back to the legacy requester-answerable card for the other
+    // tools after a mid-session flag-off or flag read error: only the grant-checked tools are protected by the sticky
+    // `enforcing`, so every approval-required tool denies for the rest of the session (ADR-307 rollback).
+    if (a.approval.grants.enforcing) {
+      a.logDecision(a.toolName, "deny", "approval flow unavailable after it ran in this session");
+      return deny(APPROVAL_UNAVAILABLE_DENY);
+    }
+    return null;
+  }
   // From here the session is on the approval flow for good (sticky): a tool handler that finds no execution grant refuses
   // instead of falling back to the legacy path, even if the flag is turned off mid-session.
   a.approval.grants.enforcing = true;
@@ -164,14 +197,14 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
     userId: a.userId,
   };
   const aborted = () => a.callSignal?.aborted === true || a.controllerSignal.aborted;
-  const denyAborted = (): PermissionResult => {
+  const denyAborted = (spent = false): PermissionResult => {
     a.logDecision(a.toolName, "deny", "approval wait aborted");
-    return deny(APPROVAL_ABORTED_DENY);
+    return deny(spent ? APPROVAL_ABORTED_SPENT_DENY : APPROVAL_ABORTED_DENY);
   };
 
   // Tell the card what the agent is doing now, so it never claims "your agent is continuing" or "stopped waiting" from a
   // guess (wireframe 04C vs 04D). Best effort: a failed frame is one op and the card keeps its last state.
-  const emitStatus = (approvalId: string, status: "pending" | "expired" | "consumed", agentWaiting: boolean): void => {
+  const emitStatus = (approvalId: string, status: ApprovalWireStatus, agentWaiting: boolean): void => {
     try {
       a.sendToClient(a.userId, { type: "approval_status", approvalId, conversationId: a.conversationId, status, agentWaiting });
     } catch (err) {
@@ -219,7 +252,13 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         a.logDecision(a.toolName, "deny", "invalid input");
         return deny(APPROVAL_INVALID_INPUT_DENY);
       }
-      reportApprovalOp(code === "invalid_server_derived" ? "bindFailed" : "gateFailed", err, { ...op, extra: { code } });
+      if (code === "key_unavailable") {
+        // The hash key (SENTRY_USERID_PEPPER) is unset: every gated call denies. Its own error-level op, so one alert
+        // covers a mis-deployed container instead of sharing the generic gate-failure group.
+        reportApprovalOp("keyUnavailable", null, { ...op, extra: { code } });
+      } else {
+        reportApprovalOp(code === "invalid_server_derived" ? "bindFailed" : "gateFailed", err, { ...op, extra: { code } });
+      }
       a.logDecision(a.toolName, "deny", "approval bind failed");
       return deny(APPROVAL_UNAVAILABLE_DENY);
     }
@@ -242,7 +281,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
       return deny(APPROVAL_UNAVAILABLE_DENY);
     }
 
-    // The grant carries what was approved to the handler that executes it (R1). Written immediately before allow(), on
+    // The grant carries what was approved to the handler that executes it (ADR-307, execution grants). Written immediately before allow(), on
     // both allow paths, keyed by the zod-parsed handler args; a throw here is a deny (the outer catch).
     const allowWithGrant = (): PermissionResult => {
       putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId, headSha: derived?.headSha });
@@ -267,13 +306,18 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         emitStatus(submitted.approvalId, "consumed", false);
         if (wasAborted) {
           reportApprovalOp("consumedAborted", null, { ...ctx, extra: { path: "reproposal" } });
-          return denyAborted();
+          return denyAborted(true);
         }
         a.logDecision(a.toolName, "allow", "approved request consumed on re-proposal");
         return allowWithGrant();
       }
       case "consume_rejected": {
-        reportApprovalOp("consumeRejected", null, { ...op, approvalId: submitted.approvalId, extra: { reason: submitted.reason } });
+        reportApprovalOp("consumeRejected", null, {
+          ...op,
+          approvalId: submitted.approvalId,
+          extra: { reason: submitted.reason, ...(submitted.code ? { code: submitted.code } : {}) },
+        });
+        emitStatus(submitted.approvalId, consumeRejectedCardStatus(submitted.reason), false);
         a.logDecision(a.toolName, "deny", "approval consume rejected");
         return deny(consumeRejectedDeny(submitted.reason));
       }
@@ -358,7 +402,8 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
       }
 
       let readErrors = 0;
-      const wait = async (): Promise<string> => {
+      let lastReadError: unknown;
+      const wait = async (): Promise<WaitSelection> => {
         const outcome = await waitForDecision({
           approvalId,
           read: () => a.approval.readStatus(approvalId),
@@ -368,11 +413,12 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         });
         if (outcome.kind === "decided") return outcome.status;
         readErrors = outcome.readErrors;
+        lastReadError = outcome.lastReadError;
         return outcome.kind; // "timeout" | "aborted"
       };
-      const selection = await a.hold(approvalId, a.callSignal ?? a.controllerSignal, wait);
+      const selection = (await a.hold(approvalId, a.callSignal ?? a.controllerSignal, wait)) as WaitSelection | null;
       // ONE event per wait with the count, never one per poll.
-      if (readErrors > 0) reportApprovalOp("waitReadFailed", null, { ...ctx, extra: { readErrors } });
+      if (readErrors > 0) reportApprovalOp("waitReadFailed", lastReadError, { ...ctx, extra: { readErrors } });
 
       // null = the wait threw or the session aborted (holdForUser re-checks the abort AFTER its restore write).
       if (selection === null || selection === "aborted" || aborted()) return denyAborted();
@@ -381,16 +427,23 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         case "approved": {
           let consumed: boolean;
           let reason = "unknown";
+          let consumeError: unknown = null;
           try {
             const c = await a.approval.consume({ id: approvalId, hash, conversationId: a.conversationId });
             consumed = c.consumed === true;
-            if (!c.consumed) reason = c.reason;
-          } catch {
+            if (!c.consumed) {
+              reason = c.reason;
+              if (c.code) consumeError = { code: c.code };
+            }
+          } catch (err) {
             consumed = false;
             reason = "rpc_error";
+            consumeError = err;
           }
           if (!consumed) {
-            reportApprovalOp("consumeRejected", null, { ...ctx, extra: { reason } });
+            reportApprovalOp("consumeRejected", consumeError, { ...ctx, extra: { reason } });
+            // The card said "released, your agent is continuing": it must stop saying so.
+            emitStatus(approvalId, consumeRejectedCardStatus(reason), false);
             a.logDecision(a.toolName, "deny", "approval consume rejected");
             return deny(consumeRejectedDeny(reason));
           }
@@ -407,7 +460,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           emitStatus(approvalId, "consumed", false);
           if (wasAborted) {
             reportApprovalOp("consumedAborted", null, { ...ctx, extra: { path: "live" } });
-            return denyAborted();
+            return denyAborted(true);
           }
           a.logDecision(a.toolName, "allow", "approval consumed");
           return allowWithGrant();
@@ -431,10 +484,15 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           reportApprovalOp("consumeRejected", null, { ...ctx, extra: { reason: "already_consumed" } });
           a.logDecision(a.toolName, "deny", "approval already consumed");
           return deny(APPROVAL_CONSUME_REJECTED_DENY);
-        default:
+        default: {
+          // Exhaustive over WaitSelection: a new wait outcome is a compile error here. The runtime deny is the fail-closed
+          // backstop for the untyped `hold` seam (it returns a bare string), never a reachable branch.
+          const unreachable: never = selection;
+          void unreachable;
           reportApprovalOp("gateFailed", null, { ...ctx, extra: { stage: "unknown-outcome" } });
           a.logDecision(a.toolName, "deny", "approval outcome unknown");
           return deny(APPROVAL_UNAVAILABLE_DENY);
+        }
       }
     } finally {
       unregisterWaiter(approvalId);

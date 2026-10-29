@@ -43,6 +43,7 @@ vi.mock("@/server/trigger-workflow", () => ({ triggerWorkflow: readers.triggerWo
 vi.mock("@/server/push-branch", () => ({ pushBranch: readers.pushBranch }));
 
 import { buildGithubTools } from "@/server/github-tools";
+import { ExecutionGrants } from "@/server/approval/grants";
 import { UNTRUSTED_PREAMBLES } from "@/server/untrusted-content";
 
 type ToolStub = {
@@ -61,6 +62,7 @@ function toolByName(name: string): ToolStub {
     defaultBranch: "main",
     workspacePath: "/w",
     workflowRateLimiter: {} as never,
+    grants: new ExecutionGrants(),
   });
   const t = tools.find((x) => (x as unknown as ToolStub).name === name);
   if (!t) throw new Error(`${name} not found`);
@@ -132,6 +134,7 @@ describe("every github tool is classified read (framed) or write", () => {
       defaultBranch: "main",
       workspacePath: "/w",
       workflowRateLimiter: {} as never,
+      grants: new ExecutionGrants(),
     });
     const bare = toolNames.map((n) => n.replace("mcp__soleur_platform__", "")).sort();
     const expected = [...READ_TOOLS.map(([n]) => n), ...WRITE_TOOL_NAMES].sort();

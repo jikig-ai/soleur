@@ -1,5 +1,5 @@
 /**
- * #4672 R1 (CTO ruling 1): the per-session execution-grant side channel. One-shot, short-lived, bounded, keyed by the
+ * #4672 ADR-307 § Bound versus executed: the per-session execution-grant side channel. One-shot, short-lived, bounded, keyed by the
  * zod-parsed handler args, and sticky-enforcing once the approval flow ran in the session.
  */
 import { describe, expect, test } from "vitest";
@@ -65,8 +65,7 @@ describe("ExecutionGrants", () => {
 describe("checkGrant", () => {
   const args = { branch: "feat/x" }; // `force` defaults to false on BOTH sides
 
-  test("no grants object, or a session the flow never ran in: legacy (behaviour unchanged)", () => {
-    expect(checkGrant(undefined, T, args)).toEqual({ kind: "legacy" });
+  test("a session the flow never ran in: legacy (behaviour unchanged)", () => {
     expect(checkGrant(new ExecutionGrants(), T, args)).toEqual({ kind: "legacy" });
   });
 

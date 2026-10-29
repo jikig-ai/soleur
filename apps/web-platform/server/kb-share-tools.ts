@@ -23,12 +23,7 @@ import {
   type ShareServiceClient,
 } from "@/server/kb-share";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
-import {
-  checkGrant,
-  GRANT_MISSING_MESSAGE,
-  WORKSPACE_CHANGED_MESSAGE,
-  type ExecutionGrants,
-} from "./approval/grants";
+import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";
 
 interface BuildKbShareToolsOpts {
   serviceClient: ShareServiceClient;
@@ -37,10 +32,11 @@ interface BuildKbShareToolsOpts {
   /** Absolute origin like "https://app.soleur.ai" — prepended to relative share URLs. */
   baseUrl: string;
   /**
-   * #4672 per-session execution grants (shared by closure with the approval gate). Once the approval flow ran in the
-   * session, `kb_share_create` runs only with a grant, and only in the workspace the Owner approved it for.
+   * #4672 per-session execution grants (shared by closure with the approval gate). REQUIRED, so a forgotten wiring is a
+   * compile error. Once the approval flow ran in the session, `kb_share_create` runs only with a grant, and only in the
+   * workspace the Owner approved it for.
    */
-  grants?: ExecutionGrants;
+  grants: ExecutionGrants;
 }
 
 type ToolTextResponse = {
@@ -130,16 +126,16 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
         "revoked links the user may want to know about.",
       { documentPath: z.string() },
       async (args) => {
-        const grant = checkGrant(grants, "mcp__soleur_platform__kb_share_create", args);
-        if (grant.kind === "refuse") {
-          return textResponse({ error: GRANT_MISSING_MESSAGE, code: "approval_grant_missing", status: 403 }, true);
-        }
+        const toolName = "mcp__soleur_platform__kb_share_create";
+        const grant = checkGrant(grants, toolName, args);
+        if (grant.kind === "refuse") return grantRefusalResponse("grant_missing");
         // kb_share_links.workspace_id is NOT NULL (migration 059);
         // resolve the active workspace (solo fallback = userId).
         const workspaceId = await resolveCurrentWorkspaceId(userId, serviceClient);
         // The approval binds the workspace it was granted in: approved-on-W1 must not create the link on W2.
         if (grant.kind === "granted" && grant.binding.workspaceId !== workspaceId) {
-          return textResponse({ error: WORKSPACE_CHANGED_MESSAGE, code: "workspace_changed", status: 409 }, true);
+          reportGrantRefused(toolName, "workspace_changed");
+          return grantRefusalResponse("workspace_changed");
         }
         return wrapCreate(
           await createShare(serviceClient, userId, workspaceId, kbRoot, args.documentPath),

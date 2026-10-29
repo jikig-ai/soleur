@@ -1798,7 +1798,8 @@ function replayBufferedDebugEvents(
 /**
  * #4672 — re-send the conversation's live approval cards on attach (resume_session, context_path resume,
  * resume_stream). Fire-and-forget: a failure is one Sentry op inside `reemitLiveApprovals` and must never delay or
- * fail the attach. Dormant (zero reads) while the approval flag is off.
+ * fail the attach. While the approval flag is off the only reads are the attaching session's workspace resolution (and
+ * the flag read itself); the `approval_request` table is not touched.
  */
 function reattachApprovals(
   userId: string,
@@ -1823,7 +1824,11 @@ function reattachApprovals(
         return data === true ? "owner" : "member";
       },
     });
-  })().catch(() => {});
+  })().catch((err) => {
+    // Only the workspace resolution can reject here (`reemitLiveApprovals` never throws): report it, never swallow it. The
+    // attach is unaffected and the inbox row remains the fallback surface for the card.
+    reportApprovalOp("reattachFailed", err, { conversationId, userId, extra: { stage: "resolve-workspace" } });
+  });
 }
 
 // ---------------------------------------------------------------------------

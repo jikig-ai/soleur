@@ -73,13 +73,13 @@ describe("InboxItemRow for approval_required", () => {
     expect(screen.queryByRole("button", { name: "Archive item" })).toBeNull();
   });
 
-  it("an expired (FYI) row says nothing was run and can be archived", () => {
+  it("an expired (FYI) row says the request ran nothing and can be archived", () => {
     render(
       <InboxItemRow
-        item={row({ severity: "attention", title: "Approval expired: send email to a@example.test. Nothing was run.", approval: { status: "expired", expiresAt: "2026-10-28T10:00:00Z" } })}
+        item={row({ severity: "attention", title: "Approval expired: send email to a@example.test. This request ran nothing.", approval: { status: "expired", expiresAt: "2026-10-28T10:00:00Z" } })}
       />,
     );
-    expect(screen.getByText(/Nothing was run\. Saved for your agent/)).toBeTruthy();
+    expect(screen.getByText(/This request ran nothing\. Saved for your agent/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Archive item" })).toBeTruthy();
     expect(screen.queryByTestId("approval-row-expiry")).toBeNull();
   });
@@ -92,6 +92,15 @@ describe("InboxItemRow for approval_required", () => {
   it("other sources keep their Mark done and Archive controls (no regression)", () => {
     render(<InboxItemRow item={row({ source: "system", source_ref: null, title: "billing failed" })} />);
     expect(screen.getByRole("button", { name: "Mark done" })).toBeTruthy();
+  });
+
+  it("an approval row title longer than the sanitizer's default 200-character cap is shown in full; other rows are still capped", () => {
+    const long = "Approval needed: send email to " + "a".repeat(400) + "@example.test";
+    const { unmount } = render(<InboxItemRow item={row({ title: long, approval: pendingInfo })} />);
+    expect(document.body.textContent).toContain(long);
+    unmount();
+    render(<InboxItemRow item={row({ source: "system", source_ref: null, title: "b".repeat(400) })} />);
+    expect(document.body.textContent).not.toContain("b".repeat(201));
   });
 
   it("renders the title as plain text (the row text comes from the server, never markup)", () => {
@@ -144,12 +153,22 @@ describe("enrichApprovalInboxRows (GET /api/inbox)", () => {
     expect(out.approval).toEqual({ status: "pending", expiresAt: "2026-10-29T10:00:00Z" });
   });
 
-  it("states per request status: expired says nothing was run; approved-then-expired says the agent never asked again", async () => {
+  it("states per request status: expired says the request ran nothing; approved-then-expired says the agent never asked again", async () => {
     const [a] = await enrichApprovalInboxRows(client([stored({ status: "expired" })]).c, [row()]);
-    expect(a.title.endsWith("Nothing was run.")).toBe(true);
+    expect(a.title.endsWith("This request ran nothing.")).toBe(true);
     expect(a.title.startsWith("Approval expired: ")).toBe(true);
     const [b] = await enrichApprovalInboxRows(client([stored({ status: "expired", decided_at: "2026-10-28T11:00:00Z" })]).c, [row()]);
     expect(b.title.startsWith("You approved this, but your agent never asked again: ")).toBe(true);
+  });
+
+  it("a revoked row (rejected with revoked_at) reads 'You revoked', a plain denial reads 'You denied'", async () => {
+    const [rev] = await enrichApprovalInboxRows(
+      client([stored({ status: "rejected", decided_at: "2026-10-28T11:00:00Z", revoked_at: "2026-10-28T11:30:00Z" })]).c,
+      [row()],
+    );
+    expect(rev.title.startsWith("You revoked: send email to ")).toBe(true);
+    const [den] = await enrichApprovalInboxRows(client([stored({ status: "rejected", decided_at: "2026-10-28T11:00:00Z" })]).c, [row()]);
+    expect(den.title.startsWith("You denied: send email to ")).toBe(true);
   });
 
   it("keeps the static title when the stored text no longer verifies against the bound hash", async () => {

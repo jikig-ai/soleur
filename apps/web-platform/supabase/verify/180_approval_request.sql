@@ -8,8 +8,11 @@
 -- pinned; decide_approval is EXECUTE-able by authenticated ONLY, every other RPC by service_role ONLY; the internal
 -- helper and the guard trigger function are EXECUTE-able by nobody (no PUBLIC, no api role); the write-once guard
 -- trigger exists and is enabled; exactly one CHECK on inbox_item references `source` and it admits approval_required;
--- the revoke columns, the cap/scrub/FK indexes and the principal re-check, erasure-delete and cap clauses are present;
--- no approval row survives for an erased personal workspace (the CLO falsifier).
+-- the revoke columns, the cap/scrub/FK indexes and the principal re-check, erasure-delete and cap clauses are present.
+-- There is deliberately NO row-level "no approval row survives for an erased solo workspace" check here: a memberless
+-- TEAM workspace (every member erased, accepted residual) is indistinguishable from an erased personal workspace by
+-- catalog query and would fail verify-migrations on every later release. The falsifier lives in
+-- test/server/approval-request.tenant-isolation.test.ts (solo case deleted; sole-member team case retained).
 
 SELECT 'approval_request_rls_enabled' AS check_name,
        CASE WHEN (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.approval_request'::regclass) THEN 0 ELSE 1 END::int AS bad
@@ -287,13 +290,4 @@ UNION ALL
 SELECT 'inbox_item_source_only_admitting_check',
        CASE WHEN (SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.inbox_item'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ~ '\ysource\y') = 1
             AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.inbox_item'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ~ '\ysource\y' AND pg_get_constraintdef(oid) NOT LIKE '%approval_required%')
-            THEN 0 ELSE 1 END::int
-UNION ALL
--- CLO falsifier (erasure of a personal workspace): no approval_request row may belong to a workspace that has no
--- member left AND whose id is not a live user (an erased personal workspace). Zero on a healthy database.
-SELECT 'no_approval_rows_for_erased_solo_workspace',
-       CASE WHEN EXISTS (
-              SELECT 1 FROM public.approval_request a
-               WHERE NOT EXISTS (SELECT 1 FROM public.workspace_members m WHERE m.workspace_id = a.workspace_id)
-                 AND NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id = a.workspace_id)
-            ) THEN 1 ELSE 0 END::int;
+            THEN 0 ELSE 1 END::int;

@@ -162,7 +162,11 @@ describe("rendering", () => {
   it("a failed count read is reported (not silently shown as 1) and the card still renders", async () => {
     h.countError.value = { message: "boom", code: "XX000" };
     render(await run());
-    expect(h.report).toHaveBeenCalledWith("landingReadFailed", expect.anything(), expect.objectContaining({ approvalId: APPROVAL_ID }));
+    expect(h.report).toHaveBeenCalledWith(
+      "landingReadFailed",
+      expect.anything(),
+      expect.objectContaining({ approvalId: APPROVAL_ID, extra: { read: "request-count" } }),
+    );
     expect(screen.queryByTestId("approval-request-count")).toBeNull();
     expect(screen.getByTestId("approval-request-card")).toBeTruthy();
   });
@@ -215,6 +219,10 @@ describe("rendering", () => {
   it("a read error is reported with its own op and surfaces as an error, never as not-found", async () => {
     h.rowError.value = { message: "boom", code: "XX000" };
     await expect(run()).rejects.not.toBeInstanceOf(NotFound);
-    expect(h.report).toHaveBeenCalledWith("landingReadFailed", expect.anything(), expect.objectContaining({ approvalId: APPROVAL_ID }));
+    expect(h.report).toHaveBeenCalledWith(
+      "landingReadFailed",
+      expect.anything(),
+      expect.objectContaining({ approvalId: APPROVAL_ID, extra: { read: "row" } }),
+    );
   });
 });

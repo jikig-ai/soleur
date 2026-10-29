@@ -5,13 +5,13 @@
  * the agent stays blocked), so on every session attach the server reads the conversation's `pending` and `approved`
  * rows and emits one `approval_request` per row. The client upserts by approval id, so a re-send is idempotent.
  *
- * Gated by the same flag seam as the gate (zero database reads while dormant). Each card is rebuilt from the STORED
+ * Gated by the same flag seam as the gate (no `approval_request` read while the flag is off for the attaching workspace). Each card is rebuilt from the STORED
  * canonical action and re-verified against the stored hash before it is shown: a card that does not hash to the bound
  * value is never rendered (P6: the text the Owner reads cannot disagree with the action that would be consumed).
  */
 
 import type { WSMessage } from "@/lib/types";
-import { CANONICAL_VERSION, computeActionHash, type CanonicalAction } from "./canonical";
+import { ApprovalCanonicalError, CANONICAL_VERSION, computeActionHash, type CanonicalAction } from "./canonical";
 import { isApprovalQueueEnabled } from "./flag";
 import { reportApprovalOp } from "./ops";
 import { renderApprovalView } from "./render";
@@ -75,6 +75,7 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
       if (!(await enabledFor(approval.workspace_id))) continue;
       const action = asCanonical(approval.canonical_action);
       let verified = false;
+      let keyUnavailable = false;
       if (action) {
         try {
           verified =
@@ -84,9 +85,20 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
               conversationId: approval.conversation_id,
               action,
             }) === approval.action_sha256;
-        } catch {
+        } catch (err) {
           verified = false;
+          if (err instanceof ApprovalCanonicalError && err.code === "key_unavailable") keyUnavailable = true;
         }
+      }
+      if (keyUnavailable) {
+        // The hash key is unset: no card can be verified. Same op as the gate's, so one alert covers a mis-deployed container.
+        reportApprovalOp("keyUnavailable", null, {
+          approvalId: approval.id,
+          toolName: approval.tool_name,
+          conversationId: a.conversationId,
+          extra: { code: "key_unavailable", stage: "reattach" },
+        });
+        continue;
       }
       if (!action || !verified) {
         reportApprovalOp("reattachFailed", null, {

@@ -960,7 +960,7 @@ describe("deleteAccount", () => {
 
     mockRpc.mockImplementation(async (name: string) => {
       if (name === "anonymise_approval_request") {
-        return { data: null, error: { message: "RPC unavailable" } };
+        return { data: null, error: { message: "RPC unavailable", code: "XX000" } };
       }
       return { data: 0, error: null };
     });
@@ -973,14 +973,16 @@ describe("deleteAccount", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/anonymise-approval-request/);
     expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        feature: "account-delete",
-        op: "anonymise-approval-request",
-        extra: { userId: "user-123" },
-      }),
-    );
+    // A LITERAL null first argument: an Error object would be captured by the pino mirror (feature=pino-mirror) and the
+    // art17_approval_anonymise_failed alert (feature=account-delete, op=anonymise-approval-request) could never fire.
+    const call = mockReportSilentFallback.mock.calls.find((c) => (c[1] as { op?: string })?.op === "anonymise-approval-request");
+    expect(call).toBeDefined();
+    expect(call![0]).toBeNull();
+    expect(call![1]).toMatchObject({
+      feature: "account-delete",
+      op: "anonymise-approval-request",
+      extra: { userId: "user-123", code: "XX000" },
+    });
   });
 
   test("Art. 17 — anonymise_approval_request throwing aborts cascade BEFORE auth-delete (#4672)", async () => {
@@ -998,10 +1000,11 @@ describe("deleteAccount", () => {
 
     expect(result.success).toBe(false);
     expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ feature: "account-delete", op: "anonymise-approval-request" }),
-    );
+    const call = mockReportSilentFallback.mock.calls.find((c) => (c[1] as { op?: string })?.op === "anonymise-approval-request");
+    expect(call).toBeDefined();
+    expect(call![0]).toBeNull(); // see the RPC-error case: an Error here would steal the capture and mute the alert
+    expect(call![1]).toMatchObject({ feature: "account-delete", op: "anonymise-approval-request", extra: { userId: "user-123", errName: "Error" } });
+    expect(JSON.stringify(call![1])).not.toContain("network down");
   });
 
   test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {

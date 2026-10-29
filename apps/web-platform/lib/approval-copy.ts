@@ -1,6 +1,7 @@
 /**
- * Copy deck for durable approval requests (#4672). The single home of every fixed string the approval surfaces, the
- * server-built card view and the notifications use. It is a pure leaf (no imports) so client components, the server
+ * Copy deck for durable approval requests (#4672). The home of the fixed strings the approval surfaces and the
+ * notifications use. The per-tool consequence lines (what an approval covers) live with the card view model in
+ * server/approval/render.ts (PHRASES). It is a pure leaf (no imports) so client components, the server
  * render module and `server/notifications.ts` can all read it without crossing the client/server import boundary.
  *
  * Source of truth: knowledge-base/product/design/approvals (copy deck screenshot 09, after the Phase 0.2 wireframe delta).
@@ -30,10 +31,17 @@ export const APPROVAL_COPY = {
   /** Landing page (no live socket): what the server can honestly say about a consumed request. */
   releasedTitleNeutral: "Released. If your agent is still waiting it will continue.",
   approvedLate: "Approved. Ask your agent again.",
+  /**
+   * Landing page (no live socket, so the page cannot know whether the agent is still inside its wait): state-neutral, no
+   * numeric claim. A push-notified Owner often opens the page within seconds, while the agent is still waiting.
+   */
+  approvedLateNeutral: "Approved. If your agent is still waiting it will continue; if not, ask it again in this conversation.",
+  /** A revoke that lost the race to the agent's repeat: the approval was already consumed. */
+  revokeTooLate: "Your revoke came too late: your agent had already used this approval",
   revoke: "Revoke approval",
   revokedTitle: "Approval revoked",
   approvedNeverAsked: "You approved this, but your agent never asked again",
-  resolvedNothing: "Nothing was run. Saved for your agent. Asking again with the same arguments is allowed.",
+  resolvedNothing: "This request ran nothing. Saved for your agent. Asking again with the same arguments is allowed.",
   newerRequestBanner: "A newer request from your agent exists",
   newerRequestBannerDetail: "Check which one you mean to approve.",
   nonOwnerWaiting: "Waiting for the workspace Owner",
@@ -62,17 +70,21 @@ export const APPROVAL_STATE_COPY = {
   },
   deniedTitle: (noun: string) => `You denied this ${noun}`,
   expiredTitle: "Nobody decided in time",
-  expiredLine: (noun: string) => `This request expired. Nothing was run. Ask your agent again if you still want this ${noun}.`,
+  expiredLine: (noun: string) => `This request expired and ran nothing. Ask your agent again if you still want this ${noun}.`,
   expiredAfterApprovalLine:
-    "Nothing was run. This appears in your inbox and thread only: no push, no email. Ask your agent again if you still want this.",
+    "This request ran nothing. This appears in your inbox and thread only: no push, no email. Ask your agent again if you still want this.",
   approvedLateLine: (minutes: number) =>
     `Saved for your agent. Asking again with the same arguments is allowed. Your agent stopped waiting after ${minutes} minutes, so ask it again in this conversation.`,
+  /** Landing-page variant of `approvedLateLine`: no wait duration, because the page cannot see the agent's wait. */
+  approvedLateNeutralLine: "Saved for your agent. Asking again with the same arguments is allowed.",
+  /** Landing-page pending sub-line: the page cannot tell whether the agent is still inside its wait. */
+  pendingSublineNeutral: "If your agent has stopped waiting, ask it again in this conversation once you have decided.",
   /** Offered on an approved request the agent has not used yet; the deny decision on an approved request is a revoke. */
   revokeHint: "Changed your mind? Revoking stops your agent from using this approval.",
   revoking: "Revoking",
   revokedLine: "Revoked. Your agent cannot use this approval.",
   releasedLine: "What your agent does next is up to your agent; this card does not report an outcome.",
-  memberLine: "Only the workspace Owner can approve or deny this. Waiting for the workspace Owner. If nobody decides in time, this expires and nothing is run.",
+  memberLine: "Only the workspace Owner can approve or deny this. Waiting for the workspace Owner. If nobody decides in time, this expires and the request runs nothing.",
   memberRoleLine: "Workspace Owner · only they can decide",
   // Neutral on purpose: the wire does not say WHO decided first (a second Owner, or this viewer's own earlier tap).
   alreadyDecidedAnonymous: "Already decided",
@@ -82,8 +94,12 @@ export const APPROVAL_STATE_COPY = {
   alreadyDecidedSameLine: "Another Owner recorded the same decision before your tap. Nothing changes for your agent.",
   closedLine: (noun: string) =>
     `Your approval was not recorded because this conversation is closed. Ask your agent again in a new conversation if you still want this ${noun}.`,
+  /** Scheduled retention removal (the row is at least `days` past its end). */
   detailsRemovedLine: (days: number) =>
-    `The action details were removed ${days} days after this request ended. Only who decided and when is kept.`,
+    `The action details were removed ${days} days after this request ended. We keep the kind of action, its status and its times, and, unless that person's account has been erased, who asked and who decided.`,
+  /** Removal whose reason the UI cannot tell from the row (e.g. early, on the requester's account erasure): no day count. */
+  detailsRemovedNeutralLine:
+    "The action details have been removed. We keep the kind of action, its status and its times, and, unless that person's account has been erased, who asked and who decided.",
   approving: "Approving",
   denying: "Denying",
   recordingDecision: "Recording your decision…",
@@ -131,8 +147,8 @@ export const APPROVAL_NOTIFY_COPY = {
   },
   expired: {
     pushTitle: "Approval request expired",
-    pushBody: "A request expired before it was decided. Nothing was run.",
-    emailSubject: "Soleur: a request expired and nothing was run",
+    pushBody: "A request expired before it was decided. It ran nothing.",
+    emailSubject: "Soleur: a request expired without being run",
     emailHeading: "A request expired",
     emailCta: "Open Soleur",
   },
@@ -169,13 +185,13 @@ export function approvalEmailLines(kind: ApprovalNotifyKind, v: ApprovalEmailVal
     return [
       hi,
       `A request from one of your agents in ${ws} expired before it was decided.`,
-      "Nothing was run. If you still want it done, ask your agent again in Soleur.",
+      "This request ran nothing. If you still want it done, ask your agent again in Soleur.",
     ];
   }
   const when = formatExpiryDateTimeTz(v.expiresAt);
   return [
     hi,
-    `A request from one of your agents in ${ws} needs your decision. Open Soleur to see exactly what it would do, then approve or deny. If you do nothing, it expires${when ? ` on ${when}` : ""} and nothing is run.`,
+    `A request from one of your agents in ${ws} needs your decision. Open Soleur to see exactly what it would do, then approve or deny. If you do nothing, it expires${when ? ` on ${when}` : ""} and the request runs nothing.`,
   ];
 }
 

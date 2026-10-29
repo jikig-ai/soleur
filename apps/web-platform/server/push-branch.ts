@@ -13,6 +13,7 @@
 
 import { execFileSync } from "child_process";
 
+import { COMMIT_SHA_RE } from "./approval/canonical";
 import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
@@ -22,8 +23,6 @@ const log = createChildLogger("push-branch");
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const COMMIT_SHA_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
 
 export const PROTECTED_BRANCHES = ["main", "master"] as const;
 const AGENT_AUTHOR_NAME = "Soleur Agent";
@@ -47,6 +46,17 @@ export interface PushBranchOptions {
    * approval wait cannot change what lands on the remote. Absent = legacy `HEAD` (approval flow never ran).
    */
   commitSha?: string;
+}
+
+/**
+ * The commit the Owner approved cannot be pushed (not a full sha, or not in the workspace repository). Typed so the tool
+ * handler reports it as an `approval-grant-refused` (reason `commit_unavailable`) and returns the terminal refusal.
+ */
+export class ApprovedCommitUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApprovedCommitUnavailableError";
+  }
 }
 
 export interface PushResult {
@@ -107,12 +117,12 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
   // 3b. A pinned commit must be a full sha that exists in the workspace repository.
   if (commitSha !== undefined) {
     if (!COMMIT_SHA_RE.test(commitSha)) {
-      throw new Error("Approved commit is not a valid full commit sha");
+      throw new ApprovedCommitUnavailableError("Approved commit is not a valid full commit sha");
     }
     try {
       execFileSync("git", ["cat-file", "-e", `${commitSha}^{commit}`], { cwd: workspacePath, stdio: "pipe" });
     } catch {
-      throw new Error("Approved commit is not present in the workspace repository");
+      throw new ApprovedCommitUnavailableError("Approved commit is not present in the workspace repository");
     }
   }
 

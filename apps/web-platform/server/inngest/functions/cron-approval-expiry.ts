@@ -52,7 +52,8 @@ export async function cronApprovalExpiryHandler({ step, logger }: HandlerArgs): 
       const result = await sweepApprovals(createServiceClient() as unknown as ApprovalRpcClient);
       return { ok: true, result };
     } catch (err) {
-      reportApprovalOp("sweepFailed", err, { extra: { fn: CRON_NAME } });
+      // `cron`, not `fn`: `fn` is the failing RPC name that the thrown error contributes, and must not be overwritten.
+      reportApprovalOp("sweepFailed", err, { extra: { cron: CRON_NAME } });
       return { ok: false };
     }
   });
@@ -94,18 +95,20 @@ export async function cronApprovalExpiryHandler({ step, logger }: HandlerArgs): 
           });
           if (e.reason !== "unanswered") continue;
           let delivered = false;
+          let notifyError: unknown = null;
           try {
             delivered = await notifyApprovalExpired(e.id, e.workspaceId);
-          } catch {
+          } catch (err) {
             delivered = false;
+            notifyError = err; // kept: its code / class name goes into the op (never its message)
           }
           if (!delivered) {
             failed += 1;
-            reportApprovalOp("notifyFailed", null, {
+            reportApprovalOp("notifyFailed", notifyError, {
               approvalId: e.id,
               toolName: e.toolName,
               workspaceId: e.workspaceId,
-              extra: { kind: "expired" },
+              extra: { kind: "expired", cause: notifyError === null ? "not-delivered" : "threw" },
             });
           }
         }

@@ -1,5 +1,5 @@
 /**
- * #4672 R1 (CTO ruling 1): the two handlers that re-resolve the active workspace at execution
+ * #4672 R1 (ADR-307, execution grants): the two handlers that re-resolve the active workspace at execution
  * (`workspace_set_autonomous`, `kb_share_create`) verify the workspace the Owner approved the action for, and refuse
  * with `workspace_changed` when it moved. No grant while the approval flow is on for the session = refuse.
  */
@@ -32,13 +32,13 @@ type Handler = (a: Record<string, unknown>) => Promise<{ content: Array<{ text: 
 const KB = "mcp__soleur_platform__kb_share_create";
 const SET = "mcp__soleur_platform__workspace_set_autonomous";
 
-const kbCreate = (grants?: ExecutionGrants): Handler =>
+const kbCreate = (grants: ExecutionGrants): Handler =>
   (buildKbShareTools({ serviceClient: {} as never, userId: "u1", kbRoot: "/k", baseUrl: "https://app.test", grants }) as unknown as Array<{
     name: string;
     handler: Handler;
   }>).find((t) => t.name === "kb_share_create")!.handler;
 
-const setAuto = (grants?: ExecutionGrants): Handler =>
+const setAuto = (grants: ExecutionGrants): Handler =>
   (buildWorkspaceSettingsTools({ userId: "u1", grants, resolveWorkspaceId: async () => m.currentWorkspace.value }).tools as unknown as Array<{
     name: string;
     handler: Handler;
@@ -96,7 +96,7 @@ describe("kb_share_create", () => {
   it("not enforcing: legacy behaviour, whatever the workspace", async () => {
     m.currentWorkspace.value = "ws-any";
     expect((await kbCreate(new ExecutionGrants())(args)).isError).toBeUndefined();
-    expect((await kbCreate(undefined)(args)).isError).toBeUndefined();
+    expect((await kbCreate(new ExecutionGrants())(args)).isError).toBeUndefined();
     expect(m.createShare).toHaveBeenCalledTimes(2);
   });
 });
@@ -120,7 +120,7 @@ describe("workspace_set_autonomous", () => {
     m.currentWorkspace.value = "ws-w2";
     const r = await setAuto(granted())(args);
     expect(r.isError).toBe(true);
-    expect(body(r).error).toBe("workspace_changed");
+    expect(body(r).code).toBe("workspace_changed");
     expect(m.setBash).not.toHaveBeenCalled();
   });
 
@@ -129,7 +129,7 @@ describe("workspace_set_autonomous", () => {
     g.enforcing = true;
     const r = await setAuto(g)(args);
     expect(r.isError).toBe(true);
-    expect(body(r).error).toBe("approval_grant_missing");
+    expect(body(r).code).toBe("approval_grant_missing");
     expect(m.setBash).not.toHaveBeenCalled();
   });
 

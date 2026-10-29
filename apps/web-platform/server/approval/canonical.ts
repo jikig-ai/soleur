@@ -19,16 +19,19 @@
  *     denies the tool call: fail closed).
  *
  * `action_sha256 = HMAC-SHA256(key, canonicalJson({tool_name, workspace_id, conversation_id, action}))` with
- * `key = HMAC-SHA256(SENTRY_USERID_PEPPER, "soleur:approval-request:action-sha256:v1")` (a domain-separated derivation
- * from the pepper that already exists for pseudonymising user ids: no new secret). The hash is a keyed fingerprint:
+ * `key = HKDF-SHA256(ikm = SENTRY_USERID_PEPPER, salt = empty, info = "soleur:approval-request:action-sha256:v1", 32 bytes)`
+ * (RFC 5869; a domain-separated derivation from the pepper that already exists for pseudonymising user ids: no new
+ * secret). The pepper is the input keying material and the purpose label is the HKDF `info`, so no other use of the
+ * pepper (for example `hashUserId`, which HMACs a literal under it) can produce this key or a value derived from it. The hash is a keyed fingerprint:
  * a reader of the database alone cannot recompute it or confirm a guessed action against it. It stays pseudonymous
  * (not anonymous) while the secret exists. An unset or empty pepper FAILS CLOSED (`key_unavailable`): there is never
  * a fallback to an unkeyed hash. The pepper must be stable for the life of a live row (at most 48 h); a rotation makes
  * live approvals fail closed as `hash_mismatch` ("needs a new approval").
  */
 
-import { createHmac } from "node:crypto";
+import { createHmac, hkdfSync } from "node:crypto";
 import { z } from "zod/v4";
+import { isUuid } from "@/lib/is-uuid";
 import { APPROVAL_REQUIRED_TOOLS, type ApprovalToolName, isApprovalRequiredTool } from "./tools";
 
 export const CANONICAL_VERSION = 1 as const;
@@ -108,7 +111,9 @@ const complianceFields = {
 };
 
 const nonEmpty = z.string().min(1);
-const sha = z.string().regex(/^[0-9a-f]{40}$|^[0-9a-f]{64}$/);
+/** The one full-commit-sha pattern (SHA-1 or SHA-256 object format): the canonical schema, the gate resolver and `pushBranch` share it. */
+export const COMMIT_SHA_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
+const sha = z.string().regex(COMMIT_SHA_RE);
 
 interface ToolSpec {
   input: z.ZodObject<z.ZodRawShape>;
@@ -210,7 +215,7 @@ export function canonicalizeAction(tool: string, input: unknown, serverDerived?:
 /**
  * The arguments key a tool handler can recompute from the zod-parsed args it receives: `canonicalJson` of the tool's
  * model-supplied `input` shape, with the same zod defaults applied as at gate time. Used by the per-session
- * execution-grant side channel (#4672 R1); contains no server-derived field.
+ * execution-grant side channel (#4672, ADR-307); contains no server-derived field.
  */
 export function handlerArgsKey(tool: string, input: unknown): string {
   if (!isApprovalRequiredTool(tool)) throw new ApprovalCanonicalError("unsupported_tool");
@@ -221,18 +226,16 @@ export function handlerArgsKey(tool: string, input: unknown): string {
 
 const HASH_KEY_INFO = "soleur:approval-request:action-sha256:v1";
 
-/** Domain-separated HMAC key derived from the pepper. Read at call time; unset/empty fails closed. */
+/** Domain-separated HMAC key: HKDF-SHA256 over the pepper with the purpose label as `info`. Read at call time; unset/empty fails closed. */
 export function deriveApprovalHashKey(pepper: string | undefined = process.env.SENTRY_USERID_PEPPER): Buffer {
   if (!pepper) throw new ApprovalCanonicalError("key_unavailable");
-  return createHmac("sha256", pepper).update(HASH_KEY_INFO, "utf8").digest();
+  return Buffer.from(hkdfSync("sha256", Buffer.from(pepper, "utf8"), Buffer.alloc(0), HASH_KEY_INFO, 32));
 }
 
 /** HMAC-SHA256 hex of the canonical text under the derived key (exported for the known-answer test). */
 export function hmacActionText(text: string, pepper?: string): string {
   return createHmac("sha256", deriveApprovalHashKey(pepper)).update(text, "utf8").digest("hex");
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ActionHashInput {
   toolName: string;
@@ -242,7 +245,7 @@ export interface ActionHashInput {
 }
 
 export function computeActionHash(input: ActionHashInput): string {
-  if (!UUID_RE.test(input.workspaceId) || !UUID_RE.test(input.conversationId)) {
+  if (!isUuid(input.workspaceId) || !isUuid(input.conversationId)) {
     throw new ApprovalCanonicalError("bad_hash_input");
   }
   if (input.toolName !== input.action.tool || !APPROVAL_REQUIRED_TOOLS.includes(input.toolName as ApprovalToolName)) {

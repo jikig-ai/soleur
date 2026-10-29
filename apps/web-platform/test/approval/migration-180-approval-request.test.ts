@@ -633,9 +633,11 @@ describe("verify sentinel", () => {
     expect(v).toMatch(/has_table_privilege/);
   });
 
-  it("asserts no source CHECK lacking approval_required remains, and the erasure falsifier", () => {
+  it("asserts no source CHECK lacking approval_required remains, and carries no row-level erasure check", () => {
     expect(v).toContain("inbox_item_source_only_admitting_check");
-    expect(v).toContain("no_approval_rows_for_erased_solo_workspace");
+    // A row-level erased-solo-workspace check also matches a memberless TEAM workspace (accepted residual) and would
+    // fail verify-migrations on every later release; the falsifier lives in the tenant-isolation integration test.
+    expect(v).not.toContain("no_approval_rows_for_erased_solo_workspace");
     expect(v).toContain("consume_approval_principal_recheck");
     expect(v).not.toContain("approval_request_inbox_settle(uuid, text)");
   });

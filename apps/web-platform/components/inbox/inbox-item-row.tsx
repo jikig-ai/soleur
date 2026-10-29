@@ -52,7 +52,12 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
 
   // An approval row names the agent's action: invisible direction/zero-width controls are made visible BEFORE the
   // sanitizer (which would drop them silently), so a right-to-left override cannot disguise a recipient.
-  const title = sanitizeDisplayString(item.source === "approval_required" ? revealInvisible(item.title) : item.title);
+  // An approval title is also exempt from the sanitizer's 200-character cap: the row names the action in full, so a
+  // cap would silently cut the very value (a long recipient or branch) the Owner is checking.
+  const title =
+    item.source === "approval_required"
+      ? sanitizeDisplayString(revealInvisible(item.title), Number.POSITIVE_INFINITY)
+      : sanitizeDisplayString(item.title);
   const severity = item.severity;
   const isActionRequired = severity === "action_required";
   const isActed = item.acted_at !== null;
@@ -156,7 +161,7 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
 
       <div className="flex w-full flex-col gap-1.5">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-medium text-soleur-text-primary">{title}</p>
+          <p className="min-w-0 text-sm font-medium text-soleur-text-primary [overflow-wrap:anywhere]">{title}</p>
           <span className="shrink-0 text-xs tabular-nums text-soleur-text-muted">
             {relativeTime(item.created_at)}
           </span>
