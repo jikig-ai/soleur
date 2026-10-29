@@ -157,16 +157,22 @@ export interface CompoundPromoteOutcome {
    *   - `create_requested`   a manual `patterns` run: whether the event carried `allow_create === true`. Present on
    *                          every such row (also the early terminal rows), so each switch-on is visible without SSH.
    *   - `kind`, `create_arm` emitted ONLY when the arm ran (`create_arm: "ran"`); an absent field means off.
-   *   - `create_outcome`     `no_action` (the model declined, or the pattern is already proposed), `refused`, `opened`.
+   *   - `create_outcome`     `no_action` (the model declined, no pattern was offerable, or the pattern is already proposed), `refused`, `opened`.
    *   - `create_refusal_class` the closed class of the ONE refusal reason `create-refused`; `create_detail` its closed
    *                          token (a field label plus a rule id, or a fixed phrase); the numbers explain a budget or
    *                          overlap refusal (cap and total, top-1 overlap score, rank of the nearest skill).
+   *   - `create_offered`     a count, never text: the candidate patterns left after the same-run and ledger filters. When a
+   *                          model call was made it is the number offered to the model; on a pre-call refusal it is the
+   *                          candidate count and no call was spent; on a pre-call `no_action` it is 0. Absent on a
+   *                          `week-cap` or `index-empty` refusal, on `model-invalid/internal` (a step defect, Sentry op
+   *                          `create-propose-internal`) and when the memoized step output carried none.
    */
   kind?: "create";
   create_requested?: boolean;
   create_arm?: "ran";
   create_outcome?: "no_action" | "refused" | "opened";
   create_no_action_reason?: CreateNoActionReason;
+  create_offered?: number;
   create_refusal_class?: CreateRefusalClass;
   create_detail?: string;
   create_words?: number;

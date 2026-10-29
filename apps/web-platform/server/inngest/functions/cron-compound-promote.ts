@@ -78,6 +78,7 @@ import {
   runCreatePersistStep,
   runCreateProposeStep,
   type CreatePersistResult,
+  type CreateStepVerdict,
   type CreateVerdictCreate,
 } from "@/server/compound-promote-create-arm";
 import type { CreateRefusal, CreateVerdict } from "@/server/compound-promote-create";
@@ -96,6 +97,8 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 const WEEK_CAP_DEFAULT = 2;
 export const MAX_DIFF_BYTES = 16384;
+/** Sanity bound (not a product limit) for the `create_offered` count read back from a memoized step output; a value above it yields no key. */
+const MAX_CREATE_OFFERED = 1000;
 /**
  * The quorum: the fewest DISTINCT, corpus-resolved source learnings a cluster may cite and
  * still be drafted. The phase-1 prompt, the refusal in `draftAdditiveEdit` and the
@@ -1731,6 +1734,9 @@ export async function cronCompoundPromoteHandler({
   let createNoAction: Extract<CreateVerdict, { kind: "no_action" }>["reason"] | undefined;
   let createRefusal: CreateRefusal | undefined;
   let createPr: number | undefined;
+  // #10550 -- the number of candidate patterns the create arm offered to the model (a count, never text). Assigned from the
+  // MEMOIZED step return, outside the step callback, so a replay still reports it; absent when the memo has none.
+  let createOffered: number | undefined;
   const createMarker = (): Partial<CompoundPromoteOutcome> => {
     if (!createArmRan) return {};
     const n = createRefusal?.numbers ?? {};
@@ -1739,6 +1745,7 @@ export async function cronCompoundPromoteHandler({
       create_arm: "ran",
       ...(createOutcome === undefined ? {} : { create_outcome: createOutcome }),
       ...(createNoAction === undefined ? {} : { create_no_action_reason: createNoAction }),
+      ...(createOffered === undefined ? {} : { create_offered: createOffered }),
       ...(createRefusal === undefined ? {} : { create_refusal_class: createRefusal.class, create_detail: createRefusal.detail }),
       // Only these numbers reach the marker (an allowlist: a number the pure module adds is Sentry-only until named here).
       ...Object.fromEntries(Object.entries(CREATE_MARKER_NUMBERS).flatMap(([from, to]) => (n[from] === undefined ? [] : [[to, n[from]]]))),
@@ -2214,7 +2221,7 @@ export async function cronCompoundPromoteHandler({
     const runCreateArm = async (): Promise<void> => {
       createArmRan = true;
       const capLeft = weekCapResult.remaining - clustersOpened;
-      const proposed: CreateVerdict = await step.run("create-propose", async () => {
+      const proposed: CreateStepVerdict = await step.run("create-propose", async () => {
         const octokit = new Octokit({ auth: installationToken });
         return runCreateProposeStep({
           repoRoot,
@@ -2232,6 +2239,10 @@ export async function cronCompoundPromoteHandler({
           },
         });
       });
+      // The step output is memoized JSON that outlives a deploy, so `offered` is optional on read: an older memo has none,
+      // and only a non-negative integer within the pattern bound reaches the marker (anything else yields no key).
+      const stamped: unknown = proposed.offered;
+      createOffered = typeof stamped === "number" && Number.isInteger(stamped) && stamped >= 0 && stamped <= MAX_CREATE_OFFERED ? stamped : undefined;
       if (proposed.kind === "refused") {
         recordCreateRefusal(proposed);
         return;
