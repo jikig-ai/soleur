@@ -24,7 +24,7 @@ existing closed tokens and the CTO ruling already covered every fork.
 1. The "a server gate never yields `no_action`" invariant was too strong. The post-call ledger/same-run backstop
    (a model create naming a pattern that was not offered) ends `no_action` with reason `other`. The invariant is
    restated precisely (`no-pattern-qualifies` is always the model's; `other` with `create_offered > 0` is the model's
-   or the backstop, told apart by `ledger_suppressed`), and the reading table gains the matching row.
+   or the backstop; `ledger_suppressed` / `refusal_detail` are corroborating hints only, not a discriminator, per CTO T1a), and the reading table gains the matching row.
 2. Added the `model-invalid/transport` row (call may not have reached the model), so every `model-invalid` detail
    the arm emits is covered.
 3. Verified every value in the table against source: classes (`CREATE_REFUSAL_CLASSES`), reasons
@@ -143,9 +143,11 @@ fields" and `### Review checklist for a create draft`. It states, in this order:
 1. The invariant, stated precisely: every server gate that refuses a model create returns `create_outcome=refused`
    with `create_refusal_class` and `create_detail`; `no_action` with `no-pattern-qualifies` is therefore always the
    model's own answer. One exception to say out loud: the ledger/same-run backstop, a post-call check on a model
-   create naming a pattern that was not offered, ends `no_action` with reason `other` (and `ledger_suppressed`
-   counts it, or a `refusal_detail` entry exists), so `other` with `create_offered > 0` is either the model's own
-   `other` or that backstop; `ledger_suppressed` tells them apart. The arm makes one call with one verdict, so there
+   create naming a pattern that was not offered, ends `no_action` with reason `other`, so `other` with `create_offered > 0` is either the model's own
+   `other` or that backstop. Nothing on the marker reliably separates them: the same-run branch leaves neither
+   `ledger_suppressed` nor a `refusal_detail` entry, and the edit loop also increments both, so a raised
+   `ledger_suppressed` can sit beside the model's own `other`. Read an unchanged or absent value as unknown, never as
+   the model's. The arm makes one call with one verdict, so there
    is nothing to count.
 2. The reading table below (values taken verbatim from `compound-promote-marker.ts`).
 3. What the marker cannot show: whether a decline was instant or deliberated. The only signal is
@@ -156,8 +158,8 @@ fields" and `### Review checklist for a create draft`. It states, in this order:
 | Marker values | Meaning | Follow-up |
 |---|---|---|
 | `no_action`, `no-pattern-qualifies`, `create_offered > 0` | The model declined; no gate ran. | None in code, however many times it repeats: declining is the intended default and the bar stays. |
-| `no_action`, `all-owned` or `other`, `create_offered > 0` | A call was spent. The model answered `all-owned`/`other` itself, or the ledger backstop suppressed a create naming an unoffered owned pattern (`ledger_suppressed` > 0 or a `refusal_detail` entry). | None in code. |
-| `no_action`, `all-owned` or `other`, `create_offered = 0` | A pre-call path ended the arm; no call was spent. | None. |
+| `no_action`, `all-owned` or `other`, `create_offered > 0` | A call was spent. The model answered `all-owned`/`other` itself, or the ledger backstop suppressed a create naming an unoffered owned pattern. The marker cannot tell which (`ledger_suppressed` and `refusal_detail` are hints only; an unchanged value means unknown). | None in code. |
+| `no_action`, `all-owned` or `other`, `create_offered = 0` | A pre-call path ended the arm (every candidate already claimed this run, or all owned); no call was spent. | None. |
 | `refused`, `prefer-patch`, `nearest-not-top3` (`create_nearest_rank`) | A gate refused a model-proposed create. | One such live row opens a plan for supplying the server's per-pattern top-3 candidates in the prompt, as its own PR with its own live-fire. It is not a loosening of the gate. |
 | `refused`, `prefer-patch`, `overlap` (`create_top1` >= 0.16) or `open-pr-nearest` | The gate works as designed. | None. |
 | `refused`, `shape`, `slug` or `budget` | Handled per class in this runbook. | None new. |
