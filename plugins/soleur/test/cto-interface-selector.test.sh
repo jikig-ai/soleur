@@ -159,12 +159,13 @@ _s3="$(section3_of "$DELEG")"
 
 DOMAIN_PROMPT="$(grep -F -m1 -- '| Engineering |' "$DOMAIN_CFG" | awk -F'|' '{ print $(NF-1) }' | sed 's/^ *//; s/ *$//')"
 PLAN_REVIEW_LENS="$(awk '/^  cto: \{/ { f = 1 } f && /lens:/ { print; exit }' "$PLAN_REVIEW_WF" | sed "s/^ *lens: *'//; s/',\$//")"
-_re='starts `(Own the epic)`'
+_re='prompt that starts `(Own the epic)`'
 GO_OWN_CUE=""
 _go_para="$(awk '/^## Step 1\.5: Hold routing/ { f = 1; next } f && /^## / { f = 0 } f { print }' "$GO_MD")"
 [[ "$_go_para" =~ $_re ]] && GO_OWN_CUE="${BASH_REMATCH[1]}"
 # The classification route (epic 9927) spawns the CTO with a Rule prompt, never an Own the epic one: its cue is read out of the same paragraph.
-_re='starts `(Rule on this technical question[^`]*)`'
+# Anchored on `prompt that starts`: the negated sentence `This prompt never starts ...` must never match.
+_re='prompt that starts `(Rule on this technical question[^`]*)`'
 GO_CLASSIFY_CUE=""
 [[ "$_go_para" =~ $_re ]] && GO_CLASSIFY_CUE="${BASH_REMATCH[1]}"
 
@@ -345,6 +346,16 @@ ck; [[ "${#PLAN_REVIEW_PLAIN}" -ge 400 && "$PLAN_REVIEW_PLAIN" == *'Structured a
   && ok "rebuilt the plan-review engineering-reviewer prompt (${#PLAN_REVIEW_PLAIN} bytes)" || bad "could not rebuild the non-named reviewPrompt text (${#PLAN_REVIEW_PLAIN} bytes)"
 ck; [[ -n "$GO_OWN_CUE" ]] && ok "extracted go.md's hold-routing spawn cue: \`$GO_OWN_CUE\`" || bad "go.md's hold-routing paragraph names no 'starts \`Own the epic\`' cue"
 ck; [[ -n "$GO_CLASSIFY_CUE" ]] && ok "extracted go.md's hold-classification spawn cue: \`$GO_CLASSIFY_CUE\`" || bad "go.md's hold-routing paragraph names no 'starts \`Rule on this technical question ...\`' classification cue"
+# Parity: every cue that selects the Assess interface (the strip list) must appear inside the classification route bullet, so the
+# calling skill strips exactly what cto.md would otherwise match on.
+GO_ROUTE_BULLET="$(grep -F -m1 -- '- **Classification list: route**' "$GO_MD" || true)"
+ck
+_ncue=0; _cmiss=""
+while IFS= read -r _cue; do
+  [[ -n "$_cue" ]] || continue; _ncue=$((_ncue + 1))
+  [[ "$GO_ROUTE_BULLET" == *"$_cue"* ]] || _cmiss="$_cmiss [$_cue]"
+done < <(selector_cues "$CTO" assess)
+[[ "$_ncue" -ge 2 && -n "$GO_ROUTE_BULLET" && -z "$_cmiss" ]] && ok "every Assess cue of cto.md ($_ncue) appears in go.md's classification route bullet" || bad "go.md's classification route bullet misses Assess cue(s):${_cmiss:- (or fewer than 2 cues / no bullet found: $_ncue)}"
 
 # --- C. each existing caller's phrase selects the intended interface ----------------------------------
 CL_LABEL=(); CL_WANT=(); CL_PROMPT=()
@@ -626,8 +637,8 @@ ck; [[ "$(printf '%s\n' "$SURFACES" | grep -c . || true)" -ge 8 ]] && ok "cto sp
 # (2) ABSOLUTE: the count of a green run, committed with ZERO slack. A derived floor moves with the rows it
 #     guards (delete six rows and the floor drops with them), so this constant is the one that bites. Raise it
 #     in the same commit that adds rows, never ahead of them.
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 9 + caller_n + 1 + 4 + 15 + nrows + 1 + 1 ))
-ABSOLUTE_FLOOR=170
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 10 + caller_n + 1 + 4 + 15 + nrows + 1 + 1 ))
+ABSOLUTE_FLOOR=171
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' "$asserted" "$MIN_ASSERTIONS" >&2

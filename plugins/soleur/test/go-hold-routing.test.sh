@@ -17,6 +17,13 @@
 # posted publicly, and the outcome in business terms), the headless behaviour, ${CLAUDE_PLUGIN_ROOT} script
 # paths, the execution-sentence wiring and the stop sequence (delete, disarm, cancel, say what remains).
 #
+# CLASSIFICATION FORM (epic 9927). The widened, classification-only trigger (a label plus open items, tied to an open epic the brief
+# cites) and its route (set-aside of reserved wording, the CTO Rule prompt with untrusted numbered items, rows, headless and edge
+# behaviour) and the No delegable act bullet are pinned CLAUSE BY CLAUSE: one property per clause, each with a phrase-deletion row
+# (hand-written C rows plus the table-driven SWEEP) that must turn its own token red. A derived matcher judges synthesized
+# fixtures (positive and negative) against the vocabulary, author set and ignore rules READ FROM the paragraph; see the matcher
+# header below for what it models and what it does not.
+#
 # PR-TIME CHECKS. The merge-base anchor describes THIS PR's diff. After the merge the merge base IS HEAD, so on
 # the real file the anchored properties are SKIPPED with a printed reason (never a silent pass); the mutation
 # rows still compare a changed file against the base and stay meaningful. Rows match the violation token as an
