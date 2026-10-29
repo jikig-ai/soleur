@@ -56,11 +56,11 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 on either runner; the Sentry issue and the pino line come from that emit, not from this rule. Once this change is applied
 (merge, then `apply-sentry-infra.yml`) the rule's one action is an `issue_owners` email with the `NoOne` fallthrough (the
 provider rejects a rule with no action), which resolves to no recipient while the project has no Sentry ownership rule
-(last measured 2026-09-06; the read-only token gets 403 on that endpoint, so it cannot be re-measured with it).
+(last measured 2026-09-06; a retry with the read-only token on 2026-10-29 got 403, so it has not been re-measured).
 That covers this rule only. Sentry's vendor-default workflow "Send a notification for high priority issues" (id 566201, not
-managed by Terraform; captured 2026-09-09 as an `issue_owners` email with the `ActiveMembers` fallthrough) can still email
-active members for a NEW high-priority issue, and the agent-auth issue
-(WEB-PLATFORM-C8) is `level=error`, priority `high`. The emit is
+managed by Terraform; captured 2026-09-09 as an `issue_owners` email with the `ActiveMembers` fallthrough, triggered by a new
+high-priority issue or by an existing one that Sentry re-marks as high priority) can still email active members, and the
+agent-auth issue (WEB-PLATFORM-C8) was `level=error`, priority `high` when read on 2026-10-29. The emit is
 `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`; the literal `null` first argument keeps
 it off the pino-mirror path (#8629). It carries ten closed-enum tags and nothing else (no key material, env value, message
 body, user or workspace id, path). Read the events with the commands below; no scheduled check reads them.

@@ -139,12 +139,14 @@ export function ruleProblems(hclRaw: string, allHclRaw = hclRaw): string[] {
   const actions = block.match(/\bactions\s*=\s*\[([\s\S]*?)\n\s*\]/);
   const email = actions?.[1].match(/^\s*\{\s*email\s*=\s*\{([^}]*)\}\s*\}\s*,?\s*$/)?.[1];
   const emailAttr = (k: string) => email?.match(new RegExp(`\\b${k}\\s*=\\s*"([^"]+)"`))?.[1];
+  // HCL separates object attributes by comma OR newline and the last duplicate wins, so count KEYS, not commas.
+  const emailKeys = email ? [...email.matchAll(/\b(\w+)\s*=/g)].map((m) => m[1]).sort() : [];
   if (!actions) bad.push("no actions list");
   else if (
     !email ||
     emailAttr("target_type") !== "issue_owners" ||
     emailAttr("fallthrough_type") !== "NoOne" ||
-    email.split(",").filter((part) => part.trim()).length !== 2
+    emailKeys.join(",") !== "fallthrough_type,target_type"
   ) {
     bad.push("actions must be exactly one email issue_owners + NoOne");
   }
@@ -365,6 +367,12 @@ describe("agent-auth-failure — harness self-tests (mutation rows)", () => {
     expect(ruleProblems(swapped)).toEqual([]);
   });
 
+  it("MUST-PASS non-canonical: an unrelated attribute ending in logic_type outside action_filters still passes", () => {
+    const withTriggerLogic = RULE_FIXTURE.replace("  enabled           = true\n", '  enabled           = true\n  trigger_logic_type = "single"\n');
+    expect(withTriggerLogic).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(withTriggerLogic)).toEqual([]);
+  });
+
   it("MUST-PASS non-canonical: a different (unique) frequency still passes", () => {
     const other = RULE_FIXTURE.replace("frequency_minutes = 71", "frequency_minutes = 99");
     expect(other).not.toBe(RULE_FIXTURE);
@@ -396,6 +404,19 @@ describe("agent-auth-failure — harness self-tests (mutation rows)", () => {
     const extraKey = RULE_FIXTURE.replace('fallthrough_type = "NoOne" }', 'fallthrough_type = "NoOne", target_identifier = "42" }');
     expect(extraKey).not.toBe(RULE_FIXTURE);
     expect(ruleProblems(extraKey)).toContain("actions must be exactly one email issue_owners + NoOne");
+    // HCL separates object attributes by newline too, and a later duplicate key wins: none of these may pass.
+    const dupFallthrough = RULE_FIXTURE.replace('fallthrough_type = "NoOne" }', 'fallthrough_type = "NoOne"\n          fallthrough_type = "AllMembers" }');
+    expect(dupFallthrough).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(dupFallthrough)).toContain("actions must be exactly one email issue_owners + NoOne");
+    const dupTarget = RULE_FIXTURE.replace('target_type = "issue_owners",', 'target_type = "issue_owners"\n          target_type = "user",');
+    expect(dupTarget).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(dupTarget)).toContain("actions must be exactly one email issue_owners + NoOne");
+    const newlineKey = RULE_FIXTURE.replace('fallthrough_type = "NoOne" }', 'fallthrough_type = "NoOne"\n          target_identifier = "42" }');
+    expect(newlineKey).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(newlineKey)).toContain("actions must be exactly one email issue_owners + NoOne");
+    const suffixKey = RULE_FIXTURE.replace('target_type = "issue_owners"', 'x_target_type = "issue_owners"');
+    expect(suffixKey).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(suffixKey)).toContain("actions must be exactly one email issue_owners + NoOne");
     const userTarget = RULE_FIXTURE.replace('target_type = "issue_owners"', 'target_type = "user"');
     expect(userTarget).not.toBe(RULE_FIXTURE);
     expect(ruleProblems(userTarget)).toContain("actions must be exactly one email issue_owners + NoOne");

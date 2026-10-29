@@ -1818,9 +1818,10 @@ resource "sentry_alert" "masked_dir_precreate_failed" {
 #
 # GROUPING: the message is constant, so every event shares ONE Sentry issue; the per-user 5-minute debounce and the
 # process-wide cap (10 events per 5 minutes) bound the events. NoOne resolves to no recipient ONLY while the project has
-# no Sentry ownership rule (last measured 2026-09-06, not re-measurable with the read-only token): a rule that names
-# owners would deliver to them. This covers THIS rule only: Sentry's vendor-default workflow "Send a notification for
-# high priority issues" (not managed here) can still email active members for a new high-priority issue; see README.md.
+# no Sentry ownership rule (last measured 2026-09-06; a 2026-10-29 retry with the read-only token got 403): a rule that
+# names owners would deliver to them. This covers THIS rule only: Sentry's vendor-default workflow "Send a notification
+# for high priority issues" (not managed here) can still email active members for a new or re-prioritised high-priority
+# issue; see README.md.
 # No Slack action is wired for this rule. Both filters (feature AND op) are carried so a later diagnostic op under
 # feature=agent-auth cannot match by accident.
 #
