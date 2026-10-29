@@ -30,6 +30,19 @@ rules in `issue-alerts.tf` already use for "lands in the issue stream to be read
 the project has no Sentry ownership rule, so `issue_owners` resolves to nobody and `NoOne` alone decides
 delivery. Everything else about the rule stays byte-identical. See `decision-challenges.md`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29 (targeted pass: the change is one attribute value, so the 40-agent fan-out was not run; the halt gates and a live-fact verification pass were).
+**Gates run:** User-Brand Impact (4.6, threshold `none` with the sensitive-path scope-out present), Observability (4.7), PAT-shaped variable sweep (4.8, no hits), Encryption Posture (4.10, skip stated), Guard Contract (4.11, `scripts/lint-guard-contract.py` green), Scope Check (4.12, section rebuilt to the Ask Mapping / Provenance / Split schema), no UI surface (4.9), no network/SSH trigger (4.5), no downtime trigger (4.55: an in-place alert-rule update, no host or DB change).
+**Plan-review panel (DHH, Kieran, code-simplicity):** applied the mechanical findings (tolerant regex instead of string equality, extractor pushes a problem rather than throwing, the `noOne` red-goes row rewritten so it cannot pass vacuously, two pinned single-line phrases named, redundant Phase 0/C4/scratch-validate steps cut, caveat stated once). Kept the heading rename in the README responder steps because "When the email arrives" would become false.
+
+### Key verifications (live, 2026-10-29)
+- `terraform validate` with `actions = []` on provider 0.15.7: `list must contain at least 1 elements, got: 0` (why the form is one `NoOne` action).
+- `frequency_minutes = 40` appears once in the Sentry root (`issue-alerts.tf`), so uniqueness holds and the value is unchanged.
+- The README's pinned phrase `removal checklist in the header of \`server/agent-auth-mode.ts\`` sits on one line (Lifecycle paragraph); the `apply-sentry-infra.yml` header states "the PR merge IS the human authorization".
+- `GET .../projects/jikigai-eu/web-platform/ownership/` with `SENTRY_ISSUE_RO_TOKEN` returned HTTP 403 (scopes `event:read, org:read`), so the ownership-rule premise stays at its 2026-09-06 measurement.
+- ADR ordinal note: two files carry the `ADR-031` prefix (`ADR-031-sentry-as-iac.md` and `ADR-031-cc-dispatcher-extraction-cc-workflow-end-messages.md`); this plan means the former.
+
 ## Research Insights
 
 **Premise Validation.** Checked: #11085 is OPEN and its Step 1 text matches the brief; #11086 OPEN; #10455
@@ -77,18 +90,38 @@ the routing rather than assuming it, here the inverse: confirm it routes to nobo
 
 ## Scope Check
 
-| Ask (from the brief) | Plan item |
-|---|---|
-| Drop the email action from `sentry_alert.agent_auth_failure` | Phase 1 (CTO-ruled form: one `NoOne` email action, since zero actions is a validate error) |
-| Keep the Sentry issue and the pino/Better Stack line | Phase 1 changes no emit, tag, filter or trigger; AC4 pins it |
-| Update `alert-reference.json` in the same PR | Phase 2 |
-| Update README "Diagnostic rule: agent-auth-failure" | Phase 4 |
-| Update guard tests that pin the email action | Phase 3 |
-| Do not remove the rule, tags or emit; do not extend the diagnostic | Non-Goals; AC4 |
-| `Ref #11085`, close nothing | AC8 |
-| Note that infra apply on merge is production-mutating | Infrastructure (IaC) section, Apply path |
+### Ask Mapping
 
-No item is `inferred`. Split assessment: one PR, one concern.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Drop the email action from sentry_alert.agent_auth_failure in apps/web-platform/infra/sentry/issue-alerts.tf" [brief] | Phase 1 (CTO-ruled form: one `NoOne` email action, since the provider rejects zero actions) | mapped |
+| 2 | "keep the Sentry issue and the pino/Better Stack line (feature=agent-auth)" [brief] | Phase 1 changes no emit, tag, filter or trigger; AC4 | mapped |
+| 3 | "update apps/web-platform/infra/sentry/alert-reference.json in the same PR so the plan-projection gate stays green" [brief] | Phase 2, AC2, AC6 | mapped |
+| 4 | "Update the README section \"Diagnostic rule: agent-auth-failure\"" [brief] | Phase 4, AC5 | mapped |
+| 5 | "any guard tests that pin the email action" [brief] | Phase 3, AC3 | mapped |
+| 6 | "without removing the rule, the tags or the emit" and "Do not extend the diagnostic with new tags or matcher patterns" [brief] | Non-Goals, AC4 | mapped |
+| 7 | "Use \"Ref #11085\" in the PR body, and close nothing" [brief] | AC8, Phase 5 | mapped |
+| 8 | "Every infra apply on merge is production-mutating: note that in the plan." [brief] | Infrastructure (IaC) section, Apply path | mapped |
+| 9 | "have the CTO rule on it" (the zero-actions fork) [brief] | Overview ruling, `decision-challenges.md` | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `issue-alerts.tf` edit (Phase 1) | "Drop the email action from sentry_alert.agent_auth_failure" (asks 1-2) | asked |
+| `alert-reference.json` edit (Phase 2) | "update apps/web-platform/infra/sentry/alert-reference.json in the same PR" (ask 3) | asked |
+| `README.md` edit (Phase 4) | "Update the README section" (ask 4) | asked |
+| contract test edit (Phase 3) | "any guard tests that pin the email action" (ask 5) | asked |
+| Phase 0 baseline `terraform validate` | — | inferred — justification: `terraform validate` is the only local check that the provider still accepts the edited block, and ask 3 requires the plan gate to stay green |
+| Phase 5 verification run | — | inferred — justification: the red-then-green guard run is how ask 5 is shown to hold; no new file is added |
+| `decision-challenges.md` and `tasks.md` | "Persist every decision as a row of the `| Item | Class | Ruling |` table" (ask 9) | asked |
+
+### Split Assessment
+
+- Subsystems touched: 2 — apps/web-platform/infra/sentry, apps/web-platform/test
+- Planned files: 4 edited (plus plan, tasks and decision-challenges artifacts) | Estimated changed lines: ~70
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Non-Goals
 
