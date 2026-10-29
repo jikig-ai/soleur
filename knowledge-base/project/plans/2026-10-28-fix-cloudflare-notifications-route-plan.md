@@ -45,7 +45,7 @@ Correct the `cf-token-scope` default-token Notifications probe to use Cloudflare
 
 ## Artifact Lifecycle
 
-- **Archival deferral:** Defer archiving this plan and its spec directory until after `soleur:ship` Phase 6 has completed. Ship reads the live task/session artifacts and performs the approved Phase 6.45 archive; compound must not archive them in this pre-ship phase.
+- **Archival deferral:** Defer compound's pre-ship archival of this plan and spec directory until after `soleur:ship` Phase 6 has completed its live-path reads. Ship's Phase 6.45 archive step is the approved in-PR archival point; compound must not archive these artifacts before it.
 
 ## User-Brand Impact
 
