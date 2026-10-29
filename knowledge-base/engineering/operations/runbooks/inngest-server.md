@@ -2507,7 +2507,9 @@ setting).
    full-state baseline so this destructive cutover is reversible and verifiable (no SSH):
 
    ```bash
-   gh workflow run cutover-inngest.yml --field op=backup      # Hetzner server snapshot (full root disk incl. /var/lib/inngest); logs the image id
+   gh workflow run cutover-inngest.yml --field op=backup      # Hetzner server snapshot (full root disk incl. /var/lib/inngest); logs the image id.
+   # #9755: the dispatch stays "Waiting" until the inngest-cutover environment reviewer approves it — the approval IS
+   # the prod-write ack, and snapshot creation starts only after it. Approve the run before expecting an image id.
    gh workflow run cutover-inngest.yml --field op=inventory   # BEFORE baseline: {functions, event_names, armed_reminder_ids}
    ```
 

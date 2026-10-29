@@ -141,3 +141,9 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 | #11086 | Root cause of the raw login reply, and a friendly user-facing error that keeps the matcher on the raw text | open |
 | #11085 | Downgrade then remove the temporary agent-auth-failure alert (fallback review 2026-11-30) | open |
 | #10455 | Umbrella: record the first real event's tag tuple and read the cause from it | open |
+
+## Addendum — 2026-10-29 (#11085: first events recorded, diagnostic downgraded)
+
+- **Detection now works; the cause is still open.** The diagnostic recorded its first two real events on 2026-10-27 (09:01Z and 16:27Z) with one tuple: `runner=cc-soleur-go`, `credential_scheme=oauth_token`, `auth_env_present=true`, `auth_mode=api-key`, `cli_key_source=none`, `match_kind=not_logged_in`, decoded and recorded on #10455 on 2026-10-29. The OAuth token was in the options handed to the SDK and the CLI still saw no credential; the cause stays with #11086.
+- **A detection gap found while downgrading.** The diagnostic rule was downgraded so its own action resolves to no recipient (a `NoOne` fallthrough; the provider rejects a rule with no action). Review found that Sentry's vendor-default workflow "Send a notification for high priority issues" (id 566201, not managed by Terraform) can still email active members for this issue, which is `level=error`, priority `high`. Whether anyone was emailed for the 2026-10-27 events, and by which path, was not established. The delivery claim for the incident's alerting path is therefore "this rule's own action", not "nobody".
+- **Timing.** The downgrade change was committed at 08:36Z on 2026-10-29, before the 48-hour window on #11085 ended (09:01Z), but it takes effect only when the merge is applied.

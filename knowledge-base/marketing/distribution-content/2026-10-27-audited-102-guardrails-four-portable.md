@@ -3,7 +3,7 @@ title: "We Audited 102 Guardrails. Only Four Belong in Every Repository."
 type: pillar
 publish_date: 2026-10-29
 channels: x, bluesky, discord, linkedin-personal
-status: scheduled
+status: published
 issue_reference: "#10903"
 ---
 
