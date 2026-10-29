@@ -33,6 +33,7 @@ for minimal depth, and no framework, SDK or external surface applies).
 3. Wording ruled by the CTO agent (see `decision-challenges.md`; the ruling gate passes, 4 rows).
 
 ### Verification results
+
 - 4.6 pass (threshold `none`; the only edited file is under `knowledge-base/`, outside the sensitive
   path regex). 4.7 skipped (pure docs). 4.8 pass (no PAT shapes). 4.9 not triggered (no UI file).
   4.10, 4.11 not triggered (no store/connection, no guard). 4.12 pass (one unfenced
