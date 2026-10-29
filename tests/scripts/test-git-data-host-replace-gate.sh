@@ -692,7 +692,7 @@ gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to th
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 103 ]]; then
+if [[ "$_ran" -lt 111 ]]; then
   fails=$((fails + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 111 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else

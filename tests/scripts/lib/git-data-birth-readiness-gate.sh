@@ -2772,6 +2772,14 @@ _git_data_hcl_nocomment() {
 # genuine top-level assignment. The depth counts and the opener/assignment matches therefore read a
 # per-line copy with every string reduced to ""; the raw line is kept for value extraction.
 #
+# INTERPOLATION IS REFUSED, NOT PARSED (security review, round 2). blank() does not understand `${...}`:
+# the nested quote in "${lower("}")}" closes the string early, so a brace lands outside and moves the depth
+# and a nested `git_data_volume_id = ""` can masquerade as the top-level argument (a terraform plan of such
+# a file renders the real non-empty id). Rather than parse HCL interpolation, any line INSIDE the module
+# call (after the comment strip) that contains `${` or `%{` ABORTs with its own verdict. The real module
+# call has none (a formatted file passes references bare, `var.x`, not `"${var.x}"`), so this costs
+# nothing today; adding one is a deliberate edit to the file this gate reads.
+#
 # OUT OF SCOPE, on purpose (review findings D1 and D4; fixing either needs a deliberate edit by someone who
 # can already edit this gate, and #11433 retires the interlock rather than hardening it):
 #   D1  a SECOND module call that also feeds user_data (this reads only `module "git_data_userdata"`).
@@ -2812,22 +2820,26 @@ git_data_plaintext_id_interlock() {
       }
       return o
     }
-    BEGIN { depth = 0; inb = 0; blocks = 0; n = 0; closed = 0 }
+    BEGIN { depth = 0; inb = 0; blocks = 0; n = 0; closed = 0; interp = 0 }
     {
       _il_depth = depth
       b = blank($0)
       o = gsub(/[{]/, "{", b); c = gsub(/[}]/, "}", b)
-      if (!inb && _il_depth == 0 && $0 ~ /^[[:space:]]*module[[:space:]]+"git_data_userdata"[[:space:]]*[{]/ && b ~ /^[[:space:]]*module[[:space:]]+""[[:space:]]*[{]/) {
+      if (!inb && _il_depth == 0 && $0 ~ /^[[:space:]]*module[[:space:]]+"git_data_userdata"[[:space:]]*[{]/) {
         blocks++; inb = 1; closed = 0
       } else if (inb && _il_depth == 1 && b ~ /^[[:space:]]*git_data_volume_id[[:space:]]*=/) {
         n++; line = NR; v = $0; sub(/^[[:space:]]*git_data_volume_id[[:space:]]*=/, "", v); val = trim(v)
       }
+      # Interpolation is not parsed: a nested quote inside ${...} (e.g. "${lower("}")}") ends the blank() string
+      # state early and shifts the depth, so a line of the module call that carries ${ or %{ is refused.
+      if (inb && !interp && $0 ~ /[$%][{]/) interp = NR
       depth += o - c
       if (inb && depth <= 0) { inb = 0; closed = 1 }
     }
     END {
       if (blocks == 0) print "noblock"
       else if (blocks > 1) print "multiblock"
+      else if (interp) print "interp:" interp
       else if (!closed) print "unclosed"
       else if (n == 0) print "zero"
       else if (n > 1) print "multiple:" line
@@ -2847,6 +2859,7 @@ git_data_plaintext_id_interlock() {
   case "$_il_verdict" in
     noblock) echo "git_data_plaintext_id_interlock: ABORT — no module \"git_data_userdata\" block found in $(basename "$tf"); refusing (an extractor that finds nothing is not an empty literal)."; return 1 ;;
     multiblock) echo "git_data_plaintext_id_interlock: ABORT — more than one module \"git_data_userdata\" block in $(basename "$tf"); refusing (Terraform rejects a duplicate module name, so this file is not the one that will be planned)."; return 1 ;;
+    interp) echo "git_data_plaintext_id_interlock: ABORT — the module \"git_data_userdata\" block carries a string interpolation (\${ or %{) at line ${_il_out#interp:}; this check does not parse interpolation (a nested quote inside it can shift the brace depth and hide the real top-level argument), so it refuses rather than guess. The file is not the reviewed shape: remove the interpolation from the module call, or extend this parser deliberately. No value is printed."; return 1 ;;
     unclosed) echo "git_data_plaintext_id_interlock: ABORT — the module \"git_data_userdata\" block in $(basename "$tf") is not brace-balanced; refusing."; return 1 ;;
     zero) echo "git_data_plaintext_id_interlock: ABORT — the module \"git_data_userdata\" block carries no top-level git_data_volume_id assignment; refusing (an absent argument is not an empty one)."; return 1 ;;
     multiple) echo "git_data_plaintext_id_interlock: ABORT — more than one top-level git_data_volume_id assignment in the module \"git_data_userdata\" block (last at line ${_il_out#multiple:}); refusing rather than guess which one Terraform keeps."; return 1 ;;

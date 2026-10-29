@@ -2395,8 +2395,9 @@ const GIT_DATA_RETIRED_ADDRESSES = ["hcloud_volume.git_data", "hcloud_volume_att
 function retiredFlagLines(block: string): string[] {
   const alt = GIT_DATA_RETIRED_ADDRESSES.map((a) => a.replace(/\./g, "[.]")).join("|");
   // `[= ]`: terraform accepts `-target addr` as well as `-target=addr`, and either spelling (also with
-  // a single leading dash) re-adds the line.
-  const re = new RegExp(`-{1,2}(?:target|replace)[= ]['"]?(?:${alt})(?![A-Za-z0-9_])`);
+  // a single leading dash) re-adds the line. The lookbehind makes `-{1,2}` bite: without it the regex is
+  // unanchored and a lone `-` already matches inside `--replace`, so the two-dash control proved nothing.
+  const re = new RegExp(`(?<![-\\w])-{1,2}(?:target|replace)[= ]['"]?(?:${alt})(?![A-Za-z0-9_])`);
   return block.split("\n").filter((l) => !/^\s*#/.test(l) && re.test(l));
 }
 // The same scan, counting every git-data flag line it COULD have matched (non-vacuity).
@@ -2594,6 +2595,8 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volu
     expect(retiredFlagLines("  -target hcloud_volume.git_data \\")).toHaveLength(1);
     expect(retiredFlagLines("  --replace hcloud_volume_attachment.git_data \\")).toHaveLength(1);
     expect(retiredFlagLines("  -target hcloud_volume.git_data_luks \\")).toHaveLength(0);
+    // A flag glued to a paren (the EXTRA_TARGET+=(...) shape) is still a flag line.
+    expect(retiredFlagLines("  EXTRA_TARGET+=(-target='hcloud_volume.git_data')")).toHaveLength(1);
   });
 
   test("the retired plaintext pair is not DECLARED as a resource in apps/web-platform/infra/*.tf (#11194)", () => {
@@ -5947,7 +5950,6 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // demand `creates == 1` of a resource a resumed dispatch legitimately re-plans as a no-op, and one
     // silently leaving would stop demanding its create.
     expect([...entailed].sort()).toEqual(["hcloud_server_network.git_data", "hcloud_volume_attachment.git_data_luks"]);
-    expect(entailed).toHaveLength(2);
 
     // The two members the gate handles by their own dedicated arms rather than by a loop:
     // the server (the `creates == 1` identity arm) and the firewall attachment (an

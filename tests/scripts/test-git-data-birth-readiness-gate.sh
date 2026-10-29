@@ -3219,6 +3219,33 @@ _il_chk "IL6d a DIFFERENT key sharing the suffix (old_git_data_volume_id = \"\")
 _IL_HDOC="$_il_dir/hdoccmt.tf"
 printf '# an example (<<EOF) that is only a comment\nmodule "git_data_userdata" {\n  git_data_volume_id = ""\n}\n' > "$_IL_HDOC"
 _il_chk "IL6e a '# (<<EOF)' comment above the call: the shared stripper swallows it => ABORT (fail-closed, pinned)" 1 "no module" "$_IL_HDOC"
+# --- (security review, round 2) interpolation is REFUSED, not parsed ---
+# "${lower("}")}" ends the string-blanking early (the nested quote), so its brace shifts the depth and the
+# nested `git_data_volume_id = ""` below masquerades as the top-level argument while the real top-level
+# assignment is non-empty. Before the refusal this PASSed (rc 0) while a terraform plan of the same file
+# rendered the real id. Fail-closed by design: any `${` / `%{` inside the module call ABORTs, whatever the
+# rest of the file says; a terraform-fmt'd real module call passes references bare, so it carries none.
+_IL_FOPEN="$_il_dir/fopen.tf"
+cat > "$_IL_FOPEN" <<'HCL_EOF'
+module "git_data_userdata" {
+  source = "./modules/git-data-userdata"
+  sentry_dsn = "${lower("{")}"
+  git_data_volume_id = "106867358"
+  host_name = lookup({
+    x = "${lower("}")}${lower("}")}"
+    git_data_volume_id = ""
+  }, "k", "d")
+}
+HCL_EOF
+_il_chk "IL8 a nested quote inside \${...} hides a real non-empty argument (the interpolation fail-open) => ABORT on the interpolation verdict" 1 "string interpolation" "$_IL_FOPEN" "106867358"
+_IL_INTERP="$(_il_fix interp '  host_name = "${var.host}"' '  git_data_volume_id = ""')"
+_il_chk "IL8b a plain \"\${var.x}\" in ANOTHER argument beside a genuine empty id => ABORT (fail-closed by design)" 1 "string interpolation" "$_IL_INTERP"
+# PR-2-shaped control: the real git-data.tf with ONLY the literal blanked (the one-hunk change). It must PASS,
+# which also proves the real module call carries no interpolation. Before that change merges the sed has
+# something to change; after it, it is a no-op - the row holds on both sides.
+_IL_PR2="$_il_dir/pr2shape.tf"
+sed -E 's/^([[:space:]]*git_data_volume_id[[:space:]]*=).*/\1 ""/' "${ROOT}/apps/web-platform/infra/git-data.tf" > "$_IL_PR2"
+_il_chk "IL8c control: the real git-data.tf with only the id blanked (the PR-2 shape) => PASS" 0 "PASS" "$_IL_PR2"
 # The live-tree EXTRACTOR invariant. This asserts only that the real git-data.tf is PARSEABLE by the
 # extractor, never what it says: the verdict (PASS or the non-empty ABORT) flips when the
 # `git_data_volume_id = ""` change merges, and this row must stay true on both sides of that merge.
@@ -3280,6 +3307,9 @@ MUTATE_G_NEEDLE="unclassified extractor verdict" _IL_AWK_STUB=1 mutate_g "IM10: 
   '/^    \*) echo "git_data_plaintext_id_interlock: ABORT — unclassified/ s/return 1 ;;/return 0 ;;/' \
   0 git_data_plaintext_id_interlock "$_IL_OK"
 unset -f awk
+MUTATE_G_NEEDLE="PASS" mutate_g "IM12: the interpolation refusal is load-bearing (deleted, the nested-quote fail-open PASSes)" \
+  '/^      if (inb && !interp && \$0 ~ \/\[\$%\]\[{\]\/) interp = NR$/d' \
+  0 git_data_plaintext_id_interlock "$_IL_FOPEN"
 MUTATE_G_NEEDLE="PASS" mutate_g "IM11: counting braces on the string-blanked copy is load-bearing (neutered, a \"}\" string hides a later non-empty assignment)" \
   's/, "{", b)/, "{")/; s/, "}", b)/, "}")/' \
   0 git_data_plaintext_id_interlock "$_IL_STRBRACE_BAD"
@@ -3490,7 +3520,13 @@ mutate_suite "M0d: an _il_chk whose condition is 'if true' reds this suite (ILS 
 #     1  M0d       harness: an _il_chk whose condition is `if true` reds the suite
 #   ----
 #    11 (ILS 1 + IL6-IL6d 4 + IL6e 1 + IL6f 1 + IL7 1 + IM10 1 + IM11 1 + M0d 1)
-_FLOOR=302
+# RAISED 302 -> 306 (PR #11432 review round 2; observed 302 before, 306 after), ITEMISED — the interpolation refusal:
+#     1  IL8       the nested-quote-inside-${...} fail-open shape => ABORT on the interpolation verdict
+#     1  IL8b      a plain "${var.x}" in another argument beside a genuine empty id => ABORT (fail-closed by design)
+#     1  IL8c      control: the real git-data.tf with only the id blanked (the PR-2 shape) => PASS
+#     1  IM12      mutation: deleting the interpolation check releases the fail-open shape
+#   (the redundant `module ""` opener conjunct was removed with no count change; it was an equivalent mutant)
+_FLOOR=306
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
