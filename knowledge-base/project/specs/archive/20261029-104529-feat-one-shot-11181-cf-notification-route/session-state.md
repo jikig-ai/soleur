@@ -173,6 +173,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 |---|---|---|---|
 | Sentry error-delta skip wording implied that an API read found no issue | `sentry-error-delta-skipped-not-no-issue` | `security-sentinel` | State that delta measurement was skipped because no Sentry issue was named in the PR/linked issue |
 | Archived plan acceptance criterion still stated byte-identity as a present condition | `historical-hash-acceptance-criterion` | `code-quality-analyst` | Reword as the original #11456 merge-time verification and note the later redaction |
+| Other archived planning/session prose described the original digest match without limiting it to merge time | `historical-hash-claims-not-time-scoped` | `code-quality-analyst` (final verifier) | Qualify each matching statement as historical evidence from the original #11456 merge |
 
 ### Final-review dedup-before-fixing ledger
 
