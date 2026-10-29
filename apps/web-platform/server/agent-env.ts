@@ -1,3 +1,4 @@
+import type { CredentialScheme } from "@/lib/credential-scheme";
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
@@ -9,7 +10,7 @@ import { SECCOMP_SELECTOR_ENV, seccompArtifactFor, usesUnixDenyArtifact } from "
  * subscription `CLAUDE_CODE_OAUTH_TOKEN`. The scheme is the discriminator
  * that selects the mutually-exclusive env var in `buildAgentEnv`.
  */
-export type AgentAuthScheme = "api_key" | "oauth_token";
+export type AgentAuthScheme = CredentialScheme;
 
 /**
  * A resolved agent credential. Carried as a single object (not two scalar
