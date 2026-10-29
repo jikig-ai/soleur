@@ -13,6 +13,7 @@
 - A later patch context was already superseded; its verification failure was investigated by re-reading the worktree, and no change was lost.
 - Two follow-up patches for the learning/session records failed verification because the expected text did not match the current recovery wording; neither failed attempt changed files. Re-read the exact text and reapplied with the matching context.
 - Status checks against the old `chore-learning-cf-token-route` worktree failed because it no longer existed. `gh pr view 11479` confirmed the PR had merged; the source blob was verified through `origin/main` instead.
+- Review fixes were committed before the final-panel dedup ledger was persisted. Reconciled all findings and recorded the ledger below before starting the targeted round; no more fixes will be dispatched without a durable ledger.
 - A combined plan/tasks/session-state patch failed verification because it expected a session-error count line in the learning file; no edits landed. Re-read each target and split updates by file.
 
 ### Decisions
@@ -121,9 +122,20 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 - Focused suite passed 200/200; `bash -n`, warning-severity ShellCheck, and `git diff --check` pass. No affected full-gate pass is claimed; capacity remains contended and CI's required `test` is authoritative.
 - User authorized redaction of the pre-existing learning detail; apply it in a follow-up PR after #11456 merges to avoid an add/add conflict on this stale branch. Do not rewrite the already-published commit history.
 
+### Final-review dedup-before-fixing ledger
+
+| raw finding | canonical defect key | reporting seat(s) | fix disposition |
+|---|---|---|---|
+| Curl proxy deny check and mock parser omitted valid selectors (`--proxy1.0`, SOCKS4/4a/5/5-hostname) and did not pin the `--noproxy` value | `curl-proxy-selector-parity` | `pattern-recognition-specialist`, `structural-enumeration` | `7c91fe2d1c` |
+| Proxy-only fixtures did not prove a real transfer target remains the only logged URL beside a proxy operand | `proxy-selector-with-real-target` | `test-design-reviewer`, `structural-enumeration` | `7c91fe2d1c` |
+| Direct mock boundary fixture rejected a path suffix but not a query suffix | `notifications-query-suffix-boundary` | `structural-enumeration` | `7c91fe2d1c` |
+| No Notification 2xx fixture proved that a valid array on HTTP 201 remains denied | `notifications-non200-2xx-status` | `structural-enumeration` | `7c91fe2d1c` |
+| Two identical curl-mock guidance bullets were present | `duplicate-curl-mock-guidance` | `git-history-analyzer`, `pattern-recognition-specialist`, `architecture-strategist`, `code-quality-analyst` | `7c91fe2d1c` |
+| The learning's token-inventory anecdote is on current public `main` via merged #11479 | `token-inventory-learning-disclosure` | `security-sentinel` | Separate redaction PR after #11456 merges; user authorized, no history rewrite |
+
 ## Compound Phase
 
-- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 25 Session Errors have Prevention lines.
+- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 26 Session Errors have Prevention lines.
 - Added one domain-scoped sharp-edge to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`; learning `synced_to: [work]` records the route. The related 2026-10-28 route learning and its main-checkout source copy remain byte-identical; the new learning links to it.
 - No project-level constitution/component/README proposals were warranted. The worktree plan explicitly defers plan/spec archival until after ship Phase 6; compound did not archive them.
 - Rule-budget linter returned `[WARN] B_ALWAYS=44390` and exit 0; no AGENTS rules were added. Token-efficiency report skipped because the diff was below its minimum size.

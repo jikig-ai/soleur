@@ -141,6 +141,13 @@ extra URL earlier in the argument vector.
 - **Prevention:** Keep each patch hunk scoped to the file that owns the expected
   text and verify the anchor in that file before applying.
 
+**Final-panel fixes were committed before the dedup ledger was persisted.**
+
+- **Recovery:** Reconciled the eight-seat panel reports and recorded a durable
+  findings-to-fix ledger before starting the targeted review round.
+- **Prevention:** Persist the dedup ledger to session state before any fix
+  dispatch; treat it as the input to the targeted-round seat union.
+
 **A PR-body edit command was interrupted after a NUL sentinel entered its payload.**
 
 - **Recovery:** Re-read the live PR body, labels, and close references; confirmed
