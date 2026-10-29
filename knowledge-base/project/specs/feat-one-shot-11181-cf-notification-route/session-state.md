@@ -19,7 +19,7 @@
 - Keep the epic open, web-2 excluded at weight 0, and all permission, token, Doppler, infrastructure, and workflow state unchanged.
 
 ### Components Invoked
-Skills: `plan`, `deepen-plan`, `spec-templates`, `work`. Agent: `general` for planning; no nested research agents and no work agents. Planning used `Reviewed-Coverage: sequential-fallback`; work used Tier C sequential execution.
+Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `qa`, `compound`, `compound-capture`. Agents: `general` for planning/compound, full review panel and targeted fix-round seats; no work implementation agents. Planning used `Reviewed-Coverage: sequential-fallback`; work used Tier C sequential execution.
 
 ## Work Phase
 
@@ -83,5 +83,22 @@ Skills: `plan`, `deepen-plan`, `spec-templates`, `work`. Agent: `general` for pl
 - Initial scratch mutation setup omitted the adjacent skill docs; a subsequent setup selected a mutated copy as its baseline. Rebuilt complete scratch trees with a pristine baseline; no product files were changed by these attempts.
 - A scratch-mutation anchor was stale and a status banner used `printf` with a leading `--`; both commands failed before touching repository files and were corrected.
 - The first URL-parser run shifted the mock's positional parameters before D-conf captured argv (176 passed / 1 failed). Moved argv capture before parsing and reran the suite (177/177).
-- Scratch mutation assertions twice expected an outdated failure label; inspection showed each mutant had been killed under the updated diagnostic, and the expected output anchors were corrected.
+- Scratch mutation assertions expected outdated failure labels on multiple runs; inspection showed each mutant had been killed under the updated diagnostic, and the expected output anchors were corrected.
 - One read attempted a nonexistent `project-nope.md` path and returned not-found; this was read-only and no files changed.
+- The related-docs search first used the parent directory of a learning and was corrected to the actual `integration-issues/` path.
+- The plan's initial `knowledge-base/INDEX.md` lookup returned not-found; a repository-scoped glob confirmed the index is absent in this worktree.
+- The first frontmatter check parsed the unquoted ISO date as a YAML date object; the learning now quotes it to satisfy the schema's string type.
+
+## QA Phase
+
+- Plan scenarios are unit-level Given/When/Then cases with no executable `Browser:` or `API verify:` steps; per QA skill, browser/dev-server/API automation was skipped. The focused suite covers them and passed 183/183 on the current test code.
+- The local affected gate remains budget-deferred; the latest capacity probe found a sibling full-gate run, so no competing run was started. CI's required `test` check is authoritative and was queued at head `a77e904fe1` before compound artifacts.
+- Epic #11181 was rechecked as `OPEN`. Infra/workflow diff is empty; permissions, tokens, Doppler, infrastructure, cutover, and web-2 were not changed.
+
+## Compound Phase
+
+- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 17 Session Errors have Prevention lines.
+- Added one domain-scoped sharp-edge to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`; learning `synced_to: [work]` records the route. The related 2026-10-28 route learning and its main-checkout source copy remain byte-identical; the new learning links to it.
+- No project-level constitution/component/README proposals were warranted. The worktree plan explicitly defers plan/spec archival until after ship Phase 6; compound did not archive them.
+- Rule-budget linter returned `[WARN] B_ALWAYS=44390` and exit 0; no AGENTS rules were added. Token-efficiency report skipped because the diff was below its minimum size.
+- The local rule-metrics aggregator warned that 77 malformed incident-log lines were excluded from the aggregate. Its source shows malformed rows are filtered during aggregation; rotation is opt-in and did not run. The metrics cache is not committed.
