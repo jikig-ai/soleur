@@ -14,62 +14,89 @@ brand_survival_threshold: single-user incident
 
 ## Overview
 
-Issue #11562 (child of epic #11556). Measured diagnosis (brainstorm `knowledge-base/project/brainstorms/2026-10-29-required-check-time-brainstorm.md`): leg 1/8 runs 54.9 min because `plugins/soleur/test/ci-pr-affected-replay.test.sh` costs 24.9 min on a PR run while manifest-priced at 1,184 ms (floor — never measured on main); leg 3/8 runs 50.9 min because `scripts/test-all-affected` costs 29.5 min on a PR run vs 337 s main median (5.3× PR-event divergence). Suite-sum ≈ wall-clock on every leg (~1 min/leg setup), so the work is bounding/splitting two suites and re-pricing the manifest — not rebalancing or caching.
+Issue #11562 (child of epic #11556). Measured diagnosis (brainstorm `knowledge-base/project/brainstorms/2026-10-29-required-check-time-brainstorm.md`; artifact legs are 0-based `suite-timings-scripts-{0..7}` = shards `{1..8}/8`): leg 1/8 runs 54.9 min because `plugins/soleur/test/ci-pr-affected-replay.test.sh` costs 24.9 min while manifest-priced at 1,184 ms (floor — never measured on main, **not event-sensitive**: 20.1 min on merge_group); leg 3/8 runs 50.9 min because `scripts/test-all-affected` costs 29.5 min on PR and 18.2 min on merge_group vs 337 s main median — a **non-push-event** divergence (~4–5×), not PR-specific. Suite-sum ≈ wall-clock on every leg (~1 min/leg setup), so the work is bounding/splitting two suites and re-pricing the manifest — not rebalancing or caching.
 
 ## Premise Validation
 
 - #11562 OPEN, #11556 OPEN (epic), #11563/#11564 filed by this brainstorm. No cited blocker stale.
-- `scripts/suite-shard-legs.tsv` (n=8, 668 rows) + `scripts/regenerate-shard-manifest.py` exist and are the live mechanism (ADR-240) — verified by reading ci.yml:1428–1456 + runbook.
-- CORRECTION to a domain-leader claim: `shard-totality-mutations` is **not** in `scripts/required-checks.txt` (only `test` at line 68) — the CLO's "remains required" invariant is moot; totality coverage is preserved as a proof mechanism, not a required-name invariant.
-- Mechanism minimality (0.6b): every mechanism the ask names already exists — `--rows` suite split (#8864/`shard-totality-mutations`), `--runs 5` regen, bounded fixture corpora (standard suite shape). Cut list: no new machinery; scheduled regen deferred to #11564.
+- `scripts/suite-shard-legs.tsv` (n=8, 668 rows) + `scripts/regenerate-shard-manifest.py` exist and are the live mechanism (ADR-240).
+- CORRECTION: `shard-totality-mutations` is **not** in `scripts/required-checks.txt` (only `test` at :68; the job self-describes "NOT a required check", ci.yml:1746–1755) — spec TR1's "stays required" is a stale invariant (spec amended).
+- Plan-review verified the cost driver: `ci-pr-affected-replay.test.sh` is **fully stubbed** (PATH-shim `gh`, recorded fixtures) — no live enumeration exists to cap. Its 24.9 min is ~1,276 assertions / ~469 mutants × Python-proc respawn + `rt_*` fixture repos + `ow_*` real-second soak probes. The fix is row-splitting, not corpus bounding.
+
+## Scope Check (Ask Mapping)
+
+| Verbatim ask (issue #11562 / spec) | Plan item |
+|---|---|
+| Diagnose `test-all-affected` divergence; split or bound | Phase 1 → Phase 3 |
+| Bound/split `ci-pr-affected-replay` | Phase 2 (rows split — corrected mechanism) |
+| Full `--runs 5` regen both manifests | Phase 3 (light only — heavy unchanged, see note) |
+| Fresh p90 baseline + runbook/spec updates | Phase 4 |
+| CLO invariants preserved | Guard Contract below |
+
+## Research Insights / Cut List
+
+- Mechanism minimality: every mechanism named already exists — `--rows` label-split (precedent: `lint-orphan-test-suites` `-a`/`-b`, #8864 — an **in-runner label** split inside a leg, *not* the `shard-totality-mutations` job-matrix shape, #9035), `--runs 5` regen, `--timings-dir` offline pricing, `in_range` row plumbing.
+- Cut: bounded-replay-corpus for the replay suite (already fixture-hermetic — no such cost exists); K-bump path (kept only as a conditional fallback — see Phase 3); heavy-group regen (no suite changes group — pure churn on a second conflict surface); scheduled regen machinery (deferred #11564).
 
 ## Value-Proposition Measurement
 
-`gh api repos/jikig-ai/soleur/actions/runs/40936890587/jobs` + `gh run download <run> -n suite-timings-scripts-N`: legs 1/8,3/8 = 54.9/50.9 min wall, 54.2/50.1 suite-sum; same two suites dominate merge_group run 40936383604 (20.1/18.2 min). Post-surgery expectation: worst leg ≤ ~28 min PR, ≤ ~38 min merge_group.
+`gh api .../actions/runs/40936890587/jobs` + `gh run download -n suite-timings-scripts-N`: legs 1/8,3/8 = 54.9/50.9 min wall ≈ 54.2/50.1 suite-sum; same two suites dominate merge_group 40936383604. Post-surgery expectation: worst leg ≤ ~28 min PR, ≤ ~38 min merge_group.
 
 ## Implementation Phases
 
-### Phase 1 — Diagnose `test-all-affected` PR-vs-main divergence (G1, OQ1)
+### Phase 1 — Diagnose `test-all-affected` (G1, decide bound vs split)
 
-Read `scripts/test-all-affected.test.sh` (4,116 lines) and `scripts/ci-pr-affected-replay.py` to identify which phase is event-sensitive: merge-base derivation, the audit reach (source-closure walk over depth-8 `source` chains), the naming walk, or the live `gh` run enumeration. Compare the suite's own per-phase timing if it emits any; otherwise instrument once locally with a stubbed diff surface. Then choose, per suite:
+The suite is hermetic (fixtures; `ENV_SCRUB` unsets `CI`) but walks the **real repo's** enumerate/diff surface — cost scales with the merged diff. Recipe: wrap `SECONDS` deltas per named row-block (runner honors `TEST_TIMING_LOG`), or run once locally with an emulated merge-base diff and rank. Decision rule: if the divergence lives in live-IO (real-repo walk / `gh` surface) → **bound** (pinned corpus — kills the variance class; the advisory `affected-index-ratchet` job exercises the live path on every PR, ci.yml:417). If it lives in divisible fixture-portable compute → `--rows` split. CTO weighting: bound-first for a variance bug. Record the rationale in the PR body.
 
-- **Split** via the `--rows` precedent (#8864, `shard-totality-mutations` `1-14/15-28/29-42`) when the work is divisible and all arms must run; or
-- **Bound** via a fixture/pinned corpus when a live-repo enumeration is the cost and a recorded corpus covers the same assertions (the advisory `affected-index-ratchet` job + `scripts/followthroughs/` soak probes keep the live path exercised elsewhere).
+### Phase 2 — `--rows` label-split `ci-pr-affected-replay.test.sh` (G2)
 
-### Phase 2 — Bound `ci-pr-affected-replay.test.sh` (G2)
+Split the `row_*`/`rt_*`/`ow_*` arms across **in-runner labels** (the lint-orphan `-a`/`-b` shape — each arm a separately registered suite the LPT packer distributes). Preconditions this must carry:
 
-5,062 lines; floor-priced 1.2 s. Cap live `gh` run enumeration behind a bounded replay corpus (fixtures committed under its `fixtures/` or a `--rows` split if the mutation rows themselves are the cost). Preserve coverage: the suite's own controls (anti-vacuity floor, instrument self-test, "a mutant that crashes is never a kill") must stay green; FR2.
+- `in_range` sequencing — every site dispatched on every leg, only ranged ones execute (so relevance declines stay identical per arm), + `_EXPECTED_EXECUTED` equality — the lint-orphan contract (`scripts/lint-orphan-test-suites.test.sh`).
+- `DECLARED_TOTAL`-style census per suite family — `FLOOR_ASSERTIONS=1276` / `FLOOR_MUTANTS=469` / `OW_MUT_RUN >= OW_SITES` are exact-count floors that fail under naive `--rows`; each must be re-expressed as ranged-sum equality (the `shard-totality-mutations` `_rows_tile_check` / Direction-2 contract).
+- New labels registered via `run_suite`+`skip_suite` pairs **inside the same relevance gate arm** so legs never diverge on declines; verify the totality census covers a battery in `plugins/soleur/test/` (it does — precedents live there) and, if `test-all-affected` splits, that the census reaches `scripts/`.
+- Placement: tabled-at-floor arms deal onto least-loaded legs (could re-pile); price the new arms via `--timings-dir` from a local run *in the same PR* so the manifest lands them honestly.
 
-### Phase 3 — Full manifest regen (G3)
+### Phase 3 — Apply decision + regen (G1/G3)
 
-`python3 scripts/regenerate-shard-manifest.py --runs 5 --write` and `--group heavy --runs 5 --write` — re-prices the 74 floor rows (`watch-*` pinned at 140–150 s). Then `--legs K` dry-run for K ∈ {8, 10, 12} to check whether a K bump is worth the extra per-leg setup + runner-pool pressure (COO: ~60-job shared concurrency). If K changes, same-PR edit to ci.yml matrix + both manifests (generator refuses K≠N). Update stale ci.yml comments (~9.5 min/leg, "collected but not yet consumed") and the runbook topology table.
+- `test-all-affected`: apply Phase-1 outcome (bound → pinned corpus inside the same suite file; split → same Phase-2 preconditions). Fallback if neither reaches ≤ ~28 min: heavy-group relocation or partial split + explicitly-accepted floor pricing.
+- `python3 scripts/regenerate-shard-manifest.py --runs 5 --write` — light group only. **Sequencing:** event-gated suites (the replay suite has never appeared in a main-run timing sample) re-price to `src=floor` on a `--runs` regen — price them via `--timings-dir` from the local/CI runs in this PR, or state the accepted-floor rationale sized to the post-bound cost. Land the regen as the **last isolated commit**; document "re-run `--incremental` after rebase" in runbook + PR body (sibling `--incremental` deltas conflict on durations; never hand-merge).
+- `--legs K` dry-run for K ∈ {8,10,12} as **verification only**: a K bump ships only if post-surgery predicted worst leg still exceeds the bound (COO: ~60-job pool).
+- Delete or justify the stray tracked snapshots `scripts/suite-shard-legs.tsv.n` / `scripts/suite-durations.tsv.n` (stale 2026-10-12 copy, no consumer — conflict/drift trap).
+- Fix stale ci.yml comments (~9.5 min/leg, "collected but not yet consumed") + runbook topology table.
 
-### Phase 4 — Fresh p90 baseline + docs (G4, G5)
+### Phase 4 — Baseline + close-out (G4/G5)
 
-Compute a fresh PR required-check p90 (cohort method: queue vs execution vs ejection-requeue) over the last ~30 green PR runs via the jobs API; record method + numbers in the runbook's Measured history. Update spec/notes.
+- Fresh PR leg-time sample via jobs API (~10–15 recent green PR runs; queue vs execution decomposition); record in runbook Measured history. The full epic-level p90 cohort stays on #11556 — this PR proves its own ACs.
+- Update the epic issue with actuals (spec AC) + comment on #11562.
+- Amend spec TR1 (totality not required — done at plan time).
+- **Regen-ownership checkpoint (CTO):** implementer owns a dated first post-merge check (~2 weeks): `--runs 5` dry-run, diff predicted-vs-incumbent, paste into runbook Measured history — this is also the observation that arms #11564's re-eval trigger.
+- Rollback note: if post-merge coverage regression found, revert the suite edit then `--incremental --write` — never revert TSVs over sibling incremental deltas.
 
 ## Files to Edit
 
-- `scripts/test-all-affected.test.sh` — split or bound per Phase 1 diagnosis
-- `plugins/soleur/test/ci-pr-affected-replay.test.sh` (+ any new `fixtures/` corpus) — Phase 2
-- `scripts/suite-shard-legs.tsv`, `scripts/suite-shard-legs-heavy.tsv`, `scripts/suite-durations.tsv`, `scripts/suite-durations-heavy.tsv` — regenerated (never hand-edited)
-- `.github/workflows/ci.yml` — stale comments; matrix arrays only if Phase 3 K dry-run justifies
-- `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md` — topology + Measured history
+- `scripts/test-all-affected.test.sh` — bound (pinned corpus) or `--rows` per Phase 1
+- `plugins/soleur/test/ci-pr-affected-replay.test.sh` — `--rows` label-split + ranged-floor retrofit
+- `scripts/ci-pr-affected-replay.py` — if bounding caps an enumeration path script-side (Phase 1 decides)
+- `scripts/suite-shard-legs.tsv`, `scripts/suite-durations.tsv` — regenerated only (never hand-edited); delete `.tsv.n` strays or justify
+- `scripts/test-all.sh` — new `run_suite`/`skip_suite` label registrations for split arms (inside same gate arms)
+- `.github/workflows/ci.yml` — stale comments only (no matrix edit unless conditional K fires)
+- `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md` — topology, Measured history, rebase-regen note, ownership checkpoint
 
-## Guard Contract / Invariants (CLO + machinery)
+## Guard Contract / Invariants
 
 - `scripts/required-checks.txt` byte-identical; `test` aggregate name untouched; no leg becomes a required context.
-- Totality coverage preserved: `scripts-shard-totality.test.sh` + 42-row mutation battery stay green; every suite runs on exactly one leg.
-- Manifests stay committed + deterministic (regenerate, never hand-merge).
-- `fetch-depth: 0` preserved on the CLA-dependent shard checkout; `merge_group` synthetic re-reporting preserved; NO concurrency-cancel on `merge_group`.
-- Light↔heavy moves only with toolchain-parity evidence (`scripts-shard-runtime-coverage.test.sh`); `timeout-minutes: 60` unchanged.
+- Coverage preserved: totality guards green; every suite (incl. new split labels) runs on exactly one leg; per-suite floors re-expressed ranged — *bounding keeps labels identical so totality cannot see intra-suite cuts: the suite's own floors/mutation rows are the only net, they must stay non-vacuous.*
+- **TR5:** any new skip path records its classifier rationale inline per the `ci-shard-totality-classify.sh` precedent.
+- Manifests committed + deterministic; FR3 = manifests regenerated **in the same commit** as any matrix/K change (generator refuses K≠N).
+- `fetch-depth: 0` on `test-webplat` (CLA epoch derivation) preserved; `merge_group` synthetic re-reporting preserved; NO concurrency-cancel on `merge_group`; `timeout-minutes: 60` unchanged.
 - No affected-selection (S4 PR C/D) touch — parked behind #10448/#10859.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: leg-balance of test-scripts — max predicted suite time per leg
+  what: leg-balance of test-scripts — max suite time per leg
   cadence: every ci.yml run (suite-timings-* artifacts, if: always())
   alert_target: operator via runbook Measured history; drift probe deferred to #11564
   configured_in: .github/workflows/ci.yml test-scripts upload step
@@ -80,12 +107,15 @@ failure_modes:
   - mode: leg exceeds bound after surgery
     detection: suite-timings artifact sum per leg > threshold
     alert_route: red `test` aggregate; runbook regen instructions
+  - mode: floor-priced split arms land unpriced / re-pile on one leg
+    detection: new labels' src=floor rows vs --timings-dir measured values; leg-spread check
+    alert_route: red leg on the run; --timings-dir re-price
+  - mode: silent 60-min timeout kill (only bound, no annotation — legs at 54.9 were ~5 min from it)
+    detection: job conclusion=killed/cancelled with no suite verdict
+    alert_route: red `test` aggregate; job log tail
   - mode: floor-priced suite silently growing (the ci-pr-affected-replay class)
-    detection: grep `floor` rows in scripts/suite-durations.tsv vs measured reality — automated probe deferred to #11564
-    alert_route: manual regen; probe filed
-  - mode: manifest/matrix n-mismatch
-    detection: runner degrades to positional round-robin with stderr notice
-    alert_route: scripts-shard-manifest.test.sh red
+    detection: grep `floor` rows in scripts/suite-durations.tsv vs measured — automated probe deferred to #11564; interim = the Phase-4 ownership checkpoint
+    alert_route: ownership checkpoint + probe filed
 logs:
   where: suite-timings-*.tsv artifacts + committed scripts/suite-durations{,-heavy}.tsv
   retention: artifacts 14 days; committed tables permanent
@@ -96,29 +126,32 @@ discoverability_test:
 
 ## Alternative Approaches Considered
 
-- Measure-only regen + baseline (deferred suite surgery): leaves ~55-min overshoot — rejected; the manifest cannot price an unmeasurable suite.
-- Move the two suites to `test-scripts-heavy`: relocates the atomic floor into a 3-leg group; heavy legs carry different toolchain/timeout math (TR2) — rejected as sole fix; remains an option if splitting proves unsafe.
-- Scheduled regen machinery now: scope inflation + bot-PR surface — filed as #11564 instead.
-- Job-level path filters on the heavy legs: rejected mechanism per ADR-262 (unreported-vs-skipped semantics in a required context).
+- Bounded replay corpus for the replay suite — **rejected on the facts**: the suite is already fixture-stubbed; cost is mutant respawn volume, not live enumeration.
+- Job-matrix split (shard-totality-mutations shape) — rejected: creates new job names/runner overhead; label-split keeps arms inside the leg packer.
+- Move suites to `test-scripts-heavy` — relocates the atomic floor into a 3-leg group; kept as Phase-3 fallback only.
+- Measure-only regen + baseline — leaves ~55-min overshoot; rejected.
+- Scheduled regen machinery — filed #11564 (probe semantics undesigned; interim = ownership checkpoint).
 
 ## Acceptance Criteria
 
-- Worst `test-scripts` light leg ≤ ~28 min on a PR run (from ~55); merge_group critical path ≤ ~38 min (from ~53).
+- Worst `test-scripts` light leg ≤ ~28 min on this PR's green run; merge_group critical path ≤ ~38 min.
+- **FR1 restored:** no single light-leg *suite* > ~25 min (per-suite bound, not just leg totals).
 - Per-leg `suite-timings-*` spread ≤ ~10 min on a green PR run.
-- `ci-pr-affected-replay.test.sh` and `test-all-affected` bounded or split with controls green (anti-vacuity floor, instrument self-test, mutation rows).
-- Both manifests + durations tables regenerated via `--runs 5`; `grep '^# n='` matches matrix N.
-- `scripts/required-checks.txt` byte-identical; totality tests green; no `merge_group` cancellation introduced.
-- Runbook records fresh p90 baseline + method.
+- Split arms satisfy ranged-floor equality (in_range/DECLARED_TOTAL contract); suite controls green.
+- Both manifests + durations regenerated via `--runs 5` (+ `--timings-dir` for event-gated rows); `# n=` matches matrix N; **same commit** as any K change.
+- `scripts/required-checks.txt` byte-identical; totality tests green; no `merge_group` cancel; spec TR1 amended.
+- Runbook records fresh baseline + ownership checkpoint; epic #11556 updated with actuals.
 
-## Domain Review (carry-forward from brainstorm)
+## Domain Review (carry-forward)
 
-- **Engineering:** machinery exists; gap is drift + atomic floor. Never hand-merge TSVs; sticky-LPT diff-stability means regen conflicts on sibling PRs regenerate rather than merge.
-- **Product:** Lever A cannot reach the epic's ≤20-min goal alone — honest intermediate milestone; #11563 holds the user-facing half.
-- **Legal:** clean; invariants above preserve the Art. 5(2) evidence chain; no doc/register amendments.
-- **Operations:** public repo → runner minutes $0; constraint is the ~60-job concurrency pool (relevant to any K bump).
+- **Engineering:** machinery exists; gap is drift + atomic floor. Never hand-merge TSVs; regen last-commit + rebase re-run note.
+- **Product:** Lever A cannot reach ≤20 min alone — honest intermediate milestone; #11563 holds the user-facing half.
+- **Legal:** clean; invariants preserve the Art. 5(2) evidence chain; corpus-bound suites keep totality-blind coverage only via their own non-vacuous floors (TR5 + ranged-floor contract).
+- **Operations:** runner minutes $0 (public repo); ~60-job concurrency pool is the real constraint on any K bump; corpus freshness = the advisory ratchet job is the guard.
 
 ## Open Questions Resolved at Work Time
 
-1. `test-all-affected` divergence mechanism — Phase 1 diagnosis decides split vs bound.
-2. `ci-pr-affected-replay` bounded-corpus design — how much of the 25-min live enumeration is load-bearing.
-3. K=8 vs larger — decided by Phase 3 `--legs K` dry-run.
+1. `test-all-affected` divergence mechanism — Phase 1 decides bound vs split (bound-first lean).
+2. `ci-pr-affected-replay` arm partition — which rows go to which label (pack via `--timings-dir` pricing).
+3. Regen cadence ownership — interim = Phase-4 checkpoint; automation = #11564.
+4. K optimum — only if post-surgery predicted worst leg still exceeds bound.

@@ -43,13 +43,13 @@ The remaining ~111−54 ≈ 57 overshoot-minutes are mild PR-event inflation acr
 ## Functional Requirements
 
 - **FR1.** After the change, no `test-scripts` light leg carries a suite priced or measured above ~25 min on a PR run.
-- **FR2.** `ci-pr-affected-replay.test.sh` retains its ratchet/battery coverage via the bounded corpus; mutation parity preserved (its own self-tests stay green).
+- **FR2.** `ci-pr-affected-replay.test.sh` retains its ratchet/battery coverage via `--rows` label-split (suite is fixture-stubbed; cost is mutant-respawn volume, not live enumeration — plan-review corrected); ranged-floor equality preserved (its own self-tests stay green).
 - **FR3.** Both `suite-shard-legs{,-heavy}.tsv` and `suite-durations{,-heavy}.tsv` regenerated in the same commit as any K/matrix change (generator refuses K≠N).
 - **FR4.** The PR records the fresh p90 baseline and method in the runbook.
 
 ## Technical Requirements
 
-- **TR1.** CLO invariants: `scripts/required-checks.txt` byte-identical; `shard-totality-mutations` stays required; manifests committed and deterministic; `fetch-depth: 0` preserved on the CLA-dependent shard; `merge_group` synthetic re-reporting preserved; no concurrency-cancel on `merge_group`.
+- **TR1.** CLO invariants: `scripts/required-checks.txt` byte-identical; totality coverage preserved (`shard-totality-mutations` is NOT a required context — verified 2026-10-29, `required-checks.txt:68` carries only `test`); manifests committed and deterministic; `fetch-depth: 0` preserved on the CLA-dependent shard; `merge_group` synthetic re-reporting preserved; no concurrency-cancel on `merge_group`.
 - **TR2.** Light↔heavy leg moves are NOT free (heavy carries no likec4, different timeout math) — any suite relocation must respect the toolchain-parity assertion (`scripts-shard-runtime-coverage.test.sh`).
 - **TR3.** Split suites must keep totality coverage (`scripts-shard-totality.test.sh`, 42-row mutation battery).
 - **TR4.** `timeout-minutes: 60` stays (silent bound; ~6× post-surgery nominal, do-not-lower per ci.yml comment chain).

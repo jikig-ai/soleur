@@ -11,14 +11,14 @@ Spec: `knowledge-base/project/specs/feat-11556-required-check-time/spec.md`
 
 ## Phase 2 — Bound `ci-pr-affected-replay.test.sh` (G2)
 
-- [ ] 2.1 Identify the 25-min cost source inside `plugins/soleur/test/ci-pr-affected-replay.test.sh` (live `gh` run enumeration vs mutation rows)
-- [ ] 2.2 Bound it: committed fixture corpus and/or `--rows` split; keep live enumeration exercised via the advisory `affected-index-ratchet` job
+- [ ] 2.1 Partition the `row_*`/`rt_*`/`ow_*` arms of `plugins/soleur/test/ci-pr-affected-replay.test.sh` across in-runner labels (lint-orphan `-a`/`-b` shape — suite is fixture-stubbed, cost is ~469 mutant respawns)
+- [ ] 2.2 Retrofit ranged floors: `in_range` sequencing + DECLARED_TOTAL-style census so `FLOOR_ASSERTIONS`/`FLOOR_MUTANTS`/`OW_MUT_RUN` become ranged-sum equalities; register new `run_suite`/`skip_suite` labels inside the same gate arm
 - [ ] 2.3 Verify suite controls stay green (anti-vacuity floor, instrument self-test, mutant-crash-is-never-a-kill)
 
 ## Phase 3 — Apply the Phase-1 decision + regen manifests (G1/G3)
 
 - [ ] 3.1 Apply split/bound to `test-all-affected`; keep totality coverage (`scripts-shard-totality.test.sh`, 42-row battery green)
-- [ ] 3.2 `python3 scripts/regenerate-shard-manifest.py --runs 5 --write` (light) and `--group heavy --runs 5 --write`
+- [ ] 3.2 `python3 scripts/regenerate-shard-manifest.py --runs 5 --write` (light only — heavy unchanged); price event-gated rows via `--timings-dir`; land regen as last isolated commit; delete/justify `.tsv.n` strays
 - [ ] 3.3 `--legs K` dry-run for K ∈ {8,10,12}; if K changes, same-commit ci.yml matrix + manifests
 - [ ] 3.4 Fix stale ci.yml comments (~9.5 min/leg, "collected but not yet consumed") + runbook topology table
 
