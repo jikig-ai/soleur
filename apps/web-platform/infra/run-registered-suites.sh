@@ -650,7 +650,11 @@ _SUITE_BOUNDS=(
   # #8609: the Guard 7 mutation rows took the suite from ~360 to 485 assertions. At 180 s it was
   # bound-killed mid-run (rc=124 at 180 s, run 36730312987) while green; measured 385 s serial on a
   # contended local host. 540 s matches the other mutation-heavy suites below and fits the 15-min leg.
-  "apps/web-platform/infra/ci-deploy.test.sh=540"
+  # #11568: widened 540 -> 720. CI wall time at -P 4 across Infra Validation main runs: 393, 466, 471, 493 s
+  # (green; 0.73-0.91 of 540) and a bound-kill at 540 s on shard 2 (runs 40944524196, 40950238076,
+  # 40952456472) once betterstack-alert-structure (~360 s) landed beside it. 493 s was 0.91 of the old
+  # bound; 720 s keeps the worst observed run at 0.68 and still ends inside the 900 s leg timeout.
+  "apps/web-platform/infra/ci-deploy.test.sh=720"
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
