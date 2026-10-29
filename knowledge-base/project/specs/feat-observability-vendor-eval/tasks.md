@@ -10,22 +10,22 @@ status: pending
 ## Phase 1 — Enumerate
 
 - [x] 1.1 Static live-vs-declared diff done → `monitor-prune-inventory.md` (67 declared, ~all have producers; only `cron-egress-resolve` unmatched — verify live slug before any delete). **Remaining: live-API pass** — `sentry-monitors-audit.sh` + `reconcile-live-heartbeats.ts` with `SENTRY_IAC_AUTH_TOKEN`
-- [ ] 1.2 Resolve `needs-verdict` rows using #6591 catch-value evidence (needs Sentry API incident history); dead-man/self-watch monitors = KEEP — KEEP candidates shortlisted in inventory
+- [x] 1.2 Resolved via live Sentry API pass — audit + 90d `/stats/` per monitor; verdict: 24 KEEP / 43 PRUNE with per-row surviving-signal citations in `monitor-prune-inventory.md`
 - [x] 1.3 Write `alert-ingest-map.md` — all 19 alerts read journald on source 2457081; **none consume host_metrics** → safe aggressive trim
 
 ## Phase 2 — Sentry prune (#6590)
 
-- [ ] 2.1 Amend `ADR-031-*` (monitor-per-cron → monitored-where-silence-undetectable)
-- [ ] 2.2 Delete pruned `sentry_cron_monitor` blocks in `infra/sentry/cron-monitors.tf`
-- [ ] 2.3 Apply via `apply-sentry-infra.yml`; verify destroys land in plan output pre-merge
+- [x] 2.1 ADR-031 amended (Amendment 2026-10-29 — monitor-per-cron → monitored-where-silence-undetectable, new-cron opt-in)
+- [ ] 2.2 **PR-B (follow-up):** delete 43 `sentry_cron_monitor` blocks + unrouted entries + README-listed removal edits (`NON_INNGEST_MONITORS`, `[ack-destroy]` trailer, count citations). PR-A unbinds via `cron_monitor_alert_unrouted` (two-PR removal rule)
+- [ ] 2.3 PR-B: apply via `apply-sentry-infra.yml`; verify destroys land in plan output pre-merge
 
 ## Phase 3 — Better Stack ingest cut (#7577)
 
-- [ ] 3.1 `vector.toml` compaction transform for multi-line `app_container_journald` (join BEFORE `pii_scrub_*` ordering preserved)
-- [ ] 3.2 `host_metrics` interval raise + family filter to alert-map consumers only
-- [ ] 3.3 `vector validate` in CI; apply via infra path
+- [x] 3.1 `transforms.app_container_compaction` added (reduce, group_by SYSLOG_IDENTIFIER+CONTAINER_NAME, concat_newline) — joins before `pii_scrub_drop_userdata` inputs
+- [x] 3.2 host_metrics 300s→900s, collectors → [memory, filesystem] (zero alert consumers per alert-ingest-map)
+- [ ] 3.3 vector.toml deploys via `terraform_data` file-provisioner + reload on web-1 apply
 - [ ] 3.4 24–48 h `betterstack-query.sh` row-rate verification
-- [ ] 3.5 Verify ~$68 plan name/tier; downgrade if fits; update `expenses.md:49-50`
+- [x] 3.5 expenses.md updated w/ Sentry post-prune projection (~$50.94) + ingest-cut note; Better Stack tier verify remains per existing verify_by=2026-11-12 marker (no usage/billing API — measured 404s today)
 
 ## Phase 4 — Verify and record
 

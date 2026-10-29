@@ -290,6 +290,32 @@ if parse_err != null {
 }
 '''
 
+# --------------- Compaction: multi-line app container logs (#7577) ----------------
+# The web-platform container pretty-prints object literals, so ONE logical event
+# bills as N ingest rows (measured 2026-08-14: ~80k of ~135k rows/day, ~75%).
+# This reduce joins continuation lines back into one event BEFORE the PII
+# pipeline, so pii_scrub_* still sees complete messages and the 19
+# logtail_exploration_alert predicates still match per-emitter rows.
+#
+# Group boundary: opens on a line that begins an object ({ not closed on the
+# same line — a complete single-line pino JSON row fails the second half and
+# passes through), closes on a line beginning } (the closer may carry trailing
+# text, e.g. "} sweep starting"). group_by pins the join to one emitter so a
+# group can never span SYSLOG_IDENTIFIER boundaries. expire_after_ms bounds
+# both memory and the worst case of an unclosed group (a crash mid-write).
+[transforms.app_container_compaction]
+type = "reduce"
+inputs = ["app_container_warn_filter"]
+group_by = ["SYSLOG_IDENTIFIER", "CONTAINER_NAME"]
+expire_after_ms = 5000
+starts_when = '''
+match(string(.message) ?? "", r'^\s*\{') && !match(string(.message) ?? "", r'\}\s*$')
+'''
+ends_when = '''
+match(string(.message) ?? "", r'^\s*\}')
+'''
+merge_strategies.message = "concat_newline"
+
 # ---------------- Source 3b: egress gateway journald (#9534) ----------------
 # soleur-egress-gw runs --log-driver journald; its stdout is the JSON decision
 # log (soleur_json logformat: workspace attribution + requested host + resolved
@@ -567,10 +593,15 @@ batch_size = 16
 # with no diagnostic signal.
 # Decision record: knowledge-base/operations/expenses.md (Better Stack row);
 # verdict tracker: #5110; strategic re-decision tracked in #4296.
+# 2026-10-29 (#7577): scraped down to ["memory","filesystem"] at 900s —
+# the alert-ingest map (specs/feat-observability-vendor-eval/alert-ingest-map.md)
+# proves none of the 19 logtail_exploration_alert rules consume host_metrics;
+# filesystem capacity is the dashboard-convenience floor and is also covered by
+# disk-monitor.sh + the Better Stack journald pagers. cpu/disk/load dropped.
 [sources.host_metrics]
 type = "host_metrics"
-scrape_interval_secs = 300
-collectors = ["cpu", "memory", "disk", "filesystem", "load"]
+scrape_interval_secs = 900
+collectors = ["memory", "filesystem"]
 
 [sources.host_metrics.disk]
 devices.excludes = ["loop*", "dm-*"]
@@ -644,7 +675,7 @@ type = "remap"
 # app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
 # the app container's pino lines traverse the full 3-stage redaction (Art-9 key
 # drop → userId HMAC → string backstop) like every other source.
-inputs = ["inngest_terminator_filter", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
+inputs = ["inngest_terminator_filter", "system_journald", "app_container_compaction", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)
