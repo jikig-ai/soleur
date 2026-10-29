@@ -16,18 +16,19 @@
 export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired", "consumed"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
-/** Forward-only transitions; MUST equal the `(OLD.status, NEW.status) NOT IN (...)` list in the migration trigger. */
+/**
+ * Allowed transitions: forward-only plus the Owner revoke (`approved -> rejected`, an unconsumed approval withdrawn).
+ * MUST equal the `(OLD.status, NEW.status) NOT IN (...)` list in the migration trigger; the parity test
+ * (test/approval/migration-180-approval-request.test.ts) parses the SQL and compares.
+ */
 export const APPROVAL_TRANSITIONS: ReadonlyArray<readonly [ApprovalStatus, ApprovalStatus]> = [
   ["pending", "approved"],
   ["pending", "rejected"],
   ["pending", "expired"],
   ["approved", "consumed"],
   ["approved", "expired"],
+  ["approved", "rejected"],
 ];
-
-export function canTransition(from: ApprovalStatus, to: ApprovalStatus): boolean {
-  return APPROVAL_TRANSITIONS.some(([a, b]) => a === from && b === to);
-}
 
 export interface RpcResult {
   data: unknown;
@@ -63,6 +64,9 @@ export interface ApprovalRow {
   decided_by: string | null;
   consumed_at: string | null;
   expired_at: string | null;
+  /** Set once with the Owner revoke (`approved -> rejected`); null otherwise. */
+  revoked_at: string | null;
+  revoked_by: string | null;
   unanswered_flagged_at: string | null;
   created_at: string;
   canonical_action: unknown | null;
@@ -93,7 +97,7 @@ export interface CreateApprovalParams {
   toolName: string;
   actionSha256: string;
   canonicalAction: unknown;
-  /** Seconds until the request expires; the database clamps it (default 24 h). */
+  /** Seconds until the request expires; the database rejects an out-of-range value with 22023 (default 24 h). */
   ttlSeconds?: number;
 }
 
@@ -103,6 +107,27 @@ export interface CreateApprovalResult {
   created: boolean;
   /** Requests for this (conversation, action hash) across all statuses; the card header reads from 2 onward. */
   requestCount: number;
+  /**
+   * Whether to push/email the Owner: true only for a NEW request when no other pending request of the workspace was
+   * created in the last 10 minutes (coalescing). The card and inbox row exist either way.
+   */
+  notify: boolean;
+  /** ISO timestamp the request expires at (so notifications need no table read). */
+  expiresAt: string;
+}
+
+/** SQLSTATEs `create_approval_request` raises when a pending cap is hit: 5 per conversation, 20 per workspace. */
+export const APPROVAL_CAP_CODES = { AP429: "conversation", AP430: "workspace" } as const;
+export type ApprovalCapScope = (typeof APPROVAL_CAP_CODES)[keyof typeof APPROVAL_CAP_CODES];
+
+/** A pending cap was reached (`code` is AP429 for the conversation cap, AP430 for the workspace cap). */
+export class ApprovalCapReachedError extends ApprovalServiceError {
+  readonly scope: ApprovalCapScope;
+  constructor(fn: string, code: keyof typeof APPROVAL_CAP_CODES) {
+    super(fn, code);
+    this.name = "ApprovalCapReachedError";
+    this.scope = APPROVAL_CAP_CODES[code];
+  }
 }
 
 export async function createApprovalRequest(client: ApprovalRpcClient, p: CreateApprovalParams): Promise<CreateApprovalResult> {
@@ -115,14 +140,32 @@ export async function createApprovalRequest(client: ApprovalRpcClient, p: Create
     p_canonical_action: p.canonicalAction,
   };
   if (p.ttlSeconds !== undefined) args.p_ttl_seconds = p.ttlSeconds;
-  const data = await call(client, "create_approval_request", args);
-  if (!isObj(data) || typeof data.created !== "boolean" || typeof data.request_count !== "number") {
+  let data: unknown;
+  try {
+    data = await call(client, "create_approval_request", args);
+  } catch (e) {
+    const code = e instanceof ApprovalServiceError ? e.code : undefined;
+    if (code === "AP429" || code === "AP430") throw new ApprovalCapReachedError("create_approval_request", code);
+    throw e;
+  }
+  // notify / expires_at are additive fields: an absent one (a database that predates them) degrades safely
+  // (notify true = the Owner is nudged; expiresAt from the row), a PRESENT one of the wrong type is a bad payload.
+  if (
+    !isObj(data) ||
+    typeof data.created !== "boolean" ||
+    typeof data.request_count !== "number" ||
+    (data.notify !== undefined && typeof data.notify !== "boolean") ||
+    (data.expires_at !== undefined && typeof data.expires_at !== "string")
+  ) {
     throw new ApprovalServiceError("create_approval_request", "bad_payload");
   }
+  const approval = parseApprovalRow("create_approval_request", data.approval);
   return {
-    approval: parseApprovalRow("create_approval_request", data.approval),
+    approval,
     created: data.created,
     requestCount: data.request_count,
+    notify: data.notify ?? true,
+    expiresAt: data.expires_at ?? approval.expires_at,
   };
 }
 
@@ -133,6 +176,8 @@ export type ConsumeRejectReason =
   | "hash_mismatch"
   | "wrong_conversation"
   | "expired"
+  | "decider_not_owner"
+  | "requester_not_member"
   | "not_approved"
   | "already_consumed"
   | "rpc_error"
@@ -168,9 +213,11 @@ export async function consumeApproval(
 
 export type SubmitResult =
   | { kind: "released"; approvalId: string; requestCount: number }
-  | { kind: "wait"; approval: ApprovalRow; created: boolean; requestCount: number }
+  | { kind: "wait"; approval: ApprovalRow; created: boolean; requestCount: number; notify: boolean; expiresAt: string }
   | { kind: "consume_rejected"; approvalId: string; reason: string }
-  | { kind: "not_waitable"; approval: ApprovalRow; requestCount: number };
+  | { kind: "not_waitable"; approval: ApprovalRow; requestCount: number }
+  /** A pending cap was hit; nothing was saved. `scope` says which cap (5 per conversation, 20 per workspace). */
+  | { kind: "cap_reached"; scope: ApprovalCapScope };
 
 /**
  * Create-or-find the live request and decide what the gate does next. A live request that is ALREADY approved
@@ -178,7 +225,13 @@ export type SubmitResult =
  * consumed at once: no card, no wait. A pending one goes to the wait loop. Anything else is not waitable.
  */
 export async function submitApprovalRequest(client: ApprovalRpcClient, p: CreateApprovalParams): Promise<SubmitResult> {
-  const r = await createApprovalRequest(client, p);
+  let r: CreateApprovalResult;
+  try {
+    r = await createApprovalRequest(client, p);
+  } catch (e) {
+    if (e instanceof ApprovalCapReachedError) return { kind: "cap_reached", scope: e.scope };
+    throw e;
+  }
   if (r.approval.status === "approved") {
     const c = await consumeApproval(client, { id: r.approval.id, hash: p.actionSha256, conversationId: p.conversationId });
     return c.consumed
@@ -186,13 +239,21 @@ export async function submitApprovalRequest(client: ApprovalRpcClient, p: Create
       : { kind: "consume_rejected", approvalId: r.approval.id, reason: c.reason };
   }
   if (r.approval.status === "pending") {
-    return { kind: "wait", approval: r.approval, created: r.created, requestCount: r.requestCount };
+    return {
+      kind: "wait",
+      approval: r.approval,
+      created: r.created,
+      requestCount: r.requestCount,
+      notify: r.notify,
+      expiresAt: r.expiresAt,
+    };
   }
   return { kind: "not_waitable", approval: r.approval, requestCount: r.requestCount };
 }
 
 // ---------------------------------------------------------------------------
 
+/** The scalar projection `get_approval_status` returns: no action text, no user ids. */
 export interface ApprovalStatusRow {
   id: string;
   status: ApprovalStatus;
@@ -200,6 +261,9 @@ export interface ApprovalStatusRow {
   decided_at: string | null;
   consumed_at: string | null;
   expired_at: string | null;
+  revoked_at: string | null;
+  unanswered_flagged_at: string | null;
+  created_at: string;
   tool_name: string;
   action_sha256: string;
   conversation_id: string;
@@ -209,7 +273,10 @@ export interface ApprovalStatusRow {
 export async function getApprovalStatus(client: ApprovalRpcClient, id: string): Promise<ApprovalStatusRow | null> {
   const data = await call(client, "get_approval_status", { p_id: id });
   if (data === null || data === undefined) return null;
-  return parseApprovalRow("get_approval_status", data) as unknown as ApprovalStatusRow;
+  const row = parseApprovalRow("get_approval_status", data);
+  // The RPC never returns the action text or the user ids: drop them even if a future change leaked one.
+  const { canonical_action: _a, requested_by_user_id: _r, decided_by: _d, revoked_by: _v, ...status } = row;
+  return status as unknown as ApprovalStatusRow;
 }
 
 export interface LiveApproval {
@@ -260,11 +327,4 @@ export async function sweepApprovals(client: ApprovalRpcClient): Promise<SweepRe
     })),
     scrubbed: data.scrubbed,
   };
-}
-
-/** Art. 17: anonymise the user's approval rows (service role). Returns the number of rows touched. */
-export async function anonymiseApprovalRequests(client: ApprovalRpcClient, userId: string): Promise<number> {
-  const data = await call(client, "anonymise_approval_request", { p_user_id: userId });
-  if (typeof data !== "number") throw new ApprovalServiceError("anonymise_approval_request", "bad_payload");
-  return data;
 }

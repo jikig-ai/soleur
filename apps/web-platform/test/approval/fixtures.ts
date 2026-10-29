@@ -174,3 +174,7 @@ export function mutateField(tool: string, field: string): Sample {
   else throw new Error(`mutateField: unsupported field ${field}`);
   return s;
 }
+
+// The approval action hash is an HMAC keyed from SENTRY_USERID_PEPPER (canonical.ts; an unset pepper fails closed).
+// Suites that hash fill a fixed, non-secret test pepper here; a suite that needs it unset deletes it itself.
+process.env.SENTRY_USERID_PEPPER ||= "vitest-approval-pepper-not-a-secret";

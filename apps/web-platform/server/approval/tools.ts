@@ -8,7 +8,7 @@
  *
  * Adding a gated tool: follow the checklist in ADR-307 § Adding a gated tool (it owns it; do not restate it here).
  *
- * This module is dependency-free on purpose: the migration shape test, the canonicalizer and the (later)
+ * This module is dependency-free on purpose: the migration shape test, the canonicalizer and the
  * permission callback all import it.
  */
 

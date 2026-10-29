@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApprovalCanonicalError,
   CANONICAL_VERSION,
   canonicalJson,
   canonicalizeAction,
   computeActionHash,
+  deriveApprovalHashKey,
+  handlerArgsKey,
+  hmacActionText,
 } from "@/server/approval/canonical";
 import {
   CONVERSATION_ID,
@@ -205,25 +208,72 @@ describe("full-input fidelity (the preview was lossy; the canonical object is no
   });
 });
 
-describe("computeActionHash", () => {
-  it("is a 64-char lowercase hex sha256 of the canonical JSON of {tool_name, workspace_id, conversation_id, action}", async () => {
-    const { createHash } = await import("node:crypto");
+describe("computeActionHash (HMAC-SHA256, keyed from SENTRY_USERID_PEPPER)", () => {
+  // Known-answer vectors computed OUTSIDE this codebase (python hmac/hashlib over hand-written literals), so a
+  // change to canonicalJson, the key derivation or the digest cannot move the expected value with it.
+  //   key  = HMAC-SHA256(pepper, "soleur:approval-request:action-sha256:v1")
+  //   hash = HMAC-SHA256(key, text)
+  const KAT_PEPPER = "kat-pepper-0123456789abcdef";
+  const KAT_KEY = "e0b7ffa054210ee9f4d17543d0a24981456a5c637c92134fedec60c9d59fe560";
+  const KAT_TEXT_HASH = "f30c86e4e7f037722726c0981bc86496c43605f7bd8983cd0d41ed32eeadeabe"; // over '{"a":1}'
+  const KAT_ACTION_TEXT =
+    '{"action":{"fields":{"documentPath":"knowledge-base/pricing/q4.md"},"tool":"mcp__soleur_platform__kb_share_create","v":1},' +
+    '"conversation_id":"00000000-0000-4000-8000-000000000003","tool_name":"mcp__soleur_platform__kb_share_create",' +
+    '"workspace_id":"00000000-0000-4000-8000-000000000001"}';
+  const KAT_ACTION_HASH = "974b85df97f307b40371a1b15cc439ea37368753fd3fc12360d25d714faacc1a";
+  const KAT_UNKEYED_SHA256 = "7d9d2ef31a3d1d1a678a991c9e112fddcf04a15c29596b9259297c96274e7579";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("derives the key by domain separation from the pepper (known answer)", () => {
+    expect(deriveApprovalHashKey(KAT_PEPPER).toString("hex")).toBe(KAT_KEY);
+    expect(hmacActionText('{"a":1}', KAT_PEPPER)).toBe(KAT_TEXT_HASH);
+  });
+
+  it("hashes a real canonicalised action to the externally computed HMAC, and NOT to the unkeyed sha256", () => {
+    vi.stubEnv("SENTRY_USERID_PEPPER", KAT_PEPPER);
     const s = SAMPLES[TOOLS.kbShareCreate];
     const action = canonicalizeAction(TOOLS.kbShareCreate, s.input, s.server);
+    // The text the SUT hashes is the hand-written literal (so canonicalJson cannot drift unnoticed).
+    expect(canonicalJson({ tool_name: TOOLS.kbShareCreate, workspace_id: WORKSPACE_ID, conversation_id: CONVERSATION_ID, action })).toBe(KAT_ACTION_TEXT);
     const h = computeActionHash({ toolName: TOOLS.kbShareCreate, workspaceId: WORKSPACE_ID, conversationId: CONVERSATION_ID, action });
     expect(h).toMatch(/^[0-9a-f]{64}$/);
-    const expected = createHash("sha256")
-      .update(
-        canonicalJson({
-          tool_name: TOOLS.kbShareCreate,
-          workspace_id: WORKSPACE_ID,
-          conversation_id: CONVERSATION_ID,
-          action,
-        }),
-        "utf8",
-      )
-      .digest("hex");
-    expect(h).toBe(expected);
+    expect(h).toBe(KAT_ACTION_HASH);
+    expect(h).not.toBe(KAT_UNKEYED_SHA256);
+  });
+
+  it("a different pepper yields a different hash (the secret is part of the fingerprint)", () => {
+    const s = SAMPLES[TOOLS.kbShareCreate];
+    const action = canonicalizeAction(TOOLS.kbShareCreate, s.input, s.server);
+    const args = { toolName: TOOLS.kbShareCreate, workspaceId: WORKSPACE_ID, conversationId: CONVERSATION_ID, action };
+    vi.stubEnv("SENTRY_USERID_PEPPER", KAT_PEPPER);
+    const a = computeActionHash(args);
+    vi.stubEnv("SENTRY_USERID_PEPPER", `${KAT_PEPPER}-rotated`);
+    expect(computeActionHash(args)).not.toBe(a);
+  });
+
+  it("FAILS CLOSED when the pepper is unset or empty: key_unavailable, never an unkeyed hash", () => {
+    const s = SAMPLES[TOOLS.kbShareCreate];
+    const action = canonicalizeAction(TOOLS.kbShareCreate, s.input, s.server);
+    const args = { toolName: TOOLS.kbShareCreate, workspaceId: WORKSPACE_ID, conversationId: CONVERSATION_ID, action };
+    for (const v of [undefined, ""]) {
+      if (v === undefined) vi.stubEnv("SENTRY_USERID_PEPPER", undefined as unknown as string);
+      else vi.stubEnv("SENTRY_USERID_PEPPER", v);
+      if (v === undefined) delete process.env.SENTRY_USERID_PEPPER;
+      let err: unknown;
+      try {
+        computeActionHash(args);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ApprovalCanonicalError);
+      expect((err as ApprovalCanonicalError).code).toBe("key_unavailable");
+      expect((err as Error).message).not.toContain(KAT_UNKEYED_SHA256);
+    }
+    expect(() => deriveApprovalHashKey("")).toThrow(ApprovalCanonicalError);
+    expect(() => hmacActionText("x", "")).toThrow(ApprovalCanonicalError);
   });
 
   it("rejects a tool name that is not the action's tool", () => {
@@ -240,5 +290,21 @@ describe("computeActionHash", () => {
     expect(() => computeActionHash({ toolName: TOOLS.kbShareCreate, workspaceId: "ws-1", conversationId: CONVERSATION_ID, action })).toThrow(
       ApprovalCanonicalError,
     );
+  });
+});
+
+describe("handlerArgsKey (execution-grant key a tool handler can recompute)", () => {
+  it("applies the same zod defaults as the gate and carries no server-derived field", () => {
+    const s = SAMPLES[TOOLS.pushBranch];
+    const withDefault = handlerArgsKey(TOOLS.pushBranch, { branch: "feat/x" });
+    expect(withDefault).toBe('{"branch":"feat/x","force":false}');
+    expect(handlerArgsKey(TOOLS.pushBranch, { branch: "feat/x", force: false })).toBe(withDefault);
+    expect(handlerArgsKey(TOOLS.pushBranch, s.input)).not.toContain("headSha");
+  });
+
+  it("does not throw on optional keys that are undefined, and rejects invalid input / unsupported tools", () => {
+    expect(handlerArgsKey(TOOLS.createPr, { head: "h", title: "t", body: undefined })).toBe('{"base":"main","head":"h","title":"t"}');
+    expect(() => handlerArgsKey(TOOLS.pushBranch, { branch: "" })).toThrow(ApprovalCanonicalError);
+    expect(() => handlerArgsKey("mcp__soleur_platform__create_issue", {})).toThrow(ApprovalCanonicalError);
   });
 });

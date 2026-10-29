@@ -84,7 +84,7 @@ SELECT 'jti_deny_policies_count_28',
    AND policyname LIKE '%_jti_not_denied'
    AND permissive = 'RESTRICTIVE'
 UNION ALL
--- (8-33) Per-table presence assertions (one row per tenant table; 27 total)
+-- Per-table presence assertions (one row per tenant table; 28 total, one per jti_not_denied policy counted in (7))
 SELECT 'conversations_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='conversations'

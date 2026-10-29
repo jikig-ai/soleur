@@ -18,10 +18,16 @@
  *   - Invalid input throws `ApprovalCanonicalError` with a static message that never echoes the input (the caller
  *     denies the tool call: fail closed).
  *
- * `action_sha256 = sha256(canonicalJson({tool_name, workspace_id, conversation_id, action}))`.
+ * `action_sha256 = HMAC-SHA256(key, canonicalJson({tool_name, workspace_id, conversation_id, action}))` with
+ * `key = HMAC-SHA256(SENTRY_USERID_PEPPER, "soleur:approval-request:action-sha256:v1")` (a domain-separated derivation
+ * from the pepper that already exists for pseudonymising user ids: no new secret). The hash is a keyed fingerprint:
+ * a reader of the database alone cannot recompute it or confirm a guessed action against it. It stays pseudonymous
+ * (not anonymous) while the secret exists. An unset or empty pepper FAILS CLOSED (`key_unavailable`): there is never
+ * a fallback to an unkeyed hash. The pepper must be stable for the life of a live row (at most 48 h); a rotation makes
+ * live approvals fail closed as `hash_mismatch` ("needs a new approval").
  */
 
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { z } from "zod/v4";
 import { APPROVAL_REQUIRED_TOOLS, type ApprovalToolName, isApprovalRequiredTool } from "./tools";
 
@@ -35,7 +41,13 @@ export interface CanonicalAction {
   fields: { [k: string]: CanonicalValue };
 }
 
-export type ApprovalCanonicalCode = "unsupported_tool" | "invalid_input" | "invalid_server_derived" | "bad_hash_input" | "not_canonical";
+export type ApprovalCanonicalCode =
+  | "unsupported_tool"
+  | "invalid_input"
+  | "invalid_server_derived"
+  | "bad_hash_input"
+  | "not_canonical"
+  | "key_unavailable";
 
 export class ApprovalCanonicalError extends Error {
   readonly code: ApprovalCanonicalCode;
@@ -195,6 +207,31 @@ export function canonicalizeAction(tool: string, input: unknown, serverDerived?:
   return { v: CANONICAL_VERSION, tool, fields: sorted };
 }
 
+/**
+ * The arguments key a tool handler can recompute from the zod-parsed args it receives: `canonicalJson` of the tool's
+ * model-supplied `input` shape, with the same zod defaults applied as at gate time. Used by the per-session
+ * execution-grant side channel (#4672 R1); contains no server-derived field.
+ */
+export function handlerArgsKey(tool: string, input: unknown): string {
+  if (!isApprovalRequiredTool(tool)) throw new ApprovalCanonicalError("unsupported_tool");
+  const parsed = SPECS[tool].input.safeParse(input);
+  if (!parsed.success) throw new ApprovalCanonicalError("invalid_input");
+  return canonicalJson(dropUndefined(parsed.data as Record<string, unknown>));
+}
+
+const HASH_KEY_INFO = "soleur:approval-request:action-sha256:v1";
+
+/** Domain-separated HMAC key derived from the pepper. Read at call time; unset/empty fails closed. */
+export function deriveApprovalHashKey(pepper: string | undefined = process.env.SENTRY_USERID_PEPPER): Buffer {
+  if (!pepper) throw new ApprovalCanonicalError("key_unavailable");
+  return createHmac("sha256", pepper).update(HASH_KEY_INFO, "utf8").digest();
+}
+
+/** HMAC-SHA256 hex of the canonical text under the derived key (exported for the known-answer test). */
+export function hmacActionText(text: string, pepper?: string): string {
+  return createHmac("sha256", deriveApprovalHashKey(pepper)).update(text, "utf8").digest("hex");
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ActionHashInput {
@@ -217,5 +254,5 @@ export function computeActionHash(input: ActionHashInput): string {
     conversation_id: input.conversationId,
     action: input.action,
   });
-  return createHash("sha256").update(text, "utf8").digest("hex");
+  return hmacActionText(text);
 }

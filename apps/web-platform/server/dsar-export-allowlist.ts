@@ -580,14 +580,15 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
   // additionalOwnerFields [decided_by]) and is a recorded condition of
   // enabling the flag outside the Jikigai canary (compliance-posture.md,
   // Active Items, "Approval queue: public wording and enabling gate"). The
-  // manual Art. 15 route is <legal@jikigai.com>; the four legal documents say
-  // so (Privacy Policy 4.15, GDPR Policy 3.17/5.3, DPD 2.3(ah)/5.3).
+  // manual Art. 15 route is <legal@jikigai.com>; the three published legal
+  // documents say so (Privacy Policy 4.15, GDPR Policy 3.17/5.3, DPD 2.3(ah)/5.3).
   approval_request:
     "Migration 180 table (#4672), dark behind the approval-queue flag (empty " +
     "until it is switched on). Art. 17: ON DELETE SET NULL on " +
-    "requested_by_user_id/decided_by plus anonymise_approval_request (nulls " +
-    "the user columns and the action text), called from account-delete.ts " +
-    "(step 5.16). Holds user ids and the Owner-only action text (scrubbed 30 " +
+    "requested_by_user_id/decided_by/revoked_by plus anonymise_approval_request " +
+    "(nulls the user columns and the action text and, when the user's personal " +
+    "workspace has no member left, deletes that workspace's approval rows), " +
+    "called from account-delete.ts (step 5.16). Holds user ids and the Owner-only action text (scrubbed 30 " +
     "days after the terminal state). Excluded from the self-serve export " +
     "because service_role has no table privilege on it (RPC-only), so a " +
     "worker read would fail every export; manual Art. 15 route at " +

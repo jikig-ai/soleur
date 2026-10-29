@@ -89,7 +89,8 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   // non-owner reading another founder's contact PII must be denied (42501).
   crm_get_contact_detail: (c) => `select crm_get_contact_detail('${c.contactA}')`,
   // Owner-only decision (mig 180, #4672) on a REAL pending request of workspace A: tenant B is not an Owner of wsA,
-  // so the in-body owner check raises 42501 (the same error as for a missing id: no existence oracle).
+  // so the in-body owner check raises 42501 (the same error as for a missing id: no existence oracle). The check runs
+  // before the row lock and before any status branch, so it also guards the Owner revoke (deny on an approved row).
   decide_approval: (c) => `select decide_approval('${c.approvalA}','approve')`,
   set_inbox_item_state: (c) => `select set_inbox_item_state('${c.inboxA}','archived')`,
   // workspace-OWNER-gated (is_email_triage_workspace_owner, mig 111) on a REAL

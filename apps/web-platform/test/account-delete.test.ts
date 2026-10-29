@@ -945,6 +945,14 @@ describe("deleteAccount", () => {
     const authIdx = callOrder.indexOf("auth.deleteUser");
     expect(anonIdx).toBeGreaterThanOrEqual(0);
     expect(anonIdx).toBeLessThan(authIdx);
+    // The RPC deletes a personal workspace's rows only when no member is left, so it MUST run after the membership
+    // removal (step 5.7) and after the egress-rollup erase (step 5.15), which use the same memberless-workspace rule.
+    const membersIdx = callOrder.indexOf("rpc:anonymise_workspace_members");
+    const rollupIdx = callOrder.indexOf("rpc:erase_egress_audit_rollup");
+    expect(membersIdx).toBeGreaterThanOrEqual(0);
+    expect(membersIdx).toBeLessThan(anonIdx);
+    expect(rollupIdx).toBeGreaterThanOrEqual(0);
+    expect(rollupIdx).toBeLessThan(anonIdx);
   });
 
   test("Art. 17 — anonymise_approval_request failure aborts cascade BEFORE auth-delete (#4672)", async () => {

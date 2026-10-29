@@ -68,3 +68,17 @@ describe("Guard 2 census: every gated tool is required or exempt-with-a-reason",
     expect(classifyGatedTools(map, ["a", "b"], { gone: "reason one here" }).staleExempt).toEqual(["gone"]);
   });
 });
+
+describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_ALLOWLIST (CTO ruling 9(d))", () => {
+  // The cc runner has no approval wiring: a promoted approval tool would run on the legacy in-memory gate and
+  // silently skip the queue. readCcMcpAllowlist must therefore REFUSE every APPROVAL_REQUIRED_TOOLS short name.
+  // NOTE: requires the matching guard in server/cc-dispatcher.ts (not part of the migration/service unit).
+  for (const fqn of APPROVAL_REQUIRED_TOOLS) {
+    const short = fqn.replace("mcp__soleur_platform__", "");
+    it(`CC_MCP_ALLOWLIST naming ${short} throws (static message, no env echo beyond the short name)`, async () => {
+      const { readCcMcpAllowlist } = await import("@/server/cc-dispatcher");
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: short })).toThrow(/approval/i);
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `create_issue, ${short}` })).toThrow(/approval/i);
+    });
+  }
+});
