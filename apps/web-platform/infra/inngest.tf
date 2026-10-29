@@ -89,7 +89,7 @@ resource "random_id" "inngest_manual_trigger_secret_dev" {
 # which updates the dedicated secret in place) and then `-replace` on the app doppler_secret
 # (phase 2; ignore_changes applies to updates, not to create, so the replaced secret is created
 # with the new value), then a host restart and a fleet redeploy — the owner-authorised
-# .github/workflows/inngest-key-rotate.yml route, ADR-304. The cutover workflow op=arm G3.5 parity
+# .github/workflows/inngest-key-rotate.yml route, ADR-307. The cutover workflow op=arm G3.5 parity
 # gate still refuses to arm on divergence, and the copies legitimately differ between the two
 # phases. See the runbook §2.4 (key-reconcile) + ADR-100 §4 Amendment. The isolation-sensitive
 # secrets that STAY separate per host are INNGEST_POSTGRES_URI + SUPABASE_SERVICE_ROLE — never
@@ -333,7 +333,7 @@ resource "github_actions_secret" "supabase_access_token" {
 # update. Replace the doppler_secret too (`-replace` on a create applies the new value).
 # Per secret:
 #   - INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY (prd): derived from the DEDICATED random_id
-#     (inngest-host.tf). Rotate through .github/workflows/inngest-key-rotate.yml (ADR-304),
+#     (inngest-host.tf). Rotate through .github/workflows/inngest-key-rotate.yml (ADR-307),
 #     never by hand: it replaces the dedicated pair, reboots the scheduler, then replaces
 #     these two secrets and redeploys the web fleet, in that order.
 #   - INNGEST_MANUAL_TRIGGER_SECRET, the _dev copies: replace the random_id and the

@@ -1474,7 +1474,7 @@ after the flip sends plaintext (counted by `legacy_8288`) until that first deplo
    fresh in-session go naming that line and saying the new key will cross plaintext `:8288` again and a re-rotation follows. The
    workflow's best-effort failure step is never given the confirm, so after a rotation it logs the refusal and does nothing. The run
    test counts any non-`plan` run, including a rotation that applied and then failed (it already holds the new key); a false
-   positive costs one extra confirm. Accepted residuals, stated in [ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md):
+   positive costs one extra confirm. Accepted residuals, stated in [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md):
    GitHub's default 90-day run retention expires the marker, deleted run history resets it, and dispatching
    `apply-web-platform-infra.yml apply_target=inngest-link-flag inngest_link_value=off` directly bypasses the confirm. Re-enabling TLS
    after a deliberate post-rotation `off` is `action=flip` with the same extra confirm.
@@ -1860,7 +1860,7 @@ window.
 |---|---|
 | #10538 | the `sdk_url` poll (leg 2): a web-side listener or poll removal, merge by 2026-11-12, accepted-risk row lapses 2026-12-10 |
 | #10539 | bind `:8288` to loopback and drop the legacy accept at the next unrelated replace (also restricts the Connect ports) |
-| #10540 | the signing-key and event-key rotation apply route: `inngest-key-rotate.yml`, [ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md) (closed by the PR that adds it; A5 is still owner-dispatched) |
+| #10540 | the signing-key and event-key rotation apply route: `inngest-key-rotate.yml`, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md) (closed by the PR that adds it; A5 is still owner-dispatched) |
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
 | #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1; closed 2026-10-20) |
 | #10543 | the dashboard send archives the draft on a failed enqueue |
@@ -1884,7 +1884,7 @@ no-SSH repair (#10557).
 
 `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources. The prd pair has **one route**: the dispatch-only
 workflow `.github/workflows/inngest-key-rotate.yml` (body `scripts/inngest-key-rotate.sh`, decision and rationale in
-[ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md); this section is the procedure and does not restate the rationale).
+[ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md); this section is the procedure and does not restate the rationale).
 The other generated secrets are covered under "Other generated secrets" at the end of this section.
 
 > **Secret delivery (#5560).** inngest-server reads `INNGEST_POSTGRES_URI`, `INNGEST_REDIS_URI`, `INNGEST_SIGNING_KEY`, and `INNGEST_EVENT_KEY` from the doppler-run **environment** (owner-only `/proc/<pid>/environ`), never the `inngest start` argv (world-readable `/proc/<pid>/cmdline`). A rotated value loads on the next inngest-server restart/redeploy **without** being re-exposed on argv. **Ordering matters:** when rotating because a value leaked, deploy the env-delivery build FIRST (verify `ps -eo args | grep inngest` shows no secret), THEN rotate — rotating while an old argv-form image is still running would re-leak the new value immediately. After rotation, NEVER roll back to a pre-#5560 (argv-form) image.
@@ -1972,7 +1972,7 @@ after it; it refuses to redeploy while the host reads NOT SERVING. There is no a
 
 There is no old key to roll back to. A flag-off link rollback is guarded: see "Rollback" step 3 under Link TLS (`OFF-AFTER-ROTATION`,
 form (b) only). Accepted residuals (90-day run retention, deleted run history, a direct `apply_target=inngest-link-flag` dispatch) are in
-ADR-304.
+ADR-307.
 
 ### Other generated secrets (`INNGEST_MANUAL_TRIGGER_SECRET`, the `_dev` copies)
 
@@ -3245,7 +3245,7 @@ ADR-100, amendment 2026-09-14.
    > A future full automation would mint a narrow prd-root write token; the G3.5 gate is the
    > recurrence-prevention that makes the divergence impossible to ship silently.)
    >
-   > **Superseded for how the app copy is produced (2026-10-27, #10540, [ADR-304](../architecture/decisions/ADR-304-inngest-key-rotation-route.md)); appended, the text above is unchanged.**
+   > **Superseded for how the app copy is produced (2026-10-27, #10540, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md)); appended, the text above is unchanged.**
    > The cutover completed on 2026-09-18, and since #10540 the `soleur/prd` copies derive from the dedicated `random_id` in Terraform, so
    > there is no copy loop to run and no `prd`-root write token to find. Do not use the loop above today. The app copy is
    > re-aligned only by the dispatch-only `inngest-key-rotate.yml` route (see "Key rotation"), whose phase 2 replaces the app secrets and

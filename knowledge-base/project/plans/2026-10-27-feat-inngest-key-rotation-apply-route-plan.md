@@ -131,7 +131,7 @@ Cut List (mechanism, property it would buy, what already covers it or why cut):
 | R2 | `mode=reboot-check` rejected; ACPI wait bounded at 10 minutes (no probe row with a new `boot_id` = `host_silent`); the route never hard-resets (a hard reset is a separate owner go). |
 | R3 | The rotation plan gate refuses any bare `create` of `random_id.*_dedicated` except the documented recovery shape; Phase 0 reads whether the host unit has a Doppler fallback cache. Dropped: the per-merge RED fixture, the state-vs-Doppler hash, the forced-reboot arm (a stale boot key fails the redeploy canary, which is the safe detector). |
 | R4 | SERVING pre-check for `rotate` only; `guard` refuses `run_attempt > 1` for `rotate`/`converge` (a re-run bypasses the owner go; only `plan` may be re-run); `converge` derives `keys` and `rotated_at` from the newest non-plan run that reached apply1 (a guard-refused run does not qualify); no age limit (copies-equal and boot-start-after-`rotated_at` decide); skips the reboot POST when a Hetzner action is running or finished after `rotated_at`; every post-apply failure prints one stop sentence with the exact `converge` command (needs the owner's per-command go; no agent runs it) and files the issue; green `converge` prints the same `S5-A5-DONE` line; the off-confirm counts any non-plan run. |
-| R5 | Keep `converge`, the typed confirm and `quiet_window` (cron-quiet cannot be machine-checked); cut the in-script `kr_require_go` (YAML `needs` graph + a structure test replace it); verify = `inngest-host-state.sh` `SERVING=yes` (it includes `registry_fns`) + `boot_id` differs from the pre-reboot capture + a `tls-health` row with the new `boot_id` and `listener=1`; ADR-294 gets a one-line pointer to ADR-304; evidence lands in an issue comment, not only the step summary (summaries expire with run logs). |
+| R5 | Keep `converge`, the typed confirm and `quiet_window` (cron-quiet cannot be machine-checked); cut the in-script `kr_require_go` (YAML `needs` graph + a structure test replace it); verify = `inngest-host-state.sh` `SERVING=yes` (it includes `registry_fns`) + `boot_id` differs from the pre-reboot capture + a `tls-health` row with the new `boot_id` and `listener=1`; ADR-294 gets a one-line pointer to ADR-307; evidence lands in an issue comment, not only the step summary (summaries expire with run logs). |
 | Closes | `Closes #10540` is honest only with the reboot lever, the runbook corrections, the F5 confirm, and the two follow-up issues in the same PR/tracker; otherwise `Ref`. |
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -187,7 +187,7 @@ Every post-apply failure (apply2, reboot, verify, redeploy) prints one stop-and-
 
 ### Rollback accounting (P5)
 
-Two guards. `rotate` refuses unless the link flag is `1`, so the new key never rides plaintext. `scripts/inngest-link-flip.sh` gains a check at the chokepoint `flip_apply_flag off`: when any non-`plan` run of `inngest-key-rotate.yml` exists (matched on `displayTitle` from `run-name`, queried with `--limit 200`; a rotate that applied and then failed is the exact case that already has the new key live, and a false positive only costs one extra confirm), `off` requires a new input `confirm_off_after_rotation=OFF-AFTER-ROTATION` whose error text states that the new key would cross plaintext `:8288` again and a re-rotation follows. The `revert` path simply logs the refusal through its existing warning branch (no special case). Accepted residuals, stated in ADR-304 and the runbook: GitHub's default 90-day run retention expires the marker, deleted run history resets it, and dispatching `apply-web-platform-infra.yml apply_target=inngest-link-flag inngest_link_value=off` directly bypasses the script. Phase 0 also verifies whether `flip` can start from a flag already at `1`; if it can, `flip` refuses while a rotation run exists (re-enabling TLS after a rollback goes through `off` first), because the revert path returns to the flag-absent state. Runbook "Rollback" step 3 is rewritten to match.
+Two guards. `rotate` refuses unless the link flag is `1`, so the new key never rides plaintext. `scripts/inngest-link-flip.sh` gains a check at the chokepoint `flip_apply_flag off`: when any non-`plan` run of `inngest-key-rotate.yml` exists (matched on `displayTitle` from `run-name`, queried with `--limit 200`; a rotate that applied and then failed is the exact case that already has the new key live, and a false positive only costs one extra confirm), `off` requires a new input `confirm_off_after_rotation=OFF-AFTER-ROTATION` whose error text states that the new key would cross plaintext `:8288` again and a re-rotation follows. The `revert` path simply logs the refusal through its existing warning branch (no special case). Accepted residuals, stated in ADR-307 and the runbook: GitHub's default 90-day run retention expires the marker, deleted run history resets it, and dispatching `apply-web-platform-infra.yml apply_target=inngest-link-flag inngest_link_value=off` directly bypasses the script. Phase 0 also verifies whether `flip` can start from a flag already at `1`; if it can, `flip` refuses while a rotation run exists (re-enabling TLS after a rollback goes through `off` first), because the revert path returns to the flag-absent state. Runbook "Rollback" step 3 is rewritten to match.
 
 ## Implementation Phases
 
@@ -210,7 +210,7 @@ Phase 3 — the workflow file and its static suite (`inngest-key-rotate-workflow
 
 Phase 4 — link-flip guard in `scripts/inngest-link-flip.sh` and `.github/workflows/inngest-link-flip.yml` (new input) with new rows in `inngest-link-flip-workflow.test.sh`; BUDGET TABLE pins (A40-A42) untouched.
 
-Phase 5 — registrations and records: `infra-credential-tiers-8209.md` row; census and `trio-baseline.tsv` rows; `web-hosts-fanout-parity.test.sh` operand; `infra-validation.yml` path entries; ADR-304 plus ADR-100/ADR-294 amendments; `model.c4` edge text; runbook rewrite; owner-ask probe text and its suite.
+Phase 5 — registrations and records: `infra-credential-tiers-8209.md` row; census and `trio-baseline.tsv` rows; `web-hosts-fanout-parity.test.sh` operand; `infra-validation.yml` path entries; ADR-307 plus ADR-100/ADR-294 amendments; `model.c4` edge text; runbook rewrite; owner-ask probe text and its suite.
 
 Phase 6 — local verification only (all suites, `terraform fmt`/`validate` on the infra root, actionlint if present). No dispatch of `rotate` or `converge`, ever, by an agent without the owner's per-command go.
 
@@ -221,7 +221,7 @@ Post-merge (read-only): one `mode=plan` dispatch (see Production Actions).
 - `.github/workflows/inngest-key-rotate.yml`
 - `scripts/inngest-key-rotate.sh`
 - `apps/web-platform/infra/inngest-key-rotate-workflow.test.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-304-inngest-key-rotation-route.md` (ordinal provisional; re-verify against `origin/main` at ship)
+- `knowledge-base/engineering/architecture/decisions/ADR-307-inngest-key-rotation-route.md` (ordinal provisional; re-verify against `origin/main` at ship)
 - `knowledge-base/project/specs/feat-one-shot-10540-inngest-key-rotation-route/tasks.md`
 - `knowledge-base/project/specs/feat-one-shot-10540-inngest-key-rotation-route/decision-challenges.md`
 
@@ -237,7 +237,7 @@ Post-merge (read-only): one `mode=plan` dispatch (see Production Actions).
 - `tests/scripts/test-infra-privileged-tier-census.sh` (only if it keys on named jobs; verify in Phase 0.4), `tests/scripts/trio-baseline.tsv` (new files naming the deploy trio)
 - `apps/web-platform/infra/web-hosts-fanout-parity.test.sh` (new operand for the workflow's roster literal)
 - `.github/workflows/infra-validation.yml` (path entries for the new workflow and script)
-- `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md` (§4 Amendment: app copy now derived), `ADR-294-inngest-link-tls-terminator-and-flagged-flip.md` (a one-line pointer to ADR-304)
+- `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md` (§4 Amendment: app copy now derived), `ADR-294-inngest-link-tls-terminator-and-flagged-flip.md` (a one-line pointer to ADR-307)
 - `knowledge-base/engineering/architecture/diagrams/model.c4` (and `model.likec4.json` if generated by the render test) — the `github -> hetzner` edge text
 - `plugins/soleur/test/stock-preflight-coverage.test.ts` only if Phase 0 shows it enumerates workflows other than `apply_target` options (expected: no change)
 
@@ -371,7 +371,7 @@ Doppler and Hetzner API calls need no paid tier. Better Stack read access uses t
 
 ### ADR
 
-Create ADR-304 "Inngest key rotation: dedicated workflow, two-phase apply, app copy derived from the dedicated random_id, Hetzner soft reboot as the restart lever" via `soleur:architecture` (ordinal provisional; `soleur:ship` re-verifies against `origin/main`). Amend ADR-100 §4 Amendment (the app copy is now derived, no longer copied across by a separate step; the G3.5 gate stays) and add an ADR-294 addendum (the route, the reboot lever, the off-after-rotation confirm). ADR-304 records the two-phase order, the lock topology (workflow group `inngest-key-rotate`, `terraform-apply-web-platform-host` on the apply jobs, `deploy-inngest-restart` on the reboot job; `web-platform-release` has a per-SHA group and is not serialized against the route, which is why the in-flight refusal is repeated before each write), the accepted residuals of Guard 3, and the Guard 1 anchor statement. Sequencing: written now, describing the target state; not deferred.
+Create ADR-307 "Inngest key rotation: dedicated workflow, two-phase apply, app copy derived from the dedicated random_id, Hetzner soft reboot as the restart lever" via `soleur:architecture` (ordinal provisional; `soleur:ship` re-verifies against `origin/main`). Amend ADR-100 §4 Amendment (the app copy is now derived, no longer copied across by a separate step; the G3.5 gate stays) and add an ADR-294 addendum (the route, the reboot lever, the off-after-rotation confirm). ADR-307 records the two-phase order, the lock topology (workflow group `inngest-key-rotate`, `terraform-apply-web-platform-host` on the apply jobs, `deploy-inngest-restart` on the reboot job; `web-platform-release` has a per-SHA group and is not serialized against the route, which is why the in-flight refusal is repeated before each write), the accepted residuals of Guard 3, and the Guard 1 anchor statement. Sequencing: written now, describing the target state; not deferred.
 
 ### C4 views
 
@@ -401,7 +401,7 @@ Read all three `.c4` files in Phase 0.5. Checked against the feature: external h
 
 **Harness rows:** (a) replace the gate call in the suite with `true`; the suite must go RED. (b) must-PASS non-canonical inputs: `keys=event` plan with reordered `resource_changes` and an extra no-op entry; the bare-`["create"]` recovery shape with `before` null for the app secret.
 
-**Anchor.** The allowlist table and `terraform-target-parity.test.ts` pin the same set; both live in this repo, so the guard proves consistency, not integrity. Integrity rests on `infra-privileged` being main-only and on required review; stated plainly in ADR-304.
+**Anchor.** The allowlist table and `terraform-target-parity.test.ts` pin the same set; both live in this repo, so the guard proves consistency, not integrity. Integrity rests on `infra-privileged` being main-only and on required review; stated plainly in ADR-307.
 
 ### Guard 2 — No key material reaches a log
 
@@ -442,7 +442,7 @@ Read all three `.c4` files in Phase 0.5. Checked against the feature: external h
 
 **Harness rows:** (a) stub `gh run list` returning an empty list; `off` proceeds (must-PASS, differs from canonical). (b) remove the stub's `displayTitle` field; the guard must fail closed (refuse), and the suite goes RED if it proceeds.
 
-**Anchor.** `gh run list` is read-only against GitHub; run-history retention (90 days) and deletion reset it, and a direct dispatch of the apply workflow bypasses it. Documented as accepted residuals in ADR-304 and the runbook.
+**Anchor.** `gh run list` is read-only against GitHub; run-history retention (90 days) and deletion reset it, and a direct dispatch of the apply workflow bypasses it. Documented as accepted residuals in ADR-307 and the runbook.
 
 ### Guard 4 — Refusal ladder precedes every write
 
@@ -495,7 +495,7 @@ Read all three `.c4` files in Phase 0.5. Checked against the feature: external h
 | `mode=plan` rehearsal arm | — | inferred — justification: CTO F7; the first real dispatch runs under an owner go, so the gate chain needs a read-only dress rehearsal |
 | `converge` mode | — | inferred — justification: after the apply there is no old key to roll back to (it exists nowhere), so recovery must be a defined, Doppler-write-free mode (CTO F3) |
 | Owner-ask probe text change | — | inferred — justification: CPO condition; the probe still says the owner "executes the rotation", which the route supersedes |
-| ADR-304 + amendments, C4 edge text | — | inferred — justification: plan Phase 2.10 (new credential-rotation route; app-key source of truth moves into Terraform) |
+| ADR-307 + amendments, C4 edge text | — | inferred — justification: plan Phase 2.10 (new credential-rotation route; app-key source of truth moves into Terraform) |
 | Runbook corrections (restart claim) | — | inferred — justification: the A5 row's restart mechanism is false for the dedicated host; `Closes #10540` is honest only with it corrected (CTO) |
 | Follow-up issues #11292, #11293, #11294 | — | inferred — justification: deferral tracking rule; #11294 is a security finding made while planning |
 | Scrub contract (Guard 2) | "never read or print secret values" | asked |
@@ -608,7 +608,7 @@ Earliest A5 date: after #11215 closes COMPLETED (earliest check 2026-10-28T13:56
 - Risk: the unit boots on a cached old key (Doppler fallback cache). Mitigation: Phase 0.7 reads the unit; if it ever happened, the redeploy canary fails against the mismatched server and the old containers keep running.
 - Risk: a merge or release deploying between the phases reads the old app key against the new scheduler and fails its canary (a red release, no outage). Mitigation: the in-flight-run refusal before every write job and the quiet-window attestation; stated in the go text.
 - Risk: per-merge closure now includes the dedicated `random_id`s through the new edge. Mitigation: closure test with no `hcloud_*` member; per-merge plan stays quiet by `ignore_changes`.
-- Residual: the guard in Guard 3 reads GitHub run history; retention (90 days) and deletion reset it, and a direct dispatch of the apply workflow bypasses it (documented in ADR-304 and the runbook).
+- Residual: the guard in Guard 3 reads GitHub run history; retention (90 days) and deletion reset it, and a direct dispatch of the apply workflow bypasses it (documented in ADR-307 and the runbook).
 - Risk: public-log exposure of key bytes by existing jobs is outside this PR's reach (#11294); the owner's go text should mention that the rotation also retires any value those logs may have carried.
 
 ## References
@@ -623,4 +623,4 @@ Earliest A5 date: after #11215 closes COMPLETED (earliest check 2026-10-28T13:56
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan` Phase 4.6; this one declares `single-user incident`.
 - Never publish the plan JSON, the `tfplan` file, or any Terraform stream: `random_id` ids and `hex` are key bytes.
 - The typed confirm and the `quiet_window` attestation are typo-guards and statements of fact, not authorization.
-- The ADR ordinal is provisional; `ADR-304` may be taken by a sibling PR before ship.
+- The ADR ordinal is provisional; `ADR-307` may be taken by a sibling PR before ship.

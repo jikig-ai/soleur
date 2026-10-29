@@ -2,7 +2,7 @@
 # inngest-a5-a6-owner-ask-10136.sh -- NOTIFY-ONLY follow-through probe: asks the owner, in plain words, for the
 # next open owner-human act of the Inngest TLS arc (#10136): A5 (the scheduler signing-key rotation) and then
 # A6 (the "no known access" record). The A5 ask names the exact dispatch lines of the rotation route
-# (.github/workflows/inngest-key-rotate.yml, ADR-304, #10540): the read-only plan rehearsal, the rotate line, and the converge line
+# (.github/workflows/inngest-key-rotate.yml, ADR-307, #10540): the read-only plan rehearsal, the rotate line, and the converge line
 # that finishes a failed run. Only the owner dispatches rotate and converge, each under a fresh in-session go naming the exact line;
 # the route prints the S5-A5-DONE line and never posts it, and the owner posts it themselves on the epic (an agent-posted line,
 # or one posted by the workflow, does not satisfy the record).

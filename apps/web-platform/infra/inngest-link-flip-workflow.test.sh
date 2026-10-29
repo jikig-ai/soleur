@@ -707,7 +707,7 @@ D="$(fresh badvalue)"; ( source "$BODY"; PATH="$D/bin:$PATH" STUB="$D"; flip_app
 D="$(fresh nomode)"; run_script "$D" "$BODY" bogus
 [[ "$RC" == 64 ]] && ok "B20 an unknown subcommand exits 64" || bad "B20 rc=$RC"
 
-printf '\n=== B. off-after-rotation guard (#10540, ADR-304 Guard 3) ===\n'
+printf '\n=== B. off-after-rotation guard (#10540, ADR-307 Guard 3) ===\n'
 refused_out() { grep -q '^verdict=refused$' "$1/github_output" 2>/dev/null; }
 # Fixed both directions: no rotation run => off is exactly as before; a plan-only history => unchanged.
 D="$(fresh rot-none)"; run_script "$D" "$BODY" off

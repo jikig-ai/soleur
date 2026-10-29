@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# inngest-key-rotate.sh - the orchestration body of .github/workflows/inngest-key-rotate.yml (#10540, ADR-304).
+# inngest-key-rotate.sh - the orchestration body of .github/workflows/inngest-key-rotate.yml (#10540, ADR-307).
 #
 # Rotates the two Inngest shared secrets (INNGEST_SIGNING_KEY, INNGEST_EVENT_KEY) on BOTH copies, in two Terraform phases with a
 # host reboot and a verification between them, then redeploys the web fleet:

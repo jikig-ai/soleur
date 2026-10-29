@@ -43,7 +43,7 @@ The change delivers the route only. No task dispatches `rotate` or `converge`, a
 ## Phase 5: Registrations and records
 
 - [ ] 5.1 `infra-credential-tiers-8209.md` rows; census; `tests/scripts/trio-baseline.tsv`; `web-hosts-fanout-parity.test.sh` operand; `infra-validation.yml` paths.
-- [ ] 5.2 ADR-304 (via `soleur:architecture`; re-verify the ordinal against `origin/main`); ADR-100 §4 amendment; ADR-294 one-line pointer.
+- [ ] 5.2 ADR-307 (via `soleur:architecture`; re-verify the ordinal against `origin/main`); ADR-100 §4 amendment; ADR-294 one-line pointer.
 - [ ] 5.3 `model.c4` `github -> hetzner` edge text; run the C4 validation tests and `c4-count-parity.test.sh`.
 - [ ] 5.4 Runbook rewrite (A5 row, order step 3, Key rotation, Rollback step 3, evidence wording, between-phases note, follow-ups table); owner-ask probe text and its suite.
 

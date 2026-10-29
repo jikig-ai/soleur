@@ -10,7 +10,7 @@ brand_survival_threshold: single-user incident
 tags: [inngest, secrets, rotation, terraform, doppler, hetzner, ci]
 ---
 
-# ADR-304: Inngest key rotation runs through a dedicated dispatch-only workflow in two Terraform phases, derives the app copy from the dedicated random_id, and restarts the scheduler with a Hetzner soft reboot
+# ADR-307: Inngest key rotation runs through a dedicated dispatch-only workflow in two Terraform phases, derives the app copy from the dedicated random_id, and restarts the scheduler with a Hetzner soft reboot
 
 ## Context
 

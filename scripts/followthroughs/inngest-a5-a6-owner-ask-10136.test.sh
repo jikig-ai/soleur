@@ -241,7 +241,7 @@ reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLET
 run_case 2026-10-30
 expect "row 7: with #10543 fixed the ask drops the quiesced window" 5 "replaces the scheduler's signing key" "quiet window"
 
-# The A5 ask names the exact dispatch lines of the rotation route and the S5-A5-DONE handoff (#10540, ADR-304).
+# The A5 ask names the exact dispatch lines of the rotation route and the S5-A5-DONE handoff (#10540, ADR-307).
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="CLOSED:COMPLETED"
 run_case 2026-10-30
 expect "row 7: the ask names the read-only plan rehearsal line" 5 "gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=signing"

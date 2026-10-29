@@ -14,7 +14,7 @@
 #                                 that is already absent still gets the redeploy)
 #   inngest-link-flip.sh revert   best-effort `off` for the workflow's failure/cancel step; always exits 0
 #
-# OFF-AFTER-ROTATION GUARD (#10540, ADR-304 Guard 3). Once the Inngest keys have been rotated (any non-`plan` dispatch of
+# OFF-AFTER-ROTATION GUARD (#10540, ADR-307 Guard 3). Once the Inngest keys have been rotated (any non-`plan` dispatch of
 # inngest-key-rotate.yml exists), a flag-off apply would redeploy the fleet on plaintext http://10.0.1.40:8288 and the NEW key
 # would cross it again. `flip_apply_flag off` (the chokepoint of `off` and of `revert`) therefore refuses unless
 # CONFIRM_OFF_AFTER_ROTATION=OFF-AFTER-ROTATION (workflow input confirm_off_after_rotation); `revert` never receives it, so it
