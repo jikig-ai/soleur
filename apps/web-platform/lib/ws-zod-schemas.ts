@@ -18,6 +18,7 @@
 // internal API boundaries (registry signatures, mint helpers).
 
 import { z, type ZodError } from "zod";
+import { CREDENTIAL_SCHEMES } from "@/lib/auth-scheme";
 import { reportSilentFallback } from "@/lib/client-observability";
 import {
   type WSMessage,
@@ -525,6 +526,10 @@ const errorSchema = z.strictObject({
   // ADR-044 PR-1 — present with `errorCode: "workspace_switch_required"`: the
   // target workspace id the client offers to switch to.
   switchToWorkspaceId: z.string().optional(),
+  // #11086 — present with `errorCode: "key_invalid"` on an agent-CLI auth
+  // failure: the credential scheme the run used. Closed enum shared with the
+  // server via `lib/auth-scheme` (one literal, no copy).
+  credentialScheme: z.enum(CREDENTIAL_SCHEMES).optional(),
 });
 
 // Stage 3 (#2885) — new event variants
