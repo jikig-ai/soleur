@@ -316,8 +316,9 @@ red after a complete apply). So routing a new monitor takes two PRs:
 The routing-parity guard
 (`apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`)
 fails any PR that leaves a declared monitor in neither list. Until PR 2 lands,
-the audit's Class A lists the pending monitor with a `::warning::` on each
-`apply-sentry-infra.yml` run (and each release's audit). That audit runs BEFORE
+the audit's Class A lists the pending monitor in its dated report (the
+`class_a_pending_labels` partition — report-visible but `::warning::`-silent)
+on each `apply-sentry-infra.yml` run. That audit runs BEFORE
 the apply, so on the run that merges a routing change it still reports the
 pre-apply state.
 
