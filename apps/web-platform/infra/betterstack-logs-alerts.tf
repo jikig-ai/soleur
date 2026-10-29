@@ -383,7 +383,7 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
 
   # Presence-only, so safe before the probe is delivered (no rows, value 0). The window is 900 s
   # because that is the largest query_period Better Stack has accepted for a per-row-parse alert
-  # since September (see the measured table below). The probe re-emits no sooner than hourly after any
+  # created since 2026-10-01 (see the measured table below). The probe re-emits no sooner than hourly after any
   # non-ok token, so while it fails the incident stays open and does not re-page. It pages within about
   # 5 min of the first failing row. When it resolves, and why that is not recovery, is in the
   # AUTO-RESOLVE WINDOW comment above this resource.
@@ -396,12 +396,13 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # 300/5400. Every alert created since 2026-10-01 has query_period <= 900 (registry_zot_log_credential_shape
   # 300/900 on 10-15, egress_gw_probe_fail 300/900 on 10-12, web_nic_guard_unpinned_url 60/300 on 10-27).
   # So an existing long window proves nothing about what the API accepts today. The (300, 900) pair set
-  # below was applied by #11427 (744396abbb): push run 40782617701 on 04cad4e8e0, which descends from
-  # 744396abbb, shows the Terraform apply step succeeded with this alert in its -target list; I did not
-  # read the per-resource result separately. Four (check, query) tuples were refused 422, all at a
-  # query_period of 5400 s or more: 300/10800, 900/10800, 3600/10800 and 300/5400. Live alerts created in
-  # September carry 5400, 86400 and 97200 s. 604800 s and 2592000 s were never tried, so whether a 30-day
-  # dead-man can exist is unknown; a try needs an owner-authorized create-and-delete probe.
+  # below was created by #11427 (744396abbb): push run 40744937376 on 744396abbb planned "+ query_period = 900"
+  # and "+ push = true" and logged "Creation complete" for this alert (id 888101/2988722350); that run later
+  # failed at an SSH step ("SSH forward to web-2 through the web-1 bastion"), fixed by 04cad4e8e0 (#11454). Push
+  # run 40782617701 on 04cad4e8e0, which descends from 744396abbb, refreshed this alert (it is in the -target
+  # list) and reported "No changes", so the live attributes matched this block at that time.
+  # 604800 s and 2592000 s were never tried, so whether a 30-day dead-man can exist is unknown; a try needs an
+  # owner-authorized create-and-delete probe.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
@@ -414,7 +415,8 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   paused = false
 
   # #11068 convention (#9168 measured flip): push armed. History: the original plan was to revert to
-  # `push = false` if the apply refused it; the apply accepted it (live read 2026-10-29: push true).
+  # `push = false` if the apply refused it; the apply accepted it (run 40744937376 planned and created it
+  # with `push = true`; run 40782617701 refreshed it and reported "No changes").
   email          = true
   push           = true
   call           = false

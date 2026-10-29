@@ -7,19 +7,27 @@
 # (a notify-only probe may over-report, never stay quiet): a stale-replay refusal counts toward both.
 #   criterion 1  a spawn-agent failure was observed in production, Sentry events since 2026-10-26 (PR 11208's merge day):
 #                ENQ   = tagged `feature:spawn-agent op:inngest-enqueue`      (the enqueue itself failed), or
-#                STALE = tagged `feature:spawn-agent op:inngest-replay-stale` (a re-click was refused as too old);
+#                STALE = tagged `feature:spawn-agent op:inngest-replay-stale` (a re-click was refused; the event
+#                        carries `reason: expired` = older than the replay window, the draft is ARCHIVED, or
+#                        `reason: future_clicked_at` = the clock_skew arm: a click time in the future beyond the skew
+#                        tolerance or unparseable, NOT too old, and the draft is NOT archived);
 #                holds when ENQ > 0 or STALE > 0;
 #   criterion 2  a stranded send exists: an `action_sends` row with acknowledged_at, failure_reason, undone_at and
 #                cancellation_requested_at all NULL, joined to a `messages` row still in status 'draft', whose
 #                clicked_at is MORE than 1 h old, with NO upper bound on its age; holds when recoverable + aged_out > 0
-#                OR STALE > 0 (a refused replay archives its draft, so the stranded row can already be gone).
+#                OR STALE > 0 (an `expired` refusal archives its draft, so the stranded row can already be gone; a
+#                `future_clicked_at` refusal leaves the draft in place, so the query may still count it).
 # Criterion 2 is counted in two buckets that are printed separately: `recoverable` (clicked under 23 h ago: inside
 # REPLAY_MAX_AGE_MS in apps/web-platform/server/action-sends/decide-replay.ts, so a founder re-click can still recover
-# it; the 23 h cap is Inngest's event-id dedup horizon minus a 1 h margin, and the suite pins the `23 hours` literal
+# it; the 23 h cap is the Inngest event-id dedup horizon (about 24 h) minus a 1 h margin, and that horizon is ASSUMED:
+# decide-replay.ts itself calls it a "plan-level assumption: not verified". The suite pins the `23 hours` literal
 # below to that constant) and `aged_out` (over 23 h). The count can OVER-count (drafts with an unparseable `source_ref`,
-# `no_artifact_in_pr_a`) and UNDER-count (a draft archived between daily runs; STALE now covers that case). The table
+# `no_artifact_in_pr_a`) and UNDER-count (a draft archived between daily runs; STALE covers that case only for an
+# `expired` replay: the founder's discard route archives a draft with no STALE event). The table
 # has held 0 rows ever (plan-time read 2026-10-29). `per_page=100` caps each Sentry count; only > 0 is ever used.
-# ACTION REQUIRED (exit 5) fires on STALE > 0 alone, or on ENQ > 0 together with a stranded draft.
+# ACTION REQUIRED (exit 5) fires on STALE > 0 alone, or on ENQ > 0 together with a stranded draft. The two Sentry
+# queries carry no `environment:` filter, so a STALE (or ENQ) event from ANY environment (preview, staging, a
+# developer's machine) counts, and since the window start is fixed, one such event keeps STALE > 0 (exit 5) every day.
 # RESIDUAL: the two `op` tags are read from Sentry with no runtime positive control (none exists); the suite pins the
 # tags against apps/web-platform/app/api/dashboard/today/[id]/send/route.ts, so a mistyped tag fails CI, but an op
 # renamed in the route LATER would silently read 0 here.
@@ -59,7 +67,7 @@ set -uo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this probe handles live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;  # [mut:xtrace]
 esac
-trap 'set -- "$?"; if [[ -n "${TMP:-}" ]]; then rm -f "$TMP"; fi; case "$1" in 2|3|5|78) ;; *) echo "CANNOT ESTABLISH: internal error (unexpected exit status $1)"; exit 3 ;; esac' EXIT  # [mut:trap]
+trap 'set -- "$?"; if [[ -n "${TMP:-}" ]]; then rm -f "$TMP"; fi; case "$1" in 2|3|5|78) ;; *) echo "CANNOT ESTABLISH: internal error (unexpected exit status, or killed by a signal)"; exit 3 ;; esac' EXIT  # [mut:trap]
 
 cannot() { echo "CANNOT ESTABLISH: $1"; exit 3; }
 
@@ -70,12 +78,12 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIA
 # Token-shape check only (empty, or any char outside the allowlist, e.g. a newline that would inject a curl config
 # directive on the stdin channel below). Never echoes a value. Explicit guards, never `${VAR:?}` (that aborts with 1).
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
-_bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}" || cannot "SENTRY_ACTIONS_RO_TOKEN unusable"  # [mut:token-check]
-_bearer_ok "${SUPABASE_ACCESS_TOKEN:-}" || cannot "SUPABASE_ACCESS_TOKEN unusable"  # [mut:token-check]
+_bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}" || cannot "SENTRY_ACTIONS_RO_TOKEN unusable"  # [mut:token-check-sentry]
+_bearer_ok "${SUPABASE_ACCESS_TOKEN:-}" || cannot "SUPABASE_ACCESS_TOKEN unusable"  # [mut:token-check-supabase]
 command -v jq >/dev/null 2>&1 || cannot "jq is not available"
 
 NOW_EPOCH="${NOW_EPOCH:-$(date -u +%s)}"
-[[ "$NOW_EPOCH" =~ ^[0-9]+$ ]] || cannot "unusable NOW_EPOCH"
+[[ "$NOW_EPOCH" =~ ^[1-9][0-9]{0,15}$ ]] || cannot "unusable NOW_EPOCH"  # no leading zero: it would be octal inside (( ))
 END_ISO="$(date -u -d "@${NOW_EPOCH}" '+%Y-%m-%dT%H%%3A%M%%3A%S' 2>/dev/null)"
 [[ -n "$END_ISO" ]] || cannot "could not format the window end"
 

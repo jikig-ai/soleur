@@ -6,7 +6,8 @@
 # `$ROOT/scripts/betterstack-query.sh` is a stub, because the probe resolves its reader as
 # `$SCRIPT_DIR/../betterstack-query.sh` and has no environment seam. The stub RECORDS its argv and prints JSONEachRow rows
 # shaped like the real reader's output (`raw` is a JSON STRING holding a JSON document whose `.message` is the marker
-# line); a call WITH `--grep` is the main read, a call without it is the reader-liveness canary. Registered EXPLICITLY
+# line); a call WITH `--grep` is the main read, a call without it is the archive-arm canary, and the stub honors the
+# canary's `--since 24h` / `--until` by dropping canary rows outside that window (like the real reader). Registered EXPLICITLY
 # in scripts/test-all.sh (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS).
 #
 # INSTRUMENT SELF-TEST. Before any fixture row, check/has/hasnt are driven with known-true and known-false inputs; a
@@ -58,8 +59,9 @@ dt_of() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S'; }
 # row <epoch> <message> [fraction]: the REAL stored shape, raw = a JSON string holding {message, ...}
 row() { jq -nc --arg dt "$(dt_of "$1")${3:-}" --arg m "$2" '{dt:$dt, raw:({message:$m, SYSLOG_IDENTIFIER:"inngest-cutover-flip"}|tojson)}'; }
 mrow() { row "$1" "$MARKER token=$2 rc=0 at=tick"; }   # an anchored producer row
-# any live Logs row (the canary's answer): an object, not a keeper row
-live_row() { jq -nc --arg dt "$(dt_of $((NOW - 60)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
+# any live Logs row (the canary's answer): an object, not a keeper row; live_row is ARCHIVE-aged (5 h), hot_row is 60 s old
+live_row() { jq -nc --arg dt "$(dt_of $((NOW - 5 * 3600)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
+hot_row() { jq -nc --arg dt "$(dt_of $((NOW - 60)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
 
 # The temp tree: the probe under test sits at scripts/followthroughs/, the stub reader at scripts/betterstack-query.sh.
 TREE="$ROOT/tree"; mkdir -p "$TREE/scripts/followthroughs"
@@ -75,7 +77,12 @@ case " $* " in
     if [ -n "${STUB_RC:-}" ] && [ "$STUB_RC" != 0 ]; then echo "auth failure for user secret-user at host secret-host $STUB_CANARY" >&2; exit "$STUB_RC"; fi ;;
   *)
     printf '%s\n' "$*" > "$STUB_CARGS"; echo CANARY >> "$STUB_CALLS"
-    cat "$STUB_CROWS"
+    since_arg=""; until_arg=""; prev=""
+    for a in "$@"; do case "$prev" in --since) since_arg="$a" ;; --until) until_arg="$a" ;; esac; prev="$a"; done
+    lo=""; hi=""
+    if [ "$since_arg" = 24h ]; then lo="$(date -u -d "@$((STUB_NOW - 86400))" '+%Y-%m-%d %H:%M:%S')"; fi
+    if [ -n "$until_arg" ]; then hi="$(printf '%s' "$until_arg" | sed 's/T/ /; s/Z$//')"; fi
+    awk -v lo="$lo" -v hi="$hi" '{ if (match($0, /"dt":"[0-9-]+ [0-9:]+/)) { d = substr($0, RSTART + 6, RLENGTH - 6); if ((lo != "" && d < lo) || (hi != "" && d > hi)) next } print }' "$STUB_CROWS"
     if [ -n "${STUB_CRC:-}" ] && [ "$STUB_CRC" != 0 ]; then echo "auth failure for user secret-user at host secret-host $STUB_CANARY" >&2; exit "$STUB_CRC"; fi ;;
 esac
 STUB
@@ -85,10 +92,10 @@ live_row > "$ROOT/crow"
 
 RCS="$ROOT/rcs"; : > "$RCS"
 OUT=""; RC=0
-run() {  # rows come from $ROOT/rows, the canary answer from $CROWS (default: one live row); knobs: QH QU QP, XBASH, XENV, STUB_RC, STUB_CRC
+run() {  # rows come from $ROOT/rows, the canary answer from $CROWS (default: one archive-aged live row); knobs: QH QU QP, NOWV, XBASH, XENV, STUB_RC, STUB_CRC
   RC=0
   rm -f "$ROOT/args" "$ROOT/cargs" "$ROOT/calls" "$ROOT/evil-called"; : > "$ROOT/calls"
-  OUT="$(env -i PATH="$PATH" HOME="$ROOT" TMPDIR="$ROOT" NOW_EPOCH="$NOW" STUB_ROWS="$ROOT/rows" STUB_CROWS="${CROWS:-$ROOT/crow}" \
+  OUT="$(env -i PATH="$PATH" HOME="$ROOT" TMPDIR="$ROOT" NOW_EPOCH="${NOWV-$NOW}" STUB_NOW="$NOW" STUB_ROWS="$ROOT/rows" STUB_CROWS="${CROWS:-$ROOT/crow}" \
     STUB_ARGS="$ROOT/args" STUB_CARGS="$ROOT/cargs" STUB_CALLS="$ROOT/calls" \
     STUB_RC="${STUB_RC:-0}" STUB_CRC="${STUB_CRC:-0}" STUB_CANARY="$CAN_STR" LUKS_KEEPER_QUERY_SCRIPT="$EVIL" \
     BETTERSTACK_QUERY_HOST="${QH-h}" BETTERSTACK_QUERY_USERNAME="${QU-u}" BETTERSTACK_QUERY_PASSWORD="${QP-p}" \
@@ -98,7 +105,7 @@ run() {  # rows come from $ROOT/rows, the canary answer from $CROWS (default: on
 calls()  { grep -c . "$ROOT/calls" 2>/dev/null || true; }
 mcalls() { grep -c '^MAIN$' "$ROOT/calls" 2>/dev/null || true; }
 ccalls() { grep -c '^CANARY$' "$ROOT/calls" 2>/dev/null || true; }
-reset_knobs() { unset QH QU QP XBASH XENV STUB_RC STUB_CRC CROWS; }
+reset_knobs() { unset QH QU QP NOWV XBASH XENV STUB_RC STUB_CRC CROWS; }
 run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
 reset_knobs
@@ -152,7 +159,15 @@ has "the newest measured row decides the class (ok over an older fail)" "$OUT" "
 { mrow $((NOW - 2 * DAY)) fail_other; mrow $((NOW - 3 * DAY)) ok; } > "$ROOT/rows"; run
 has "the newest measured row decides the class (fail over an older ok)" "$OUT" "newest_measured_token=fail"
 { mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 2 * DAY)) fail_other; } > "$ROOT/rows"; run
-has "two measured rows at one instant: the class is fail (conservative)" "$OUT" "newest_measured_token=fail"
+has "two measured rows in the same second: the class is fail (conservative)" "$OUT" "newest_measured_token=fail"
+{ mrow $((NOW - 2 * DAY)) fail_other; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
+has "two measured rows in the same second, fail listed first: the class is fail" "$OUT" "newest_measured_token=fail"
+# a NOT YET whose newest measured row is a failed verdict says a resolved page is not recovery
+mrow $((NOW - 20 * DAY)) fail_passphrase > "$ROOT/rows"; run
+check "a lone 20-day-old failed-verdict row: exit 2" 2 "$RC"
+has "NOT YET after a fail row: a resolved page is not recovery" "$OUT" "a resolved page is not recovery"
+mrow $((NOW - 20 * DAY)) ok > "$ROOT/rows"; run
+hasnt "NOT YET after an ok row: no failed-verdict note" "$OUT" "a resolved page is not recovery"
 
 # 5. only the NEWEST measured row decides; indeterminate rows never count as health and never reset the window
 { mrow $((NOW - 40 * DAY)) ok; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
@@ -183,6 +198,9 @@ mrow $((NOW - 5 * DAY)) weird_token > "$ROOT/rows"; run
 check "an anchored row with an unrecognised token: exit 3" 3 "$RC"
 row $((NOW - 5 * DAY)) "$MARKER no token here" > "$ROOT/rows"; run
 check "an anchored row with no token: exit 3" 3 "$RC"
+mrow 0 ok > "$ROOT/rows"; run
+check "a sole measured row dated at the epoch: exit 3, not a 20717-day age" 3 "$RC"
+hasnt "epoch-dated row: no ACTION REQUIRED" "$OUT" "ACTION REQUIRED"
 jq -nc --arg m "$MARKER token=ok rc=0 at=tick" '{dt:"not a date", raw:({message:$m}|tojson)}' > "$ROOT/rows"; run
 check "a measured row with an unreadable timestamp: exit 3" 3 "$RC"
 # shape drift: an OBJECT that mentions nothing decodable, ALONE (no anchored row, no other line)
@@ -196,6 +214,15 @@ has "a lone garbage line is named as a PARSE failure" "$OUT" "PARSE:"
 hasnt "a lone garbage line is not reported as shape drift" "$OUT" "SHAPE_DRIFT"
 { jq -nc --arg dt "$(dt_of $((NOW - 3 * DAY)))" '{dt:$dt, raw:"not json at all"}'; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
 check "an object with an undecodable raw beside a valid producer row does not block the verdict: exit 2" 2 "$RC"
+# a mid-stream failure emitted AS A JSON OBJECT (no dt, no raw) is not a reader row: class X, never class U
+{ mrow $((NOW - 40 * DAY)) ok; printf '{"exception":"Code: 395. DB::Exception: %s"}\n' "$CAN_STR"; } > "$ROOT/rows"; run
+check "an old measured row plus an exception-object tail: exit 3, never a false ACTION REQUIRED" 3 "$RC"
+has "exception-object tail: a PARSE failure is named" "$OUT" "PARSE:"
+hasnt "exception-object tail: never echoed" "$OUT" "$CAN_STR"
+{ mrow $((NOW - 2 * DAY)) ok; printf '{"dt":"%s"}\n' "$(dt_of $((NOW - DAY)))"; } > "$ROOT/rows"; run
+check "an object with a dt but no raw beside a valid row: exit 3" 3 "$RC"
+{ mrow $((NOW - 2 * DAY)) ok; printf '{"raw":"{}"}\n'; } > "$ROOT/rows"; run
+check "an object with a raw but no dt beside a valid row: exit 3" 3 "$RC"
 
 # 7b. an UNTRUSTWORTHY read (R1 i): any non-blank reader line that is not a JSON object is exit 3 before any verdict
 printf '<html><head><title>502 Bad Gateway</title></head><body>%s</body></html>\n' "$CAN_STR" > "$ROOT/rows"; run
@@ -217,15 +244,15 @@ done
 check "blank and whitespace-only lines are ignored: exit 2" 2 "$RC"
 has "blank lines: both rows counted" "$OUT" "rows=2 measured=2"
 
-# 7c. the reader-liveness canary (R1 ii): zero anchored rows needs proof the SOURCE is live
+# 7c. the archive-arm canary (R1 ii as amended by the CTO ruling C1): zero anchored rows needs proof the ARCHIVE arm is live
 : > "$ROOT/rows"; : > "$ROOT/crow-empty"; CROWS="$ROOT/crow-empty" run; reset_knobs
 check "empty body and an EMPTY canary: exit 3 (a dead source is not 'no keeper rows')" 3 "$RC"
-has "empty body and empty canary: the fixed reason" "$OUT" "reader source not live"
+has "empty body and empty canary: the fixed reason" "$OUT" "reader archive arm not live"
 : > "$ROOT/rows"; run
 check "empty body and a LIVE canary: exit 2" 2 "$RC"
 : > "$ROOT/rows"; STUB_CRC=7 run; reset_knobs
 check "empty body and a canary that exits 7: exit 3" 3 "$RC"
-has "canary exit 7: the fixed reason" "$OUT" "reader source not live"
+has "canary exit 7: the fixed reason" "$OUT" "reader archive arm not live"
 hasnt "canary failure: user withheld" "$OUT" "secret-user"; hasnt "canary failure: host withheld" "$OUT" "secret-host"
 hasnt "canary failure: canary string withheld" "$OUT" "$CAN_STR"
 printf '<html>%s</html>\n' "$CAN_STR" > "$ROOT/crow-html"; CROWS="$ROOT/crow-html" run; reset_knobs
@@ -236,6 +263,19 @@ printf '  \n\n' > "$ROOT/crow-blank"; CROWS="$ROOT/crow-blank" run; reset_knobs
 check "empty body and a whitespace-only canary: exit 3" 3 "$RC"
 printf '[1]\n' > "$ROOT/crow-arr"; CROWS="$ROOT/crow-arr" run; reset_knobs
 check "empty body and a canary that decodes to a JSON array, not an object: exit 3" 3 "$RC"
+# the canary must be a {dt, raw} reader row: an exception emitted as a JSON object is not proof of life
+printf '{"exception":"Code: 395. DB::Exception: %s"}\n' "$CAN_STR" > "$ROOT/crow-exc"; CROWS="$ROOT/crow-exc" run; reset_knobs
+check "empty body and an exception-object-only canary: exit 3" 3 "$RC"; hasnt "exception-object canary: never echoed" "$OUT" "$CAN_STR"
+printf '{"dt":"%s"}\n' "$(dt_of $((NOW - 5 * 3600)))" > "$ROOT/crow-nodt"; CROWS="$ROOT/crow-nodt" run; reset_knobs
+check "empty body and a canary object with a dt but no raw: exit 3" 3 "$RC"
+# the canary window excludes the hot window: a row 60 s old can only come from the hot arm, which cannot prove the archive
+hot_row > "$ROOT/crow-hot"; CROWS="$ROOT/crow-hot" run; reset_knobs
+check "empty body and a canary holding only a 60 s old (hot-window) row: exit 3" 3 "$RC"
+has "hot-window-only canary: the fixed reason names the archive arm" "$OUT" "no rows 3-24h back; the hot window cannot answer this"
+{ hot_row; live_row; } > "$ROOT/crow-both"; CROWS="$ROOT/crow-both" run; reset_knobs
+check "empty body and a canary holding a hot row plus a 5 h old row: exit 2" 2 "$RC"
+jq -nc --arg dt "$(dt_of $((NOW - 25 * 3600)))" '{dt:$dt, raw:({message:"too old"}|tojson)}' > "$ROOT/crow-old"; CROWS="$ROOT/crow-old" run; reset_knobs
+check "empty body and a canary holding only a 25 h old row (outside --since 24h): exit 3" 3 "$RC"
 # quoting rows only: no anchored row, so the canary is read too
 { row $((NOW - 40 * DAY)) "a PR body quoting $MARKER token=ok rc=0 at=tick"; } > "$ROOT/rows"; run
 check "quoting rows only and a live canary: exit 2, canary read" 2 "$RC"; check "quoting rows only: canary read once" 1 "$(ccalls)"
@@ -245,12 +285,14 @@ check "quoting rows only and a dead canary: exit 3" 3 "$RC"
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; CROWS="$ROOT/crow-empty" run; reset_knobs
 check "anchored measured row beside a dead canary: exit 2 (the canary is not consulted)" 2 "$RC"
 { mrow $((NOW - 1 * DAY)) indeterminate; } > "$ROOT/rows"; CROWS="$ROOT/crow-empty" run; reset_knobs
-check "indeterminate-only beside a dead canary: still exit 3 for its own reason" 3 "$RC"; hasnt "indeterminate-only: not blamed on the source" "$OUT" "reader source not live"
+check "indeterminate-only beside a dead canary: still exit 3 for its own reason" 3 "$RC"; hasnt "indeterminate-only: not blamed on the source" "$OUT" "reader archive arm not live"
 # the canary's shape
 : > "$ROOT/rows"; run
 cargs="$(cat "$ROOT/cargs" 2>/dev/null)"
-check "the canary asks for exactly the last 6 h, one row" "--since 6h --limit 1" "$cargs"
+until_exp="$(date -u -d "@$((NOW - 10800))" '+%Y-%m-%dT%H:%M:%SZ')"
+check "the canary asks for the archive-only window (24 h back, ending 3 h ago), one row" "--since 24h --until $until_exp --limit 1" "$cargs"
 hasnt "the canary never filters (--grep)" "$cargs" "--grep"
+hasnt "the canary never reads the hot-only window (--since 6h)" "$cargs" "--since 6h"
 hasnt "the canary never passes --raw-only" "$cargs" "--raw-only"
 hasnt "the canary never passes --no-archive (default mode reads hot + archive)" "$cargs" "--no-archive"
 
@@ -302,6 +344,14 @@ check "reader script missing: exit 3" 3 "$RC"
 for v in QH QU QP; do
   mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; eval "$v=''"; run
   check "empty $v: exit 3" 3 "$RC"; check "empty $v: reader never called" 0 "$(calls)"; reset_knobs
+done
+
+# 10b. NOW_EPOCH: a positive decimal without a leading zero (a leading zero is OCTAL inside (( )))
+mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"
+for bad_now in 0 017 08 -5 1e9 12x; do
+  NOWV="$bad_now" run; reset_knobs
+  check "NOW_EPOCH=$bad_now: exit 3" 3 "$RC"; has "NOW_EPOCH=$bad_now: the fixed reason" "$OUT" "unusable NOW_EPOCH"
+  check "NOW_EPOCH=$bad_now: reader never called" 0 "$(calls)"
 done
 
 # 11. xtrace refusal: 78 before any read, with or without credentials
@@ -433,7 +483,18 @@ if run_battery "${1:-}"; then
   mutate_run m6d-canary-dropped        '[mut:canary]'      ':' 'empty body and an EMPTY canary: exit 3 (a dead source is not '"'"'no keeper rows'"'"')'
   mutate_run m6e-canary-rc-ignored     '[mut:canary-rc]'   ':' 'empty body and a canary that exits 7: exit 3'
   mutate_run m6f-canary-shape-ignored  '[mut:canary-shape]' ':' 'empty body and an HTML canary: exit 3'
-  mutate_sub m6g-canary-filters        'bash "$QUERY" --since 6h --limit 1' '--since 6h --limit 1' '--since 6h --limit 1 --raw-only' 'the canary asks for exactly the last 6 h, one row'
+  mutate_sub m6g-canary-filters        'CAN="$(bash "$QUERY"' '--limit 1' '--limit 1 --raw-only' 'the canary asks for the archive-only window (24 h back, ending 3 h ago), one row'
+  mutate_sub m6g2-canary-until-dropped 'CAN="$(bash "$QUERY"' ' --until "$until_iso"' '' 'empty body and a canary holding only a 60 s old (hot-window) row: exit 3'
+  mutate_sub m6g3-canary-hot-window    'CAN="$(bash "$QUERY"' '--since 24h' '--since 6h' 'the canary never reads the hot-only window (--since 6h)'
+  mutate_sub m6k-canary-shape-object-only 'if type == "object" then ((.dt | type)' 'if type == "object" then ((.dt | type) == "string" and (.raw | type) == "string") else false end' 'type == "object"' 'empty body and an exception-object-only canary: exit 3'
+  mutate_sub m6l-tie-rule-dropped      '[mut:classify]'    ' else if($2+0==n && k=="fail"){c="fail"}' '' 'two measured rows in the same second: the class is fail (conservative)'
+  mutate_sub m6m-tie-last-row-wins     '[mut:classify]'    'else if($2+0==n && k=="fail"){c="fail"}' 'else if($2+0==n){c=k}' 'two measured rows in the same second, fail listed first: the class is fail'
+  mutate_sub m6n-epoch-zero-accepted   '[mut:classify]'    '$2=="-" || $2+0<=0' '$2=="-"' 'a sole measured row dated at the epoch: exit 3, not a 20717-day age'
+  mutate_sub m6o-object-shape-dropped  'then "X\t-\t-"'    ' or (($r.dt | type) != "string") or (($r.raw | type) != "string")' '' 'an old measured row plus an exception-object tail: exit 3, never a false ACTION REQUIRED'
+  mutate_sub m6o2-dt-clause-dropped    'then "X\t-\t-"'    ' or (($r.dt | type) != "string")' '' 'an object with a raw but no dt beside a valid row: exit 3'
+  mutate_sub m6o3-raw-clause-dropped   'then "X\t-\t-"'    ' or (($r.raw | type) != "string")' '' 'an object with a dt but no raw beside a valid row: exit 3'
+  mutate_sub m6p-now-epoch-octal-regex 'unusable NOW_EPOCH' '^[1-9][0-9]{0,15}$' '^[0-9]+$' 'NOW_EPOCH=017: the fixed reason'
+  mutate_sub m6q-fail-note-dropped     'The newest measured row is a FAILED verdict' 'a resolved page is not recovery' 'a note' 'NOT YET after a fail row: a resolved page is not recovery'
   mutate_sub m6h-token-class-hardcoded '[mut:tokclass]'    'newest_measured_token=${NEWCLS}' 'newest_measured_token=ok' 'fail-then-dark: the newest measured token class is fail'
   mutate_sub m6i-env-seam-reintroduced '[mut:query-path]'  'QUERY="$SCRIPT_DIR/../betterstack-query.sh"' 'QUERY="${LUKS_KEEPER_QUERY_SCRIPT:-$SCRIPT_DIR/../betterstack-query.sh}"' 'an exported LUKS_KEEPER_QUERY_SCRIPT is ignored: the evil script is never run'
   mutate_sub m6j-marker-typo           '[mut:marker]'      'KEY_PROBE' 'KEY_PR0BE' 'probe MARKER equals the paging alert'"'"'s anchored marker in betterstack-logs-alerts.tf'
@@ -442,12 +503,12 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (an --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=152; MIN_BATTERY=33
+MIN_FIXTURE=189; MIN_BATTERY=44
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-luks-keeper-dark-11265.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
 if [ -z "${FT_INNER:-}" ]; then
   if [ "$FIX_N" -lt "$MIN_FIXTURE" ]; then printf 'FLOOR: only %s fixture assertions ran, expected at least %s\n' "$FIX_N" "$MIN_FIXTURE"; exit 1; fi
-  if [ "$LEDGER_N" -gt "$FIX_N" ] && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
+  if run_battery "${1:-}" && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
 fi
 [ "$FAIL" -eq 0 ]

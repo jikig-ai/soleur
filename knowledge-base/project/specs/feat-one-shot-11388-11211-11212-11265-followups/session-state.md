@@ -15,7 +15,7 @@
 - 11211 sweeper stays deferred (CTO); ship a notify-only follow-through probe instead. 11211 stays open with Ref only.
 - 11265 keeper trio deferred (needs an image mint, forbidden here); ship a dark-probe follow-through, exits 2/3/5 only. 11265 stays open with Ref only.
 - 11388 closes: one family-wide structure suite plus a minimal census widening of the key-probe guard.
-- 11212 closes: pill deletion, type-level test, minimal .pen; remaining comment items tracked in 11486.
+- 11212 closes: pill deletion, type-level test, minimal .pen; remaining comment items of #11212 carried to the `deferred-scope-out` tracker 11486 (its first item: the live `pg_policies` UPDATE-policy check on `public.messages`, a P1 migration if no owner UPDATE policy exists).
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto (x4), ux-design-lead, review panel agents.
@@ -44,4 +44,8 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto (x4)
 | suite bound, weight row, presence-only timing | structure suite cost never priced | performance, observability, code-quality, pattern-recognition, git-history | 86d055568d |
 | helper self-tests, mutant bash -n, named-FAIL attribution, floors | probe-suite instrument integrity | test-design, code-quality | 50de6a4899 |
 | leading-zero octal, TLS env unset, tripwire label (11211) | probe hardening | security | 50de6a4899 |
-| #11486 priority + zero-event window; #11265 comment not yet posted | durable records state unperformed acts | git-history, architecture | ship-time (GitHub-only) |
+| #11486 states a priority and a zero-event window as settled (its priority is the operator's call and its first item is the live UPDATE-policy check, not copy); #11265 comment not yet posted | durable records state unperformed acts | git-history, architecture | ship-time (GitHub-only) |
+
+## Review Phase, fix round 1 (docs and comments)
+- CTO ruling C1 (option B): the 11265 liveness canary reads `--since 24h --until <3 hours ago>` and so proves the archive arm; recorded as a new row in decision-challenges.md `## Amendments 2026-10-29 (fix round 1)`, together with the factual corrections (STALE has two reasons, the 23 h cap is an assumption, the dead-man PR does not exist yet, the count-variable window is about 26 h, apply evidence cited from runs 40744937376 and 40782617701).
+- Still open for the lead at ship (GitHub-only): the #11265 and #11211 directives, labels and comments; the sweeper run-log check after the first eligible sweep (tasks 3.4, 4.4).

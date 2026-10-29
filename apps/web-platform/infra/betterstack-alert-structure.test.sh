@@ -13,8 +13,10 @@
 # in EVERY *.tf of the infra root (presence rows 1-24 below, each one verdict over the whole set):
 #   1-4   census: at least 19 alerts and 19 explorations, every enumerated header yields a block (a header
 #         `block_of` cannot extract would otherwise be invisible to every row after it; an UNQUOTED label
-#         is enumerated and then reds here, never skipped), and at least 15 alert guards under
-#         apps/web-platform/test/infra. Rows 1-4 are all `--census-only` runs.
+#         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
+#         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
+#         the enumerator's sed cannot see, `resource"logtail_exploration_alert" "x" {`, reds as un-enumerated),
+#         and at least 15 alert guards under apps/web-platform/test/infra. Rows 1-4 are all `--census-only` runs.
 #   5-7   closed attribute set: top-level keys of each alert equal REQUIRED_ATTRS + OPTIONAL_ATTRS, plus
 #         exactly one `escalation_target` block. No family-wide attribute VALUE pins: the per-alert guards
 #         own `push`, `call`, the windows and the SQL.
@@ -24,22 +26,27 @@
 #   11    no `removed`, `moved` or `import` block names a logtail_exploration* address
 #   12    no `*override.tf`, `*override.tf.json` or `*.tf.json` in the root
 #   13    no symlink anywhere under the infra root (a `zz.tf -> elsewhere` is loaded by Terraform and read by
-#         no row here)
+#         no row here); find's own exit status is read, and only the root's own `.terraform` is skipped
 #   14    no `logtail_*` resource declared in a `.tf` OUTSIDE the root's own `*.tf` (a subdirectory or module
-#         file is invisible to the root enumeration and to every guard)
+#         file is invisible to the root enumeration and to every guard) and no root `module` block whose
+#         `source` is not `./<subdir>...` (a remote or `..` source loads .tf no row here can read)
 #   15-17 provider tripwire: the lock's `logtail` constraint equals main.tf's literal, the lock version
 #         equals PROVIDER_LOCK_VERSION below, and main.tf's `source` equals PROVIDER_SOURCE (a tripwire, NOT
 #         an integrity proof)
 #   18-19 CI pin: every apps/web-platform/test/infra/*alert*.test.sh is a plain `bash <path>` step in
 #         infra-validation.yml whose step keys are exactly {name, run} (an allow-list: any other key, `if:`,
 #         `continue-on-error:`, `env:`, `shell:` ... reds), and the WHOLE job block (job-level keys after
-#         `steps:` included) carries no `continue-on-error:`, `*_GUARD_*` / `ALERT_STRUCT_*` env or `if:` other
-#         than the job's one legitimate dedup gate (JOB_IF_ALLOWED); same for workflow-level env. Line-based
-#         awk, no PyYAML. This is the suite's second chokepoint (the first is logtail_blocks / block_text).
-#   20    no non-comment line of infra-validation.yml names `ALERT_STRUCT_` (those variables redirect this
-#         suite at another tree)
+#         `steps:` included) is an allow-list too (runs-on, needs, if == JOB_IF_ALLOWED, permissions,
+#         timeout-minutes, steps, strategy, name) with no `defaults:`, no `GUARD_*` (bare or prefixed) /
+#         `ALERT_STRUCT_*` / BASH_ENV / SHELLOPTS / BASHOPTS / ENV env and no $GITHUB_ENV / $GITHUB_PATH write;
+#         workflow level refuses `defaults:` and the same env names. Line-based awk, no PyYAML. This is the
+#         suite's second chokepoint (the first is logtail_blocks / block_text).
+#   20    no non-comment line of ANY workflow under .github/workflows or of scripts/test-all.sh names
+#         `ALERT_STRUCT_` (those variables redirect this suite at another tree). An override run prints
+#         `graded tree: <infra root>` first.
 #   21-22 apply parity, scoped to `logtail_*` ONLY: every enumerated logtail resource has a
-#         `-target=<addr>` line in apply-web-platform-infra.yml, and every `-target=logtail_*` there is an
+#         `-target=<addr>` argument in apply-web-platform-infra.yml (echo/printf lines and comments, whole-line or
+#         trailing, do not count), and every `-target=logtail_*` there is an
 #         enumerated resource. The equality of the WHOLE -target set is deliberately not asserted, and this
 #         suite only READS the workflow.
 #   23-24 predicate controls: synthetic blocks prove the meta-argument and attribute-set predicates pass a
@@ -65,7 +72,7 @@
 # harness rows that edit the suite or the lexer itself, through a scratch repo skeleton), and requires rc=1 plus
 # the row's own FAIL text. rc>=2 is the instrument, not evidence. Tracked files are never written; a checksum of
 # the real infra root and both workflows is compared at exit (git diff is not used: a dirty worktree must not
-# fail it). Inner runs are ~4-6 s each (header enumeration, then one lexer pass per block) and run in parallel;
+# fail it). Inner runs are ~10-12 s each (header enumeration, then one lexer pass per block) and run in parallel;
 # no row depends on wall-clock time.
 #
 # Usage: bash apps/web-platform/infra/betterstack-alert-structure.test.sh [--presence-only | --census-only]
@@ -112,6 +119,10 @@ WF="${ALERT_STRUCT_WF:-$REPO/.github/workflows/infra-validation.yml}"
 APPLY_WF="${ALERT_STRUCT_APPLY_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
 GUARDS="${ALERT_STRUCT_GUARDS:-$REPO/apps/web-platform/test/infra}"
 HCL_LIB="$REPO/tests/scripts/lib/hcl-effective-text.sh"
+# An override redirects the graded tree: say so on every run, so a log never reads as a verdict on the real root.
+for _v in ALERT_STRUCT_INFRA ALERT_STRUCT_WF ALERT_STRUCT_APPLY_WF ALERT_STRUCT_GUARDS; do
+  if [ -n "${!_v:-}" ]; then printf 'graded tree: %s (workflow %s, apply workflow %s, guards %s)\n' "$INFRA" "$WF" "$APPLY_WF" "$GUARDS"; break; fi
+done
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -171,6 +182,21 @@ logtail_blocks() {
       | while IFS='|' read -r t n; do printf '%s|%s|%s\n' "$f" "$t" "$n"; done
   done
 }
+# FAIL-CLOSED CROSS-CHECK for the enumerator above (#11483 review). logtail_blocks only sees a header its sed
+# recognises; `resource"logtail_exploration_alert" "x" {` (no space after `resource`) is valid HCL and invisible to
+# it. Every code line (comments, heredoc bodies and trailing comments dropped) of every root *.tf that names
+# logtail_exploration must therefore be an ENUMERATED header (the SAME prefix as the sed) or a
+# `logtail_exploration*.<n>.id` reference; anything else is printed as `file:line`.
+logtail_strays() {
+  local f
+  for f in "$INFRA"/*.tf; do
+    [ -e "$f" ] || continue
+    strip_comments "$f" | blank_heredocs | sed -E 's/[[:space:]]*(#|\/\/).*$//' | grep -nF 'logtail_exploration' \
+      | grep -vE '^[0-9]+:[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?[^" {]+' \
+      | grep -vE '^[0-9]+:[[:space:]]*exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.[A-Za-z0-9_-]+\.id[[:space:]]*$' \
+      | sed "s|^|$(basename "$f"):|"
+  done
+}
 # One block, code-only: brace-depth extraction, then heredoc bodies blanked.
 block_text() { block_of "$1" "$2" "$3" | blank_heredocs; }
 
@@ -216,6 +242,18 @@ surgery_in() {
     }'
 }
 
+# `module` blocks of ONE file (comment- and heredoc-blind): prints each block's depth-1 `source` literal, or `-` when
+# the block has none. A single-line `module "x" { source = "..." }` has no depth-1 line and reads as `-` (fail closed).
+module_sources_in() {
+  strip_comments "$1" | blank_heredocs | awk "$HCL_AWK_FUNCS"'
+    !inb && $0 ~ /^[[:space:]]*module([[:space:]]|")/ { inb = 1; d = 0; src = "-" }
+    inb {
+      if (d == 1 && match($0, /^[[:space:]]*source[[:space:]]*=[[:space:]]*"[^"]*"/)) { src = substr($0, RSTART, RLENGTH); sub(/^[^"]*"/, "", src); sub(/"$/, "", src) }
+      c = cv($0); o = gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d += o - x
+      if (d <= 0 && o + x > 0) { print src; inb = 0 }
+    }'
+}
+
 lock_field() {  # lock_field <version|constraints> -> value of the logtail provider entry in the lock
   awk -v f="$1" '/^provider "registry.terraform.io\/betterstackhq\/logtail" \{/ { i = 1; next }
     i && /^\}/ { exit }
@@ -226,11 +264,20 @@ main_constraint() { main_logtail_field version; }
 # CI pin: for ONE guard path, prints one reason line per defect. `W:` = not wired as a plain step,
 # `M:` = masked. Empty output = wired plainly and unmasked.
 #   step  : every step-level key must be `name` or `run` (ALLOW-list; an unlisted key is the defect, whatever it is)
-#   job   : the WHOLE job block, `steps:` list excluded: job-level keys that appear before OR after `steps:`
-#   file  : workflow-level lines before `jobs:`
-# `*_GUARD_*` and `ALERT_STRUCT_*` are the env names that redirect a guard or this suite at another tree.
+#   job   : the WHOLE job block, `steps:` list excluded: job-level keys that appear before OR after `steps:` are an
+#           ALLOW-list {runs-on, needs, if (== JOB_IF_ALLOWED), permissions, timeout-minutes, steps, strategy, name};
+#           `defaults:`, a shell-injection env name and a $GITHUB_ENV / $GITHUB_PATH write anywhere in the job (run
+#           bodies included: an earlier step poisons every later one) are refused by name
+#   file  : workflow-level lines before `jobs:`: no `defaults:` (a default shell rewrites every step), no
+#           shell-injection env name, no guard-redirect env name
+# `*GUARD_*` (any name containing `GUARD_`, with or without a prefix: the guards read GUARD_TF, GUARD_SCRIPTS_DIR,
+# GUARD_SERVER_TF, GUARD_VECTOR_TOML bare) and `ALERT_STRUCT_*` are the env names that redirect a guard or this
+# suite at another tree. BASH_ENV, SHELLOPTS, BASHOPTS and ENV are the names that make bash source or change a
+# program before the guard's first line.
 ci_pin_of() {  # ci_pin_of <workflow> <repo-relative guard path>
   awk -v P="$2" -v JOBIF="$JOB_IF_ALLOWED" '
+    function guard(s) { return s ~ /(^|[^A-Z0-9])[A-Z_]*GUARD_[A-Z_]+/ }
+    function shenv(s) { return s ~ /(^|[^A-Za-z0-9_])(BASH_ENV|SHELLOPTS|BASHOPTS|ENV)[[:space:]]*[:=]/ }
     function ind(s) { match(s, /^[[:space:]]*/); return RLENGTH }
     function blank(s) { return s ~ /^[[:space:]]*$/ }
     function cmt(s) { return s ~ /^[[:space:]]*#/ }
@@ -264,7 +311,7 @@ ci_pin_of() {  # ci_pin_of <workflow> <repo-relative guard path>
         for (m = dash; m < k; m++) {
           if (blank(L[m]) || cmt(L[m])) continue
           if (L[m] ~ /^[[:space:]]*(-[[:space:]]+)?(if|continue-on-error):/) print "M:step has " (L[m] ~ /continue-on-error/ ? "continue-on-error" : "if")
-          if (L[m] ~ /_GUARD_/) print "M:step sets a *_GUARD_* env"
+          if (guard(L[m])) print "M:step sets a *_GUARD_* env"
           if (L[m] ~ /ALERT_STRUCT_/) print "M:step sets an ALERT_STRUCT_* env"
           line = L[m]
           if (m == dash) sub(/^[[:space:]]*-[[:space:]]+/, "", line)
@@ -284,27 +331,50 @@ ci_pin_of() {  # ci_pin_of <workflow> <repo-relative guard path>
           s = L[m]
           if (blank(s) || cmt(s)) continue
           if (ind(s) <= 2) break
-          if (ind(s) == 4 && s !~ /^[[:space:]]*-/) region = (s ~ /^    steps:/) ? "steps" : "job"
+          if (s ~ /GITHUB_(ENV|PATH)/) print "M:job writes $GITHUB_ENV / $GITHUB_PATH (every later step would run poisoned)"
+          if (ind(s) == 4 && s !~ /^[[:space:]]*-/) {
+            region = (s ~ /^    steps:/) ? "steps" : "job"
+            jk = s; sub(/^[[:space:]]+/, "", jk); sub(/[: \t].*$/, "", jk)
+            if (jk !~ /^(runs-on|needs|if|permissions|timeout-minutes|steps|strategy|name)$/) print "M:job key " jk " is outside the job allow-list"
+            if (jk == "defaults") print "M:job has defaults: (a default shell rewrites every step)"
+          }
           if (region != "job") continue
           if (s ~ /^    continue-on-error:/) print "M:job has continue-on-error"
-          if (s ~ /_GUARD_/) print "M:job sets a *_GUARD_* env"
+          if (shenv(s)) print "M:job sets a shell-injection env (BASH_ENV, SHELLOPTS, BASHOPTS or ENV)"
+          if (guard(s)) print "M:job sets a *_GUARD_* env"
           if (s ~ /ALERT_STRUCT_/) print "M:job sets an ALERT_STRUCT_* env"
           if (s ~ /^    if:/) { v = s; sub(/^    if:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v); if (v != JOBIF) print "M:job has an if: other than the dedup gate" }
         }
         for (m = 1; m <= NR; m++) {
           if (L[m] ~ /^jobs:/) break
           if (cmt(L[m])) continue
-          if (L[m] ~ /_GUARD_/) print "M:workflow-level *_GUARD_* env"
+          if (L[m] ~ /^defaults:/) print "M:workflow-level defaults: (a default shell rewrites every step)"
+          if (shenv(L[m])) print "M:workflow-level shell-injection env (BASH_ENV, SHELLOPTS, BASHOPTS or ENV)"
+          if (guard(L[m])) print "M:workflow-level *_GUARD_* env"
           if (L[m] ~ /ALERT_STRUCT_/) print "M:workflow-level ALERT_STRUCT_* env"
         }
       }
     }' "$1" | sort -u
 }
-# Non-comment lines of the workflow that name ALERT_STRUCT_ (those variables point this suite at another tree).
+# Non-comment lines of one file that name ALERT_STRUCT_ (those variables point this suite at another tree).
 struct_env_lines() { grep -vE '^[[:space:]]*#' "$1" | grep -E 'ALERT_STRUCT_' | sed -n '1,3p' | tr '\n' ' '; }
+# One `<file> names ALERT_STRUCT_ (<lines>)` per offending file: the graded workflow, every workflow of the repo and
+# scripts/test-all.sh (the runner that could export the variable for this suite).
+struct_env_hits() {
+  local f l
+  for f in "$WF" "$REPO"/.github/workflows/*.yml "$REPO/scripts/test-all.sh"; do
+    [ -r "$f" ] || continue
+    l="$(struct_env_lines "$f")"
+    [ -z "$l" ] || printf '%s names ALERT_STRUCT_ (%s)\n' "$(basename "$f")" "${l% }"
+  done | sort -u
+}
 
-# The -target addresses of a workflow, scoped to logtail_* (comments dropped), one per line.
-logtail_targets_of() { grep -vE '^[[:space:]]*#' "$1" | grep -oE -- '-target=logtail_[A-Za-z0-9_]+\.[A-Za-z0-9_-]+' | sed 's/^-target=//' | sort -u; }
+# The -target addresses of a workflow, scoped to logtail_* and to REAL arguments: whole-line comments, echo/printf
+# lines and trailing `# ...` comments are dropped, so a -target that is only TEXT cannot satisfy the parity rows.
+logtail_targets_of() {
+  grep -vE '^[[:space:]]*(#|(-[[:space:]]+)?(run:[[:space:]]*)?(echo|printf)([[:space:]]|$))' "$1" | sed -E 's/[[:space:]]+#.*$//' \
+    | grep -oE -- '-target=logtail_[A-Za-z0-9_]+\.[A-Za-z0-9_-]+' | sed 's/^-target=//' | sort -u
+}
 
 # Declared-set helpers
 # main.tf's logtail provider field (`source` / `version`), from the required_providers block
@@ -329,6 +399,7 @@ while IFS='|' read -r _f _t _n; do
   esac
 done < <(logtail_blocks)
 NA=${#ALERT_NAMES[@]}; NE=${#EXPL_NAMES[@]}
+STRAYS=(); while IFS= read -r _s; do [ -z "$_s" ] || STRAYS+=("$_s"); done < <(logtail_strays)
 
 join() { local IFS='; '; printf '%s' "$*"; }
 
@@ -339,9 +410,11 @@ join() { local IFS='; '; printf '%s' "$*"; }
 [ "$NE" -ge "$CENSUS_FLOOR_EXPLORATIONS" ] \
   && ok "census floor: $NE logtail_exploration blocks enumerated (floor $CENSUS_FLOOR_EXPLORATIONS)" \
   || no "census floor: only $NE logtail_exploration blocks enumerated (floor $CENSUS_FLOOR_EXPLORATIONS): edit the census floor with a legitimate removal"
-[ "${#NOBLOCK[@]}" -eq 0 ] \
-  && ok "every enumerated header yields an extractable block" \
-  || no "no extractable block for: $(join "${NOBLOCK[@]}"): the header is indented, unquoted or malformed and every row below would skip it; start the resource at column 0 with quoted labels"
+if [ "${#NOBLOCK[@]}" -eq 0 ] && [ "${#STRAYS[@]}" -eq 0 ]; then
+  ok "every enumerated header yields an extractable block, and no other code line names a logtail_exploration"
+else
+  no "census: $([ "${#NOBLOCK[@]}" -eq 0 ] || printf 'no extractable block for: %s: the header is indented, unquoted or malformed and every row below would skip it; start the resource at column 0 with quoted labels. ' "$(join "${NOBLOCK[@]}")")$([ "${#STRAYS[@]}" -eq 0 ] || printf 'un-enumerated logtail_exploration line(s): %s: neither an enumerated header nor a logtail_exploration*.<n>.id reference, so no row would read it; write the header as resource "logtail_exploration[_alert]" "<name>" {' "$(join "${STRAYS[@]}")")"
+fi
 GUARD_LIST=()
 for _g in "$GUARDS"/*alert*.test.sh; do [ -e "$_g" ] && GUARD_LIST+=("apps/web-platform/test/infra/$(basename "$_g")"); done
 [ "${#GUARD_LIST[@]}" -ge "$GUARD_CENSUS_FLOOR" ] \
@@ -424,13 +497,36 @@ done
   || no "override file present in the infra root ($(cd "$INFRA" && ls -- *override.tf *.tf.json 2>/dev/null | tr '\n' ' ')): Terraform merges it over the reviewed text; delete it"
 
 # ── 13 no symlinks ─────────────────────────────────────────────────────────────────────────────────
-_sl="$(find "$INFRA" -type l -not -path '*/.terraform/*' -printf '%P\n' 2>/dev/null | sort | tr '\n' ' ')"
-[ -z "$_sl" ] \
-  && ok "no symlink under the infra root" \
-  || no "symlink under the infra root: ${_sl% }: a link is loaded by Terraform as the file it points at and read by no row here; replace it with a regular file"
+# find's own status is read (a find that failed to walk the tree found "no symlink" by not looking), and only the
+# ROOT's own .terraform is skipped (a nested .terraform directory is a place to hide a link, not a provider cache).
+_slrc=0; _slraw="$(find "$INFRA" -type l -not -path "$INFRA/.terraform/*" -printf '%P\n' 2>/dev/null)" || _slrc=$?
+_sl="$(printf '%s\n' "$_slraw" | sed '/^$/d' | sort | tr '\n' ' ')"
+if [ "$_slrc" -ne 0 ]; then
+  no "symlink scan: find exited $_slrc under the infra root: an unreadable tree is not evidence of no symlink; fix the permissions"
+elif [ -z "$_sl" ]; then
+  ok "no symlink under the infra root"
+else
+  no "symlink under the infra root: ${_sl% }: a link is loaded by Terraform as the file it points at and read by no row here; replace it with a regular file"
+fi
 
-# ── 14 no logtail_* resource outside the root's own *.tf ───────────────────────────────────────────
+# ── 14 no logtail_* resource outside the root's own *.tf, no module block that leaves the root's subdirectories ──
+# A root `module` block whose source is not `./<subdir>/...` (a registry or git source, an absolute path, a `..`
+# escape, or no depth-1 source at all) pulls in .tf this suite never reads. The one legitimate module block today
+# (git-data.tf, ./modules/git-data-userdata) is a root subdirectory, which the file scan below does read.
 _out=()
+_mods="$(for _f in "$INFRA"/*.tf; do
+  [ -e "$_f" ] || continue
+  while IFS= read -r _src; do printf '%s|%s\n' "$(basename "$_f")" "$_src"; done < <(module_sources_in "$_f")
+done)"
+while IFS='|' read -r _mf _src; do
+  [ -n "$_mf" ] || continue
+  case "$_src" in
+    *..*|-|"") _out+=("$_mf: module with source '$_src' (non-local module source)") ;;
+    ./[A-Za-z0-9_]*) : ;;
+    *) _out+=("$_mf: module with source '$_src' (non-local module source)") ;;
+  esac
+done <<<"$_mods"
+_fndrc=0; _found="$(find "$INFRA" -mindepth 2 \( -name '*.tf' -o -name '*.tf.json' \) -not -path "$INFRA/.terraform/*" -print 2>/dev/null | sort)" || _fndrc=$?
 while IFS= read -r _f; do
   [ -n "$_f" ] || continue
   case "$_f" in
@@ -438,10 +534,14 @@ while IFS= read -r _f; do
     *) _c="$(strip_comments "$_f" | blank_heredocs | grep -cE '^[[:space:]]*resource[[:space:]]+"?logtail_')" ;;
   esac
   [ "${_c:-0}" -eq 0 ] || _out+=("${_f#"$INFRA"/}")
-done < <(find "$INFRA" -mindepth 2 \( -name '*.tf' -o -name '*.tf.json' \) -not -path '*/.terraform/*' -print 2>/dev/null | sort)
-[ "${#_out[@]}" -eq 0 ] \
-  && ok "no logtail_* resource is declared outside the infra root's own *.tf files" \
-  || no "logtail_* resource outside the infra root: $(join "${_out[@]}"): a subdirectory or module file is invisible to the root enumeration and to every guard; declare it in a root *.tf"
+done <<<"$_found"
+if [ "$_fndrc" -ne 0 ]; then
+  no "subdirectory scan: find exited $_fndrc under the infra root: an unreadable tree is not evidence of no logtail_* resource; fix the permissions"
+elif [ "${#_out[@]}" -eq 0 ]; then
+  ok "no logtail_* resource is declared outside the infra root's own *.tf files, and every root module block has a ./<subdir> source"
+else
+  no "logtail_* resource or non-local module outside the infra root: $(join "${_out[@]}"): a subdirectory, remote module or module file is invisible to the root enumeration and to every guard; declare it in a root *.tf and keep module sources under ./"
+fi
 
 # ── 15-17 provider tripwire ────────────────────────────────────────────────────────────────────────
 _lc="$(lock_field constraints)"; _lv="$(lock_field version)"; _mc="$(main_constraint)"; _ms="$(main_logtail_field source)"
@@ -473,11 +573,11 @@ done
   && ok "CI pin: no alert-guard step (keys exactly {name, run}), job block or workflow env is masked" \
   || no "CI pin masked: $(join "${_mk[@]}"): restore the plain 'bash <path>' step with only name:/run: keys and no job- or workflow-level if:/continue-on-error:/*_GUARD_*/ALERT_STRUCT_* env"
 
-# ── 20 no ALERT_STRUCT_ env anywhere in the workflow ───────────────────────────────────────────────
-_se="$(struct_env_lines "$WF")"
-[ -z "$_se" ] \
-  && ok "CI env: no line of infra-validation.yml names ALERT_STRUCT_ (the override variables of this suite)" \
-  || no "CI env: infra-validation.yml names ALERT_STRUCT_ (${_se% }): those variables point this suite at another tree; remove it"
+# ── 20 no ALERT_STRUCT_ env anywhere in a workflow or the test runner ──────────────────────────────
+_se=(); while IFS= read -r _s; do [ -z "$_s" ] || _se+=("$_s"); done < <(struct_env_hits)
+[ "${#_se[@]}" -eq 0 ] \
+  && ok "CI env: no workflow and not scripts/test-all.sh names ALERT_STRUCT_ (the override variables of this suite)" \
+  || no "CI env: $(join "${_se[@]}"): those variables point this suite at another tree; remove it"
 
 # ── 21-22 apply parity, scoped to logtail_* ────────────────────────────────────────────────────────
 _enum="$(for _k in "${!BLK[@]}"; do printf '%s.%s\n' "${_k%%|*}" "${_k#*|}"; done | sort -u)"
@@ -590,7 +690,7 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
   #   fatal : inner rc must be 2 (the instrument refuses to run)
   mut() {
     local want="$1" label="$2" tag="$3" kind="$4" prog="$5" ssed="${6:-}" libapp="${7:-}"
-    local w root wf awf suite b0 b1 w0 w1
+    local w root wf awf suite b0 b1 w0 w1 rootall
     MUT_N=$(( ${MUT_N:-0} + 1 ))
     w="$MUT_DIR/s$MUT_N"; _in_mut "$w" || { printf '[FATAL] scratch %s outside MUT_DIR\n' "$w" >&2; exit 2; }
     mkdir -p "$w" || exit 2
@@ -601,10 +701,12 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
       cp -P "$INFRA/.terraform.lock.hcl" "$root/" || exit 2
       cp -P "$WF" "$wf" || exit 2
       cp -P "$APPLY_WF" "$awf" || exit 2
+      rootall="$root"
     else
       fake_root "$w/repo"
       root="$w/repo/apps/web-platform/infra"; wf="$w/repo/.github/workflows/infra-validation.yml"
       awf="$w/repo/.github/workflows/apply-web-platform-infra.yml"
+      rootall="$w/repo"   # a fake-root program may plant a file outside infra/ (another workflow, scripts/test-all.sh)
       suite="$root/betterstack-alert-structure.test.sh"
       if [ -n "$ssed" ]; then
         cp -P "$suite" "$suite.orig" && sed -i "$ssed" "$suite" && ! cmp -s "$suite" "$suite.orig" \
@@ -613,14 +715,14 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
       fi
       if [ -n "$libapp" ]; then printf '\n%s\n' "$libapp" >> "$w/repo/tests/scripts/lib/hcl-effective-text.sh"; fi
     fi
-    b0="$(_dsum "$root")"; w0="$(sha256sum < "$wf") $(sha256sum < "$awf")"
+    b0="$(_dsum "$rootall")"; w0="$(sha256sum < "$wf") $(sha256sum < "$awf")"
     if [ "$prog" != "-" ]; then
       printf '%s\n%s\n' "$PRELUDE" "$prog" > "$w/mut.py"
       python3 "$w/mut.py" "$root" "$wf" "$awf" || { no "mutation '$label' did not land (the python program failed)"; return 0; }
-      b1="$(_dsum "$root")"; w1="$(sha256sum < "$wf") $(sha256sum < "$awf")"
+      b1="$(_dsum "$rootall")"; w1="$(sha256sum < "$wf") $(sha256sum < "$awf")"
       if [ "$b0" = "$b1" ] && [ "$w0" = "$w1" ]; then no "mutation '$label' produced no change"; return 0; fi
     fi
-    # Inner runs execute concurrently (each is a ~4-6 s pass, header enumeration then one lexer pass per block);
+    # Inner runs execute concurrently (each is a ~10-12 s pass, header enumeration then one lexer pass per block);
     # grading happens in grade_all, in row order. MUT_FLAG selects the inner mode (default --presence-only).
     if [ "$kind" = ovr ]; then
       [ -n "$root" ] && [ -n "$wf" ] || { printf '[FATAL] mut: empty override path\n' >&2; exit 2; }
@@ -756,6 +858,45 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
   MUT_FLAG=--census-only mut red "M-24a: --census-only with one alert+exploration pair removed (exit 1, never a vacuous green)" "census floor" ovr \
     's = rd(BT); i = last(s); a, b = span(s, list(AH.finditer(s))[i]); nm = AH.search(s[a:b]).group(1); s = s[:a] + s[b:]; e = [m for m in EH.finditer(s) if m.group(1) == nm][0]; c, d = span(s, e); wr(BT, s[:c] + s[d:])'
 
+  # ── #11483 review round 1: the CI pin is an allow-list at job level, the guard-env pattern matches bare names,
+  #    module sources, a header the enumerator's sed cannot see, text-only -target lines, other workflows ─────────
+  mut red "M-25a: BASH_ENV as a JOB-level env (bash would source it before the guard's first line)" "job sets a shell-injection env" ovr \
+    'p = wf; s = rd(p); k = "  deploy-script-tests-fixed:\n"; assert s.count(k) == 1; wr(p, s.replace(k, k + "    env:\n      BASH_ENV: /tmp/elsewhere\n"))'
+  mut red "M-25b: defaults.run.shell on the guard JOB (rewrites how every run line executes)" "job has defaults:" ovr \
+    'p = wf; s = rd(p); k = "  deploy-script-tests-fixed:\n"; assert s.count(k) == 1; wr(p, s.replace(k, k + "    defaults:\n      run:\n        shell: bash -c \"true\" {0}\n"))'
+  mut red "M-25c: defaults.run.shell at WORKFLOW level" "workflow-level defaults:" ovr \
+    'p = wf; s = rd(p); k = "\nenv:\n"; assert s.count(k) == 1; wr(p, s.replace(k, "\ndefaults:\n  run:\n    shell: bash -c \"true\" {0}\n" + k))'
+  mut red "M-25d: a run body in the guard job appends to \$GITHUB_PATH (a later step would run a planted bash)" "GITHUB_PATH" ovr \
+    'p = wf; s = rd(p); i = s.index("  deploy-script-tests-fixed:\n"); j = s.index("    steps:\n", i) + len("    steps:\n"); wr(p, s[:j] + "      - run: echo /tmp/elsewhere >> \"$GITHUB_PATH\"\n" + s[j:])'
+  mut red "M-25e: BASH_ENV at WORKFLOW level" "workflow-level shell-injection env" ovr \
+    'p = wf; s = rd(p); k = "\nenv:\n"; assert s.count(k) == 1; wr(p, s.replace(k, k + "  BASH_ENV: /tmp/elsewhere\n"))'
+  mut red "M-26a: the bare override name GUARD_TF (no leading underscore) on a guard STEP" "step sets a *_GUARD_* env" ovr \
+    'p = wf; s = rd(p); k = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"; assert s.count(k) == 1; wr(p, s.replace(k, k + "        env:\n          GUARD_TF: /dev/null\n"))'
+  mut red "M-26b: GUARD_SCRIPTS_DIR at JOB level" "job sets a *_GUARD_* env" ovr \
+    'p = wf; s = rd(p); k = "  deploy-script-tests-fixed:\n"; assert s.count(k) == 1; wr(p, s.replace(k, k + "    env:\n      GUARD_SCRIPTS_DIR: /dev/null\n"))'
+  mut red "M-26c: GUARD_VECTOR_TOML at WORKFLOW level" "workflow-level *_GUARD_* env" ovr \
+    'p = wf; s = rd(p); k = "\nenv:\n"; assert s.count(k) == 1; wr(p, s.replace(k, k + "  GUARD_VECTOR_TOML: /dev/null\n"))'
+  mut red "M-27a: a root module block with a remote (git) source" "non-local module source" ovr \
+    'p = os.path.join(root, "dns.tf"); wr(p, rd(p) + "\nmodule \"zz_remote\" {\n  source = \"git::https://example.invalid/m.git//x\"\n}\n")'
+  mut red "M-27b: a root module block whose source escapes the root (../elsewhere)" "non-local module source" ovr \
+    'p = os.path.join(root, "network.tf"); wr(p, rd(p) + "\nmodule \"zz_escape\" {\n  source = \"../elsewhere\"\n}\n")'
+  mut red "M-28: resource\"logtail_exploration_alert\" with NO space after resource (valid HCL the enumerator sed cannot see)" "un-enumerated" ovr \
+    's = rd(BT); wr(BT, s + "\nresource\"logtail_exploration_alert\" \"zz_nospace\" {\n}\n")'
+  mut red "M-29a: an echo line carries the -target= of a resource whose real line was deleted (text, not an argument)" "no -target= line in apply-web-platform-infra.yml" ovr \
+    'p = awf; s = rd(p); k = "              -target=logtail_exploration.egress_gw_probe_fail \\\n"; assert s.count(k) == 1; wr(p, s.replace(k, "              echo \"-target=logtail_exploration.egress_gw_probe_fail\"\n"))'
+  mut red "M-29b: the -target= of a deleted line survives only in a TRAILING comment" "no -target= line in apply-web-platform-infra.yml" ovr \
+    'p = awf; s = rd(p); k = "              -target=logtail_exploration.egress_gw_probe_fail \\\n"; assert s.count(k) == 1; wr(p, s.replace(k, "              true # -target=logtail_exploration.egress_gw_probe_fail\n"))'
+  mut red "M-30a: ALERT_STRUCT_INFRA in ANOTHER workflow of the repo (the check used to read infra-validation.yml only)" "zz-other.yml names ALERT_STRUCT_" fake \
+    'wr(os.path.join(os.path.dirname(wf), "zz-other.yml"), "name: other\non: push\nenv:\n  ALERT_STRUCT_INFRA: /tmp/elsewhere\n")'
+  mut red "M-30b: ALERT_STRUCT_INFRA exported by scripts/test-all.sh" "test-all.sh names ALERT_STRUCT_" fake \
+    'rp = os.path.dirname(os.path.dirname(os.path.dirname(wf))); os.makedirs(os.path.join(rp, "scripts"), exist_ok=True); wr(os.path.join(rp, "scripts", "test-all.sh"), "#!/usr/bin/env bash\nexport ALERT_STRUCT_INFRA=/tmp/elsewhere\n")'
+  mut red "M-31a: a symlink inside a NESTED .terraform directory (only the root's own .terraform is skipped)" "symlink under the infra root" ovr \
+    'd = os.path.join(root, "modules", "x", ".terraform"); os.makedirs(d); os.symlink("../../../main.tf", os.path.join(d, "zz.tf"))'
+  mut red "M-31b: the symlink scan's find fails (nonexistent start path): rc is read, never taken as 'no symlink'" "symlink scan: find exited" fake \
+    - 's#find "\$INFRA" -type l#find "$INFRA/zz-gone" -type l#'
+  mut red "M-31c: the subdirectory scan's find fails: rc is read, never taken as 'no logtail resource outside'" "subdirectory scan: find exited" fake \
+    - 's#find "\$INFRA" -mindepth 2#find "$INFRA/zz-gone" -mindepth 2#'
+
   # ── must-PASS rows: legitimate edits must not red ────────────────────────────────────────────────
   mut pass "M-p1: attribute-order shuffle (check_period/query_period swapped in one alert)" - ovr \
     's = rd(BT); m = list(AH.finditer(s))[mid(s)]; a, b = span(s, m); blk = s[a:b]; x = re.search(r"(?m)^  check_period +=.*\n", blk).group(0); y = re.search(r"(?m)^  query_period +=.*\n", blk).group(0); blk2 = blk.replace(x, "@@X@@").replace(y, x).replace("@@X@@", y); assert blk2 != blk; wr(BT, s[:a] + blk2 + s[b:])'
@@ -780,6 +921,11 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
   MUT_FLAG=--census-only mut pass "M-p10: --census-only runs ONLY the census rows (a planted zz_override.tf, which row 12 reds, does not fail it)" - ovr \
     'wr(os.path.join(root, "zz_override.tf"), "# merged over the reviewed text\n")'
 
+  mut pass "M-p11: a root module block with a LOCAL ./modules source (the git-data shape) stays green" - ovr \
+    'p = os.path.join(root, "dns.tf"); wr(p, rd(p) + "\nmodule \"zz_local\" {\n  source = \"./modules/zz-local\"\n}\n")'
+  mut pass "M-p12: a job-level name:, and a benign workflow-level env name, stay green (the allow-list is not a blanket reject)" - ovr \
+    'p = wf; s = rd(p); k = "  deploy-script-tests-fixed:\n"; assert s.count(k) == 1; s = s.replace(k, k + "    name: guard job\n"); k = "\nenv:\n"; assert s.count(k) == 1; wr(p, s.replace(k, k + "  UNRELATED_FLAG: \"1\"\n"))'
+
   # ── harness rows ──────────────────────────────────────────────────────────────────────────────────
   mut fatal "M-a: the suite's ok() stops moving its counter: the instrument self-test must refuse to run" - fake - \
     's/^ok() { pass=\$((pass + 1)); /ok() { /'
@@ -802,8 +948,9 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
     no "M-census: --census-only on the pristine tree exited $_crc without a 'passed, 0 failed' line: $(sed -n '$p' "$_cl")"
   fi
   # M-flake: the pipe-free reader (fail_line_has) must never false-negative on a log whose first line carries the tag
-  # and whose remainder is far larger than the pipe buffer, 200 runs in a row; and the legacy `| grep -q` form must
-  # reproduce the false-negative on that same log (otherwise this row proves nothing).
+  # and whose remainder is far larger than the pipe buffer, 200 runs in a row. The legacy `| grep -q` form is run 20
+  # times for information only: whether it false-negatives depends on the host's pipe capacity and load, so its count
+  # is reported, never asserted.
   _legacy_fail_line_has() { grep -F '[FAIL]' "$1" | grep -qF -- "$2"; }
   _fl="$MUT_DIR/flake.log"
   { printf '[FAIL] M-flake-tag on the first line\n'
@@ -811,10 +958,18 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
   _flsize="$(wc -c < "$_fl")"; _fl_new=0; _fl_old=0
   for _i in $(seq 1 200); do fail_line_has "$_fl" "M-flake-tag" || _fl_new=$((_fl_new + 1)); done
   for _i in $(seq 1 20); do _legacy_fail_line_has "$_fl" "M-flake-tag" || _fl_old=$((_fl_old + 1)); done
-  if [ "$_flsize" -gt 65536 ] && [ "$_fl_new" -eq 0 ] && [ "$_fl_old" -gt 0 ]; then
-    ok "M-flake: fail_line_has found the tag in 200 of 200 runs on a ${_flsize}-byte log (the legacy grep -q form missed it $_fl_old of 20)"
+  if [ "$_flsize" -gt 65536 ] && [ "$_fl_new" -eq 0 ]; then
+    ok "M-flake: fail_line_has found the tag in 200 of 200 runs on a ${_flsize}-byte log (informational: the legacy grep -q form missed it $_fl_old of 20 here)"
   else
-    no "M-flake: fail_line_has false-negatives $_fl_new of 200 (want 0), legacy form $_fl_old of 20 (want >0, else the log does not reproduce the flake), log $_flsize bytes (want >65536)"
+    no "M-flake: fail_line_has false-negatives $_fl_new of 200 (want 0), log $_flsize bytes (want >65536; informational legacy misses $_fl_old of 20)"
+  fi
+  # M-scorer: negative control for the row scorer (fail_line_has decides "red for the RIGHT reason"). It must accept a
+  # [FAIL] line holding the fragment, and must REFUSE a fragment that is only in an [ok] line and one that no line holds.
+  _sc="$MUT_DIR/scorer.log"; printf '[ok] wrong-reason-frag\n[FAIL] some other defect\n[FAIL] right-reason-frag here\n' > "$_sc"
+  if fail_line_has "$_sc" "right-reason-frag" && ! fail_line_has "$_sc" "wrong-reason-frag" && ! fail_line_has "$_sc" "absent-frag"; then
+    ok "M-scorer: fail_line_has grades a [FAIL] line holding the fragment RIGHT and a fragment found only in an [ok] line or nowhere WRONG"
+  else
+    no "M-scorer: fail_line_has no longer separates the right reason from the wrong one (a row that reds for the wrong reason would pass)"
   fi
 fi
 
@@ -822,8 +977,8 @@ fi
 # adds one row per `mut` call (MUT_N) plus BATTERY_DIRECT_ROWS direct rows. The instrument control above is what
 # catches a floor that drifts past the presence rows (that control, not this comment, is the guard against a dead battery).
 PRESENCE_ROWS=24
-MUT_ROWS=63
-BATTERY_DIRECT_ROWS=2
+MUT_ROWS=83
+BATTERY_DIRECT_ROWS=3
 _floor=$PRESENCE_ROWS
 if [ -z "$PRESENCE_ONLY" ]; then
   [ "${MUT_N:-0}" -eq "$MUT_ROWS" ] || { printf '[FATAL] mutation row count: ran %s, MUT_ROWS %s\n' "${MUT_N:-0}" "$MUT_ROWS" >&2; exit 1; }

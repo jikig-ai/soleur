@@ -711,12 +711,12 @@ _SUITE_BOUNDS=(
   # block's >=1.5x-worst-observed rule and the sibling entries' same basis — a slow day renders as
   # this suite's RED, not a step-ceiling kill.
   "apps/web-platform/infra/git-data-wipe-assert.test.sh=720"
-  # #11388 (review of PR 11483): the family-wide alert structure suite runs its mutation battery as ~65 inner
-  # runs (6 at a time), each a 4-6 s lexer pass, so about 7 runnable processes compete for 4 vCPUs. Measured
-  # 87-125 s wall under load on the dev host (faster than a 4-core CI runner) against the 360 s default.
-  # Pin at 600 (~4.8x the worst local figure, ~1.6x the 360 s default) so a starved leg renders as this
-  # suite's own RED rather than a leg timeout.
-  "apps/web-platform/infra/betterstack-alert-structure.test.sh=600"
+  # #11388 (review of PR 11483): the family-wide alert structure suite runs its mutation battery as ~85 inner
+  # runs (6 at a time), each a 10-12 s lexer pass, so about 7 runnable processes compete for 4 vCPUs. Measured
+  # ~124 s wall idle and 495 s at 6-way load on the dev host (faster than a 4-core CI runner; CI width is 4)
+  # against the 360 s default. Pin at 720 (git-data-wipe-assert precedent; ~1.5x the 495 s loaded figure)
+  # so a starved leg renders as this suite's own RED rather than a leg timeout.
+  "apps/web-platform/infra/betterstack-alert-structure.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

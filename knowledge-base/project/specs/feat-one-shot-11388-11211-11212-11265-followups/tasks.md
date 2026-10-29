@@ -22,14 +22,14 @@ Order inside each phase: tests first (`cq-write-failing-tests-before`).
 - 2.1 Create `apps/web-platform/test/components/acknowledged-pill.test.tsx` (derivePillState table, three renders, `@ts-expect-error` for `enqueue_failed`); confirm `./node_modules/.bin/tsc --noEmit` is red before the edit
 - 2.2 Edit `apps/web-platform/components/dashboard/acknowledged-pill.tsx` (remove `queued`, `enqueue_failed`, the precedence comment)
 - 2.3 Commit `knowledge-base/product/design/dashboard/acknowledged-pill-states.pen` and `.../screenshots/acknowledged-pill-states.png`
-- 2.4 Comment on tracker 11486 about the stale Article 30 register row (g)(6) (legal record, counsel path)
+- 2.4 Tracker 11486 is the `deferred-scope-out` carrier of #11212's remaining comment items; its first and weightiest item is the live `pg_policies` UPDATE-policy check on `public.messages` (a P1 migration if no owner UPDATE policy exists; Discard, `/edit` and the send route's archive all UPDATE `messages`), then the edit-409, `approval_expired`, `not_a_draft` and 503 copy items. Add one comment on it about the stale Article 30 register row (g)(6) (legal record, counsel path); that comment is an addition to the tracker, not its subject
 
 ## Phase 3 - 11211 self-reporting probe
 
 - 3.1 Create `scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh` (PATH-stub curl; exit codes only 2/3/5/78)
 - 3.2 Create `scripts/followthroughs/dispatch-recovery-sweeper-11211.sh` (Sentry + Supabase read-only; pinned single-literal SELECT; fixed-reason failure output, never a response body; two buckets; header with contract, credential posture, RETIREMENT)
 - 3.3 Register the suite in `scripts/test-all.sh` with a `run_suite` line
-- 3.4 Ship-time, GitHub only: directive + `follow-through` label + evidence comment on 11211 (stays open)
+- 3.4 Ship-time, GitHub only: directive + `follow-through` label + evidence comment on 11211 (stays open). Then verify the sweeper actually ran the script: read the `scheduled-followthrough-sweeper.yml` run log for the first sweep on or after `earliest=2026-10-30` and find the script's output line (no comment is indistinguishable from a healthy run; a bare `script=` name or a missing executable bit fails silently, `followthrough-convention.md`)
 
 ## Phase 4 - 11265 dark-probe trigger and ADR
 
@@ -37,7 +37,7 @@ Order inside each phase: tests first (`cq-write-failing-tests-before`).
 - 4.2 Register the suite in `scripts/test-all.sh`
 - 4.2b Add four `.github/CODEOWNERS` rows for the two probes and their suites (`ci-draft-light-soak-9728` precedent)
 - 4.3 Append a new top-level `## Addendum - 2026-10-29 (#11265)` (newest last, after the 2026-10-28 second addendum) to `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` (no new ordinal); add the dark-probe pointer to the `Key-continuity probe (#9927 item 2)` subsection of `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` keeping the heading text
-- 4.4 Ship-time, GitHub only: directive (`earliest=2026-11-29T00:00:00Z`) + `follow-through` label + comment of what remains (items a to f) on 11265 (stays open, `Ref` only)
+- 4.4 Ship-time, GitHub only: directive (`earliest=2026-11-29T00:00:00Z`) + `follow-through` label + comment of what remains (items a to f) on 11265 (stays open, `Ref` only). Then, on or after 2026-11-29, read the sweeper run log for the first sweep and find the script's output line (the first exit-3 from a fault would otherwise not show before that day, and 'it did not comment' cannot be told from 'it worked')
 
 ## Phase 5 - verify and hand off
 

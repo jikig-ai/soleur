@@ -55,17 +55,28 @@ STUBDIR="$ROOT/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/curl" <<'STUB'
 #!/usr/bin/env bash
 # PATH stub for curl. Records argv (one arg per line), the stdin config, the -d payload, any TLS-subverting env; answers per URL.
+# STRICT about argv: a request that lacks any of the pinned flags (--disable, --noproxy '*', -sS, --max-time 30,
+# -w '%{http_code}', --config -, -o <file>) is REFUSED (exit 64, nothing on stdout, one line in $STUB_REFUSE, which the
+# suite asserts empty), so a probe that drops one of them cannot pass by the stub quietly answering anyway.
 { for a in "$@"; do printf '%s\n' "$a"; done; echo '---CALL---'; } >> "$STUB_ARGV"
 env | grep -E '^(SSLKEYLOGFILE|CURL_CA_BUNDLE|SSL_CERT_FILE|SSL_CERT_DIR|CURL_HOME|HOSTALIASES|LOCALDOMAIN|RES_OPTIONS)=' >> "$STUB_TLS" || true
-args=("$@"); url=""; out=""; data=""; hascfg=0
+args=("$@"); url=""; out=""; data=""; hascfg=0; pinned=0
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[$i]}" in
     -o) out="${args[$((i + 1))]}" ;;
     -d) data="${args[$((i + 1))]}" ;;
-    --config) hascfg=1 ;;
+    --config) if [ "${args[$((i + 1))]}" = - ]; then hascfg=1; fi ;;
+    --disable|-sS) pinned=$((pinned + 1)) ;;
+    --noproxy) if [ "${args[$((i + 1))]}" = '*' ]; then pinned=$((pinned + 1)); fi ;;
+    --max-time) if [ "${args[$((i + 1))]}" = 30 ]; then pinned=$((pinned + 1)); fi ;;
+    -w) if [ "${args[$((i + 1))]}" = '%{http_code}' ]; then pinned=$((pinned + 1)); fi ;;
     https://*) url="${args[$i]}" ;;
   esac
 done
+if [ "$pinned" != 5 ] || [ "$hascfg" != 1 ] || [ -z "$out" ] || [ -z "$url" ]; then
+  printf 'refused: pinned=%s/5 config=%s out=%s url=%s\n' "$pinned" "$hascfg" "${out:+set}" "${url:+set}" >> "$STUB_REFUSE"
+  exit 64
+fi
 cfg=""; [ "$hascfg" = 1 ] && cfg="$(cat)"
 printf '%s\t%s\n' "$url" "$cfg" >> "$STUB_CFG"
 case "$url" in
@@ -83,13 +94,13 @@ printf '%s' "$code"
 STUB
 chmod +x "$STUBDIR/curl"
 
-RCS="$ROOT/rcs"; : > "$RCS"
+RCS="$ROOT/rcs"; : > "$RCS"; : > "$ROOT/refused"   # refused is cumulative over the WHOLE suite (asserted empty before the battery)
 OUT=""; RC=0
-# run: env knobs ST / SB (tokens; unset = default, empty = empty), ENQ_BODY / STALE_BODY / SB_BODY (file paths), codes, FAILKIND
+# run: env knobs ST / SB (tokens; unset = default, empty = empty), NOWV (NOW_EPOCH), ENQ_BODY / STALE_BODY / SB_BODY (file paths), codes, FAILKIND
 run() {
   RC=0
   rm -f "$ROOT/argv" "$ROOT/cfg" "$ROOT/data" "$ROOT/tls"; : > "$ROOT/argv"; : > "$ROOT/cfg"; : > "$ROOT/tls"
-  OUT="$(env -i PATH="$STUBDIR:$PATH" HOME="$ROOT" TMPDIR="$ROOT" NOW_EPOCH="$NOW" \
+  OUT="$(env -i PATH="$STUBDIR:$PATH" HOME="$ROOT" TMPDIR="$ROOT" NOW_EPOCH="${NOWV-$NOW}" STUB_REFUSE="$ROOT/refused" \
     STUB_ARGV="$ROOT/argv" STUB_CFG="$ROOT/cfg" STUB_DATA="$ROOT/data" STUB_TLS="$ROOT/tls" \
     STUB_ENQ_BODY="${ENQ_BODY:-}" STUB_ENQ_CODE="${ENQ_CODE:-200}" \
     STUB_STALE_BODY="${STALE_BODY:-$ROOT/stale0.json}" STUB_STALE_CODE="${STALE_CODE:-200}" \
@@ -101,7 +112,7 @@ run() {
   echo "$RC" >> "$RCS"
 }
 calls() { grep -c '^---CALL---$' "$ROOT/argv" 2>/dev/null || true; }
-reset_knobs() { unset ST SB ENQ_BODY STALE_BODY SB_BODY FAILKIND XENV XBASH; ENQ_CODE=200; STALE_CODE=200; SB_CODE=200; }
+reset_knobs() { unset ST SB NOWV ENQ_BODY STALE_BODY SB_BODY FAILKIND XENV XBASH; ENQ_CODE=200; STALE_CODE=200; SB_CODE=200; }
 
 mk_events() {  # mk_events <file> <N>: a Sentry events page with N events
   local n="$2" i items=""
@@ -272,6 +283,15 @@ check "no TLS-subverting environment variable reaches curl (all three requests)"
 check "the source unsets the TLS-subverting environment before any token is sent" 1 "$(grep -cE '^unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS' "$SUT")"
 # every request is bounded
 check "every request carries --max-time 30" 3 "$(grep -A1 -x -- '--max-time' "$ROOT/argv" | grep -cx '30')"
+# every request carries -w '%{http_code}' (it is how the probe learns the status; the stub is strict about it, see its header)
+check "every request carries -w '%{http_code}'" 3 "$(grep -A1 -x -- '-w' "$ROOT/argv" | grep -cxF '%{http_code}')"
+check "the strict curl stub refused no request so far (every request carried the pinned flag set)" "" "$(cat "$ROOT/refused")"
+# the stub's own strictness (instrument check): a request without -w '%{http_code}' IS refused (exit 64, logged, no stdout)
+stub_rc=0; stub_out="$(env PATH="$STUBDIR:$PATH" STUB_ARGV="$ROOT/argv.t" STUB_TLS="$ROOT/tls.t" STUB_REFUSE="$ROOT/refused.t" STUB_CFG="$ROOT/cfg.t" \
+  curl --disable --noproxy '*' -sS --max-time 30 -o "$ROOT/o.t" --config - https://example.invalid/ 2>/dev/null </dev/null)" || stub_rc=$?
+check "instrument: the curl stub refuses a request lacking -w '%{http_code}' (exit 64)" 64 "$stub_rc"
+check "instrument: a refused request prints nothing on stdout" "" "$stub_out"
+check "instrument: a refused request is logged" 1 "$(grep -c '^refused:' "$ROOT/refused.t" 2>/dev/null || true)"
 check "the fetch line pins --max-time 30" 1 "$(grep -cE '^[[:space:]]*HTTP="\$\(curl .*--max-time 30 ' "$SUT")"
 
 # 7b. OFFLINE: the Sentry tags the probe queries are the tags the send route emits (a mistyped tag reads 0 forever)
@@ -281,6 +301,13 @@ check "the send route emits feature spawn-agent and ops inngest-enqueue and inng
 url_tags="$(cut -f1 "$ROOT/cfg" | grep 'sentry.io' | sed -E 's/.*[?&]query=([^&]*)(&.*)?$/\1/; s/%3A/:/g; s/%20/\n/g' | sed -E 's/^([a-z]+):(.*)$/\1: "\2"/' | sort -u | tr '\n' ';')"
 check "every tag the probe queries is a tag the route emits, and each route tag is queried" "$route_tags" "$url_tags"
 check "each Sentry URL carries exactly one op term" "1 1 " "$(cut -f1 "$ROOT/cfg" | grep 'sentry.io' | while read -r u; do printf '%s ' "$(printf '%s' "$u" | grep -o '%20op%3A' | wc -l)"; done)"
+
+# 7c. NOW_EPOCH: a positive decimal without a leading zero (a leading zero is OCTAL inside (( )))
+for bad_now in 0 017 08 -5 1e9 12x; do
+  all_zero; NOWV="$bad_now"; run; reset_knobs
+  check "NOW_EPOCH=$bad_now: exit 3" 3 "$RC"; has "NOW_EPOCH=$bad_now: the fixed reason" "$OUT" "unusable NOW_EPOCH"
+  check "NOW_EPOCH=$bad_now: no request made" 0 "$(calls)"
+done
 
 # 8. xtrace: refuse (78) BEFORE any credential is read or any request is made
 all_zero; XBASH="-x"; run
@@ -356,6 +383,7 @@ FAULT
 all_zero; XENV="BASH_ENV=$ROOT/fault.sh"; run
 check "an unexpected internal exit status is mapped to 3 by the EXIT trap" 3 "$RC"
 reset_knobs
+check "the strict curl stub refused no request in the whole suite" "" "$(cat "$ROOT/refused")"
 
 FIX_N="$(wc -l < "$LEDGER")"
 if run_battery "${1:-}"; then
@@ -424,7 +452,10 @@ if run_battery "${1:-}"; then
   mutate_run m6b-stale-not-criterion-2 '[mut:decision]'    'if (( (ENQ > 0 || STALE > 0) && (RECOVERABLE + AGED_OUT) > 0 )); then' 'a STALE event alone (no ENQ, no rows) fires: exit 5'
   mutate_run m6c-stale-not-criterion-1 '[mut:decision]'    'if (( ENQ > 0 && ((RECOVERABLE + AGED_OUT) > 0 || STALE > 0) )); then' 'STALE plus stranded rows, no ENQ: exit 5'
   mutate_run m6d-stale-ignored         '[mut:decision]'    'if (( ENQ > 0 && (RECOVERABLE + AGED_OUT) > 0 )); then' 'a STALE event alone (no ENQ, no rows) fires: exit 5'
-  mutate_run m8-bad-token-still-reads  '[mut:token-check]' ':' 'empty SENTRY_ACTIONS_RO_TOKEN: exit 3'
+  mutate_sub m5c3-w-http-code-dropped  '[mut:fetch]'       "-w '%{http_code}' " '' "every request carries -w '%{http_code}'"
+  mutate_run m8a-sentry-token-unchecked '[mut:token-check-sentry]' ':' 'empty SENTRY_ACTIONS_RO_TOKEN: exit 3'
+  mutate_run m8b-supabase-token-unchecked '[mut:token-check-supabase]' ':' 'empty SUPABASE_ACCESS_TOKEN: exit 3'
+  mutate_sub m8c-now-epoch-octal-regex 'unusable NOW_EPOCH' '^[1-9][0-9]{0,15}$' '^[0-9]+$' 'NOW_EPOCH=017: exit 3'
   mutate_sub m9a-enq-tag-mistyped      '[mut:enq-url]'     'inngest-enqueue' 'inngest-enqeue' 'every tag the probe queries is a tag the route emits, and each route tag is queried'
   mutate_sub m9b-stale-tag-mistyped    '[mut:stale-url]'   'inngest-replay-stale' 'inngest-replay-staile' 'every tag the probe queries is a tag the route emits, and each route tag is queried'
   mutate_sub m9c-stale-reads-the-enq-op '[mut:stale-url]'  'inngest-replay-stale' 'inngest-enqueue' 'STALE URL pins its query'
@@ -434,12 +465,12 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (a --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=155; MIN_BATTERY=36
+MIN_FIXTURE=179; MIN_BATTERY=39
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== dispatch-recovery-sweeper-11211.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
 if [ -z "${FT_INNER:-}" ]; then
   if [ "$FIX_N" -lt "$MIN_FIXTURE" ]; then printf 'FLOOR: only %s fixture assertions ran, expected at least %s\n' "$FIX_N" "$MIN_FIXTURE"; exit 1; fi
-  if [ "$LEDGER_N" -gt "$FIX_N" ] && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
+  if run_battery "${1:-}" && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
 fi
 [ "$FAIL" -eq 0 ]

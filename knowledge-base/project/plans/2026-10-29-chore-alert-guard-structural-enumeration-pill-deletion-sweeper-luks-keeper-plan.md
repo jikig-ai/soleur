@@ -158,8 +158,8 @@ Exemption record (CTO ruling): the change is a behavior-preserving dead-branch d
 - **If this leaks, the user's data is exposed via:** no new vector. The two probes read aggregates only (counts and a newest-timestamp), print no row content, and use credentials the follow-through sweeper already holds; the `action_sends` read is a `SELECT count` with no identifier in any output stream.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** the alert these guards protect carries its own `single-user incident` tier under ADR-282; this PR changes no runtime behavior on that path and only hardens its CI text guards, so the aggregate tier is the honest one for this diff. A disputed choice is a decision challenge.
-- **Deferral exposure (11211, stated so it is not read as "nothing happens"):** the dispatch-recovery sweeper stays deferred, so a founder whose send fails to enqueue sees the 503 toast ("Your approval is saved ... Click Send again to retry") and has a 23 h window in which a re-click replays the draft; that toast plus the replay is the only founder-side mitigation. After 23 h an un-re-clicked draft is silently abandoned. Plan-time reads (0 `action_sends` rows ever, 0 Sentry events for the spawn-agent ops) are why this cannot reach a user today. The widened STALE criterion of the probe now also covers the abandoned-replay case (`inngest-replay-stale`), so the first such event reaches the tracker comment.
-- **Accepted: public counts.** The 11211 probe's output is republished as a comment on a public tracker with exact counts (ENQ, STALE, recoverable, aged-out). Counts above 0 are accepted as a product-activity signal on a public repo (the alternative, bucketed output, is the surfaced taste item in `decision-challenges.md`).
+- **Deferral exposure (11211, stated so it is not read as "nothing happens"):** the dispatch-recovery sweeper stays deferred, so a founder whose send fails to enqueue sees the 503 toast ("Your approval is saved ... Click Send again to retry") and has a 23 h window in which a re-click replays the draft; that toast plus the replay is the only founder-side mitigation. After 23 h an un-re-clicked draft is silently abandoned (the 23 h cap is an assumption: `decide-replay.ts` calls the Inngest dedup window of about 24 h a "plan-level assumption: not verified against the self-hosted instance", and the 1 h margin is a choice). Plan-time reads (0 `action_sends` rows ever, 0 Sentry events for the spawn-agent ops) are why this cannot reach a user today. The widened STALE criterion of the probe reports `inngest-replay-stale`, which the send route emits for TWO reasons: `expired` (the abandoned-replay case, and the draft is archived) and `future_clicked_at` (the `clock_skew` arm: fails closed WITHOUT archiving, not an old click). So STALE means 'a re-click was refused', not always 'an approval was abandoned', and it reaches the tracker comment on the first such event either way. A draft archived by the founder Discard route emits no STALE.
+- **Accepted: public counts.** The 11211 probe's output is republished as a comment on a public tracker with exact counts (ENQ, STALE, recoverable, aged-out). Counts above 0 are accepted as a product-activity signal on a public repo (the alternative, bucketed output, is the surfaced taste item in `decision-challenges.md`). The 11265 probe publishes counts, the newest measured row's age in whole days and its token CLASS (`ok` or `fail`, nothing else), and fixed reason strings; no timestamp, identifier or token detail. The stream is one row a day while healthy, so an age plus a class can single out one probe event on a public tracker; accepted, since the row is a host-level cryptsetup verdict with no user data in it.
 
 ## Implementation Phases
 
@@ -229,8 +229,8 @@ real tree and each matrix row must red a scratch copy.
    window row), and add the trailing-comment-after-`{` census row. Counters: `MUT_ROWS` 13 -> 16 (three new
    `mutate_red` rows), `PRESENCE_ROWS` stays 30 unless a presence row is added; measure with an inner `MUT_SKIP=1` run.
 7. Docs: reword `betterstack-log-query.md`'s "push once the apply accepts it" as dated history (`push = true`
-   in the `.tf` is the source of truth; the apply read-back is the live proof; live read 2026-10-29 confirmed
-   `push: true`); document the auto-resolve window in the runbook and as a `.tf` comment (superseded wording: the earlier
+   in the `.tf` is the source of truth; the apply read-back is the live proof, cited from push runs 40744937376 (created
+   with `push = true`) and 40782617701 ("No changes"); the plan-time GET above is an observation, not a durable source); document the auto-resolve window in the runbook and as a `.tf` comment (superseded wording: the earlier
    "at least two consecutive non-`fail_` hourly emits" was wrong; the incident resolves on time alone, about 4500 to
    4800 s after the last failing row, so resolution is not evidence of recovery; one authoritative copy in the `.tf`,
    the runbooks point to it) above `inngest_luks_key_probe_fail` in
@@ -273,8 +273,10 @@ real tree and each matrix row must red a scratch copy.
      with no upper bound, counted in two buckets (under 23 h recoverable, over 23 h aged-out; two `count(*)
      filter` terms in one query, CTO re-confirmed). Criterion 2 holds when recoverable plus aged-out is above 0 or
      STALE is above 0. No `source_ref` parseability filter: the header states that the count can over-count (drafts
-     with an unparseable `source_ref`) and under-count (a draft archived between daily runs, which STALE covers), and
-     that `per_page=100` caps the count so only above 0 is used.
+     with an unparseable `source_ref`) and under-count (a draft archived between daily runs: STALE covers it only when the expired replay archived it, not
+     when the founder discarded it), and that `per_page=100` caps the count so only above 0 is used. It also states that
+     `op:inngest-replay-stale` has two reasons (`expired`, which archives, and `future_clicked_at`, which does not) and that
+     the 23 h cap is an assumption (decide-replay.ts: "not verified").
    - The SQL is ONE literal string with no interpolation (no env or issue-derived value, no `;`, a `^SELECT` prefix, `now() - interval` in SQL not shell-built timestamps); the suite captures the stdin payload and asserts it. The Supabase token can run writes and DDL, so the query text is the only read-only control; prefer a read-only query endpoint if one exists (verify with a stub test or one live call before relying on it).
    - Failure branches print only a fixed reason string plus the HTTP status code, never `$BODY`, `$RESP` or curl stderr (the sweeper runs the probe with `2>&1` and republishes the last 4 KB into a PUBLIC issue comment; `autovacuum-thrash-6168.sh`'s `head -c 500` body echo is NOT copied).
    - Exit contract (never 0, never 1): 2 NOT YET (the normal daily state); 5 ACTION REQUIRED on STALE above 0 alone,
@@ -313,7 +315,10 @@ work time); the new infra-dir suite is selected by `apps/web-platform/infra/run-
    only `indeterminate` rows exist (the probe could not measure; the counts of both kinds are printed); 5 when measured rows exist and the newest is over 30 days old; 3 on any read or parse
    failure, including a reader line that is not a JSON object (checked before any verdict), a measured row dated more than 1 h in the future
    (`PARSE: future-dated measured row`), and a failed reader-liveness canary when zero anchored rows were found (one companion
-   read, `--since 6h --limit 1`, no filter; fixed string `reader source not live`); never 0 or 1; 78 under xtrace. Header documents the residual that zero rows after retention
+   read, `--since 24h --until <3 hours ago> --limit 1`, no filter, which proves the ARCHIVE arm because the hot window of about
+   40 minutes cannot answer it; fixed string `reader archive arm not live (no rows 3-24h back; the hot window cannot answer this)`;
+   CTO ruling C1, `decision-challenges.md` Amendments 2026-10-29 (fix round 1); an archive ingest lag above 3 h gives a false exit 3,
+   the safer failure); never 0 or 1; 78 under xtrace. Header documents the residual that zero rows after retention
    expiry looks like "never started", and that the probe is inert until the owner's bundle delivery makes the
    first `token=ok` row.
 2. Register the suite in `scripts/test-all.sh`. At ship time (GitHub-only): the unfenced directive with
@@ -412,7 +417,7 @@ discoverability_test:
   # non-zero below the census floor (fewer than 19 enumerated alerts), so a vacuous run cannot print a green line.
   # Measured honestly: --presence-only (the fuller read of about 60 infra *.tf files, the lock file and one workflow)
   # took 12 to 19 s on a loaded host, over the 5 s first assumed and near preflight Check 10's 15 s kill, which
-  # is why the discoverability command is the lighter --census-only mode (its measured time is in the work report).
+  # is why the discoverability command is the lighter --census-only mode (measured 3.3 to 3.8 s on this host; a rerun in fix round 1 read 3 s, whole-second resolution).
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -529,7 +534,7 @@ refusal, an unset or malformed secret, an empty result).
 | 4 | Drop the `*x*` xtrace refusal | RED |
 | 5a | A stub returns a non-2xx body containing a canary string on every read path; the canary must be absent from stdout and stderr on every exit path | RED if any branch echoes a body |
 | 5b | Capture the Supabase request payload: it must equal the pinned single-literal `^SELECT` text with no `;` and no interpolated value; exit 78 must occur before any secret is read; grep both probes for `-u `, `Authorization:` and `Bearer` outside a stdin-config process substitution | RED on any deviation |
-| 5 | Dispatch (amended by CTO R1): an empty body is exit 3 when the liveness canary read is also empty (`reader source not live`) and exit 2 when the canary returns a row; an HTML 502 body, a `Code: ... DB::Exception` line mixed with valid rows, and a future-dated measured row are each exit 3; this row also covers a curl failure | RED |
+| 5 | Dispatch (amended by CTO R1): an empty body is exit 3 when the archive-arm canary read (`--since 24h --until <3 h ago>`) is also empty (`reader archive arm not live`) and exit 2 when the canary returns a row; an HTML 502 body, a `Code: ... DB::Exception` line mixed with valid rows, and a future-dated measured row are each exit 3; this row also covers a curl failure | RED |
 
 **Harness rows.** A must-PASS fixture that is not the canonical: a measured-row timestamp exactly 30 days minus
 one second old (exit 2) and plus one second (exit 5); an `indeterminate`-only history (exit 3, counts printed). Registration of
@@ -643,7 +648,7 @@ matches real files; `components/**/*.tsx` matches the pill. Sibling lookup for t
 - Given a second alert pointing at an existing exploration, when the suite runs, then it exits 1 on the one-alert-per-exploration row.
 - Given `degraded="enqueue_failed"` passed to `AcknowledgedPill`, when `tsc --noEmit` runs, then it errors; given the three surviving states, when rendered, then each carries its `data-pill-state`.
 - Given Sentry 0 (ENQ and STALE) and an empty `action_sends`, when the 11211 probe runs, then exit 2; given an ENQ hit and one aged-out draft row, then exit 5; given a STALE hit alone, then exit 5; given a 500 from either Sentry read or from Supabase, then exit 3; never 0 or 1.
-- Given no keeper rows of any kind and a live reader (the canary returns a row), when the 11265 probe runs, then exit 2; given no rows and an empty canary, then exit 3 (`reader source not live`); given a measured row 31 days old, then exit 5; given only `indeterminate` rows, then exit 3 with counts printed; given a non-JSON reader line anywhere, or a measured row dated more than 1 h in the future, then exit 3; given an unreadable archive, then exit 3.
+- Given no keeper rows of any kind and a live archive arm (the 3-24 h canary returns a row), when the 11265 probe runs, then exit 2; given no rows and an empty canary, or a canary answered only by the hot window (rows newer than 3 h), then exit 3 (`reader archive arm not live`); given a measured row 31 days old, then exit 5; given only `indeterminate` rows, then exit 3 with counts printed; given a non-JSON reader line anywhere, or a measured row dated more than 1 h in the future, then exit 3; given an unreadable archive, then exit 3.
 
 ## Success Metrics
 
@@ -656,7 +661,7 @@ probe ever goes dark for 30 days after its first measured row.
 - Risk: the structure suite's line-based workflow awk false-reds on a legitimate YAML re-indent. Mitigation: anchor on the `- name:` step boundary and a column-agnostic key match; a must-PASS row re-indents a step.
 - Risk: the lexer's behavior on exotic HCL (a `/* */` containing braces). Mitigation: the lib's own rows; the must-PASS comment row here.
 - Risk: the 31-day Better Stack look-back becomes unreadable if retention shrinks (free-tier change). Mitigation: exit 3 is permanent and visible; the residual is documented.
-- Risk: the 11211 `source_ref` SQL filter drifts from `decideReplay()`. Mitigation: omit-and-document fallback, plus the STALE criterion, which covers the under-count (a draft archived between daily runs); the count can also over-count (unparseable `source_ref`).
+- Risk: the 11211 `source_ref` SQL filter drifts from `decideReplay()`. Mitigation: omit-and-document fallback, plus the STALE criterion, which covers the under-count only for a draft that an expired replay archived between daily runs (not one the founder discarded); the count can also over-count (unparseable `source_ref`).
 - Dependency: none on another open PR; the two probes use secrets already wired in the sweeper workflow.
 
 ## Sharp Edges

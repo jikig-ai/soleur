@@ -217,19 +217,19 @@ done
 # names it, or whose sql_query reads a local whose heredoc names it; an alert that binds such an exploration) OR its name starts
 # with the bare stem (so `inngest_luks_key_probe2_fail` and the bare stem are counted, #11388). Leading whitespace and a
 # trailing comment after the brace do not hide a header. The declared set must equal KEY_PROBE_EXPLORATIONS for BOTH the
-# exploration side and the alert side. A family-wide structural suite
+# exploration side and the alert side. Every root *.tf is scanned, the key is the substring LUKS_KEY_PROBE, a local name may
+# contain a hyphen, a heredoc closer ends the current local, and a single-line local that names a marked local carries the
+# marker too (transitively; a reference inside a string interpolation or a multi-line local is NOT followed). A family-wide structural suite
 # (apps/web-platform/infra/betterstack-alert-structure.test.sh) independently enforces one alert per exploration.
 CENSUS_AWK='function cv(s) { gsub(/"([^"\\]|\\.)*"/, "\"\"", s); sub(/[[:space:]]*(#|\/\/).*$/, "", s); return s }
 function hdopen(c) {
-  if (c !~ /(#|\/\/)/ && match(c, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
-    hd = substr(c, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd); return 1
-  }
-  return 0
+  if (match(c, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) { hd = substr(c, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd) }
 }
+FNR == 1 { hd = ""; loc = ""; inb = 0 }
 {
   line = $0
   if (hd != "") {
-    if (line ~ ("^[[:space:]]*" hd "[[:space:]]*$")) hd = ""
+    if (line ~ ("^[[:space:]]*" hd "[[:space:]]*$")) { hd = ""; loc = "" }
     else if (index(line, MARK) > 0) { if (inb) braw[nb] = braw[nb] " " MARK; else if (loc != "") marked[loc] = 1 }
     next
   }
@@ -237,17 +237,17 @@ function hdopen(c) {
   c = cv(line)
   if (!inb) {
     if (match(line, /^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?[^" {]+"?[[:space:]]*\{/)) {
-      h = line
-      kind = (h ~ /logtail_exploration_alert/) ? "A" : "E"
+      kind = (line ~ /logtail_exploration_alert/) ? "A" : "E"
       nm = line
       sub(/^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?/, "", nm)
       sub(/["[:space:]{].*$/, "", nm)
       nb++; bkind[nb] = kind; bname[nb] = nm; braw[nb] = ""; bcv[nb] = ""; inb = 1; d = 0
     } else {
-      if (match(c, /^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_]/)) {
+      if (match(c, /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_]/)) {
         loc = c; sub(/^[[:space:]]*/, "", loc); sub(/[[:space:]]*=.*$/, "", loc)
-      } else if (line ~ /^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*=/ && index(line, MARK) > 0) {
-        l2 = line; sub(/^[[:space:]]*/, "", l2); sub(/[[:space:]]*=.*$/, "", l2); marked[l2] = 1
+      } else if (line ~ /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/) {
+        l2 = line; sub(/^[[:space:]]*/, "", l2); sub(/[[:space:]]*=.*$/, "", l2); lbody[l2] = line
+        if (index(line, MARK) > 0) marked[l2] = 1
       }
       hdopen(c)
       next
@@ -256,14 +256,20 @@ function hdopen(c) {
   if (inb) {
     braw[nb] = braw[nb] " " line; bcv[nb] = bcv[nb] " " c
     o = gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d += o - x
-    if (!hdopen(cv(line))) { }
+    hdopen(cv(line))
     if (d <= 0) { inb = 0 }
   }
 }
 END {
+  do {   # a single-line local that names a marked local carries the marker too, however deep the chain
+    ch = 0
+    for (l in lbody) if (!(l in marked)) for (m in marked) if (lbody[l] ~ ("local\\." m "([^A-Za-z0-9_-]|$)")) { newm[l] = 1; break }
+    for (l in newm) { marked[l] = 1; ch = 1 }
+    delete newm
+  } while (ch)
   for (i = 1; i <= nb; i++) {
     car[i] = (index(braw[i], MARK) > 0)
-    for (l in marked) if (bcv[i] ~ ("local\\." l "([^A-Za-z0-9_]|$)")) car[i] = 1
+    for (l in marked) if (bcv[i] ~ ("local\\." l "([^A-Za-z0-9_-]|$)")) car[i] = 1
   }
   for (i = 1; i <= nb; i++) if (bkind[i] == "E") ecar[bname[i]] = car[i]
   for (i = 1; i <= nb; i++) {
@@ -275,7 +281,9 @@ END {
     printf "A|%s|%d|%s\n", bname[i], (b != "" && ecar[b]), b
   }
 }'
-_census="$(awk -v MARK="$MARKER" "$CENSUS_AWK" "$TF" 2>/dev/null)"
+# Every root *.tf is scanned (a local may live in another file than the resource that reads it), and the key is the
+# substring LUKS_KEY_PROBE of the marker, so a renamed prefix (SOLEUR_<other>_LUKS_KEY_PROBE) still carries it.
+_census="$(awk -v MARK="LUKS_KEY_PROBE" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
 _dexp="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = E ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$KEY_PROBE_STEM"* ]]; then printf '%s\n' "$_n"; fi
@@ -341,8 +349,20 @@ FAILSQL = "inngest_luks_key_probe_fail_sql = <<-SQL"
 FAILAL = "resource \"logtail_exploration_alert\" \"inngest_luks_key_probe_fail\" {"
 SQLEND = "\n  SQL\n"'
 
-  mutate_red() {  # mutate_red <label> <TF|WF|FLIP> <python-program-on-s> [expected [FAIL] fragment]
-    local label="$1" which="$2" prog="$3" tag="${4:-}" src copy rc=0 olog="$MUT_DIR/inner.log"
+  # Scores ONE inner run: prints red | wrong | survived | unresolved. Only rc=1 is a caught mutation; when a fragment is named
+  # a [FAIL] line must contain it (a row that reds for the WRONG reason is no evidence). The reader is pipe-free:
+  # `grep | grep -q` lets the second grep exit early and the first die of SIGPIPE under pipefail.
+  _red_verdict() {  # _red_verdict <rc> <log> <fragment-or-empty>
+    case "$1" in
+      1) if [ -z "$3" ] || { grep -F '[FAIL]' "$2" | grep -F -- "$3" >/dev/null; }; then echo red; else echo wrong; fi ;;
+      0) echo survived ;;
+      *) echo unresolved ;;
+    esac
+  }
+
+  mutate_red() {  # mutate_red <label> <TF|WF|FLIP> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
+    local label="$1" which="$2" prog="$3" tag="${4:-}" want="${5:-red}" src copy rc=0 olog="$MUT_DIR/inner.log"
+    rm -f "$MUT_DIR"/zz_*.tf   # a second-file row plants one; it must not leak into the next row's census
     case "$which" in
       TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
@@ -367,14 +387,15 @@ PY
       WF) KEYPROBE_GUARD_WF="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
       FLIP) KEYPROBE_GUARD_FLIP="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
     esac
-    # rc DISCRIMINATION. Only rc=1 (an assertion went red) is a caught mutation. rc>=2 is this
-    # guard's own FATAL class, rc=126/127 a broken invocation: none is evidence a row pins anything.
-    # When the row names a fragment, a [FAIL] line must contain it (a row that reds for the WRONG reason is no evidence).
-    # The reader is pipe-free: `grep | grep -q` lets the second grep exit early and the first die of SIGPIPE under pipefail.
-    case "$rc" in
-      1) if [ -z "$tag" ] || { grep -F '[FAIL]' "$olog" | grep -F -- "$tag" >/dev/null; }; then ok "mutation RED: $label"
-         else no "mutation went red for the WRONG reason (no [FAIL] line contains '$tag'): $label"; fi ;;
-      0) no "mutation SURVIVED: $label — the rows above pin nothing" ;;
+    # rc DISCRIMINATION. rc>=2 is this guard's own FATAL class, rc=126/127 a broken invocation: none is evidence a
+    # row pins anything. want=wrong is the scorer's NEGATIVE CONTROL: a mutant that reds a row other than the one the
+    # fragment names must be graded WRONG (never RED), or every fragment check above would be decoration.
+    case "$(_red_verdict "$rc" "$olog" "$tag"):$want" in
+      red:red) ok "mutation RED: $label" ;;
+      wrong:wrong) ok "scorer control: graded WRONG reason as required: $label" ;;
+      wrong:red) no "mutation went red for the WRONG reason (no [FAIL] line contains '$tag'): $label" ;;
+      red:wrong) no "scorer control: the wrong-reason mutant was graded RED (the fragment check accepts anything): $label" ;;
+      survived:*) no "mutation SURVIVED: $label — the rows above pin nothing" ;;
       *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
     esac
   }
@@ -382,6 +403,7 @@ PY
   # A must-PASS row: a legitimate edit (here a comment) must NOT red the guard (rc 0 is the only pass).
   mutate_green() {  # mutate_green <label> <TF> <python-program-on-s>
     local label="$1" which="$2" prog="$3" copy rc=0
+    rm -f "$MUT_DIR"/zz_*.tf
     [ "$which" = TF ] || { printf '[FATAL] mutate_green: only TF is wired\n' >&2; exit 2; }
     copy="$MUT_DIR/betterstack-logs-alerts.tf"
     cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
@@ -477,6 +499,28 @@ s = s.replace(old, old + "              -target=logtail_exploration.inngest_luks
   mutate_floor_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor"
   mutate_green "the declared set is still the one pair; only a comment above the paging alert is reworded" TF \
     's = s.replace("# Presence-only, so safe before the probe is delivered", "# Presence-only (reworded), so safe before the probe is delivered")'
+  # #11483 review round 1 (census): each branch of the awk gets a row. The repro for a branch the old awk got WRONG is a
+  # must-PASS (a stale local was marked) or a mutation it MISSED (hyphenated name, renamed prefix, a chain, a second file).
+  mutate_green "a heredoc that is NOT a local's body (base64encode(<<-EOT) names the marker: the previous local must not inherit it)" TF \
+    's = s + "\nlocals {\n  zz_plain = <<-EOT\n    plain\n  EOT\n  zz_wrapped = base64encode(<<-EOT\n    SOLEUR_INNGEST_LUKS_KEY_PROBE\n  EOT\n  )\n}\nresource \"logtail_exploration\" \"zz_use\" {\n  sql_query = local.zz_plain\n}\n"'
+  mutate_red "an exploration reads the marker through a HYPHENATED local name (the old name class stopped at underscore)" TF \
+    's = s + "\nlocals {\n  zz-hy = <<-SQL\n    SOLEUR_INNGEST_LUKS_KEY_PROBE\n  SQL\n}\nresource \"logtail_exploration\" \"zz_hy\" {\n  sql_query = local.zz-hy\n}\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  mutate_red "an exploration names a marker with a RENAMED prefix (SOLEUR_RENAMED_LUKS_KEY_PROBE: the census keys on LUKS_KEY_PROBE)" TF \
+    's = s + "\nresource \"logtail_exploration\" \"zz_sub\" {\n  sql_query = \"SELECT 1 WHERE position(raw, SOLEUR_RENAMED_LUKS_KEY_PROBE) = 1\"\n}\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  mutate_red "an exploration reads the marker through a local that WRAPS the key-probe local (transitive carry)" TF \
+    's = s + "\nlocals {\n  zz_wrap = replace(trimspace(local.inngest_luks_key_probe_fail_sql), \"x\", \"y\")\n}\nresource \"logtail_exploration\" \"zz_tr\" {\n  sql_query = local.zz_wrap\n}\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  mutate_red "a SECOND root *.tf declares an exploration that reads the key-probe local (the census scans every root file)" TF \
+    'import os
+open(os.path.join(os.path.dirname(p), "zz_second.tf"), "w").write("resource \"logtail_exploration\" \"zz_second\" {\n  sql_query = local.inngest_luks_key_probe_fail_sql\n}\n")
+s = s + "\n# second-file row\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  # Scorer NEGATIVE CONTROL: the mutant reds ONLY the runbook-anchor row, so a fragment naming the paging SQL must grade it WRONG.
+  mutate_red "scorer control: a mutant that reds only the runbook-anchor row, scored against a paging-SQL fragment" TF \
+    's = s.replace("#key-continuity-probe-9927-item-2", "#key-continuity-probe-9927-item-2x")' \
+    "paging SQL differs" wrong
   mutate_red "the dead-man is smuggled back: a dark SQL local joins the .tf" TF \
     'old = "  inngest_luks_key_probe_runbook_url ="
 assert s.count(old) == 1
@@ -487,7 +531,7 @@ fi
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
 PRESENCE_ROWS=30
-MUT_ROWS=24
+MUT_ROWS=30
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))

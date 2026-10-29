@@ -16,7 +16,8 @@
 # function) makes a guard blind to a `/* ... */`-wrapped protection. That is PROVEN to redden three of the
 # five consuming suites: Guard B4 rows 8a-8c in workspaces-luks.test.sh, row 3 plus the library-neutering
 # harness rows in inngest-luks-sole-copy.test.sh, and the strip_comments / blank_heredocs neutering harness
-# rows (M-b, M-b2, M-c) in betterstack-alert-structure.test.sh. The other two consumers
+# rows (M-b, M-b2) in betterstack-alert-structure.test.sh (its M-c neuters block_of, a different function of this
+# lib, and is not a strip_comments / blank_heredocs row). The other two consumers
 # (inngest-redis-luks-import-rehearsal.test.sh, tests/scripts/test-git-data-wipe-wedge.sh) carry no neutering row
 # for this lexer; do not read the sentence as covering them.
 #
