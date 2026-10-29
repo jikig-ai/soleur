@@ -15,6 +15,25 @@ requires_cpo_signoff: false
 
 # chore: today-card send-error copy, live messages UPDATE-policy check, shared mutation harness
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** Proposed Solution B (scorer controls), Guard Contract, Research Insights
+**Research agents used:** repo-research-analyst, learnings-researcher, functional-discovery (no overlap), CTO (9 rulings), CPO (product + UX lens), plan-review panel (DHH, Kieran, code-simplicity)
+
+### Key Improvements
+
+1. The plan-review correctness pass turned four design defects into fixes before any code exists: `mh_floor` needs the suite's own `$1` (inside a function `$1` is `MIN_FIXTURE`, so every `--no-battery` run would have failed the floor), controls must be capture-only in the parent shell (an `ok`/`bad` inside a subshell loses the `PASS`/`FAIL` increments and trips `LEDGER MISMATCH`), the teeth row overrides the function instead of sourcing a lib copy, and the Guard Contract matrix was re-derived to rows that can actually go red.
+2. A product truthfulness fix: no refusal string claims "nothing was sent" or "the draft was cleared"; the skew string no longer names "Send", so it stays valid in the typed-confirm modal.
+3. The AC4 JSX/className invariant was widened (`role=`, `aria-`, `data-`) so the wireframe exemption is backed by a check that cannot be dodged by an attribute on its own line.
+
+### New Considerations Discovered
+
+- The 11211 suite is itself affected by a route edit: its `AFFECTED_*_PATHS` array lists `send/route.ts` and `decide-replay.ts`, so the `reason` edit reruns that suite, including its battery. The suite reads only the route's `feature:`/`op:` tags and the 12 lines above `export const REPLAY_MAX_AGE_MS`; neither is touched.
+- Source ordering: the suites call `instrument_selftest` before any fixture row, so `source "$REPO/scripts/lib/mutation-harness.sh"` must come after `REPO=` and before that call; the mutant copy that `mutate_helper` writes to `$MUT` re-sources it through the exported `FT_REPO`.
+- The suites run `set -uo pipefail`: lib functions must not read unset variables (use `${1:-}`), and `local` declarations stay inside functions.
+- The ruling gate (`ship/scripts/technical-ruling-gate.sh`) rejects a `technical` row that lacks `Ruled by CTO agent, <date>:`; planner-applied mechanical findings are recorded as `taste` rows ruled by the planner. Verified green: 15 rows examined.
+
 ## Overview
 
 One PR resolves two deferred scope-out issues, with the PR body carrying `Closes #11486` and
@@ -210,7 +229,7 @@ Two open `code-review` issues name files this plan edits:
    five rows are capture-only: each calls `mh_caught` directly in the PARENT shell and emits exactly one
    `check` row (an `ok`/`bad` call inside a subshell would lose the `PASS`/`FAIL` increments and trip
    `LEDGER MISMATCH`). Four controls on synthetic logs written under `$MUT`: a log holding
-   `FAIL: frag` mid-line (with surrounding text) is caught; a log with only `PASS: frag` is not; a log
+   `FAIL: frag` followed by trailing text is caught; a log with only `PASS: frag` is not; a log
    with a `FAIL:` line for a different row is not; an empty log is not. One teeth row: in a subshell,
    override the function (`mh_caught() { return 0; }`; no lib copy, so no double-source ambiguity), run
    the three "not caught" controls, print how many came back wrongly caught, and assert in the parent
@@ -326,6 +345,33 @@ and `bash scripts/lint-betterstack-emitter-read.test.sh`; `bash scripts/test-aff
 `python3 scripts/lint-guard-contract.py` on this plan. `lint-skill-body-budget.py` is not applicable (no
 skill body is edited). Then the two probe suites and the web-platform vitest files touched.
 
+### Implementation sketch (scorer and controls)
+
+```bash
+# scripts/lib/mutation-harness.sh (functions only; no assignment, set or trap at source time)
+mh_caught() { grep -qF -- "FAIL: $1" "$2"; }   # $1 fragment, $2 inner-run log; silent
+
+# in each suite's battery, after the pristine control; all rows capture-only, one check each
+printf '  PASS: other\n  FAIL: frag-1 and trailing text\n' > "$MUT/sc-right.log"
+printf '  PASS: frag-1\n'                              > "$MUT/sc-pass-only.log"
+printf '  FAIL: a different row\n'                     > "$MUT/sc-other.log"
+: > "$MUT/sc-empty.log"
+check "scorer: a FAIL line starting with the fragment and trailing text is caught" yes "$(mh_caught frag-1 "$MUT/sc-right.log" && echo yes || echo no)"
+check "scorer: a PASS-only log is not caught"                       no  "$(mh_caught frag-1 "$MUT/sc-pass-only.log" && echo yes || echo no)"
+check "scorer: a FAIL line for a different row is not caught"       no  "$(mh_caught frag-1 "$MUT/sc-other.log" && echo yes || echo no)"
+check "scorer: an empty log is not caught"                          no  "$(mh_caught frag-1 "$MUT/sc-empty.log" && echo yes || echo no)"
+dead="$( ( mh_caught() { return 0; }; n=0; for f in sc-pass-only sc-other sc-empty; do mh_caught frag-1 "$MUT/$f.log" && n=$((n + 1)); done; echo "$n" ) )"
+check "scorer teeth: a dead scorer is caught wrongly-yes by the three negative controls" yes "$([ "${dead:-0}" -ge 1 ] && echo yes || echo no)"
+```
+
+The teeth row asserts the NEGATIVE controls would redden under a dead scorer; it does not run them
+through `check` a second time, so the ledger gains exactly five rows. `check` argument order is
+`<label> <expected> <got>`, as in the existing helpers.
+
+CLI tokens used by the Phase 1 command were verified against the local binaries on 2026-10-29
+(`psql --help`: `-X, --no-psqlrc`, `-v, --set=NAME=VALUE`, `-f, --file=FILENAME`; `doppler run --help`:
+`-p, --project`, `-c, --config`).
+
 ## Files to Edit
 
 - `apps/web-platform/hooks/use-action-send.ts`
@@ -389,7 +435,7 @@ Verified unaffected (no edit): `send-route.spawn.test.ts` (503 body unchanged), 
 | 4 | Suite: delete the five control rows from the SECOND suite after a compliant first, leaving `MIN_BATTERY` at the new value | RED for that suite (its own battery floor; run it for the first suite too) |
 | 5 | Suite: the teeth row's subshell does not override `mh_caught` (runs the pristine scorer) | RED (the row asserts at least one control reds under a dead scorer, so a vacuous teeth row fails itself) |
 
-**Harness rows.** Edit to the suite: row 4 (and row 5, which edits the suite's teeth row). Must-PASS input that is not the canonical: the first control's log holds the fragment mid-line inside surrounding text, so the scorer is shown to be a substring-on-`FAIL:` match and not an exact-line match against a canonical log; and the pristine-run diff (AC6) shows every existing mutant is still credited.
+**Harness rows.** Edit to the suite: row 4 (and row 5, which edits the suite's teeth row). Must-PASS input that is not the canonical: the first control's log carries trailing text after the fragment and a preceding `PASS:` line, so the scorer is shown to be a `FAIL: <frag>` substring match and not an exact-line match against a canonical log (the fragment must follow `FAIL: ` directly: that is how `bad()` prints a row label); and the pristine-run diff (AC6) shows every existing mutant is still credited.
 
 **Residual (accepted).** Nothing in the suite detects `mutate_run` ceasing to call `mh_caught`: the controls call the scorer directly and every existing mutant carries a correct fragment. AC8's grep pins that glue; driving `mutate_run` itself with a wrong-reason inner run would need an isolated ledger per suite and is not worth the fragility for a function with two callers.
 
