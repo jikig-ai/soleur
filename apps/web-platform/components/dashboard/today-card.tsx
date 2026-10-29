@@ -404,6 +404,19 @@ function StripeCard({
             setDraft(next!);
             return;
           }
+          if (res.status === 409) {
+            // /edit refuses once an approval row exists (draft_already_approved): say what to do
+            // next. Any other 409 body, or an unparseable one, keeps the bare status below.
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            if (body.error === "draft_already_approved") {
+              setEditError(
+                "You already approved this draft, so it can't be edited. Send it or Discard it.",
+              );
+              return;
+            }
+          }
           setEditError(`Edit failed (${res.status})`);
         } catch {
           setEditError("Edit failed — network error");

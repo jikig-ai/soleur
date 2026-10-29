@@ -3,7 +3,9 @@
  *
  * Both entry points (`onSend`, and `onConfirmTyped` once the typed-confirm modal is open) must handle:
  *   503 enqueue_unavailable            → approval saved, retry copy, NOT acknowledged, NOT archived, modal stays open
- *   409 approval_expired / not_a_draft → "can no longer run" (the route archived the draft; refresh clears the card)
+ *   409 approval_expired               → copy split on the additive `reason` (expired / future_clicked_at); an absent or
+ *                                        unknown reason keeps the "can no longer run" fallback
+ *   409 not_a_draft                    → "already handled" (usually a second tab or a click after a client abort)
  *   409 draft_changed_since_approval   → restore-or-refresh copy, nothing acknowledged
  *   409 send_in_progress               → "another send is in progress", never acknowledges or archives
  *   403 with no denyReasonCopy entry   → generic "Permissions changed" copy
@@ -39,8 +41,15 @@ afterEach(() => {
 });
 
 const COPY_503 =
-  "Your approval is saved, but we couldn't start the agent. Click Send again to retry.";
+  "Your approval is saved, but we couldn't send it yet. Try again in a moment.";
+// Fallback for an approval_expired body with an absent or unknown `reason` (deploy skew either way).
 const COPY_NO_LONGER = "This approval can no longer run. Refresh to update this card.";
+const COPY_EXPIRED =
+  "This approval expired, so this attempt didn't go through. Refresh to update this card.";
+const COPY_SKEW =
+  "We couldn't confirm when you approved this, so this attempt didn't go through. Try again in a minute.";
+const COPY_HANDLED =
+  "This draft was already handled, maybe in another tab. Refresh to update this card.";
 const COPY_CHANGED =
   "This draft changed after you approved it, so this approval can't run.";
 const COPY_IN_PROGRESS = "Another send is in progress — try again in a moment";
@@ -89,16 +98,44 @@ const CASES: Array<{
     copy: COPY_503,
   },
   {
-    name: "409 approval_expired",
+    name: "409 approval_expired reason=expired",
+    status: 409,
+    body: { error: "approval_expired", message_id: "msg-1", reason: "expired" },
+    copy: COPY_EXPIRED,
+  },
+  {
+    name: "409 approval_expired reason=future_clicked_at",
+    status: 409,
+    body: {
+      error: "approval_expired",
+      message_id: "msg-1",
+      reason: "future_clicked_at",
+    },
+    copy: COPY_SKEW,
+  },
+  {
+    name: "409 approval_expired with no reason (older server)",
     status: 409,
     body: { error: "approval_expired", message_id: "msg-1" },
+    copy: COPY_NO_LONGER,
+  },
+  {
+    name: "409 approval_expired with an unknown string reason",
+    status: 409,
+    body: { error: "approval_expired", message_id: "msg-1", reason: "other" },
+    copy: COPY_NO_LONGER,
+  },
+  {
+    name: "409 approval_expired with a non-string reason",
+    status: 409,
+    body: { error: "approval_expired", message_id: "msg-1", reason: 7 },
     copy: COPY_NO_LONGER,
   },
   {
     name: "409 not_a_draft",
     status: 409,
     body: { error: "not_a_draft", status: "archived" },
-    copy: COPY_NO_LONGER,
+    copy: COPY_HANDLED,
   },
   {
     name: "409 draft_changed_since_approval",

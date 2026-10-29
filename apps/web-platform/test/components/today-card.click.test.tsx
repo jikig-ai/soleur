@@ -216,7 +216,7 @@ describe("GitHubCard onClick (PR-A)", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Your approval is saved.*Click Send again to retry/),
+        screen.getByText(/Your approval is saved.*Try again in a moment/),
       ).toBeInTheDocument();
     });
     // The draft is still a draft: no pill, no LeaderLoopStatus, and the
@@ -310,5 +310,69 @@ describe("KbDriftCard onClick (PR-A)", () => {
     const btn = screen.getByLabelText(/Let CTO spawn a PR-review agent/);
     expect(btn).not.toBeDisabled();
     expect(btn.getAttribute("aria-disabled")).not.toBe("true");
+  });
+});
+
+describe("StripeCard Edit refusal copy (#11486)", () => {
+  const APPROVED_COPY =
+    "You already approved this draft, so it can't be edited. Send it or Discard it.";
+
+  const ORIGINAL_PROMPT = window.prompt;
+
+  async function editTo(next: string) {
+    // happy-dom ships no window.prompt, so assign rather than spy.
+    window.prompt = vi.fn(() => next);
+    render(
+      <TodayCard
+        id="msg-1"
+        source="stripe"
+        sourceRef={null}
+        owningDomain="cfo"
+        draftPreview="Hello founder"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Edit draft/));
+  }
+
+  afterEach(() => {
+    window.prompt = ORIGINAL_PROMPT;
+  });
+
+  it("409 draft_already_approved explains the approval and the next step instead of a bare status", async () => {
+    nextResponse = { status: 409, body: { error: "draft_already_approved" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(APPROVED_COPY);
+    });
+    expect(screen.queryByText(/Edit failed/)).toBeNull();
+  });
+
+  it("a 409 with another body keeps 'Edit failed (409)'", async () => {
+    nextResponse = { status: 409, body: { error: "something_else" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (409)");
+    });
+  });
+
+  it("a 409 whose body is not JSON keeps 'Edit failed (409)'", async () => {
+    nextResponse = { status: 409, body: {} };
+    globalThis.fetch = vi.fn(
+      async () => new Response("<html>gateway</html>", { status: 409 }),
+    ) as unknown as typeof fetch;
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (409)");
+    });
+  });
+
+  it("a 500 keeps 'Edit failed (500)'", async () => {
+    nextResponse = { status: 500, body: { error: "internal_error" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (500)");
+    });
   });
 });
