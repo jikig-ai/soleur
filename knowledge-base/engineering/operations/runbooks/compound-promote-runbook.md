@@ -442,6 +442,34 @@ open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
   later create refuses `budget` / `over-headroom` until a human trims descriptions or raises the cap in
   `plugins/soleur/test/components.test.ts` (the cap is human-owned).
 
+### Reading a live-fire row (model decline or gate refusal)
+
+The marker already separates a model decline from a server gate refusing a model-proposed create, so no extra
+field is needed. Every gate that refuses a model create returns `create_outcome: refused` with
+`create_refusal_class` and `create_detail`; therefore `no_action` with `no-pattern-qualifies` is always the model's
+own answer. The one `no_action` that a server check produces after a spent call is the ledger / same-run backstop
+(the model named a pattern it was not offered): it ends `no_action` with reason `other`, so `other` on a row with
+`create_offered > 0` is either the model's own `other` or that backstop. Nothing on the marker reliably separates
+those two: the same-run branch leaves neither `ledger_suppressed` nor a `refusal_detail` entry, and the edit loop
+also increments both, so read an unchanged or absent value as unknown, never as the model's. The arm makes one call
+and gets one verdict, so there is nothing to count.
+
+| Marker values | Meaning | Follow-up |
+|---|---|---|
+| `no_action`, `no-pattern-qualifies`, `create_offered > 0` | The model declined; no gate ran. | None in code, however often it repeats: declining is the intended default and the bar stays. |
+| `no_action`, `all-owned` or `other`, `create_offered > 0` | A call was spent. The model answered `all-owned` or `other` itself, or the backstop suppressed a create naming an unoffered owned pattern. The marker cannot tell which. | None in code. |
+| `no_action`, `all-owned` or `other`, `create_offered` = 0 | A pre-call path ended the arm (every candidate already claimed this run, or all owned); no call was spent. | None. |
+| `refused`, `prefer-patch`, `nearest-not-top3` (`create_nearest_rank`) | A gate refused a model-proposed create. | One such live row opens a plan for supplying the server's per-pattern top-3 candidates in the prompt, as its own PR with its own live-fire. It is not a loosening of the gate. |
+| `refused`, `prefer-patch`, `overlap` (`create_top1` at or above 0.16) or `open-pr-nearest` | The gate works as designed. | None. |
+| `refused`, `shape`, `slug` or `budget` | Handled per class in this runbook. | None new. |
+| `refused`, `model-invalid`, `max-tokens`, `empty` or `not-json` | A call was spent and its output was unusable. | Review the output cap. |
+| `refused`, `model-invalid`, `transport` | The call may not have reached the model (read the Sentry `cause`). | Re-fire only on the operator's go-ahead. |
+| `opened` | A draft PR exists (`create_pr`). | Record the PR and review it by hand. |
+
+What the marker cannot show: whether a decline was instant or deliberated. The only signal is `output_tokens` on the
+`SOLEUR_CLAUDE_COST` row for the run (the create call is the last row under the run id), and that row is absent
+while the claude-cost-capture-dark incident is open. Fixing that is separate work, not part of this arm.
+
 ### Review checklist for a create draft
 
 The draft PR body carries this fixed checklist (server text, the same for every create). Reading a create draft:

@@ -731,7 +731,8 @@ create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its 
 mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
 (`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
 `create_detail` token: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The gated new-skill
-create arm". Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
+create arm". To tell a model decline from a gate refusal on one row, read its subsection "Reading a live-fire row".
+Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
 there); the rows that asked for a create are those with `.create_requested == true`. Empty output means no manual
 `patterns` run in the window; an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace on any row:
 
