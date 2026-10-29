@@ -46,7 +46,7 @@ or bound the window with `start=`/`end=` so the coverage claim rests on the boun
 
 ## Cross-references
 
-- Ruling source: PR #11543 decision-challenges (CTO technical-ruling gate: 1 REFUTE→`sort=-timestamp`, 1 AMEND→sequential-fallback trailer), `knowledge-base/project/specs/feat-one-shot-11532-xtrace-guard-fallback-probe/decision-challenges.md`
+- Ruling source: PR #11543 decision-challenges (CTO technical-ruling gate: 1 REFUTE→`sort=-timestamp`, 1 AMEND→sequential-fallback trailer), `knowledge-base/project/specs/archive/20261029-211119-feat-one-shot-11532-xtrace-guard-fallback-probe/decision-challenges.md`
 - Pin implementation: `scripts/followthroughs/discord-blog-webhook-fallback.sh:184` (+ harness re-assertion in `.test.sh`)
 - Authoring convention (routed): `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`
 - Same `.cwd` class: `knowledge-base/project/learnings/2026-09-17-devin-envelope-omits-cwd-precommit-guard-false-deny.md`, `workflow-issues/2026-10-20-context-reviewed-gate-resolves-cwd-to-bare-root-on-worktree-commits.md` (#8254 umbrella)
