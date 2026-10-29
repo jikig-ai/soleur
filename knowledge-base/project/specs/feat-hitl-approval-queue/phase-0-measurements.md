@@ -130,3 +130,7 @@ Command: `NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform
 Result: `RESULT: PASS (sdk=0.3.284 cli=2.1.284, cases-run=10)`. All eight gated tools: `:prod` rows `invoked=yes verdict=ok allowedToolsListsIt=false tier=gated decisions=[deny] stubRan=false denyHonoured=true`; `email_send:prod-stream` the same; canary `email_send:raw` `invoked=no verdict=CANARY-OK` (the old composition still bypasses, so the probe is not vacuous). Registration: legacy runner registers all eight tools; cc-soleur-go registers none (`cc=no`).
 
 Scope of the claim: the gated tools reach the production gate and a deny is honoured on the legacy runner path. It does not measure the approval flow with the flag on (dormant), nor the hosted ask lane evidence gates #9776 and #10111.
+
+## Addendum 2026-10-29 (#4672): probe re-run at the final head e271d9f101
+
+Same command as the earlier addendum, after the review rounds changed `gate-flow.ts`, `gate.ts`, `agent-runner.ts` and the probe's grants wiring. `RESULT: PASS (sdk=0.3.284 cli=2.1.284, cases-run=10)`: all eight gated tools `:prod` rows `invoked=yes verdict=ok ... decisions=[deny] stubRan=false denyHonoured=true`, `email_send:prod-stream` the same, canary `email_send:raw` `invoked=no verdict=CANARY-OK`. Scope of the claim is unchanged: the legacy-runner path reaches the production gate and honours a deny; it does not measure the approval flow with the flag on.
