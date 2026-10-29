@@ -11,6 +11,21 @@ lane: cross-domain
 
 # fix: xtrace refusal for content-publisher.sh + Discord blog webhook fallback verification probe
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** Probe contract, Encryption Posture, Acceptance Criteria (verified live)
+
+### Key Improvements
+1. deepen gates all green in-process: User-Brand Impact (4.6), Observability (4.7 — allowlisted verb, literal `expected_output`, <15s), PAT sweep (4.8 — clean), Encryption Posture (4.10), Guard Contract lint (4.11 — 2 entries), Scope Check (4.12 — 1 unfenced, all rows mapped/justified), Task-Design (4.13 — detection table does not fire: probe rides the existing sweeper).
+2. Live-verified prescribed GitHub objects: labels `follow-through` + `meta/machinery` exist; milestone `Post-MVP / Later` exists; issue #11532 OPEN; PR #11543 draft on this branch; commit `347d3812` on main.
+3. `at_rest: []` — no persistent store; only in_transit (probe → de.sentry.io, TLS + cert verification on) is declared.
+
+### New Considerations Discovered
+- `scripts/content-publisher.sh` is baselined in `lint-shell-trace-credential-refusal.baseline.txt` — the fix must delete its row (drawdown) or the violation stays suppressed.
+- The lint's `referenced_credentials` includes `LINKEDIN_TRACKER_REASON_MISSING_TOKEN` (in-file constant) — must appear in the refusal's `${VAR:+x}` limbs for Rule C coverage.
+- `scripts/followthroughs/*.test.sh` is not glob-discovered: explicit `run_suite` registration + `regenerate-shard-manifest.py --incremental --write` rows are the registration contract.
+
 Close out the deferred verification + lint follow-ups from the Discord blog→general
 webhook fallback feature that merged 2026-10-29 as squash commit `347d3812` (cite the
 merge by date/SHA only — never as `#11504`, per operator direction).
@@ -304,9 +319,8 @@ credentialed read, and no qualifying file exists until 2026-11-03.)
 ## Encryption Posture
 
 ```yaml
-at_rest:
-  - store: none — the probe persists no data (read-only GETs; tmp files in mktemp
-      are deleted by the EXIT trap)
+at_rest: []  # no persistent store introduced — the probe persists no data
+  # (read-only GETs; tmp files in mktemp are deleted by the EXIT trap)
 in_transit:
   - connection: probe -> de.sentry.io (GET /api/0/organizations/jikigai-eu/events/)
     enforced_at: scripts/followthroughs/discord-blog-webhook-fallback.sh — _sentry_get + pinned-URL case gate
