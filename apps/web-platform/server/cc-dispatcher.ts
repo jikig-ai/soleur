@@ -60,6 +60,7 @@ import {
   type QueryFactoryArgs,
   type DispatchArgs,
   type DispatchEvents,
+  type CloseQueryReason,
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps, readCcManagedWarnCap } from "./cc-cost-caps";
@@ -222,6 +223,7 @@ import {
   MissingByokKeyError,
   reportMissingByokKey,
 } from "./byok-lease";
+import { isOauthUnusableLeaseError, oauthUnusableFrame } from "./agent-auth-user-message";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import {
@@ -1536,7 +1538,7 @@ async function replicateAndReleaseCcWorktreeLease(
     // swallow so a replication failure never wedges the lease release below.
   } finally {
     if (opts?.skipRelease) {
-      // #9538 — the stale-resume arm detaches instead of releasing: the
+      // #9538 — the stale-resume arm (and #11086's auth-failed arm) detaches instead of releasing: the
       // recovery retry re-acquires same-host keep-gen, so a deferred
       // release would tombstone (`heartbeat_at = '-infinity'`) the row
       // out from under the fresh handle (migration-116 release matches
@@ -1782,7 +1784,7 @@ export function handleCcCloseQuery({
 }: {
   conversationId: string;
   userId: string;
-  reason?: "disconnected" | "stale-resume";
+  reason?: CloseQueryReason;
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
   // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
@@ -1803,7 +1805,7 @@ export function handleCcCloseQuery({
   // released. The push-options ride the git-data push ONLY (never the in-sandbox
   // agent's GitHub origin push).
   void replicateAndReleaseCcWorktreeLease(userId, conversationId, {
-    skipRelease: reason === "stale-resume",
+    skipRelease: reason === "stale-resume" || reason === "auth-failed",
   });
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
@@ -3809,6 +3811,18 @@ async function reportDispatchSoleurGoError(
       },
       "repo-readiness gate: blocked dispatch (repo not ready)",
     );
+  } else if (isOauthUnusableLeaseError(err)) {
+    // #11086 — the lease already reported its own closed-class event (feature byok-lease); a second mirror would double
+    // the Sentry count for one failed turn.
+    log.info(
+      {
+        feature: "cc-dispatcher",
+        op: "oauth-credential-unusable-gate",
+        userIdHash: hashUserId(ctx.userId),
+        conversationId: ctx.conversationId,
+      },
+      "lease refused a stored credential the CLI cannot use",
+    );
   } else if (err instanceof WorkspaceNotReadyError) {
     // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
     // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
@@ -3889,6 +3903,16 @@ async function reportDispatchSoleurGoError(
       message: "Your API key is invalid — set up a fresh key to continue.",
       errorCode: "key_invalid",
     });
+  } else if (isOauthUnusableLeaseError(err)) {
+    // #11086 — a lease refusal precedes any stream, so there is no `stream_end` to wait for: send the recovery frame now.
+    // MUST sit above the generic `else` so it neither clears a resumable `session_id` nor re-mirrors.
+    // Sent for every persona: unlike the mid-stream path there is no friendly bubble to protect, and the support client falls
+    // back to its canned text on an error frame either way.
+    ctx.sendToClient(ctx.userId, oauthUnusableFrame());
+    // An `auth-failed` close detached (not released) the worktree lease for the immediate re-acquire, and the credential
+    // lease refused before the factory's own cleanup could run: drop the kept in-memory record. The detached handle's row is
+    // not tombstoned (release is a no-op after detach) and expires on its own within 240 s. No-op when none is held.
+    void releaseCcWorktreeLease(ctx.userId, ctx.conversationId).catch(() => {});
   } else if (err instanceof RepoNotReadyError) {
     // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
     // user-facing message (and `repo_setup_failed` errorCode on the error
@@ -4838,7 +4862,7 @@ async function dispatchSoleurGoInner(
         });
       }
     },
-    onTextTurnEnd: () => {
+    onTextTurnEnd: (turn) => {
       // #3603 W2 + W4 — `consumeForComplete` returns `null` if the turn was
       // already persisted via the abort path (silent no-op so a late
       // `onTextTurnEnd` cannot double-write or overwrite the aborted row).
@@ -4862,7 +4886,8 @@ async function dispatchSoleurGoInner(
       // mirrors :3712). Shared helper so the two lineages cannot drift. Guarded
       // on workspacePath: an unresolved workspace can't attribute a workspace-
       // grain row, so skip the nudge rather than emit an unscoped one.
-      if (workspacePath) {
+      // #11086 — a turn that ended in a terminal sign-in failure is not a completion: no "finished" push or inbox card.
+      if (workspacePath && !turn?.authFailure) {
         void notifyTaskCompleted({
           userId,
           conversationId,
@@ -4889,6 +4914,15 @@ async function dispatchSoleurGoInner(
         type: "stream_end",
         leaderId: CC_ROUTER_LEADER_ID,
       });
+    },
+    // #11086 — the runner fires this AFTER onTextTurnEnd (so after the `stream_end` above) for a terminal CLI auth failure
+    // it rewrote to friendly copy. `key_invalid` makes the client stop reconnecting and offer the Settings action; the frame
+    // is built server-side from the closed match kind x scheme, never from raw CLI text.
+    onAgentAuthFailure: (frame) => {
+      // The support persona's SSE client treats any `error` frame as a canned-fallback trigger and would replace the friendly
+      // bubble; its surface keeps the friendly bubble only (the Settings recovery card is a Command Center affordance).
+      if (args.persona === "support") return;
+      sendToClient(userId, frame);
     },
     onWorkflowDetected: (_workflow) => {
       // Stage 3 emits a dedicated `workflow_started` WS event; for now

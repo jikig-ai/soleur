@@ -38,6 +38,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
+import { authFailureFrameFromLeaseError, isOauthUnusableLeaseError, logSessionFailure } from "./agent-auth-user-message";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "./observability";
@@ -2633,18 +2634,27 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           if (pendingLeader) {
             startAgentSession(userId, session.conversationId, pendingLeader, undefined, undefined, pendingContext).catch(
               (err) => {
-                Sentry.captureException(err);
-                log.error({ userId, err }, "startAgentSession error");
+                // #11086: the lease already reported an unusable stored credential; no duplicate raw capture.
+                if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
+                logSessionFailure(log, err, { userId }, {
+                  refused: "startAgentSession refused: stored subscription credential is not usable",
+                  failed: "startAgentSession error",
+                });
                 const errorCode: WSErrorCode | undefined = err instanceof KeyInvalidError
                   ? "key_invalid"
                   : err instanceof ByokDelegationError
                     ? `delegation_${err.reason}` as WSErrorCode
                     : undefined;
-                sendToClient(userId, {
-                  type: "error",
-                  message: sanitizeErrorForClient(err),
-                  errorCode,
-                });
+                // #11086 — a lease refusal of an unusable stored credential gets the recovery frame, not the generic text.
+                const leaseFrame = authFailureFrameFromLeaseError(err);
+                sendToClient(
+                  userId,
+                  leaseFrame ?? {
+                    type: "error",
+                    message: sanitizeErrorForClient(err),
+                    errorCode,
+                  },
+                );
               },
             );
           }

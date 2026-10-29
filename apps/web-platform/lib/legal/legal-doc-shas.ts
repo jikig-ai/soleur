@@ -19,7 +19,7 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "corporate-cla":
     "03cbf51b1543cdb3699ec71fbfa2946ff28d264ef574ae7252eac17b89ab6bad",
   "data-protection-disclosure":
-    "aa0bbd60462ce9ae198fd56282203aeca596b33f4a76c69d222fc7b5495eb029",
+    "e8799c9a589b92d09e1c2f73a7d35ebe2f47de5d408101035ea563c9fbebd756",
   "disclaimer":
     "19c9069f166d17c179e91e9747d816d25de81156e74752cf1d67ee210f3935d6",
   "gdpr-policy":
