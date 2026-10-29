@@ -6629,6 +6629,8 @@ if want_scripts; then
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
+  # #11294: the random_* id redaction filter that keeps a random_id's key bytes out of every public terraform log, issue and comment.
+  run_suite "tests/scripts/tf-redact-random-ids" bash tests/scripts/test-tf-redact-random-ids.sh
   # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential anywhere —
   # zero-tolerance since #9755 retired the op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing

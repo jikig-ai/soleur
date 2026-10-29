@@ -660,6 +660,7 @@ tests/scripts/stock-preflight-gate	6
 tests/scripts/supabase-advisor-scan	7
 tests/scripts/supabase-logs-query	3
 tests/scripts/tenant-integration-gate-verdict	5
+tests/scripts/tf-redact-random-ids	1
 tests/scripts/tmp-purge	7
 tests/scripts/trio-baseline-census	1
 tests/scripts/vector-redeliver-gate	8

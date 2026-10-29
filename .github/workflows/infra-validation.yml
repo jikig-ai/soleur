@@ -1669,6 +1669,11 @@ jobs:
           PLAN_EXIT=$?
           set -e
 
+          # A replaced random_id diffs its old value into this PUBLIC PR comment (#11294).
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          PLAN_OUTPUT=$(printf '%s' "$PLAN_OUTPUT" | tf_redact_random_ids)
+
           if [[ ${#PLAN_OUTPUT} -gt 60000 ]]; then
             PLAN_OUTPUT="${PLAN_OUTPUT:0:60000}
 
