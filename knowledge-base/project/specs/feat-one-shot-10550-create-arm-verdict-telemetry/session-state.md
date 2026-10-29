@@ -10,7 +10,7 @@ None. Plan-review panel not run (docs-only; CTO ruling covered every fork; recor
 
 ### Decisions
 - CTO 2026-10-29: brief premise false. A gate refusal already shows as create_outcome=refused with create_refusal_class and create_detail; no_action/no-pattern-qualifies is the model's own answer. Live-fire 4 was a model decline.
-- Documentation-only PR: "Reading a live-fire row" subsection in compound-promote-runbook.md (nine-row table), one-sentence pointer in betterstack-log-query.md. No code, no new marker field.
+- Documentation-only PR: "Reading a live-fire row" subsection in compound-promote-runbook.md (reading table), one-sentence pointer in betterstack-log-query.md. No code, no new marker field.
 - 2026-10-28 bound holds in full (no prompt/bar/evidence/schema/OVERLAP_*/nearest_skill gate change).
 - Pin: git diff --name-only shows only knowledge-base/**.
 - Next live-fire and enabling the arm on the weekly cron are operator-owned.

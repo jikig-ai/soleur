@@ -25,8 +25,8 @@ existing closed tokens and the CTO ruling already covered every fork.
    (a model create naming a pattern that was not offered) ends `no_action` with reason `other`. The invariant is
    restated precisely (`no-pattern-qualifies` is always the model's; `other` with `create_offered > 0` is the model's
    or the backstop; `ledger_suppressed` / `refusal_detail` are corroborating hints only, not a discriminator, per CTO T1a), and the reading table gains the matching row.
-2. Added the `model-invalid/transport` row (call may not have reached the model), so every `model-invalid` detail
-   the arm emits is covered.
+2. Added the `model-invalid/transport` row (call may not have reached the model), and review added the `schema` and `unknown-pattern`
+   details and a catch-all row, so the table maps the `model-invalid` details and points at the class tables for the rest.
 3. Verified every value in the table against source: classes (`CREATE_REFUSAL_CLASSES`), reasons
    (`CREATE_NO_ACTION_REASONS`), outcomes (`create_outcome` type) and details `nearest-not-top3`, `overlap`,
    `open-pr-nearest`, `max-tokens`, `empty`, `not-json`, `transport`.
@@ -54,7 +54,7 @@ open; whether a create is ever proposed is unmeasured until an operator-authoris
 
 ### Premise Validation (Phase 0.6)
 
-- Issue #10550 is open (title "WikiSkill Phase 2 - gated new-skill creation (split from #8281)"). PR #11441
+- Issue #10550 is open. PR #11441
   (adds `create_offered`) merged 2026-10-28T22:33Z. PR #11474 is this branch's open draft. Collision pre-check
   reports only #11474 and no foreign runs.
 - Stale premise found, and it changes the plan's shape. The brief states the marker cannot tell a model decline
@@ -149,23 +149,16 @@ fields" and `### Review checklist for a create draft`. It states, in this order:
    `ledger_suppressed` can sit beside the model's own `other`. Read an unchanged or absent value as unknown, never as
    the model's. The arm makes one call with one verdict, so there
    is nothing to count.
-2. The reading table below (values taken verbatim from `compound-promote-marker.ts`).
-3. What the marker cannot show: whether a decline was instant or deliberated. The only signal is
-   `output_tokens` on the `SOLEUR_CLAUDE_COST` row for the run, which is blocked while the
-   claude-cost-capture-dark incident is open; it is a separate fix, not part of this arm.
-4. A pointer that this section replaces the brief's claim that the marker could not separate the two cases.
-
-| Marker values | Meaning | Follow-up |
-|---|---|---|
-| `no_action`, `no-pattern-qualifies`, `create_offered > 0` | The model declined; no gate ran. | None in code, however many times it repeats: declining is the intended default and the bar stays. |
-| `no_action`, `all-owned` or `other`, `create_offered > 0` | A call was spent. The model answered `all-owned`/`other` itself, or the ledger backstop suppressed a create naming an unoffered owned pattern. The marker cannot tell which (`ledger_suppressed` and `refusal_detail` are hints only; an unchanged value means unknown). | None in code. |
-| `no_action`, `all-owned` or `other`, `create_offered = 0` | A pre-call path ended the arm (every candidate already claimed this run, or all owned); no call was spent. | None. |
-| `refused`, `prefer-patch`, `nearest-not-top3` (`create_nearest_rank`) | A gate refused a model-proposed create. | One such live row opens a plan for supplying the server's per-pattern top-3 candidates in the prompt, as its own PR with its own live-fire. It is not a loosening of the gate. |
-| `refused`, `prefer-patch`, `overlap` (`create_top1` >= 0.16) or `open-pr-nearest` | The gate works as designed. | None. |
-| `refused`, `shape`, `slug` or `budget` | Handled per class in this runbook. | None new. |
-| `refused`, `model-invalid`, `max-tokens`, `empty` or `not-json` | A call was spent and its output was unusable. | Review the output cap. |
-| `refused`, `model-invalid`, `transport` | The call may not have reached the model (read the Sentry `cause`). | Re-fire only on the operator's go-ahead. |
-| `opened` | A draft PR exists (`create_pr`). | Record the PR; review it by hand. |
+2. The reading table. The runbook subsection is its single home (values taken verbatim from
+   `compound-promote-marker.ts`); this plan does not restate it, because a second copy drifts. It maps marker values to
+   model decline, gate refusal, pre-call end or opened, splits `all-owned` from `other` on a spent call, and ends with a
+   catch-all row for every other refused class.
+3. What the marker cannot show: whether a decline was instant or deliberated. The only signal is `output_tokens` on
+   the `SOLEUR_CLAUDE_COST` row for the run. State it as a dated observation tied to #11049 (the open
+   claude-cost-capture-dark incident, which alerts on a missing `cost_usd`), not as a present-tense production claim;
+   the fix is separate work, not part of this arm.
+4. The brief's claim that the marker could not separate the two cases is deliberately not cited in the runbook: an
+   operator document should not reference a work brief. The decision record carries it (T1).
 
 Edit `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`: add one sentence after the
 create-arm field paragraph pointing at that subsection. No new jq column (the recipe already prints every
