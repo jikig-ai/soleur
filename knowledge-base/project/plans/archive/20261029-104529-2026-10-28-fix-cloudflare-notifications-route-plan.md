@@ -242,7 +242,7 @@ None. `gh issue list --label code-review --state open` returned no issue whose b
 - [x] An authorized Notification 200 with `success: true` and array-valued `result` is reported as `authorized (200)` and can pass the default-token baseline when all retained rows authorize and LB 403 rows are at baseline.
 - [x] A Notification 404 remains `denied (404, unverified — fail-closed)`, returns exit 3, and cannot be neutralized by the expected LB 403 rows; degraded/wrong-shape 200 responses also fail.
 - [x] Existing Tunnel, Access, DNS, account LB pools, zone Load Balancers, and rulesets profile URL/classification regression cases remain green with their exact existing request URLs.
-- [x] The learning file is included byte-identically with the supplied SHA-256, and its source copy is not removed or modified.
+- [x] At the original #11456 merge, the learning file matched the supplied SHA-256; a later separately authorized follow-up redacted the current copy without rewriting that merge.
 - [x] `bash plugins/soleur/test/cf-token-scope.test.sh` passes with zero failures.
 - [x] No Cloudflare permissions/token, Doppler value, infrastructure, workflow, cutover, or web-2 weight/structural-exclusion state is changed; verify the infra/workflow diff is empty with `git diff --quiet origin/main...HEAD -- apps/web-platform/infra .github/workflows`; close duplicate issue #11480 while leaving epic #11181 open (`Closes #11480` and `Ref #11181`).
 

@@ -142,7 +142,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 - Before merge, closed the suspected queue-stall issue #11537 as a false positive after confirming #11456 remained queued at position 2 and merge-group run `40907797551` was in progress.
 - PR #11456 merged as `c5fd25cb4f430e12c7063e9e3315f5e37cd60ec7`. Main CI run `40918403358` passed.
 - Deploy arm `40919197619` completed its deploy successfully; `deploy-arm.sh find` returned `MATCH=exact DEPLOY=success CI=success`, and `served` returned `CONTAINS BUILD_SHA=c5fd25cb4f430e12c7063e9e3315f5e37cd60ec7`. `/health` returned status `ok`, Supabase `connected`, and the same build SHA.
-- Post-merge observability: no open `ci/inngest-down` issue. Sentry monitor and Better Stack incident reads were skipped; no Sentry issue was identified for error-delta measurement.
+- Post-merge observability: no open `ci/inngest-down` issue. Sentry monitor and Better Stack incident reads were skipped; Sentry error-count delta was skipped because no Sentry issue was named in the PR or linked issue.
 - Live verification, browser verification, and sole-copy read-back were skipped because the PR changed no UI or triggering infra paths. KB archival read-back was clean: all added plan/spec artifacts were under `archive/`. Feature-tweet was ineligible because the PR is a fix.
 - After merge, duplicate #11480 was closed and the post-merge verification result was posted to it.
 - The route learning had been byte-identical at the time #11456 merged. Per explicit user authorization, this follow-up redacts its account-specific operational detail while preserving the general credential-correlation lesson; the prior published commit history is unchanged.
@@ -165,7 +165,14 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 |---|---|---|---|
 | Archived session state disclosed environment-level vendor-token availability | `vendor-credential-posture-disclosure` | `security-sentinel` | Generalize to skipped vendor reads without stating credential presence |
 | Original byte-identical hash acceptance criterion read as current after redaction | `hash-criterion-time-scope` | `code-quality-analyst` | Qualify as the original #11456 merge-time condition |
-- Applied both wording corrections in the current worktree; targeted review and one fresh-eyes verification remain.
+- The initial wording corrections were applied; the targeted review below found two remaining P3 documentation gaps, now tracked in round 2.
+
+### Redaction follow-up targeted-round-2 dedup ledger
+
+| raw finding | canonical defect key | reporting seat | planned correction |
+|---|---|---|---|
+| Sentry error-delta skip wording implied that an API read found no issue | `sentry-error-delta-skipped-not-no-issue` | `security-sentinel` | State that delta measurement was skipped because no Sentry issue was named in the PR/linked issue |
+| Archived plan acceptance criterion still stated byte-identity as a present condition | `historical-hash-acceptance-criterion` | `code-quality-analyst` | Reword as the original #11456 merge-time verification and note the later redaction |
 
 ### Final-review dedup-before-fixing ledger
 
