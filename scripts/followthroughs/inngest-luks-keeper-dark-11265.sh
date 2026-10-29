@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Follow-through probe for #11265: has the on-host LUKS key-continuity probe gone DARK for 30 days after it last
-# MEASURED anything? This is the dead-man CONVERSION TRIGGER, not an independent dead-man.
+# MEASURED anything? This is the dead-man CONVERSION TRIGGER, not an independent dead-man, and a 30-day BACKSTOP only:
+# the Better Stack dead-man alert (arms at 26 h) stays a blocking prerequisite of the bundle promotion (#11266); this
+# probe's blind window is about 28 times wider.
 #
 # WHY IT EXISTS. ADR-282's paging alert fires on `token=fail_*` rows only; a probe that stops emitting pages nobody.
-# The in-Better-Stack dead-man (a 30-day `query_period`) cannot be created today: Better Stack refuses every
-# `query_period` above 900 s (four 422s, recorded in betterstack-logs-alerts.tf), so this read-only probe may be the
-# only 30-day coverage there is. When it fires, the owner converts to the "count-variable form" defined in the
-# ADR-282 addendum of 2026-10-29 (#11265): the last rung of the fallback ladder, a Terraform variable defaulting to
-# false and flipped by the owner, replacing the data-derived self-arm. THIS PROBE DEPENDS ON THE SWEEPER WORKFLOW
-# (scheduled-followthrough-sweeper.yml): if the sweeper stops, so does this probe.
+# The in-Better-Stack dead-man could not be created at the windows tried: four (check, query) tuples were refused 422,
+# all at a query_period of 5400 s or more: 300/10800, 900/10800, 3600/10800 and 300/5400. Live alerts created in
+# September carry 5400, 86400 and 97200 s. 604800 s and 2592000 s were never tried, so whether a 30-day dead-man can
+# exist is unknown. When this probe fires (exit 5) the action is an OWNER DECISION: see the ADR-282 addendum of
+# 2026-10-29 (#11265), which defines the "count-variable form" ladder rung and what to do if the API refuses it.
+# THIS PROBE DEPENDS ON THE SWEEPER WORKFLOW (scheduled-followthrough-sweeper.yml): if the sweeper stops, so does it.
 #
 # WHAT IT COUNTS. MEASURED rows only: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=ok` or `token=fail_*`. An `indeterminate`
 # row (the probe could not measure) never counts as health and never resets the 30-day window. The marker is anchored
@@ -16,59 +18,64 @@
 # betterstack-logs-alerts.tf): a webhook or PR body that QUOTES the marker is a row too, but not a producer row.
 # The read is scripts/betterstack-query.sh over the hot window AND the archive arm (its default mode; `--raw-only` is
 # never passed because it excludes the journald rows, one of the two shipping paths), 60 days back, newest 5000 rows.
+# The reader's own `--max-time` bounds each request (the suite pins it); this probe makes no request itself.
+#
+# TRUST IN THE READ. (i) Every non-blank reader line must decode to a JSON object; one that does not (an HTML 502 page,
+# a ClickHouse `Code: ... DB::Exception` line after a mid-stream failure, which truncates the tail = the NEWEST rows)
+# makes the answer untrustworthy: exit 3 before any verdict, even when anchored rows were found. (ii) When the read
+# finds zero anchored rows, ONE companion read through the same reader (default mode, `--since 6h --limit 1`, no
+# `--grep`, no `--raw-only`) must return at least one JSON object line, else exit 3 `reader source not live`: an empty
+# answer from a dead source must not read as 'no keeper rows'. (iii) A measured row dated more than 1 h in the future
+# is exit 3 (`PARSE: future-dated measured row`); skew up to 1 h counts as age 0.
 #
 # NOTIFY-ONLY probe: this tracker is never closed by a script, so nothing here exits 0 or 1
 # (followthrough-convention.md, the TRANSIENT sub-vocabulary):
-#   2 = NOT YET           no rows of any kind (the keeper is deferred, so this is the state until the owner's bundle
-#                         lands), OR measured rows exist and the newest is under 30 days old
-#   3 = CANNOT ESTABLISH  any read or parse failure; OR only `indeterminate` rows exist (rows=N measured=0
+#   2 = NOT YET           the reader is live and either no keeper rows exist (the keeper is deferred, so this is the
+#                         state until the owner's bundle lands), OR measured rows exist and the newest is under 30 days
+#   3 = CANNOT ESTABLISH  any read or parse failure; an untrustworthy answer (non-object line, future-dated measured
+#                         row); a reader that is not live; OR only `indeterminate` rows exist (rows=N measured=0
 #                         indeterminate=N: a keeper that emits but never measures must not hide behind NOT YET)
-#   5 = ACTION REQUIRED   measured rows exist and the newest is 30 days old or older
+#   5 = ACTION REQUIRED   measured rows exist and the newest is 30 days old or older: the newest measured row from
+#                         `luks_key_probe_tick` (or the future keeper) is >= 30 days old
 #  78 = refused to run under xtrace (#7797), before anything is read
-# THE SWEEPER HAS NO DEDUP: exits 3 and 5 repeat in the daily comment until the directive is removed from the issue
-# body or the `follow-through` label is removed.
+# THE SWEEPER HAS NO DEDUP: EVERY verdict (2 included) posts one comment per open-tracker sweep, about 30 a month. To
+# stop them, remove the directive from the issue body or the `follow-through` label.
 #
-# RESIDUALS, stated plainly. (1) Zero rows after the source retention expires (90 days, betterstack-log-query.md) looks
-# exactly like "never started"; a keeper dark for longer than the 60-day look-back reads NOT YET, not ACTION REQUIRED.
-# (2) A reader that succeeds with an empty body is indistinguishable from zero rows (JSONEachRow has no envelope), so
-# an empty answer reads NOT YET; only a non-zero reader exit reads CANNOT ESTABLISH. (3) The 5000-row cap keeps the
-# NEWEST rows, which is what the newest-measured-row decision needs; the printed counts are of those rows only.
-# (4) Inert until the owner's bundle delivery produces the first `token=ok` row (#11266).
+# RESIDUALS, stated plainly. (1) REACH: the archive arm was measured to reach back at least 40 days (the look-back is
+# 60 d; retention is 90 d, betterstack-log-query.md). Exit 5 is therefore reachable for days 30 to about 60 of darkness
+# and degrades silently afterwards to exit 2 (a keeper dark for longer than the look-back reads 'no keeper rows' while
+# the canary passes on other rows). (2) `--limit 5000` keeps the newest 5000 rows that merely CONTAIN the marker, so
+# rows that quote it (webhook or PR bodies) could evict the newest measured row; the printed counts are of the rows
+# kept only. (3) Inert until the owner's bundle delivery produces the first `token=ok` row (#11266).
 #
-# THE SWEEPER POSTS THIS OUTPUT AS A PUBLIC COMMENT (the last 4 KB, run with 2>&1): counts, an age in whole days and
-# fixed reason strings only. The reader's own output is never printed (it can echo credentials on an auth failure).
+# THE SWEEPER POSTS THIS OUTPUT AS A PUBLIC COMMENT (the last 4 KB, run with 2>&1): counts, an age in whole days, the
+# newest measured token CLASS (`ok` or `fail`, nothing else) and fixed reason strings only. The reader's own output
+# is never printed (it can echo credentials on an auth failure).
 #
 # CREDENTIAL POSTURE: BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD, already bound in
 # scheduled-followthrough-sweeper.yml (no workflow edit); this probe makes no request itself, the pinned reader does.
-# Directive (added to the #11265 body at ship time, unfenced at column 0):
-#   soleur:followthrough script=scripts/followthroughs/inngest-luks-keeper-dark-11265.sh earliest=2026-11-29T00:00:00Z
-#   secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD
+# Directive (added to the #11265 body at ship time, unfenced at column 0, on ONE line):
+#   <!-- soleur:followthrough script=scripts/followthroughs/inngest-luks-keeper-dark-11265.sh earliest=2026-11-29T00:00:00Z secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
 # `earliest=` is the first sweep day, NOT a deadline: the probe never closes the issue.
 #
 # RETIREMENT (delete together when #11265 closes or the dead-man exists): this file,
-# scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh, their two `run_suite` rows in scripts/test-all.sh,
+# scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh, their `run_suite` row in scripts/test-all.sh,
 # their .github/CODEOWNERS rows, the dark-probe pointer in runbooks/inngest-luks-cutover-6894.md (Key-continuity probe
-# subsection), the ADR-282 addendum's probe paragraph, and the tracker directive.
+# subsection), the ADR-282 addendum's probe paragraph, and the tracker directive (or its `follow-through` label).
 set -uo pipefail
 
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this probe handles live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;  # [mut:xtrace]
 esac
-
-_finish() {
-  local rc=$?
-  case "$rc" in 2|3|5|78) ;; *) echo "CANNOT ESTABLISH: internal error (unexpected exit status ${rc})"; exit 3 ;; esac
-}
-trap _finish EXIT  # [mut:trap]
+trap 'set -- "$?"; case "$1" in 2|3|5|78) ;; *) echo "CANNOT ESTABLISH: internal error (unexpected exit status $1)"; exit 3 ;; esac' EXIT  # [mut:trap]
 
 cannot() { echo "CANNOT ESTABLISH: $1"; exit 3; }
 
-readonly MARKER="SOLEUR_INNGEST_LUKS_KEY_PROBE"
+readonly MARKER="SOLEUR_INNGEST_LUKS_KEY_PROBE"  # [mut:marker]
 readonly DARK_SECS=$((30 * 86400))  # [mut:window]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The seam exists for the suite's stub; under the sweeper's `env -i` launcher it is never set.
-QUERY="${LUKS_KEEPER_QUERY_SCRIPT:-$SCRIPT_DIR/../betterstack-query.sh}"
+QUERY="$SCRIPT_DIR/../betterstack-query.sh"  # [mut:query-path]
 NOW_EPOCH="${NOW_EPOCH:-$(date -u +%s)}"
 [[ "$NOW_EPOCH" =~ ^[0-9]+$ ]] || cannot "unusable NOW_EPOCH"
 command -v jq >/dev/null 2>&1 || cannot "jq is not available"
@@ -88,47 +95,67 @@ read_rows() {
 }
 read_rows
 
-# Decode in ONE jq pass (never two `-R` stages: `jq -r` materialises embedded newlines). One output line per input
-# row: kind <TAB> epoch <TAB> token. A = anchored producer row (message STARTS with the marker), Q = a row whose
-# message merely contains it, U = a line that mentions it but does not decode to {raw: JSON object with a string message}.
-JQ_HEAD='(fromjson? // null) as $r | select(($r | type) == "object")
-  | (try ($r.dt | tostring | sub(" "; "T") | sub("\\.[0-9]+"; "") | sub("Z$"; "") + "Z" | fromdateiso8601) catch "-") as $e
-  | (try ($r.raw | fromjson) catch null) as $d
-  | if (($d | type) != "object") or (($d.message | type) != "string") then "U\t\($e)\t-"
-    elif '
+# Decode in ONE jq pass (never two `-R` stages: `jq -r` materialises embedded newlines). One output line per NON-BLANK
+# input line: kind <TAB> epoch <TAB> token. X = a line that is not a JSON object (untrustworthy read), A = anchored
+# producer row (message STARTS with the marker), Q = a row whose message merely contains it, U = an object that
+# mentions it but is not {raw: JSON object with a string message}.
+JQ_HEAD='select(test("\\S"))
+  | ((fromjson? // null) as $r
+  | if ($r | type) != "object" then "X\t-\t-"
+    else (
+      (try ($r.dt | tostring | sub(" "; "T") | sub("\\.[0-9]+"; "") | sub("Z$"; "") + "Z" | fromdateiso8601) catch "-") as $e
+      | (try ($r.raw | fromjson) catch null) as $d
+      | if (($d | type) != "object") or (($d.message | type) != "string") then "U\t\($e)\t-"
+        elif '
 ANCHOR='($d.message | startswith($m))'  # [mut:anchor]
 JQ_TAIL=' then "A\t\($e)\t\(([$d.message | capture("token=(?<t>[a-z_]+)") | .t][0]) // "-")"
-    else "Q\t\($e)\t-" end'
+        else "Q\t\($e)\t-" end
+    ) end)'
 ROWS="$(printf '%s\n' "$OUT" | jq -R -r --arg m "$MARKER" "${JQ_HEAD}${ANCHOR}${JQ_TAIL}" 2>/dev/null)" || cannot "the rows could not be decoded"
 
-# Measured = token ok or fail_*; indeterminate is counted apart; any other anchored token is a parse failure.
-CLASSIFY='$1=="A"{a++; if($3=="ok"||$3 ~ /^fail_/){m++; if($2=="-"){be++} else if($2+0>n){n=$2+0}} else if($3=="indeterminate"){i++} else {b++}} $1=="U"{u++} END{printf "%d %d %d %d %d %d %d\n", a,m,i,b,u,n,be}'  # [mut:classify]
-read -r ANCH MEAS INDET BADTOK UNDEC NEWEST BADEPOCH < <(printf '%s\n' "$ROWS" | awk -F'\t' "$CLASSIFY")
-[[ "$ANCH$MEAS$INDET$BADTOK$UNDEC$NEWEST$BADEPOCH" =~ ^[0-9]+$ ]] || cannot "the rows could not be counted"
+# Measured = token ok or fail_*; indeterminate is counted apart; any other anchored token is a parse failure. A measured
+# row dated more than 3600 s after NOW is counted as future-dated (skew up to 1 h is tolerated).
+CLASSIFY='$1=="X"{x++} $1=="A"{a++; k=($3=="ok")?"ok":"fail"; if($3=="ok"||$3 ~ /^fail_/){m++; if($2=="-"){be++} else {if($2+0>now+3600){fu++}; if($2+0>n){n=$2+0; c=k} else if($2+0==n && k=="fail"){c="fail"}}} else if($3=="indeterminate"){i++} else {b++}} $1=="U"{u++} END{printf "%d %d %d %d %d %d %d %d %d %s\n", a,m,i,b,u,n,be,x,fu,(c==""?"-":c)}'  # [mut:classify]
+read -r ANCH MEAS INDET BADTOK UNDEC NEWEST BADEPOCH BADLINE FUTURE NEWCLS < <(printf '%s\n' "$ROWS" | awk -F'\t' -v now="$NOW_EPOCH" "$CLASSIFY")
+[[ "$ANCH$MEAS$INDET$BADTOK$UNDEC$NEWEST$BADEPOCH$BADLINE$FUTURE" =~ ^[0-9]+$ ]] || cannot "the rows could not be counted"
+case "$NEWCLS" in ok|fail|-) ;; *) cannot "the rows could not be counted" ;; esac
 
+(( BADLINE == 0 )) || cannot "PARSE: ${BADLINE} reader line(s) are not a JSON object (an error body or a truncated read); the answer is untrustworthy"  # [mut:object-check]
 (( BADTOK == 0 )) || cannot "PARSE: ${BADTOK} anchored row(s) carry an unrecognised token"  # [mut:badtoken]
 (( BADEPOCH == 0 )) || cannot "PARSE: a measured row has an unreadable timestamp"
+(( FUTURE == 0 )) || cannot "PARSE: future-dated measured row"  # [mut:future]
 
 if (( MEAS > 0 )); then
-  age=$(( NOW_EPOCH - NEWEST ))
-  echo "inngest-luks keeper dark probe (#11265): rows=${ANCH} measured=${MEAS} indeterminate=${INDET} newest_measured_age_days=$(( age / 86400 ))"
+  age=$(( NOW_EPOCH - NEWEST ))  # a negative age (skew within the 1 h tolerance) truncates to 0 whole days
+  echo "inngest-luks keeper dark probe (#11265): rows=${ANCH} measured=${MEAS} indeterminate=${INDET} newest_measured_age_days=$(( age / 86400 )) newest_measured_token=${NEWCLS}"  # [mut:tokclass]
   if (( age >= DARK_SECS )); then  # [mut:threshold]
-    echo "ACTION REQUIRED: the newest measured key-continuity row is 30 days old or older, so the keeper has gone dark. Convert the dead-man to the count-variable form (ADR-282 addendum 2026-10-29, #11265) or investigate the host. The tracker is NOT closed by the probe: close it and remove its follow-through label by hand."
+    echo "ACTION REQUIRED: the newest measured key-continuity row is 30 days old or older (the on-host probe, or the future keeper, has gone dark). Owner decision: see the ADR-282 addendum of 2026-10-29 (#11265). The tracker is NOT closed by the probe: close it and remove its follow-through label by hand."
     exit 5  # [mut:action]
   fi
   echo "NOT YET: the newest measured row is under 30 days old."
   exit 2
 fi
 
-if (( INDET > 0 )); then  # [mut:indet]
+if (( INDET > 0 )); then
   echo "inngest-luks keeper dark probe (#11265): rows=${INDET} measured=0 indeterminate=${INDET}"
-  cannot "only indeterminate rows exist: the keeper emits but has never measured; an unmeasured verdict is not health and never resets the 30-day window"
+  cannot "only indeterminate rows exist: the keeper emits but has never measured; an unmeasured verdict is not health and never resets the 30-day window"  # [mut:indet]
 fi
 
 if (( ANCH == 0 && UNDEC > 0 )); then  # [mut:drift]
   cannot "SHAPE_DRIFT: ${UNDEC} line(s) mention ${MARKER} but none decodes as a producer row; the stored message shape may have changed (re-measure it against a live row)"
 fi
 
+# Zero anchored rows: prove the SOURCE is live before reading emptiness as 'no keeper rows'. The canary is the reader's
+# default mode (hot + archive), the last 6 h, one row, no filter: any live Logs source has one.
+read_canary() {
+  local CRC=0 CAN="" verdict=""
+  CAN="$(bash "$QUERY" --since 6h --limit 1 2>/dev/null)" || CRC=$?
+  (( CRC == 0 )) || cannot "reader source not live"  # [mut:canary-rc]
+  verdict="$(printf '%s\n' "$CAN" | jq -R -s -r 'split("\n") | map(select(test("\\S")) | ((fromjson? // null) | type)) | if (length > 0) and (all(. == "object")) then "live" else "dead" end' 2>/dev/null)"
+  [[ "$verdict" == "live" ]] || cannot "reader source not live"  # [mut:canary-shape]
+}
+read_canary  # [mut:canary]
+
 echo "inngest-luks keeper dark probe (#11265): rows=0 measured=0 indeterminate=0"
-echo "NOT YET: no keeper rows in the last 60 days. The probe is inert until the owner's bundle delivery produces the first token=ok row; zero rows after retention expiry looks the same as never started."
+echo "NOT YET: no keeper rows in the last 60 days. The probe is inert until the owner's bundle delivery produces the first token=ok row; zero rows after the look-back looks the same as never started."
 exit 2

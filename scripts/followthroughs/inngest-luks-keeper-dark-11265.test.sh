@@ -2,19 +2,27 @@
 # Fixture suite for scripts/followthroughs/inngest-luks-keeper-dark-11265.sh, a NOTIFY-ONLY probe: it may exit only
 # 2 (NOT YET), 3 (CANNOT ESTABLISH), 5 (ACTION REQUIRED) or 78 (xtrace refusal), never 0 or 1, on EVERY path.
 #
-# No network: the Better Stack reader (scripts/betterstack-query.sh) is replaced through the probe's
-# LUKS_KEEPER_QUERY_SCRIPT seam by a stub that RECORDS its argv and prints JSONEachRow rows shaped like the real
-# reader's output (`raw` is a JSON STRING holding a JSON document whose `.message` is the marker line). Registered
-# EXPLICITLY in scripts/test-all.sh (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS).
+# No network: the probe is COPIED into a temp tree `$ROOT/scripts/followthroughs/` whose sibling
+# `$ROOT/scripts/betterstack-query.sh` is a stub, because the probe resolves its reader as
+# `$SCRIPT_DIR/../betterstack-query.sh` and has no environment seam. The stub RECORDS its argv and prints JSONEachRow rows
+# shaped like the real reader's output (`raw` is a JSON STRING holding a JSON document whose `.message` is the marker
+# line); a call WITH `--grep` is the main read, a call without it is the reader-liveness canary. Registered EXPLICITLY
+# in scripts/test-all.sh (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS).
 #
-# GUARD 3 BATTERY (plan Guard 3): after the fixture rows the suite mutates a scratch copy of the probe at the
-# `# [mut:NAME]` tag lines and re-runs itself against the mutant (FT_INNER=1): rc 1 = caught, rc 0 = the mutant
-# SURVIVED, rc >= 2 = the instrument broke. A pristine control must come back rc 0 first.
+# INSTRUMENT SELF-TEST. Before any fixture row, check/has/hasnt are driven with known-true and known-false inputs; a
+# helper that cannot tell them apart aborts the run (rc 4, `INSTRUMENT SELF-TEST FAILED`). The battery proves that
+# detection by neutering each helper in a copy of THIS file.
+#
+# MUTATION BATTERY. After the fixture rows the suite mutates a scratch copy of the probe at the `# [mut:NAME]` tag lines
+# (or at any unique text) and re-runs itself against the mutant (FT_INNER=1). A mutant is credited as caught only when
+# the inner run exits 1 AND prints its own named `FAIL: <fragment>` line; rc 0 = SURVIVED, any other rc or a mutant that
+# does not parse or did not land = the instrument itself broke. A pristine control must come back rc 0 first.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${FT_REPO:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 SUT="${FT_SUT:-$SCRIPT_DIR/inngest-luks-keeper-dark-11265.sh}"
-SELF="$SCRIPT_DIR/inngest-luks-keeper-dark-11265.test.sh"
+SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 ROOT="$(mktemp -d)"
 trap 'rm -rf "${ROOT:?}"' EXIT
 
@@ -25,46 +33,82 @@ check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$2] got [$3
 has()   { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing [$3]" ;; esac; }
 hasnt() { case "$2" in *"$3"*) bad "$1" "unexpected [$3] present" ;; *) ok "$1" ;; esac; }
 
+instrument_selftest() {
+  local p0=$PASS f0=$FAIL n0 p1 f1 p2 f2
+  n0="$(wc -l < "$LEDGER")"
+  { check st 1 2; has st abc z; hasnt st abc b; } >/dev/null
+  p1=$((PASS - p0)); f1=$((FAIL - f0))
+  { check st 1 1; has st abc b; hasnt st abc z; } >/dev/null
+  p2=$((PASS - p0 - p1)); f2=$((FAIL - f0 - f1))
+  PASS=$p0; FAIL=$f0
+  head -n "$n0" "$LEDGER" > "$LEDGER.t" && mv "$LEDGER.t" "$LEDGER"
+  if [ "$p1/$f1/$p2/$f2" != "0/3/3/0" ]; then
+    echo "INSTRUMENT SELF-TEST FAILED: check/has/hasnt cannot tell true from false (false-block pass/fail $p1/$f1, true-block pass/fail $p2/$f2)"
+    exit 4
+  fi
+}
+instrument_selftest
+
 NOW=1790000000
 DAY=86400
 MARKER="SOLEUR_INNGEST_LUKS_KEY_PROBE"
+CAN_STR="CANARY-7f3a9c"
 dt_of() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S'; }
 
 # row <epoch> <message> [fraction]: the REAL stored shape, raw = a JSON string holding {message, ...}
 row() { jq -nc --arg dt "$(dt_of "$1")${3:-}" --arg m "$2" '{dt:$dt, raw:({message:$m, SYSLOG_IDENTIFIER:"inngest-cutover-flip"}|tojson)}'; }
 mrow() { row "$1" "$MARKER token=$2 rc=0 at=tick"; }   # an anchored producer row
+# any live Logs row (the canary's answer): an object, not a keeper row
+live_row() { jq -nc --arg dt "$(dt_of $((NOW - 60)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
 
-QUERY_STUB="$ROOT/query.sh"
+# The temp tree: the probe under test sits at scripts/followthroughs/, the stub reader at scripts/betterstack-query.sh.
+TREE="$ROOT/tree"; mkdir -p "$TREE/scripts/followthroughs"
+PROBE="$TREE/scripts/followthroughs/inngest-luks-keeper-dark-11265.sh"
+cp "$SUT" "$PROBE"
+QUERY_STUB="$TREE/scripts/betterstack-query.sh"
 cat > "$QUERY_STUB" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" > "$STUB_ARGS"; echo CALL >> "$STUB_CALLS"
-if [ -n "${STUB_RC:-}" ] && [ "$STUB_RC" != 0 ]; then echo "auth failure for user secret-user at host secret-host $STUB_CANARY" >&2; exit "$STUB_RC"; fi
-cat "$STUB_ROWS"
+case " $* " in
+  *" --grep "*)
+    printf '%s\n' "$*" > "$STUB_ARGS"; echo MAIN >> "$STUB_CALLS"
+    cat "$STUB_ROWS"
+    if [ -n "${STUB_RC:-}" ] && [ "$STUB_RC" != 0 ]; then echo "auth failure for user secret-user at host secret-host $STUB_CANARY" >&2; exit "$STUB_RC"; fi ;;
+  *)
+    printf '%s\n' "$*" > "$STUB_CARGS"; echo CANARY >> "$STUB_CALLS"
+    cat "$STUB_CROWS"
+    if [ -n "${STUB_CRC:-}" ] && [ "$STUB_CRC" != 0 ]; then echo "auth failure for user secret-user at host secret-host $STUB_CANARY" >&2; exit "$STUB_CRC"; fi ;;
+esac
 STUB
 chmod +x "$QUERY_STUB"
+EVIL="$ROOT/evil.sh"; printf '#!/usr/bin/env bash\necho EVIL >> "%s"\n' "$ROOT/evil-called" > "$EVIL"; chmod +x "$EVIL"
+live_row > "$ROOT/crow"
 
 RCS="$ROOT/rcs"; : > "$RCS"
 OUT=""; RC=0
-run() {  # rows come from $ROOT/rows; knobs: QH QU QP (creds; unset = set), QSCRIPT, XBASH, XENV, STUB_RC
+run() {  # rows come from $ROOT/rows, the canary answer from $CROWS (default: one live row); knobs: QH QU QP, XBASH, XENV, STUB_RC, STUB_CRC
   RC=0
-  rm -f "$ROOT/args" "$ROOT/calls"; : > "$ROOT/calls"
-  OUT="$(env -i PATH="$PATH" HOME="$ROOT" TMPDIR="$ROOT" NOW_EPOCH="$NOW" STUB_ROWS="$ROOT/rows" STUB_ARGS="$ROOT/args" STUB_CALLS="$ROOT/calls" \
-    STUB_RC="${STUB_RC:-0}" STUB_CANARY="CANARY-7f3a9c" LUKS_KEEPER_QUERY_SCRIPT="${QSCRIPT-$QUERY_STUB}" \
+  rm -f "$ROOT/args" "$ROOT/cargs" "$ROOT/calls" "$ROOT/evil-called"; : > "$ROOT/calls"
+  OUT="$(env -i PATH="$PATH" HOME="$ROOT" TMPDIR="$ROOT" NOW_EPOCH="$NOW" STUB_ROWS="$ROOT/rows" STUB_CROWS="${CROWS:-$ROOT/crow}" \
+    STUB_ARGS="$ROOT/args" STUB_CARGS="$ROOT/cargs" STUB_CALLS="$ROOT/calls" \
+    STUB_RC="${STUB_RC:-0}" STUB_CRC="${STUB_CRC:-0}" STUB_CANARY="$CAN_STR" LUKS_KEEPER_QUERY_SCRIPT="$EVIL" \
     BETTERSTACK_QUERY_HOST="${QH-h}" BETTERSTACK_QUERY_USERNAME="${QU-u}" BETTERSTACK_QUERY_PASSWORD="${QP-p}" \
-    ${XENV:+"$XENV"} bash ${XBASH:+"$XBASH"} "$SUT" 2>&1 </dev/null)" || RC=$?
+    ${XENV:+"$XENV"} bash ${XBASH:+"$XBASH"} "$PROBE" 2>&1 </dev/null)" || RC=$?
   echo "$RC" >> "$RCS"
 }
-calls() { grep -c '^CALL$' "$ROOT/calls" 2>/dev/null || true; }
-reset_knobs() { unset QH QU QP QSCRIPT XBASH XENV STUB_RC; }
+calls()  { grep -c . "$ROOT/calls" 2>/dev/null || true; }
+mcalls() { grep -c '^MAIN$' "$ROOT/calls" 2>/dev/null || true; }
+ccalls() { grep -c '^CANARY$' "$ROOT/calls" 2>/dev/null || true; }
+reset_knobs() { unset QH QU QP XBASH XENV STUB_RC STUB_CRC CROWS; }
 run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
 reset_knobs
 echo "=== inngest-luks-keeper-dark-11265.sh tests ==="
 
-# 1. no rows of any kind: the normal state while the keeper is deferred
+# 1. no rows of any kind and a LIVE source: the normal state while the keeper is deferred
 : > "$ROOT/rows"; run
-check "no rows at all: exit 2 (NOT YET)" 2 "$RC"; has "no rows: NOT YET named" "$OUT" "NOT YET"
+check "no rows, live source: exit 2 (NOT YET)" 2 "$RC"; has "no rows: NOT YET named" "$OUT" "NOT YET"
 has "no rows: says the probe is inert until the first measured row" "$OUT" "inert"
+check "no rows: the canary was read once" 1 "$(ccalls)"
 
 # 2. echo isolation: a row that merely QUOTES the marker is not a producer row (anchored at message position 1)
 { row $((NOW - 40 * DAY)) "a PR body quoting $MARKER token=ok rc=0 at=tick verbatim"
@@ -82,6 +126,7 @@ for tok in ok fail_passphrase fail_header fail_key_absent fail_other; do
 done
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; run
 has "NOT YET prints the counts" "$OUT" "rows=1 measured=1 indeterminate=0"
+check "anchored rows found: the canary is not read" 0 "$(ccalls)"
 
 # 4. the 30-day boundary
 mrow $((NOW - 30 * DAY + 1)) ok > "$ROOT/rows"; run
@@ -92,8 +137,22 @@ mrow $((NOW - 30 * DAY - 1)) ok > "$ROOT/rows"; run
 check "newest measured row 30 days plus one second old: exit 5" 5 "$RC"
 has "ACTION REQUIRED named" "$OUT" "ACTION REQUIRED"
 has "ACTION REQUIRED says the tracker is not closed by the probe" "$OUT" "NOT closed by the probe"
+has "ACTION REQUIRED points at the owner decision, not a bare conversion" "$OUT" "Owner decision: see the ADR-282 addendum of 2026-10-29"
+hasnt "ACTION REQUIRED does not claim the keeper exists and went dark" "$OUT" "the keeper has gone dark"
 mrow $((NOW - 45 * DAY)) fail_passphrase > "$ROOT/rows"; run
 check "a 45-day-old failed-verdict row is a measured row too: exit 5" 5 "$RC"
+
+# 4b. the newest measured token CLASS is printed (fixed vocabulary), so a fail-then-dark composition is legible
+mrow $((NOW - 31 * DAY)) fail_header > "$ROOT/rows"; run
+has "fail-then-dark: the newest measured token class is fail" "$OUT" "newest_measured_token=fail"
+mrow $((NOW - 31 * DAY)) ok > "$ROOT/rows"; run
+has "ok-then-dark: the newest measured token class is ok" "$OUT" "newest_measured_token=ok"
+{ mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 3 * DAY)) fail_passphrase; } > "$ROOT/rows"; run
+has "the newest measured row decides the class (ok over an older fail)" "$OUT" "newest_measured_token=ok"
+{ mrow $((NOW - 2 * DAY)) fail_other; mrow $((NOW - 3 * DAY)) ok; } > "$ROOT/rows"; run
+has "the newest measured row decides the class (fail over an older ok)" "$OUT" "newest_measured_token=fail"
+{ mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 2 * DAY)) fail_other; } > "$ROOT/rows"; run
+has "two measured rows at one instant: the class is fail (conservative)" "$OUT" "newest_measured_token=fail"
 
 # 5. only the NEWEST measured row decides; indeterminate rows never count as health and never reset the window
 { mrow $((NOW - 40 * DAY)) ok; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
@@ -126,11 +185,90 @@ row $((NOW - 5 * DAY)) "$MARKER no token here" > "$ROOT/rows"; run
 check "an anchored row with no token: exit 3" 3 "$RC"
 jq -nc --arg m "$MARKER token=ok rc=0 at=tick" '{dt:"not a date", raw:({message:$m}|tojson)}' > "$ROOT/rows"; run
 check "a measured row with an unreadable timestamp: exit 3" 3 "$RC"
-{ printf '%s\n' "garbage line mentioning $MARKER"; jq -nc --arg dt "$(dt_of $((NOW - 3 * DAY)))" '{dt:$dt, raw:"not json at all"}'; } > "$ROOT/rows"; run
-check "lines that mention the marker but decode to nothing and no producer row: exit 3 (shape drift)" 3 "$RC"
+# shape drift: an OBJECT that mentions nothing decodable, ALONE (no anchored row, no other line)
+jq -nc --arg dt "$(dt_of $((NOW - 3 * DAY)))" '{dt:$dt, raw:"not json at all"}' > "$ROOT/rows"; run
+check "an object whose raw does not decode, and no producer row: exit 3 (shape drift)" 3 "$RC"
 has "shape drift is named" "$OUT" "SHAPE_DRIFT"
+# a bare garbage LINE, ALONE: not an object, so the read itself is untrustworthy (a different reason from shape drift)
+printf '%s\n' "garbage line mentioning $MARKER" > "$ROOT/rows"; run
+check "a lone garbage line that mentions the marker: exit 3 (untrustworthy read)" 3 "$RC"
+has "a lone garbage line is named as a PARSE failure" "$OUT" "PARSE:"
+hasnt "a lone garbage line is not reported as shape drift" "$OUT" "SHAPE_DRIFT"
 { jq -nc --arg dt "$(dt_of $((NOW - 3 * DAY)))" '{dt:$dt, raw:"not json at all"}'; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
-check "an undecodable line beside a valid producer row does not block the verdict: exit 2" 2 "$RC"
+check "an object with an undecodable raw beside a valid producer row does not block the verdict: exit 2" 2 "$RC"
+
+# 7b. an UNTRUSTWORTHY read (R1 i): any non-blank reader line that is not a JSON object is exit 3 before any verdict
+printf '<html><head><title>502 Bad Gateway</title></head><body>%s</body></html>\n' "$CAN_STR" > "$ROOT/rows"; run
+check "an HTML 502 body with exit 0: exit 3" 3 "$RC"
+has "502 body: a PARSE failure is named" "$OUT" "PARSE:"
+hasnt "502 body: the body is never echoed" "$OUT" "$CAN_STR"
+{ mrow $((NOW - 2 * DAY)) ok; printf 'Code: 241. DB::Exception: Memory limit (for query) exceeded: %s\n' "$CAN_STR"; } > "$ROOT/rows"; run
+check "valid rows then a ClickHouse 'Code: ... DB::Exception' line (truncated tail): exit 3, not a verdict" 3 "$RC"
+hasnt "DB::Exception line: never echoed" "$OUT" "$CAN_STR"
+{ mrow $((NOW - 40 * DAY)) ok; printf 'Code: 241. DB::Exception: Memory limit exceeded\n'; } > "$ROOT/rows"; run
+check "an old measured row plus a DB::Exception line: exit 3, never a false ACTION REQUIRED" 3 "$RC"
+{ printf 'Code: 241. DB::Exception: Memory limit exceeded\n'; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
+check "a DB::Exception line BEFORE valid rows: exit 3" 3 "$RC"
+for junk in '[1,2]' '"a string"' 'null' '42' 'true' '{"dt":"x"} trailing'; do
+  { mrow $((NOW - 2 * DAY)) ok; printf '%s\n' "$junk"; } > "$ROOT/rows"; run
+  check "valid row plus a non-object line ($junk): exit 3" 3 "$RC"
+done
+{ printf '\n'; mrow $((NOW - 2 * DAY)) ok; printf '   \n'; mrow $((NOW - 3 * DAY)) ok; printf '\n'; } > "$ROOT/rows"; run
+check "blank and whitespace-only lines are ignored: exit 2" 2 "$RC"
+has "blank lines: both rows counted" "$OUT" "rows=2 measured=2"
+
+# 7c. the reader-liveness canary (R1 ii): zero anchored rows needs proof the SOURCE is live
+: > "$ROOT/rows"; : > "$ROOT/crow-empty"; CROWS="$ROOT/crow-empty" run; reset_knobs
+check "empty body and an EMPTY canary: exit 3 (a dead source is not 'no keeper rows')" 3 "$RC"
+has "empty body and empty canary: the fixed reason" "$OUT" "reader source not live"
+: > "$ROOT/rows"; run
+check "empty body and a LIVE canary: exit 2" 2 "$RC"
+: > "$ROOT/rows"; STUB_CRC=7 run; reset_knobs
+check "empty body and a canary that exits 7: exit 3" 3 "$RC"
+has "canary exit 7: the fixed reason" "$OUT" "reader source not live"
+hasnt "canary failure: user withheld" "$OUT" "secret-user"; hasnt "canary failure: host withheld" "$OUT" "secret-host"
+hasnt "canary failure: canary string withheld" "$OUT" "$CAN_STR"
+printf '<html>%s</html>\n' "$CAN_STR" > "$ROOT/crow-html"; CROWS="$ROOT/crow-html" run; reset_knobs
+check "empty body and an HTML canary: exit 3" 3 "$RC"; hasnt "HTML canary: never echoed" "$OUT" "$CAN_STR"
+{ live_row; printf 'Code: 241. DB::Exception: x\n'; } > "$ROOT/crow-mixed"; CROWS="$ROOT/crow-mixed" run; reset_knobs
+check "empty body and a canary with one object line and one non-object line: exit 3" 3 "$RC"
+printf '  \n\n' > "$ROOT/crow-blank"; CROWS="$ROOT/crow-blank" run; reset_knobs
+check "empty body and a whitespace-only canary: exit 3" 3 "$RC"
+printf '[1]\n' > "$ROOT/crow-arr"; CROWS="$ROOT/crow-arr" run; reset_knobs
+check "empty body and a canary that decodes to a JSON array, not an object: exit 3" 3 "$RC"
+# quoting rows only: no anchored row, so the canary is read too
+{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER token=ok rc=0 at=tick"; } > "$ROOT/rows"; run
+check "quoting rows only and a live canary: exit 2, canary read" 2 "$RC"; check "quoting rows only: canary read once" 1 "$(ccalls)"
+CROWS="$ROOT/crow-empty" run; reset_knobs
+check "quoting rows only and a dead canary: exit 3" 3 "$RC"
+# a verdict from anchored rows never needs the canary, even when the canary would be dead
+mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; CROWS="$ROOT/crow-empty" run; reset_knobs
+check "anchored measured row beside a dead canary: exit 2 (the canary is not consulted)" 2 "$RC"
+{ mrow $((NOW - 1 * DAY)) indeterminate; } > "$ROOT/rows"; CROWS="$ROOT/crow-empty" run; reset_knobs
+check "indeterminate-only beside a dead canary: still exit 3 for its own reason" 3 "$RC"; hasnt "indeterminate-only: not blamed on the source" "$OUT" "reader source not live"
+# the canary's shape
+: > "$ROOT/rows"; run
+cargs="$(cat "$ROOT/cargs" 2>/dev/null)"
+check "the canary asks for exactly the last 6 h, one row" "--since 6h --limit 1" "$cargs"
+hasnt "the canary never filters (--grep)" "$cargs" "--grep"
+hasnt "the canary never passes --raw-only" "$cargs" "--raw-only"
+hasnt "the canary never passes --no-archive (default mode reads hot + archive)" "$cargs" "--no-archive"
+
+# 7d. future-dated measured rows (R1 iii)
+mrow $((NOW + 2 * 3600)) ok > "$ROOT/rows"; run
+check "a measured row dated 2 h in the future: exit 3" 3 "$RC"; has "future-dated: the fixed reason" "$OUT" "PARSE: future-dated measured row"
+mrow $((NOW + 3600 + 1)) ok > "$ROOT/rows"; run
+check "a measured row dated 1 h + 1 s in the future: exit 3" 3 "$RC"
+mrow $((NOW + 3600)) ok > "$ROOT/rows"; run
+check "a measured row dated exactly 1 h in the future (skew): exit 2" 2 "$RC"; has "skew within 1 h counts as age 0" "$OUT" "newest_measured_age_days=0"
+mrow $((NOW + 600)) fail_other > "$ROOT/rows"; run
+check "a measured row 10 min in the future (skew): exit 2" 2 "$RC"
+mrow $((NOW + 3 * 3600)) fail_header > "$ROOT/rows"; run
+check "a future-dated FAIL row: exit 3" 3 "$RC"
+{ mrow $((NOW - 40 * DAY)) ok; mrow $((NOW + 2 * 3600)) ok; } > "$ROOT/rows"; run
+check "a future-dated row cannot mask a dark keeper (old row plus future row): exit 3, not 2" 3 "$RC"
+mrow $((NOW + 2 * 3600)) indeterminate > "$ROOT/rows"; run
+check "a future-dated INDETERMINATE row is not a measured row: exit 3 for its own reason" 3 "$RC"; hasnt "future indeterminate: not the future-dated reason" "$OUT" "future-dated"
 
 # 8. what the probe asks Better Stack for: hot window + archive arm, 60 days, NOT --raw-only (it drops journald rows)
 : > "$ROOT/rows"; run
@@ -140,16 +278,24 @@ has "greps the marker name" "$args" "--grep $MARKER"
 has "bounded limit" "$args" "--limit 5000"
 hasnt "never --raw-only (it excludes the journald rows)" "$args" "--raw-only"
 hasnt "never --no-archive (the archive arm is what reaches 31 days back)" "$args" "--no-archive"
-check "exactly one reader call" 1 "$(calls)"
+check "exactly one main read" 1 "$(mcalls)"
+
+# 8b. the reader is FIXED to the sibling script: no environment seam (R6)
+: > "$ROOT/rows"; run
+check "an exported LUKS_KEEPER_QUERY_SCRIPT is ignored: the evil script is never run" "" "$(cat "$ROOT/evil-called" 2>/dev/null)"
+check "an exported LUKS_KEEPER_QUERY_SCRIPT is ignored: the sibling reader answered" 1 "$(mcalls)"
+leftover="$(grep -n 'LUKS_KEEPER_QUERY_SCRIPT' "$SUT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+check "the probe source has no LUKS_KEEPER_QUERY_SCRIPT seam" "" "$leftover"
+check "the reader path is fixed to \$SCRIPT_DIR/../betterstack-query.sh" 1 "$(grep -cE '^QUERY="\$SCRIPT_DIR/\.\./betterstack-query\.sh"' "$SUT")"
 
 # 9. read failure: CANNOT ESTABLISH, and the reader's credential-bearing stderr is withheld
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; STUB_RC=7 run; unset STUB_RC
 check "reader exits 7: exit 3 (never a verdict from the rows it printed)" 3 "$RC"
 hasnt "reader failure: user withheld" "$OUT" "secret-user"; hasnt "reader failure: host withheld" "$OUT" "secret-host"
-hasnt "reader failure: canary withheld" "$OUT" "CANARY-7f3a9c"
+hasnt "reader failure: canary withheld" "$OUT" "$CAN_STR"
 has "reader failure: fixed reason with the exit code" "$OUT" "Better Stack read failed (exit 7)"
 for rc in 1 2 3 64 78; do STUB_RC=$rc run; check "reader exits $rc: exit 3" 3 "$RC"; done; unset STUB_RC
-: > "$ROOT/rows"; QSCRIPT="$ROOT/does-not-exist.sh" run; reset_knobs
+: > "$ROOT/rows"; mv "$QUERY_STUB" "$QUERY_STUB.off"; run; mv "$QUERY_STUB.off" "$QUERY_STUB"; reset_knobs
 check "reader script missing: exit 3" 3 "$RC"
 
 # 10. credentials: missing in any position is CANNOT ESTABLISH with no reader call
@@ -171,12 +317,49 @@ exits="$(grep -oE '(^|[^A-Za-z_])exit [0-9]+' "$SUT" 2>/dev/null | grep -oE '[0-
 check "the source names only exit 2, 3, 5 and 78 (a literal exit 0 or 1 cannot exist)" "2 3 5 78 " "$exits"
 qform="$(grep -nE '\$\{[A-Za-z_0-9]+:\?' "$SUT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
 check "no \${VAR:?} form on an executable line (it aborts with status 1)" "" "$qform"
-echoed="$(grep -nE 'echo[^|]*\$\{?OUT\}?|printf[^|]*\$\{?OUT\}?[^|]*>&2' "$SUT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+echoed="$(grep -nE 'echo[^|]*\$\{?(OUT|CAN)\}?|printf[^|]*\$\{?(OUT|CAN)\}?[^|]*>&2' "$SUT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
 check "no executable line echoes the reader output" "" "$echoed"
 direct="$(grep -nE '(^|[^A-Za-z_])curl[[:space:]]|Authorization:|Bearer' "$SUT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
 check "no direct curl and no bearer: the only egress is the pinned reader" "" "$direct"
 rawonly="$(grep -nE '^[^#]*--raw-only' "$SUT" 2>/dev/null || true)"
 check "the source never passes --raw-only on an executable line" "" "$rawonly"
+check "the reader the probe calls bounds its request with --max-time" 1 "$(grep -cE 'curl .*--max-time [0-9]+' "$REPO/scripts/betterstack-query.sh")"
+
+# 12b. the followthrough-convention.md NOTIFY-ONLY rule: refusal first, the rc-remapping EXIT trap directly after it
+check "exactly one trap statement" 1 "$(grep -c '^trap ' "$SUT")"
+check "no exec / kill on an executable line (either bypasses the EXIT remap)" "" "$(grep -nE '(^|[^A-Za-z_-])(exec|kill)[[:space:]]' "$SUT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+refusal_start="$(awk '/^case "\$-" in$/ { print NR; exit }' "$SUT")"
+refusal_end="$(awk '/^case "\$-" in$/ { s = 1 } s && /^esac$/ { print NR; exit }' "$SUT")"
+trap_ln="$(grep -n '^trap ' "$SUT" | head -n 1 | cut -d: -f1)"
+has "the xtrace refusal case exits 78" "$(sed -n "${refusal_start:-0},${refusal_end:-0}p" "$SUT")" "exit 78"
+check "nothing between the xtrace refusal and the trap (the trap is the next line)" "$(( ${refusal_end:-0} + 1 ))" "${trap_ln:-none}"
+first_cred="$(grep -nE 'BETTERSTACK_QUERY_|NOW_EPOCH|betterstack-query' "$SUT" | grep -vE '^[0-9]+:[[:space:]]*#' | head -n 1 | cut -d: -f1)"
+check "the xtrace refusal precedes the first credential or reader reference" yes "$([ "${refusal_end:-999999}" -lt "${first_cred:-0}" ] && echo yes || echo no)"
+
+# 12c. the enrollable directive: ONE `<!-- soleur:followthrough ... -->` line in the header
+dir_lines="$(grep -E '^#[[:space:]]+<!-- soleur:followthrough ' "$SUT" || true)"
+check "the header carries exactly one single-line follow-through directive" 1 "$(printf '%s\n' "$dir_lines" | grep -c .)"
+check "the directive names this script, earliest= and secrets= and closes on the same line" 1 "$(printf '%s\n' "$dir_lines" | grep -cE 'script=scripts/followthroughs/inngest-luks-keeper-dark-11265\.sh earliest=[0-9]{4}-[0-9]{2}-[0-9]{2}T00:00:00Z secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->$')"
+check "the directive's script exists in the repo" yes "$([ -f "$REPO/scripts/followthroughs/inngest-luks-keeper-dark-11265.sh" ] && echo yes || echo no)"
+
+# 12d. parity with the producer: the marker and the token vocabulary equal the strings in the alert and the flip script
+TF_SRC="$(cat "$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf")"
+FLIP_SRC="$(cat "$REPO/apps/web-platform/infra/inngest-cutover-flip.sh")"
+probe_marker="$(sed -n 's/^readonly MARKER="\(.*\)"  *# \[mut:marker\]$/\1/p' "$SUT")"
+check "the probe MARKER is the 30-character producer marker" "$MARKER" "$probe_marker"
+has "probe MARKER equals the paging alert's anchored marker in betterstack-logs-alerts.tf" "$TF_SRC" "position(JSONExtractString(raw, 'message'), '$probe_marker') = 1"
+has "probe MARKER equals the marker the flip script emits (inngest-cutover-flip.sh)" "$FLIP_SRC" "\"$probe_marker \${row}\""
+flip_tokens="$(grep -oE 'luks_probe_finish [a-z_]+ [0-9"$]' "$REPO/apps/web-platform/infra/inngest-cutover-flip.sh" | awk '{print $2}' | sort -u | tr '\n' ' ')"
+tf_tokens="$(sed -n 's/^# token in {\(.*\)}, shipped twice.*$/\1/p' "$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf" | tr -d ' ' | tr ',' '\n' | sort -u | tr '\n' ' ')"
+check "the flip script emits exactly the vocabulary {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}" "fail_header fail_key_absent fail_passphrase indeterminate ok " "$flip_tokens"
+check "the alert file documents the same token vocabulary as the flip script" "$flip_tokens" "$tf_tokens"
+for t in $flip_tokens; do
+  mrow $((NOW - 5 * DAY)) "$t" > "$ROOT/rows"; run
+  case "$t" in
+    indeterminate) check "producer token $t is classified as unmeasured: exit 3, indeterminate=1" "3:yes" "$RC:$(case "$OUT" in *"indeterminate=1"*) echo yes ;; *) echo no ;; esac)" ;;
+    *)             check "producer token $t is classified as measured: exit 2, measured=1" "2:yes" "$RC:$(case "$OUT" in *"measured=1 "*) echo yes ;; *) echo no ;; esac)" ;;
+  esac
+done
 
 # 13. the EXIT trap keeps a stray status inside the vocabulary (a fault injected at the read exits 1 in the body)
 cat > "$ROOT/fault.sh" <<'FAULT'
@@ -185,38 +368,86 @@ FAULT
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; XENV="BASH_ENV=$ROOT/fault.sh" run; reset_knobs
 check "an unexpected internal exit status is mapped to 3 by the EXIT trap" 3 "$RC"
 
+FIX_N="$(wc -l < "$LEDGER")"
 if run_battery "${1:-}"; then
-  echo "=== Guard 3 mutation battery ==="
+  echo "=== mutation battery ==="
+  export FT_REPO="$REPO"
   MUT="$ROOT/mut"; mkdir -p "$MUT"
-  mutate_run() {  # $1 = name, $2 = tag, $3 = replacement line
-    local name="$1" tag="$2" rep="$3" f="$MUT/$1.sh" rc=0
-    if ! grep -qF "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
+  # mutate_run <name> <tag-or-unique-text> <replacement line> <expected FAIL fragment>
+  mutate_run() {
+    local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0
+    if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
     REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
-    FT_INNER=1 FT_SUT="$f" bash "$SELF" >/dev/null 2>&1 || rc=$?
-    if [ "$rc" = 1 ]; then ok "mutation $name: rc=$rc (caught)"
-    elif [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
-    else bad "mutation $name: unresolved instrument rc=$rc"; fi
+    if cmp -s "$SUT" "$f"; then bad "mutation $name: the mutation did not land (instrument)"; return; fi
+    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant does not parse (instrument)"; return; fi
+    FT_INNER=1 FT_SUT="$f" bash "$SELF" > "$o" 2>&1 || rc=$?
+    if [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
+    elif [ "$rc" != 1 ]; then bad "mutation $name: unresolved instrument rc=$rc"
+    elif grep -qF -- "FAIL: $frag" "$o"; then ok "mutation $name: caught by its own FAIL line [$frag]"
+    else bad "mutation $name: rc=1 but no FAIL line [$frag] (killed by something else)"; fi
+  }
+  # mutate_sub <name> <unique text> <from> <to> <expected FAIL fragment>: replace <from> by <to> inside the ONE line holding <unique text>
+  mutate_sub() {
+    local line new
+    line="$(grep -F -- "$2" "$SUT" || true)"
+    if [ -z "$line" ] || [ "$(printf '%s\n' "$line" | wc -l)" != 1 ]; then bad "mutation $1: the text [$2] matches exactly one line (instrument)"; return; fi
+    new="${line/"$3"/"$4"}"
+    if [ "$new" = "$line" ]; then bad "mutation $1: [$3] is present in the line (instrument)"; return; fi
+    mutate_run "$1" "$2" "$new" "$5"
+  }
+  # mutate_helper <name> <helper> <neutered definition>: the self-test must abort the run (rc 4) on a copy of THIS file
+  mutate_helper() {
+    local name="$1" helper="$2" rep="$3" f="$MUT/$1.test.sh" o="$MUT/$1.out" rc=0
+    HELPER="$helper" REP="$rep" awk 'index($0, ENVIRON["HELPER"] "()") == 1 { print ENVIRON["REP"]; next } { print }' "$SELF" > "$f"
+    if cmp -s "$SELF" "$f"; then bad "mutation $name: the helper mutation did not land (instrument)"; return; fi
+    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant suite does not parse (instrument)"; return; fi
+    FT_INNER=1 FT_SUT="$SUT" bash "$f" > "$o" 2>&1 || rc=$?
+    if [ "$rc" = 4 ] && grep -qF -- "INSTRUMENT SELF-TEST FAILED" "$o"; then ok "mutation $name: caught by the instrument self-test (rc 4)"
+    else bad "mutation $name: the neutered helper went undetected (rc=$rc)"; fi
   }
   ctl=0; FT_INNER=1 FT_SUT="$SUT" bash "$SELF" >/dev/null 2>&1 || ctl=$?
   check "battery control: the pristine probe passes the inner suite (rc 0)" 0 "$ctl"
-  mutate_run m1-action-exit-0       '[mut:action]'      '    exit 0'
-  mutate_run m2-read-fail-falls-through '[mut:read-fail]' '  if (( RC != 0 )); then OUT=""; return 0; fi'
-  mutate_run m2b-trap-removed       '[mut:trap]'        ':'
-  mutate_run m4-xtrace-refusal-dropped '[mut:xtrace]'   '  *x*) : ;;'
-  mutate_run m5a-reader-output-echoed '[mut:read-fail]' '  if (( RC != 0 )); then echo "$OUT"; cannot "Better Stack read failed (exit ${RC})"; fi'
-  mutate_run m5b-anchor-dropped     '[mut:anchor]'      "ANCHOR='(\$d.message | contains(\$m))'"
-  mutate_run m5c-indeterminate-counts-as-measured '[mut:classify]' "CLASSIFY='\$1==\"A\"{a++; if(\$3==\"ok\"||\$3==\"indeterminate\"||\$3 ~ /^fail_/){m++; if(\$2==\"-\"){be++} else if(\$2+0>n){n=\$2+0}} else {b++}} \$1==\"U\"{u++} END{printf \"%d %d %d %d %d %d %d\\n\", a,m,i,b,u,n,be}'"
-  mutate_run m5d-threshold-off-by-one '[mut:threshold]' '  if (( age > DARK_SECS )); then'
-  mutate_run m5e-indeterminate-only-is-not-yet '[mut:indet]' '  if (( INDET > 0 )); then echo "NOT YET: indeterminate only"; exit 2; fi'
-  mutate_run m5f-shape-drift-ignored '[mut:drift]'      '  if false; then'
-  mutate_run m5g-bad-token-ignored  '[mut:badtoken]'    ':'
-  mutate_run m5h-missing-cred-still-reads '[mut:cred-check]' ':'
-  mutate_run m5i-window-30-to-31-days '[mut:window]'    'readonly DARK_SECS=$((31 * 86400))'
+  mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
+  mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
+  mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
+  mutate_helper h4-check-always-bad    check  'check() { bad "$1"; }'
+  mutate_helper h5-has-inverted        has    'has() { case "$2" in *"$3"*) bad "$1" ;; *) ok "$1" ;; esac; }'
+  mutate_sub m1-action-exit-0          '[mut:action]'      'exit 5'  'exit 0' 'newest measured row exactly 30 days old: exit 5'
+  mutate_run m2-read-fail-falls-through '[mut:read-fail]'  '  if (( RC != 0 )); then OUT=""; return 0; fi' 'reader exits 7: exit 3'
+  mutate_run m2b-trap-removed          '[mut:trap]'        ':' 'an unexpected internal exit status is mapped to 3 by the EXIT trap'
+  mutate_sub m2c-statement-before-trap '[mut:trap]'        'trap ' $'FOO=1\ntrap ' 'nothing between the xtrace refusal and the trap'
+  mutate_sub m2d-second-trap           '[mut:trap]'        '# [mut:trap]' $'# [mut:trap]\ntrap - EXIT' 'exactly one trap statement'
+  mutate_run m4-xtrace-refusal-dropped '[mut:xtrace]'      '  *x*) : ;;' 'xtrace with credentials: exit 78'
+  mutate_run m5a-reader-output-echoed  '[mut:read-fail]'   '  if (( RC != 0 )); then echo "$OUT"; cannot "Better Stack read failed (exit ${RC})"; fi' 'no executable line echoes the reader output'
+  mutate_sub m5b-anchor-dropped        '[mut:anchor]'      'startswith' 'contains' 'quoting rows only (marker not at position 1): exit 2, not counted'
+  mutate_sub m5c-indeterminate-counts-as-measured '[mut:classify]' '$3=="ok"||$3 ~' '$3=="ok"||$3=="indeterminate"||$3 ~' 'indeterminate-only history: exit 3'
+  mutate_sub m5d-threshold-off-by-one  '[mut:threshold]'   '>= DARK_SECS' '> DARK_SECS' 'newest measured row exactly 30 days old: exit 5'
+  mutate_run m5e-indeterminate-only-is-not-yet '[mut:indet]' '  { echo "NOT YET: indeterminate only"; exit 2; }' 'indeterminate-only history: exit 3'
+  mutate_run m5f-shape-drift-ignored   '[mut:drift]'       'if false; then' 'an object whose raw does not decode, and no producer row: exit 3 (shape drift)'
+  mutate_run m5g-bad-token-ignored     '[mut:badtoken]'    ':' 'an anchored row with an unrecognised token: exit 3'
+  mutate_run m5h-missing-cred-still-reads '[mut:cred-check]' ':' 'empty QH: reader never called'
+  mutate_sub m5i-window-30-to-31-days  '[mut:window]'      '30 * 86400' '31 * 86400' 'newest measured row exactly 30 days old: exit 5'
+  mutate_run m6a-object-check-dropped  '[mut:object-check]' ':' 'an HTML 502 body with exit 0: exit 3'
+  mutate_run m6b-future-check-dropped  '[mut:future]'      ':' 'a measured row dated 2 h in the future: exit 3'
+  mutate_sub m6c-future-tolerance-off-by-one '[mut:classify]' 'now+3600' 'now+3599' 'a measured row dated exactly 1 h in the future (skew): exit 2'
+  mutate_run m6d-canary-dropped        '[mut:canary]'      ':' 'empty body and an EMPTY canary: exit 3 (a dead source is not '"'"'no keeper rows'"'"')'
+  mutate_run m6e-canary-rc-ignored     '[mut:canary-rc]'   ':' 'empty body and a canary that exits 7: exit 3'
+  mutate_run m6f-canary-shape-ignored  '[mut:canary-shape]' ':' 'empty body and an HTML canary: exit 3'
+  mutate_sub m6g-canary-filters        'bash "$QUERY" --since 6h --limit 1' '--since 6h --limit 1' '--since 6h --limit 1 --raw-only' 'the canary asks for exactly the last 6 h, one row'
+  mutate_sub m6h-token-class-hardcoded '[mut:tokclass]'    'newest_measured_token=${NEWCLS}' 'newest_measured_token=ok' 'fail-then-dark: the newest measured token class is fail'
+  mutate_sub m6i-env-seam-reintroduced '[mut:query-path]'  'QUERY="$SCRIPT_DIR/../betterstack-query.sh"' 'QUERY="${LUKS_KEEPER_QUERY_SCRIPT:-$SCRIPT_DIR/../betterstack-query.sh}"' 'an exported LUKS_KEEPER_QUERY_SCRIPT is ignored: the evil script is never run'
+  mutate_sub m6j-marker-typo           '[mut:marker]'      'KEY_PROBE' 'KEY_PR0BE' 'probe MARKER equals the paging alert'"'"'s anchored marker in betterstack-logs-alerts.tf'
+  mutate_sub m7a-directive-bare-form   '<!-- soleur:followthrough script=' '<!-- soleur:followthrough' 'soleur:followthrough' 'the header carries exactly one single-line follow-through directive'
+  mutate_sub m7b-directive-unclosed    '<!-- soleur:followthrough script=' ' -->' '' 'the directive names this script, earliest= and secrets= and closes on the same line'
 fi
 
-MIN_ASSERTS=70
+# Floors: MIN_FIXTURE is the real fixture-row count (an --no-battery run reaches it exactly); MIN_BATTERY the battery's.
+MIN_FIXTURE=152; MIN_BATTERY=33
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-luks-keeper-dark-11265.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
-if [ -z "${FT_INNER:-}" ] && [ "$LEDGER_N" -lt "$MIN_ASSERTS" ]; then printf 'FLOOR: only %s assertions ran, expected at least %s\n' "$LEDGER_N" "$MIN_ASSERTS"; exit 1; fi
+if [ -z "${FT_INNER:-}" ]; then
+  if [ "$FIX_N" -lt "$MIN_FIXTURE" ]; then printf 'FLOOR: only %s fixture assertions ran, expected at least %s\n' "$FIX_N" "$MIN_FIXTURE"; exit 1; fi
+  if [ "$LEDGER_N" -gt "$FIX_N" ] && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
+fi
 [ "$FAIL" -eq 0 ]

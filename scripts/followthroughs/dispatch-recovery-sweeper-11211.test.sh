@@ -3,17 +3,23 @@
 # only 2 (NOT YET), 3 (CANNOT ESTABLISH), 5 (ACTION REQUIRED) or 78 (xtrace refusal), never 0 or 1, on EVERY path.
 #
 # No network: `curl` is a PATH stub that records its argv, its stdin config and its -d payload, and answers per
-# URL host. Registered EXPLICITLY in scripts/test-all.sh (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS).
+# URL (the ENQ Sentry read, the STALE Sentry read, the Supabase read). Registered EXPLICITLY in scripts/test-all.sh
+# (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS).
 #
-# GUARD 3 BATTERY (plan 2026-10-29-chore-alert-guard-structural-enumeration-...-plan.md, Guard 3). After the
-# fixture rows, the suite mutates a scratch copy of the probe at the `# [mut:NAME]` tag lines and re-runs itself
-# against the mutant (FT_INNER=1): rc 1 = the suite caught the mutant, rc 0 = the mutant SURVIVED, rc >= 2 = the
-# instrument itself broke (unresolved). A pristine control must come back rc 0 first.
+# INSTRUMENT SELF-TEST. Before any fixture row, check/has/hasnt are driven with known-true and known-false inputs; a
+# helper that cannot tell them apart aborts the run (rc 4, `INSTRUMENT SELF-TEST FAILED`). The battery proves that
+# detection by neutering each helper in a copy of THIS file.
+#
+# MUTATION BATTERY. After the fixture rows the suite mutates a scratch copy of the probe at the `# [mut:NAME]` tag lines
+# (or at any unique text) and re-runs itself against the mutant (FT_INNER=1). A mutant is credited as caught only when
+# the inner run exits 1 AND prints its own named `FAIL: <fragment>` line; rc 0 = SURVIVED, any other rc or a mutant that
+# does not parse or did not land = the instrument itself broke. A pristine control must come back rc 0 first.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${FT_REPO:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 SUT="${FT_SUT:-$SCRIPT_DIR/dispatch-recovery-sweeper-11211.sh}"
-SELF="$SCRIPT_DIR/dispatch-recovery-sweeper-11211.test.sh"
+SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 ROOT="$(mktemp -d)"
 trap 'rm -rf "${ROOT:?}"' EXIT
 
@@ -24,6 +30,22 @@ check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$2] got [$3
 has()   { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing [$3]" ;; esac; }
 hasnt() { case "$2" in *"$3"*) bad "$1" "unexpected [$3] present" ;; *) ok "$1" ;; esac; }
 
+instrument_selftest() {
+  local p0=$PASS f0=$FAIL n0 p1 f1 p2 f2
+  n0="$(wc -l < "$LEDGER")"
+  { check st 1 2; has st abc z; hasnt st abc b; } >/dev/null
+  p1=$((PASS - p0)); f1=$((FAIL - f0))
+  { check st 1 1; has st abc b; hasnt st abc z; } >/dev/null
+  p2=$((PASS - p0 - p1)); f2=$((FAIL - f0 - f1))
+  PASS=$p0; FAIL=$f0
+  head -n "$n0" "$LEDGER" > "$LEDGER.t" && mv "$LEDGER.t" "$LEDGER"
+  if [ "$p1/$f1/$p2/$f2" != "0/3/3/0" ]; then
+    echo "INSTRUMENT SELF-TEST FAILED: check/has/hasnt cannot tell true from false (false-block pass/fail $p1/$f1, true-block pass/fail $p2/$f2)"
+    exit 4
+  fi
+}
+instrument_selftest
+
 NOW=1790000000
 ST_TOK="sentrytok-AAAA1111"
 SB_TOK="sbtok-BBBB2222"
@@ -32,8 +54,9 @@ CANARY="CANARY-BODY-7f3a9c"
 STUBDIR="$ROOT/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/curl" <<'STUB'
 #!/usr/bin/env bash
-# PATH stub for curl. Records argv (one arg per line), the stdin config, the -d payload; answers per host.
+# PATH stub for curl. Records argv (one arg per line), the stdin config, the -d payload, any TLS-subverting env; answers per URL.
 { for a in "$@"; do printf '%s\n' "$a"; done; echo '---CALL---'; } >> "$STUB_ARGV"
+env | grep -E '^(SSLKEYLOGFILE|CURL_CA_BUNDLE|SSL_CERT_FILE|SSL_CERT_DIR|CURL_HOME|HOSTALIASES|LOCALDOMAIN|RES_OPTIONS)=' >> "$STUB_TLS" || true
 args=("$@"); url=""; out=""; data=""; hascfg=0
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[$i]}" in
@@ -46,11 +69,15 @@ done
 cfg=""; [ "$hascfg" = 1 ] && cfg="$(cat)"
 printf '%s\t%s\n' "$url" "$cfg" >> "$STUB_CFG"
 case "$url" in
-  *sentry.io*)       kind=sentry;   code="${STUB_SENTRY_CODE:-200}"; bodyf="${STUB_SENTRY_BODY:-}" ;;
-  *api.supabase.com*) kind=supabase; code="${STUB_SB_CODE:-200}";     bodyf="${STUB_SB_BODY:-}"; printf '%s' "$data" > "$STUB_DATA" ;;
+  *sentry.io*inngest-replay-stale*) kind=stale;    code="${STUB_STALE_CODE:-200}"; bodyf="${STUB_STALE_BODY:-}" ;;
+  *sentry.io*)                      kind=enq;      code="${STUB_ENQ_CODE:-200}";   bodyf="${STUB_ENQ_BODY:-}" ;;
+  *api.supabase.com*)               kind=supabase; code="${STUB_SB_CODE:-200}";    bodyf="${STUB_SB_BODY:-}"; printf '%s' "$data" > "$STUB_DATA" ;;
   *) kind=other; code=404; bodyf="" ;;
 esac
-case "${STUB_FAIL:-}" in all|"$kind") printf '000'; exit 7 ;; esac
+case "${STUB_FAIL:-}" in
+  all|"$kind") printf '000'; exit 7 ;;
+  sentry) case "$kind" in enq|stale) printf '000'; exit 7 ;; esac ;;
+esac
 [ -n "$out" ] && { [ -n "$bodyf" ] && [ -f "$bodyf" ] && cat "$bodyf" > "$out" || : > "$out"; }
 printf '%s' "$code"
 STUB
@@ -58,29 +85,35 @@ chmod +x "$STUBDIR/curl"
 
 RCS="$ROOT/rcs"; : > "$RCS"
 OUT=""; RC=0
-# run: env knobs ST / SB (tokens; unset = default, empty = empty), SENTRY_BODY / SB_BODY (file paths), codes, FAIL
+# run: env knobs ST / SB (tokens; unset = default, empty = empty), ENQ_BODY / STALE_BODY / SB_BODY (file paths), codes, FAILKIND
 run() {
   RC=0
-  rm -f "$ROOT/argv" "$ROOT/cfg" "$ROOT/data"; : > "$ROOT/argv"; : > "$ROOT/cfg"
+  rm -f "$ROOT/argv" "$ROOT/cfg" "$ROOT/data" "$ROOT/tls"; : > "$ROOT/argv"; : > "$ROOT/cfg"; : > "$ROOT/tls"
   OUT="$(env -i PATH="$STUBDIR:$PATH" HOME="$ROOT" TMPDIR="$ROOT" NOW_EPOCH="$NOW" \
-    STUB_ARGV="$ROOT/argv" STUB_CFG="$ROOT/cfg" STUB_DATA="$ROOT/data" \
-    STUB_SENTRY_BODY="${SENTRY_BODY:-}" STUB_SENTRY_CODE="${SENTRY_CODE:-200}" \
+    STUB_ARGV="$ROOT/argv" STUB_CFG="$ROOT/cfg" STUB_DATA="$ROOT/data" STUB_TLS="$ROOT/tls" \
+    STUB_ENQ_BODY="${ENQ_BODY:-}" STUB_ENQ_CODE="${ENQ_CODE:-200}" \
+    STUB_STALE_BODY="${STALE_BODY:-$ROOT/stale0.json}" STUB_STALE_CODE="${STALE_CODE:-200}" \
     STUB_SB_BODY="${SB_BODY:-}" STUB_SB_CODE="${SB_CODE:-200}" STUB_FAIL="${FAILKIND:-}" \
+    SSLKEYLOGFILE="$ROOT/keys" CURL_CA_BUNDLE="$ROOT/ca" SSL_CERT_FILE="$ROOT/ca" SSL_CERT_DIR="$ROOT" CURL_HOME="$ROOT" \
+    HOSTALIASES="$ROOT/aliases" LOCALDOMAIN=evil.example RES_OPTIONS=debug \
     SENTRY_ACTIONS_RO_TOKEN="${ST-$ST_TOK}" SUPABASE_ACCESS_TOKEN="${SB-$SB_TOK}" \
     ${XENV:+"$XENV"} bash ${XBASH:+"$XBASH"} "$SUT" 2>&1 </dev/null)" || RC=$?
   echo "$RC" >> "$RCS"
 }
 calls() { grep -c '^---CALL---$' "$ROOT/argv" 2>/dev/null || true; }
-reset_knobs() { unset ST SB SENTRY_BODY SB_BODY FAILKIND XENV XBASH; SENTRY_CODE=200; SB_CODE=200; }
+reset_knobs() { unset ST SB ENQ_BODY STALE_BODY SB_BODY FAILKIND XENV XBASH; ENQ_CODE=200; STALE_CODE=200; SB_CODE=200; }
 
-mk_sentry() { printf '{"data":[%s],"meta":{}}' "$1" > "$ROOT/sentry.json"; SENTRY_BODY="$ROOT/sentry.json"; }
-sentry_n() {  # N events
-  local n="$1" i items=""
+mk_events() {  # mk_events <file> <N>: a Sentry events page with N events
+  local n="$2" i items=""
   for ((i = 0; i < n; i++)); do items="${items}${items:+,}{\"id\":\"e$i\",\"timestamp\":\"2026-10-27T10:00:00+00:00\"}"; done
-  mk_sentry "$items"
+  printf '{"data":[%s],"meta":{}}' "$items" > "$1"
 }
+mk_events "$ROOT/stale0.json" 0
+enq_n()   { mk_events "$ROOT/enq.json" "$1"; ENQ_BODY="$ROOT/enq.json"; }       # N ENQ events
+stale_n() { mk_events "$ROOT/stale.json" "$1"; STALE_BODY="$ROOT/stale.json"; } # N STALE events
 mk_sb() { printf '%s' "$1" > "$ROOT/sb.json"; SB_BODY="$ROOT/sb.json"; }
 sb_counts() { mk_sb "[{\"recoverable\":$1,\"aged_out\":$2}]"; }
+all_zero() { reset_knobs; enq_n 0; sb_counts 0 0; }   # the normal quiet state; callers then override one knob
 
 run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
@@ -88,126 +121,177 @@ reset_knobs
 echo "=== dispatch-recovery-sweeper-11211.sh tests ==="
 
 # 1. the normal daily state: nothing fired, nothing stranded
-sentry_n 0; sb_counts 0 0; run
-check "no sentry events, no rows: exit 2 (NOT YET)" 2 "$RC"
+all_zero; run
+check "no events, no rows: exit 2 (NOT YET)" 2 "$RC"
 has "NOT YET: names the verdict" "$OUT" "NOT YET"
-has "NOT YET: counts printed (sentry)" "$OUT" "sentry_events=0"
+has "NOT YET: counts printed (enqueue)" "$OUT" "enqueue_events=0"
+has "NOT YET: counts printed (stale)" "$OUT" "replay_stale_events=0"
 has "NOT YET: counts printed (recoverable)" "$OUT" "recoverable=0"
 has "NOT YET: counts printed (aged_out)" "$OUT" "aged_out=0"
-check "both sources were read" 2 "$(calls)"
+check "all three sources were read (ENQ, STALE, Supabase)" 3 "$(calls)"
 
-# 2. each criterion alone is not enough
-sentry_n 3; sb_counts 0 0; run
-check "criterion 1 alone (events, no stranded rows): exit 2" 2 "$RC"
-sentry_n 0; sb_counts 4 0; run
+# 2. each criterion alone is not enough, except STALE which counts toward both (the fail-safe direction)
+reset_knobs; enq_n 3; sb_counts 0 0; run
+check "criterion 1 alone via ENQ (events, no stranded rows): exit 2" 2 "$RC"
+reset_knobs; enq_n 0; sb_counts 4 0; run
 check "criterion 2 alone (recoverable rows, no events): exit 2" 2 "$RC"
-sentry_n 0; sb_counts 0 3; run
+reset_knobs; enq_n 0; sb_counts 0 3; run
 check "aged-out rows cannot fire alone: exit 2" 2 "$RC"
+reset_knobs; enq_n 0; stale_n 1; sb_counts 0 0; run
+check "a STALE event alone (no ENQ, no rows) fires: exit 5" 5 "$RC"
+has "STALE alone: the stale count is printed" "$OUT" "replay_stale_events=1"
+has "STALE alone: the enqueue count is printed apart" "$OUT" "enqueue_events=0"
+reset_knobs; enq_n 0; stale_n 2; sb_counts 5 5; run
+check "STALE plus stranded rows, no ENQ: exit 5" 5 "$RC"
 
 # 3. both criteria: ACTION REQUIRED, in either bucket, and never 0
-sentry_n 1; sb_counts 1 0; run
-check "criterion 1 and a recoverable row: exit 5" 5 "$RC"
+reset_knobs; enq_n 1; sb_counts 1 0; run
+check "ENQ and a recoverable row: exit 5" 5 "$RC"
 has "ACTION REQUIRED: named" "$OUT" "ACTION REQUIRED"
 has "ACTION REQUIRED: says the tracker is not closed by the probe" "$OUT" "NOT closed by the probe"
-sentry_n 2; sb_counts 0 1; run
-check "criterion 1 and an aged-out row: exit 5" 5 "$RC"
+reset_knobs; enq_n 2; sb_counts 0 1; run
+check "ENQ and an aged-out row: exit 5" 5 "$RC"
 has "aged-out count printed" "$OUT" "aged_out=1"
-sentry_n 2; mk_sb '[{"recoverable":"2","aged_out":"5"}]'; run
+reset_knobs; enq_n 2; mk_sb '[{"recoverable":"2","aged_out":"5"}]'; run
 check "counts delivered as strings are accepted: exit 5" 5 "$RC"
 has "string counts: parsed value printed" "$OUT" "recoverable=2"
+reset_knobs; enq_n 1; stale_n 1; sb_counts 1 1; run
+check "ENQ, STALE and rows together: exit 5" 5 "$RC"
+has "all four counts printed separately" "$OUT" "enqueue_events=1 replay_stale_events=1 criterion2 recoverable=1 aged_out=1"
 
-# 4. every read failure is CANNOT ESTABLISH, whichever source fails and whatever the other says
-sentry_n 0; sb_counts 0 0; SENTRY_CODE=500; run
-check "sentry 500, supabase fine: exit 3" 3 "$RC"; has "sentry 500: fixed reason with status" "$OUT" "Sentry read failed (http=500)"
-reset_knobs; sentry_n 0; sb_counts 0 0; SB_CODE=500; run
-check "supabase 500 AFTER a compliant sentry read of 0: exit 3, not 2 (second source is read too)" 3 "$RC"
+# 4. every read failure is CANNOT ESTABLISH, whichever source fails and whatever the others say
+reset_knobs; enq_n 0; sb_counts 0 0; ENQ_CODE=500; run
+check "ENQ read 500, the rest fine: exit 3" 3 "$RC"; has "ENQ 500: fixed reason with status" "$OUT" "Sentry read failed (http=500)"
+check "the first failing read exits at once (one request made)" 1 "$(calls)"
+reset_knobs; enq_n 0; sb_counts 0 0; STALE_CODE=500; run
+check "STALE read 500 after a quiet ENQ read: exit 3, not 2" 3 "$RC"
+reset_knobs; enq_n 5; sb_counts 1 1; STALE_CODE=403; run
+check "STALE 403 while ENQ and rows say 'fire': exit 3, never 5" 3 "$RC"
+reset_knobs; enq_n 0; sb_counts 0 0; SB_CODE=500; run
+check "supabase 500 AFTER compliant sentry reads of 0: exit 3, not 2 (the last source is read too)" 3 "$RC"
 has "supabase 500: fixed reason with status" "$OUT" "Supabase read failed (http=500)"
-reset_knobs; sentry_n 2; sb_counts 1 1; SB_CODE=500; run
+check "supabase 500: all three requests were made" 3 "$(calls)"
+reset_knobs; enq_n 2; sb_counts 1 1; SB_CODE=500; run
 check "criteria 'met' on sentry but supabase 500: exit 3, never 5" 3 "$RC"
-reset_knobs; sentry_n 2; sb_counts 1 1; SENTRY_CODE=403; run
-check "sentry 403: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; sb_counts 0 0; SB_CODE=401; run
+reset_knobs; enq_n 2; sb_counts 1 1; ENQ_CODE=403; run
+check "ENQ 403: exit 3" 3 "$RC"
+reset_knobs; enq_n 0; sb_counts 0 0; SB_CODE=401; run
 check "supabase 401: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; sb_counts 0 0; SB_CODE=201; run
+reset_knobs; enq_n 0; sb_counts 0 0; SB_CODE=201; run
 check "supabase 201 (the query endpoint's success code) is accepted: exit 2" 2 "$RC"
-reset_knobs; sentry_n 0; sb_counts 0 0; FAILKIND=sentry; run
-check "curl transport failure on sentry: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; sb_counts 0 0; FAILKIND=supabase; run
-check "curl transport failure on supabase: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; sb_counts 0 0; FAILKIND=all; run
-check "curl transport failure on both: exit 3" 3 "$RC"
+for kind in enq stale supabase sentry all; do
+  reset_knobs; enq_n 0; sb_counts 0 0; FAILKIND=$kind; run
+  check "curl transport failure on $kind: exit 3" 3 "$RC"
+done
 
 # 5. empty and malformed bodies are never read as zero rows
-reset_knobs; sb_counts 0 0; : > "$ROOT/empty.json"; SENTRY_BODY="$ROOT/empty.json"; run
-check "sentry 200 with an empty body: exit 3 (a probe reading 0 from nothing is vacuous)" 3 "$RC"
-reset_knobs; sb_counts 0 0; printf '{"meta":{}}' > "$ROOT/nodata.json"; SENTRY_BODY="$ROOT/nodata.json"; run
-check "sentry 200 with no data field: exit 3" 3 "$RC"
-reset_knobs; sb_counts 0 0; printf '{"data":null}' > "$ROOT/nulldata.json"; SENTRY_BODY="$ROOT/nulldata.json"; run
-check "sentry 200 with data:null: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; : > "$ROOT/empty2.json"; SB_BODY="$ROOT/empty2.json"; run
+reset_knobs; sb_counts 0 0; : > "$ROOT/empty.json"; ENQ_BODY="$ROOT/empty.json"; run
+check "ENQ 200 with an empty body: exit 3 (a probe reading 0 from nothing is vacuous)" 3 "$RC"
+reset_knobs; enq_n 0; sb_counts 0 0; STALE_BODY="$ROOT/empty.json"; run
+check "STALE 200 with an empty body: exit 3" 3 "$RC"
+reset_knobs; sb_counts 0 0; printf '{"meta":{}}' > "$ROOT/nodata.json"; ENQ_BODY="$ROOT/nodata.json"; run
+check "ENQ 200 with no data field: exit 3" 3 "$RC"
+reset_knobs; enq_n 0; sb_counts 0 0; STALE_BODY="$ROOT/nodata.json"; run
+check "STALE 200 with no data field: exit 3" 3 "$RC"
+reset_knobs; sb_counts 0 0; printf '{"data":null}' > "$ROOT/nulldata.json"; ENQ_BODY="$ROOT/nulldata.json"; run
+check "ENQ 200 with data:null: exit 3" 3 "$RC"
+reset_knobs; enq_n 0; : > "$ROOT/empty2.json"; SB_BODY="$ROOT/empty2.json"; run
 check "supabase 200 with an empty body: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; mk_sb '[]'; run
+reset_knobs; enq_n 0; mk_sb '[]'; run
 check "supabase 200 with zero rows (an aggregate always returns one): exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; mk_sb '{"recoverable":0,"aged_out":0}'; run
+reset_knobs; enq_n 0; mk_sb '{"recoverable":0,"aged_out":0}'; run
 check "supabase 200 with an object, not an array: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; mk_sb '[{"recoverable":"x","aged_out":0}]'; run
+reset_knobs; enq_n 0; mk_sb '[{"recoverable":"x","aged_out":0}]'; run
 check "supabase non-numeric count: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; mk_sb '[{"recoverable":0}]'; run
+reset_knobs; enq_n 0; mk_sb '[{"recoverable":0}]'; run
 check "supabase row missing aged_out: exit 3" 3 "$RC"
-reset_knobs; sentry_n 0; mk_sb '[{"recoverable":-1,"aged_out":0}]'; run
+reset_knobs; enq_n 0; mk_sb '[{"recoverable":-1,"aged_out":0}]'; run
 check "supabase negative count: exit 3" 3 "$RC"
+# a count with a leading zero is invalid octal inside bash (( )); it must be refused, never fall through to a verdict
+reset_knobs; enq_n 0; mk_sb '[{"recoverable":"08","aged_out":0}]'; run
+check "supabase count with a leading zero (\"08\"): exit 3, not a fall-through to NOT YET" 3 "$RC"
+has "leading-zero count: the fixed unparseable reason" "$OUT" "Supabase response unparseable"
+hasnt "leading-zero count: no bash arithmetic error reaches the public comment" "$OUT" "value too great for base"
+hasnt "leading-zero count: no bash error text at all" "$OUT" "((:"
+reset_knobs; enq_n 1; mk_sb '[{"recoverable":0,"aged_out":"007"}]'; run
+check "supabase aged_out \"007\": exit 3, never 5" 3 "$RC"
+reset_knobs; enq_n 0; mk_sb '[{"recoverable":"00","aged_out":0}]'; run
+check "supabase count \"00\": exit 3" 3 "$RC"
+reset_knobs; enq_n 0; sb_counts 10 0; run
+check "supabase count 10 (a zero that is not leading) is accepted: exit 2" 2 "$RC"
+has "count 10 is printed as 10" "$OUT" "recoverable=10"
 
 # 6. PUBLIC-LEAK: a non-2xx body or a malformed body is never echoed (the sweeper republishes the tail publicly)
-for combo in "sentry-500:500:200" "sb-500:200:500" "sentry-403:403:200" "sb-401:200:401"; do
-  reset_knobs; IFS=: read -r nm scode bcode <<<"$combo"
+for combo in "enq-500:500:200:200" "stale-500:200:500:200" "sb-500:200:200:500" "enq-403:403:200:200" "sb-401:200:200:401"; do
+  reset_knobs; IFS=: read -r nm ecode scode bcode <<<"$combo"
   printf '{"detail":"%s","token":"%s","echo":"%s"}' "$CANARY" "$ST_TOK" "$SB_TOK" > "$ROOT/canary.json"
-  SENTRY_BODY="$ROOT/canary.json"; SB_BODY="$ROOT/canary.json"; SENTRY_CODE="$scode"; SB_CODE="$bcode"
-  case "$nm" in sb-*) sentry_n 0 ;; esac
-  case "$nm" in sentry-*) sb_counts 0 0 ;; esac
+  ENQ_BODY="$ROOT/canary.json"; STALE_BODY="$ROOT/canary.json"; SB_BODY="$ROOT/canary.json"; ENQ_CODE="$ecode"; STALE_CODE="$scode"; SB_CODE="$bcode"
+  case "$nm" in sb-*|stale-*) enq_n 0 ;; esac
+  case "$nm" in enq-*|stale-*) sb_counts 0 0 ;; esac
+  case "$nm" in sb-*) stale_n 0 ;; esac
   run
   check "$nm: exit 3" 3 "$RC"
   hasnt "$nm: body canary absent from output" "$OUT" "$CANARY"
   hasnt "$nm: sentry token absent from output" "$OUT" "$ST_TOK"
   hasnt "$nm: supabase token absent from output" "$OUT" "$SB_TOK"
 done
-reset_knobs; printf 'not json %s' "$CANARY" > "$ROOT/garbage.json"; SENTRY_BODY="$ROOT/garbage.json"; sb_counts 0 0; run
-check "garbage 200 body on sentry: exit 3" 3 "$RC"; hasnt "garbage sentry body not echoed" "$OUT" "$CANARY"
-reset_knobs; sentry_n 0; printf 'not json %s' "$CANARY" > "$ROOT/garbage2.json"; SB_BODY="$ROOT/garbage2.json"; run
+reset_knobs; printf 'not json %s' "$CANARY" > "$ROOT/garbage.json"; ENQ_BODY="$ROOT/garbage.json"; sb_counts 0 0; run
+check "garbage 200 body on ENQ: exit 3" 3 "$RC"; hasnt "garbage ENQ body not echoed" "$OUT" "$CANARY"
+reset_knobs; enq_n 0; STALE_BODY="$ROOT/garbage.json"; sb_counts 0 0; run
+check "garbage 200 body on STALE: exit 3" 3 "$RC"; hasnt "garbage STALE body not echoed" "$OUT" "$CANARY"
+reset_knobs; enq_n 0; printf 'not json %s' "$CANARY" > "$ROOT/garbage2.json"; SB_BODY="$ROOT/garbage2.json"; run
 check "garbage 200 body on supabase: exit 3" 3 "$RC"; hasnt "garbage supabase body not echoed" "$OUT" "$CANARY"
 
 # 7. credentials: shape-checked first, never read when unusable, never on argv, each only to its own host
-reset_knobs; sentry_n 0; sb_counts 0 0; ST=""; run
+reset_knobs; enq_n 0; sb_counts 0 0; ST=""; run
 check "empty SENTRY_ACTIONS_RO_TOKEN: exit 3" 3 "$RC"; check "empty sentry token: no request made" 0 "$(calls)"
-reset_knobs; sentry_n 0; sb_counts 0 0; SB=""; run
+reset_knobs; enq_n 0; sb_counts 0 0; SB=""; run
 check "empty SUPABASE_ACCESS_TOKEN: exit 3" 3 "$RC"; check "empty supabase token: no request made" 0 "$(calls)"
-reset_knobs; sentry_n 0; sb_counts 0 0; ST=$'tok\nurl = "https://evil.example/"'; run
+reset_knobs; enq_n 0; sb_counts 0 0; ST=$'tok\nurl = "https://evil.example/"'; run
 check "newline in the sentry token (curl-config injection): exit 3" 3 "$RC"; check "malformed token: no request made" 0 "$(calls)"
-reset_knobs; sentry_n 0; sb_counts 0 0; SB='tok"x'; run
+reset_knobs; enq_n 0; sb_counts 0 0; SB='tok"x'; run
 check "quote in the supabase token: exit 3" 3 "$RC"; check "quote in token: no request made" 0 "$(calls)"
-reset_knobs; sentry_n 0; sb_counts 0 0; run
+all_zero; run
 argv="$(cat "$ROOT/argv")"
 hasnt "sentry token never on curl argv" "$argv" "$ST_TOK"
 hasnt "supabase token never on curl argv" "$argv" "$SB_TOK"
-cfg="$(cat "$ROOT/cfg")"
-has "sentry token rides the stdin config to the sentry host" "$(grep 'sentry.io/api/0/organizations/jikigai-eu/events/' "$ROOT/cfg")" "header = \"Authorization: Bearer $ST_TOK\""
+sentry_cfg="$(grep 'sentry.io/api/0/organizations/jikigai-eu/events/' "$ROOT/cfg")"
+check "both Sentry reads carry the sentry token on the stdin config" 2 "$(printf '%s\n' "$sentry_cfg" | grep -cF "header = \"Authorization: Bearer $ST_TOK\"")"
 has "supabase token rides the stdin config to the supabase host" "$(grep 'api.supabase.com/v1/projects/ifsccnjhymdmidffkzhl/database/query' "$ROOT/cfg")" "header = \"Authorization: Bearer $SB_TOK\""
 hasnt "sentry token never sent to supabase" "$(grep 'api.supabase.com' "$ROOT/cfg")" "$ST_TOK"
 hasnt "supabase token never sent to sentry" "$(grep 'sentry.io' "$ROOT/cfg")" "$SB_TOK"
-has "sentry URL pins the query" "$argv" "feature%3Aspawn-agent%20op%3Ainngest-enqueue"
-has "sentry URL pins the window start (2026-10-26)" "$argv" "start=2026-10-26T00%3A00%3A00"
-has "sentry URL pins the window end to the clock" "$argv" "end=$(date -u -d "@$NOW" '+%Y-%m-%dT%H%%3A%M%%3A%S')"
-has "sentry URL reads the errors dataset" "$argv" "dataset=errors"
+has "ENQ URL pins its query" "$argv" "query=feature%3Aspawn-agent%20op%3Ainngest-enqueue&"
+has "STALE URL pins its query" "$argv" "query=feature%3Aspawn-agent%20op%3Ainngest-replay-stale&"
+check "two plain Sentry reads, not one op:[a,b] read" 2 "$(grep -c 'sentry.io' "$ROOT/cfg")"
+hasnt "no read ORs the two ops" "$argv" "%5B"
+has "sentry URLs pin the window start (2026-10-26)" "$argv" "start=2026-10-26T00%3A00%3A00"
+has "sentry URLs pin the window end to the clock" "$argv" "end=$(date -u -d "@$NOW" '+%Y-%m-%dT%H%%3A%M%%3A%S')"
+has "sentry URLs read the errors dataset" "$argv" "dataset=errors"
+# the TLS-subverting environment never reaches curl (it would let the actor who sets it read the bearer off the wire)
+check "no TLS-subverting environment variable reaches curl (all three requests)" "" "$(cat "$ROOT/tls")"
+check "the source unsets the TLS-subverting environment before any token is sent" 1 "$(grep -cE '^unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS' "$SUT")"
+# every request is bounded
+check "every request carries --max-time 30" 3 "$(grep -A1 -x -- '--max-time' "$ROOT/argv" | grep -cx '30')"
+check "the fetch line pins --max-time 30" 1 "$(grep -cE '^[[:space:]]*HTTP="\$\(curl .*--max-time 30 ' "$SUT")"
+
+# 7b. OFFLINE: the Sentry tags the probe queries are the tags the send route emits (a mistyped tag reads 0 forever)
+ROUTE="$REPO/apps/web-platform/app/api/dashboard/today/[id]/send/route.ts"
+route_tags="$(grep -oE '(feature|op): "(spawn-agent|inngest-enqueue|inngest-replay-stale)"' "$ROUTE" | sort -u | tr '\n' ';')"
+check "the send route emits feature spawn-agent and ops inngest-enqueue and inngest-replay-stale" 'feature: "spawn-agent";op: "inngest-enqueue";op: "inngest-replay-stale";' "$route_tags"
+url_tags="$(cut -f1 "$ROOT/cfg" | grep 'sentry.io' | sed -E 's/.*[?&]query=([^&]*)(&.*)?$/\1/; s/%3A/:/g; s/%20/\n/g' | sed -E 's/^([a-z]+):(.*)$/\1: "\2"/' | sort -u | tr '\n' ';')"
+check "every tag the probe queries is a tag the route emits, and each route tag is queried" "$route_tags" "$url_tags"
+check "each Sentry URL carries exactly one op term" "1 1 " "$(cut -f1 "$ROOT/cfg" | grep 'sentry.io' | while read -r u; do printf '%s ' "$(printf '%s' "$u" | grep -o '%20op%3A' | wc -l)"; done)"
 
 # 8. xtrace: refuse (78) BEFORE any credential is read or any request is made
-reset_knobs; sentry_n 0; sb_counts 0 0; XBASH="-x"; run
+all_zero; XBASH="-x"; run
 check "xtrace with live credentials: exit 78" 78 "$RC"; check "xtrace: no request made" 0 "$(calls)"
 hasnt "xtrace: sentry token absent from output" "$OUT" "$ST_TOK"; hasnt "xtrace: supabase token absent from output" "$OUT" "$SB_TOK"
-reset_knobs; sentry_n 0; sb_counts 0 0; ST=""; SB=""; XBASH="-x"; run
+all_zero; ST=""; SB=""; XBASH="-x"; run
 check "xtrace with NO credentials still refuses: exit 78 (before any credential read)" 78 "$RC"
 
 # 9. the Supabase query is ONE literal: pinned text, ^SELECT, no `;`, no interpolated value
 PINNED_QUERY="SELECT count(*) FILTER (WHERE s.clicked_at >= now() - interval '23 hours') AS recoverable, count(*) FILTER (WHERE s.clicked_at < now() - interval '23 hours') AS aged_out FROM public.action_sends s JOIN public.messages m ON m.id = s.message_id WHERE s.acknowledged_at IS NULL AND s.failure_reason IS NULL AND s.undone_at IS NULL AND s.cancellation_requested_at IS NULL AND m.status = 'draft' AND s.clicked_at < now() - interval '1 hour'"
-reset_knobs; sentry_n 0; sb_counts 0 0; run
+all_zero; run
 payload="$(cat "$ROOT/data" 2>/dev/null)"
 q="$(printf '%s' "$payload" | jq -r '.query' 2>/dev/null)"
 check "payload is a JSON object with exactly one key" 1 "$(printf '%s' "$payload" | jq -r 'keys | length' 2>/dev/null)"
@@ -221,6 +305,16 @@ done
 has "query keeps the unacknowledged predicate" "$q" "s.acknowledged_at IS NULL"
 has "query keeps the draft predicate" "$q" "m.status = 'draft'"
 has "query has no upper bound on age (only the 1 h floor)" "$q" "s.clicked_at < now() - interval '1 hour'"
+# the `23 hours` literal is REPLAY_MAX_AGE_MS (decide-replay.ts), which is what makes a bucket 'recoverable'
+DECIDE="$REPO/apps/web-platform/server/action-sends/decide-replay.ts"
+decide_expr="$(sed -n 's/^export const REPLAY_MAX_AGE_MS = \([0-9 *]*\);.*$/\1/p' "$DECIDE")"
+case "$decide_expr" in
+  ''|*[!0-9\ \*]*) decide_hours="unparseable [$decide_expr]" ;;
+  *) decide_hours="$(( $decide_expr / 3600000 ))" ;;
+esac
+sql_hours="$(grep -oE "interval '[0-9]+ hours'" "$SUT" | grep -oE '[0-9]+' | sort -u | tr '\n' ' ')"
+check "every 'N hours' literal in the SQL equals REPLAY_MAX_AGE_MS in decide-replay.ts (23 h)" "$decide_hours " "$sql_hours"
+has "decide-replay.ts carries the back-pointer to this probe next to REPLAY_MAX_AGE_MS" "$(grep -B12 '^export const REPLAY_MAX_AGE_MS' "$DECIDE")" "scripts/followthroughs/dispatch-recovery-sweeper-11211.sh"
 
 # 10. exit vocabulary: every rc observed so far is in {2,3,5,78}; the source cannot exit 0 or 1 anywhere
 badrc="$(grep -vxE '2|3|5|78' "$RCS" | sort -u | tr '\n' ' ')"
@@ -238,48 +332,114 @@ check "Authorization/Bearer appear only inside a stdin-config process substituti
 argvcred="$(grep -nE 'curl' "$SUT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' | grep -E '(^|[[:space:]])(-u|--user)[[:space:]]|-H +"?Authorization' || true)"
 check "no -u / --user / -H Authorization credential on argv" "" "$argvcred"
 
-# 11. the EXIT trap keeps a stray status inside the vocabulary (a fault injected at the sentry read exits 1 in the body)
+# 10b. the followthrough-convention.md NOTIFY-ONLY rule: refusal first, the rc-remapping EXIT trap directly after it
+check "exactly one trap statement" 1 "$(grep -c '^trap ' "$SUT")"
+check "no exec / kill on an executable line (either bypasses the EXIT remap)" "" "$(grep -nE '(^|[^A-Za-z_-])(exec|kill)[[:space:]]' "$SUT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+refusal_start="$(awk '/^case "\$-" in$/ { print NR; exit }' "$SUT")"
+refusal_end="$(awk '/^case "\$-" in$/ { s = 1 } s && /^esac$/ { print NR; exit }' "$SUT")"
+trap_ln="$(grep -n '^trap ' "$SUT" | head -n 1 | cut -d: -f1)"
+has "the xtrace refusal case exits 78" "$(sed -n "${refusal_start:-0},${refusal_end:-0}p" "$SUT")" "exit 78"
+check "nothing between the xtrace refusal and the trap (the trap is the next line)" "$(( ${refusal_end:-0} + 1 ))" "${trap_ln:-none}"
+first_cred="$(grep -nE 'SENTRY_ACTIONS_RO_TOKEN|SUPABASE_ACCESS_TOKEN|NOW_EPOCH|mktemp' "$SUT" | grep -vE '^[0-9]+:[[:space:]]*#' | head -n 1 | cut -d: -f1)"
+check "the xtrace refusal precedes the first credential reference" yes "$([ "${refusal_end:-999999}" -lt "${first_cred:-0}" ] && echo yes || echo no)"
+
+# 10c. the enrollable directive: ONE `<!-- soleur:followthrough ... -->` line in the header
+dir_lines="$(grep -E '^#[[:space:]]+<!-- soleur:followthrough ' "$SUT" || true)"
+check "the header carries exactly one single-line follow-through directive" 1 "$(printf '%s\n' "$dir_lines" | grep -c .)"
+check "the directive names this script, earliest= and secrets= and closes on the same line" 1 "$(printf '%s\n' "$dir_lines" | grep -cE 'script=scripts/followthroughs/dispatch-recovery-sweeper-11211\.sh earliest=[0-9]{4}-[0-9]{2}-[0-9]{2}T00:00:00Z secrets=SENTRY_ACTIONS_RO_TOKEN,SUPABASE_ACCESS_TOKEN -->$')"
+check "the directive's script exists in the repo" yes "$([ -f "$REPO/scripts/followthroughs/dispatch-recovery-sweeper-11211.sh" ] && echo yes || echo no)"
+
+# 11. the EXIT trap keeps a stray status inside the vocabulary (a fault injected at the first sentry read exits 1 in the body)
 cat > "$ROOT/fault.sh" <<'FAULT'
 trap 'case "$BASH_COMMAND" in read_sentry*) exit 1 ;; esac' DEBUG
 FAULT
-reset_knobs; sentry_n 0; sb_counts 0 0; XENV="BASH_ENV=$ROOT/fault.sh"; run
+all_zero; XENV="BASH_ENV=$ROOT/fault.sh"; run
 check "an unexpected internal exit status is mapped to 3 by the EXIT trap" 3 "$RC"
 reset_knobs
 
+FIX_N="$(wc -l < "$LEDGER")"
 if run_battery "${1:-}"; then
-  echo "=== Guard 3 mutation battery ==="
+  echo "=== mutation battery ==="
+  export FT_REPO="$REPO"
   MUT="$ROOT/mut"; mkdir -p "$MUT"
-  mutate_run() {  # $1 = name, $2 = tag, $3 = replacement line, expected rc in $4 (default 1)
-    local name="$1" tag="$2" rep="$3" want="${4:-1}" f="$MUT/$1.sh" rc=0
-    cp "$SUT" "$f"
-    if ! grep -qF "$tag" "$f"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
+  # mutate_run <name> <tag-or-unique-text> <replacement line> <expected FAIL fragment>
+  mutate_run() {
+    local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0
+    if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
     REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
-    FT_INNER=1 FT_SUT="$f" bash "$SELF" >/dev/null 2>&1 || rc=$?
-    if [ "$rc" = "$want" ]; then ok "mutation $name: rc=$rc (caught)"
-    elif [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
-    else bad "mutation $name: unresolved instrument rc=$rc"; fi
+    if cmp -s "$SUT" "$f"; then bad "mutation $name: the mutation did not land (instrument)"; return; fi
+    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant does not parse (instrument)"; return; fi
+    FT_INNER=1 FT_SUT="$f" bash "$SELF" > "$o" 2>&1 || rc=$?
+    if [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
+    elif [ "$rc" != 1 ]; then bad "mutation $name: unresolved instrument rc=$rc"
+    elif grep -qF -- "FAIL: $frag" "$o"; then ok "mutation $name: caught by its own FAIL line [$frag]"
+    else bad "mutation $name: rc=1 but no FAIL line [$frag] (killed by something else)"; fi
+  }
+  # mutate_sub <name> <unique text> <from> <to> <expected FAIL fragment>: replace <from> by <to> inside the ONE line holding <unique text>
+  mutate_sub() {
+    local line new
+    line="$(grep -F -- "$2" "$SUT" || true)"
+    if [ -z "$line" ] || [ "$(printf '%s\n' "$line" | wc -l)" != 1 ]; then bad "mutation $1: the text [$2] matches exactly one line (instrument)"; return; fi
+    new="${line/"$3"/"$4"}"
+    if [ "$new" = "$line" ]; then bad "mutation $1: [$3] is present in the line (instrument)"; return; fi
+    mutate_run "$1" "$2" "$new" "$5"
+  }
+  # mutate_helper <name> <helper> <neutered definition>: the self-test must abort the run (rc 4) on a copy of THIS file
+  mutate_helper() {
+    local name="$1" helper="$2" rep="$3" f="$MUT/$1.test.sh" o="$MUT/$1.out" rc=0
+    HELPER="$helper" REP="$rep" awk 'index($0, ENVIRON["HELPER"] "()") == 1 { print ENVIRON["REP"]; next } { print }' "$SELF" > "$f"
+    if cmp -s "$SELF" "$f"; then bad "mutation $name: the helper mutation did not land (instrument)"; return; fi
+    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant suite does not parse (instrument)"; return; fi
+    FT_INNER=1 FT_SUT="$SUT" bash "$f" > "$o" 2>&1 || rc=$?
+    if [ "$rc" = 4 ] && grep -qF -- "INSTRUMENT SELF-TEST FAILED" "$o"; then ok "mutation $name: caught by the instrument self-test (rc 4)"
+    else bad "mutation $name: the neutered helper went undetected (rc=$rc)"; fi
   }
   ctl=0; FT_INNER=1 FT_SUT="$SUT" bash "$SELF" >/dev/null 2>&1 || ctl=$?
   check "battery control: the pristine probe passes the inner suite (rc 0)" 0 "$ctl"
-  mutate_run m1-action-exit-0       '[mut:action]'        '  exit 0'
-  mutate_run m2-sentry-fail-falls-through '[mut:sentry-fail]' '  [[ "$HTTP" == "200" ]] || { SENTRY_EVENTS=0; return 0; }'
-  mutate_run m2b-trap-removed       '[mut:trap]'          ':'
-  mutate_run m3-short-circuit-after-sentry '[mut:after-sentry]' '[[ "$SENTRY_EVENTS" -eq 0 ]] && exit 2'
-  mutate_run m3b-sb-fail-ignored    '[mut:sb-fail]'       '  :'
-  mutate_run m4-xtrace-refusal-dropped '[mut:xtrace]'     '  *x*) : ;;'
-  mutate_run m5a-body-echoed        '[mut:sentry-fail]'   '  [[ "$HTTP" == "200" ]] || { cat "$TMP"; cannot "Sentry read failed (http=${HTTP})"; }'
-  mutate_run m5b-semicolon-in-sql   '[mut:query]'         "readonly QUERY=\"${PINNED_QUERY};\""
-  mutate_run m5c-token-on-argv      '[mut:fetch]'         '  HTTP="$(curl --disable --noproxy "*" -sS --max-time 30 -o "$TMP" -w "%{http_code}" -H "Authorization: Bearer $1" "${@:3}" --config - "$2" 2>/dev/null < <(printf "\n"))" || true'
-  mutate_run m5d-sentry-parse-lenient '[mut:sentry-parse]' '  [[ "$SENTRY_EVENTS" =~ ^[0-9]+$ ]] || SENTRY_EVENTS=0'
-  mutate_run m5e-sb-parse-lenient   '[mut:sb-parse]'      '  [[ "$RECOVERABLE" =~ ^[0-9]{1,9}$ && "$AGED_OUT" =~ ^[0-9]{1,9}$ ]] || { RECOVERABLE=0; AGED_OUT=0; }'
-  mutate_run m6-aged-out-fires-alone '[mut:decision]'     'if (( (SENTRY_EVENTS > 0 && RECOVERABLE > 0) || AGED_OUT > 0 )); then'
-  mutate_run m7-or-instead-of-and   '[mut:decision]'      'if (( SENTRY_EVENTS > 0 || (RECOVERABLE + AGED_OUT) > 0 )); then'
-  mutate_run m8-bad-token-still-reads '[mut:token-check]' ':'
+  mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
+  mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
+  mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
+  mutate_helper h4-check-always-bad    check  'check() { bad "$1"; }'
+  mutate_helper h5-has-inverted        has    'has() { case "$2" in *"$3"*) bad "$1" ;; *) ok "$1" ;; esac; }'
+  mutate_sub m1-action-exit-0          '[mut:action]'      'exit 5' 'exit 0' 'ENQ and a recoverable row: exit 5'
+  mutate_run m2-sentry-fail-falls-through '[mut:sentry-fail]' '  [[ "$HTTP" == "200" ]] || { COUNT=0; return 0; }' 'ENQ read 500, the rest fine: exit 3'
+  mutate_run m2b-trap-removed          '[mut:trap]'        ':' 'an unexpected internal exit status is mapped to 3 by the EXIT trap'
+  mutate_sub m2c-statement-before-trap '[mut:trap]'        'trap ' $'FOO=1\ntrap ' 'nothing between the xtrace refusal and the trap'
+  mutate_sub m2d-second-trap           '[mut:trap]'        '# [mut:trap]' $'# [mut:trap]\ntrap - EXIT' 'exactly one trap statement'
+  mutate_run m3-short-circuit-after-enq '[mut:after-enq]'  '[[ "$ENQ" -eq 0 ]] && exit 2' 'a STALE event alone (no ENQ, no rows) fires: exit 5'
+  mutate_run m3a-short-circuit-after-sentry '[mut:after-sentry]' '[[ "$ENQ" -eq 0 && "$STALE" -eq 0 ]] && exit 2' 'supabase 500 AFTER compliant sentry reads of 0: exit 3, not 2 (the last source is read too)'
+  mutate_run m3b-sb-fail-ignored       '[mut:sb-fail]'     '  :' 'supabase 500 AFTER compliant sentry reads of 0: exit 3, not 2 (the last source is read too)'
+  mutate_run m4-xtrace-refusal-dropped '[mut:xtrace]'      '  *x*) : ;;' 'xtrace with live credentials: exit 78'
+  mutate_run m5a-body-echoed           '[mut:sentry-fail]' '  [[ "$HTTP" == "200" ]] || { cat "$TMP"; cannot "Sentry read failed (http=${HTTP})"; }' 'enq-500: body canary absent from output'
+  mutate_run m5b-semicolon-in-sql      '[mut:query]'       "readonly QUERY=\"${PINNED_QUERY};\"" 'supabase query equals the pinned literal'
+  mutate_sub m5b2-query-literal-changed '[mut:query]'      "interval '1 hour'" "interval '2 hour'" 'supabase query equals the pinned literal'
+  mutate_sub m5b3-window-24h           '[mut:query]'       "interval '23 hours')" "interval '24 hours')" "every 'N hours' literal in the SQL equals REPLAY_MAX_AGE_MS in decide-replay.ts (23 h)"
+  mutate_run m5c-token-on-argv         '[mut:fetch]'       '  HTTP="$(curl --disable --noproxy "*" -sS --max-time 30 -o "$TMP" -w "%{http_code}" -H "Authorization: Bearer $1" "${@:3}" --config - "$2" 2>/dev/null < <(printf "\n"))" || true' 'sentry token never on curl argv'
+  mutate_sub m5c2-max-time-dropped     '[mut:fetch]'       '--max-time 30 ' '' 'every request carries --max-time 30'
+  mutate_run m5d-sentry-parse-lenient  '[mut:sentry-parse]' '  [[ "$COUNT" =~ ^[0-9]+$ ]] || COUNT=0' 'ENQ 200 with data:null: exit 3'
+  mutate_run m5e-sb-parse-lenient      '[mut:sb-parse]'    '  [[ "$RECOVERABLE" =~ $COUNT_RE && "$AGED_OUT" =~ $COUNT_RE ]] || { RECOVERABLE=0; AGED_OUT=0; }' 'supabase non-numeric count: exit 3'
+  mutate_sub m5f-octal-count-regex     '[mut:count-re]'    "'^(0|[1-9][0-9]{0,8})\$'" "'^[0-9]{1,9}\$'" 'supabase count with a leading zero ("08"): exit 3, not a fall-through to NOT YET'
+  mutate_run m6-aged-out-fires-alone   '[mut:decision]'    'if (( (ENQ > 0 && RECOVERABLE > 0) || AGED_OUT > 0 || STALE > 0 )); then' 'aged-out rows cannot fire alone: exit 2'
+  mutate_run m6a-or-instead-of-and     '[mut:decision]'    'if (( (ENQ > 0 || STALE > 0) || ((RECOVERABLE + AGED_OUT) > 0 || STALE > 0) )); then' 'criterion 1 alone via ENQ (events, no stranded rows): exit 2'
+  mutate_run m6b-stale-not-criterion-2 '[mut:decision]'    'if (( (ENQ > 0 || STALE > 0) && (RECOVERABLE + AGED_OUT) > 0 )); then' 'a STALE event alone (no ENQ, no rows) fires: exit 5'
+  mutate_run m6c-stale-not-criterion-1 '[mut:decision]'    'if (( ENQ > 0 && ((RECOVERABLE + AGED_OUT) > 0 || STALE > 0) )); then' 'STALE plus stranded rows, no ENQ: exit 5'
+  mutate_run m6d-stale-ignored         '[mut:decision]'    'if (( ENQ > 0 && (RECOVERABLE + AGED_OUT) > 0 )); then' 'a STALE event alone (no ENQ, no rows) fires: exit 5'
+  mutate_run m8-bad-token-still-reads  '[mut:token-check]' ':' 'empty SENTRY_ACTIONS_RO_TOKEN: exit 3'
+  mutate_sub m9a-enq-tag-mistyped      '[mut:enq-url]'     'inngest-enqueue' 'inngest-enqeue' 'every tag the probe queries is a tag the route emits, and each route tag is queried'
+  mutate_sub m9b-stale-tag-mistyped    '[mut:stale-url]'   'inngest-replay-stale' 'inngest-replay-staile' 'every tag the probe queries is a tag the route emits, and each route tag is queried'
+  mutate_sub m9c-stale-reads-the-enq-op '[mut:stale-url]'  'inngest-replay-stale' 'inngest-enqueue' 'STALE URL pins its query'
+  mutate_run m10-tls-unset-dropped     '[mut:tls-unset]'   ':' 'no TLS-subverting environment variable reaches curl (all three requests)'
+  mutate_sub m11a-directive-bare-form  '<!-- soleur:followthrough script=' '<!-- soleur:followthrough' 'soleur:followthrough' 'the header carries exactly one single-line follow-through directive'
+  mutate_sub m11b-directive-unclosed   '<!-- soleur:followthrough script=' ' -->' '' 'the directive names this script, earliest= and secrets= and closes on the same line'
 fi
 
-MIN_ASSERTS=90
+# Floors: MIN_FIXTURE is the real fixture-row count (a --no-battery run reaches it exactly); MIN_BATTERY the battery's.
+MIN_FIXTURE=155; MIN_BATTERY=36
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== dispatch-recovery-sweeper-11211.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
-if [ -z "${FT_INNER:-}" ] && [ "$LEDGER_N" -lt "$MIN_ASSERTS" ]; then printf 'FLOOR: only %s assertions ran, expected at least %s\n' "$LEDGER_N" "$MIN_ASSERTS"; exit 1; fi
+if [ -z "${FT_INNER:-}" ]; then
+  if [ "$FIX_N" -lt "$MIN_FIXTURE" ]; then printf 'FLOOR: only %s fixture assertions ran, expected at least %s\n' "$FIX_N" "$MIN_FIXTURE"; exit 1; fi
+  if [ "$LEDGER_N" -gt "$FIX_N" ] && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
+fi
 [ "$FAIL" -eq 0 ]
