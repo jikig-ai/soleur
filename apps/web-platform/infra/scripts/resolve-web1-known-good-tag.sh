@@ -26,7 +26,8 @@
 # deploy-status-fanout-verify.{sh,test.sh} seam precedent.
 #
 # CONTRACT:
-#   input  : the bare /health `.version` string, via $1 (preferred) or stdin.
+#   input  : strict three-part semver, bare or `v`-prefixed — normalized to bare
+#            before the prepend. Via $1 (preferred) or stdin. (#11426, #9669)
 #   output : `v<version>` on stdout + exit 0, IFF it is strict three-part semver.
 #   failure: exit 1 with a `::error::` diagnostic on stderr naming the rejected
 #            version + a remediation. Emits NO tag on stdout.
@@ -44,6 +45,12 @@ if [[ $# -ge 1 ]]; then
 else
   RUNNING_VERSION="$(cat || true)"
 fi
+
+# Canonicalize: the workflow input regex accepts `v?`-prefixed spellings, so a
+# caller may legitimately hand us `v1.2.3`. Strip exactly ONE leading v before
+# the prepend — `vv1.2.3` normalizes to `v1.2.3`, prepends to `vv1.2.3`, and the
+# strict guard below still rejects it (the double-v path stays loud). #11426.
+RUNNING_VERSION="${RUNNING_VERSION#v}"
 
 TARGET_TAG="v${RUNNING_VERSION}"
 

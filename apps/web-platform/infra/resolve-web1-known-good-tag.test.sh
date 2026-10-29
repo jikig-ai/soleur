@@ -79,10 +79,24 @@ if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(e) latest (the wedge v
 run_arg "1.2"
 if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(f) two-part 1.2 → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
 
-# ── (g) already-v-prefixed input (v1.2.3 → vv1.2.3) → non-zero ────────────────
-# Contract: input is the BARE /health .version; a leading v means a caller bug.
+# ── (g) v-prefixed input canonicalizes (v1.2.3 → v1.2.3) → rc=0 ───────────────
+# Contract: input is strict three-part semver, bare or `v`-prefixed — the
+# resolver normalizes one leading v before prepending, so both accepted
+# spellings emit the same canonical tag. This is the apply-web-platform-infra.yml
+# `image_tag` contract: its input regex is ^v?[0-9]+\.[0-9]+\.[0-9]+$ — a
+# v-prefixed dispatch must not abort post-approval as vvX.Y.Z (#11426, #9669).
 run_arg "v1.2.3"
-if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(g) already-prefixed v1.2.3 → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+if [[ "$RC" -eq 0 && "$OUT" == "v1.2.3" ]]; then pass; else fail "(g) v-prefixed v1.2.3 → expected rc=0 OUT=v1.2.3, got rc=$RC OUT='$OUT'"; fi
+
+# ── (g2) double-v input (vv1.2.3) → non-zero (the strict guard stays loud) ────
+# The strip removes exactly ONE leading v; vv1.2.3 → v1.2.3 → prepend → vv1.2.3,
+# which the strict guard still rejects. The double-v path stays loud.
+run_arg "vv1.2.3"
+if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(g2) double-v vv1.2.3 → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+
+# ── (g3) stdin seam parity: a v-prefixed version on stdin canonicalizes too ────
+run_stdin "v4.5.6"
+if [[ "$RC" -eq 0 && "$OUT" == "v4.5.6" ]]; then pass; else fail "(g3) stdin v4.5.6 → expected rc=0 OUT=v4.5.6, got rc=$RC OUT='$OUT'"; fi
 
 # ── (h) stdin seam parity: a valid version on stdin resolves identically ──────
 run_stdin "4.5.6"
