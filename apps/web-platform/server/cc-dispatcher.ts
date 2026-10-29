@@ -3899,8 +3899,8 @@ async function reportDispatchSoleurGoError(
     // back to its canned text on an error frame either way.
     ctx.sendToClient(ctx.userId, oauthUnusableFrame());
     // An `auth-failed` close detached (not released) the worktree lease for the immediate re-acquire, and the credential
-    // lease refused before the factory's own cleanup could run: drop the kept record so it does not outlive the refusal.
-    // No-op when none is held; never throws.
+    // lease refused before the factory's own cleanup could run: drop the kept in-memory record. The detached handle's row is
+    // not tombstoned (release is a no-op after detach) and expires on its own within 240 s. No-op when none is held.
     void releaseCcWorktreeLease(ctx.userId, ctx.conversationId).catch(() => {});
   } else if (err instanceof RepoNotReadyError) {
     // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest

@@ -426,7 +426,7 @@ Accepted, with the reason:
 
 ### Fix round 1 (9 targeted seats over `003ddfc9ae..7b440d6519`; dedup: ~45 raw -> 13 unique)
 
-Fixed inline: the `auth-failed` close reason is now pinned at both ends (runner reason, dispatcher detach-not-release); the runner-to-dispatcher `authFailure` flag is pinned on the real runner; the legacy "finished" nudge skip has a test with a positive control; the cc runner keeps the first recovery frame (matches legacy) and resets the pending frame on a reused Query; the lease record kept by an `auth-failed` close is released when the re-lease is refused; the copy-table non-empty and unknown-scheme assertions are restored; `log.error` is pinned as not-called on a refusal; dead helpers and a stale header removed from the dispatcher wiring test; stale prose and plan contradictions corrected (BYOK_LEASE_CAUSES, eviction timing, the INFO log being local-only). Mutants M6, M7, M7b, M8, M9, M16 each turn a named test red.
+Fixed inline: the `auth-failed` close reason is now pinned at both ends (runner reason, dispatcher detach-not-release); the runner-to-dispatcher `authFailure` flag is pinned on the real runner; the legacy "finished" nudge skip has a test with a positive control; a null frame (`session_expired`) no longer erases a pending terminal frame in the cc runner (matches legacy; the verification pass showed a reuse-branch reset would drop the frame for a message queued before the `result`, so none is added); the in-memory lease record kept by an `auth-failed` close is dropped when the re-lease is refused (the row itself expires within 240 s); the copy-table non-empty and unknown-scheme assertions are restored; `log.error` is pinned as not-called on a refusal; dead helpers and a stale header removed from the dispatcher wiring test; stale prose and plan contradictions corrected (BYOK_LEASE_CAUSES, eviction timing, the INFO log being local-only). Mutants M6, M7, M7b, M8, M9, M16 each turn a named test red.
 
 Accepted, with the reason:
 
@@ -437,6 +437,7 @@ Accepted, with the reason:
 | Support persona gets no typed signal on a terminal auth failure | Accepted: the support surface is prose-only by design (an `error` frame would trigger its canned fallback); documented in the dispatcher comment. |
 | `agent-auth-cli-contract` network arms can still flake on a rate-limited runner | Accepted: arms skip visibly when egress is absent; a reachable-but-throttled runner is rare; the offline classifier pin is renamed so it no longer claims to observe the CLI. |
 | No test sentinel for a second `anthropic_oauth` writer; no DB-level shape CHECK | Accepted: exactly one writer exists today (swept by the data-integrity seat); a CHECK would lock out a future valid token shape. Pre-existing hardening, not introduced here. |
+| Other refusal arms (`KeyInvalidError`, generic) after an `auth-failed` close also leave the detached in-memory record | Accepted: the handle is detached and a successful re-acquire overwrites the entry; only the `oauth_unusable` arm is the likely repeat. |
 | Two copies of the rewrite-trace `log.info` (cc only) | Accepted: the line is a local breadcrumb; the warehoused signal is the agent-auth diagnostic. Plan observability row corrected to say so. |
 
 ## Domain Review

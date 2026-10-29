@@ -2798,8 +2798,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         extra: { conversationId: state.conversationId },
       });
     }
-    // Keep the first recovery frame of the turn: a `session_expired` reply (frame null, bubble only) must not erase a pending
-    // terminal frame. Same shape as the legacy runner.
+    // A null frame (`session_expired`, bubble only) never erases a pending terminal frame. Same shape as the legacy runner.
+    // Not reset on a reused Query: a message dispatched between this reply and the `result` would otherwise drop the frame.
     if (friendly.frame) state.pendingAuthFrame = friendly.frame;
     // Closed fields only (kind and scheme enums, no text). The rewrite replaces the raw reply, so this is a LOCAL
     // (docker logs) breadcrumb only: the INFO level never ships to Better Stack. The warehoused signal is the agent-auth diagnostic.
@@ -3427,8 +3427,6 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       state.firstToolUseAt = null;
       state.lastBlockKind = null;
       state.lastBlockToolName = null;
-      // #11086 — a friendly reply from a turn that never produced a `result` must not leak its recovery frame into this turn.
-      state.pendingAuthFrame = null;
 
       // #3436 Phase 3.B KD-5 — stale-context check on reused sessions.
       // When `state.chapterChunkedContext` is set but the new turn's
