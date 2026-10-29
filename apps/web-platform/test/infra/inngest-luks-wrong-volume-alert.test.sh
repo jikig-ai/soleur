@@ -222,9 +222,12 @@ printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'detail')
 # `GROUP BY time`. "Leg B's tokens exist somewhere in the file" cannot satisfy this while the
 # arm that admits them is gone.
 _or_open="$(printf '%s' "$LOCAL_SQL" | grep -cE '^[[:space:]]+OR \($' || true)"
-_or_next="$(printf '%s' "$LOCAL_SQL" | grep -m1 -A1 -E '^[[:space:]]+OR \($' | tail -1 || true)"
+# `grep -m1`/`grep -q` are early-exit greps: under pipefail their SIGPIPE on the upstream
+# printf can read as a MISS (#9217, grep-q-pipe-guard). `-A1`+`sed -n 2p` and `-cF` read the
+# whole stream, so they cannot.
+_or_next="$(printf '%s' "$LOCAL_SQL" | grep -A1 -E '^[[:space:]]+OR \($' | sed -n '2p' || true)"
 if [ "$_or_open" = "2" ] \
-  && printf '%s' "$_or_next" | grep -qF "JSONExtractString(raw, 'shipper') = '${MUT_SHIPPER}'" \
+  && printf '%s' "$_or_next" | grep -cF >/dev/null "JSONExtractString(raw, 'shipper') = '${MUT_SHIPPER}'" \
   && [ "$(printf '%s' "$LOCAL_SQL" | tail -5 | head -1)" = "            )" ] \
   && [ "$(printf '%s' "$LOCAL_SQL" | tail -4 | head -1)" = "          )" ] \
   && [ "$(printf '%s' "$LOCAL_SQL" | tail -3 | head -1)" = "        )" ] \
