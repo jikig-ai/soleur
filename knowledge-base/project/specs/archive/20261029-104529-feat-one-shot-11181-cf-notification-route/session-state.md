@@ -136,11 +136,12 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 
 ## Post-Merge Verification and Redaction Follow-Up
 
+- Before merge, closed the suspected queue-stall issue #11537 as a false positive after confirming #11456 remained queued at position 2 and merge-group run `40907797551` was in progress.
 - PR #11456 merged as `c5fd25cb4f430e12c7063e9e3315f5e37cd60ec7`. Main CI run `40918403358` passed.
 - Deploy arm `40919197619` completed its deploy successfully; `deploy-arm.sh find` returned `MATCH=exact DEPLOY=success CI=success`, and `served` returned `CONTAINS BUILD_SHA=c5fd25cb4f430e12c7063e9e3315f5e37cd60ec7`. `/health` returned status `ok`, Supabase `connected`, and the same build SHA.
 - Post-merge observability: no open `ci/inngest-down` issue; no Sentry or Better Stack read-only token was present in environment, so those vendor checks were skipped without accessing Doppler. No Sentry issue was identified for error-delta measurement.
 - Live verification, browser verification, and sole-copy read-back were skipped because the PR changed no UI or triggering infra paths. KB archival read-back was clean: all added plan/spec artifacts were under `archive/`. Feature-tweet was ineligible because the PR is a fix.
-- Closed duplicate #11480 and posted the post-merge verification result. The stale merge-queue alert #11537 was closed as a false positive after confirming #11456 remained queued at position 2 and merge-group run `40907797551` was in progress.
+- After merge, duplicate #11480 was closed and the post-merge verification result was posted to it.
 - The route learning had been byte-identical at the time #11456 merged. Per explicit user authorization, this follow-up redacts its account-specific operational detail while preserving the general credential-correlation lesson; the prior published commit history is unchanged.
 - Compound session-error inventory and recurring/one-off triage were completed before editing. The test-failure learning now records the resumed ship/post-merge and follow-up tooling errors with prevention guidance; total Session Errors: 36.
 - The pinned markdown-lint runner reported these knowledge-base files are excluded by `.markdownlintignore`; no markdownlint verdict is claimed. `git diff --check` passed. The current diff is documentation-only.
