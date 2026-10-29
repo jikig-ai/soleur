@@ -82,7 +82,7 @@ printf '%s\t%s\n' "$url" "$cfg" >> "$STUB_CFG"
 case "$url" in
   *sentry.io*inngest-replay-stale*) kind=stale;    code="${STUB_STALE_CODE:-200}"; bodyf="${STUB_STALE_BODY:-}" ;;
   *sentry.io*)                      kind=enq;      code="${STUB_ENQ_CODE:-200}";   bodyf="${STUB_ENQ_BODY:-}" ;;
-  *api.supabase.com*)               kind=supabase; code="${STUB_SB_CODE:-200}";    bodyf="${STUB_SB_BODY:-}"; printf '%s' "$data" > "$STUB_DATA" ;;
+  *https://api.supabase.com*)       kind=supabase; code="${STUB_SB_CODE:-200}";    bodyf="${STUB_SB_BODY:-}"; printf '%s' "$data" > "$STUB_DATA" ;;
   *) kind=other; code=404; bodyf="" ;;
 esac
 case "${STUB_FAIL:-}" in

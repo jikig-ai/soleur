@@ -948,20 +948,17 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
     no "M-census: --census-only on the pristine tree exited $_crc without a 'passed, 0 failed' line: $(sed -n '$p' "$_cl")"
   fi
   # M-flake: the pipe-free reader (fail_line_has) must never false-negative on a log whose first line carries the tag
-  # and whose remainder is far larger than the pipe buffer, 200 runs in a row. The legacy `| grep -q` form is run 20
-  # times for information only: whether it false-negatives depends on the host's pipe capacity and load, so its count
-  # is reported, never asserted.
-  _legacy_fail_line_has() { grep -F '[FAIL]' "$1" | grep -qF -- "$2"; }
+  # and whose remainder is far larger than the pipe buffer, 200 runs in a row. The old pipe-into-`grep -q` form is not
+  # run here: whether it false-negatives depends on the host's pipe capacity, and the repo's grep-q-pipe-guard bans it.
   _fl="$MUT_DIR/flake.log"
   { printf '[FAIL] M-flake-tag on the first line\n'
     awk 'BEGIN { for (i = 0; i < 4000; i++) printf "[FAIL] filler line %d padding padding padding padding padding\n", i }'; } > "$_fl"
-  _flsize="$(wc -c < "$_fl")"; _fl_new=0; _fl_old=0
+  _flsize="$(wc -c < "$_fl")"; _fl_new=0
   for _i in $(seq 1 200); do fail_line_has "$_fl" "M-flake-tag" || _fl_new=$((_fl_new + 1)); done
-  for _i in $(seq 1 20); do _legacy_fail_line_has "$_fl" "M-flake-tag" || _fl_old=$((_fl_old + 1)); done
   if [ "$_flsize" -gt 65536 ] && [ "$_fl_new" -eq 0 ]; then
-    ok "M-flake: fail_line_has found the tag in 200 of 200 runs on a ${_flsize}-byte log (informational: the legacy grep -q form missed it $_fl_old of 20 here)"
+    ok "M-flake: fail_line_has found the tag in 200 of 200 runs on a ${_flsize}-byte log"
   else
-    no "M-flake: fail_line_has false-negatives $_fl_new of 200 (want 0), log $_flsize bytes (want >65536; informational legacy misses $_fl_old of 20)"
+    no "M-flake: fail_line_has false-negatives $_fl_new of 200 (want 0), log $_flsize bytes (want >65536)"
   fi
   # M-scorer: negative control for the row scorer (fail_line_has decides "red for the RIGHT reason"). It must accept a
   # [FAIL] line holding the fragment, and must REFUSE a fragment that is only in an [ok] line and one that no line holds.
