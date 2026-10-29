@@ -63,3 +63,8 @@
 - e2e census: já executado (evidência no PR body; #11321 fechado).
 - Gate regressions pré-existentes NÃO relacionadas ao diff: vinngest pin drift v1.1.64 vs v1.1.66 (main avançou), code-to-prd T11 (camada secret-scan alheia), runtime ceiling exit-3 (ambiental — fila + 4h).
 - Próximo: compound → ship (Phase 6.45 archive-kb; UNTRUSTED-CI: .github/workflows tocado → sem --admin) → postmerge → DONE.
+
+## WS-C (compound, ~01:30)
+- Learnings escritos: 2026-10-29-fixing-one-copy-of-a-triplicated-jq-bug-leaves-the-p1-twin.md + 2026-10-29-running-review-seats-as-headless-devin-subprocesses.md (ambos com Session Errors + Prevention).
+- Triage: erros da sessão = one-offs já capturados pelos gates (SC2218, indent-artifact, undispositioned strip, grep -q); o único recurring = "fix one copy of a triplicated bug" → resolvido inline pelo NOTE lockstep + fixture live-path; sem AGENTS.md rule (constraint não-hidden, coberta pelo fix-round).
+- Próximo: ship completo (phases, archive-kb, overlap preflight, ready, CI poll, merge --squash --auto, postmerge) → DONE.
