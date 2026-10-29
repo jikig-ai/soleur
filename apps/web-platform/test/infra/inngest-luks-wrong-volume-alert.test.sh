@@ -91,9 +91,12 @@ done
 # The emitter literal is DERIVED from the canonical lib, never re-pinned (#8874 review): a
 # coordinated probe-tag rename that updates LOG_TAG + the lib but misses the .tf conjunct must
 # go red, which only happens when the needle follows the lib. MUT_EMITTER feeds the python
-# mutation needles below; a bare literal here would be a third uncoupled copy.
+# mutation needles below; a bare literal here would be a third uncoupled copy. The unset is the
+# lib's documented load contract — an env-inherited name must not silently substitute for a
+# failed source.
+unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
 # shellcheck source=scripts/lib/inngest-probe-row.sh
-source "$REPO/scripts/lib/inngest-probe-row.sh"
+source "$REPO/scripts/lib/inngest-probe-row.sh" || { printf '[FATAL] cannot source scripts/lib/inngest-probe-row.sh — the emitter needle has no canonical source\n' >&2; exit 2; }
 export MUT_EMITTER="$INNGEST_PROBE_EMITTER"
 
 # The predicate heredoc, extracted from the FIRST UNCOMMENTED opening line. An earlier form
@@ -132,8 +135,8 @@ printf '%s' "$LOCAL_SQL" | grep -cE >/dev/null "position\(JSONExtractString\(raw
   && ok "the devid predicate is a NEGATION: a row whose field is missing or renamed FIRES" \
   || no "the devid predicate is not '= 0' — a schema change would make this rule go quiet"
 
-printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1" \
-  && ok "scoped to the probe marker, anchored at position 1 (not a substring anywhere in the row)" \
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'message'), '${INNGEST_PROBE_MARKER}') = 1" \
+  && ok "scoped to the probe marker (derived from INNGEST_PROBE_MARKER), anchored at position 1 (not a substring anywhere in the row)" \
   || no "the marker scope is missing or unanchored"
 
 printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '${INNGEST_PROBE_EMITTER}'" \
