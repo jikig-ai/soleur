@@ -3,6 +3,7 @@
 ## Plan Phase
 - Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-discord-blog-channel-fallback/knowledge-base/project/plans/2026-10-29-fix-discord-blog-webhook-fallback-warning-plan.md
 - Status: complete
+- cto_spawns=1
 - Plan artifact: complete (selector=branch)
 
 ### Errors
