@@ -112,12 +112,26 @@ extra URL earlier in the argument vector.
 - **Prevention:** Resolve candidate roots from the current worktree inventory and
   test the exact relative file path instead of recursively searching broad roots.
 
-**A knowledge-base patch failed verification on stale expected text.**
+**A first knowledge-base patch failed verification on stale expected text.**
 
 - **Recovery:** Re-read the exact current recovery wording and reapplied the patch
   with matching context; the failed patch made no edits.
 - **Prevention:** Anchor a patch to freshly read text and verify every expected
   line before retrying.
+
+**A retry knowledge-base patch still used a stale archival-path match.**
+
+- **Recovery:** Re-read the exact archival session-state lines and reapplied the
+  full patch with the current path and wording; no partial edits had landed.
+- **Prevention:** Verify the complete patch context against the latest file before
+  retrying; do not carry forward a stale line from the previous attempt.
+
+**A PR-body edit command was interrupted after a NUL sentinel entered its payload.**
+
+- **Recovery:** Re-read the live PR body, labels, and close references; confirmed
+  the command made no remote changes.
+- **Prevention:** Write Markdown to a quoted heredoc/body file and pass it with
+  `gh pr edit --body-file`; never embed control-character sentinels in shell text.
 
 **Default-severity ShellCheck returned nonzero for informational `SC2016` notices.**
 

@@ -107,12 +107,13 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 
 - The required `cleanup-merged` session-start run skipped its temp sweep because `/home/jean/.local/state/soleur/tmp-guard.lock` was contended. `lslocks` and `fuser` showed no holder by the time it was investigated; no temp cleanup was attempted outside the lock.
 - Hash verification initially looked for the learning source at the old `/data/.../soleur/knowledge-base/` checkout path and returned not-found; a broad recursive search timed out. A registered-worktree inventory scan found the unchanged source copy in `chore-learning-cf-token-route`; its digest matches the PR copy.
+- A PR-body update command was interrupted before execution because its shell payload contained NUL sentinels. Live PR re-read confirmed the body and labels were unchanged; retry with `--body-file`.
 - The PR has no `Review-Evidence:` comment despite the recorded full panel and verifier; Phase 5.5/arming requires review evidence for the final pushed head, so rerun review after final artifact commits and archival.
 - Ship Phase 6.45 merge-mode overlap preflight exited 13 for the known shared learning with PR #11479; no changes were made to that PR. The plan and spec are archived under `knowledge-base/project/plans/archive/20261029-104529-2026-10-28-fix-cloudflare-notifications-route-plan.md` and `knowledge-base/project/specs/archive/20261029-104529-feat-one-shot-11181-cf-notification-route/`; the live-path reference sweep found no remaining references outside archives.
 
 ## Compound Phase
 
-- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 22 Session Errors have Prevention lines.
+- Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 23 Session Errors have Prevention lines.
 - Added one domain-scoped sharp-edge to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`; learning `synced_to: [work]` records the route. The related 2026-10-28 route learning and its main-checkout source copy remain byte-identical; the new learning links to it.
 - No project-level constitution/component/README proposals were warranted. The worktree plan explicitly defers plan/spec archival until after ship Phase 6; compound did not archive them.
 - Rule-budget linter returned `[WARN] B_ALWAYS=44390` and exit 0; no AGENTS rules were added. Token-efficiency report skipped because the diff was below its minimum size.
