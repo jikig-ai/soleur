@@ -400,7 +400,7 @@ open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
   the arm ends `no_action` (`create_no_action_reason: other`); when the ledger empties the offer it ends `no_action`
   (`create_no_action_reason: all-owned`). Either way there is no call (`create_offered: 0`) and no `ledger_suppressed` increment.
   A model that names an unoffered owned pattern anyway is the backstop: a same-run hash is still `no_action` / `other`
-  and is NOT recorded a second time (one `refusal_detail` entry per hash, the edit loop's own; no extra `ledger_suppressed`); a ledger hash
+  and is NOT recorded a second time (at most one `refusal_detail` entry per hash, the edit loop's own, and none for a hash it opened; no extra `ledger_suppressed`); a ledger hash
   is suppressed by the post-call gate (`ledger-suppressed`, counted once). An empty offer ends the step before the clone check and the
   open-create lookup, so a missing clone (`persist/clone-missing`) or an open create PR (`create-open`) is not surfaced on such a run.
 - **Base moved.** Step B refreshes the clone to the current main, re-runs the admission checks on it, and, just
@@ -453,12 +453,12 @@ after a spent call (the model named a pattern it was not offered), so `other` on
 either the model's own `other` or that backstop, while `all-owned` on such a row is always the model's. Nothing on the
 marker reliably separates the two `other` cases: the same-run branch adds neither `ledger_suppressed` nor a
 `refusal_detail` entry, and the edit loop also increments both, so read a zero or absent value as unknown and a
-non-zero one as a hint, never as proof. The arm makes one call and gets one verdict, so there is nothing to count. A row with `create_offered` absent (a memoized step that predates the field) cannot be
-classified by offered count.
+non-zero one as a hint, never as proof. The arm makes one call and gets one verdict, so there is nothing to count. A `no_action` row with `create_offered` absent (a memoized step that predates the field) cannot be
+split by offered count, except that `no-pattern-qualifies` is still the model's.
 
 | Marker values | Meaning | Follow-up |
 |---|---|---|
-| `no_action`, `no-pattern-qualifies`, `create_offered > 0` | The model declined; no content gate ran. | None in code, however often it repeats: declining is the intended default and the bar stays. |
+| `no_action`, `no-pattern-qualifies`, `create_offered > 0` | The model declined; no gate beyond the schema parse ran. | None in code, however often it repeats: declining is the intended default and the bar stays. |
 | `no_action`, `all-owned`, `create_offered > 0` | A call was spent and the model itself answered `all-owned`. | None in code. |
 | `no_action`, `other`, `create_offered > 0` | A call was spent. The model answered `other` itself, or the backstop suppressed a create naming an unoffered owned pattern. The marker cannot tell which. | None in code. |
 | `no_action`, `all-owned` or `other`, `create_offered = 0` | A pre-call path ended the arm (every candidate already claimed this run, or all owned); no call was spent. | None. |

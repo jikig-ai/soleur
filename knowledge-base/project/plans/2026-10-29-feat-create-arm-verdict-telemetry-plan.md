@@ -24,7 +24,7 @@ existing closed tokens and the CTO ruling already covered every fork.
 1. The "a server gate never yields `no_action`" invariant was too strong. The post-call ledger/same-run backstop
    (a model create naming a pattern that was not offered) ends `no_action` with reason `other`. The invariant is
    restated precisely (`no-pattern-qualifies` is always the model's; `other` with `create_offered > 0` is the model's
-   or the backstop; `ledger_suppressed` / `refusal_detail` are corroborating hints only, not a discriminator, per CTO T1a), and the reading table gains the matching row.
+   or the backstop; `ledger_suppressed` / `refusal_detail` are corroborating hints only, not a discriminator, per CTO T1a), and the runbook's reading table gains the matching row.
 2. Added the `model-invalid/transport` row (call may not have reached the model), and review added the `schema` and `unknown-pattern`
    details and a catch-all row, so the table maps the `model-invalid` details and points at the class tables for the rest.
 3. Verified every value in the table against source: classes (`CREATE_REFUSAL_CLASSES`), reasons
@@ -91,7 +91,7 @@ Mechanisms named by the ask, each against what is already on `origin/main`:
 |---|---|---|---|
 | `create_model_verdict` marker field | 1 | `create_outcome` x `create_no_action_reason` x `create_offered` (derivable, grepped in `compound-promote-marker.ts` / `cron-compound-promote.ts`) | CUT |
 | `create_gate_refusal` counts and reason slugs | 1 | `create_outcome=refused` + `create_refusal_class` + `create_detail` + `create_nearest_rank`/`create_top1`; one verdict per run so counts are 0 or 1 | CUT |
-| Response-size field (alternative considered by the planner, ruled out by the CTO) | "instant vs deliberated" | a `no_action` is `z.strictObject({decision, reason_class})`, about 55 bytes regardless; `postAnthropicMessage` drops thinking blocks; only `output_tokens` on the cost row discriminates, blocked by the open claude-cost-capture-dark incident | CUT (reopen only if that incident proves unfixable) |
+| Response-size field (alternative considered by the planner, ruled out by the CTO) | "instant vs deliberated" | a `no_action` is `z.strictObject({decision, reason_class})`, about 55 bytes regardless; `postAnthropicMessage` drops thinking blocks; only `output_tokens` on the cost row discriminates (not observed on the 2026-10-29T08:03Z run; cause not established, related incident #11049) | CUT (reopen only if that incident proves unfixable) |
 | Changing the `nearest_skill` top-3 gate | none for run 4 (no gate ran) | the 2026-10-28 ruling: unmeasured, not a shown bias | CUT for this PR |
 | Runbook reading rule (new) | 1, 2 | runbook lines already map each field; the follow-up rule is the gap | KEEP |
 
@@ -262,7 +262,7 @@ consulted through the CTO ruling above, which is the technical-fork mechanism, n
    `grep -o '`[a-z_0-9-]*`' <(awk '/^### Reading a live-fire row/{f=1;next}/^### /{f=0}f' knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md) | sort -u`
    and confirm each token is a `create_*` field, a marker key (`ledger_suppressed`, `refusal_detail`), a member of
    `CREATE_NO_ACTION_REASONS` or `CREATE_REFUSAL_CLASSES`, a `create_outcome` value, a `create_detail` token the code
-   emits (the parity census list), or a named telemetry term (`SOLEUR_CLAUDE_COST`, `output_tokens`, `cost_usd`,
+   emits (the parity census list), a `class/detail` pair of tokens the code emits, or a named telemetry term (`SOLEUR_CLAUDE_COST`, `output_tokens`, `cost_usd`,
    `extra.cause`, `extra.threshold`, `OVERLAP_REFUSE_THRESHOLD`).
 3. `cd apps/web-platform && npx vitest run test/server/compound-promote-runbook-parity.test.ts` passes
    unchanged (the "`create_detail` values by class" table has not been touched).
