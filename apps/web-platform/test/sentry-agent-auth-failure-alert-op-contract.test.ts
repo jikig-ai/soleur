@@ -393,6 +393,9 @@ describe("agent-auth-failure — harness self-tests (mutation rows)", () => {
     const allMembers = RULE_FIXTURE.replace('fallthrough_type = "NoOne"', 'fallthrough_type = "AllMembers"');
     expect(allMembers).not.toBe(RULE_FIXTURE);
     expect(ruleProblems(allMembers)).toContain("actions must be exactly one email issue_owners + NoOne");
+    const extraKey = RULE_FIXTURE.replace('fallthrough_type = "NoOne" }', 'fallthrough_type = "NoOne", target_identifier = "42" }');
+    expect(extraKey).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(extraKey)).toContain("actions must be exactly one email issue_owners + NoOne");
     const userTarget = RULE_FIXTURE.replace('target_type = "issue_owners"', 'target_type = "user"');
     expect(userTarget).not.toBe(RULE_FIXTURE);
     expect(ruleProblems(userTarget)).toContain("actions must be exactly one email issue_owners + NoOne");
