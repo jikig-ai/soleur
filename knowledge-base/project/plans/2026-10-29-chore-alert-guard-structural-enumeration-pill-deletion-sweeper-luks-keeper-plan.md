@@ -13,6 +13,22 @@ brand_survival_threshold: aggregate pattern
 
 # chore: four follow-ups - alert-guard structural enumeration, dead pill variant, dispatch-recovery sweeper ruling, LUKS keeper code side
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** Implementation Phases 1 to 4, Observability, Guard Contract (3 entries), Scope Check, Files, Acceptance Criteria
+**Review agents used:** DHH, Kieran, code-simplicity, CPO, CTO (devex lens and a pending-ruling confirmation) at plan review; architecture-strategist, security-sentinel, observability-coverage-reviewer at deepen. Gates 4.6 to 4.13 run mechanically (user-brand, observability, PAT-shaped, UI wireframe, guard contract, scope check): all pass.
+
+### Key Improvements
+1. Public-leak hardening of the two probes (fixed-reason failure output, pinned single-literal SELECT, credential-off-argv rows, CODEOWNERS rows), because the sweeper republishes probe output into a public issue comment.
+2. Observability section now cites layer 6 (workflow run log) and layer 3 for the counted rows, argues the discoverability-command false hit, and accepts the sweeper-stops residual honestly; the dark probe exits 3 on an indeterminate-only history instead of reading NOT YET forever.
+3. Correct apply-path statement (any file under `apps/web-platform/infra/**` fires the merge apply) plus a post-merge AC that the run reads "No changes" for the key-probe pair; ADR addendum placed per repo convention (new top-level heading).
+
+### New Considerations Discovered
+- Guard 2 floor row was backwards (lowering `PRESENCE_ROWS` cannot red); fixed to raise it. Guard 3's registration row was unreachable and became a one-time acceptance grep.
+- `block_of` prints heredoc bodies unchanged; the suite pipes it through `blank_heredocs`.
+- Two planner refinements of CTO rulings are logged in `decision-challenges.md` for review (11211 unbounded criterion-2 window, re-confirmed by the CTO; 11265 indeterminate-only exit 3).
+
 ## Overview
 
 One PR that works through four open follow-up trackers. The operator asked for all four; the CTO agent
@@ -193,7 +209,10 @@ real tree and each matrix row must red a scratch copy.
      (`.github/scripts/test/test-infra-suite-registration.sh`); the suite header says so.
 4. Mutation battery (the Guard Contract matrix below): every row copies the tree into a scratch dir, mutates
    the COPY, re-runs the suite against it through `ALERT_STRUCT_{INFRA,WF}` overrides, and requires rc=1
-   (rc>=2 is the instrument, not evidence), with an instrument control on the pristine tree first.
+   (rc>=2 is the instrument, not evidence), with an instrument control on the pristine tree first. Hardening: the mutate
+   helper refuses any path whose realpath is outside `$MUT_DIR`, copies with `cp -RP`, fails if `ALERT_STRUCT_INFRA` or
+   `ALERT_STRUCT_WF` is empty in mutation mode, `trap ... EXIT` over `mktemp -d`, and a suite-exit instrument check
+   `git diff --quiet -- apps/web-platform/infra .github`.
 5. Register the suite: it lives under `apps/web-platform/infra/`, so the matrix glob
    (`run-registered-suites.sh`) picks it up; add its row with
    `python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write`. No
@@ -248,6 +267,8 @@ real tree and each matrix row must red a scratch copy.
      filter` terms in one query, CTO re-confirmed). No `source_ref` parseability filter: the header states that
      the count over-includes `no_artifact_in_pr_a` drafts (an over-count only moves the probe toward ACTION
      REQUIRED, the fail-safe direction for a notify-only probe, and the table has held 0 rows ever).
+   - The SQL is ONE literal string with no interpolation (no env or issue-derived value, no `;`, a `^SELECT` prefix, `now() - interval` in SQL not shell-built timestamps); the suite captures the stdin payload and asserts it. The Supabase token can run writes and DDL, so the query text is the only read-only control; prefer a read-only query endpoint if one exists (verify with a stub test or one live call before relying on it).
+   - Failure branches print only a fixed reason string plus the HTTP status code, never `$BODY`, `$RESP` or curl stderr (the sweeper runs the probe with `2>&1` and republishes the last 4 KB into a PUBLIC issue comment; `autovacuum-thrash-6168.sh`'s `head -c 500` body echo is NOT copied).
    - Exit contract (never 0, never 1): 2 NOT YET (the normal daily state); 5 ACTION REQUIRED only when
      criterion 1 holds AND criterion 2 holds in either bucket; 3 CANNOT ESTABLISH on any read, auth or parse
      failure; 78 under xtrace. Output is counts only: no identifier, no timestamp of an individual row.
@@ -275,20 +296,21 @@ work time); the new infra-dir suite is selected by `apps/web-platform/infra/run-
 
 1. Create `scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh` first, then
    `scripts/followthroughs/inngest-luks-keeper-dark-11265.sh`: a notify-only probe that reads Better Stack
-   read-only through `scripts/betterstack-query.sh` (`BETTERSTACK_QUERY_*` already wired in the sweeper; same template and exit vocabulary as Phase 3, header states that exits 3
+   read-only through `scripts/betterstack-query.sh` (`BETTERSTACK_QUERY_*` already wired in the sweeper; same template, exit vocabulary and fixed-reason failure output as Phase 3, header states that exits 3
    and 5 repeat daily until the directive or label is removed). It
    counts MEASURED rows only - `token=ok` or `token=fail_*`, never `indeterminate` - with the marker anchored at
    message position 1 (the same anchor the paging SQL uses; a quoting webhook row must not count), over both the
-   hot window and the archive arm with a 60-day look-back. Exit 2 when there are no measured rows or the newest is
-   under 30 days old; 5 when measured rows exist and the newest is over 30 days old; 3 on any read or parse
+   hot window and the archive arm with a 60-day look-back. Exit 2 when there are no rows of any kind, or measured rows exist and the newest is under 30 days old; exit 3 when
+   only `indeterminate` rows exist (the probe could not measure; the counts of both kinds are printed); 5 when measured rows exist and the newest is over 30 days old; 3 on any read or parse
    failure; never 0 or 1; 78 under xtrace. Header documents the residual that zero rows after retention
    expiry looks like "never started", and that the probe is inert until the owner's bundle delivery makes the
    first `token=ok` row.
 2. Register the suite in `scripts/test-all.sh`. At ship time (GitHub-only): the unfenced directive with
    `earliest=2026-11-29T00:00:00Z secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD`
    and the `follow-through` label on #11265, plus the comment of what remains (below).
-3. ADR-282: append a dated addendum under the 2026-10-26 section (no new ordinal; status stays `accepted`)
-   recording the keeper deferral and its digest-pin reason, the required order, the keeper reusing
+3. ADR-282: append a new top-level `## Addendum - 2026-10-29 (#11265)` heading (hyphen, newest last, after the
+   `Addendum - 2026-10-28 (#9927), second` section; opening line "Appended; nothing above is edited and the status stays
+   `accepted`. No new ordinal."; leave the "LUKS header corrupted" row alone) recording the keeper deferral and its digest-pin reason, the required order, the keeper reusing
    `CUTOVER_LUKS_PROBE_STAMP`, the definition of "count-variable form", the above-900 s caveat on the
    dead-man, and the new probe. Also add the dark-probe pointer to the `Key-continuity probe (#9927 item 2)`
    subsection of `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` (keep the
@@ -296,7 +318,9 @@ work time); the new infra-dir suite is selected by `apps/web-platform/infra/run-
 4. The #11265 comment (what remains, all owner-authorized or maintenance-window acts): (a) an image-content PR
    adding the keeper trio to the bootstrap image build and its check script; (b) the image mint and pin-bump;
    (c) a STAGED/cloud-init PR (measure user_data headroom with `inngest-userdata-budget.sh` and confirm an
-   image-only PR passes the every-asset-in-STAGED test); (d) the next planned `apply_target=inngest-host-replace`
+   image-only PR passes the every-asset-in-STAGED test); the keeper must put its `logger -t` tag in the Vector source
+   allowlist with its drift fixture, emit armed / fired / outcome / disarmed markers (not only error branches), and reuse
+   `CUTOVER_LUKS_PROBE_STAMP`; (d) the next planned `apply_target=inngest-host-replace`
    (a reboot-forcing hcloud_server update, applied only in the maintenance window, no `[ack-destroy]` from
    this PR); (e) deleting `luks_key_probe_tick` only after the keeper's first measured row, by shipping a
    bundle without it; (f) the dead-man create-and-delete probe on a paused throwaway alert. The merge
@@ -318,8 +342,10 @@ None beyond the comment. No provider, variable or resource change.
 
 ### Apply path
 
-None. The merge-time push apply of `apply-web-platform-infra.yml` reruns its explicit `-target` allowlist
-(which contains no `hcloud_server.*`) and plans no diff for a comment-only change. No dispatch, no replace.
+None. The merge-time push apply of `apply-web-platform-infra.yml` fires on ANY file under `apps/web-platform/infra/**`
+(the new suite and the shard-manifest row included, not only the `.tf` comment), reruns its explicit `-target`
+allowlist (which contains no `hcloud_server.*`; the key-probe pair is in it) and plans no diff for these changes.
+No dispatch, no replace.
 
 ### Host fan-out
 
@@ -351,14 +377,17 @@ error_reporting:
 
 failure_modes:
   - mode: Sentry or Supabase read fails in the 11211 probe
-    detection: exit 3 CANNOT ESTABLISH in the daily sweeper comment
+    detection: workflow run log of scheduled-followthrough-sweeper.yml (observability layer 6) shows exit=3 CANNOT ESTABLISH, and the daily sweeper comment repeats it
     alert_route: the 11211 tracker comment
-  - mode: Better Stack read or 31-day look-back fails in the 11265 probe
-    detection: exit 3 CANNOT ESTABLISH in the daily sweeper comment (a permanent 3 is itself the signal that the look-back cannot be read)
+  - mode: Better Stack read or the 60-day look-back (31 days needed) fails in the 11265 probe, or only indeterminate rows exist
+    detection: workflow run log of scheduled-followthrough-sweeper.yml (layer 6) shows exit=3 CANNOT ESTABLISH with the measured and indeterminate counts, and the daily sweeper comment repeats it (a permanent 3 is itself the signal); the rows being counted come from the on-host marker through Vector to Better Stack (layer 3)
     alert_route: the 11265 tracker comment
   - mode: a new alert is added with an extra attribute, a meta-argument, a second alert on one exploration, or a removed/moved/import block
-    detection: the structure suite goes red on the PR
+    detection: the structure suite goes red in the infra-validation workflow run log (layer 6) with an ::error:: line naming the alert and the fix
     alert_route: red infra-validation check on the PR
+  - mode: the follow-through sweeper itself stops running, so neither probe reports
+    detection: not independently detected by this change; stated as an accepted residual (the probes are a conversion trigger, not an independent dead-man, and depend on the sweeper workflow staying healthy); the sweeper's own failure notification is the only cover
+    alert_route: the sweeper workflow failure notification
 
 logs:
   where: GitHub Actions run logs for the sweeper and for the infra-validation matrix leg
@@ -367,13 +396,17 @@ logs:
 discoverability_test:
   command: bash apps/web-platform/infra/betterstack-alert-structure.test.sh --presence-only
   expected_output: passed, 0 failed
+  # Argued false hit against the suite-shaped detection: --presence-only runs NO mutation battery and no
+  # network; it only reads about 60 infra *.tf files, the lock file and one workflow through awk and
+  # grep, and the AC bounds it at 5 s on the real tree. It also exits non-zero below the census floor
+  # (fewer than 19 enumerated alerts), so a vacuous run cannot print a green line.
 ```
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-Amend ADR-282 with a dated addendum (no new ordinal, status stays `accepted`) as an in-scope task of Phase 4:
+Amend ADR-282 with a new top-level dated addendum (`## Addendum - 2026-10-29 (#11265)`, no new ordinal, status stays `accepted`) as an in-scope task of Phase 4; the wording is "conversion trigger", never "dead-man", and it states the probe depends on the sweeper workflow and is not an independent dead-man:
 the keeper deferral and its reason (a STAGED line naming assets absent from the `@sha256`-pinned bootstrap
 image strands the next replace), the required order, the shared-stamp rule for the future keeper, the
 definition of "count-variable form" (the last rung of the fallback ladder: a Terraform variable defaulting to
@@ -481,10 +514,12 @@ refusal, an unset or malformed secret, an empty result).
 | 2 | Let a read failure fall through to the implicit exit status of the last command (rc 1 or 0) | RED |
 | 3 | Add a SECOND failing source (second stub returning 500 after a compliant first) and require exit 3, not 2 | RED if only the first source is checked |
 | 4 | Drop the `*x*` xtrace refusal | RED |
+| 5a | A stub returns a non-2xx body containing a canary string on every read path; the canary must be absent from stdout and stderr on every exit path | RED if any branch echoes a body |
+| 5b | Capture the Supabase request payload: it must equal the pinned single-literal `^SELECT` text with no `;` and no interpolated value; exit 78 must occur before any secret is read; grep both probes for `-u `, `Authorization:` and `Bearer` outside a stdin-config process substitution | RED on any deviation |
 | 5 | Dispatch: stub a reader that returns an empty body (or HTTP 200 with no rows field) and require exit 3 (a probe reading "0 rows" from an empty body is vacuous); this row also covers a curl failure | RED |
 
 **Harness rows.** A must-PASS fixture that is not the canonical: a measured-row timestamp exactly 30 days minus
-one second old (exit 2) and plus one second (exit 5); an `indeterminate`-only history (exit 2). Registration of
+one second old (exit 2) and plus one second (exit 5); an `indeterminate`-only history (exit 3, counts printed). Registration of
 each suite in `scripts/test-all.sh` is a one-time acceptance grep (no always-run gate covers
 `scripts/followthroughs/*.test.sh`, so a suite cannot detect its own missing `run_suite` line).
 
@@ -520,16 +555,17 @@ also editing that script, which has its own suite.
 | `dispatch-recovery-sweeper-11211.sh` + suite | "ship only the items that are in scope" | inferred - justification: the CTO ruled the probe is the in-scope self-reporting form of the issue's own "re-evaluation criteria"; without it the deferral rots |
 | `inngest-luks-keeper-dark-11265.sh` + suite | "dead-man conversion trigger" | asked |
 | ADR-282 addendum + `inngest-luks-cutover-6894.md` pointer | "code side only" | inferred - justification: the keeper deferral and the definition of "count-variable form" are architecture facts a reader of ADR-282 would otherwise be misled about (plan Phase 2.10) |
+| `.github/CODEOWNERS` probe rows | "do NOT create or change the dead-man Better Stack alert" (the probes are the code-side substitute) | inferred - justification: the probes run with a broad Supabase management token under the sweeper's `env -i` launcher; review pinning is the only control on a merged script, and the repo's soak probes already carry rows |
 | `scripts/test-all.sh` registrations | "dead-man conversion trigger" | inferred - justification: `followthroughs/*.test.sh` is not in `SUITE_GLOBS`; an unregistered suite is a claim |
 | `apps/web-platform/infra/suite-shard-legs.tsv` row | "add structural enumeration" | inferred - justification: the infra matrix runner manifest records the new suite's shard (regenerated by the script, not hand-edited) |
 | New tracker 11486 | "leave that issue open ... saying what remains" | inferred - justification: closing #11212 would orphan its comment items (`wg-when-deferring-a-capability-create-a`); CTO ruled `Closes` only with the carrier filed |
 
 ### Split Assessment
 
-- Subsystems touched: 3 - `apps/web-platform` (infra suite, key-probe guard, component, test), `scripts` (two probes, `test-all.sh`), `knowledge-base` (ADR, runbooks, design, plan artifacts)
-- Planned files: 17 | Estimated changed lines: about 900 (the new suite and its battery are about 450, the two probes with suites about 350, the rest edits)
+- Subsystems touched: 5 - `apps/web-platform` (infra suite, key-probe guard, component, test), `scripts` (two probes, `test-all.sh`), `tests` (lib header comment), `.github` (CODEOWNERS rows), `knowledge-base` (ADR, runbooks, design, plan artifacts)
+- Planned files: 18 | Estimated changed lines: about 950 (the new suite and its battery are about 450, the two probes with suites about 350, the rest edits)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR - the estimated-lines figure is over the 800 threshold only because of two test-heavy suites that are independent files; the operator asked for a single PR, the four trackers share no code, and the review cost is dominated by the new suite, which is self-contained.
+- Recommendation: single PR - both the roots count (5) and the line estimate (about 950) are over the thresholds, but the operator's brief asks for one PR ("Resolve four open follow-up issues in a single PR"), the four trackers share no code, three of the five roots are one-line or comment-only touches, and the bulk is two self-contained test-heavy files; a split would be along tracker lines (11388 suite plus docs / 11212 pill / 11211 + 11265 probes plus ADR) if review cost proves too high.
 
 ## Files to Create
 
@@ -549,7 +585,8 @@ also editing that script, which has its own suite.
 - `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`
 - `apps/web-platform/infra/betterstack-logs-alerts.tf` (comment only)
 - `apps/web-platform/infra/suite-shard-legs.tsv` (generated row; the regenerated diff must touch only the new suite's row)
-- `tests/scripts/lib/hcl-effective-text.sh` (header comment only: add the new suite to its consumer list; the lib is already in the `infra-validation.yml` path filter)
+- `.github/CODEOWNERS` (four rows for the two probes and their suites, following the `ci-draft-light-soak-9728` precedent; a merged probe plus a `secrets=SUPABASE_ACCESS_TOKEN` directive hands a broad management token to the script, a residual stated in the probe header; the CTO's no-new-row ruling covered the structure suite only)
+- `tests/scripts/lib/hcl-effective-text.sh` (header comment only: add the new suite to its consumer list and update its "BOTH consuming suites" neutering claim to the three suites; the lib is already in the `infra-validation.yml` path filter, and its comment at lines 204-207 of `infra-validation.yml` is left unedited to keep the no-workflow-edit AC, with the drift noted in the PR body)
 - `scripts/test-all.sh` (two `run_suite` lines)
 - `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`
 - `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md`
@@ -566,7 +603,7 @@ matches real files; `components/**/*.tsx` matches the pill. Sibling lookup for t
 
 ### Pre-merge (PR)
 
-- [ ] `bash apps/web-platform/infra/betterstack-alert-structure.test.sh` exits 0 on the real tree with its mutation battery (every RED matrix row rc=1, the must-PASS rows rc=0, the pristine control rc=0), and `... --presence-only` prints a final line containing `passed, 0 failed` in under 15 s.
+- [ ] `bash apps/web-platform/infra/betterstack-alert-structure.test.sh` exits 0 on the real tree with its mutation battery (every RED matrix row rc=1, the must-PASS rows rc=0, the pristine control rc=0), and `... --presence-only` prints a final line containing `passed, 0 failed` in under 5 s on the real tree (measured with `time`), runs no battery, and exits non-zero when it enumerates fewer than 19 alerts.
 - [ ] Mutating the last enumerated alert, a middle alert and the first alert each reds the suite (Guard 1 rows 3 to 5); a `moved {}` naming a non-logtail address stays green.
 - [ ] `bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh` exits 0; appending a `probe2_fail` pair makes it exit 1 on a scratch copy.
 - [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is green after the pill edit and RED (unused `@ts-expect-error`) when the pill edit is reverted; `./node_modules/.bin/vitest run test/components/acknowledged-pill.test.tsx test/components/today-card.click.test.tsx test/components/dashboard/leader-loop-status.test.tsx` is green (the test path matches the vitest `test/**/*.test.tsx` include glob).
@@ -583,6 +620,7 @@ matches real files; `components/**/*.tsx` matches the pill. Sibling lookup for t
 
 - [ ] #11211 and #11265 bodies carry the unfenced column-0 follow-through directive and the `follow-through` label; each tracker has the comment of what remains (evidence counts for 11211; items a to f for 11265). A dry run of the sweeper on the branch (`gh workflow run scheduled-followthrough-sweeper.yml --ref <branch> -f dry_run=true`) shows each probe's `exit=` line as 2 or 3.
 - [ ] #11211 and #11265 remain OPEN; #11486 exists and is cited.
+- [ ] The merge-time `apply-web-platform-infra.yml` push run reads "No changes" for `logtail_exploration.inngest_luks_key_probe_fail` and `logtail_exploration_alert.inngest_luks_key_probe_fail` (checked from the run's plan log with `gh run view --log`, not inferred from the diff).
 
 ## Test Scenarios
 
@@ -612,7 +650,7 @@ probe ever goes dark for 30 days after its first measured row.
 
 - A plan whose `## User-Brand Impact` section is empty, holds filler text only, or omits the threshold will fail `deepen-plan` Phase 4.6. This plan's section is filled with a stated threshold.
 - Any comment edit inside `cloud-init-inngest.yml` is also a `user_data` edit that forces a host replace: this plan does not touch that file.
-- `betterstack-logs-alerts.tf` is in the apply workflow's push paths; keep the edit comment-only or the merge apply plans a live Better Stack update.
+- Every file under `apps/web-platform/infra/**` fires the merge-time apply; the `betterstack-logs-alerts.tf` edit must stay comment-only or the merge apply plans a live Better Stack update.
 - Two `1`-vs-`2` rc discriminations matter in every battery: only rc=1 is a caught mutation.
 
 ## References

@@ -27,19 +27,20 @@ Order inside each phase: tests first (`cq-write-failing-tests-before`).
 ## Phase 3 - 11211 self-reporting probe
 
 - 3.1 Create `scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh` (PATH-stub curl; exit codes only 2/3/5/78)
-- 3.2 Create `scripts/followthroughs/dispatch-recovery-sweeper-11211.sh` (Sentry + Supabase read-only; two buckets; header with contract, credential posture, RETIREMENT)
+- 3.2 Create `scripts/followthroughs/dispatch-recovery-sweeper-11211.sh` (Sentry + Supabase read-only; pinned single-literal SELECT; fixed-reason failure output, never a response body; two buckets; header with contract, credential posture, RETIREMENT)
 - 3.3 Register the suite in `scripts/test-all.sh` with a `run_suite` line
 - 3.4 Ship-time, GitHub only: directive + `follow-through` label + evidence comment on 11211 (stays open)
 
 ## Phase 4 - 11265 dark-probe trigger and ADR
 
-- 4.1 Create `scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh`, then `scripts/followthroughs/inngest-luks-keeper-dark-11265.sh` (measured rows only, 30-day threshold, 60-day look-back, exit 2/3/5/78)
+- 4.1 Create `scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh`, then `scripts/followthroughs/inngest-luks-keeper-dark-11265.sh` (measured rows only, 30-day threshold, 60-day look-back, exit 2/3/5/78; exit 3 when only indeterminate rows exist)
 - 4.2 Register the suite in `scripts/test-all.sh`
-- 4.3 Append the dated addendum to `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` (no new ordinal); add the dark-probe pointer to the `Key-continuity probe (#9927 item 2)` subsection of `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` keeping the heading text
+- 4.2b Add four `.github/CODEOWNERS` rows for the two probes and their suites (`ci-draft-light-soak-9728` precedent)
+- 4.3 Append a new top-level `## Addendum - 2026-10-29 (#11265)` (newest last, after the 2026-10-28 second addendum) to `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` (no new ordinal); add the dark-probe pointer to the `Key-continuity probe (#9927 item 2)` subsection of `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` keeping the heading text
 - 4.4 Ship-time, GitHub only: directive (`earliest=2026-11-29T00:00:00Z`) + `follow-through` label + comment of what remains (items a to f) on 11265 (stays open, `Ref` only)
 
 ## Phase 5 - verify and hand off
 
 - 5.1 Run the plan's Acceptance Criteria commands; `python3 scripts/lint-guard-contract.py`; `bash plugins/soleur/test/c4-count-parity.test.sh`
-- 5.2 Confirm the diff leaves `cloud-init-inngest.yml`, `inngest-cutover-flip.sh`, `inngest-host.tf`, all workflows and the lock file untouched
+- 5.2 After merge, confirm the push apply run reads "No changes" for the key-probe pair; confirm the diff leaves `cloud-init-inngest.yml`, `inngest-cutover-flip.sh`, `inngest-host.tf`, all workflows and the lock file untouched
 - 5.3 PR body: `Closes #11388`, `Closes #11212`, `Ref #11211`, `Ref #11265`, `Ref #11486`; no `Closes` for 11211 or 11265
