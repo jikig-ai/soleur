@@ -1343,8 +1343,11 @@ ctl_fails  _exact_bad || { printf 'FATAL: late control: row() accepted the verdi
 # (2) ABSOLUTE: the count of a green run, committed with ZERO slack. A derived floor moves with the rows it
 #     guards (delete six rows and the floor drops with them); this constant is the one that bites. Raise it in
 #     the same commit that adds rows, never ahead of them.
+# The trailing 5 is the final value of nextra (1 + 4), written as a literal: guard-vacuity-floor.test.sh builds
+# its neutered-machinery mutant from this block alone, and a variable that is not a plain `X=$((X + 1))` counter
+# is unbound there, so the mutant dies at `set -u` and the floor scores as unconstructible.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 + nextra ))
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 + 5 ))
 ABSOLUTE_FLOOR=663
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
