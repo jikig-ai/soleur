@@ -21,3 +21,16 @@
 - soleur:plan (phases 0–6.5, inline on Devin)
 - soleur:deepen-plan (halt gates 4.5–4.13 verified, enhancement summary committed + pushed)
 - Artifacts: tasks.md, decision-challenges.md in this spec dir
+
+## Resume checkpoint 2026-10-29 (post-commit 2e4ed4bd3c)
+
+Implementation committed+pushed (16 files, [ack-destroy] on body line 2). PR-B #11535 draft.
+GREEN: vitest guards 63/63, c4-count-parity 13/13 (C4=24 C5=14 C6/C9=10).
+Fixture-suite fixes in flight (unstaged): sentry-monitors-audit.test.sh T19p6/T19p7 repointed
+bot-pr-reaper→luks-web2/betterstack-mirror; prod-version-drift-check.test.sh B10g accepts
+PRUNED membership; token-drift-workflow-causes.test.sh R10 declared-or-pruned check +
+PRUNED_TS env + r10_tf_sub anchor repointed to scheduled_terraform_drift.
+NEXT: re-run the 3 suites; if green, commit; then soleur:review → resolve → soleur:qa →
+soleur:compound → soleur:ship → merge #11535 → postmerge (apply-plan 43 destroys, sentry-audit
+post-merge, heartbeat fire-test AC3). test-all.sh --affected degraded to full-gate (runner
+files touched) — refused by sibling contention; run targeted suites instead.
