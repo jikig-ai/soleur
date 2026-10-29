@@ -5332,7 +5332,9 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
       ["the alias no longer reads the volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)\$\{hcloud_volume\.inngest_redis_luks\.id\}/m, "$110626194"), /alias does not interpolate hcloud_volume\.inngest_redis_luks\.id/],
       ["the alias reads the volume only in a comment", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)$/m, "  # $1\n  inngest_luks_wrong_volume_alias = \"scsi-0HC_Volume_1\""), /alias does not interpolate/],
       ["the alias reads a sibling volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)hcloud_volume\.inngest_redis_luks\.id/m, "$1hcloud_volume.workspaces_luks.id"), /alias does not interpolate/],
-      ["the sql local stops using the alias", wf, alertsTf.replace("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
+      // replaceAll: since #11526 the alias is interpolated on BOTH legs of the dual-path
+      // predicate, so a single-occurrence replace leaves a live reference and the row survives.
+      ["the sql local stops using the alias", wf, alertsTf.replaceAll("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
       ["the exploration stops reading the sql local", wf, alertsTf.replace("trimspace(local.inngest_luks_wrong_volume_sql)", "trimspace(\"select 1\")"), /sql_query does not read local\.inngest_luks_wrong_volume_sql/],
       ["the exploration resource renamed", wf, alertsTf.replace('resource "logtail_exploration" "inngest_luks_wrong_volume"', 'resource "logtail_exploration" "inngest_luks_wrong_volume_x"'), /logtail_exploration\.inngest_luks_wrong_volume: missing/],
       ["the apply job not found (renamed)", wf.replace(/^ {2}apply:/m, "  apply_renamed:"), alertsTf, /apply job extracted 0 targets/],
