@@ -56,7 +56,7 @@ Live standing alarms over this source:
   read back `paused=false` on 2026-09-21. No `-var` flag and no tfvars entry is involved. The watched alias is built from
   `hcloud_volume.inngest_redis_luks.id`, never a literal. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
-  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
+  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (mutation rows).
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
@@ -731,7 +731,8 @@ create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its 
 mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
 (`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
 `create_detail` token: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The gated new-skill
-create arm". Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
+create arm". To read a `no_action` row against a `refused`
+one, see the subsection "Reading a live-fire row" in that section. Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
 there); the rows that asked for a create are those with `.create_requested == true`. Empty output means no manual
 `patterns` run in the window; an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace on any row:
 

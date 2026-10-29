@@ -118,6 +118,11 @@ row("the raw terminator source is read by the filter only, and the filter only b
     and not any(ch in str(i) for v in GRAPH.values() for i in (v.get("inputs") or []) for ch in "*?["))
 row("pii_scrub_drop_userdata reads the filter, not the raw terminator source, and still reads every other source",
     "inngest_terminator_filter" in drop_in and "inngest_journald" not in drop_in and all(o in drop_in for o in OTHERS))
+row("the app-container chain reads compaction between the raw source and the warn filter (#7577)",
+    consumers("app_container_journald") == ["app_container_compaction"]
+    and consumers("app_container_compaction") == ["app_container_warn_filter"])
+row("no node can take app-container rows before the compaction or before the scrub",
+    consumers("app_container_warn_filter") == ["pii_scrub_drop_userdata"])
 row("filter condition extracted and non-trivial (>= 200 bytes; an empty extraction must fail the suite, never pass it)", len(cond) >= 200)
 row("condition is exactly three match() drop patterns, one per healthy-request shape, and no contains()",
     len(MATCHES) == 3 and cond.count("match(") == 3 and "contains(" not in cond
@@ -233,6 +238,25 @@ else
   check_test "vector test exits 0" test "$VT_RC" -eq 0
   check_test "vector test reports no failed test" test "$VT_FAILED" -eq 0
   check_test "vector test passed every test in the fixture file (not zero)" test "$VT_PASSED" -eq "$N_TESTS" -a "$VT_PASSED" -gt 0
+fi
+
+# Compaction boundary proof (#7577): the reduce's starts_when/ends_when are
+# VRL conditions with the same failure mode this suite exists for — prove
+# them against the real vector.toml rather than assuming they compile.
+COMP_TOML="$INFRA_DIR/vector-compaction.test.toml"
+if [[ -f "$COMP_TOML" ]]; then
+  NC_TESTS="$(grep -c '^\[\[tests\]\]' "$COMP_TOML" || true)"
+  if [[ "$VECTOR_AVAILABLE" -eq 1 ]]; then
+    COMP_OUT="$VT_DIR/compaction.out"
+    run_vector_test "$VECTOR_TOML" "$COMP_TOML" "$COMP_OUT"
+    CMP_RC=$?
+    count_results "$COMP_OUT"
+    check_test "compaction vector test exits 0" test "$CMP_RC" -eq 0
+    check_test "compaction vector test reports no failed test" test "$VT_FAILED" -eq 0
+    check_test "compaction vector test passed every fixture (not zero)" test "$VT_PASSED" -eq "$NC_TESTS" -a "$VT_PASSED" -gt 0
+  else
+    echo "  SKIP: compaction fixture deferred to the vector-capable CI step"
+  fi
 fi
 
 echo "-- Guard 2 mutation rows (each edits a COPY; a mutation that does not land is a failure, not a pass) --"

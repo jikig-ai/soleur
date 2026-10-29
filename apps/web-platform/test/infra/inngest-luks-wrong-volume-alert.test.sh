@@ -21,6 +21,11 @@
 #     continuously and been muted; that history is why `paused` is a variable at all.
 #   * Both resources are in the apply workflow's `-target=` allowlist. Without that they are never
 #     applied and never exist (the #5566 silent-un-applied class).
+#   * The row set is pinned to the probe's own emitter. A `doppler` event-log row that merely
+#     QUOTES the marker verbatim (webhook-delivered issue/PR text about the probe — the #8846
+#     defect class, measured 50 quoting rows vs 6 real probe rows in one 6h window) can never
+#     count. The start-of-message anchor excluded them only because every such row happens to
+#     begin with `{` — a payload-formatting accident, not a control (#8874).
 #
 # WHAT THIS FILE DOES NOT PROVE (stated so the name is not read as more than it is): that the
 # alert is armed IN PRODUCTION. Armed-ness there is decided by the RESOLVED variable — a Doppler
@@ -83,6 +88,17 @@ for f in "$TF" "$VARS" "$WF"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
+# The emitter literal is DERIVED from the canonical lib, never re-pinned (#8874 review): a
+# coordinated probe-tag rename that updates LOG_TAG + the lib but misses the .tf conjunct must
+# go red, which only happens when the needle follows the lib. MUT_EMITTER feeds the python
+# mutation needles below; a bare literal here would be a third uncoupled copy. The unset is the
+# lib's documented load contract — an env-inherited name must not silently substitute for a
+# failed source.
+unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+source "$REPO/scripts/lib/inngest-probe-row.sh" || { printf '[FATAL] cannot source scripts/lib/inngest-probe-row.sh — the emitter needle has no canonical source\n' >&2; exit 2; }
+export MUT_EMITTER="$INNGEST_PROBE_EMITTER"
+
 # The predicate heredoc, extracted from the FIRST UNCOMMENTED opening line. An earlier form
 # started at the first match anywhere, so a commented-out copy of the heredoc above `locals {`
 # would have become the extracted body and let the live one be gutted freely.
@@ -103,6 +119,10 @@ line_is "$TF" 'sql_query[[:space:]]*=[[:space:]]*replace\(trimspace\(local\.inng
   && ok "the exploration carries THIS predicate, collapsed to one line (the sibling's perpetual-diff rule)" \
   || no "the exploration does not carry local.inngest_luks_wrong_volume_sql as its sql_query"
 
+line_is "$TF" 'exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.inngest_luks_wrong_volume\.id' \
+  && ok "the alert is bound to THIS exploration — every sibling guard pins this identity link" \
+  || no "the alert's exploration_id does not name this exploration — a repoint decouples it silently"
+
 line_is "$TF" 'inngest_luks_wrong_volume_alias[[:space:]]*=[[:space:]]*"scsi-0HC_Volume_\$\{hcloud_volume\.inngest_redis_luks\.id\}"' \
   && ok "the watched alias is built from hcloud_volume.inngest_redis_luks.id, never a literal id" \
   || no "the alias is not derived from the resource id — a re-created volume would silence the rule"
@@ -115,9 +135,13 @@ printf '%s' "$LOCAL_SQL" | grep -cE >/dev/null "position\(JSONExtractString\(raw
   && ok "the devid predicate is a NEGATION: a row whose field is missing or renamed FIRES" \
   || no "the devid predicate is not '= 0' — a schema change would make this rule go quiet"
 
-printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1" \
-  && ok "scoped to the probe marker, anchored at position 1 (not a substring anywhere in the row)" \
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'message'), '${INNGEST_PROBE_MARKER}') = 1" \
+  && ok "scoped to the probe marker (derived from INNGEST_PROBE_MARKER), anchored at position 1 (not a substring anywhere in the row)" \
   || no "the marker scope is missing or unanchored"
+
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '${INNGEST_PROBE_EMITTER}'" \
+  && ok "scoped to the probe's own emitter (needle derived from INNGEST_PROBE_EMITTER — a coordinated tag rename that misses this SQL goes red, not quiet) — a doppler row merely QUOTING the marker can never count" \
+  || no "the emitter conjunct is missing: marker-quoting rows under another SYSLOG_IDENTIFIER would count (#8874)"
 
 printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "host_role=dedicated " \
   && ok "scoped to host_role=dedicated — the co-located web host emits the same marker" \
@@ -267,13 +291,38 @@ s = s.replace(old, "variable \"inngest_luks_cutover_compleet\" {")'
     'old = "            -target=logtail_exploration_alert.inngest_luks_wrong_volume \\\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
+  # #8874 rows — the row set is pinned to the probe's own emitter, so a marker-quoting row under
+  # any other SYSLOG_IDENTIFIER can never satisfy the predicate. Three different weakenings; each
+  # must redden the presence row above, never just move it.
+  mutate_red "the emitter conjunct is dropped (quoting rows count again)" TF \
+    'import os
+em = os.environ["MUT_EMITTER"]
+old = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the emitter literal flips to doppler (the offender becomes the counted set)" TF \
+    'import os
+em = os.environ["MUT_EMITTER"]
+old = "SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27"
+assert s.count(old) == 1
+s = s.replace(old, "SYSLOG_IDENTIFIER\x27) = \x27doppler\x27")'
+  mutate_red "the emitter equality weakens to a containment check" TF \
+    'import os
+em = os.environ["MUT_EMITTER"]
+old = "JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + em + "\x27"
+assert s.count(old) == 1
+s = s.replace(old, "position(JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27), \x27" + em + "\x27) > 0")'
+  mutate_red "the alert is repointed at a different exploration" TF \
+    'old = "exploration_id = logtail_exploration.inngest_luks_wrong_volume.id"
+assert s.count(old) == 1
+s = s.replace(old, "exploration_id = logtail_exploration.monitor_send_failed.id")'
 fi
 
-# 23 = 13 presence rows + 10 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
+# 29 = 15 presence rows + 14 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
 # an inner run asserts only those, and the instrument control above is what catches a floor that
 # drifts past them (that control, not this comment, is the guard against a dead battery).
-_floor=23
-[ -n "${MUT_SKIP:-}" ] && _floor=13
+_floor=29
+[ -n "${MUT_SKIP:-}" ] && _floor=15
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi

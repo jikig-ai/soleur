@@ -21,9 +21,10 @@
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
 # WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
 # that PRESERVES the data volume (hcloud_volume.git_data_luks) and the LUKS passphrase by OMISSION.
-# DISABLED from the Option B merge until #11194 retires the plaintext arms from its gates: the
-# replace, rotate and create gates still demand the retired plaintext addresses, so they refuse every
-# plan (ADR-239 Amendment 2026-10-26, item 4). It is a maintenance-window dispatch, not a per-PR apply;
+# The replace, rotate and create gates no longer demand the retired plaintext addresses (#11194,
+# ADR-239 Amendment 2026-10-28), and each route refuses through a plaintext-id interlock while the
+# module call below passes a non-empty git_data_volume_id (ADR-239 Amendment 2026-10-26, item 4). It
+# is a maintenance-window dispatch, not a per-PR apply;
 # these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
 # ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
 # invariant that a boot-armed heartbeat needs such a path is mechanically enforced by
@@ -382,7 +383,7 @@ resource "doppler_secret" "git_data_ssh_host_key" {
 # rung-2 gate derives its hash-input set by grepping THAT file — see
 # tests/scripts/lib/git-data-birth-readiness-gate.sh.
 # git_data_volume_id below is a LITERAL (the retired plaintext volume):
-# SOLEUR-DEBT: literal id naming a device that a Terraform destroy deleted at the provider API on 2026-10-27 (run 40478209838; it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendments 2026-10-26 and 2026-10-27) and so any host rebirth boots into the bootstrap plaintext_unverified FATAL; when #11194 merges (plaintext arms retired from the host replace/birth/rotate gates) set this to "" in a deliberate, owner-named host replace.
+# SOLEUR-DEBT: literal id naming a device that a Terraform destroy deleted at the provider API on 2026-10-27 (run 40478209838; it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendments 2026-10-26 and 2026-10-27) and so any host rebirth boots into the bootstrap plaintext_unverified FATAL (the plaintext-id interlock refuses the replace/birth/rotate routes while this is non-empty, #11194); when the separate one-hunk change tracked on #11194 is merged set this to "" in a deliberate, owner-named host replace.
 module "git_data_userdata" {
   source = "./modules/git-data-userdata"
 

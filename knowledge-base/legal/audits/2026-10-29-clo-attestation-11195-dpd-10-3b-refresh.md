@@ -4,15 +4,15 @@ type: clo-attestation
 date: 2026-10-29
 issue: 11195
 also_addresses: [6897]
-pr: "pending (DPD-refresh pull request; Ref #11195, Ref #6897)"
+pr: 11506
 attestation-authority: clo
-status: "PENDING: wording RULED by the CLO agent on 2026-10-29 as exact text; SIGNED-OFF only once the CLO agent verifies a byte-match of the merged PR head against the ruled text. DRAFT legal wording: owner review is required before merge."
+status: "SIGNED-OFF 2026-10-29 (v1 internal sign-off, not external counsel review): wording RULED by the CLO agent as exact text; the CLO agent returned PASS on the final bytes after the rebase onto #11487, verifying by content because the ruled text is not quoted in the repository. DRAFT legal wording: the owner has seen the byte-final text."
 tier_classification: "DPD Tier 1. T&C and its mirror unchanged; TC_VERSION stays 2.6.1; TC_DOCUMENT_SHA unchanged."
 semver: "No version constant for the DPD. No re-acceptance and no session closure, because only a TC_VERSION bump forces those."
 brand_survival_threshold: single-user incident
 written_against: "The ruled replacement text for DPD 10.3(b) and the DPD Last Updated entry, returned by the CLO agent on 2026-10-29 and applied byte-exact to the canonical document and the Eleventy mirror. Cited by content, not by branch commit, because a squash merge drops branch commits."
-signed_off_at: pending
-signed_off_by: pending
+signed_off_at: 2026-10-29
+signed_off_by: CLO agent
 disposition: "Lapses on any later byte change to the DPD or its Eleventy mirror until the CLO re-attests."
 scope: "the wording in this PR only. NOT a finding on the volume's contents, on the residue (whether any exists, how much, or that it is gone), or on what Hetzner retains after a delete. Does not discharge #9066 or #11194."
 re_evaluation_triggers: "(1) the merge falls after 2026-11-03: comment on #6897 (outer limit 2026-11-11); (2) any measurement of the residue or of Hetzner snapshot or backup retention; (3) #9066 remediation, or a #11194 host replace; (4) a data-subject request about the residue; (5) alignment of Privacy Policy section 7, GDPR Policy section 8.4 or the Delete Account dialog with 10.3(b); (6) any rebase that changes the bytes of the DPD or its mirror, including the sibling TLS-wording PR (#11487) merging first; (7) v1 external-counsel triggers: first arms-length user, EEA-out, or a regulated industry."
