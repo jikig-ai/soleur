@@ -451,7 +451,8 @@ fetch_artifact() {
 }
 
 fetch_blob() { # <sha256:digest> — pull into $POOL with digest verification
-  local dig="$1" hex="${1#sha256:}" f="$POOL/$hex" code
+  local dig="$1" hex="${1#sha256:}" code
+  local f="$POOL/$hex"
   if [[ -f "$f" ]]; then printf '%s\n' "$hex" >> "$CUR_BLOBS"; return 0; fi
   code="$(ghcr_get "https://ghcr.io/v2/${REPO}/blobs/${dig}" "$f")"
   [[ "$(classify_code "$code")" == "OK" ]] || { rm -f "$f"; die_by_code "blob ${dig}" "$code"; }
@@ -463,7 +464,8 @@ fetch_blob() { # <sha256:digest> — pull into $POOL with digest verification
 # assemble_layout <digest> <layoutdir> — hardlink the artifact's blob set into an
 # OCI layout dir whose index.json names exactly the artifact digest.
 assemble_layout() {
-  local dig="$1" ldir="$2" hex="${1#sha256:}" mf="$POOL/$hex" mt size h
+  local dig="$1" ldir="$2" hex="${1#sha256:}" mt size h
+  local mf="$POOL/$hex"
   mkdir -p "$ldir/blobs/sha256"
   while IFS= read -r h; do
     [[ -n "$h" ]] || continue
@@ -643,7 +645,8 @@ verify_pushed() {
 
 # ── plan + dry-run ────────────────────────────────────────────────────────────
 count_artifact() { # <digest> <depth> → accumulates DC_MANIFESTS DC_BLOBS DC_BYTES DC_CHILDREN
-  local dig="$1" depth="$2" hex="${1#sha256:}" mf="$WORK/dry/$hex" code kind children c sz nb n
+  local dig="$1" depth="$2" hex="${1#sha256:}" code kind children c sz nb n
+  local mf="$WORK/dry/$hex"
   mkdir -p "$WORK/dry"
   if [[ ! -f "$mf" ]]; then
     code="$(ghcr_get "https://ghcr.io/v2/${REPO}/manifests/${dig}" "$mf")"
