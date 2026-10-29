@@ -31,3 +31,14 @@
 - lint-ratchet: not adopted (relay, no update)
 - affected gate: queued on test-all advisory lock (position 3, sibling runs ahead) — verdict pending
 - Remaining AC: apply-run verification post-merge + post-apply issue close (ship/postmerge scope)
+
+## Review Phase (in progress)
+- PANEL_SHA=e5f0807a2d; tier=aggregate pattern, class=code; 11 seats: design-pass{simplicity,arch}=keep + 9 panel
+- P2 #1 (pattern-recognition): emitter conjunct drops probe's vector-down phone-home fallback rows (inngest-bootstrap.sh:1316-1317, cloud-init-inngest.yml:562 — POST payload has marker=SOLEUR_INNGEST_SERVER_PROBE but NO SYSLOG_IDENTIFIER). Pre-PR those rows counted; post-PR blind during vector outage. Suggested shape: OR JSONExtractString(raw,'marker')='SOLEUR_INNGEST_SERVER_PROBE'. → CTO ruling needed (design A-vs-B)
+- P2 #2 (data-integrity): emitter literal is 3rd unchained copy — coordinated tag rename leaves alert blind while heartbeat stays green (feeder follows updated lib). Remediation: derive needle from INNGEST_PROBE_EMITTER in guard (source inngest-probe-row.sh)
+- P2 #3 (git-history): plan doc overclaims sibling-SQL convention ("every other logtail_exploration SQL" — egress_gw_deny_spike uses CONTAINER_NAME; only 8/18 use SYSLOG_IDENTIFIER). Doc fix inline.
+- P3 clusters (doc fixes inline): fails-quiet-on-field-loss asymmetry note; marker trailing-space vs canonical def; 50-vs-36 disambiguation; threshold-clause reorder; stale "(6 mutation rows)" in betterstack-log-query.md:59 (→13); stale deferral note in inngest-probe-row.test.sh:140; emitter-literal load-bearing comment clause.
+- Follow-up filings: (a) inngest_luks_key_probe_fail_sql same-class exposure — needs own emitter enumeration (dual-path emitter, conjunct can't copy verbatim); (b) substring-grep dead-context escape class (family-wide pre-existing).
+- user-impact CONCUR tier; performance/agent-native/security/code-quality clean (P3-only).
+- Outstanding seat: structural-enumeration (680ff225).
+- Remaining: synthesize→inline fixes→CTO ruling on phone-home fork→implement per ruling→fix-round→qa→compound→ship→postmerge→DONE. PR body already carries Ref+prod-mutation first line.
