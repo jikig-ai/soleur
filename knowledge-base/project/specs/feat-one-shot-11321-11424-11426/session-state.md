@@ -20,3 +20,15 @@
 - skills/plan/SKILL.md (run to completion)
 - skills/plan-review/SKILL.md (applied inline, sequential-fallback)
 - skills/deepen-plan/SKILL.md (run to completion inline)
+
+## Work Phase
+- Status: implementation complete, committed `e1c09b5782` (10 files +1142/-19), pushed.
+- WS-B: resolver #v normalization + fixtures (g)/(g2)/(g3) + workflow wording — TDD RED verified, 15/15, all cross-suites green. NOTE: apply-web-platform-infra.yml now 489,980/490,000 bytes (~20B headroom).
+- WS-A: registry-breakglass-mirror SKILL.md + mirror-ghcr-to-zot.sh (~850 lines) + README row; components 1455 pass; script validated (bash -n, --help, --dry-run, xtrace refusal 78).
+- ADR/C4: ADR-096 2026-10-28 amendment + 3 model.c4 description edits; model.likec4.json regenerated; c4 tests 35/35.
+- WS-C: #11321 CLOSED with live evidence (4 conns @ 2026.10.4; run 40748202708 version_verdict=versions_ok).
+- PR #11442 body updated (merge-blast first line, Closes #11424/#11426/#9669, Refs #11321, Changelog).
+- GDPR gate: skipped (no regulated paths in diff). lint-ratchet: user-ruff not adopted (relayed).
+- Affected-test exit gate RUNNING detached: log /var/tmp/soleur-11424-run/test-all.log, rc /var/tmp/soleur-11424-run/test-all.rc — MUST verify terminal `=== N/M suites passed ===` + rc=0 before review.
+- cto_spawns=0 (all rulings inline). agent_rounds=2.
+- Remaining: one-shot Steps 4-8 (review → resolve findings → qa → compound → ship → DONE).
