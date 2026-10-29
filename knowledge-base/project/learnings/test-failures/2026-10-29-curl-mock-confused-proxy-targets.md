@@ -141,12 +141,14 @@ extra URL earlier in the argument vector.
 - **Prevention:** Treat capacity contention as no local verdict; rely on the
   tracked CI check rather than claiming a pass.
 
-**Push output reported 80 open Dependabot alerts on the repository's default branch.**
+**Push output reported 80, then 87 open Dependabot alerts on the repository's default branch.**
 
-- **Recovery:** Queried the alert API and verified the aggregate severity counts;
-  the alerts were unrelated to this feature.
+- **Recovery:** Queried the alert API after both notices; current counts are 8
+  critical, 39 high, 33 moderate, and 7 low. The alerts are unrelated to this
+  feature.
 - **Prevention:** Investigate repository-wide security notices, but keep unrelated
-  backlog work out of a focused feature PR.
+  backlog work out of a focused feature PR; re-query after a later push before
+  repeating a count.
 
 **An initial `knowledge-base/INDEX.md` lookup returned not-found.**
 
@@ -168,12 +170,12 @@ extra URL earlier in the argument vector.
 - **Prevention:** Quote ISO dates in frontmatter when the schema requires a
   string; validate the parsed type, not only the visible format.
 
-**The related-docs search first used the parent directory of a matching learning.**
+**Rule-metrics aggregation warned that 77 malformed incident-log lines were excluded.**
 
-- **Recovery:** The search was corrected to the learning's actual
-  `integration-issues/` category path.
-- **Prevention:** Read the exact path returned by the repository search instead
-  of inferring a category directory from its basename.
+- **Recovery:** Read the aggregator: malformed rows are dropped from the
+  aggregate with a warning; raw-log rotation is opt-in and did not run.
+- **Prevention:** Inspect the aggregator's warning path before interpreting
+  filtered rows as source-log deletion or complete telemetry.
 
 ## Solution
 
