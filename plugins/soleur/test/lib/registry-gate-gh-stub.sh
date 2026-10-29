@@ -39,7 +39,9 @@
 # The blob sha is computed WITHOUT spawning git (a test that spawns git needs the constructed
 # environment from plugins/soleur/AGENTS.md; the pure sha1sum form needs none):
 #   sha1("blob <size>\0<bytes>")
-printf '%s\n' "$*" >> "$GH_LOG"
+case "${GH_LOG:-}" in /*) ;; *) echo "stub: GH_LOG must be an absolute path (got '${GH_LOG:-}')" >&2; exit 2 ;; esac
+case "${STUB_ERR:-}" in /*) ;; *) echo "stub: STUB_ERR must be an absolute path (got '${STUB_ERR:-}')" >&2; exit 2 ;; esac
+printf '%s\n' "$*" | tee -a "$GH_LOG" >/dev/null
 refuse() { printf 'stub: %s\n' "$*" | tee -a "$STUB_ERR" >&2; exit 64; }
 
 if [[ "${1:-} ${2:-}" == "run list" ]]; then printf '%s\n' "$STUB_WATERMARK"; exit 0; fi
