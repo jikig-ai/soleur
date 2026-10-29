@@ -1136,7 +1136,7 @@ M = {
  "drop_quiet": ("  kr_run_check quiet_window_attested kr_chk_quiet || return 1\n", ""),
  "drop_confirm": ("  kr_run_check confirm_ok kr_chk_confirm || return 1\n", ""),
  "drop_soak": ("  kr_run_check soak_closed_completed kr_chk_soak || { kr_guard_report; return 1; }\n", ""),
- "drop_serving": ("    rotate) kr_run_check host_serving_pre_reboot kr_chk_serving || { kr_guard_report; return 1; } ;;", "    rotate) : ;;"),
+ "drop_serving": ("    rotate|plan) kr_run_check host_serving_pre_reboot kr_chk_serving || { kr_guard_report; return 1; } ;;", "    rotate|plan) : ;;"),
  "drop_latch": ("  if [[ \"$KR_POSTED\" == 1 ]]; then kr_refuse reboot_refused_second_post \"a second reboot POST in one run is refused\"; return 1; fi\n", ""),
  "drop_inflight_reboot": ("  kr_require_no_inflight_post || return 1\n  kr_resolve_server || {", "  kr_resolve_server || {"),
  "old_boot_ok": (("      [[ \"$pre\" == - || \"$boot\" != \"$pre\" ]] || continue\n", ""), ("( \"$pre\" == - || \"$KR_HS_BOOT\" != \"$pre\" ) && ", "")),
@@ -1779,7 +1779,7 @@ REFUSED_ANY=""; for ((i = 1; i <= NONMUT_N; i++)); do [[ -s "$TMP/s$i/refusals.l
 [[ -z "$(ls -d "$TMP"/s*/rt/inngest-key-rotate.* 2>/dev/null)" ]] && ok "J2 no scenario left its private temp dir (and so no plan JSON) behind" || bad "J2 leftover temp dir"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=471
+FLOOR=472
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1
