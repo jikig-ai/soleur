@@ -3544,16 +3544,22 @@ fail-safe: if you cannot complete one, stop at step 1.
      (the `sh -c` is load-bearing: without it your own shell expands the variable before Doppler
      sets it).
      Any row means the tick ran (or was drained): do not re-fire.
-   - (d) **Its Sentry monitor agrees.** The slug is usually `scheduled-<name>` (the
+   - (d) **Its Sentry monitor agrees — IF it still has one.** The slug is usually `scheduled-<name>` (the
      `SENTRY_MONITOR_SLUG` constant in `cron-<name>.ts`); if that file has no constant, look the
-     monitor up by name in `cron-monitors.tf` before concluding there is none. Read the check-ins
+     monitor up by name in `cron-monitors.tf` before concluding there is none. **#6590 PR-B caveat:**
+     43 monitors were destroyed while their emitters kept posting (spec NG4 void-post — the pruned
+     cohort lives in `apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts`). For a pruned
+     slug this check-in endpoint 404s forever: treat "slug in PRUNED" as "no monitor exists", which
+     makes step (c)'s `routine_runs` read the load-bearing miss proof — do NOT read the 404 as the
+     tick having run, and do NOT treat the 404 as grounds to re-fire either. Read the check-ins
      after the tick plus that monitor's `checkin_margin_minutes`, through the API with the
      IaC read token (verified live 2026-09-27; this repo reads Sentry with `SENTRY_IAC_AUTH_TOKEN`):
      `doppler run -p soleur -c prd -- bash -c 'curl -sS --fail-with-body -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/?per_page=100"' | jq -r 'if type == "array" then .[] | select(.environment == "production") | "\(.expectedTime) \(.status)" else error("sentry read failed") end'`.
      Require a `missed` row whose `expectedTime` is the tick, and no `ok`, `in_progress` or `error`
      row after it (a finished run whose heartbeat was lost also reads `missed`, which is why step
      (c) comes first). An API
-     error, or no monitor at all, means the tick cannot be confirmed as missed: do not re-fire.
+     error, or no monitor at all (including a destroyed/pruned one — for those, only step (c) can
+     prove the miss), means the tick cannot be confirmed as missed: do not re-fire.
 3. Only then fire it, the way `soleur:trigger-cron` recommends: confirm the event is allowlisted
    with `--list`, run `--event cron/<name>.manual-trigger --dry-run`, then run it without
    `--dry-run`. Take particular care with the destructive or user-facing crons:
@@ -3631,7 +3637,7 @@ inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{"issue_number":438
 
 ### How to observe results
 
-1. **Sentry cron monitor:** `scheduled-bug-fixer` — shows `ok` / `error` heartbeat status per run.
+1. **Sentry cron monitor:** `scheduled-bug-fixer` — destroyed by the #6590 PR-B prune (void-posts by design, spec NG4); observe per-run outcome via the `notify-ops-email`/issue paths and `routine_runs` instead.
 2. **GitHub PRs:** Filter by `bot-fix/*` branch prefix — `gh pr list --state all -L 200 --search "head:bot-fix/"`.
 3. **Inngest dashboard:** Run history for `cron-bug-fixer` shows step-by-step execution (mint-installation-token → precreate-labels → select-issue → setup-workspace → claude-eval → detect-pr → auto-merge-gate → notify-ops-email → sentry-heartbeat).
 

@@ -2085,6 +2085,7 @@ done <<<"$R5_OUT"
 # New prose in the sweep jobs must not spell the read/write token name, or R7 fires on its own text.
 # ---------------------------------------------------------------------------
 export R10_TF="$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf"
+export PRUNED_TS="$REPO_ROOT/apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
 SWEEP_PY=$(cat <<'PYD'
 import copy, os, re, sys, yaml
 
@@ -2267,6 +2268,13 @@ SENTRY_SECRETS = {"SENTRY_INGEST_DOMAIN", "SENTRY_PROJECT_ID", "SENTRY_PUBLIC_KE
 AGG_SECRETS = SENTRY_SECRETS | {"RESEND_API_KEY"}
 AGG_KEYS = {"name", "if", "needs", "runs-on", "steps", "timeout-minutes", "permissions"}
 TF_TEXT = ""
+# #6590 PR-B: emitters to destroyed monitors post void-check-ins BY DESIGN (spec NG4). Their
+# slugs are registered in the shared pruned set — declared OR pruned is the legal universe.
+PRUNED_TS = os.environ.get("PRUNED_TS", "")
+try:
+    PRUNED = set(re.findall(r'^\s*"([a-z0-9-]+)",?\s*$', open(PRUNED_TS).read(), re.M)) if PRUNED_TS else set()
+except OSError:
+    PRUNED = set()
 TOKEN_RE = re.compile(r"\s*(?:('(?:[^']|'')*')|(\|\||&&|==|!=|!|\(|\))|([A-Za-z_][\w\-.]*(?:\(\))?))")
 
 def gh_tokens(expr):
@@ -2414,15 +2422,16 @@ def r10(wf):
     slug = (h.get("with") or {}).get("monitor-slug")
     tf_live = re.sub(r"/\*.*?\*/", "", TF_TEXT, flags=re.S)
     tf_live = "\n".join(l for l in tf_live.splitlines() if not re.match(r"\s*(?:#|//)", l))
-    if not (isinstance(slug, str) and re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{(?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"%s"' % re.escape(slug), tf_live)):
-        out.append("%s monitor-slug %r is not a monitor name in cron-monitors.tf" % (jid, slug))
+    declared = isinstance(slug, str) and bool(re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{(?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"%s"' % re.escape(slug), tf_live))
+    if not (declared or slug in PRUNED):
+        out.append("%s monitor-slug %r is not a monitor name in cron-monitors.tf nor a registered pruned slug" % (jid, slug))
     else:
         nslug = sum(1 for oj in wf["jobs"].values() for s in oj.get("steps") or []
                     if str(s.get("uses", "")).rstrip("/") == HEARTBEAT and (s.get("with") or {}).get("monitor-slug") == slug)
         if nslug != 1:
             out.append("slug %s has %d check-in steps in the workflow (want 1)" % (slug, nslug))
     if slug != "scheduled-orphan-sweeps":
-        out.append("%s heartbeat posts to %r, not the monitor scheduled-orphan-sweeps" % (jid, slug))
+        out.append("%s heartbeat posts to %r, not the slug scheduled-orphan-sweeps" % (jid, slug))
     mon = re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{((?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"scheduled-orphan-sweeps"(?:(?!\nresource\s)[\s\S])*)', tf_live)
     if mon:
         blk = mon.group(1).split("\n}", 1)[0]
@@ -2701,15 +2710,6 @@ def m10_if_not_cancelled(m): agg(m)["if"] = "${{ !cancelled() && github.ref == '
 def m10_if_not_failure(m): agg(m)["if"] = "${{ !failure() && github.ref == 'refs/heads/main' }}"
 def m10_if_quoted_always(m): agg(m)["if"] = "github.ref == 'refs/heads/main' && 'always()'"
 def m10_if_ref_neq_feature(m): agg(m)["if"] = "always() && github.ref != 'refs/heads/feature'"
-def m10_tf_commented(m): m["name"] = str(m.get("name", "")) + " (tf slug commented out)"
-def r10_tf_commented(m):
-    global TF_TEXT
-    old = TF_TEXT
-    TF_TEXT = "\n".join(("# " + l if re.search(r'name\s*=\s*"scheduled-orphan-sweeps"', l) else l) for l in old.splitlines())
-    try:
-        return r10(m)
-    finally:
-        TF_TEXT = old
 def m10_agg_if_release(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release'"
 def m10_agg_if_prmerge(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/pull/1/merge'"
 def m10_slug_other_monitor(m): agg_step(m, is_hb)["with"]["monitor-slug"] = "scheduled-oauth-probe"
@@ -2729,18 +2729,6 @@ def m10_sweep_body_other_removed(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("any other answer means the reply did not match the pinned volume or could not be read", "any other answer means something")
 def m10_sweep_body_401_removed(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("HTTP 401 or 403 means Hetzner refused the token", "HTTP 401 or 403 means something")
-def r10_tf_sub(old, new):
-    def chk(m):
-        global TF_TEXT
-        keep = TF_TEXT
-        i = TF_TEXT.index('resource "sentry_cron_monitor" "scheduled_orphan_sweeps"')
-        assert old in TF_TEXT[i:], "tf mutation target not found"
-        TF_TEXT = TF_TEXT[:i] + TF_TEXT[i:].replace(old, new, 1)
-        try:
-            return r10(m)
-        finally:
-            TF_TEXT = keep
-    return chk
 def m10_sweep_subject_static(m): fail_email(jobs(m)[RUNG])["with"]["subject"] = "[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed"
 def m10_sweep_subject_inverted(m):
     w = fail_email(jobs(m)[RUNG])["with"]; w["subject"] = w["subject"].replace("== 'unproven'", "== 'proven'")
@@ -2865,7 +2853,6 @@ ROWS = [
     ("r10-job-if-not-failure",         r10, m10_if_not_failure, "red"),
     ("r10-job-if-quoted-always",       r10, m10_if_quoted_always, "red"),
     ("r10-job-if-ref-neq-feature",     r10, m10_if_ref_neq_feature, "red"),
-    ("r10-slug-commented-out-in-tf",   r10_tf_commented, m10_tf_commented, "red"),
     ("r10-sweep-subject-static",       r10, m10_sweep_subject_static, "red"),
     ("r10-sweep-subject-inverted",     r10, m10_sweep_subject_inverted, "red"),
     ("r10-sweep-subject-wrong-output", r10, m10_sweep_subject_reason, "red"),
@@ -2881,9 +2868,6 @@ ROWS = [
     ("r10-sweep-body-401-403-sentence-removed", r10, m10_sweep_body_401_removed, "red"),
     ("r10-sweep-body-404-sentence-removed", r10, m10_sweep_body_404_removed, "red"),
     ("r10-sweep-body-other-answer-sentence-removed", r10, m10_sweep_body_other_removed, "red"),
-    ("r10-tf-margin-lowered",          r10_tf_sub("checkin_margin_minutes  = 60", "checkin_margin_minutes  = 5"), m10_tf_commented, "red"),
-    ("r10-tf-crontab-changed",         r10_tf_sub('crontab = "0 6,18 * * *"', 'crontab = "0 6 * * *"'), m10_tf_commented, "red"),
-    ("r10-tf-failure-threshold-changed", r10_tf_sub("failure_issue_threshold = 1", "failure_issue_threshold = 3"), m10_tf_commented, "red"),
     ("r10-must-pass-aggregator-renamed", r10, m10_renamed,        "clean"),
     ("r10-must-pass-email-body-reworded", r10, m10_email_body_reworded, "clean"),
     ("r10-must-pass-heartbeat-timeout-changed", r10, m10_hb_timeout, "clean"),
@@ -2946,7 +2930,7 @@ _r10=$(python3 -c "$SWEEP_PY" r10 "$WF") || { echo "FATAL: the R10 scan crashed"
 _r10_bad=$(grep -c '^violation' <<<"$_r10") || _r10_bad=0
 _r10_pop=$(sed -n 's/^population=//p' <<<"$_r10")
 if [[ "$_r10_pop" =~ ^[0-9]+$ ]] && (( _r10_pop >= 2 )) && [[ "$_r10_bad" == "0" ]]; then
-  pass "R10 the aggregator covers all ${_r10_pop} orphan-sweep jobs: ok only when every sweep job succeeded, emails on every other result, reads contents only, names no Hetzner or Doppler credential, posts to a monitor declared in cron-monitors.tf"
+  pass "R10 the aggregator covers all ${_r10_pop} orphan-sweep jobs: ok only when every sweep job succeeded, emails on every other result, reads contents only, names no Hetzner or Doppler credential, posts to a monitor declared in cron-monitors.tf or a registered pruned slug"
 else
   fail "R10 (${_r10_pop:-?} jobs, ${_r10_bad} violation(s)): $(grep '^violation' <<<"$_r10" | cut -f2 | tr '\n' ';')"
 fi
@@ -2964,7 +2948,7 @@ fi
 # 61 -> 91 with R10 (22 red rows and 3 must-pass rows) and R11 (4 red rows and 1 must-pass row): 30 added.
 # 91 -> 108 with the review round's 17 R10 mutation rows (all red), then 108 -> 122 with the fix-round's 14 (aggregator `if` pinned exactly,
 # slug pinned, subject order, TF monitor values, the sweep email's identity fallbacks and its 401/403 sentence).
-R78_MIN=122
+R78_MIN=118  # 122 - 4: the destroyed scheduled_orphan_sweeps tf-mutation rows retired (#6590 PR-B)
 echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
 R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
 r78_line() { if [[ "$1" == "PASS" ]]; then pass "R78/$2: $3"; else fail "R78/$2: $3"; fi; }
@@ -3413,6 +3397,9 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # body fields), 12 more identity cases for each of the two sweeps (24 rows: the 5xx class, a 4xx that is not retried, ids either side of the
 # pin, a nested id, a null or empty or mistyped volume, and the back-off sleep now asserted on every case), and 10 identity mutation rows for each of
 # the two sweeps (20 rows): 89 added (two more: the byte-identity of the two proof blocks, and its mutation; then 26 from the fix round: 14 R10 mutation rows, 8 wording mutation rows across the two sweeps, 4 dispatch-ledger rows), 406 is the REALIZED `PASS + FAIL`.
+# Then 406 -> 402 with #6590 PR-B: the 4 tf-mutation rows probed fields of the now-destroyed
+# scheduled_orphan_sweeps block — deletion is the deliberate pruned state (PRUNED_MONITOR_SLUGS),
+# not a red verdict, so the rows are retired, not repointed. 402 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -3428,8 +3415,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 406 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 406." >&2
+if [[ "$((PASS + FAIL))" -lt 402 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 402." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
