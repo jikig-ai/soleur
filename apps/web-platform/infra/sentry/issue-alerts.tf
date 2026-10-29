@@ -1811,16 +1811,18 @@ resource "sentry_alert" "masked_dir_precreate_failed" {
 # and test/agent-auth-failure-sentry-path.test.ts (real logger, real helper, secret canary).
 #
 # TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: step 1
-# (the downgrade, 2026-10-29, first real event recorded on #10455) stopped the push: the provider rejects a rule with
-# no action, so the rule keeps ONE issue_owners email with the NoOne fallthrough, which lands in the issue stream and
-# is delivered to nobody. Step 2 removes the rule when the root-cause fix merges or 30 days after the first event,
-# whichever comes first. The removal checklist is in the header of server/agent-auth-mode.ts.
+# (#11085, first real event 2026-10-27T09:01Z recorded on #10455) takes effect when this change is applied on merge: the
+# provider rejects a rule with no action, so the rule keeps ONE issue_owners email with the NoOne fallthrough, which
+# resolves to no recipient. Step 2 removes the rule when the root-cause fix merges or on 2026-11-26 (30 days after the
+# first event), whichever comes first. The removal checklist is in the header of server/agent-auth-mode.ts.
 #
 # GROUPING: the message is constant, so every event shares ONE Sentry issue; the per-user 5-minute debounce and the
-# process-wide cap (10 events per 5 minutes) bound the events. NoOne delivers to nobody ONLY while the project has no
-# Sentry ownership rule: a rule that names owners would deliver to them, so re-check that before relying on it.
-# NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op) are carried so a later
-# diagnostic op under feature=agent-auth cannot notify by accident.
+# process-wide cap (10 events per 5 minutes) bound the events. NoOne resolves to no recipient ONLY while the project has
+# no Sentry ownership rule (last measured 2026-09-06, not re-measurable with the read-only token): a rule that names
+# owners would deliver to them. This covers THIS rule only: Sentry's vendor-default workflow "Send a notification for
+# high priority issues" (not managed here) can still email active members for a new high-priority issue; see README.md.
+# No Slack action is wired for this rule. Both filters (feature AND op) are carried so a later diagnostic op under
+# feature=agent-auth cannot match by accident.
 #
 # DECODE KEY: README.md ("Diagnostic rule: agent-auth-failure") is the one copy of the tag decode table, the responder
 # steps and the read commands.

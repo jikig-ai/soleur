@@ -51,14 +51,18 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
 ## Diagnostic rule: `agent-auth-failure` (temporary, #10455 / #10548)
 
-`sentry_alert.agent_auth_failure` (`issue-alerts.tf`, `frequency_minutes = 40`) records the Claude CLI's auth-failure reply
-(`Not logged in · Please run /login`) on either runner as a Sentry issue, and since 2026-10-29 it no longer pushes: its one
-action is `issue_owners` with the `NoOne` fallthrough (the provider rejects a rule with no action), which delivers to
-nobody while the project has no Sentry ownership rule. The emit is
-`reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`
-in `server/agent-auth-failure.ts`; the literal `null` first argument keeps it off the pino-mirror path (#8629).
-It carries ten closed-enum tags and nothing else (no key material, env value, message body, user or workspace id, path).
-Nobody is paged and nothing is emailed: read the events with the commands below.
+`sentry_alert.agent_auth_failure` (`issue-alerts.tf`, `frequency_minutes = 40`) routes the event that
+`server/agent-auth-failure.ts` records when the Claude CLI's auth-failure reply (`Not logged in · Please run /login`) is seen
+on either runner; the Sentry issue and the pino line come from that emit, not from this rule. Once this change is applied
+(merge, then `apply-sentry-infra.yml`) the rule's one action is an `issue_owners` email with the `NoOne` fallthrough (the
+provider rejects a rule with no action), which resolves to no recipient while the project has no Sentry ownership rule
+(last measured 2026-09-06; the read-only token gets 403 on that endpoint, so it cannot be re-measured with it).
+That covers this rule only. Sentry's vendor-default workflow "Send a notification for high priority issues" (id 566201, not
+managed by Terraform) can still email active members for a NEW high-priority issue, and the agent-auth issue
+(WEB-PLATFORM-C8) is `level=error`, priority `high`. The emit is
+`reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`; the literal `null` first argument keeps
+it off the pino-mirror path (#8629). It carries ten closed-enum tags and nothing else (no key material, env value, message
+body, user or workspace id, path). Read the events with the commands below; no scheduled check reads them.
 
 **Decode the event.** This README is the one copy of the decode table; `issue-alerts.tf` points here. Terms first:
 
@@ -92,7 +96,7 @@ Nobody is paged and nothing is emailed: read the events with the commands below.
 **When you read an event (responder steps).**
 
 1. Open the event in Sentry (or run the read command below) and read the ten tags with the table above. Do not look for a message body, user or path: none is sent.
-2. Record a new tag tuple as a comment on #10455 (the first real tuple, recorded 2026-10-29, started the lifecycle clock below).
+2. Record a new tag tuple as a comment on #10455 (the lifecycle clock below runs from the first event, 2026-10-27T09:01Z).
 3. **Resolve the issue after recording the tuple; never archive or ignore it.** Every event shares one Sentry issue, and a
    benign one (a single tenant's own revoked key: `invalid_api_key` or `oauth_token_revoked`) groups with the real outage
    signal, so an archived issue would also hide the next real event.
@@ -126,16 +130,16 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1
 A fault inside the diagnostic itself is visible as one constant `logger.warn` line per probe, per tap or per process
 (`auth-failure probe:` observer error or construction failure, `auth-failure tap:` observer error or "not installed" (the
 diagnostic is blind for that Query, for example after an SDK change), `auth-failure matcher:` unreadable message); these are
-breadcrumbs and never Sentry events, so search Better Stack for them by text. A silent rule is therefore not proof of health
+breadcrumbs and never Sentry events, so search Better Stack for them by text. An empty read is therefore not proof of health
 until none of these lines is present.
 
-**Lifecycle.** This is a temporary diagnostic. Step 1 is done (2026-10-29, after the first real event of 2026-10-27 was recorded on
-#10455): the rule's push was dropped by changing its single action's fallthrough to `NoOne`, and the Sentry issue and the pino
-line are kept. The rule, its
-`alert-reference.json` entry, these README lines, both guard tests, the wiring pins, the widened source-pin regex and the
-other items of the removal checklist in the header of `server/agent-auth-mode.ts` are removed when the root-cause fix merges
-or 30 days after the first event, whichever comes first (#11085 tracks both steps). If no real event has been recorded by
-2026-11-30, #11085 is reviewed on that date rather than waiting on the event-driven clock.
+**Lifecycle.** This is a temporary diagnostic, and its clock runs from the first real event, 2026-10-27T09:01Z (its tag tuple
+was recorded on #10455 on 2026-10-29). Step 1 (#11085) takes effect when this change is applied on merge: the rule's push is
+dropped by changing its single action's fallthrough to `NoOne`, and the Sentry issue and the pino line are kept. Step 2 removes
+the rule, its `alert-reference.json` entry, these README lines, both guard tests, the wiring pins, the widened source-pin regex
+and the other items of the removal checklist in the header of `server/agent-auth-mode.ts`, when the root-cause fix merges or on
+2026-11-26 (30 days after the first event), whichever comes first. #11085 is reviewed on 2026-11-30 at the latest, whether or
+not step 2 has happened.
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 

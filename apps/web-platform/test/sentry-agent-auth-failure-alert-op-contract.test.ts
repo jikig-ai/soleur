@@ -9,7 +9,7 @@ import { CLI_AUTH_FAILURE_REPLIES, SDK_API_KEY_SOURCES } from "../server/claude-
 // rule `agent_auth_failure` that routes it. Before this rule the Claude CLI's "Not logged in · Please run /login"
 // reply reached the user with nothing in Sentry or Better Stack (#10455, #10548). Chain proven here without firing
 // a production event:
-//   auth-failure stream message -> reportSilentFallback(null, { feature, op, ... }) -> live rule -> issue-stream action.
+//   auth-failure stream message -> reportSilentFallback(null, { feature, op, ... }) -> live rule -> its single NoOne email action.
 // The emit MUST use the message path (first argument the literal `null`): an Error first argument is mirrored by the
 // pino logger as `feature=pino-mirror` and the tagged capture is deduplicated behind it (#8629 class), so a
 // tag-filtered rule could never match. The real-path proof lives in agent-auth-failure-sentry-path.test.ts; the
@@ -130,17 +130,25 @@ export function ruleProblems(hclRaw: string, allHclRaw = hclRaw): string[] {
   if (!f || f.match !== "eq" || f.value !== FEATURE) bad.push(`feature filter must be eq ${FEATURE}`);
   if (!o || o.match !== "eq" || o.value !== OP) bad.push(`op filter must be eq ${OP}`);
   if (!/^\s*logic_type\s*=\s*"all"/m.test(block)) bad.push('logic_type must be "all"');
-  // Step 1 of the #11085 lifecycle: the diagnostic no longer pushes. The provider rejects an empty `actions` list, so the
-  // rule keeps exactly ONE action, the issue_owners email with the NoOne fallthrough (it lands in the issue stream and
-  // is delivered to nobody while the project has no ownership rule). ActiveMembers would page the founder again.
+  // Step 1 of the #11085 lifecycle: the diagnostic stops its own push. The provider rejects an empty `actions` list, so the
+  // rule keeps exactly ONE action, the issue_owners email with the NoOne fallthrough, which resolves to no recipient
+  // while the project has no ownership rule. ActiveMembers would email every active member again. One `action_filters`
+  // entry and one `actions` list, so a second filter cannot carry another action past the first-list check below.
+  if ((block.match(/\bactions\s*=\s*\[/g) ?? []).length !== 1) bad.push("exactly one actions list");
+  if ((block.match(/^\s*logic_type\s*=/gm) ?? []).length !== 1) bad.push("exactly one action_filters entry");
   const actions = block.match(/\bactions\s*=\s*\[([\s\S]*?)\n\s*\]/);
+  const email = actions?.[1].match(/^\s*\{\s*email\s*=\s*\{([^}]*)\}\s*\}\s*,?\s*$/)?.[1];
+  const emailAttr = (k: string) => email?.match(new RegExp(`\\b${k}\\s*=\\s*"([^"]+)"`))?.[1];
   if (!actions) bad.push("no actions list");
   else if (
-    !/^\s*\{\s*email\s*=\s*\{\s*target_type\s*=\s*"issue_owners"\s*,\s*fallthrough_type\s*=\s*"NoOne"\s*\}\s*\}\s*,?\s*$/.test(actions[1])
+    !email ||
+    emailAttr("target_type") !== "issue_owners" ||
+    emailAttr("fallthrough_type") !== "NoOne" ||
+    email.split(",").filter((part) => part.trim()).length !== 2
   ) {
     bad.push("actions must be exactly one email issue_owners + NoOne");
   }
-  if (/fallthrough_type\s*=\s*"ActiveMembers"/.test(block)) bad.push("fallthrough ActiveMembers pages");
+  if (/fallthrough_type\s*=\s*"ActiveMembers"/.test(block)) bad.push("fallthrough ActiveMembers emails every active member");
   if (!/^\s*enabled\s*=\s*true/m.test(block)) bad.push("rule not enabled");
   const trig = block.match(/trigger_conditions\s*=\s*\[([\s\S]*?)\n\s*\]/);
   if (!trig || !/event_frequency_count\s*=\s*\{\s*interval\s*=\s*"1h"\s*,\s*value\s*=\s*0\s*\}/.test(trig[1])) {
@@ -282,7 +290,7 @@ describe("agent-auth-failure — emit site / rule contract", () => {
     }
   });
 
-  it("the live rule routes it: feature eq + op eq, email to a person, rate trigger 0/1h, unique frequency", () => {
+  it("the live rule routes it: feature eq + op eq, one issue_owners/NoOne email action, rate trigger 0/1h, unique frequency", () => {
     expect(ruleProblems(issueAlertsTf, allTf)).toEqual([]);
     expect(tfFiles).toContain("issue-alerts.tf");
   });
@@ -349,6 +357,14 @@ describe("agent-auth-failure — harness self-tests (mutation rows)", () => {
     expect(ruleProblems(reordered)).toEqual([]);
   });
 
+  it("MUST-PASS non-canonical: the email action's two attributes in the opposite order still pass", () => {
+    const emailLine = '{ email = { target_type = "issue_owners", fallthrough_type = "NoOne" } }';
+    expect(RULE_FIXTURE).toContain(emailLine);
+    const swapped = RULE_FIXTURE.replace(emailLine, '{ email = { fallthrough_type = "NoOne", target_type = "issue_owners" } }');
+    expect(swapped).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(swapped)).toEqual([]);
+  });
+
   it("MUST-PASS non-canonical: a different (unique) frequency still passes", () => {
     const other = RULE_FIXTURE.replace("frequency_minutes = 71", "frequency_minutes = 99");
     expect(other).not.toBe(RULE_FIXTURE);
@@ -373,12 +389,25 @@ describe("agent-auth-failure — harness self-tests (mutation rows)", () => {
     expect(ruleProblems(noEmail).length).toBeGreaterThan(0);
     const activeMembers = RULE_FIXTURE.replace('fallthrough_type = "NoOne"', 'fallthrough_type = "ActiveMembers"');
     expect(activeMembers).not.toBe(RULE_FIXTURE);
-    expect(ruleProblems(activeMembers)).toContain("fallthrough ActiveMembers pages");
+    expect(ruleProblems(activeMembers)).toContain("fallthrough ActiveMembers emails every active member");
+    const allMembers = RULE_FIXTURE.replace('fallthrough_type = "NoOne"', 'fallthrough_type = "AllMembers"');
+    expect(allMembers).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(allMembers)).toContain("actions must be exactly one email issue_owners + NoOne");
+    const userTarget = RULE_FIXTURE.replace('target_type = "issue_owners"', 'target_type = "user"');
+    expect(userTarget).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(userTarget)).toContain("actions must be exactly one email issue_owners + NoOne");
     const emailLine = '        { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },\n';
     expect(RULE_FIXTURE).toContain(emailLine);
     const secondAction = RULE_FIXTURE.replace(emailLine, emailLine + emailLine);
     expect(secondAction).not.toBe(RULE_FIXTURE);
     expect(ruleProblems(secondAction)).toContain("actions must be exactly one email issue_owners + NoOne");
+    // A second action_filters entry carries its own `actions` list, which the first-list check alone never reads.
+    const secondFilter = RULE_FIXTURE.replace(
+      "  ]\n  lifecycle {",
+      `    {\n      logic_type = "any-short"\n      conditions = []\n      actions = [\n        { email = { target_type = "issue_owners", fallthrough_type = "AllMembers" } },\n      ]\n    },\n  ]\n  lifecycle {`,
+    );
+    expect(secondFilter).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(secondFilter)).toEqual(expect.arrayContaining(["exactly one actions list", "exactly one action_filters entry"]));
     const wrongOp = RULE_FIXTURE.replace(`value = "${OP}"`, `value = "${OP}-x"`);
     expect(ruleProblems(wrongOp).length).toBeGreaterThan(0);
   });
