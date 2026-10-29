@@ -18,7 +18,7 @@
 - A first post-merge `gh pr view` jq filter omitted the dot before `headRefName` and failed; corrected the object selector and verified the merged state.
 - The first `pipeline-tally.sh show` on the new follow-up branch reported a missing ledger; initialized the branch tally before continuing.
 - The first pre-push secret scan ran before a commit and reported `range=0 scanned=0`. It did not cover pending edits; rerun after commit and require a non-empty range.
-- Initial deploy-arm and affected-tests lookups used `scripts/...` at repo root instead of `plugins/soleur/scripts/...`; a repository-scoped glob found the correct paths.
+- Initial deploy-arm and affected-tests lookups used `scripts/...` at repo root instead of `plugins/soleur/scripts/...`; a later net-issue-flow lookup used `plugins/soleur/scripts/` instead of `plugins/soleur/skills/ship/scripts/`. Repository-scoped lookup found the correct paths.
 - The correct affected-tests invocation emitted a Bun 1.4.4 vs expected 1.4.2 warning and exceeded the shell's 180s timeout while sibling suites were active. Its process later disappeared without a terminal marker; no local affected-test verdict is claimed.
 - Preflight `dig +short CNAME` was unavailable; the documented `resolvectl` fallback resolved the production hostname.
 - A Check 9 command used invalid `rg -nE` syntax and a filter pipeline without `pipefail`; its empty output was not a verdict. Reran with `rg -n -e` and `pipefail`, which returned a valid no-match result.
@@ -149,7 +149,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 - Compound session-error inventory and recurring/one-off triage were completed before editing. The test-failure learning now records the resumed ship/post-merge and follow-up tooling errors with prevention guidance; total Session Errors: 39.
 - The pinned markdown-lint runner reported these knowledge-base files are excluded by `.markdownlintignore`; no markdownlint verdict is claimed. `git diff --check` passed. The current diff is documentation-only.
 - The local affected-test attempt produced no verdict under sibling-run contention; use the follow-up PR's required CI `test` result as the authoritative gate.
-- Preflight: Check 4 PASS (dev/prd resolve to distinct refs via CNAME resolution), Check 9 PASS after correction, Check 13 `NO-BLOCK`; other applicable checks SKIP by unchanged paths or pre-PR state. No Doppler state was changed.
+- Preflight ran before PR creation: Check 4 PASS (dev/prd resolve to distinct refs via CNAME resolution), Check 9 PASS after correction, Check 13 `NO-BLOCK`; other applicable checks SKIP by unchanged paths, and Checks 6/10 deferred because no PR existed yet. No Doppler state was changed.
 - Redaction follow-up review found and fixed one P3 chronology ambiguity; commit `a1f99afad5` was verified by one targeted code-quality pass with no findings.
 
 ### Redaction follow-up review

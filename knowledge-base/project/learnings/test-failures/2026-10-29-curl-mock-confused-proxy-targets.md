@@ -284,13 +284,13 @@ extra URL earlier in the argument vector.
 - **Prevention:** Start with fields documented by the live schema and expand a
   GraphQL query only after the minimal query succeeds.
 
-**Two ship-helper lookups initially omitted the `plugins/soleur/` path prefix.**
+**Several ship-helper lookups initially used stale or guessed repository paths.**
 
-- **Recovery:** `scripts/deploy-arm.sh` and `scripts/affected-tests.sh` were not
-  found at repository root. Resolved both with a repository-scoped glob and used
-  `plugins/soleur/scripts/` paths.
+- **Recovery:** Root-level `scripts/deploy-arm.sh` and `scripts/affected-tests.sh`
+  were not found; later, `plugins/soleur/scripts/net-issue-flow.sh` was also the
+  wrong location. Repository-scoped lookup found the correct plugin paths.
 - **Prevention:** Resolve helper paths from the repository tree before running
-  commands copied from a skill example.
+  commands copied from a skill or inferred from a neighboring helper.
 
 **The local affected-suite run timed out without producing a verdict.**
 
