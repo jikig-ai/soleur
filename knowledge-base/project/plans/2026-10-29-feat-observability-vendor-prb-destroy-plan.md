@@ -13,6 +13,61 @@ status: draft
 
 # feat(observability): PR-B — destroy the 43 pruned Sentry cron monitors
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** 6 (Proposed Solution, Files to Edit, Guard Contract,
+Observability, Acceptance Criteria, Scope Check)
+**Research agents used:** none — subagent context; all fan-outs executed inline
+with file-level evidence (per `## Research Insights` research-mode note)
+
+### Key Improvements
+
+1. **Producer census resolved the emit-path question.** Measured all 43 pruned
+   slugs have live producers (35 Inngest code slugs + 8 workflow `monitor-slug:`
+   params). Spec NG4 rules out stripping them, so the plan carries a shared
+   `PRUNED_MONITOR_SLUGS` exemption consumed by three strict guards — the only
+   shape that keeps the suite green AND honest.
+2. **C4 derivation fix, not just prose.** `derive_github_slugs` counts raw
+   `monitor-slug:` literals; with emitters retained it would derive 22 while
+   only 14 check-ins land on live monitors. The derivation moves to a
+   live-backed intersection so C5/C6/C9 stay TRUE, not merely matching.
+3. **`alert-reference.json` regeneration eliminated.** Verified the projection
+   covers `sentry_alert` rules only and already binds the 22 kept detectors —
+   removed a README-ritual step that would have been dead work.
+4. **#6615 live-removal gap made a first-class AC.** Plan/apply green cannot
+   prove a monitor is gone (provider-id mismatch); the audit-side Class D
+   check is the verification, AC6.
+5. **Stale-tracker dispositions found.** #10972 (route orphan-sweeps, due
+   2026-10-27) is OBE — its followthrough probe exits 3 forever post-destroy
+   until the issue is closed; #8704 loses 4 of 5 mute targets.
+
+### New Considerations Discovered
+
+- GuardA(i) "carrier-red" on `plan_pr` (last-applied not an ancestor of a stale
+  merge ref) is expected under main's merge velocity — remediation is rebase +
+  re-push, evidenced on run 40895562992 (feat-hitl-approval-queue).
+- #8595 gap-1 is already fixed on main by guard (c3); this PR is its first
+  live exercise (8 NON_INNGEST entries die).
+- Open-PR overlap (#11289, #10905) is merge-order risk only, not scope
+  duplication.
+
+### Gate Verification (deepen-plan halt checks)
+
+- 4.6 User-Brand: PASS (threshold `single-user incident`, all required lines)
+- 4.7 Observability: PASS (5-field schema; `grep` probe, allowlisted first
+  token, no `ssh `, literal `24` expected_output)
+- 4.8 PAT variables: PASS (none referenced)
+- 4.9 UI wireframe: N/A (no UI surface)
+- 4.10 Encryption Posture: PASS (no new store/connection; stated explicitly)
+- 4.11 Guard Contract: PASS (`lint-guard-contract.py` clean; 5-row mutation
+  matrix + must-PASS rows + anchor)
+- 4.12 Scope Check: PASS (exactly one unfenced section; 9/9 asks mapped;
+  inferred items justified)
+- 4.13 Task Design: N/A (no new autonomous-task surface)
+- Rule IDs cited verified live in AGENTS.md; knowledge-base path citations
+  all resolve.
+
 ## Overview
 
 Complete the two-PR removal rule for the #6590 Sentry cron-monitor prune. PR-A
