@@ -12,6 +12,33 @@ brand_survival_threshold: none
 lane: single-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Sections enhanced:** Research Insights (deepen-pass findings), Context
+**Research agents used:** None — this harness has no Agent/Task spawn capability; research and
+review were completed sequentially inline by the orchestrator.
+**Reviewed-Coverage:** sequential-fallback
+
+### Key Improvements
+
+1. Verified the corrected endpoint against Cloudflare's current API reference (`GET
+   /accounts/{account_id}/alerting/v3/policies`, "List Notification policies") and corroborated it
+   in-repo (`infra-security.md:81`) and by the learning's measured-live authorized 200.
+2. Surfaced the live duplicate (PR #11456, same three files) from the collision precheck into the
+   plan's premise validation, and added the implementation step-0 duplicate-merge gate.
+3. Pinned the corrected route against silent reversion with a Guard Contract entry (mock-dispatch
+   chokepoint, 5-row mutation matrix including a must-PASS harness row).
+
+### New Considerations Discovered
+
+- The API reference documents no query parameters for this operation; the sibling PR ships the
+  bare path while this plan keeps `?per_page=1` per the issue's explicit prescription — recorded
+  as a `technical` row in `decision-challenges.md`.
+- The mock's `*)` fallback arm returns a zone-shaped object, so a Notifications URL the dispatch
+  does not recognize degrades to exit 3 rather than false-passing — the fail direction of a missed
+  dispatch is safe.
+
 # fix(cf-token-scope): retained Notifications probe queries nonexistent /notification_policies route
 
 The `cf-token-scope` `default-token` profile's retained Notifications control queries
@@ -119,6 +146,21 @@ best-practices/framework-docs fan-out needed for a one-line route correction. Re
 and advisor fan-outs ran **inline by the orchestrator** — this harness has no Agent/Task spawn
 capability (`Reviewed-Coverage: sequential-fallback`); recorded as a `technical` row in
 `decision-challenges.md`.
+
+### Deepen-pass findings (2026-10-29)
+
+- **`want_type` stays `array`:** the documented response shape is `result: array of Policy` —
+  `?per_page=1` paginates but preserves the array contract the classifier checks.
+- **Permission coverage:** the reference's Accepted Permissions (`Notifications Read` among them)
+  are satisfied by the token's retained Notifications scope — corroborated by the learning's
+  measured-live authorized 200 on this exact route.
+- **Halt-gate results (deepen-plan Phases 4.6–4.13, run inline):** User-Brand Impact compliant
+  (`none` + scope-out); Observability schema complete (allowlisted `grep` probe, literal
+  `expected_output`, no ssh, inside the 15s cap); PAT sweep zero hits; no UI surface; no
+  encryption trigger; Guard Contract `lint-guard-contract.py` rc=0 with a structural assembly
+  (the mock `case` dispatch chokepoint) and a 5-row matrix; exactly one unfenced `## Scope Check`
+  carrying `Recommendation: single PR`; no autonomous-task surface; no network-outage or downtime
+  trigger. Test baseline verified green at 148/148 before the change.
 
 ## Files to Edit
 
