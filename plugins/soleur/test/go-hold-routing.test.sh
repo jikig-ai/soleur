@@ -372,10 +372,13 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   if [[ "$n_voc" -eq 1 ]]; then emit matcher-note-vocabulary-empty; fi
 
   # Location: after the Step 1 heading, before the start marker, and never between the markers.
-  start_ln="$(awk -v s="$BLOCK_START" 'index($0, s) { print NR; exit }' "$f")"
-  end_ln="$(awk -v e="$BLOCK_END" 'index($0, e) { print NR; exit }' "$f")"
-  head_ln="$(awk -v hre="$HEADING_RE" '$0 ~ hre { print NR; exit }' "$f")"
-  step1_ln="$(awk '/^## Step 1: /{ print NR; exit }' "$f")"
+  read -r start_ln end_ln head_ln step1_ln <<<"$(awk -v s="$BLOCK_START" -v e="$BLOCK_END" -v hre="$HEADING_RE" '
+    !st && index($0, s) { st = NR }
+    !en && index($0, e) { en = NR }
+    !hd && $0 ~ hre { hd = NR }
+    !s1 && /^## Step 1: / { s1 = NR }
+    END { print st + 0, en + 0, hd + 0, s1 + 0 }' "$f")"
+  [[ "$start_ln" != 0 ]] || start_ln=""; [[ "$end_ln" != 0 ]] || end_ln=""; [[ "$head_ln" != 0 ]] || head_ln=""; [[ "$step1_ln" != 0 ]] || step1_ln=""
   if [[ -z "$start_ln" || -z "$end_ln" || -z "$step1_ln" ]]; then
     emit anchors-missing
   elif [[ -n "$head_ln" ]]; then
