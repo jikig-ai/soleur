@@ -246,6 +246,9 @@ failure_modes:
   - mode: an ownership rule is added to the project, so issue_owners resolves and mail resumes
     detection: not detectable by this PR (the read-only token gets 403 on the ownership endpoint); bounded by step 2 deleting the rule
     alert_route: none (accepted residual risk, recorded in the .tf comment and the CTO ruling)
+  - mode: Sentry's vendor-default workflow "Send a notification for high priority issues" (id 566201, not Terraform-managed) emails active members for the agent-auth issue regardless of this rule (found at review: the issue is level error, priority high)
+    detection: not detectable by this PR; it is a UI-managed setting. Stated in the README and the .tf comment.
+    alert_route: none (accepted; changing the default is a production Sentry setting outside this PR)
 logs:
   where: Better Stack (pino line, feature=agent-auth); Sentry event store
   retention: vendor defaults, unchanged
