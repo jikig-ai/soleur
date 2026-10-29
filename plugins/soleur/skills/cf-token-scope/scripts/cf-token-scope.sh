@@ -99,7 +99,7 @@ DT_ROWS=(
   "retained|accounts/<acct>/cfd_tunnel|$API/accounts/\$ACCT/cfd_tunnel?per_page=1|array|account"
   "retained|accounts/<acct>/access/apps|$API/accounts/\$ACCT/access/apps?per_page=1|array|account"
   "retained|zones/<zone>/dns_records|$API/zones/\$ZONE/dns_records?per_page=1|array|zone"
-  "retained|accounts/<acct>/notification_policies|$API/accounts/\$ACCT/notification_policies?per_page=1|array|account"
+  "retained|accounts/<acct>/alerting/v3/policies|$API/accounts/\$ACCT/alerting/v3/policies|array|account"
   "target|accounts/<acct>/lb/pools|$API/accounts/\$ACCT/load_balancers/pools?per_page=1|array|account"
   "target|zones/<zone>/load_balancers|$API/zones/\$ZONE/load_balancers?per_page=1|array|zone"
 )
