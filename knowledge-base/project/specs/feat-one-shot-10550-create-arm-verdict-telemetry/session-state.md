@@ -18,3 +18,23 @@ None. Plan-review panel not run (docs-only; CTO ruling covered every fork; recor
 ### Components Invoked
 soleur:plan, soleur:deepen-plan, soleur:engineering:cto
 cto_spawns=2
+
+## Review dedup ledger (panel SHA c262462a9d)
+
+dedup: 21 raw -> 11 unique. structural-cause roll-up: rows 1-3 are one gap (the invariant paragraph and the table stated a universal before the producers of each `no_action` reason were enumerated); rows 5-6 are one gap (the table was not exhaustive over the refusal vocabulary). Seat that should have enumerated: code-quality-analyst (claim-by-claim table).
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+|---|---|---|---|
+| "Every gate returns refused ... therefore" overclaims | runbook invariant universal vs ledger backstop exception | security-sentinel, code-quality-analyst, git-history-analyzer | 250dd3b905 |
+| row 2 lumps `all-owned` with the backstop | `all-owned` with offered>0 is always the model's | pattern-recognition-specialist, code-quality-analyst | 250dd3b905 |
+| row 1 "no gate ran" | pre-call checks and the clone check do run | code-quality-analyst | 250dd3b905 |
+| 0.16 literal restated | second owner of the overlap threshold | pattern-recognition-specialist | 250dd3b905 |
+| table omits schema, unknown-pattern, no-api-key, internal, nearest-missing, other classes | table not exhaustive over refusal vocabulary | security-sentinel, code-quality-analyst, git-history-analyzer, pattern-recognition-specialist | 250dd3b905 |
+| "Review the output cap" for empty/not-json | cause claim unverified | security-sentinel, pattern-recognition-specialist | 250dd3b905 |
+| cost row "absent while incident open" | present-tense production claim contradicted by 2026-10-28 evidence | git-history-analyzer, security-sentinel, code-quality-analyst | 250dd3b905 |
+| "unchanged" has no baseline on one row | hints-only semantics need a readable rule | git-history-analyzer | 250dd3b905 |
+| backstop semantics restated across rows and bullets | single owner for backstop semantics | pattern-recognition-specialist, git-history-analyzer | 250dd3b905 |
+| style: backticks, `extra.cause`, `create_pr` optional, betterstack pointer wording | wording nits | pattern-recognition-specialist, code-quality-analyst, git-history-analyzer | 250dd3b905 |
+| plan: second copy of the table, false "every model-invalid detail" claim, quoted issue title, brief-claim item | plan restated and drifted from the runbook | pattern-recognition-specialist, git-history-analyzer | 250dd3b905 |
+
+Disposition notes: the plan's "Not in this PR" list of issue numbers is the operator's standing constraint list and is left as written (wontfix, history P3-7). The CTO spawn cap for this run was reached, so the `all-owned` refinement is recorded in decision-challenges.md T1a as a review refinement, not a re-ruling.
