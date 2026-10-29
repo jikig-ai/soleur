@@ -289,11 +289,8 @@ mutate "$BF/$TF_REL" "re.sub(r'(zot_image_amd64 = \")[^\"]*(\")', r'\\1not-a-pin
 COMPARE="$(cap_compare_of)"; run_gate
 [[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"unmeasurable by the head render"* ]] && grep -q '::warning::' "$TMP/log" && pass "K5: cap hit + unmeasurable watermark render -> deliver=true, ::warning::, why names it" || fail "K5: rc=$RC deliver=$(out deliver) why=$(out why)"
 
-# K7 — the render-input blobs are identical at both ends: deliver=false with no terraform at all
-# (CI=1, terraform off PATH: any render attempt would fail closed).
-reset_trees
-COMPARE="$(cap_compare_of)"; GATE_PATH="$NO_TF_PATH" run_gate CI=1
-[[ "$RC" -eq 0 && "$(out deliver)" == "false" ]] && pass "K7: cap hit + identical blobs -> deliver=false with no render" || fail "K7: rc=$RC deliver=$(out deliver)"
+# (The terraform-free cap rows -- identical blobs, unreadable blobs, the 299/300 boundary -- live in
+# plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh, which every workflow edit selects.)
 
 echo "workflow wiring"
 wf_tfv="$(python3 -c 'import sys,yaml; print((yaml.safe_load(open(sys.argv[1])).get("env") or {}).get("TERRAFORM_VERSION",""))' "$WF")"
@@ -324,8 +321,8 @@ if [[ "$PASS" -ne $((_cp+1)) || "$FAIL" -ne $((_cf+1)) || "${#FAILURES[@]}" -ne 
 fi
 FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # EQUALITY, not a floor: adding a row must move this literal.
-if [[ "$((PASS + FAIL - HARN))" -ne 33 ]]; then
-  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 33 are expected (fix the dispatch, do not edit the literal to match).\n' "$((PASS + FAIL - HARN))" >&2
+if [[ "$((PASS + FAIL - HARN))" -ne 32 ]]; then
+  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 32 are expected (fix the dispatch, do not edit the literal to match).\n' "$((PASS + FAIL - HARN))" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

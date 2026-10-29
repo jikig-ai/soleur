@@ -228,11 +228,12 @@ reset_gate_trees; GCOMPARE="$(gcompare 300)"; run_gate
 [[ "$RC" -eq 0 && "$(gout deliver)" == "false" ]] && pass "K1: 300 files + identical render-input blobs -> deliver=false, rc 0 (the old arm delivered)" || fail "K1: rc=$RC deliver=$(gout deliver) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
 [[ "$(blob_reads)" -eq 6 ]] && ! grep -qF -- '--jq .content' "$TMP/ggh.log" && pass "K1: exactly six blob reads (3 inputs x 2 refs) and no content fetch" || fail "K1: blob reads=$(blob_reads), content fetches=$(grep -cF -- '--jq .content' "$TMP/ggh.log" || true)"
 grep -qF 'compare list truncated at 300 files' "$TMP/glog" && pass "K1: the derived cap hit is announced (::notice::)" || fail "K1: no truncation notice"
+grep -qF 'none of the render inputs' "$TMP/glog" && pass "K1: the capped deliver=false sentence names the blob compare" || fail "K1: capped sentence missing"
 [[ -z "$(gout unproven)" && -z "$(gout render_changed)" ]] && pass "K1: no unproven / render_changed output on a proven-unchanged cap hit" || fail "K1: stray outputs"
 
 # K1b: 299 files is a COMPLETE list: the file-list path decides and no blob is read (boundary of -ge 300).
 reset_gate_trees; GCOMPARE="$(gcompare 299)"; run_gate
-[[ "$RC" -eq 0 && "$(gout deliver)" == "false" && "$(blob_reads)" -eq 0 ]] && pass "K1b: 299 files is not capped -> file-list path, zero blob reads" || fail "K1b: rc=$RC deliver=$(gout deliver) blob reads=$(blob_reads)"
+[[ "$RC" -eq 0 && "$(gout deliver)" == "false" && "$(blob_reads)" -eq 0 ]] && grep -qF 'Nothing since the watermark' "$TMP/glog" && pass "K1b: 299 files is not capped -> file-list path, zero blob reads" || fail "K1b: rc=$RC deliver=$(gout deliver) blob reads=$(blob_reads)"
 
 # K2: THE #10501 INCIDENT SHAPE (measured read-only on the live range): 300 files, the template and
 # zot-registry.tf identical, variables.tf differing only by an unrelated new variable. The three
@@ -268,6 +269,30 @@ reset_gate_trees; rm -f "$GBF/$TF_REL"; GCOMPARE="$(gcompare 300)"; run_gate
 reset_gate_trees; GCOMPARE="$(gcompare 300)"; run_gate STUB_SHA_FAIL="$CFG_REL@$W"
 [[ "$RC" -eq 1 && "$(gout unproven)" == "cap" ]] && grep -q '::error::.*cloud-init-registry\.yml' "$TMP/glog" && [[ "$(reads_of "$TF_REL" "$W")" -eq 0 ]] && pass "K6c: first input unreadable -> named, later inputs not read" || fail "K6c: rc=$RC reads(tf)=$(reads_of "$TF_REL" "$W")"
 
+# K6d: the API answers rc 0 but NOT with a blob sha (a symlink or submodule makes
+# `select(.type=="file")` print nothing). Blanked at BOTH refs the two values are equal, so only the
+# 40-hex validation separates "unreadable" from "unchanged".
+reset_gate_trees; GCOMPARE="$(gcompare 300)"; run_gate STUB_SHA_EMPTY="$CFG_REL@$W $CFG_REL@$H"
+[[ "$RC" -eq 1 && "$(gout unproven)" == "cap" && -z "$(gout deliver)" ]] && grep -q '::error::.*cloud-init-registry\.yml.*symlink, submodule' "$TMP/glog" && pass "K6d: empty answers at both refs -> unprovable (rc 1), never 'unchanged'" || fail "K6d: rc=$RC unproven=$(gout unproven) deliver=$(gout deliver)"
+reset_gate_trees; GCOMPARE="$(gcompare 300)"; run_gate STUB_SHA_GARBAGE="$TF_REL@$H"
+[[ "$RC" -eq 1 && "$(gout unproven)" == "cap" && -z "$(gout deliver)" ]] && grep -q '::error::.*zot-registry\.tf' "$TMP/glog" && [[ "$(reads_of "$TF_REL" "$H")" -eq 3 ]] && pass "K6e: a non-sha answer -> unprovable after 3 attempts" || fail "K6e: rc=$RC unproven=$(gout unproven) attempts=$(reads_of "$TF_REL" "$H")"
+# The recovery text must not steer to the host-replacing re-fire as the first move.
+grep -q 'gh run rerun' "$TMP/glog" && pass "K6e: the ::error:: offers the non-replacing recovery (gh run rerun)" || fail "K6e: no rerun advice"
+
+# K9b: TWO inputs differ (template edit + an unrelated variables.tf block): both must reach the
+# downstream arms; a `changed` that kept only the last differing input would skip the render.
+reset_gate_trees
+gmutate "$GBF/$CFG_REL" "s.replace('#cloud-config\\n', '#cloud-config\\n# rationale-only line (K9b)\\n', 1)"
+printf '\nvariable "synthesized_unrelated_flag" {\n  type    = bool\n  default = true\n}\n' >> "$GSB/$VARS_REL"
+GCOMPARE="$(gcompare 300)"; run_gate
+[[ "$RC" -ne 0 && "$(gout deliver)" != "false" && -z "$(gout unproven)" ]] && grep -qi 'unmeasurable' "$TMP/glog" && pass "K9b: template + variables.tf both differ -> the render arm is still reached" || fail "K9b: rc=$RC deliver=$(gout deliver) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
+
+# K9c: ONLY zot-registry.tf differs (the #7582 zot digest shape) -> the render arm is reached.
+reset_gate_trees
+gmutate "$GBF/$TF_REL" "s.replace('registry_host_reserve_mb = 1024', 'registry_host_reserve_mb = 1000', 1)"
+GCOMPARE="$(gcompare 300)"; run_gate
+[[ "$RC" -ne 0 && "$(gout deliver)" != "false" && -z "$(gout unproven)" ]] && grep -qi 'unmeasurable' "$TMP/glog" && pass "K9c: only zot-registry.tf differs -> the render arm is reached" || fail "K9c: rc=$RC deliver=$(gout deliver) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
+
 # K9: a cap hit where the TEMPLATE blob differs reaches the render arm (terraform is off PATH under
 # CI=1 here, so the head render fails closed: non-zero and NO deliver=false). Proves a changed blob
 # falls into the existing downstream arms rather than being decided by the cap arm.
@@ -281,7 +306,7 @@ GCOMPARE="$(gcompare 300)"; run_gate
 run_verdict JOB_STATUS=failure GATE_OUTCOME=failure GATE_UNPROVEN=cap PREFLIGHT_OUTCOME=skipped DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped TARGETS= PRS= COMMITS=
 if [[ "$RC" -eq 0 ]] && grep -q 'kind=gate-unproven' "$GH_LOG" && ! grep -q 'kind=gate-failed' "$GH_LOG" && ! grep -q 'NOT live' "$GH_LOG" && ! grep -q 'unchanged since' "$GH_LOG"; then pass "V16: GATE_UNPROVEN=cap -> kind=gate-unproven, no NOT-live / unchanged-since claim"; else fail "V16: rc=$RC kinds=$(grep -o 'kind=[a-z-]*' "$GH_LOG" | tr '\n' ' ')"; fi
 grep -q 'issue create' "$GH_LOG" && grep -qF -- 'kind=gate-unproven attempt=1 --> --label action-required' "$GH_LOG" && pass "V16: owner issue created when nothing is derivable; marker is the LAST line" || fail "V16: owner issue / marker position"
-grep -q 'UNPROVEN' "$GH_LOG" && grep -q '300' "$GH_LOG" && pass "V16: the body names the cap and says UNPROVEN" || fail "V16: wording"
+grep -q 'UNPROVEN' "$GH_LOG" && grep -qF 'at 300 files' "$GH_LOG" && grep -qF 'gh run rerun' "$GH_LOG" && ! grep -qF 'to deliver again' "$GH_LOG" && pass "V16: the body names the cap and says UNPROVEN" || fail "V16: wording"
 # V16b: a stale GATE_UNPROVEN without a gate failure must not select the arm.
 run_verdict JOB_STATUS=failure GATE_OUTCOME=success GATE_UNPROVEN=cap PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped
 grep -q 'kind=refused' "$GH_LOG" && ! grep -q 'kind=gate-unproven' "$GH_LOG" && pass "V16b: gate-unproven is keyed on the gate's own failure outcome" || fail "V16b"
@@ -295,8 +320,8 @@ fi
 FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # A literal bound adjacent to the test, reported by a direct printf + exit 1 (never through the
 # helpers it backstops), so scripts/guard-vacuity-floor.test.sh can construct its mutant.
-if [[ "$PASS" -lt 50 ]]; then
-  printf '  FATAL: anti-vacuity: only %s passes; the floor is 50 (fix the dispatch, do not lower it).\n' "$PASS" >&2
+if [[ "$PASS" -lt 58 ]]; then
+  printf '  FATAL: anti-vacuity: only %s passes; the floor is 58 (fix the dispatch, do not lower it).\n' "$PASS" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

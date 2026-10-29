@@ -25,10 +25,10 @@
 # `status=identical, total_commits=0, commits=[]`) — a manual re-fire at the watermark SHA. It
 # falls through to the empty-intersection arm and needs no enum value of its own.
 #
-# EMPTY INTERSECTION ON A PROVEN RANGE yields NO PR. The gate can reach this helper on a run it
-# decided WITHOUT a delivery (the compare's 300-file cap no longer delivers by default since #10650:
-# the gate compares the render inputs by git blob and, when they match, exits `deliver=false`), on a
-# manual re-fire, or on the workflow file's own registration push. Attributing to whatever merged last would post "PR #N is NOT live"
+# EMPTY INTERSECTION ON A PROVEN RANGE yields NO PR. The gate can reach this helper on a
+# `deliver=false` run (including a compare list truncated at the API's 300-file cap whose render
+# inputs match by git blob, #10650), on a manual re-fire, or on the workflow file's own registration
+# push. Attributing to whatever merged last would post "PR #N is NOT live"
 # on a PR that never touched the config — a new instance of the defect this helper removes.
 #
 # MERGE-COMMIT PRs need no special arm (measured on #6326): `commits?path=` applies git history

@@ -103,7 +103,7 @@ concurrency:
 #             on the push arm, `render_changed=true` + `why=` (what it measured); on a compare
 #             list truncated at the API's 300-file cap it compares the three render inputs by
 #             git blob instead, and when it cannot read them emits `unproven=cap` and exits 1
-#             (#10650: a cap hit never delivers by default)
+#             (#10650: a cap hit delivers only on a proven render-input change)
 #   change    names the change(s) this run delivers — the helper's six keys `range=`,
 #             `range_note=`, `commits=`, `prs=`, `unattributed=`, `summary=` plus `targets=` —
 #             via scripts/registry-delivery-change.sh; never fails the job
@@ -307,9 +307,8 @@ jobs:
           # counts commits, not files), so the cap itself is the signal: at exactly 300 the list
           # MAY be complete and MAY be truncated, and those are indistinguishable here.
           #
-          # A CAP HIT NEVER DELIVERS BY DEFAULT (#10650, CTO ruling 2026-10-29). It used to
-          # (`deliver=true`, "an unnecessary volume-preserving replace is recoverable"), and after a
-          # stale watermark almost every range is over the cap — so the merge of PR #10501, which
+          # A CAP HIT NEVER DELIVERS BY DEFAULT (#10650). It used to (`deliver=true`), and a stale
+          # watermark makes a range likely to exceed the cap — so the merge of PR #10501, which
           # changed only an unrelated variable in variables.tf, destroyed and recreated the fleet's
           # SOLE image-pull path. Instead of guessing, DERIVE the answer: compare the git BLOB sha of
           # each of the three render inputs at the watermark and at the head through the contents
@@ -322,8 +321,11 @@ jobs:
           #                            advance the watermark and the verdict step files
           #                            `kind=gate-unproven`, so nothing is silently skipped and
           #                            nothing is replaced on a guess. Unreadable means ANY result
-          #                            that is not a 40-hex blob sha after three attempts (5xx, a
-          #                            directory, a bad shape, a path absent at exactly one ref).
+          #                            that is not a 40-hex blob sha after three attempts: an API
+          #                            error (5xx, 404), a directory (jq errors on the array), a
+          #                            path absent at either ref, or a symlink/submodule (the
+          #                            `select(.type=="file")` prints nothing for those, and a
+          #                            submodule's `.sha` would otherwise pass as a 40-hex sha).
           # #9149's "or could not be computed => deliver" is about the DOWNSTREAM render arms
           # (unchanged below); an unprovable touched-set is a different uncertainty and fails closed.
           n_files="$(printf '%s' "$cmp_json" | jq -r '(.files | length) // 0' 2>/dev/null || echo 0)"
@@ -331,22 +333,27 @@ jobs:
           if [[ "${n_files:-0}" -ge 300 ]]; then
             capped=1
             blob_at() {  # $1 = repo path, $2 = ref -> prints the 40-hex blob sha; rc 1 = unprovable
-              local n r
+              # Called inside $( ), so the failure class of the LAST attempt travels via $WHY_FILE
+              # (a variable set here would die with the subshell).
+              local n r grc
               for n in 1 2 3; do
-                r="$(gh api "repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" --jq 'select(.type=="file")|.sha' 2>/dev/null)" \
-                  && [[ "$r" =~ ^[0-9a-f]{40}$ ]] && { printf '%s' "$r"; return 0; }
+                grc=0
+                r="$(gh api "repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" --jq 'select(.type=="file")|.sha' 2>/dev/null)" || grc=$?
+                if [[ "$grc" -ne 0 ]]; then printf '%s' "the contents API failed or the path is absent or not a file (gh rc=${grc})" > "$WHY_FILE"
+                elif [[ "$r" =~ ^[0-9a-f]{40}$ ]]; then printf '%s' "$r"; return 0
+                else printf '%s' "the API answered but not with a regular file's blob sha (a symlink, submodule or malformed answer)" > "$WHY_FILE"; fi
                 (( n < 3 )) && sleep "$n"
               done
               return 1
             }
-            changed=""; unread=""
+            WHY_FILE="$(mktemp)"; changed=""; unread=""
             for _p in "$CFG" "$TF" "$VARS"; do
               if ! _b="$(blob_at "$_p" "$BEFORE_SHA")" || ! _a="$(blob_at "$_p" "$AFTER_SHA")"; then unread="$_p"; break; fi
-              [[ "$_b" != "$_a" ]] && changed="${changed:+$changed$'\n'}$_p"
+              if [[ "$_b" != "$_a" ]]; then changed="${changed:+$changed$'\n'}$_p"; fi
             done
             if [[ -n "$unread" ]]; then
               echo "unproven=cap" >> "$GITHUB_OUTPUT"   # BEFORE the exit: the verdict step reads it
-              echo "::error::the compare API returned ${n_files} files (its 300 cap), so the changed-file list is TRUNCATED, and render input ${unread} could not be read as a file at both the watermark ${BEFORE_SHA:0:7} and the head ${AFTER_SHA:0:7} (only the first unreadable input is named). Refusing to dispatch a registry host replace on an unprovable diff: it neither delivers nor skips. Re-fire via workflow_dispatch once the API recovers; a re-fire replaces the host."
+              echo "::error::the compare API returned ${n_files} files (its 300 cap), so the changed-file list is TRUNCATED, and render input ${unread} could not be read as a file at both the watermark ${BEFORE_SHA:0:7} and the head ${AFTER_SHA:0:7}: $(cat "$WHY_FILE") (only the first unreadable input is named). Refusing to dispatch a registry host replace on an unprovable diff: it neither delivers nor skips. If the cause is transient, re-run this run (gh run rerun) or wait for the next push, which re-derives the range. A workflow_dispatch re-fire delivers unconditionally and REPLACES the host: use it only for a confirmed add, delete or rename of a render input."
               exit 1
             fi
             echo "::notice::compare list truncated at ${n_files} files; the three render inputs were compared by git blob at the watermark and the head (changed: ${changed:-none})."
@@ -863,6 +870,7 @@ jobs:
           # to the not-live sentence; the arms where the replace RAN (or may have) override it.
           STATE="$NOT_LIVE"
           REFUSAL_NOTES=0
+          UNPROVEN_ARM=0
           if [[ "${JOB_STATUS:-}" == "cancelled" ]]; then
             # A ceiling cancellation is the one arm where a replace may ALREADY BE IN FLIGHT, so
             # the remediation is "read the run before re-firing", not "re-fire" — and the host's
@@ -902,7 +910,8 @@ jobs:
             KIND="gate-unproven"
             WHAT="Delivery UNPROVEN: the compare API's file list was truncated and the render inputs could not be compared"
             WHY="The compare API caps its changed-file list at 300 files and gave no truncation flag, so the gate compared the git blobs of the three render inputs instead, and could not read one of them (the gate's own \`::error::\` in the run names it). Nothing was dispatched."
-            STATE="Whether the registry host's user_data is current is UNPROVEN (not known to be stale). The delivery watermark did not advance, so the next push re-derives this range; a manual re-fire delivers (and replaces the host) once the three render inputs have been checked."
+            STATE="Whether the registry host's user_data is current is UNPROVEN (not known to be stale). The delivery watermark did not advance, so the next push re-derives this range, and so does \`gh run rerun ${GITHUB_RUN_ID}\` once the cause (the gate's \`::error::\` names it) has cleared. A manual re-fire delivers unconditionally and REPLACES the host: use it only for a confirmed add, delete or rename of a render input."
+            UNPROVEN_ARM=1
           elif [[ "${GATE_OUTCOME:-}" == "failure" ]]; then
             # The gate's own exit 1 (compare API unreadable, a watermark revision unreadable, or —
             # #7582 — the head render unmeasurable or over Hetzner's cap). Not the `else`: that arm would
@@ -932,6 +941,10 @@ jobs:
           REFIRE="Re-fire with \`gh workflow run registry-host-replace-dispatch.yml -f reason='<why>' -f tracker=${FIRST_TARGET:-<the issue you are tracking this under>}\`"
           if [[ "$REFUSAL_NOTES" -eq 1 ]]; then
             REFIRE="${REFIRE} once the refusing predicate is resolved. Three predicates are expected to need it:"$'\n\n'"- **P1** (local-cache pulls) — the manual arm passes \`--manual\`, which skips P1 only; it is the predicate a replace outage itself trips."$'\n'"- **P5** (the replace would be unobservable) — \`--manual\` does NOT skip this one, deliberately. If the container-log channel is dark (#7569) the replace outcome cannot be read back, and forcing it would put the sole pull path behind a channel that cannot report whether it returned."$'\n'"- **P6** (the zot boot-image release asset is missing or not the pinned sha256) — \`--manual\` does NOT skip it. Publish a new pin's asset with \`zot-image-mirror.yml\`; a vanished release cannot be re-created under its tag, so revert the pin (runbook § zot boot image)."
+          elif [[ "$UNPROVEN_ARM" -eq 1 ]]; then
+            # (#10650) The default tail ("to deliver again") would steer the operator to the one
+            # action that REPLACES the host on a range nobody proved changed it.
+            REFIRE="${REFIRE} only for a confirmed add, delete or rename of a render input: it delivers unconditionally and replaces the host. For a transient cause, re-run the run instead."
           else
             REFIRE="${REFIRE} to deliver again, after reading the run."
           fi

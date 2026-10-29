@@ -472,12 +472,12 @@ own record — read it rather than inferring delivery from a green merge:
 ```bash
 run=$(gh run list --workflow=registry-host-replace-dispatch.yml --branch main --limit 1 \
   --json databaseId,conclusion --jq '.[0] | "\(.databaseId) \(.conclusion)"')
-gh run view "${run%% *}" --log | grep -E 'Z (range|prs|summary|targets)=|Z Nothing since the watermark'
+gh run view "${run%% *}" --log | grep -E 'Z (range|prs|summary|targets)=|Z Nothing since the watermark|Z The compare list was truncated'
 gh api --paginate --slurp "repos/jikig-ai/soleur/issues/<number>/comments?per_page=100" \
   | jq -r '[.[][] | select(.body | test("<!-- registry-delivery run=[0-9]+ kind="))] | last | .body // "no verdict"'
 ```
 
-`deliver=false` (a registration-only or comment-only push) and a green run with no verdict is
+`deliver=false` (a registration-only or comment-only push, or a capped compare whose render inputs match by git blob) and a green run with no verdict is
 the expected case. Any `kind=` other than none is reported verbatim with the runbook's next
 action (`knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`).
 

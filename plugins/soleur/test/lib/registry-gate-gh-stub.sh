@@ -32,6 +32,8 @@
 # Modelled API failures (NOT refusals: the gate asked the right question):
 #   STUB_CONTENTS_FAIL=1          every `.content` read fails (HTTP 502)
 #   STUB_SHA_FAIL=<path>@<ref>    the blob read of <path> at <ref> fails (HTTP 502), every attempt
+#   STUB_SHA_EMPTY="<p>@<ref> ..." the read prints nothing and exits 0 (a symlink/submodule)
+#   STUB_SHA_GARBAGE="<p>@<ref> ..." the read prints a non-sha and exits 0
 #   (a path in STUB_INPUTS that is absent from the tree answers `Not Found (HTTP 404)`, exit 1)
 #
 # The blob sha is computed WITHOUT spawning git (a test that spawns git needs the constructed
@@ -68,6 +70,11 @@ case "$url" in
           *) refuse "blob read for unexpected ref '$ref'" ;;
         esac
         [[ "${STUB_SHA_FAIL:-}" == "$p@$ref" ]] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
+        # A symlink or submodule makes `select(.type=="file")` print NOTHING and exit 0 (modelled by
+        # STUB_SHA_EMPTY); a malformed answer is modelled by STUB_SHA_GARBAGE. Space-separated
+        # `<path>@<ref>` lists, so a harness can blank BOTH refs (two empties compare equal).
+        case " ${STUB_SHA_EMPTY:-} " in *" $p@$ref "*) exit 0 ;; esac
+        case " ${STUB_SHA_GARBAGE:-} " in *" $p@$ref "*) printf 'not-a-sha\n'; exit 0 ;; esac
         f="$tree/$p"
         [[ -f "$f" ]] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
         { printf 'blob %s\0' "$(wc -c < "$f" | tr -d '[:space:]')"; cat "$f"; } | sha1sum | cut -d' ' -f1
