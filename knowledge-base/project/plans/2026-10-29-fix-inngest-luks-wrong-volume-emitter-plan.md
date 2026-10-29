@@ -289,10 +289,10 @@ No new Better Stack resources — the free-tier limits that gate `betteruptime_p
 
 ## Acceptance Criteria
 
-- [ ] `local.inngest_luks_wrong_volume_sql` in `apps/web-platform/infra/betterstack-logs-alerts.tf` contains the exact conjunct `AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'` as its first predicate after the time filter; marker anchor, `host_role` scope, and the negated devid predicate are unchanged.
-- [ ] The local's comment block carries a dated `LIVE-PROBED` entry with the four Phase-2 measurements and the one-line rationale for the emitter conjunct.
-- [ ] `bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` exits 0 reporting `27 passed, 0 failed` with floors updated (27 / 14 under `MUT_SKIP`); the three new `mutate_red` rows each go red on their mutation.
-- [ ] Phase-2 live-probe executed and recorded: population `> 0`, emitter breakdown enumerated, quiet control `= 0`, positive control equal to the population count.
+- [x] `local.inngest_luks_wrong_volume_sql` in `apps/web-platform/infra/betterstack-logs-alerts.tf` contains the exact conjunct `AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'` as its first predicate after the time filter; marker anchor, `host_role` scope, and the negated devid predicate are unchanged.
+- [x] The local's comment block carries a dated `LIVE-PROBED` entry with the four Phase-2 measurements and the one-line rationale for the emitter conjunct.
+- [x] `bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` exits 0 reporting `27 passed, 0 failed` with floors updated (27 / 14 under `MUT_SKIP`); the three new `mutate_red` rows each go red on their mutation.
+- [x] Phase-2 live-probe executed and recorded: population `> 0`, emitter breakdown enumerated, quiet control `= 0`, positive control equal to the population count.
 - [ ] Post-merge, the `apply-web-platform-infra.yml` run on the merge SHA applies `logtail_exploration.inngest_luks_wrong_volume` and `logtail_exploration_alert.inngest_luks_wrong_volume` successfully (apply log shows the exploration updated in place).
 - [ ] After the apply run lands, #8874 is closed with a comment naming the apply run and the live-probe numbers; PR body carried `Ref #8874` (never `Closes` — the live change lands post-merge, on the apply).
 
