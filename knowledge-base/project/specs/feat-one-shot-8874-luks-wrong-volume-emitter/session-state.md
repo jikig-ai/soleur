@@ -42,3 +42,12 @@
 - user-impact CONCUR tier; performance/agent-native/security/code-quality clean (P3-only).
 - Outstanding seat: structural-enumeration (680ff225).
 - Remaining: synthesize→inline fixes→CTO ruling on phone-home fork→implement per ruling→fix-round→qa→compound→ship→postmerge→DONE. PR body already carries Ref+prod-mutation first line.
+
+## Findings synthesis
+- CTO ruling (Option B): phone-home fallback emits BOOT_STAGE marker, never satisfied the anchor — pre-existing blind edge, NOT a regression. Conditions met: comment amended (.tf:228-240), follow-up filed #11526, no re-probe.
+- P2 data-integrity RESOLVED: guard derives emitter needle from INNGEST_PROBE_EMITTER (source inngest-probe-row.sh); mutation needles env-inject MUT_EMITTER.
+- P2 git-history RESOLVED: plan overclaim corrected + sibling-accurate examples; threshold clause reordered.
+- U2 exploration_id inlined: +1 presence (line_is) +1 mutation → floors 29/15. Guard: 29 passed / 0 failed.
+- Filings: #11526 fallback redesign, #11527 sibling key-probe emitter, #11528 guard coverage gaps (U1/U3-U5/U7) — all meta/machinery.
+- Doc fixes: betterstack-log-query.md:59 count removed; inngest-probe-row.test.sh:140 deferral note updated.
+- P3s disposed: comment edges recorded (.tf:228-240); reorder-must-PASS row skipped (no must-green harness); tasks.md checkbox convention = pipeline shape.

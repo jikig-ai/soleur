@@ -221,9 +221,23 @@ locals {
   # The row set is also pinned to the probe's OWN EMITTER (the first conjunct below, #8874):
   # the host's `doppler` event log ships to this same source and quotes the marker verbatim
   # whenever GitHub webhooks in issue/PR text about the probe — the #8846 defect class, measured
-  # 50 quoting rows vs 6 real probe rows in one 6h window. The start-of-message anchor alone
-  # excluded those rows only because every one happens to begin with `{` — a payload accident,
-  # not a control.
+  # 50 quoting rows vs 6 real probe rows in one 6h window (the issue's own body counts 36 under a
+  # narrower event-log subset; both are 2026-09-25 measurements). The start-of-message anchor
+  # alone excluded those rows only because every one happens to begin with `{` — a payload
+  # accident, not a control.
+  # Three residual edges this conjunct does not close, recorded so they are not re-derived:
+  #   * the emitted tag is now load-bearing — a probe-tag rename that misses this SQL leaves the
+  #     population permanently zero, which reads as health; the drift guard derives its needle
+  #     from the canonical lib so a coordinated rename that skips this file goes red;
+  #   * unlike the negated devid check, the conjunct fails QUIET — a raw schema change that drops
+  #     or renames SYSLOG_IDENTIFIER excludes every row and reads healthy;
+  #   * the vector-down phone-home fallback emits marker=SOLEUR_INNGEST_BOOT_STAGE /
+  #     stage=inngest-server-probe-vector-down with the field row in `detail` and no
+  #     SYSLOG_IDENTIFIER — it was already invisible to this alert via the pre-existing
+  #     marker-at-position-1 anchor, a pre-existing blind edge, not a regression (CTO ruling,
+  #     PR #11519). The marker anchor also lacks the canonical def's trailing space — a
+  #     hypothetical `SOLEUR_INNGEST_SERVER_PROBEX` prefix would count here but not per
+  #     `inngest_probe_row`; latent, fail-loud.
   # LIVE-PROBED 2026-10-29 after adding the emitter conjunct, 48h window over the hot remote()
   # UNION s3Cluster archive:
   #   population  (emitter + marker + host_role=dedicated)   -> 49 rows

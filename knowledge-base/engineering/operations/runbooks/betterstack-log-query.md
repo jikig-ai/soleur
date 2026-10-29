@@ -56,7 +56,7 @@ Live standing alarms over this source:
   read back `paused=false` on 2026-09-21. No `-var` flag and no tfvars entry is involved. The watched alias is built from
   `hcloud_volume.inngest_redis_luks.id`, never a literal. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
-  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
+  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (mutation rows).
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
