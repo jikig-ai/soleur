@@ -253,9 +253,12 @@ A NEW DISPATCH JOB INHERITS NOTHING (ADR-145). The per-PR `host_creates > 0` HAL
 a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
 one, so for this path the sourced birth gate is the ONLY check.
 
-THIS JOB CARRIES THREE MECHANICAL INTERLOCKS PLUS THE PLAINTEXT-ID INTERLOCK (#11194). RUNG-2
-CURRENTLY HOLDS (the evidence has been stale since #11342 changed a bound payload) AND THE
-PLAINTEXT-ID INTERLOCK HOLDS UNTIL THE `git_data_volume_id = ""` CHANGE (#11449) MERGES.
+THIS JOB CARRIES THREE MECHANICAL INTERLOCKS PLUS THE PLAINTEXT-ID INTERLOCK (#11194). THE
+RUNG-2 INTERLOCK HOLDS WHILE THE COMMITTED EVIDENCE HASH DIFFERS FROM THE TREE'S; THE
+PLAINTEXT-ID INTERLOCK HOLDS WHILE `git_data_volume_id` IS NON-EMPTY.
+
+(Dated 2026-10-28, a fact and not a live verdict: the evidence has been stale since #11342
+changed a hash-bound payload, and the `git_data_volume_id = ""` change is #11449.)
 
 An earlier version of this header read "STILL HELD, BY TWO GATES". That inverted the
 moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting

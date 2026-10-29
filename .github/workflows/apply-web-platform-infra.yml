@@ -182,10 +182,9 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`. Three mechanical interlocks plus the plaintext-id one
-          gate it: rung-2 holds (evidence stale since #11342) and the plaintext-id one holds
-          until #11449 merges (job-rationale.md §git_data_host_create). Read
-          knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
+          needs `confirm=BIRTH-GIT-DATA`. Gated by three interlocks plus the plaintext-id one (rung-2
+          while the evidence hash differs, plaintext-id while git_data_volume_id is non-empty;
+          job-rationale.md §git_data_host_create). Read git-data-birth.md first.
         required: false
         default: manual-rerun
         type: choice
