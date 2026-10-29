@@ -79,8 +79,8 @@ while [[ $# -gt 0 ]]; do
       [[ $# -gt 0 ]] && record_url "$1"
       ;;
     --url=*) record_url "${1#*=}" ;;
-    --proxy|--preproxy|-x) shift ;;
-    --proxy=*|--preproxy=*|-x*) ;;
+    --proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5|--socks5-hostname|-x) shift ;;
+    --proxy=*|--proxy1.0=*|--preproxy=*|--socks4=*|--socks4a=*|--socks5=*|--socks5-hostname=*|-x*) ;;
     --max-time|-w|-H|--noproxy) shift ;;
     -* ) [[ "$1" == *://* ]] && record_url "$1" ;;
     *) record_url "$1" ;;
@@ -340,13 +340,20 @@ NOTIF_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/al
 LB_POOLS_URL='https://api.cloudflare.com/client/v4/accounts/acct9876543210fedcba/load_balancers/pools?per_page=1'
 LB_ZONE_URL='https://api.cloudflare.com/client/v4/zones/zone0123456789abcdef/load_balancers?per_page=1'
 # Directly exercise the mock's negative route boundary; broadening its matcher
-# must not let a suffixed path receive the Notifications success fixture.
+# must not let a suffixed path or query receive the Notifications success fixture.
 PATH="$MOCKPATH" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
   "$MOCKBIN/curl" "$NOTIF_URL/extra" >"$OUTFILE"
 if grep -Fxq -- '418' "$OUTFILE"; then
   ok "D2 mock dispatch rejects a suffixed Notifications URL"
 else
   no "D2 mock dispatch accepted a suffixed Notifications URL"
+fi
+PATH="$MOCKPATH" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_OTHER='418:{"success":false}' \
+  "$MOCKBIN/curl" "$NOTIF_URL?per_page=1" >"$OUTFILE"
+if grep -Fxq -- '418' "$OUTFILE"; then
+  ok "D2 mock dispatch rejects a Notifications query suffix"
+else
+  no "D2 mock dispatch accepted a Notifications query suffix"
 fi
 D2_OPERAND_LOG="$WORK/d2-curl-operands"
 PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_OPERAND_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' \
@@ -374,10 +381,31 @@ assert_proxy_only_falls_through() {
 }
 assert_proxy_only_falls_through "D2 --proxy= value is not a transfer URL" "--proxy=$NOTIF_URL"
 assert_proxy_only_falls_through "D2 separated --proxy value is not a transfer URL" --proxy "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --proxy1.0= value is not a transfer URL" "--proxy1.0=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --proxy1.0 value is not a transfer URL" --proxy1.0 "$NOTIF_URL"
 assert_proxy_only_falls_through "D2 --preproxy= value is not a transfer URL" "--preproxy=$NOTIF_URL"
 assert_proxy_only_falls_through "D2 separated --preproxy value is not a transfer URL" --preproxy "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks4= value is not a transfer URL" "--socks4=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks4 value is not a transfer URL" --socks4 "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks4a= value is not a transfer URL" "--socks4a=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks4a value is not a transfer URL" --socks4a "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks5= value is not a transfer URL" "--socks5=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks5 value is not a transfer URL" --socks5 "$NOTIF_URL"
+assert_proxy_only_falls_through "D2 --socks5-hostname= value is not a transfer URL" "--socks5-hostname=$NOTIF_URL"
+assert_proxy_only_falls_through "D2 separated --socks5-hostname value is not a transfer URL" --socks5-hostname "$NOTIF_URL"
 assert_proxy_only_falls_through "D2 -x value is not a transfer URL" -x "$NOTIF_URL"
 assert_proxy_only_falls_through "D2 attached -x value is not a transfer URL" "-x$NOTIF_URL"
+D2_MIXED_PROXY_LOG="$WORK/d2-proxy-with-transfer-target"
+PATH="$MOCKPATH" MOCK_CURL_URLLOG="$D2_MIXED_PROXY_LOG" MOCK_NOTIF='200:{"success":true,"result":[]}' MOCK_TUNNEL='418:{"success":false}' \
+  "$MOCKBIN/curl" --proxy "$NOTIF_URL" "$TUNNEL_URL" >"$OUTFILE"
+if [[ "$(wc -l < "$D2_MIXED_PROXY_LOG" | tr -d '[:space:]')" == "1" ]] \
+   && grep -Fxq -- "$TUNNEL_URL" "$D2_MIXED_PROXY_LOG" \
+   && ! grep -Fxq -- "$NOTIF_URL" "$D2_MIXED_PROXY_LOG" \
+   && grep -Fxq -- '418' "$OUTFILE"; then
+  ok "D2 proxy option beside a real target logs only the transfer URL"
+else
+  no "D2 proxy option beside a real target confused the transfer URL log"
+fi
 MOCK_DOPPLER_MARKER="$D2MARK" MOCK_CURL_URLLOG="$D2URLS" MOCK_NOTIF='200:{"success":true,"result":[{"id":"synthetic-policy-id"}]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D2 baseline LB 403s are exit-neutral -> exit 0"
 # RUN-PATH URL ASSEMBLY pin (design-pass P2): inspect the actual request URLs,
@@ -443,6 +471,15 @@ has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+denied \(404, unverified
 has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3n account LB 403 remains baseline-neutral"
 has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3n zone LB 403 remains baseline-neutral"
 lacks "PASS: no scope dropped" "D3n Notifications 404 prevents the retained-scope PASS"
+unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
+
+# --- D3s: only an HTTP 200 is authorized; a successful array body on 201 fails closed. ---
+MOCK_NOTIF='201:{"success":true,"result":[]}' MOCK_LB_POOLS="$LB403" MOCK_LB_ZONE="$LB403" run "$MOCKPATH" --profile default-token
+assert_rc 3 "D3s Notifications 201 with an otherwise valid array -> exit 3"
+has_re 'accounts/<acct>/alerting/v3/policies[[:space:]]+denied \(201\)' "D3s non-200 Notifications response is denied"
+has_re 'accounts/<acct>/lb/pools[[:space:]]+not-yet-widened \(403' "D3s expected account LB 403 remains baseline-neutral"
+has_re 'zones/<zone>/load_balancers[[:space:]]+not-yet-widened \(403' "D3s expected zone LB 403 remains baseline-neutral"
+lacks "PASS: no scope dropped" "D3s Notifications 201 prevents the retained-scope PASS"
 unset MOCK_NOTIF MOCK_LB_POOLS MOCK_LB_ZONE
 
 # --- D3m: a degraded Notification 200 is not authorization. ---
@@ -581,8 +618,9 @@ dargv_lines="$(wc -l < "$DARGV" | tr -d '[:space:]')"
 assert_eq "D-conf one argv record per probe ($DT_N rows)" "$DT_N" "$dargv_lines"
 if [[ "$(grep -c -- '--disable' "$DARGV")" -eq "$DT_N" ]] \
    && [[ "$(grep -c -- '--noproxy' "$DARGV")" -eq "$DT_N" ]] \
+   && [[ "$(grep -Fc -- '--noproxy \*' "$DARGV")" -eq "$DT_N" ]] \
    && grep -q -- '-H @/dev/fd/' "$DARGV" \
-   && ! grep -Eq -- '(^|[[:space:]])--(pre)?proxy(=|[[:space:]]|$)|(^|[[:space:]])-x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
+   && ! grep -Eq -- '(^|[[:space:]])(--proxy|--proxy1\.0|--preproxy|--socks4a?|--socks5(-hostname)?)(=|[[:space:]]|$)|(^|[[:space:]])-x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
    && ! grep -q -- 'xyz789' "$DARGV"; then
   ok "D-conf every probe confined (no proxy override), header via @/dev/fd, token never on argv"
 else

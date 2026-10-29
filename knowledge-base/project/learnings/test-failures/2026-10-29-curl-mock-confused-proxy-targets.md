@@ -112,6 +112,14 @@ extra URL earlier in the argument vector.
 - **Prevention:** Resolve candidate roots from the current worktree inventory and
   test the exact relative file path instead of recursively searching broad roots.
 
+**A previously recorded source worktree path no longer existed.**
+
+- **Recovery:** `git -C` status checks failed because the worktree had been
+  reaped; `gh pr view 11479` confirmed the PR was merged, and the source blob was
+  verified from `origin/main`.
+- **Prevention:** Verify PR state and refresh the worktree inventory before using
+  an old path; inspect the merged blob through the current ref.
+
 **A first knowledge-base patch failed verification on stale expected text.**
 
 - **Recovery:** Re-read the exact current recovery wording and reapplied the patch
@@ -125,6 +133,13 @@ extra URL earlier in the argument vector.
   full patch with the current path and wording; no partial edits had landed.
 - **Prevention:** Verify the complete patch context against the latest file before
   retrying; do not carry forward a stale line from the previous attempt.
+
+**A combined archive-record patch expected a count line in the wrong file.**
+
+- **Recovery:** Re-read the individual targets and split the session-state and
+  learning updates into file-specific patches; the failed patch made no edits.
+- **Prevention:** Keep each patch hunk scoped to the file that owns the expected
+  text and verify the anchor in that file before applying.
 
 **A PR-body edit command was interrupted after a NUL sentinel entered its payload.**
 
@@ -234,8 +249,8 @@ The mock now distinguishes actual transfer-target forms from proxy settings:
 case "$1" in
   --url) shift; record_url "$1" ;;
   --url=*) record_url "${1#*=}" ;;
-  --proxy|--preproxy|-x) shift ;;       # consume the setting; do not log it as a target
-  --proxy=*|--preproxy=*|-x*) ;;        # likewise for attached/equal forms
+  --proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5|--socks5-hostname|-x) shift ;; # consume proxy settings, not targets
+  --proxy=*|--proxy1.0=*|--preproxy=*|--socks4=*|--socks4a=*|--socks5=*|--socks5-hostname=*|-x*) ;; # attached/equal forms
   -H|-w|--max-time|--noproxy) shift ;;  # consume unrelated option values
   -*) [[ "$1" == *://* ]] && record_url "$1" ;;
   *) record_url "$1" ;;
@@ -243,9 +258,10 @@ esac
 ```
 
 Capture the original argv before parsing. Pin the complete dry-run recipe, all
-six live target URLs, exactly one Notifications URL, mock suffix fall-through,
-and proxy-option absence in the SUT argv. Cover valid array responses and
-fail-closed 404, degraded, object, and empty-object responses.
+six live target URLs, exactly one Notifications URL, path/query suffix fall-
+through, and `--noproxy '*'` plus proxy-selector absence in the SUT argv. Test
+each selector alone and beside a real target. Cover valid array responses,
+fail-closed 404/201, degraded, object, and empty-object responses.
 
 ## Why This Works
 

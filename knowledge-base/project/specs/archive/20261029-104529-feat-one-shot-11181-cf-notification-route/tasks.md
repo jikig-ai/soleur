@@ -19,7 +19,7 @@
 ## Phase 3: Testing
 
 - [x] 3.1 Run `bash plugins/soleur/test/cf-token-scope.test.sh` and require zero failures, including the rulesets back-compat cases.
-  - Initial focused checkpoint: 170 passed, 0 failed. Final review-hardened focused run: 183 passed, 0 failed.
+  - Initial focused checkpoint: 170 passed, 0 failed. Final review-hardened focused run: 200 passed, 0 failed.
 - [x] 3.2 Verify the probe dry-run prints `alerting/v3/policies` and does not expose a token or make a request.
   - Dry-run prints the exact account Alerting URL without a pagination suffix; the test asserts no curl is issued and no token value is printed.
 - [x] 3.3 Verify the feature diff is empty under `apps/web-platform/infra/` and `.github/workflows/`; confirm no permissions, token values, Doppler values, workflow dispatches, cutover state, or web-2 weight/structural-exclusion state changed.
@@ -36,4 +36,7 @@
 - [x] 4.2 Fix targeted review findings: log actual URL operands across schemes, directly test suffix rejection, pin the full dry-run recipe, and reject empty-object Notification responses.
   - Scratch mutants for widened mock matching, extra HTTP/FTP `--url` operands, extra dry-run URLs, and empty-object authorization were killed; the focused suite passed 177/177 before full-panel hardening.
 - [x] 4.3 Fix full-panel findings: distinguish transfer URLs from proxy settings and refresh the final test count in this task artifact.
-  - Proxy-only equals/separated `--proxy`/`--preproxy` and short `-x` fixtures return the generic response without logging a request URL; D-conf rejects proxy overrides. Final focused suite passed 183/183.
+  - Proxy-only fixtures cover all curl proxy selectors; a mixed proxy-plus-real-target fixture logs only the true transfer target. D-conf pins `--noproxy '*'` and rejects proxy overrides.
+- [x] 4.4 Close final-review test gaps: directly reject the Notifications query suffix, deny a valid-array HTTP 201, and test proxy-selector values alongside a real transfer target.
+- [x] 4.5 Remove duplicate curl-mock guidance and expand the surviving reference entry to cover all supported proxy selectors.
+  - Final focused suite passed 200/200; Bash syntax, warning-severity ShellCheck, and `git diff --check` passed.
