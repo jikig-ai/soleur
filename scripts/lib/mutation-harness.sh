@@ -16,12 +16,25 @@
 
 # shellcheck disable=SC2154  # the caller-supplied names above
 
+# The repo-wide path guard (byte-identical to every tracked copy): fixture roots are absolute or we stop.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # mh_caught <fragment> <inner-run log>: 0 only when the log holds a line containing `FAIL: <fragment>` (that is how `bad`
 # prints a row label). Prints nothing; the scorer's controls call it directly.
 mh_caught() { grep -qF -- "FAIL: $1" "$2"; }
 
 instrument_selftest() {
   local p0=$PASS f0=$FAIL n0 p1 f1 p2 f2
+  assert_fixture_dir "$LEDGER"
   n0="$(wc -l < "$LEDGER")"
   { check st 1 2; has st abc z; hasnt st abc b; } >/dev/null
   p1=$((PASS - p0)); f1=$((FAIL - f0))
@@ -40,6 +53,7 @@ run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 # mutate_run <name> <tag-or-unique-text> <replacement line> <expected FAIL fragment>
 mutate_run() {
   local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0
+  assert_fixture_dir "$f"; assert_fixture_dir "$o"
   if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
   REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
   if cmp -s "$SUT" "$f"; then bad "mutation $name: the mutation did not land (instrument)"; return; fi
@@ -64,6 +78,7 @@ mutate_sub() {
 # mutate_helper <name> <helper> <neutered definition>: the self-test must abort the run (rc 4) on a copy of THIS file
 mutate_helper() {
   local name="$1" helper="$2" rep="$3" f="$MUT/$1.test.sh" o="$MUT/$1.out" rc=0
+  assert_fixture_dir "$f"; assert_fixture_dir "$o"
   HELPER="$helper" REP="$rep" awk 'index($0, ENVIRON["HELPER"] "()") == 1 { print ENVIRON["REP"]; next } { print }' "$SELF" > "$f"
   if cmp -s "$SELF" "$f"; then bad "mutation $name: the helper mutation did not land (instrument)"; return; fi
   if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant suite does not parse (instrument)"; return; fi

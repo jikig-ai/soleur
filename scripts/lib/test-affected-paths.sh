@@ -652,6 +652,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_DISPATCH_RECOVERY_SWEEPER_11211_PATHS=(
   "scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh"
   "apps/web-platform/app/api/dashboard/today/[id]/send/route.ts"
   "apps/web-platform/server/action-sends/decide-replay.ts"
+  "scripts/lib/mutation-harness.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # #11265: the LUKS keeper dark-period probe suite pins the key-probe alert block and the flip script's
@@ -663,6 +664,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_INNGEST_LUKS_KEEPER_DARK_11265_PATHS=(
   "apps/web-platform/infra/inngest-cutover-flip.sh"
   "scripts/betterstack-query.sh"
   "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "scripts/lib/mutation-harness.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(

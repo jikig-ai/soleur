@@ -415,6 +415,20 @@ if run_battery "${1:-}"; then
   MUT="$ROOT/mut"; mkdir -p "$MUT"
   ctl=0; FT_INNER=1 FT_SUT="$SUT" bash "$SELF" >/dev/null 2>&1 || ctl=$?
   check "battery control: the pristine probe passes the inner suite (rc 0)" 0 "$ctl"
+  # Scorer controls (#11520): mh_caught decides whether a mutant was caught FOR THE CLAIMED REASON. Each row calls it
+  # directly in THIS shell (an ok/bad inside a subshell would lose its PASS/FAIL increment and trip LEDGER MISMATCH) and
+  # emits exactly one check. The logs are synthetic, never recorded from a real run.
+  printf '  PASS: other\n  FAIL: frag-1 and trailing text\n' > "$MUT/sc-right.log"
+  printf '  PASS: frag-1\n'                                > "$MUT/sc-pass-only.log"
+  printf '  FAIL: a different row\n'                       > "$MUT/sc-other.log"
+  : > "$MUT/sc-empty.log"
+  check "scorer: a FAIL line starting with the fragment and trailing text is caught" yes "$(mh_caught frag-1 "$MUT/sc-right.log" && echo yes || echo no)"
+  check "scorer: a PASS-only log is not caught" no "$(mh_caught frag-1 "$MUT/sc-pass-only.log" && echo yes || echo no)"
+  check "scorer: a FAIL line for a different row is not caught" no "$(mh_caught frag-1 "$MUT/sc-other.log" && echo yes || echo no)"
+  check "scorer: an empty log is not caught" no "$(mh_caught frag-1 "$MUT/sc-empty.log" && echo yes || echo no)"
+  # Teeth: with the scorer overridden to always say yes, the three "not caught" controls come back wrongly caught.
+  dead="$( ( mh_caught() { return 0; }; n=0; for f in sc-pass-only sc-other sc-empty; do mh_caught frag-1 "$MUT/$f.log" && n=$((n + 1)); done; echo "$n" ) )"
+  check "scorer teeth: a dead scorer is caught wrongly-yes by the three negative controls" yes "$([ "${dead:-0}" -ge 1 ] && echo yes || echo no)"
   mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
   mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
   mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
@@ -461,7 +475,7 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (an --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=189; MIN_BATTERY=44
+MIN_FIXTURE=189; MIN_BATTERY=49
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-luks-keeper-dark-11265.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
