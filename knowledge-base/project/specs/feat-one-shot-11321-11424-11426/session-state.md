@@ -41,3 +41,9 @@
 - PENDING: mirror-ghcr-to-zot.test.sh fixture (closes zero-coverage + CRANE_CMD-seam findings) + registration; verify (shellcheck, bash -n, both suites + devin-cloud-mode bun test); commit fix batch; emit main trailer + Review-Evidence comment; push; ADR-267 fix round (respawn reporting∪path-mapped∪security = ~8 seats + 1 verifier over diff PANEL_SHA..HEAD, cap 2); QA (fixture-suite evidence; census already closed #11321); compound; ship (Phase 6.45 archive-kb.sh handles KB archival; UNTRUSTED-CI caveat — PR touches .github/workflows so no agent --admin fallback); DONE.
 - Affected gate: /var/tmp/soleur-11424-run/test-all.log LOCK_QUEUED position≈3 of siblings (one-shot fleet); rc file /var/tmp/soleur-11424-run/test-all.rc — wait `until [ -s rc ]`.
 - Tally: seats=8 (+1 consult pending), ci_cycles=1, fix_rounds=0, agent_rounds=2.
+
+## WS-R2 (fix-round 1, 2026-10-28 ~21:40)
+- Pushed 623f1b346d..6062b74b8d (fix commit f33b9f088b + trailer). Review-Evidence comment posted on #11442.
+- Fix-round 1: 8 seats resumed (same session ids) over `git diff 623f1b346d..HEAD`; reports at /var/tmp/soleur-11424-run/fixround/<seat>.out. fix_rounds=1.
+- New findings (round 1): P1 verify_blobs_of:578 same jq `[]` bug (fixed+live-stub fixture h); P2 (g5) vacuous grep → anchored `IMAGE_TAG_RAW" =~ \^v?` ==2; P3s: classify `" 502"` boundary, CRANE_TIMEOUT 900+docs+shape check, n_layers local, ZOT_TARGET guard after flag-parse, tr -cd '[:print:]' portable sanitizer, :5337 indent+comment restored (489,9xx), RAW_VERSION at track.sh+apply-deploy-pipeline-fix.yml, Run-comment path, (c) env -u GHCR_TOKEN, SKILL.md timeout prereq + mirror.env rm. suite-durations.tsv is generated → NO row.
+- Remaining: verify (fixture incl new live row (h) exercising verify_blobs_of; shellcheck; suites) → commit → 1 verification-pass seat (code-quality=ahead-production found the P1) → emit --fix-round --since 623f1b346d trailer → push → affected-gate rc → QA → compound → ship → DONE.

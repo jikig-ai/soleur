@@ -67,8 +67,8 @@ mutation.
 Two `doppler secrets get` calls for `ZOT_PUSH_*` — one per secret, mirroring the
 `scheduled-inngest-health.yml` credential pattern.
 
-Host prerequisites on the mirror host: `curl`, `jq`, `sha256sum` (the script
-die-6s on a missing one); `crane` is fetched pinned when absent.
+Host prerequisites on the mirror host: `curl`, `jq`, `sha256sum`, `timeout`
+(the script die-6s on a missing one); `crane` is fetched pinned when absent.
 
 ## Inputs — which repo, which refs
 
@@ -143,10 +143,12 @@ binding).
    whose signature shows ABSENT).
 4. **Mirror.** Carry the environment to the host WITHOUT putting secrets on a
    command line — never `ssh host 'GHCR_TOKEN=… bash …'` (the PAT lands on the
-   remote `bash -c` argv and the local `ssh` argv for the whole run). Write a
-   `0600` env file, `scp` it, then
-   `ssh deploy@<host> 'set -a; . ./mirror.env; set +a; ./mirror-ghcr-to-zot.sh …'`,
-   or feed env+invocation over `ssh host bash -s` stdin. The script pulls
+   remote `bash -c` argv and the local `ssh` argv for the whole run). Feed
+   env+invocation over `ssh host bash -s` stdin, or write a `0600` env file,
+   `scp` it, then
+   `ssh deploy@<host> 'set -a; . ./mirror.env; set +a; ./mirror-ghcr-to-zot.sh …; rm -f ./mirror.env'`
+   (the `rm` matters — the env-file arm must not strand a credential file on
+   a prod host). The script pulls
    manifests+blobs via `curl
    --resolve`, assembles each ref into an OCI layout, `crane push`es to
    `10.0.1.30:5000/<repo>` (plain-HTTP private net — `--insecure`, the standing

@@ -75,6 +75,8 @@
 #   CRANE_CMD         crane binary to invoke (test seam; default: crane, with a
 #                     pinned v0.20.2 github-release fetch when absent —
 #                     github.com is NOT sinkholed).
+#   CRANE_TIMEOUT     seconds bound on every crane invocation (default 900 —
+#                     a stalled private-net write dies retryable, never hangs).
 #
 # Secrets transit via env/stdin only — never argv, never logged; the tokens are
 # unset after use and the private DOCKER_CONFIG is removed with the scratch dir.
@@ -147,7 +149,7 @@ Env: GHCR_TOKEN (required unless --dry-run; operator read:packages PAT — never
 the revoked-by-design GHCR_READ_TOKEN), GHCR_USER (default operator),
 ZOT_PUSH_USER, ZOT_PUSH_TOKEN (Doppler soleur/prd), ZOT_TARGET (default
 10.0.1.30:5000), GHCR_IP / PKGC_IP (optional --resolve overrides), CRANE_CMD
-(test seam).
+(test seam), CRANE_TIMEOUT (default 900s).
 
 Exit: 0 verified · 1 usage · 2 GHCR/source · 3 sink retryable · 4 verification
 (not retryable) · 5 credential · 6 unclassified · 78 xtrace refusal.
@@ -166,9 +168,6 @@ die() { # $1 = exit code, rest = message (CR/LF flattened — registry text inte
   exit "$code"
 }
 
-[[ "$ZOT_TARGET" =~ ^[a-zA-Z0-9.-]+:[0-9]+$ ]] \
-  || die 1 "ZOT_TARGET must look like host:port (got '${ZOT_TARGET}') — the push and the sink credentials would go to a host you did not name."
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
@@ -178,6 +177,11 @@ while [[ $# -gt 0 ]]; do
     *) break ;;
   esac
 done
+
+[[ "$ZOT_TARGET" =~ ^[a-zA-Z0-9.-]+:[0-9]+$ ]] \
+  || die 1 "ZOT_TARGET must look like host:port (got '${ZOT_TARGET}') — the push and the sink credentials would go to a host you did not name."
+[[ "${CRANE_TIMEOUT:-900}" =~ ^[0-9]+$ ]] \
+  || die 1 "CRANE_TIMEOUT must be a positive-integer second count (got '${CRANE_TIMEOUT:-}')."
 
 REPO="${1:-}"
 [[ $# -ge 1 ]] || { usage >&2; die 1 "<repo> and at least one <ref> are required."; }
@@ -510,10 +514,10 @@ assemble_layout() {
 crane_capture() { # <outfile> <errfile> <crane args...> — bounded: a stalled
   # private-net write must die as retryable NETWORK, never hang the run.
   local out="$1" err="$2" rc; shift 2
-  timeout "${CRANE_TIMEOUT:-300}" "$CRANE" "$@" >"$out" 2>"$err" </dev/null
+  timeout "${CRANE_TIMEOUT:-900}" "$CRANE" "$@" >"$out" 2>"$err" </dev/null
   rc=$?
   if (( rc == 124 )); then
-    printf 'crane invocation timed out after %ss (i/o timeout)\n' "${CRANE_TIMEOUT:-300}" >>"$err"
+    printf 'crane invocation timed out after %ss (i/o timeout)\n' "${CRANE_TIMEOUT:-900}" >>"$err"
   fi
   return "$rc"
 }
@@ -526,7 +530,7 @@ classify() {
     *UNAUTHORIZED*|*DENIED*|*"authentication required"*|*"denied:"*)   echo DENIED ;;
     *"no such host"*|*"dial tcp"*|*"connection refused"*|*"connection reset"*|\
     *"i/o timeout"*|*"TLS handshake"*|*"unexpected EOF"*|*EOF|\
-    *"502 "*|*"503 "*|*"504 "*|*"502"|*"503"|*"504")                    echo NETWORK ;;
+    *"502 "*|*"503 "*|*"504 "*|*" 502"|*" 503"|*" 504")               echo NETWORK ;;
     *) echo UNKNOWN ;;
   esac
 }
@@ -575,7 +579,7 @@ verify_blobs_of() {
         || die 4 "${what}: enumerated ${n} children but the index declares ${n_declared} — the remainder were never verified."
       ;;
     manifest)
-      if ! blobs="$(jq -r '[(if has("config") then (.config.digest // "-") else empty end)] + [(.layers // []) | (.digest // "-")] | .[]' "$out" 2>"$WORK/vb.jqerr")"; then
+      if ! blobs="$(jq -r '[(if has("config") then (.config.digest // "-") else empty end)] + [(.layers // [])[] | (.digest // "-")] | .[]' "$out" 2>"$WORK/vb.jqerr")"; then
         die 4 "${what}: its blob list could not be fully enumerated — a truncated read would silently skip blobs."
       fi
       n_decl="$(jq -r '((if has("config") then 1 else 0 end)) + ((.layers // []) | length)' "$out" 2>/dev/null || printf '?')"
@@ -680,7 +684,7 @@ verify_pushed() {
 
 # ── plan + dry-run ────────────────────────────────────────────────────────────
 count_artifact() { # <digest> <depth> → accumulates DC_MANIFESTS DC_BLOBS DC_BYTES DC_CHILDREN
-  local dig="$1" depth="$2" hex="${1#sha256:}" code kind children c sz nb n
+  local dig="$1" depth="$2" hex="${1#sha256:}" code kind children c sz nb n n_layers
   local mf="$WORK/dry/$hex"
   mkdir -p "$WORK/dry" || die 6 "could not create the dry-run store — filesystem fault."
   if [[ ! -f "$mf" ]]; then

@@ -123,8 +123,8 @@ if echo "$STDERR_G4" | grep -c "version='vv1.2.3'" >/dev/null; then pass; else f
 # BOTH workflow validation sites so a one-sided edit reintroducing the post-
 # approval vv* abort class fails here (#11426/#9669). ──
 WF="$(cd "$DIR/../../.." && pwd)/.github/workflows/apply-web-platform-infra.yml"
-HITS="$(grep -c 'v?\[0-9\]' "$WF" 2>/dev/null || true)"
-if [[ -f "$WF" && "$HITS" -ge 2 ]]; then pass; else fail "(g5) input-regex parity → expected >=2 ^v? semver guards in $WF, got $HITS"; fi
+HITS="$(grep -c 'IMAGE_TAG_RAW" =~ \^v?\[0-9\]' "$WF" 2>/dev/null || true)"
+if [[ -f "$WF" && "$HITS" -eq 2 ]]; then pass; else fail "(g5) input-regex parity → expected exactly 2 IMAGE_TAG_RAW =~ ^v? guard lines in $WF, got $HITS"; fi
 
 # ── (i) diagnostic quality: rejection message names the rejected version inside the quoted slot + surfaces ::error:: ──
 STDERR="$(bash "$SCRIPT" "latest" 2>&1 >/dev/null)"

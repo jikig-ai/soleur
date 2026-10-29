@@ -58,12 +58,14 @@ RUNNING_VERSION="${RUNNING_VERSION#v}"
 TARGET_TAG="v${RUNNING_VERSION}"
 
 if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  # Strip control chars + DEL + the Unicode line separators U+2028/U+2029 from
-  # the untrusted /health value before echoing it into the runner log — a
-  # spoofed .version carrying an embedded newline or separator could otherwise
-  # inject a `::workflow-command::` annotation line (log-annotation injection).
-  # The valid path never reaches here (validated semver has none).
-  SAFE_VERSION=$(printf '%s' "$RAW_VERSION" | tr -d '\000-\037\177' | sed 's/\xe2\x80\xa8\|\xe2\x80\xa9//g')
+  # Strip everything but printable ASCII from the untrusted /health value
+  # before echoing it into the runner log — a spoofed .version carrying an
+  # embedded newline, C0 control, DEL, or a Unicode separator (U+2028/29)
+  # could otherwise inject a `::workflow-command::` annotation line
+  # (log-annotation injection). The valid path never reaches here (validated
+  # semver has none). `LC_ALL=C tr -cd '[:print:]'` is the portable form —
+  # GNU/BSD safe, unlike sed \x escapes.
+  SAFE_VERSION=$(printf '%s' "$RAW_VERSION" | LC_ALL=C tr -cd '[:print:]')
   echo "::error::Cannot resolve a semver known-good tag for web-1's running container from /health (.version='${SAFE_VERSION}'). The container is not reporting a released BUILD_VERSION (expected strict vX.Y.Z). Trigger a normal web-platform release, confirm app/health reports the new version, then re-run this recreate." >&2
   exit 1
 fi
