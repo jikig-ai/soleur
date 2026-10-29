@@ -136,24 +136,36 @@ run_case() {
 echo "== discord-blog-webhook-fallback.sh arms =="
 
 # ── LIVENESS: every non-qualifying shape must exit 2 before any Sentry read ──
+# LIVENESS-first is a load-bearing ORDER, not just an exit code: a NOT-YET arm
+# must never reach curl at all (the calls log is truncated by reset_fixtures
+# before each case, so an empty log after the run pins zero credentialed reads).
+expect_no_curl() { # <desc> -- asserts the last run_case performed no curl call
+  if [[ ! -s "$CALLS" ]]; then pass "$1"; else fail "$1 (calls: $(cat "$CALLS"))"; fi
+}
+
 reset_fixtures
 run_case "empty content dir -> NOT YET" 2
+expect_no_curl "empty content dir: no credentialed read before NOT YET"
 
 reset_fixtures
 md_file "$WORK/content/2026-11-03-scheduled.md" scheduled 2026-11-03 "x, bluesky, discord, linkedin-personal"
 run_case "scheduled (not published) discord file -> NOT YET" 2
+expect_no_curl "scheduled file: no credentialed read before NOT YET"
 
 reset_fixtures
 md_file "$WORK/content/2026-10-20-old.md" published 2026-10-20 "x, discord"
 run_case "published discord file below the date floor -> NOT YET" 2
+expect_no_curl "below-floor file: no credentialed read before NOT YET"
 
 reset_fixtures
 md_file "$WORK/content/2026-11-03-nodiscord.md" published 2026-11-03 "x, bluesky, linkedin-personal"
 run_case "published in-window file without discord channel -> NOT YET" 2
+expect_no_curl "no-discord file: no credentialed read before NOT YET"
 
 reset_fixtures
 md_file "$WORK/content/2026-11-03-substring.md" published 2026-11-03 "x, discord-blog"
 run_case "channels token merely containing 'discord' -> NOT YET (word match)" 2
+expect_no_curl "substring token: no credentialed read before NOT YET"
 
 # ── qualifying liveness + Sentry arms ────────────────────────────────────────
 reset_fixtures
