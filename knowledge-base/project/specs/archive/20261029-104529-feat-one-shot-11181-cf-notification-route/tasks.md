@@ -19,7 +19,7 @@
 ## Phase 3: Testing
 
 - [x] 3.1 Run `bash plugins/soleur/test/cf-token-scope.test.sh` and require zero failures, including the rulesets back-compat cases.
-  - Initial focused checkpoint: 170 passed, 0 failed. Final review-hardened focused run: 200 passed, 0 failed.
+  - Initial focused checkpoint: 170 passed, 0 failed. First final-head review checkpoint: 200 passed, 0 failed. Latest targeted-review fix run: 219 passed, 0 failed.
 - [x] 3.2 Verify the probe dry-run prints `alerting/v3/policies` and does not expose a token or make a request.
   - Dry-run prints the exact account Alerting URL without a pagination suffix; the test asserts no curl is issued and no token value is printed.
 - [x] 3.3 Verify the feature diff is empty under `apps/web-platform/infra/` and `.github/workflows/`; confirm no permissions, token values, Doppler values, workflow dispatches, cutover state, or web-2 weight/structural-exclusion state changed.

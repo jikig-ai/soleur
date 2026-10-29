@@ -641,13 +641,24 @@ MOCK_CURL_ARGV="$DARGV" run "$MOCKPATH" --profile default-token
 assert_rc 0 "D-conf default-token run -> exit 0"
 dargv_lines="$(wc -l < "$DARGV" | tr -d '[:space:]')"
 assert_eq "D-conf one argv record per probe ($DT_N rows)" "$DT_N" "$dargv_lines"
-DNOPROXY_COUNTS="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "--noproxy") { n++; if ($(i + 1) == "\\*") star++ } } END { printf "%d %d", n + 0, star + 0 }' "$DARGV")"
-read -r d_noproxy_count d_noproxy_star_count <<<"$DNOPROXY_COUNTS"
+DNP_BAD_ROWS="$(awk '
+  {
+    n = 0; star = 0; equals_form = 0
+    for (i = 1; i <= NF; i++) {
+      if ($i == "--noproxy") {
+        n++
+        if ($(i + 1) == "\\*") star++
+      }
+      if ($i ~ /^--noproxy=/) equals_form = 1
+    }
+    if (n != 1 || star != 1 || equals_form) bad++
+  }
+  END { print bad + 0 }
+' "$DARGV")"
 if [[ "$(grep -c -- '--disable' "$DARGV")" -eq "$DT_N" ]] \
-   && [[ "$d_noproxy_count" -eq "$DT_N" ]] \
-   && [[ "$d_noproxy_star_count" -eq "$DT_N" ]] \
+   && [[ "$DNP_BAD_ROWS" -eq 0 ]] \
    && grep -q -- '-H @/dev/fd/' "$DARGV" \
-   && ! grep -Eq -- '(^|[[:space:]])(--proxy|--proxy1\.0|--preproxy|--socks4a?|--socks5(-hostname)?)(=|[[:space:]]|$)|(^|[[:space:]])-[^-][^[:space:]]*x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
+   && ! grep -Eq -- '(^|[[:space:]])(--proxy|--proxy1\.0|--preproxy|--socks4a?|--socks5(-hostname)?)(=|[[:space:]]|$)|(^|[[:space:]])-x[^[:space:]]*([[:space:]]|$)|(^|[[:space:]])-[^-][^[:space:]]*x[^[:space:]]*([[:space:]]|$)' "$DARGV" \
    && ! grep -q -- 'xyz789' "$DARGV"; then
   ok "D-conf every probe confined (no proxy override), header via @/dev/fd, token never on argv"
 else

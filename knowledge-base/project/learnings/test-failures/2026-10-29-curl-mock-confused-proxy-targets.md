@@ -87,8 +87,12 @@ extra URL earlier in the argument vector.
 
 - **Recovery:** An initial ship-resumption read of the plan/spec files also
   returned not-found; re-read all affected files by absolute worktree path
-  before editing.
-- **Prevention:** Use worktree-absolute paths for MCP/tool reads and writes.
+  before editing. A later absolute Read reported an out-of-range offset at 568
+  lines while `wc -l` in the same worktree reported 763; a shell read confirmed
+  the current D-conf block.
+- **Prevention:** Use worktree-absolute paths for MCP/tool reads and writes; when
+  Read line bounds disagree with `wc -l` in that worktree, verify through shell
+  from the exact worktree before editing.
 
 **Session-start cleanup warned that the separate root checkout could not fast-forward `main`.**
 

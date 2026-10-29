@@ -5,12 +5,13 @@
 - Status: complete
 
 ### Errors
+- A targeted review-ledger patch missed the current session-state section; no edits landed. Re-read and anchored the ledger before the next section marker.
 - Two targeted-round record patches failed verification against stale long/wrapped contexts; no edits landed. Re-read the current text and use short, file-specific anchors for follow-up.
 - Web search returned HTTP 404; the official Cloudflare API reference was fetched directly and verified.
 - An incidental read of nonexistent `knowledge-base/project/project-nope.md` returned not-found; no repository files changed.
 - One test patch failed verification because its hunks were out of order; no edits landed from that call, and the patch was reapplied in file order.
 - Two `scripts/test-all.sh --print-selection` attempts exceeded their 30s and 120s bounds; they emitted only the local Bun-version warning and yielded no selection or test verdict.
-- During review, relative-path reads resolved against the main checkout and returned stale test content / missing untracked plan artifacts. On ship resumption, an initial relative-path read of the plan/spec files also returned not-found. These were read-only; all affected files were re-read by absolute worktree path before editing.
+- During review, relative-path reads resolved against the main checkout and returned stale test content / missing untracked plan artifacts. On ship resumption, an initial relative-path read of the plan/spec files returned not-found; later, an absolute Read reported 568 lines for the test file while `wc -l` in the same worktree returned 763. Shell reads verified the current file; no edits were based on stale output.
 - A later patch context was already superseded; its verification failure was investigated by re-reading the worktree, and no change was lost.
 - Two follow-up patches for the learning/session records failed verification because the expected text did not match the current recovery wording; neither failed attempt changed files. Re-read the exact text and reapplied with the matching context.
 - Status checks against the old `chore-learning-cf-token-route` worktree failed because it no longer existed. `gh pr view 11479` confirmed the PR had merged; the source blob was verified through `origin/main` instead.
@@ -147,6 +148,19 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 | `--noproxy` check counted matching lines and accepted duplicate or narrowed operands | `noproxy-option-cardinality-and-value` | `architecture-strategist`, `security-sentinel` | Count exact option tokens and exact `*` operands |
 | D-conf did not reject clustered `-sSx` proxy syntax | `clustered-x-proxy-option` | `security-sentinel` | Reject short-option clusters containing `x` |
 | Mixed-target fixtures covered only `--proxy` while docs claimed all selectors | `mixed-proxy-selector-target-coverage` | `pattern-recognition-specialist`, `architecture-strategist`, `security-sentinel`, `code-quality-analyst`, `test-design-reviewer`, `structural-enumeration` | Exercise every selector/form beside a real transfer target |
+
+## Targeted Fix-Review Round 2
+
+- At HEAD `f6e88ea782f73f656c7afde11aa0903c0407d4ff`, eight reviewer agents returned and ShellCheck passed. Findings: aggregate `--noproxy` counts could hide per-probe imbalance or `--noproxy=` overrides (P2); the short-option deny regex missed standalone/attached `-x` (P2); `tasks.md` described 200/200 without marking it as an earlier checkpoint (P3).
+- Fixes are now applied locally: D-conf validates each argv record, requires one separated `--noproxy '*'`, rejects equals overrides, and catches standalone/attached/clustered `-x`. The task artifact labels 200/200 as an intermediate checkpoint and 219/219 as latest. Focused suite: 219/219; one fresh-eyes verifier remains.
+
+### Round 2 Dedup-before-fixing ledger
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix |
+|---|---|---|---|
+| D-conf aggregates `--noproxy` and wildcard counts across probes and ignores the equals form | `dconf-proxy-policy-not-per-invocation` | `architecture-strategist`, `security-sentinel`, `test-design-reviewer`, `pattern-recognition-specialist`, `structural-enumeration` | Validate exactly one token/value per argv record and reject `--noproxy=` |
+| Short-option regex misses `-x`, `-x<proxy>`, and clusters with `x` | `dconf-short-x-proxy-deny` | `security-sentinel`, `pattern-recognition-specialist`, `structural-enumeration` | Add explicit `-x` and clustered-option alternatives |
+| Task artifact presents the 200/200 intermediate result as the final run | `final-test-count-currentness` | `test-design-reviewer` | Mark 200/200 as an intermediate checkpoint and retain 219/219 as latest |
 
 ## Compound Phase
 
