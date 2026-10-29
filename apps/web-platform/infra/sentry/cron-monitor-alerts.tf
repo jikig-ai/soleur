@@ -52,13 +52,17 @@ locals {
     # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
     # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
     workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
+    # #4672 — the approval-queue expiry sweep's liveness monitor, added under the two-PR rule: not in monitor_ids until
+    # its first apply. There is NO independent cover for a dead sweep today: the only issue alert on the sweep's output
+    # (sentry_alert.approval_gate_unanswered) is emitted BY the sweep, so a dead sweep emits nothing, and no Better Stack
+    # missing-SOLEUR_APPROVAL_SWEEP monitor exists in infra/ (verified by grep). Until routed, a missed or failed
+    # check-in only opens a Sentry issue nobody is emailed about. The flag stays off meanwhile, so no live request can be
+    # stranded; routing this monitor into cron_monitor_failure is therefore a REQUIRED item on the approval-queue flag-flip
+    # checklist (ADR-307 "Flag lifecycle", flag-create-handover.md): route it before the flag is turned on for anyone.
+    scheduled_approval_expiry = "routing is a flip-checklist item: no independent cover exists (gate_unanswered is emitted by the sweep itself); route before the approval-queue flag is turned on (#4672)"
     # #10390 WS1 — the Better Stack incident mirror's liveness monitor, added under the two-PR rule:
     # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the
     # first measured check-in.
-    # #4672 — the approval-queue expiry sweep's liveness monitor, added under the two-PR rule: route it after
-    # its first apply. Real cover meanwhile: the unrouted monitor still opens a Sentry issue on a missed or
-    # failed check-in, and the gate_unanswered issue alert (issue-alerts.tf) covers a request nobody answered.
-    scheduled_approval_expiry = "route after first apply; the monitor still opens a Sentry issue and sentry_alert.approval_gate_unanswered covers an unanswered request (#4672)"
     scheduled_betterstack_incident_mirror = "the mirror's own ci/betterstack-incident GitHub issues are the primary channel; route after the first measured check-in (#10390)"
   }
 }

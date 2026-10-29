@@ -30,7 +30,7 @@ Forces:
 
 ## Considered Options
 
-- **Option A: a new `approval_request` table, consumed inside `canUseTool` (chosen).** One row per exact action, forward-only status machine,
+- **Option A: a new `approval_request` table, consumed inside `canUseTool` (chosen).** One row per exact action, a constrained status machine (forward-only except an Owner revoke before consume),
   write-once decision columns, an Owner-only `decide_approval` RPC, no server-side execution. Pros: durable, audit-bearing, bound to a hash of the
   full canonical input, answerable from a card, an inbox row or a push landing page. Cons: a new table, RPC set, cron and flag to own.
 - **Option B: widen `action_sends`.** Rejected. `grant_id` is NOT NULL (FK to `scope_grants`), `tier_at_send` is a four-value CHECK and the pure-reject
@@ -40,7 +40,7 @@ Forces:
 - **Option D: a per-request Inngest `step.sleepUntil` function.** Rejected: one 5-minute cron serves expiry, the unanswered flag and the scrub with one task surface.
 - **Option E: server-side execution of an approved payload after the session died.** Deferred: a different principal and a larger change. Slice 1 only
   releases the agent's next identical call once.
-- **Option F: a second WORM decision-log table.** Rejected: write-once columns plus forward-only transitions on the one table give the same history.
+- **Option F: a second WORM decision-log table.** Rejected: write-once columns plus a constrained transition matrix on the one table give the same history.
 - **Option G: keep the in-memory gate and add only the timeout fix.** Rejected for these tools: it does not give P1, P2 or an audit row. The timeout-deny fix itself is
   not part of this decision; ADR-305 owns it.
 
@@ -51,28 +51,87 @@ Adopt Option A for eight gated platform tools, behind the Flagsmith flag `approv
 `workspace_set_autonomous`. Every other gated tool stays on the existing in-memory review gate, byte-identical.
 
 Flow. In the gated branch of `canUseTool` (the same branch ADR-305 and ADR-284 use), with the flag on and the tool in `APPROVAL_REQUIRED_TOOLS`:
-the full canonical action is hashed before the first `await`, a service-role RPC creates (idempotently) the request and its inbox item, the Owner is
-notified with content-free text, and the agent waits at most 5 minutes (wake on the in-process decide, plus an abortable poll of one indexed row about every
+the full canonical action is hashed before the first `await`, a service-role RPC creates (idempotently, and subject to the pending caps below) the request and its
+inbox item, the Owner is notified with content-free text (coalesced, see invariant 9), and the agent waits at most 5 minutes (wake on the in-process decide, plus an abortable poll of one indexed row about every
 5 s, at most 60 reads, so a decision made over HTTP on another host is seen). A decision inside the window releases the call through an atomic consume.
 A wait that ends undecided denies with a static "saved for the workspace Owner; do not retry now" message and leaves the row `pending`; a later approval
 lets the next byte-identical proposal in the same conversation consume the approved row once.
 
 ### Invariants
 
-1. **Action-bound.** `action_sha256 = sha256(canonicalJSON({tool_name, workspace_id, conversation_id, action}))`, over every field that changes what runs, keys sorted,
-   strings hashed exactly as supplied (no Unicode normalisation), nothing truncated. The card view is rendered from the same canonical object, so display and hash cannot drift.
+1. **Action-bound.** `action_sha256 = HMAC-SHA256(key, canonicalJSON({tool_name, workspace_id, conversation_id, action}))`, over every field that changes what runs, keys sorted,
+   strings hashed exactly as supplied (no Unicode normalisation), nothing truncated. The key is derived, not new: `key = HMAC-SHA256(SENTRY_USERID_PEPPER, "soleur:approval-request:action-sha256:v1")`
+   (domain-separated; the pepper already exists in `server/observability.ts`, so there is no new secret). It is read at call time in `server/approval/hash-key.ts`; an unset or empty pepper raises
+   `ApprovalCanonicalError("key_unavailable")`, which the gate treats as a gate failure (static unavailable deny). There is **no fallback to an unkeyed hash and no sentinel key**: fail closed.
+   Why keyed: the hash is kept as the audit record after the 30-day text scrub and after erasure; an unkeyed hash over a low-entropy action (an `email_suppress` recipient) is dictionary-confirmable.
+   The keyed hash is still personal data in the legal sense while the secret exists (pseudonymous, not anonymous); it is described as a keyed fingerprint of the action that cannot be reversed or
+   confirmed without a secret held only by the server. The pepper only has to be stable for the life of a live row (at most 48 h): all recomputation is in-process (gate, the hash the gate passes to consume,
+   reattach re-verify), so a rotation makes live approvals fail closed as `hash_mismatch` ("needs a new approval"). The card view is rendered from the same canonical object, so display and hash cannot drift.
    The object handed to `allow()` is the same deep-cloned snapshot that was hashed.
-2. **Single use.** Consume is one atomic conditional `UPDATE ... WHERE status='approved' AND expires_at>now() AND action_sha256=p_hash AND conversation_id=p_conversation`.
-3. **Forward-only, write-once.** A trigger allows only `pending -> approved|rejected|expired` and `approved -> consumed|expired`; identity, hash, tool, expiry and
-   decision columns are write-once; every write outside the RPCs is refused. Only the account-erasure carve-outs (a row-level `SET NULL` of the user FKs, the workspace-cascade DELETE) and
-   the GUC-gated scrub of `canonical_action` are permitted exceptions.
+2. **Single use, principals re-checked.** Consume is one atomic conditional `UPDATE ... WHERE status='approved' AND expires_at>now() AND action_sha256=p_hash AND conversation_id=p_conversation
+   AND is_workspace_owner(workspace_id, decided_by) AND is_workspace_member(workspace_id, requested_by_user_id)`. The principal re-check is inside the same UPDATE (not a second read), so it cannot be raced:
+   a decider demoted from Owner, a requester removed from the workspace, or an erased user (a NULL id makes the predicate NULL) leaves the row unconsumable. The reject reasons are `decider_not_owner` and
+   `requester_not_member`, and the agent is told the approval can no longer be applied and a new one is needed from a current Owner. This also closes, for this feature, the #4307 gap that a role change does not invalidate a granted session capability.
+3. **Constrained transitions, write-once facts.** A trigger allows exactly these transitions and no others:
+
+   | From | To | Who |
+   |---|---|---|
+   | `pending` | `approved`, `rejected` | `decide_approval` (Owner) |
+   | `pending` | `expired` | sweep or inline expiry |
+   | `approved` | `consumed` | `consume_approval` (service role) |
+   | `approved` | `expired` | sweep or inline expiry |
+   | `approved` | `rejected` | `decide_approval` deny by an Owner (**revoke**), only for an unconsumed, unexpired row |
+
+   The revoke path (`approved -> rejected`) is the one backward-looking edge: it only ever reduces authority, so it is allowed while consume is not. It has its own audit pair (`revoked_at`, `revoked_by`,
+   write-once, settable only on that transition); `decided_at` and `decided_by` keep the approval facts. Revoke and consume serialise on the row lock and the conditional UPDATE, so exactly one wins; a
+   revoke that loses the race reports `conflict`. A denied request is not sticky: a later re-ask finds no live row and creates a new pending request. Identity, hash, tool, expiry and decision columns are
+   write-once, and every write outside the RPCs is refused. The permitted exceptions are only: (a) the account-erasure `SET NULL` of the user FKs (`requested_by_user_id`, `decided_by`, `revoked_by`),
+   (b) the workspace-cascade DELETE, (c) the GUC-gated scrub of `canonical_action`, and (d) a **GUC-gated DELETE carve-out for a memberless workspace**: during account erasure a solo workspace's rows
+   (`workspace_id` equals the erased user's id and no `workspace_members` row remains) are deleted by `anonymise_approval_request` under the scrub GUC, together with their `approval_required` inbox items.
+   A DELETE outside the GUC, or while a member exists, still raises. A team workspace keeps its history with only the user columns nulled. The migration header carries the same matrix and carve-outs.
 4. **Owner-only decision, actor from the session.** `decide_approval(p_id, p_decision)` is granted to `authenticated` only and takes the actor from `auth.uid()`, never from a
-   parameter; it re-checks `is_workspace_owner` and `expires_at > now()` at decision time. Every other RPC is `service_role` only.
+   parameter; it re-checks `is_workspace_owner` and `expires_at > now()` at decision time. The Owner check runs BEFORE the row lock is taken (the workspace is looked up without a lock), so a
+   signed-in non-Owner who guesses a request id cannot lock it, and a missing row and a non-Owner return the same error. Every other RPC is `service_role` only.
 5. **Expiry is bounded and never silent.** 24 h expiry; the cron is never the authority (an overdue row is expired inline by the decide RPC); `canonical_action` is nulled 30 days after the terminal state;
-   an unanswered request is flagged once after 15 minutes.
+   an unanswered request is flagged once after 15 minutes. The scrub is bounded and indexed (at most 1000 rows per tick, `FOR UPDATE SKIP LOCKED`), so a backlog drains over successive ticks.
 6. **Content-free off-session notifications.** Push and email carry no action text (#8532); the surface is the in-product card.
 7. **Honest consent.** "Approve" releases the agent's next identical call once; it does not execute anything and the record claims no tool outcome (`consumed` means released to the agent).
 8. **`review_gate_response` can never resolve an approval waiter**; the approval path has its own wire types (`approval_request`, `approval_status`, `approval_decide`) with no option strings, so "approve all" cannot be expressed.
+9. **Bounded queue, coalesced nudges.** Caps are enforced in `create_approval_request` (the database, not TypeScript) and count `pending` rows only: **5 per conversation** (error code `AP429`) and **20 per workspace**
+   (`AP430`). An idempotent re-ask of an already-live request is never blocked by the cap. The count is a bound, not an invariant: a concurrent race can overshoot by at most the in-process `MAX_PENDING_GATES`
+   and there is no advisory lock. The gate maps each code to a static "too many pending requests" deny and a warn op. Notifications are coalesced: `create_approval_request` returns `notify`, true only when
+   the request is new AND no other pending request in the workspace was created in the previous **10 minutes**; the card and inbox row are always created, only the push or email is suppressed (its text is
+   content-free, so a coalesced nudge loses nothing). The 15-minute unanswered flag and the expiry notice are unchanged.
+
+### Bound versus executed: ExecutionGrants
+
+The hash binds the identifiers the Owner saw, but several handlers re-resolve content when they run, up to five minutes (the wait) after the gate. For a push the handler would otherwise push `HEAD`, which
+may have moved during the wait. A per-session in-process side channel, `ExecutionGrants` (`server/approval/grants.ts`), closes the part of that gap which is closable without changing the tool schemas:
+
+- **Mechanism.** The gate writes a grant immediately before `allow()` on BOTH allow paths (the live `approved` case and the `released` re-proposal case); the three handlers that need it read it once.
+  A side channel is needed because the tool zod strips keys not in the schema and SDK `tool()` handlers get no reliable `tool_use_id`, so a binding cannot ride in `updatedInput` without letting the model supply it.
+  The object is created once per session in `agent-runner.ts` and shared by closure between the gate deps and the tool builders; no MCP tool exposes it and the Bash sandbox holds no handle to it, so the model cannot forge it.
+  A grant is keyed by `canonicalJson(zod-parsed handler args)` (the same `SPECS[tool].input.parse` on both sides, so defaults such as `force=false` match), is one-shot (`take` deletes), expires after 120 s,
+  and the map is capped at 64 entries (oldest dropped).
+- **Fail closed, sticky.** The gate sets `enforcing = true` as soon as the flag evaluates true in a session. From then on a handler that finds no grant refuses ("approval grant missing; ask again"). If the
+  flag is turned off mid-session, a legacy-gated call in that session is refused at the handler and the agent must ask again in a new session; this is accepted. When `grants` is absent or never `enforcing`
+  (the flag was never on), handler behaviour is byte-identical to before.
+- **Hotfix boundary untouched.** The grant is written inside the existing `canUseTool` allow path; `allowedTools` and ADR-305 are unchanged.
+
+| Tool | Disposition | Residual |
+|---|---|---|
+| `github_push_branch` | **Pin** the commit: the gate binds the derived head sha, `pushBranch` takes `commitSha` (40 or 64 hex, `git cat-file -e <sha>^{commit}` verified, refspec `<sha>:refs/heads/<branch>`), so exactly the approved commit is pushed even if `HEAD` moved. | None for the pushed commit. |
+| `workspace_set_autonomous` | **Verify** at execution that the active workspace equals the granted workspace; refuse with `workspace_changed` on mismatch. | None for the workspace. |
+| `kb_share_create` | **Verify** the workspace as above. | **Accepted:** the file's bytes. The Owner is shown a path, never content, so a content hash would bind a version nobody reviewed; `createShare` already stores `content_sha256` and re-issues on drift, so a link only serves the bytes hashed at create time. |
+| `create_pull_request` | None. | **Accepted:** head and base are names; the commits on `head` were approved at their own push. |
+| `github_trigger_workflow` | None. | **Accepted:** the workflow runs as defined on `ref` when it starts. Ref-sha pinning needs a GitHub API call at gate time and is deferred (tracked). |
+| `email_reply` | None. | **Accepted:** the recipient is derived from the same immutable inbound row at gate and handler. |
+| `email_send`, `email_suppress` | Fully bound by the hash: every field is model-supplied input. | None. |
+
+Residual risk, stated on the cards and here: *The approval binds the action's identifiers and, for a push, the exact commit. It does not bind the content a handler re-reads at execution for `kb_share_create`
+(file bytes), `create_pull_request` (branch contents) or `github_trigger_workflow` (workflow file at the ref). Those stay residual and are stated on the card.* The copy deck
+(`apps/web-platform/lib/approval-copy.ts`) carries the matching detail lines: `kb_share_create` "Creates a public link to this file as it is when your agent creates the link. The file's contents are not shown here.";
+`create_pull_request` "Opens a pull request between these branches. The changes on the branch were approved when they were pushed, not here."; `github_trigger_workflow` "Runs the workflow as it exists on this branch or tag when it starts."
 
 ### Flag-off posture
 
@@ -86,9 +145,15 @@ The agent session runs in the same process as the server and the Owner's WebSock
 as its sentinel.** What exists:
 
 - No MCP tool exposes a decide capability, and the sandboxed Bash tool holds no database credential (ADR-272).
-- The sentinel test `test/approval/decide-boundary.test.ts` pins three conjuncts: the `decide_approval` RPC name appears in exactly one source module; that module has exactly the allowlisted
-  importers (today the WebSocket handler); and a static, dynamic and re-export import walk from the gate side and every MCP tool builder never reaches it (the WebSocket handler is treated as the process hub and not traversed,
-  because it is reachable from every module that sends a notification, which is why the plan's stronger "nothing reachable" form is unsatisfiable).
+- The sentinel test `test/approval/decide-boundary.test.ts` pins these conjuncts: the `decide_approval` RPC name appears in exactly one source module (`server/approval/decide.ts`); `decide.ts` has exactly the
+  allowlisted importers, which are **two**: the WebSocket handler (`server/ws-handler.ts`, the `approval_decide` frame) and the HTTP decide route (`app/api/approvals/[id]/decide/route.ts`, the push landing page);
+  and a static, dynamic and re-export import walk from the gate side and every MCP tool builder never reaches `decide.ts`. The walk skips type-only imports (`import type`, `export type`, `import { type X }`-only
+  specifiers), builds its entry set by glob (`server/*-tools.ts`, `server/**/mcp-*.ts`, and every module under `server/approval/` except `decide.ts`) with a floor assertion on the entry count so a rename cannot
+  silently empty the walk, and treats the WebSocket handler as the process hub and does not traverse it (it is reachable from every module that sends a notification, which is why the plan's stronger "nothing
+  reachable" form is unsatisfiable). Two further assertions bound the hub: no module outside the allowlisted set imports `handleMessage` (or any value export) from `ws-handler`, and no gate-side or MCP-builder
+  module value-imports `ws-handler` at all, so the hub exemption cannot be used to reach `handleMessage`, which mints a tenant client.
+- `readCcMcpAllowlist` (the cc runner's env-driven MCP allowlist) throws if any resolved name is in `APPROVAL_REQUIRED_TOOLS`: the cc runner has no approval wiring, so a promoted approval tool would otherwise run
+  on the legacy in-memory gate and silently skip the queue.
 
 What it does not cover: an RPC name assembled at runtime, a new importer added together with its allowlist entry, or a code path that obtains a tenant client and calls `decide_approval` through a
 channel the grep does not model. A prompt-injected agent that can only emit tool calls cannot do this; arbitrary code execution in the server process can, and is outside this decision's threat model
@@ -96,9 +161,9 @@ channel the grep does not model. A prompt-injected agent that can only emit tool
 
 ### Relationship to other ADRs
 
-- **ADR-305** is the prerequisite and is unchanged: gated tools never enter `allowedTools`, and the shared `holdForUser` lifecycle fails closed. This ADR adds a second stage inside that gated branch.
-- **ADR-284** (memory-less must-ask lane for hosted Bash) is unchanged for Bash. A durable single-use request extends the idea of an ask to platform tools, which that ADR's wording ("no new approval surface") did not contemplate; see its dated Addendum.
-- **ADR-085**: the inbox `source` CHECK is widened to include `approval_required`, as that ADR reserved; see its dated Addendum. The per-Owner recipient-state join stays deferred: the approval row carries its own state and the decide RPC moves the linked inbox item out of the `action_required` count in the same transaction.
+- **ADR-305** is the prerequisite and is unchanged: gated tools never enter `allowedTools`, and the shared `holdForUser` lifecycle fails closed. This ADR adds a second stage inside that gated branch. For the eight tools with the flag on, ADR-305's timeout wording differs by design (the wait ends with "saved for the workspace Owner; do not retry now" and the row stays pending rather than "the action was not performed"); see ADR-305's dated Addendum.
+- **ADR-284** (memory-less must-ask lane for hosted Bash) is unchanged in behaviour for Bash: no acknowledgement and no cache entry are added to it. The two mechanisms are not isolated, though: they share the `holdForUser` lifecycle and the per-session `pendingGates` budget (5 pending cards, Bash and platform together), so a pending approval wait counts against the same budget as a pending Bash card. A durable single-use request extends the idea of an ask to platform tools, which that ADR's wording ("no new approval surface") did not contemplate; see its dated Addendum.
+- **ADR-085**: the inbox `source` CHECK is widened to include `approval_required`, as that ADR reserved; see its dated Addendum. The per-Owner recipient-state join stays deferred. ADR-085's trigger ("when broadcast `approval_required` first needs it") was evaluated for this ADR and is **not met**: the approval is a workspace-grain decision (the first Owner's decision settles it for every Owner), the approval row carries its own state, and the decide RPC moves the linked inbox item out of the `action_required` count in the same transaction, so no independent per-Owner `acted_at` exists to reconcile. Re-evaluate if a future approval needs per-Owner acknowledgement.
 - **ADR-060**: its body-hash-bound single-use approval is the precedent. The email handler's own `approvedBodySha256` stays as it is; it is computed from the same arguments at handler time and binds nothing independent of the gate, so the gate hash over the snapshot is the binding.
 - **ADR-249 / ADR-264**: the operator TTY ack and staged operator scripts are unchanged. They cover operator production writes, a different principal; this queue covers a founder's agent acting on the founder's behalf.
 - **ADR-027 / ADR-068** (process-local state, multi-host): the in-process waiter is an optimisation; correctness never depends on it, because every wait re-reads the row.
@@ -121,11 +186,66 @@ Owner: Jikigai engineering (CTO lane); the flag is created through `soleur:flag-
 the flag has been ON for all workspaces for 30 days with consume success above the agreed threshold (the rate of `approval-consume-rejected` is the measure of the "byte-identical arguments" wording). Public-document wording is
 gated separately (the compliance posture row); this ADR does not enable the feature.
 
+### Flag-flip checklist (before the flag is turned on for anyone)
+
+1. **Cohort rule: no workspace with more than one member gets the flag until the Owner card names the requester and `reattach` stops sending full action text to non-Owners.** Until both hold, the flag is limited to
+   single-member workspaces (also: the decide path out of the agent process, or the sentinel gap re-accepted). Check `workspace_members` count for the workspace before any per-workspace override.
+2. Read-only check that `SENTRY_USERID_PEPPER` is set in Doppler `prd` (invariant 1 fails closed without it). Do not rotate the pepper without draining live approvals.
+3. Route the cron monitor: `scheduled_approval_expiry` is declared-unrouted under the two-PR rule and has no independent cover (the unanswered alert is emitted by the sweep itself, and no Better Stack
+   missing-`SOLEUR_APPROVAL_SWEEP` monitor exists). Route it into `cron_monitor_failure` before the flip.
+4. Re-run the real-SDK probe (`dev-probe-approval-gate.ts`, ADR-305 checklist) and confirm the post-deploy verification below is green.
+5. The provisional autonomous-mode card copy has CPO and CLO sign-off; evidence gates #9776 and #10111 are closed.
+
+## Rollback and post-deploy verification
+
+**Rollback is: flag off, keep the schema.** `180_approval_request.down.sql` is NOT a hot rollback. Run by hand against production it (1) leaves the `_schema_migrations` row, so the runner never re-applies 180 while
+the schema is gone; (2) strands `verify/068` (which expects the extra `_jti_not_denied` policy) and `verify/180`, which stay in `main` and fail every following release's `verify-migrations`, blocking `deploy`; (3) breaks
+account deletion for every user if the new app is live, because saga step 5.16 calls `anonymise_approval_request`; and (4) deletes the `approval_required` inbox rows and DROPs the table including its audit rows.
+An app-only rollback (redeploy the previous image) is safe: old code never references the new objects, the table stays empty while the flag is off, and the Sentry monitor goes `missed` after its margin.
+
+If a schema down is unavoidable, the order is: (a) deploy the previous image FIRST; (b) take a `pg_dump` snapshot of `public.approval_request` (and the `approval_required` rows of `inbox_item`) BEFORE the DROP, because
+the down drops the audit rows; (c) apply the down; (d) `DELETE FROM public._schema_migrations WHERE filename = '180_approval_request.sql'`; (e) revert the `verify/068` and `verify/180` edits and the app code in the
+same change. The preferred alternatives are a revert PR that removes migration, verify files and app code together, or a forward-fix migration. Migration 180 is edited in place before merge (DEV only); the DEV
+reset is down, delete the ledger row, up, then `verify/180` and `scripts/dev-ledger-parity.sh`, never against prd.
+
+Merge order: the release pipeline runs `migrate`, then `verify-migrations`, then `deploy`, so the schema lands before the app. The sibling branch `fix-codex-notice-rights-slice-a` holds migration 179 and is stale against
+the hotfix; its merge order is recorded in the PR body.
+
+Post-deploy verification (flag still off; read-only, counts only, within 5 minutes of the deploy):
+
+```sql
+-- 1. High-value invariants (expected: every row 0)
+SELECT 'rls' AS chk, CASE WHEN relrowsecurity THEN 0 ELSE 1 END AS bad FROM pg_class WHERE oid = 'public.approval_request'::regclass
+UNION ALL SELECT 'ledger', CASE WHEN count(*) = 1 THEN 0 ELSE 1 END FROM public._schema_migrations WHERE filename = '180_approval_request.sql'
+UNION ALL SELECT 'no_service_role_table_priv', CASE WHEN has_table_privilege('service_role', 'public.approval_request', 'SELECT,INSERT,UPDATE,DELETE') THEN 1 ELSE 0 END;
+
+-- 2. No stale narrow source CHECK left beside the widened one (expected 0)
+SELECT count(*) AS stale_narrow_checks FROM pg_constraint
+ WHERE conrelid = 'public.inbox_item'::regclass AND contype = 'c'
+   AND pg_get_constraintdef(oid) LIKE '%task_completed%' AND pg_get_constraintdef(oid) NOT LIKE '%approval_required%';
+
+-- 3. Dormancy while the flag is off (expected 0, 0, 0)
+SELECT (SELECT count(*) FROM public.approval_request) AS approval_rows,
+       (SELECT count(*) FROM public.inbox_item WHERE source = 'approval_required') AS approval_inbox_rows,
+       (SELECT count(*) FROM public.approval_request WHERE status = 'pending') AS pending_rows;
+```
+
+Also: the inbox per-source and per-severity counts equal the pre-deploy baseline; `SOLEUR_APPROVAL_SWEEP` reaches Better Stack at least twice in 15 minutes, each `ok=true expired=0 flagged=0 scrubbed=0
+notify_failed=0`; the `scheduled-approval-expiry` Sentry monitor shows an `ok` check-in within 15 minutes; Sentry has zero `feature=account-delete op=anonymise-approval-request` events in the first 24 hours
+(that step is flag-independent and fail-closed, and it now has its own routed alert); and `soleur:flag-list` shows `approval-queue` off everywhere. Pre-deploy, the baseline is the same inbox counts, the ledger
+row and table absent in prd, and exactly one `inbox_item` source CHECK. Nothing in this section flips or creates the flag; an end-to-end gate smoke in prd belongs to the enabling gate.
+
+Retention and WAL: the 30-day scrub is an `UPDATE` that nulls `canonical_action`, so the old row version remains in WAL and database backups until their own retention windows pass. "Nulled after 30 days" is the
+application-visible state, not a claim of physical erasure. Metadata rows only grow (one per request, never deleted except a solo workspace on erasure), bounded by the pending caps and the 5-minute cron rather than by
+retention.
+
 ## Consequences
 
-- An Owner can answer a high-risk action after the session ended, and every decision leaves a hash-bound, forward-only audit row that survives erasure of the action text.
+- An Owner can answer a high-risk action after the session ended, and every decision leaves a hash-bound audit row with constrained transitions (including an Owner revoke before consume) that survives erasure of the action text. The row survives erasure of the *account* except for a solo workspace, where it is deleted with the account (invariant 3); a team workspace keeps its history with the user columns nulled.
 - Slice 1 does not execute on approve: the agent must propose the identical action again, so a regenerated email body hashes differently and is not consumed. That friction is accepted and measured.
 - One more table, six-plus RPCs, a 5-minute cron and a flag to maintain; every new gated tool pays the checklist above.
+- Three tools keep stated residuals (file bytes, branch contents, workflow file at the ref), shown on their cards; a push is pinned to the approved commit.
+- The flag is limited to single-member workspaces until the cohort rule in the flip checklist is met.
 - The decide path stays code-discipline protected in the agent's process until it moves out (Residual risk).
 - Nothing in this ADR is a measured production claim. Status is `adopting` until the flag is flipped for a canary and the path (consume success, unanswered rate) is measured.
 

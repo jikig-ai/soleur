@@ -8,7 +8,7 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 ## Phase 0: Measurements and design deltas (stop point: 0.1 must pass before 2.x)
 
 - [x] 0.1 (delivered by the gate-bypass hotfix, ADR-305) Write `apps/web-platform/scripts/dev-probe-approval-gate.ts` through the real `buildAgentQueryOptions` path; run it; record in `phase-0-measurements.md` whether `canUseTool` is invoked for each slice-1 tool and whether `allowedTools` short-circuits it
-  - [x] 0.1.1 (delivered by the hotfix) If short-circuited: extract pure `buildAllowedTools`, drop `APPROVAL_REQUIRED_TOOLS` when the flag is on, add census test
+  - [x] 0.1.1 (delivered by the hotfix, ADR-305) If short-circuited: extract pure `buildAllowedTools` that UNCONDITIONALLY filters `APPROVAL_REQUIRED_TOOLS` out of `allowedTools` (flag on or off; the flag-gated filter was rejected, so a gated tool never short-circuits `canUseTool`), add census test
 - [ ] 0.2 Wireframe delta via `soleur:product:design:ux-design-lead` (honest "Approve" copy, two approved states, copy-deck fixes, drop 04G and member landing variant, other items in plan Phase 0.2); scrub `fileToken`; operator approval
 - [x] 0.3 Confirm per-tool canonical field lists against each tool's zod schema; record in test fixtures
 

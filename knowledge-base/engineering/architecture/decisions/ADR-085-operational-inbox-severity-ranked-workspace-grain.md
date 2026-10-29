@@ -57,5 +57,6 @@ Two questions drove the design:
 ## Addendum (2026-10-29, #4672)
 
 Decision 6 reserved `approval_required` for #4672. The `inbox_item.source` CHECK is now widened to include it (added `NOT VALID`, then validated, in migration 180) for durable approval requests; the row is `severity='action_required'`,
-carries the approval id as `source_ref`, and stays content-minimized (no action text). The per-Owner recipient-state join stays deferred: the approval row carries its own state and the decide RPC moves the linked
-item out of the `action_required` count in the same transaction. Rationale and invariants: [ADR-307](./ADR-307-durable-action-bound-approval-requests.md).
+carries the approval id as `source_ref`, and stays content-minimized (no action text). The per-Owner recipient-state join stays deferred. The deferral trigger above ("when broadcast `approval_required` first needs it") was evaluated and is **not met**: an approval is a workspace-grain decision (the first
+Owner's decision settles it for every Owner), the approval row carries its own state, and the decide RPC moves the linked item out of the `action_required` count in the same transaction, so there is no
+independent per-Owner `acted_at` to reconcile. Re-evaluate if a future approval needs per-Owner acknowledgement. Rationale and invariants: [ADR-307](./ADR-307-durable-action-bound-approval-requests.md).

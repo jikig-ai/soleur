@@ -1,4 +1,7 @@
 // #4672 — cron-approval-expiry handler: sweep, notify, marker and heartbeat ordering and failure isolation.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
@@ -25,9 +28,10 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
   return { ...actual, postSentryHeartbeat: (...a: unknown[]) => h.heartbeat(...a) };
 });
 
-import { cronApprovalExpiryHandler, SENTRY_MONITOR_SLUG } from "@/server/inngest/functions/cron-approval-expiry";
+import { cronApprovalExpiry, cronApprovalExpiryHandler, SENTRY_MONITOR_SLUG } from "@/server/inngest/functions/cron-approval-expiry";
 
-const step = { run: async (_n: string, fn: () => unknown) => fn() };
+const stepRun = vi.fn(async (_n: string, fn: () => unknown) => fn());
+const step = { run: stepRun };
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const args = { step, logger } as unknown as Parameters<typeof cronApprovalExpiryHandler>[0];
 
@@ -36,6 +40,7 @@ const EXP = (id: string, reason: "unanswered" | "unconsumed") => ({ id, workspac
 describe("cronApprovalExpiryHandler", () => {
   beforeEach(() => {
     for (const f of Object.values(h)) f.mockReset();
+    stepRun.mockClear();
     h.notify.mockResolvedValue(true);
   });
 
@@ -45,6 +50,8 @@ describe("cronApprovalExpiryHandler", () => {
     expect(r).toEqual({ ok: true, expired: 0, flagged: 0, scrubbed: 0, notifyFailed: 0 });
     expect(h.notify).not.toHaveBeenCalled();
     expect(h.op).not.toHaveBeenCalled();
+    // The notify step is skipped entirely when both result arrays are empty (no billed empty step every 5 minutes).
+    expect(stepRun.mock.calls.map((c) => c[0])).toEqual(["approval-sweep", "approval-sweep-marker", "sentry-heartbeat"]);
     expect(h.marker).toHaveBeenCalledWith("SOLEUR_APPROVAL_SWEEP", expect.objectContaining({ ok: true }));
     expect(h.heartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG }));
   });
@@ -53,7 +60,8 @@ describe("cronApprovalExpiryHandler", () => {
     h.sweep.mockResolvedValue({ expired: [EXP("a1", "unanswered"), EXP("a2", "unconsumed")], flagged: [], scrubbed: 3 });
     const r = await cronApprovalExpiryHandler(args);
     expect(h.notify).toHaveBeenCalledTimes(1);
-    expect(h.notify).toHaveBeenCalledWith("a1");
+    expect(h.notify).toHaveBeenCalledWith("a1", "w1");
+    expect(stepRun.mock.calls.map((c) => c[0])).toContain("approval-notify");
     expect(r).toMatchObject({ ok: true, expired: 2, scrubbed: 3, notifyFailed: 0 });
   });
 
@@ -77,6 +85,7 @@ describe("cronApprovalExpiryHandler", () => {
     await cronApprovalExpiryHandler(args);
     expect(h.op).toHaveBeenCalledWith("gateUnanswered", null, expect.objectContaining({ approvalId: "f1" }));
     expect(h.notify).not.toHaveBeenCalled();
+    expect(stepRun.mock.calls.map((c) => c[0])).toContain("approval-notify");
   });
 
   it("an RPC failure is one sweepFailed op, no push, and a red heartbeat", async () => {
@@ -85,6 +94,24 @@ describe("cronApprovalExpiryHandler", () => {
     expect(r).toMatchObject({ ok: false, expired: 0 });
     expect(h.op).toHaveBeenCalledWith("sweepFailed", expect.any(Error), expect.anything());
     expect(h.notify).not.toHaveBeenCalled();
+    expect(stepRun.mock.calls.map((c) => c[0])).not.toContain("approval-notify");
     expect(h.heartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+  });
+});
+
+// The registration (not the handler) owns the lane. The shared "cron-platform" account lane is held 50-70 min by
+// claude-eval, which would delay the sweep and false-page its monitor; the dedicated key mirrors cron-bot-pr-reaper.
+describe("cronApprovalExpiry registration", () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../server/inngest/functions/cron-approval-expiry.ts"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((l) => !/^\s*\/\//.test(l))
+    .join("\n");
+
+  it("runs on its own account concurrency lane and not the shared cron-platform one", () => {
+    expect(src).toContain(`{ scope: "fn", limit: 1 }`);
+    expect(src).toContain(`{ scope: "account", key: '"cron-approval-expiry"', limit: 1 }`);
+    expect(src).not.toContain(`"cron-platform"`);
+    expect(cronApprovalExpiry).toBeDefined();
   });
 });

@@ -1,4 +1,4 @@
-// cron-approval-expiry — the 5-minute sweep of durable approval requests (#4672, ADR-307 provisional).
+// cron-approval-expiry — the 5-minute sweep of durable approval requests (#4672, ADR-307).
 //
 // WHY THIS SHAPE: an approval request outlives the agent session that made it (the Owner may answer hours later), so
 // something must age rows out without a session. One `sweep_approvals()` RPC does all three database jobs in one
@@ -12,8 +12,9 @@
 //
 // FLAG-INDEPENDENT BY DESIGN: the `approval-queue` flag gates row CREATION only. This cron stays live while the flag is
 // off, so turning the flag off never strands a pending request, and it emits SOLEUR_APPROVAL_SWEEP every run so the
-// Better Stack probe is valid on a dark deploy. With the flag never on there are no rows and the run is three empty
-// reads: no push, no Sentry op, no card.
+// Better Stack probe is valid on a dark deploy. With the flag never on there are no rows: the sweep RPC finds nothing,
+// the notify step is skipped (both result arrays are empty), and the run is the sweep, the marker and the heartbeat:
+// no push, no Sentry op, no card.
 //
 // Notifications are GENERIC (lib/approval-copy.ts; nothing from the action reaches a lock screen, #8532): the owner's
 // inbox item was already moved to FYI by the RPC; an `unanswered` expiry also sends the generic "expired" push, an
@@ -43,7 +44,8 @@ export interface ApprovalExpiryResult {
 
 export async function cronApprovalExpiryHandler({ step, logger }: HandlerArgs): Promise<ApprovalExpiryResult> {
   // Step 1: the one RPC. A failure is ONE Sentry op, a red heartbeat, and the next tick (5 minutes) retries; the RPC
-  // is idempotent, so there is nothing to compensate.
+  // is idempotent, so there is nothing to compensate. The failure is CAUGHT here and returned as `{ ok: false }`, so
+  // Inngest never sees a thrown step and `retries` below does not re-run it: the 5-minute schedule is the retry.
   const swept = await step.run("approval-sweep", async (): Promise<{ ok: true; result: SweepResult } | { ok: false }> => {
     try {
       const { createServiceClient } = await import("@/lib/supabase/service");
@@ -66,46 +68,50 @@ export async function cronApprovalExpiryHandler({ step, logger }: HandlerArgs): 
     flagged = result.flagged.length;
     scrubbed = result.scrubbed;
 
-    // Step 2: tell people. Never throws: each failure is the existing `approval-notify-failed` op and the inbox row
-    // (already FYI) remains the fallback surface.
-    notifyFailed = await step.run("approval-notify", async () => {
-      let failed = 0;
-      for (const f of result.flagged) {
-        reportApprovalOp("gateUnanswered", null, { approvalId: f.id, toolName: f.toolName, workspaceId: f.workspaceId });
-      }
-      for (const e of result.expired) {
-        reportApprovalOp("expired", null, {
-          approvalId: e.id,
-          toolName: e.toolName,
-          workspaceId: e.workspaceId,
-          extra: { reason: e.reason, seen_by: "cron" },
-        });
-        logApprovalMarker("SOLEUR_APPROVAL_EXPIRED", {
-          approval_id: e.id,
-          tool: e.toolName,
-          workspace_id: e.workspaceId,
-          reason: e.reason,
-          seen_by: "cron",
-        });
-        if (e.reason !== "unanswered") continue;
-        let delivered = false;
-        try {
-          delivered = await notifyApprovalExpired(e.id);
-        } catch {
-          delivered = false;
+    // Step 2: tell people. Skipped when there is nothing to tell (both arrays empty, which is every run while the
+    // flag is dark and almost every run after): an empty step would still be a billed Inngest step every 5 minutes.
+    // Never throws: each failure is the existing `approval-notify-failed` op and the inbox row (already FYI) remains
+    // the fallback surface.
+    if (result.expired.length > 0 || result.flagged.length > 0) {
+      notifyFailed = await step.run("approval-notify", async () => {
+        let failed = 0;
+        for (const f of result.flagged) {
+          reportApprovalOp("gateUnanswered", null, { approvalId: f.id, toolName: f.toolName, workspaceId: f.workspaceId });
         }
-        if (!delivered) {
-          failed += 1;
-          reportApprovalOp("notifyFailed", null, {
+        for (const e of result.expired) {
+          reportApprovalOp("expired", null, {
             approvalId: e.id,
             toolName: e.toolName,
             workspaceId: e.workspaceId,
-            extra: { kind: "expired" },
+            extra: { reason: e.reason, seen_by: "cron" },
           });
+          logApprovalMarker("SOLEUR_APPROVAL_EXPIRED", {
+            approval_id: e.id,
+            tool: e.toolName,
+            workspace_id: e.workspaceId,
+            reason: e.reason,
+            seen_by: "cron",
+          });
+          if (e.reason !== "unanswered") continue;
+          let delivered = false;
+          try {
+            delivered = await notifyApprovalExpired(e.id, e.workspaceId);
+          } catch {
+            delivered = false;
+          }
+          if (!delivered) {
+            failed += 1;
+            reportApprovalOp("notifyFailed", null, {
+              approvalId: e.id,
+              toolName: e.toolName,
+              workspaceId: e.workspaceId,
+              extra: { kind: "expired" },
+            });
+          }
         }
-      }
-      return failed;
-    });
+        return failed;
+      });
+    }
   }
 
   // Every run, flag on or off: the lifecycle probe for a dark deploy (one grep proves the marker reaches Better Stack).
@@ -145,8 +151,13 @@ export const cronApprovalExpiry = inngest.createFunction(
     id: "cron-approval-expiry",
     concurrency: [
       { scope: "fn", limit: 1 },
-      { scope: "account", key: '"cron-platform"', limit: 1 },
+      // Dedicated account lane (the lane key is the fn id itself), as cron-bot-pr-reaper does: the shared
+      // `"cron-platform"` lane is held for 50-70 minutes by claude-eval, which would delay expiry past its 5-minute
+      // cadence and page the 30-minute check-in margin of the Sentry monitor as a false "sweep dead".
+      { scope: "account", key: '"cron-approval-expiry"', limit: 1 },
     ],
+    // `retries: 1` only covers a throw outside the sweep RPC (the marker and heartbeat steps); the RPC failure is caught
+    // in the handler and never re-run by Inngest, the next 5-minute tick is its retry.
     retries: 1,
     triggers: [
       // Every 5 minutes: bounds how long an expired or unanswered request waits to be noticed.
