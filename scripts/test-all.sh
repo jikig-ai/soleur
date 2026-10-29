@@ -6629,8 +6629,8 @@ if want_scripts; then
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
-  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential outside the one
-  # expiring op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
+  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential anywhere —
+  # zero-tolerance since #9755 retired the op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
   # auto-discovers tests/scripts/.
   run_suite "tests/scripts/hcloud-token-readonly-no-fallback-scan" bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh
