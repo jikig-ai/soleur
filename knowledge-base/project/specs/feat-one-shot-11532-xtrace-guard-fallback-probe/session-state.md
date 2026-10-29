@@ -53,3 +53,11 @@ None blocking. Devin subagent has no Task/Skill tool — plan and deepen-plan fa
 - Remaining: Step 5 resolve findings → 5.5 qa → 6 compound → 7 ship → 8 DONE
 - Tally: agent_rounds=4 (init, plan, work, review)
 - Postmerge parent context (survives this PR): postmerge for squash 347d3812 complete (comment posted); AC chain = tracker #11549 auto-verifies next publish (earliest 2026-11-03T15:30Z); #11531 closed already-fixed by dfd4fd48f4
+
+## Compound Phase
+- Status: complete (in-process on Devin subagent — no Task/Skill tool; SKILL.md read+executed).
+- Learnings: appended `.cwd` instance (follow-through-directive-gate `script=` resolution) to `learnings/2026-09-17-devin-envelope-omits-cwd-precommit-guard-false-deny.md`; new `learnings/2026-10-29-sentry-events-sort-optional-pin-it-for-coverage-arguments.md` (8-item session-error inventory).
+- Route-to-definition: +1 bullet in `runbooks/followthrough-convention.md` (pin sort=/bounding on Sentry /events/ coverage arguments); +3-line capability-scoped clarification in `plugins/soleur/devin/INSTRUCTIONS.md` §Sequential fallback.
+- Filed: #11553 (deferred-scope-out + meta/machinery) — sibling-probe sort-pin census + candidate lint (step-3.6 null guardrail).
+- Deviation analyst: `cq-never-skip-hooks` bypass row on 89b20b10f noted (already incident-logged); rule budget [WARN] B_ALWAYS=44390; constitution 320/300 → no promotions, no AGENTS.md adds.
+- Spec archival DEFERRED to ship Phase 6.45 (ship Phase 6 step 2.5 reads decision-challenges.md live).
