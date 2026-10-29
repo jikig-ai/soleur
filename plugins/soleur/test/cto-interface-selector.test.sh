@@ -346,8 +346,9 @@ ck; [[ "${#PLAN_REVIEW_PLAIN}" -ge 400 && "$PLAN_REVIEW_PLAIN" == *'Structured a
   && ok "rebuilt the plan-review engineering-reviewer prompt (${#PLAN_REVIEW_PLAIN} bytes)" || bad "could not rebuild the non-named reviewPrompt text (${#PLAN_REVIEW_PLAIN} bytes)"
 ck; [[ -n "$GO_OWN_CUE" ]] && ok "extracted go.md's hold-routing spawn cue: \`$GO_OWN_CUE\`" || bad "go.md's hold-routing paragraph names no 'starts \`Own the epic\`' cue"
 ck; [[ -n "$GO_CLASSIFY_CUE" ]] && ok "extracted go.md's hold-classification spawn cue: \`$GO_CLASSIFY_CUE\`" || bad "go.md's hold-routing paragraph names no 'starts \`Rule on this technical question ...\`' classification cue"
-# Parity: every cue that selects the Assess interface (the strip list) must appear inside the classification route bullet, so the
-# calling skill strips exactly what cto.md would otherwise match on.
+# Parity: every cue that selects the Assess interface (the strip list) must be MENTIONED inside the classification route bullet AND
+# the bullet must carry the strip clause that removes the cues from item text; a cue named without the clause strips nothing.
+# What this proves is mention plus the clause; it does not execute the strip.
 GO_ROUTE_BULLET="$(grep -F -m1 -- '- **Classification list: route**' "$GO_MD" || true)"
 ck
 _ncue=0; _cmiss=""
@@ -355,7 +356,7 @@ while IFS= read -r _cue; do
   [[ -n "$_cue" ]] || continue; _ncue=$((_ncue + 1))
   [[ "$GO_ROUTE_BULLET" == *"$_cue"* ]] || _cmiss="$_cmiss [$_cue]"
 done < <(selector_cues "$CTO" assess)
-[[ "$_ncue" -ge 2 && -n "$GO_ROUTE_BULLET" && -z "$_cmiss" ]] && ok "every Assess cue of cto.md ($_ncue) appears in go.md's classification route bullet" || bad "go.md's classification route bullet misses Assess cue(s):${_cmiss:- (or fewer than 2 cues / no bullet found: $_ncue)}"
+[[ "$_ncue" -ge 2 && -n "$GO_ROUTE_BULLET" && -z "$_cmiss" && "$GO_ROUTE_BULLET" == *'are removed from item text'* ]] && ok "every Assess cue of cto.md ($_ncue) is mentioned in go.md's classification route bullet together with the 'are removed from item text' strip clause" || bad "go.md's classification route bullet misses Assess cue(s) or the strip clause:${_cmiss:- (or fewer than 2 cues / no bullet / no 'are removed from item text' clause: $_ncue)}"
 
 # --- C. each existing caller's phrase selects the intended interface ----------------------------------
 CL_LABEL=(); CL_WANT=(); CL_PROMPT=()
