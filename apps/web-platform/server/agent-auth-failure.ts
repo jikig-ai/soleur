@@ -25,6 +25,10 @@
 //   - There is exactly ONE emit site below. Its first argument is the literal `null` (the #8629 pino-mirror dedupe class: an
 //     Error first argument makes the logger mirror a `feature=pino-mirror` capture and Sentry then drops this tagged one).
 //
+// The matcher itself (`matchAgentAuthFailure`, the forgery gate, `AgentAuthMatchKind`) lives in ./agent-auth-match.ts and is
+// re-exported below: it is permanent product code, because the user-facing rewrite in ./agent-auth-user-message.ts calls it
+// (#11086), so the removal checklist keeps it.
+//
 // REMOVAL CHECKLIST: see the header of ./agent-auth-mode.ts (one pass deletes the whole diagnostic).
 
 import * as Sentry from "@sentry/nextjs";
@@ -32,11 +36,13 @@ import * as Sentry from "@sentry/nextjs";
 import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
 import { sandboxPostureOf, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 import {
-  CLI_AUTH_FAILURE_REPLIES,
-  SDK_API_KEY_SOURCES,
-  SDK_AUTHENTICATION_FAILED,
-  type CliAuthFailureKind,
-} from "./claude-error-signatures";
+  __resetAgentAuthMatchWarnForTests,
+  isRec,
+  matchAgentAuthFailure,
+  type AgentAuthMatchKind,
+  type Rec,
+} from "./agent-auth-match";
+import { CLI_AUTH_FAILURE_REPLIES, SDK_API_KEY_SOURCES } from "./claude-error-signatures";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 
@@ -44,8 +50,10 @@ import { reportSilentFallback } from "./observability";
 // Closed enums
 // ---------------------------------------------------------------------------
 
+// The matcher is permanent product code now (see ./agent-auth-match.ts); re-exported so every existing import keeps working.
+export { matchAgentAuthFailure, type AgentAuthMatchKind };
+
 export type AgentAuthRunner = "legacy" | "cc-soleur-go";
-export type AgentAuthMatchKind = CliAuthFailureKind | "structured";
 export type AgentAuthMode = "managed" | "api-key" | "unbound" | "unknown";
 
 const ENUMS = {
@@ -78,81 +86,9 @@ function closed(key: keyof typeof ENUMS, value: unknown): string {
 const noop = (): void => undefined;
 const RESOLVED: Promise<void> = Promise.resolve();
 
-type Rec = Record<PropertyKey, unknown>;
-const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
-
-// ---------------------------------------------------------------------------
-// Matcher
-// ---------------------------------------------------------------------------
-
-const MAX_REPLY_LENGTH = 200;
-/** The model id the CLI stamps on messages it authors itself (measured from the real binary's stream). */
-const CLI_SYNTHETIC_MODEL = "<synthetic>";
-
-/** Cheap-first: type, then length, then the anchored regexes (no nested or overlapping quantifiers). */
-function classifyReplyText(text: unknown): CliAuthFailureKind | null {
-  if (typeof text !== "string") return null;
-  if (text.length > MAX_REPLY_LENGTH) return null;
-  const whole = text.trim();
-  for (const { kind, pattern } of CLI_AUTH_FAILURE_REPLIES) {
-    if (pattern.test(whole)) return kind;
-  }
-  return null;
-}
-
-/** The text of a message whose content is exactly ONE text block (a tool_use or a second block disqualifies it). */
-function onlyTextBlock(inner: Rec): unknown {
-  const content = inner.content;
-  if (!Array.isArray(content) || content.length !== 1) return undefined;
-  const block: unknown = content[0];
-  return isRec(block) && block.type === "text" ? block.text : undefined;
-}
-
-/**
- * Classify one SDK stream message. Returns a closed `match_kind` or null; the returned value is never derived from the
- * message text (it is a member of a fixed list), so it can never carry the body.
- *
- * Text is classified FIRST and the structured code is the fallback, so `match_kind` keeps its variants (the real stream
- * carries BOTH the text and `error: "authentication_failed"` on the same message, so structured-first would flatten every
- * event to "structured"). The text arm of an assistant message additionally needs a CLI-set field, see the header.
- */
-export function matchAgentAuthFailure(message: unknown): AgentAuthMatchKind | null {
-  try {
-    if (!isRec(message)) return null;
-    if (message.type === "assistant") {
-      const inner = message.message;
-      if (isRec(inner) && (inner.model === CLI_SYNTHETIC_MODEL || message.is_api_error_message === true)) {
-        const kind = classifyReplyText(onlyTextBlock(inner));
-        if (kind !== null) return kind;
-      }
-      return message.error === SDK_AUTHENTICATION_FAILED ? "structured" : null;
-    }
-    if (message.type === "result") {
-      return message.is_error === true ? classifyReplyText(message.result) : null;
-    }
-    return null;
-  } catch {
-    // A throwing getter on a hostile message object: the matcher must never throw into a runner loop.
-    warnMatcherFaultOnce();
-    return null;
-  }
-}
-
-let matcherFaultWarned = false;
-/** One constant-text warn per process: a hostile or malformed message is visible without ever becoming an event. */
-function warnMatcherFaultOnce(): void {
-  if (matcherFaultWarned) return;
-  matcherFaultWarned = true;
-  try {
-    createChildLogger("auth-failure-matcher").warn("auth-failure matcher: unreadable message skipped");
-  } catch {
-    // The logger is unavailable (a partial mock): nothing more to do.
-  }
-}
-
 /** Test seam: re-arm the process-wide warns (matcher fault, runner probe-unavailable, tap not installed). */
 export function __resetAgentAuthMatcherWarnForTests(): void {
-  matcherFaultWarned = false;
+  __resetAgentAuthMatchWarnForTests();
   probeUnavailableWarned = false;
   tapNotInstalledWarned = false;
 }
