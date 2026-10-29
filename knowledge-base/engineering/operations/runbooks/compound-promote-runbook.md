@@ -444,6 +444,17 @@ open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
 
 ### Reading a live-fire row (model decline or gate refusal)
 
+Extract the marker row by its JSON key, never by text: a Better Stack row wraps the marker as an escaped string, so a
+`--grep create_arm=` style match never hits, and a poller written that way times out while the row is already there.
+Include a known-positive check (the same filter must match the previous live-fire's row) before trusting an empty result.
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 20 \
+  | jq -cR 'fromjson? | (.raw | fromjson? // {}).message | (if type == "string" then (fromjson? // {}) else . end) | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME)'
+```
+
+A webhook delivery whose body merely quotes the marker name also matches `--grep`; the `select` on the key drops it.
+
 The marker already separates a model decline from a server-side refusal, so no extra
 field is needed. Every gate except the ledger / same-run backstop returns `create_outcome: refused` with
 `create_refusal_class` and `create_detail`. `no_action` with `no-pattern-qualifies` is therefore always the model's
