@@ -12,14 +12,19 @@
 # pins the pushed commit and the workspace). For each edit of the gate's chokepoints and narrowing predicates, the designed
 # test turns RED on the case that is meant to catch it, and is GREEN on the unedited copy first.
 #
-# JUDGE (review round, test-design P2-6/P2-7). Every row names the EXACT failing test(s) that must kill it: `kill` is a list
-# of substrings of the full test name (describe path + title) and EVERY entry must be among the failed tests of the single
-# targeted file, which vitest reports in a JSON file (never a substring of the whole log, which a crash, a describe title
-# or the "N failed" summary line could satisfy). The control run proves each named test exists and is green before any
-# mutant runs. Verdicts, from the JSON report only:
-#     KILLED        the named test(s) failed (exit 1)
+# JUDGE (review round, test-design P2-6/P2-7; round 2, FD-5). Every row names the EXACT failing test(s) that must kill it:
+# `kill` is a list of substrings of the full test name (describe path + title) and EVERY entry must be among the failed
+# tests of the single targeted file, which vitest reports in a JSON file (never a substring of the whole log, which a crash,
+# a describe title or the "N failed" summary line could satisfy). The control run proves each named test exists and is green
+# before any mutant runs. Attribution is by EXACT COUNT: a named substring must match as many FAILED tests as it matches
+# control-PASSED tests (a title shared by several it.each cases is credited only when all of its cases fail, so one case
+# going quiet reads MISATTRIBUTED, not KILLED). A must-kill row with an empty `kill` list is MISATTRIBUTED (any failing test
+# would credit it). The blast radius is bounded: failed/total above the row's bound (default 0.5; `blast=` on a row whose
+# designed detector is legitimately spread over most of the file) is UNRESOLVED, because a crash that fails the whole file
+# is not a kill by its named test. Verdicts, from the JSON report only:
+#     KILLED        the named test(s) failed (exit 1), all cases of each named title, inside the blast bound
 #     SURVIVED      nothing failed (exit 0)
-#     MISATTRIBUTED something failed but not the named test(s): a finding (killed by an unrelated test)
+#     MISATTRIBUTED something failed but not (all of) the named test(s), or the row names none: a finding
 #     BROKEN        the suite did not collect (syntax error / unresolved import): killed by the parser, not by the row
 #     UNRESOLVED    anything else: no report, a timeout, a signal, a non-zero exit with no failed test, failed tests with
 #                   exit 0. A crash is never a kill (exit 3).
@@ -47,32 +52,58 @@
 #   landed"; the control (unedited) runs first and a red or short control voids the battery (printf + exit 1, ADR-193).
 #
 # EQUIVALENT SURVIVORS (each must SURVIVE; the reason is printed on every run):
-#   G1-R4  the `default:` arm of the verdict switch in gate-flow.ts is unreachable. Input shapes surveyed: the wait returns
-#          decided|timeout|aborted; `decided` carries only approved|rejected|expired|consumed (waitForDecision filters
-#          null and "pending"); timeout and aborted have their own arms or are handled before the switch; a string from
-#          a stubbed `hold` is not a real source (hold is holdForUser around the wait). No input reaches the arm.
+#   G1-R4  the `default:` arm of the verdict switch in gate-flow.ts (since round 2 an exhaustiveness `never` check plus a
+#          fail-closed deny) is unreachable. Input shapes surveyed: the wait returns decided|timeout|aborted; `decided`
+#          carries only approved|rejected|expired|consumed (waitForDecision filters null and "pending"); timeout and
+#          aborted have their own arms or are handled before the switch (`selection === null || "aborted" || aborted()`);
+#          a string from a stubbed `hold` is not a real source (hold is holdForUser around the wait, typed WaitSelection
+#          | null by the cast); a hold that returns an unknown string is the only way in and no production hold does.
+#          The arm is the runtime backstop for the untyped `hold` seam.
 #   G1-W6  the post-race abort check in waiters.ts is redundant. Input shapes surveyed: abort before the loop (checked at
 #          the top), abort during a read (the next top-of-loop check), abort during the sleep (the `aborted` racer resolves,
 #          the post-race check is skipped, the next iteration returns aborted before any read), abort after the wake
-#          (same). Every path ends with the same `aborted` result and the same read count.
+#          (same). Every path ends with the same `aborted` result and the same read count. (Round 2 added `lastReadError` to
+#          the result; the two returns still carry the same fields.)
+#   G1-GD24 the `COMMIT_SHA_RE` check on `git rev-parse HEAD` in gate.ts is defence in depth. Input shapes surveyed: a
+#          normal repository (one 40-hex id), a sha-256 repository (64-hex, the regex admits it), an empty repository (no
+#          commit: git exits 128, execFile throws before the check), a non-repository directory (exit 128), a detached
+#          HEAD (one id). None reaches the check with a non-sha; the throw tests in gate-deps.test.ts hold the exit paths.
 # RESIDUAL GAPS (NOT equivalent: real behaviour the test suite does not see; each must SURVIVE and is reported, so a
 # future fix that kills one turns the battery red until the row is moved to the must-kill table):
 #   G1-DB3  a tool builder that assembles the RPC name at run time (`decide_${"approval"}`) is not seen by the sentinel's
-#           name grep; only the import-graph conjuncts and review stand between that and a self-decide.
-#   G1-F5   `=== true` -> `!== false` on the flag read lets a non-boolean truthy/undefined flag value turn the flow on; the
-#           flag client returns booleans, so the dev impact is nil but the fail-closed contract for odd values is unpinned.
+#           name grep; only the import-graph conjuncts and review stand between that and a self-decide. Input shapes
+#           surveyed: a template literal with an interpolated fragment (this row), string concatenation (`"decide_" +
+#           "approval"`), an array join, a computed property on an object of names, a name read from a constant in another
+#           module. The grep sees none of them; a builder that reaches the RPC at all must import a client, which the
+#           import-graph conjuncts (no decide module, no hub value import) do not stop either. Closing it needs a
+#           data-flow check, not a grep; the property is held by the absence of any decide import and by review.
+#   G1-F5   `=== true` -> `!== false` on the flag read lets a non-boolean truthy/undefined flag value turn the flow on.
+#           Input shapes surveyed: `getRuntimeFlag` is typed `Promise<boolean>` (a lookup into the per-flag snapshot, lib/feature-flags/server.ts;
+#           the snapshot values are not re-checked at run time), the gate's seam is typed `Promise<boolean>`, tests inject booleans and a rejected promise (both pinned), and a
+#           mutated seam returning `undefined` / `"yes"` / `1` is not constructible from the typed seam. The dev impact is
+#           nil; the fail-closed contract for an odd value is unpinned and a typed-seam change would be the trigger.
 #
 # NOT COVERED OFFLINE (honest gaps, not rows): mutations whose only detector is the database-gated behavioural suite
 #   (test/server/approval-request.tenant-isolation.test.ts, runs in tenant-integration.yml against a DEV database) and the
 #   real-SDK probe itself; for example dropping `OR v_closed` from decide_approval's pending path leaves the offline
 #   tokenized assertions that do not name it green. The SQL rows below are the tokenized backstop, not the behaviour.
+#   Round 2 pinned offline (tokenized, test/approval/migration-180-approval-request.test.ts, not rows here because the
+#   migration file is not edited by this battery): consume's `IF v_id IS NOT NULL ... 'consumed', true` and the single
+#   `'consumed', false` failure return (N1/N2), get_approval_status reading the row's own status (N3), and both inbox-settle
+#   branches scoped by `workspace_id = p_workspace_id` (N4/N5). The reason lookup's CASE order is pinned (G1-3g).
+#
+# ROW GROUPS (round 2 added sections 11-14): 11 the production gate-deps factory gate.ts (grants identity, consume, readStatus,
+#   flag default, viewer role, repo, HEAD, recipient; test/approval/gate-deps.test.ts builds the REAL factory); 12 sticky
+#   enforcement for every tool, grants-required builders (an AST pin), push grant without a commit, grant-refused and
+#   key-unavailable ops, the not_approved mapping and the consume-reject settle frame; 13 requestedByUserId / expiresAt payload
+#   wiring (test/approval/gate-flow-payload.test.ts); 14 the Art. 17 erasure emitters' literal null first argument.
 #
 # Usage: bash apps/web-platform/test/approval-guard1-mutation.test.sh [--only <ERE over mutant ids>] [--list] [--check-anchors]
 # Exit: 0 all verdicts as designed; 1 a finding; 2 setup failure; 3 inconclusive (a mutant could not be judged).
-# Time: one targeted vitest file per mutant (~3-12 s each); the budget below is a WARN, never a verdict.
+# Time: one targeted vitest file per mutant (~3-12 s each, ~25 min for the full table); the budget below is a WARN, never a verdict.
 set -uo pipefail
 
-WALL_BUDGET_S=1500
+WALL_BUDGET_S=3000
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ONLY=""
 LIST=0
@@ -120,9 +151,11 @@ def E(a, r, count=1, nth=None):
     return {"anchor": a, "replace": r, "count": count, "nth": nth}
 
 TABLE = []
-def M(id, file, edits, test, kill=None, equivalent=None, residual=None):
+def M(id, file, edits, test, kill=None, equivalent=None, residual=None, blast=None):
+    # blast = the largest failed/total fraction the row may legitimately cause (default 0.5, see the judge): a crash that
+    # fails a whole file is never a kill, and a row whose designed detector is spread over most of the file says so here.
     TABLE.append({"id": id, "file": file, "edits": edits if isinstance(edits, list) else [edits],
-                  "test": test, "kill": kill or [], "equivalent": equivalent, "residual": residual})
+                  "test": test, "kill": kill or [], "equivalent": equivalent, "residual": residual, "blast": blast})
 
 GF = "server/approval/gate-flow.ts"
 CANON = "server/approval/canonical.ts"
@@ -139,6 +172,10 @@ WSH = "server/ws-handler.ts"
 GHT = "server/github-tools.ts"
 PUSH = "server/push-branch.ts"
 PROBE = "scripts/dev-probe-approval-gate.ts"
+GD = "server/approval/gate.ts"
+KBS = "server/kb-share-tools.ts"
+WSET = "server/workspace-settings-tools.ts"
+ACC = "server/account-delete.ts"
 
 T_GF = "test/approval/gate-flow.test.ts"
 T_RES = "test/approval/gate-flow-resolver-snapshot.test.ts"
@@ -157,9 +194,14 @@ T_BA = "test/build-allowed-tools-census.test.ts"
 T_CLOSED = "test/approval/migration-180-decide-closed.test.ts"
 T_DENYP = "test/approval/gate-flow-grant-deny-paths.test.ts"
 T_PUSHG = "test/github-tools-push-grant.test.ts"
-T_PUSHB = "test/push-branch.test.ts"
 T_PINNED = "test/push-branch-pinned.test.ts"
 T_EXG = "test/approval/execution-grant-handlers.test.ts"
+T_GD = "test/approval/gate-deps.test.ts"
+T_SINK = "test/approval/approval-ops-real-sink.test.ts"
+T_OPSINK = "test/approval/ops-sink.test.ts"
+T_PAY = "test/approval/gate-flow-payload.test.ts"
+T_BGR = "test/approval/builder-grants-required.test.ts"
+T_AD = "test/account-delete.test.ts"
 STATIC = "static:probe"
 
 # Test-name fragments reused by several rows.
@@ -168,6 +210,7 @@ K_REASON = "the reason lookup reports the principal-change codes after expiry an
 K_DECIDE_CLEAN = "is tokenized-clean: Owner check before the row lock with one error for missing and non-owner, expiry above the decided blocks, closed on the pending path only"
 K_REVOKE = "revokes an approved row through the deny decision and records who and when"
 K_MACHINE = "encodes exactly the TypeScript status machine"
+KEYUNAV = ["the hash key is a fail-closed dependency an unset pepper denies with the unavailable text, reports its OWN approval-key-unavailable op with the code, and creates nothing"]
 K_CAPS = "caps pending requests (5 per conversation AP429, 20 per workspace AP430) only for a new request, before the INSERT"
 
 # ---- 1. SQL consume predicate and decide_approval (tokenized offline backstop; S1-S10 representatives) ----------------
@@ -203,7 +246,7 @@ M("G1-3d-sql-status-machine-reopens-consumed", SQL, E("       ('approved', 'cons
 M("G1-4-sql-decide-without-owner-check", SQL, E("  v_ok := FOUND AND COALESCE(public.is_workspace_owner(v_ws, auth.uid()), false);", "  v_ok := FOUND;"), T_MIG, [K_DECIDE_CLEAN])
 M("G1-4b-sql-decide-owner-polarity-inverted", SQL, E("  v_ok := FOUND AND COALESCE(public.is_workspace_owner(v_ws, auth.uid()), false);", "  v_ok := FOUND AND NOT COALESCE(public.is_workspace_owner(v_ws, auth.uid()), false);"), T_MIG, [K_DECIDE_CLEAN])
 K_CLOSED = "reads the archived state of the request's own conversation and refuses a missing or archived one before any pending write"
-M("G1-9-sql-decide-ignores-archived-conversation", SQL, E("  SELECT (c.archived_at IS NOT NULL) INTO v_closed", "  SELECT false INTO v_closed"), T_CLOSED, [K_CLOSED])
+M("G1-9-sql-decide-ignores-archived-conversation", SQL, E("  SELECT (c.archived_at IS NOT NULL) INTO v_closed", "  SELECT false INTO v_closed"), T_CLOSED, [K_CLOSED], blast=0.6)
 M("G1-9b-sql-decide-closed-flag-never-refuses", SQL, E("  IF NOT FOUND OR v_closed THEN", "  IF NOT FOUND THEN"), T_CLOSED, [K_CLOSED])
 # Revoke (CTO ruling 2): the approved -> rejected edge in the trigger, the decide deny branch, and the TypeScript machine.
 M("G1-RV1-sql-trigger-drops-the-revoke-edge", SQL, E("       ('approved', 'expired'),\n       ('approved', 'rejected')\n", "       ('approved', 'expired')\n"), T_MIG, [K_MACHINE])
@@ -230,9 +273,9 @@ M("G1-C2-hash-drops-tool-name", CANON, E("    tool_name: input.toolName,\n", "")
 M("G1-C3-hash-drops-conversation", CANON, E("    conversation_id: input.conversationId,\n", ""), T_CAN, ["binds the tool name, the workspace and the conversation into the hash"])
 M("G1-C4-hash-drops-workspace", CANON, E("    workspace_id: input.workspaceId,\n", ""), T_CAN, ["binds the tool name, the workspace and the conversation into the hash"])
 M("G1-C5-strings-are-trimmed", CANON, E('    case "string":\n    case "boolean":\n      return value;', '    case "string":\n      return value.trim();\n    case "boolean":\n      return value;'), T_CAN, ["does not trim: surrounding whitespace is part of the action and of the hash"])
-M("G1-C6-default-not-applied", CANON, E('force: z.boolean().default(false)', 'force: z.boolean().optional()'), T_CAN, ["treats a zod default and its omission as the same action"])
+M("G1-C6-default-not-applied", CANON, E('force: z.boolean().default(false)', 'force: z.boolean().optional()'), T_CAN, ["github_push_branch treats a zod default and its omission as the same action", "handlerArgsKey (execution-grant key a tool handler can recompute) applies the same zod defaults as the gate"])
 M("G1-C7-server-derived-optional", CANON, E('if (!parsedServer.success) throw new ApprovalCanonicalError("invalid_server_derived");', 'if (!parsedServer.success) server = {};\n    else'), T_CAN, ["refuses to canonicalize without every server-derived field"])
-M("G1-C8-hash-accepts-non-uuid-binding", CANON, E("if (!UUID_RE.test(input.workspaceId) || !UUID_RE.test(input.conversationId)) {", "if (false) {"), T_CAN, ["rejects ids that are not UUID-shaped"])
+M("G1-C8-hash-accepts-non-uuid-binding", CANON, E("if (!isUuid(input.workspaceId) || !isUuid(input.conversationId)) {", "if (false) {"), T_CAN, ["rejects ids that are not UUID-shaped"])
 M("G1-C9-non-finite-number-hashed", CANON, E('if (!Number.isFinite(value)) throw new ApprovalCanonicalError("not_canonical");\n      return value;', "return value;"), T_CAN, ["rejects values that have no canonical form instead of coercing them"])
 M("G1-C10-reply-recipient-unbound", CANON, E("server: z.object({ recipient: nonEmpty }),", "server: null,"), T_CAN, ["email_reply binds the server-derived recipient that is absent from the model input"])
 M("G1-C11-pushed-commit-unbound", CANON, E("server: z.object({ repo: nonEmpty, headSha: sha }),", "server: z.object({ repo: nonEmpty }),"), T_CAN, ["github_push_branch is versioned and carries every input and server-derived field"])
@@ -240,17 +283,20 @@ M("G1-C12-reply-to-field-stripped", CANON, E("      replyTo: z.string().optional
 M("G1-C13-hash-ignores-action-tool-mismatch", CANON, E("if (input.toolName !== input.action.tool || !APPROVAL_REQUIRED_TOOLS", "if (!APPROVAL_REQUIRED_TOOLS"), T_CAN, ["rejects a tool name that is not the action's tool"])
 # Keyed hash (CTO ruling 5): the fail-closed key dependency.
 M("G1-K1-unset-pepper-falls-back-to-unkeyed-hash", CANON, [
-    E('import { createHmac } from "node:crypto";', 'import { createHash, createHmac } from "node:crypto";'),
+    E('import { createHmac, hkdfSync } from "node:crypto";', 'import { createHash, createHmac, hkdfSync } from "node:crypto";'),
     E('  return createHmac("sha256", deriveApprovalHashKey(pepper)).update(text, "utf8").digest("hex");',
       '  if (!(pepper ?? process.env.SENTRY_USERID_PEPPER)) return createHash("sha256").update(text, "utf8").digest("hex");\n  return createHmac("sha256", deriveApprovalHashKey(pepper)).update(text, "utf8").digest("hex");')],
   T_CAN, ["FAILS CLOSED when the pepper is unset or empty: key_unavailable, never an unkeyed hash"])
 M("G1-K2-key-unavailable-not-raised", CANON, E('if (!pepper) throw new ApprovalCanonicalError("key_unavailable");', 'if (!pepper) pepper = "unset";'), T_CAN, ["FAILS CLOSED when the pepper is unset or empty: key_unavailable, never an unkeyed hash"])
 M("G1-K3-hash-is-the-unkeyed-sha256", CANON, [
-    E('import { createHmac } from "node:crypto";', 'import { createHash, createHmac } from "node:crypto";'),
+    E('import { createHmac, hkdfSync } from "node:crypto";', 'import { createHash, createHmac, hkdfSync } from "node:crypto";'),
     E('  return createHmac("sha256", deriveApprovalHashKey(pepper)).update(text, "utf8").digest("hex");', '  void createHmac;\n  return createHash("sha256").update(text, "utf8").digest("hex");')],
   T_CAN, ["hashes a real canonicalised action to the externally computed HMAC, and NOT to the unkeyed sha256"])
-M("G1-K4-key-domain-separation-changed", CANON, E('const HASH_KEY_INFO = "soleur:approval-request:action-sha256:v1";', 'const HASH_KEY_INFO = "soleur:approval-request:action-sha256:v2";'), T_CAN, ["derives the key by domain separation from the pepper (known answer)"])
-M("G1-K5-gate-key-failure-is-not-a-deny", GF, E('reportApprovalOp(code === "invalid_server_derived" ? "bindFailed" : "gateFailed", err, { ...op, extra: { code } });\n      a.logDecision(a.toolName, "deny", "approval bind failed");\n      return deny(APPROVAL_UNAVAILABLE_DENY);', 'reportApprovalOp(code === "invalid_server_derived" ? "bindFailed" : "gateFailed", err, { ...op, extra: { code } });\n      a.logDecision(a.toolName, "deny", "approval bind failed");\n      return a.allow(snapshot);'), T_GF, ["the hash key is a fail-closed dependency an unset pepper denies with the unavailable text, reports approval-gate-failed with the code, and creates nothing"])
+M("G1-K4-key-domain-separation-changed", CANON, E('const HASH_KEY_INFO = "soleur:approval-request:action-sha256:v1";', 'const HASH_KEY_INFO = "soleur:approval-request:action-sha256:v2";'), T_CAN, ["derives the key by HKDF-SHA256 from the pepper (known answer)"])
+M("G1-K5-gate-key-failure-is-not-a-deny", GF, E('      a.logDecision(a.toolName, "deny", "approval bind failed");\n      return deny(APPROVAL_UNAVAILABLE_DENY);\n    }\n    if (aborted()) return denyAborted();', '      a.logDecision(a.toolName, "deny", "approval bind failed");\n      return a.allow(snapshot);\n    }\n    if (aborted()) return denyAborted();'), T_GF, KEYUNAV)
+M("G1-K6-hkdf-derivation-skipped-pepper-used-as-the-key", CANON, E('return Buffer.from(hkdfSync("sha256", Buffer.from(pepper, "utf8"), Buffer.alloc(0), HASH_KEY_INFO, 32));', 'void hkdfSync;\n  return Buffer.from(pepper, "utf8");'), T_CAN, ["derives the key by HKDF-SHA256 from the pepper (known answer)"])
+M("G1-K7-hkdf-unset-pepper-derives-an-empty-key", CANON, E('if (!pepper) throw new ApprovalCanonicalError("key_unavailable");', 'if (!pepper) return Buffer.alloc(0);'), T_CAN, ["FAILS CLOSED when the pepper is unset or empty: key_unavailable, never an unkeyed hash"])
+M("G1-K8-key-unavailable-reported-under-the-shared-gate-failure-op", GF, E('reportApprovalOp("keyUnavailable", null, { ...op, extra: { code } });', 'reportApprovalOp("gateFailed", null, { ...op, extra: { code } });'), T_GF, KEYUNAV)
 
 # ---- 3. The gated flow: allow() input, snapshot, card source, binding ------------------------------------------------------
 GRANT_PUT = "putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId, headSha: derived?.headSha });"
@@ -258,15 +304,15 @@ M("G1-8a-allow-live-input-on-reproposal", GF, E("return allowWithGrant();", "ret
 M("G1-8b-allow-live-input-on-live-wait", GF, E("return allowWithGrant();", "return (" + GRANT_PUT.rstrip(";") + ", a.allow(a.toolInput));", count=2, nth=2), T_GF, ["the allowed input is a deep clone of what was hashed, never the live object (mutation row 8)"])
 M("G1-8c-snapshot-is-an-alias", GF, E("snapshot = structuredClone(a.toolInput);", "snapshot = a.toolInput;"), T_GF, ["the allowed input is a deep clone of what was hashed, never the live object (mutation row 8)"])
 M("G1-8d-unbound-input-not-denied", GF, E("if (!isCoveredByCanonical(snapshot, action.fields)) {", "if (false) {"), T_GF, ["an input with a field the canonical action does not cover is denied (unbound input), nothing is requested"])
-M("G1-8e-resolver-gets-the-live-input", GF, E("derived = await a.approval.resolveServerDerived(a.toolName, snapshot);", "derived = await a.approval.resolveServerDerived(a.toolName, a.toolInput);"), T_RES, ["resolveServerDerived receives the snapshot, not the live input"])
+M("G1-8e-resolver-gets-the-live-input", GF, E("derived = await a.approval.resolveServerDerived(a.toolName, snapshot);", "derived = await a.approval.resolveServerDerived(a.toolName, a.toolInput);"), T_RES, ["resolveServerDerived receives the snapshot, not the live input", "the resolver's argument is also detached from the live object for a nested mutation"], blast=1.0)  # the file IS the detector: 3 tests, all about this argument
 M("G1-6-card-built-from-tool-input", GF, E("view: renderApprovalView(action),", "view: renderApprovalView({ ...action, fields: snapshot as never }),"), T_GF, ["the card frame is built from the canonical object and carries no option strings"])
 M("G1-1c-consume-binds-a-different-hash", GF, E("const c = await a.approval.consume({ id: approvalId, hash, conversationId: a.conversationId });", 'const c = await a.approval.consume({ id: approvalId, hash: "0".repeat(64), conversationId: a.conversationId });'), T_GF, ["approve in window -> exactly one consume with the independently computed hash -> allow"])
 M("G1-5a-allow-on-wait-timeout", GF, E('a.logDecision(a.toolName, "deny", "approval wait ended undecided");\n          return deny(APPROVAL_PENDING_DENY);', 'a.logDecision(a.toolName, "deny", "approval wait ended undecided");\n          return a.allow(snapshot);'), T_GF, ["timeout denies with the 'saved, do not retry now' text, leaves the row pending and mirrors one op with the approval id"])
 M("G1-5b-allow-on-abort", GF, E('if (selection === null || selection === "aborted" || aborted()) return denyAborted();', 'if (selection === null || selection === "aborted" || aborted()) return a.allow(snapshot);'), T_GF, ["abort during the wait denies, leaves the row pending, and an approval that arrives afterwards is never honoured"])
 M("G1-5c-allow-when-the-wait-throws", GF, E('if (selection === null || selection === "aborted" || aborted()) return denyAborted();', 'if (selection === null) return a.allow(snapshot);\n      if (selection === "aborted" || aborted()) return denyAborted();'), T_GF, ["abort during the wait denies, leaves the row pending, and an approval that arrives afterwards is never honoured"])
-M("G1-5d-no-abort-check-after-consume", GF, E('          if (wasAborted) {\n            reportApprovalOp("consumedAborted", null, { ...ctx, extra: { path: "live" } });\n            return denyAborted();\n          }\n', ""), T_GF, ["a session that dies while the consume is in flight is a deny (the approval is spent for nothing)"])
+M("G1-5d-no-abort-check-after-consume", GF, E('          if (wasAborted) {\n            reportApprovalOp("consumedAborted", null, { ...ctx, extra: { path: "live" } });\n            return denyAborted(true);\n          }\n', ""), T_GF, ["a session that dies while the consume is in flight is a deny (the approval is spent for nothing)"])
 M("G1-5e-allow-on-unexpected-throw", GF, E('a.logDecision(a.toolName, "deny", "approval flow failed");\n    return deny(APPROVAL_UNAVAILABLE_DENY);', 'a.logDecision(a.toolName, "deny", "approval flow failed");\n    return a.allow(a.toolInput);'), T_GF, ["a fault anywhere else in the flow (here: the decision logger, after the consume) denies and reports, never allows"])
-M("G1-5f-allow-when-consume-throws", GF, E('} catch {\n            consumed = false;\n            reason = "rpc_error";\n          }', '} catch {\n            consumed = true;\n            reason = "rpc_error";\n          }'), T_GF, ["a consume that rejects at the dependency boundary (not just inside the service) is a deny"])
+M("G1-5f-allow-when-consume-throws", GF, E('} catch (err) {\n            consumed = false;\n            reason = "rpc_error";\n            consumeError = err;\n          }', '} catch (err) {\n            consumed = true;\n            reason = "rpc_error";\n            consumeError = err;\n          }'), T_GF, ["a consume that rejects at the dependency boundary (not just inside the service) is a deny"])
 M("G1-5g-truthy-consume-is-an-allow", GF, E("consumed = c.consumed === true;", "consumed = Boolean(c.consumed);"), T_GF, ["only a boolean true from consume is an allow (a truthy string is not)"])
 M("G1-5h-no-abort-check-before-submit", GF, E("    if (aborted()) return denyAborted();\n\n    // 3. Create-or-find", "\n    // 3. Create-or-find"), T_GF, ["an abort that lands while the server-derived fields resolve creates no request"])
 M("G1-5i-no-abort-check-at-entry", GF, E("    if (aborted()) return denyAborted();\n\n    // 1. The fields", "\n    // 1. The fields"), T_GF, ["an already-aborted call performs no database read and cannot allow"])
@@ -291,10 +337,10 @@ M("G1-X5b-grant-written-on-a-live-consume-rejection", GF, E('a.logDecision(a.too
 M("G1-X5c-grant-written-on-an-owner-rejection", GF, E('a.logDecision(a.toolName, "deny", "approval rejected by the owner");\n          return deny(APPROVAL_REJECTED_DENY);', 'a.logDecision(a.toolName, "deny", "approval rejected by the owner");\n          putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n          return deny(APPROVAL_REJECTED_DENY);'), T_DENYP, ["Owner rejected while the agent waited: deny, no allow(), no grant, session enforcing"])
 M("G1-X5d-grant-written-on-a-wait-timeout", GF, E('a.logDecision(a.toolName, "deny", "approval wait ended undecided");\n          return deny(APPROVAL_PENDING_DENY);', 'a.logDecision(a.toolName, "deny", "approval wait ended undecided");\n          putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n          return deny(APPROVAL_PENDING_DENY);'), T_DENYP, ["nobody decided before the wait deadline: deny, no allow(), no grant, session enforcing"])
 M("G1-X6-push-handler-ignores-the-grant-commit", GHT, E('commitSha: grant.kind === "granted" ? grant.binding.headSha : undefined,', "commitSha: undefined,"), T_PUSHG, ["a grant pins the approved commit: pushBranch gets commitSha = the approved headSha"])
-M("G1-X7-push-handler-runs-without-a-grant", GHT, E('if (grant.kind === "refuse") {\n        return { content: [{ type: "text", text: `Error pushing branch: ${GRANT_MISSING_MESSAGE}` }], isError: true };', 'if (false) {\n        return { content: [{ type: "text", text: `Error pushing branch: ${GRANT_MISSING_MESSAGE}` }], isError: true };'), T_PUSHG, ["enforcing and no grant: refuses with the grant-missing text and pushes nothing"])
+M("G1-X7-push-handler-runs-without-a-grant", GHT, E('if (grant.kind === "refuse") return grantRefusalResponse("grant_missing");', 'if (false) return grantRefusalResponse("grant_missing");'), T_PUSHG, ["enforcing and no grant: refuses with the grant-missing text and pushes nothing"])
 M("G1-X8-push-ignores-the-pinned-commit", PUSH, E('`${commitSha ?? "HEAD"}:refs/heads/${branch}`', '`HEAD:refs/heads/${branch}`'), T_PINNED, ["approve at A, HEAD moves to B: the remote branch ends at A, not B"])
 M("G1-X9-push-pinned-commit-not-verified", PUSH, E('execFileSync("git", ["cat-file", "-e", `${commitSha}^{commit}`], { cwd: workspacePath, stdio: "pipe" });', "void 0;"), T_PINNED, ["a sha that is absent from the repository throws and the remote branch is not created"])
-M("G1-X10-check-grant-does-not-refuse-when-enforcing", GRANTS, E('return grants.enforcing ? { kind: "refuse" } : { kind: "legacy" };', 'return { kind: "legacy" };'), T_GRANTS, ["checkGrant enforcing and no grant: refuse (the sticky flag fails closed)"])
+M("G1-X10-check-grant-does-not-refuse-when-enforcing", GRANTS, E('if (!grants.enforcing) return { kind: "legacy" };', 'return { kind: "legacy" };'), T_GRANTS, ["checkGrant enforcing and no grant: refuse (the sticky flag fails closed)"])
 M("G1-X11-grant-is-not-one-shot", GRANTS, E("    if (!e) return null;\n    this.entries.delete(id);\n", "    if (!e) return null;\n"), T_GRANTS, ["ExecutionGrants take is one-shot"])
 M("G1-X12-grant-never-expires", GRANTS, E("return e.expiresAt > this.now() ? e.binding : null;", "return e.binding;"), T_GRANTS, ["ExecutionGrants a grant expires after 120 s and the expired read still consumes it"])
 M("G1-X13-grant-map-unbounded", GRANTS, E("while (this.entries.size > GRANT_MAX_ENTRIES) {", "while (false) {"), T_GRANTS, ["ExecutionGrants the map is capped at 64 entries and the oldest is dropped"])
@@ -303,40 +349,41 @@ M("G1-X15-autonomous-ignores-a-changed-workspace", "server/workspace-settings-to
 
 # ---- 4. Flag-off fail-closed ------------------------------------------------------------------------------------------------
 M("G1-F1-flag-read-error-turns-flow-on", GF, E("} catch {\n    enabled = false;\n  }", "} catch {\n    enabled = true;\n  }"), T_GF, ["absent, disabled and a throwing flag read behave identically"])
-M("G1-F2-flag-off-still-runs-the-flow", GF, E("if (!enabled) return null;", ""), T_GF, ["absent, disabled and a throwing flag read behave identically"])
+M("G1-F2-flag-off-still-runs-the-flow", GF, E("if (!enabled) {", "if (false) {"), T_GF, ["absent, disabled and a throwing flag read behave identically"])
 M("G1-F3-flag-module-fails-open", FLAG, E("    return false;\n  }\n}", "    return true;\n  }\n}"), T_FLAG, ["isApprovalQueueEnabled fails closed when the flag read throws"])
 M("G1-F4-flag-wrong-name", FLAG, E('getRuntimeFlag("approval-queue"', 'getRuntimeFlag("approval-queu"'), T_FLAG, ["isApprovalQueueEnabled reads the approval-queue flag with the workspace as the segment identity"])
 M("G1-F5-flag-truthy-is-on", GF, E("enabled = (await a.approval.isEnabled()) === true;", "enabled = (await a.approval.isEnabled()) !== false;"), T_GF, residual="the flag client returns booleans; a non-boolean flag value turning the flow on is unpinned (the throwing and false reads are pinned by F1/F2)")
 M("G1-F6-reattach-reads-flag-without-workspace", REATT, E("isApprovalQueueEnabled({ userId: a.userId, workspaceId: w })", "isApprovalQueueEnabled({ userId: a.userId, workspaceId: null as never })"), T_WS, ["reattach re-send attach site: resume_stream a workspace-scoped cohort: the card is re-sent for the cohort's workspace and the flag was read WITH a workspace"])
 
 # ---- 5. The permission-callback gated branch ---------------------------------------------------------------------------------
-M("G1-PC1-gated-branch-never-calls-the-gate", PC, E("if (deps.approval && isApprovalRequiredTool(toolName)) {", "if (false && deps.approval && isApprovalRequiredTool(toolName)) {"), T_GF, ["approve in window -> exactly one consume with the independently computed hash -> allow"])
-M("G1-PC2-gate-verdict-discarded", PC, E("if (approvalVerdict !== null) return approvalVerdict;", ""), T_GF, ["approve in window -> exactly one consume with the independently computed hash -> allow"])
+# PC1/PC2 sit on the chokepoint every createCanUseTool-driven gate test passes through, so most of gate-flow.test.ts goes red (94/123, 86/123 measured).
+M("G1-PC1-gated-branch-never-calls-the-gate", PC, E("if (deps.approval && isApprovalRequiredTool(toolName)) {", "if (false && deps.approval && isApprovalRequiredTool(toolName)) {"), T_GF, ["approve in window -> exactly one consume with the independently computed hash -> allow"], blast=0.85)
+M("G1-PC2-gate-verdict-discarded", PC, E("if (approvalVerdict !== null) return approvalVerdict;", ""), T_GF, ["approve in window -> exactly one consume with the independently computed hash -> allow"], blast=0.85)
 
 # ---- 6. Service wrappers (consume contract, re-proposal consume: matrix row 11) ------------------------------------------------
 M("G1-11a-approved-row-not-consumed-on-create", SVC, E('if (r.approval.status === "approved") {', 'if (false && r.approval.status === "approved") {'), T_SVC, ["an approved live row is consumed immediately, with no card and no wait"])
 M("G1-11b-approved-row-returned-to-the-wait-loop", SVC, [E('if (r.approval.status === "approved") {', 'if (false && r.approval.status === "approved") {'), E('if (r.approval.status === "pending") {', 'if (r.approval.status === "pending" || r.approval.status === "approved") {')], T_GF, ["row 11: a live row that is already approved is consumed at once, with no card and no wait"])
 M("G1-1d-consume-rpc-drops-conversation", SVC, E("p_conversation: p.conversationId }", "p_conversation: p.id }"), T_SVC, ["passes id, hash and conversation and reports consumed once"])
 M("G1-1e-consume-rpc-drops-hash", SVC, E("p_hash: p.hash,", "p_hash: p.id,"), T_SVC, ["passes id, hash and conversation and reports consumed once"])
-M("G1-5j-allow-when-consume-rpc-errors", SVC, E('if (res.error) return { consumed: false, reason: "rpc_error" };', "if (res.error) return { consumed: true };"), T_SVC, ["fails closed: an rpc error, a null payload or an unknown shape is a rejection, never a consume"])
-M("G1-5k-allow-when-consume-rpc-throws", SVC, E('} catch {\n    return { consumed: false, reason: "rpc_error" };\n  }\n  if (res.error)', '} catch {\n    return { consumed: true };\n  }\n  if (res.error)'), T_GF, ["a consume that throws, or answers with anything but boolean true, is a deny"])
+M("G1-5j-allow-when-consume-rpc-errors", SVC, E('if (res.error) return { consumed: false, reason: "rpc_error", ...(res.error.code ? { code: res.error.code } : {}) };', "if (res.error) return { consumed: true };"), T_SVC, ["fails closed: an rpc error, a null payload or an unknown shape is a rejection, never a consume"])
+M("G1-5k-allow-when-consume-rpc-throws", SVC, E('} catch (e) {\n    return { consumed: false, reason: "rpc_error", ...(e instanceof Error && e.name ? { code: e.name } : {}) };\n  }', '} catch (e) {\n    return { consumed: true };\n  }'), T_GF, ["a consume that throws, or answers with anything but boolean true, is a deny"])
 M("G1-5l-truthy-rpc-payload-consumes", SVC, E("if (isObj(d) && d.consumed === true) return { consumed: true };", "if (isObj(d) && d.consumed) return { consumed: true };"), T_SVC, ["fails closed: an rpc error, a null payload or an unknown shape is a rejection, never a consume"])
 M("G1-1f-malformed-hash-reaches-the-database", SVC, E('if (!HASH_RE.test(p.hash)) return { consumed: false, reason: "bad_request" };', ""), T_SVC, ["refuses to call the rpc with a hash that is not 64 lowercase hex (never consume on a malformed bind)"])
 
 # ---- 7. The wait loop -----------------------------------------------------------------------------------------------------------
-M("G1-W1-transient-read-error-decides-approved", WAIT, E("} catch {\n          // Transient read error: keep waiting until the deadline. Never an allow. Counted, and reported once per wait.\n          readErrors += 1;\n        }", '} catch {\n          return { kind: "decided", status: "approved" };\n        }'), T_WAIT, ["waitForDecision a transient read error continues until the deadline and never allows"])
-M("G1-W2-abort-not-checked-first", WAIT, E('      if (deps.signal.aborted) return { kind: "aborted", readErrors };\n\n      if (reads < MAX_POLL_READS)', "      if (reads < MAX_POLL_READS)"), T_WAIT, ["waitForDecision checks the signal first: an already aborted signal does not read at all"])
-M("G1-W3-timeout-reads-as-approved", WAIT, E('if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "timeout", readErrors };', 'if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "decided", status: "approved" };'), T_WAIT, ["waitForDecision times out undecided after the deadline and leaves the verdict to the caller (row stays pending)"])
+M("G1-W1-transient-read-error-decides-approved", WAIT, E("          readErrors += 1;\n          lastReadError = err;\n        }", '          return { kind: "decided", status: "approved" };\n        }'), T_WAIT, ["waitForDecision a transient read error continues until the deadline and never allows"])
+M("G1-W2-abort-not-checked-first", WAIT, E('      if (deps.signal.aborted) return { kind: "aborted", readErrors, lastReadError };\n\n      if (reads < MAX_POLL_READS)', "      if (reads < MAX_POLL_READS)"), T_WAIT, ["waitForDecision checks the signal first: an already aborted signal does not read at all"])
+M("G1-W3-timeout-reads-as-approved", WAIT, E('if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "timeout", readErrors, lastReadError };', 'if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "decided", status: "approved" };'), T_WAIT, ["waitForDecision times out undecided after the deadline and leaves the verdict to the caller (row stays pending)"])
 M("G1-W4-wake-is-a-verdict", WAIT, E('if (r === "woken") wake = undefined;', 'if (r === "woken") return { kind: "decided", status: "approved" };'), T_WAIT, ["waitForDecision an in-memory wake on this host short-circuits the sleep and is confirmed by one database read"])
-M("G1-W5-pending-read-counts-as-decided", WAIT, E('if (s && s !== "pending") return { kind: "decided", status: s };', 'if (s) return { kind: "decided", status: s as never };'), T_WAIT, [])
-M("G1-W6-abort-during-sleep-not-honoured", WAIT, E('if (r === "aborted" || deps.signal.aborted) return { kind: "aborted", readErrors };', 'if (false) return { kind: "aborted", readErrors };'), T_WAIT, equivalent="the next loop iteration begins with the signal check before any read, so dropping the post-race abort check only adds one no-op iteration; surveyed abort points: before the loop, during a read, during the sleep, after the wake; each ends in the same aborted result with no extra read")
+M("G1-W5-pending-read-counts-as-decided", WAIT, E('if (s && s !== "pending") return { kind: "decided", status: s };', 'if (s) return { kind: "decided", status: s as never };'), T_WAIT, ["waitForDecision times out undecided after the deadline and leaves the verdict to the caller (row stays pending)", "waitForDecision the wake is a hint only: a woken 'approved' with a database row still pending is not an allow"])
+M("G1-W6-abort-during-sleep-not-honoured", WAIT, E('if (r === "aborted" || deps.signal.aborted) return { kind: "aborted", readErrors, lastReadError };', 'if (false) return { kind: "aborted", readErrors, lastReadError };'), T_WAIT, equivalent="the next loop iteration begins with the signal check before any read, so dropping the post-race abort check only adds one no-op iteration; surveyed abort points: before the loop, during a read, during the sleep, after the wake; each ends in the same aborted result with no extra read")
 
 # ---- 8. Tool set and census (matrix row 7; Guard 2 rows) --------------------------------------------------------------------------
 M("G1-7a-slice1-tool-removed-from-required-set", TOOLS, E("  `${P}workspace_set_autonomous`,\n] as const;", "] as const;"), T_TC, ["slice-1 tool set is exactly the eight tools of the spec (fully qualified names)"])
 M("G1-7b-nothing-is-approval-required", TOOLS, E("return REQUIRED.has(toolName);", "return false;"), T_TC, ["slice-1 tool set is exactly the eight tools of the spec (fully qualified names)"])
-M("G1-7c-gated-tool-listed-in-allowed-tools", "server/tool-tiers.ts", E('return getToolTier(fqn) === "auto-approve";', 'return getToolTier(fqn) !== "blocked";'), T_BA, [])
+M("G1-7c-gated-tool-listed-in-allowed-tools", "server/tool-tiers.ts", E('return getToolTier(fqn) === "auto-approve";', 'return getToolTier(fqn) !== "blocked";'), T_BA, ["unit census every hand-listed gated entry is absent even when handed to the filter explicitly", "unit census the booted universe is exactly the registered tools; each is in the table; auto-approve ones are pre-approved and gated ones are not"])
 M("G1-7d-runner-loses-the-approval-wiring", "server/agent-runner.ts", E("approval: createApprovalGateDeps({", "approvalOff: createApprovalGateDeps({"), T_RC, ["runner registration census the legacy runner wires the approval dependency into its canUseTool deps"])
-M("G1-7e-runner-grants-not-shared-with-a-builder", "server/agent-runner.ts", E("const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId, grants: approvalGrants });", "const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });"), T_RC, ["runner registration census the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (R1)"])
+M("G1-7e-runner-grants-not-shared-with-a-builder", "server/agent-runner.ts", E("const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId, grants: approvalGrants });", "const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });"), T_RC, ["runner registration census the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (ADR-307 ExecutionGrants)"])
 M("G1-12a-census-vacuity-check-removed", TOOLS, E("if (gated.length === 0 || required.length === 0) {", "if (false) {"), T_TC, ["Guard 2 census: every gated tool is required or exempt-with-a-reason row 2: an empty census is reported as vacuous"])
 M("G1-12b-census-vacuity-needs-both-empty", TOOLS, E("if (gated.length === 0 || required.length === 0) {", "if (gated.length === 0 && required.length === 0) {"), T_TC, ["Guard 2 census: every gated tool is required or exempt-with-a-reason row 2b: a census with gated tools but no required tool, or required tools but no gated tool, is vacuous"])
 M("G2-1-unclassified-gated-tool-not-reported", TOOLS, E("unclassified: gated.filter((t) => !req.has(t) && !Object.hasOwn(exempt, t)),", "unclassified: [],"), T_TC, ["Guard 2 census: every gated tool is required or exempt-with-a-reason row 1: a new gated tool added to the map without classification is reported"])
@@ -347,11 +394,11 @@ M("G1-D1-decision-enum-widened", DECIDE, E('export const APPROVAL_DECISIONS = ["
 M("G1-D2a-service-reexports-decide-by-name", SVC, E("export const APPROVAL_STATUSES =", 'export { decideApproval } from "./decide";\nexport const APPROVAL_STATUSES ='), T_DB, ["canUseTool, the gate flow and the service wrappers cannot reach decide.ts"])
 M("G1-D2b-service-star-reexports-decide", SVC, E("export const APPROVAL_STATUSES =", 'export * from "./decide";\nexport const APPROVAL_STATUSES ='), T_DB, ["canUseTool, the gate flow and the service wrappers cannot reach decide.ts"])
 M("G1-D2c-stray-decide-rpc-name-single-quoted-in-a-gate-module", TOOLS, E('const P = "mcp__soleur_platform__";', 'const P = "mcp__soleur_platform__";\nexport const STRAY = \'decide_approval\';'), T_DB, ["the decide_approval RPC name appears, in code and in any quote style, in exactly one source module"])
-M("G1-D2d-stray-decide-rpc-call-in-a-tool-builder", GHT, E('import { checkGrant, GRANT_MISSING_MESSAGE, type ExecutionGrants } from "./approval/grants";', 'import { checkGrant, GRANT_MISSING_MESSAGE, type ExecutionGrants } from "./approval/grants";\nexport const STRAY_RPC = (c: { rpc: (n: string) => unknown }) => c.rpc("decide_approval");'), T_DB, ["the decide_approval RPC name appears, in code and in any quote style, in exactly one source module"])
+M("G1-D2d-stray-decide-rpc-call-in-a-tool-builder", GHT, E('import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";', 'import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";\nexport const STRAY_RPC = (c: { rpc: (n: string) => unknown }) => c.rpc("decide_approval");'), T_DB, ["the decide_approval RPC name appears, in code and in any quote style, in exactly one source module"])
 M("G1-D2e-tool-builder-imports-handleMessage-from-the-hub", "server/kb-share-tools.ts", E('import { tool } from "@anthropic-ai/claude-agent-sdk";', 'import { tool } from "@anthropic-ai/claude-agent-sdk";\nimport { handleMessage } from "./ws-handler";\nexport const STRAY_HUB = handleMessage;'), T_DB, ["the hub (ws-handler) is not a back door no gate-side, approval or MCP-builder module value-imports ws-handler at all"])
 M("G1-D2f-gate-module-imports-handleMessage-by-alias", TOOLS, E('const P = "mcp__soleur_platform__";', 'import { handleMessage as hm } from "../ws-handler";\nexport const STRAY_HUB = hm;\nconst P = "mcp__soleur_platform__";'), T_DB, ["the hub (ws-handler) is not a back door nothing outside tests imports handleMessage (the entry that mints a tenant client and routes approval_decide)"])
 M("G1-D2g-gate-module-imports-decide-directly", TOOLS, E('const P = "mcp__soleur_platform__";', 'import { decideApproval } from "./decide";\nexport const STRAY_DECIDE = decideApproval;\nconst P = "mcp__soleur_platform__";'), T_DB, ["the decide path is unreachable from anything the agent can reach canUseTool, the gate flow and the service wrappers cannot reach decide.ts"])
-M("G1-DB3-template-built-rpc-name-in-a-tool-builder", GHT, E('import { checkGrant, GRANT_MISSING_MESSAGE, type ExecutionGrants } from "./approval/grants";', 'import { checkGrant, GRANT_MISSING_MESSAGE, type ExecutionGrants } from "./approval/grants";\nexport const STRAY_RPC = (c: { rpc: (n: string) => unknown }) => c.rpc(`decide_${"approval"}`);'), T_DB, residual="a run-time assembled RPC name is invisible to the name grep (the import-graph conjuncts still hold because the builder imports no decide module)")
+M("G1-DB3-template-built-rpc-name-in-a-tool-builder", GHT, E('import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";', 'import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";\nexport const STRAY_RPC = (c: { rpc: (n: string) => unknown }) => c.rpc(`decide_${"approval"}`);'), T_DB, residual="a run-time assembled RPC name is invisible to the name grep (the import-graph conjuncts still hold because the builder imports no decide module)")
 M("G1-D3-review-answer-can-resolve-an-approval", WSH, E('if (typeof msg.gateId === "string" && hasApprovalWaiter(msg.gateId)) {', "if (false) {"), T_WS, ["cross-kind resolution bypass: a review gate and an approval can never resolve each other review_gate_response carrying an approval's id does not wake the waiter, does not decide, and is refused"])
 M("G1-D4-reattach-skips-hash-verification", REATT, E("}) === approval.action_sha256;", "}) !== '';"), T_WS, ["a row whose stored action does not hash to the bound value is never rendered (the card cannot disagree with the hash)"])
 M("G1-D5-card-truncates-the-body", "server/approval/render.ts", E('row("BODY", str(f.body), "block"),', 'row("BODY", str(f.body).slice(0, 40), "block"),', count=2), T_REND, ["a 100 KB body is rendered in full (no ellipsis, no +N more)"])
@@ -374,6 +421,76 @@ M("P8-probe-behaviour-hard-coded-to-deny", PROBE, E("behaviors.push(String(r?.be
 M("P9-probe-approver-says-approve", PROBE, E('return "Reject"; },', 'return "Approve"; },'), STATIC, ["probe: the probe approver answers Reject, so a bypass would be the only way the stub runs"])
 M("P10-probe-tier-hard-coded-gated", PROBE, E("if (toolName === target) tier = getToolTier(toolName);", 'if (toolName === target) tier = "gated";'), STATIC, ["probe: the tier is read from the production tier map"])
 M("P11-probe-never-records-the-tool-call", PROBE, E("      seen.push(toolName);\n", ""), STATIC, ["probe: invoked comes from the names production canUseTool saw"])
+
+# ---- 11. The production gate-deps factory (gate.ts): the "injected seam" class (round-2 FD-1) ------------------------------------
+K_GD_GRANTS = ["createApprovalGateDeps: the grants object exposes the SAME ExecutionGrants object it was given",
+               "createApprovalGateDeps: the grants object a gate run through the factory's deps turns THAT object enforcing"]
+M("G1-GD1-factory-builds-a-private-grants-object", GD, [E('import type { ExecutionGrants } from "./grants";', 'import { ExecutionGrants } from "./grants";'), E("    grants: args.grants,", "    grants: new ExecutionGrants(),")], T_GD, K_GD_GRANTS + ["composed: factory deps -> gate -> the real kb_share_create handler, over one shared grants object approved in W1 but the active workspace moved to W2"])
+M("G1-GD2-factory-consume-always-releases", GD, E("    consume: (p) => consumeApproval(svc(), p),", "    consume: async () => ({ consumed: true }),"), T_GD, ["createApprovalGateDeps: RPC forwarding consume forwards consume_approval with the id, the hash and the conversation"])
+M("G1-GD3-factory-readstatus-always-approved", GD, E("      return row ? row.status : null;", '      return row ? "approved" : null;'), T_GD, ["readStatus forwards get_approval_status with the id and returns the row's own status"])
+M("G1-GD4-factory-flag-defaults-on", GD, E("isEnabled: args.isEnabled ?? (() => isApprovalQueueEnabled({ userId: args.userId, workspaceId: args.workspaceId })),", "isEnabled: args.isEnabled ?? (async () => true),"), T_GD, ["the default isEnabled reads the REAL approval-queue flag with the user and the workspace", "the default is OFF when the flag is off or unreadable (never on by default)"])
+M("G1-GD5-factory-flag-read-without-the-workspace", GD, E("isApprovalQueueEnabled({ userId: args.userId, workspaceId: args.workspaceId })", "isApprovalQueueEnabled({ userId: args.userId, workspaceId: args.userId })"), T_GD, ["the default isEnabled reads the REAL approval-queue flag with the user and the workspace"])
+M("G1-GD6-factory-workspace-id-is-not-the-sessions", GD, E("    workspaceId: args.workspaceId,\n    grants: args.grants,", "    workspaceId: args.userId,\n    grants: args.grants,"), T_GD, ["exposes the SAME ExecutionGrants object it was given"])
+M("G1-GD7-factory-viewer-always-owner", GD, E('return data === true ? "owner" : "member";', 'return "owner";'), T_GD, ["is 'member' for false, null and any non-true answer"])
+M("G1-GD8-factory-viewer-read-error-ignored", GD, E('if (error) throw new Error("viewer role read failed");', ""), T_GD, ["a read error is thrown (the gate reports it and shows the read-only card); it is never an owner"])
+M("G1-GD9-factory-viewer-asks-about-another-user", GD, E("p_user_id: args.userId }", "p_user_id: args.workspaceId }"), T_GD, ["is 'owner' only for a clean `true`, asked of is_workspace_owner for THIS workspace and user"])
+M("G1-GD10-factory-require-repo-deleted", GD, E('if (!args.repoSlug) throw new Error("no connected repository to bind");', ""), T_GD, ["push / PR / trigger with NO connected repository throw (nothing to bind)"])
+M("G1-GD11-factory-pr-and-trigger-repo-constant", GD, E('case "mcp__soleur_platform__github_trigger_workflow":\n          return { repo: requireRepo() };', 'case "mcp__soleur_platform__github_trigger_workflow":\n          return { repo: "example/constant" };'), T_GD, ["PR and workflow trigger: the connected repository only"])
+M("G1-GD12-factory-push-head-is-a-constant", GD, E("headSha: await headSha(args.workspacePath) }", 'headSha: "0".repeat(40) }'), T_GD, ["push: the connected repository and the workspace HEAD resolved FROM THE WORKSPACE PATH"])
+M("G1-GD13-factory-push-head-read-from-the-wrong-path", GD, E("await headSha(args.workspacePath)", 'await headSha(".")'), T_GD, ["push: the connected repository and the workspace HEAD resolved FROM THE WORKSPACE PATH"])
+M("G1-GD14-factory-push-repo-is-a-constant", GD, E("return { repo: requireRepo(), headSha:", 'return { repo: "example/constant", headSha:'), T_GD, ["push: the connected repository and the workspace HEAD resolved FROM THE WORKSPACE PATH"])
+M("G1-GD15-factory-reply-recipient-is-a-constant", GD, E("return { recipient: sender };", 'return { recipient: "constant@example.test" };'), T_GD, ["email_reply: the STORED sender of the owner-scoped inbound item"])
+M("G1-GD16-factory-reply-reads-another-row", GD, E('.select("id, sender").eq("id", messageId)', '.select("id, sender").eq("id", args.userId)'), T_GD, ["email_reply: the STORED sender of the owner-scoped inbound item"])
+M("G1-GD17-factory-reply-empty-sender-accepted", GD, E('typeof sender !== "string" || sender.length === 0', 'typeof sender !== "string"'), T_GD, ["email_reply: no message id, a read error, or an empty / non-string sender throws"])
+M("G1-GD18-factory-reply-read-error-ignored", GD, E("if (error || typeof sender !==", "if (typeof sender !=="), T_GD, ["email_reply: no message id, a read error, or an empty / non-string sender throws"])
+M("G1-GD19-factory-pushes-again-on-a-re-ask", GD, E("if (!created || !notify) return;", "if (!notify) return;"), T_GD, ["pushes only for a NEW request the database said to notify about"])
+M("G1-GD20-factory-undelivered-push-is-silent", GD, E('if (!delivered) throw new Error("approval notification not delivered");', ""), T_GD, ["a dispatch that reaches nobody throws, so the gate reports approval-notify-failed"])
+M("G1-GD21-factory-service-client-not-memoised", GD, E("(service ??= (args.serviceClient", "(service = (args.serviceClient"), T_GD, ["the service client is created once and reused across calls"])
+M("G1-GD22-factory-head-read-in-the-process-cwd", GD, E("{ cwd: workspacePath, timeout: 10_000 }", "{ cwd: process.cwd(), timeout: 10_000 }"), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
+M("G1-GD23-factory-head-not-trimmed", GD, E("const sha = stdout.trim();", "const sha = stdout;"), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
+M("G1-GD24-factory-head-shape-unchecked", GD, E('if (!COMMIT_SHA_RE.test(sha)) throw new Error("workspace HEAD is not a commit sha");', ""), T_GD, equivalent="`git rev-parse HEAD` that exits 0 prints exactly one full object id (40 or 64 hex) and an unborn or missing HEAD exits non-zero, which execFile already turns into a throw; surveyed input shapes: a normal repo, an empty repo (no commit), a non-repository directory, a repository with a detached HEAD; none reaches the shape check with a non-sha. Defence in depth for a future change of the git command.")
+
+# ---- 12. Sticky enforcement, grants refused / key unavailable ops, push without a commit, consume-reject frames (round-2 Q3/Q5/Q6/Q8) --
+K_STICKY = [": flag on, then off, on ONE ExecutionGrants object -> terminal unavailable deny, no review card, no request"]
+M("G1-ST1-flag-off-after-enforcing-falls-back-to-the-legacy-card", GF, E("    if (a.approval.grants.enforcing) {\n      a.logDecision", "    if (false) {\n      a.logDecision"), T_GF, K_STICKY, blast=0.3)
+M("G1-ST2-flag-off-after-enforcing-allows", GF, E('a.logDecision(a.toolName, "deny", "approval flow unavailable after it ran in this session");\n      return deny(APPROVAL_UNAVAILABLE_DENY);', 'a.logDecision(a.toolName, "deny", "approval flow unavailable after it ran in this session");\n      return a.allow(a.toolInput);'), T_GF, K_STICKY, blast=0.3)
+M("G1-ST3-flag-off-always-denies-even-before-the-flow-ran", GF, E("    if (a.approval.grants.enforcing) {\n      a.logDecision", "    if (true) {\n      a.logDecision"), T_GF, ["a session the flow NEVER ran in still falls back to the legacy gate when the flag is off"], blast=0.3)
+M("G1-ST4-grants-required-grants-optional-github", GHT, E("\n  grants: ExecutionGrants;", "\n  grants?: ExecutionGrants;"), T_BGR, ["'buildGithubTools': the options interface 'BuildGithubToolsOpts' has a non-optional"])
+M("G1-ST5-grants-required-grants-optional-kb-share", KBS, E("\n  grants: ExecutionGrants;", "\n  grants?: ExecutionGrants;"), T_BGR, ["'buildKbShareTools': the options interface 'BuildKbShareToolsOpts' has a non-optional"])
+M("G1-ST6-grants-required-grants-optional-settings", WSET, E("\n  grants: ExecutionGrants;", "\n  grants?: ExecutionGrants;"), T_BGR, ["'buildWorkspaceSettingsTools': the options interface 'BuildWorkspaceSettingsToolsOpts' has a non-optional"])
+M("G1-ST7-grants-required-builder-takes-another-type", GHT, E("export function buildGithubTools(opts: BuildGithubToolsOpts)", "export function buildGithubTools(opts: Partial<BuildGithubToolsOpts>)"), T_BGR, ["'buildGithubTools' takes its options as 'BuildGithubToolsOpts'"])
+M("G1-PG1-push-grant-without-a-commit-pushes-head", GHT, E('if (grant.kind === "granted" && !grant.binding.headSha) {', "if (false) {"), T_PUSHG, ["a grant that carries no headSha REFUSES (never pushes HEAD) and is reported as commit_mismatch"])
+M("G1-PG2-push-grant-without-a-commit-refuses-unreported", GHT, E('reportGrantRefused(toolName, "commit_mismatch");', ""), T_SINK, ["commit_mismatch: a push grant that carries no headSha refuses (never pushes HEAD)"])
+M("G1-PG3-approved-commit-unavailable-refuses-unreported", GHT, E('reportGrantRefused(toolName, "commit_unavailable");', ""), T_SINK, ["commit_unavailable: the approved commit cannot be pushed"])
+M("G1-GR1-checkgrant-refusal-not-reported", GRANTS, E('reportGrantRefused(tool, threw ? "grant_error" : "grant_missing", threw ? cause : null);', "void 0;"), T_SINK, ["grant_missing: an enforcing session, no grant", "grant_error: args that cannot be keyed"])
+M("G1-GR2-keying-failure-reported-as-missing", GRANTS, E('threw ? "grant_error" : "grant_missing"', '"grant_missing"'), T_SINK, ["grant_error: args that cannot be keyed"])
+M("G1-GR3-grant-refused-op-drops-the-reason", GRANTS, E('reportApprovalOp("grantRefused", cause, { toolName: tool, extra: { reason } });', 'reportApprovalOp("grantRefused", cause, { toolName: tool });'), T_SINK, ["grant_missing: an enforcing session, no grant"])
+M("G1-GR4-kb-share-workspace-change-not-reported", KBS, E('reportGrantRefused(toolName, "workspace_changed");', ""), T_SINK, ["workspace_changed: approved in W1, active workspace W2"])
+M("G1-GR5-settings-workspace-change-not-reported", WSET, E('reportGrantRefused(toolName, "workspace_changed");', ""), T_SINK, ["workspace_changed: approved in W1, active workspace W2"])
+M("G1-GR6-refusal-code-differs-between-tools", GRANTS, E('workspace_changed: { error: WORKSPACE_CHANGED_MESSAGE, code: "workspace_changed", status: 409 }', 'workspace_changed: { error: WORKSPACE_CHANGED_MESSAGE, code: "workspace-changed", status: 409 }'), T_EXG, ["kb_share_create the active workspace changed after approval: refused with workspace_changed, createShare never called", "workspace_set_autonomous approved on W1 but the active workspace is W2: refused with workspace_changed, setBashAutonomous never called"])
+M("G1-KU1-error-level-ops-downgraded-to-warn", "server/approval/ops.ts", E('if (def.level === "error") reportSilentFallback(null, options);', 'if (false) reportSilentFallback(null, options);'), T_SINK, ["the gate denies with the unavailable text and reaches Sentry as its own error event (literal-null path, code in extra)"])
+M("G1-KU1b-error-level-ops-hand-the-error-to-the-helper", "server/approval/ops.ts", E('if (def.level === "error") reportSilentFallback(null, options);', 'if (def.level === "error") reportSilentFallback(err, options);'), T_OPSINK, [": captureMessage with feature/op tags, the static message, error level and the approval id", ": the pino mirror line carries feature/op and no err object (nothing for the pino integration to capture)"], blast=0.9)
+M("G1-KU2-reattach-key-unavailable-not-reported", REATT, E('reportApprovalOp("keyUnavailable", null, {', 'reportApprovalOp("reattachFailed", null, {'), T_SINK, ["reattach reports the same op, tagged with the approval id, and shows no card"])
+M("G1-KU3-flag-read-failure-latches-after-the-first-report", FLAG, E("lastReadFailureReportedAt === null || now - lastReadFailureReportedAt >= FLAG_READ_FAILURE_REPORT_TTL_MS", "lastReadFailureReportedAt === null"), T_SINK, ["reports once per window, stays quiet inside it, and reports again after the TTL"])
+M("G1-NA1-not-approved-has-no-own-deny-text", GF, E('    case "not_approved":\n      // The consume lost to a revoke: the Owner denied it, so the honest text is the denial, not "arguments changed".\n      return APPROVAL_REJECTED_DENY;\n', ""), T_GF, ["consume reasons map to their own static text not_approved"])
+M("G1-NA2-not-approved-card-keeps-claiming-approved", GF, E('    case "not_approved":\n      return "rejected";\n', ""), T_GF, ["live path, reason not_approved -> approval_status rejected with agentWaiting=false"])
+M("G1-CF1-live-consume-reject-sends-no-settle-frame", GF, E("            emitStatus(approvalId, consumeRejectedCardStatus(reason), false);\n", ""), T_GF, ["live path, reason "], blast=0.3)
+M("G1-CF2-live-consume-reject-says-the-agent-still-waits", GF, E("emitStatus(approvalId, consumeRejectedCardStatus(reason), false);", "emitStatus(approvalId, consumeRejectedCardStatus(reason), true);"), T_GF, ["live path, reason "], blast=0.3)
+M("G1-CF3-reproposal-consume-reject-sends-no-settle-frame", GF, E("        emitStatus(submitted.approvalId, consumeRejectedCardStatus(submitted.reason), false);\n", ""), T_GF, ["re-proposal path (consume rejected inside submit) emits the same settle frame"])
+M("G1-CF4-expired-reject-card-keeps-claiming-approved", GF, E('    case "expired":\n      return "expired";\n    case "not_approved":', '    case "not_approved":'), T_GF, ["live path, reason expired -> approval_status expired with agentWaiting=false"])
+
+# ---- 13. Payload wiring of the gate flow (round-2 FD-6) -------------------------------------------------------------------------
+K_PAY_SUBMIT = ["gate-flow payload wiring the submitted request carries the REQUESTING user"]
+M("G1-PL1-requester-is-the-conversation", GF, E("requestedByUserId: a.userId,", "requestedByUserId: a.conversationId,"), T_PAY, K_PAY_SUBMIT)
+M("G1-PL2-submit-binds-the-user-as-the-conversation", GF, E("        conversationId: a.conversationId,\n        requestedByUserId: a.userId,", "        conversationId: a.userId,\n        requestedByUserId: a.userId,"), T_PAY, K_PAY_SUBMIT)
+M("G1-PL3-submit-carries-an-empty-canonical-action", GF, E("        canonicalAction: action,\n", "        canonicalAction: { ...action, fields: {} },\n"), T_PAY, K_PAY_SUBMIT)
+M("G1-PL4-card-expiry-is-blank", GF, E("          expiresAt: submitted.approval.expires_at,\n          requestCount", '          expiresAt: "",\n          requestCount'), T_PAY, ["the approval_request card carries the row's own expires_at"])
+M("G1-PL5-card-request-count-is-constant", GF, E("          requestCount: submitted.requestCount,\n          viewerRole,", "          requestCount: 1,\n          viewerRole,"), T_PAY, ["the approval_request card carries the row's own expires_at, the request count"])
+M("G1-PL6-dispatch-gets-the-cards-expiry", GF, E("                expiresAt: submitted.expiresAt,\n", "                expiresAt: submitted.approval.expires_at,\n"), T_PAY, ["the onRequested dispatch gets the approval id, the created and notify verdicts and the DATABASE's expiresAt (not the card's)"])
+
+# ---- 14. Art. 17 erasure emitters: a literal null first argument (round-2 Q2) ---------------------------------------------------
+M("G1-ER1-erasure-rpc-error-hands-the-error-to-the-helper", ACC, E('reportSilentFallback(null, {\n        feature: "account-delete",\n        op: "anonymise-approval-request",', 'reportSilentFallback(anonApprovalErr, {\n        feature: "account-delete",\n        op: "anonymise-approval-request",'), T_AD, ["anonymise_approval_request failure aborts cascade BEFORE auth-delete"])
+M("G1-ER2-erasure-throw-hands-the-error-to-the-helper", ACC, E('reportSilentFallback(null, {\n      feature: "account-delete",\n      op: "anonymise-approval-request",', 'reportSilentFallback(err, {\n      feature: "account-delete",\n      op: "anonymise-approval-request",'), T_AD, ["anonymise_approval_request throwing aborts cascade BEFORE auth-delete"])
 
 json.dump(TABLE, open(sys.argv[1], "w"))
 PYTBL
@@ -473,6 +590,9 @@ JUDGE_PY="$SB/judge.py"
 cat > "$JUDGE_PY" <<'PY'
 import json, os, re, sys
 report, rc, kills = sys.argv[1], int(sys.argv[2]), json.loads(sys.argv[3])
+names_path, blast = sys.argv[4], float(sys.argv[5])
+# The control run's PASSED full names: attribution is by EXACT COUNT against them (see below).
+ctrl = open(names_path, encoding="utf-8").read().split("\n") if os.path.isfile(names_path) else []
 PARSE = re.compile(r"SyntaxError|Transform failed|Failed to parse|Unexpected token|Cannot find module|Failed to resolve import|is not defined|Expected|ParseError", re.I)
 def out(v, d=""):
     print("%s\t%s" % (v, d)); sys.exit(0)
@@ -498,14 +618,28 @@ if not failed:
     out("SURVIVED" if rc == 0 else "UNRESOLVED", "no failed test" if rc == 0 else "non-zero exit (rc=%d) with no failed test" % rc)
 if rc == 0:
     out("UNRESOLVED", "failed tests with exit 0")
-missing = [k for k in kills if not any(k in n for n in failed)]
-if kills and missing:
-    out("MISATTRIBUTED", "failed %d test(s), none matches [%s]; first failed: %s" % (len(failed), "; ".join(m[:70] for m in missing), failed[0][:110]))
-hit = next((n for n in failed if not kills or kills[0] in n), failed[0])
-out("KILLED", "%d failed; named test failed: %s" % (len(failed), hit[:110]))
+total = int(d.get("numTotalTests", 0))
+shown = "; ".join(n[:90] for n in failed[:12])
+# A row with no named detector cannot be attributed: any failing test would credit it (review FD-5).
+if not kills:
+    out("MISATTRIBUTED", "the row names no detector test; %d failed: %s" % (len(failed), shown))
+# EXACT-COUNT attribution. Every named substring must match the SAME NUMBER of failed tests as it matches control-passed
+# tests: a title shared by several it.each cases is credited only when ALL of its cases fail, so a future narrower
+# regression in one case cannot read KILLED, and a substring that is a prefix of an unrelated test does not widen it.
+for k in kills:
+    n_ctrl = sum(1 for n in ctrl if k in n)
+    n_fail = sum(1 for n in failed if k in n)
+    if n_ctrl == 0:
+        out("UNRESOLVED", "named detector [%s] matches no control-passed test" % k[:90])
+    if n_fail != n_ctrl:
+        out("MISATTRIBUTED", "[%s] matches %d control-passed test(s) but %d failed; failed: %s" % (k[:80], n_ctrl, n_fail, shown))
+# Blast radius: a crash or a global breakage that fails (nearly) the whole file is not a kill by its named test.
+if total and len(failed) / total > blast:
+    out("UNRESOLVED", "blast radius %d/%d failed exceeds the row's bound %.2f (a crash that fails the file is not a kill)" % (len(failed), total, blast))
+out("KILLED", "%d/%d failed; named tests failed: %s" % (len(failed), total, "; ".join(k[:60] for k in kills)))
 PY
-judge() { # judge <report.json> <rc> <kills-json> -> "<VERDICT>\t<detail>"
-  python3 "$JUDGE_PY" "$1" "$2" "$3"
+judge() { # judge <report.json> <rc> <kills-json> <control-passed-names-file> [blast-bound] -> "<VERDICT>\t<detail>"
+  python3 "$JUDGE_PY" "$1" "$2" "$3" "$4" "${5:-0.5}"
 }
 verdict_of() { printf '%s' "${1%%$'\t'*}"; }
 
@@ -602,17 +736,29 @@ jq -n '{numTotalTests:3,testResults:[{status:"failed",assertionResults:[{fullNam
 jq -n '{numTotalTests:0,testResults:[{status:"failed",message:"Error: Transform failed with 1 error: SyntaxError: Unexpected token",assertionResults:[]}]}' > "$CAN/parse.json"
 jq -n '{numTotalTests:0,testResults:[{status:"failed",message:"Error: Test timed out in a hook",assertionResults:[]}]}' > "$CAN/dead.json"
 printf 'not json' > "$CAN/garbage.json"
-check "judge: canned green reads SURVIVED" test "$(verdict_of "$(judge "$CAN/green.json" 0 '["a one"]')")" = SURVIVED
-check "judge: a failure of the NAMED test reads KILLED" test "$(verdict_of "$(judge "$CAN/red-designed.json" 1 '["a one"]')")" = KILLED
-check "judge: a failure of a DIFFERENT test reads MISATTRIBUTED, never KILLED (a describe-title substring cannot credit the row)" test "$(verdict_of "$(judge "$CAN/red-other.json" 1 '["a one"]')")" = MISATTRIBUTED
-check "judge: a parse error reads BROKEN, never KILLED" test "$(verdict_of "$(judge "$CAN/parse.json" 1 '["a one"]')")" = BROKEN
-check "judge: a suite that died without a parse error reads UNRESOLVED" test "$(verdict_of "$(judge "$CAN/dead.json" 1 '["a one"]')")" = UNRESOLVED
-check "judge: a verdict-less non-zero exit (no report) reads UNRESOLVED, never KILLED" test "$(verdict_of "$(judge "$CAN/missing.json" 1 '["a one"]')")" = UNRESOLVED
-check "judge: an unreadable report reads UNRESOLVED" test "$(verdict_of "$(judge "$CAN/garbage.json" 1 '["a one"]')")" = UNRESOLVED
-check "judge: a timeout (rc 124) reads UNRESOLVED even when the report shows a red" test "$(verdict_of "$(judge "$CAN/red-designed.json" 124 '["a one"]')")" = UNRESOLVED
-check "judge: a red report with exit 0 reads UNRESOLVED" test "$(verdict_of "$(judge "$CAN/red-designed.json" 0 '["a one"]')")" = UNRESOLVED
-check "judge: a green report with a non-zero exit reads UNRESOLVED (a crash after the tests is not a survivor)" test "$(verdict_of "$(judge "$CAN/green.json" 1 '["a one"]')")" = UNRESOLVED
-check "judge: every named test must fail (one of two missing is MISATTRIBUTED)" test "$(verdict_of "$(judge "$CAN/red-designed.json" 1 '["a one","a three"]')")" = MISATTRIBUTED
+printf 'a one\na two\na three' > "$CAN/names.txt"
+# Three it.each cases that share a title, plus an unrelated test.
+printf 't case 1\nt case 2\nt case 3\nother' > "$CAN/names-shared.txt"
+jq -n '{numTotalTests:4,testResults:[{status:"failed",assertionResults:[{fullName:"t case 1",status:"failed"},{fullName:"t case 2",status:"passed"},{fullName:"t case 3",status:"passed"},{fullName:"other",status:"passed"}]}]}' > "$CAN/shared-one.json"
+jq -n '{numTotalTests:4,testResults:[{status:"failed",assertionResults:[{fullName:"t case 1",status:"failed"},{fullName:"t case 2",status:"failed"},{fullName:"t case 3",status:"failed"},{fullName:"other",status:"passed"}]}]}' > "$CAN/shared-all.json"
+jq -n '{numTotalTests:4,testResults:[{status:"failed",assertionResults:[{fullName:"t case 1",status:"failed"},{fullName:"t case 2",status:"failed"},{fullName:"t case 3",status:"failed"},{fullName:"other",status:"failed"}]}]}' > "$CAN/crash-all.json"
+check "judge: canned green reads SURVIVED" test "$(verdict_of "$(judge "$CAN/green.json" 0 '["a one"]' "$CAN/names.txt")")" = SURVIVED
+check "judge: a failure of the NAMED test reads KILLED" test "$(verdict_of "$(judge "$CAN/red-designed.json" 1 '["a one"]' "$CAN/names.txt")")" = KILLED
+check "judge: a failure of a DIFFERENT test reads MISATTRIBUTED, never KILLED (a describe-title substring cannot credit the row)" test "$(verdict_of "$(judge "$CAN/red-other.json" 1 '["a one"]' "$CAN/names.txt")")" = MISATTRIBUTED
+check "judge: a parse error reads BROKEN, never KILLED" test "$(verdict_of "$(judge "$CAN/parse.json" 1 '["a one"]' "$CAN/names.txt")")" = BROKEN
+check "judge: a suite that died without a parse error reads UNRESOLVED" test "$(verdict_of "$(judge "$CAN/dead.json" 1 '["a one"]' "$CAN/names.txt")")" = UNRESOLVED
+check "judge: a verdict-less non-zero exit (no report) reads UNRESOLVED, never KILLED" test "$(verdict_of "$(judge "$CAN/missing.json" 1 '["a one"]' "$CAN/names.txt")")" = UNRESOLVED
+check "judge: an unreadable report reads UNRESOLVED" test "$(verdict_of "$(judge "$CAN/garbage.json" 1 '["a one"]' "$CAN/names.txt")")" = UNRESOLVED
+check "judge: a timeout (rc 124) reads UNRESOLVED even when the report shows a red" test "$(verdict_of "$(judge "$CAN/red-designed.json" 124 '["a one"]' "$CAN/names.txt")")" = UNRESOLVED
+check "judge: a red report with exit 0 reads UNRESOLVED" test "$(verdict_of "$(judge "$CAN/red-designed.json" 0 '["a one"]' "$CAN/names.txt")")" = UNRESOLVED
+check "judge: a green report with a non-zero exit reads UNRESOLVED (a crash after the tests is not a survivor)" test "$(verdict_of "$(judge "$CAN/green.json" 1 '["a one"]' "$CAN/names.txt")")" = UNRESOLVED
+check "judge: every named test must fail (one of two missing is MISATTRIBUTED)" test "$(verdict_of "$(judge "$CAN/red-designed.json" 1 '["a one","a three"]' "$CAN/names.txt")")" = MISATTRIBUTED
+check "judge: a shared title is credited only when ALL its cases fail (one of three failing is MISATTRIBUTED, never KILLED)" test "$(verdict_of "$(judge "$CAN/shared-one.json" 1 '["t case"]' "$CAN/names-shared.txt" 0.9)")" = MISATTRIBUTED
+check "judge: all cases of a shared title failing reads KILLED when the row declares the blast radius it needs" test "$(verdict_of "$(judge "$CAN/shared-all.json" 1 '["t case"]' "$CAN/names-shared.txt" 0.9)")" = KILLED
+check "judge: the same failures beyond the default blast bound read UNRESOLVED, never KILLED" test "$(verdict_of "$(judge "$CAN/shared-all.json" 1 '["t case"]' "$CAN/names-shared.txt")")" = UNRESOLVED
+check "judge: a crash that fails the whole file reads UNRESOLVED even when it fails the named test" test "$(verdict_of "$(judge "$CAN/crash-all.json" 1 '["t case"]' "$CAN/names-shared.txt" 0.9)")" = UNRESOLVED
+check "judge: a must-kill row that names no detector never reads KILLED (any failing test would credit it)" test "$(verdict_of "$(judge "$CAN/red-designed.json" 1 '[]' "$CAN/names.txt")")" = MISATTRIBUTED
+check "judge: a named detector that is not a control-passed test reads UNRESOLVED" test "$(verdict_of "$(judge "$CAN/red-designed.json" 1 '["no such test"]' "$CAN/names.txt")")" = UNRESOLVED
 
 # --- Harness row (probe-comment): an anchor that survives only inside a comment does not satisfy the static checker.
 printf '%s\n' '// } else if (!r.invoked) verdict = "BYPASS";' 'const x = 1; /* process.exit(failed ? 1 : 0) */' > "$CAN/commented.ts"
@@ -620,7 +766,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-MIN_MUTANTS=150
+# 213 rows today (round 2); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=212
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -634,26 +781,31 @@ check "harness row (a-anchor): a mutant whose anchor is missing fails the apply 
 # --- Control: the unedited copy, on every distinct test file, must be GREEN with a literal floor of tests, and every test
 # name a row relies on must be among the PASSED tests (so a typo or a renamed test is a harness failure, not a silent no-op).
 declare -A FLOOR=(
-  ["test/approval/gate-flow.test.ts"]=102
+  ["test/approval/gate-flow.test.ts"]=123
   ["test/approval/gate-flow-resolver-snapshot.test.ts"]=3
-  ["test/approval/canonical.test.ts"]=80
-  ["test/approval/waiters.test.ts"]=18
+  ["test/approval/canonical.test.ts"]=81
+  ["test/approval/waiters.test.ts"]=19
   ["test/approval/service.test.ts"]=26
-  ["test/approval/migration-180-approval-request.test.ts"]=81
+  ["test/approval/migration-180-approval-request.test.ts"]=89
   ["test/approval/tools-census.test.ts"]=18
-  ["test/approval/runner-census.test.ts"]=5
+  ["test/approval/runner-census.test.ts"]=9
   ["test/approval/flag.test.ts"]=5
-  ["test/approval/decide-boundary.test.ts"]=47
-  ["test/approval/render.test.ts"]=42
+  ["test/approval/decide-boundary.test.ts"]=52
+  ["test/approval/render.test.ts"]=44
   ["test/approval/grants.test.ts"]=11
   ["test/approval/migration-180-decide-closed.test.ts"]=9
   ["test/approval/gate-flow-grant-deny-paths.test.ts"]=9
   ["test/approval/execution-grant-handlers.test.ts"]=10
-  ["test/server/ws-handler-approval.test.ts"]=34
+  ["test/server/ws-handler-approval.test.ts"]=37
   ["test/build-allowed-tools-census.test.ts"]=47
-  ["test/github-tools-push-grant.test.ts"]=5
-  ["test/push-branch.test.ts"]=16
+  ["test/github-tools-push-grant.test.ts"]=7
   ["test/push-branch-pinned.test.ts"]=4
+  ["test/approval/gate-deps.test.ts"]=25
+  ["test/approval/approval-ops-real-sink.test.ts"]=13
+  ["test/approval/ops-sink.test.ts"]=37
+  ["test/approval/gate-flow-payload.test.ts"]=4
+  ["test/approval/builder-grants-required.test.ts"]=7
+  ["test/account-delete.test.ts"]=55
 )
 for tf in $(jq -r '.[].test' "$MUTANTS" | sort -u); do
   if [ "$tf" = "static:probe" ]; then
@@ -712,6 +864,7 @@ for ((i = 0; i < TOTAL; i++)); do
   kills="$(jq -c ".[$i].kill" "$MUTANTS")"
   equiv="$(jq -r ".[$i].equivalent // empty" "$MUTANTS")"
   resid="$(jq -r ".[$i].residual // empty" "$MUTANTS")"
+  blast="$(jq -r ".[$i].blast // 0.5" "$MUTANTS")"
 
   python3 "$APPLY_PY" "$MUTANTS" "$i" "$APPCOPY" > "$SB/apply.log" 2>&1
   arc=$?
@@ -727,7 +880,8 @@ for ((i = 0; i < TOTAL; i++)); do
   else
     run_test "$tf" "$SB/mut.$i.log"
   fi
-  res="$(judge "$SB/mut.$i.log.json" "$RUN_RC" "$kills")"
+  if [ "$tf" = "static:probe" ]; then cnames="$SB/names.probe"; else cnames="$SB/names.$(basename "$tf")"; fi
+  res="$(judge "$SB/mut.$i.log.json" "$RUN_RC" "$kills" "$cnames" "$blast")"
   verdict="$(verdict_of "$res")"; detail="${res#*$'\t'}"
   cp "$PRISTINE/$file" "$APPCOPY/$file"
   if ! cmp -s "$APPCOPY/$file" "$PRISTINE/$file"; then printf 'HALT: restore of %s failed\n' "$file"; exit 2; fi
@@ -773,8 +927,18 @@ if [ -n "$ONLY" ]; then
   exit 0
 fi
 
+# Verdict classes of a full run: exactly the documented survivors (3 equivalent: G1-R4, G1-W6, G1-GD24; 2 residual gaps:
+# G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
+EXPECT_EQUIV=3
+EXPECT_RESID=2
+MIN_KILLED=207
+if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
+  printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
+  exit 1
+fi
+
 # Anti-vacuity: the floor is a literal directly above its `if`, and reported by printf + exit, never through ok/bad.
-MIN_CHECKS=330
+MIN_CHECKS=465
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s: the battery is vacuous\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1

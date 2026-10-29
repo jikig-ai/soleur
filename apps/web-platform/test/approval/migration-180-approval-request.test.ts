@@ -430,6 +430,18 @@ describe("Guard 1: consume predicate (tokenized; behavioural proof is the tenant
     expect(body).toMatch(/RETURNING/);
   });
 
+  it("consume releases ONLY on the matched UPDATE (IF v_id IS NOT NULL ... 'consumed', true) and every other path ends in 'consumed', false", () => {
+    expect(consumeShapeIssues(sql)).toEqual([]);
+  });
+
+  it("get_approval_status reports the row's own status, never a literal", () => {
+    expect(statusShapeIssues(sql)).toEqual([]);
+  });
+
+  it("both inbox-settle branches (acted, fyi) are scoped by workspace_id = p_workspace_id, the approval source and the approval id", () => {
+    expect(settleIssues(sql)).toEqual([]);
+  });
+
   it("the reason lookup reports the principal-change codes after expiry and before the bind mismatches", () => {
     const b = norm(fnBody(code, "consume_approval"));
     const at = (x: string) => b.indexOf(x);
@@ -648,6 +660,51 @@ describe("verify sentinel", () => {
 // S4b). Each is applied to the RAW migration text; the matching checker must report at least one issue.
 // ---------------------------------------------------------------------------------------------------------------
 
+// Shape checks for the parts of the RPCs that sit OUTSIDE the consume UPDATE (round-2 FD-2/FD-3): a consume that reports
+// `consumed: true` without a match, a failure branch that reports `consumed: true`, a status read that reports a constant,
+// and an inbox-settle branch that drops its workspace scope all survived the conjunct-set checker. Tokenized over the
+// comment-stripped, whitespace-normalised function body, so a reformat does not break them and a comment cannot satisfy them.
+const countOf = (hay: string, needle: string): number => hay.split(needle).length - 1;
+
+function consumeShapeIssues(raw: string): string[] {
+  const out: string[] = [];
+  const b = norm(fnBody(stripSql(raw), "consume_approval"));
+  if (!b) return ["consume_approval not found"];
+  if (!b.includes("RETURNING id INTO v_id; IF v_id IS NOT NULL THEN RETURN jsonb_build_object('consumed', true, 'reason', 'ok'); END IF;")) {
+    out.push("consume does not release only on `IF v_id IS NOT NULL` straight after the UPDATE");
+  }
+  if (countOf(b, "'consumed', true") !== 1) out.push("'consumed', true must appear exactly once (the matched branch)");
+  if (!b.includes("RETURN jsonb_build_object('consumed', false, 'reason', v_reason); END;")) out.push("the failure branch must end the function with 'consumed', false and the looked-up reason");
+  if (countOf(b, "'consumed', false") !== 1) out.push("'consumed', false must appear exactly once (the failure branch)");
+  return out;
+}
+
+function statusShapeIssues(raw: string): string[] {
+  const out: string[] = [];
+  const b = norm(fnBody(stripSql(raw), "get_approval_status"));
+  if (!b) return ["get_approval_status not found"];
+  if (!b.includes("'status', v_row.status,")) out.push("status must be read from the row");
+  if (/'status',\s*'/.test(b)) out.push("status must never be a literal");
+  return out;
+}
+
+function settleIssues(raw: string): string[] {
+  const out: string[] = [];
+  const b = norm(fnBody(stripSql(raw), "approval_request_inbox_settle"));
+  if (!b) return ["approval_request_inbox_settle not found"];
+  const updates = [...b.matchAll(/UPDATE public\.inbox_item SET (.*?) WHERE (.*?);/g)];
+  if (updates.length !== 2) out.push(`expected exactly two UPDATE public.inbox_item branches (acted, fyi), found ${updates.length}`);
+  const scope = "workspace_id = p_workspace_id AND source = 'approval_required' AND dedup_key = p_approval_id::text";
+  for (const u of updates) {
+    const fyi = u[1].includes("severity = 'info'");
+    const want = fyi ? `${scope} AND severity = 'action_required'` : scope;
+    if (u[2] !== want) out.push(`${fyi ? "fyi" : "acted"} branch WHERE is not exactly: ${want}`);
+  }
+  if (!updates.some((u) => u[1].includes("severity = 'info'"))) out.push("no fyi branch");
+  if (!updates.some((u) => u[1].includes("acted_at"))) out.push("no acted branch");
+  return out;
+}
+
 function mutate(raw: string, from: string, to: string, within?: { fn: string }): string {
   let idx = -1;
   if (within) {
@@ -683,6 +740,11 @@ const MUTANTS: Array<{ id: string; why: string; checker: (raw: string) => string
   { id: "T2", why: "a transition tuple added (rejected -> approved)", checker: (r) => (transitionTuples(r).join() === APPROVAL_TRANSITIONS.map(([a, b]) => `${a}>${b}`).sort().join() ? [] : ["tuple drift"]), apply: (r) => mutate(r, "('approved', 'rejected')\n     )", "('approved', 'rejected'),\n       ('rejected', 'approved')\n     )") },
   { id: "C1", why: "consume drops the decider-still-Owner re-check", checker: consumeIssues, apply: (r) => mutate(r, "AND public.is_workspace_owner(workspace_id, decided_by)\n", "", { fn: "consume_approval" }) },
   { id: "C2", why: "consume drops the requester-still-member re-check", checker: consumeIssues, apply: (r) => mutate(r, "AND public.is_workspace_member(workspace_id, requested_by_user_id)\n", "", { fn: "consume_approval" }) },
+  { id: "N1", why: "consume releases on IF TRUE (reports consumed without a match)", checker: consumeShapeIssues, apply: (r) => mutate(r, "IF v_id IS NOT NULL THEN", "IF TRUE THEN", { fn: "consume_approval" }) },
+  { id: "N2", why: "the consume failure branch reports consumed: true", checker: consumeShapeIssues, apply: (r) => mutate(r, "jsonb_build_object('consumed', false, 'reason', v_reason)", "jsonb_build_object('consumed', true, 'reason', v_reason)", { fn: "consume_approval" }) },
+  { id: "N3", why: "get_approval_status reports a constant approved", checker: statusShapeIssues, apply: (r) => mutate(r, "'status', v_row.status,", "'status', 'approved',", { fn: "get_approval_status" }) },
+  { id: "N4", why: "the acted inbox-settle branch loses its workspace scope", checker: settleIssues, apply: (r) => mutate(r, "WHERE workspace_id = p_workspace_id\n       AND source = 'approval_required'\n       AND dedup_key = p_approval_id::text;", "WHERE source = 'approval_required'\n       AND dedup_key = p_approval_id::text;", { fn: "approval_request_inbox_settle" }) },
+  { id: "N5", why: "the fyi inbox-settle branch loses its workspace scope", checker: settleIssues, apply: (r) => mutate(r, "WHERE workspace_id = p_workspace_id\n       AND source = 'approval_required'\n       AND dedup_key = p_approval_id::text\n       AND severity = 'action_required';", "WHERE source = 'approval_required'\n       AND dedup_key = p_approval_id::text\n       AND severity = 'action_required';", { fn: "approval_request_inbox_settle" }) },
   { id: "D1", why: "decide takes the row lock before the Owner check", checker: decideIssues, apply: (r) => mutate(r, "SELECT workspace_id INTO v_ws FROM public.approval_request WHERE id = p_id;", "SELECT workspace_id INTO v_ws FROM public.approval_request WHERE id = p_id FOR UPDATE;", { fn: "decide_approval" }) },
 ];
 
@@ -691,6 +753,9 @@ describe("MUTATIONS: the unmutated migration is clean, every mutant is RED", () 
     expect(consumeIssues(sql)).toEqual([]);
     expect(decideIssues(sql)).toEqual([]);
     expect(grantIssues(sql)).toEqual([]);
+    expect(consumeShapeIssues(sql)).toEqual([]);
+    expect(statusShapeIssues(sql)).toEqual([]);
+    expect(settleIssues(sql)).toEqual([]);
     expect(transitionTuples(sql)).toEqual(APPROVAL_TRANSITIONS.map(([a, b]) => `${a}>${b}`).sort());
   });
 

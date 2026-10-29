@@ -9,7 +9,11 @@
  *
  * Synthesized data only.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
   getRuntimeFlag: vi.fn(),
@@ -281,6 +285,43 @@ describe("createApprovalGateDeps: resolveServerDerived", () => {
     for (const tool of [TOOLS.emailSend, TOOLS.emailSuppress, TOOLS.kbShareCreate, TOOLS.setAutonomous]) {
       expect(await deps.resolveServerDerived(tool, {}), tool).toBeUndefined();
     }
+  });
+});
+
+describe("createApprovalGateDeps: the DEFAULT workspace HEAD reader (real git, no injected headSha)", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+  });
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], { cwd, stdio: "pipe", encoding: "utf8" }).trim();
+  function repo(files: number): { dir: string; head: string } {
+    const dir = mkdtempSync(join(tmpdir(), "gate-deps-head-"));
+    roots.push(dir);
+    git(dir, "init", "-q", "-b", "main");
+    for (let i = 0; i < files; i++) {
+      writeFileSync(join(dir, `f${i}.txt`), `content ${i}`);
+      git(dir, "add", ".");
+      git(dir, "commit", "-q", "-m", `c${i}`);
+    }
+    return { dir, head: git(dir, "rev-parse", "HEAD") };
+  }
+
+  it("push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha", async () => {
+    const a = repo(1);
+    const b = repo(2);
+    expect(a.head).not.toBe(b.head);
+    const deps = (dir: string) =>
+      createApprovalGateDeps({ userId: USER_ID, workspaceId: WORKSPACE_ID, repoSlug: REPO, workspacePath: dir, grants: new ExecutionGrants(), tenantClient: tenantFake().client });
+    expect(await deps(a.dir).resolveServerDerived(TOOLS.pushBranch, { branch: "feat-x" })).toEqual({ repo: REPO, headSha: a.head });
+    expect(await deps(b.dir).resolveServerDerived(TOOLS.pushBranch, { branch: "feat-x" })).toEqual({ repo: REPO, headSha: b.head });
+  });
+
+  it("a workspace that is not a git repository (or has no commit) is not approvable: the resolver throws", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "gate-deps-nogit-"));
+    roots.push(empty);
+    const d = createApprovalGateDeps({ userId: USER_ID, workspaceId: WORKSPACE_ID, repoSlug: REPO, workspacePath: empty, grants: new ExecutionGrants(), tenantClient: tenantFake().client });
+    await expect(d.resolveServerDerived(TOOLS.pushBranch, {})).rejects.toThrow();
   });
 });
 
