@@ -8,6 +8,7 @@
  * Server-only (renders with `./render`). Never imports the decide path.
  */
 
+import type { ApprovalWireStatus } from "@/lib/approval-wire";
 import { CANONICAL_VERSION, computeActionHash, type CanonicalAction } from "./canonical";
 import { renderApprovalView, type ApprovalView } from "./render";
 import { isApprovalRequiredTool } from "./tools";
@@ -18,12 +19,14 @@ export interface StoredApprovalRow {
   conversation_id: string;
   tool_name: string;
   action_sha256: string;
-  status: "pending" | "approved" | "rejected" | "expired" | "consumed";
+  status: ApprovalWireStatus;
   expires_at: string;
   created_at: string;
   decided_at: string | null;
   decided_by: string | null;
   consumed_at: string | null;
+  /** Set once when an Owner took an approved, unconsumed request back (status `rejected`). */
+  revoked_at: string | null;
   canonical_action: unknown;
 }
 

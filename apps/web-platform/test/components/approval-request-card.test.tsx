@@ -107,12 +107,13 @@ describe("pending, non-owner (wireframe 05)", () => {
 describe("resolved states (wireframe 04)", () => {
   const cases: Array<[string, Partial<ApprovalRequestCardProps>, string, RegExp]> = [
     ["released (consumed)", { status: "consumed", agentWaiting: false }, "released", /Released, your agent is continuing/],
-    ["released (approved, agent waiting)", { status: "approved", agentWaiting: true }, "released", /Released, your agent is continuing/],
-    ["approved late (04D)", { status: "approved", agentWaiting: false }, "approved_late", /Approved\. Ask your agent again\./],
     ["denied (04E)", { status: "rejected" }, "denied", /You denied this email/],
     ["expired unanswered (04F)", { status: "expired" }, "expired", /Nobody decided in time/],
     ["expired after approval (04H)", { status: "expired", expiredAfterApproval: true }, "expired_after_approval", /You approved this, but your agent never asked again/],
     ["already decided (04I)", { status: "approved", decideOutcome: "conflict" }, "already_decided", /Already decided/],
+    ["already decided by another Owner", { status: "approved", decideOutcome: "already_decided" }, "already_decided", /Already decided by another Owner/],
+    ["revoked", { status: "rejected", decideOutcome: "revoked" }, "revoked", /Approval revoked/],
+    ["revoked (row says so)", { status: "rejected", revoked: true }, "revoked", /Approval revoked/],
     ["conversation closed (04J)", { status: "pending", decideOutcome: "closed" }, "conversation_closed", /This conversation is closed/],
     ["details removed (04K)", { view: null }, "details_removed", /Details removed per retention policy/],
   ];
@@ -125,6 +126,11 @@ describe("resolved states (wireframe 04)", () => {
       expect(card().textContent).not.toMatch(/\b(sent|ran|executed|delivered)\b/i);
     });
   }
+
+  it("a conflict on a request that was meanwhile used reads as released, not as a lost race", () => {
+    render(<ApprovalRequestCard {...props({ status: "consumed", decideOutcome: "conflict" })} />);
+    expect(state()).toBe("released");
+  });
 
   it("the released card says what the agent does next is not reported", () => {
     render(<ApprovalRequestCard {...props({ status: "consumed" })} />);
@@ -268,6 +274,55 @@ describe("landing layout (wireframe 07b)", () => {
   });
 });
 
+describe("revoke: an approved, unconsumed request can be taken back (CTO ruling 2)", () => {
+  it.each([
+    ["approved, agent waiting (released)", { status: "approved" as const, agentWaiting: true }, "released"],
+    ["approved, agent stopped waiting (04D)", { status: "approved" as const, agentWaiting: false }, "approved_late"],
+  ])("%s: shows 'Revoke approval' and no Approve/Deny; the click sends deny", async (_n, over, expected) => {
+    const onDecide = vi.fn(() => true);
+    render(<ApprovalRequestCard {...props({ ...over, onDecide })} />);
+    expect(state()).toBe(expected);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deny" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Revoke approval" }));
+    });
+    expect(onDecide).toHaveBeenCalledWith("deny");
+  });
+
+  it("never offered on a used (consumed), pending, denied or expired request, or to a member", () => {
+    for (const over of [{ status: "consumed" as const }, { status: "pending" as const }, { status: "rejected" as const }, { status: "expired" as const }]) {
+      const { unmount } = render(<ApprovalRequestCard {...props(over)} />);
+      expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
+      unmount();
+    }
+    render(<ApprovalRequestCard {...props({ status: "approved", viewerRole: "member" })} />);
+    expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
+  });
+
+  it("settles to the revoked state only on the server's word (rerender), and the button disappears", async () => {
+    const { rerender } = render(<ApprovalRequestCard {...props({ status: "approved", agentWaiting: false })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Revoke approval" }));
+    });
+    expect(state()).toBe("approved_late"); // no optimistic state
+    rerender(<ApprovalRequestCard {...props({ status: "rejected", decideOutcome: "revoked" })} />);
+    expect(state()).toBe("revoked");
+    expect(screen.getByTestId("approval-info").textContent).toBe("Revoked. Your agent cannot use this approval.");
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("a revoke that lost the race to the agent's repeat unlocks into the released state", async () => {
+    const { rerender } = render(<ApprovalRequestCard {...props({ status: "approved", agentWaiting: false })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Revoke approval" }));
+    });
+    rerender(<ApprovalRequestCard {...props({ status: "consumed", decideOutcome: "conflict" })} />);
+    expect(state()).toBe("released");
+    expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
+  });
+});
+
 describe("the card renders agent-authored values as inert, untruncated text", () => {
   it("renders markup-looking values as text, never as elements", () => {
     const s = SAMPLES[TOOLS.emailSend];
@@ -280,10 +335,10 @@ describe("the card renders agent-authored values as inert, untruncated text", ()
 
   it("makes a right-to-left override in a recipient visible instead of letting it spoof", () => {
     const s = SAMPLES[TOOLS.emailSend];
-    const v = renderApprovalView(canonicalizeAction(TOOLS.emailSend, { ...s.input, to: "ok@example.test‮txt.evil" }, {}));
+    const v = renderApprovalView(canonicalizeAction(TOOLS.emailSend, { ...s.input, to: "ok@example.test\u202Etxt.evil" }, {}));
     render(<ApprovalRequestCard {...props({ view: v })} />);
     expect(screen.getByTestId("approval-bound-block").textContent).toContain("<U+202E>");
-    expect(screen.getByTestId("approval-bound-block").textContent).not.toContain("‮");
+    expect(screen.getByTestId("approval-bound-block").textContent).not.toContain("\u202E");
   });
 
   it("a long body scrolls inside the card with a visible 'N more lines' marker and loses no line", () => {

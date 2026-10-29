@@ -1061,7 +1061,14 @@ export async function notifyInboxItem(opts: {
  */
 export async function dispatchInboxPush(
   inboxItemId: string,
-  opts: { kind?: ApprovalNotifyKind } = {},
+  opts: {
+    kind?: ApprovalNotifyKind;
+    /**
+     * Approval rows only: the request's expiry, as returned by the create RPC. `approval_request` has no service-role
+     * table grant (migration 180 REVOKEs it), so this value is passed in and never read back from the table.
+     */
+    approvalExpiresAt?: string | null;
+  } = {},
 ): Promise<boolean> {
   try {
     const supabase = createServiceClient();
@@ -1109,23 +1116,20 @@ export async function dispatchInboxPush(
     };
 
     if (row.source === "approval_required") {
-      // Only the two interpolated values the copy deck allows: the workspace name and the expiry date-time.
+      // Only the two interpolated values the copy deck allows: the workspace name and the expiry date-time (passed in).
       let workspaceName: string | null = null;
-      let expiresAt: string | null = null;
       try {
         const ws = await supabase.from("workspaces").select("name").eq("id", row.workspace_id).maybeSingle();
         const n = (ws.data as { name?: unknown } | null)?.name;
         workspaceName = typeof n === "string" && n.length > 0 ? n : null;
-        const approvalId = row.source_ref?.approvalId;
-        if (approvalId) {
-          const ap = await supabase.from("approval_request").select("expires_at").eq("id", approvalId).maybeSingle();
-          const e = (ap.data as { expires_at?: unknown } | null)?.expires_at;
-          expiresAt = typeof e === "string" ? e : null;
-        }
       } catch {
-        // The copy degrades to "your workspace" and no date; it never blocks the nudge.
+        // The copy degrades to "your workspace"; it never blocks the nudge.
       }
-      payload.approvalCopy = { kind: opts.kind ?? "requested", workspaceName, expiresAt };
+      payload.approvalCopy = {
+        kind: opts.kind ?? "requested",
+        workspaceName,
+        expiresAt: typeof opts.approvalExpiresAt === "string" ? opts.approvalExpiresAt : null,
+      };
     }
 
     return await dispatchToRecipients(supabase, { workspaceId: row.workspace_id, userId: row.user_id }, payload, failOp);

@@ -7,7 +7,7 @@
  * HINT that triggers one database read, never a verdict (a wake that the row does not confirm is not an allow).
  *
  * The registry is keyed by approval id and is a separate namespace from `review-gate.ts` waiters: a
- * `review_gate_response` can never resolve an approval waiter (the ws-handler guard, later unit, relies on this).
+ * `review_gate_response` can never resolve an approval waiter (the ws-handler guard relies on this).
  *
  * Loop contract: the signal is checked FIRST (an aborted call performs no read and cannot allow); a transient read
  * error continues until the deadline and never allows; only `decided` carries a status, and the CALLER maps
@@ -26,18 +26,23 @@ interface Waiter {
   woken: Promise<WaitStatus>;
   wake: (s: WaitStatus) => void;
   settled: boolean;
+  /** Concurrent gates for the same approval id (an identical re-ask while the first wait is still open). */
+  refs: number;
 }
 
 const waiters = new Map<string, Waiter>();
 
 export function registerWaiter(approvalId: string): { woken: Promise<WaitStatus> } {
   const existing = waiters.get(approvalId);
-  if (existing) return { woken: existing.woken };
+  if (existing) {
+    existing.refs += 1;
+    return { woken: existing.woken };
+  }
   let resolve!: (s: WaitStatus) => void;
   const woken = new Promise<WaitStatus>((r) => {
     resolve = r;
   });
-  const w: Waiter = { woken, wake: resolve, settled: false };
+  const w: Waiter = { woken, wake: resolve, settled: false, refs: 1 };
   waiters.set(approvalId, w);
   return { woken };
 }
@@ -56,8 +61,12 @@ export function hasWaiter(approvalId: string): boolean {
   return waiters.has(approvalId);
 }
 
+/** Release one registration; the waiter is dropped only when the LAST concurrent gate for the id has finished. */
 export function unregisterWaiter(approvalId: string): void {
-  waiters.delete(approvalId);
+  const w = waiters.get(approvalId);
+  if (!w) return;
+  w.refs -= 1;
+  if (w.refs <= 0) waiters.delete(approvalId);
 }
 
 export function waiterCount(): number {
@@ -70,8 +79,9 @@ export function clearAllWaiters(): void {
 
 export type WaitOutcome =
   | { kind: "decided"; status: Exclude<WaitStatus, "pending"> }
-  | { kind: "timeout" }
-  | { kind: "aborted" };
+  /** `readErrors` = status reads that failed during the wait (each one kept waiting; never an allow). */
+  | { kind: "timeout"; readErrors: number }
+  | { kind: "aborted"; readErrors: number };
 
 export interface WaitDeps {
   approvalId: string;
@@ -99,6 +109,7 @@ export async function waitForDecision(deps: WaitDeps): Promise<WaitOutcome> {
   const deadline = now() + (deps.deadlineMs ?? DEFAULT_WAIT_MS);
   let wake = deps.woken;
   let reads = 0;
+  let readErrors = 0;
 
   // One abort listener for the whole wait (a listener per poll would pile up on the signal).
   const onAbort: { resolve: () => void } = { resolve: () => {} };
@@ -109,7 +120,7 @@ export async function waitForDecision(deps: WaitDeps): Promise<WaitOutcome> {
 
   try {
     while (true) {
-      if (deps.signal.aborted) return { kind: "aborted" };
+      if (deps.signal.aborted) return { kind: "aborted", readErrors };
 
       if (reads < MAX_POLL_READS) {
         reads += 1;
@@ -117,18 +128,19 @@ export async function waitForDecision(deps: WaitDeps): Promise<WaitOutcome> {
           const s = await deps.read();
           if (s && s !== "pending") return { kind: "decided", status: s };
         } catch {
-          // Transient read error: keep waiting until the deadline. Never an allow.
+          // Transient read error: keep waiting until the deadline. Never an allow. Counted, and reported once per wait.
+          readErrors += 1;
         }
       }
 
       const remaining = deadline - now();
-      if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "timeout" };
+      if (remaining <= 0 || reads >= MAX_POLL_READS) return { kind: "timeout", readErrors };
 
       const nap = Math.min(jittered(random), remaining);
       const racers: Array<Promise<"slept" | "woken" | "aborted">> = [sleep(nap).then(() => "slept" as const), aborted];
       if (wake) racers.push(wake.then(() => "woken" as const));
       const r = await Promise.race(racers);
-      if (r === "aborted" || deps.signal.aborted) return { kind: "aborted" };
+      if (r === "aborted" || deps.signal.aborted) return { kind: "aborted", readErrors };
       // The hint is consumed once: a resolved promise must not turn the loop into a hot database poll.
       if (r === "woken") wake = undefined;
     }

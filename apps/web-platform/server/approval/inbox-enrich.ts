@@ -20,7 +20,7 @@ interface RlsClient {
   };
 }
 
-const COLUMNS = "id, workspace_id, conversation_id, tool_name, action_sha256, status, expires_at, created_at, decided_at, decided_by, consumed_at, canonical_action";
+const COLUMNS = "id, workspace_id, conversation_id, tool_name, action_sha256, status, expires_at, created_at, decided_at, decided_by, consumed_at, revoked_at, canonical_action";
 
 function stateOf(r: StoredApprovalRow): ApprovalInboxState {
   if (r.status === "expired") return r.decided_at ? "expired_after_approval" : "expired";

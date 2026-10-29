@@ -27,7 +27,14 @@ export interface ReemitArgs {
   client: () => ApprovalRpcClient;
   /** Role of the viewing user in the approval's workspace; failure = member (read-only). */
   viewerRole: (workspaceId: string) => Promise<"owner" | "member">;
-  isEnabled?: () => Promise<boolean>;
+  /**
+   * The workspace of the session that is attaching (REQUIRED: the flag is evaluated per workspace, so reading it with no
+   * workspace would lose the live card for a workspace-scoped cohort that the gate itself serves). Each row is then
+   * checked again against its own `workspace_id`.
+   */
+  workspaceId: string;
+  /** Test seam; defaults to the flag read for `{userId, workspaceId}`. */
+  isEnabled?: (workspaceId: string) => Promise<boolean>;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -41,17 +48,31 @@ function asCanonical(v: unknown): CanonicalAction | null {
 export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
   let sent = 0;
   try {
-    let enabled = false;
-    try {
-      enabled = await (a.isEnabled ?? (() => isApprovalQueueEnabled({ userId: a.userId, workspaceId: null })))();
-    } catch {
-      enabled = false;
-    }
-    if (!enabled) return 0;
+    // The flag, per workspace, memoised for this attach. An error is OFF (an unreadable flag never shows a card).
+    const flagByWorkspace = new Map<string, Promise<boolean>>();
+    const enabledFor = (workspaceId: string): Promise<boolean> => {
+      let p = flagByWorkspace.get(workspaceId);
+      if (!p) {
+        p = (async () => {
+          try {
+            return (await (a.isEnabled ?? ((w: string) => isApprovalQueueEnabled({ userId: a.userId, workspaceId: w })))(workspaceId)) === true;
+          } catch {
+            return false;
+          }
+        })();
+        flagByWorkspace.set(workspaceId, p);
+      }
+      return p;
+    };
+    // Dormant: zero database reads while the flag is off for the attaching session's workspace.
+    if (!(await enabledFor(a.workspaceId))) return 0;
 
     const live = await listLiveApprovals(a.client(), a.conversationId);
     for (const { approval, requestCount } of live) {
       if (approval.status !== "pending" && approval.status !== "approved") continue;
+      // The row's own workspace decides whether the flow is on for it (a conversation's rows can sit in another workspace
+      // than the one the attaching session is bound to).
+      if (!(await enabledFor(approval.workspace_id))) continue;
       const action = asCanonical(approval.canonical_action);
       let verified = false;
       if (action) {
@@ -76,10 +97,11 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
         });
         continue;
       }
-      let viewerRole: "owner" | "member" = "member";
+      let viewerRole: "owner" | "member";
       try {
         viewerRole = await a.viewerRole(approval.workspace_id);
-      } catch {
+      } catch (err) {
+        reportApprovalOp("viewerRoleFailed", err, { approvalId: approval.id, toolName: approval.tool_name, conversationId: a.conversationId });
         viewerRole = "member";
       }
       a.send(a.userId, {

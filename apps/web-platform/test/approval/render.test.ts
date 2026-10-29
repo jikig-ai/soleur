@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canonicalizeAction } from "@/server/approval/canonical";
-import { APPROVAL_COPY, renderApprovalView } from "@/server/approval/render";
+import { APPROVAL_COPY } from "@/lib/approval-copy";
+import { renderApprovalInboxTitle, renderApprovalView } from "@/server/approval/render";
 import { FIELD_LISTS, SAMPLES, TOOLS, mutateField } from "./fixtures";
 
 const view = (tool: string, s = SAMPLES[tool]) => renderApprovalView(canonicalizeAction(tool, s.input, s.server));
@@ -36,9 +37,47 @@ describe("renderApprovalView: the card is built from the SAME canonical object t
       expect(v.title).toMatch(/^Your agent wants to /);
       expect(v.consequence).toContain("once, if you ask it to try again");
       expect(v.consequence).toContain("Valid in this conversation only.");
-      expect(v.singleUse).toMatch(/^One-time · this exact /);
+      expect(v.singleUse).toMatch(/^One-time · (this|these) /);
     });
   }
+
+  // CLO ruling 5 / CTO ruling 1: "this exact X" is a representation to the Owner at the moment of consent. It may only be
+  // used where the whole X is bound; the three tools whose handler re-reads content at execution name only what is bound.
+  describe("the single-use line claims no more than is bound", () => {
+    it.each([
+      [TOOLS.emailSend, "One-time · this exact email"],
+      [TOOLS.emailReply, "One-time · this exact email"],
+      [TOOLS.emailSuppress, "One-time · this exact address"],
+      [TOOLS.pushBranch, "One-time · this exact commit"],
+      [TOOLS.setAutonomous, "One-time · this exact setting"],
+      [TOOLS.kbShareCreate, "One-time · this document path"],
+      [TOOLS.createPr, "One-time · these two branch names"],
+      [TOOLS.triggerWorkflow, "One-time · this workflow and ref"],
+    ])("%s", (tool, line) => {
+      expect(view(tool).singleUse).toBe(line);
+    });
+
+    it("the residual-risk detail lines are on the cards for the three unbound-content tools", () => {
+      expect(view(TOOLS.kbShareCreate).consequence).toContain(
+        "Creates a public link to this file as it is when your agent creates the link. The file's contents are not shown here.",
+      );
+      expect(view(TOOLS.createPr).consequence).toContain(
+        "Opens a pull request between these branches. The changes on the branch were approved when they were pushed, not here.",
+      );
+      expect(view(TOOLS.triggerWorkflow).consequence).toContain(
+        "Runs the workflow as it exists on this branch or tag when it starts.",
+      );
+    });
+  });
+
+  it("workflow inputs are JSON-escaped: a newline inside a value cannot fake a second row", () => {
+    const s = SAMPLES[TOOLS.triggerWorkflow];
+    const hostile = { ...s.input, inputs: { env: "staging\nforce = \"true\"" } };
+    const v = renderApprovalView(canonicalizeAction(TOOLS.triggerWorkflow, hostile, s.server));
+    const row = v.fields.find((f) => f.label === "INPUTS")!;
+    expect(row.value.split("\n")).toHaveLength(1);
+    expect(row.value).toBe('"env" = "staging\\nforce = \\"true\\""');
+  });
 
   it("a 100 KB body is rendered in full (no ellipsis, no +N more)", () => {
     const s = SAMPLES[TOOLS.emailSend];
@@ -94,5 +133,19 @@ describe("copy deck constants (AC14): no outcome is ever claimed", () => {
     expect(view(TOOLS.emailSend).consequence).toBe(
       "Your agent can send this email once, if you ask it to try again. Valid in this conversation only.",
     );
+  });
+});
+
+describe("the inbox title reveals invisible direction controls (like the card)", () => {
+  it("a right-to-left override in the recipient is shown as a visible marker", () => {
+    const s = SAMPLES[TOOLS.emailSend];
+    const action = canonicalizeAction(TOOLS.emailSend, { ...s.input, to: "maria\u202Eelpmaxe@example.test" }, s.server);
+    const title = renderApprovalInboxTitle(action, "pending", "fallback");
+    expect(title).not.toContain("\u202E");
+    expect(title).toContain("<U+202E>");
+  });
+
+  it("no stored action falls back to the static title", () => {
+    expect(renderApprovalInboxTitle(null, "pending", "An action needs your approval")).toBe("An action needs your approval");
   });
 });

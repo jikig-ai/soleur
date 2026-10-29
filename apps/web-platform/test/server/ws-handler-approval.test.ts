@@ -13,6 +13,7 @@ import {
   APPROVAL_ID,
   CONVERSATION_ID,
   OTHER_CONVERSATION_ID,
+  OTHER_WORKSPACE_ID,
   SAMPLES,
   TOOLS,
   USER_ID,
@@ -28,6 +29,9 @@ const h = vi.hoisted(() => ({
   getFreshTenantClient: vi.fn(),
   resolveReviewGate: vi.fn(),
   flagOn: { value: false },
+  /** When set, the flag is on only for this workspace id (a workspace-scoped cohort). */
+  flagWorkspace: { value: null as string | null },
+  flagCalls: [] as Array<{ userId: string; workspaceId: string | null }>,
   report: vi.fn(),
   warn: vi.fn(),
   logWarn: vi.fn(),
@@ -43,9 +47,26 @@ vi.mock("@/lib/supabase/tenant", () => {
       this.cause = cause;
     }
   }
-  const single = async () => ({ data: { id: "00000000-0000-4000-8000-000000000003", repo_url: "https://github.com/acme/repo.git" }, error: null });
+  const conv = {
+    id: "00000000-0000-4000-8000-000000000003",
+    repo_url: "https://github.com/acme/repo.git",
+    workspace_id: "00000000-0000-4000-8000-000000000001",
+    status: "active",
+    current_workspace_id: "00000000-0000-4000-8000-000000000001",
+    last_active: "2026-10-29T10:00:00Z",
+  };
+  const single = async () => ({ data: conv, error: null });
+  // Any query chain: `single`/`maybeSingle` resolve the conversation row, awaiting the chain itself resolves an empty list.
+  const chain = (): unknown =>
+    new Proxy(() => {}, {
+      get: (_t, p) => {
+        if (p === "single" || p === "maybeSingle") return single;
+        if (p === "then") return (ok: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null, count: 0 }).then(ok);
+        return () => chain();
+      },
+    });
   const tenantClient = {
-    from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ single, maybeSingle: single }) }) }) }),
+    from: () => chain(),
     rpc: (...a: unknown[]) => h.tenantRpc(...a),
   };
   h.getFreshTenantClient.mockImplementation(async () => tenantClient);
@@ -57,7 +78,22 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: "https://test.supabase.co",
 }));
 
-vi.mock("@/server/approval/flag", () => ({ isApprovalQueueEnabled: async () => h.flagOn.value }));
+vi.mock("@/server/approval/flag", () => ({
+  isApprovalQueueEnabled: async (id: { userId: string; workspaceId: string | null }) => {
+    h.flagCalls.push(id);
+    return h.flagOn.value && (h.flagWorkspace.value === null || id.workspaceId === h.flagWorkspace.value);
+  },
+}));
+
+// The resume paths' unrelated collaborators: engine binding guard and in-flight checkpoint restore.
+vi.mock("@/server/agent-engine-route-guard", () => ({
+  assertLegacyConversationEngineBinding: vi.fn(async () => {}),
+  assertLegacyEngineBinding: vi.fn(),
+}));
+vi.mock("@/server/inflight-checkpoint", () => ({
+  restoreInflightCheckpoint: vi.fn(async () => ({ restored: true })),
+  CHECKPOINT_REFUSED_MESSAGE: "refused",
+}));
 
 vi.mock("../../server/agent-runner", () => ({
   startAgentSession: vi.fn(),
@@ -106,6 +142,8 @@ const row = (over: Record<string, unknown> = {}) => ({
   decided_by: USER_ID,
   consumed_at: null,
   expired_at: null,
+  revoked_at: null,
+  revoked_by: null,
   unanswered_flagged_at: null,
   created_at: new Date().toISOString(),
   canonical_action: null,
@@ -118,6 +156,8 @@ const decideFrame = (over: Record<string, unknown> = {}) => ({ type: "approval_d
 beforeEach(() => {
   vi.clearAllMocks();
   h.flagOn.value = false;
+  h.flagWorkspace.value = null;
+  h.flagCalls.length = 0;
   h.tenantRpc.mockImplementation(async (fn: string) => {
     if (fn === "decide_approval") return { data: { outcome: "decided", approval: row() }, error: null };
     if (fn === "is_workspace_owner") return { data: true, error: null };
@@ -202,6 +242,49 @@ describe("approval_decide", () => {
     await send(USER_ID, decideFrame());
     expect(frames(s)).toContainEqual(expect.objectContaining({ type: "approval_status", status: "rejected", outcome: "conflict" }));
     await expect(reg.woken).resolves.toBe("rejected");
+  });
+
+  it("a DENY decision sends p_decision 'deny' to the RPC, reports the rejected row and wakes the waiter with 'rejected'", async () => {
+    const reg = registerWaiter(APPROVAL_ID);
+    h.tenantRpc.mockImplementation(async (fn: string) =>
+      fn === "decide_approval" ? { data: { outcome: "decided", approval: row({ status: "rejected" }) }, error: null } : { data: null, error: null },
+    );
+    const s = makeSession(CONVERSATION_ID);
+    sessions.set(USER_ID, s);
+    await send(USER_ID, decideFrame({ decision: "deny" }));
+    expect(h.tenantRpc).toHaveBeenCalledWith("decide_approval", { p_id: APPROVAL_ID, p_decision: "deny" });
+    expect(frames(s)).toContainEqual({
+      type: "approval_status",
+      approvalId: APPROVAL_ID,
+      conversationId: CONVERSATION_ID,
+      status: "rejected",
+      outcome: "decided",
+    });
+    await expect(reg.woken).resolves.toBe("rejected");
+  });
+
+  it("a revoke (deny on an APPROVED row) reports status 'rejected' with outcome 'revoked', and the requester sees the card settle", async () => {
+    const reg = registerWaiter(APPROVAL_ID);
+    h.tenantRpc.mockImplementation(async () => ({
+      data: { outcome: "revoked", approval: row({ status: "rejected", requested_by_user_id: OTHER_USER, revoked_at: new Date().toISOString(), revoked_by: USER_ID }) },
+      error: null,
+    }));
+    const owner = makeSession(CONVERSATION_ID);
+    const requester = makeSession(CONVERSATION_ID);
+    sessions.set(USER_ID, owner);
+    sessions.set(OTHER_USER, requester);
+    await send(USER_ID, decideFrame({ decision: "deny" }));
+    expect(frames(owner)).toContainEqual(expect.objectContaining({ type: "approval_status", status: "rejected", outcome: "revoked" }));
+    expect(frames(requester)).toContainEqual({ type: "approval_status", approvalId: APPROVAL_ID, conversationId: CONVERSATION_ID, status: "rejected" });
+    await expect(reg.woken).resolves.toBe("rejected");
+  });
+
+  it("a second Owner repeating the recorded decision gets outcome 'already_decided' with the current status", async () => {
+    h.tenantRpc.mockImplementation(async () => ({ data: { outcome: "already_decided", approval: row({ status: "approved" }) }, error: null }));
+    const s = makeSession(CONVERSATION_ID);
+    sessions.set(USER_ID, s);
+    await send(USER_ID, decideFrame());
+    expect(frames(s)).toContainEqual(expect.objectContaining({ type: "approval_status", status: "approved", outcome: "already_decided" }));
   });
 
   it("a closed conversation (still pending) does not wake the waiter", async () => {
@@ -296,6 +379,70 @@ describe("reattach re-send", () => {
     return send(USER_ID, { type: "resume_stream", conversationId: CONVERSATION_ID, ackSeq: 0 });
   };
   const settle = () => new Promise((r) => setTimeout(r, 30));
+
+  // The three places a client attaches to a conversation. Each must re-send the live cards.
+  const ATTACH_SITES: Array<[string, (s: ClientSession) => Promise<void>]> = [
+    ["resume_stream", resume],
+    [
+      "resume_session",
+      (s) => {
+        sessions.set(USER_ID, s);
+        return send(USER_ID, { type: "resume_session", conversationId: CONVERSATION_ID });
+      },
+    ],
+    [
+      "start_session with resumeByContextPath (context_path)",
+      (s) => {
+        sessions.set(USER_ID, s);
+        return send(USER_ID, { type: "start_session", resumeByContextPath: "knowledge-base/overview/doc.md" });
+      },
+    ],
+  ];
+
+  describe.each(ATTACH_SITES)("attach site: %s", (_name, attach) => {
+    it("flag on: the live card is re-sent", async () => {
+      h.flagOn.value = true;
+      h.serviceRpc.mockResolvedValue({ data: [liveRow()], error: null });
+      const s = makeSession(undefined);
+      await attach(s);
+      await settle();
+      expect(h.serviceRpc).toHaveBeenCalledWith("list_live_approvals", { p_conversation: CONVERSATION_ID });
+      expect(frames(s).find((f) => f.type === "approval_request")).toMatchObject({ approvalId: APPROVAL_ID, status: "pending", viewerRole: "owner" });
+    });
+
+    it("flag off: dormant, zero reads, no card", async () => {
+      h.flagOn.value = false;
+      h.serviceRpc.mockResolvedValue({ data: [liveRow()], error: null });
+      const s = makeSession(undefined);
+      await attach(s);
+      await settle();
+      expect(h.serviceRpc).not.toHaveBeenCalled();
+      expect(frames(s).some((f) => f.type === "approval_request")).toBe(false);
+    });
+
+    it("a workspace-scoped cohort: the card is re-sent for the cohort's workspace and the flag was read WITH a workspace", async () => {
+      h.flagOn.value = true;
+      h.flagWorkspace.value = WORKSPACE_ID;
+      h.serviceRpc.mockResolvedValue({ data: [liveRow()], error: null });
+      const s = makeSession(undefined);
+      await attach(s);
+      await settle();
+      expect(frames(s).find((f) => f.type === "approval_request")).toMatchObject({ approvalId: APPROVAL_ID });
+      expect(h.flagCalls.length).toBeGreaterThan(0);
+      expect(h.flagCalls.every((c) => c.workspaceId !== null)).toBe(true);
+      expect(h.flagCalls.some((c) => c.workspaceId === WORKSPACE_ID)).toBe(true);
+    });
+  });
+
+  it("a row of a workspace the flag is OFF for is not shown, even when the attaching session's workspace is on", async () => {
+    h.flagOn.value = true;
+    h.flagWorkspace.value = OTHER_WORKSPACE_ID;
+    h.serviceRpc.mockResolvedValue({ data: [liveRow()], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await resume(s);
+    await settle();
+    expect(frames(s).some((f) => f.type === "approval_request")).toBe(false);
+  });
 
   it("flag on: live cards are re-sent from the table, built from the stored canonical action", async () => {
     h.flagOn.value = true;

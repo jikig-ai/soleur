@@ -72,6 +72,7 @@ import {
   getDefaultWorkspaceForUser,
   getWorkspaceForUserInOrganization,
   readWorkspaceIdFromDb,
+  resolveCurrentWorkspaceId,
   workspacePathForWorkspaceId,
   isGitDataStoreEnabled,
 } from "./workspace-resolver";
@@ -1732,7 +1733,7 @@ async function handleResumeStream(
     }
 
     // #4672 — approval cards are not in the replay ring; re-send the live ones from the table.
-    reattachApprovals(userId, verifiedConvId);
+    reattachApprovals(userId, verifiedConvId, { tenant });
 
     const { frames, status } = streamReplayBuffer.replayFrom(verifiedConvId, ackSeq);
     if (status === "incomplete") {
@@ -1799,19 +1800,30 @@ function replayBufferedDebugEvents(
  * resume_stream). Fire-and-forget: a failure is one Sentry op inside `reemitLiveApprovals` and must never delay or
  * fail the attach. Dormant (zero reads) while the approval flag is off.
  */
-function reattachApprovals(userId: string, conversationId: string): void {
-  void reemitLiveApprovals({
-    userId,
-    conversationId,
-    send: sendToClient,
-    client: () => supabase as unknown as ApprovalRpcClient,
-    viewerRole: async (workspaceId) => {
-      const tenant = await tenantFor(userId, "approval-reattach");
-      if (!tenant) return "member";
-      const { data, error } = await tenant.rpc("is_workspace_owner", { p_workspace_id: workspaceId, p_user_id: userId });
-      return !error && data === true ? "owner" : "member";
-    },
-  }).catch(() => {});
+function reattachApprovals(
+  userId: string,
+  conversationId: string,
+  /** The attaching session's workspace: given by the site that already knows it, else resolved with the site's tenant client. */
+  workspace: { workspaceId: string } | { tenant: Parameters<typeof resolveCurrentWorkspaceId>[1] },
+): void {
+  void (async () => {
+    const workspaceId = "workspaceId" in workspace ? workspace.workspaceId : await resolveCurrentWorkspaceId(userId, workspace.tenant);
+    return reemitLiveApprovals({
+      userId,
+      conversationId,
+      // The flag is read per workspace. Each row is checked again against its own workspace inside.
+      workspaceId,
+      send: sendToClient,
+      client: () => supabase as unknown as ApprovalRpcClient,
+      viewerRole: async (workspaceId) => {
+        const tenant = await tenantFor(userId, "approval-reattach");
+        if (!tenant) return "member";
+        const { data, error } = await tenant.rpc("is_workspace_owner", { p_workspace_id: workspaceId, p_user_id: userId });
+        if (error) throw new Error("viewer role read failed"); // reported by reattach; the card shows the read-only view
+        return data === true ? "owner" : "member";
+      },
+    });
+  })().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -2001,7 +2013,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // leave-and-return rebind (buffered frames only; no-op when the
             // ring is gone).
             replayBufferedDebugEvents(userId, row.id);
-            reattachApprovals(userId, row.id);
+            reattachApprovals(userId, row.id, { tenant: tenantResume });
 
             log.info({ userId, conversationId: row.id }, "start_session resumed by context_path");
             break;
@@ -2374,7 +2386,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // leave-and-return rebind: emit the conversation's buffered debug
         // frames (marked `replayed`; no-op when the ring is gone).
         replayBufferedDebugEvents(userId, msg.conversationId);
-        reattachApprovals(userId, msg.conversationId);
+        reattachApprovals(userId, msg.conversationId, { workspaceId: resumeWorkspaceId });
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "resume_session error");

@@ -504,6 +504,7 @@ describe("approval frames (#4672)", () => {
     fields: [{ label: "To", value: "maria@example.test", kind: "text" }],
     consequence: "c",
     singleUse: "s",
+    noun: "email",
     approveLabel: "Approve",
     denyLabel: "Deny",
     danger: false,
@@ -528,10 +529,19 @@ describe("approval frames (#4672)", () => {
     expect(parseWSMessage({ ...request, view: { ...view, extra: 1 } }).ok).toBe(false);
   });
 
+  test("the card view carries a non-empty noun (the client never parses a display sentence)", () => {
+    const { noun: _n, ...withoutNoun } = view;
+    expect(parseWSMessage({ ...request, view: withoutNoun }).ok).toBe(false);
+    expect(parseWSMessage({ ...request, view: { ...view, noun: "" } }).ok).toBe(false);
+  });
+
   test("approval_status round-trips; outcome is a closed enum", () => {
     const st = { type: "approval_status", approvalId: ID, conversationId: "c", status: "approved" };
     expect(parseWSMessage(st).ok).toBe(true);
     expect(parseWSMessage({ ...st, outcome: "conflict" }).ok).toBe(true);
+    for (const outcome of ["decided", "unchanged", "already_decided", "conflict", "revoked", "expired", "closed"]) {
+      expect(parseWSMessage({ ...st, status: "rejected", outcome }).ok, outcome).toBe(true);
+    }
     expect(parseWSMessage({ ...st, outcome: "whatever" }).ok).toBe(false);
     expect(parseWSMessage({ ...st, status: "maybe" }).ok).toBe(false);
   });

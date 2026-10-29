@@ -7,16 +7,17 @@
 import { useCallback, useState } from "react";
 import { ApprovalRequestCard } from "@/components/chat/approval-request-card";
 import { formatExpiryDateTimeTz } from "@/lib/approval-copy";
-import { inferAgentWaiting } from "@/lib/approval-card-state";
+import { isApprovalDecideOutcomeWire, isApprovalWireStatus } from "@/lib/approval-wire";
 import type { ApprovalCardView, ApprovalDecideOutcomeWire, ApprovalDecisionWire, ApprovalWireStatus } from "@/lib/types";
 
 export interface ApprovalLandingRow {
   status: ApprovalWireStatus;
   expiresAt: string;
-  createdAt: string;
   decidedAt: string | null;
   /** True when the viewer is the one who decided (drives "by you"). */
   decidedByViewer: boolean;
+  /** True when the request was approved and then taken back (status `rejected` with `revoked_at` set). */
+  revoked: boolean;
 }
 
 interface DecideResponse {
@@ -24,19 +25,13 @@ interface DecideResponse {
   approval: { status: ApprovalWireStatus; decided_at: string | null };
 }
 
-const OUTCOMES: readonly string[] = ["decided", "unchanged", "conflict", "expired", "closed"];
-const STATUSES: readonly string[] = ["pending", "approved", "rejected", "expired", "consumed"];
-
 function parseDecideResponse(v: unknown): DecideResponse | null {
   if (!v || typeof v !== "object") return null;
   const o = v as { outcome?: unknown; approval?: { status?: unknown; decided_at?: unknown } };
-  if (typeof o.outcome !== "string" || !OUTCOMES.includes(o.outcome)) return null;
-  if (!o.approval || typeof o.approval.status !== "string" || !STATUSES.includes(o.approval.status)) return null;
+  if (!isApprovalDecideOutcomeWire(o.outcome)) return null;
+  if (!o.approval || !isApprovalWireStatus(o.approval.status)) return null;
   const decidedAt = typeof o.approval.decided_at === "string" ? o.approval.decided_at : null;
-  return {
-    outcome: o.outcome as ApprovalDecideOutcomeWire,
-    approval: { status: o.approval.status as ApprovalWireStatus, decided_at: decidedAt },
-  };
+  return { outcome: o.outcome, approval: { status: o.approval.status, decided_at: decidedAt } };
 }
 
 export function ApprovalLanding({
@@ -72,7 +67,9 @@ export function ApprovalLanding({
         ...r,
         status: parsed.approval.status,
         decidedAt: parsed.approval.decided_at,
-        decidedByViewer: parsed.outcome === "decided" || parsed.outcome === "unchanged" ? true : r.decidedByViewer,
+        decidedByViewer:
+          parsed.outcome === "decided" || parsed.outcome === "unchanged" || parsed.outcome === "revoked" ? true : r.decidedByViewer,
+        revoked: parsed.outcome === "revoked" ? true : r.revoked,
       }));
       setOutcome(parsed.outcome);
       return true;
@@ -81,7 +78,7 @@ export function ApprovalLanding({
   );
 
   const decidedLabel =
-    row.decidedAt && row.status !== "expired"
+    row.decidedAt && row.status !== "expired" && !row.revoked
       ? `${formatExpiryDateTimeTz(row.decidedAt)}${row.decidedByViewer ? " · by you" : ""}`
       : undefined;
 
@@ -94,9 +91,12 @@ export function ApprovalLanding({
       expiresAt={row.expiresAt}
       requestCount={requestCount}
       viewerRole="owner"
-      agentWaiting={inferAgentWaiting({ created_at: row.createdAt, decided_at: row.decidedAt }, Date.now())}
+      // The landing page has no live socket and cannot see the agent's wait: it never claims the agent is waiting or
+      // continuing. An approved request is "ask your agent again" until the row says it was used (`consumed`).
+      agentWaiting={false}
       decideOutcome={outcome}
       expiredAfterApproval={row.status === "expired" && row.decidedAt !== null}
+      revoked={row.revoked}
       decidedLabel={decidedLabel}
       onDecide={onDecide}
     />

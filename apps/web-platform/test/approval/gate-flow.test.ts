@@ -1,5 +1,5 @@
 /**
- * #4672 slice 1, unit 2: the approval flow in the gated branch of `createCanUseTool`.
+ * #4672: the approval flow in the gated branch of `createCanUseTool`.
  *
  * Guard 1 (approval consume gate): a slice-1 tool call is allowed only if it consumes, exactly once, an approved and
  * unexpired request whose hash equals the hash of the full input about to run, in the same conversation. The consume
@@ -26,7 +26,8 @@ vi.mock("@/server/permission-log", () => ({ logPermissionDecision: mockLogDecisi
 vi.mock("@/server/observability", () => ({ warnSilentFallback: mockWarn, reportSilentFallback: mockReport }));
 
 import { createCanUseTool, type CanUseToolContext, type StatusGuard } from "@/server/permission-callback";
-import { canonicalizeAction, computeActionHash } from "@/server/approval/canonical";
+import { canonicalizeAction, computeActionHash, handlerArgsKey } from "@/server/approval/canonical";
+import { ExecutionGrants } from "@/server/approval/grants";
 import { clearAllWaiters, wakeWaiter, waiterCount } from "@/server/approval/waiters";
 import {
   consumeApproval,
@@ -42,8 +43,11 @@ import {
   APPROVAL_EXPIRED_DENY,
   APPROVAL_INVALID_INPUT_DENY,
   APPROVAL_PENDING_DENY,
+  APPROVAL_PRINCIPAL_CHANGED_DENY,
   APPROVAL_REJECTED_DENY,
+  APPROVAL_TOO_MANY_PENDING_DENY,
   APPROVAL_UNAVAILABLE_DENY,
+  consumeRejectedDeny,
 } from "@/server/approval/gate-flow";
 import type { ApprovalGateDeps } from "@/server/approval/gate-types";
 import { CONVERSATION_ID, OTHER_CONVERSATION_ID, SAMPLES, TOOLS, USER_ID, WORKSPACE_ID } from "./fixtures";
@@ -72,6 +76,10 @@ class FakeDb {
   failCreate = false;
   failRead = false;
   failConsume: "throw" | "garbage" | null = null;
+  /** The pending cap the fake database reports (SQLSTATE AP429 conversation / AP430 workspace). */
+  cap: "AP429" | "AP430" | null = null;
+  /** Coalescing verdict returned by create. */
+  notify = true;
 
   private id() {
     this.seq += 1;
@@ -90,6 +98,7 @@ class FakeDb {
       this.rpcLog.push({ fn, args });
       if (fn === "create_approval_request") {
         if (this.failCreate) return { data: null, error: { message: "db text that must never surface", code: "XX000" } };
+        if (this.cap) return { data: null, error: { message: "approval: too many pending requests", code: this.cap } };
         const conv = args.p_conversation_id as string;
         const hash = args.p_action_sha256 as string;
         let row = this.rows.find((r) => r.conversation_id === conv && r.action_sha256 === hash && ["pending", "approved"].includes(r.status));
@@ -108,7 +117,10 @@ class FakeDb {
           this.rows.push(row);
         }
         const count = this.rows.filter((r) => r.conversation_id === conv && r.action_sha256 === hash).length;
-        return { data: { approval: this.view(row), created, request_count: count }, error: null };
+        return {
+          data: { approval: this.view(row), created, request_count: count, notify: created && this.notify, expires_at: new Date(row.expires_at).toISOString() },
+          error: null,
+        };
       }
       if (fn === "consume_approval") {
         if (this.failConsume === "throw") throw new Error("socket hang up");
@@ -147,6 +159,8 @@ class FakeDb {
       decided_by: null,
       consumed_at: null,
       expired_at: null,
+      revoked_at: null,
+      revoked_by: null,
       unanswered_flagged_at: null,
       created_at: new Date().toISOString(),
       canonical_action: null,
@@ -174,6 +188,8 @@ function makeHarness(
     gate?: (...a: unknown[]) => Promise<string>;
     nonInteractive?: boolean;
     onRequested?: ApprovalGateDeps["onRequested"];
+    onRequestedDeadlineMs?: number;
+    viewerRole?: ApprovalGateDeps["viewerRole"];
     sendDelivered?: boolean;
   } = {},
 ) {
@@ -197,15 +213,18 @@ function makeHarness(
     const s = SAMPLES[tool];
     return s && Object.keys(s.server).length ? (s.server as Record<string, string>) : undefined;
   };
+  const grants = new ExecutionGrants();
   const approval: ApprovalGateDeps = {
     isEnabled,
     workspaceId: WORKSPACE_ID,
+    grants,
     resolveServerDerived: vi.fn(opts.serverDerived ?? defaultDerived),
     submit: vi.fn((p) => submitApprovalRequest(db.client, p)),
     readStatus: vi.fn(async (id: string) => (await getApprovalStatus(db.client, id))?.status ?? null),
     consume: vi.fn((p) => consumeApproval(db.client, p)),
-    viewerRole: vi.fn(async () => "owner" as const),
+    viewerRole: vi.fn(opts.viewerRole ?? (async () => "owner" as const)),
     onRequested: opts.onRequested,
+    onRequestedDeadlineMs: opts.onRequestedDeadlineMs,
     waitOptions: { deadlineMs: opts.deadlineMs ?? 60, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 15))) },
   };
   const deps = {
@@ -235,7 +254,7 @@ function makeHarness(
       message?: string;
       updatedInput?: Record<string, unknown>;
     }>;
-  return { db, ctx, deps, approval, controller, row, frames, call, sendToClient, isEnabled, updateConversationStatus };
+  return { db, ctx, deps, approval, grants, controller, row, frames, call, sendToClient, isEnabled, updateConversationStatus };
 }
 
 const sampleInput = (tool: string) => structuredClone(SAMPLES[tool].input);
@@ -598,7 +617,7 @@ describe("Guard 1: the consume gate is fail-closed and bound to hash, conversati
       const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
       const id = await decideWhenCardArrives(h, "approved");
       const res = await pending;
-      expect(res, reason).toEqual({ behavior: "deny", message: APPROVAL_CONSUME_REJECTED_DENY });
+      expect(res, reason).toEqual({ behavior: "deny", message: reason === "expired" ? APPROVAL_EXPIRED_DENY : APPROVAL_CONSUME_REJECTED_DENY });
       const ops = mockWarn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-consume-rejected");
       expect(ops, reason).toHaveLength(1);
       expect((ops[0][1] as { tags: Record<string, string> }).tags.approval_id).toBe(id);
@@ -695,7 +714,7 @@ describe("Guard 1: the consume gate is fail-closed and bound to hash, conversati
 
   test("a late approval whose consume is rejected on re-proposal denies and reports the rejection", async () => {
     const h = makeHarness({ deadlineMs: 5000 });
-    h.approval.submit = vi.fn(async () => ({ kind: "consume_rejected" as const, approvalId: "x", reason: "expired" }));
+    h.approval.submit = vi.fn(async () => ({ kind: "consume_rejected" as const, approvalId: "x", reason: "hash_mismatch" }));
     const res = await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_CONSUME_REJECTED_DENY });
     expect(mockWarn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-consume-rejected")).toBe(true);
@@ -770,7 +789,8 @@ describe("every other failure is a deny with its own op", () => {
     });
     const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
     await decideWhenCardArrives(h, "approved");
-    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_CONSUME_REJECTED_DENY });
+    // An rpc failure is "approval unavailable", not "the arguments changed".
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
   });
 
   test("a fault anywhere else in the flow (here: the decision logger, after the consume) denies and reports, never allows", async () => {
@@ -952,5 +972,344 @@ describe("Guard 1: terminal outcomes and abort edges are denies, and the release
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_DENY });
     expect(h.approval.submit).not.toHaveBeenCalled();
     expect(h.db.rows).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review round (CTO rulings 1, 3, 4, 7, 11): grants, reason texts, caps, notification, honest frames, observability.
+// ---------------------------------------------------------------------------
+
+describe("consume reasons map to their own static text", () => {
+  test.each([
+    ["expired", APPROVAL_EXPIRED_DENY],
+    ["rpc_error", APPROVAL_UNAVAILABLE_DENY],
+    ["decider_not_owner", APPROVAL_PRINCIPAL_CHANGED_DENY],
+    ["requester_not_member", APPROVAL_PRINCIPAL_CHANGED_DENY],
+    ["hash_mismatch", APPROVAL_CONSUME_REJECTED_DENY],
+    ["wrong_conversation", APPROVAL_CONSUME_REJECTED_DENY],
+    ["not_approved", APPROVAL_CONSUME_REJECTED_DENY],
+    ["already_consumed", APPROVAL_CONSUME_REJECTED_DENY],
+    ["not_found", APPROVAL_CONSUME_REJECTED_DENY],
+    ["bad_request", APPROVAL_CONSUME_REJECTED_DENY],
+    ["unknown", APPROVAL_CONSUME_REJECTED_DENY],
+    ["something_new", APPROVAL_CONSUME_REJECTED_DENY],
+  ])("%s", (reason, text) => {
+    expect(consumeRejectedDeny(reason)).toBe(text);
+  });
+
+  test("the principal-changed text says what happened and that a new Owner approval is needed, with no database text", () => {
+    expect(APPROVAL_PRINCIPAL_CHANGED_DENY).toMatch(/membership or roles changed/);
+    expect(APPROVAL_PRINCIPAL_CHANGED_DENY).toMatch(/new approval from a current workspace Owner/);
+    expect(APPROVAL_EXPIRED_DENY).not.toMatch(/arguments changed/);
+    expect(APPROVAL_UNAVAILABLE_DENY).not.toMatch(/arguments changed/);
+  });
+
+  test("a live consume rejected because the decider is no longer an Owner denies with the principal-changed text", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    h.approval.consume = vi.fn(async () => ({ consumed: false as const, reason: "decider_not_owner" }));
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_PRINCIPAL_CHANGED_DENY });
+  });
+
+  test("the same reason on the re-proposal path (consumed inside submit) maps the same way", async () => {
+    const h = makeHarness();
+    h.approval.submit = vi.fn(async () => ({ kind: "consume_rejected" as const, approvalId: "x", reason: "requester_not_member" }));
+    expect(await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend))).toEqual({ behavior: "deny", message: APPROVAL_PRINCIPAL_CHANGED_DENY });
+  });
+});
+
+describe("the hash key is a fail-closed dependency", () => {
+  test("an unset pepper denies with the unavailable text, reports approval-gate-failed with the code, and creates nothing", async () => {
+    const h = makeHarness();
+    const saved = process.env.SENTRY_USERID_PEPPER;
+    delete process.env.SENTRY_USERID_PEPPER;
+    try {
+      const res = await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+      expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    } finally {
+      if (saved !== undefined) process.env.SENTRY_USERID_PEPPER = saved;
+    }
+    expect(h.approval.submit).not.toHaveBeenCalled();
+    expect(h.db.rpcLog).toEqual([]);
+    const ops = mockReport.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-gate-failed");
+    expect(ops).toHaveLength(1);
+    expect((ops[0][1] as { extra: Record<string, unknown> }).extra.code).toBe("key_unavailable");
+  });
+});
+
+describe("pending caps", () => {
+  test.each([
+    ["AP429", "conversation"],
+    ["AP430", "workspace"],
+  ] as const)("%s -> static too-many-pending deny, a capReached op with the scope, no card, no wait, no hold", async (code, scope) => {
+    const db = new FakeDb();
+    db.cap = code;
+    const h = makeHarness({ db });
+    const res = await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(res).toEqual({ behavior: "deny", message: APPROVAL_TOO_MANY_PENDING_DENY });
+    expect(h.frames).toEqual([]);
+    expect(h.updateConversationStatus).not.toHaveBeenCalled();
+    expect(waiterCount()).toBe(0);
+    const ops = mockWarn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-cap-reached");
+    expect(ops).toHaveLength(1);
+    expect((ops[0][1] as { extra: Record<string, unknown> }).extra.scope).toBe(scope);
+    // Not the generic create failure.
+    expect(mockReport.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-create-failed")).toBe(false);
+    expect(APPROVAL_TOO_MANY_PENDING_DENY).toMatch(/answer or decline the pending requests first/);
+  });
+});
+
+describe("the request notification", () => {
+  test("onRequested receives the database's coalescing verdict and the expiry from the create result", async () => {
+    const onRequested = vi.fn(async () => {});
+    const h = makeHarness({ deadlineMs: 2000, onRequested });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    await pending;
+    expect(onRequested).toHaveBeenCalledWith({
+      approvalId: h.db.rows[0].id,
+      created: true,
+      notify: true,
+      expiresAt: new Date(h.db.rows[0].expires_at).toISOString(),
+    });
+    const db = new FakeDb();
+    db.notify = false;
+    const onRequested2 = vi.fn(async () => {});
+    const h2 = makeHarness({ db, deadlineMs: 40, onRequested: onRequested2 });
+    await h2.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(onRequested2).toHaveBeenCalledWith(expect.objectContaining({ created: true, notify: false }));
+  });
+
+  test("a push that never settles does not hold the agent: the deadline reports notify-failed and the wait proceeds", async () => {
+    const onRequested = vi.fn(() => new Promise<void>(() => {}));
+    const h = makeHarness({ deadlineMs: 40, onRequested, onRequestedDeadlineMs: 20 });
+    const res = await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(res).toEqual({ behavior: "deny", message: APPROVAL_PENDING_DENY });
+    const ops = mockWarn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-notify-failed");
+    expect(ops.some((c) => (c[1] as { extra: Record<string, unknown> }).extra.cause === "timeout")).toBe(true);
+  });
+
+  test("an abort while the push is in flight ends the gate without waiting for the push", async () => {
+    const onRequested = vi.fn(() => new Promise<void>(() => {}));
+    const h = makeHarness({ deadlineMs: 5000, onRequested, onRequestedDeadlineMs: 5000 });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    for (let i = 0; i < 200 && !h.frames.some((f) => f.type === "approval_request"); i++) await tick(1);
+    h.controller.abort();
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_DENY });
+  });
+});
+
+describe("the released (re-proposal) path tells the open card it was consumed", () => {
+  test("approval_status{consumed, agentWaiting:false} is emitted before allow()", async () => {
+    const db = new FakeDb();
+    const h1 = makeHarness({ db, deadlineMs: 40 });
+    await h1.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    db.decide(db.rows[0].id, "approved");
+    const h2 = makeHarness({ db, deadlineMs: 5000 });
+    const res = await h2.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(res.behavior).toBe("allow");
+    expect(h2.frames.filter((f) => f.type === "approval_status")).toEqual([
+      expect.objectContaining({ status: "consumed", agentWaiting: false, approvalId: db.rows[0].id }),
+    ]);
+  });
+
+  test("a spent approval for a session that already ended is logged (aborted=true), reported and denied", async () => {
+    const db = new FakeDb();
+    const h1 = makeHarness({ db, deadlineMs: 40 });
+    await h1.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    db.decide(db.rows[0].id, "approved");
+    const h2 = makeHarness({ db, deadlineMs: 5000 });
+    const real = h2.approval.submit;
+    h2.approval.submit = vi.fn(async (p) => {
+      const r = await real(p);
+      h2.controller.abort();
+      return r;
+    });
+    log.warn.mockClear();
+    const res = await h2.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(res).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_DENY });
+    const consumed = log.warn.mock.calls.map((c) => String(c[1])).find((l) => l.startsWith("SOLEUR_APPROVAL_CONSUMED"));
+    expect(consumed).toContain("path=reproposal");
+    expect(consumed).toContain("aborted=true");
+    expect(mockWarn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-consumed-aborted")).toBe(true);
+    expect(h2.grants.size()).toBe(0);
+  });
+
+  test("the live path logs CONSUMED with aborted=true BEFORE denying a session that died during the consume", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const real = h.approval.consume;
+    h.approval.consume = vi.fn(async (p) => {
+      const r = await real(p);
+      h.controller.abort();
+      return r;
+    });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    await pending;
+    const consumed = log.warn.mock.calls.map((c) => String(c[1])).find((l) => l.startsWith("SOLEUR_APPROVAL_CONSUMED"));
+    expect(consumed).toContain("path=live");
+    expect(consumed).toContain("aborted=true");
+    expect(mockWarn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-consumed-aborted")).toBe(true);
+    expect(h.grants.size()).toBe(0);
+  });
+});
+
+describe("silent paths are now observable", () => {
+  test("an invalid-input deny and a not-covered deny each leave a warn op with the stage", async () => {
+    const h = makeHarness();
+    await h.call(TOOLS.pushBranch, { branch: "" });
+    await h.call(TOOLS.emailSend, { ...sampleInput(TOOLS.emailSend), bcc: "attacker@example.test" });
+    const stages = mockWarn.mock.calls
+      .filter((c) => (c[1] as { op?: string }).op === "approval-invalid-input")
+      .map((c) => (c[1] as { extra: Record<string, unknown> }).extra.stage);
+    expect(stages).toEqual(["canonical", "not-covered"]);
+  });
+
+  test("a viewer-role read failure is reported once and the card falls back to the read-only member view", async () => {
+    const h = makeHarness({
+      deadlineMs: 40,
+      viewerRole: async () => {
+        throw new Error("rpc down");
+      },
+    });
+    await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(requestFrame(h.frames)).toMatchObject({ viewerRole: "member" });
+    expect(mockWarn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-viewer-role-failed")).toHaveLength(1);
+  });
+
+  test("poll read errors are counted and reported ONCE per wait with the count, also on the timeout op", async () => {
+    const db = new FakeDb();
+    db.failRead = true;
+    const h = makeHarness({ db, deadlineMs: 80 });
+    const res = await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(res).toEqual({ behavior: "deny", message: APPROVAL_PENDING_DENY });
+    const ops = mockWarn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-wait-read-failed");
+    expect(ops).toHaveLength(1);
+    const n = (ops[0][1] as { extra: { readErrors: number } }).extra.readErrors;
+    expect(n).toBeGreaterThan(1);
+    const timeout = mockWarn.mock.calls.find((c) => (c[1] as { op?: string }).op === "approval-wait-timeout");
+    expect((timeout![1] as { extra: { readErrors: number } }).extra.readErrors).toBe(n);
+  });
+
+  test("a clean wait reports no read-failure op", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    await pending;
+    expect(mockWarn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-wait-read-failed")).toBe(false);
+  });
+});
+
+describe("R1: the execution grant is written right before allow(), on both allow paths, and never on a deny", () => {
+  const input = () => sampleInput(TOOLS.pushBranch);
+  const key = () => handlerArgsKey(TOOLS.pushBranch, input());
+  const headSha = SAMPLES[TOOLS.pushBranch].server.headSha as string;
+
+  test("the flag turning on marks the session enforcing; a flag-off call leaves it untouched", async () => {
+    const off = makeHarness({ enabled: false });
+    await off.call(TOOLS.pushBranch, input());
+    expect(off.grants.enforcing).toBe(false);
+    expect(off.grants.size()).toBe(0);
+
+    const on = makeHarness({ deadlineMs: 30 });
+    await on.call(TOOLS.pushBranch, input());
+    expect(on.grants.enforcing).toBe(true);
+  });
+
+  test("live approved path: the grant carries the approved headSha and workspace, keyed by the handler args, and is in place when allow() runs", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.pushBranch, input());
+    await decideWhenCardArrives(h, "approved");
+    const res = await pending;
+    expect(res.behavior).toBe("allow");
+    expect(h.grants.take(TOOLS.pushBranch, key())).toEqual({ workspaceId: WORKSPACE_ID, headSha });
+    expect(h.grants.take(TOOLS.pushBranch, key())).toBeNull(); // one-shot
+  });
+
+  test("released (re-proposal) path: the same grant is written", async () => {
+    const db = new FakeDb();
+    const h1 = makeHarness({ db, deadlineMs: 40 });
+    await h1.call(TOOLS.pushBranch, input());
+    db.decide(db.rows[0].id, "approved");
+    const h2 = makeHarness({ db, deadlineMs: 5000 });
+    expect((await h2.call(TOOLS.pushBranch, input())).behavior).toBe("allow");
+    expect(h2.grants.take(TOOLS.pushBranch, key())).toEqual({ workspaceId: WORKSPACE_ID, headSha });
+  });
+
+  test("a tool without a server-derived commit gets a grant with only the workspace", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.setAutonomous, sampleInput(TOOLS.setAutonomous));
+    await decideWhenCardArrives(h, "approved");
+    expect((await pending).behavior).toBe("allow");
+    expect(h.grants.take(TOOLS.setAutonomous, handlerArgsKey(TOOLS.setAutonomous, sampleInput(TOOLS.setAutonomous)))).toEqual({
+      workspaceId: WORKSPACE_ID,
+      headSha: undefined,
+    });
+  });
+
+  test("the grant is written BEFORE allow(): if writing it fails the call is a deny, never an allow without a grant", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    h.grants.put = () => {
+      throw new Error("grant store fault");
+    };
+    const pending = h.call(TOOLS.pushBranch, input());
+    await decideWhenCardArrives(h, "approved");
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    expect(mockReport.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-gate-failed")).toBe(true);
+  });
+
+  test.each([
+    ["rejected", async (h: ReturnType<typeof makeHarness>) => void (await decideWhenCardArrives(h, "rejected"))],
+    ["timeout", async () => {}],
+  ])("a %s outcome never writes a grant", async (_name, act) => {
+    const h = makeHarness({ deadlineMs: 40 });
+    const pending = h.call(TOOLS.pushBranch, input());
+    await act(h);
+    expect((await pending).behavior).toBe("deny");
+    expect(h.grants.size()).toBe(0);
+  });
+
+  test("a consume rejection, a cap and an aborted call never write a grant", async () => {
+    const rej = makeHarness({ deadlineMs: 2000 });
+    rej.approval.consume = vi.fn(async () => ({ consumed: false as const, reason: "hash_mismatch" }));
+    const p = rej.call(TOOLS.pushBranch, input());
+    await decideWhenCardArrives(rej, "approved");
+    expect((await p).behavior).toBe("deny");
+    expect(rej.grants.size()).toBe(0);
+
+    const db = new FakeDb();
+    db.cap = "AP429";
+    const capped = makeHarness({ db });
+    await capped.call(TOOLS.pushBranch, input());
+    expect(capped.grants.size()).toBe(0);
+
+    const ab = makeHarness();
+    await ab.call(TOOLS.pushBranch, input(), AbortSignal.abort());
+    expect(ab.grants.size()).toBe(0);
+  });
+
+  test("a grant keyed for one set of arguments is not returned for another", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.pushBranch, input());
+    await decideWhenCardArrives(h, "approved");
+    await pending;
+    expect(h.grants.take(TOOLS.pushBranch, handlerArgsKey(TOOLS.pushBranch, { branch: "other-branch" }))).toBeNull();
+  });
+});
+
+describe("concurrent gates for the same approval share one waiter (refcounted)", () => {
+  test("the first gate finishing does not drop the waiter the second still waits on", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const input = sampleInput(TOOLS.emailSend);
+    const a = h.call(TOOLS.emailSend, structuredClone(input));
+    const b = h.call(TOOLS.emailSend, structuredClone(input));
+    for (let i = 0; i < 200 && h.frames.filter((f) => f.type === "approval_request").length < 2; i++) await tick(1);
+    expect(waiterCount()).toBe(1);
+    const id = h.db.rows[0].id;
+    h.db.decide(id, "approved");
+    wakeWaiter(id, "approved");
+    await Promise.all([a, b]);
+    expect(waiterCount()).toBe(0);
   });
 });

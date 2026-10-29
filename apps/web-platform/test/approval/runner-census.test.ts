@@ -31,6 +31,21 @@ describe("runner registration census", () => {
     expect(block).toMatch(/workspaceId:\s*activeWorkspaceId/);
   });
 
+  test("the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (R1)", () => {
+    const runner = src("server/agent-runner.ts");
+    expect(runner.match(/new ExecutionGrants\(\)/g)).toHaveLength(1);
+    const block = createCanUseToolBlock("server/agent-runner.ts");
+    expect(block).toMatch(/createApprovalGateDeps\(\{[\s\S]{0,600}?grants:\s*approvalGrants/);
+    expect(runner).toMatch(/buildGithubTools\(\{[^}]*grants:\s*approvalGrants/s);
+    expect(runner).toMatch(/buildKbShareTools\(\{[^}]*grants:\s*approvalGrants/s);
+    expect(runner).toMatch(/buildWorkspaceSettingsTools\(\{[^}]*grants:\s*approvalGrants/s);
+  });
+
+  test("the cc runner never builds the approval gate dependency or the execution grants", () => {
+    const cc = src("server/cc-dispatcher.ts");
+    expect(cc).not.toMatch(/createApprovalGateDeps|ExecutionGrants/);
+  });
+
   test("the cc runner registers no slice-1 tool and imports none of their builders (recorded reason above)", () => {
     const cc = src("server/cc-dispatcher.ts");
     for (const name of SHORT) expect(cc, `cc-dispatcher registers ${name} without approval wiring`).not.toMatch(new RegExp(`["'\`]${name}["'\`]`));

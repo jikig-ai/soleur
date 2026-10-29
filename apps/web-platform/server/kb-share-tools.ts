@@ -23,6 +23,12 @@ import {
   type ShareServiceClient,
 } from "@/server/kb-share";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import {
+  checkGrant,
+  GRANT_MISSING_MESSAGE,
+  WORKSPACE_CHANGED_MESSAGE,
+  type ExecutionGrants,
+} from "./approval/grants";
 
 interface BuildKbShareToolsOpts {
   serviceClient: ShareServiceClient;
@@ -30,6 +36,11 @@ interface BuildKbShareToolsOpts {
   kbRoot: string;
   /** Absolute origin like "https://app.soleur.ai" — prepended to relative share URLs. */
   baseUrl: string;
+  /**
+   * #4672 per-session execution grants (shared by closure with the approval gate). Once the approval flow ran in the
+   * session, `kb_share_create` runs only with a grant, and only in the workspace the Owner approved it for.
+   */
+  grants?: ExecutionGrants;
 }
 
 type ToolTextResponse = {
@@ -107,7 +118,7 @@ function wrapPreview(result: PreviewShareResult): ToolTextResponse {
 }
 
 export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
-  const { serviceClient, userId, kbRoot, baseUrl } = opts;
+  const { serviceClient, userId, kbRoot, baseUrl, grants } = opts;
   return [
     tool(
       "kb_share_create",
@@ -118,19 +129,23 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
         "the tool is idempotent on unchanged content, but listing surfaces stale or " +
         "revoked links the user may want to know about.",
       { documentPath: z.string() },
-      async (args) =>
-        wrapCreate(
-          await createShare(
-            serviceClient,
-            userId,
-            // kb_share_links.workspace_id is NOT NULL (migration 059);
-            // resolve the active workspace (solo fallback = userId).
-            await resolveCurrentWorkspaceId(userId, serviceClient),
-            kbRoot,
-            args.documentPath,
-          ),
+      async (args) => {
+        const grant = checkGrant(grants, "mcp__soleur_platform__kb_share_create", args);
+        if (grant.kind === "refuse") {
+          return textResponse({ error: GRANT_MISSING_MESSAGE, code: "approval_grant_missing", status: 403 }, true);
+        }
+        // kb_share_links.workspace_id is NOT NULL (migration 059);
+        // resolve the active workspace (solo fallback = userId).
+        const workspaceId = await resolveCurrentWorkspaceId(userId, serviceClient);
+        // The approval binds the workspace it was granted in: approved-on-W1 must not create the link on W2.
+        if (grant.kind === "granted" && grant.binding.workspaceId !== workspaceId) {
+          return textResponse({ error: WORKSPACE_CHANGED_MESSAGE, code: "workspace_changed", status: 409 }, true);
+        }
+        return wrapCreate(
+          await createShare(serviceClient, userId, workspaceId, kbRoot, args.documentPath),
           baseUrl,
-        ),
+        );
+      },
     ),
     tool(
       "kb_share_list",

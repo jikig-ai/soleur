@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   deriveApprovalCardState,
   hasNewerPendingRequest,
-  inferAgentWaiting,
   isDecidable,
-  nounFromSingleUse,
-  revealInvisibleChars,
+  isRevocable,
+  revealInvisible,
   type ApprovalCardStateInput,
 } from "@/lib/approval-card-state";
 
@@ -16,6 +15,11 @@ describe("deriveApprovalCardState (wireframes 04, 05)", () => {
   it("pending: the Owner decides, a member waits read-only", () => {
     expect(d({})).toBe("pending_owner");
     expect(d({ viewerRole: "member" })).toBe("pending_member");
+  });
+
+  it("the landing page (agentWaiting always false) never reaches released from an approved row", () => {
+    expect(d({ status: "approved", agentWaiting: false })).toBe("approved_late");
+    expect(d({ status: "approved", agentWaiting: false, decideOutcome: "decided" })).toBe("approved_late");
   });
 
   it("approved splits in two: released only while the agent still waits, otherwise ask again (04C vs 04D)", () => {
@@ -53,29 +57,65 @@ describe("deriveApprovalCardState (wireframes 04, 05)", () => {
   });
 });
 
-describe("helpers", () => {
-  it("extracts the noun from the server-built single-use line, with a safe fallback", () => {
-    expect(nounFromSingleUse("One-time · this exact email")).toBe("email");
-    expect(nounFromSingleUse("One-time · this exact pull request")).toBe("pull request");
-    expect(nounFromSingleUse("something else")).toBe("request");
-    expect(nounFromSingleUse("One-time · this exact ")).toBe("request");
+describe("revoke and the loser states", () => {
+  it("a revoked request is its own state, from the live outcome or from the row", () => {
+    expect(d({ status: "rejected", decideOutcome: "revoked" })).toBe("revoked");
+    expect(d({ status: "rejected", revoked: true })).toBe("revoked");
+    expect(d({ status: "rejected" })).toBe("denied");
   });
+
+  it("revoke is offered only to an Owner on an approved, unconsumed request", () => {
+    expect(isRevocable("approved_late", "approved", "owner")).toBe(true);
+    expect(isRevocable("released", "approved", "owner")).toBe(true);
+    expect(isRevocable("released", "consumed", "owner")).toBe(false);
+    expect(isRevocable("approved_late", "approved", "member")).toBe(false);
+    for (const st of ["pending", "rejected", "expired"] as const) expect(isRevocable("denied", st, "owner")).toBe(false);
+  });
+
+  it("a conflict on a request that was meanwhile used is released; any other conflict is the loser state", () => {
+    expect(d({ status: "consumed", decideOutcome: "conflict" })).toBe("released");
+    expect(d({ status: "rejected", decideOutcome: "conflict" })).toBe("already_decided");
+    expect(d({ status: "approved", decideOutcome: "already_decided" })).toBe("already_decided");
+  });
+});
+
+describe("revealInvisible (cq-regex-unicode-separators-escape-only)", () => {
+  const ch = (...cps: number[]) => String.fromCodePoint(...cps);
 
   it("makes direction and zero-width controls visible instead of dropping them", () => {
-    expect(revealInvisibleChars("a‮b")).toBe("a<U+202E>b");
-    expect(revealInvisibleChars("x​y﻿z")).toBe("x<U+200B>y<U+FEFF>z");
-    expect(revealInvisibleChars("plain text, é, 日本")).toBe("plain text, é, 日本");
+    expect(revealInvisible(`a${ch(0x202e)}b`)).toBe("a<U+202E>b");
+    expect(revealInvisible(`x${ch(0x200b)}y${ch(0xfeff)}z`)).toBe("x<U+200B>y<U+FEFF>z");
+    expect(revealInvisible("plain text, \u00e9, \u65e5\u672c")).toBe("plain text, \u00e9, \u65e5\u672c");
   });
 
-  it("infers the agent's wait on the landing page from the row, as a documented heuristic", () => {
-    const created = "2026-10-28T10:00:00Z";
-    const at = (iso: string) => Date.parse(iso);
-    expect(inferAgentWaiting({ created_at: created, decided_at: null }, at("2026-10-28T10:04:59Z"))).toBe(true);
-    expect(inferAgentWaiting({ created_at: created, decided_at: null }, at("2026-10-28T10:05:01Z"))).toBe(false);
-    // an approval that landed inside the window counts as released even when read much later
-    expect(inferAgentWaiting({ created_at: created, decided_at: "2026-10-28T10:02:00Z" }, at("2026-10-29T10:00:00Z"))).toBe(true);
-    expect(inferAgentWaiting({ created_at: created, decided_at: "2026-10-28T10:09:00Z" }, at("2026-10-29T10:00:00Z"))).toBe(false);
-    expect(inferAgentWaiting({ created_at: "nope", decided_at: null }, 0)).toBe(false);
+  it("covers every range the review named: bidi embeddings and isolates, marks, invisible operators, soft hyphen, tags", () => {
+    const cps = [
+      0x202a, 0x202b, 0x202c, 0x202d, 0x202e, // embeddings and overrides
+      0x2066, 0x2067, 0x2068, 0x2069, // isolates
+      0x061c, // Arabic letter mark
+      0x200b, 0x200c, 0x200d, 0x200e, 0x200f, // zero-width and directional marks
+      0x2060, 0x2061, 0x2062, 0x2063, 0x2064, // word joiner and invisible operators
+      0x00ad, 0x180e, 0xfeff, // soft hyphen, Mongolian vowel separator, BOM
+      0xe0000, 0xe0041, 0xe007f, // tag characters (astral)
+    ];
+    for (const cp of cps) {
+      const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+      expect(revealInvisible(`a${ch(cp)}b`), `U+${hex}`).toBe(`a<U+${hex}>b`);
+    }
+  });
+
+  it("leaves neighbours of the ranges alone, and never touches visible text (emoji, CJK, accents)", () => {
+    for (const cp of [0x2029, 0x202f, 0x2065, 0x206a, 0x061b, 0x061d, 0x00ac, 0x00ae, 0x180d, 0x180f, 0xfefe, 0xe007f + 1, 0xdfff + 1]) {
+      expect(revealInvisible(`a${ch(cp)}b`), `U+${cp.toString(16)}`).toBe(`a${ch(cp)}b`);
+    }
+    expect(revealInvisible(ch(0x1f600) + "caf\u00e9")).toBe(ch(0x1f600) + "caf\u00e9");
+  });
+
+  it("the source of this module holds no raw invisible character (escapes only)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../../lib/approval-card-state.ts", import.meta.url), "utf8");
+    // eslint-disable-next-line no-misleading-character-class
+    expect(src).not.toMatch(new RegExp("[\\u202A-\\u202E\\u2066-\\u2069\\u061C\\u200B-\\u200F\\u2060-\\u2064\\u00AD\\u180E\\uFEFF]|[\\u{E0000}-\\u{E007F}]", "u"));
   });
 });
 

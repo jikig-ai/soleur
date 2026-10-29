@@ -1,5 +1,5 @@
 /**
- * #4672 task 3.2: the push and email for an approval request are GENERIC for every gated tool. Nothing from the stored
+ * #4672: the push and email for an approval request are GENERIC for every gated tool. Nothing from the stored
  * row title, the request or the agent can reach a lock screen or an inbox preview (privacy notice scope #8532), and the
  * dispatch half is split from the insert (`dispatchInboxPush`) so the RPC-written row is pushed after the RPC returns.
  */
@@ -42,6 +42,9 @@ vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     auth: { admin: { getUserById: h.getUserById } },
     from: (table: string) => {
+      // Production forbids this read (migration 180 REVOKEs every privilege on approval_request from service_role), so a
+      // fake that quietly answers it would only hide a regression. Throw instead.
+      if (table === "approval_request") throw new Error("service role must not read approval_request");
       const res = () => h.tables[table] ?? { data: null, error: null };
       const chain: Record<string, unknown> = {};
       const self = () => chain;
@@ -100,7 +103,6 @@ beforeEach(() => {
   h.tables = {
     inbox_item: { data: inboxRow() },
     workspaces: { data: { name: "Jikigai" } },
-    approval_request: { data: { expires_at: "2026-10-29T10:42:00Z" } },
   };
 });
 
@@ -155,7 +157,7 @@ describe("dispatchInboxPush: the email fallback", () => {
   });
 
   it("sends the fixed subject and body; interpolates only first name, workspace name and the expiry", async () => {
-    expect(await dispatchInboxPush(INBOX_ID)).toBe(true);
+    expect(await dispatchInboxPush(INBOX_ID, { approvalExpiresAt: "2026-10-29T10:42:00Z" })).toBe(true);
     const e = emailArg();
     expect(e.subject).toBe("Soleur: a request needs your decision");
     expect(e.html).toContain("Hi Dana,");
@@ -194,6 +196,20 @@ describe("dispatchInboxPush: the email fallback", () => {
     await dispatchInboxPush(INBOX_ID, { kind: "expired" });
     expect(emailArg().subject).toBe("Soleur: a request expired and nothing was run");
     expect(emailArg().html).toContain("Nothing was run. If you still want it done, ask your agent again in Soleur.");
+  });
+});
+
+describe("dispatchInboxPush: no approval_request table read (R2)", () => {
+  it("succeeds while the service client throws on from('approval_request'), and carries the PASSED expiry", async () => {
+    h.subs.value = [];
+    expect(await dispatchInboxPush(INBOX_ID, { approvalExpiresAt: "2026-10-29T10:42:00Z" })).toBe(true);
+    expect(emailArg().html).toContain("Thu 29 Oct, 10:42 UTC");
+  });
+
+  it("without a passed expiry the copy has no date (it is never looked up)", async () => {
+    h.subs.value = [];
+    expect(await dispatchInboxPush(INBOX_ID)).toBe(true);
+    expect(emailArg().html).not.toContain("10:42 UTC");
   });
 });
 

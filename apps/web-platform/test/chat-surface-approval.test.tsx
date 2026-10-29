@@ -125,6 +125,20 @@ describe("approval card in the thread", () => {
     await renderStreaming([userMsg, card(ID1, { status: "approved", agentWaiting: false })]);
     expect(screen.getByRole("heading", { name: "Approved. Ask your agent again." })).toBeInTheDocument();
   });
+
+  it("an approved card offers Revoke approval, which sends the same decide with deny through the hook", async () => {
+    await renderStreaming([userMsg, card(ID1, { status: "approved", agentWaiting: false })]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Revoke approval" }));
+    });
+    expect(wsReturn.sendApprovalDecide).toHaveBeenCalledWith(ID1, "deny");
+  });
+
+  it("a revoked card renders the revoked state with no buttons", async () => {
+    await renderStreaming([userMsg, card(ID1, { status: "rejected", decideOutcome: "revoked", agentWaiting: false })]);
+    expect(screen.getByTestId("approval-request-card").getAttribute("data-approval-state")).toBe("revoked");
+    expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
+  });
 });
 
 describe("awaitingUserInput counts a pending approval the agent is waiting on", () => {

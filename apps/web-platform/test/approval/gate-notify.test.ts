@@ -1,5 +1,5 @@
 /**
- * #4672 task 3.2: the gate's `onRequested` hook sends the generic push for a NEW request (the split half of
+ * #4672: the gate's `onRequested` hook sends the generic push for a NEW request (the split half of
  * notifyInboxItem), finds the RPC-written inbox row by its dedup key, and reports (through the gate's own
  * approval-notify-failed op) when nothing reached the Owner. A re-ask never pushes twice.
  */
@@ -29,14 +29,18 @@ vi.mock("@/lib/supabase/service", () => ({
 }));
 
 import { createApprovalGateDeps } from "@/server/approval/gate";
-import { notifyApprovalRequested } from "@/server/approval/notify";
+import { ExecutionGrants } from "@/server/approval/grants";
+import { notifyApprovalExpired, notifyApprovalRequested } from "@/server/approval/notify";
 
-const deps = (notifyRequested?: (id: string) => Promise<boolean>) =>
+const EXPIRES_AT = "2026-10-29T10:42:00Z";
+
+const deps = (notifyRequested?: (id: string, workspaceId: string, expiresAt: string | null) => Promise<boolean>) =>
   createApprovalGateDeps({
     userId: USER_ID,
     workspaceId: WORKSPACE_ID,
     repoSlug: "acme/repo",
     workspacePath: "/tmp/ws",
+    grants: new ExecutionGrants(),
     isEnabled: async () => true,
     serviceClient: () => ({ rpc: async () => ({ data: null, error: null }) }),
     notifyRequested,
@@ -51,41 +55,56 @@ beforeEach(() => {
 describe("createApprovalGateDeps.onRequested", () => {
   it("pushes for a newly created request", async () => {
     const notify = vi.fn(async () => true);
-    await deps(notify).onRequested!({ approvalId: APPROVAL_ID, created: true });
-    expect(notify).toHaveBeenCalledWith(APPROVAL_ID);
+    await deps(notify).onRequested!({ approvalId: APPROVAL_ID, created: true, notify: true, expiresAt: EXPIRES_AT });
+    expect(notify).toHaveBeenCalledWith(APPROVAL_ID, WORKSPACE_ID, EXPIRES_AT);
+  });
+
+  it("a new request inside the workspace's coalescing window (notify=false) is not pushed", async () => {
+    const notify = vi.fn(async () => true);
+    await deps(notify).onRequested!({ approvalId: APPROVAL_ID, created: true, notify: false, expiresAt: EXPIRES_AT });
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("a re-ask that found the existing request does NOT push again", async () => {
     const notify = vi.fn(async () => true);
-    await deps(notify).onRequested!({ approvalId: APPROVAL_ID, created: false });
+    await deps(notify).onRequested!({ approvalId: APPROVAL_ID, created: false, notify: true, expiresAt: EXPIRES_AT });
     expect(notify).not.toHaveBeenCalled();
   });
 
   it("throws when nothing reached the Owner, so the gate reports approval-notify-failed", async () => {
-    await expect(deps(async () => false).onRequested!({ approvalId: APPROVAL_ID, created: true })).rejects.toThrow();
+    await expect(
+      deps(async () => false).onRequested!({ approvalId: APPROVAL_ID, created: true, notify: true, expiresAt: EXPIRES_AT }),
+    ).rejects.toThrow();
   });
 });
 
 describe("notifyApprovalRequested", () => {
-  it("finds the RPC-written inbox row by source and dedup key (the approval id) and dispatches that row", async () => {
-    expect(await notifyApprovalRequested(APPROVAL_ID)).toBe(true);
+  it("finds the RPC-written inbox row by (workspace_id, source, dedup_key = the approval id) and dispatches that row with the expiry", async () => {
+    expect(await notifyApprovalRequested(APPROVAL_ID, WORKSPACE_ID, EXPIRES_AT)).toBe(true);
     expect(h.filters).toEqual([
+      ["inbox_item.workspace_id", WORKSPACE_ID],
       ["inbox_item.source", "approval_required"],
       ["inbox_item.dedup_key", APPROVAL_ID],
     ]);
-    expect(h.dispatch).toHaveBeenCalledWith("55555555-5555-4555-8555-555555555555", { kind: "requested" });
+    expect(h.dispatch).toHaveBeenCalledWith("55555555-5555-4555-8555-555555555555", { kind: "requested", approvalExpiresAt: EXPIRES_AT });
+  });
+
+  it("the expired kind looks the row up by workspace too and carries no date", async () => {
+    expect(await notifyApprovalExpired(APPROVAL_ID, WORKSPACE_ID)).toBe(true);
+    expect(h.filters[0]).toEqual(["inbox_item.workspace_id", WORKSPACE_ID]);
+    expect(h.dispatch).toHaveBeenCalledWith("55555555-5555-4555-8555-555555555555", { kind: "expired", approvalExpiresAt: null });
   });
 
   it("no inbox row (or a read error) means no dispatch and false", async () => {
     h.inboxRow.value = { data: null, error: null };
-    expect(await notifyApprovalRequested(APPROVAL_ID)).toBe(false);
+    expect(await notifyApprovalRequested(APPROVAL_ID, WORKSPACE_ID, EXPIRES_AT)).toBe(false);
     h.inboxRow.value = { data: { id: "x" }, error: { message: "boom" } };
-    expect(await notifyApprovalRequested(APPROVAL_ID)).toBe(false);
+    expect(await notifyApprovalRequested(APPROVAL_ID, WORKSPACE_ID, EXPIRES_AT)).toBe(false);
     expect(h.dispatch).not.toHaveBeenCalled();
   });
 
   it("reports the dispatch result as is", async () => {
     h.dispatch.mockResolvedValue(false);
-    expect(await notifyApprovalRequested(APPROVAL_ID)).toBe(false);
+    expect(await notifyApprovalRequested(APPROVAL_ID, WORKSPACE_ID, EXPIRES_AT)).toBe(false);
   });
 });

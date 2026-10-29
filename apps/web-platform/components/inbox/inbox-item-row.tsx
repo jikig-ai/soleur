@@ -17,6 +17,7 @@ import { usePendingRouter } from "@/hooks/use-pending-router";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import { Button } from "@/components/ui/button";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
+import { revealInvisible } from "@/lib/approval-card-state";
 import { inboxRowEligibility } from "@/lib/inbox-archive-eligibility";
 import { relativeTime } from "@/lib/relative-time";
 import { APPROVAL_COPY, formatExpiry } from "@/lib/approval-copy";
@@ -49,7 +50,9 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
   const [confirming, setConfirming] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const title = sanitizeDisplayString(item.title);
+  // An approval row names the agent's action: invisible direction/zero-width controls are made visible BEFORE the
+  // sanitizer (which would drop them silently), so a right-to-left override cannot disguise a recipient.
+  const title = sanitizeDisplayString(item.source === "approval_required" ? revealInvisible(item.title) : item.title);
   const severity = item.severity;
   const isActionRequired = severity === "action_required";
   const isActed = item.acted_at !== null;

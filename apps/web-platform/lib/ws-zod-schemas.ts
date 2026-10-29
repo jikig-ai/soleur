@@ -19,6 +19,7 @@
 
 import { z, type ZodError } from "zod";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { APPROVAL_WIRE_DECIDE_OUTCOMES, APPROVAL_WIRE_STATUSES } from "@/lib/approval-wire";
 import {
   type WSMessage,
   WORKFLOW_END_STATUSES,
@@ -409,6 +410,7 @@ const approvalCardViewSchema = z.strictObject({
   ),
   consequence: z.string(),
   singleUse: z.string(),
+  noun: z.string().min(1),
   approveLabel: z.literal("Approve"),
   denyLabel: z.literal("Deny"),
   danger: z.boolean(),
@@ -429,8 +431,8 @@ const approvalStatusSchema = z.strictObject({
   type: z.literal("approval_status"),
   approvalId: z.uuid(),
   conversationId: z.string(),
-  status: z.enum(["pending", "approved", "rejected", "expired", "consumed"]),
-  outcome: z.enum(["decided", "unchanged", "conflict", "expired", "closed"]).optional(),
+  status: z.enum(APPROVAL_WIRE_STATUSES),
+  outcome: z.enum(APPROVAL_WIRE_DECIDE_OUTCOMES).optional(),
   agentWaiting: z.boolean().optional(),
 });
 const sessionStartedSchema = z.strictObject({

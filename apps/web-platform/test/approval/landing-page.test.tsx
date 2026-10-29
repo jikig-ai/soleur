@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   row: { value: null as Record<string, unknown> | null },
   rowError: { value: null as unknown },
   count: { value: 1 },
+  countError: { value: null as unknown },
   fromCalls: [] as string[],
   flag: vi.fn(),
   report: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock("@/lib/supabase/server", () => ({
       h.fromCalls.push(table);
       const chain = {
         select: (_c: string, opts?: { head?: boolean }) => {
-          if (opts?.head) return { eq: () => ({ eq: async () => ({ count: h.count.value, error: null }) }) };
+          if (opts?.head) return { eq: () => ({ eq: async () => ({ count: h.count.value, error: h.countError.value }) }) };
           return {
             eq: () => ({
               maybeSingle: async () =>
@@ -87,6 +88,7 @@ function stored(over: Record<string, unknown> = {}) {
     decided_at: null,
     decided_by: null,
     consumed_at: null,
+    revoked_at: null,
     canonical_action: action,
     ...over,
   };
@@ -99,6 +101,7 @@ beforeEach(() => {
   h.row.value = stored();
   h.rowError.value = null;
   h.count.value = 1;
+  h.countError.value = null;
   h.fromCalls.length = 0;
   h.flag.mockReset();
   h.report.mockReset();
@@ -133,7 +136,10 @@ describe("rendering", () => {
   it("shows the exact canonical action text, the countdown and Approve/Deny for a pending request", async () => {
     render(await run());
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Approval request");
-    expect(screen.getByText(/Q4 pallet pricing follow-ups/)).toBeTruthy();
+    // Fixed header: the model-influenceable conversation title is never read or shown.
+    expect(screen.getByText("From your agent")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Q4 pallet pricing follow-ups");
+    expect(h.fromCalls).not.toContain("conversations");
     const block = screen.getByTestId("approval-bound-block").textContent ?? "";
     expect(block).toContain(String(s.input.to));
     expect(block).toContain(String(s.input.body));
@@ -151,6 +157,28 @@ describe("rendering", () => {
     h.count.value = 3;
     render(await run());
     expect(screen.getByTestId("approval-request-count").textContent).toContain("request 3");
+  });
+
+  it("a failed count read is reported (not silently shown as 1) and the card still renders", async () => {
+    h.countError.value = { message: "boom", code: "XX000" };
+    render(await run());
+    expect(h.report).toHaveBeenCalledWith("landingReadFailed", expect.anything(), expect.objectContaining({ approvalId: APPROVAL_ID }));
+    expect(screen.queryByTestId("approval-request-count")).toBeNull();
+    expect(screen.getByTestId("approval-request-card")).toBeTruthy();
+  });
+
+  it("an approved, unconsumed row renders 'ask again' with a Revoke control, not 'released'", async () => {
+    h.row.value = stored({ status: "approved", decided_at: new Date().toISOString(), decided_by: USER_ID });
+    render(await run());
+    expect(screen.getByTestId("approval-request-card").getAttribute("data-approval-state")).toBe("approved_late");
+    expect(screen.getByRole("button", { name: "Revoke approval" })).toBeTruthy();
+  });
+
+  it("a revoked row (rejected with revoked_at) renders the revoked state", async () => {
+    h.row.value = stored({ status: "rejected", decided_at: "2026-10-28T10:01:00Z", decided_by: USER_ID, revoked_at: "2026-10-28T10:30:00Z" });
+    render(await run());
+    expect(screen.getByTestId("approval-request-card").getAttribute("data-approval-state")).toBe("revoked");
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 
   it("a resolved request shows its final state with no buttons", async () => {

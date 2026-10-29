@@ -18,17 +18,18 @@ import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import {
+  AGENT_WAIT_MINUTES,
   APPROVAL_COPY,
+  APPROVAL_RETENTION_DAYS,
   APPROVAL_STATE_COPY,
   formatExpiry,
 } from "@/lib/approval-copy";
 import {
-  AGENT_WAIT_MINUTES,
   BLOCK_VISIBLE_LINES,
   deriveApprovalCardState,
   isDecidable,
-  nounFromSingleUse,
-  revealInvisibleChars,
+  isRevocable,
+  revealInvisible,
   type ApprovalCardState,
 } from "@/lib/approval-card-state";
 import type {
@@ -51,10 +52,12 @@ export interface ApprovalRequestCardProps {
   viewerRole: "owner" | "member";
   /** True while the agent is still inside its in-session wait (server truth, never guessed client-side). */
   agentWaiting: boolean;
-  /** The server's reply to THIS viewer's own decide, when there was one (conflict, expired and closed explain a refusal). */
+  /** The server's reply to THIS viewer's own decide, when there was one (conflict, already_decided, revoked, expired and closed). */
   decideOutcome?: ApprovalDecideOutcomeWire;
   /** Expired after the Owner approved it and the agent never asked again. The wire cannot say; the landing page can. */
   expiredAfterApproval?: boolean;
+  /** A rejected request that was an approval taken back (revoked). The landing page can tell from the row; the live wire says `revoked` as the outcome. */
+  revoked?: boolean;
   /** Render-time banner on an older pending card when a newer one exists for the same conversation and tool. */
   newerRequestExists?: boolean;
   /** Right-hand meta of a resolved card, e.g. "Today 10:42 · by you". Built by the caller from data it holds. */
@@ -101,6 +104,7 @@ const STATE_STYLE: Record<ApprovalCardState, StateStyle> = {
     icon: "warn",
   },
   denied: { box: `${BOX_BASE} border-soleur-border-default bg-soleur-bg-surface-1`, badge: "bg-soleur-bg-surface-2 text-soleur-text-secondary", icon: "x" },
+  revoked: { box: `${BOX_BASE} border-soleur-border-default bg-soleur-bg-surface-1`, badge: "bg-soleur-bg-surface-2 text-soleur-text-secondary", icon: "x" },
   expired: { box: `${BOX_BASE} border-soleur-border-default bg-soleur-bg-surface-1`, badge: "bg-soleur-bg-surface-2 text-soleur-text-secondary", icon: "x" },
   expired_after_approval: {
     box: `${BOX_BASE} border-soleur-border-default bg-soleur-bg-surface-1`,
@@ -130,6 +134,7 @@ const BADGE_TEXT: Record<ApprovalCardState, string> = {
   released: APPROVAL_STATE_COPY.badge.released,
   approved_late: APPROVAL_STATE_COPY.badge.approvedLate,
   denied: APPROVAL_STATE_COPY.badge.denied,
+  revoked: APPROVAL_STATE_COPY.badge.revoked,
   expired: APPROVAL_STATE_COPY.badge.expired,
   expired_after_approval: APPROVAL_STATE_COPY.badge.expiredAfterApproval,
   already_decided: APPROVAL_STATE_COPY.badge.alreadyDecided,
@@ -200,7 +205,7 @@ function Icon({ name, className = "h-4 w-4" }: { name: StateStyle["icon"] | "tim
 }
 
 function BoundValue({ label, value, kind }: { label: string; value: string; kind: "text" | "code" | "block" }) {
-  const shown = revealInvisibleChars(value);
+  const shown = revealInvisible(value);
   if (kind === "block") {
     const lines = shown.split("\n").length;
     const scrolls = lines > BLOCK_VISIBLE_LINES;
@@ -263,6 +268,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
     agentWaiting,
     decideOutcome,
     expiredAfterApproval,
+    revoked,
     newerRequestExists,
     decidedLabel,
     alreadyDecidedBy,
@@ -279,10 +285,12 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
     decideOutcome,
     detailsRemoved: view === null,
     expiredAfterApproval,
+    revoked,
   });
   const style = STATE_STYLE[state];
-  const noun = view ? nounFromSingleUse(view.singleUse) : "request";
+  const noun = view ? view.noun : "request";
   const decidable = isDecidable(state, viewerRole) && view !== null;
+  const revocable = isRevocable(state, status, viewerRole) && view !== null;
   const pendingState = state === "pending_owner" || state === "pending_member";
 
   // The countdown re-renders every 30 s. SSR and the first client render can disagree by a tick: the chip opts out of
@@ -343,18 +351,24 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       infoLine = APPROVAL_STATE_COPY.memberLine;
       break;
     case "released":
-      title = APPROVAL_COPY.releasedTitle;
+      // The landing page has no live socket: it never says the agent "is continuing", only what the server recorded.
+      title = layout === "landing" ? APPROVAL_COPY.releasedTitleNeutral : APPROVAL_COPY.releasedTitle;
       infoLine = `${APPROVAL_COPY.releasedBadge}. ${APPROVAL_STATE_COPY.releasedLine}`;
       infoIcon = "check";
       break;
     case "approved_late":
       title = APPROVAL_COPY.approvedLate;
-      infoLine = APPROVAL_STATE_COPY.approvedLateLine;
+      infoLine = APPROVAL_STATE_COPY.approvedLateLine(AGENT_WAIT_MINUTES);
       infoIcon = "warn";
       break;
     case "denied":
       title = APPROVAL_STATE_COPY.deniedTitle(noun);
       infoLine = APPROVAL_COPY.resolvedNothing;
+      infoIcon = "x";
+      break;
+    case "revoked":
+      title = APPROVAL_COPY.revokedTitle;
+      infoLine = APPROVAL_STATE_COPY.revokedLine;
       infoIcon = "x";
       break;
     case "expired":
@@ -368,8 +382,10 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       infoIcon = "x";
       break;
     case "already_decided":
-      title = alreadyDecidedBy ? APPROVAL_COPY.alreadyDecided(alreadyDecidedBy.name, alreadyDecidedBy.role) : APPROVAL_STATE_COPY.alreadyDecidedAnonymous;
-      infoLine = APPROVAL_STATE_COPY.alreadyDecidedLine;
+      if (alreadyDecidedBy) title = APPROVAL_COPY.alreadyDecided(alreadyDecidedBy.name, alreadyDecidedBy.role);
+      else if (decideOutcome === "already_decided") title = APPROVAL_COPY.alreadyDecidedByAnotherOwner;
+      else title = APPROVAL_STATE_COPY.alreadyDecidedAnonymous;
+      infoLine = decideOutcome === "already_decided" ? APPROVAL_STATE_COPY.alreadyDecidedSameLine : APPROVAL_STATE_COPY.alreadyDecidedLine;
       break;
     case "conversation_closed":
       title = APPROVAL_COPY.conversationClosed;
@@ -378,7 +394,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       break;
     case "details_removed":
       title = APPROVAL_COPY.detailsRemoved;
-      infoLine = APPROVAL_STATE_COPY.detailsRemovedLine;
+      infoLine = APPROVAL_STATE_COPY.detailsRemovedLine(APPROVAL_RETENTION_DAYS);
       infoIcon = "x";
       break;
   }
@@ -509,6 +525,23 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
           <p className={`text-xs text-soleur-text-muted ${landing ? "text-center" : "ml-auto"}`}>
             {locked ? APPROVAL_STATE_COPY.recordingDecision : view.singleUse}
           </p>
+        </div>
+      )}
+
+      {revocable && view && (
+        <div className="mt-4" data-testid="approval-revoke">
+          <p className="mb-2 text-xs text-soleur-text-muted">{APPROVAL_STATE_COPY.revokeHint}</p>
+          <Button
+            variant="outlined"
+            type="button"
+            disabled={locked}
+            loading={locked}
+            loadingLabel={APPROVAL_STATE_COPY.revoking}
+            onClick={() => decide("deny")}
+            className={landing ? "min-h-12 w-full" : "min-h-10 px-5 py-2"}
+          >
+            {APPROVAL_COPY.revoke}
+          </Button>
         </div>
       )}
 

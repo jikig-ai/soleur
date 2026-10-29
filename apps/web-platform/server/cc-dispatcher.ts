@@ -292,6 +292,7 @@ const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
 // pino + supabase service client into the browser bundle.
 export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { isApprovalRequiredTool } from "./approval/tools";
 
 // Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
 // (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
@@ -330,6 +331,13 @@ export function readCcMcpAllowlist(
     if (CC_ROUTER_TIER3_DENYLIST.has(fqn)) {
       throw new Error(
         `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
+      );
+    }
+    // #4672 — the cc runner has no approval wiring, so a promoted approval tool would run on the legacy in-memory gate
+    // and silently skip the queue. Refuse it here (static message; the short name is the only env echo).
+    if (isApprovalRequiredTool(fqn)) {
+      throw new Error(
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — the cc runner has no approval wiring (ADR-307)`,
       );
     }
   }

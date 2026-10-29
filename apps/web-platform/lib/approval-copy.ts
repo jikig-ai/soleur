@@ -14,14 +14,24 @@
  *     expiry date-time may be interpolated, and only in the email.
  */
 
+/** Minutes the agent waits in-session for a decision. Lockstep with `DEFAULT_WAIT_MS` in server/approval/waiters.ts (pinned by a test). */
+export const AGENT_WAIT_MINUTES = 5;
+
+/**
+ * Days a finished request keeps its action text before the retention scrub removes it. Lockstep with the
+ * `sweep_approvals()` interval in migration 180 (pinned by a test that reads the SQL).
+ */
+export const APPROVAL_RETENTION_DAYS = 30;
+
 /** Card, state and landing-page strings (in-app, behind sign-in). */
 export const APPROVAL_COPY = {
-  approve: "Approve",
-  deny: "Deny",
   releasedBadge: "Released to your agent",
   releasedTitle: "Released, your agent is continuing",
+  /** Landing page (no live socket): what the server can honestly say about a consumed request. */
+  releasedTitleNeutral: "Released. If your agent is still waiting it will continue.",
   approvedLate: "Approved. Ask your agent again.",
-  expiredUnanswered: "This request expired. Nothing was run.",
+  revoke: "Revoke approval",
+  revokedTitle: "Approval revoked",
   approvedNeverAsked: "You approved this, but your agent never asked again",
   resolvedNothing: "Nothing was run. Saved for your agent. Asking again with the same arguments is allowed.",
   newerRequestBanner: "A newer request from your agent exists",
@@ -32,6 +42,7 @@ export const APPROVAL_COPY = {
   pendingSubline: (minutes: number) => `Your agent stopped waiting after ${minutes} minutes`,
   requestCount: (n: number) => `The agent asked again, request ${n}`,
   alreadyDecided: (name: string, role: string) => `Already decided by ${name} (${role})`,
+  alreadyDecidedByAnotherOwner: "Already decided by another Owner",
 } as const;
 
 /** In-card state copy beyond the shared strings above (copy deck section C, wireframe 04). */
@@ -42,6 +53,7 @@ export const APPROVAL_STATE_COPY = {
     released: "Released to your agent",
     approvedLate: "Approved · ask again",
     denied: "Denied",
+    revoked: "Revoked",
     expired: "Expired",
     expiredAfterApproval: "Expired after approval",
     alreadyDecided: "Already decided",
@@ -53,8 +65,12 @@ export const APPROVAL_STATE_COPY = {
   expiredLine: (noun: string) => `This request expired. Nothing was run. Ask your agent again if you still want this ${noun}.`,
   expiredAfterApprovalLine:
     "Nothing was run. This appears in your inbox and thread only: no push, no email. Ask your agent again if you still want this.",
-  approvedLateLine:
-    "Saved for your agent. Asking again with the same arguments is allowed. Your agent stopped waiting after 5 minutes, so ask it again in this conversation.",
+  approvedLateLine: (minutes: number) =>
+    `Saved for your agent. Asking again with the same arguments is allowed. Your agent stopped waiting after ${minutes} minutes, so ask it again in this conversation.`,
+  /** Offered on an approved request the agent has not used yet; the deny decision on an approved request is a revoke. */
+  revokeHint: "Changed your mind? Revoking stops your agent from using this approval.",
+  revoking: "Revoking",
+  revokedLine: "Revoked. Your agent cannot use this approval.",
   releasedLine: "What your agent does next is up to your agent; this card does not report an outcome.",
   memberLine: "Only the workspace Owner can approve or deny this. Waiting for the workspace Owner. If nobody decides in time, this expires and nothing is run.",
   memberRoleLine: "Workspace Owner · only they can decide",
@@ -62,9 +78,12 @@ export const APPROVAL_STATE_COPY = {
   alreadyDecidedAnonymous: "Already decided",
   alreadyDecidedLine:
     "This request was already decided before your tap. Your decision was not recorded, and nothing changes for your agent.",
+  /** A second Owner repeated the decision that was already recorded. */
+  alreadyDecidedSameLine: "Another Owner recorded the same decision before your tap. Nothing changes for your agent.",
   closedLine: (noun: string) =>
     `Your approval was not recorded because this conversation is closed. Ask your agent again in a new conversation if you still want this ${noun}.`,
-  detailsRemovedLine: "The action details were removed 30 days after this request ended. Only who decided and when is kept.",
+  detailsRemovedLine: (days: number) =>
+    `The action details were removed ${days} days after this request ended. Only who decided and when is kept.`,
   approving: "Approving",
   denying: "Denying",
   recordingDecision: "Recording your decision…",
@@ -77,12 +96,10 @@ export const APPROVAL_STATE_COPY = {
 /** Away-user landing page strings (wireframe 07). */
 export const APPROVAL_LANDING_COPY = {
   pageTitle: "Approval request",
-  notFoundTitle: "Page not found",
-  notFoundBody: "We could not find what you were looking for.",
-  notFoundCta: "Go to Soleur",
+  /** Fixed header line: the conversation title is agent-influenceable text and is never shown here. */
+  fromAgent: "From your agent",
   /** Shown instead of the buttons when the stored text cannot be verified against the bound hash. */
   unverifiable: "This request cannot be shown right now. Nothing was approved. Ask your agent again.",
-  from: (leader: string, conversation: string) => `From your ${leader} · ${conversation}`,
 } as const;
 
 /**

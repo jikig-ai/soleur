@@ -1,4 +1,5 @@
 import { getRuntimeFlag } from "@/lib/feature-flags/server";
+import { reportApprovalOp } from "./ops";
 
 /**
  * The `approval-queue` flag read (#4672, ADR-307).
@@ -16,6 +17,13 @@ export interface ApprovalFlagIdentity {
   workspaceId: string | null;
 }
 
+let readFailureReported = false;
+
+/** Test seam: forget that a read failure was already reported in this process. */
+export function resetFlagReadFailureReport(): void {
+  readFailureReported = false;
+}
+
 export async function isApprovalQueueEnabled(identity: ApprovalFlagIdentity): Promise<boolean> {
   try {
     return await getRuntimeFlag("approval-queue", {
@@ -25,7 +33,13 @@ export async function isApprovalQueueEnabled(identity: ApprovalFlagIdentity): Pr
       email: null,
       subscriptionStatus: null,
     });
-  } catch {
+  } catch (err) {
+    // Fail closed AND visible: a silently-off flag would look like a healthy dormant feature. Once per process, so a
+    // flag-service outage cannot flood Sentry (the gate reads the flag on every gated call).
+    if (!readFailureReported) {
+      readFailureReported = true;
+      reportApprovalOp("flagReadFailed", err);
+    }
     return false;
   }
 }

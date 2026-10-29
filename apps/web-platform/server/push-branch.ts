@@ -23,6 +23,8 @@ const log = createChildLogger("push-branch");
 // Constants
 // ---------------------------------------------------------------------------
 
+const COMMIT_SHA_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
+
 export const PROTECTED_BRANCHES = ["main", "master"] as const;
 const AGENT_AUTHOR_NAME = "Soleur Agent";
 const AGENT_AUTHOR_EMAIL = "agent@soleur.ai";
@@ -39,6 +41,12 @@ export interface PushBranchOptions {
   branch: string;
   force: boolean;
   defaultBranch?: string;
+  /**
+   * The exact commit the workspace Owner approved (#4672 execution grant). When set, that commit (not whatever HEAD is
+   * at execution time) is pushed: a commit sha content-addresses its whole history, so a HEAD that moved during the
+   * approval wait cannot change what lands on the remote. Absent = legacy `HEAD` (approval flow never ran).
+   */
+  commitSha?: string;
 }
 
 export interface PushResult {
@@ -74,13 +82,13 @@ export function rejectProtectedBranch(
 // ---------------------------------------------------------------------------
 
 /**
- * Push the current workspace HEAD to a feature branch on the remote.
+ * Push the current workspace HEAD (or, with `commitSha`, the approved commit) to a feature branch on the remote.
  *
  * The gating (review gate) is handled by canUseTool — this function
  * only executes after the founder has approved.
  */
 export async function pushBranch(options: PushBranchOptions): Promise<PushResult> {
-  const { installationId, owner, repo, workspacePath, branch, force, defaultBranch } = options;
+  const { installationId, owner, repo, workspacePath, branch, force, defaultBranch, commitSha } = options;
 
   // 1. Reject force-push unconditionally
   if (force) {
@@ -95,6 +103,18 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
 
   // 3. Reject pushes to protected branches (main, master, default)
   rejectProtectedBranch(branch, defaultBranch);
+
+  // 3b. A pinned commit must be a full sha that exists in the workspace repository.
+  if (commitSha !== undefined) {
+    if (!COMMIT_SHA_RE.test(commitSha)) {
+      throw new Error("Approved commit is not a valid full commit sha");
+    }
+    try {
+      execFileSync("git", ["cat-file", "-e", `${commitSha}^{commit}`], { cwd: workspacePath, stdio: "pipe" });
+    } catch {
+      throw new Error("Approved commit is not present in the workspace repository");
+    }
+  }
 
   // 4. Set git author to Soleur Agent identity
   try {
@@ -114,7 +134,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
   try {
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
     await gitWithInstallationAuth(
-      ["push", repoUrl, `HEAD:refs/heads/${branch}`],
+      ["push", repoUrl, `${commitSha ?? "HEAD"}:refs/heads/${branch}`],
       installationId,
       { cwd: workspacePath, timeout: 120_000 },
     );

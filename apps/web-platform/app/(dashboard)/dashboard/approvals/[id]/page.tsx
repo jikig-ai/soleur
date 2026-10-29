@@ -16,17 +16,16 @@ import { reportApprovalOp } from "@/server/approval/ops";
 import { readStoredApproval, type StoredApprovalRow } from "@/server/approval/view-model";
 import { ApprovalLanding } from "@/components/approvals/approval-landing";
 import { APPROVAL_LANDING_COPY } from "@/lib/approval-copy";
+import { isUuid } from "@/lib/is-uuid";
 
 export const dynamic = "force-dynamic";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 const ROW_COLUMNS =
-  "id, workspace_id, conversation_id, tool_name, action_sha256, status, expires_at, created_at, decided_at, decided_by, consumed_at, canonical_action";
+  "id, workspace_id, conversation_id, tool_name, action_sha256, status, expires_at, created_at, decided_at, decided_by, consumed_at, revoked_at, canonical_action";
 
 export default async function ApprovalPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  if (!UUID_PATTERN.test(id)) notFound();
+  if (!isUuid(id)) notFound();
 
   const supabase = await createClient();
   const {
@@ -46,25 +45,25 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
   const read = readStoredApproval(row);
 
   // Request count (header from request 2): every status for the same conversation and action, read under the same RLS.
+  // A failed read is reported and the count line is omitted (the card shows it from 2 up): never a silent "1".
   let requestCount = 1;
   const counted = await supabase
     .from("approval_request")
     .select("id", { count: "exact", head: true })
     .eq("conversation_id", row.conversation_id)
     .eq("action_sha256", row.action_sha256);
-  if (!counted.error && typeof counted.count === "number" && counted.count > 0) requestCount = counted.count;
-
-  // Conversation title for the "From your agent" line (best effort; absent means the line omits it).
-  const conv = await supabase.from("conversations").select("title").eq("id", row.conversation_id).maybeSingle();
-  const title = typeof (conv.data as { title?: unknown } | null)?.title === "string" ? ((conv.data as { title: string }).title) : "";
+  if (counted.error) {
+    reportApprovalOp("landingReadFailed", counted.error, { approvalId: id, userId: user.id });
+  } else if (typeof counted.count === "number" && counted.count > 0) {
+    requestCount = counted.count;
+  }
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-6 md:px-6 md:py-10">
       <header className="mb-4">
         <h1 className="text-xl font-medium text-soleur-text-primary">{APPROVAL_LANDING_COPY.pageTitle}</h1>
-        <p className="mt-1 text-sm text-soleur-text-secondary">
-          {APPROVAL_LANDING_COPY.from("agent", title || "conversation")}
-        </p>
+        {/* Fixed copy on purpose: the conversation title is model-influenceable text and never reaches this page. */}
+        <p className="mt-1 text-sm text-soleur-text-secondary">{APPROVAL_LANDING_COPY.fromAgent}</p>
       </header>
       {read.kind === "unverifiable" ? (
         <p role="alert" data-testid="approval-unverifiable" className="rounded-xl border-2 border-soleur-border-default bg-soleur-bg-surface-1 p-4 text-sm text-soleur-text-primary">
@@ -78,9 +77,9 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
           initial={{
             status: row.status,
             expiresAt: row.expires_at,
-            createdAt: row.created_at,
             decidedAt: row.decided_at,
             decidedByViewer: row.decided_by === user.id,
+            revoked: row.revoked_at !== null,
           }}
         />
       )}

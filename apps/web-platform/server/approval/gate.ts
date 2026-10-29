@@ -16,6 +16,7 @@ import type { ServerDerived } from "./canonical";
 import { isApprovalQueueEnabled } from "./flag";
 import { notifyApprovalRequested } from "./notify";
 import type { ApprovalGateDeps } from "./gate-types";
+import type { ExecutionGrants } from "./grants";
 import { consumeApproval, getApprovalStatus, submitApprovalRequest, type ApprovalRpcClient } from "./service";
 import type { WaitStatus } from "./waiters";
 
@@ -48,13 +49,15 @@ export interface CreateApprovalGateDepsArgs {
   /** `owner/name` of the connected repository, or "" when none is connected. */
   repoSlug: string;
   workspacePath: string;
+  /** The per-session execution grants (created once in agent-runner, shared with the tool builders). */
+  grants: ExecutionGrants;
   /** Test seams. */
   isEnabled?: () => Promise<boolean>;
   serviceClient?: () => ApprovalRpcClient;
   tenantClient?: () => Promise<TenantLike>;
   headSha?: (workspacePath: string) => Promise<string>;
   /** Push/email dispatch for a newly created request; false = nothing reached the Owner. */
-  notifyRequested?: (approvalId: string) => Promise<boolean>;
+  notifyRequested?: (approvalId: string, workspaceId: string, expiresAt: string | null) => Promise<boolean>;
 }
 
 export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): ApprovalGateDeps {
@@ -71,6 +74,7 @@ export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): Approv
   return {
     isEnabled: args.isEnabled ?? (() => isApprovalQueueEnabled({ userId: args.userId, workspaceId: args.workspaceId })),
     workspaceId: args.workspaceId,
+    grants: args.grants,
 
     async resolveServerDerived(toolName, snapshot): Promise<ServerDerived | undefined> {
       switch (toolName) {
@@ -103,10 +107,11 @@ export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): Approv
 
     consume: (p) => consumeApproval(svc(), p),
 
-    async onRequested({ approvalId, created }) {
-      // A re-ask finds the existing request, whose row was already pushed when it was created: no second nudge.
-      if (!created) return;
-      const delivered = await (args.notifyRequested ?? notifyApprovalRequested)(approvalId);
+    async onRequested({ approvalId, created, notify, expiresAt }) {
+      // A re-ask finds the existing request, whose row was already pushed when it was created: no second nudge. A new
+      // request inside the workspace's coalescing window keeps its card and inbox row but does not push again.
+      if (!created || !notify) return;
+      const delivered = await (args.notifyRequested ?? notifyApprovalRequested)(approvalId, args.workspaceId, expiresAt);
       // The gate reports this as its own approval-notify-failed op; the inbox row remains the fallback surface.
       if (!delivered) throw new Error("approval notification not delivered");
     },
@@ -114,7 +119,9 @@ export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): Approv
     async viewerRole() {
       const t = await tenant();
       const { data, error } = await t.rpc("is_workspace_owner", { p_workspace_id: args.workspaceId, p_user_id: args.userId });
-      return !error && data === true ? "owner" : "member";
+      // A read error is thrown (the gate reports it and shows the read-only card); only a clean `true` is an owner.
+      if (error) throw new Error("viewer role read failed");
+      return data === true ? "owner" : "member";
     },
   };
 }

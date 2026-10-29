@@ -98,6 +98,18 @@ describe("InboxItemRow for approval_required", () => {
     render(<InboxItemRow item={row({ title: "Approval needed: <b>x</b>" })} />);
     expect(document.querySelector("b")).toBeNull();
   });
+
+  it("an approval row title makes an invisible direction override visible instead of dropping it silently", () => {
+    const title = "Approval needed: send email to ok@example.test" + String.fromCharCode(0x202e) + "txt.evil";
+    render(<InboxItemRow item={row({ title, approval: pendingInfo })} />);
+    expect(document.body.textContent).toContain("<U+202E>");
+  });
+
+  it("a malformed approval id builds no deep link (one shared UUID check)", () => {
+    render(<InboxItemRow item={row({ source_ref: { approvalId: "../x" }, title: "Approval needed: send email" })} />);
+    fireEvent.click(screen.getByText(/approval needed/i));
+    expect(mockPush).not.toHaveBeenCalled();
+  });
 });
 
 describe("enrichApprovalInboxRows (GET /api/inbox)", () => {
@@ -116,6 +128,7 @@ describe("enrichApprovalInboxRows (GET /api/inbox)", () => {
     decided_at: null,
     decided_by: null,
     consumed_at: null,
+    revoked_at: null,
     canonical_action: action,
     ...over,
   });

@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
 import {
   APPROVAL_COPY,
   APPROVAL_LANDING_COPY,
+  AGENT_WAIT_MINUTES,
   APPROVAL_NOTIFY_COPY,
+  APPROVAL_RETENTION_DAYS,
   APPROVAL_STATE_COPY,
   AUTONOMOUS_CARD_COPY_PROVISIONAL,
   approvalEmailFootnote,
@@ -18,7 +20,8 @@ import {
   formatExpiry,
   formatExpiryDateTimeTz,
 } from "@/lib/approval-copy";
-import { AGENT_WAIT_MINUTES } from "@/lib/approval-card-state";
+import { AGENT_WAIT_MINUTES as WAIT_FROM_STATE_MODULE } from "@/lib/approval-card-state";
+import { readFileSync } from "node:fs";
 import { DEFAULT_WAIT_MS } from "@/server/approval/waiters";
 import { renderApprovalInboxTitle } from "@/server/approval/render";
 import { canonicalizeAction } from "@/server/approval/canonical";
@@ -60,6 +63,25 @@ describe("copy deck: no outcome claim (AC14)", () => {
 
   it("contains none of the outcome words sent, ran, executed, delivered", () => {
     for (const s of all) expect(s, s).not.toMatch(OUTCOME_WORDS);
+  });
+
+  it("the revoke copy exists, is outcome-free, and says only what the server recorded", () => {
+    expect(APPROVAL_COPY.revoke).toBe("Revoke approval");
+    expect(APPROVAL_STATE_COPY.revokedLine).toBe("Revoked. Your agent cannot use this approval.");
+    for (const t of [APPROVAL_COPY.revoke, APPROVAL_COPY.revokedTitle, APPROVAL_STATE_COPY.revokedLine, APPROVAL_STATE_COPY.revokeHint, APPROVAL_STATE_COPY.revoking]) {
+      expect(t, t).not.toMatch(OUTCOME_WORDS);
+    }
+    expect(APPROVAL_COPY.alreadyDecidedByAnotherOwner).toBe("Already decided by another Owner");
+  });
+
+  it("no dead keys remain in the deck", () => {
+    for (const k of ["approve", "deny", "expiredUnanswered"]) expect(APPROVAL_COPY).not.toHaveProperty(k);
+    for (const k of ["notFoundTitle", "notFoundBody", "notFoundCta", "from"]) expect(APPROVAL_LANDING_COPY).not.toHaveProperty(k);
+  });
+
+  it("the landing page and the neutral released title never claim the agent is continuing from a guess", () => {
+    expect(APPROVAL_COPY.releasedTitleNeutral).toBe("Released. If your agent is still waiting it will continue.");
+    expect(APPROVAL_LANDING_COPY.fromAgent).toBe("From your agent");
   });
 
   it("the guard itself bites: a planted outcome word is caught", () => {
@@ -135,6 +157,21 @@ describe("the autonomous-mode card wording is PROVISIONAL (CPO and CLO sign-off 
 describe("shared timing and countdown", () => {
   it("the card's wait minutes equal the server's wait (lockstep)", () => {
     expect(AGENT_WAIT_MINUTES * 60_000).toBe(DEFAULT_WAIT_MS);
+    expect(WAIT_FROM_STATE_MODULE).toBe(AGENT_WAIT_MINUTES);
+  });
+
+  it("durations in the copy come from the constants, not from a literal in the sentence", () => {
+    expect(APPROVAL_STATE_COPY.approvedLateLine(AGENT_WAIT_MINUTES)).toContain(`stopped waiting after ${AGENT_WAIT_MINUTES} minutes`);
+    expect(APPROVAL_STATE_COPY.approvedLateLine(9)).toContain("stopped waiting after 9 minutes");
+    expect(APPROVAL_STATE_COPY.approvedLateLine(9)).not.toContain("5 minutes");
+    expect(APPROVAL_STATE_COPY.detailsRemovedLine(APPROVAL_RETENTION_DAYS)).toContain(`removed ${APPROVAL_RETENTION_DAYS} days after`);
+    expect(APPROVAL_STATE_COPY.detailsRemovedLine(7)).toContain("removed 7 days after");
+    expect(APPROVAL_STATE_COPY.detailsRemovedLine(7)).not.toContain("30 days");
+  });
+
+  it("the retention days equal the scrub interval in migration 180 (lockstep)", () => {
+    const sql = readFileSync(new URL("../../supabase/migrations/180_approval_request.sql", import.meta.url), "utf8");
+    expect(sql).toContain(`interval '${APPROVAL_RETENTION_DAYS} days'`);
   });
 
   it("formats the expiry chip: hours and minutes, amber under an hour, Expired past it", () => {

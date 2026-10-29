@@ -107,6 +107,42 @@ export const APPROVAL_OPS = {
     message: "Approval expiry cron: the sweep_approvals call failed; the next tick retries",
     level: "error",
   },
+  /** A pending cap was reached (5 per conversation, 20 per workspace): nothing was saved, the gate denies with static text. */
+  capReached: {
+    op: "approval-cap-reached",
+    message: "Approval gate: too many requests are already waiting for the Owner; the new request was not saved",
+    level: "warn",
+  },
+  /** The model's arguments cannot be approved as given (missing/invalid/uncovered field). Low volume. */
+  invalidInput: {
+    op: "approval-invalid-input",
+    message: "Approval gate: the arguments cannot be approved as given; the action was denied",
+    level: "warn",
+  },
+  /** The approval was consumed (spent) but the session had already ended, so the action was denied. */
+  consumedAborted: {
+    op: "approval-consumed-aborted",
+    message: "Approval gate: the approval was spent but the session ended before the action ran",
+    level: "warn",
+  },
+  /** Status reads failed during a wait; ONE event per wait with the count (not one per poll). */
+  waitReadFailed: {
+    op: "approval-wait-read-failed",
+    message: "Approval gate: status reads failed while waiting for the Owner",
+    level: "warn",
+  },
+  /** The requester's role could not be read; the card falls back to the read-only member view. */
+  viewerRoleFailed: {
+    op: "approval-viewer-role-failed",
+    message: "Approval gate: the viewer role could not be read; the card shows the read-only view",
+    level: "warn",
+  },
+  /** The `approval-queue` flag read threw; the flag is treated as OFF. Reported once per process (flag.ts). */
+  flagReadFailed: {
+    op: "approval-flag-read-failed",
+    message: "Approval gate: the approval-queue flag could not be read; the flag was treated as off",
+    level: "warn",
+  },
   /** Fired by the expiry cron (15 minutes pending): issue-alerts registers THIS op only. */
   gateUnanswered: {
     op: "gate_unanswered",
@@ -127,8 +163,25 @@ export interface ApprovalOpContext {
 }
 
 /**
- * Report one approval op. `err` is the caught error (its message is static for `ApprovalServiceError`) or null for a
- * condition with no error object, in which case the op's static message is the Sentry message.
+ * What a thrown value contributes to the event: a short code (`err.code`, else the class name), the failing RPC (`fn`) and
+ * the class name. Never the message or the stack (database text can echo row content).
+ */
+function describeError(err: unknown): { code?: string; fn?: string; errName?: string } {
+  if (err === null || err === undefined) return {};
+  if (typeof err !== "object") return { errName: typeof err };
+  const e = err as { code?: unknown; fn?: unknown; name?: unknown };
+  return {
+    ...(typeof e.code === "string" && e.code ? { code: e.code } : {}),
+    ...(typeof e.fn === "string" && e.fn ? { fn: e.fn } : {}),
+    ...(typeof e.name === "string" && e.name ? { errName: e.name } : {}),
+  };
+}
+
+/**
+ * Report one approval op. `err` is the caught error or null for a condition with no error object. The Error object is
+ * NEVER handed to the Sentry helper: with an Error the pino mirror (logger.error) captures it first, without the
+ * `feature`/`op` tags, and one Sentry group would hold untagged events no alert can route. The op's static message is the
+ * Sentry message and the thrown value contributes only `{code, fn, errName}` in `extra`.
  */
 export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {
   const def: ApprovalOp = APPROVAL_OPS[key];
@@ -142,12 +195,13 @@ export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: Approval
       ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
       ...(ctx.workspaceId ? { workspaceId: ctx.workspaceId } : {}),
       ...(ctx.userId ? { userId: ctx.userId } : {}),
+      ...describeError(err),
       ...ctx.extra,
     },
   };
   try {
-    if (def.level === "error") reportSilentFallback(err ?? null, options);
-    else warnSilentFallback(err ?? null, options);
+    if (def.level === "error") reportSilentFallback(null, options);
+    else warnSilentFallback(null, options);
   } catch {
     // Observability must never turn a deny into a throw.
   }

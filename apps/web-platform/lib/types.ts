@@ -2,6 +2,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { WorkflowName } from "@/server/conversation-routing";
 import type { InteractivePromptKind } from "@/server/pending-prompt-registry";
 import type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
+import type { ApprovalDecideOutcomeWire, ApprovalWireStatus } from "@/lib/approval-wire";
 
 // Re-export so client code can import workflow-name and branded IDs from the
 // canonical wire-protocol module without reaching into server/* directly.
@@ -285,10 +286,8 @@ export type MessageState = "thinking" | "tool_use" | "streaming" | "done" | "err
 // Durable approval requests (#4672). Wire shapes only: this module is client-reachable, so it must not import
 // `@/server/*`. The card view is declared structurally here and a server-side test pins it to `ApprovalView`
 // (server/approval/render.ts) in both directions, so the two cannot drift.
-export type ApprovalWireStatus = "pending" | "approved" | "rejected" | "expired" | "consumed";
+export type { ApprovalDecideOutcomeWire, ApprovalWireStatus };
 export type ApprovalDecisionWire = "approve" | "deny";
-/** Outcome of an Owner decision, echoed to the deciding socket (`approval_status.outcome`). */
-export type ApprovalDecideOutcomeWire = "decided" | "unchanged" | "conflict" | "expired" | "closed";
 
 export interface ApprovalCardViewRow {
   label: string;
@@ -303,6 +302,8 @@ export interface ApprovalCardView {
   fields: ApprovalCardViewRow[];
   consequence: string;
   singleUse: string;
+  /** What the request is, as one noun ("email", "commits"): server-built, so the client never parses a display sentence. */
+  noun: string;
   approveLabel: "Approve";
   denyLabel: "Deny";
   danger: boolean;

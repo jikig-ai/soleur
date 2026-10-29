@@ -44,6 +44,27 @@ describe("registry", () => {
     expect(waiterCount()).toBe(0);
   });
 
+  it("is refcounted: two concurrent gates share one waiter and the first to finish does not drop it", async () => {
+    const a = registerWaiter(APPROVAL_ID);
+    const b = registerWaiter(APPROVAL_ID);
+    expect(b.woken).toBe(a.woken);
+    expect(waiterCount()).toBe(1);
+    unregisterWaiter(APPROVAL_ID);
+    expect(waiterCount()).toBe(1); // the second gate is still waiting
+    expect(wakeWaiter(APPROVAL_ID, "approved")).toBe(true);
+    await expect(b.woken).resolves.toBe("approved");
+    unregisterWaiter(APPROVAL_ID);
+    expect(waiterCount()).toBe(0);
+  });
+
+  it("an extra unregister is harmless", () => {
+    unregisterWaiter(APPROVAL_ID);
+    registerWaiter(APPROVAL_ID);
+    unregisterWaiter(APPROVAL_ID);
+    unregisterWaiter(APPROVAL_ID);
+    expect(waiterCount()).toBe(0);
+  });
+
   it("waking an id that has no waiter on this host is a no-op (the poll covers the other host)", () => {
     expect(wakeWaiter("11111111-1111-1111-1111-111111111111", "rejected")).toBe(false);
   });
@@ -76,7 +97,7 @@ describe("waitForDecision", () => {
 
   it("times out undecided after the deadline and leaves the verdict to the caller (row stays pending)", async () => {
     const { p, sleeps } = run({ read: async () => "pending" });
-    expect(await p).toEqual({ kind: "timeout" });
+    expect(await p).toEqual({ kind: "timeout", readErrors: 0 });
     const total = sleeps.reduce((a, b) => a + b, 0);
     expect(total).toBeGreaterThanOrEqual(DEFAULT_WAIT_MS - POLL_INTERVAL_MS);
   });
@@ -94,8 +115,29 @@ describe("waitForDecision", () => {
       throw new Error("db down");
     });
     const { p } = run({ read });
-    expect(await p).toEqual({ kind: "timeout" });
+    const outcome = await p;
+    expect(outcome.kind).toBe("timeout");
     expect(read.mock.calls.length).toBeGreaterThan(1);
+    // Every failed poll is counted and handed to the caller, which reports ONE op per wait with the count.
+    expect(outcome).toEqual({ kind: "timeout", readErrors: read.mock.calls.length });
+  });
+
+  it("read errors are also counted on an abort, and a clean wait counts none", async () => {
+    const ac = new AbortController();
+    let n = 0;
+    const { p } = run({
+      read: async () => {
+        n += 1;
+        throw new Error("db down");
+      },
+      signal: ac.signal,
+      sleep: async () => {
+        if (n >= 2) ac.abort();
+      },
+    });
+    expect(await p).toEqual({ kind: "aborted", readErrors: 2 });
+    const clean = run({ read: async () => "pending" });
+    expect(await clean.p).toMatchObject({ kind: "timeout", readErrors: 0 });
   });
 
   it("a read error followed by a decision still returns the decision", async () => {
@@ -114,7 +156,7 @@ describe("waitForDecision", () => {
     ac.abort();
     const read = vi.fn<Reader>(async () => "approved");
     const { p } = run({ read, signal: ac.signal });
-    expect(await p).toEqual({ kind: "aborted" });
+    expect(await p).toEqual({ kind: "aborted", readErrors: 0 });
     expect(read).not.toHaveBeenCalled();
   });
 
@@ -127,7 +169,7 @@ describe("waitForDecision", () => {
         ac.abort();
       },
     });
-    expect(await p).toEqual({ kind: "aborted" });
+    expect(await p).toEqual({ kind: "aborted", readErrors: 0 });
   });
 
   it("an in-memory wake on this host short-circuits the sleep and is confirmed by one database read", async () => {
@@ -148,7 +190,7 @@ describe("waitForDecision", () => {
     const w = registerWaiter(APPROVAL_ID);
     wakeWaiter(APPROVAL_ID, "approved");
     const { p } = run({ read: async () => "pending", woken: w.woken });
-    expect(await p).toEqual({ kind: "timeout" });
+    expect(await p).toEqual({ kind: "timeout", readErrors: 0 });
   });
 
   it("jitters the poll interval within +-20% of the base", async () => {

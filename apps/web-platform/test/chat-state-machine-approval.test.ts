@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "vitest";
 import { applyStreamEvent, type ChatMessage } from "../lib/chat-state-machine";
-import type { ApprovalCardView, WSMessage } from "../lib/types";
+import type { ApprovalCardView, ApprovalDecideOutcomeWire, WSMessage } from "../lib/types";
 import type { ApprovalView } from "../server/approval/render";
 import type { DomainLeaderId } from "../server/domain-leaders";
 
@@ -25,6 +25,7 @@ const view: ApprovalCardView = {
   fields: [{ label: "To", value: "maria@example.test", kind: "text" }],
   consequence: "Your agent can send an email once, if you ask it to try again. Valid in this conversation only.",
   singleUse: "One-time · this exact email",
+  noun: "email",
   approveLabel: "Approve",
   denyLabel: "Deny",
   danger: false,
@@ -43,7 +44,7 @@ const req = (over: Partial<Req> = {}): Req => ({
   viewerRole: "owner",
   ...over,
 });
-const status = (s: "pending" | "approved" | "rejected" | "expired" | "consumed", outcome?: "decided" | "conflict"): Extract<WSMessage, { type: "approval_status" }> => ({
+const status = (s: "pending" | "approved" | "rejected" | "expired" | "consumed", outcome?: ApprovalDecideOutcomeWire): Extract<WSMessage, { type: "approval_status" }> => ({
   type: "approval_status",
   approvalId: APPROVAL_ID,
   conversationId: CONV,
@@ -104,6 +105,14 @@ describe("approval_status", () => {
     const b = applyStreamEvent(a.messages, a.activeStreams, status("rejected", "conflict"));
     const c = applyStreamEvent(b.messages, b.activeStreams, status("rejected"));
     expect(c.messages[0]).toMatchObject({ decideOutcome: "conflict" });
+  });
+
+  test("a revoke folds into the card as rejected + revoked, and a stale approved re-send does not walk it back", () => {
+    const a = applyStreamEvent([], streams(), req({ status: "approved" }));
+    const b = applyStreamEvent(a.messages, a.activeStreams, status("rejected", "revoked"));
+    expect(b.messages[0]).toMatchObject({ type: "approval_request", status: "rejected", decideOutcome: "revoked" });
+    const c = applyStreamEvent(b.messages, b.activeStreams, req({ status: "approved", agentWaiting: true }));
+    expect(c.messages[0]).toMatchObject({ status: "rejected", decideOutcome: "revoked", agentWaiting: false });
   });
 
   test("a status for an unknown approval is a no-op", () => {

@@ -12,7 +12,7 @@
  * Sequence (plan "Gated branch"):
  *   snapshot (deep clone, before the first await) -> flag (once) -> server-derived fields -> canonical + hash ->
  *   submit (create-or-find; an already-approved live row is consumed there, no card, no wait) -> card -> wait ->
- *   approved: consume(id, hash, conversation) -> allow(snapshot).
+ *   approved: consume(id, hash, conversation) -> execution grant (R1) -> allow(snapshot).
  *
  * Returns `null` ONLY when the flag is off (or unreadable): the caller then runs the in-memory review gate exactly as
  * it did before this module existed.
@@ -28,6 +28,7 @@ import {
   type CanonicalValue,
 } from "./canonical";
 import type { ApprovalGateDeps } from "./gate-types";
+import { putGrant } from "./grants";
 import { logApprovalMarker, reportApprovalOp, type ApprovalOpContext } from "./ops";
 import { renderApprovalView } from "./render";
 import { registerWaiter, unregisterWaiter, waitForDecision } from "./waiters";
@@ -41,6 +42,10 @@ export const APPROVAL_EXPIRED_DENY =
   "The approval request expired before it was used, so the action was not performed. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.";
 export const APPROVAL_CONSUME_REJECTED_DENY =
   "The approval could not be applied to this call (the arguments changed, or it was already used), so the action was not performed. Do not retry with different arguments. Tell the user the exact action needs a new approval.";
+export const APPROVAL_PRINCIPAL_CHANGED_DENY =
+  "The approval can no longer be applied because workspace membership or roles changed after it was granted, so the action was not performed. Do not retry. Tell the user the action needs a new approval from a current workspace Owner.";
+export const APPROVAL_TOO_MANY_PENDING_DENY =
+  "Too many approval requests are already waiting for the workspace Owner, so this one was not saved. Do not retry. Tell the user to answer or decline the pending requests first.";
 export const APPROVAL_ABORTED_DENY =
   "The session ended before the approval was applied, so the action was not performed. The request stays saved for the workspace Owner. Do not retry unless the user asks.";
 export const APPROVAL_UNAVAILABLE_DENY =
@@ -65,6 +70,42 @@ export interface RunApprovalGateArgs {
 }
 
 const deny = (message: string): PermissionResult => ({ behavior: "deny" as const, message });
+
+/** The static agent text for a consume that did not release. Only the reasons that mean something else get their own text. */
+export function consumeRejectedDeny(reason: string): string {
+  switch (reason) {
+    case "expired":
+      return APPROVAL_EXPIRED_DENY;
+    case "rpc_error":
+      return APPROVAL_UNAVAILABLE_DENY;
+    case "decider_not_owner":
+    case "requester_not_member":
+      return APPROVAL_PRINCIPAL_CHANGED_DENY;
+    default:
+      return APPROVAL_CONSUME_REJECTED_DENY;
+  }
+}
+
+/** The `onRequested` dispatch (a push/email) is best effort: the gate never waits on it longer than this. */
+export const ON_REQUESTED_DEADLINE_MS = 10_000;
+
+/** Run `fn`, but stop waiting for it when the signal aborts or the deadline passes. Resolves "ok" | "aborted" | "timeout"; a throw of `fn` rejects. */
+async function boundedByAbort(fn: () => Promise<void>, signal: AbortSignal, deadlineMs: number): Promise<"ok" | "aborted" | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const limit = new Promise<"aborted" | "timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), deadlineMs);
+    onAbort = () => resolve("aborted");
+    if (signal.aborted) resolve("aborted");
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([fn().then(() => "ok" as const), limit]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -112,6 +153,9 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
     enabled = false;
   }
   if (!enabled) return null;
+  // From here the session is on the approval flow for good (sticky): a tool handler that finds no execution grant refuses
+  // instead of falling back to the legacy path, even if the flag is turned off mid-session.
+  a.approval.grants.enforcing = true;
 
   const op: ApprovalOpContext = {
     toolName: a.toolName,
@@ -123,6 +167,16 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
   const denyAborted = (): PermissionResult => {
     a.logDecision(a.toolName, "deny", "approval wait aborted");
     return deny(APPROVAL_ABORTED_DENY);
+  };
+
+  // Tell the card what the agent is doing now, so it never claims "your agent is continuing" or "stopped waiting" from a
+  // guess (wireframe 04C vs 04D). Best effort: a failed frame is one op and the card keeps its last state.
+  const emitStatus = (approvalId: string, status: "pending" | "expired" | "consumed", agentWaiting: boolean): void => {
+    try {
+      a.sendToClient(a.userId, { type: "approval_status", approvalId, conversationId: a.conversationId, status, agentWaiting });
+    } catch (err) {
+      reportApprovalOp("notifyFailed", err, { ...op, approvalId, extra: { channel: "ws-status" } });
+    }
   };
 
   try {
@@ -148,6 +202,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
     try {
       action = canonicalizeAction(a.toolName, snapshot, derived);
       if (!isCoveredByCanonical(snapshot, action.fields)) {
+        reportApprovalOp("invalidInput", null, { ...op, extra: { stage: "not-covered" } });
         a.logDecision(a.toolName, "deny", "input not covered by the canonical action");
         return deny(APPROVAL_INVALID_INPUT_DENY);
       }
@@ -160,6 +215,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
     } catch (err) {
       const code = err instanceof ApprovalCanonicalError ? err.code : "unknown";
       if (code === "invalid_input") {
+        reportApprovalOp("invalidInput", null, { ...op, extra: { stage: "canonical" } });
         a.logDecision(a.toolName, "deny", "invalid input");
         return deny(APPROVAL_INVALID_INPUT_DENY);
       }
@@ -186,25 +242,45 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
       return deny(APPROVAL_UNAVAILABLE_DENY);
     }
 
+    // The grant carries what was approved to the handler that executes it (R1). Written immediately before allow(), on
+    // both allow paths, keyed by the zod-parsed handler args; a throw here is a deny (the outer catch).
+    const allowWithGrant = (): PermissionResult => {
+      putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId, headSha: derived?.headSha });
+      return a.allow(snapshot);
+    };
+
     switch (submitted.kind) {
       case "released": {
         const ctx = { ...op, approvalId: submitted.approvalId };
         // An approved live row that exists BEFORE this call means the agent is asking again after its wait ended.
         reportApprovalOp("reproposed", null, { ...ctx, extra: { requestCount: submitted.requestCount, released: true } });
-        if (aborted()) return denyAborted();
+        // The approval is spent (consumed inside submit). Log it whether or not the session is still alive, and tell the
+        // open card, so it never stays "approved" for an action that already ran (duplicate-approval risk).
+        const wasAborted = aborted();
         logApprovalMarker("SOLEUR_APPROVAL_CONSUMED", {
           approval_id: submitted.approvalId,
           tool: a.toolName,
           conversation_id: a.conversationId,
           path: "reproposal",
+          aborted: wasAborted,
         });
+        emitStatus(submitted.approvalId, "consumed", false);
+        if (wasAborted) {
+          reportApprovalOp("consumedAborted", null, { ...ctx, extra: { path: "reproposal" } });
+          return denyAborted();
+        }
         a.logDecision(a.toolName, "allow", "approved request consumed on re-proposal");
-        return a.allow(snapshot);
+        return allowWithGrant();
       }
       case "consume_rejected": {
         reportApprovalOp("consumeRejected", null, { ...op, approvalId: submitted.approvalId, extra: { reason: submitted.reason } });
         a.logDecision(a.toolName, "deny", "approval consume rejected");
-        return deny(APPROVAL_CONSUME_REJECTED_DENY);
+        return deny(consumeRejectedDeny(submitted.reason));
+      }
+      case "cap_reached": {
+        reportApprovalOp("capReached", null, { ...op, extra: { scope: submitted.scope } });
+        a.logDecision(a.toolName, "deny", "too many pending approval requests");
+        return deny(APPROVAL_TOO_MANY_PENDING_DENY);
       }
       case "not_waitable": {
         const ctx = { ...op, approvalId: submitted.approval.id };
@@ -217,9 +293,6 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
       }
       case "wait":
         break;
-      default:
-        reportApprovalOp("gateFailed", null, { ...op, extra: { stage: "submit-kind" } });
-        return deny(APPROVAL_UNAVAILABLE_DENY);
     }
 
     // 4. Wait for the Owner. Register the in-process waiter before the card goes out so a fast decide is never missed
@@ -239,10 +312,11 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         request_count: submitted.requestCount,
       });
 
-      let viewerRole: "owner" | "member" = "member";
+      let viewerRole: "owner" | "member";
       try {
         viewerRole = await a.approval.viewerRole();
-      } catch {
+      } catch (err) {
+        reportApprovalOp("viewerRoleFailed", err, ctx);
         viewerRole = "member"; // read-only card is the safe default
       }
       try {
@@ -261,30 +335,29 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
       } catch (err) {
         reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "ws-card" } });
       }
-      // Tell the card what the agent is doing now, so it never claims "your agent is continuing" or "stopped waiting"
-      // from a guess (wireframe 04C vs 04D). Best effort: a failed frame is one op and the card keeps its last state.
-      const emitStatus = (status: "pending" | "expired" | "consumed", agentWaiting: boolean): void => {
-        try {
-          a.sendToClient(a.userId, {
-            type: "approval_status",
-            approvalId,
-            conversationId: a.conversationId,
-            status,
-            agentWaiting,
-          });
-        } catch (err) {
-          reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "ws-status" } });
-        }
-      };
+
+      const signal = combineSignals(a.callSignal, a.controllerSignal);
       if (a.approval.onRequested) {
+        // Bounded: a slow push provider can neither hold the agent's turn open nor outlive an abort.
         try {
-          await a.approval.onRequested({ approvalId, created: submitted.created });
+          const dispatched = await boundedByAbort(
+            () =>
+              a.approval.onRequested!({
+                approvalId,
+                created: submitted.created,
+                notify: submitted.notify,
+                expiresAt: submitted.expiresAt,
+              }),
+            signal,
+            a.approval.onRequestedDeadlineMs ?? ON_REQUESTED_DEADLINE_MS,
+          );
+          if (dispatched === "timeout") reportApprovalOp("notifyFailed", null, { ...ctx, extra: { channel: "onRequested", cause: "timeout" } });
         } catch (err) {
           reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "onRequested" } });
         }
       }
 
-      const signal = combineSignals(a.callSignal, a.controllerSignal);
+      let readErrors = 0;
       const wait = async (): Promise<string> => {
         const outcome = await waitForDecision({
           approvalId,
@@ -294,9 +367,12 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           ...a.approval.waitOptions,
         });
         if (outcome.kind === "decided") return outcome.status;
+        readErrors = outcome.readErrors;
         return outcome.kind; // "timeout" | "aborted"
       };
       const selection = await a.hold(approvalId, a.callSignal ?? a.controllerSignal, wait);
+      // ONE event per wait with the count, never one per poll.
+      if (readErrors > 0) reportApprovalOp("waitReadFailed", null, { ...ctx, extra: { readErrors } });
 
       // null = the wait threw or the session aborted (holdForUser re-checks the abort AFTER its restore write).
       if (selection === null || selection === "aborted" || aborted()) return denyAborted();
@@ -316,30 +392,36 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           if (!consumed) {
             reportApprovalOp("consumeRejected", null, { ...ctx, extra: { reason } });
             a.logDecision(a.toolName, "deny", "approval consume rejected");
-            return deny(APPROVAL_CONSUME_REJECTED_DENY);
+            return deny(consumeRejectedDeny(reason));
           }
-          // The approval is spent. If the session died while the consume was in flight it is spent for nothing: deny.
-          emitStatus("consumed", false);
-          if (aborted()) return denyAborted();
+          // The approval is spent. Log it before the abort check, so a spent-then-aborted approval is visible; if the
+          // session died while the consume was in flight it is spent for nothing: deny.
+          const wasAborted = aborted();
           logApprovalMarker("SOLEUR_APPROVAL_CONSUMED", {
             approval_id: approvalId,
             tool: a.toolName,
             conversation_id: a.conversationId,
             path: "live",
+            aborted: wasAborted,
           });
+          emitStatus(approvalId, "consumed", false);
+          if (wasAborted) {
+            reportApprovalOp("consumedAborted", null, { ...ctx, extra: { path: "live" } });
+            return denyAborted();
+          }
           a.logDecision(a.toolName, "allow", "approval consumed");
-          return a.allow(snapshot);
+          return allowWithGrant();
         }
         case "rejected":
           a.logDecision(a.toolName, "deny", "approval rejected by the owner");
           return deny(APPROVAL_REJECTED_DENY);
         case "timeout":
-          emitStatus("pending", false);
-          reportApprovalOp("waitTimeout", null, ctx);
+          emitStatus(approvalId, "pending", false);
+          reportApprovalOp("waitTimeout", null, { ...ctx, extra: readErrors > 0 ? { readErrors } : undefined });
           a.logDecision(a.toolName, "deny", "approval wait ended undecided");
           return deny(APPROVAL_PENDING_DENY);
         case "expired":
-          emitStatus("expired", false);
+          emitStatus(approvalId, "expired", false);
           reportApprovalOp("expired", null, ctx);
           logApprovalMarker("SOLEUR_APPROVAL_EXPIRED", { approval_id: approvalId, tool: a.toolName, conversation_id: a.conversationId, seen_by: "gate" });
           a.logDecision(a.toolName, "deny", "approval expired");

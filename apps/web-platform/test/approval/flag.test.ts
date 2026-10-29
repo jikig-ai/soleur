@@ -1,13 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getRuntimeFlag = vi.fn();
+const warn = vi.fn();
 vi.mock("@/lib/feature-flags/server", () => ({ getRuntimeFlag: (...a: unknown[]) => getRuntimeFlag(...a) }));
+vi.mock("@/server/observability", () => ({ warnSilentFallback: (...a: unknown[]) => warn(...a), reportSilentFallback: vi.fn() }));
+vi.mock("@/server/logger", () => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return { default: log, createChildLogger: () => log };
+});
 
-import { isApprovalQueueEnabled } from "@/server/approval/flag";
+import { isApprovalQueueEnabled, resetFlagReadFailureReport } from "@/server/approval/flag";
 
 describe("isApprovalQueueEnabled", () => {
   beforeEach(() => {
     getRuntimeFlag.mockReset();
+    warn.mockReset();
+    resetFlagReadFailureReport();
   });
 
   it("reads the approval-queue flag with the workspace as the segment identity", async () => {
@@ -27,5 +35,21 @@ describe("isApprovalQueueEnabled", () => {
     });
     const result = await isApprovalQueueEnabled({ userId: "u1", workspaceId: "w1" });
     expect(result).toBe(false);
+  });
+
+  it("a read failure is mirrored to Sentry ONCE per process, tagged, with the static message; later failures stay quiet", async () => {
+    getRuntimeFlag.mockImplementation(async () => {
+      throw new Error("flagsmith down");
+    });
+    for (let i = 0; i < 3; i++) await expect(isApprovalQueueEnabled({ userId: "u1", workspaceId: "w1" })).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toMatchObject({ feature: "approval-queue", op: "approval-flag-read-failed" });
+    expect(warn.mock.calls[0][0]).toBeNull(); // never the Error object
+  });
+
+  it("a clean read reports nothing", async () => {
+    getRuntimeFlag.mockResolvedValue(false);
+    await isApprovalQueueEnabled({ userId: "u1", workspaceId: "w1" });
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -17,8 +17,8 @@
 // YOU or below the pin.
 
 import type { EmailTriageItem } from "@/components/inbox/email-triage-row";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import type { ApprovalWireStatus } from "@/lib/approval-wire";
+import { isUuid } from "@/lib/is-uuid";
 
 export type InboxItemSeverity = "action_required" | "attention" | "info";
 
@@ -32,7 +32,7 @@ export type InboxItemSource = "task_completed" | "system" | "approval_required";
  * title and no chip.
  */
 export interface InboxApprovalInfo {
-  status: "pending" | "approved" | "rejected" | "expired" | "consumed";
+  status: ApprovalWireStatus;
   expiresAt: string;
 }
 
@@ -126,7 +126,7 @@ export function buildInboxDeepLink(
     case "approval_required": {
       // The id is interpolated into a path, so it must be exactly a UUID (never a free string from a stored ref).
       const id = sourceRef?.approvalId;
-      return id && UUID_RE.test(id) ? `/dashboard/approvals/${id}` : null;
+      return id && isUuid(id) ? `/dashboard/approvals/${id}` : null;
     }
     default:
       // autopilot_run's target is built by #4674.

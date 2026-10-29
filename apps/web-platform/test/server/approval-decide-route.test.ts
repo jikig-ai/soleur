@@ -124,11 +124,22 @@ describe("POST /api/approvals/[id]/decide", () => {
     expect(JSON.stringify(body)).not.toContain("SECRET BODY");
   });
 
-  it("passes the non-decided outcomes through (conflict, expired, closed)", async () => {
-    for (const outcome of ["conflict", "expired", "closed", "unchanged"]) {
+  it("passes the non-decided outcomes through (conflict, expired, closed, unchanged, revoked, already_decided)", async () => {
+    for (const outcome of ["conflict", "expired", "closed", "unchanged", "revoked", "already_decided"]) {
       h.rpc.mockResolvedValue({ data: { outcome, approval: row() }, error: null });
       expect((await (await POST(req({ decision: "approve" }))).json()).outcome).toBe(outcome);
     }
+  });
+
+  it("a revoke (deny on an approved row) is a normal 200 with outcome revoked and the rejected status; the RPC args are the plain deny", async () => {
+    h.rpc.mockResolvedValue({ data: { outcome: "revoked", approval: row({ status: "rejected" }) }, error: null });
+    const res = await POST(req({ decision: "deny" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.outcome).toBe("revoked");
+    expect(body.approval.status).toBe("rejected");
+    expect(h.rpc).toHaveBeenCalledWith("decide_approval", { p_id: APPROVAL_ID, p_decision: "deny" });
+    expect(h.marker.mock.calls.some((c) => c[0] === "SOLEUR_APPROVAL_DECIDED" && (c[1] as { outcome?: string }).outcome === "revoked")).toBe(true);
   });
 
   it("a missing row and a non-owner are the SAME 404 (the RPC raises 42501 for both): no existence oracle", async () => {
