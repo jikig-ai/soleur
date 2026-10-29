@@ -176,6 +176,7 @@
 9	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-nftables.test.sh
 8	apps/web-platform/infra/cron-egress-resolve.sh
+2	apps/web-platform/infra/cutover-inngest-workflow.test.sh
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
 10	apps/web-platform/infra/disk-monitor.test.sh
@@ -357,6 +358,7 @@
 1	plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh
 1	plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh
 1	plugins/soleur/skills/provision-github/scripts/provision-github.sh
+4	plugins/soleur/skills/registry-breakglass-mirror/scripts/mirror-ghcr-to-zot.sh
 1	plugins/soleur/skills/review/test/ensure-semgrep.test.sh
 1	plugins/soleur/skills/ship/scripts/hold-gate-eval.sh
 4	plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh

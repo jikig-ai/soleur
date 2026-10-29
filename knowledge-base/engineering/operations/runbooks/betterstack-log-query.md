@@ -718,7 +718,10 @@ manual `patterns` row `create_requested` (boolean) records whether the event car
 the early `disabled`, `deduped` and `week-cap-reached` rows; the scheduled row and a manual corpus row carry none of
 the create fields. When the arm ran the row also carries `create_arm` (`ran`, emitted ONLY then), `kind` (`create`),
 `create_outcome` (`no_action` | `refused` | `opened`) and, as the case needs, `create_no_action_reason`
-(`no-pattern-qualifies` | `all-owned` | `other`), `create_refusal_class` (one of `week-cap`, `create-open`,
+(`no-pattern-qualifies` | `all-owned` | `other`), `create_offered` (an integer count of the candidate patterns the arm would send to the
+model; whenever a call was made it is the number offered, on a pre-call refusal it is the candidate count and no call was
+spent, on a pre-call `no_action` it is `0`; absent on a `week-cap` or `index-empty` refusal, on `model-invalid/internal` (a step
+defect, Sentry op `create-propose-internal`) and on a row whose memoized step output predates the field), `create_refusal_class` (one of `week-cap`, `create-open`,
 `index-empty`, `input-size`, `model-invalid`, `shape`, `slug`, `prefer-patch`, `budget`, `scan`, `readme-sync`,
 `stub-drift`, `persist`), `create_detail` (a closed token, never model text), the numbers `create_words`,
 `create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, the refusal evidence numbers `create_tokens`,
@@ -728,7 +731,8 @@ create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its 
 mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
 (`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
 `create_detail` token: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The gated new-skill
-create arm". Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
+create arm". To read a `no_action` row against a `refused`
+one, see the subsection "Reading a live-fire row" in that section. Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
 there); the rows that asked for a create are those with `.create_requested == true`. Empty output means no manual
 `patterns` run in the window; an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace on any row:
 
@@ -741,7 +745,7 @@ doppler run -p soleur -c prd_terraform -- \
                  (.create_refusal_class//"-"), (.create_detail//"-"), (.create_no_action_reason//"-"),
                  (.create_words//"-"), (.create_cap//"-"), (.create_total//"-"), (.create_top1//"-"),
                  (.create_nearest_rank//"-"), (.create_tokens//"-"), (.create_path_index//"-"), (.create_file_index//"-"),
-                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-")] | @tsv'
+                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-"), (.create_offered//"-")] | @tsv'
 ```
 
 A row with `create_requested: true` and `-` in the `create_arm` column ended before the arm (read `status`: a saturated

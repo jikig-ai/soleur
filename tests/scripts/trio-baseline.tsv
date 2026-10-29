@@ -83,6 +83,12 @@
 @allow	apps/web-platform/infra/hooks.json.tmpl	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
 @allow	apps/web-platform/infra/cloud-init.yml	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
 @allow	apps/web-platform/infra/soleur-host-bootstrap.sh	WEBHOOK_DEPLOY_SECRET_NEXT	2026-11-30	#9294:PR-2
+@allow	.github/workflows/inngest-key-rotate.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+@allow	.github/workflows/inngest-key-rotate.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+@allow	.github/workflows/inngest-key-rotate.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+@allow	apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+@allow	apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+@allow	apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
 .github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-2
 .github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-2
 .github/actions/dispatch-web-redeploy/track.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-2

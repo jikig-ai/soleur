@@ -301,10 +301,10 @@ interface RunResult {
   statusAfterPersist: string[];
 }
 
-async function run(event: { name: string; data?: Record<string, unknown> }): Promise<RunResult> {
+async function run(event: { name: string; data?: Record<string, unknown> }, seed: Record<string, unknown> = {}): Promise<RunResult> {
   const names: string[] = [];
   const statusAfterPersist: string[] = [];
-  const memo = new Map<string, unknown>();
+  const memo = new Map<string, unknown>(Object.entries(seed));
   const step = {
     run: async <T,>(name: string, cb: () => Promise<T>): Promise<T> => {
       names.push(name);
@@ -326,7 +326,7 @@ async function run(event: { name: string; data?: Record<string, unknown> }): Pro
 
 const CREATE_ONLY_KEYS = [
   "kind", "create_arm", "create_outcome", "create_no_action_reason", "create_refusal_class", "create_detail",
-  "create_words", "create_cap", "create_total", "create_top1", "create_nearest_rank", "create_pr",
+  "create_words", "create_cap", "create_total", "create_top1", "create_nearest_rank", "create_pr", "create_offered",
 ];
 const createKeys = (m: Record<string, unknown>) => Object.keys(m).filter((k) => k.startsWith("create_") || k === "kind");
 const ENTRY_HASH = createClusterHash(CREATE_EVIDENCE);
@@ -698,7 +698,7 @@ describe("Step A: create-propose is ONE bounded model call, memoized, and never 
     const r = await run(PATTERNS_CREATE());
     expect(createPrompts()).toHaveLength(0);
     expect(r.names).not.toContain("create-persist");
-    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "all-owned", ledger_suppressed: 0 });
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "all-owned", ledger_suppressed: 0, create_offered: 0 });
     expect(r.last).not.toHaveProperty("create_refusal_class");
     expect(createCommits()).toHaveLength(0);
   });
@@ -912,7 +912,7 @@ describe("the open-PR path scan feeds the collision gates", () => {
 describe("the marker for a create run", () => {
   it("an opened create carries exactly the closed create fields (no text), alongside the unchanged edit-arm fields", async () => {
     const r = await run(PATTERNS_CREATE());
-    expect(createKeys(r.last).sort()).toEqual(["create_arm", "create_outcome", "create_pr", "create_requested", "kind"]);
+    expect(createKeys(r.last).sort()).toEqual(["create_arm", "create_offered", "create_outcome", "create_pr", "create_requested", "kind"]);
     expect(r.last).toMatchObject({ clusters_proposed: 1, clusters_opened: 1, input_source: "patterns", ledger_read: "ok" });
     expect(JSON.stringify(r.last)).not.toContain(String(PROPOSAL.description));
   });
@@ -927,6 +927,71 @@ describe("the marker for a create run", () => {
   it("the scheduled-path equivalence holds: no create step name exists anywhere in a cron run", async () => {
     const r = await run(CRON());
     expect(r.names.filter((n) => n.startsWith("create-"))).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------------
+describe("create_offered (#10550): the marker states how many candidates the arm sent to the model", () => {
+  // The fixture has three pattern pages; page two is the edit loop's this run, so two are offered by default.
+  it("a model no_action, a post-call refusal and an opened create all carry the offered count", async () => {
+    createReply = { text: JSON.stringify({ decision: "no_action", reason_class: "no-pattern-qualifies" }), stopReason: "end_turn" };
+    const declined = await run(PATTERNS_CREATE());
+    expect(declined.last).toMatchObject({ create_outcome: "no_action", create_no_action_reason: "no-pattern-qualifies", create_offered: 2 });
+
+    createReply = { text: "not json", stopReason: "end_turn" };
+    h.marker.mockClear();
+    const refused = await run(PATTERNS_CREATE());
+    expect(refused.last).toMatchObject({ create_outcome: "refused", create_detail: "not-json", create_offered: 2 });
+
+    createReply = { text: JSON.stringify(goodProposal()), stopReason: "end_turn" };
+    h.marker.mockClear();
+    h.safeCommit.mockClear();
+    const opened = await run(PATTERNS_CREATE());
+    expect(opened.last).toMatchObject({ create_outcome: "opened", create_offered: 2 });
+    expect(JSON.stringify(createCommits().map((c) => c[0]))).not.toContain("offered"); // the stamp does not reach the commit arguments (persist reads named verdict fields only)
+  });
+
+  it("a persist-step refusal carries the count too (it is assigned before any branch)", async () => {
+    h.scan.mockResolvedValue({ ok: true });
+    h.sync.mockResolvedValue({ ok: true });
+    h.collect.mockResolvedValue({ ok: false, detail: "path-nul", index: 4 });
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_refusal_class: "persist", create_detail: "path-nul", create_offered: 2 });
+  });
+
+  it("a ledger-owned pattern is not counted (page one owned, page two the edit loop's: one offered)", async () => {
+    h.ledger.items = [ledgerOpen(CREATE_EVIDENCE)];
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_arm: "ran", create_offered: 1 });
+  });
+
+  // The step output is memoized JSON that outlives a deploy: an older memo has no `offered`, and a damaged one must never
+  // put a wrong number on the marker. Seeded through the step memo so the run reads it exactly as a replay would.
+  it("an old-shape memo, and every bad value, yield NO create_offered key (the run still completes)", async () => {
+    const bad: unknown[] = [undefined, null, -1, 1.5, "6", {}, [], true, 10_000, Number.MAX_SAFE_INTEGER];
+    for (const offered of bad) {
+      h.marker.mockClear();
+      const r = await run(PATTERNS_CREATE(), { "create-propose": { kind: "no_action", reason: "other", ...(offered === undefined ? {} : { offered }) } });
+      expect(r.result.status, String(offered)).toBe("completed"); // the edit loop opened its PR, so the run completes
+      expect(r.last, String(offered)).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other" });
+      expect(r.last, String(offered)).not.toHaveProperty("create_offered");
+    }
+    h.marker.mockClear();
+    for (const [offered, present] of [[1000, true], [1001, false]] as const) {
+      h.marker.mockClear();
+      const edge = await run(PATTERNS_CREATE(), { "create-propose": { kind: "no_action", reason: "other", offered } });
+      if (present) expect(edge.last, String(offered)).toHaveProperty("create_offered", offered);
+      else expect(edge.last, String(offered)).not.toHaveProperty("create_offered");
+    }
+    h.marker.mockClear();
+    const zero = await run(PATTERNS_CREATE(), { "create-propose": JSON.parse(JSON.stringify({ kind: "no_action", reason: "all-owned", offered: 0 })) });
+    expect(zero.last).toMatchObject({ create_no_action_reason: "all-owned", create_offered: 0 });
+  });
+
+  it("the scheduled and corpus rows never carry the field", async () => {
+    const r = await run(CRON());
+    expect(r.last).not.toHaveProperty("create_offered");
   });
 });
 
