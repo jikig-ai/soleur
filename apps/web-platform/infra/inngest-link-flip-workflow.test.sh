@@ -310,10 +310,13 @@ FLAG='doppler_secret.inngest_link_tls[0]'
 [[ "$(tb 'd["rec_if"] == "failure() || cancelled()" and d["apply_id"] == "apply" and d["rec_env"].get("APPLY_OUTCOME") == "${{ steps.apply.outcome }}" and d["rec_env"].get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_WRITE }}"')" == True ]] && ok "A31c the reconcile step runs on failure() || cancelled(), reads the apply step's own outcome and holds the write-scoped token" || bad "A31c reconcile wiring"
 python3 -c 'import re,sys; s=re.sub(r"\\\n\s*", " ", open(sys.argv[1]).read()); sys.exit(1 if re.search(r"secrets delete INNGEST_LINK_TLS[^\n]*\|\| true", s) else 0)' "$TMP/tierb-write.sh" && python3 -c 'import re,sys; s=re.sub(r"\\\n\s*", " ", open(sys.argv[1]).read()); sys.exit(1 if re.search(r"secrets (delete|set) INNGEST_LINK_TLS[^\n]*\|\| true", s) else 0)' "$TMP/tierb-reconcile.sh" && ok "A31b neither the source-key write nor the reconcile swallows a failed delete or set (no || true)" || bad "A31b a swallowed delete"
 [[ "$(tb 'd["checkout"].get("with", {}).get("persist-credentials")')" == False ]] && ok "A32 the job's checkout sets persist-credentials: false (the Doppler write token is not a git credential; nothing in the job pushes or fetches over git)" || bad "A32 checkout credentials"
-APPLY_LINE="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply.sh" | sed 's/^[[:space:]]*//')"
-[[ "$APPLY_LINE" == "terraform apply -no-color -input=false -auto-approve tfplan" ]] && ok "A33 the apply argv is exactly '-auto-approve tfplan': only the gated, saved plan is applied (no -target, -replace, -var, no re-plan)" || bad "A33 apply argv: '$APPLY_LINE'"
-sed 's/ tfplan$//' "$TMP/tierb-apply.sh" > "$TMP/tierb-apply-mut.sh"
+REDACT_SFX=' 2>&1 | tf_redact_random_ids' # #11294: the apply streams through the redaction filter; the PINNED argv is what precedes it
+APPLY_RAW="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply.sh" | sed 's/^[[:space:]]*//')"
+APPLY_LINE="${APPLY_RAW%"$REDACT_SFX"}"
+[[ "$APPLY_LINE" == "terraform apply -no-color -input=false -auto-approve tfplan" && "$APPLY_RAW" == "$APPLY_LINE$REDACT_SFX" ]] && ok "A33 the apply argv is exactly '-auto-approve tfplan' (then the redaction pipe): only the gated, saved plan is applied (no -target, -replace, -var, no re-plan)" || bad "A33 apply argv: '$APPLY_LINE'"
+sed 's/ tfplan\( 2>&1 | tf_redact_random_ids\)$/\1/' "$TMP/tierb-apply.sh" > "$TMP/tierb-apply-mut.sh"
 APPLY_MUT="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply-mut.sh" | sed 's/^[[:space:]]*//')"
+APPLY_MUT="${APPLY_MUT%"$REDACT_SFX"}"
 [[ "$APPLY_MUT" != "terraform apply -no-color -input=false -auto-approve tfplan" ]] && ok "A33m a mutated apply (the plan operand dropped, which re-plans untargeted and applies ALL drift) no longer equals the pinned argv" || bad "A33m"
 
 # The stateful fakes. soleur/prd and soleur/prd_terraform are directories of key files; DOPPLER_INHERIT=1 makes prd_terraform's
@@ -373,7 +376,7 @@ SH
 tb_env() { # dir -> runs "$@" with the job's environment in dir
   local d="$1"; shift
   ( cd "$d" && env -i PATH="$d/bin:/usr/local/bin:/usr/bin:/bin" HOME="$d" STUB="$d" RUNNER_TEMP="$d" CI_SSH_PUB=/x/key.pub REASON_RAW="flip test" DOPPLER_TOKEN=tok \
-      GITHUB_SERVER_URL=https://example.invalid GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/summary" "$@" 2>&1 )
+      GITHUB_WORKSPACE="$REPO_ROOT" GITHUB_SERVER_URL=https://example.invalid GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/summary" "$@" 2>&1 )
 }
 run_tb_job() { # dir value [write-script] [plan-script] [apply-script] [env assignments...] -> TB_RC, TB_OUT, TB_STAGE, TB_REC_RC; stops at the first failing step like Actions, then runs the reconcile step (failure() || cancelled())
   local d="$1" value="$2" ws="${3:-$TMP/tierb-write.sh}" ps="${4:-$TMP/tierb-plan.sh}" as="${5:-$TMP/tierb-apply.sh}"; shift 5 2>/dev/null || shift $#
