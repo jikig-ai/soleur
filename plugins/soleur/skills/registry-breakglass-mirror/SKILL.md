@@ -75,7 +75,8 @@ Host prerequisites on the mirror host: `curl`, `jq`, `sha256sum`, `timeout`
 - **Repo:** `jikig-ai/soleur-web-platform` (the only image set production
   deploys pin).
 - **Refs:** the pinned image set. The canonical generator is
-  `scripts/registry-pull-path-health.sh --prepare --tags-out` — the same
+  [registry-pull-path-health.sh](../../../../scripts/registry-pull-path-health.sh)
+  ` --prepare --tags-out` — the same
   `entries[]` manifest `registry-restore-from-ghcr.sh --tags-from` consumes —
   or the `registry-restore-pins` workflow artifact from the last restore run.
   Digest refs (`repo@sha256:<d>`) are preferred — they bind the pin exactly;

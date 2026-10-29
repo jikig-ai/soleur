@@ -57,3 +57,9 @@
 ## WS-R4 (gate wait, ~00:30)
 - Tudo pushed até a08c566efe (fix-round trailer). GATE test-all.log >51k linhas, suites na fase PASS-roll final (infra z-*); rc file ainda vazio — seguir polling `[ -s test-all.rc ]`.
 - Depois do gate: QA (fixture suites já 7/7 + 17/17 + devin-cloud-mode 42/42) → compound (learnings: 490KB ceiling, resolver-canonical D1, DoH/--resolve, devin -p seat mechanism, jq `[arr|.field]` bug class) → ship (Phase 6.45 archive-kb.sh; UNTRUSTED-CI: PR toca .github/workflows → sem --admin fallback) → postmerge → pipeline-tally show → DONE.
+
+## WS-QA (~01:10)
+- QA PASS: resolver 17/17, mirror fixture 7/7 (incl live-path row h), devin-cloud-mode 42/42, components 1455/1455, integration greps (2 IMAGE_TAG_RAW =~ ^v? sites, unstripped pass-through, no #v in workflow, --insecure only on zot leg). SKILL.md backtick→markdown-link fix para components.test.
+- e2e census: já executado (evidência no PR body; #11321 fechado).
+- Gate regressions pré-existentes NÃO relacionadas ao diff: vinngest pin drift v1.1.64 vs v1.1.66 (main avançou), code-to-prd T11 (camada secret-scan alheia), runtime ceiling exit-3 (ambiental — fila + 4h).
+- Próximo: compound → ship (Phase 6.45 archive-kb; UNTRUSTED-CI: .github/workflows tocado → sem --admin) → postmerge → DONE.
