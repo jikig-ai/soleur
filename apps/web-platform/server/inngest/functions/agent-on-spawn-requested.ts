@@ -1272,9 +1272,10 @@ const TRANSIENT_ANTHROPIC_CAUSES: readonly string[] = [
   "anthropic_timeout",
 ] as const satisfies readonly FailureReason[];
 
-// `ByokLeaseError.cause` values (server/byok-lease.ts).
+// `ByokLeaseError.cause` values (server/byok-lease.ts). `oauth_unusable` is defensive exhaustiveness: this path leases through
+// `getRestApiKey()` only, which never reads the operator subscription row, so the cause cannot reach it today.
 const BYOK_LEASE_CAUSES: ReadonlySet<string> = new Set(
-  ["fetch_failed", "decrypt_failed", "escape", "subscription_limit"] as const satisfies readonly ByokLeaseError["cause"][],
+  ["fetch_failed", "decrypt_failed", "escape", "subscription_limit", "oauth_unusable"] as const satisfies readonly ByokLeaseError["cause"][],
 );
 
 // Tags a retryable LIVE error inside `turn-${n}-claude` with its FailureReason,
