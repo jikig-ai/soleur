@@ -239,6 +239,29 @@ assert_eq "discord-no-webhook-rc3" "3" \
 assert_eq "discord-success-rc0" "0" \
   "$(DISCORD_WEBHOOK_URL="https://example.test/hook" rc_of post_discord "body")"
 
+# Discord: only general webhook set → fallback is used AND the
+# SOLEUR_PUBLISHER_FALLBACK marker fires on stderr.
+tmp_stderr=$(mktemp -p "$SUITE_TMP")
+( unset DISCORD_BLOG_WEBHOOK_URL; DISCORD_WEBHOOK_URL="https://example.test/hook" post_discord "body" ) >/dev/null 2>"$tmp_stderr" || true
+if grep -q "SOLEUR_PUBLISHER_FALLBACK" "$tmp_stderr"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: discord-fallback-marker: expected SOLEUR_PUBLISHER_FALLBACK in stderr, got: $(cat "$tmp_stderr")" >&2
+fi
+rm -f "$tmp_stderr"
+
+# Discord: blog webhook set → no fallback marker.
+tmp_stderr=$(mktemp -p "$SUITE_TMP")
+( DISCORD_BLOG_WEBHOOK_URL="https://example.test/blog" DISCORD_WEBHOOK_URL="https://example.test/hook" post_discord "body" ) >/dev/null 2>"$tmp_stderr" || true
+if grep -q "SOLEUR_PUBLISHER_FALLBACK" "$tmp_stderr"; then
+  FAIL=$((FAIL + 1))
+  echo "FAIL: discord-blog-set-no-marker: unexpected SOLEUR_PUBLISHER_FALLBACK in stderr: $(cat "$tmp_stderr")" >&2
+else
+  PASS=$((PASS + 1))
+fi
+rm -f "$tmp_stderr"
+
 # X: no creds → rc 3
 assert_eq "x-no-creds-rc3" "3" \
   "$(unset X_API_KEY X_API_SECRET X_ACCESS_TOKEN X_ACCESS_TOKEN_SECRET; rc_of post_x_thread "$full_fixture")"

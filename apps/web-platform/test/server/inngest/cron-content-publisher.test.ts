@@ -22,7 +22,9 @@ import {
   cronContentPublisher,
   MAX_RUN_DURATION_MS,
   PUBLISHER_ENV_KEYS,
+  PUBLISHER_FALLBACK_MARKER,
   buildPublisherEnv,
+  publisherStderrSignals,
 } from "@/server/inngest/functions/cron-content-publisher";
 // #5111: consolidated into the safe-commit helper (was a per-cron copy).
 import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
@@ -218,5 +220,49 @@ describe("buildPublisherEnv allowlist (security surface)", () => {
     it("allowlist does NOT use ...process.env spread", () => {
       expect(buildEnvBody).not.toMatch(/\.\.\.process\.env/);
     });
+  });
+});
+
+// =============================================================================
+// Discord fallback marker surfacing (SOLEUR_PUBLISHER_FALLBACK)
+// =============================================================================
+
+describe("publisherStderrSignals — marker extraction", () => {
+  it("returns the marker when present mid-stream", () => {
+    const stderr =
+      "line one\nWarning: DISCORD_BLOG_WEBHOOK_URL unset — posting to fallback webhook (general channel) [SOLEUR_PUBLISHER_FALLBACK]\nline three\n";
+    expect(publisherStderrSignals(stderr)).toEqual([
+      "SOLEUR_PUBLISHER_FALLBACK",
+    ]);
+  });
+
+  it("returns empty when the marker is absent", () => {
+    expect(publisherStderrSignals("ordinary stderr output\n")).toEqual([]);
+    expect(publisherStderrSignals("")).toEqual([]);
+  });
+
+  it("marker constant is the contract literal both sides pin", () => {
+    expect(PUBLISHER_FALLBACK_MARKER).toBe("SOLEUR_PUBLISHER_FALLBACK");
+  });
+});
+
+describe("fallback-surfacing source-shape anchors", () => {
+  it.each([
+    ["SOLEUR_PUBLISHER_FALLBACK", "marker token the bash emit and grep share"],
+    ['op: "discord-blog-webhook-fallback"', "Sentry warn op tag"],
+    ["warnSilentFallback(null,", "null first arg keeps captureMessage tags"],
+    ["discordBlogFallback", "step return flag in the Inngest run record"],
+    ["publisherStderrSignals(result.stderr)", "grep site inside the step"],
+  ])("source contains %s (%s)", (anchor) => {
+    expect(SUT_SOURCE).toContain(anchor);
+  });
+
+  it("mirror message carries no raw stderr interpolation", () => {
+    const mirror = SUT_SOURCE.match(
+      /warnSilentFallback\(null, \{[\s\S]+?\}\);/,
+    );
+    expect(mirror).not.toBeNull();
+    expect(mirror![0]).not.toContain("result.stderr");
+    expect(mirror![0]).not.toContain("stderr");
   });
 });

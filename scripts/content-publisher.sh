@@ -8,7 +8,10 @@
 #   declared in frontmatter, and updates status to published via sed -i.
 #
 # Environment variables:
-#   DISCORD_BLOG_WEBHOOK_URL - Discord webhook for #blog channel (preferred; optional)
+#   DISCORD_BLOG_WEBHOOK_URL - Discord webhook for #blog channel (preferred; optional).
+#                            - Unset/empty while DISCORD_WEBHOOK_URL is set posts to
+#                              #general and emits a stderr warning carrying the
+#                              SOLEUR_PUBLISHER_FALLBACK marker.
 #   DISCORD_WEBHOOK_URL      - Discord webhook fallback (optional; skips if neither set)
 #   X_API_KEY              - X API key (optional; skips if unset)
 #   X_API_SECRET           - X API secret
@@ -333,6 +336,15 @@ post_discord() {
     echo "Warning: No Discord webhook URL set (checked DISCORD_BLOG_WEBHOOK_URL, DISCORD_WEBHOOK_URL). Skipping Discord posting." >&2
     SKIP_REASON="no credentials"
     return 3
+  fi
+
+  # Fallback path: the blog-channel webhook is absent and the post is about to
+  # land in the general channel. Emit a fixed-string warning carrying the
+  # SOLEUR_PUBLISHER_FALLBACK marker so the Inngest harness (which discards
+  # this stderr) can grep + mirror it to Sentry — a missing/misnamed
+  # DISCORD_BLOG_WEBHOOK_URL must never again misroute silently.
+  if [[ -z "${DISCORD_BLOG_WEBHOOK_URL:-}" ]]; then
+    echo "Warning: DISCORD_BLOG_WEBHOOK_URL unset — posting to fallback webhook (general channel) [SOLEUR_PUBLISHER_FALLBACK]" >&2
   fi
 
   local payload

@@ -26,6 +26,7 @@ import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import {
   reportSilentFallback,
+  warnSilentFallback,
   mirrorWarnWithDebounce,
 } from "@/server/observability";
 import {
@@ -165,6 +166,30 @@ export function buildPublisherEnv(ghToken: string): NodeJS.ProcessEnv {
     env[key] = process.env[key];
   }
   return env;
+}
+
+/**
+ * Value-free signal token emitted on stderr by `scripts/content-publisher.sh`
+ * `post_discord()` when the blog-channel webhook is absent and the post is
+ * about to land in the general channel via `DISCORD_WEBHOOK_URL`. The Inngest
+ * spawn captures the script's stderr into `result.stderr` but must never
+ * forward it raw to Sentry (incidentals: response bodies, filenames), so the
+ * script emits fixed markers and this token is the contract — pinned by tests
+ * on both sides. Literal kept identical to the bash emit site.
+ */
+export const PUBLISHER_FALLBACK_MARKER = "SOLEUR_PUBLISHER_FALLBACK";
+
+/**
+ * Pure extraction of the fixed marker tokens present in captured
+ * content-publisher.sh stderr. Exported so the test suite can pin the
+ * contract without a step.run harness.
+ */
+export function publisherStderrSignals(stderr: string): string[] {
+  const signals: string[] = [];
+  if (stderr.includes(PUBLISHER_FALLBACK_MARKER)) {
+    signals.push(PUBLISHER_FALLBACK_MARKER);
+  }
+  return signals;
 }
 
 /** Spawn a bash script and capture stdout + stderr + exit code. */
@@ -709,7 +734,24 @@ export async function cronContentPublisherHandler({
         );
       }
 
-      return { exitCode: result.exitCode };
+      // Surface the script's fixed markers. spawnScriptCapture captures
+      // stderr but nothing downstream reads it — grep for the known token
+      // and mirror a fixed message (never raw stderr) to Sentry.
+      const stderrSignals = publisherStderrSignals(result.stderr);
+      const discordBlogFallback = stderrSignals.includes(
+        PUBLISHER_FALLBACK_MARKER,
+      );
+      if (discordBlogFallback) {
+        warnSilentFallback(null, {
+          feature: "cron-content-publisher",
+          op: "discord-blog-webhook-fallback",
+          message:
+            "DISCORD_BLOG_WEBHOOK_URL unset in publisher env — Discord post went to the general-channel fallback webhook",
+          extra: { fn: "cron-content-publisher" },
+        });
+      }
+
+      return { exitCode: result.exitCode, discordBlogFallback };
     });
 
     // Persist status updates via safeCommitAndPr (#5111) — gains the
