@@ -1,0 +1,23 @@
+# Session State
+
+## Plan Phase
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-observability-vendor-prb-destroy/knowledge-base/project/plans/2026-10-29-feat-observability-vendor-prb-destroy-plan.md
+- Status: complete
+
+### Errors
+- Subagent spawn unavailable inside the planning subagent's context — all skill fan-outs (research agents, domain leaders, spec-flow, reviewer panel, advisor consult, functional/community discovery) executed inline with file-level evidence; recorded in the plan's `## Research Insights` research-mode note and `decision-challenges.md` (`pending - assumed:` rulings where a CTO consult would otherwise run).
+- No blocking errors. All deepen-plan halt gates verified PASS mechanically.
+
+### Decisions
+- Exempt, don't strip (spec NG4): all 43 pruned monitors keep live producers (35 Inngest `SENTRY_MONITOR_SLUG` + 8 workflow `monitor-slug:`), so the plan prescribes a shared `PRUNED_MONITOR_SLUGS` exemption consumed by the three strict parity guards rather than emit-path edits — with stale-set assertions (`PRUNED ∩ declared = ∅`, `PRUNED ⊆ producers`).
+- `c4-count-parity.test.sh` derivation fix required: raw `monitor-slug:` counts (22) would falsify gated prose post-destroy; `derive_github_slugs` moves to a live-backed intersection (14), making C6/C9 = 10.
+- `alert-reference.json` regeneration eliminated — projection covers `sentry_alert` only and already binds the 22 kept detectors.
+- #6615 made a first-class AC: apply-green ≠ live removal; post-merge audit Class D is the compensating verification. #10972 is OBE (close at ship); #8704 loses 4 of 5 mute targets; GuardA(i) "carrier-red" on stale merge refs is expected — rebase + re-push.
+
+### CTO Rulings
+- cto_spawns=1 — 4 rows ruled (guard-site correction, c4 invariant split, #10972 re-class + 2 tails, alert-reference skip)
+
+### Components Invoked
+- soleur:plan (phases 0–6.5, inline on Devin)
+- soleur:deepen-plan (halt gates 4.5–4.13 verified, enhancement summary committed + pushed)
+- Artifacts: tasks.md, decision-challenges.md in this spec dir

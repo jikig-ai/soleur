@@ -17,7 +17,8 @@ status: pending
 - [ ] 2.1 Create `apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts` exporting `PRUNED_MONITOR_SLUGS` (43 kebab-case slugs + NG4/inventory rationale + re-add path)
 - [ ] 2.2 `sentry-monitor-iac-parity.test.ts`: consult `PRUNED_MONITOR_SLUGS` in the code-slug→IaC and workflow-slug→IaC guards; add assertions `PRUNED ∩ declared = ∅` and `PRUNED ⊆ producers`
 - [ ] 2.3 `function-registry-count.test.ts`: remove the 8 stale `NON_INNGEST_MONITORS` entries; extend guard (c) to consult `PRUNED_MONITOR_SLUGS`
-- [ ] 2.4 `plugins/soleur/test/c4-count-parity.test.sh`: `derive_github_slugs` → workflow slugs ∩ declared tf `name` attrs (14); verify C1=19, C2=13, C3=6, C5=14, C6=10, C9=10
+- [ ] 2.4 `plugins/soleur/test/c4-count-parity.test.sh`: `derive_github_slugs` → workflow slugs ∩ declared tf `name` attrs (14) feeding C5/C6/C9; NEW raw `derive_github_emitter_slugs` feeds ONLY the `c5 -ge c1` invariant (:203-212); comment names the split; verify C1=19, C2=13, C3=6, C5=14, C6=10, C9=10
+- [ ] 2.5 #10972 tracker retirement (CTO tails): delete `scripts/followthroughs/orphan-sweeps-relook-10972.{sh,test.sh}` + `run_suite` line in `scripts/test-all.sh`; regenerate `suite-shard-legs.tsv`/`suite-durations.tsv` via `regenerate-shard-manifest.py --incremental --write`; update 3 stale `#10972` comments in `scheduled-terraform-drift.yml` (~L3000/~L3281/~L3311 — destroyed-not-routed + mail-key common-mode record)
 
 ## Phase 3 — Count citations + model regen
 
@@ -36,7 +37,7 @@ status: pending
 - [ ] 5.1 Apply run lands the 43 destroys; verify live removal via `sentry-monitors-audit.sh` Class D (the #6615 survivor check)
 - [ ] 5.2 `sentry-audit-gate` + `scheduled-sentry-alert-drift` green on next runs
 - [ ] 5.3 Fire-test one retained heartbeat miss → BS alert → `[ci/betterstack-incident]` issue (AC7)
-- [ ] 5.4 Comment #6590 (executed); close #10972 OBE; comment #8704 + #8595; #7577 Nano tracking + verify_by=2026-11-12 unchanged
+- [ ] 5.4 Comment #6590 (executed); close #10972 OBE post-apply (comment names the Resend-mail-key common-mode loss) + drop `follow-through` label; comment #8704 + #8595; #7577 Nano tracking + verify_by=2026-11-12 unchanged
 
 ## Acceptance Criteria
 

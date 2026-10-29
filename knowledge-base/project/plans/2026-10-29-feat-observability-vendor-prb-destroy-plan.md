@@ -26,12 +26,18 @@ with file-level evidence (per `## Research Insights` research-mode note)
 1. **Producer census resolved the emit-path question.** Measured all 43 pruned
    slugs have live producers (35 Inngest code slugs + 8 workflow `monitor-slug:`
    params). Spec NG4 rules out stripping them, so the plan carries a shared
-   `PRUNED_MONITOR_SLUGS` exemption consumed by three strict guards — the only
-   shape that keeps the suite green AND honest.
+   `PRUNED_MONITOR_SLUGS` exemption consumed by three strict guard SITES
+   (iac-parity code→IaC + workflow→IaC; registry guard (c)) — the only
+   shape that keeps the suite green AND honest. Per CTO ruling:
+   `sentry-cron-monitor-routing-parity.test.ts` is NOT a consumer (its
+   universe is declared monitors only) — wiring it there is dead code.
 2. **C4 derivation fix, not just prose.** `derive_github_slugs` counts raw
    `monitor-slug:` literals; with emitters retained it would derive 22 while
    only 14 check-ins land on live monitors. The derivation moves to a
-   live-backed intersection so C5/C6/C9 stay TRUE, not merely matching.
+   live-backed intersection so C5/C6/C9 stay TRUE, not merely matching —
+   split, per CTO ruling: a raw-literal `derive_github_emitter_slugs` keeps
+   feeding the `c5 -ge c1` tail invariant (:203-212; C1=19 emitter files
+   would falsely red a live-backed C5=14).
 3. **`alert-reference.json` regeneration eliminated.** Verified the projection
    covers `sentry_alert` rules only and already binds the 22 kept detectors —
    removed a README-ritual step that would have been dead work.
@@ -330,6 +336,34 @@ a declared `name = "<slug>"` in `cron-monitors.tf` (live-backed check-ins =
 live-backed count; the emitter cohort is still pinned by
 sentry-monitor-iac-parity + the PRUNED set). `derive_webapp_slugs` (C4−C5)
 then yields 10 = true webapp/host-backed monitors.
+**CTO-ruled invariant split:** the `c5 -ge c1` tail invariant (:203-212)
+asserts an emitter property, not a live-backed one — C1 = 19 files using
+`actions/sentry-heartbeat`, so a live-backed C5=14 would falsely red a
+CORRECT derivation. Add `derive_github_emitter_slugs` (the current raw
+`monitor-slug:` grep, unchanged) consumed ONLY by that invariant, while the
+intersected `derive_github_slugs` feeds C5/C6/C9. The semantic-shift comment
+must name the split explicitly, or a maintainer will "simplify" the second
+derivation away and re-break the semantics (CTO dissent).
+
+### Phase 2.5 — #10972 tracker retirement (CTO-ruled tails)
+
+2.5.1 Retire the followthrough probe per its own RETIREMENT contract
+(`scripts/followthroughs/orphan-sweeps-relook-10972.sh:69-72` — "when #10972
+closes, delete this probe…"): delete `orphan-sweeps-relook-10972.sh` +
+`orphan-sweeps-relook-10972.test.sh`, remove the `run_suite` line
+(`scripts/test-all.sh:6857`), and regenerate the two manifests —
+`python3 scripts/regenerate-shard-manifest.py --incremental --write` touches
+`scripts/suite-shard-legs.tsv` + `scripts/suite-durations.tsv`. Deleting in
+THIS PR is deliberate: post-merge-apply the monitor is gone and the probe
+exits 3 forever — same-merge removal skips the permanently-red window.
+
+2.5.2 `scheduled-terraform-drift.yml` comment updates (3 sites): the two
+"unrouted until #10972" notes (~L3000, ~L3281) and the "routed Sentry monitor
+(#10972) is the only monitoring path that does not use [the shared mail key]"
+note (~L3311) all go stale — the monitor is destroyed, not routed. Rewrite to
+record that the mail key is now a common-mode dependency for every surviving
+orphan-sweep cover (the CTO dissent: the trade must read as seen, not
+missed).
 
 ### Phase 3 — Count citations + model regen
 
@@ -388,8 +422,11 @@ Better Stack alert → `scheduled-betterstack-incident-mirror` files the
 `[ci/betterstack-incident]` GitHub issue — the end-to-end wake path, unmocked.
 
 5.4 Issue bookkeeping: comment on #6590 (PR-B executed — seat savings
-realized); close #10972 as OBE (monitor destroyed by prune verdict; cover
-reverts to the aggregator's notify-ops-email step its own body cites);
+realized); close #10972 as OBE ONLY AFTER the apply destroys the monitor
+(monitor destroyed by prune verdict; cover reverts to the aggregator's
+notify-ops-email step its own body cites; the OBE comment ALSO names the
+Resend-mail-key common-mode loss so the trade reads as seen — CTO dissent),
+and drop its `follow-through` label (probe retired in Phase 2.5.1);
 comment on #8704 (4 of 5 unmute targets destroyed — only
 `scheduled-anthropic-credit-probe`'s unmute remains live); comment on #8595
 ((c3) got its first live exercise; the cadence-parity half stays open);
@@ -436,9 +473,23 @@ APIs 404).
 - `knowledge-base/engineering/architecture/diagrams/model.likec4.json` —
   regenerated artifact
 - `plugins/soleur/test/c4-count-parity.test.sh` — `derive_github_slugs`
-  live-intersection + comment
+  live-intersection + raw `derive_github_emitter_slugs` for the `c5 -ge c1`
+  invariant + comment naming the split
+- `scripts/test-all.sh` — remove the `orphan-sweeps-relook-10972` `run_suite`
+  line (:6857)
+- `scripts/suite-shard-legs.tsv` + `scripts/suite-durations.tsv` —
+  regenerated via `regenerate-shard-manifest.py --incremental --write`
+- `.github/workflows/scheduled-terraform-drift.yml` — 3 stale `#10972`
+  comment sites (~L3000, ~L3281, ~L3311): destroyed-not-routed +
+  mail-key common-mode record
 - `knowledge-base/operations/expenses.md` — OPTIONAL one-line "destroyed by
   PR-B" append
+
+## Files to Delete
+
+- `scripts/followthroughs/orphan-sweeps-relook-10972.sh` — #10972 RETIREMENT
+  contract (probe exits 3 forever once the monitor is destroyed)
+- `scripts/followthroughs/orphan-sweeps-relook-10972.test.sh` — its suite
 
 ## Files to Create
 
