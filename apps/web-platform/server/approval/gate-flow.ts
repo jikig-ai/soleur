@@ -110,6 +110,14 @@ function consumeRejectedCardStatus(reason: string): "approved" | "rejected" | "e
   }
 }
 
+/**
+ * The row stays `approved` but can never be consumed (the decider is no longer an Owner, or the requester left the
+ * workspace): the card must not tell the Owner that asking again is allowed.
+ */
+export function consumeRejectedIsUnusable(reason: string): boolean {
+  return reason === "decider_not_owner" || reason === "requester_not_member";
+}
+
 /** The `onRequested` dispatch (a push/email) is best effort: the gate never waits on it longer than this. */
 export const ON_REQUESTED_DEADLINE_MS = 10_000;
 
@@ -204,11 +212,30 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
 
   // Tell the card what the agent is doing now, so it never claims "your agent is continuing" or "stopped waiting" from a
   // guess (wireframe 04C vs 04D). Best effort: a failed frame is one op and the card keeps its last state.
-  const emitStatus = (approvalId: string, status: ApprovalWireStatus, agentWaiting: boolean): void => {
+  const emitStatus = (approvalId: string, status: ApprovalWireStatus, agentWaiting: boolean, unusable = false): void => {
     try {
-      a.sendToClient(a.userId, { type: "approval_status", approvalId, conversationId: a.conversationId, status, agentWaiting });
+      a.sendToClient(a.userId, {
+        type: "approval_status",
+        approvalId,
+        conversationId: a.conversationId,
+        status,
+        agentWaiting,
+        ...(unusable ? { unusable: true } : {}),
+      });
     } catch (err) {
       reportApprovalOp("notifyFailed", err, { ...op, approvalId, extra: { channel: "ws-status" } });
+    }
+  };
+
+  // `not_approved` means the row is no longer approved: a revoke (rejected) or the sweep (expired). One best-effort read
+  // tells them apart so an expired request is not reported to the agent and the card as "Owner denied". A failed read
+  // keeps the safe default (the denial text).
+  const refineConsumeReason = async (approvalId: string, reason: string): Promise<string> => {
+    if (reason !== "not_approved") return reason;
+    try {
+      return (await a.approval.readStatus(approvalId)) === "expired" ? "expired" : reason;
+    } catch {
+      return reason;
     }
   };
 
@@ -317,9 +344,10 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           approvalId: submitted.approvalId,
           extra: { reason: submitted.reason, ...(submitted.code ? { code: submitted.code } : {}) },
         });
-        emitStatus(submitted.approvalId, consumeRejectedCardStatus(submitted.reason), false);
+        const shown = await refineConsumeReason(submitted.approvalId, submitted.reason);
+        emitStatus(submitted.approvalId, consumeRejectedCardStatus(shown), false, consumeRejectedIsUnusable(shown));
         a.logDecision(a.toolName, "deny", "approval consume rejected");
-        return deny(consumeRejectedDeny(submitted.reason));
+        return deny(consumeRejectedDeny(shown));
       }
       case "cap_reached": {
         reportApprovalOp("capReached", null, { ...op, extra: { scope: submitted.scope } });
@@ -443,9 +471,10 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           if (!consumed) {
             reportApprovalOp("consumeRejected", consumeError, { ...ctx, extra: { reason } });
             // The card said "released, your agent is continuing": it must stop saying so.
-            emitStatus(approvalId, consumeRejectedCardStatus(reason), false);
+            const shown = await refineConsumeReason(approvalId, reason);
+            emitStatus(approvalId, consumeRejectedCardStatus(shown), false, consumeRejectedIsUnusable(shown));
             a.logDecision(a.toolName, "deny", "approval consume rejected");
-            return deny(consumeRejectedDeny(reason));
+            return deny(consumeRejectedDeny(shown));
           }
           // The approval is spent. Log it before the abort check, so a spent-then-aborted approval is visible; if the
           // session died while the consume was in flight it is spent for nothing: deny.

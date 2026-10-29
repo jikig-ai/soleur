@@ -489,6 +489,8 @@ export type WSMessage =
       outcome?: ApprovalDecideOutcomeWire;
       /** Set when the agent's in-session wait state changed (false once it stopped waiting). Absent = unchanged. */
       agentWaiting?: boolean;
+      /** True when the row stays approved but can never be used (its decider or requester lost their standing). Absent = unchanged. */
+      unusable?: boolean;
     }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }

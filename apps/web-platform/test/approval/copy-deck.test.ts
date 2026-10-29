@@ -123,6 +123,16 @@ describe("copy deck: no outcome claim (AC14)", () => {
     expect(APPROVAL_COPY.approvedLate).toBe("Approved. Ask your agent again.");
   });
 
+  it("an approval that can no longer be used never invites asking again, and says what to do instead", () => {
+    expect(APPROVAL_COPY.approvedUnusable).toBe("Approved, but this approval can no longer be used");
+    const line = APPROVAL_STATE_COPY.approvedUnusableLine;
+    expect(line).not.toMatch(/asking again|ask (it|your agent) again|is allowed/i);
+    expect(line).toMatch(/Owner to revoke it/);
+    expect(line).toMatch(/wait for it to expire/);
+    expect(line).toMatch(/start a new request/);
+    expect(APPROVAL_STATE_COPY.badge.approvedUnusable).not.toMatch(/ask again/i);
+  });
+
   it("the inbox row text never claims an outcome either, for every state of every tool", () => {
     for (const tool of Object.keys(SAMPLES)) {
       const s = SAMPLES[tool];

@@ -49,6 +49,7 @@ import {
   APPROVAL_TOO_MANY_PENDING_DENY,
   APPROVAL_UNAVAILABLE_DENY,
   consumeRejectedDeny,
+  consumeRejectedIsUnusable,
 } from "@/server/approval/gate-flow";
 import type { ApprovalGateDeps } from "@/server/approval/gate-types";
 import { CONVERSATION_ID, OTHER_CONVERSATION_ID, SAMPLES, TOOLS, USER_ID, WORKSPACE_ID } from "./fixtures";
@@ -1377,6 +1378,71 @@ describe("a consume that does not release stops the card claiming the agent is c
     expect(h.frames.filter((f) => f.type === "approval_status")).toEqual([
       expect.objectContaining({ approvalId: id, status, agentWaiting: false }),
     ]);
+  });
+
+  test.each(["decider_not_owner", "requester_not_member"] as const)(
+    "reason %s leaves the row approved but flags the status frame unusable (the card must not say 'ask again'); other reasons never do",
+    async (reason) => {
+      const h = makeHarness({ deadlineMs: 2000 });
+      h.approval.consume = vi.fn(async () => ({ consumed: false as const, reason }));
+      const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+      await decideWhenCardArrives(h, "approved");
+      await pending;
+      expect(h.frames.filter((f) => f.type === "approval_status")).toEqual([
+        expect.objectContaining({ status: "approved", agentWaiting: false, unusable: true }),
+      ]);
+      expect(consumeRejectedIsUnusable(reason)).toBe(true);
+    },
+  );
+
+  test("hash_mismatch / rpc_error / not_approved / expired / already_consumed are not flagged unusable", () => {
+    for (const r of ["hash_mismatch", "rpc_error", "not_approved", "expired", "already_consumed", "not_found"]) {
+      expect(consumeRejectedIsUnusable(r)).toBe(false);
+    }
+  });
+
+  test("the re-proposal path flags an unusable approval the same way", async () => {
+    const h = makeHarness();
+    h.approval.submit = vi.fn(async () => ({ kind: "consume_rejected" as const, approvalId: "x", reason: "decider_not_owner" }));
+    await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(h.frames.filter((f) => f.type === "approval_status")).toEqual([
+      expect.objectContaining({ approvalId: "x", status: "approved", unusable: true }),
+    ]);
+  });
+
+  describe("not_approved: one best-effort status read tells a revoke from the sweep", () => {
+    const run = async (read: (real: () => Promise<string | null>) => Promise<string | null>) => {
+      const h = makeHarness({ deadlineMs: 2000 });
+      let consumed = false;
+      h.approval.consume = vi.fn(async () => {
+        consumed = true;
+        return { consumed: false as const, reason: "not_approved" };
+      });
+      const real = h.approval.readStatus;
+      h.approval.readStatus = vi.fn(async (id: string) => (consumed ? read(() => real(id)) : real(id))) as typeof h.approval.readStatus;
+      const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+      await decideWhenCardArrives(h, "approved");
+      return { res: await pending, h };
+    };
+
+    test("a row that expired meanwhile maps to the expired deny text and the expired card status, not 'Owner denied'", async () => {
+      const { res, h } = await run(async () => "expired");
+      expect(res).toEqual({ behavior: "deny", message: APPROVAL_EXPIRED_DENY });
+      expect(h.frames.filter((f) => f.type === "approval_status")).toEqual([expect.objectContaining({ status: "expired", agentWaiting: false })]);
+    });
+
+    test("a row that was rejected (a revoke) keeps the denial text and the rejected card status", async () => {
+      const { res, h } = await run(async () => "rejected");
+      expect(res).toEqual({ behavior: "deny", message: APPROVAL_REJECTED_DENY });
+      expect(h.frames.filter((f) => f.type === "approval_status")).toEqual([expect.objectContaining({ status: "rejected" })]);
+    });
+
+    test("a failed or empty read keeps the safe default (the denial), and the deny stays static", async () => {
+      for (const read of [async () => Promise.reject(new Error("db text that must never surface")), async () => null]) {
+        const { res } = await run(read as never);
+        expect(res).toEqual({ behavior: "deny", message: APPROVAL_REJECTED_DENY });
+      }
+    });
   });
 
   test("re-proposal path (consume rejected inside submit) emits the same settle frame", async () => {

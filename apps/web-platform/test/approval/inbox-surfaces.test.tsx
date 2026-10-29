@@ -18,7 +18,7 @@ vi.mock("@/server/approval/ops", async (orig) => ({
   reportApprovalOp: (...a: unknown[]) => reportOp(...a),
 }));
 
-import { InboxItemRow } from "@/components/inbox/inbox-item-row";
+import { APPROVAL_TITLE_MAX_CHARS, InboxItemRow } from "@/components/inbox/inbox-item-row";
 
 const STATIC_TITLE = "An action needs your approval";
 const row = (over: Partial<InboxItemRowData> = {}): InboxItemRowData => ({
@@ -101,6 +101,23 @@ describe("InboxItemRow for approval_required", () => {
     unmount();
     render(<InboxItemRow item={row({ source: "system", source_ref: null, title: "b".repeat(400) })} />);
     expect(document.body.textContent).not.toContain("b".repeat(201));
+  });
+
+  it("an approval row title past the generous bound shows the head, then says how many characters are not shown (never silently dropped)", () => {
+    const over = 37;
+    const long = "Approval needed: " + "c".repeat(APPROVAL_TITLE_MAX_CHARS - "Approval needed: ".length + over);
+    render(<InboxItemRow item={row({ title: long, approval: pendingInfo })} />);
+    const text = document.body.textContent ?? "";
+    expect(text).toContain(long.slice(0, APPROVAL_TITLE_MAX_CHARS));
+    expect(text).not.toContain(long);
+    expect(text).toContain(`… (${over} more characters)`);
+  });
+
+  it("an approval row title exactly at the bound is shown whole, with no marker", () => {
+    const exact = "Approval needed: " + "d".repeat(APPROVAL_TITLE_MAX_CHARS - "Approval needed: ".length);
+    render(<InboxItemRow item={row({ title: exact, approval: pendingInfo })} />);
+    expect(document.body.textContent).toContain(exact);
+    expect(document.body.textContent).not.toMatch(/more characters/);
   });
 
   it("renders the title as plain text (the row text comes from the server, never markup)", () => {

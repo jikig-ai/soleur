@@ -74,11 +74,17 @@ describe("revoke and the loser states", () => {
   });
 
   it("a revoke that loses to the agent's repeat (conflict on a consumed row) is recognised, nothing else is", () => {
-    expect(isRevokeTooLate("consumed", "conflict")).toBe(true);
-    expect(isRevokeTooLate("consumed", undefined)).toBe(false);
-    expect(isRevokeTooLate("consumed", "decided")).toBe(false);
-    expect(isRevokeTooLate("approved", "conflict")).toBe(false);
-    expect(isRevokeTooLate("rejected", "conflict")).toBe(false);
+    expect(isRevokeTooLate("consumed", "conflict", "deny")).toBe(true);
+    expect(isRevokeTooLate("consumed", undefined, "deny")).toBe(false);
+    expect(isRevokeTooLate("consumed", "decided", "deny")).toBe(false);
+    expect(isRevokeTooLate("approved", "conflict", "deny")).toBe(false);
+    expect(isRevokeTooLate("rejected", "conflict", "deny")).toBe(false);
+  });
+
+  it("an Approve tap (or no sent decision) never reads as a lost revoke, even on the same consumed + conflict pair", () => {
+    expect(isRevokeTooLate("consumed", "conflict", "approve")).toBe(false);
+    expect(isRevokeTooLate("consumed", "conflict", null)).toBe(false);
+    expect(isRevokeTooLate("consumed", "conflict", undefined)).toBe(false);
   });
 
   it("a conflict on a request that was meanwhile used is released; any other conflict is the loser state", () => {

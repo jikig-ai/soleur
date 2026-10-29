@@ -55,6 +55,8 @@ export interface ApprovalRequestCardProps {
   agentWaiting: boolean;
   /** The server's reply to THIS viewer's own decide, when there was one (conflict, already_decided, revoked, expired and closed). */
   decideOutcome?: ApprovalDecideOutcomeWire;
+  /** Approved, but the server found it can never be used (decider lost Owner standing, or requester left): no "ask again". */
+  approvalUnusable?: boolean;
   /** Expired after the Owner approved it and the agent never asked again. The wire cannot say; the landing page can. */
   expiredAfterApproval?: boolean;
   /** A rejected request that was an approval taken back (revoked). The landing page can tell from the row; the live wire says `revoked` as the outcome. */
@@ -274,6 +276,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
     viewerRole,
     agentWaiting,
     decideOutcome,
+    approvalUnusable,
     expiredAfterApproval,
     revoked,
     newerRequestExists,
@@ -361,7 +364,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
     case "released":
       // The landing page has no live socket: it never says the agent "is continuing", only what the server recorded.
       // A revoke that lost to the agent's repeat says so (the Owner's tap otherwise vanishes without a word).
-      title = isRevokeTooLate(status, decideOutcome)
+      title = isRevokeTooLate(status, decideOutcome, choice)
         ? APPROVAL_COPY.revokeTooLate
         : layout === "landing"
           ? APPROVAL_COPY.releasedTitleNeutral
@@ -373,6 +376,11 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       // The landing page cannot see the agent's wait, so it makes no claim about it and states no duration.
       title = layout === "landing" ? APPROVAL_COPY.approvedLateNeutral : APPROVAL_COPY.approvedLate;
       infoLine = layout === "landing" ? APPROVAL_STATE_COPY.approvedLateNeutralLine : APPROVAL_STATE_COPY.approvedLateLine(AGENT_WAIT_MINUTES);
+      // The row stays approved but can never be applied: "ask again" would be false.
+      if (approvalUnusable) {
+        title = APPROVAL_COPY.approvedUnusable;
+        infoLine = APPROVAL_STATE_COPY.approvedUnusableLine;
+      }
       infoIcon = "warn";
       break;
     case "denied":
@@ -448,7 +456,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
           className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${badgeClass}`}
         >
           {style.icon !== "none" && <Icon name={style.icon} className="h-3.5 w-3.5" />}
-          {BADGE_TEXT[state]}
+          {state === "approved_late" && approvalUnusable ? APPROVAL_STATE_COPY.badge.approvedUnusable : BADGE_TEXT[state]}
         </span>
         {pendingState && expiry.text ? (
           <span

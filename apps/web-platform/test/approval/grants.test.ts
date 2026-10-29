@@ -4,7 +4,17 @@
  */
 import { describe, expect, test } from "vitest";
 import { handlerArgsKey } from "@/server/approval/canonical";
-import { checkGrant, ExecutionGrants, GRANT_MAX_ENTRIES, GRANT_TTL_MS, putGrant } from "@/server/approval/grants";
+import {
+  APPROVED_COMMIT_UNAVAILABLE_MESSAGE,
+  checkGrant,
+  ExecutionGrants,
+  GRANT_MAX_ENTRIES,
+  GRANT_MISSING_MESSAGE,
+  GRANT_TTL_MS,
+  grantRefusalResponse,
+  putGrant,
+  WORKSPACE_CHANGED_MESSAGE,
+} from "@/server/approval/grants";
 import { TOOLS, WORKSPACE_ID } from "./fixtures";
 
 const T = TOOLS.pushBranch;
@@ -100,5 +110,32 @@ describe("checkGrant", () => {
     const g = new ExecutionGrants();
     g.enforcing = true;
     expect(checkGrant(g, T, { branch: "" })).toEqual({ kind: "refuse" });
+  });
+});
+
+describe("the terminal refusal texts say what actually happened (one per cause, never the generic grant-missing text)", () => {
+  const body = (reason: Parameters<typeof grantRefusalResponse>[0]) => JSON.parse(grantRefusalResponse(reason).content[0].text);
+
+  test("the texts themselves", () => {
+    expect(WORKSPACE_CHANGED_MESSAGE).toBe(
+      "The active workspace changed after the approval was granted, so the action was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation in the intended workspace if they still want it done.",
+    );
+    expect(APPROVED_COMMIT_UNAVAILABLE_MESSAGE).toBe(
+      "The commit the Owner approved is not available in the workspace, so the push was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation if they still want it pushed.",
+    );
+    expect(WORKSPACE_CHANGED_MESSAGE).not.toBe(GRANT_MISSING_MESSAGE);
+    expect(APPROVED_COMMIT_UNAVAILABLE_MESSAGE).not.toBe(GRANT_MISSING_MESSAGE);
+    expect(WORKSPACE_CHANGED_MESSAGE).not.toBe(APPROVED_COMMIT_UNAVAILABLE_MESSAGE);
+  });
+
+  test("each refusal reason answers with its own text, code and status, as an error result", () => {
+    expect(grantRefusalResponse("workspace_changed").isError).toBe(true);
+    expect(body("workspace_changed")).toEqual({ error: WORKSPACE_CHANGED_MESSAGE, code: "workspace_changed", status: 409 });
+    for (const r of ["commit_mismatch", "commit_unavailable"] as const) {
+      expect(body(r)).toEqual({ error: APPROVED_COMMIT_UNAVAILABLE_MESSAGE, code: "approved_commit_unavailable", status: 409 });
+    }
+    for (const r of ["grant_missing", "grant_error"] as const) {
+      expect(body(r)).toEqual({ error: GRANT_MISSING_MESSAGE, code: "approval_grant_missing", status: 403 });
+    }
   });
 });

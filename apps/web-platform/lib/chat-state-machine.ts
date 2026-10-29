@@ -216,6 +216,8 @@ export interface ChatApprovalMessage extends ChatMessageBase {
   agentWaiting: boolean;
   /** Set on the reply to this socket's own `approval_decide` (conflict / expired / closed explain a refusal). */
   decideOutcome?: ApprovalDecideOutcomeWire;
+  /** The row stays approved but can never be used (decider no longer an Owner, or requester left): the card must not say "ask again". */
+  approvalUnusable?: boolean;
 }
 
 /** Stage 4 (#2886): subagent group bubble — parent leader's assessment +
@@ -1634,6 +1636,7 @@ export function applyStreamEvent(
         status: event.status,
         decideOutcome: event.outcome ?? old.decideOutcome,
         agentWaiting: event.agentWaiting ?? old.agentWaiting,
+        approvalUnusable: event.unusable ?? old.approvalUnusable,
       };
       return { messages: updated, activeStreams, workflow: priorWorkflow, spawnIndex: priorSpawnIndex };
     }

@@ -19,11 +19,17 @@ const m = vi.hoisted(() => ({
   getRuntimeFlag: vi.fn(),
   createShare: vi.fn(),
   currentWorkspace: { value: "00000000-0000-4000-8000-000000000001" },
+  // The REAL default clients the factory falls back to when no seam is injected (item F1).
+  serviceRpc: vi.fn(async (_fn: string, _args?: Record<string, unknown>) => ({ data: { consumed: true }, error: null }) as { data: unknown; error: unknown }),
+  createServiceClient: vi.fn(),
+  tenantRpc: vi.fn(async (_fn: string, _args?: Record<string, unknown>) => ({ data: true, error: null }) as { data: unknown; error: unknown }),
+  getFreshTenantClient: vi.fn(),
+  notifyApprovalRequested: vi.fn(async (_id: string, _ws: string, _exp: string | null) => true),
 }));
 
-vi.mock("@/lib/supabase/service", () => ({ createServiceClient: () => ({}) }));
-vi.mock("@/lib/supabase/tenant", () => ({ getFreshTenantClient: vi.fn(async () => ({})) }));
-vi.mock("@/server/approval/notify", () => ({ notifyApprovalRequested: vi.fn(async () => true) }));
+vi.mock("@/lib/supabase/service", () => ({ createServiceClient: (...a: unknown[]) => m.createServiceClient(...a) }));
+vi.mock("@/lib/supabase/tenant", () => ({ getFreshTenantClient: (...a: unknown[]) => m.getFreshTenantClient(...a) }));
+vi.mock("@/server/approval/notify", () => ({ notifyApprovalRequested: (...a: unknown[]) => (m.notifyApprovalRequested as (...x: unknown[]) => Promise<boolean>)(...a) }));
 vi.mock("@/lib/feature-flags/server", () => ({ getRuntimeFlag: (...a: unknown[]) => m.getRuntimeFlag(...a) }));
 vi.mock("@/server/logger", () => {
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -58,6 +64,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearAllWaiters();
   m.currentWorkspace.value = WORKSPACE_ID;
+  m.createServiceClient.mockImplementation(() => ({ rpc: m.serviceRpc }));
+  m.getFreshTenantClient.mockImplementation(async () => ({ rpc: m.tenantRpc }));
+  m.notifyApprovalRequested.mockImplementation(async () => true);
   process.env.SENTRY_USERID_PEPPER = "gate-deps-test-pepper";
 });
 
@@ -490,5 +499,50 @@ describe("composed: factory deps -> gate -> the real kb_share_create handler, ov
     expect(verdict).not.toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
     expect(grants.size()).toBe(0);
     expect(m.createShare).not.toHaveBeenCalled();
+  });
+});
+
+describe("createApprovalGateDeps: the DEFAULT clients (no test seam injected)", () => {
+  // No serviceClient / tenantClient / notifyRequested: this is the production wiring.
+  const bare = () => makeDeps({ serviceClient: undefined, tenantClient: undefined, notifyRequested: undefined });
+
+  it("the default tenant client is getFreshTenantClient(userId): the USER id, never the workspace id", async () => {
+    const { deps } = bare();
+    expect(await deps.viewerRole()).toBe("owner");
+    expect(m.getFreshTenantClient).toHaveBeenCalledTimes(1);
+    expect(m.getFreshTenantClient).toHaveBeenCalledWith(USER_ID);
+    expect(m.getFreshTenantClient).not.toHaveBeenCalledWith(WORKSPACE_ID);
+    // And it is the tenant client that answered the owner question, with both ids in their own slots.
+    expect(m.tenantRpc).toHaveBeenCalledWith("is_workspace_owner", { p_workspace_id: WORKSPACE_ID, p_user_id: USER_ID });
+    expect(m.createServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("the default service client is createServiceClient (service role), never the tenant client", async () => {
+    const { deps } = bare();
+    expect(await deps.consume({ id: "x-id", hash: HASH, conversationId: CONVERSATION_ID })).toEqual({ consumed: true });
+    expect(m.createServiceClient).toHaveBeenCalledTimes(1);
+    expect(m.serviceRpc).toHaveBeenCalledWith("consume_approval", { p_id: "x-id", p_hash: HASH, p_conversation: CONVERSATION_ID });
+    expect(m.tenantRpc).not.toHaveBeenCalled();
+    expect(m.getFreshTenantClient).not.toHaveBeenCalled();
+    // One client per gate (memoized): a second RPC does not build another.
+    await deps.consume({ id: "y-id", hash: HASH, conversationId: CONVERSATION_ID });
+    expect(m.createServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("the default notifier forwards a newly created request to the real notify path with the approval id, the workspace id and the expiry", async () => {
+    const { deps } = bare();
+    const expiresAt = "2030-01-01T00:00:00.000Z";
+    await deps.onRequested!({ approvalId: "x-id", created: true, notify: true, expiresAt });
+    expect(m.notifyApprovalRequested).toHaveBeenCalledTimes(1);
+    expect(m.notifyApprovalRequested).toHaveBeenCalledWith("x-id", WORKSPACE_ID, expiresAt);
+  });
+
+  it("the default notifier does not push a re-ask or a coalesced request, and a undelivered push is reported as a throw", async () => {
+    const { deps } = bare();
+    await deps.onRequested!({ approvalId: "x-id", created: false, notify: true, expiresAt: "2030-01-01T00:00:00.000Z" });
+    await deps.onRequested!({ approvalId: "x-id", created: true, notify: false, expiresAt: "2030-01-01T00:00:00.000Z" });
+    expect(m.notifyApprovalRequested).not.toHaveBeenCalled();
+    m.notifyApprovalRequested.mockImplementationOnce(async () => false);
+    await expect(deps.onRequested!({ approvalId: "x-id", created: true, notify: true, expiresAt: "2030-01-01T00:00:00.000Z" })).rejects.toThrow();
   });
 });

@@ -17,6 +17,8 @@ const ROOT = join(__dirname, "../..");
 /** Source with comments removed: every regex below must match CODE (a comment naming the wiring must not satisfy it). */
 const src = (rel: string) => stripComments(readFileSync(join(ROOT, rel), "utf8"));
 const SHORT = APPROVAL_REQUIRED_TOOLS.map((t) => t.replace("mcp__soleur_platform__", ""));
+/** The wired grants argument: the identifier must END at `approvalGrants` (a different object named `approvalGrantsB` must not pass). */
+const GRANTS_ARG = /grants:\s*approvalGrants\s*[,}]/;
 const BUILDERS = ["email-triage-tools", "github-tools", "kb-share-tools", "workspace-settings-tools"];
 
 function createCanUseToolBlock(file: string): string {
@@ -37,10 +39,10 @@ describe("runner registration census", () => {
     const runner = src("server/agent-runner.ts");
     expect(runner.match(/new ExecutionGrants\(\)/g)).toHaveLength(1);
     const block = createCanUseToolBlock("server/agent-runner.ts");
-    expect(block).toMatch(/createApprovalGateDeps\(\{[\s\S]{0,600}?grants:\s*approvalGrants/);
-    expect(runner).toMatch(/buildGithubTools\(\{[^}]*grants:\s*approvalGrants/s);
-    expect(runner).toMatch(/buildKbShareTools\(\{[^}]*grants:\s*approvalGrants/s);
-    expect(runner).toMatch(/buildWorkspaceSettingsTools\(\{[^}]*grants:\s*approvalGrants/s);
+    expect(block).toMatch(new RegExp(String.raw`createApprovalGateDeps\(\{[\s\S]{0,600}?` + GRANTS_ARG.source));
+    expect(runner).toMatch(new RegExp(String.raw`buildGithubTools\(\{[^}]*` + GRANTS_ARG.source, 's'));
+    expect(runner).toMatch(new RegExp(String.raw`buildKbShareTools\(\{[^}]*` + GRANTS_ARG.source, 's'));
+    expect(runner).toMatch(new RegExp(String.raw`buildWorkspaceSettingsTools\(\{[^}]*` + GRANTS_ARG.source, 's'));
   });
 
   test("the cc runner never builds the approval gate dependency or the execution grants", () => {
@@ -62,6 +64,14 @@ describe("runner registration census", () => {
 });
 
 describe("self-test: the census regexes see code, not comments (mutation list)", () => {
+  test("the grants argument must end at approvalGrants: a longer identifier, or another object, fails it", () => {
+    expect(GRANTS_ARG.test("buildGithubTools({ userId, grants: approvalGrants })")).toBe(true);
+    expect(GRANTS_ARG.test("buildGithubTools({ grants: approvalGrants, userId })")).toBe(true);
+    expect(GRANTS_ARG.test("buildGithubTools({ userId, grants: approvalGrantsB })")).toBe(false);
+    expect(GRANTS_ARG.test("buildGithubTools({ userId, grants: approvalGrantsB, x })")).toBe(false);
+    expect(new RegExp(String.raw`buildGithubTools\(\{[^}]*` + GRANTS_ARG.source, "s").test("buildGithubTools({ userId, grants: approvalGrantsB })")).toBe(false);
+  });
+
   const WIRED = `createCanUseTool({ deps: { approval: createApprovalGateDeps({ grants: approvalGrants }), workspaceId: activeWorkspaceId } })`;
   const wired = (text: string) => /approval:\s*createApprovalGateDeps\(/.test(stripComments(text));
 

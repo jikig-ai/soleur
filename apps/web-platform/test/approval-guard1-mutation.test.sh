@@ -90,7 +90,8 @@
 #   Round 2 pinned offline (tokenized, test/approval/migration-180-approval-request.test.ts, not rows here because the
 #   migration file is not edited by this battery): consume's `IF v_id IS NOT NULL ... 'consumed', true` and the single
 #   `'consumed', false` failure return (N1/N2), get_approval_status reading the row's own status (N3), and both inbox-settle
-#   branches scoped by `workspace_id = p_workspace_id` (N4/N5). The reason lookup's CASE order is pinned (G1-3g).
+#   branches scoped by `workspace_id = p_workspace_id` (N4/N5), and both `WHERE id = p_id` row reads, get_approval_status and
+#   the consume reason lookup (N6/N7; rows G1-N6/G1-N7 mutate the real SQL). The reason lookup's CASE order is pinned (G1-3g).
 #
 # ROW GROUPS (round 2 added sections 11-14): 11 the production gate-deps factory gate.ts (grants identity, consume, readStatus,
 #   flag default, viewer role, repo, HEAD, recipient; test/approval/gate-deps.test.ts builds the REAL factory); 12 sticky
@@ -201,6 +202,7 @@ T_SINK = "test/approval/approval-ops-real-sink.test.ts"
 T_OPSINK = "test/approval/ops-sink.test.ts"
 T_PAY = "test/approval/gate-flow-payload.test.ts"
 T_BGR = "test/approval/builder-grants-required.test.ts"
+T_PCGB = "test/approval/permission-callback-gated-branch.test.ts"
 T_AD = "test/account-delete.test.ts"
 STATIC = "static:probe"
 
@@ -239,6 +241,8 @@ M("G1-S4-sql-hash-conjunct-commented-out", SQL, cons(lambda s: s.replace("     A
 M("G1-S4b-sql-conversation-conjunct-block-commented", SQL, cons(lambda s: s.replace("     AND conversation_id = p_conversation\n", "     AND true /* conversation_id = p_conversation */\n")), T_MIG, [K_CONS])
 M("G1-S10-sql-where-id-or-true", SQL, cons(lambda s: s.replace("WHERE id = p_id", "WHERE (id = p_id OR true)")), T_MIG, [K_CONS])
 M("G1-3g-sql-reason-drops-decider-arm", SQL, E("    WHEN NOT COALESCE(public.is_workspace_owner(v_row.workspace_id, v_row.decided_by), false) THEN 'decider_not_owner'\n", ""), T_MIG, [K_REASON])
+M("G1-N6-sql-status-read-widened", SQL, E("SELECT * INTO v_row FROM public.approval_request WHERE id = p_id;\n  IF NOT FOUND THEN\n    RETURN NULL;", "SELECT * INTO v_row FROM public.approval_request WHERE (id = p_id OR true);\n  IF NOT FOUND THEN\n    RETURN NULL;"), T_MIG, ["get_approval_status reports the row's own status, never a literal"])
+M("G1-N7-sql-consume-reason-lookup-widened", SQL, E("SELECT * INTO v_row FROM public.approval_request WHERE id = p_id;\n  v_reason := CASE", "SELECT * INTO v_row FROM public.approval_request WHERE (id = p_id OR true);\n  v_reason := CASE"), T_MIG, ["consume releases ONLY on the matched UPDATE (IF v_id IS NOT NULL ... 'consumed', true) and every other path ends in 'consumed', false"])
 M("G1-2b-sql-decide-accepts-overdue", SQL, E("  IF v_row.status IN ('pending', 'approved') AND v_row.expires_at <= now() THEN", "  IF FALSE THEN"), T_MIG, [K_DECIDE_CLEAN])
 M("G1-2c-sql-create-keeps-overdue-live-row", SQL, E("       AND status IN ('pending', 'approved')\n       AND expires_at <= now()\n    RETURNING id, workspace_id", "       AND status IN ('pending', 'approved')\n    RETURNING id, workspace_id"), T_MIG, ["expires an overdue live row for the same action before inserting"])
 M("G1-3c-sql-hash-column-not-write-once", SQL, E("     OR NEW.action_sha256 IS DISTINCT FROM OLD.action_sha256\n", ""), T_MIG, ["makes the identity, decision and revoke columns write-once"])
@@ -320,7 +324,7 @@ M("G1-R1-allow-on-owner-rejection", GF, E('a.logDecision(a.toolName, "deny", "ap
 M("G1-R2-allow-on-expired", GF, E('a.logDecision(a.toolName, "deny", "approval expired");\n          return deny(APPROVAL_EXPIRED_DENY);', 'a.logDecision(a.toolName, "deny", "approval expired");\n          return a.allow(snapshot);'), T_GF, ["a request that expires while the agent waits denies with the expiry text and never consumes"])
 M("G1-R3-allow-on-already-consumed", GF, E('a.logDecision(a.toolName, "deny", "approval already consumed");\n          return deny(APPROVAL_CONSUME_REJECTED_DENY);', 'a.logDecision(a.toolName, "deny", "approval already consumed");\n          return a.allow(snapshot);'), T_GF, ["a request that another identical call already consumed denies and never consumes again"])
 M("G1-R4-allow-on-unknown-outcome", GF, E('a.logDecision(a.toolName, "deny", "approval outcome unknown");\n          return deny(APPROVAL_UNAVAILABLE_DENY);', 'a.logDecision(a.toolName, "deny", "approval outcome unknown");\n          return a.allow(snapshot);'), T_GF, equivalent="the default arm of the verdict switch is unreachable: the wait returns only decided|timeout|aborted, waitForDecision never returns 'pending' or null as decided, every decided status it can return has its own arm, and aborted/null are handled before the switch; the arm is defence in depth and no input shape reaches it")
-M("G1-R5-allow-on-rejected-reproposal-consume", GF, E('a.logDecision(a.toolName, "deny", "approval consume rejected");\n        return deny(consumeRejectedDeny(submitted.reason));', 'a.logDecision(a.toolName, "deny", "approval consume rejected");\n        return a.allow(snapshot);'), T_GF, ["a late approval whose consume is rejected on re-proposal denies and reports the rejection"])
+M("G1-R5-allow-on-rejected-reproposal-consume", GF, E('a.logDecision(a.toolName, "deny", "approval consume rejected");\n        return deny(consumeRejectedDeny(shown));', 'a.logDecision(a.toolName, "deny", "approval consume rejected");\n        return a.allow(snapshot);'), T_GF, ["a late approval whose consume is rejected on re-proposal denies and reports the rejection"])
 M("G1-R6-allow-on-not-waitable", GF, E('a.logDecision(a.toolName, "deny", "approval request not waitable");\n        return deny(APPROVAL_UNAVAILABLE_DENY);', 'a.logDecision(a.toolName, "deny", "approval request not waitable");\n        return a.allow(snapshot);'), T_GF, ["a request that is neither pending nor approved is not waitable: deny"])
 M("G1-R7-allow-when-request-not-created", GF, E('a.logDecision(a.toolName, "deny", "approval request not created");\n      return deny(APPROVAL_UNAVAILABLE_DENY);', 'a.logDecision(a.toolName, "deny", "approval request not created");\n      return a.allow(snapshot);'), T_GF, ["the request cannot be created: deny, approval-create-failed, no card, no hold, static text only"])
 M("G1-R8-allow-when-bind-fails", GF, E('a.logDecision(a.toolName, "deny", "approval bind failed");\n      return deny(APPROVAL_UNAVAILABLE_DENY);\n    }\n\n    // 2.', 'a.logDecision(a.toolName, "deny", "approval bind failed");\n      return a.allow(snapshot);\n    }\n\n    // 2.'), T_GF, ["server-derived fields that cannot be resolved: deny, approval-bind-failed, nothing requested"])
@@ -332,8 +336,8 @@ M("G1-PR2-requester-not-member-has-no-own-text", GF, E('    case "decider_not_ow
 M("G1-X1-grant-write-dropped-before-allow", GF, E("      putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId, headSha: derived?.headSha });\n", ""), T_GF, ["the grant is written BEFORE allow(): if writing it fails the call is a deny, never an allow without a grant", "live approved path: the grant carries the approved headSha and workspace, keyed by the handler args, and is in place when allow() runs", "released (re-proposal) path: the same grant is written"])
 M("G1-X2-enforcing-never-set", GF, E("  a.approval.grants.enforcing = true;\n", ""), T_GF, ["the flag turning on marks the session enforcing; a flag-off call leaves it untouched"])
 M("G1-X3-grant-drops-the-approved-commit", GF, E("headSha: derived?.headSha });", "headSha: undefined });"), T_GF, ["live approved path: the grant carries the approved headSha and workspace, keyed by the handler args, and is in place when allow() runs"])
-M("G1-X5-grant-written-on-a-reproposal-consume-rejection", GF, E('a.logDecision(a.toolName, "deny", "approval consume rejected");\n        return deny(consumeRejectedDeny(submitted.reason));', 'a.logDecision(a.toolName, "deny", "approval consume rejected");\n        putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n        return deny(consumeRejectedDeny(submitted.reason));'), T_DENYP, ["a deny writes no execution grant (every deny path of the gate) re-proposal consume rejected (submit answers consume_rejected): deny, no allow(), no grant, session enforcing"])
-M("G1-X5b-grant-written-on-a-live-consume-rejection", GF, E('a.logDecision(a.toolName, "deny", "approval consume rejected");\n            return deny(consumeRejectedDeny(reason));', 'a.logDecision(a.toolName, "deny", "approval consume rejected");\n            putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n            return deny(consumeRejectedDeny(reason));'), T_GF, ["a consume rejection, a cap and an aborted call never write a grant"])
+M("G1-X5-grant-written-on-a-reproposal-consume-rejection", GF, E('a.logDecision(a.toolName, "deny", "approval consume rejected");\n        return deny(consumeRejectedDeny(shown));', 'a.logDecision(a.toolName, "deny", "approval consume rejected");\n        putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n        return deny(consumeRejectedDeny(shown));'), T_DENYP, ["a deny writes no execution grant (every deny path of the gate) re-proposal consume rejected (submit answers consume_rejected): deny, no allow(), no grant, session enforcing"])
+M("G1-X5b-grant-written-on-a-live-consume-rejection", GF, E('a.logDecision(a.toolName, "deny", "approval consume rejected");\n            return deny(consumeRejectedDeny(shown));', 'a.logDecision(a.toolName, "deny", "approval consume rejected");\n            putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n            return deny(consumeRejectedDeny(shown));'), T_GF, ["a consume rejection, a cap and an aborted call never write a grant"])
 M("G1-X5c-grant-written-on-an-owner-rejection", GF, E('a.logDecision(a.toolName, "deny", "approval rejected by the owner");\n          return deny(APPROVAL_REJECTED_DENY);', 'a.logDecision(a.toolName, "deny", "approval rejected by the owner");\n          putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n          return deny(APPROVAL_REJECTED_DENY);'), T_DENYP, ["Owner rejected while the agent waited: deny, no allow(), no grant, session enforcing"])
 M("G1-X5d-grant-written-on-a-wait-timeout", GF, E('a.logDecision(a.toolName, "deny", "approval wait ended undecided");\n          return deny(APPROVAL_PENDING_DENY);', 'a.logDecision(a.toolName, "deny", "approval wait ended undecided");\n          putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId });\n          return deny(APPROVAL_PENDING_DENY);'), T_DENYP, ["nobody decided before the wait deadline: deny, no allow(), no grant, session enforcing"])
 M("G1-X6-push-handler-ignores-the-grant-commit", GHT, E('commitSha: grant.kind === "granted" ? grant.binding.headSha : undefined,', "commitSha: undefined,"), T_PUSHG, ["a grant pins the approved commit: pushBranch gets commitSha = the approved headSha"])
@@ -356,9 +360,10 @@ M("G1-F5-flag-truthy-is-on", GF, E("enabled = (await a.approval.isEnabled()) ===
 M("G1-F6-reattach-reads-flag-without-workspace", REATT, E("isApprovalQueueEnabled({ userId: a.userId, workspaceId: w })", "isApprovalQueueEnabled({ userId: a.userId, workspaceId: null as never })"), T_WS, ["reattach re-send attach site: resume_stream a workspace-scoped cohort: the card is re-sent for the cohort's workspace and the flag was read WITH a workspace"])
 
 # ---- 5. The permission-callback gated branch ---------------------------------------------------------------------------------
-# PC1/PC2 sit on the chokepoint every createCanUseTool-driven gate test passes through, so most of gate-flow.test.ts goes red (94/123, 86/123 measured).
-M("G1-PC1-gated-branch-never-calls-the-gate", PC, E("if (deps.approval && isApprovalRequiredTool(toolName)) {", "if (false && deps.approval && isApprovalRequiredTool(toolName)) {"), T_GF, ["approve in window -> exactly one consume with the independently computed hash -> allow"], blast=0.85)
-M("G1-PC2-gate-verdict-discarded", PC, E("if (approvalVerdict !== null) return approvalVerdict;", ""), T_GF, ["approve in window -> exactly one consume with the independently computed hash -> allow"], blast=0.85)
+# PC1/PC2 sit on the chokepoint every createCanUseTool-driven gate test passes through, so gate-flow.test.ts goes red wholesale (a crash-shaped signal, not an
+# attribution). Their detector is the small permission-callback-gated-branch.test.ts: exactly ONE of its three tests goes red on either edit.
+M("G1-PC1-gated-branch-never-calls-the-gate", PC, E("if (deps.approval && isApprovalRequiredTool(toolName)) {", "if (false && deps.approval && isApprovalRequiredTool(toolName)) {"), T_PCGB, ["the gated branch of createCanUseTool an approval-required tool with the flag on is handed to the approval gate and returns the gate's verdict"])
+M("G1-PC2-gate-verdict-discarded", PC, E("if (approvalVerdict !== null) return approvalVerdict;", ""), T_PCGB, ["the gated branch of createCanUseTool an approval-required tool with the flag on is handed to the approval gate and returns the gate's verdict"])
 
 # ---- 6. Service wrappers (consume contract, re-proposal consume: matrix row 11) ------------------------------------------------
 M("G1-11a-approved-row-not-consumed-on-create", SVC, E('if (r.approval.status === "approved") {', 'if (false && r.approval.status === "approved") {'), T_SVC, ["an approved live row is consumed immediately, with no card and no wait"])
@@ -448,6 +453,10 @@ M("G1-GD20-factory-undelivered-push-is-silent", GD, E('if (!delivered) throw new
 M("G1-GD21-factory-service-client-not-memoised", GD, E("(service ??= (args.serviceClient", "(service = (args.serviceClient"), T_GD, ["the service client is created once and reused across calls"])
 M("G1-GD22-factory-head-read-in-the-process-cwd", GD, E("{ cwd: workspacePath, timeout: 10_000 }", "{ cwd: process.cwd(), timeout: 10_000 }"), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
 M("G1-GD23-factory-head-not-trimmed", GD, E("const sha = stdout.trim();", "const sha = stdout;"), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
+M("G1-GD25-factory-default-tenant-client-is-built-for-the-workspace", GD, E("getFreshTenantClient(args.userId)", "getFreshTenantClient(args.workspaceId)"), T_GD, ["the default tenant client is getFreshTenantClient(userId): the USER id, never the workspace id"])
+M("G1-GD26-factory-default-service-client-is-not-createServiceClient", GD, E("createServiceClient() as unknown as ApprovalRpcClient", "({}) as unknown as ApprovalRpcClient"), T_GD, ["the default service client is createServiceClient (service role), never the tenant client"])
+M("G1-GD27-factory-default-notifier-gets-the-user-not-the-workspace", GD, E("(args.notifyRequested ?? notifyApprovalRequested)(approvalId, args.workspaceId, expiresAt)", "(args.notifyRequested ?? notifyApprovalRequested)(approvalId, args.userId, expiresAt)"), T_GD, ["the default notifier forwards a newly created request to the real notify path with the approval id, the workspace id and the expiry"])
+M("G1-GD28-factory-default-notifier-is-not-the-real-notify-path", GD, E("args.notifyRequested ?? notifyApprovalRequested", "args.notifyRequested ?? (async () => true)"), T_GD, ["the default notifier forwards a newly created request to the real notify path with the approval id, the workspace id and the expiry"])
 M("G1-GD24-factory-head-shape-unchecked", GD, E('if (!COMMIT_SHA_RE.test(sha)) throw new Error("workspace HEAD is not a commit sha");', ""), T_GD, equivalent="`git rev-parse HEAD` that exits 0 prints exactly one full object id (40 or 64 hex) and an unborn or missing HEAD exits non-zero, which execFile already turns into a throw; surveyed input shapes: a normal repo, an empty repo (no commit), a non-repository directory, a repository with a detached HEAD; none reaches the shape check with a non-sha. Defence in depth for a future change of the git command.")
 
 # ---- 12. Sticky enforcement, grants refused / key unavailable ops, push without a commit, consume-reject frames (round-2 Q3/Q5/Q6/Q8) --
@@ -468,16 +477,26 @@ M("G1-GR3-grant-refused-op-drops-the-reason", GRANTS, E('reportApprovalOp("grant
 M("G1-GR4-kb-share-workspace-change-not-reported", KBS, E('reportGrantRefused(toolName, "workspace_changed");', ""), T_SINK, ["workspace_changed: approved in W1, active workspace W2"])
 M("G1-GR5-settings-workspace-change-not-reported", WSET, E('reportGrantRefused(toolName, "workspace_changed");', ""), T_SINK, ["workspace_changed: approved in W1, active workspace W2"])
 M("G1-GR6-refusal-code-differs-between-tools", GRANTS, E('workspace_changed: { error: WORKSPACE_CHANGED_MESSAGE, code: "workspace_changed", status: 409 }', 'workspace_changed: { error: WORKSPACE_CHANGED_MESSAGE, code: "workspace-changed", status: 409 }'), T_EXG, ["kb_share_create the active workspace changed after approval: refused with workspace_changed, createShare never called", "workspace_set_autonomous approved on W1 but the active workspace is W2: refused with workspace_changed, setBashAutonomous never called"])
+M("G1-GR7-workspace-changed-text-is-the-generic-grant-missing-text", GRANTS, E('"The active workspace changed after the approval was granted, so the action was NOT performed.', '"The approval for this action could not be applied to this call, so the action was NOT performed.'), T_GRANTS, ["the terminal refusal texts say what actually happened (one per cause, never the generic grant-missing text) the texts themselves"])
+M("G1-GR8-commit-unavailable-text-is-the-generic-grant-missing-text", GRANTS, E('"The commit the Owner approved is not available in the workspace, so the push was NOT performed.', '"The approval for this action could not be applied to this call, so the push was NOT performed.'), T_GRANTS, ["the terminal refusal texts say what actually happened (one per cause, never the generic grant-missing text) the texts themselves"])
+M("G1-GR9-commit-unavailable-reason-answers-grant-missing", GRANTS, E("commit_unavailable: { error: APPROVED_COMMIT_UNAVAILABLE_MESSAGE,", "commit_unavailable: { error: GRANT_MISSING_MESSAGE,"), T_GRANTS, ["each refusal reason answers with its own text, code and status"])
+M("G1-BGR1-content-census-loses-a-grant-reading-builder", KBS, E('import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";', 'import { grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";'), T_BGR, ["grant-reading builders and the three known ones among them"])
+M("G1-7f-runner-hands-a-builder-a-different-grants-object", "server/agent-runner.ts", E("buildWorkspaceSettingsTools({ userId, grants: approvalGrants })", "buildWorkspaceSettingsTools({ userId, grants: approvalGrantsB })"), T_RC, ["runner registration census the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (ADR-307 ExecutionGrants)"])
 M("G1-KU1-error-level-ops-downgraded-to-warn", "server/approval/ops.ts", E('if (def.level === "error") reportSilentFallback(null, options);', 'if (false) reportSilentFallback(null, options);'), T_SINK, ["the gate denies with the unavailable text and reaches Sentry as its own error event (literal-null path, code in extra)"])
-M("G1-KU1b-error-level-ops-hand-the-error-to-the-helper", "server/approval/ops.ts", E('if (def.level === "error") reportSilentFallback(null, options);', 'if (def.level === "error") reportSilentFallback(err, options);'), T_OPSINK, [": captureMessage with feature/op tags, the static message, error level and the approval id", ": the pino mirror line carries feature/op and no err object (nothing for the pino integration to capture)"], blast=0.9)
+M("G1-KU1b-error-level-ops-hand-the-error-to-the-helper", "server/approval/ops.ts", E('if (def.level === "error") reportSilentFallback(null, options);', 'if (def.level === "error") reportSilentFallback(err, options);'), T_OPSINK, [": captureMessage with feature/op tags, the static message, error level and the approval id", ": the pino mirror line carries feature/op and no err object (nothing for the pino integration to capture)"], blast=0.45)  # 15/37 measured: every error-level op case of two it.each tests
 M("G1-KU2-reattach-key-unavailable-not-reported", REATT, E('reportApprovalOp("keyUnavailable", null, {', 'reportApprovalOp("reattachFailed", null, {'), T_SINK, ["reattach reports the same op, tagged with the approval id, and shows no card"])
 M("G1-KU3-flag-read-failure-latches-after-the-first-report", FLAG, E("lastReadFailureReportedAt === null || now - lastReadFailureReportedAt >= FLAG_READ_FAILURE_REPORT_TTL_MS", "lastReadFailureReportedAt === null"), T_SINK, ["reports once per window, stays quiet inside it, and reports again after the TTL"])
 M("G1-NA1-not-approved-has-no-own-deny-text", GF, E('    case "not_approved":\n      // The consume lost to a revoke: the Owner denied it, so the honest text is the denial, not "arguments changed".\n      return APPROVAL_REJECTED_DENY;\n', ""), T_GF, ["consume reasons map to their own static text not_approved"])
 M("G1-NA2-not-approved-card-keeps-claiming-approved", GF, E('    case "not_approved":\n      return "rejected";\n', ""), T_GF, ["live path, reason not_approved -> approval_status rejected with agentWaiting=false"])
-M("G1-CF1-live-consume-reject-sends-no-settle-frame", GF, E("            emitStatus(approvalId, consumeRejectedCardStatus(reason), false);\n", ""), T_GF, ["live path, reason "], blast=0.3)
-M("G1-CF2-live-consume-reject-says-the-agent-still-waits", GF, E("emitStatus(approvalId, consumeRejectedCardStatus(reason), false);", "emitStatus(approvalId, consumeRejectedCardStatus(reason), true);"), T_GF, ["live path, reason "], blast=0.3)
-M("G1-CF3-reproposal-consume-reject-sends-no-settle-frame", GF, E("        emitStatus(submitted.approvalId, consumeRejectedCardStatus(submitted.reason), false);\n", ""), T_GF, ["re-proposal path (consume rejected inside submit) emits the same settle frame"])
+M("G1-CF1-live-consume-reject-sends-no-settle-frame", GF, E("            emitStatus(approvalId, consumeRejectedCardStatus(shown), false, consumeRejectedIsUnusable(shown));\n", ""), T_GF, ["live path, reason "], blast=0.3)
+M("G1-CF2-live-consume-reject-says-the-agent-still-waits", GF, E("emitStatus(approvalId, consumeRejectedCardStatus(shown), false, consumeRejectedIsUnusable(shown));", "emitStatus(approvalId, consumeRejectedCardStatus(shown), true, consumeRejectedIsUnusable(shown));"), T_GF, ["live path, reason "], blast=0.3)
+M("G1-CF3-reproposal-consume-reject-sends-no-settle-frame", GF, E("        emitStatus(submitted.approvalId, consumeRejectedCardStatus(shown), false, consumeRejectedIsUnusable(shown));\n", ""), T_GF, ["re-proposal path (consume rejected inside submit) emits the same settle frame"])
 M("G1-CF4-expired-reject-card-keeps-claiming-approved", GF, E('    case "expired":\n      return "expired";\n    case "not_approved":', '    case "not_approved":'), T_GF, ["live path, reason expired -> approval_status expired with agentWaiting=false"])
+# Round 3: not_approved is told apart from expired by ONE best-effort read; an unusable approval is flagged on the status frame.
+M("G1-NA3-not-approved-expired-row-reported-as-denied", GF, E('return (await a.approval.readStatus(approvalId)) === "expired" ? "expired" : reason;', "return reason;"), T_GF, ["a row that expired meanwhile maps to the expired deny text and the expired card status, not 'Owner denied'"])
+M("G1-NA4-not-approved-read-failure-changes-the-deny", GF, E('    } catch {\n      return reason;\n    }\n  };', '    } catch {\n      return "rpc_error";\n    }\n  };'), T_GF, ["a failed or empty read keeps the safe default (the denial), and the deny stays static"])
+M("G1-UN1-unusable-flag-never-sent", GF, E("        ...(unusable ? { unusable: true } : {}),\n", ""), T_GF, ["leaves the row approved but flags the status frame unusable", "the re-proposal path flags an unusable approval the same way"])
+M("G1-UN2-requester-not-member-not-flagged-unusable", GF, E('return reason === "decider_not_owner" || reason === "requester_not_member";', 'return reason === "decider_not_owner";'), T_GF, ["reason requester_not_member leaves the row approved but flags the status frame unusable"])
 
 # ---- 13. Payload wiring of the gate flow (round-2 FD-6) -------------------------------------------------------------------------
 K_PAY_SUBMIT = ["gate-flow payload wiring the submitted request carries the REQUESTING user"]
@@ -766,8 +785,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 213 rows today (round 2); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=212
+# 228 rows today (round 3); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=227
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -781,18 +800,18 @@ check "harness row (a-anchor): a mutant whose anchor is missing fails the apply 
 # --- Control: the unedited copy, on every distinct test file, must be GREEN with a literal floor of tests, and every test
 # name a row relies on must be among the PASSED tests (so a typo or a renamed test is a harness failure, not a silent no-op).
 declare -A FLOOR=(
-  ["test/approval/gate-flow.test.ts"]=123
+  ["test/approval/gate-flow.test.ts"]=130
   ["test/approval/gate-flow-resolver-snapshot.test.ts"]=3
   ["test/approval/canonical.test.ts"]=81
   ["test/approval/waiters.test.ts"]=19
   ["test/approval/service.test.ts"]=26
-  ["test/approval/migration-180-approval-request.test.ts"]=89
+  ["test/approval/migration-180-approval-request.test.ts"]=91
   ["test/approval/tools-census.test.ts"]=18
-  ["test/approval/runner-census.test.ts"]=9
+  ["test/approval/runner-census.test.ts"]=10
   ["test/approval/flag.test.ts"]=5
   ["test/approval/decide-boundary.test.ts"]=52
   ["test/approval/render.test.ts"]=44
-  ["test/approval/grants.test.ts"]=11
+  ["test/approval/grants.test.ts"]=13
   ["test/approval/migration-180-decide-closed.test.ts"]=9
   ["test/approval/gate-flow-grant-deny-paths.test.ts"]=9
   ["test/approval/execution-grant-handlers.test.ts"]=10
@@ -800,12 +819,13 @@ declare -A FLOOR=(
   ["test/build-allowed-tools-census.test.ts"]=47
   ["test/github-tools-push-grant.test.ts"]=7
   ["test/push-branch-pinned.test.ts"]=4
-  ["test/approval/gate-deps.test.ts"]=25
+  ["test/approval/gate-deps.test.ts"]=29
   ["test/approval/approval-ops-real-sink.test.ts"]=13
   ["test/approval/ops-sink.test.ts"]=37
   ["test/approval/gate-flow-payload.test.ts"]=4
-  ["test/approval/builder-grants-required.test.ts"]=7
+  ["test/approval/builder-grants-required.test.ts"]=9
   ["test/account-delete.test.ts"]=55
+  ["test/approval/permission-callback-gated-branch.test.ts"]=3
 )
 for tf in $(jq -r '.[].test' "$MUTANTS" | sort -u); do
   if [ "$tf" = "static:probe" ]; then
@@ -931,14 +951,14 @@ fi
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
 EXPECT_EQUIV=3
 EXPECT_RESID=2
-MIN_KILLED=207
+MIN_KILLED=222
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1
 fi
 
 # Anti-vacuity: the floor is a literal directly above its `if`, and reported by printf + exit, never through ok/bad.
-MIN_CHECKS=465
+MIN_CHECKS=499
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s: the battery is vacuous\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1

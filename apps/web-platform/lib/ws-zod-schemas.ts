@@ -434,6 +434,7 @@ const approvalStatusSchema = z.strictObject({
   status: z.enum(APPROVAL_WIRE_STATUSES),
   outcome: z.enum(APPROVAL_WIRE_DECIDE_OUTCOMES).optional(),
   agentWaiting: z.boolean().optional(),
+  unusable: z.boolean().optional(),
 });
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),

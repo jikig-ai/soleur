@@ -27,6 +27,15 @@ import {
   type InboxItemSeverity,
 } from "@/lib/inbox-severity";
 
+/** Generous bound on an approval row title (the server title is far shorter); past it the row says how much is not shown. */
+export const APPROVAL_TITLE_MAX_CHARS = 4096;
+
+function boundApprovalTitle(text: string): string {
+  const chars = Array.from(text);
+  if (chars.length <= APPROVAL_TITLE_MAX_CHARS) return text;
+  return `${chars.slice(0, APPROVAL_TITLE_MAX_CHARS).join("")}… (${chars.length - APPROVAL_TITLE_MAX_CHARS} more characters)`;
+}
+
 interface InboxItemRowProps {
   item: InboxItemRowData;
   /** Called after a successful act/archive — the surface refetches. */
@@ -53,10 +62,12 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
   // An approval row names the agent's action: invisible direction/zero-width controls are made visible BEFORE the
   // sanitizer (which would drop them silently), so a right-to-left override cannot disguise a recipient.
   // An approval title is also exempt from the sanitizer's 200-character cap: the row names the action in full, so a
-  // cap would silently cut the very value (a long recipient or branch) the Owner is checking.
+  // cap would silently cut the very value (a long recipient or branch) the Owner is checking. A generous bound
+  // (APPROVAL_TITLE_MAX_CHARS) keeps a pathological row from flooding the list, and past it the row says how many
+  // characters are not shown, so nothing is dropped silently.
   const title =
     item.source === "approval_required"
-      ? sanitizeDisplayString(revealInvisible(item.title), Number.POSITIVE_INFINITY)
+      ? boundApprovalTitle(sanitizeDisplayString(revealInvisible(item.title), Number.POSITIVE_INFINITY))
       : sanitizeDisplayString(item.title);
   const severity = item.severity;
   const isActionRequired = severity === "action_required";

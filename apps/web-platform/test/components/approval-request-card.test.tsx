@@ -127,10 +127,26 @@ describe("resolved states (wireframe 04)", () => {
     });
   }
 
-  it("a conflict on a request that was meanwhile used reads as released, not as a lost race", () => {
-    render(<ApprovalRequestCard {...props({ status: "consumed", decideOutcome: "conflict" })} />);
+  it("a revoke tap answered with a conflict on a used request reads as released with the too-late copy, not as a lost race", async () => {
+    const { rerender } = render(<ApprovalRequestCard {...props({ status: "approved", agentWaiting: false })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Revoke approval" }));
+    });
+    rerender(<ApprovalRequestCard {...props({ status: "consumed", decideOutcome: "conflict" })} />);
     expect(state()).toBe("released");
     expect(screen.getByRole("heading").textContent).toBe("Your revoke came too late: your agent had already used this approval");
+  });
+
+  it("an APPROVE tap answered with a conflict on a used request is NOT 'revoke too late' (a second Owner never revoked anything)", async () => {
+    const { rerender } = render(<ApprovalRequestCard {...props({})} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    });
+    rerender(<ApprovalRequestCard {...props({ status: "consumed", decideOutcome: "conflict" })} />);
+    expect(state()).toBe("released");
+    const heading = screen.getByRole("heading").textContent ?? "";
+    expect(heading).not.toMatch(/revoke/i);
+    expect(heading).toBe("Released, your agent is continuing");
   });
 
   it("a released card without a lost revoke keeps its ordinary title", () => {
@@ -175,6 +191,23 @@ describe("resolved states (wireframe 04)", () => {
   it("shows the decided meta label on a resolved card", () => {
     render(<ApprovalRequestCard {...props({ status: "rejected", decidedLabel: "Wed 28 Oct, 10:44 UTC · by you" })} />);
     expect(screen.getByTestId("approval-decided-label").textContent).toContain("by you");
+  });
+});
+
+describe("an approved request that can no longer be used (decider lost Owner standing, or requester left)", () => {
+  it("never says 'ask again' or that asking again is allowed, and says what to do instead", () => {
+    render(<ApprovalRequestCard {...props({ status: "approved", agentWaiting: false, approvalUnusable: true })} />);
+    expect(state()).toBe("approved_late");
+    expect(screen.getByRole("heading").textContent).toBe("Approved, but this approval can no longer be used");
+    expect(screen.getByTestId("approval-badge").textContent).toBe("Approved · unusable");
+    const text = card().textContent ?? "";
+    expect(text).not.toMatch(/ask(ing)? (it |your agent )?again|is allowed/i);
+    expect(screen.getByTestId("approval-info").textContent).toMatch(/revoke it, or wait for it to expire, then start a new request/);
+  });
+
+  it("an ordinary late approval still invites asking again", () => {
+    render(<ApprovalRequestCard {...props({ status: "approved", agentWaiting: false })} />);
+    expect(screen.getByRole("heading").textContent).toBe("Approved. Ask your agent again.");
   });
 });
 

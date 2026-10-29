@@ -676,6 +676,11 @@ function consumeShapeIssues(raw: string): string[] {
   if (countOf(b, "'consumed', true") !== 1) out.push("'consumed', true must appear exactly once (the matched branch)");
   if (!b.includes("RETURN jsonb_build_object('consumed', false, 'reason', v_reason); END;")) out.push("the failure branch must end the function with 'consumed', false and the looked-up reason");
   if (countOf(b, "'consumed', false") !== 1) out.push("'consumed', false must appear exactly once (the failure branch)");
+  // The non-authoritative reason read is keyed by the id alone: widening it reports another row's state as this one's.
+  if (!b.includes("END IF; SELECT * INTO v_row FROM public.approval_request WHERE id = p_id; v_reason := CASE")) {
+    out.push("the reason lookup must be `SELECT * INTO v_row FROM public.approval_request WHERE id = p_id;` straight after the matched branch");
+  }
+  if (countOf(b, "FROM public.approval_request WHERE id = p_id;") !== 1) out.push("the reason lookup must be the only plain id read");
   return out;
 }
 
@@ -685,6 +690,9 @@ function statusShapeIssues(raw: string): string[] {
   if (!b) return ["get_approval_status not found"];
   if (!b.includes("'status', v_row.status,")) out.push("status must be read from the row");
   if (/'status',\s*'/.test(b)) out.push("status must never be a literal");
+  if (!b.includes("SELECT * INTO v_row FROM public.approval_request WHERE id = p_id; IF NOT FOUND THEN RETURN NULL; END IF;")) {
+    out.push("the row read must be exactly `WHERE id = p_id` followed by the not-found NULL return");
+  }
   return out;
 }
 
@@ -745,6 +753,8 @@ const MUTANTS: Array<{ id: string; why: string; checker: (raw: string) => string
   { id: "N3", why: "get_approval_status reports a constant approved", checker: statusShapeIssues, apply: (r) => mutate(r, "'status', v_row.status,", "'status', 'approved',", { fn: "get_approval_status" }) },
   { id: "N4", why: "the acted inbox-settle branch loses its workspace scope", checker: settleIssues, apply: (r) => mutate(r, "WHERE workspace_id = p_workspace_id\n       AND source = 'approval_required'\n       AND dedup_key = p_approval_id::text;", "WHERE source = 'approval_required'\n       AND dedup_key = p_approval_id::text;", { fn: "approval_request_inbox_settle" }) },
   { id: "N5", why: "the fyi inbox-settle branch loses its workspace scope", checker: settleIssues, apply: (r) => mutate(r, "WHERE workspace_id = p_workspace_id\n       AND source = 'approval_required'\n       AND dedup_key = p_approval_id::text\n       AND severity = 'action_required';", "WHERE source = 'approval_required'\n       AND dedup_key = p_approval_id::text\n       AND severity = 'action_required';", { fn: "approval_request_inbox_settle" }) },
+  { id: "N6", why: "get_approval_status widens its row read (WHERE id = p_id OR true)", checker: statusShapeIssues, apply: (r) => mutate(r, "SELECT * INTO v_row FROM public.approval_request WHERE id = p_id;\n  IF NOT FOUND THEN\n    RETURN NULL;", "SELECT * INTO v_row FROM public.approval_request WHERE (id = p_id OR true);\n  IF NOT FOUND THEN\n    RETURN NULL;", { fn: "get_approval_status" }) },
+  { id: "N7", why: "the consume reason lookup widens its row read (WHERE id = p_id OR true)", checker: consumeShapeIssues, apply: (r) => mutate(r, "SELECT * INTO v_row FROM public.approval_request WHERE id = p_id;\n  v_reason := CASE", "SELECT * INTO v_row FROM public.approval_request WHERE (id = p_id OR true);\n  v_reason := CASE", { fn: "consume_approval" }) },
   { id: "D1", why: "decide takes the row lock before the Owner check", checker: decideIssues, apply: (r) => mutate(r, "SELECT workspace_id INTO v_ws FROM public.approval_request WHERE id = p_id;", "SELECT workspace_id INTO v_ws FROM public.approval_request WHERE id = p_id FOR UPDATE;", { fn: "decide_approval" }) },
 ];
 

@@ -115,6 +115,14 @@ describe("approval_status", () => {
     expect(c.messages[0]).toMatchObject({ status: "rejected", decideOutcome: "revoked", agentWaiting: false });
   });
 
+  test("an unusable flag on a status frame is folded into the card and survives a later frame that omits it", () => {
+    const a = applyStreamEvent([], streams(), req({ status: "approved" }));
+    const b = applyStreamEvent(a.messages, a.activeStreams, { ...status("approved"), agentWaiting: false, unusable: true });
+    expect(b.messages[0]).toMatchObject({ status: "approved", approvalUnusable: true });
+    const c = applyStreamEvent(b.messages, b.activeStreams, status("approved"));
+    expect(c.messages[0]).toMatchObject({ approvalUnusable: true });
+  });
+
   test("a status for an unknown approval is a no-op", () => {
     const base: ChatMessage[] = [thinking];
     const r = applyStreamEvent(base, streams(), status("approved"));

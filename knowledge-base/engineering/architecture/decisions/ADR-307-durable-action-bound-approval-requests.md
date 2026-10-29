@@ -115,13 +115,14 @@ may have moved during the wait. A per-session in-process side channel, `Executio
 
 - **Mechanism.** The gate writes a grant immediately before `allow()` on BOTH allow paths (the live `approved` case and the `released` re-proposal case); the three handlers that need it read it once.
   A side channel is needed because the tool zod strips keys not in the schema and SDK `tool()` handlers get no reliable `tool_use_id`, so a binding cannot ride in `updatedInput` without letting the model supply it.
-  The object is created once per session in `agent-runner.ts` and shared by closure between the gate deps and the tool builders; no MCP tool exposes it and the Bash sandbox holds no handle to it, so the model cannot forge it.
+  The object is created once per user message (turn) in `agent-runner.ts` (`startAgentSessionInner`) and shared by closure between the gate deps and the tool builders; no MCP tool exposes it and the Bash sandbox holds no handle to it, so the model cannot forge it.
   A grant is keyed by `canonicalJson(zod-parsed handler args)` (the same `SPECS[tool].input.parse` on both sides, so defaults such as `force=false` match), is one-shot (`take` deletes), expires after 120 s,
   and the map is capped at 64 entries (oldest dropped).
-- **Fail closed, sticky.** The gate sets `enforcing = true` as soon as the flag evaluates true in a session. From then on a handler that finds no grant refuses with a TERMINAL message ("the action was NOT performed; do not retry in
-  this conversation; start a new conversation"). If the flag is turned off, or its read errors, mid-session: the three grant-checked tools (`github_push_branch`, `kb_share_create`, `workspace_set_autonomous`) refuse at the
-  handler, and the gate itself denies the other five approval-required tools with the static "approval unavailable" text instead of falling back to the legacy requester-answerable card, for the rest of that session (the
-  `ExecutionGrants` lifetime); a new conversation starts clean. This is accepted. When `grants` is never `enforcing` (the flag was never on in the session), handler behaviour is byte-identical to before.
+- **Fail closed, sticky for the rest of the turn.** The gate sets `enforcing = true` as soon as the flag evaluates true in a turn. From then on a handler that finds no grant refuses with a TERMINAL message ("the action was NOT performed; do not retry in
+  this conversation; start a new conversation"). If the flag is turned off, or its read errors, later in the same turn: the three grant-checked tools (`github_push_branch`, `kb_share_create`, `workspace_set_autonomous`) refuse at the
+  handler, and the gate itself denies the other five approval-required tools with the static "approval unavailable" text instead of falling back to the legacy requester-answerable card, for the rest of that turn (the
+  `ExecutionGrants` lifetime). The grants object is created per user message, so the next user message starts with a fresh, non-enforcing grants object and evaluates the flag again. This is accepted. When `grants` is never `enforcing` (the flag was never on in the turn), handler behaviour is byte-identical to before.
+  Two accepted consequences of that lifetime, both bounded to the dark/cohort phase. (1) A flag read error on the FIRST gated call of a turn takes the same path as flag off: the legacy card runs. "Unreadable means off" is the accepted contract while the flag is dark or limited to the Jikigai canary; the flip checklist asks for a decision on hardening it before the flag goes wider. (2) A legacy card opened before enforcement began in the turn and approved afterwards lets the five tools without a handler grant check run on that legacy approval; the window is the card wait and is accepted.
   `grants` is a REQUIRED argument of the three builders, so a forgotten wiring is a compile error. Every grant refusal is reported as the warn op `approval-grant-refused` (`extra.reason`, `extra.tool`).
 - **Hotfix boundary untouched.** The grant is written inside the existing `canUseTool` allow path; `allowedTools` and ADR-305 are unchanged.
 
@@ -218,6 +219,7 @@ The same list is copied verbatim into `knowledge-base/project/specs/feat-hitl-ap
    fingerprint is keyed (pepper set, known-answer vector green); both recorded in `knowledge-base/legal/audits/`. The integration test `approval-request.tenant-isolation.test.ts` is the falsifier; `verify/180` deliberately has no row-level check (invariant 3).
 6. **CLO attestation and sign-offs** (compliance-posture row, items (b), (h), (i)): (b) the full CLO attestation is discharged in `knowledge-base/legal/audits/` (a Jikigai-owned canary needs only its (b-canary) verification step);
    (h) the autonomous-mode card copy is non-provisional with both the CPO and CLO reviewer fields filled; (i) as item 5. Evidence gates #9776 and #10111 are closed.
+7. **First-call flag-error posture**: decide whether to harden a flag read error on the first gated call of a turn to deny before enabling beyond the Jikigai canary (today it takes the flag-off path, a legacy card; see "Fail closed, sticky for the rest of the turn").
 
 ### Accepted deviation: cron monitor routing (the CTO review's cron-and-alerts ruling, second clause)
 
@@ -231,8 +233,8 @@ yet. The approval alerts that DO exist and are routed in this PR: `approval-gate
 **Rollback is: flag off, keep the schema.** `180_approval_request.down.sql` is NOT a hot rollback. Run by hand against production it (1) leaves the `_schema_migrations` row, so the runner never re-applies 180 while
 the schema is gone; (2) strands `verify/068` (which expects the extra `_jti_not_denied` policy) and `verify/180`, which stay in `main` and fail every following release's `verify-migrations`, blocking `deploy`; (3) breaks
 account deletion for every user if the new app is live, because saga step 5.16 calls `anonymise_approval_request`; and (4) deletes the `approval_required` inbox rows and DROPs the table including its audit rows.
-Turning the flag off is also safe mid-session, with one stated effect: for the rest of any session in which the approval flow already ran (the `ExecutionGrants` lifetime), the three grant-checked tools refuse at the handler
-and the other five approval-required tools are denied by the gate with the static unavailable text (they never fall back to the legacy requester-answerable card); a new conversation starts clean. Live `pending` and `approved` rows are
+Turning the flag off is also safe mid-session, with one stated effect: for the rest of any turn in which the approval flow already ran (the `ExecutionGrants` lifetime, one user message), the three grant-checked tools refuse at the handler
+and the other five approval-required tools are denied by the gate with the static unavailable text (they never fall back to the legacy requester-answerable card); the next user message starts with a fresh, non-enforcing grants object. Live `pending` and `approved` rows are
 not touched and expire by themselves. **Rotating `SENTRY_USERID_PEPPER` is a rollback hazard of its own**: it invalidates every live approval (pending and approved rows fail closed as `hash_mismatch`; ADR-029 pseudonyms change with it), so
 do it only with the flag off and no live rows.
 

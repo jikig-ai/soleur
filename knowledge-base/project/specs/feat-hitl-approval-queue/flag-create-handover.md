@@ -23,6 +23,7 @@ Authoritative: `knowledge-base/engineering/architecture/decisions/ADR-307-durabl
    fingerprint is keyed (pepper set, known-answer vector green); both recorded in `knowledge-base/legal/audits/`. The integration test `approval-request.tenant-isolation.test.ts` is the falsifier; `verify/180` deliberately has no row-level check (invariant 3).
 6. **CLO attestation and sign-offs** (compliance-posture row, items (b), (h), (i)): (b) the full CLO attestation is discharged in `knowledge-base/legal/audits/` (a Jikigai-owned canary needs only its (b-canary) verification step);
    (h) the autonomous-mode card copy is non-provisional with both the CPO and CLO reviewer fields filled; (i) as item 5. Evidence gates #9776 and #10111 are closed.
+7. **First-call flag-error posture**: decide whether to harden a flag read error on the first gated call of a turn to deny before enabling beyond the Jikigai canary (today it takes the flag-off path, a legacy card; see "Fail closed, sticky for the rest of the turn").
 
 ## Other preconditions
 

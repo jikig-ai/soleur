@@ -23,6 +23,7 @@
 
 import { handlerArgsKey } from "./canonical";
 import { reportApprovalOp, type GrantRefusedReason } from "./ops";
+import type { ApprovalToolName } from "./tools";
 
 export interface ExecutionBinding {
   /** The workspace the approval was granted in (the hash binds it). */
@@ -92,7 +93,7 @@ export type GrantCheck =
   | { kind: "refuse" }
   | { kind: "granted"; binding: ExecutionBinding };
 
-export function checkGrant(grants: ExecutionGrants, tool: string, args: unknown): GrantCheck {
+export function checkGrant(grants: ExecutionGrants, tool: ApprovalToolName, args: unknown): GrantCheck {
   let binding: ExecutionBinding | null = null;
   let cause: unknown;
   let threw = false;

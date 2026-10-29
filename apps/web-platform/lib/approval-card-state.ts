@@ -16,7 +16,7 @@
  */
 
 import { AGENT_WAIT_MINUTES } from "@/lib/approval-copy";
-import type { ApprovalDecideOutcomeWire, ApprovalWireStatus } from "@/lib/types";
+import type { ApprovalDecideOutcomeWire, ApprovalDecisionWire, ApprovalWireStatus } from "@/lib/types";
 
 export { AGENT_WAIT_MINUTES };
 
@@ -71,11 +71,16 @@ export function deriveApprovalCardState(i: ApprovalCardStateInput): ApprovalCard
 
 /**
  * A revoke that lost the race to the agent's repeat: the Owner tapped Revoke on an approved request, but the row had
- * meanwhile been consumed, so the server answers `conflict` with status `consumed`. Only a revoke can produce that pair
- * (the card offers no other decision on an approved or used request), and the card says so instead of staying silent.
+ * meanwhile been consumed, so the server answers `conflict` with status `consumed`. The same pair is also what a second
+ * Owner gets by tapping Approve on a pending card whose row was decided and used meanwhile, so the status pair alone
+ * proves nothing: the copy is gated on the decision THIS card actually sent (`deny` is the revoke on an approved row).
  */
-export function isRevokeTooLate(status: ApprovalWireStatus, decideOutcome: ApprovalDecideOutcomeWire | undefined): boolean {
-  return status === "consumed" && decideOutcome === "conflict";
+export function isRevokeTooLate(
+  status: ApprovalWireStatus,
+  decideOutcome: ApprovalDecideOutcomeWire | undefined,
+  sentDecision: ApprovalDecisionWire | null | undefined,
+): boolean {
+  return status === "consumed" && decideOutcome === "conflict" && sentDecision === "deny";
 }
 
 /** States in which the Owner can still decide (the only states that render Approve and Deny). */

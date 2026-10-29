@@ -10,18 +10,65 @@
  *
  * Does NOT prove: that callers outside agent-runner pass the right object (tests and probes pass an explicit instance).
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const SERVER = resolve(__dirname, "../../server");
 
-const BUILDERS = [
-  { file: "github-tools.ts", fn: "buildGithubTools", iface: "BuildGithubToolsOpts" },
-  { file: "kb-share-tools.ts", fn: "buildKbShareTools", iface: "BuildKbShareToolsOpts" },
-  { file: "workspace-settings-tools.ts", fn: "buildWorkspaceSettingsTools", iface: "BuildWorkspaceSettingsToolsOpts" },
-] as const;
+/** The least number of grant-reading builders that exist today; a census that finds fewer has stopped seeing them. */
+const BUILDERS_FLOOR = 3;
+
+function listTs(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = resolve(dir, e.name);
+    if (e.isDirectory()) return listTs(full);
+    return e.isFile() && e.name.endsWith(".ts") ? [full] : [];
+  });
+}
+
+/** True when the parsed file imports `checkGrant` by name (a real import, not a mention in a comment or string). */
+function importsCheckGrant(sf: ts.SourceFile): boolean {
+  return sf.statements.some(
+    (st) =>
+      ts.isImportDeclaration(st) &&
+      st.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(st.importClause.namedBindings) &&
+      st.importClause.namedBindings.elements.some((el) => (el.propertyName ?? el.name).text === "checkGrant"),
+  );
+}
+
+/**
+ * Derived by CONTENT, not by a hand-kept list: every server file that imports `checkGrant` reads grants, so the exported
+ * builder in it (the exported `build*` function) and the options interface it takes are the subject. A fourth
+ * grant-reading builder is therefore covered the day it is written, without anyone remembering to list it here.
+ */
+function deriveBuilders(): Array<{ file: string; fn: string; iface: string }> {
+  const out: Array<{ file: string; fn: string; iface: string }> = [];
+  for (const full of listTs(SERVER)) {
+    const sf = ts.createSourceFile(full, readFileSync(full, "utf8"), ts.ScriptTarget.Latest, true);
+    if (!importsCheckGrant(sf)) continue;
+    const fns = sf.statements.filter(
+      (st): st is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(st) &&
+        st.name !== undefined &&
+        st.name.text.startsWith("build") &&
+        (ts.getCombinedModifierFlags(st) & ts.ModifierFlags.Export) !== 0,
+    );
+    // The options interface is found by CONTENT too (the interface in this file that declares a `grants` member, optional or
+    // not), never read back from the builder's own parameter: the "takes its options as <iface>" check below must be able to
+    // fail when the parameter type is changed.
+    const iface = sf.statements.find(
+      (st): st is ts.InterfaceDeclaration =>
+        ts.isInterfaceDeclaration(st) && st.members.some((m) => ts.isPropertySignature(m) && m.name.getText() === "grants"),
+    );
+    for (const f of fns) out.push({ file: relative(SERVER, full), fn: f.name!.text, iface: iface?.name.text ?? "" });
+  }
+  return out;
+}
+
+const BUILDERS = deriveBuilders();
 
 function parse(file: string): ts.SourceFile {
   const path = resolve(SERVER, file);
@@ -35,6 +82,22 @@ function findInterface(sf: ts.SourceFile, name: string): ts.InterfaceDeclaration
 function findFunction(sf: ts.SourceFile, name: string): ts.FunctionDeclaration | undefined {
   return sf.statements.find((s): s is ts.FunctionDeclaration => ts.isFunctionDeclaration(s) && s.name?.text === name);
 }
+
+describe("the builder list is derived by content, with a floor", () => {
+  it(`finds at least ${BUILDERS_FLOOR} grant-reading builders and the three known ones among them`, () => {
+    expect(BUILDERS.length).toBeGreaterThanOrEqual(BUILDERS_FLOOR);
+    expect(BUILDERS.map((b) => b.fn).sort()).toEqual(expect.arrayContaining(["buildGithubTools", "buildKbShareTools", "buildWorkspaceSettingsTools"]));
+    for (const b of BUILDERS) expect(b.iface, `${b.fn} in ${b.file} must take a named options interface`).toMatch(/^[A-Z]\w+$/);
+  });
+
+  it("the content reader sees an import of checkGrant and ignores a comment or string that merely mentions it", () => {
+    const parseText = (t: string) => ts.createSourceFile("x.ts", t, ts.ScriptTarget.Latest, true);
+    expect(importsCheckGrant(parseText('import { checkGrant, ExecutionGrants } from "@/server/approval/grants";'))).toBe(true);
+    expect(importsCheckGrant(parseText('import { checkGrant as cg } from "./approval/grants";'))).toBe(true);
+    expect(importsCheckGrant(parseText('// import { checkGrant } from "x";\nconst s = "checkGrant";'))).toBe(false);
+    expect(importsCheckGrant(parseText('import { ExecutionGrants } from "@/server/approval/grants";'))).toBe(false);
+  });
+});
 
 describe("grants is a REQUIRED option of every grant-reading tool builder", () => {
   it.each(BUILDERS)("$fn: the options interface $iface has a non-optional `grants: ExecutionGrants`", ({ file, iface }) => {

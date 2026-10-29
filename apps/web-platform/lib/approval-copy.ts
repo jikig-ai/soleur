@@ -36,6 +36,8 @@ export const APPROVAL_COPY = {
    * numeric claim. A push-notified Owner often opens the page within seconds, while the agent is still waiting.
    */
   approvedLateNeutral: "Approved. If your agent is still waiting it will continue; if not, ask it again in this conversation.",
+  /** Approved, but the approval can no longer be applied (its decider is no longer an Owner, or the requester left): never "ask again". */
+  approvedUnusable: "Approved, but this approval can no longer be used",
   /** A revoke that lost the race to the agent's repeat: the approval was already consumed. */
   revokeTooLate: "Your revoke came too late: your agent had already used this approval",
   revoke: "Revoke approval",
@@ -60,6 +62,7 @@ export const APPROVAL_STATE_COPY = {
     waitingForOwner: "Waiting for owner",
     released: "Released to your agent",
     approvedLate: "Approved · ask again",
+    approvedUnusable: "Approved · unusable",
     denied: "Denied",
     revoked: "Revoked",
     expired: "Expired",
@@ -75,6 +78,9 @@ export const APPROVAL_STATE_COPY = {
     "This request ran nothing. This appears in your inbox and thread only: no push, no email. Ask your agent again if you still want this.",
   approvedLateLine: (minutes: number) =>
     `Saved for your agent. Asking again with the same arguments is allowed. Your agent stopped waiting after ${minutes} minutes, so ask it again in this conversation.`,
+  /** Approved row that can never be consumed: ask the Owner to revoke it or let it expire, then start a new request. */
+  approvedUnusableLine:
+    "Workspace membership or roles changed after it was approved, so your agent cannot use it. Ask a workspace Owner to revoke it, or wait for it to expire, then start a new request.",
   /** Landing-page variant of `approvedLateLine`: no wait duration, because the page cannot see the agent's wait. */
   approvedLateNeutralLine: "Saved for your agent. Asking again with the same arguments is allowed.",
   /** Landing-page pending sub-line: the page cannot tell whether the agent is still inside its wait. */

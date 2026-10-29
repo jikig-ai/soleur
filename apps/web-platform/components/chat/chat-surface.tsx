@@ -1216,6 +1216,7 @@ export function ChatSurface({
                       viewerRole={msg.viewerRole}
                       agentWaiting={msg.agentWaiting}
                       decideOutcome={msg.decideOutcome}
+                      approvalUnusable={msg.approvalUnusable}
                       newerRequestExists={hasNewerPendingRequest(messages, idx)}
                       decidedLabel={
                         msg.decideOutcome === "decided" || msg.decideOutcome === "unchanged"
