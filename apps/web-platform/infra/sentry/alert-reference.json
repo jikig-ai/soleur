@@ -58,7 +58,7 @@
       {
         "actions": [
           {
-            "fallthroughType": "ActiveMembers",
+            "fallthroughType": "NoOne",
             "targetIdentifier": null,
             "targetType": "issue_owners",
             "type": "email"
