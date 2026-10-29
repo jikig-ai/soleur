@@ -2790,7 +2790,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     friendly: NonNullable<ReturnType<typeof rewriteAgentAuthFailure>>,
   ): void {
     try {
-      state.events.onText(friendly.content[0].text);
+      // Select by block TYPE, never by position (lint-anthropic-content-position); the content is server-authored text.
+      const friendlyText = friendly.content.find((b) => b.type === "text")?.text;
+      if (friendlyText !== undefined) state.events.onText(friendlyText);
     } catch (err) {
       reportSilentFallback(err, {
         feature: "soleur-go-runner",
