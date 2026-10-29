@@ -218,6 +218,20 @@ locals {
   # `…_12345`, and the row has a field after this one on every emitted path. The negation is over
   # the whole predicate, so a row that cannot be matched at all (a schema change that drops or
   # renames the field) FIRES rather than going quiet: an unreadable answer is not a clean one.
+  # The row set is also pinned to the probe's OWN EMITTER (the first conjunct below, #8874):
+  # the host's `doppler` event log ships to this same source and quotes the marker verbatim
+  # whenever GitHub webhooks in issue/PR text about the probe — the #8846 defect class, measured
+  # 50 quoting rows vs 6 real probe rows in one 6h window. The start-of-message anchor alone
+  # excluded those rows only because every one happens to begin with `{` — a payload accident,
+  # not a control.
+  # LIVE-PROBED 2026-10-29 after adding the emitter conjunct, 48h window over the hot remote()
+  # UNION s3Cluster archive:
+  #   population  (emitter + marker + host_role=dedicated)   -> 49 rows
+  #   emitter breakdown of marker-anchored rows              -> inngest-server-probe: 97
+  #     (49 dedicated + 48 web-1; no foreign-emitter rows in this window — the class the
+  #      conjunct excludes is latent by design, measured in #8846, not seen live today)
+  #   watched alias = the live encrypted alias (…_106903269) -> 0 rows  (quiet control)
+  #   watched alias = a wrong id (scsi-0HC_Volume_0)         -> 49 rows (positive control = population)
   # LIVE-PROBED 2026-09-18 against the ClickHouse table (the step-1 requirement above), 24h window:
   #   total=37248  probe_rows=22  host_role=dedicated rows=11
   #   watched alias = the live PLAINTEXT alias  -> 0 rows   (quiet when the field matches)
@@ -230,6 +244,7 @@ locals {
     SELECT {{time}} AS time, count(*) AS value
     FROM {{source}}
     WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
       AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
       AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
       AND position(JSONExtractString(raw, 'message'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0

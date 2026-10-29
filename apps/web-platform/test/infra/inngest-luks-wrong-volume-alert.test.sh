@@ -21,6 +21,11 @@
 #     continuously and been muted; that history is why `paused` is a variable at all.
 #   * Both resources are in the apply workflow's `-target=` allowlist. Without that they are never
 #     applied and never exist (the #5566 silent-un-applied class).
+#   * The row set is pinned to the probe's own emitter. A `doppler` event-log row that merely
+#     QUOTES the marker verbatim (webhook-delivered issue/PR text about the probe — the #8846
+#     defect class, measured 50 quoting rows vs 6 real probe rows in one 6h window) can never
+#     count. The start-of-message anchor excluded them only because every such row happens to
+#     begin with `{` — a payload-formatting accident, not a control (#8874).
 #
 # WHAT THIS FILE DOES NOT PROVE (stated so the name is not read as more than it is): that the
 # alert is armed IN PRODUCTION. Armed-ness there is decided by the RESOLVED variable — a Doppler
@@ -118,6 +123,10 @@ printf '%s' "$LOCAL_SQL" | grep -cE >/dev/null "position\(JSONExtractString\(raw
 printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1" \
   && ok "scoped to the probe marker, anchored at position 1 (not a substring anywhere in the row)" \
   || no "the marker scope is missing or unanchored"
+
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'" \
+  && ok "scoped to the probe's own emitter — a doppler row merely QUOTING the marker can never count" \
+  || no "the emitter conjunct is missing: marker-quoting rows under another SYSLOG_IDENTIFIER would count (#8874)"
 
 printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "host_role=dedicated " \
   && ok "scoped to host_role=dedicated — the co-located web host emits the same marker" \
@@ -267,13 +276,28 @@ s = s.replace(old, "variable \"inngest_luks_cutover_compleet\" {")'
     'old = "            -target=logtail_exploration_alert.inngest_luks_wrong_volume \\\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
+  # #8874 rows — the row set is pinned to the probe's own emitter, so a marker-quoting row under
+  # any other SYSLOG_IDENTIFIER can never satisfy the predicate. Three different weakenings; each
+  # must redden the presence row above, never just move it.
+  mutate_red "the emitter conjunct is dropped (quoting rows count again)" TF \
+    'old = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27inngest-server-probe\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the emitter literal flips to doppler (the offender becomes the counted set)" TF \
+    'old = "SYSLOG_IDENTIFIER\x27) = \x27inngest-server-probe\x27"
+assert s.count(old) == 1
+s = s.replace(old, "SYSLOG_IDENTIFIER\x27) = \x27doppler\x27")'
+  mutate_red "the emitter equality weakens to a containment check" TF \
+    'old = "JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27inngest-server-probe\x27"
+assert s.count(old) == 1
+s = s.replace(old, "position(JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27), \x27inngest-server-probe\x27) > 0")'
 fi
 
-# 23 = 13 presence rows + 10 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
+# 27 = 14 presence rows + 13 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
 # an inner run asserts only those, and the instrument control above is what catches a floor that
 # drifts past them (that control, not this comment, is the guard against a dead battery).
-_floor=23
-[ -n "${MUT_SKIP:-}" ] && _floor=13
+_floor=27
+[ -n "${MUT_SKIP:-}" ] && _floor=14
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
