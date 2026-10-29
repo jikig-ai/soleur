@@ -243,7 +243,8 @@ if [[ -n "$ref_ln" && -n "$trap_ln" && "$ref_ln" -lt "$trap_ln" ]]; then
 else
   fail "ordering: the xtrace refusal (line $ref_ln) must precede the EXIT trap (line $trap_ln)"
 fi
-if grep -vE '^[[:space:]]*#' "$PROBE" | grep -qE '\b(exec|kill)\b'; then
+probe_stripped=$(grep -vE '^[[:space:]]*#' "$PROBE") || probe_stripped=""
+if grep -qE '\b(exec|kill)\b' <<<"$probe_stripped"; then
   fail "exec/kill present in the probe — either can bypass the rc-remap"
 else
   pass "no exec/kill in the probe"
