@@ -24,17 +24,17 @@ All in `apps/web-platform/test/server/compound-promote-create.test.ts` (new desc
 
 - 2.1 Export `patternOverlapText` (title + summary + tags), `hiddenSkillNames` (one expression, also used by `checkCreate`), `createCandidates` (all-skills ranking, drop hidden, score > 0, first `OVERLAP_TOP_K`).
 - 2.2 `prepareCreate`: compute candidates for `args.patterns`; fenced `create-candidates` block (`<pattern_slug>: a, b, c`, body `none` when empty) between the pattern index and the skill list; add its bytes to `inputBytes`; keep every existing prompt line verbatim; add the three bullets next to the overlap bullet.
-- 2.3 `checkCreate`: in the `nearest-not-top3` branch only, add `nearest_in_offered` (0/1) to the refusal numbers when candidates exist for the named pattern. Class, detail, `nearest_rank`, `top1` unchanged.
+- 2.3 `checkCreate`: in the `nearest-not-top3` branch only, add `nearest_in_offered` (0/1) to the refusal numbers when candidates exist for the named pattern. Class, detail, `nearest_rank`, `top1` unchanged. Write the key inside the third-argument object literal of the `refuse(...)` call (conditional spread): the marker-numbers census reads keys from that literal.
 
 ## Phase 3 - Marker allowlist
 
-- 3.1 `apps/web-platform/server/compound-promote-marker.ts`: add `"nearest_in_offered"` to `CREATE_SENTRY_ONLY_NUMBERS`; no other mention of the key in the file; `CREATE_MARKER_NUMBERS` untouched.
+- 3.1 (same commit as 2.3: the census fails on a stale Sentry-only entry) `apps/web-platform/server/compound-promote-marker.ts`: add `"nearest_in_offered"` to `CREATE_SENTRY_ONLY_NUMBERS`; no other mention of the key in the file; `CREATE_MARKER_NUMBERS` untouched.
 
 ## Phase 4 - Runbook and ADR
 
 - 4.1 Runbook row "`refused`, `prefer-patch`, `nearest-not-top3`": candidates now supplied, residual risk, the three readings of `extra.nearest_in_offered` (absent, 0, 1), the paths that carry it and those that do not, the single-re-rank flip condition, no PR-opening claim.
 - 4.2 One clause near the `create_top1` / `create_nearest_rank` field row pointing at that row.
-- 4.3 ADR-092: one amendment paragraph, "Amendment, 2026-10-29 (#10550)", after the 2026-10-28 amendment.
+- 4.3 ADR-092: one amendment paragraph, "Amendment, 2026-10-29 (#10550)", as the last paragraph of the file, after the 2026-10-28 amendment. It is inside the tail the parity suite reads, where each `CREATE_STAGE_ORDER` stage phrase must occur exactly once: repeat none of them; run `compound-promote-create-parity.test.ts` right after.
 
 ## Phase 5 - Verify (GREEN)
 

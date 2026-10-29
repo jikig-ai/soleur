@@ -8,6 +8,35 @@ type: feat
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Passes run:** the always-on halts (4.6 user-brand present, threshold `none` with the sensitive-path scope-out;
+4.7 observability block valid, first token `grep`, no shell-active characters, literal `expected_output`; 4.8 PAT
+sweep clean; 4.11 `scripts/lint-guard-contract.py` green with 1 entry; 4.12 exactly one unfenced `## Scope Check`;
+4.9, 4.10, 4.13 not triggered: no UI path, no store or connection, no new autonomous task), a verify-the-negative sweep
+over the plan's negative claims against source, a citation check (paths, rule ids, learnings), and a read of the
+parity and census suites the edit touches. No external-research or review-agent fan-out: the design is fixed by the CTO
+rulings and the change is a small pure function plus prompt lines; the fan-out would re-open settled forks.
+
+### Key improvements
+
+1. The ADR-092 parity suite treats everything from `## Amendment - create-only new-skill path` to the end of the file
+   as one text in which each `CREATE_STAGE_ORDER` stage phrase must occur exactly once. The new amendment paragraph
+   is the tail of that text, so its wording must not repeat any stage phrase. Added to Phase 4, AC10 and Sharp Edges.
+2. The marker-numbers census reads number keys from the THIRD positional argument object literal of `refuse(...)` and
+   fails on a stale Sentry-only entry that no source passes. `nearest_in_offered` must therefore be written as a key
+   inside that literal (conditional spread), not assigned afterwards. Added to Phase 2 item 3 and Sharp Edges.
+3. Corrected the ceiling arithmetic: 25,760 bytes (6,440-token bound), 5,560 tokens of headroom, not the earlier
+   estimate.
+
+### New considerations discovered
+
+- The census's "no stale entry" test means Phase 1 and Phase 3 must land in the same commit, or the suite is red
+  between them.
+- Candidate names come from the same `SkillRecord.name` source as the existing skill list, so no new injection
+  surface; the block is still fenced with the call's nonce.
+
 ## Overview
 
 Live-fire 6 of the gated create arm (2026-10-29T13:27Z, run `01M63XFR2HTYS2XZ0RP8VNW6K2`) ended `create_arm=ran`,
@@ -67,8 +96,11 @@ from `apps/web-platform/server/compound-promote-create.ts` and reads `knowledge-
 (run with `bun run <scratch>/probe.ts` from `apps/web-platform`).
 
 - Population: 105 skills with a SKILL.md, 8 of them `disable-model-invocation` (hidden from the model); 7 open patterns.
-- Current create prompt: 29,207 bytes for all 7 patterns. The ceiling counts only index + skill block (about 7.1k of
-  the 12,000-token bound), leaving about 4.8k tokens of headroom. The new block adds well under 1 KB.
+- Current create prompt: 29,207 bytes for all 7 patterns. The ceiling counts only the pattern index + the fenced
+  skill list: 25,760 bytes, a bound of 6,440 tokens against the 12,000-token ceiling, leaving 5,560 tokens of
+  headroom (measured by rebuilding `renderPatternIndex` + `fenceBlock(..., "skill-list", ...)` exactly as
+  `prepareCreate` does). The new block adds well under 1 KB. (The constant's comment says "Phase 0 measured ~9.8k";
+  that is an older tree, not the current one.)
 - Pattern-keyed top-3 (title + summary + tags; visible skills; scores in parentheses):
   verification-scaffolding-carries-the-defect: test-fix-loop (.106), verification-scaffold (.097), fix-issue (.091);
   mutation-score-is-not-predicate-correctness: cron-delete (.065), linear-fetch (.051), agent-native-audit (.051);
@@ -204,8 +236,11 @@ Run them and confirm they fail for the right reason (missing exports), before Ph
    - if none of the listed skills is a genuine nearest skill for the pattern, return no_action with reason_class
      `no-pattern-qualifies`.
 3. `checkCreate`: in the `nearest-not-top3` branch only, compute `createCandidates(page, c.skills)`; when non-empty
-   add `nearest_in_offered: includes(p.nearest_skill) ? 1 : 0` to the refusal `numbers`. The returned class, detail
-   and the `nearest_rank` / `top1` values are unchanged.
+   add `nearest_in_offered: includes(p.nearest_skill) ? 1 : 0` to the refusal `numbers`. Write it as a key inside
+   the third-argument object literal of the `refuse("prefer-patch", "nearest-not-top3", { nearest_rank: nearestRank,
+   top1, ...(offered.length === 0 ? {} : { nearest_in_offered: ... }) })` call, because the marker-numbers census
+   reads keys from that literal (an assignment after the fact is invisible to it). The returned class, detail and the
+   `nearest_rank` / `top1` values are unchanged.
 
 ### Phase 3 - Marker allowlist (`compound-promote-marker.ts`)
 
@@ -227,7 +262,12 @@ counts occurrences).
    and every path that does not.
 2. In the field table near `create_top1` / `create_nearest_rank`, add one clause pointing at that row for the Sentry-only
    `nearest_in_offered` (single home; no second copy of the reading rule).
-3. ADR-092: add the amendment paragraph from the Architecture section.
+3. ADR-092: append the amendment paragraph from the Architecture section as the LAST paragraph of the file. It sits
+   inside the tail that `compound-promote-create-parity.test.ts` reads from `## Amendment - create-only new-skill
+   path` onward, where each stage phrase of `CREATE_STAGE_ORDER` must occur exactly once: do not write any of those
+   phrases (for example "the API key", "schema validation", "slug format", "the clone being present", "then ONE model
+   call with no retry.", "the base-moved check", "fetches once more", "and only then the commit.") in it. Run the
+   parity suite before moving on.
 
 ### Phase 5 - Verify (GREEN) and measure
 
@@ -421,8 +461,8 @@ mechanism, not a domain-leader review. No UI surface, no legal, finance, marketi
 9. The runbook row names the candidates, the residual risk, the three readings of `nearest_in_offered` (absent, 0, 1),
    the paths that carry it and the paths that do not, and claims no PR-opening effect; every backticked token in the
    edited row is a real field, enum member or detail token (runbook parity suite green).
-10. ADR-092 gains exactly one amendment paragraph and the parity suite
-    (`compound-promote-create-parity.test.ts`) stays green.
+10. ADR-092 gains exactly one amendment paragraph, appended as the last paragraph of the file, and the parity suite
+    (`compound-promote-create-parity.test.ts`) stays green with every stage phrase still occurring exactly once.
 11. The vitest files in Phase 5 item 1, `npx tsc --noEmit` and markdownlint on the edited docs pass.
 12. `bash plugins/soleur/test/c4-count-parity.test.sh` passes.
 13. The PR body says "Ref #10550", never "Closes", does not say the change fixes `nearest-not-top3` or that a PR will
@@ -465,6 +505,10 @@ Browser / API verification: none (no UI, no external service call in tests).
   from Step A's; this is telemetry on a refusal, not a gate input.
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the
   threshold will fail `deepen-plan` Phase 4.6. This one declares threshold `none` with the scope-out reason.
+- The census test also fails when a Sentry-only entry is not passed by any source (`no stale entry`). Land the
+  `nearest_in_offered` allowlist entry and the `refuse(...)` literal in the same commit.
+- The ADR parity suite counts stage phrases across the whole amendment tail; a new paragraph that repeats one turns
+  it red even though the ADR reads fine.
 - Do not add the `top3` property seen in two arm-test fixtures to `CreateVerdict.overlap`; it is not a source field.
 - `prepareCreate` is create-arm only; do not route the candidates through `renderPatternIndex` (the patterns arm shares
   it, and its prompt bytes must not move).
