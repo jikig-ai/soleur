@@ -34,6 +34,7 @@ import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observabi
 import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { CREDENTIAL_SCHEMES, type CredentialScheme } from "@/lib/credential-scheme";
 import { C4_DIAGRAM_SAVED_EVENT } from "@/lib/c4-constants";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
@@ -63,6 +64,9 @@ export type StreamState = "idle" | "streaming" | "stopping";
 export interface WebSocketError {
   code: string;
   message: string;
+  // #11086 - set on a `key_invalid` error only when the server tagged the
+  // frame with the credential scheme; drives the card title/label.
+  credentialScheme?: CredentialScheme;
   action?: {
     label: string;
     href: string;
@@ -1179,11 +1183,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
           // Key invalidation: set structured error instead of redirect
           if (msg.errorCode === "key_invalid") {
-            setLastError({
-              code: "key_invalid",
-              message: "Your API key is invalid or expired.",
-              action: { label: "Update key", href: "/dashboard/settings" },
-            });
+            // #11086: server-authored copy only when the frame names a known
+            // credential scheme; otherwise the legacy text, byte-identical.
+            const scheme = msg.credentialScheme;
+            const action = { label: "Update key", href: "/dashboard/settings" };
+            setLastError(
+              scheme && CREDENTIAL_SCHEMES.includes(scheme)
+                ? { code: "key_invalid", message: msg.message, credentialScheme: scheme, action }
+                : { code: "key_invalid", message: "Your API key is invalid or expired.", action },
+            );
             teardown();
             return;
           }

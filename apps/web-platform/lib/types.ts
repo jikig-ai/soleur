@@ -2,6 +2,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { WorkflowName } from "@/server/conversation-routing";
 import type { InteractivePromptKind } from "@/server/pending-prompt-registry";
 import type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
+import type { CredentialScheme } from "@/lib/credential-scheme";
 
 // Re-export so client code can import workflow-name and branded IDs from the
 // canonical wire-protocol module without reaching into server/* directly.
@@ -539,6 +540,11 @@ export type WSMessage =
       // membership-checked switch — a reset user is a non-member by
       // construction). Optional and ignorable by existing consumers.
       switchToWorkspaceId?: string;
+      // #11086 - set with `errorCode: "key_invalid"` when the failure is an
+      // agent-CLI auth failure: which credential scheme the run used, so the
+      // client shows scheme-correct copy/title/label. Optional; frames from
+      // sites that do not know the scheme omit it and render the legacy text.
+      credentialScheme?: CredentialScheme;
     }
   // #3930 — cross-process JWT revocation discriminator. Emitted when
   // ws-handler's `tenantFor` catch site sees a RuntimeAuthError with

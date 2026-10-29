@@ -156,6 +156,34 @@ describe("Error state clearing on remount (#1377)", () => {
     expect(screen.getByText("Update key")).toBeInTheDocument();
   });
 
+  test("oauth_token credentialScheme renders the Claude sign-in title and Update token label (#11086)", async () => {
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "We couldn't sign in to Claude with your connected subscription.",
+      credentialScheme: "oauth_token",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    await renderChatPage();
+    expect(screen.getByText("Claude Sign-in Failed")).toBeInTheDocument();
+    expect(screen.queryByText("Invalid API Key")).toBeNull();
+    const link = screen.getByText("Update token");
+    expect(link.closest("a")).toHaveAttribute("href", "/dashboard/settings");
+    expect(screen.queryByText("Update key")).toBeNull();
+    expect(screen.queryByText("Reconnect")).toBeNull();
+  });
+
+  test("api_key credentialScheme keeps the unchanged title and label (#11086)", async () => {
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      credentialScheme: "api_key",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    await renderChatPage();
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+    expect(screen.getByText("Update key")).toBeInTheDocument();
+  });
+
   test("error card disappears when lastError is cleared (simulates remount clearing)", async () => {
     // First render: error present
     wsReturn.lastError = {
