@@ -16,6 +16,33 @@ brand_survival_threshold: none
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Method:** proportionate to a one-sentence docs edit. The mechanical halts 4.6-4.13 were run
+against the plan; cited identifiers were re-verified live; no broad agent fan-out (the brief asks
+for minimal depth, and no framework, SDK or external surface applies).
+
+### Key Improvements
+1. Acceptance Criteria hardened by the plan-stage review: the diff-scope check now names the exact
+   expected file set and runs after commit (before commit it lists nothing and passes vacuously),
+   the one-hunk check is a command (`git diff -U0 origin/main...HEAD -- <runbook> | grep -c '^@@'`),
+   and `lint-infra-no-human-steps.py --changed --base origin/main` replaces the three registry
+   suites as the check that actually reads the edited file (the suites stay as a no-regression run).
+2. Line numbers are now secondary to content anchors throughout.
+3. Wording ruled by the CTO agent (see `decision-challenges.md`; the ruling gate passes, 4 rows).
+
+### Verification results
+- 4.6 pass (threshold `none`; the only edited file is under `knowledge-base/`, outside the sensitive
+  path regex). 4.7 skipped (pure docs). 4.8 pass (no PAT shapes). 4.9 not triggered (no UI file).
+  4.10, 4.11 not triggered (no store/connection, no guard). 4.12 pass (one unfenced
+  `## Scope Check`, `Recommendation:` present, no `unmapped` row). 4.13 not triggered (no workflow
+  or autonomous task). 4.5 and 4.55 not triggered.
+- Live checks: #10932 OPEN, #9757 OPEN, #11518 MERGED (commit `45ff719b0a` is an ancestor of
+  `origin/main` and touched `scripts/registry-restore-from-ghcr.sh` +7 lines), #11557 OPEN draft.
+  The stale sentence is still present on `origin/main` (1 match). No AGENTS.md rule id is cited.
+- Markdownlint on the plan: 0 issues.
+
 ## Overview
 
 Residual 1 of #10932 (Ref #9757), one residual per PR. The engine header in
