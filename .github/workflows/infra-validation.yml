@@ -164,6 +164,12 @@ on:
       # the Tier-B flag job the suite also reads, is already listed.)
       - ".github/workflows/inngest-link-flip.yml"
       - "scripts/inngest-link-flip.sh"
+      # (#10540) inngest-key-rotate-workflow.test.sh asserts the key-rotation workflow's posture (dispatch-only, the
+      # Tier-B environment per job, the confirm literals) and drives its body, scripts/inngest-key-rotate.sh, against
+      # stubbed gh/curl/doppler. Neither file is under apps/*/infra/**, so a PR editing only one of them would skip the
+      # suite whose job is to turn that edit red - the same defect class as the #10136 entries above.
+      - ".github/workflows/inngest-key-rotate.yml"
+      - "scripts/inngest-key-rotate.sh"
       # The flip's redeploy is the shared driver (track.sh), which the same suite runs for real against a degraded
       # fan-out frame, and its roster literal is pinned by web-hosts-fanout-parity.test.sh (under apps/*/infra/**).
       - ".github/actions/dispatch-web-redeploy/track.sh"

@@ -4374,7 +4374,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/inngest-key-rotate.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4412,8 +4412,8 @@ done
 [[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
 [[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
 [[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
-# The floor is the realized count (9 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), inngest-link-flip x2 (flip_webhook's POST and GET arms)). BOTH operands are literals above the `if`.
-S4_SCALLS_FLOOR=9
+# The floor is the realized count (11 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), git-data-rehearsal-evidence x1, inngest-link-flip x2 (flip_webhook's POST and GET arms), inngest-key-rotate x1 (kr_hz, the Hetzner read)). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=11
 if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
 else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
 # The lint's SCRIPT-CONSUMER derivation (scripts/lint-workflow-local-action-checkout.py, SCRIPT CONSUMERS) runs its `git ls-files` arm on the REAL tree only here
