@@ -38,7 +38,7 @@
 # Plan harness rows. (a) The real-SDK probe (scripts/dev-probe-approval-gate.ts) needs a model, Doppler and the network, so
 #   it cannot run inside this battery. HONEST SCOPE: the probe's SEMANTIC behaviour (that a gated tool really reaches
 #   canUseTool under the production options and that a deny stops the handler) is measured ONLY by the manual real-SDK run
-#   recorded in knowledge-base/project/specs/feat-hitl-approval-queue/phase-0-measurements.md. What this battery can do is
+#   recorded in knowledge-base/project/specs/archive/20261029-164429-feat-hitl-approval-queue/phase-0-measurements.md. What this battery can do is
 #   pin that the probe's own verdict logic still exists in executable code: `probe-static` strips comments and string-
 #   adjacent noise first (an anchor that survives only inside a comment does not count; row P7 proves it), then requires ten
 #   anchors (the BYPASS verdict, the honoured-deny requirement, the failing exit code, the handlerRan / invoked / behaviour /

@@ -205,7 +205,7 @@ gated separately (the compliance posture row); this ADR does not enable the feat
 
 ### Flag-flip checklist (before the flag is turned on for anyone)
 
-The same list is copied verbatim into `knowledge-base/project/specs/feat-hitl-approval-queue/flag-create-handover.md`; edit them together.
+The same list is copied verbatim into `knowledge-base/project/specs/archive/20261029-164429-feat-hitl-approval-queue/flag-create-handover.md`; edit them together.
 
 1. **Cohort rule: no workspace with more than one member gets the flag until the Owner card names the requester and `reattach` stops sending full action text to non-Owners.** Until both hold, the flag is limited to
    single-member workspaces (also: the decide path out of the agent process, or the sentinel gap re-accepted). Check the `workspace_members` count for the workspace before any per-workspace override, and **re-check it on
