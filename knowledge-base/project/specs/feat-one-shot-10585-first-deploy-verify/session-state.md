@@ -28,3 +28,9 @@
 - IN FLIGHT: sweeper dry-run 40867419941 (branch ref); fix-round review pending next.
 - NEXT: fix-round seats over `git diff 8e0429035e..HEAD` → verify → compound → ship (ship runs postmerge; post-merge: file standing tracker w/ directive per plan §Follow-Through Enrollment, then gh issue close 10585).
 - tally: agent_rounds=3 (planner, cto, …); fix agent cce261c6.
+
+## Pipeline State (checkpoint 2)
+- PR #11500 ready-for-review; all commits re-authored to Jean (CLA green). HEAD a8f4f90a00+19677780c3.
+- Fix-round findings applied (60/0 suite). kb-consumers baseline row added. ci-pr-affected accept+regen done.
+- test-bun failure diagnosed: workflow-file-size gate (490KB) — compressed pointer echoes + comment prose → 489912B. Flakes seen: deploy-script-tests (4/4) all-green-steps.
+- NEXT: CI green on 19677780c3 → merge → post-merge Phase 3 (file standing tracker + directive per plan §Follow-Through Enrollment, gh issue close 10585) → postmerge verify → DONE.
