@@ -188,6 +188,15 @@ describe("full-input fidelity (the preview was lossy; the canonical object is no
     );
   });
 
+  it("does not trim: surrounding whitespace is part of the action and of the hash", () => {
+    const base = SAMPLES[TOOLS.emailSend];
+    const padded = canonicalizeAction(TOOLS.emailSend, { ...base.input, body: "  hello\n" }, {});
+    expect(padded.fields.body).toBe("  hello\n");
+    expect(hashOf(TOOLS.emailSend, { input: { ...base.input, body: "hello" }, server: {} })).not.toBe(
+      hashOf(TOOLS.emailSend, { input: { ...base.input, body: "hello " }, server: {} }),
+    );
+  });
+
   it("workflow inputs hash independent of key order", () => {
     const wf = SAMPLES[TOOLS.triggerWorkflow];
     const a = hashOf(TOOLS.triggerWorkflow, { ...wf, input: { ...wf.input, inputs: { a: "1", b: "2" } } });
@@ -215,6 +224,14 @@ describe("computeActionHash", () => {
       )
       .digest("hex");
     expect(h).toBe(expected);
+  });
+
+  it("rejects a tool name that is not the action's tool", () => {
+    const s = SAMPLES[TOOLS.kbShareCreate];
+    const action = canonicalizeAction(TOOLS.kbShareCreate, s.input, s.server);
+    expect(() =>
+      computeActionHash({ toolName: TOOLS.emailSend, workspaceId: WORKSPACE_ID, conversationId: CONVERSATION_ID, action }),
+    ).toThrow(ApprovalCanonicalError);
   });
 
   it("rejects ids that are not UUID-shaped", () => {

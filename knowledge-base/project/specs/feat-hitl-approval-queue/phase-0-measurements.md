@@ -122,3 +122,11 @@ Provenance line: `sdk=0.3.284 cli=2.1.284 node=v26.3.0 bun=1.4.4 doppler-config=
 - Allow rules from settings files can also shadow the callback; `settingSources: []` in the builder removes that source here, and the probe does not test it.
 - Only the `canUseTool`-allow short-circuit is characterised; a PreToolUse hook `allow` (the #10054 class) was not a factor in these runs (the production hooks are
   in the composition and the `no-allowed` rows reached `canUseTool`).
+
+## Addendum 2026-10-29 (#4672): probe re-run on the finished branch (task 5.4)
+
+Command: `NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform/scripts/dev-probe-approval-gate.ts` at branch head after Phases 1-5 (flag seam wired, default OFF; the production `canUseTool` and `buildAllowedTools` unchanged by this branch).
+
+Result: `RESULT: PASS (sdk=0.3.284 cli=2.1.284, cases-run=10)`. All eight gated tools: `:prod` rows `invoked=yes verdict=ok allowedToolsListsIt=false tier=gated decisions=[deny] stubRan=false denyHonoured=true`; `email_send:prod-stream` the same; canary `email_send:raw` `invoked=no verdict=CANARY-OK` (the old composition still bypasses, so the probe is not vacuous). Registration: legacy runner registers all eight tools; cc-soleur-go registers none (`cc=no`).
+
+Scope of the claim: the gated tools reach the production gate and a deny is honoured on the legacy runner path. It does not measure the approval flow with the flag on (dormant), nor the hosted ask lane evidence gates #9776 and #10111.

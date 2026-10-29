@@ -39,6 +39,7 @@ import { APPROVAL_REQUIRED_TOOLS } from "@/server/approval/tools";
 import {
   APPROVAL_ABORTED_DENY,
   APPROVAL_CONSUME_REJECTED_DENY,
+  APPROVAL_EXPIRED_DENY,
   APPROVAL_INVALID_INPUT_DENY,
   APPROVAL_PENDING_DENY,
   APPROVAL_REJECTED_DENY,
@@ -872,5 +873,84 @@ describe("markers and ops", () => {
       expect(l).not.toContain("Updated pricing");
       expect(l).not.toContain("maria@example.test");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guard 1 gaps closed by the mutation battery (test/approval-guard1-mutation.test.sh).
+// ---------------------------------------------------------------------------
+
+describe("Guard 1: terminal outcomes and abort edges are denies, and the release hands allow() the snapshot", () => {
+  async function waitForCard(h: ReturnType<typeof makeHarness>) {
+    for (let i = 0; i < 200 && !h.frames.some((f) => f.type === "approval_request"); i++) await tick(1);
+    return requestFrame(h.frames).approvalId as string;
+  }
+
+  test("a request that expires while the agent waits denies with the expiry text and never consumes", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    const id = await waitForCard(h);
+    h.db.rows[0].status = "expired";
+    wakeWaiter(id, "expired");
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_EXPIRED_DENY });
+    expect(h.approval.consume).not.toHaveBeenCalled();
+  });
+
+  test("a request that another identical call already consumed denies and never consumes again", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    const id = await waitForCard(h);
+    h.db.rows[0].status = "consumed";
+    wakeWaiter(id, "consumed");
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_CONSUME_REJECTED_DENY });
+    expect(h.approval.consume).not.toHaveBeenCalled();
+  });
+
+  test("the re-proposal release also hands allow() the snapshot, never the live object", async () => {
+    const db = new FakeDb();
+    const h1 = makeHarness({ db, deadlineMs: 40 });
+    await h1.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend)); // times out, row stays pending
+    db.decide(db.rows[0].id, "approved");
+
+    const input = sampleInput(TOOLS.emailSend);
+    const original = structuredClone(input);
+    const h2 = makeHarness({ db, deadlineMs: 5000 });
+    h2.approval.submit = vi.fn(async (p) => {
+      input.body = "SOMETHING ELSE ENTIRELY"; // the live object changes after the hash was taken
+      return submitApprovalRequest(db.client, p);
+    });
+    const res = await h2.call(TOOLS.emailSend, input);
+    expect(res.behavior).toBe("allow");
+    expect(res.updatedInput).toEqual(original);
+    expect(res.updatedInput).not.toBe(input);
+  });
+
+  test("a session that dies while the consume is in flight is a deny (the approval is spent for nothing)", async () => {
+    const h = makeHarness({ deadlineMs: 2000 });
+    const real = h.approval.consume;
+    h.approval.consume = vi.fn(async (p) => {
+      const r = await real(p);
+      h.controller.abort();
+      return r;
+    });
+    const pending = h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    await decideWhenCardArrives(h, "approved");
+    expect(await pending).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_DENY });
+    expect(h.db.rows[0].status).toBe("consumed");
+  });
+
+  test("an abort that lands while the server-derived fields resolve creates no request", async () => {
+    let abort: () => void = () => {};
+    const h = makeHarness({
+      serverDerived: async () => {
+        abort();
+        return undefined;
+      },
+    });
+    abort = () => h.controller.abort();
+    const res = await h.call(TOOLS.emailSend, sampleInput(TOOLS.emailSend));
+    expect(res).toEqual({ behavior: "deny", message: APPROVAL_ABORTED_DENY });
+    expect(h.approval.submit).not.toHaveBeenCalled();
+    expect(h.db.rows).toEqual([]);
   });
 });

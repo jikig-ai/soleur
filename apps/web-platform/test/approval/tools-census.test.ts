@@ -49,6 +49,11 @@ describe("Guard 2 census: every gated tool is required or exempt-with-a-reason",
     expect(() => classifyGatedTools({}, [], {})).toThrow(/vacuous/i);
   });
 
+  it("row 2b: a census with gated tools but no required tool, or required tools but no gated tool, is vacuous", () => {
+    expect(() => classifyGatedTools(map, [], {})).toThrow(/vacuous/i);
+    expect(() => classifyGatedTools({ c: "auto-approve" }, ["a"], {})).toThrow(/vacuous/i);
+  });
+
   it("row 3: a second unclassified gated tool after a classified one is also reported", () => {
     expect(classifyGatedTools({ ...map, n: "gated", m: "gated" }, ["a"], { b: "reason one here" }).unclassified.sort()).toEqual(["m", "n"]);
   });

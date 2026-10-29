@@ -45,7 +45,7 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 - [x] 5.1 C4: `approvalStore` element and edge, description fixes, `views.c4` include, regenerate `model.likec4.json`, parity counts, render tests (done 2026-10-29; the cron-monitor counts C4/C6/C9 are +1 only when 4.2 adds the `sentry_cron_monitor`: bump the `model.c4` prose then and re-run `c4-count-parity.test.sh`)
 - [ ] 5.2 Legal (own commit): Art. 30 entry, DPD, GDPR Policy, Privacy Policy and mirrors, `legal-doc-shas.ts`, `account-delete.ts` call site, `dsar-export-allowlist.ts`, posture row and flag-refusal check
 - [x] 5.3 ADR-307 (re-check ordinal against fresh `origin/main`; 305 and 306 are taken), ADR-284 and ADR-085 amendment notes, "Adding a gated tool" checklist (done 2026-10-29: 307 free on fresh origin/main; re-check immediately before merge)
-- [ ] 5.4 Guard 1 mutation battery (one dedicated file, pristine-copy harness) and census guard green; re-run the real-SDK probe on the finished branch
+- [x] 5.4 Guard 1 mutation battery (one dedicated file, pristine-copy harness) and census guard green; re-run the real-SDK probe on the finished branch
 
 ## Phase 6: Ship
 
