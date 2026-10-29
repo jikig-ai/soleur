@@ -2272,7 +2272,7 @@ TF_TEXT = ""
 # slugs are registered in the shared pruned set — declared OR pruned is the legal universe.
 PRUNED_TS = os.environ.get("PRUNED_TS", "")
 try:
-    PRUNED = set(re.findall(r'"([a-z0-9-]+)"', open(PRUNED_TS).read())) if PRUNED_TS else set()
+    PRUNED = set(re.findall(r'^\s*"([a-z0-9-]+)",?\s*$', open(PRUNED_TS).read(), re.M)) if PRUNED_TS else set()
 except OSError:
     PRUNED = set()
 TOKEN_RE = re.compile(r"\s*(?:('(?:[^']|'')*')|(\|\||&&|==|!=|!|\(|\))|([A-Za-z_][\w\-.]*(?:\(\))?))")
@@ -2710,15 +2710,6 @@ def m10_if_not_cancelled(m): agg(m)["if"] = "${{ !cancelled() && github.ref == '
 def m10_if_not_failure(m): agg(m)["if"] = "${{ !failure() && github.ref == 'refs/heads/main' }}"
 def m10_if_quoted_always(m): agg(m)["if"] = "github.ref == 'refs/heads/main' && 'always()'"
 def m10_if_ref_neq_feature(m): agg(m)["if"] = "always() && github.ref != 'refs/heads/feature'"
-def m10_tf_commented(m): m["name"] = str(m.get("name", "")) + " (tf slug commented out)"
-def r10_tf_commented(m):
-    global TF_TEXT
-    old = TF_TEXT
-    TF_TEXT = "\n".join(("# " + l if re.search(r'name\s*=\s*"scheduled-orphan-sweeps"', l) else l) for l in old.splitlines())
-    try:
-        return r10(m)
-    finally:
-        TF_TEXT = old
 def m10_agg_if_release(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release'"
 def m10_agg_if_prmerge(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/pull/1/merge'"
 def m10_slug_other_monitor(m): agg_step(m, is_hb)["with"]["monitor-slug"] = "scheduled-oauth-probe"
@@ -2738,18 +2729,6 @@ def m10_sweep_body_other_removed(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("any other answer means the reply did not match the pinned volume or could not be read", "any other answer means something")
 def m10_sweep_body_401_removed(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("HTTP 401 or 403 means Hetzner refused the token", "HTTP 401 or 403 means something")
-def r10_tf_sub(old, new):
-    def chk(m):
-        global TF_TEXT
-        keep = TF_TEXT
-        i = TF_TEXT.index('resource "sentry_cron_monitor" "scheduled_terraform_drift"')
-        assert old in TF_TEXT[i:], "tf mutation target not found"
-        TF_TEXT = TF_TEXT[:i] + TF_TEXT[i:].replace(old, new, 1)
-        try:
-            return r10(m)
-        finally:
-            TF_TEXT = keep
-    return chk
 def m10_sweep_subject_static(m): fail_email(jobs(m)[RUNG])["with"]["subject"] = "[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed"
 def m10_sweep_subject_inverted(m):
     w = fail_email(jobs(m)[RUNG])["with"]; w["subject"] = w["subject"].replace("== 'unproven'", "== 'proven'")

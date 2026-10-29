@@ -29,7 +29,8 @@
 # monitors (`scheduled_oauth_probe`, `scheduled_github_app_drift_guard`) use a
 # 30-min margin — Inngest fires deterministically with ≤2-min jitter, so 30 is
 # honest. #8450 returned two GHA-fired monitors
-# (`scheduled_prod_version_drift`, `zot_restart_loop_alarm`) to hourly cadence
+# (`scheduled_prod_version_drift` — since destroyed by the #6590 PR-B prune;
+# `zot_restart_loop_alarm`) to hourly cadence
 # with larger margins (360/120) sized for GHA schedule-delivery jitter, not
 # Inngest's. Since #8495 `zot_restart_loop_alarm` and `scheduled_inngest_health`
 # are dispatched by the web server's watchdog clock (ADR-248), so their margins
@@ -492,7 +493,9 @@ resource "sentry_cron_monitor" "scheduled_betterstack_incident_mirror" {
 # `name` MUST stay slug-shaped: Sentry derives the slug by slugifying `name`, and the workflow's
 # `monitor-slug` input must equal it (sentry-monitor-iac-parity.test.ts asserts the two agree).
 # 05:17 UTC mirrors the workflow's `schedule:`; checkin_margin_minutes = 360 follows the measured GHA
-# schedule-delivery jitter documented on scheduled_prod_version_drift below, NOT the nominal interval.
+# schedule-delivery jitter that scheduled_prod_version_drift's stanza documented (that monitor was
+# destroyed by the #6590 PR-B prune — the measurement rationale stays, only the stanza is gone),
+# NOT the nominal interval.
 resource "sentry_cron_monitor" "image_cve_scan" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug

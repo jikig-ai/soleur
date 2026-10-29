@@ -6859,9 +6859,6 @@ if want_scripts; then
   run_suite "scripts/watch-code-quality-reeval-9730" bash scripts/watch-code-quality-reeval-9730.test.sh
   run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
-  # #10972: the orphan-sweeps re-look probe's exit-code contract (a curl shim that accepts one exact argv, an injected
-  # clock, mutant-justified rows for every branch that can end in 0 or 1, and an in-process plus nested proof that the
-  # verdict helpers and the final gate can fail). Same explicit-registration and LAST-in-block reasons as above.
 fi
 
 # Named bun-test entries — bun shard.

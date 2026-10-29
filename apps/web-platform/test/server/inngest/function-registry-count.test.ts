@@ -85,6 +85,11 @@ function functionFilesWithCheckpointingKey(): string[] {
     });
 }
 
+// #6590 PR-B note: ~12 entries here also sit in PRUNED_MONITOR_SLUGS — deliberate,
+// not redundant. The two sets carry DIFFERENT semantics ("never monitored —
+// findings alert elsewhere" vs "monitor destroyed — emitter void-posts per spec
+// NG4"); deduplicating either direction loses a distinction Guard (c) and the
+// stale-set assertions each enforce.
 const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-campaign-calendar",
   "scheduled-cloud-task-heartbeat",

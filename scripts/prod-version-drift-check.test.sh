@@ -1548,7 +1548,7 @@ run_part_b() {
   if [[ -f "$MONITORS_TF" ]]; then
     local slug="${X_HEARTBEAT_SLUG:-}"
     local pruned_ts="$PRUNED_TS_FILE"
-    if [[ -n "$slug" ]] && { grep -qF -- "\"$slug\"" "$MONITORS_TF" || { [[ -f "$pruned_ts" ]] && grep -qF -- "\"$slug\"" "$pruned_ts"; }; }; then
+    if [[ -n "$slug" ]] && { grep -qE "^[[:space:]]*name[[:space:]]*=[[:space:]]*\"$slug\"" "$MONITORS_TF" || { [[ -f "$pruned_ts" ]] && grep -qE "^[[:space:]]*\"$slug\",?[[:space:]]*$" "$pruned_ts"; }; }; then
       pass "B10g heartbeat slug '$slug' has a matching sentry_cron_monitor or is registered pruned"
     else
       fail "B10g heartbeat slug has a matching sentry_cron_monitor" "\"$slug\" declared or pruned" "absent"
