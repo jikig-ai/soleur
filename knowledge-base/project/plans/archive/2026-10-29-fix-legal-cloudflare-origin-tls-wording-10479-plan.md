@@ -12,10 +12,7 @@ Cloudflare mode. The technical fix (Origin CA, `strict`, handshake probe) is the
 
 ## Authority
 
-CLO ruling on #10479, 2026-10-27 (verbatim text for Privacy Policy Section 11 and DPD 8.1(c)), re-affirmed
-2026-10-29: fix the hop, no accepted-risk path. Dates from the ruling: target 2026-11-12 (Origin CA, `strict`,
-handshake probe), hard stop 2026-11-19 (after which the published "not claimed" wording stays; no extension
-or acceptance record is ruled).
+CLO ruling on #10479, 2026-10-27 (the only posted artifact; the 2026-10-29 re-affirmation named in the task brief is not on the issue and is not cited in any repo record). Fix: no accepted-risk path; dates are in the ruling.
 
 ## Scope
 
@@ -57,4 +54,4 @@ Any Cloudflare mode change, Origin CA deployment, or origin deploy. Merge. #1047
 ## Observability
 
 Documentation-only change; no production code or infra is touched. Discoverability test:
-`python3 scripts/lint-encryption-posture.py` (no SSH) fails every PR from 2026-11-12 unless the ledger row is renewed or removed.
+`python3 scripts/lint-encryption-posture.py` (no SSH) fails every PR from 2026-11-13 unless the ledger row is renewed or removed.
