@@ -130,9 +130,9 @@ list() { # <id,status> ...   -> $WORK/fx/list
         "${pair%%,*}" "$(ts '2026-10-29')" "${pair##*,}"
     done; } | jq -s '.' > "$WORK/fx/list"
 }
-job() { # <run-id> <job-id> <job-name> <conclusion> — REST /jobs response shape
-  printf '{"total_count":1,"jobs":[{"id":%s,"name":"%s","status":"completed","conclusion":"%s"}]}\n' \
-    "$2" "$3" "$4" > "$WORK/fx/jobs.$1"
+job() { # <run-id> <job-id> <job-name> <conclusion> [trail-step-conclusion=success] — REST /jobs response shape
+  printf '{"total_count":1,"jobs":[{"id":%s,"name":"%s","status":"completed","conclusion":"%s","steps":[{"name":"%s","conclusion":"%s"}]}]}\n' \
+    "$2" "$3" "$4" "$S" "${5:-success}" > "$WORK/fx/jobs.$1"
 }
 bs() { # <host_name> <control> <marker-ts|none>
   printf 'control=%s\nmarker=%s\n' "$2" "$3" > "$WORK/fx/bs.$1"
@@ -168,7 +168,7 @@ run_probe() {
   PROBE_RC=$rc
   SEEN_RCS+=("$rc")
   assert_fixture_dir "$WORK"
-  STUB_INVOCATIONS=$(grep -c '^INVOCATION$' "$WORK/stub-calls.log" 2>/dev/null || printf '0')
+  STUB_INVOCATIONS=$(grep -c '^INVOCATION$' "$WORK/stub-calls.log" 2>/dev/null) || STUB_INVOCATIONS=0
   : > "$WORK/stub-calls.log"
 }
 check() { # <want-rc> <want-word|-> <label>
@@ -205,6 +205,15 @@ grep -qF 'DISPATCH_LABEL=web-host-replace' "$WF_YML" \
 grep -qF 'DISPATCH_LABEL=web-host-create' "$WF_YML" \
   && pass "DISPATCH_LABEL=web-host-create still in the workflow" \
   || fail "DISPATCH_LABEL=web-host-create drifted"
+grep -qF 'web_host_replace:' "$WF_YML" \
+  && pass "job key 'web_host_replace:' still names a workflow job" \
+  || fail "web_host_replace job name drifted — the jobs filter would enumerate nothing"
+grep -qF 'web_host_create:' "$WF_YML" \
+  && pass "job key 'web_host_create:' still names a workflow job" \
+  || fail "web_host_create job name drifted — the jobs filter would enumerate nothing"
+grep -qF 'variable "web_hosts"' "$REPO_ROOT/apps/web-platform/infra/variables.tf" \
+  && pass "roster anchor 'variable \"web_hosts\"' still in variables.tf" \
+  || fail "the web_hosts declaration drifted — the roster derivation is unmeasured"
 # The session-TZ-safe bound: a naive toDateTime('...') parses in the session TZ
 # and silently shifts the boot bound (the stale-evidence class).
 grep -qF "toDateTime64('" "$PROBE" && grep -qF "3, 'UTC'" "$PROBE" \
@@ -269,6 +278,7 @@ check 5 "$B" "overdue comment names the boot timestamp"
 check 5 "actions/runs/901" "overdue comment names the dispatch run URL"
 check 5 "control_rows=4" "overdue comment names the control count"
 check 5 "web-host-birth.md" "overdue pointer names BOTH runbooks"
+check 5 "web-host-replace.md" "overdue pointer also names the replace runbook"
 
 # 4. Channel-dark past the deadline is still ACTION REQUIRED — "no evidence of
 #    a completed deploy", never a quiet pass.
@@ -343,6 +353,21 @@ run_probe; check 3 "zero parseable" "success job with an empty trail reads CANNO
 { printf 'web_host_replace\tCheckout\t%s ok\n' "$B"; printf 'web_host_replace\tSet up job\t%s ok\n' "$B"; } > "$WORK/fx/log.9011"
 run_probe; check 3 "zero parseable" "success job with an unrelated-step-only log reads CANNOT ESTABLISH"
 
+# 7c. plan_only rehearsal: the trail step is `if: always() && plan_only != true`
+#     so a plan_only job concludes `success` with the step SKIPPED — a designed
+#     absence, NOT drift. It contributes no obligation and must not trip the
+#     zero-trail tripwire or mask a real owed host in the same window.
+reset_fx; list "901,completed"; job 901 9011 web_host_replace success skipped
+run_probe; check 2 "NOT YET" "a plan_only rehearsal (trail step skipped by input) derives no obligation"
+# ...and a plan_only run adjacent to a REAL overdue host leaves the verdict at 5.
+reset_fx; list "901,completed" "902,completed"
+job 901 9011 web_host_replace success skipped
+job 902 9021 web_host_replace success
+B=$(ts '3 days ago')
+{ l "$(PTR web-2 replace)" "$B" web_host_replace; l "$READY" "$B" web_host_replace; } > "$WORK/fx/log.9021"
+bs soleur-web-2 0 none
+run_probe; check 5 "ACTION REQUIRED" "a plan_only run does not mask a real overdue host in the same window"
+
 # 8. Mutation 4 / re-replace: a host re-replaced after an earlier boot owes only
 #    the NEWEST boot's deadline — the old boot's overdue-ness is superseded.
 reset_fx; list "901,completed" "900,completed"
@@ -377,6 +402,14 @@ variable "other_map" {
 TF
 run_probe; check 2 "NOT YET" "the roster grep is scoped to the web_hosts block, not the whole file"
 
+# 10b. A missing `variable "web_hosts"` block while proven boots exist means the
+#      roster derivation is UNMEASURED (anchor drifted) -> CANNOT ESTABLISH.
+reset_fx; list "901,completed"; job 901 9011 web_host_replace success
+B=$(ts '1 hour ago')
+{ l "$(PTR web-2 replace)" "$B" web_host_replace; l "$READY" "$B" web_host_replace; } > "$WORK/fx/log.9011"
+printf 'variable "other_map" {\n  default = { "web-2" = {} }\n}\n' > "$WORK/fx/variables.tf"
+run_probe; check 3 "web_hosts" "a missing web_hosts block with proven boots reads CANNOT ESTABLISH, not quiet-2"
+
 # 11. web_host_create is covered by the same arm (the pointer alternation).
 reset_fx; list "901,completed"; job 901 9011 web_host_create success
 B=$(ts '1 hour ago')
@@ -401,7 +434,16 @@ run_probe; check 2 "NOT YET" "a dispatch run for another apply_target derives no
 reset_fx
 pairs=(); for i in $(seq 1 100); do pairs+=("$((1000+i)),completed"); done
 list "${pairs[@]}"
-run_probe; check 3 "cap" "a run list at exactly the -L cap reads CANNOT ESTABLISH"
+run_probe; check 3 "the -L 100 cap" "a run list at exactly the -L cap reads CANNOT ESTABLISH"
+
+# 12c. The jobs read: a transport failure or a >100-job page is CANNOT
+#      ESTABLISH (the same truncation doctrine as the -L run-list cap).
+reset_fx; list "901,completed"; job 901 9011 web_host_replace success
+touch "$WORK/fx/jobs.901.fail"
+run_probe; check 3 "cannot read the jobs" "jobs-read transport failure reads CANNOT ESTABLISH"
+reset_fx; list "901,completed"
+printf '{"total_count":101,"jobs":[{"id":9011,"name":"web_host_replace","status":"completed","conclusion":"success","steps":[]}]}\n' > "$WORK/fx/jobs.901"
+run_probe; check 3 "cannot read the jobs" "a jobs page past the per_page cap reads CANNOT ESTABLISH (total_count trip)"
 
 # 13. Credential and binary preflights -> CANNOT ESTABLISH (never 2-as-quiet).
 reset_fx; list "901,completed"; job 901 9011 web_host_replace success

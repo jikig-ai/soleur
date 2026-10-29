@@ -158,14 +158,17 @@ for v in GH_TOKEN BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_
 done
 
 GH="${FT10585_GH:-gh}"
-for b in "$GH" jq awk date grep sort; do
+for b in "$GH" jq awk date grep sort tr dirname; do
   if ! command -v "$b" >/dev/null 2>&1; then
     printf 'CANNOT ESTABLISH: %s is not on PATH — cannot enumerate or grade.\n' "$b" >&2
     exit 3
   fi
 done
-if (( BASH_VERSINFO[0] < 4 )); then
-  printf 'CANNOT ESTABLISH: bash >= 4 is required (the owed-boot map is an associative array); this is bash %s.\n' "${BASH_VERSION:-unknown}" >&2
+# bash >= 4.4: the owed-boot map is an associative array AND "${!arr[@]}" on an
+# EMPTY declared assoc aborts under set -u on 4.0-4.3 (the empty-array nounset
+# bug fixed in 4.4); the EXIT trap would still land it at 3, but gate early.
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+  printf 'CANNOT ESTABLISH: bash >= 4.4 is required (assoc arrays + empty-array nounset); this is bash %s.\n' "${BASH_VERSION:-unknown}" >&2
   exit 3
 fi
 
@@ -228,19 +231,26 @@ for id in $ids; do
     exit 3
   fi
   # ONE REST call per run (the retired `gh run view --json jobs` fanned out to
-  # ~3): the jobs list, filtered server-shape to "<job-id>\t<conclusion>".
+  # ~3): the jobs list filtered to "<job-id>\t<conclusion>\t<trail-step
+  # conclusion>" — the step's own conclusion distinguishes a plan_only skip
+  # (designed absence: the trail step is `if: always() && plan_only != true`)
+  # from real log-shape drift. `total_count > .jobs|length` trips on a page
+  # cap the same way the -L run-list cap trips above.
   jobs_tsv=$("$GH" api "repos/${REPO}/actions/runs/${id}/jobs?per_page=100" \
-    --jq '.jobs[] | select((.name == "web_host_replace" or .name == "web_host_create") and (.conclusion // "") != "" and (.conclusion // "") != "skipped") | "\(.id)\t\(.conclusion)"' \
+    --jq 'if .total_count > (.jobs | length) then error("jobs page truncated") else .jobs[] | select((.name == "web_host_replace" or .name == "web_host_create") and (.conclusion // "") != "" and (.conclusion // "") != "skipped") | "\(.id)\t\(.conclusion)\t\(([.steps[]? | select(.name | startswith("Surface fresh-host Sentry breadcrumb trail")) | .conclusion] | .[0] // "absent"))" end' \
     2>/dev/null) || {
-    printf 'CANNOT ESTABLISH: cannot read the jobs of run %s.\n' "$id" >&2
+    printf 'CANNOT ESTABLISH: cannot read the jobs of run %s (transport failure or a >100-job page the probe refuses to grade blind).\n' "$id" >&2
     exit 3; }
-  while IFS=$'\t' read -r jid jcon; do
+  while IFS=$'\t' read -r jid jcon jstep; do
     [[ -n "$jid" ]] || continue   # empty response = no qualifying job in this run
     if ! [[ "$jid" =~ ^[0-9]+$ ]]; then
       printf 'CANNOT ESTABLISH: unexpected job id %s in the jobs response of run %s.\n' "$(san "$jid")" "$id" >&2
       exit 3
     fi
-    log=$("$GH" run view --repo "$REPO" --job "$jid" --log 2>/dev/null) || {
+    # plan_only rehearsal: the trail step is skipped BY INPUT — a designed
+    # absence, not drift. The job booted nothing; it contributes no obligation.
+    [[ "$jstep" == "skipped" ]] && continue
+    log=$("$GH" run view --repo "$REPO" --job "$jid" --log </dev/null 2>/dev/null) || {
       printf 'CANNOT ESTABLISH: cannot read the log of job %s (run %s).\n' "$jid" "$id" >&2
       exit 3; }
     # The trail step's own output: field 2 is the step name, field 3 is
@@ -284,12 +294,21 @@ done
 # set — the `${!arr[@]+"${!arr[@]}"}` alternate-expansion idiom MISPARSES on
 # assoc arrays (it expands to nothing even when keys exist) and must not be used
 # here.
+# Scoped to the `variable "web_hosts" { ... }` block — an unscoped grep would
+# also match a same-named key in a neighbouring variable declaration. Capture
+# the block ONCE (awk's rc is inspectable, no SIGPIPE-prone awk|grep -q pipe):
+# an empty range while proven boots exist means the anchor drifted (variable
+# renamed, hosts moved) and the roster is UNMEASURED — CANNOT ESTABLISH, never
+# a quiet 2. The `^}` close assumes column-0 braces; an indented close bleeds
+# the range wider (fail-safe toward over-owing, never under).
+roster_block=$(awk '/variable "web_hosts" \{/,/^\}/' "$VARS_TF") || roster_block=""
+if (( ${#BOOT_EPOCH[@]} > 0 )) && [[ -z "$roster_block" ]]; then
+  printf 'CANNOT ESTABLISH: the `variable "web_hosts"` block did not parse in %s — the roster derivation is unmeasured; refusing to grade %d proven boot(s) against an empty roster.\n' "$VARS_TF" "${#BOOT_EPOCH[@]}" >&2
+  exit 3
+fi
 declare -a OWED=()
 for key in "${!BOOT_EPOCH[@]}"; do
-  # Scoped to the `variable "web_hosts" { ... }` block — an unscoped grep would
-  # also match a same-named key in a neighbouring variable declaration.
-  if awk '/variable "web_hosts" \{/,/^\}/' "$VARS_TF" \
-     | grep -qE "^[[:space:]]*\"?${key}\"?[[:space:]]*=[[:space:]]*\{"; then
+  if grep -qE "^[[:space:]]*\"?${key}\"?[[:space:]]*=[[:space:]]*\{" <<<"$roster_block"; then
     OWED+=("$key")
   fi
 done
