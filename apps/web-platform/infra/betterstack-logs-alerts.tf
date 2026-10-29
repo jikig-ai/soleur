@@ -265,8 +265,13 @@ locals {
   #     self-attested value over receive-time is unmeasured (#9784); a severely skewed host
   #     clock could place a real wrong-volume row outside this alert's 5400 s window;
   #   * the leg-B literals are load-bearing — `stage` is a call-site literal whose authority is
-  #     the emit site in inngest-bootstrap.sh; the drift guard derives its needle from there, so
-  #     a coordinated rename that misses this SQL goes red rather than quietly re-pinning.
+  #     the emit site in inngest-bootstrap.sh (a RESERVED token on the shared phone-home helper —
+  #     the guard asserts exactly one emit site passes it); `shipper` is the payload builder's
+  #     literal in cloud-init-inngest.yml; the drift guard derives both needles from those
+  #     sources, so a coordinated rename that misses this SQL goes red rather than quietly
+  #     re-pinning. The alert's integrity bound on BOTH legs is the source ingest token — every
+  #     identity field here (SYSLOG_IDENTIFIER, message, shipper, stage, detail) is
+  #     sender-attested, so a token holder can forge either leg (parity, not a new capability).
   # LIVE-PROBED 2026-10-29 (dual-path predicate, #11526), 48h window over the hot remote() UNION
   # s3Cluster archive — controls A–E measured against the shipped shape:
   #   A leg-A population (emitter + marker + host_role=dedicated)    -> 49 rows
@@ -387,7 +392,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The dedicated Inngest host reports /mnt/data backed by a volume that is NOT the encrypted one (probe_schema=8 data_mount_devid). Redis writes are landing unencrypted. Runbook: ${local.inngest_luks_wrong_volume_runbook_url}"
+  incident_cause = "The dedicated Inngest host reports /mnt/data backed by a volume that is NOT the encrypted one (probe_schema=8 data_mount_devid). Redis writes are landing unencrypted. If Vector was down, the evidence row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=inngest-server-probe-vector-down) — decode its .detail, not the message. Runbook: ${local.inngest_luks_wrong_volume_runbook_url}"
   metadata = {
     runbook = local.inngest_luks_wrong_volume_runbook_url
   }

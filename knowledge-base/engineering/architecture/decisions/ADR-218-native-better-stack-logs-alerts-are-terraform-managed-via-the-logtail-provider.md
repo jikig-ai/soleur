@@ -585,6 +585,22 @@ This is the pattern #11527 applies to `inngest_luks_key_probe_fail` (a sibling d
 emitter — its marker already names a curl-direct phone-home copy) and #11528 pins in the guard
 family. Both are deliberately out of scope here.
 
+Two recorded refinements (post-panel, 2026-10-29):
+
+- **Marker override is the enumerated alternative.** Where a fallback caller already passes its
+  marker as the phone-home arg-3 override (as `inngest-cutover-flip.sh` does for
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE`, so the fallback `message` itself begins with the marker), the
+  position-1 anchor reads BOTH channels with no second OR leg — emitter-side override, not
+  envelope-field identity, is the mechanism there. Envelope-field legs are the convention for a
+  fallback that cannot or must not override `marker` (this probe re-purposing
+  `SOLEUR_INNGEST_BOOT_STAGE`, ~15 call sites, was rejected at plan).
+- **No per-run dedup.** The two channels are mutually exclusive per ROW (no envelope carries both
+  `SYSLOG_IDENTIFIER` and `shipper`), but one probe RUN during `activating`/flap can land a row in
+  each — Vector's journald cursor ships the journald copy late on recovery. `value` can read 2 for
+  one wrong-volume event; harmless under `operator = "higher_than", value = 0`, but a future
+  sibling alert with a `>1` threshold inherits the inflation — record the threshold assumption
+  when copying this convention.
+
 - **Enforcement.** `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` derives
   the stage needle from the emit site in `inngest-bootstrap.sh` (a coordinated rename that misses
   the `.tf` goes red), carries per-leg presence rows (`message`-anchored on leg A,

@@ -106,12 +106,21 @@ source "$REPO/scripts/lib/inngest-probe-row.sh" || { printf '[FATAL] cannot sour
 export MUT_EMITTER="$INNGEST_PROBE_EMITTER"
 
 # The leg-B `stage` literal is a CALL-SITE literal with no canonical lib — its authority is the
-# emit site in inngest-bootstrap.sh (#11526). Deriving the needle from there mirrors the
-# MUT_EMITTER contract: a coordinated stage rename that misses the .tf conjunct goes red rather
-# than quietly re-pinning the guard to a dead literal.
+# emit site in inngest-bootstrap.sh (#11526). The extraction is anchored on the
+# `inngest-boot-phone-home.sh <stage>` CALL FORM with no `#` before the helper name, so a comment
+# carrying the bare literal cannot satisfy it, and it yields the arg BOUNDED — a rename to a
+# superstring (-v2) extracts the NEW literal, reddening the .tf needle instead of silently
+# re-pinning a stale one. Unlike MUT_EMITTER this cannot flow through a lib.
 export MUT_STAGE
-MUT_STAGE="$(grep -oE 'inngest-server-probe-vector-down' "$REPO/apps/web-platform/infra/inngest-bootstrap.sh" | head -1)"
-[ -n "$MUT_STAGE" ] || { printf '[FATAL] no inngest-server-probe-vector-down literal in inngest-bootstrap.sh — the stage needle has no canonical source\n' >&2; exit 2; }
+MUT_STAGE="$(sed -n 's/^[^#]*inngest-boot-phone-home\.sh[[:space:]]\+\(inngest-server-probe-[A-Za-z0-9_-]*\).*/\1/p' "$REPO/apps/web-platform/infra/inngest-bootstrap.sh" | head -1)"
+[ -n "$MUT_STAGE" ] || { printf '[FATAL] no inngest-server-probe-* call site on inngest-boot-phone-home.sh in inngest-bootstrap.sh — the stage needle has no canonical source\n' >&2; exit 2; }
+
+# The leg-B `shipper` literal is the payload builder's own — its authority is the jq envelope in
+# cloud-init-inngest.yml (`shipper:"…"`), derived the same way so a payload-side rename that
+# misses the .tf goes red rather than leaving the needle green on a dead literal.
+export MUT_SHIPPER
+MUT_SHIPPER="$(sed -n 's/^[^#]*shipper:"\([^"]*\)".*/\1/p' "$REPO/apps/web-platform/infra/cloud-init-inngest.yml" | head -1)"
+[ -n "$MUT_SHIPPER" ] || { printf '[FATAL] no shipper literal in the cloud-init-inngest.yml payload builder — the shipper needle has no canonical source\n' >&2; exit 2; }
 
 # The predicate heredoc, extracted from the FIRST UNCOMMENTED opening line. An earlier form
 # started at the first match anywhere, so a commented-out copy of the heredoc above `locals {`
@@ -175,9 +184,17 @@ printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 
 # negated devid check evaluates position('') = 0 and counts it — the schema-drop class must page,
 # never read healthy (the jq-failure payload carries no shipper at all and is recorded as a
 # silently-uncounted residual edge, per the CTO's T1 dissent).
-printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'" \
-  && ok "leg B pins shipper='cloud-init-phone-home' — the emitter class of the phone-home envelope" \
-  || no "the shipper equality conjunct is missing: phone-home rows cannot reach leg B"
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'shipper') = '${MUT_SHIPPER}'" \
+  && ok "leg B pins shipper='${MUT_SHIPPER}' — the emitter class of the phone-home envelope, derived from the payload builder" \
+  || no "the shipper equality conjunct is missing or pinned to a stale literal: phone-home rows cannot reach leg B"
+
+# The stage literal is a RESERVED token on a shared helper (inngest-boot-phone-home.sh takes
+# `stage` as positional $1 at ~16 call sites): a second emit site passing the same stage arg is a
+# leg-B identity collision the predicate cannot see — exactly one call site may pass it.
+_stage_sites="$(grep -cE '^[^#]*inngest-boot-phone-home\.sh[[:space:]]+inngest-server-probe-vector-down([[:space:]"]|$)' "$REPO/apps/web-platform/infra/inngest-bootstrap.sh" || true)"
+[ "$_stage_sites" = "1" ] \
+  && ok "exactly one emit site passes the stage literal to inngest-boot-phone-home.sh — the token is reserved" \
+  || no "stage-literal emit-site count=${_stage_sites} (want 1) — a second emitter collides on leg-B identity"
 
 printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'stage') = '${MUT_STAGE}'" \
   && ok "leg B pins stage='${MUT_STAGE}' — needle derived from the emit site, not re-pinned" \
@@ -207,7 +224,7 @@ printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'detail')
 _or_open="$(printf '%s' "$LOCAL_SQL" | grep -cE '^[[:space:]]+OR \($' || true)"
 _or_next="$(printf '%s' "$LOCAL_SQL" | grep -m1 -A1 -E '^[[:space:]]+OR \($' | tail -1 || true)"
 if [ "$_or_open" = "2" ] \
-  && printf '%s' "$_or_next" | grep -qF "JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'" \
+  && printf '%s' "$_or_next" | grep -qF "JSONExtractString(raw, 'shipper') = '${MUT_SHIPPER}'" \
   && [ "$(printf '%s' "$LOCAL_SQL" | tail -5 | head -1)" = "            )" ] \
   && [ "$(printf '%s' "$LOCAL_SQL" | tail -4 | head -1)" = "          )" ] \
   && [ "$(printf '%s' "$LOCAL_SQL" | tail -3 | head -1)" = "        )" ] \
@@ -393,15 +410,27 @@ s = s.replace(old, "        position(JSONExtractString(raw, \x27SYSLOG_IDENTIFIE
 assert s.count(old) == 1
 s = s.replace(old, "exploration_id = logtail_exploration.monitor_send_failed.id")'
 
-  # #11526 rows — the phone-home fallback arm. Five weakenings; each must redden a presence row.
+  # #11526 rows — the phone-home fallback arm. Eight weakenings; each must redden a presence row.
   mutate_red "the leg-B shipper conjunct is dropped (any stage's phone-home row counts)" TF \
-    'old = "          JSONExtractString(raw, \x27shipper\x27) = \x27cloud-init-phone-home\x27\n"
+    'import os
+shipper = os.environ["MUT_SHIPPER"]
+old = "          JSONExtractString(raw, \x27shipper\x27) = \x27" + shipper + "\x27\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
+  mutate_red "the leg-B shipper literal flips to a foreign shipper (leg B reads zero rows silently)" TF \
+    'import os
+shipper = os.environ["MUT_SHIPPER"]
+old = "JSONExtractString(raw, \x27shipper\x27) = \x27" + shipper + "\x27"
+assert s.count(old) == 1
+s = s.replace(old, "JSONExtractString(raw, \x27shipper\x27) = \x27cloud-init-phone-other\x27")'
   mutate_red "the leg-B stage conjunct is dropped (every phone-home row counts)" TF \
     'import os
 stage = os.environ["MUT_STAGE"]
 old = "          AND JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the leg-B detail host_role scope is dropped (a web-host fallback row counts)" TF \
+    'old = "              position(JSONExtractString(raw, \x27detail\x27), \x27host_role=dedicated \x27) > 0\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
   mutate_red "the leg-B stage literal flips to a foreign stage" TF \
@@ -421,8 +450,9 @@ s = s.replace(old, "false")'
   mutate_red "the whole OR arm is deleted (the #11526 regression — legs collapse to journald-only)" TF \
     'import os
 stage = os.environ["MUT_STAGE"]
+shipper = os.environ["MUT_SHIPPER"]
 old = ("        OR (\n"
-       "          JSONExtractString(raw, \x27shipper\x27) = \x27cloud-init-phone-home\x27\n"
+       "          JSONExtractString(raw, \x27shipper\x27) = \x27" + shipper + "\x27\n"
        "          AND JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27\n"
        "          AND (\n"
        "            JSONExtractString(raw, \x27detail\x27) = \x27\x27\n"
@@ -436,11 +466,11 @@ assert s.count(old) == 1
 s = s.replace(old, "")'
 fi
 
-# 41 = 21 presence rows + 20 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
+# 44 = 22 presence rows + 22 mutation rows. The MUT_SKIP floor is exactly the presence-row count:
 # an inner run asserts only those, and the instrument control above is what catches a floor that
 # drifts past them (that control, not this comment, is the guard against a dead battery).
-_floor=41
-[ -n "${MUT_SKIP:-}" ] && _floor=21
+_floor=44
+[ -n "${MUT_SKIP:-}" ] && _floor=22
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
