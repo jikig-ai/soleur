@@ -30,20 +30,10 @@ check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$2] got [$3
 has()   { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing [$3]" ;; esac; }
 hasnt() { case "$2" in *"$3"*) bad "$1" "unexpected [$3] present" ;; *) ok "$1" ;; esac; }
 
-instrument_selftest() {
-  local p0=$PASS f0=$FAIL n0 p1 f1 p2 f2
-  n0="$(wc -l < "$LEDGER")"
-  { check st 1 2; has st abc z; hasnt st abc b; } >/dev/null
-  p1=$((PASS - p0)); f1=$((FAIL - f0))
-  { check st 1 1; has st abc b; hasnt st abc z; } >/dev/null
-  p2=$((PASS - p0 - p1)); f2=$((FAIL - f0 - f1))
-  PASS=$p0; FAIL=$f0
-  head -n "$n0" "$LEDGER" > "$LEDGER.t" && mv "$LEDGER.t" "$LEDGER"
-  if [ "$p1/$f1/$p2/$f2" != "0/3/3/0" ]; then
-    echo "INSTRUMENT SELF-TEST FAILED: check/has/hasnt cannot tell true from false (false-block pass/fail $p1/$f1, true-block pass/fail $p2/$f2)"
-    exit 4
-  fi
-}
+MH_LIB="$REPO/scripts/lib/mutation-harness.sh"
+[ -f "$MH_LIB" ] || { echo "mutation-harness lib missing: $MH_LIB"; exit 4; }
+# shellcheck source=../lib/mutation-harness.sh
+source "$MH_LIB"
 instrument_selftest
 
 NOW=1790000000
@@ -126,7 +116,6 @@ mk_sb() { printf '%s' "$1" > "$ROOT/sb.json"; SB_BODY="$ROOT/sb.json"; }
 sb_counts() { mk_sb "[{\"recoverable\":$1,\"aged_out\":$2}]"; }
 all_zero() { reset_knobs; enq_n 0; sb_counts 0 0; }   # the normal quiet state; callers then override one knob
 
-run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
 reset_knobs
 echo "=== dispatch-recovery-sweeper-11211.sh tests ==="
@@ -385,43 +374,12 @@ check "an unexpected internal exit status is mapped to 3 by the EXIT trap" 3 "$R
 reset_knobs
 check "the strict curl stub refused no request in the whole suite" "" "$(cat "$ROOT/refused")"
 
+# shellcheck disable=SC2034  # read by mh_floor in the sourced lib
 FIX_N="$(wc -l < "$LEDGER")"
 if run_battery "${1:-}"; then
   echo "=== mutation battery ==="
   export FT_REPO="$REPO"
   MUT="$ROOT/mut"; mkdir -p "$MUT"
-  # mutate_run <name> <tag-or-unique-text> <replacement line> <expected FAIL fragment>
-  mutate_run() {
-    local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0
-    if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
-    REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
-    if cmp -s "$SUT" "$f"; then bad "mutation $name: the mutation did not land (instrument)"; return; fi
-    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant does not parse (instrument)"; return; fi
-    FT_INNER=1 FT_SUT="$f" bash "$SELF" > "$o" 2>&1 || rc=$?
-    if [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
-    elif [ "$rc" != 1 ]; then bad "mutation $name: unresolved instrument rc=$rc"
-    elif grep -qF -- "FAIL: $frag" "$o"; then ok "mutation $name: caught by its own FAIL line [$frag]"
-    else bad "mutation $name: rc=1 but no FAIL line [$frag] (killed by something else)"; fi
-  }
-  # mutate_sub <name> <unique text> <from> <to> <expected FAIL fragment>: replace <from> by <to> inside the ONE line holding <unique text>
-  mutate_sub() {
-    local line new
-    line="$(grep -F -- "$2" "$SUT" || true)"
-    if [ -z "$line" ] || [ "$(printf '%s\n' "$line" | wc -l)" != 1 ]; then bad "mutation $1: the text [$2] matches exactly one line (instrument)"; return; fi
-    new="${line/"$3"/"$4"}"
-    if [ "$new" = "$line" ]; then bad "mutation $1: [$3] is present in the line (instrument)"; return; fi
-    mutate_run "$1" "$2" "$new" "$5"
-  }
-  # mutate_helper <name> <helper> <neutered definition>: the self-test must abort the run (rc 4) on a copy of THIS file
-  mutate_helper() {
-    local name="$1" helper="$2" rep="$3" f="$MUT/$1.test.sh" o="$MUT/$1.out" rc=0
-    HELPER="$helper" REP="$rep" awk 'index($0, ENVIRON["HELPER"] "()") == 1 { print ENVIRON["REP"]; next } { print }' "$SELF" > "$f"
-    if cmp -s "$SELF" "$f"; then bad "mutation $name: the helper mutation did not land (instrument)"; return; fi
-    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant suite does not parse (instrument)"; return; fi
-    FT_INNER=1 FT_SUT="$SUT" bash "$f" > "$o" 2>&1 || rc=$?
-    if [ "$rc" = 4 ] && grep -qF -- "INSTRUMENT SELF-TEST FAILED" "$o"; then ok "mutation $name: caught by the instrument self-test (rc 4)"
-    else bad "mutation $name: the neutered helper went undetected (rc=$rc)"; fi
-  }
   ctl=0; FT_INNER=1 FT_SUT="$SUT" bash "$SELF" >/dev/null 2>&1 || ctl=$?
   check "battery control: the pristine probe passes the inner suite (rc 0)" 0 "$ctl"
   mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
@@ -469,8 +427,5 @@ MIN_FIXTURE=179; MIN_BATTERY=39
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== dispatch-recovery-sweeper-11211.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
-if [ -z "${FT_INNER:-}" ]; then
-  if [ "$FIX_N" -lt "$MIN_FIXTURE" ]; then printf 'FLOOR: only %s fixture assertions ran, expected at least %s\n' "$FIX_N" "$MIN_FIXTURE"; exit 1; fi
-  if run_battery "${1:-}" && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
-fi
+mh_floor "$MIN_FIXTURE" "$MIN_BATTERY" "${1:-}"
 [ "$FAIL" -eq 0 ]
