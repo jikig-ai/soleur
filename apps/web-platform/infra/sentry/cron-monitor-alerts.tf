@@ -48,7 +48,7 @@ locals {
     # cron-cloud-task-heartbeat's stale-bot-PR scan (#5138) feeds
     # sentry_alert.stale_bot_pr (issue-alerts.tf) → email; the unrouted
     # monitor itself still opens a Sentry issue on failure.
-    scheduled_bot_pr_reaper = "48h stale-bot-PR watchdog (sentry_alert.stale_bot_pr) covers a dead reaper pending a routing decision (#9274)"
+    scheduled_bot_pr_reaper = "pruned per #6590 silence-doctrine + 90d catch-value; destroy lands in the follow-up PR (feat-observability-vendor-eval PR-B). Supersedes the #9274 pending-route note: its stale_bot_pr cover lives under pruned cron-cloud-task-heartbeat"
     # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
     # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
     workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"

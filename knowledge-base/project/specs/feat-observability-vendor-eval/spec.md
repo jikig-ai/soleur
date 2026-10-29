@@ -104,6 +104,11 @@ and **#7577** (Vector ingest cut) but was never sequenced as a spend initiative.
 ## Acceptance Criteria
 
 - AC1 — Sentry monthly invoice projection ≤ ~$35–40/mo (Team base + retained
+  seats + uptime). **Deviation (recorded 2026-10-29):** the evidence-driven
+  enumeration kept 24 monitors (~$50.94/mo projected), ~30% over the
+  pre-evidence ~15–20 estimate — each keep carries a per-row surviving-signal
+  citation in `monitor-prune-inventory.md`; the band was written before the
+  live 90d stats pass and the AC stands unmet by ~$11–15/mo.
   monitors + uptime) after prune.
 - AC2 — Better Stack monthly invoice ≤ ~$40/mo (or Nano tier) after ingest cut.
 - AC3 — Zero coverage regressions: every retained detection property

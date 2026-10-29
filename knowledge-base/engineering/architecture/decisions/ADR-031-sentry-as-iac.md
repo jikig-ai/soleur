@@ -1183,7 +1183,7 @@ crons, muted monitors, and surfaces covered by downstream Better Stack journald 
   host crons, and security lines. A cron that fails loudly throws to Sentry errors for free; a
   cron whose missed run is visible in artifacts (reports, digests, filed issues) or covered by a
   downstream pager does not earn a seat. New-cron monitors are opt-in per risk, not automatic.
-- **Executed scope.** 67 → 24 declared monitors; the 43 pruned labels are inventoried with
+- **Executed scope.** 67 → 24 routed monitors after the PR-A unbind (declared count stays 67 until the PR-B destroy); the 43 pruned labels are inventoried with
   per-row surviving-signal citations in
   `knowledge-base/project/specs/feat-observability-vendor-eval/monitor-prune-inventory.md`.
   Removal follows the two-PR rule: PR-A unbinds via `cron_monitor_alert_unrouted` (this PR);

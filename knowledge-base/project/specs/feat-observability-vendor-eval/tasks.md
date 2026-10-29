@@ -29,7 +29,8 @@ status: pending
 
 ## Phase 4 — Verify and record
 
-- [ ] 4.1 Fire-test: one retained cron monitor, `app_health` pager, redirect-health, one `logtail_exploration_alert`, send-failed pager, incident mirror → GH issue
+- [ ] 4.1 Fire-test: one retained cron monitor, `app_health` pager, redirect-health, one `logtail_exploration_alert`, send-failed pager, incident mirror → GH issue; PLUS one representative UNBOUND monitor's cited surviving signal fired end-to-end (covers the PR-A→PR-B silent window)
+- [ ] 4.1a Regenerate `alert-reference.json` via the `sentry-alert-reference-expected-<run>` CI artifact after apply-sentry-infra.yml plan runs on the PR (README two-PR rule — required before merge)
 - [ ] 4.2 Comment execution evidence on #6590 + #7577
 - [ ] 4.3 gdpr-gate at work Phase 2 exit (vector.toml is a regulated-data surface)
 

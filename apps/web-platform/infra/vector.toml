@@ -262,6 +262,52 @@ include_matches.CONTAINER_NAME = ["soleur-web-platform"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
+# --------------- Compaction: multi-line app container logs (#7577) ----------------
+# The web-platform container pretty-prints object literals (Inngest's ctx.logger
+# renders warn(obj,msg) via util.inspect — one journald row per line), so ONE
+# logical event bills as N ingest rows. The container is ~101k of ~135k rows/day
+# (~75%, 2026-08-14 ingest post-mortem); the multi-line subset is the
+# compaction-eligible share. This reduce runs BEFORE the WARN+ filter below so
+# reassembled blobs are level-filtered like every other row — after the filter,
+# the whole multi-line class would be exempt from the level cut (fragments all
+# fail parse_json → kept).
+#
+# Reduce is a transaction model, not a shape match: once a group is open for a
+# group_by key, EVERY same-key event merges into it until an end fires — a
+# single-line pino row emitted mid-dump is absorbed into the blob and then
+# fails parse_json at pii_scrub_drop_userdata, so it is scrubbed only by
+# pii_scrub_string's backstop (extended below to cover the `"key": "v"` /
+# `key: 'v'` forms absorbed rows carry). A single-line pino row passes through
+# unjoined only while NO group is open.
+#
+# Group boundary: opens on a column-0 `{`-led line not closed on the same line
+# (a complete pino row fails the second half), closes on a column-0 `}`-led
+# line (the closer may carry trailing text, e.g. "} sweep starting"; indented
+# `},` nested-object closers do NOT close the group — column-0 anchoring keeps
+# nested objects joined). group_by pins the join to one group KEY — all of the
+# container's emitters (stdout pino, stderr inspect, child processes) share it;
+# it is not a per-emitter bound.
+#
+# Bounds: expire_after_ms is an IDLE flush (resets per event — a partial group
+# ships once its key goes quiet for 5 s); end_every_period_ms is the real bound
+# (an unclosed group on a busy emitter flushes every 30 s regardless);
+# max_events caps blob width (memory + the swallowed-row radius). A Vector
+# restart loses open groups.
+[transforms.app_container_compaction]
+type = "reduce"
+inputs = ["app_container_journald"]
+group_by = ["SYSLOG_IDENTIFIER", "CONTAINER_NAME"]
+expire_after_ms = 5000
+end_every_period_ms = 30000
+max_events = 200
+starts_when = '''
+match(string(.message) ?? "", r'^\{') && !match(string(.message) ?? "", r'\}\s*$')
+'''
+ends_when = '''
+match(string(.message) ?? "", r'^\}')
+'''
+merge_strategies.message = "concat_newline"
+
 # ---------------- Filter: app container WARN+ (pino level >= 40) ----------------
 # Quota control (#4773 Vendor-tier reality check): the app container's stdout is
 # higher-volume than the supervisor journald (cron INFO output + scattered
@@ -276,7 +322,7 @@ batch_size = 16
 # Non-JSON lines (container crash / uncaught-exception stack on fd 2) are kept.
 [transforms.app_container_warn_filter]
 type = "filter"
-inputs = ["app_container_journald"]
+inputs = ["app_container_compaction"]
 condition = '''
 parsed, parse_err = parse_json(.message)
 if parse_err != null {
@@ -289,32 +335,6 @@ if parse_err != null {
   true
 }
 '''
-
-# --------------- Compaction: multi-line app container logs (#7577) ----------------
-# The web-platform container pretty-prints object literals, so ONE logical event
-# bills as N ingest rows (measured 2026-08-14: ~80k of ~135k rows/day, ~75%).
-# This reduce joins continuation lines back into one event BEFORE the PII
-# pipeline, so pii_scrub_* still sees complete messages and the 19
-# logtail_exploration_alert predicates still match per-emitter rows.
-#
-# Group boundary: opens on a line that begins an object ({ not closed on the
-# same line — a complete single-line pino JSON row fails the second half and
-# passes through), closes on a line beginning } (the closer may carry trailing
-# text, e.g. "} sweep starting"). group_by pins the join to one emitter so a
-# group can never span SYSLOG_IDENTIFIER boundaries. expire_after_ms bounds
-# both memory and the worst case of an unclosed group (a crash mid-write).
-[transforms.app_container_compaction]
-type = "reduce"
-inputs = ["app_container_warn_filter"]
-group_by = ["SYSLOG_IDENTIFIER", "CONTAINER_NAME"]
-expire_after_ms = 5000
-starts_when = '''
-match(string(.message) ?? "", r'^\s*\{') && !match(string(.message) ?? "", r'\}\s*$')
-'''
-ends_when = '''
-match(string(.message) ?? "", r'^\s*\}')
-'''
-merge_strategies.message = "concat_newline"
 
 # ---------------- Source 3b: egress gateway journald (#9534) ----------------
 # soleur-egress-gw runs --log-driver journald; its stdout is the JSON decision
@@ -589,7 +609,7 @@ batch_size = 16
 # own buffer dir — /mnt/data is covered by NO other monitor; / is also
 # covered by disk-monitor.sh). Predicted ~69 rows/scrape = ~19.9k rows/day
 # (20% under threshold). Snap loop devices (loop*) and device-mapper (dm-*)
-# stay excluded from the disk + filesystem collectors — pseudo-device series
+# stay excluded from the filesystem collector — pseudo-device series
 # with no diagnostic signal.
 # Decision record: knowledge-base/operations/expenses.md (Better Stack row);
 # verdict tracker: #5110; strategic re-decision tracked in #4296.
@@ -602,9 +622,6 @@ batch_size = 16
 type = "host_metrics"
 scrape_interval_secs = 900
 collectors = ["memory", "filesystem"]
-
-[sources.host_metrics.disk]
-devices.excludes = ["loop*", "dm-*"]
 
 [sources.host_metrics.filesystem]
 devices.excludes = ["loop*", "dm-*"]
@@ -675,7 +692,7 @@ type = "remap"
 # app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
 # the app container's pino lines traverse the full 3-stage redaction (Art-9 key
 # drop → userId HMAC → string backstop) like every other source.
-inputs = ["inngest_terminator_filter", "system_journald", "app_container_compaction", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
+inputs = ["inngest_terminator_filter", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)
@@ -784,6 +801,14 @@ if contains(tag, "structured") {
     msg = slice!(msg, 0, 10000)
   }
   msg = replace(msg, r'(?i)\b(userid|user_id)=[\w-]+', "$${1}=[redacted]")
+  # Merged-blob coverage (#7577): app_container_compaction can glue a previously
+  # parseable row into a non-JSON blob, skipping both structured stages and
+  # landing here — so this branch must cover the SAME Art-9 key set stage 1
+  # drops and the userId + credential keys stage 2 rewrites, in their textual
+  # forms (`"key": "v"`, `key: 'v'`, `key: v`). Key-anchored (our own schema
+  # keys), value-shaped to JSON quotes, inspect quotes, or bare tokens.
+  msg = replace(msg, r'(?i)([\x22\x27]?(body|content|message|userMessage|prompt|chat_message|userInput|user_input)[\x22\x27]?\s*:\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|\[[^\]]*\]|\{[^\}]*\}|[^\s,}\]]+)', "$${1}[redacted]")
+  msg = replace(msg, r'(?i)([\x22\x27]?(user_?id|userId|api_?key|apiKey|token|password|secret|passwd|credentials?)[\x22\x27]?\s*[:=]\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,}\]]+)', "$${1}[redacted]")
   # OAuth query-param redaction (PR #4293 review F2): the /api/auth/callback/...
   # path carve-out preserves the discriminator but query params can carry
   # short-lived OAuth tokens (code, state, access_token, id_token, refresh_token).
