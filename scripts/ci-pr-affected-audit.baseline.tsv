@@ -1,4 +1,3 @@
-SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=1513 baseline=1514
 .claude/hooks/bare-head-self-heal.test.sh	AGENTS.md
 .claude/hooks/bare-head-self-heal.test.sh	AGENTS.rules.md
 .claude/hooks/brand-hex-commit-gate.test.sh	apps/web-platform/app/globals.css
