@@ -299,7 +299,7 @@ a2_n=$(wc -w <<<"$a2_codes")
 if [[ "$a2_n" -ge 7 ]]; then
   pass "A2: the exit-code list is derived from the engine header ($a2_n codes: $a2_codes)"
 else
-  fail "the engine header must yield at least 7 failure codes for the A2 loop (seven header rows, exit 1 included)" "$a2_n" "$a2_codes"
+  fail "the engine header must yield at least 7 failure codes for the A2 loop (1 + six header rows)" "$a2_n" "$a2_codes"
 fi
 for code in $a2_codes; do
   W="$(world "$TMP/w-a2-$code")"
