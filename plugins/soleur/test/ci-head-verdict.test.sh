@@ -1010,17 +1010,20 @@ mutant() {
 }
 # Harness controls: the helper must be able to report BOTH a survivor and a crash, or its green verdicts mean nothing.
 mutant_selftest() {
-  VERDICTS_EXPECTED=$((VERDICTS_EXPECTED + 1)); ASSERTED=$((ASSERTED + 3))
-  local surv_ok=0 crash_ok=0 rt_ok=0
+  VERDICTS_EXPECTED=$((VERDICTS_EXPECTED + 1)); ASSERTED=$((ASSERTED + 4))
+  local surv_ok=0 crash_ok=0 rt_ok=0 req_ok=0
   mutant_run SELF-EQUIV 'readonly MARKER="SOLEUR_CI_HEAD_VERDICT"' "readonly MARKER='SOLEUR_CI_HEAD_VERDICT'" row_V3 row_V15
   [[ "$MUT_LANDED" -eq 1 && -n "$MUT_SURV" && "$MUT_CRASH" -eq 0 ]] && surv_ok=1
+  # the same control for the `required` rows (their child seam is explicit, so a mutant copy still reaches the stub child)
+  mutant_run SELF-EQUIV-REQ 'readonly REQUIRED_MARKER="SOLEUR_CI_REQUIRED_SET"' "readonly REQUIRED_MARKER='SOLEUR_CI_REQUIRED_SET'" row_R1 row_R6 row_RE1
+  [[ "$MUT_LANDED" -eq 1 && "$MUT_SURV" == " row_R1 row_R6 row_RE1" && "$MUT_CRASH" -eq 0 ]] && req_ok=1
   mutant_run SELF-CRASH 'set -uo pipefail' 'set -uo pipefail; readonly MARKER=(' row_V3
   [[ "$MUT_LANDED" -eq 1 && "$MUT_CRASH" -eq 1 ]] && crash_ok=1
   # the stderr detector itself: a mutant that PARSES (bash -n passes) but fails at runtime must still be flagged
   mutant_run SELF-CRASH-RT 'set -uo pipefail' 'set -uo pipefail; no_such_command_zz' row_V3
   if [[ "$MUT_LANDED" -eq 1 && "$MUT_CRASH" -eq 1 ]] && bash -n "$SANDBOX/mut-SELF-CRASH-RT.sh" 2>/dev/null; then rt_ok=1; fi
-  if [[ "$surv_ok" -eq 1 && "$crash_ok" -eq 1 && "$rt_ok" -eq 1 ]]; then pass "harness controls (an equivalent mutant survives, a non-parsing and a runtime-failing mutant are flagged)"
-  else fail "harness controls (survivor reported: $surv_ok, parse crash flagged: $crash_ok, runtime crash flagged: $rt_ok)"; fi
+  if [[ "$surv_ok" -eq 1 && "$crash_ok" -eq 1 && "$rt_ok" -eq 1 && "$req_ok" -eq 1 ]]; then pass "harness controls (an equivalent mutant survives, a non-parsing and a runtime-failing mutant are flagged)"
+  else fail "harness controls (survivor reported: $surv_ok, parse crash flagged: $crash_ok, runtime crash flagged: $rt_ok, required-rows control survives: $req_ok)"; fi
 }
 
 run_row() { # <fn> <label>
@@ -1143,19 +1146,68 @@ mutant M46 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[0].check_s
 mutant M47 '(min | tostring)' '(.[0] | tostring)' row_V25
 mutant M48 '(min | tostring)' '(.[-1] | tostring)' row_V25
 mutant M49 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[-1].check_suites[] | .created_at | fromdateiso8601]' row_V25
+# `required` mutants (Guard 1 of #9927: `complete` only on a proven-complete required set). Every kill row asserts the exact state AND
+# reason. Not mutated, each with its reason: the byte-exact round trip (true by construction of the split: equivalent), the rc 3/4
+# pass-through (an rc 4 would fall into the not-ready arm and print the same reason: equivalent), the SIGINT trap and the dispatch case.
+mutant M50 'AM_NA == 0 && AM_NP == 0 && AM_NF == 0' 'AM_NA == 0 && AM_NP == 0' row_R8
+mutant M51 'AM_NA == 0 && AM_NP == 0 && AM_NF == 0' 'AM_NP == 0 && AM_NF == 0' row_R8
+mutant M52 'AM_NA == 0 && AM_NP == 0 && AM_NF == 0' 'AM_NA == 0 && AM_NF == 0' row_R8
+mutant M53 'CL_REASON="$AM_REASON"; [[ "$AM_REASON" == not-green ]] && CL_REASON=no-culprit' 'CL_STATE=pending; CL_REASON="$AM_REASON"' row_R7
+mutant M54 '  if (( AM_NA + AM_NP + AM_NF == 0 )); then
+    CL_REASON=' '  if (( AM_REQ == 0 )); then CL_REASON=required-unknown; return 0; fi
+  if (( AM_NA + AM_NP + AM_NF == 0 )); then
+    CL_REASON=' row_R7
+mutant M55 '[[ "$AM_REASON" == not-green ]] && CL_REASON=no-culprit' ':' row_R7
+mutant M56 '  if (( AM_NF > 0 )); then CL_STATE=failed
+  elif (( AM_NA > 0 )); then CL_STATE=absent' '  if (( AM_NA > 0 )); then CL_STATE=absent
+  elif (( AM_NF > 0 )); then CL_STATE=failed' row_R5
+mutant M57 '  elif (( AM_NA > 0 )); then CL_STATE=absent
+  else CL_STATE=pending; fi' '  elif (( AM_NP > 0 )); then CL_STATE=pending
+  else CL_STATE=absent; fi' row_R5
+mutant M58 '(( n == 1 )) || { AM_ERR=marker-unparseable; return 1; }' ':' row_R6
+mutant M59 'line="$(tail -n 1 "$f")"' 'line="$(grep '\''^SOLEUR_ADMIN_MERGE_READY '\'' "$f")"' row_R6
+mutant M60 '(( n >= 1 )) || { AM_ERR=no-marker; return 1; }' ':' row_R6
+mutant M61 '"${BASH_REMATCH[3]}" == "$PR_SHA"' '"${BASH_REMATCH[3]}" == "${BASH_REMATCH[3]}"' row_R6
+mutant M62 '"${BASH_REMATCH[2]}" == "$PR"' '"${BASH_REMATCH[2]}" == "${BASH_REMATCH[2]}"' row_R6
+mutant M63 'case "$rc:$AM_VERDICT" in 0:ready|1:not-ready|3:error|4:stale) : ;; *) CL_REASON="rc-mismatch"; return 0 ;; esac' ':' row_R6
+mutant M64 'case "$rc" in 0|1|3|4) : ;; *)' 'case "$rc" in 0|1|2|3|4|130) : ;; *)' row_R6
+mutant M65 'jq -es '\''length == 1 and (.[0] | type == "array")' 'jq -es '\''length >= 1 and (.[0] | type == "array")' row_R6
+mutant M66 'and ((explode | any(. < 32 or . == 127)) | not)' 'and true' row_R6
+mutant M67 '(( AM_NA + AM_NP + AM_NF <= AM_REQ )) || { AM_ERR=marker-unparseable; return 1; }' ':' row_R6
+mutant M68 'if (( AM_REQ > 0 )); then' 'if (( AM_REQ >= 0 )); then' row_R8
+mutant M69 'req_marker error "$reason" - - - -' 'req_marker error "$reason" - '\''[]'\'' '\''[]'\'' '\''[]'\''' row_R6
+mutant M70 '[[ "$sha" == unknown ]] && sha="-"' ':' row_R6
+mutant M71 'printf '\''RECOVERY rerun run=%s basis=workflow' 'gh run rerun "$id" >/dev/null 2>&1; printf '\''RECOVERY rerun run=%s basis=workflow' row_R2
+mutant M72 'printf '\''RECOVERY rerun run=%s basis=candidate' 'gh run rerun "$id" >/dev/null 2>&1; printf '\''RECOVERY rerun run=%s basis=candidate' row_R3
+mutant M73 'printf '\''RECOVERY owner not determined (read failed) ctx=%s\n'\'' "$ctxj"' 'fail_api "recovery read failed" api-error' row_R4
+mutant M74 'if (( AM_NA == 0 && AM_NP == 0 && AM_NF == 0 )); then CL_STATE=complete' 'if (( AM_NA != 0 || AM_NP != 0 || AM_NF != 0 )); then CL_STATE=complete' row_R1 row_RE1
+mutant M75 '--base "$PR_BASE" >' '>' row_R10
+mutant M76 '--base "$PR_BASE" >' '--base "$PR_BASE" --wait >' row_R1
+mutant M77 '[[ "$PR_BASE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail_api "the PR base branch is empty or not a plain branch name" bad-base' ':' row_R9
+mutant M78 '(.base.ref // "")' '("main")' row_R10 row_R9
+mutant M79 '. != "test" or $r != "stalled"' '$r != "stalled"' row_R4
+mutant M80 'if [[ "$ctx" == test && "$CL_REASON" == stalled ]]; then' 'if [[ "$CL_REASON" == stalled ]]; then' row_R4
+mutant M81 'if length == 1 then "W' 'if length >= 1 then "W' row_R3
+mutant M82 '| sort_by(.id) | reverse' '| sort_by(.id)' row_R3
+mutant M83 'select(.head_sha == $h and .conclusion == "cancelled"' 'select(.conclusion == "cancelled"' row_R2
+mutant M84 '.conclusion == "cancelled" and (.id | type)' '.conclusion != null and (.id | type)' row_R2
+mutant M85 'if [[ "$CL_REASON" == awaiting-approval ]]; then' 'if false; then' row_R4
+mutant M86 'if [[ "$CL_REASON" == stale-row ]]; then' 'if false; then' row_R4
+mutant M87 '(( need == 1 )) && read_cancelled' ':' row_R2
+mutant M88 'elif [[ "$(jq -r '\''length'\'' "$WORK/cancelled.json")" == 0 ]]; then' 'elif false; then' row_R2
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
 # MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS (the measured counts at the last edit); raise them in the same edit as a new row.
-MIN_ASSERTIONS=803
+MIN_ASSERTIONS=843
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=47
+MIN_MUTANTS=86
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi

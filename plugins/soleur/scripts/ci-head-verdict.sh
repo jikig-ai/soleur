@@ -478,8 +478,8 @@ amr_parse() {
   a="${tail%% pending=*}"; rest="${tail#*' pending='}"; p="${rest%' failed='*}"; fl="${rest##*' failed='}"
   [[ "$a pending=$p failed=$fl" == "$tail" ]] || { AM_ERR=marker-unparseable; return 1; }
   if ! { amr_arr_ok "$a" && amr_arr_ok "$p" && amr_arr_ok "$fl"; }; then AM_ERR=marker-unparseable; return 1; fi
-  AM_NA="$(printf '%s' "$a" | jq -r 'length')"; AM_NP="$(printf '%s' "$p" | jq -r 'length')"; AM_NF="$(printf '%s' "$fl" | jq -r 'length')"
-  AM_JA="$(printf '%s' "$a" | jq -c '.')"; AM_JP="$(printf '%s' "$p" | jq -c '.')"; AM_JF="$(printf '%s' "$fl" | jq -c '.')"
+  AM_NA="$(printf '%s' "$a" | jq -rs '.[0] | length')"; AM_NP="$(printf '%s' "$p" | jq -rs '.[0] | length')"; AM_NF="$(printf '%s' "$fl" | jq -rs '.[0] | length')"
+  AM_JA="$(printf '%s' "$a" | jq -cs '.[0]')"; AM_JP="$(printf '%s' "$p" | jq -cs '.[0]')"; AM_JF="$(printf '%s' "$fl" | jq -cs '.[0]')"
   [[ "$AM_NA" =~ ^[0-9]+$ && "$AM_NP" =~ ^[0-9]+$ && "$AM_NF" =~ ^[0-9]+$ ]] || { AM_ERR=marker-unparseable; return 1; }
   (( AM_NA + AM_NP + AM_NF <= AM_REQ )) || { AM_ERR=marker-unparseable; return 1; }
 }
