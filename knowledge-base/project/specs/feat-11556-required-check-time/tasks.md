@@ -5,9 +5,9 @@ Spec: `knowledge-base/project/specs/feat-11556-required-check-time/spec.md`
 
 ## Phase 1 — Diagnose `test-all-affected` divergence (G1)
 
-- [ ] 1.1 Read `scripts/test-all-affected.test.sh` phases (audit reach, naming walk, scan, mutation rows, live `gh` enumeration) and identify which is PR-event-sensitive
-- [ ] 1.2 Emit/obtain per-phase timing on one PR-shaped run (instrument locally or stub the diff surface)
-- [ ] 1.3 Decide split (`--rows` precedent, `shard-totality-mutations`) vs bound (pinned fixture corpus); record rationale in the PR body
+- [x] 1.1 Read `scripts/test-all-affected.test.sh` phases (audit reach, naming walk, scan, mutation rows, live `gh` enumeration) and identify which is PR-event-sensitive
+- [x] 1.2 Emit/obtain per-phase timing on one PR-shaped run (instrument locally or stub the diff surface)
+- [x] 1.3 Decide split (`--rows` precedent, `shard-totality-mutations`) vs bound (pinned fixture corpus); record rationale in the PR body
 
 ## Phase 2 — Bound `ci-pr-affected-replay.test.sh` (G2)
 
