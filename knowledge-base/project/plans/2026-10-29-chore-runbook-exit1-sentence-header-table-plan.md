@@ -175,7 +175,7 @@ None. `gh issue list --label code-review --state open` (200 issues) has no body 
 ### Split Assessment
 
 - Subsystems touched: 1 — knowledge-base/engineering/operations
-- Planned files: 1 edited (plus 3 plan/spec artifacts) | Estimated changed lines: ~4
+- Planned files: 1 edited (plus 4 plan/spec artifacts) | Estimated changed lines: ~4
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -193,14 +193,17 @@ None. `gh issue list --label code-review --state open` (200 issues) has no body 
 
 1. `grep -c "tracked on #10932" <runbook>` and `grep -c "yet list exit 1" <runbook>` both print
    `0`; `grep -c "Its own header table lists" <runbook>` prints `1`; and
-   ``grep -c '^| `1` |' <runbook>`` prints `1` (the row the new sentence points at still exists).
+   ``grep -c '^| `1` |' <runbook>`` prints `2` on `origin/main` and on this branch alike (the D10
+   gate's "Over cap" row and the restore-exit-codes row the new sentence points at; the count must
+   not change).
 2. The diff is one hunk inside the intended paragraph, and the `1` table row and the
    `except exit 1` phrase are untouched:
    `git diff -U0 origin/main...HEAD -- <runbook> | grep -c '^@@'` prints `1`, and that hunk's
    removed lines all belong to the paragraph beginning `scripts/registry-restore-from-ghcr.sh` exits.
-3. The changed-file set is exactly the runbook plus the three planning artifacts:
+3. The changed-file set is exactly the runbook plus the four planning artifacts:
    `git diff --name-only origin/main...HEAD` equals the runbook path, the plan file,
-   `specs/feat-one-shot-10932-runbook-exit1-sentence/tasks.md` and `.../decision-challenges.md`.
+   `specs/feat-one-shot-10932-runbook-exit1-sentence/tasks.md`, `.../decision-challenges.md` and
+   `.../session-state.md` (the pipeline's own state file).
    No path under `scripts/`, and not `.github/workflows/apply-web-platform-infra.yml`. (Run it after
    committing: before commit the command lists nothing and passes vacuously.)
 4. The statement is true: `grep -c '^#   1  INPUT' scripts/registry-restore-from-ghcr.sh` prints
