@@ -3,8 +3,10 @@
 #
 # DISPATCH-ONLY, and a production act. The authorization is the owner's fresh in-session go naming the exact command (mode,
 # keys, typed confirm); the typed confirm and quiet_window below are typo-guards and a statement of fact, NOT the
-# authorization. `mode=plan` is the read-only rehearsal. `mode=converge` is the recovery after a failed `rotate`; it never
-# mints a key. A GitHub "re-run" of rotate or converge is refused by the guard (it would reuse the inputs and bypass the go).
+# authorization. `mode=plan` is the read-only rehearsal. `mode=converge` is the recovery after a `rotate` whose first apply
+# succeeded and a later job failed; it never mints a key (a rotate whose first apply FAILED is re-dispatched, not converged).
+# A GitHub "re-run" of rotate or converge is refused: Re-run all jobs by the guard, and Re-run failed jobs is refused by every
+# write job (a re-run reuses the first attempt's guard outputs and would bypass the go).
 # The push trigger below exists SOLELY to register the workflow in the Actions UI; every job is gated on workflow_dispatch.
 #
 # THE REPOSITORY IS PUBLIC. Terraform prints a random_id's `id` (the key in base64url) and `hex` on plan, apply and refresh
@@ -17,10 +19,13 @@
 #   apply1  phase 1: -replace the dedicated random_id(s), update the dedicated Doppler secret(s). The soleur/prd key that
 #           unrelated deploys read is untouched until the scheduler is verified SERVING.
 #   reboot  the ONE Hetzner control-plane soft reboot (the only lever that reaches 10.0.1.40), then wait for a NEW boot_id,
-#           SERVING and a tls-health row with listener=1 from Better Stack. No retry, no hard reset.
+#           SERVING and a tls-health row with listener=1 from Better Stack. No retry, no hard reset. An `admit` step first
+#           re-reads, read-only, what must still hold after an approval wait of any length (link flag, in-flight runs, the one
+#           server, a fresh boot_id).
 #   apply2  phase 2: -replace the app doppler_secret(s) (their value derives from the replaced dedicated random_id); assert
 #           both copies are equal by hashing on a pipe (booleans only).
 #   redeploy  canary-then-prod fleet redeploy (track.sh). Prints, never posts, the S5-A5-DONE line.
+#   notify  the last job: when a write happened and a job was cancelled or never ran, files the one action-required issue.
 #
 # LOCKS. Workflow group inngest-key-rotate (never cancelled); terraform-apply-web-platform-host on the two Terraform jobs;
 # deploy-inngest-restart on the reboot job. web-platform-release has a per-SHA group and is NOT serialized against this route,
@@ -108,6 +113,8 @@ jobs:
       server_id: ${{ steps.guard.outputs.server_id }}
       boot_pre: ${{ steps.guard.outputs.boot_pre }}
       rotated_at: ${{ steps.guard.outputs.rotated_at }}
+      verify_after: ${{ steps.guard.outputs.verify_after }}
+      plan_block: ${{ steps.guard.outputs.plan_block }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         timeout-minutes: 2
@@ -175,6 +182,7 @@ jobs:
         env:
           EFF_MODE: ${{ needs.guard.outputs.mode }}
           EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          EFF_PLAN_BLOCK: ${{ needs.guard.outputs.plan_block }}
           GH_TOKEN: ${{ github.token }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: bash scripts/inngest-key-rotate.sh apply1
@@ -184,8 +192,8 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_reboot == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') }}
     environment: infra-privileged
     runs-on: ubuntu-24.04
-    # (KR_REBOOT_STEP_S + KR_VERIFY_STEP_S + KR_JOB_SLACK_S) / 60.
-    timeout-minutes: 40
+    # (KR_ADMIT_S + KR_REBOOT_STEP_S + KR_VERIFY_STEP_S + KR_JOB_SLACK_S) / 60.
+    timeout-minutes: 50
     # The shared inngest mutex (cutover, image deploy, link flip and standalone deploys serialize on it).
     concurrency:
       group: deploy-inngest-restart
@@ -194,6 +202,12 @@ jobs:
       contents: read
       actions: read
       issues: write
+    # What later jobs read: the POST time, the fresh pre-reboot boot_id (admit), the new boot_id and the time verify passed.
+    outputs:
+      post_epoch: ${{ steps.post.outputs.post_epoch }}
+      boot_pre: ${{ steps.admit.outputs.boot_pre }}
+      boot_new: ${{ steps.verify.outputs.boot_new }}
+      verified_at: ${{ steps.verify.outputs.verified_at }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         timeout-minutes: 2
@@ -207,22 +221,47 @@ jobs:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
-      # The ONLY step that holds the Hetzner WRITE token (HCLOUD_TOKEN, exported by the loader) and the ONLY place a
-      # reboot POST is made: ONE POST per run, no retry. Every step after the loader runs under an env -i allow-list so the
-      # loader's other Tier-B values never reach a child. (KR_REBOOT_STEP_S / 60.)
-      - name: Reboot request (the one Hetzner write)
-        id: post
-        if: ${{ needs.guard.outputs.reboot_post == 'true' }}
+      # Read-only re-admission, AFTER the environment approval (which can wait for hours) and BEFORE the POST: the link flag is
+      # still 1, no related run is in flight, the same single server, and a FRESH pre-reboot boot_id (a guard-time boot_id is stale
+      # by then). No Hetzner write token: the read-only one is fetched by the script. (KR_ADMIT_S / 60.)
+      - name: Admit the reboot (read-only re-check)
+        id: admit
         timeout-minutes: 10
         env:
           EFF_MODE: ${{ needs.guard.outputs.mode }}
           EFF_KEYS: ${{ needs.guard.outputs.keys }}
           EFF_SERVER_ID: ${{ needs.guard.outputs.server_id }}
+          EFF_ROTATED_AT: ${{ needs.guard.outputs.rotated_at }}
           EFF_REBOOT_POST: ${{ needs.guard.outputs.reboot_post }}
+          GH_TOKEN: ${{ github.token }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" \
+            GH_TOKEN="$GH_TOKEN" DOPPLER_TOKEN="$DOPPLER_TOKEN" \
+            BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" \
+            EFF_MODE="$EFF_MODE" EFF_KEYS="$EFF_KEYS" EFF_SERVER_ID="$EFF_SERVER_ID" EFF_ROTATED_AT="$EFF_ROTATED_AT" EFF_REBOOT_POST="$EFF_REBOOT_POST" \
+            bash scripts/inngest-key-rotate.sh admit
+
+      # The ONLY step that holds the Hetzner WRITE token (HCLOUD_TOKEN, exported by the loader) and the ONLY place a
+      # reboot POST is made: ONE POST per run, no retry. Every step after the loader runs under an env -i allow-list so the
+      # loader's other Tier-B values never reach a child. (KR_REBOOT_STEP_S / 60.)
+      - name: Reboot request (the one Hetzner write)
+        id: post
+        if: ${{ steps.admit.outputs.reboot_post == 'true' }}
+        timeout-minutes: 10
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          EFF_SERVER_ID: ${{ needs.guard.outputs.server_id }}
+          EFF_REBOOT_POST: ${{ steps.admit.outputs.reboot_post }}
           GH_TOKEN: ${{ github.token }}
         run: |
           exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
-            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" \
             GH_TOKEN="$GH_TOKEN" HCLOUD_TOKEN="$HCLOUD_TOKEN" \
             EFF_MODE="$EFF_MODE" EFF_KEYS="$EFF_KEYS" EFF_SERVER_ID="$EFF_SERVER_ID" EFF_REBOOT_POST="$EFF_REBOOT_POST" \
             bash scripts/inngest-key-rotate.sh reboot
@@ -234,7 +273,8 @@ jobs:
         env:
           EFF_MODE: ${{ needs.guard.outputs.mode }}
           EFF_KEYS: ${{ needs.guard.outputs.keys }}
-          EFF_BOOT_PRE: ${{ needs.guard.outputs.boot_pre }}
+          EFF_BOOT_PRE: ${{ steps.admit.outputs.boot_pre }}
+          EFF_VERIFY_AFTER: ${{ steps.admit.outputs.verify_after }}
           EFF_ROTATED_AT: ${{ needs.guard.outputs.rotated_at }}
           EFF_POST_EPOCH: ${{ steps.post.outputs.post_epoch }}
           GH_TOKEN: ${{ github.token }}
@@ -243,10 +283,10 @@ jobs:
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
         run: |
           exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
-            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" \
             GH_TOKEN="$GH_TOKEN" \
             BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" \
-            EFF_MODE="$EFF_MODE" EFF_KEYS="$EFF_KEYS" EFF_BOOT_PRE="$EFF_BOOT_PRE" EFF_ROTATED_AT="$EFF_ROTATED_AT" EFF_POST_EPOCH="$EFF_POST_EPOCH" \
+            EFF_MODE="$EFF_MODE" EFF_KEYS="$EFF_KEYS" EFF_BOOT_PRE="$EFF_BOOT_PRE" EFF_VERIFY_AFTER="$EFF_VERIFY_AFTER" EFF_ROTATED_AT="$EFF_ROTATED_AT" EFF_POST_EPOCH="$EFF_POST_EPOCH" \
             bash scripts/inngest-key-rotate.sh verify
 
   apply2:
@@ -296,8 +336,8 @@ jobs:
     needs: [guard, apply1, reboot, apply2]
     if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_redeploy == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && needs.reboot.result == 'success' && needs.apply2.result == 'success' }}
     runs-on: ubuntu-24.04
-    # (KR_REDEPLOY_S + KR_JOB_SLACK_S) / 60: the redeploy is bounded by the pipeline's own 4800 s ceiling.
-    timeout-minutes: 90
+    # (KR_REDEPLOY_STEP_S + KR_JOB_SLACK_S) / 60: the redeploy is bounded by the pipeline's own 4800 s ceiling.
+    timeout-minutes: 95
     permissions:
       contents: read
       actions: read
@@ -312,15 +352,52 @@ jobs:
         with:
           persist-credentials: false
 
-      # KR_REDEPLOY_S / 60 rounded up (+ slack in the job). Holds the deploy webhook trio only.
+      # KR_REDEPLOY_STEP_S / 60 (the 4800 s pipeline ceiling plus the step slack, so the step never dies at the instant track.sh gives
+      # up). Holds the deploy webhook trio only. The EFF_BOOT_* / EFF_POST_EPOCH / EFF_VERIFIED_AT values are the reboot job's
+      # MEASURED evidence, carried into the printed record.
       - name: Fleet redeploy (canary then prod)
-        timeout-minutes: 80
+        timeout-minutes: 85
         env:
           EFF_MODE: ${{ needs.guard.outputs.mode }}
           EFF_KEYS: ${{ needs.guard.outputs.keys }}
           EFF_ROTATED_AT: ${{ needs.guard.outputs.rotated_at }}
+          EFF_BOOT_PRE: ${{ needs.reboot.outputs.boot_pre }}
+          EFF_BOOT_NEW: ${{ needs.reboot.outputs.boot_new }}
+          EFF_POST_EPOCH: ${{ needs.reboot.outputs.post_epoch }}
+          EFF_VERIFIED_AT: ${{ needs.reboot.outputs.verified_at }}
           GH_TOKEN: ${{ github.token }}
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/inngest-key-rotate.sh redeploy
+
+  # The last job. A job that is cancelled (a pending job-level concurrency slot is replaced when a newer job queues behind the
+  # group), killed or never started runs no script, so after the first write it leaves no verdict, no stop sentence and no issue.
+  # This job runs after every outcome of a non-plan run that did not end in a green redeploy and files the one action-required issue
+  # when a write happened and none exists for this run. No concurrency group (it must never be the replaced one); issues:write only.
+  notify:
+    needs: [guard, apply1, reboot, apply2, redeploy]
+    if: ${{ always() && needs.guard.outputs.go == 'true' && needs.guard.outputs.mode != 'plan' && needs.redeploy.result != 'success' }}
+    runs-on: ubuntu-24.04
+    # (KR_NOTIFY_S + KR_JOB_SLACK_S) / 60.
+    timeout-minutes: 15
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      # KR_NOTIFY_S / 60.
+      - name: File the stop issue when a write job never reported
+        timeout-minutes: 5
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEYS: ${{ needs.guard.outputs.keys }}
+          EFF_RESULT_APPLY1: ${{ needs.apply1.result }}
+          EFF_RESULT_REBOOT: ${{ needs.reboot.result }}
+          EFF_RESULT_APPLY2: ${{ needs.apply2.result }}
+          EFF_RESULT_REDEPLOY: ${{ needs.redeploy.result }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/inngest-key-rotate.sh notify
