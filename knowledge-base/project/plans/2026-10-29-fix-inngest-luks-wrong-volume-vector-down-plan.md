@@ -17,6 +17,39 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No spec
 
 **Does merging this alone mutate production?** Yes — `betterstack-logs-alerts.tf` is under `apps/web-platform/infra/**`, so the merge fires the push-triggered apply, which updates the live exploration's stored SQL in Better Stack. The PR body's first line must state this (the merge click is the authorization act).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29
+**Agents used:** none — this deepen ran inside a pipeline subagent with no Task/Agent tool, so the §4 halt gates, the precedent-diff, and the verify-the-negative pass were executed inline by the planning agent (mirroring the sibling #8874 deepen).
+
+### Gate verdicts (all evaluated inline)
+
+- §4.4 Precedent-diff: pass — the OR-arm shape mirrors `ghcr_hostsfile_deny_lost_sql:1368` in the same file; the dual-channel convention is the precedent this change establishes for #11527.
+- §4.45 verify-the-negative: every negative claim re-verified by reading the emit site and envelope constructor (no `SYSLOG_IDENTIFIER`, `marker` default, `detail` field set, jq-failure payload shape, parity-suite coverage of the field set).
+- §4.5 network-outage: evaluated, skipped — the only trigger matches are the `cloud-init-inngest.yml:502` line reference and the "no `terraform_data` SSH provisioner" negative statement; no SSH/network symptom is addressed and the changed resources carry no provisioner/`connection` blocks.
+- §4.55 downtime: skipped — in-place Better Stack exploration update; no host, volume, DB, or deploy-surface touched.
+- §4.6 User-Brand Impact: pass (section present, threshold `aggregate pattern`, concrete artifact/vector).
+- §4.7 Observability: pass (5 fields populated; `discoverability_test.command` is `grep -c`, an allowlisted verb under the 15s cap, `expected_output` the literal `1`).
+- §4.8 PAT-shaped variable: pass (grep clean — `BETTERSTACK_QUERY_*` are ClickHouse read credentials, not GitHub PAT shapes).
+- §4.9 UI-wireframe: skipped (no UI-surface files).
+- §4.10 Encryption Posture: pass (triggered by `.tf` edit; all fields populated, `does_not_defend` non-empty, no exception needed).
+- §4.11 Guard Contract: pass — `scripts/lint-guard-contract.py` green (1 guard entry); assembly is structural (the WHERE clause chokepoint + the guard's extracted `LOCAL_SQL` + the emit-site `stage` authority), not a member list.
+- §4.12 Scope Check: pass (exactly one unfenced section; all asks mapped; inferred items carry justifications; split assessment derived from the file lists).
+- §4.13 Task Design: skipped (modifies an existing alert; no new workflow/timer/daemon surface).
+
+### Key improvements from the deepen pass
+
+1. **Guard-needle disambiguation made explicit** — the leg-B `detail` devid check makes the bare `data_mount_devid=…') = 0` needle match twice; Phase 1 prescribes retargeting the two existing devid mutation needles to the `message`-extracted form plus a dedicated leg-B devid mutation, so the guard can never green over a dropped leg.
+2. **`stage` needle derived, not re-pinned** — mirrors the `MUT_EMITTER` convention: the guard greps `inngest-server-probe-vector-down` from the emit site, so a coordinated rename that misses the `.tf` goes red instead of quiet.
+3. **Control E added beyond the issue's A–D** — the leg-B logic is verified on synthetic `raw` literals (wrong devid `1` / live alias `0` / detail-absent `1`) without POSTing to the real source, since `stage='inngest-server-probe-vector-down'` rows are expected ~0 while Vector is healthy.
+4. **Self-attested `dt` edge recorded** — the phone-home envelope POSTs its own `dt`; whether the warehouse honors it is unmeasured (#9784 learning), recorded as a residual edge rather than silently assumed.
+
+### New considerations discovered
+
+- The jq-failure fallback payload carries no `detail` key → under leg-B's negated devid check it counts as wrong-volume. Kept deliberately (fail-loud, same class as leg A's negation) and recorded as a residual edge rather than carved out.
+- `inngest-server-probe-heartbeat.test.sh:126-142` pins `#8516`/`treat_as_zero`/`inngest_server_probe` tokens in this alert's comment region — the comment rewrite is constrained to keep them; added as an AC.
+- During a Vector outage the dead-probe heartbeat already pages — leg B does not replace that signal; it keeps the *wrong-volume content check* live under it. Noted in Context.
+
 ## Overview
 
 The Better Stack Logs alert `logtail_exploration_alert.inngest_luks_wrong_volume` pages when the dedicated Inngest host's hourly probe row reports `/mnt/data` backed by a by-id alias that is not the LUKS-encrypted volume's — the tripwire for Redis writes landing unencrypted after the cutover. When the Vector shipper is down, the probe emits the same field row through a second channel: a curl-direct phone-home POST (`inngest-boot-phone-home.sh inngest-server-probe-vector-down "<fields>"`, `apps/web-platform/infra/inngest-bootstrap.sh:1316-1317`) whose envelope carries `shipper=cloud-init-phone-home`, `stage=inngest-server-probe-vector-down`, and the field row in `detail` — landing in the SAME Logs source 2457081. The alert's predicate anchors on journald-only signals (the `SYSLOG_IDENTIFIER='inngest-server-probe'` conjunct merged under #8874/PR #11519, plus a start-of-message `SOLEUR_INNGEST_SERVER_PROBE` marker the fallback envelope never carries), so during a Vector outage — exactly when degraded-host states make a wrong-volume mount most plausible — the alert reads zero rows and `treat_as_zero` reports health. #11526 asks for a deliberate accept/reject decision and, on accept, a dual-path predicate that admits the fallback on its own envelope fields. The settled shape is the shared pattern sibling issue #11527 applies to `inngest_luks_key_probe_fail` and #11528 pins in the guard family.
