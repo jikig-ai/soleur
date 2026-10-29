@@ -694,10 +694,13 @@ export function patternOverlapText(p: { title: string; summary: string; tags: re
   return `${p.title} ${p.summary} ${p.tags.join(" ")}`;
 }
 
-/** The skills the model is not shown (user-invoked). ONE expression, read by the prompt's candidates and by `checkCreate`. */
+/** The skills the model is not shown (user-invoked). Shared by `createCandidates` and `checkCreate`'s rank, so the two cannot disagree about which skills are hidden. */
 export function hiddenSkillNames(skills: readonly SkillRecord[]): Set<string> {
   return new Set(skills.filter((s) => s.disableModelInvocation).map((s) => s.name));
 }
+
+/** The repo's skill directory charset. A name outside it is never listed, so one cannot break the `slug: a, b` line contract. */
+const CANDIDATE_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 /**
  * The skills the server ranks closest to a pattern, for the prompt: the gate's own `rankOverlap` over EVERY skill
@@ -708,7 +711,7 @@ export function hiddenSkillNames(skills: readonly SkillRecord[]): Set<string> {
 export function createCandidates(p: { title: string; summary: string; tags: readonly string[] }, skills: readonly SkillRecord[]): string[] {
   const hidden = hiddenSkillNames(skills);
   return rankOverlap(patternOverlapText(p), skills)
-    .filter((r) => !hidden.has(r.name) && r.score > 0)
+    .filter((r) => !hidden.has(r.name) && r.score > 0 && CANDIDATE_NAME_RE.test(r.name))
     .slice(0, OVERLAP_TOP_K)
     .map((r) => r.name);
 }
@@ -774,8 +777,8 @@ export function prepareCreate(args: { patterns: readonly PatternPage[]; skills: 
     `- Never use these claim words: ${CREATE_CLAIM_WORDS.join(", ")}. Never restate or relax a hard rule.`,
     `- Never write instructions that ${INSTRUCTION_RISK_GROUPS.map((g) => g.label).join("; or that ")}.`,
     `- A server-side overlap check refuses a create whose overlap with any existing skill reaches ${OVERLAP_REFUSE_THRESHOLD.toFixed(2)}; your nearest_skill must be among the server's top ${OVERLAP_TOP_K} matches.`,
-    `- The create-candidates block lists, for each pattern, up to ${OVERLAP_TOP_K} existing skills the server ranks closest to that pattern by word overlap. Set nearest_skill to one listed for the pattern_slug you chose. The server then ranks your own slug, description and when_to_use against every skill, so a listed skill can still fall outside the top ${OVERLAP_TOP_K}.`,
-    "- A pattern with no line in the create-candidates block has no near skill the server can name: do not create from it.",
+    `- The create-candidates block lists, for each pattern, up to ${OVERLAP_TOP_K} existing skills the server ranks closest to that pattern by word overlap. Set nearest_skill to one listed for the pattern_slug you chose. The server then ranks your own slug, description and when_to_use against every skill, so a listed skill can still fall outside the top ${OVERLAP_TOP_K}. The "top ${OVERLAP_TOP_K} matches" rule above is that ranking of your own proposal.`,
+    `- A pattern with no line in the create-candidates block has no near skill the server can name: do not create from it. If no pattern qualifies, return no_action with reason_class ${CREATE_NO_PATTERN_REASON}.`,
     `- If none of the listed skills is a genuine nearest skill for the pattern, return no_action with reason_class ${CREATE_NO_PATTERN_REASON}.`,
     "- pattern_slug must be exactly the slug of one pattern in the index.",
     "",
