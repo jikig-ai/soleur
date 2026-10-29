@@ -59,9 +59,12 @@ import {
   checkCreate,
   checkRenderedCreate,
   collectModelStrings,
+  createCandidates,
   countDescriptionWords,
   countWords,
   createClusterHash,
+  hiddenSkillNames,
+  patternOverlapText,
   createPathList,
   parseCreateModelText,
   prepareCreate,
@@ -87,7 +90,7 @@ import {
   type CreateContext,
   type SkillRecord,
 } from "@/server/compound-promote-create";
-import type { PatternPage } from "@/server/compound-promote-patterns";
+import { fenceBlock, renderPatternIndex, type PatternPage } from "@/server/compound-promote-patterns";
 
 const FIX = join(__dirname, "..", "fixtures", "compound-promote-create");
 // Two levels above test/server is apps/web-platform; the repo root is four.
@@ -1298,6 +1301,232 @@ describe("prepareCreate: input ceiling (refuse, never truncate) and the prompt",
     const over = prepareCreate({ patterns: [PATTERN], skills: mk(lo + 1), nonce });
     expect(at.kind).toBe("ready");
     expect(over.kind).toBe("refused");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("create candidates: the prompt shows the gate's own ranking (Ref #10550)", () => {
+  const nonce = "0123456789abcdef";
+  const sk = (name: string, description: string, hidden = false): SkillRecord => ({ name, description, disableModelInvocation: hidden });
+  const page = (slug: string, title: string, summary: string, tags: string[] = []): PatternPage => ({ ...PATTERN, slug, title, summary, tags });
+
+  // The expectation is rebuilt from gate primitives only; it never calls the functions under test.
+  function expectedNames(p: PatternPage, skills: readonly SkillRecord[]): string[] {
+    const hidden = new Set(skills.filter((s) => s.disableModelInvocation).map((s) => s.name));
+    const text = `${p.title} ${p.summary} ${p.tags.join(" ")}`;
+    return rankOverlap(text, skills)
+      .filter((r) => !hidden.has(r.name) && r.score > 0)
+      .slice(0, OVERLAP_TOP_K)
+      .map((r) => r.name);
+  }
+  function expectedBlock(patterns: readonly PatternPage[], skills: readonly SkillRecord[]): string {
+    const lines = patterns.map((p) => [p.slug, expectedNames(p, skills)] as const).filter(([, n]) => n.length > 0).map(([slug, n]) => `${slug}: ${n.join(", ")}`);
+    return fenceBlock(nonce, "create-candidates", lines.length > 0 ? lines.join("\n") : "none");
+  }
+  const skillBlockOf = (skills: readonly SkillRecord[]) =>
+    fenceBlock(nonce, "skill-list", skills.filter((s) => !s.disableModelInvocation).map((s) => `- ${s.name}: ${s.description.replace(/\s+/g, " ").trim()}`).join("\n"));
+
+  const PAT_RETRY = page("retry-pattern", "Retry worktree pattern", "A recurring worktree mistake when creating a branch for a feature.", ["worktree"]);
+  const PAT_PEN = page("pencil-pattern", "Pencil wireframe pattern", "Wireframe tooling is missing and the editor must be set up.", ["pencil"]);
+
+  it("patternOverlapText is title + summary + tags (the text the gate ranks for a pattern)", () => {
+    expect(patternOverlapText(PAT_RETRY)).toBe("Retry worktree pattern A recurring worktree mistake when creating a branch for a feature. worktree");
+  });
+
+  it("equals an independent recompute from rankOverlap for every fixture pattern", () => {
+    for (const p of [PATTERN, PAT_RETRY, PAT_PEN]) {
+      expect(createCandidates(p, SKILLS), p.slug).toEqual(expectedNames(p, SKILLS));
+    }
+    expect(createCandidates(PAT_RETRY, SKILLS).length).toBeGreaterThan(0);
+    expect(createCandidates(PAT_RETRY, SKILLS).length).toBeLessThanOrEqual(OVERLAP_TOP_K);
+  });
+
+  it("a hidden top scorer is never listed", () => {
+    const skills = [
+      sk("secret-skill", "Wireframe editor setup for pencil mockups and canvas design", true),
+      sk("alpha-skill", "Handle unrelated billing invoices"),
+      sk("beta-skill", "Pencil wireframe tooling setup"),
+      sk("gamma-skill", "Another unrelated thing"),
+    ];
+    const p = page("pen", "Pencil wireframe", "Wireframe editor setup for pencil mockups and canvas design", []);
+    const raw = rankOverlap(patternOverlapText(p), skills);
+    expect(raw[0].name).toBe("secret-skill");
+    expect(createCandidates(p, skills)).not.toContain("secret-skill");
+    expect(createCandidates(p, skills)).toEqual(expectedNames(p, skills));
+    expect(hiddenSkillNames(skills)).toEqual(new Set(["secret-skill"]));
+  });
+
+  it("IDF population: candidates follow the ranking over ALL skills (hidden ones count), as the gate ranks", () => {
+    // deterministic search for a population where hiding changes the visible order
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const vocab = ["zephyr", "quartz", "lantern", "marble", "orchid", "pewter", "saffron", "tundra", "velvet", "walnut"];
+    const words = (n: number) => Array.from({ length: n }, () => vocab[Math.floor(rnd() * vocab.length)]).join(" ");
+    let found: { skills: SkillRecord[]; p: PatternPage } | null = null;
+    for (let t = 0; t < 400 && !found; t++) {
+      const skills = Array.from({ length: 9 }, (_, i) => sk(`s${i}`, words(6), i >= 5));
+      const p = page("idf-probe", words(3), words(5), []);
+      const visibleOnly = skills.filter((s) => !s.disableModelInvocation);
+      const a = rankOverlap(patternOverlapText(p), skills).filter((r) => !skills.find((s) => s.name === r.name)!.disableModelInvocation && r.score > 0).map((r) => r.name).slice(0, OVERLAP_TOP_K);
+      const b = rankOverlap(patternOverlapText(p), visibleOnly).filter((r) => r.score > 0).map((r) => r.name).slice(0, OVERLAP_TOP_K);
+      if (a.length >= 2 && JSON.stringify(a) !== JSON.stringify(b)) found = { skills, p };
+    }
+    expect(found, "precondition: a population where all-skills and visible-only rankings differ").not.toBeNull();
+    const { skills, p } = found!;
+    const visibleOnly = rankOverlap(patternOverlapText(p), skills.filter((s) => !s.disableModelInvocation)).filter((r) => r.score > 0).map((r) => r.name).slice(0, OVERLAP_TOP_K);
+    expect(createCandidates(p, skills)).toEqual(expectedNames(p, skills));
+    expect(createCandidates(p, skills)).not.toEqual(visibleOnly);
+  });
+
+  it("a zero score is never a candidate; two positive scores list two; none lists nothing and the prompt says so", () => {
+    const skills = [sk("one", "Quartz lantern marble"), sk("two", "Quartz tundra"), sk("three", "Velvet walnut orchid"), sk("four", "Pewter saffron zephyr")];
+    const two = page("two-pos", "Quartz", "quartz marble tundra", []);
+    const got = createCandidates(two, skills);
+    expect(got.length).toBe(2);
+    expect(got).toEqual(expectedNames(two, skills));
+    const none = page("none-pos", "Entirely different words", "nothing here overlaps at all", []);
+    expect(createCandidates(none, skills)).toEqual([]);
+    const v = prepareCreate({ patterns: [none], skills, nonce });
+    if (v.kind !== "ready") throw new Error("ready expected");
+    expect(v.prompt).toContain(`<<<BEGIN-${nonce}:create-candidates>>>\nnone\n<<<END-${nonce}:create-candidates>>>`);
+    expect(v.prompt).not.toContain("none-pos: ");
+  });
+
+  it("lists exactly the offered patterns, one line each, never a non-offered pattern", () => {
+    const both = prepareCreate({ patterns: [PAT_RETRY, PAT_PEN], skills: SKILLS, nonce });
+    const one = prepareCreate({ patterns: [PAT_RETRY], skills: SKILLS, nonce });
+    if (both.kind !== "ready" || one.kind !== "ready") throw new Error("ready expected");
+    expect(both.prompt).toContain(expectedBlock([PAT_RETRY, PAT_PEN], SKILLS));
+    expect(one.prompt).toContain(expectedBlock([PAT_RETRY], SKILLS));
+    expect(one.prompt).not.toContain(`${PAT_PEN.slug}: `);
+  });
+
+  it("the fenced block sits between the pattern index and the skill list", () => {
+    const v = prepareCreate({ patterns: [PAT_RETRY], skills: SKILLS, nonce });
+    if (v.kind !== "ready") throw new Error("ready expected");
+    const at = (needle: string) => v.prompt.indexOf(needle);
+    const idx = at(`<<<BEGIN-${nonce}:pattern-index>>>`);
+    const cand = at(`<<<BEGIN-${nonce}:create-candidates>>>`);
+    const list = at(`<<<BEGIN-${nonce}:skill-list>>>`);
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(cand).toBeGreaterThan(idx);
+    expect(list).toBeGreaterThan(cand);
+    expect(at(`<<<END-${nonce}:create-candidates>>>`)).toBeGreaterThan(cand);
+  });
+
+  it("the input ceiling counts the block: bytes = index + block + skill list, and a fixture that fits without it is refused with it", () => {
+    const patterns = [PAT_RETRY];
+    const ceiling = CREATE_INPUT_MAX_TOKENS * CREATE_INPUT_BYTES_PER_TOKEN;
+    const rest = (skills: SkillRecord[]) => Buffer.byteLength(renderPatternIndex(patterns, nonce), "utf8") + Buffer.byteLength(skillBlockOf(skills), "utf8");
+    const blockBytes = Buffer.byteLength(expectedBlock(patterns, SKILLS), "utf8");
+    // grow filler until the rest alone is just under the ceiling
+    let n = 1;
+    const fill = (count: number, padLen: number): SkillRecord[] => [
+      ...Array.from({ length: count }, (_, i) => sk(`fill-${i}`, "This skill should be used when " + "padding words ".repeat(40))),
+      sk("pad", "p".repeat(padLen)),
+    ];
+    while (rest(fill(n + 1, 0)) < ceiling - 5000) n++;
+    let padLen = 0;
+    while (rest(fill(n, padLen)) + Math.floor(blockBytes / 2) <= ceiling) padLen++;
+    // now the rest fits by itself but leaves less room than the block needs
+    const skills = fill(n, padLen);
+    expect(rest(skills)).toBeLessThanOrEqual(ceiling);
+    expect(rest(skills) + Buffer.byteLength(expectedBlock(patterns, skills), "utf8")).toBeGreaterThan(ceiling);
+    const v = prepareCreate({ patterns, skills, nonce });
+    expect(v.kind).toBe("refused");
+    if (v.kind === "refused") {
+      expect(v.class).toBe("input-size");
+      expect(v.numbers?.bytes).toBe(rest(skills) + Buffer.byteLength(expectedBlock(patterns, skills), "utf8"));
+    }
+  });
+
+  it("states the candidate rules in anchored sentences built from the exported constants", () => {
+    const v = prepareCreate({ patterns: [PAT_RETRY], skills: SKILLS, nonce });
+    if (v.kind !== "ready") throw new Error("ready expected");
+    const rules = v.prompt.split("\n").filter((l) => l.startsWith("- "));
+    const has = (re: RegExp) => expect(rules.some((l) => re.test(l)), String(re)).toBe(true);
+    // the existing overlap sentence is unchanged
+    has(/overlap with any existing skill reaches 0\.16; .* among the server's top 3 matches/);
+    has(new RegExp(`^- The create-candidates block lists, for each pattern, up to ${OVERLAP_TOP_K} existing skills the server ranks closest to that pattern by word overlap\\. Set nearest_skill to one listed for the pattern_slug you chose\\. The server then ranks your own slug, description and when_to_use against every skill, so a listed skill can still fall outside the top ${OVERLAP_TOP_K}\\.$`));
+    has(/^- A pattern with no line in the create-candidates block has no near skill the server can name: do not create from it\.$/);
+    const hatch = "no-pattern-qualifies";
+    expect(CREATE_NO_ACTION_REASONS as readonly string[]).toContain(hatch);
+    has(new RegExp(`^- If none of the listed skills is a genuine nearest skill for the pattern, return no_action with reason_class ${hatch}\\.$`));
+  });
+
+  describe("nearest_in_offered on a nearest-not-top3 refusal (Sentry-only number)", () => {
+    const e = CAL.negatives[0];
+    const proposalFor = (nearest: string, patternSlug: string) =>
+      proposal({ slug: e.slug, description: e.description, when_to_use: e.when_to_use, nearest_skill: nearest, pattern_slug: patternSlug });
+    const names = visibleRank(e);
+    const listedButPushedDown = names[OVERLAP_TOP_K]; // rank 4 in the proposal ranking
+    const pageListing = (slug: string, skillName: string): PatternPage => {
+      const s = SKILLS.find((x) => x.name === skillName)!;
+      return page(slug, s.name.replace(/-/g, " "), s.description, []);
+    };
+
+    it("1 when the named skill is listed for the named pattern but the proposal text pushes it below rank 3", () => {
+      const p = pageListing("listed-pattern", listedButPushedDown);
+      expect(createCandidates(p, SKILLS), "precondition: the pushed-down skill is a listed candidate").toContain(listedButPushedDown);
+      const v = checkCreate(proposalFor(listedButPushedDown, p.slug), ctx({ patterns: [p] }));
+      expect(v.kind).toBe("refused");
+      if (v.kind !== "refused") return;
+      expect([v.class, v.detail]).toEqual(["prefer-patch", "nearest-not-top3"]);
+      expect(v.numbers?.nearest_in_offered).toBe(1);
+      expect(v.numbers?.nearest_rank).toBe(OVERLAP_TOP_K + 1);
+    });
+
+    it("0 when the named skill is a visible skill the list did not contain", () => {
+      const p = pageListing("listed-pattern", names[0]);
+      const far = names[names.length - 1];
+      expect(createCandidates(p, SKILLS), "precondition: the far skill is not listed").not.toContain(far);
+      const v = checkCreate(proposalFor(far, p.slug), ctx({ patterns: [p] }));
+      expect(v.kind).toBe("refused");
+      if (v.kind === "refused") expect(v.numbers?.nearest_in_offered).toBe(0);
+    });
+
+    it("absent when no candidates were offered for the named pattern", () => {
+      const p = page("no-cands", "Entirely different words", "nothing here overlaps at all", []);
+      expect(createCandidates(p, SKILLS)).toEqual([]);
+      const v = checkCreate(proposalFor(names[names.length - 1], p.slug), ctx({ patterns: [p] }));
+      expect(v.kind).toBe("refused");
+      if (v.kind === "refused") {
+        expect(v.detail).toBe("nearest-not-top3");
+        expect(v.numbers).not.toHaveProperty("nearest_in_offered");
+      }
+    });
+
+    it("uses the pattern the model NAMED, not the first pattern", () => {
+      const first = pageListing("first-pattern", listedButPushedDown);
+      const second = pageListing("second-pattern", names[0]);
+      expect(createCandidates(first, SKILLS)).toContain(listedButPushedDown);
+      expect(createCandidates(second, SKILLS), "precondition: the second pattern does not list it").not.toContain(listedButPushedDown);
+      expect(createCandidates(second, SKILLS).length).toBeGreaterThan(0);
+      const v = checkCreate(proposalFor(listedButPushedDown, second.slug), ctx({ patterns: [first, second] }));
+      expect(v.kind).toBe("refused");
+      if (v.kind === "refused") expect(v.numbers?.nearest_in_offered).toBe(0);
+    });
+
+    it("absent on the other prefer-patch refusals (overlap, nearest-missing, open-pr-nearest)", () => {
+      const ev = CAL.evidence[0];
+      const overlap = checkCreate(proposal({ slug: ev.slug, description: ev.description, when_to_use: ev.when_to_use, nearest_skill: ev.target }), ctx());
+      const missing = checkCreate(proposal({ nearest_skill: "no-such-skill" }), ctx());
+      const base = proposal();
+      const openPr = checkCreate(base, ctx({ openPrPaths: [`plugins/soleur/skills/${String(base.nearest_skill)}/SKILL.md`] }));
+      for (const [v, detail] of [[overlap, "overlap"], [missing, "nearest-missing"], [openPr, "open-pr-nearest"]] as const) {
+        expect(v.kind, detail).toBe("refused");
+        if (v.kind === "refused") {
+          expect(v.detail, detail).toBe(detail);
+          expect(v.numbers ?? {}, detail).not.toHaveProperty("nearest_in_offered");
+        }
+      }
+    });
+  });
+
+  it("harness self-check: the independent expectation is not tautological (it can disagree with a wrong list)", () => {
+    const wrong = [...expectedNames(PAT_RETRY, SKILLS)].reverse();
+    expect(expectedNames(PAT_RETRY, SKILLS).length).toBeGreaterThan(1);
+    expect(wrong).not.toEqual(expectedNames(PAT_RETRY, SKILLS));
   });
 });
 
