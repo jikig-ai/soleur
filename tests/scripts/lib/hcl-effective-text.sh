@@ -7,14 +7,18 @@
 # home and a suite that moves fails loudly instead of silently reading a stale copy):
 #   - apps/web-platform/infra/workspaces-luks.test.sh      (Guard B4, web-1 workspaces volume)
 #   - apps/web-platform/infra/inngest-luks-sole-copy.test.sh (Guard 1, inngest sole-copy store)
+#   - apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh (rehearsal of the inngest redis LUKS import)
 #   - apps/web-platform/infra/betterstack-alert-structure.test.sh (every logtail_exploration* block, #11388)
+#   - tests/scripts/test-git-data-wipe-wedge.sh            (sources it from its own lib/ directory, not via the repo root)
 #
 # ONE CHOKEPOINT ON PURPOSE. Every guard that asks "does this attribute hold in the EFFECTIVE
 # Terraform text" reads through strip_comments below. Neutering it (for example to the identity
-# function) makes a guard blind to a `/* ... */`-wrapped protection, and that must redden ALL THREE
-# consuming suites: Guard B4 rows 8a-8c in workspaces-luks.test.sh, row 3 plus the library-neutering
+# function) makes a guard blind to a `/* ... */`-wrapped protection. That is PROVEN to redden three of the
+# five consuming suites: Guard B4 rows 8a-8c in workspaces-luks.test.sh, row 3 plus the library-neutering
 # harness rows in inngest-luks-sole-copy.test.sh, and the strip_comments / blank_heredocs neutering harness
-# rows in betterstack-alert-structure.test.sh.
+# rows (M-b, M-b2, M-c) in betterstack-alert-structure.test.sh. The other two consumers
+# (inngest-redis-luks-import-rehearsal.test.sh, tests/scripts/test-git-data-wipe-wedge.sh) carry no neutering row
+# for this lexer; do not read the sentence as covering them.
 #
 # Provides: strip_comments, blank_heredocs, HCL_AWK_FUNCS, block_of, _b4_block_range, B4_TAIL, _b4_attr_true,
 # _b4_prevent_destroy_of, p_b4_no_override_files. Needs only awk, grep, find.

@@ -75,6 +75,12 @@ done
 
 MARKER='SOLEUR_INNGEST_LUKS_KEY_PROBE'
 FAIL_NAME='inngest_luks_key_probe_fail'
+# The census below is MARKER-based: every logtail_exploration(_alert) in the .tf that carries MARKER (inline, or through a
+# local whose heredoc carries it), plus every one whose NAME starts with the stem, must be listed here. A resource that
+# reads the marker but is missing from this list fails the census with "add it to KEY_PROBE_EXPLORATIONS in this PR";
+# adding a legitimate second key-probe pair is that one-line edit, not a rewrite of a hard-coded count.
+KEY_PROBE_EXPLORATIONS='inngest_luks_key_probe_fail'
+KEY_PROBE_STEM='inngest_luks_key_probe'
 
 # The SQL heredoc local, extracted from its FIRST UNCOMMENTED opening line to the closing `  SQL`.
 sql_local() {  # sql_local <local-name>  -> whitespace-stripped SQL on stdout
@@ -207,15 +213,87 @@ done
   && ok "both resources have an anchored -target= line in the apply workflow (#5566)" \
   || no "missing -target= line(s):$_miss — the resource would never be applied"
 
-# Census over the .tf: the declared key-probe set is exactly the ONE paging pair (a second silently
-# added resource, the dead-man included, is a finding).
-# The stem is the bare `inngest_luks_key_probe` (so `inngest_luks_key_probe2_fail` and the bare stem are counted, #11388),
-# leading whitespace and a trailing comment after the brace do not hide a header, and a family-wide structural
-# suite (apps/web-platform/infra/betterstack-alert-structure.test.sh) independently enforces one alert per exploration.
-_declared="$(sed -n 's/^[[:space:]]*resource[[:space:]]\{1,\}"logtail_exploration\(_alert\)\{0,1\}"[[:space:]]\{1,\}"\(inngest_luks_key_probe[A-Za-z0-9_]*\)"[[:space:]]*{.*$/\2/p' "$TF" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
-[ "$_declared" = " 2 inngest_luks_key_probe_fail;" ] \
-  && ok "the .tf declares exactly the one key-probe pair (the name once as an exploration and once as an alert)" \
-  || no "declared key-probe resources are not exactly the one paging pair: $_declared"
+# Census over the .tf, MARKER-based. A resource is a key-probe resource when it carries MARKER (an exploration whose block
+# names it, or whose sql_query reads a local whose heredoc names it; an alert that binds such an exploration) OR its name starts
+# with the bare stem (so `inngest_luks_key_probe2_fail` and the bare stem are counted, #11388). Leading whitespace and a
+# trailing comment after the brace do not hide a header. The declared set must equal KEY_PROBE_EXPLORATIONS for BOTH the
+# exploration side and the alert side. A family-wide structural suite
+# (apps/web-platform/infra/betterstack-alert-structure.test.sh) independently enforces one alert per exploration.
+CENSUS_AWK='function cv(s) { gsub(/"([^"\\]|\\.)*"/, "\"\"", s); sub(/[[:space:]]*(#|\/\/).*$/, "", s); return s }
+function hdopen(c) {
+  if (c !~ /(#|\/\/)/ && match(c, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
+    hd = substr(c, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd); return 1
+  }
+  return 0
+}
+{
+  line = $0
+  if (hd != "") {
+    if (line ~ ("^[[:space:]]*" hd "[[:space:]]*$")) hd = ""
+    else if (index(line, MARK) > 0) { if (inb) braw[nb] = braw[nb] " " MARK; else if (loc != "") marked[loc] = 1 }
+    next
+  }
+  if (line ~ /^[[:space:]]*(#|\/\/)/) next
+  c = cv(line)
+  if (!inb) {
+    if (match(line, /^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?[^" {]+"?[[:space:]]*\{/)) {
+      h = line
+      kind = (h ~ /logtail_exploration_alert/) ? "A" : "E"
+      nm = line
+      sub(/^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?/, "", nm)
+      sub(/["[:space:]{].*$/, "", nm)
+      nb++; bkind[nb] = kind; bname[nb] = nm; braw[nb] = ""; bcv[nb] = ""; inb = 1; d = 0
+    } else {
+      if (match(c, /^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_]/)) {
+        loc = c; sub(/^[[:space:]]*/, "", loc); sub(/[[:space:]]*=.*$/, "", loc)
+      } else if (line ~ /^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*=/ && index(line, MARK) > 0) {
+        l2 = line; sub(/^[[:space:]]*/, "", l2); sub(/[[:space:]]*=.*$/, "", l2); marked[l2] = 1
+      }
+      hdopen(c)
+      next
+    }
+  }
+  if (inb) {
+    braw[nb] = braw[nb] " " line; bcv[nb] = bcv[nb] " " c
+    o = gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d += o - x
+    if (!hdopen(cv(line))) { }
+    if (d <= 0) { inb = 0 }
+  }
+}
+END {
+  for (i = 1; i <= nb; i++) {
+    car[i] = (index(braw[i], MARK) > 0)
+    for (l in marked) if (bcv[i] ~ ("local\\." l "([^A-Za-z0-9_]|$)")) car[i] = 1
+  }
+  for (i = 1; i <= nb; i++) if (bkind[i] == "E") ecar[bname[i]] = car[i]
+  for (i = 1; i <= nb; i++) {
+    if (bkind[i] == "E") { printf "E|%s|%d\n", bname[i], car[i]; continue }
+    b = ""; t = bcv[i]
+    if (match(t, /exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.[A-Za-z0-9_-]+\.id/)) {
+      b = substr(t, RSTART, RLENGTH); sub(/^.*logtail_exploration\./, "", b); sub(/\.id$/, "", b)
+    }
+    printf "A|%s|%d|%s\n", bname[i], (b != "" && ecar[b]), b
+  }
+}'
+_census="$(awk -v MARK="$MARKER" "$CENSUS_AWK" "$TF" 2>/dev/null)"
+_dexp="$(while IFS='|' read -r _k _n _c _b; do
+  [ "$_k" = E ] || continue
+  if [ "$_c" = 1 ] || [[ "$_n" == "$KEY_PROBE_STEM"* ]]; then printf '%s\n' "$_n"; fi
+done <<<"$_census" | sort -u | tr '\n' ' ')"
+_dal="$(while IFS='|' read -r _k _n _c _b; do
+  [ "$_k" = A ] || continue
+  if [ "$_c" = 1 ] || [[ "$_n" == "$KEY_PROBE_STEM"* ]] || [[ "$_b" == "$KEY_PROBE_STEM"* ]]; then printf '%s\n' "$_n"; fi
+done <<<"$_census" | sort -u | tr '\n' ' ')"
+_want="$(printf '%s\n' $KEY_PROBE_EXPLORATIONS | sort -u | tr '\n' ' ')"
+_extra_e="$(comm -23 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+_extra_a="$(comm -23 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+_gone_e="$(comm -13 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+_gone_a="$(comm -13 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+if [ -z "$_extra_e$_extra_a$_gone_e$_gone_a" ] && [ -n "$_want" ]; then
+  ok "the .tf declares exactly the KEY_PROBE_EXPLORATIONS pair set (${_want% }), each once as an exploration and once as an alert, by marker and by stem"
+else
+  no "key-probe census differs from KEY_PROBE_EXPLORATIONS (${_want% }): undeclared exploration(s) [${_extra_e% }], undeclared alert(s) [${_extra_a% }], missing exploration(s) [${_gone_e% }], missing alert(s) [${_gone_a% }]: add it to KEY_PROBE_EXPLORATIONS in this PR"
+fi
 
 # ── NEGATIVE rows (D12): the dead-man is a follow-up PR, so nothing of it may exist here ─────────
 # Whole-file greps on purpose (comments and strings included): a half-landed dead-man in any form
@@ -263,8 +341,8 @@ FAILSQL = "inngest_luks_key_probe_fail_sql = <<-SQL"
 FAILAL = "resource \"logtail_exploration_alert\" \"inngest_luks_key_probe_fail\" {"
 SQLEND = "\n  SQL\n"'
 
-  mutate_red() {  # mutate_red <label> <TF|WF> <python-program-on-s>
-    local label="$1" which="$2" prog="$3" src copy rc=0
+  mutate_red() {  # mutate_red <label> <TF|WF|FLIP> <python-program-on-s> [expected [FAIL] fragment]
+    local label="$1" which="$2" prog="$3" tag="${4:-}" src copy rc=0 olog="$MUT_DIR/inner.log"
     case "$which" in
       TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
@@ -285,14 +363,17 @@ assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
     case "$which" in
-      TF) KEYPROBE_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
-      WF) KEYPROBE_GUARD_WF="$copy" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
-      FLIP) KEYPROBE_GUARD_FLIP="$copy" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
+      TF) KEYPROBE_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
+      WF) KEYPROBE_GUARD_WF="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
+      FLIP) KEYPROBE_GUARD_FLIP="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
     esac
     # rc DISCRIMINATION. Only rc=1 (an assertion went red) is a caught mutation. rc>=2 is this
     # guard's own FATAL class, rc=126/127 a broken invocation: none is evidence a row pins anything.
+    # When the row names a fragment, a [FAIL] line must contain it (a row that reds for the WRONG reason is no evidence).
+    # The reader is pipe-free: `grep | grep -q` lets the second grep exit early and the first die of SIGPIPE under pipefail.
     case "$rc" in
-      1) ok "mutation RED: $label" ;;
+      1) if [ -z "$tag" ] || { grep -F '[FAIL]' "$olog" | grep -F -- "$tag" >/dev/null; }; then ok "mutation RED: $label"
+         else no "mutation went red for the WRONG reason (no [FAIL] line contains '$tag'): $label"; fi ;;
       0) no "mutation SURVIVED: $label — the rows above pin nothing" ;;
       *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
     esac
@@ -377,6 +458,22 @@ s = s.replace(old, old + "              -target=logtail_exploration.inngest_luks
     's = edit(s, FAILAL, "check_period        = 300", "check_period        = 3600")'
   mutate_red "a probe2 header with a trailing comment after the opening brace (the census sed was anchored on the brace)" TF \
     's = s + "\nresource \"logtail_exploration\" \"inngest_luks_key_probe2_fail\" { # trailing comment\n}\n"'
+  # #11483 review: the census is MARKER-based, so a pair that merely READS the marker is caught whatever it is named.
+  mutate_red "an exploration NOT named after the stem reads the marker through the key-probe SQL local (the stem census missed it)" TF \
+    's = s + "\nresource \"logtail_exploration\" \"zz_other_pair\" {\n  sql_query = replace(trimspace(local.inngest_luks_key_probe_fail_sql), \"/\\\\s+/\", \" \")\n}\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  mutate_red "an alert NOT named after the stem binds the key-probe exploration (a second page on the same SQL)" TF \
+    's = s + "\nresource \"logtail_exploration_alert\" \"zz_other_alert\" {\n  exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id\n}\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  mutate_red "an exploration names the marker inline in a string (no local involved)" TF \
+    's = s + "\nresource \"logtail_exploration\" \"zz_inline\" {\n  sql_query = \"SELECT 1 WHERE position(raw, SOLEUR_INNGEST_LUKS_KEY_PROBE) = 1\"\n}\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  mutate_red "an INDENTED stem header (leading whitespace does not hide it from the census)" TF \
+    's = s + "\n  resource \"logtail_exploration\" \"inngest_luks_key_probe2_fail\" {\n  }\n"' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
+  mutate_red "the declared key-probe pair is renamed away from KEY_PROBE_EXPLORATIONS (the constant no longer matches the .tf)" TF \
+    's = s.replace("\"inngest_luks_key_probe_fail\" {", "\"inngest_luks_key_probe_failx\" {")' \
+    "add it to KEY_PROBE_EXPLORATIONS in this PR"
   mutate_floor_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor"
   mutate_green "the declared set is still the one pair; only a comment above the paging alert is reworded" TF \
     's = s.replace("# Presence-only, so safe before the probe is delivered", "# Presence-only (reworded), so safe before the probe is delivered")'
@@ -390,7 +487,7 @@ fi
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
 PRESENCE_ROWS=30
-MUT_ROWS=19
+MUT_ROWS=24
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
