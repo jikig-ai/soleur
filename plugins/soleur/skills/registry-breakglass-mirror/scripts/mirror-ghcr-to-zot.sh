@@ -514,8 +514,8 @@ assemble_layout() {
 crane_capture() { # <outfile> <errfile> <crane args...> — bounded: a stalled
   # private-net write must die as retryable NETWORK, never hang the run.
   local out="$1" err="$2" rc; shift 2
-  timeout "${CRANE_TIMEOUT:-900}" "$CRANE" "$@" >"$out" 2>"$err" </dev/null
-  rc=$?
+  rc=0
+  timeout "${CRANE_TIMEOUT:-900}" "$CRANE" "$@" >"$out" 2>"$err" </dev/null || rc=$?
   if (( rc == 124 )); then
     printf 'crane invocation timed out after %ss (i/o timeout)\n' "${CRANE_TIMEOUT:-900}" >>"$err"
   fi
