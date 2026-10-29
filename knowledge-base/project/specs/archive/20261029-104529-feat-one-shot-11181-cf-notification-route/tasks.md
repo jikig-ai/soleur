@@ -13,8 +13,8 @@
   - Initial GREEN verified: the focused shell suite passed 170/170 after the route correction and exact-route review fix; the classifier was unchanged. The final review-hardened suite result is recorded in Phase 3.
 - [x] 2.3 Documentation: Update the Notifications route in `plugins/soleur/skills/cf-token-scope/SKILL.md` to match the official endpoint.
   - The route-table parity assertions pass and the old endpoint is absent from the profile documentation.
-- [x] 2.4 Artifact: Copy `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` into the feature worktree byte-identically; verify SHA-256 `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250` and leave the source copy untouched.
-  - Source and PR-copy hashes both equal `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`.
+- [x] 2.4 Original #11456 artifact result: copy `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` byte-identically; verify the supplied SHA-256 and leave the source copy untouched.
+  - At the original #11456 merge, source and PR-copy hashes both equaled `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`; the current copy was later redacted in an authorized follow-up without rewriting the merge.
 
 ## Phase 3: Testing
 
