@@ -18,3 +18,4 @@ None blocking (plan-review panel skipped, recorded as taste row T7; full deepen 
 
 ### Components Invoked
 soleur:plan, soleur:deepen-plan, soleur:engineering:cto (1 spawn)
+work-phase note: affected gate cancelled while queued behind sibling runs by operator-agreed decision; 7 targeted suites (492), tsc, markdownlint, c4 parity green; CI is the full-battery backstop
