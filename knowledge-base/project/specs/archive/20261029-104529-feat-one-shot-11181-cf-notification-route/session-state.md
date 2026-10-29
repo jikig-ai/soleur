@@ -146,6 +146,13 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 - Compound session-error inventory and recurring/one-off triage were completed before editing. The test-failure learning now records the resumed ship/post-merge and follow-up tooling errors with prevention guidance; total Session Errors: 36.
 - The pinned markdown-lint runner reported these knowledge-base files are excluded by `.markdownlintignore`; no markdownlint verdict is claimed. `git diff --check` passed. The current diff is documentation-only.
 
+### Redaction follow-up review
+
+- Classification: non-code, risk tier `none`; four panel seats ran (history, pattern, security, code quality).
+- The security and history seats found no disclosure/history issue. Code-quality identified one P3 chronology ambiguity: the queue-stall closure was listed after the merge although it occurred before it.
+- Moved the #11537 closure entry before the #11456 merge entry in commit `a1f99afad5`; the single targeted code-quality verifier reviewed `d702d2fd28..a1f99afad5` and returned no findings.
+- Current verification: `git diff --check` passes; the pinned markdown-lint runner excludes these KB paths, so no markdownlint pass is claimed. The secret scan on `a1f99afad5` was CLEAN for 2 commits / 2 scanned files. Pipeline tally: 5 review seats, 2 CI cycles.
+
 ### Final-review dedup-before-fixing ledger
 
 | raw finding | canonical defect key | reporting seat(s) | fix disposition |
