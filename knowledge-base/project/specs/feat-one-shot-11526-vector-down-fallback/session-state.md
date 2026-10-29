@@ -3,7 +3,7 @@
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-10-29-fix-inngest-luks-wrong-volume-vector-down-plan.md
 - Status: complete
-- cto_spawns=1
+- cto_spawns=2
 
 ### Errors
 - `git commit` denied twice by harness `guardrails.sh` block-commit-on-main false positive (worktree-blind `.cwd` resolution); resolved via inline `cd` into the worktree.
