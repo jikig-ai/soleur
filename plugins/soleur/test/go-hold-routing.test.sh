@@ -215,6 +215,49 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *"records that No as a comment on the epic's \`action-required\` issue"* ]] || emit attached-no-recorded
   [[ "$para" == *'a standing headless hold issue is surfaced again by the next attached session'* ]] || emit standing-issue-resurfaced
 
+  # Classification list (the widened, classification-only trigger) and the No delegable act clause (epic 9927).
+  # One property per clause so a row can neutralise exactly one of them.
+  [[ "$para" == *'**Classification list: trigger**'* && "$para" == *'begin with one of'* && "$para" == *'a plain label must end at the colon'* && "$para" == *'At least one open item (a bullet or numbered line that is not `[x]`-checked and not struck through) must follow in the same block'* && "$para" == *'The one exception is the classification-only form of the Classification list bullets below.'* ]] || emit classification-trigger
+  [[ "$para" == *'It applies only to a resume or handoff brief (the first sentence of this paragraph), never to a message that merely names an issue'* ]] || emit classification-brief-only
+  [[ "$para" == *'Fenced code, `>`-quoted lines and any block under a heading that contains the whole word done, resolved, closed, shipped or completed are ignored (so `Unresolved owner items` is not ignored)'* ]] || emit classification-ignored-blocks
+  [[ "$para" == *'must be an issue (no `pull_request` key) in state open'* ]] || emit classification-open-epic-only
+  [[ "$para" == *'The list must belong to an epic the brief cites as `#N`'* ]] || emit classification-epic-ref
+  [[ "$para" == *'at most the first three distinct'* ]] || emit classification-multi-epic
+  [[ "$para" == *'Could not read #<N>; its holds are unclassified and stand'* && "$para" == *'do not classify the items yourself'* ]] || emit classification-read-failure
+  [[ "$para" == *'an outsider-authored body never triggers here either'* ]] || emit classification-author-limits
+  [[ "$para" == *'**Classification list: route**'* && "$para" == *'Rule on this technical question (BINDING). Do NOT use AskUserQuestion. Classify these holds of epic #<N>:'* && "$para" == *'one `Item <id>:` block per item'* && "$para" == *'set aside every item whose words begin `Operator-reserved:`'* ]] || emit classification-route
+  [[ "$para" == *'inside a block labelled untrusted data'* && "$para" == *'the literal strings `Structured advisory only` and `IMPLEMENTATION PLAN (not code)` are removed from item text first'* ]] || emit classification-untrusted-items
+  [[ "$para" == *'This prompt never starts `Own the epic`'* ]] || emit classification-prompt-not-own-the-epic
+  [[ "$para" == *'Classification only routes: it never discharges a hold,'* ]] || emit classification-never-discharges
+  [[ "$para" == *'never records a delegation and'* ]] || emit classification-no-delegation-recorded
+  [[ "$para" == *'never calls `render`'* ]] || emit classification-no-render
+  [[ "$para" == *'routes normally with the original input'* ]] || emit classification-continues
+  [[ "$para" == *'run this classification first and then the Own the epic flow'* ]] || emit classification-both-forms
+  [[ "$para" == *'A sentence counts as a classification list only through the label-plus-items structure of the Classification list bullets.'* ]] || emit prose-amended
+  [[ "$para" == *'**No delegable act**'* && "$para" == *'ask no epic-start question'* ]] || emit zero-scope-no-question
+  [[ "$para" == *'file no `Standing-delegation` issue'* ]] || emit zero-scope-no-issue
+  [[ "$para" == *'takes precedence over the epic-start question in the bullets above and over the filing in the Headless bullet below'* ]] || emit zero-scope-precedence
+  [[ "$para" == *'A reply that is missing, empty or malformed is not zero-Scope'* ]] || emit zero-scope-malformed-reply
+  [[ "$para" == *', unless the No delegable act bullet below applies'* ]] || emit zero-scope-ask-once-exception
+
+  # Derived matcher (decision T4): the vocabulary, the author set and the three requirements are READ FROM the paragraph
+  # at run time (never restated here), then 11 synthesized fixtures are judged by ONE awk process. A failed extraction
+  # leaves the vocabulary or the author set empty, so every positive fixture fails (fail closed, never vacuously green).
+  printf '%s\n' "$para" > "$SANDBOX/para.cur"
+  local fxout
+  fxout="$(PARA_FILE="$SANDBOX/para.cur" FXDIR="$FXDIR" FX_NAMES="$FX_NAMES" awk -f "$MATCHER_AWK" </dev/null)"
+  ! grep -Fxq -- fx-positive-brief <<<"$fxout" || emit fx-positive-brief
+  ! grep -Fxq -- fx-positive-body <<<"$fxout" || emit fx-positive-body
+  ! grep -Fxq -- fx-positive-variant <<<"$fxout" || emit fx-positive-variant
+  ! grep -Fxq -- fx-negative-bare-ask <<<"$fxout" || emit fx-negative-bare-ask
+  ! grep -Fxq -- fx-negative-no-epic <<<"$fxout" || emit fx-negative-no-epic
+  ! grep -Fxq -- fx-negative-no-items <<<"$fxout" || emit fx-negative-no-items
+  ! grep -Fxq -- fx-negative-outsider-body <<<"$fxout" || emit fx-negative-outsider-body
+  ! grep -Fxq -- fx-negative-closed-epic-brief <<<"$fxout" || emit fx-negative-closed-epic-brief
+  ! grep -Fxq -- fx-negative-closed-epic-body <<<"$fxout" || emit fx-negative-closed-epic-body
+  ! grep -Fxq -- fx-negative-pr-as-epic <<<"$fxout" || emit fx-negative-pr-as-epic
+  ! grep -Fxq -- fx-negative-cto-line <<<"$fxout" || emit fx-negative-cto-line
+
   # Location: after the Step 1 heading, before the start marker, and never between the markers.
   start_ln="$(awk -v s="$BLOCK_START" 'index($0, s) { print NR; exit }' "$f")"
   end_ln="$(awk -v e="$BLOCK_END" 'index($0, e) { print NR; exit }' "$f")"
@@ -262,6 +305,121 @@ evaluate_ship() { # <ship SKILL.md> -> V:<token> lines
   return "$v"
 }
 
+# --- derived matcher and synthesized fixtures (decision T4) ---------------------------------------------------
+# Fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only): no real brief text, no repository path literal. The table is
+# written ONCE here; evaluate() runs one awk process over it per call. Epic JSON is built with `jq -n --arg` and read with
+# `jq -j` (never grepped), and fixture text reaches awk through files, never `awk -v`.
+command -v jq >/dev/null || { printf 'FATAL: jq required\n' >&2; exit 2; }
+FXDIR="$SANDBOX/fx"; mkdir -p "$FXDIR"; assert_fixture_dir "$FXDIR"
+MATCHER_AWK="$SANDBOX/matcher.awk"
+cat > "$MATCHER_AWK" <<'AWK'
+function slurp(path,   line, out, n) {
+  out = ""; n = 0
+  while ((getline line < path) > 0) { out = out (n++ ? "\n" : "") line }
+  close(path); return out
+}
+function count_of(h, key,   c, i) { c = 0; while ((i = index(h, key)) > 0) { c++; h = substr(h, i + length(key)) } return c }
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+function is_item(t) { return (t ~ /^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/) && (t !~ /\[[xX]\]/) && (t !~ /~~/) }
+# The label of a line (heading, bold line, or plain line ending in a colon); sets KIND (h, b, p) and LVL. "" = not a label.
+function label_of(ln,   r, k) {
+  KIND = ""; LVL = 0
+  if (ln ~ /^#+[ \t]/) { match(ln, /^#+/); LVL = RLENGTH; KIND = "h"; return trim(substr(ln, RLENGTH + 1)) }
+  if (ln ~ /^\*\*/) { r = substr(ln, 3); k = index(r, "**"); if (k > 0) r = substr(r, 1, k - 1); KIND = "b"; sub(/:[ \t]*$/, "", r); return trim(r) }
+  if (ln ~ /:[ \t]*$/ && !is_item(ln)) { r = ln; sub(/:[ \t]*$/, "", r); KIND = "p"; return trim(r) }
+  return ""
+}
+function vbegins(lab,   l, i, c) {
+  l = tolower(lab)
+  for (i = 1; i <= nvoc; i++) if (index(l, voc[i]) == 1) { c = substr(l, length(voc[i]) + 1, 1); if (c == "" || c !~ /[a-z0-9-]/) return 1 }
+  return 0
+}
+function list_in(text,   n, L, i, j, lab, k0, l0, t) {
+  n = split(text, L, "\n")
+  for (i = 1; i <= n; i++) {
+    lab = label_of(L[i]); k0 = KIND; l0 = LVL
+    if (lab == "" || !vbegins(lab)) continue
+    for (j = i + 1; j <= n; j++) {
+      t = L[j]
+      if (t ~ /^#+[ \t]/) { match(t, /^#+/); if (k0 != "h" || RLENGTH <= l0) break }
+      if (is_item(t)) return 1
+    }
+  }
+  return 0
+}
+function in_authors(a,   i) { for (i = 1; i <= nau; i++) if (au[i] == a) return 1; return 0 }
+function would_route(brief, mode, state, assoc, ispr, body) {
+  if (mode != "read") return 0
+  if (nvoc == 0) return 0
+  if (need_issue && ispr == "true") return 0
+  if (need_epic && brief !~ /#[0-9]+/) return 0
+  if (list_in(brief)) { if (!need_open || state == "open") return 1 }
+  if (need_open && state != "open") return 0
+  if (in_authors(assoc) && list_in(body)) return 1
+  return 0
+}
+BEGIN {
+  para = slurp(ENVIRON["PARA_FILE"]); dir = ENVIRON["FXDIR"]
+  nvoc = 0; nau = 0
+  key = "begin with one of"
+  if (count_of(para, key) == 1) {
+    seg = substr(para, index(para, key) + length(key)); e = index(seg, "(any case")
+    if (e > 0) {
+      seg = substr(seg, 1, e - 1)
+      while ((a = index(seg, "`")) > 0) {
+        seg = substr(seg, a + 1); b = index(seg, "`"); if (b == 0) break
+        tk = trim(substr(seg, 1, b - 1)); seg = substr(seg, b + 1)
+        if (tk != "") voc[++nvoc] = tolower(tk)
+      }
+    }
+  }
+  akey = "its `author_association` is"
+  if (count_of(para, akey) == 1) {
+    seg = substr(para, index(para, akey) + length(akey)); e = index(seg, " (an outsider")
+    if (e > 0) {
+      seg = substr(seg, 1, e - 1); cur = ""
+      for (i = 1; i <= length(seg) + 1; i++) {
+        c = substr(seg, i, 1)
+        if (c ~ /[A-Z]/) cur = cur c; else if (cur != "") { au[++nau] = cur; cur = "" }
+      }
+    }
+  }
+  need_epic  = (index(para, "cites as `#N`") > 0)
+  need_issue = (index(para, "must be an issue (no `pull_request` key)") > 0)
+  need_open  = (index(para, "must be an issue (no `pull_request` key) in state open") > 0)
+  nf = split(ENVIRON["FX_NAMES"], names, " ")
+  for (f = 1; f <= nf; f++) {
+    d = dir "/" names[f]
+    got = would_route(slurp(d "/brief.txt"), slurp(d "/mode"), slurp(d "/state"), slurp(d "/assoc"), slurp(d "/ispr"), slurp(d "/body.txt"))
+    want = (slurp(d "/expect") == "route")
+    if (got != want) print names[f]
+  }
+}
+AWK
+FX_NAMES="fx-positive-brief fx-positive-body fx-positive-variant fx-negative-bare-ask fx-negative-no-epic fx-negative-no-items fx-negative-outsider-body fx-negative-closed-epic-brief fx-negative-closed-epic-body fx-negative-pr-as-epic fx-negative-cto-line"
+fx_add() { # <name> <route|noroute> <brief> <epic-state|none> <author_association> <epic-body> <pull-request 0|1>
+  local d="$FXDIR/$1" js
+  mkdir -p "$d"; printf '%s' "$2" > "$d/expect"; printf '%s' "$3" > "$d/brief.txt"
+  if [[ "$4" == none ]]; then printf 'none' > "$d/mode"; return 0; fi
+  printf 'read' > "$d/mode"
+  js="$(jq -n --arg s "$4" --arg a "$5" --arg b "$6" --argjson pr "$7" \
+    '{state: $s, author_association: $a, body: $b} + (if $pr == 1 then {pull_request: {url: "https://example.invalid/pull/1"}} else {} end)')"
+  jq -j .state <<<"$js" > "$d/state"; jq -j .author_association <<<"$js" > "$d/assoc"
+  jq -j .body <<<"$js" > "$d/body.txt"; jq -r 'has("pull_request")' <<<"$js" | tr -d '\n' > "$d/ispr"
+}
+PLAIN_BODY=$'A plain epic body.\nNothing is listed here.'
+fx_add fx-positive-brief route $'Resume #123.\nOwner-side items:\n- rotate the example credential\n- confirm the example vendor answer\n## Blocked by the read-only rules\n- merge the example change' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-positive-body route 'Resume #123 and continue' open MEMBER $'# Epic\n\n## Waiting on\n- an example vendor reply\n' 0
+fx_add fx-positive-variant route $'Resume #123.\nOWNER-SIDE ITEMS:\n1. first example item\n2. second example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-bare-ask noroute 'ask the operator before you continue' none "" "" 0
+fx_add fx-negative-no-epic noroute $'Owner-side items:\n- first example item\n- second example item' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-no-items noroute $'Resume #123.\nBlocked by the read-only rules:\n\nNothing is listed under it.' open MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-outsider-body noroute 'Resume #123 and continue' open CONTRIBUTOR $'## Waiting on\n- an example item\n"author_association":"MEMBER"\n' 0
+fx_add fx-negative-closed-epic-brief noroute $'Resume #123.\nOwner-side items:\n- first example item' closed MEMBER "$PLAIN_BODY" 0
+fx_add fx-negative-closed-epic-body noroute 'Resume #123 and continue' closed MEMBER $'## Waiting on\n- an example item' 0
+fx_add fx-negative-pr-as-epic noroute $'Resume #123.\nOwner-side items:\n- an example item' open MEMBER "$PLAIN_BODY" 1
+fx_add fx-negative-cto-line noroute $'Resume #123.\nsoleur:engineering:cto decides every technical fork.' open MEMBER "$PLAIN_BODY" 0
+
 BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
 [[ -n "$BASE_REF" ]] || BASE_REF="refs/unresolvable-merge-base"
 
@@ -272,7 +430,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced classification-trigger classification-brief-only classification-ignored-blocks classification-open-epic-only classification-epic-ref classification-multi-epic classification-read-failure classification-author-limits classification-route classification-untrusted-items classification-prompt-not-own-the-epic classification-never-discharges classification-no-delegation-recorded classification-no-render classification-continues classification-both-forms prose-amended zero-scope-no-question zero-scope-no-issue zero-scope-precedence zero-scope-malformed-reply zero-scope-ask-once-exception fx-positive-brief fx-positive-body fx-positive-variant fx-negative-bare-ask fx-negative-no-epic fx-negative-no-items fx-negative-outsider-body fx-negative-closed-epic-brief fx-negative-closed-epic-body fx-negative-pr-as-epic fx-negative-cto-line anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -554,6 +712,59 @@ para_awk sub "$GO_MD" 'has a line exactly equal to' 'has a title or body that me
 mrow "M77 the dedupe falls back to a title or body mention" "$M/m77.md" headless-dedupe-marker
 para_awk sub "$GO_MD" 'never a count' 'a count per page is fine' > "$M/m78.md"
 mrow "M78 the dedupe counts per page (a number per page, not a line per match)" "$M/m78.md" headless-dedupe-output
+# C1..C10: the Classification list rows (epic 9927). Ten hand-written rows, each with ONE primary token; `mrow` also asserts
+# the mutation LANDED. Every phrase is the FULL phrase of its own pin, because the short forms also occur elsewhere in the paragraph.
+para_awk dropline "$GO_MD" '**Classification list: trigger**' > "$M/c1a.md"
+para_awk dropline "$M/c1a.md" '**Classification list: route**' > "$M/c1.md"
+mrow "C1 strip the two Classification bullets (revert to the old trigger)" "$M/c1.md" classification-trigger
+row "C1b the measured shape is no longer routed once the bullets are gone" "$M/c1.md" "$BASE_REF" fx-positive-brief; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'OWNER, MEMBER or COLLABORATOR' 'OWNER, MEMBER or COLLABORATOR, CONTRIBUTOR or NONE' > "$M/c2.md"
+mrow "C2 the author set is widened to CONTRIBUTOR or NONE" "$M/c2.md" fx-negative-outsider-body
+para_awk sub "$GO_MD" 'an outsider-authored body never triggers here either' 'an outsider-authored body triggers here too' > "$M/c3.md"
+mrow "C3 the widened source accepts an outsider-authored body" "$M/c3.md" classification-author-limits
+para_awk sub "$GO_MD" 'cites as `#N`' '' > "$M/c4.md"
+mrow "C4 the epic-reference requirement is dropped" "$M/c4.md" fx-negative-no-epic
+para_awk sub "$GO_MD" 'must be an issue (no `pull_request` key) in state open' 'must be an issue (no `pull_request` key)' > "$M/c5.md"
+mrow "C5 a closed epic may trigger" "$M/c5.md" fx-negative-closed-epic-brief
+para_awk sub "$GO_MD" '`Waiting on`' '`Waiting upon`' > "$M/c6.md"
+mrow "C6 the vocabulary label Waiting on is deleted" "$M/c6.md" fx-positive-body
+para_awk sub "$GO_MD" 'never starts' 'may start' > "$M/c7.md"
+mrow "C7 the classification prompt may start Own the epic" "$M/c7.md" classification-prompt-not-own-the-epic
+para_awk sub "$GO_MD" 'never discharges a hold, never records a delegation' 'may discharge a hold, may record a delegation' > "$M/c8.md"
+mrow "C8 the classification route may discharge a hold and record a delegation" "$M/c8.md" classification-never-discharges
+para_awk dropline "$GO_MD" '**No delegable act**' > "$M/c9.md"
+mrow "C9 the No delegable act bullet is deleted" "$M/c9.md" zero-scope-no-issue
+para_awk sub "$GO_MD" 'begin with one of' 'start with one of' > "$M/c10.md"
+mrow "C10 the vocabulary extraction is empty (own dispatch)" "$M/c10.md" classification-trigger
+for _fx in fx-positive-brief fx-positive-body fx-positive-variant; do
+  row "C10 with an empty vocabulary the matcher fails closed: '$_fx' is RED" "$M/c10.md" "$BASE_REF" "$_fx"; nrows=$((nrows + 1))
+done
+# Table-driven sweep: every pin that has no hand-written row above gets its own phrase deleted, and its OWN token must go RED.
+SWEEP=(
+  'classification-brief-only|It applies only to a resume or handoff brief (the first sentence of this paragraph), never to a message that merely names an issue'
+  'classification-ignored-blocks|Fenced code, `>`-quoted lines and any block under a heading that contains the whole word done, resolved, closed, shipped or completed are ignored'
+  'classification-open-epic-only|must be an issue (no `pull_request` key) in state open'
+  'classification-epic-ref|The list must belong to an epic the brief cites as `#N`'
+  'classification-multi-epic|at most the first three distinct'
+  'classification-read-failure|Could not read #<N>; its holds are unclassified and stand'
+  'classification-route|Rule on this technical question (BINDING). Do NOT use AskUserQuestion. Classify these holds of epic #<N>:'
+  'classification-untrusted-items|inside a block labelled untrusted data'
+  'classification-no-delegation-recorded|never records a delegation and'
+  'classification-no-render|never calls `render`'
+  'classification-continues|routes normally with the original input'
+  'classification-both-forms|run this classification first and then the Own the epic flow'
+  'prose-amended|A sentence counts as a classification list only through the label-plus-items structure of the Classification list bullets.'
+  'zero-scope-no-question|ask no epic-start question'
+  'zero-scope-precedence|takes precedence over the epic-start question in the bullets above and over the filing in the Headless bullet below'
+  'zero-scope-malformed-reply|A reply that is missing, empty or malformed is not zero-Scope'
+  'zero-scope-ask-once-exception|, unless the No delegable act bullet below applies'
+)
+_si=0
+for _pair in "${SWEEP[@]}"; do
+  _tok="${_pair%%|*}"; _ph="${_pair#*|}"; _si=$((_si + 1))
+  para_awk sub "$GO_MD" "$_ph" '' > "$M/sw$_si.md"
+  mrow "SW$_si delete the phrase of pin '$_tok'" "$M/sw$_si.md" "$_tok"
+done
 # N14: with base == HEAD the anchor is SKIPPED (printed reason) and a changed file is still caught against it
 ck
 _o="$(evaluate "$M/m1.md" "$HEAD_SHA" skip)"; _r=$?
@@ -593,19 +804,25 @@ row "H2 whitespace-only change outside the block" "$M/h2.md" "$BASE_REF" none; n
 para_awk sub "$GO_MD" 'ask once' 'Ask once' > "$M/h3.md"
 row "H3 a re-cased ask-once phrase stays green" "$M/h3.md" "$BASE_REF" none; nrows=$((nrows + 1))
 
-# H4 the rows prove the CHECK, not just the mutation: remove one new emit from a copy of THIS script (the list-source
-# check, which M26 grades) and require the copy to go RED on that row. The copy skips this row (GOHOLD_NESTED).
-nrows=$((nrows + 1)); ck
+# H4 the rows prove the CHECK, not just the mutation: remove two emits from ONE copy of THIS script (the list-source check,
+# which M26 grades, and the outsider-body fixture emit, which C2 grades) and require the copy to go RED on each row's own
+# failure line. The copy skips this row (GOHOLD_NESTED).
+nrows=$((nrows + 2)); ck; ck
 if [[ -n "${GOHOLD_NESTED:-}" ]]; then
   skip "H4 nested copy: the harness row is not recursed"
+  skip "H4b nested copy: the harness row is not recursed"
 else
   _self="${BASH_SOURCE[0]}"; _nest="$M/nested.test.sh"
-  sed -e "s|^ROOT=.*|ROOT=\"$ROOT\"|" -e '/|| emit list-source$/d' "$_self" > "$_nest"
+  sed -e "s|^ROOT=.*|ROOT=\"$ROOT\"|" -e '/|| emit list-source$/d' -e '/|| emit fx-negative-outsider-body$/d' "$_self" > "$_nest"
   GOHOLD_NESTED=1 bash "$_nest" </dev/null >"$M/nested.out" 2>"$M/nested.err"; _nrc=$?
   if [[ "$(grep -c '|| emit list-source$' "$_self" || true)" -eq 1 && "$(grep -c '|| emit list-source$' "$_nest" || true)" -eq 0 ]] \
      && [[ "$_nrc" -ne 0 ]] && grep -Fq "M26 delete the list-source bullet: expected RED for 'list-source'" "$M/nested.err"; then
     ok "H4 removing the list-source emit from evaluate() turns M26 RED (the row grades the check)"
   else bad "H4 removing the list-source emit did not turn M26 RED (nested rc=$_nrc, emit lines in copy: $(grep -c '|| emit list-source$' "$_nest" || true))"; fi
+  if [[ "$(grep -c '|| emit fx-negative-outsider-body$' "$_self" || true)" -eq 1 && "$(grep -c '|| emit fx-negative-outsider-body$' "$_nest" || true)" -eq 0 ]] \
+     && [[ "$_nrc" -ne 0 ]] && grep -Fq "C2 the author set is widened to CONTRIBUTOR or NONE: expected RED for 'fx-negative-outsider-body'" "$M/nested.err"; then
+    ok "H4b removing the outsider-body fixture emit turns C2 RED (the row grades the fixture)"
+  else bad "H4b removing the outsider-body fixture emit did not turn C2 RED (nested rc=$_nrc)"; fi
 fi
 
 # Late-redefinition defence: re-run the controls AFTER the last row, so a helper redefined between the first
@@ -622,7 +839,7 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
-ABSOLUTE_FLOOR=212
+ABSOLUTE_FLOOR=304
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \
