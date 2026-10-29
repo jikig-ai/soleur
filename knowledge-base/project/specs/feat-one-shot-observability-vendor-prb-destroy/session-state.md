@@ -45,3 +45,15 @@ NEXT: soleur:qa → soleur:compound → soleur:ship → merge #11535 → postmer
 (apply-plan 43 destroys; sentry-audit post-merge; retained heartbeat fire-test
 AC3; close #10972 OBE + drop follow-through label; check #9372/#10390 unrouted
 preconditions; #8160 comment; #7577 row-rate 24-48h).
+
+## Resume checkpoint 3 (ship in progress, HEAD 2bb6e0b719)
+
+Review+QA+compound done, pushed. PR #11535 marked ready, semver:patch, body set.
+BLOCKERS at checkpoint: (1) cla-check FAIL — committers deruelle + devin-ai-integration[bot];
+CLA bot wants the "I have read the CLA Document and I hereby sign the CLA" comment on the PR —
+LEGAL statement, operator must post it (do NOT sign for them; check how prior Devin PRs passed).
+(2) mergeStateStatus=BEHIND — sync branch or rely on merge queue.
+NEXT: resolve CLA → gh pr update-branch (or merge queue) → gh pr merge --squash (ack survives
+via COMMIT_MESSAGES) → poll MERGED → deploy-arm find --wait <sha> → soleur:postmerge →
+apply-plan 43 destroys + sentry-audit zero live-undeclared (#6615) + heartbeat fire-test AC3 +
+issue bookkeeping (#10972 OBE close + label, #6590/#8704/#8595 comments, #9372/#10390 check).
