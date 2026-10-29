@@ -2,7 +2,8 @@
 # shellcheck disable=SC2329,SC2015,SC2016,SC2034  # row functions are dispatched indirectly; A && B || why is the assertion idiom; jq programs are single-quoted on purpose; some fixture variables are read by sub-shell rows
 # Suite for plugins/soleur/scripts/ci-head-verdict.sh -- Guard 2 of the S3 plan (#9728,
 # knowledge-base/project/plans/archive/20261013-062704-2026-10-09-ci-s3-draft-pr-light-checks-plan.md): the one resolver every
-# reader of a PR head's CI state goes through (`verdict`, `wait-ready-run`, `ready-count`).
+# reader of a PR head's CI state goes through (`verdict`, `wait-ready-run`, `ready-count`), plus Guard 3 (#9927): the read-only
+# `required` required-context set check (rows R1-R14 and RE1-RE6).
 #
 # THE SEAM. `gh` is a PATH stub that answers ONLY the requests the SUT is expected to make, keyed on the
 # FULL argv (real flags only: `api -i`, `api graphql -F/-f`, `api --paginate --slurp`), and refuses anything
@@ -45,6 +46,8 @@ for tool in jq python3 date timeout; do
   command -v "$tool" >/dev/null || { echo "[FATAL] $tool required" >&2; exit 1; }
 done
 TIMEOUT_BIN="$(command -v timeout)"
+REAL_SLEEP="$(PATH=/usr/bin:/bin command -v sleep)"   # the PATH `sleep` is a stub in every row; R13 needs a child that really takes time
+[[ -n "$REAL_SLEEP" ]] || { echo "[FATAL] sleep required" >&2; exit 1; }
 
 assert_fixture_dir() {
   case "${1-}" in
@@ -550,7 +553,7 @@ row_W14() { local d; d=$(mkrow W14); setready "$d" "$(iso_at -3600)" "$(iso_at -
 
 # ── Guard 3 rows: required (read-only required-context set check, #9927) ────────────────────
 # The child (`admin-merge-ready.sh`) is a generated stub (marker + rc from the row dir) for the unit rows, selected through
-# ADMIN_MERGE_READY_BIN; the real-child rows (R9, R-E1, R-E2) point the seam at the REAL script, because `mutant_run` copies the SUT
+# ADMIN_MERGE_READY_BIN; the real-child rows (R9, RE1, RE2, RE3, RE6) point the seam at the REAL script, because `mutant_run` copies the SUT
 # to $SANDBOX, where the default "next to this script" would not resolve (an `error` expectation would then pass for the wrong reason).
 REAL_AMR="$SCRIPT_DIR/../scripts/admin-merge-ready.sh"
 reqrow() { # <name> [pr-base]: a mkrow PR with a REST base, an empty actions-runs list and the child stub
@@ -565,7 +568,7 @@ AMR
   printf '%s' "$d"
 }
 amr_raw() { # <verdict> <reason> <required> <tail-after-absent=> [pr] [sha]
-  printf 'SOLEUR_ADMIN_MERGE_READY verdict=%s pr=%s sha=%s base=main reason=%s required=%s absent=%s\n' "$1" "${5:-$PR}" "${6:-$H}" "$2" "$3" "$4"
+  printf 'SOLEUR_ADMIN_MERGE_READY verdict=%s pr=%s sha=%s base=%s reason=%s required=%s absent=%s\n' "$1" "${5:-$PR}" "${6:-$H}" "${AMR_BASE:-main}" "$2" "$3" "$4"
 }
 amr_line() { amr_raw "$1" "$2" "$3" "$4 pending=$5 failed=$6" "${7:-}" "${8:-}"; }   # <verdict> <reason> <required> <absent> <pending> <failed> [pr] [sha]
 setamr() { cat > "$1/amr.stdout"; printf '%s\n' "$2" > "$1/amr.rc"; }               # <dir> <rc>  (the child's stdout on stdin)
@@ -609,14 +612,14 @@ row_R2() { local d ctx wf pair; d=$(reqrow R2)
   ok R2.hint outhas 'RECOVERY rerun run=700 basis=workflow ctx="cla-evidence" wf="cla-evidence": gh run rerun 700'
   ok R2.one-hint nrerun 1; ok R2.not-executed notcalled "$d" "run rerun"; ok R2.nomiss nomiss "$d"; ok R2.one req_one
   ok R2.one-read eq "$(grep -c 'actions/runs?head_sha' "$d/log")" 1
-  # context names with spaces, parentheses, # and :, and a workflow name carrying a control character (the JSON escape keeps the line whole)
+  # context names with spaces, parentheses, # and :, and a workflow name carrying a control character (replaced by a space, so the line stays whole)
   for pair in 'Docs (build) #1: x|docs (BUILD) #1: X' $'cla-evidence|cla-evidence\001'; do ctx="${pair%%|*}"; wf="${pair#*|}"
     d=$(reqrow "R2-v-${#wf}")
     addxrun "$d" 701 "$wf" cancelled; addxrun "$d" 650 CI cancelled
     amr_line not-ready not-green 2 "$(jq -nc --arg c "$ctx" '[$c]')" '[]' '[]' | setamr "$d" 1
     rrun "$d"
     ok "R2.variant[${#wf}].state" req_is absent not-green 2 "$(jq -nc --arg c "$ctx" '[$c]')" '[]' '[]'
-    ok "R2.variant[${#wf}].hint" outhas "RECOVERY rerun run=701 basis=workflow ctx=$(jq -nc --arg c "$ctx" '$c') wf=$(jq -nc --arg c "$wf" '$c'): gh run rerun 701"
+    ok "R2.variant[${#wf}].hint" outhas "RECOVERY rerun run=701 basis=workflow ctx=$(jq -nc --arg c "$ctx" '$c') wf=$(jq -nc --arg c "${wf//$'\001'/ }" '$c'): gh run rerun 701"
     ok "R2.variant[${#wf}].one-hint" nrerun 1; ok "R2.variant[${#wf}].one" req_one
     ok "R2.variant[${#wf}].no-raw-control-char" test -z "$(LC_ALL=C tr -d -c '\001' < "$d/out")"
   done
@@ -668,6 +671,7 @@ row_R4() { local d k
   rrun "$d"
   ok R4.test-only.state req_is absent stalled 26 '["test"]' '[]' '[]'; ok R4.test-only.pointer outhas 'RECOVERY pointer reason=stalled ctx="test"'
   ok R4.test-only.no-read notcalled "$d" "actions/runs?head_sha"; ok R4.test-only.no-rerun nrerun 0
+  ok R4.test-only.caveat outhas 'no ready run is still in flight'
   d=$(reqrow R4-test-not-stalled); addxrun "$d" 700 test cancelled
   amr_line not-ready not-green 26 '["test"]' '[]' '[]' | setamr "$d" 1
   rrun "$d"
@@ -682,6 +686,7 @@ row_R4() { local d k
   rrun "$d"
   ok R4.stale-row.state req_is failed stale-row 26 '[]' '[]' '["test"]'; ok R4.stale-row.pointer outhas 'RECOVERY pointer reason=stale-row ctx="test": see skills/ship/references/ready-run-wait.md'
   ok R4.stale-row.not-generic outlacks 'gh pr checks'; ok R4.stale-row.no-rerun nrerun 0
+  ok R4.stale-row.caveat outhas 'no ready run is still in flight'
   d=$(reqrow R4-generic)
   amr_line not-ready not-green 26 '[]' '["a"]' '["b"]' | setamr "$d" 1
   rrun "$d"
@@ -714,6 +719,8 @@ r6_fixture() {
   case "$1" in
     crash) : ;;
     rc2-marker|rc130-marker) amr_line ready all-green 26 '[]' '[]' '[]' ;;
+    rc3-with-gaps) amr_line error api-error 5 '["a"]' '["p"]' '[]' ;;     # an rc 3 / rc 4 marker with POPULATED arrays must stay error with the child's reason
+    rc4-with-gaps) amr_line stale head-moved 5 '["a"]' '[]' '["f"]' ;;
     rc3-*) amr_line error "${1#rc3-}" 0 '[]' '[]' '[]' ;;
     rc4-head-moved) amr_line stale head-moved 0 '[]' '[]' '[]' ;;
     rc4-not-open) amr_line stale not-open 0 '[]' '[]' '[]' ;;
@@ -737,6 +744,17 @@ r6_fixture() {
     arr-total-above-required) amr_line not-ready not-green 1 '["a"]' '["b"]' '[]' ;;
     arr-missing-failed) amr_raw not-ready not-green 26 '["x"] pending=[]' ;;
     arr-trailing-junk) amr_raw not-ready not-green 26 '["x"] pending=[] failed=[] extra=1' ;;
+    arr-fake-failed-field) amr_raw not-ready not-green 26 '["x failed=y"] pending=[]' ;;   # ' failed=' inside a context name, no real failed= field
+    arr-del-char) amr_raw not-ready not-green 26 '["a\u007fb"] pending=[] failed=[]' ;;
+    arr-us-char) amr_raw not-ready not-green 26 '["a\u001fb"] pending=[] failed=[]' ;;
+    arr-c1-char) amr_raw not-ready not-green 26 '["a\u0085b"] pending=[] failed=[]' ;;
+    arr-c1-char-9f) amr_raw not-ready not-green 26 '["a\u009fb"] pending=[] failed=[]' ;;
+    arr-ls-char) amr_raw not-ready not-green 26 '["a\u2028b"] pending=[] failed=[]' ;;
+    arr-ps-char) amr_raw not-ready not-green 26 '["a\u2029b"] pending=[] failed=[]' ;;
+    required-20-digits) amr_raw not-ready not-green 18446744073709551617 '["x"] pending=[] failed=[]' ;;   # 2^64 + 1: wraps to 1 in bash arithmetic, so a missing cap would read absent
+    required-10-digits) amr_raw not-ready not-green 1234567890 '["x"] pending=[] failed=[]' ;;
+    base-differs) AMR_BASE=other amr_line ready all-green 26 '[]' '[]' '[]' ;;
+    reason-not-all-green) amr_line ready carryover-local-docs 26 '[]' '[]' '[]' ;;
     required-nonint) amr_raw not-ready not-green x '["x"] pending=[] failed=[]' ;;
     verdict-uppercase) amr_raw READY all-green 26 '[] pending=[] failed=[]' ;;
     ready-total-zero-required-gaps) amr_line ready all-green 0 '["a"]' '[]' '[]' ;;
@@ -761,6 +779,8 @@ rc3-unpinned|3|unpinned
 rc3-incomplete-files|3|incomplete-files
 rc4-head-moved|4|head-moved
 rc4-not-open|4|not-open
+rc3-with-gaps|3|api-error
+rc4-with-gaps|4|head-moved
 no-marker-rc0|0|no-marker
 no-marker-rc1|1|no-marker
 forged-first|1|marker-unparseable
@@ -780,6 +800,17 @@ arr-embeds-pending|1|marker-unparseable
 arr-control-char|1|marker-unparseable
 arr-total-above-required|1|marker-unparseable
 arr-missing-failed|1|marker-unparseable
+arr-fake-failed-field|1|marker-unparseable
+arr-del-char|1|marker-unparseable
+arr-us-char|1|marker-unparseable
+arr-c1-char|1|marker-unparseable
+arr-c1-char-9f|1|marker-unparseable
+arr-ls-char|1|marker-unparseable
+arr-ps-char|1|marker-unparseable
+required-20-digits|1|marker-unparseable
+required-10-digits|1|marker-unparseable
+base-differs|0|marker-mismatch
+reason-not-all-green|0|rc-mismatch
 arr-trailing-junk|1|marker-unparseable
 required-nonint|1|marker-unparseable
 verdict-uppercase|0|marker-unparseable
@@ -813,7 +844,7 @@ EOF
   ok R7.populated.state req_is failed untrusted-ci 26 '[]' '[]' '["x"]'; ok R7.populated.rc rc_is 0; }
 
 # R8: ready is `complete` only with a positive required AND three empty arrays (each array in turn, the third-only one included).
-row_R8() { local d lab req a p f want
+row_R8() { local d lab req a p f want pair
   while IFS='|' read -r lab req a p f want; do d=$(reqrow "R8-$lab")
     amr_line ready all-green "$req" "$a" "$p" "$f" | setamr "$d" 0
     rrun "$d"
@@ -825,17 +856,31 @@ failed-only|26|[]|[]|["f"]|ready-with-gaps
 all-three|26|["a"]|["p"]|["f"]|ready-with-gaps
 required-zero|0|[]|[]|[]|required-unknown
 EOF
+  # a leading zero is decimal (0089 is not an octal error), and the printed count is the decimal one
+  for pair in 0026:26 0089:89 000000001:1; do d=$(reqrow "R8-lz-${pair%%:*}")
+    amr_raw ready all-green "${pair%%:*}" '[] pending=[] failed=[]' | setamr "$d" 0; rrun "$d"
+    ok "R8.leading-zero-${pair%%:*}" req_is complete all-green "${pair##*:}" '[]' '[]' '[]'; done
   d=$(reqrow R8-one); amr_line ready all-green 1 '[]' '[]' '[]' | setamr "$d" 0; rrun "$d"
   ok R8.required-one-is-positive req_is complete all-green 1 '[]' '[]' '[]'; }
 
 # R9: the real child. The field-name tokens of its marker() and the resolve_head_verdict -> verdict call are pinned (a switch to `required`
 # would loop); the real script against a failing gh stub parses to `error api-error`; a missing seam and a bad base are `error` with no child call.
-row_R9() { local d fields
+# amr_head_verdict_ok <admin-merge-ready.sh>: resolve_head_verdict CALLS `verdict` (a code line, not a comment) and never names `required`.
+# Anchored on the call form; row R9 proves it on the real file AND rejects two known negatives (a swapped verb, a commented-out call).
+amr_head_verdict_ok() { local body
+  body=$(sed -n '/^resolve_head_verdict() {/,/^}/p' "$1" | grep -vE '^[[:space:]]*#')
+  [[ "$(grep -cE '^[[:space:]]*m="\$\(bash "\$bin" verdict "\$PR"[ )]' <<<"$body")" == 1 && "$(grep -cw required <<<"$body")" == 0 ]]
+}
+row_R9() { local d fields cp="$SANDBOX/amrneg"
   fields=$(sed -n '/^marker() {/,/^}/p' "$REAL_AMR" | grep -o '[a-z]*=%s' | tr '\n' ' ')
   ok R9.marker-field-order eq "$fields" "verdict=%s pr=%s sha=%s base=%s reason=%s required=%s absent=%s pending=%s failed=%s "
   ok R9.marker-name grep -q 'readonly MARKER="SOLEUR_ADMIN_MERGE_READY"' "$REAL_AMR"
-  ok R9.head-verdict-calls-verdict test "$(sed -n '/^resolve_head_verdict() {/,/^}/p' "$REAL_AMR" | grep -c 'bash "\$bin" verdict "\$PR"')" = 1
-  ok R9.head-verdict-never-calls-required test "$(sed -n '/^resolve_head_verdict() {/,/^}/p' "$REAL_AMR" | grep -c ' required ')" = 0
+  ok R9.head-verdict-calls-verdict-never-required amr_head_verdict_ok "$REAL_AMR"
+  mkdir -p "$cp"
+  sed 's/^\(  m="\$(bash "\$bin" \)verdict/\1required/' "$REAL_AMR" > "$cp/swap.sh"; ok R9.negative-swap-landed test "$(cmp -s "$cp/swap.sh" "$REAL_AMR" && echo same || echo differs)" = differs
+  ok R9.known-negative-required-call-is-rejected test "$(amr_head_verdict_ok "$cp/swap.sh" && echo accepted || echo rejected)" = rejected
+  sed 's/^\(  m="\$(bash "\$bin" verdict.*\)$/  # \1/' "$REAL_AMR" > "$cp/comment.sh"; ok R9.negative-comment-landed test "$(cmp -s "$cp/comment.sh" "$REAL_AMR" && echo same || echo differs)" = differs
+  ok R9.known-negative-commented-out-call-is-rejected test "$(amr_head_verdict_ok "$cp/comment.sh" && echo accepted || echo rejected)" = rejected
   d=$(rereal R9-api); touch "$d/prview.fail"
   VRUN_ENV="ADMIN_MERGE_READY_BIN=$REAL_AMR" vrun "$d" required "$PR"
   ok R9.real-api-error.state req_err api-error; ok R9.real-api-error.rc rc_is 3; ok R9.real-api-error.child-ran called "$d" "pr view $PR --json"; ok R9.real-api-error.one req_one
@@ -849,26 +894,51 @@ row_R9() { local d fields
 
 # R10: usage lives in V19; here the PR base reaches the child as --base, --repo exports GH_REPO to the child, and `verdict` ignores the base.
 row_R10() { local d
-  d=$(reqrow R10-base release/1.2); amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; rrun "$d"
+  d=$(reqrow R10-base release/1.2); AMR_BASE=release/1.2 amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; rrun "$d"
   ok R10.base.rc rc_is 0; ok R10.base.argv eq "$(cat "$d/amr.argv")" "$PR $H --base release/1.2 GH_REPO="
   d=$(reqrow R10-repo); amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; rrun "$d" --repo acme/widgets
   ok R10.repo.child-gets-GH_REPO eq "$(cat "$d/amr.argv")" "$PR $H --base main GH_REPO=acme/widgets"; ok R10.repo.gh-gets-GH_REPO called "$d" "GH_REPO=acme/widgets"; }
 
-# R11: the documented run-id extraction snippet works on sample RECOVERY lines (a wf= text imitating a second run= included), and the
-# doc's state list is the --help state list.
-row_R11() { local doc="$SCRIPT_DIR/../skills/ship/references/ready-run-wait.md" snip got helps docs
-  snip=$(grep -m1 "^sed -n 's/^RECOVERY rerun run=" "$doc")
+# R11: the documented extraction block in ready-run-wait.md RUNS verbatim (only PR_NUMBER is substituted) against the SUT and prints the marker,
+# the basis=workflow ids and the basis=candidate lines (a wf= text imitating a second run= included); a call that prints no marker (exit 2) falls to
+# its own "treat as error" line; and the reason vocabulary and the state list agree across the header, the doc and the code.
+reason_tokens() { # <anchor>; text on stdin -> the sorted tokens of the first sentence after the anchor (header `# ` prefixes removed)
+  tr '\n' ' ' | sed 's/# //g' | grep -o "$1[^.]*\." | head -1 | sed "s/^$1//; s/\.\$//" | tr -c 'a-z0-9<>-' '\n' | grep . | sort -u
+}
+row_R11() { local doc="$SCRIPT_DIR/../skills/ship/references/ready-run-wait.md" snip root d got helps docs t own pass code miss=""
+  snip=$(awk '/^```bash$/ { b = 1; blk = ""; next } /^```$/ { if (b && blk ~ /^OUT=\$\(mktemp\)/) { printf "%s", blk; exit } b = 0; next } b { blk = blk $0 "\n" }' "$doc")
   ok R11.snippet-present test -n "$snip"
-  got=$(printf '%s\n' 'RECOVERY rerun run=700 basis=workflow ctx="a" wf="a": gh run rerun 700' \
-                      'RECOVERY rerun run=801 basis=candidate ctx="b" wf="x run=99 basis=workflow"' \
-                      'RECOVERY rerun run=55 basis=candidate ctx="c" wf="run=77"' \
-                      'RECOVERY owner not determined, read the run before re-running ctx="b"' \
-                      'RECOVERY pointer reason=stalled ctx="test": see skills/ship/references/ready-run-wait.md' \
-                      'WAIT run=12 basis=workflow' | eval "$snip")
-  ok R11.snippet-output eq "$got" "$(printf '700 workflow\n801 candidate\n55 candidate')"
+  root="$SANDBOX/snip-root"; rm -rf "$root"; mkdir -p "$root/scripts"; cp "$SUT" "$root/scripts/ci-head-verdict.sh"
+  d=$(reqrow R11)
+  addxrun "$d" 700 cla-evidence cancelled; addxrun "$d" 650 CI cancelled; addxrun "$d" 801 'x run=99 basis=workflow' cancelled
+  amr_line not-ready not-green 3 '["cla-evidence","other ctx"]' '[]' '[]' | setamr "$d" 1
+  : > "$d/log"; rm -f "$d/.polls"
+  got=$(env -u GH_REPO FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_H="$H" PATH="$BIN:$PATH" CI_HEAD_VERDICT_POLL_SECONDS=0 ADMIN_MERGE_READY_BIN="$d/amr-stub.sh" CLAUDE_PLUGIN_ROOT="$root" bash -c "${snip//PR_NUMBER/$PR}" 2>"$d/err")
+  ok R11.snippet-first-line-is-the-marker test "$(sed -n 1p <<<"$got" | cut -d' ' -f1-3)" = "SOLEUR_CI_REQUIRED_SET state=absent pr=$PR"
+  ok R11.snippet-prints-the-one-workflow-id test "$(grep -cE '^[0-9]+$' <<<"$got")" = 1
+  ok R11.snippet-workflow-id-is-700 test "$(grep -E '^[0-9]+$' <<<"$got")" = 700
+  ok R11.snippet-candidates-visible eq "$(grep -c '^RECOVERY rerun run=[0-9]* basis=candidate ' <<<"$got")" 3
+  ok R11.snippet-imitated-run-stays-in-wf grep -qF 'RECOVERY rerun run=801 basis=candidate ctx="other ctx" wf="x run=99 basis=workflow"' <<<"$got"
+  ok R11.snippet-candidates-carry-no-command test "$(grep 'basis=candidate' <<<"$got" | grep -c 'gh run rerun')" = 0
+  ok R11.snippet-nomiss nomiss "$d"
+  got=$(env -u GH_REPO FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_H="$H" PATH="$BIN:$PATH" ADMIN_MERGE_READY_BIN="$d/amr-stub.sh" CLAUDE_PLUGIN_ROOT="$root" bash -c "${snip//PR_NUMBER/abc}" 2>/dev/null)
+  ok R11.snippet-no-marker-line-is-an-error eq "$got" "no marker line: treat as state=error"
   helps=$(bash "$SUT" --help | grep -o 'SOLEUR_CI_REQUIRED_SET state=<[^>]*>' | head -1); docs=$(grep -o 'SOLEUR_CI_REQUIRED_SET state=<[^>]*>' "$doc" | head -1)
   ok R11.help-has-the-states eq "$helps" 'SOLEUR_CI_REQUIRED_SET state=<complete|absent|pending|failed|error>'
-  ok R11.doc-states-equal-help eq "$docs" "$helps"; }
+  ok R11.doc-states-equal-help eq "$docs" "$helps"
+  # the reason vocabulary: header == doc for both lists, every own token is in the SUT's code, every pass-through token is in the real child's code
+  ok R11.own-reasons-header-equal-doc eq "$(reason_tokens 'itself emits (closed): ' < "$SUT")" "$(reason_tokens 'itself emits (closed): ' < "$doc")"
+  ok R11.passthrough-reasons-header-equal-doc eq "$(reason_tokens 'passed through from the child (informational): ' < "$SUT")" "$(reason_tokens 'passed through from the child (informational): ' < "$doc")"
+  own=$(reason_tokens 'itself emits (closed): ' < "$SUT"); pass=$(reason_tokens 'passed through from the child (informational): ' < "$SUT")
+  ok R11.own-reasons-nonempty test "$(wc -w <<<"$own")" -ge 14
+  ok R11.passthrough-reasons-nonempty test "$(wc -w <<<"$pass")" -ge 13
+  ok R11.interrupted-is-not-passed-through test -z "$(grep -x interrupted <<<"$pass")"
+  code=$(grep -vE '^[[:space:]]*#' "$SUT")   # a variable, not a pipe: `grep -q` closing early would SIGPIPE the producer under pipefail
+  for t in $own; do [[ "$t" == 'child-rc-<n>' ]] && t='child-rc-'; grep -qF -- "$t" <<<"$code" || miss="$miss $t"; done
+  ok "R11.own-reasons-exist-in-the-sut:${miss:-none}" test -z "$miss"; miss=""
+  code=$(grep -vE '^[[:space:]]*#' "$REAL_AMR")
+  for t in $pass; do grep -qF -- "$t" <<<"$code" || miss="$miss $t"; done
+  ok "R11.passthrough-reasons-exist-in-the-real-child:${miss:-none}" test -z "$miss"; }
 
 # rereal <name>: a REAL-child fixture. The required set is {test, cla-evidence} (both pinned to app 15368), built here; `test` is green so the
 # child never calls back into `ci-head-verdict.sh verdict`; the PR file list is clean and equals changedFiles.
@@ -881,7 +951,7 @@ rereal() {
   printf '%s' "$d"
 }
 addrcheck() { jqf "$1" rcheckruns.json ". + [{id: $2, name: \"$3\", head_sha: \"$H\", status: \"completed\", conclusion: \"success\", app: {id: 15368}, check_suite: {id: 2}}]"; }
-# R-E1: end to end against the REAL admin-merge-ready.sh. cla-evidence is absent from the check runs (its pull_request_target run was
+# RE1: end to end against the REAL admin-merge-ready.sh. cla-evidence is absent from the check runs (its pull_request_target run was
 # cancelled): absent + the rerun hint. H1: the suite flips ONE fixture line (the context is present) and the same row must read complete.
 row_RE1() { local d; d=$(rereal RE1); addxrun "$d" 650 CI cancelled; addxrun "$d" 700 cla-evidence cancelled
   VRUN_ENV="ADMIN_MERGE_READY_BIN=$REAL_AMR" vrun "$d" required "$PR"
@@ -891,10 +961,121 @@ row_RE1() { local d; d=$(rereal RE1); addxrun "$d" 650 CI cancelled; addxrun "$d
   addrcheck "$d" 12 cla-evidence
   VRUN_ENV="ADMIN_MERGE_READY_BIN=$REAL_AMR" vrun "$d" required "$PR"
   ok RE1.flip.state req_is complete all-green 2 '[]' '[]' '[]'; ok RE1.flip.rc rc_is 0; ok RE1.flip.nomiss nomiss "$d"; ok RE1.flip.no-recovery outlacks "RECOVERY"; }
-# R-E2: the PR edits a workflow file: the REAL child prints required=0 and three empty arrays; `required` reads error untrusted-ci.
+# RE2: the PR edits a workflow file: the REAL child prints required=0 and three empty arrays; `required` reads error untrusted-ci.
 row_RE2() { local d; d=$(rereal RE2); echo '[{"filename":".github/workflows/x.yml"}]' > "$d/prfiles.json"
   VRUN_ENV="ADMIN_MERGE_READY_BIN=$REAL_AMR" vrun "$d" required "$PR"
   ok RE2.state req_err untrusted-ci; ok RE2.rc rc_is 3; ok RE2.nomiss nomiss "$d"; ok RE2.one req_one; ok RE2.no-recovery outlacks "RECOVERY"; }
+
+# R12: the recovery read's guards. A run id becomes COMMAND TEXT on a basis=workflow line, so only a plain number of at most 15 digits is kept
+# (a string, a float, 1e19 and a 16-digit number are dropped); an empty match key (punctuation only on both sides) never matches; the workflow
+# name is cut at 80 characters; and every code point amr_arr_ok rejects (C1, U+2028) is replaced in wf= text, which an untrusted PR chose.
+row_R12() { local d pair lab idj name wf rawleft
+  for pair in 'str:"700"' 'float:1.5' 'big:1e19' 'sixteen:1234567890123456'; do lab="${pair%%:*}"; idj="${pair#*:}"
+    d=$(reqrow "R12-id-$lab"); addxrun "$d" "$idj" cla-evidence cancelled
+    amr_line not-ready not-green 2 '["cla-evidence"]' '[]' '[]' | setamr "$d" 1; rrun "$d"
+    ok "R12.id-$lab.state" req_is absent not-green 2 '["cla-evidence"]' '[]' '[]'; ok "R12.id-$lab.dropped" nrerun 0
+    ok "R12.id-$lab.text" outhas 'RECOVERY no cancelled run at this head'; ok "R12.id-$lab.no-command" outlacks 'gh run rerun'; done
+  d=$(reqrow R12-id-15); addxrun "$d" 123456789012345 cla-evidence cancelled
+  amr_line not-ready not-green 2 '["cla-evidence"]' '[]' '[]' | setamr "$d" 1; rrun "$d"
+  ok R12.id-15-digits-kept outhas 'RECOVERY rerun run=123456789012345 basis=workflow ctx="cla-evidence" wf="cla-evidence": gh run rerun 123456789012345'
+  d=$(reqrow R12-emptykey); addxrun "$d" 700 '---' cancelled
+  amr_line not-ready not-green 2 '["!!!"]' '[]' '[]' | setamr "$d" 1; rrun "$d"
+  ok R12.emptykey.state req_is absent not-green 2 '["!!!"]' '[]' '[]'; ok R12.emptykey.no-workflow-basis outlacks 'basis=workflow'
+  ok R12.emptykey.is-a-candidate outhas 'RECOVERY rerun run=700 basis=candidate ctx="!!!" wf="---"'; ok R12.emptykey.no-command outlacks 'gh run rerun'
+  name=$(printf 'abcdefghij%.0s' 1 2 3 4 5 6 7 8 9 10)   # 100 characters
+  d=$(reqrow R12-long); addxrun "$d" 700 "$name" cancelled
+  amr_line not-ready not-green 2 "$(jq -nc --arg c "$name" '[$c]')" '[]' '[]' | setamr "$d" 1; rrun "$d"
+  ok R12.long.hint outhas "RECOVERY rerun run=700 basis=workflow ctx=\"$name\" wf=\"${name:0:80}\": gh run rerun 700"
+  ok R12.long.wf-is-cut-at-80 outlacks "wf=\"${name:0:81}"
+  wf=$'cla-evidence\xc2\x85\xe2\x80\xa8'   # U+0085 and U+2028 survive @json, so the script must replace them
+  d=$(reqrow R12-clean); addxrun "$d" 700 "$wf" cancelled; addxrun "$d" 701 $'other\xe2\x80\xa9name' cancelled
+  amr_line not-ready not-green 2 '["cla-evidence"]' '[]' '[]' | setamr "$d" 1; rrun "$d"
+  ok R12.clean.workflow-line outhas 'RECOVERY rerun run=700 basis=workflow ctx="cla-evidence" wf="cla-evidence  ": gh run rerun 700'
+  ok R12.clean.no-raw-bytes test -z "$(LC_ALL=C tr -d -c '\302\205\342\200\250\342\200\251' < "$d/out")"
+  d=$(reqrow R12-clean-cand); addxrun "$d" 700 $'a\xc2\x9fb' cancelled
+  amr_line not-ready not-green 2 '["zzz"]' '[]' '[]' | setamr "$d" 1; rrun "$d"
+  ok R12.clean.candidate-line outhas 'RECOVERY rerun run=700 basis=candidate ctx="zzz" wf="a b"'
+  ok R12.clean.candidate-no-raw-bytes test -z "$(LC_ALL=C tr -d -c '\302\237' < "$d/out")"; }
+
+# R13: a signal while the child runs. The child is a stub that really takes a second (R13 uses the real `sleep`, not the PATH stub). Bash runs the
+# trap only AFTER the foreground child returns, so the marker is exactly one state=error reason=interrupted (exit 3) that lags the signal. A
+# second marker cannot be provoked from outside (the window is a few instructions), so the trap-clear is pinned structurally: it sits before the
+# final req_marker and before the error-path fail_api.
+row_R13() { local d pid i body n_trap n_mark
+  d=$(reqrow R13)
+  cat > "$d/amr-stub.sh" <<'AMR'
+#!/usr/bin/env bash
+: > "$FX/child-started"
+"$REAL_SLEEP" 1
+cat "$FX/amr.stdout" 2>/dev/null
+exit "$(cat "$FX/amr.rc" 2>/dev/null || echo 99)"
+AMR
+  amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0
+  rm -f "$d/child-started" "$d/.polls"; : > "$d/log"
+  env -u CI_HEAD_VERDICT_NOW -u GH_REPO FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_H="$H" PATH="$BIN:$PATH" CI_HEAD_VERDICT_POLL_SECONDS=0 \
+    REAL_SLEEP="$REAL_SLEEP" ADMIN_MERGE_READY_BIN="$d/amr-stub.sh" bash "$SUT" required "$PR" > "$d/out" 2> "$d/err" </dev/null &
+  pid=$!
+  for (( i = 0; i < 100; i++ )); do [[ -e "$d/child-started" ]] && break; "$REAL_SLEEP" 0.1; done
+  kill -TERM "$pid" 2>/dev/null
+  wait "$pid"; RC=$?; OUT=$(cat "$d/out"); ERR=$(cat "$d/err")
+  ok R13.child-was-running test -e "$d/child-started"
+  ok R13.state req_err interrupted; ok R13.rc rc_is 3; ok R13.one req_one; ok R13.nomiss nomiss "$d"
+  body=$(sed -n '/^cmd_required() {/,/^}/p' "$SUT")
+  n_trap=$(grep -n '^  trap - INT TERM HUP$' <<<"$body" | tail -1 | cut -d: -f1); n_mark=$(grep -n 'req_marker "\$CL_STATE"' <<<"$body" | tail -1 | cut -d: -f1)
+  ok R13.trap-cleared-before-the-final-marker test -n "$n_trap" -a -n "$n_mark" -a "${n_trap:-999}" -lt "${n_mark:-0}"
+  ok R13.trap-cleared-before-the-error-marker test "$(grep -c 'trap - INT TERM HUP; fail_api "admin-merge-ready.sh gave no provable answer' <<<"$body")" = 1; }
+
+# R14: the PR argument and the PR base. A leading zero is a decimal (`required 04242` is PR 4242 for the gh path, the child and the pr= field, not
+# octal); more than 15 digits is a usage error; a malformed .base object must not turn `verdict` or `wait-ready-run` into a read failure (only
+# `required` uses the base, and it answers bad-base).
+row_R14() { local d
+  d=$(reqrow R14-zero); amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; rm -f "$d/amr.argv"
+  VRUN_ENV="ADMIN_MERGE_READY_BIN=$d/amr-stub.sh" vrun "$d" required "0$PR" </dev/null
+  ok R14.leading-zero.state req_is complete all-green 26 '[]' '[]' '[]'; ok R14.leading-zero.rc rc_is 0; ok R14.leading-zero.nomiss nomiss "$d"
+  ok R14.leading-zero.child-argv eq "$(cat "$d/amr.argv")" "$PR $H --base main GH_REPO="
+  d=$(mkrow R14-zero-verdict); addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2; vrun "$d" verdict "00$PR"
+  ok R14.verdict-leading-zero.state state_is pending-full run-in-progress 8; ok R14.verdict-leading-zero.nomiss nomiss "$d"
+  vrun "$d" required 1234567890123456; ok R14.sixteen-digits.rc rc_is 2; ok R14.sixteen-digits.no-marker eq "$OUT" ""; ok R14.sixteen-digits.nocall eq "$(cat "$d/log")" ""
+  d=$(mkrow R14-base); addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2; jqf "$d" pr.json '.base = "x"'
+  vrun "$d" verdict "$PR"; ok R14.malformed-base-verdict.rc rc_is 0; ok R14.malformed-base-verdict.state state_is pending-full run-in-progress 8
+  setready "$d" "$(iso_at -3600)" "$T_ISO"; vrun "$d" wait-ready-run "$PR" --before-count 1; ok R14.malformed-base-wait.rc rc_is 0; ok R14.malformed-base-wait w_is ok run-created 8
+  d=$(reqrow R14-base-req); jqf "$d" pr.json '.base = "x"'; amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; rrun "$d"
+  ok R14.malformed-base-required.state req_err bad-base; ok R14.malformed-base-required.rc rc_is 3; ok R14.malformed-base-required.child-not-run test ! -e "$d/amr.argv"; }
+
+# rereal_fail <dir> <test-conclusion> <cla-status>: the real child's check runs with `test` at <conclusion> (run 6) and cla-evidence at <status>
+rereal_fail() {
+  local cc="null"; [[ "$3" == completed ]] && cc='"success"'
+  jq -nc --arg h "$H" --arg tc "$2" --arg cs "$3" --argjson cc "$cc" \
+    '[{id:11,name:"test",head_sha:$h,status:"completed",conclusion:$tc,app:{id:15368},check_suite:{id:1},details_url:"https://example.invalid/o/r/actions/runs/6/job/11"},
+      {id:12,name:"cla-evidence",head_sha:$h,status:$cs,conclusion:$cc,app:{id:15368},check_suite:{id:2}}]' > "$1/rcheckruns.json"
+}
+# RE3: the REAL child with a FAILED `test` and populated arrays, through the real verdict call: stale-row (failed + pending), stalled (absent) and
+# awaiting-approval (pending). These are the three pass-through reasons the script gives dedicated pointers, so they must be tokens the child
+# really prints, and each pointer must carry the child's "confirm no ready run is in flight" caveat where it advises an undo.
+row_RE3() { local d
+  d=$(rereal RE3-stale); rereal_fail "$d" failure in_progress; addtest "$d" 11 completed failure 6; addrun "$d" 8 completed failure 2
+  VRUN_ENV="ADMIN_MERGE_READY_BIN=$REAL_AMR" vrun "$d" required "$PR"
+  ok RE3.stale.state req_is failed stale-row 2 '[]' '["cla-evidence"]' '["test"]'; ok RE3.stale.rc rc_is 0; ok RE3.stale.nomiss nomiss "$d"; ok RE3.stale.one req_one
+  ok RE3.stale.pointer outhas 'RECOVERY pointer reason=stale-row ctx="test"'; ok RE3.stale.caveat outhas 'no ready run is still in flight'
+  d=$(rereal RE3-stalled); rereal_fail "$d" failure completed; addtest "$d" 11 completed failure 6; setnow "$d" 7800
+  VRUN_ENV="ADMIN_MERGE_READY_BIN=$REAL_AMR" vrun "$d" required "$PR"
+  ok RE3.stalled.state req_is absent stalled 2 '["test"]' '[]' '[]'; ok RE3.stalled.nomiss nomiss "$d"
+  ok RE3.stalled.pointer outhas 'RECOVERY pointer reason=stalled ctx="test"'; ok RE3.stalled.caveat outhas 'no ready run is still in flight'; ok RE3.stalled.no-rerun nrerun 0
+  d=$(rereal RE3-approval); rereal_fail "$d" failure completed; addtest "$d" 11 completed failure 6; addrun "$d" 8 completed action_required 2
+  VRUN_ENV="ADMIN_MERGE_READY_BIN=$REAL_AMR" vrun "$d" required "$PR"
+  ok RE3.approval.state req_is pending awaiting-approval 2 '[]' '["test"]' '[]'; ok RE3.approval.nomiss nomiss "$d"
+  ok RE3.approval.pointer outhas 'RECOVERY pointer reason=awaiting-approval ctx="test"'; }
+
+# RE6: the PRODUCTION layout. No ADMIN_MERGE_READY_BIN: the SUT finds admin-merge-ready.sh NEXT TO ITSELF. The SUT under test (the mutant, in a mutation
+# run) and the real child are copied into one directory, so a broken default path reads error no-admin-merge-ready instead of complete.
+row_RE6() { local d lay="$SANDBOX/prodlay" save="$SUT"
+  rm -rf "$lay"; mkdir -p "$lay"; cp "$SUT" "$lay/ci-head-verdict.sh"; cp "$REAL_AMR" "$lay/admin-merge-ready.sh"
+  d=$(rereal RE6)
+  SUT="$lay/ci-head-verdict.sh"; vrun "$d" required "$PR"; SUT="$save"
+  ok RE6.absent-then-flip.state req_is absent not-green 2 '["cla-evidence"]' '[]' '[]'; ok RE6.nomiss nomiss "$d"
+  addrcheck "$d" 12 cla-evidence
+  SUT="$lay/ci-head-verdict.sh"; vrun "$d" required "$PR"; SUT="$save"
+  ok RE6.complete.state req_is complete all-green 2 '[]' '[]' '[]'; ok RE6.complete.rc rc_is 0; ok RE6.complete.nomiss nomiss "$d"; ok RE6.complete.child-read-only notcalled "$d" "pr merge"; }
 
 # ── reader-bypass lint (Guard 2 last row) ───────────────────────────────────────────────────
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -1090,6 +1271,11 @@ run_row row_R10 "R10 required: the PR base and --repo reach the child"
 run_row row_R11 "R11 required: the documented extraction snippet and the --help state list"
 run_row row_RE1 "RE1 required: end to end against the real admin-merge-ready.sh (absent, then flipped to complete)"
 run_row row_RE2 "RE2 required: a workflow-editing PR is error untrusted-ci with the real child"
+run_row row_R12 "R12 required: recovery guards (run-id digits, empty key, 80-char cut, control-character replacement)"
+run_row row_R13 "R13 required: a signal while the child runs prints exactly one state=error interrupted marker"
+run_row row_R14 "R14 required: leading-zero PR, 15-digit cap, malformed base object"
+run_row row_RE3 "RE3 required: real child with a failed test and populated arrays (stale-row, stalled, awaiting-approval)"
+run_row row_RE6 "RE6 required: production layout, the child is found next to the script"
 echo "== reader-bypass lint =="
 run_row row_L1 "L1  every reader of a PR's CI state reaches the resolver"
 run_row row_L2 "L2  arm-after-ready order: ready-count, gh pr ready, wait-ready-run (known negatives rejected)"
@@ -1146,9 +1332,10 @@ mutant M46 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[0].check_s
 mutant M47 '(min | tostring)' '(.[0] | tostring)' row_V25
 mutant M48 '(min | tostring)' '(.[-1] | tostring)' row_V25
 mutant M49 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[-1].check_suites[] | .created_at | fromdateiso8601]' row_V25
-# `required` mutants (Guard 1 of #9927: `complete` only on a proven-complete required set). Every kill row asserts the exact state AND
-# reason. Not mutated, each with its reason: the byte-exact round trip (true by construction of the split: equivalent), the rc 3/4
-# pass-through (an rc 4 would fall into the not-ready arm and print the same reason: equivalent), the SIGINT trap and the dispatch case.
+# `required` mutants (Guard 3, #9927: `complete` only on a proven-complete required set). Every kill row asserts the exact state AND
+# reason. Not mutated, each with its reason: the dispatch case, and the interrupt trap's INT/HUP spellings (only TERM is sent, by R13; the
+# three share one trap line, so the TERM mutant removes all of them). The byte-exact round trip and the rc 3/4 pass-through are mutated below
+# (rows R6 arr-fake-failed-field and rc3-with-gaps / rc4-with-gaps), as are the reason, base and leading-zero axes.
 mutant M50 'AM_NA == 0 && AM_NP == 0 && AM_NF == 0' 'AM_NA == 0 && AM_NP == 0' row_R8
 mutant M51 'AM_NA == 0 && AM_NP == 0 && AM_NF == 0' 'AM_NP == 0 && AM_NF == 0' row_R8
 mutant M52 'AM_NA == 0 && AM_NP == 0 && AM_NF == 0' 'AM_NA == 0 && AM_NF == 0' row_R8
@@ -1172,7 +1359,7 @@ mutant M62 '"${BASH_REMATCH[2]}" == "$PR"' '"${BASH_REMATCH[2]}" == "${BASH_REMA
 mutant M63 'case "$rc:$AM_VERDICT" in 0:ready|1:not-ready|3:error|4:stale) : ;; *) CL_REASON="rc-mismatch"; return 0 ;; esac' ':' row_R6
 mutant M64 'case "$rc" in 0|1|3|4) : ;; *)' 'case "$rc" in 0|1|2|3|4|130) : ;; *)' row_R6
 mutant M65 'jq -es '\''length == 1 and (.[0] | type == "array")' 'jq -es '\''length >= 1 and (.[0] | type == "array")' row_R6
-mutant M66 'and ((explode | any(. < 32 or . == 127)) | not)' 'and true' row_R6
+mutant M66 'and ((explode | any(. < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232 or . == 8233)) | not)' 'and true' row_R6
 mutant M67 '(( AM_NA + AM_NP + AM_NF <= AM_REQ )) || { AM_ERR=marker-unparseable; return 1; }' ':' row_R6
 mutant M68 'if (( AM_REQ > 0 )); then' 'if (( AM_REQ >= 0 )); then' row_R8
 mutant M69 'req_marker error "$reason" - - - -' 'req_marker error "$reason" - '\''[]'\'' '\''[]'\'' '\''[]'\''' row_R6
@@ -1193,21 +1380,53 @@ mutant M83 'select(.head_sha == $h and .conclusion == "cancelled"' 'select(.conc
 mutant M84 '.conclusion == "cancelled" and (.id | type)' '.conclusion != null and (.id | type)' row_R2
 mutant M85 'if [[ "$CL_REASON" == awaiting-approval ]]; then' 'if false; then' row_R4
 mutant M86 'if [[ "$CL_REASON" == stale-row ]]; then' 'if false; then' row_R4
-mutant M87 '(( need == 1 )) && read_cancelled' ':' row_R2
+mutant M87 '(( need == 1 )) && try_read_cancelled' ':' row_R2
 mutant M88 'elif [[ "$(jq -r '\''length'\'' "$WORK/cancelled.json")" == 0 ]]; then' 'elif false; then' row_R2
+# Review-fix mutants (S1-S10, S13: the control-character set, the round trip, the rc 3/4 pass-through, the base and reason axes, the 10# prefix and
+# digit cap, the recovery id / key / cut / clean guards, the signal trap, the PR argument, the non-fatal base, the production path, the header).
+mutant M89 'any(. < 32 or . == 127 or (. >= 128' 'any(. < 32 or (. >= 128' row_R6
+mutant M90 ' or (. >= 128 and . <= 159) or . == 8232 or . == 8233)) | not)' ' or . == 8232 or . == 8233)) | not)' row_R6
+mutant M91 ' or . == 8232 or . == 8233)) | not)' ')) | not)' row_R6
+mutant M92 '(explode | any(. < 32 or . == 127' '(explode | any(. < 31 or . == 127' row_R6
+mutant M93 '[[ "$a pending=$p failed=$fl" == "$tail" ]] || { AM_ERR=marker-unparseable; return 1; }' ':' row_R6
+mutant M94 'case "$rc" in 3|4) CL_REASON="$AM_REASON"; return 0 ;; esac' ':' row_R6
+mutant M95 '[[ "$AM_BASE" == "$PR_BASE" ]] || { CL_REASON="marker-mismatch"; return 0; }' ':' row_R6
+mutant M96 '[[ "$AM_REASON" == all-green ]] || { CL_REASON="rc-mismatch"; return 0; }' ':' row_R6
+mutant M97 'AM_REQ=$((10#${BASH_REMATCH[6]}))' 'AM_REQ=$((${BASH_REMATCH[6]}))' row_R8
+mutant M98 'required=([0-9]{1,9})' 'required=([0-9]+)' row_R6
+mutant M99 'and (.id | tostring | test("^[0-9]{1,15}$"))) ]' 'and true) ]' row_R12
+mutant M100 'select($k != "" and .n == $k)' 'select(.n == $k)' row_R12
+mutant M101 'tostring | clean | .[0:80]' 'tostring | clean' row_R12
+mutant M102 'tostring | clean | .[0:80]' 'tostring | .[0:80]' row_R12
+mutant M103 "trap 'fail_api \"interrupted\" interrupted' INT TERM HUP" ':' row_R13
+mutant M104 '  # The marker is the last thing printed: a signal after this point must not print a second one.
+  trap - INT TERM HUP
+' '' row_R13
+mutant M105 'trap - INT TERM HUP; fail_api "admin-merge-ready.sh gave' 'fail_api "admin-merge-ready.sh gave' row_R13
+mutant M106 'PR=$((10#$PR))' ':' row_R14
+mutant M107 '^[0-9]{1,15}$ ]] || usage_error' '^[0-9]+$ ]] || usage_error' row_R14
+mutant M108 '2>/dev/null)" || PR_BASE=""' '2>/dev/null)"' row_R14
+mutant M109 'admin-merge-ready.sh}"' 'admin-merge-readyX.sh}"' row_RE6
+mutant M110 ' required-unknown no-culprit bad-base interrupted.' ' required-unknown bad-base interrupted.' row_R11
+mutant M111 'confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)\n'"'"' "$ctxj"' 'gh pr ready --undo, then gh pr ready, with a user token)\n'"'"' "$ctxj"' row_R4 row_RE3
+mutant M113 'or (. >= 128 and . <= 159) or . == 8232 or . == 8233 then 32' 'or . == 8232 or . == 8233 then 32' row_R12
+mutant M114 'or . == 8232 or . == 8233 then 32' 'then 32' row_R12
+mutant M112 'confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)\n'"'"'
+      else' 'gh pr ready --undo, then gh pr ready, with a user token)\n'"'"'
+      else' row_R4 row_RE3
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
 # MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS (the measured counts at the last edit); raise them in the same edit as a new row.
-MIN_ASSERTIONS=843
+MIN_ASSERTIONS=1013
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=86
+MIN_MUTANTS=112
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi
