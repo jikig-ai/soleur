@@ -17,3 +17,8 @@ None blocking. IaC write guard rejected one phrase on first write (reworded). Th
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan (targeted), soleur:engineering:cto, dhh/kieran/code-simplicity reviewers.
+
+## Work Phase
+- Commit 234eec2a1d: guard test flipped (RED on the 2 live-rule/reference cases, then GREEN), issue-alerts.tf + alert-reference.json (fallthrough ActiveMembers -> NoOne), README lifecycle/responder text.
+- Targeted: sentry-agent-auth-failure-alert-op-contract + agent-auth-failure-sentry-path 42/42; terraform fmt -check and validate green on the Sentry root.
+- Affected gate: rc=6 AFFECTED_GATE_BUDGET_DEFERRED (queued behind 5 sibling worktrees; 125 suites ok, 0 real FAIL, two expected self-test negative controls). Not a pass; CI is the authoritative gate.
