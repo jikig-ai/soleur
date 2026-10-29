@@ -630,7 +630,7 @@ matches real files; `components/**/*.tsx` matches the pill. Sibling lookup for t
 - Given a second alert pointing at an existing exploration, when the suite runs, then it exits 1 on the one-alert-per-exploration row.
 - Given `degraded="enqueue_failed"` passed to `AcknowledgedPill`, when `tsc --noEmit` runs, then it errors; given the three surviving states, when rendered, then each carries its `data-pill-state`.
 - Given Sentry 0 and an empty `action_sends`, when the 11211 probe runs, then exit 2; given a Sentry hit and one aged-out draft row, then exit 5; given a 500 from either source, then exit 3; never 0 or 1.
-- Given no measured keeper rows, when the 11265 probe runs, then exit 2; given a measured row 31 days old, then exit 5; given only `indeterminate` rows, then exit 2; given an unreadable archive, then exit 3.
+- Given no keeper rows of any kind, when the 11265 probe runs, then exit 2; given a measured row 31 days old, then exit 5; given only `indeterminate` rows, then exit 3 with counts printed; given an unreadable archive, then exit 3.
 
 ## Success Metrics
 
