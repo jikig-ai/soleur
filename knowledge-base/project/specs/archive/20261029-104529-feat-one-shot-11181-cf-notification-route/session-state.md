@@ -33,7 +33,7 @@
 ### Decisions
 - Use the documented `/accounts/{account_id}/alerting/v3/policies` route without a pagination suffix.
 - Preserve array-shaped 200 classification, fail-closed 404 handling, and existing profile routes.
-- Include the specified learning byte-identically by its SHA-256; leave its source copy untouched.
+- Original #11456 merge decision: include the specified learning byte-identically by its SHA-256 and leave its source copy untouched; that merge-time copy was later redacted by separate authorization.
 - Keep the epic open, web-2 excluded at weight 0, and all permission, token, Doppler, infrastructure, and workflow state unchanged.
 
 ### Components Invoked
@@ -45,7 +45,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 - RED: the pre-change route failed the exact URL, baseline-retention, 404, degraded-200, and wrong-shape assertions (pre-change control: 137 passed / 26 failed).
 - GREEN: `bash plugins/soleur/test/cf-token-scope.test.sh` passed 163/163; `bash -n` and `git diff --check` passed.
 - `cf-token-scope.sh --profile default-token --dry-run` printed the documented URL with no query suffix and no token value; the test confirms no curl call occurs in dry-run.
-- Learning copy hash and source hash both match `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`.
+- At the original #11456 merge, learning-copy and source hashes both matched `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`; a later authorized follow-up changed the current copy only.
 - `lint-ratchet.py auto` exited 0; `user-ruff` is not adopted and was not updated.
 - Affected-suite gate returned rc 6 (`AFFECTED_GATE_BUDGET_DEFERRED`, selected runner, CI workflow `.github/workflows/ci.yml`); it waited in the sibling-run lock queue and ran no suites. The first foreground invocation was reaped without a marker; the detached bounded rerun produced the rc 6 marker. Do not report a local affected-gate pass; the required CI `test` check is authoritative.
 - The infra/workflow diff is empty. No Cloudflare permissions, token values, Doppler values, workflow dispatch, cutover state, or web-2 state were changed.
@@ -123,7 +123,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 ## Ship Phase 0: Resumption
 
 - The required `cleanup-merged` session-start run skipped its temp sweep because `/home/jean/.local/state/soleur/tmp-guard.lock` was contended. `lslocks` and `fuser` showed no holder by the time it was investigated; no temp cleanup was attempted outside the lock.
-- Hash verification initially looked for the learning source at the old `/data/.../soleur/knowledge-base/` checkout path and returned not-found; a broad recursive search timed out. A registered-worktree inventory scan found the source in `chore-learning-cf-token-route`; PR #11479 later merged the same blob to `origin/main` (SHA-256 still matches the feature copy).
+- Hash verification initially looked for the learning source at the old `/data/.../soleur/knowledge-base/` checkout path and returned not-found; a broad recursive search timed out. A registered-worktree inventory scan found the source in `chore-learning-cf-token-route`; PR #11479 later merged the same blob to `origin/main`, where it matched the feature copy at that time.
 - The final-review security finding flagged account-specific operational detail in the learning. PR #11479 was already merged to public `main`; the user authorized redaction. This post-merge follow-up applies it after #11456, avoiding an add/add conflict on the stale feature branch and leaving published Git history intact.
 - A PR-body update command was interrupted before execution because its shell payload contained NUL sentinels. Live PR re-read confirmed the body and labels were unchanged; retry with `--body-file`.
 - The PR has no `Review-Evidence:` comment yet; arming requires evidence for the final pushed head after all fix commits and the targeted review/verifier.
@@ -173,7 +173,8 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 |---|---|---|---|
 | Sentry error-delta skip wording implied that an API read found no issue | `sentry-error-delta-skipped-not-no-issue` | `security-sentinel` | State that delta measurement was skipped because no Sentry issue was named in the PR/linked issue |
 | Archived plan acceptance criterion still stated byte-identity as a present condition | `historical-hash-acceptance-criterion` | `code-quality-analyst` | Reword as the original #11456 merge-time verification and note the later redaction |
-| Other archived planning/session prose described the original digest match without limiting it to merge time | `historical-hash-claims-not-time-scoped` | `code-quality-analyst` (final verifier) | Qualify each matching statement as historical evidence from the original #11456 merge |
+| Other archived planning/session prose described the original digest match without limiting it to merge time | `historical-hash-claims-not-time-scoped` | `code-quality-analyst` (final verifier) | Scope all matches to the original #11456 merge (fix in this working tree; commit pending) |
+- The final verifier found this residual P3 after the single verification pass; all remaining hash/identity anchors were searched and qualified manually. No further review seat is dispatched under the capped-round contract.
 
 ### Final-review dedup-before-fixing ledger
 
@@ -218,7 +219,7 @@ Skills: `one-shot`, `plan`, `deepen-plan`, `spec-templates`, `work`, `review`, `
 ## Compound Phase
 
 - Created `knowledge-base/project/learnings/test-failures/2026-10-29-curl-mock-confused-proxy-targets.md`; frontmatter enums/types validated and all 27 Session Errors have Prevention lines.
-- Added one domain-scoped sharp-edge to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`; learning `synced_to: [work]` records the route. The related 2026-10-28 route learning and its main-checkout source copy remain byte-identical; the new learning links to it.
+- Added one domain-scoped sharp-edge to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`; learning `synced_to: [work]` records the route. The related 2026-10-28 route learning and its main-checkout source copy were byte-identical at the original #11456 merge; the current copy was later redacted by authorized follow-up.
 - No project-level constitution/component/README proposals were warranted. The worktree plan explicitly defers plan/spec archival until after ship Phase 6; compound did not archive them.
 - Rule-budget linter returned `[WARN] B_ALWAYS=44390` and exit 0; no AGENTS rules were added. Token-efficiency report skipped because the diff was below its minimum size.
 - The local rule-metrics aggregator warned that 77 malformed incident-log lines were excluded from the aggregate. Its source shows malformed rows are filtered during aggregation; rotation is opt-in and did not run. The metrics cache is not committed.

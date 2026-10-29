@@ -13,7 +13,7 @@ The `cf-token-scope` `default-token` profile sends its retained Notifications pr
 - Dispatch the Notifications probe to Cloudflare's official Alerting API list endpoint.
 - Test URL dispatch, authorized Notification response classification, fail-closed 404 handling, and unchanged neighboring profile routes.
 - Keep the change read-only and preserve the current fail-closed classifier.
-- Include the already-authored route-correction learning byte-identically in the corrective PR.
+- Original #11456 requirement (satisfied at merge): include the already-authored route-correction learning byte-identically in the corrective PR.
 
 ## Non-Goals
 
@@ -38,7 +38,7 @@ The Tunnel, Access, DNS, and two Load Balancer routes remain unchanged. The defa
 
 ### FR4: Preserve the learning artifact
 
-The corrective PR includes `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` byte-identically, SHA-256 `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`; retain the source copy in the main checkout.
+At the original #11456 merge, the corrective PR included `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` byte-identically with SHA-256 `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`; the current copy was later redacted in a separately authorized follow-up without rewriting that merge.
 
 ## Technical Requirements
 

@@ -23,7 +23,7 @@ lane: single-domain
 
 1. Grounded the route and response shape in Cloudflare's official API reference and kept the existing fail-closed classifier as the only decision path.
 2. Added exact URL-dispatch, authorized 200, 404, degraded-200, and existing-profile route regression scenarios.
-3. Pinned the token/infra/cutover boundary and the byte-identical learning-file inclusion with its supplied digest.
+3. Pinned the token/infra/cutover boundary and the original #11456 merge-time byte-identical learning-file inclusion with its supplied digest.
 
 ### New Considerations Discovered
 
@@ -76,7 +76,7 @@ Correct the `cf-token-scope` default-token Notifications probe to use Cloudflare
 - `plugins/soleur/skills/cf-token-scope/SKILL.md` repeats the old Notifications route in the default-token endpoint table; update that row to avoid shipping contradictory documentation.
 - Existing learning `knowledge-base/project/learnings/2026-07-24-stubbed-uniform-fixture-hides-per-endpoint-response-shape.md` requires endpoint-specific fixtures and a non-uniform response-shape test. The Notifications endpoint is an account list and must use an array fixture.
 - Existing learning `knowledge-base/project/learnings/2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-and-control-probe-must-cover-every-scheme.md` reinforces that degraded 200 bodies are not authorization and 404 trust is scheme-specific; the Notification account row keeps the existing no-trust-404 behavior.
-- The requested learning source is not present in this worktree. Include the source file byte-identically in the corrective PR at `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md`, SHA-256 `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`; leave the original main-checkout copy untouched.
+- Original #11456 plan instruction (completed at merge): include the source file byte-identically at `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md`, verify SHA-256 `871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250`, and leave the source copy untouched.
 
 ### Official API Contract
 
@@ -90,7 +90,7 @@ Cloudflare documents `GET /accounts/{account_id}/alerting/v3/policies` as “Lis
 2. A Notification response is authorized only when the existing status/body-shape classifier sees an authorized 200 with an array result.
 3. A Notification 404 remains a hard failure even while the two LB target rows are at their expected baseline 403.
 4. The other default-token routes and the rulesets profile retain their existing dispatch and classification behavior.
-5. The route-correction learning is included without changing its bytes or removing its source copy.
+5. At the original #11456 merge, the route-correction learning was included without changing its bytes or removing its source copy.
 
 The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and shell test harness already buy properties 1–4. The smallest change is to correct the Notifications row's route URL and displayed label, update its mock dispatch and assertions, and keep the docs table aligned. The learning file is a separately requested artifact, not a new runtime mechanism.
 
@@ -122,7 +122,7 @@ The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and s
 ### Phase 2: Align documentation and carry the learning
 
 1. Update the Notifications row in `plugins/soleur/skills/cf-token-scope/SKILL.md` to the documented endpoint.
-2. Add the specified learning file byte-identically at its repo path, verify its SHA-256 against the supplied digest, and do not remove or edit the source copy.
+2. Original #11456 implementation step (completed at merge): add the specified learning file byte-identically, verify the supplied SHA-256, and do not remove or edit the source copy.
 3. Do not touch `apps/web-platform/infra/`, any workflow, Cloudflare permissions or token values, Doppler state, LB configuration, or cutover state. Leave web-2 at weight 0 and structurally excluded until the existing cutover marker; this fix adds no soak-gated close criterion.
 
 ### Files to Edit
@@ -133,7 +133,7 @@ The existing `DT_ROWS` table, shared print/run loop, `check()` classifier, and s
 
 ### Files to Create
 
-- `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` — unchanged source bytes, SHA-256 as above.
+- `knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` — at the original #11456 merge, copied with the SHA-256 recorded above.
 - `knowledge-base/project/specs/feat-one-shot-11181-cf-notification-route/spec.md`, `tasks.md`, and `session-state.md` — branch-scoped planning and execution artifacts.
 - `knowledge-base/project/plans/2026-10-28-fix-cloudflare-notifications-route-plan.md` — this plan.
 
@@ -213,7 +213,7 @@ None. `gh issue list --label code-review --state open` returned no issue whose b
 | 1 | "Fix the `cf-token-scope` default-token Notifications probe URL and its tests in a focused PR, as follow-up work on open epic #11181's non-cutover track." | FR1–FR3; Phases 1–2; script, test, and skill-doc files | mapped |
 | 2 | "Use Cloudflare's official endpoint GET /accounts/{account_id}/alerting/v3/policies; preserve fail-closed classification." | FR1–FR2; Guard Contract; URL, 200, and 404 scenarios | mapped |
 | 3 | "Do not widen or otherwise mutate Cloudflare permissions, tokens, Doppler, or infrastructure; do not dispatch workflows." | Non-Goals; Phase 2 scope boundary; AC6 | mapped |
-| 4 | "The current main checkout contains an untracked learning at `/data/git-repositories/jikig-ai/soleur/knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` (already read by the pipeline runner; SHA-256 871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250). It is not present in this worktree. Plan to include that file in the corrective PR byte-identically, without removing the source copy." | FR4; Phase 2.2; learning-file create entry; AC5 | mapped |
+| 4 | "Original #11456 request: the current main checkout contains an untracked learning at `/data/git-repositories/jikig-ai/soleur/knowledge-base/project/learnings/2026-10-28-cf-token-retained-probe-used-nonexistent-notification-route.md` (already read by the pipeline runner; SHA-256 871e2785b041342a0c4e9180c39b01545e7883d7646e5d6117f686d6ccd9e250). It is not present in this worktree. Include that file byte-identically in the original corrective PR, without removing the source copy." | FR4; Phase 2.2; learning-file create entry; AC5 | mapped |
 | 5 | "No soak-gated close criterion is introduced; preserve web-2 weight 0 / structural exclusion until the existing cutover marker; no infrastructure actions in this fix." | Non-Goals; Phase 2.3; AC6 | mapped |
 
 ### Plan-Item Provenance
@@ -223,7 +223,7 @@ None. `gh issue list --label code-review --state open` returned no issue whose b
 | Notifications URL in `cf-token-scope.sh` | "Fix the `cf-token-scope` default-token Notifications probe URL" | asked |
 | URL, 200, 404 and sibling-route tests in `cf-token-scope.test.sh` | "and its tests"; "Use Cloudflare's official endpoint GET /accounts/{account_id}/alerting/v3/policies; preserve fail-closed classification." | asked |
 | endpoint row in `cf-token-scope/SKILL.md` | "Use Cloudflare's official endpoint GET /accounts/{account_id}/alerting/v3/policies" | asked |
-| Byte-identical learning copy | "Plan to include that file in the corrective PR byte-identically, without removing the source copy." | asked |
+| Original #11456 byte-identical learning-copy requirement | "Plan to include that file in the corrective PR byte-identically, without removing the source copy." | asked |
 | Plan, spec, and task artifacts | "Create only planning artifacts under `knowledge-base/project/plans/` and `knowledge-base/project/specs/` for this exact branch." | asked |
 | web-2 / no-mutation boundary | "No soak-gated closure is introduced; preserve web-2 weight 0 / structural exclusion until the existing cutover marker; no infrastructure actions in this fix." | asked |
 
