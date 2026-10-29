@@ -58,7 +58,8 @@ on either runner; the Sentry issue and the pino line come from that emit, not fr
 provider rejects a rule with no action), which resolves to no recipient while the project has no Sentry ownership rule
 (last measured 2026-09-06; the read-only token gets 403 on that endpoint, so it cannot be re-measured with it).
 That covers this rule only. Sentry's vendor-default workflow "Send a notification for high priority issues" (id 566201, not
-managed by Terraform) can still email active members for a NEW high-priority issue, and the agent-auth issue
+managed by Terraform; captured 2026-09-09 as an `issue_owners` email with the `ActiveMembers` fallthrough) can still email
+active members for a NEW high-priority issue, and the agent-auth issue
 (WEB-PLATFORM-C8) is `level=error`, priority `high`. The emit is
 `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`; the literal `null` first argument keeps
 it off the pino-mirror path (#8629). It carries ten closed-enum tags and nothing else (no key material, env value, message
