@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const { state } = vi.hoisted(() => ({ state: { remote: "" } }));
 
@@ -15,7 +16,7 @@ vi.mock("../server/git-auth", () => ({
   // Swap the github URL for the local bare repository; everything else (refspec) is exactly what production passes.
   gitWithInstallationAuth: async (args: string[], _id: number, opts: { cwd: string }) => {
     const rewritten = args.map((a) => (a.startsWith("https://github.com/") ? state.remote : a));
-    return execFileSync("git", rewritten, { cwd: opts.cwd, stdio: "pipe" });
+    return execFileSync("git", rewritten, { cwd: opts.cwd, stdio: "pipe", env: gitFixtureEnv(opts.cwd) });
   },
 }));
 vi.mock("../server/logger", () => ({ createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
@@ -23,7 +24,7 @@ vi.mock("../server/logger", () => ({ createChildLogger: () => ({ info: vi.fn(), 
 import { pushBranch } from "../server/push-branch";
 
 const git = (cwd: string, ...args: string[]): string =>
-  execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8" }).trim();
+  execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8", env: gitFixtureEnv(cwd) }).trim();
 
 describe("pushBranch pinned commit (real git)", () => {
   let root: string;
@@ -45,8 +46,8 @@ describe("pushBranch pinned commit (real git)", () => {
     root = mkdtempSync(join(tmpdir(), "push-pin-"));
     state.remote = join(root, "remote.git");
     work = join(root, "work");
-    execFileSync("git", ["init", "--bare", "-q", state.remote]);
-    execFileSync("git", ["init", "-q", "-b", "main", work]);
+    execFileSync("git", ["init", "--bare", "-q", state.remote], { env: gitFixtureEnv(root) });
+    execFileSync("git", ["init", "-q", "-b", "main", work], { env: gitFixtureEnv(root) });
     git(work, "config", "user.name", "t");
     git(work, "config", "user.email", "t@example.invalid");
     git(work, "config", "commit.gpgsign", "false");

@@ -10,6 +10,7 @@
  * Synthesized data only.
  */
 import { execFileSync } from "node:child_process";
+import { gitFixtureEnv } from "../../../../plugins/soleur/test/lib/git-fixture-env";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -303,7 +304,7 @@ describe("createApprovalGateDeps: the DEFAULT workspace HEAD reader (real git, n
     for (const r of roots) rmSync(r, { recursive: true, force: true });
   });
   const git = (cwd: string, ...args: string[]) =>
-    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], { cwd, stdio: "pipe", encoding: "utf8" }).trim();
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], { cwd, stdio: "pipe", encoding: "utf8", env: gitFixtureEnv(cwd) }).trim();
   function repo(files: number): { dir: string; head: string } {
     const dir = mkdtempSync(join(tmpdir(), "gate-deps-head-"));
     roots.push(dir);

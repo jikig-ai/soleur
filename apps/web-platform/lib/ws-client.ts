@@ -1459,6 +1459,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         // server-side acks. Listed explicitly so a new server→client variant
         // added to `WSMessage` falls through to the `: never` rail and
         // fails `tsc --noEmit` per `cq-union-widening-grep-three-patterns`.
+        // `approval_decide` (#4672) is client→server only (the Owner's decision).
         case "auth":
         case "chat":
         case "start_session":
@@ -1466,7 +1467,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "close_conversation":
         case "review_gate_response":
         case "autonomous_disclosure_response":
-        // #4672 — client→server only (the Owner's decision); the client never receives it.
         case "approval_decide":
         case "abort_turn":
         case "interactive_prompt_response":

@@ -266,6 +266,7 @@
 1	apps/web-platform/scripts/sentry-monitors-audit.sh
 10	apps/web-platform/scripts/sentry-monitors-audit.test.sh
 2	apps/web-platform/scripts/supabase-local.test.sh
+15	apps/web-platform/test/approval-guard1-mutation.test.sh
 3	apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
 1	.claude/hooks/agent-token-tee.sh
 21	.claude/hooks/agent-token-tee.test.sh

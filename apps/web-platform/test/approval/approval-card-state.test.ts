@@ -162,7 +162,6 @@ describe("revealInvisible (cq-regex-unicode-separators-escape-only)", () => {
   it("the source of this module holds no raw invisible character (escapes only)", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../../lib/approval-card-state.ts", import.meta.url), "utf8");
-    // eslint-disable-next-line no-misleading-character-class
     expect(src).not.toMatch(new RegExp("[\\u202A-\\u202E\\u2066-\\u2069\\u061C\\u200B-\\u200F\\u2060-\\u2064\\u00AD\\u180E\\uFEFF]|[\\u{E0000}-\\u{E007F}]", "u"));
   });
 });

@@ -173,7 +173,7 @@ describe("buildInboxDeepLink — from source_ref ids, null when target absent", 
   it("approval_required with a missing or non-UUID id is non-navigating (never a path built from a free string)", () => {
     expect(buildInboxDeepLink("approval_required", null)).toBeNull();
     expect(buildInboxDeepLink("approval_required", { any: "x" })).toBeNull();
-    expect(buildInboxDeepLink("approval_required", { approvalId: "../../admin" })).toBeNull();
+    expect(buildInboxDeepLink("approval_required", { approvalId: "../admin" })).toBeNull();
     expect(buildInboxDeepLink("approval_required", { approvalId: "https://evil.example" })).toBeNull();
   });
   it("not-yet-shipped autopilot_run is non-navigating", () => {
