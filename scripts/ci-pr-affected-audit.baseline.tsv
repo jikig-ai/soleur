@@ -1313,7 +1313,6 @@ scripts/web-host-escrow-preflight	scripts/check-web-host-escrow-config.sh
 scripts/web2-luks-live-6931	.github/workflows/scheduled-followthrough-sweeper.yml
 scripts/web2-luks-live-6931	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/web2-luks-live-6931	scripts/ensure-doppler.sh
-scripts/web2-ssh-pin-current	apps/web-platform/infra/web-2-ssh-host-key.pub
 scripts/zot-fill-rate-standing-wiring	.github/workflows/scheduled-zot-restart-loop.yml
 scripts/zot-fill-rate-standing-wiring	apps/web-platform/infra/cloud-init-registry.yml
 scripts/zot-fill-rate-standing-wiring	scripts/betterstack-query.sh
