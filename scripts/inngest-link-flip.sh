@@ -185,8 +185,10 @@ flip_rotation_runs() {
 }
 
 # flip_guard_after_rotation <off|flip>: refuse (return 1) while a rotation run exists unless CONFIRM_OFF_AFTER_ROTATION is exactly
-# OFF-AFTER-ROTATION. Fails closed when the run list cannot be read. A correct confirm skips the query, so the incident rollback
-# still works while GitHub's run API is degraded. Before any rotation run exists it changes nothing.
+# OFF-AFTER-ROTATION. Fails closed when the run list cannot be read (a failed `gh run list` refuses; it is NOT "no rotation run":
+# the refusal then says only that the list could not be read). A correct confirm skips the query, so the incident rollback still
+# works while GitHub's run API is degraded. It changes nothing only when the list was read and holds no non-plan run. A non-plan run
+# that failed or was refused by its guard also counts, so the refusal says the keys MAY have been rotated, never that they were.
 flip_guard_after_rotation() {
   local what="$1" n
   # `refused` (nothing written) only for the off subcommand; revert keeps revert_incomplete, flip never changed it.
@@ -200,9 +202,9 @@ flip_guard_after_rotation() {
   [[ "$n" != 0 ]] || return 0
   [[ "$FLIP_ACTION" != off ]] || FLIP_VERDICT=refused
   if [[ "$what" == off ]]; then
-    flip_err "refusing flag off: ${n} non-plan run(s) of ${FLIP_ROTATE_WORKFLOW} exist, so the Inngest keys were rotated. Removing the flag redeploys the fleet on plaintext http://10.0.1.40:8288 and the NEW key would cross plaintext :8288 again; a re-rotation follows. If this incident rollback is intended, re-run action=off with confirm_off_after_rotation=OFF-AFTER-ROTATION. Nothing was dispatched."
+    flip_err "refusing flag off: ${n} non-plan run(s) of ${FLIP_ROTATE_WORKFLOW} exist, so the Inngest keys MAY have been rotated (a failed or guard-refused rotate run counts too; check that run). Removing the flag redeploys the fleet on plaintext http://10.0.1.40:8288 and the NEW key would cross plaintext :8288 again; a re-rotation follows. If this incident rollback is intended, re-run action=off with confirm_off_after_rotation=OFF-AFTER-ROTATION. Nothing was dispatched."
   else
-    flip_err "refusing flip: ${n} non-plan run(s) of ${FLIP_ROTATE_WORKFLOW} exist, so the Inngest keys were rotated. flip can start from a flag already at 1, and its failure revert is flag off, which would put the NEW key on plaintext :8288 again. To re-enable TLS after a deliberate post-rotation off, re-run action=flip with confirm_off_after_rotation=OFF-AFTER-ROTATION. Nothing was dispatched."
+    flip_err "refusing flip: ${n} non-plan run(s) of ${FLIP_ROTATE_WORKFLOW} exist, so the Inngest keys MAY have been rotated (a failed or guard-refused rotate run counts too; check that run). flip can start from a flag already at 1, and its failure revert is flag off, which would put the NEW key on plaintext :8288 again. To re-enable TLS after a deliberate post-rotation off, re-run action=flip with confirm_off_after_rotation=OFF-AFTER-ROTATION. Nothing was dispatched."
   fi
   return 1
 }
