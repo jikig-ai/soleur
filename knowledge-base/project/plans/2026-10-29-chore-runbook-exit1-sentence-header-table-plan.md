@@ -24,6 +24,7 @@ against the plan; cited identifiers were re-verified live; no broad agent fan-ou
 for minimal depth, and no framework, SDK or external surface applies).
 
 ### Key Improvements
+
 1. Acceptance Criteria hardened by the plan-stage review: the diff-scope check now names the exact
    expected file set and runs after commit (before commit it lists nothing and passes vacuously),
    the one-hunk check is a command (`git diff -U0 origin/main...HEAD -- <runbook> | grep -c '^@@'`),
