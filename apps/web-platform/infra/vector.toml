@@ -287,8 +287,11 @@ batch_size = 16
 # nested-object closers do NOT close the group — column-0 anchoring keeps
 # nested objects joined). Mid-dump lines and stray non-JSON lines (crash
 # stacks) merge until a `}`-ending line or a bound fires. group_by pins the
-# join to one group KEY — all of the container's emitters (stdout pino,
-# stderr inspect, child processes) share it; it is not a per-emitter bound.
+# join to one group KEY — CONTAINER_NAME alone (the journald-config guard
+# keeps SYSLOG_IDENTIFIER literal to include/exclude_matches lines, and the
+# source already restricts to the one container, so the key is a singleton);
+# all of the container's emitters (stdout pino, stderr inspect, child
+# processes) share it — it is not a per-emitter bound.
 #
 # Bounds: expire_after_ms is an IDLE flush (resets per event — a partial group
 # ships once its key goes quiet for 5 s); end_every_period_ms is the real bound
@@ -298,7 +301,7 @@ batch_size = 16
 [transforms.app_container_compaction]
 type = "reduce"
 inputs = ["app_container_journald"]
-group_by = ["SYSLOG_IDENTIFIER", "CONTAINER_NAME"]
+group_by = ["CONTAINER_NAME"]
 expire_after_ms = 5000
 end_every_period_ms = 30000
 max_events = 200
