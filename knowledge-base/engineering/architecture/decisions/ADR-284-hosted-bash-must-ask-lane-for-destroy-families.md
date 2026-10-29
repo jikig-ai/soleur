@@ -360,3 +360,9 @@ None moved. Related: NFR-014 and the audit-logging posture are unchanged (teleme
   vocabulary guard test bans "blocks", "prevents", "protects", "safe to approve", "guaranteed" and "always" in reference to the lane.
 - AP-023 (Anti-vacuity floors report directly): Aligned. The corpus, parity and mutation suites carry literal floors reported by
   `printf` and `exit`, not through the helpers they back-stop.
+
+## Addendum (2026-10-29, #4672)
+
+The Context phrase "no new approval surface" and the lane's memory-less posture (it "writes no acknowledgement and no cache entry") describe the Bash must-ask lane and are unchanged for it.
+A separate, flag-gated mechanism now gives eight gated platform tools a durable, single-use, action-bound approval request in the gated branch of `canUseTool`; it does not alter, share state with, or
+extend this lane. The rationale, invariants and residual risk are recorded once in [ADR-307](./ADR-307-durable-action-bound-approval-requests.md).
