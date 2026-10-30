@@ -106,6 +106,7 @@ import {
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
+import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import {
   authFailureFrameFromLeaseError,
   isOauthUnusableLeaseError,
@@ -2723,7 +2724,9 @@ are the requirements to implement.`;
         }
       }
     }
-    });  // end runWithByokLease
+    },
+    { resolveAuthMode: makeConversationAuthModeResolver(userId, conversationId) },
+  );  // end runWithByokLease
   } catch (err) {
     if (controller.signal.aborted) {
       // feat-abort-conversation-web PR1 (plan §1.3): the abort branch
@@ -3329,7 +3332,9 @@ async function sendUserMessageInner(
         // lease can close before the per-leader lease bodies run.
         dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
           .catch(handleSessionError);
-      });
+      },
+    { restOnly: true },
+  );
     } catch (err) {
       await handleSessionError(err);
     }

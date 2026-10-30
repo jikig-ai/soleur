@@ -153,6 +153,13 @@ vi.mock("../server/agent-prefill-guard", () => ({
 }));
 // The diagnostic's authMode resolver pulls the Supabase graph; stub it (the real resolver has its own test).
 vi.mock("../server/agent-auth-mode", () => ({ makeAuthModeResolver: mockMakeAuthModeResolver }));
+// #11591: these cases pin the subscription (oauth_token) copy and scheme, so the lease's mode resolver is
+// pinned to the managed path here; the selection itself is driven through the REAL lease and the REAL binding
+// resolver in byok-lease-auth-mode-binding.test.ts, not here.
+vi.mock("../server/engine-binding-auth-mode", () => ({
+  makeConversationAuthModeResolver: () => async () => "managed",
+  readConversationBindingAuthMode: async () => null,
+}));
 
 import { startAgentSession } from "../server/agent-runner";
 import { reportSilentFallback } from "../server/observability";

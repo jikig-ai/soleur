@@ -250,6 +250,7 @@ import {
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
+import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
@@ -3379,7 +3380,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     }
     throw err;
   }
-  }); // end runWithByokLease
+  },
+    { resolveAuthMode: makeConversationAuthModeResolver(args.userId, args.conversationId) },
+  ); // end runWithByokLease
 };
 
 let _runner: SoleurGoRunner | null = null;

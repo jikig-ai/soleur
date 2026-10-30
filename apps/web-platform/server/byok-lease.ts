@@ -58,6 +58,7 @@ import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { classifyCliDroppedValue } from "@/server/oauth-token-shape";
+import { ConversationAuthModeError } from "./auth-mode-error";
 
 const log = createChildLogger("byok-lease");
 
@@ -156,6 +157,15 @@ export interface ByokLeaseArgs {
    * undefined, solo behavior is preserved bit-for-bit.
    */
   delegationId?: string;
+  /**
+   * #11591 — resolves the auth mode (`managed` | `api-key`) of the conversation this
+   * lease serves. Lazy: called at most once per cold agent credential fetch, and ONLY
+   * for an owner who holds a subscription row with the kill-switch on, after the date
+   * and owner gates. Optional at this level because REST-only callers have no
+   * conversation; with a subscription row present and no resolver the lease fails
+   * closed (`fetch_failed`), so a forgotten caller can never serve the subscription.
+   */
+  resolveAuthMode?: () => Promise<string>;
 }
 
 /**
@@ -362,6 +372,8 @@ interface LeaseSlot {
   alive: boolean;
   /** BYOK Delegations PR-A (#4232). Threaded through to ByokLease. */
   delegationId?: string;
+  /** #11591 — see `ByokLeaseArgs.resolveAuthMode`. */
+  resolveAuthMode?: () => Promise<string>;
 }
 
 interface EncryptedRow {
@@ -500,6 +512,52 @@ async function fetchRestApiKeyIntoSlot(slot: LeaseSlot): Promise<string> {
   return buf.toString("utf8");
 }
 
+type LeaseAuthMode = "managed" | "api-key";
+type AuthModeUnresolvedReason = "no_resolver" | "resolver_failed" | "invalid_value" | "unbound" | "read_failed";
+
+function failAuthModeClosed(reason: AuthModeUnresolvedReason): never {
+  // Null error and no raw value: the event carries only the closed reason (mirrors
+  // `oauth-credential-unusable`). Bounded by the subscription-holder population.
+  reportSilentFallback(null, {
+    feature: "byok-lease",
+    op: "auth-mode-unresolved",
+    message: "byok-lease: conversation auth mode could not be resolved; failing closed",
+    tags: { reason },
+    extra: { reason },
+  });
+  throw new ByokLeaseError("fetch_failed", "Authentication unavailable; retry shortly");
+}
+
+/**
+ * #11591 — the conversation binding's auth mode. Fail closed on every unreadable or
+ * unexpected outcome: an owner who declined the subscription must never be served it
+ * because the read failed. The liveness check right after the await keeps "nothing is
+ * read after scope end" true (and testable).
+ */
+async function resolveLeaseAuthMode(slot: LeaseSlot): Promise<LeaseAuthMode> {
+  if (!slot.resolveAuthMode) return failAuthModeClosed("no_resolver");
+  let mode: unknown;
+  try {
+    mode = await slot.resolveAuthMode();
+  } catch (err) {
+    return failAuthModeClosed(err instanceof ConversationAuthModeError ? err.reason : "resolver_failed");
+  }
+  assertLeaseAlive(slot);
+  if (mode !== "managed" && mode !== "api-key") return failAuthModeClosed("invalid_value");
+  return mode;
+}
+
+function noteCredentialSelected(scheme: AgentAuthScheme): void {
+  try {
+    if (typeof Sentry.addBreadcrumb === "function") {
+      // Closed enum only: no mode string, id or value.
+      Sentry.addBreadcrumb({ category: "byok", level: "info", message: "agent-credential-selected", data: { scheme } });
+    }
+  } catch {
+    // Telemetry must never break a lease.
+  }
+}
+
 async function fetchAgentCredentialIntoSlot(
   slot: LeaseSlot,
 ): Promise<AgentCredential> {
@@ -523,29 +581,36 @@ async function fetchAgentCredentialIntoSlot(
       ) {
         throw new OauthDelegationForbiddenError();
       }
-      const buf = decryptRow(oauthRow, slot.keyOwnerUserId);
-      assertAliveAfterDecrypt(slot, buf);
-      // #11086 — refuse a stored value the bundled CLI is known to drop,
-      // BEFORE it is cached in the slot or handed out. Fail closed: no
-      // fallback to the api_key row. Only the closed class is reported.
-      const droppedClass = classifyCliDroppedValue(buf.toString("utf8"));
-      if (droppedClass) {
-        zeroize(buf);
-        reportSilentFallback(null, {
-          feature: "byok-lease",
-          op: "oauth-credential-unusable",
-          message: "byok-lease: stored subscription credential is not usable by the CLI",
-          tags: { shape_class: droppedClass },
-          extra: { shape_class: droppedClass },
-        });
-        throw new ByokLeaseError(
-          "oauth_unusable",
-          "Stored subscription credential is not usable",
-        );
+      // #11591 — the mode can only NARROW what the gates above allowed. `api-key`
+      // skips the subscription row entirely (never decrypted, no shape check) and
+      // falls through to the api_key branch; it never falls back the other way.
+      const mode = await resolveLeaseAuthMode(slot);
+      if (mode === "managed") {
+        const buf = decryptRow(oauthRow, slot.keyOwnerUserId);
+        assertAliveAfterDecrypt(slot, buf);
+        // #11086 — refuse a stored value the bundled CLI is known to drop,
+        // BEFORE it is cached in the slot or handed out. Fail closed: no
+        // fallback to the api_key row. Only the closed class is reported.
+        const droppedClass = classifyCliDroppedValue(buf.toString("utf8"));
+        if (droppedClass) {
+          zeroize(buf);
+          reportSilentFallback(null, {
+            feature: "byok-lease",
+            op: "oauth-credential-unusable",
+            message: "byok-lease: stored subscription credential is not usable by the CLI",
+            tags: { shape_class: droppedClass },
+            extra: { shape_class: droppedClass },
+          });
+          throw new ByokLeaseError(
+            "oauth_unusable",
+            "Stored subscription credential is not usable",
+          );
+        }
+        slot.agentCredentialBuffer = buf;
+        slot.agentCredentialScheme = "oauth_token";
+        noteCredentialSelected("oauth_token");
+        return { value: buf.toString("utf8"), scheme: "oauth_token" };
       }
-      slot.agentCredentialBuffer = buf;
-      slot.agentCredentialScheme = "oauth_token";
-      return { value: buf.toString("utf8"), scheme: "oauth_token" };
     }
   }
 
@@ -561,6 +626,7 @@ async function fetchAgentCredentialIntoSlot(
   assertAliveAfterDecrypt(slot, buf);
   slot.agentCredentialBuffer = buf;
   slot.agentCredentialScheme = "api_key";
+  noteCredentialSelected("api_key");
   return { value: buf.toString("utf8"), scheme: "api_key" };
 }
 
@@ -585,6 +651,7 @@ export async function runWithByokLease<T>(
     workspaceContextUserId: args.workspaceContextUserId,
     keyOwnerUserId: args.keyOwnerUserId,
     delegationId: args.delegationId,
+    resolveAuthMode: args.resolveAuthMode,
     restApiKeyBuffer: null,
     agentCredentialBuffer: null,
     agentCredentialScheme: null,

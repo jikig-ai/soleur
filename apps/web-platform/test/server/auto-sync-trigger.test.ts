@@ -47,9 +47,15 @@ const WORKSPACE_ID = "22222222-2222-4222-8222-222222222222";
  * Build a fake service client that records `conversations` INSERTs. Only the
  * surface `triggerHeadlessSync` touches is implemented.
  */
-function makeServiceClient() {
+function makeServiceClient(rpcResult: { error: { message: string } | null } = { error: null }) {
   const inserts: Array<Record<string, unknown>> = [];
+  const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const serviceClient = {
+    // #11591: the sync conversation is bound before dispatch via bind_agent_engine_run.
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      return Promise.resolve({ data: null, ...rpcResult });
+    },
     from(table: string) {
       if (table !== "conversations") {
         throw new Error(`unexpected table ${table}`);
@@ -62,11 +68,14 @@ function makeServiceClient() {
       };
     },
   };
-  return { serviceClient, inserts };
+  return { serviceClient, inserts, rpcCalls };
 }
 
-function baseSeams(startAgentSession: ReturnType<typeof vi.fn>) {
-  const { serviceClient, inserts } = makeServiceClient();
+function baseSeams(
+  startAgentSession: ReturnType<typeof vi.fn>,
+  rpcResult?: { error: { message: string } | null },
+) {
+  const { serviceClient, inserts, rpcCalls } = makeServiceClient(rpcResult);
   const seams: TriggerHeadlessSyncSeams = {
     startAgentSession: startAgentSession as unknown as TriggerHeadlessSyncSeams["startAgentSession"],
     serviceClient: serviceClient as never,
@@ -74,7 +83,7 @@ function baseSeams(startAgentSession: ReturnType<typeof vi.fn>) {
     userHasEffectiveByokKey: vi.fn().mockResolvedValue(true),
     newAgentSessionsRefused: vi.fn().mockResolvedValue(false),
   };
-  return { inserts, seams };
+  return { inserts, seams, rpcCalls };
 }
 
 beforeEach(() => {
@@ -328,5 +337,57 @@ describe("triggerHeadlessSync — quiet-window kill-switch (#8211, CTO ruling: r
     const { seams } = baseSeams(startAgentSession);
 
     expect(await triggerHeadlessSync(USER_ID, REPO_URL, seams)).toBe("failed");
+  });
+});
+
+describe("triggerHeadlessSync — engine binding before dispatch (#11591)", () => {
+  test("binds the just-inserted conversation (service client) BEFORE the session starts", async () => {
+    const order: string[] = [];
+    const startAgentSession = vi.fn().mockImplementation(async () => {
+      order.push("start");
+    });
+    const { inserts, seams, rpcCalls } = baseSeams(startAgentSession);
+    const origRpc = (seams.serviceClient as unknown as { rpc: (n: string, a: Record<string, unknown>) => Promise<unknown> }).rpc;
+    (seams.serviceClient as unknown as { rpc: unknown }).rpc = (n: string, a: Record<string, unknown>) => {
+      order.push("bind");
+      return origRpc(n, a);
+    };
+
+    await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0].name).toBe("bind_agent_engine_run");
+    expect(rpcCalls[0].args).toMatchObject({
+      p_workspace_id: WORKSPACE_ID,
+      p_execution_kind: "conversation",
+      p_conversation_id: inserts[0].id,
+      p_created_by: USER_ID,
+    });
+    expect(order).toEqual(["bind", "start"]);
+  });
+
+  test("a failed bind is Sentry-mirrored (op=auto-sync-bind) and does NOT abort the session", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { seams } = baseSeams(startAgentSession, { error: { message: "bind denied SECRETROW" } });
+
+    await expect(triggerHeadlessSync(USER_ID, REPO_URL, seams)).resolves.toBe("started");
+
+    expect(startAgentSession).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({ feature: "repo-setup", op: "auto-sync-bind" });
+    expect(JSON.stringify(mockReportSilentFallback.mock.calls[0][1])).not.toContain(USER_ID);
+  });
+
+  test("no bind when the conversation INSERT failed", async () => {
+    const startAgentSession = vi.fn();
+    const { seams, rpcCalls } = baseSeams(startAgentSession);
+    (seams.serviceClient as unknown as { from: unknown }).from = () => ({
+      insert: () => Promise.resolve({ error: { message: "insert failed" } }),
+    });
+
+    await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(rpcCalls).toHaveLength(0);
+    expect(startAgentSession).not.toHaveBeenCalled();
   });
 });

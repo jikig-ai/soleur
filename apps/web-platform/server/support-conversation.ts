@@ -13,6 +13,32 @@ import { randomUUID } from "crypto";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
+
+/**
+ * Bind the conversation's engine run before dispatch (#11591): the credential lease reads the binding's
+ * auth mode, and a `pending` conversation with no run fails closed for an owner who holds a subscription
+ * row. Non-fatal: a failed bind is Sentry-mirrored and the dispatch proceeds, because the lease already
+ * fails closed for a subscription holder and every other user is unaffected.
+ */
+async function bindSupportConversation(
+  // biome-ignore lint/suspicious/noExplicitAny: tenant client is an untyped supabase-js chain
+  tenant: any,
+  userId: string,
+  conversationId: string,
+  workspaceId: string,
+): Promise<void> {
+  try {
+    await new AgentEnginePersistenceRepository(tenant as PersistenceClient).bind({
+      workspaceId,
+      executionKind: "conversation",
+      conversationId,
+      createdBy: userId,
+    });
+  } catch (err) {
+    reportSilentFallback(err, { feature: "support", op: "bind" });
+  }
+}
 
 /**
  * Resolve the caller's existing support conversation, or create a fresh
@@ -43,7 +69,7 @@ export async function resolveOrCreateSupportConversation(
   if (!opts?.forceNew) {
     const existing = await tenant
       .from("conversations")
-      .select("id")
+      .select("id, engine_binding_state, workspace_id")
       .eq("user_id", userId)
       .eq("kind", "support")
       .order("last_active", { ascending: false })
@@ -51,6 +77,12 @@ export async function resolveOrCreateSupportConversation(
       .maybeSingle();
 
     if (existing?.data?.id) {
+      // A sticky row created before engine binding existed is `pending` until its first message after
+      // the deploy; bind it then (it snapshots that day's default). Never a `legacy` row: old rows keep
+      // their pre-binding meaning. No extra read per message: the state came with the select above.
+      if (existing.data.engine_binding_state === "pending" && typeof existing.data.workspace_id === "string") {
+        await bindSupportConversation(tenant, userId, existing.data.id as string, existing.data.workspace_id);
+      }
       return existing.data.id as string;
     }
   }
@@ -81,5 +113,6 @@ export async function resolveOrCreateSupportConversation(
     );
   }
 
+  await bindSupportConversation(tenant, userId, id, workspaceId);
   return id;
 }

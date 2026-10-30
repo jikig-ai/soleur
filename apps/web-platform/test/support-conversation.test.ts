@@ -19,8 +19,11 @@ vi.mock("@/server/workspace-resolver", () => ({
 import { resolveOrCreateSupportConversation } from "@/server/support-conversation";
 
 /** A chainable supabase mock. `existingRow` = what the resolve SELECT returns. */
-function makeTenant(existingRow: { id: string } | null) {
+function makeTenant(existingRow: { id: string; engine_binding_state?: string; workspace_id?: string } | null, rpcError: { message: string } | null = null) {
   const insert = vi.fn().mockResolvedValue({ error: null });
+  // #11591: the support conversation is bound before dispatch via bind_agent_engine_run. The mock MUST carry
+  // rpc, or the (non-fatal) bind throws a TypeError that is swallowed and the bind tests pass vacuously.
+  const rpc = vi.fn().mockResolvedValue({ data: null, error: rpcError });
   const maybeSingle = vi.fn().mockResolvedValue({ data: existingRow, error: null });
   const chain: Record<string, unknown> = {};
   const self = () => chain;
@@ -32,7 +35,7 @@ function makeTenant(existingRow: { id: string } | null) {
     maybeSingle,
     insert,
   });
-  return { chain: { from: vi.fn(() => chain) }, insert, maybeSingle };
+  return { chain: { from: vi.fn(() => chain), rpc }, insert, maybeSingle, rpc };
 }
 
 describe("resolveOrCreateSupportConversation", () => {
@@ -93,5 +96,54 @@ describe("resolveOrCreateSupportConversation", () => {
     mockGetFreshTenantClient.mockResolvedValue(chain);
 
     await expect(resolveOrCreateSupportConversation("user-1")).rejects.toThrow(/support conversation/i);
+  });
+});
+
+describe("resolveOrCreateSupportConversation — engine binding before dispatch (#11591)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("binds a newly inserted row (tenant client) with the resolved workspace", async () => {
+    const { chain, insert, rpc } = makeTenant(null);
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    const id = await resolveOrCreateSupportConversation("user-1");
+
+    expect(insert).toHaveBeenCalledOnce();
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(rpc.mock.calls[0][0]).toBe("bind_agent_engine_run");
+    expect(rpc.mock.calls[0][1]).toMatchObject({
+      p_workspace_id: "ws-123",
+      p_execution_kind: "conversation",
+      p_conversation_id: id,
+      p_created_by: "user-1",
+    });
+  });
+
+  it("binds a sticky row only while it is pending", async () => {
+    const { chain, rpc } = makeTenant({ id: "conv-old", engine_binding_state: "pending", workspace_id: "ws-9" });
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    await expect(resolveOrCreateSupportConversation("user-1")).resolves.toBe("conv-old");
+
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(rpc.mock.calls[0][1]).toMatchObject({ p_workspace_id: "ws-9", p_conversation_id: "conv-old" });
+  });
+
+  it.each(["legacy", "bound"])("never binds a sticky %s row", async (state) => {
+    const { chain, rpc } = makeTenant({ id: "conv-old", engine_binding_state: state, workspace_id: "ws-9" });
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    await resolveOrCreateSupportConversation("user-1");
+
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("a failed bind is mirrored (feature=support, op=bind) and does not fail the conversation", async () => {
+    const { chain, rpc } = makeTenant(null, { message: "bind denied" });
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    await expect(resolveOrCreateSupportConversation("user-1")).resolves.toEqual(expect.any(String));
+
+    expect(rpc).toHaveBeenCalledOnce();
   });
 });

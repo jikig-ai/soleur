@@ -4,6 +4,7 @@ import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { userHasEffectiveByokKey as defaultUserHasEffectiveByokKey } from "@/server/byok-resolver";
 import { RuntimeAuthError } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
 
@@ -194,6 +195,25 @@ export async function triggerHeadlessSync(
       });
     });
     return "failed";
+  }
+
+  // Bind the engine run before dispatch (#11591). The credential lease reads the binding's auth mode and
+  // fails closed for an owner holding a subscription row when the conversation is unbound; a fresh insert
+  // has no concurrent binder, so a plain bind is enough. Non-fatal: the lease still fails closed for a
+  // subscription holder and every other user is unaffected.
+  try {
+    await new AgentEnginePersistenceRepository(serviceClient as unknown as PersistenceClient).bind({
+      workspaceId: conversationWorkspaceId,
+      executionKind: "conversation",
+      conversationId,
+      createdBy: userId,
+    });
+  } catch (bindErr) {
+    reportSilentFallback(bindErr, {
+      feature: "repo-setup",
+      op: "auto-sync-bind",
+      message: "Failed to bind the sync conversation's engine run",
+    });
   }
 
   // --- Retry wraps ONLY startAgentSession, reusing the SAME conversationId ---
