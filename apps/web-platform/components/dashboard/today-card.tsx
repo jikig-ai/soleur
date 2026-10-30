@@ -409,10 +409,11 @@ function StripeCard({
             // next. Any other 409 body, or an unparseable one, keeps the bare status below.
             const body = (await res.json().catch(() => ({}))) as {
               error?: string;
-            };
-            if (body.error === "draft_already_approved") {
+            } | null;
+            if (body?.error === "draft_already_approved") {
+              // Names Send only: Discard is not offered here until the messages UPDATE policy exists (#11569).
               setEditError(
-                "You already approved this draft, so it can't be edited. Send it or Discard it.",
+                "You already approved this draft, so it can't be edited. Send it to go ahead.",
               );
               return;
             }

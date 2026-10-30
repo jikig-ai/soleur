@@ -47,7 +47,7 @@ const COPY_NO_LONGER = "This approval can no longer run. Refresh to update this 
 const COPY_EXPIRED =
   "This approval expired, so this attempt didn't go through. Refresh to update this card.";
 const COPY_SKEW =
-  "We couldn't confirm when you approved this, so this attempt didn't go through. Try again in a minute.";
+  "We couldn't confirm when you approved this, so this attempt didn't go through. Try again shortly.";
 const COPY_HANDLED =
   "This draft was already handled, maybe in another tab. Refresh to update this card.";
 const COPY_CHANGED =

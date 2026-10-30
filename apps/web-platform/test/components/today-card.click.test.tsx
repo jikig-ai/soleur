@@ -315,7 +315,7 @@ describe("KbDriftCard onClick (PR-A)", () => {
 
 describe("StripeCard Edit refusal copy (#11486)", () => {
   const APPROVED_COPY =
-    "You already approved this draft, so it can't be edited. Send it or Discard it.";
+    "You already approved this draft, so it can't be edited. Send it to go ahead.";
 
   const ORIGINAL_PROMPT = window.prompt;
 
@@ -361,6 +361,25 @@ describe("StripeCard Edit refusal copy (#11486)", () => {
     nextResponse = { status: 409, body: {} };
     globalThis.fetch = vi.fn(
       async () => new Response("<html>gateway</html>", { status: 409 }),
+    ) as unknown as typeof fetch;
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (409)");
+    });
+  });
+
+  it("a 500 carrying the same error code is still a bare status (the 409 guard is load-bearing)", async () => {
+    nextResponse = { status: 500, body: { error: "draft_already_approved" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (500)");
+    });
+  });
+
+  it("a 409 whose body is JSON null keeps 'Edit failed (409)'", async () => {
+    nextResponse = { status: 409, body: {} };
+    globalThis.fetch = vi.fn(
+      async () => new Response("null", { status: 409 }),
     ) as unknown as typeof fetch;
     await editTo("Edited body");
     await waitFor(() => {

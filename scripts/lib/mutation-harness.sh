@@ -5,10 +5,14 @@
 # directory, and `FT_REPO` is exported before any mutant runs).
 #
 # Caller contract, all supplied by the suite:
-#   variables  SELF SUT MUT REPO LEDGER PASS FAIL FIX_N LEDGER_N FT_INNER
+#   variables  SELF SUT MUT LEDGER PASS FAIL FIX_N LEDGER_N FT_INNER   (read at call time; `set -u` makes a missing one abort)
 #   helpers    ok bad check has hasnt  (stay IN each suite: `mutate_helper` neuters them by awk over $SELF, so a
 #              definition moved out of the suite would make the h1..h5 rows report "did not land")
-# The suites run `set -uo pipefail`, so nothing here reads an unset variable unguarded.
+#   protocol   a mutant run is `FT_INNER=1 FT_SUT=<mutant> bash $SELF`, so the suite MUST take its probe from
+#              `SUT="${FT_SUT:-<default>}"`, derive REPO from an exported `FT_REPO`, and `export FT_REPO` before the
+#              battery; a suite that ignores FT_SUT re-runs the pristine probe and every mutant reports SURVIVED.
+# The function names below are unprefixed on purpose (the suites' call sites were left unchanged by the extraction);
+# only the pure scorer and the floor carry the `mh_` prefix.
 #
 # MUTATION CREDIT. A mutant is credited as caught only when its inner run exits 1 AND prints its own named
 # `FAIL: <fragment>` line (`mh_caught`, the single place that match lives). rc 0 = SURVIVED; any other rc, or a mutant that
@@ -28,9 +32,14 @@ assert_fixture_dir() {
   esac
 }
 
-# mh_caught <fragment> <inner-run log>: 0 only when the log holds a line containing `FAIL: <fragment>` (that is how `bad`
-# prints a row label). Prints nothing; the scorer's controls call it directly.
-mh_caught() { grep -qF -- "FAIL: $1" "$2"; }
+# mh_caught <fragment> <inner-run log>: 0 only when a log line STARTS with `  FAIL: <fragment>` (exactly how `bad` prints
+# a row label, so a `FAIL:` quoted mid-line or inside a detail line never counts). Literal match, prefix semantics (a
+# fragment is the leading words of a row label), and an empty fragment is never caught. Prints nothing; the scorer's
+# controls call it directly.
+mh_caught() {
+  [ -n "${1:-}" ] || return 1
+  FRAG="$1" awk 'index($0, "  FAIL: " ENVIRON["FRAG"]) == 1 { found = 1 } END { exit !found }' "$2"
+}
 
 instrument_selftest() {
   local p0=$PASS f0=$FAIL n0 p1 f1 p2 f2
