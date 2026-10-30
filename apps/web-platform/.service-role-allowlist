@@ -389,3 +389,16 @@ apps/web-platform/server/workstream/mutate-workstream-issue.ts
 # error / no-row). Same trusted-server injected-service-client shape as
 # resolve-installation-id-for-workspace.ts / workspace-identity-resolver.ts.
 apps/web-platform/server/session-proxy.ts
+
+# Durable approval requests (#4672, ADR-309): the approval RPCs create_approval_request / consume_approval /
+# get_approval_status / list_live_approvals / sweep_approvals / anonymise_approval_request are granted to service_role
+# ONLY (migration 180: REVOKE ALL FROM PUBLIC, anon, authenticated, then an explicit service_role GRANT), so that no
+# user-JWT client - and therefore no agent holding the founder's tenant client - can mint, consume or sweep a request.
+# decide_approval is the single RPC granted to authenticated, and it is reached through a user-JWT client only
+# (server/approval/decide.ts, pinned by test/approval/decide-boundary.test.ts). The three files below are the server-side
+# callers of the service-only RPCs: gate.ts (the permission-callback gate deps), notify.ts (resolves the RPC-written
+# inbox row for the content-free push) and the Inngest expiry cron (sweep_approvals every 5 minutes, no user in scope).
+# None reads approval_request directly: the table has no service_role privilege.
+apps/web-platform/server/approval/gate.ts
+apps/web-platform/server/approval/notify.ts
+apps/web-platform/server/inngest/functions/cron-approval-expiry.ts

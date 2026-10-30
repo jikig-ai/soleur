@@ -1218,9 +1218,11 @@ done < "$class_c_out"
 # made since the 2026-08-19 live figure and is not a complete ledger, so the
 # declared count above (67) is the figure of record — SUPERSEDED 2026-10-29
 # (67 → 24, #6590 PR-B destroy) by the addendum below.
-# Addendum 2026-10-29: …→ 24 `resource "sentry_cron_monitor"` blocks — the
+# Addendum 2026-10-29: …→ 25 `resource "sentry_cron_monitor"` blocks — the
 # #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed
-# the 43 low-catch-value monitors; the emitters stay (spec NG4 void-post).
+# the 43 low-catch-value monitors (67 → 24); the emitters stay (spec NG4 void-post).
+# The #4672 scheduled-approval-expiry monitor (the 5-minute approval-request sweep) is declared
+# after that prune, taking the root to 25.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
