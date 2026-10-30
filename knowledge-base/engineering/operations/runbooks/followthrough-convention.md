@@ -321,9 +321,10 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   log line returns under field 2 `UNKNOWN STEP` while the content survives.
   A probe anchoring on the step-name column (`index($2, step)`) reads a proven
   trail as zero-line and takes its own tripwire on every aged job in its
-  window (#11600). The countermeasure — already proven in
-  `git-data-boot-poll-8178.sh` and adapted in `web-first-deploy-10585.sh`
-  (#8262): strip CR + the UTF-8 BOM globally (`${log//.../}` — one mark per
+  window (#11600). The countermeasure — proven in
+  `git-data-boot-poll-8178.sh` (#8262) and adapted in
+  `web-first-deploy-10585.sh` (#11603): strip CR + the UTF-8 BOM globally
+  (`${log//.../}` — one mark per
   section), then slice the step's output region on the runner's `##[group]Run`
   headers, first header stamped at or after the step's `started_at` from the
   jobs API, next header or EOF closing the region. Feed the region through the

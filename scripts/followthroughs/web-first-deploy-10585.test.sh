@@ -151,10 +151,9 @@ bs() { # <host_name> <control> <marker-ts|none>
 # document cannot tell `${log//…/}` from `${log/…/}` — the single-strip
 # mutation is pinned only while a SECOND BOM'd section exists.
 GH_LOG_BOM=$'\357\273\277'
-# ul/usrc — emitted / ANSI-echoed lines under "UNKNOWN STEP" (field 2):
-#   ul <line> <ts> <job> [bom]      usrc <line> <ts> <job> [bom]
+# ul — one emitted line under "UNKNOWN STEP" (field 2); ANSI-echoed variants
+#   are passed literally in the payload args.  ul <line> <ts> <job> [bom]
 ul()   { printf '%s\tUNKNOWN STEP\t%s%s %s\n' "$3" "${4:-}" "$2" "$1"; }
-usrc() { printf '%s\tUNKNOWN STEP\t%s%s \033[36;1m%s\n' "$3" "${4:-}" "$2" "$1"; }
 # ulog <job-name> <started_at-ISO> <line>... — a faithful attribution-expired
 # document: BARE `Set up job` head (gh strips the BOM only from the stream
 # head), a BOM'd prelude ##[group]Run stamped BEFORE started_at (the ts>=ps
@@ -577,7 +576,11 @@ run_probe; check 2 "NOT YET" "an ANSI-echoed ready line inside the recovered reg
 # 19. Case D (AC-3): the tripwire survives recovery — a success job whose
 #      recovered region holds zero trail-pattern lines exits 3 with the
 #      `zero parseable` message; a log with no ##[group]Run header at/after
-#      started_at is the same verdict.
+#      started_at is the same verdict. ULOG_NO_BOUND removes the post header
+#      too, so NO header at/after started_at exists at all.
+#      A named-attribution log with emitted-but-patternless trail lines must
+#      also exit 3 — the degraded channel the pattern trigger closes (the
+#      four-seat convergent review finding).
 reset_fx; list "901,completed"
 ST=$(ts '1 hour ago')
 job 901 9011 web_host_replace success success "$ST"
@@ -585,8 +588,12 @@ ulog web_host_replace "$ST" 'an unrelated output line' 'another quiet line' > "$
 run_probe; check 3 "zero parseable" "recovered region with no trail-pattern lines reads CANNOT ESTABLISH"
 reset_fx; list "901,completed"
 job 901 9011 web_host_replace success success "$ST"
-ULOG_EARLY_HDR=1 ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
+ULOG_EARLY_HDR=1 ULOG_NO_BOUND=1 ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
 run_probe; check 3 "zero parseable" "no ##[group]Run header at/after started_at reads CANNOT ESTABLISH"
+reset_fx; list "901,completed"
+job 901 9011 web_host_replace success success "$ST"
+{ l 'an unrelated emitted line' "$ST" web_host_replace; l 'another quiet line' "$ST" web_host_replace; } > "$WORK/fx/log.9011"
+run_probe; check 3 "zero parseable" "a named-attribution patternless trail on a success job reads CANNOT ESTABLISH"
 
 # 20. Case F (AC-3): a success job whose jobs-API step entry carries no
 #      started_at cannot be bounded — unbounded is unmeasured -> 3.
@@ -633,8 +640,8 @@ if [ "${#FAILURES[@]}" -gt 0 ]; then
   printf '%s passed, %s failed\n' "$passes" "${#FAILURES[@]}"; exit 1
 fi
 # Anti-vacuity floor, reported outside the helpers it backstops.
-if [[ "$passes" -lt 69 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 69+)\n' "$passes" >&2
+if [[ "$passes" -lt 70 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 70+)\n' "$passes" >&2
   exit 1
 fi
 printf '%s passed, 0 failed\n' "$passes"

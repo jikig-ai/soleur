@@ -296,42 +296,51 @@ for id in $ids; do
     trail=$(awk -F'\t' -v step="$STEP" 'index($2, step) == 1 { print $3 }' <<<"$log" | emit_rows)
     # ATTRIBUTION-EXPIRY RECOVERY (#11600): an aged log arrives with every line
     # under "UNKNOWN STEP" — the named anchor above yields nothing while the
-    # content survives. Slice the trail step's output region on the runner's
+    # content survives. The trigger is a PATTERNLESS named trail, not only an
+    # empty one: partial attribution leaves emitted lines under the step name
+    # while the pointer/ready sit under UNKNOWN STEP, and a nonempty-
+    # but-patternless trail on a success job is the same degraded channel an
+    # empty one is. Slice the trail step's output region on the runner's
     # `##[group]Run` headers: the first header stamped at or after the step's
     # started_at opens it, the next header (or EOF) closes it. The awk is
     # git-data-boot-poll-8178.sh's region derivation verbatim; the region then
-    # flows through the SAME emit_rows chokepoint as the named path.
+    # flows through the SAME emit_rows chokepoint as the named path, and the
+    # recovered region REPLACES the named trail (the region is the step's
+    # whole emitted output — a superset of whatever survived attribution).
+    TRAIL_PAT='web-host-(replace|create) web-[0-9]+ — fresh-host Sentry pointer|fresh-host boot reached fresh_boot_ready'
     recovery_cause=""
-    if [[ -z "$trail" ]]; then
+    if ! grep -qE "$TRAIL_PAT" <<<"$trail"; then
+      trail=""
       if [[ "$jstart" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
         region=$(awk -v ps="${jstart:0:19}" '
           { line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); ts = substr(line, 1, 19) }
           line ~ /^[0-9][0-9TZ:.-]* ##\[group\]Run / { if (started) exit; if (ts >= ps) { started = 1; next } }
           started { print line }' <<<"$log")
         if [[ -z "$region" ]]; then
-          recovery_cause="; no ##[group]Run header at or after ${jstart:0:19} in an attribution-expired log"
+          recovery_cause=" (attribution-expired log: no ##[group]Run header at/after ${jstart:0:19} yielded a region)"
         else
-          trail=$(emit_rows <<<"$region")
-          if [[ -z "$trail" ]]; then
-            recovery_cause="; recovered region held no emitted lines"
-          elif ! grep -qE 'web-host-(replace|create) web-[0-9]+ — fresh-host Sentry pointer|fresh-host boot reached fresh_boot_ready' <<<"$trail"; then
+          region_trail=$(emit_rows <<<"$region")
+          if grep -qE "$TRAIL_PAT" <<<"$region_trail"; then
+            trail="$region_trail"
+          elif [[ -z "$region_trail" ]]; then
+            recovery_cause=" (attribution-expired log: recovered region held no emitted lines)"
+          else
             # A success job's trail step always emits the pointer — a region
             # with output but no trail-pattern line is a degraded channel
             # (#11600), never a quiet empty trail.
-            trail=""
-            recovery_cause="; recovered region emitted no trail-pattern lines"
+            recovery_cause=" (attribution-expired log: recovered region emitted no trail-pattern lines)"
           fi
         fi
       else
-        recovery_cause="; the trail step's jobs-API entry carried no usable started_at"
+        recovery_cause=" (the trail step's jobs-API entry carried no usable started_at)"
       fi
     fi
     # Tripwire: a SUCCESS-conclusion job always emits at least the pointer line
-    # — zero parseable lines means the parse channel itself broke (log shape
-    # drift OR attribution expiry the recovery could not slice), which is
-    # measurable CANNOT ESTABLISH, not a quiet population of 0.
+    # — zero parseable trail-pattern lines means the parse channel itself broke
+    # (log shape drift OR attribution expiry the recovery could not slice),
+    # which is measurable CANNOT ESTABLISH, not a quiet population of 0.
     if [[ "$jcon" == "success" && -z "$trail" ]]; then
-      printf 'CANNOT ESTABLISH: run %s job %s concluded success but the `%s` step emitted zero parseable lines — the log shape drifted; refusing to grade an unmeasured trail.%s\n' "$id" "$jid" "$STEP" "$recovery_cause" >&2
+      printf 'CANNOT ESTABLISH: run %s job %s concluded success but the `%s` step emitted zero parseable lines — the log shape drifted; refusing to grade an unmeasured trail%s.\n' "$id" "$jid" "$STEP" "$recovery_cause" >&2
       exit 3
     fi
     ready_ts=$(awk -F'\t' '$2 ~ /^fresh-host boot reached fresh_boot_ready/ { t=$1 } END { if (t != "") print t }' <<<"$trail")
