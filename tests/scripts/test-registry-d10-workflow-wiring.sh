@@ -738,7 +738,9 @@ w9_nfails="$(grep -c '^  FAIL ' <<<"$w9_nout")"
 [[ "$w9_nfails" == 1 ]] || w9_mp+="the nested run printed ${w9_nfails} FAIL lines, want exactly 1; "
 [[ "$(grep '^  FAIL ' <<<"$w9_nout")" == "  FAIL ${W9_ROW} — ${w9_drop1_out//$'\n'/; }" ]] \
   || w9_mp+="the nested FAIL line is not the W9 row carrying the drop1 control's detail (got: $(grep '^  FAIL ' <<<"$w9_nout" | head -1 | cut -c1-200)); "
-_report "W9v meta-control: a drop1 workflow makes the real W9 row print its FAIL line" "$(w9_verdict "$w9_mp")" "$w9_mp"
+# Inline on purpose: reporting through w9_verdict would share the very function this control exists to catch (a verdict that is always ok).
+if [[ -z "$w9_mp" ]]; then _report "W9v meta-control: a drop1 workflow makes the real W9 row print its FAIL line" ok
+else _report "W9v meta-control: a drop1 workflow makes the real W9 row print its FAIL line" fail "$w9_mp"; fi
 
 # ── Anti-vacuity assertion floor ────────────────────────────────────────────────────────────
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
