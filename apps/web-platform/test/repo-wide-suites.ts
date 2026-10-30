@@ -29,6 +29,7 @@
 export const REPO_WIDE_SUITES: readonly string[] = [
   "test/agent-outer-wrap.test.ts",
   "test/agent-runner-system-prompt.test.ts",
+  "test/approval/gate-deps.test.ts",
   "test/build-allowed-tools-census.test.ts",
   "test/c4-canonical-mirror.test.ts",
   "test/c4-config-name-parity.test.ts",
@@ -71,6 +72,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/phase-surface-hint-shell-parity.test.ts",
   "test/phase-surface-map-parity.test.ts",
   "test/plugin-root-anchoring.test.ts",
+  "test/push-branch-pinned.test.ts",
   "test/plugin-pretooluse-hooks-web-parity.test.ts",
   "test/plugin-stop-hooks-web-parity.test.ts",
   "test/plugin-root-list-carveout-coupling.test.ts",

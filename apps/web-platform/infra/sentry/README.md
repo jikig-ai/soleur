@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **49 `sentry_alert` rules** (49 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545. 47 are
-  fully Terraform-owned (46 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **52 `sentry_alert` rules** (52 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672. 50 are
+  fully Terraform-owned (49 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -36,7 +36,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **24 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **25 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -255,7 +255,7 @@ named after the latter.
 
 This section previously read "the 8 `sentry_cron_monitor` resources do not
 exist in Sentry yet" and described the first apply creating them. True at
-authoring, actively misleading now: the root declares **24** of them (67 → 24 after the #6590 silence-doctrine prune — feat-observability-vendor-eval PR-B destroyed the 43 low-catch-value monitors; their emitters still void-post by design, registered in `apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts`), all live
+authoring, actively misleading now: the root declares **25** of them (67 → 24 after the #6590 silence-doctrine prune — feat-observability-vendor-eval PR-B destroyed the 43 low-catch-value monitors; their emitters still void-post by design, registered in `apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts`), all live
 once `apply-sentry-infra.yml` runs,
 and the audit's Class D machinery exists precisely *because* live monitors can
 outrun the `.tf` that declares them — a monitor Terraform never declared is

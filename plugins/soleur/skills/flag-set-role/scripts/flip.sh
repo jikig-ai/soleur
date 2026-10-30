@@ -115,6 +115,7 @@ declare -A FLAG_ENV_VARS=(
   ["untrusted-content-classify"]="FLAG_UNTRUSTED_CONTENT_CLASSIFY"
   ["untrusted-content-wrap"]="FLAG_UNTRUSTED_CONTENT_WRAP"
   ["egress-audit-collection"]="FLAG_EGRESS_AUDIT_COLLECTION"
+  ["approval-queue"]="FLAG_APPROVAL_QUEUE"
   ["agent-sandbox-unix-deny"]="FLAG_AGENT_SANDBOX_UNIX_DENY"
   ["new-sessions-paused"]="FLAG_NEW_SESSIONS_PAUSED"
 )

@@ -17,13 +17,24 @@ import { usePendingRouter } from "@/hooks/use-pending-router";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import { Button } from "@/components/ui/button";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
+import { revealInvisible } from "@/lib/approval-card-state";
 import { inboxRowEligibility } from "@/lib/inbox-archive-eligibility";
 import { relativeTime } from "@/lib/relative-time";
+import { APPROVAL_COPY, formatExpiry } from "@/lib/approval-copy";
 import {
   buildInboxDeepLink,
   type InboxItemRowData,
   type InboxItemSeverity,
 } from "@/lib/inbox-severity";
+
+/** Generous bound on an approval row title (the server title is far shorter); past it the row says how much is not shown. */
+export const APPROVAL_TITLE_MAX_CHARS = 4096;
+
+function boundApprovalTitle(text: string): string {
+  const chars = Array.from(text);
+  if (chars.length <= APPROVAL_TITLE_MAX_CHARS) return text;
+  return `${chars.slice(0, APPROVAL_TITLE_MAX_CHARS).join("")}… (${chars.length - APPROVAL_TITLE_MAX_CHARS} more characters)`;
+}
 
 interface InboxItemRowProps {
   item: InboxItemRowData;
@@ -48,7 +59,16 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
   const [confirming, setConfirming] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const title = sanitizeDisplayString(item.title);
+  // An approval row names the agent's action: invisible direction/zero-width controls are made visible BEFORE the
+  // sanitizer (which would drop them silently), so a right-to-left override cannot disguise a recipient.
+  // An approval title is also exempt from the sanitizer's 200-character cap: the row names the action in full, so a
+  // cap would silently cut the very value (a long recipient or branch) the Owner is checking. A generous bound
+  // (APPROVAL_TITLE_MAX_CHARS) keeps a pathological row from flooding the list, and past it the row says how many
+  // characters are not shown, so nothing is dropped silently.
+  const title =
+    item.source === "approval_required"
+      ? boundApprovalTitle(sanitizeDisplayString(revealInvisible(item.title), Number.POSITIVE_INFINITY))
+      : sanitizeDisplayString(item.title);
   const severity = item.severity;
   const isActionRequired = severity === "action_required";
   const isActed = item.acted_at !== null;
@@ -67,6 +87,18 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
 
   const href = buildInboxDeepLink(item.source, item.source_ref);
   const navigable = href !== null && !isArchived;
+
+  // #4672 — an approval row opens the request (the card decides; the row never carries Approve or Deny, because deciding
+  // without the full action in view is the failure this surface exists to prevent). While un-acted it can be neither
+  // marked done nor archived: it leaves NEEDS YOU only when decided or expired.
+  const isApproval = item.source === "approval_required";
+  const approvalPending = isApproval && item.approval?.status === "pending";
+  const expiry = approvalPending && item.approval ? formatExpiry(item.approval.expiresAt, Date.now()) : null;
+  const resolvedLine =
+    isApproval && item.approval && (item.approval.status === "expired" || item.approval.status === "rejected")
+      ? APPROVAL_COPY.resolvedNothing
+      : null;
+  const lockedApproval = isApproval && isActionRequired && !isActed;
 
   const { run: runAction, pending } = usePendingAction(
     async (action: "acted" | "archived") => {
@@ -140,19 +172,36 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
 
       <div className="flex w-full flex-col gap-1.5">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-medium text-soleur-text-primary">{title}</p>
+          <p className="min-w-0 text-sm font-medium text-soleur-text-primary [overflow-wrap:anywhere]">{title}</p>
           <span className="shrink-0 text-xs tabular-nums text-soleur-text-muted">
             {relativeTime(item.created_at)}
           </span>
         </div>
 
-        {!navigable && !isArchived && (
+        {isApproval && !isArchived && (expiry || resolvedLine || approvalPending) && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-soleur-text-secondary">
+            {expiry && expiry.text && (
+              <span
+                data-testid="approval-row-expiry"
+                suppressHydrationWarning
+                className={`rounded-md bg-soleur-bg-surface-2/70 px-2 py-0.5 font-medium ${
+                  expiry.urgent ? "text-amber-400" : "text-soleur-accent-gold-text"
+                }`}
+              >
+                {expiry.text}
+              </span>
+            )}
+            <span>{resolvedLine ?? "Open to see the exact action and decide"}</span>
+          </div>
+        )}
+
+        {!navigable && !isArchived && !isApproval && (
           <p className="text-xs text-soleur-text-muted">
             Nothing to open yet — this is just an update.
           </p>
         )}
 
-        {!isArchived && (
+        {!isArchived && !lockedApproval && (
           <div className="flex items-center justify-end gap-2">
             {actionError && (
               <p role="alert" className="text-xs font-medium text-red-500">

@@ -216,6 +216,10 @@ const RETIRED: Record<string, string> = {};
  * name; INTERNAL entries must NOT collide (a relation cannot be both).
  */
 const OVERRIDES: Record<string, RegistryEntry> = {
+  // Migration 180 (#4672): durable approval requests. Owner SELECT through RLS is the one api surface (the approvals
+  // landing page reads the row as the signed-in Owner); every write is a SECURITY DEFINER approval RPC and
+  // service_role holds NO table privilege at all (it reaches the table only through the RPCs). Created after the 174 snapshot.
+  "approval_request": exposed({ authenticated: ["SELECT"] }, { provenance: "migration 180 (#4672): authenticated SELECT only (Owner-gated by RLS); no write grant for any api role; service_role has no table access (RPC-only)" }),
   // OVERRIDES for migration 178's default-era api-grant narrowing (#11193 —
   // the deferred pass ADR-303 §Consequences names). Each entry replaces the
   // 174 snapshot's parsed full-DML set with the censused intended posture;

@@ -90,6 +90,8 @@ import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool, gateStatusWriteOp } from "./permission-callback";
+import { createApprovalGateDeps } from "./approval/gate";
+import { ExecutionGrants } from "./approval/grants";
 import { reportSilentFallback, hashUserId } from "./observability";
 import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
@@ -1198,6 +1200,10 @@ async function startAgentSessionInner(
       throw new Error(ERR_WORKSPACE_NOT_PROVISIONED);
     }
     const activeWorkspaceId = activeWorkspace.workspaceId;
+    // #4672 — ONE per-session execution-grant object, shared by closure between the approval gate (writer) and the three
+    // tool builders that re-resolve something at execution (reader): github_push_branch, kb_share_create,
+    // workspace_set_autonomous. The model has no handle to it.
+    const approvalGrants = new ExecutionGrants();
     const workspacePath = await resolveActiveWorkspacePath(
       userId,
       sessionTenant,
@@ -1764,6 +1770,7 @@ action was not performed, tell the user that and do not retry it.`;
           defaultBranch,
           workspacePath,
           workflowRateLimiter,
+          grants: approvalGrants,
         });
         platformTools.push(...github.tools);
         platformToolNames.push(...github.toolNames);
@@ -1845,6 +1852,7 @@ are the requirements to implement.`;
       userId,
       kbRoot: path.join(workspacePath, "knowledge-base"),
       baseUrl: appUrl ?? "https://app.soleur.ai",
+      grants: approvalGrants,
     });
     platformTools.push(...kbShareTools);
     platformToolNames.push(
@@ -1929,7 +1937,7 @@ are the requirements to implement.`;
     // (flipping an approval-bypass requires a review-gate even for the agent).
     // Registered here on the leader surface only — the cc-router exposes no
     // platform tools (platformToolNames: []); see workspace-settings-tools.ts.
-    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });
+    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId, grants: approvalGrants });
     platformTools.push(...workspaceSettingsTools.tools);
     platformToolNames.push(...workspaceSettingsTools.toolNames);
 
@@ -2250,6 +2258,16 @@ are the requirements to implement.`;
             abortableReviewGate,
             sendToClient,
             notifyOfflineUser,
+            // #4672 — the durable approval flow for the slice-1 gated tools. Cheap to build (no database access until a
+            // slice-1 tool reaches the gate); the flag seam inside it decides, once per gate, whether the flow runs.
+            // Off (today: constant false) the gated branch is the in-memory review gate, unchanged.
+            approval: createApprovalGateDeps({
+              userId,
+              workspaceId: activeWorkspaceId,
+              repoSlug: repoOwner && repoName ? `${repoOwner}/${repoName}` : "",
+              workspacePath,
+              grants: approvalGrants,
+            }),
             // Closure captures `userId` from the enclosing runAgentSession
             // scope so the deps interface stays at (conversationId, status[, guard])
             // — see plan §"Transitive Coverage via deps.updateConversationStatus".
