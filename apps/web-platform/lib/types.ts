@@ -184,6 +184,15 @@ export type WSErrorCode =
   | "delegation_daily_cap_exceeded"
   | "delegation_cross_tenant";
 
+/** Single predicate for the credential-blocked pair (#11525): the chat is
+ *  blocked (composer disabled, sends refused) iff the error code is one of
+ *  these. Spell the pair ONLY here. */
+export function isCredentialErrorCode(
+  code: string | null | undefined,
+): code is "key_invalid" | "byok_key_missing" {
+  return code === "key_invalid" || code === "byok_key_missing";
+}
+
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
 export const WS_CLOSE_CODES = {

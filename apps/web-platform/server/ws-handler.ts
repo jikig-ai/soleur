@@ -41,6 +41,7 @@ import {
 import { authFailureFrameFromLeaseError, isOauthUnusableLeaseError, logSessionFailure } from "./agent-auth-user-message";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
+import { CONVERSATION_NOT_FOUND_MESSAGE } from "@/lib/ws-constants";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
@@ -2221,7 +2222,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         const { data: conv, error: convErr } = await convQuery.single();
 
         if (convErr || !conv) {
-          sendToClient(userId, { type: "error", message: "Conversation not found" });
+          sendToClient(userId, { type: "error", message: CONVERSATION_NOT_FOUND_MESSAGE });
           return;
         }
 
@@ -2230,7 +2231,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // Could be cross-repo resume attempt OR a disconnected user. Keep
           // the response indistinguishable from "not found" so callers
           // can't probe for existence of cross-repo threads.
-          sendToClient(userId, { type: "error", message: "Conversation not found" });
+          sendToClient(userId, { type: "error", message: CONVERSATION_NOT_FOUND_MESSAGE });
           return;
         }
 
