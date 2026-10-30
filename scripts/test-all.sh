@@ -5997,6 +5997,12 @@ if want_scripts; then
   # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code
   # decides whether a soak tracker closes, so a vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/post-deploy-incident-soak" bash scripts/followthroughs/post-deploy-incident-soak.test.sh
+  # Exit-code harness for the Discord blog-webhook fallback verification probe (closes #11532's
+  # companion tracker). Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). Its exit code decides whether the sweeper closes the tracker, so a vacuous
+  # PASS — before the first post-secret publish lands, or on an unmeasured Sentry read — must
+  # redden CI.
+  run_suite "scripts/followthroughs/discord-blog-webhook-fallback" bash scripts/followthroughs/discord-blog-webhook-fallback.test.sh
   # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.

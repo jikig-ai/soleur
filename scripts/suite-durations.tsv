@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1200
-# generated-at=2026-10-29T16:17:29Z
+# generated-at=2026-10-29T18:14:30Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -392,6 +392,7 @@ scripts/followthrough-varq-ban	24476	measured
 scripts/followthrough-varq-ban-live	1544	measured
 scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
+scripts/followthroughs/discord-blog-webhook-fallback	1200	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/inngest-trace-retention-5150	1204	floor
 scripts/followthroughs/parked-green-synthesis-11362	1200	floor

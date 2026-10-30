@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1200
-# generated-at=2026-10-29T16:17:29Z
+# generated-at=2026-10-29T18:14:30Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -395,6 +395,7 @@ scripts/followthrough-varq-ban	6
 scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/ci-draft-light-soak-9728	3
 scripts/followthroughs/ci-push-dedupe-soak-9512	3
+scripts/followthroughs/discord-blog-webhook-fallback	4
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
 scripts/followthroughs/inngest-trace-retention-5150	1
 scripts/followthroughs/parked-green-synthesis-11362	4

@@ -921,6 +921,7 @@ cwv-field-rum-9178|scripts/followthroughs/cwv-field-rum-9178.test.sh
 send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097.test.sh
 betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh
 git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh
+discord-blog-webhook-fallback|scripts/followthroughs/discord-blog-webhook-fallback.test.sh
 dispatch-recovery-sweeper-11211|scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh'
 
 # HMAC (S2-C): the probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
