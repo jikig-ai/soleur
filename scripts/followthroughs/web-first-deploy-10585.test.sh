@@ -130,12 +130,56 @@ list() { # <id,status> ...   -> $WORK/fx/list
         "${pair%%,*}" "$(ts '2026-10-29')" "${pair##*,}"
     done; } | jq -s '.' > "$WORK/fx/list"
 }
-job() { # <run-id> <job-id> <job-name> <conclusion> [trail-step-conclusion=success] — REST /jobs response shape
-  printf '{"total_count":1,"jobs":[{"id":%s,"name":"%s","status":"completed","conclusion":"%s","steps":[{"name":"%s","conclusion":"%s"}]}]}\n' \
-    "$2" "$3" "$4" "$S" "${5:-success}" > "$WORK/fx/jobs.$1"
+job() { # <run-id> <job-id> <job-name> <conclusion> [trail-step-conclusion=success] [trail-started_at] — REST /jobs response shape
+  # started_at defaults to a real timestamp so recovery-capable fixtures carry
+  # it; pass "-" for the absent arm (the probe's `// "-"` then skips recovery).
+  local st_json
+  if [[ "${6:-}" == "-" ]]; then st_json='null'; else st_json="\"${6:-2026-10-20T10:00:00Z}\""; fi
+  printf '{"total_count":1,"jobs":[{"id":%s,"name":"%s","status":"completed","conclusion":"%s","steps":[{"name":"%s","conclusion":"%s","started_at":%s,"completed_at":%s}]}]}\n' \
+    "$2" "$3" "$4" "$S" "${5:-success}" "$st_json" "$st_json" > "$WORK/fx/jobs.$1"
 }
 bs() { # <host_name> <control> <marker-ts|none>
   printf 'control=%s\nmarker=%s\n' "$2" "$3" > "$WORK/fx/bs.$1"
+}
+
+# ── UNKNOWN STEP (attribution-expired) fixture builders ─────────────────────
+# GitHub drops step-name attribution ~2-3 wk post-completion: every line comes
+# back under field 2 "UNKNOWN STEP" while content survives (#11600).
+# GH_LOG_BOM — the UTF-8 byte-order mark gh writes at the start of EVERY step
+# section after the first (measured on job 106093730126: 14/15 ##[group]Run
+# headers BOM'd; only the stream head is bare). NOT decoration: a lone-BOM
+# document cannot tell `${log//…/}` from `${log/…/}` — the single-strip
+# mutation is pinned only while a SECOND BOM'd section exists.
+GH_LOG_BOM=$'\357\273\277'
+# ul — one emitted line under "UNKNOWN STEP" (field 2); ANSI-echoed variants
+#   are passed literally in the payload args.  ul <line> <ts> <job> [bom]
+ul()   { printf '%s\tUNKNOWN STEP\t%s%s %s\n' "$3" "${4:-}" "$2" "$1"; }
+# ulog <job-name> <started_at-ISO> <line>... — a faithful attribution-expired
+# document: BARE `Set up job` head (gh strips the BOM only from the stream
+# head), a BOM'd prelude ##[group]Run stamped BEFORE started_at (the ts>=ps
+# gate must skip it AND it puts the second BOM in the file — the must-PASS
+# prelude, pinned by mutation rows 2-3), the BOM'd trail-step ##[group]Run AT
+# started_at, the payload lines stamped at started_at, then a BOM'd next-step
+# header bounding the region.
+#   ULOG_NO_BOUND=1  omits the closing header (region runs to EOF)
+#   ULOG_EARLY_HDR=1 stamps the trail header BEFORE started_at (the
+#                    "no ##[group]Run header at/after started_at" arm)
+ulog() {
+  local jn="$1" st="$2"; shift 2
+  local base epoch pre post l hdr_ts
+  base=${st%Z}; base=${base%%.*}
+  # Epoch arithmetic: `date -d "<ISO> - 10 minutes"` misparses the relative
+  # clause on this platform (measured: +10h, not -10m) — go through %s.
+  epoch=$(date -u -d "${base}Z" +%s)
+  pre=$(date -u -d "@$((epoch - 600))" '+%Y-%m-%dT%H:%M:%S.0000000Z')
+  post=$(date -u -d "@$((epoch + 600))" '+%Y-%m-%dT%H:%M:%S.0000000Z')
+  hdr_ts="$st"; [[ "${ULOG_EARLY_HDR:-0}" == 1 ]] && hdr_ts="$pre"
+  printf '%s\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "$jn" "$pre"
+  ul '##[group]Run terraform plan' "$pre" "$jn" "$GH_LOG_BOM"
+  ul 'prelude step output line (not the trail)' "$pre" "$jn"
+  ul '##[group]Run Surface the fresh-host Sentry breadcrumb trail' "$hdr_ts" "$jn" "$GH_LOG_BOM"
+  for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s %s\n' "$jn" "$st" "$l"; done
+  [[ "${ULOG_NO_BOUND:-0}" == 1 ]] || ul '##[group]Run Post job cleanup' "$post" "$jn" "$GH_LOG_BOM"
 }
 
 reset_fx() {
@@ -485,6 +529,102 @@ SEEN_RCS+=("$rc")
 if [[ "$rc" == "78" ]]; then pass "xtrace with a live credential refuses (rc=78)"
 else fail "xtrace refusal: want rc=78, got rc=$rc"; fi
 
+# ── 17+. Attribution-expired job logs (UNKNOWN STEP) — #11600 ────────────────
+# The trail must be recovered from the ##[group]Run region keyed on the step's
+# started_at, graded through the same emitted-vs-echoed filter, and the
+# zero-parseable tripwire must survive recovery.
+
+# 17a. Case A (AC-1): a success job whose whole log is UNKNOWN STEP — BOM'd
+#      headers, a pre-started_at prelude the ts gate must skip, an emitted
+#      pointer+ready — is graded by content: accounted -> 2.
+reset_fx; list "901,completed"
+ST=$(ts '1 hour ago')
+job 901 9011 web_host_replace success success "$ST"
+ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
+bs soleur-web-2 7 "$(sql '30 minutes ago')"
+run_probe; check 2 "NOT YET" "aged UNKNOWN STEP success job grades the recovered trail (accounted -> 2)"
+
+# 17b. Case B (AC-1): same shape, no marker, boot past the deadline -> the
+#      overdue arm through recovery: 5 naming the host.
+reset_fx; list "901,completed"
+ST=$(ts '3 days ago')
+job 901 9011 web_host_replace success success "$ST"
+ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
+bs soleur-web-2 4 none
+run_probe; check 5 "soleur-web-2" "aged UNKNOWN STEP overdue boot is ACTION REQUIRED through recovery"
+
+# 17c. Case G (AC-5): recovery is conclusion-agnostic — a FAILURE job's aged
+#      log carrying emitted pointer+ready enrolls the obligation identically.
+reset_fx; list "901,completed"
+ST=$(ts '3 days ago')
+job 901 9011 web_host_replace failure success "$ST"
+ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
+bs soleur-web-2 4 none
+run_probe; check 5 "soleur-web-2" "aged UNKNOWN STEP failure job enrolls the obligation (conclusion-agnostic)"
+
+# 18. Case C (AC-4): the recovered region passes through the SAME emitted-vs-
+#      echoed filter — an emitted pointer beside an ANSI-echoed ready copy
+#      derives no obligation (mirrors case 7's named-attribution arm).
+reset_fx; list "901,completed"
+ST=$(ts '3 days ago')
+job 901 9011 web_host_replace success success "$ST"
+ulog web_host_replace "$ST" "$(PTR web-2 replace)" \
+  $'\033[36;1mfresh-host boot reached fresh_boot_ready — the host booted clean and reported ready.' \
+  > "$WORK/fx/log.9011"
+run_probe; check 2 "NOT YET" "an ANSI-echoed ready line inside the recovered region derives no obligation"
+
+# 19. Case D (AC-3): the tripwire survives recovery — a success job whose
+#      recovered region holds zero trail-pattern lines exits 3 with the
+#      `zero parseable` message; a log with no ##[group]Run header at/after
+#      started_at is the same verdict. ULOG_NO_BOUND removes the post header
+#      too, so NO header at/after started_at exists at all.
+#      A named-attribution log with emitted-but-patternless trail lines must
+#      also exit 3 — the degraded channel the pattern trigger closes (the
+#      four-seat convergent review finding).
+reset_fx; list "901,completed"
+ST=$(ts '1 hour ago')
+job 901 9011 web_host_replace success success "$ST"
+ulog web_host_replace "$ST" 'an unrelated output line' 'another quiet line' > "$WORK/fx/log.9011"
+run_probe; check 3 "zero parseable" "recovered region with no trail-pattern lines reads CANNOT ESTABLISH"
+reset_fx; list "901,completed"
+job 901 9011 web_host_replace success success "$ST"
+ULOG_EARLY_HDR=1 ULOG_NO_BOUND=1 ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
+run_probe; check 3 "zero parseable" "no ##[group]Run header at/after started_at reads CANNOT ESTABLISH"
+reset_fx; list "901,completed"
+job 901 9011 web_host_replace success success "$ST"
+{ l 'an unrelated emitted line' "$ST" web_host_replace; l 'another quiet line' "$ST" web_host_replace; } > "$WORK/fx/log.9011"
+run_probe; check 3 "zero parseable" "a named-attribution patternless trail on a success job reads CANNOT ESTABLISH"
+
+# 20. Case F (AC-3): a success job whose jobs-API step entry carries no
+#      started_at cannot be bounded — unbounded is unmeasured -> 3.
+reset_fx; list "901,completed"
+ST=$(ts '1 hour ago')
+job 901 9011 web_host_replace success success "-"
+ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
+run_probe; check 3 "zero parseable" "a missing started_at on a success job reads CANNOT ESTABLISH"
+
+# 21. AC-6 supersession across attribution modes: an aged UNKNOWN STEP boot
+#      plus a newer named-attribution boot for the same key keeps only the
+#      newest (the live 10-06/10-28 shape).
+reset_fx; list "901,completed" "900,completed"
+ST_OLD=$(ts '3 days ago')
+job 900 9001 web_host_replace success success "$ST_OLD"
+job 901 9011 web_host_replace success
+ulog web_host_replace "$ST_OLD" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9001"
+B_NEW=$(ts '1 hour ago')
+{ l "$(PTR web-2 replace)" "$B_NEW" web_host_replace; l "$READY" "$B_NEW" web_host_replace; } > "$WORK/fx/log.9011"
+bs soleur-web-2 3 none
+run_probe; check 2 "NOT YET" "supersession across attribution modes keeps only the newest boot"
+
+# 22. Matrix row 9 (must-PASS): the trail step as the log's LAST section —
+#      the region runs to EOF with no bounding header and still grades.
+reset_fx; list "901,completed"
+ST=$(ts '1 hour ago')
+job 901 9011 web_host_replace success success "$ST"
+ULOG_NO_BOUND=1 ulog web_host_replace "$ST" "$(PTR web-2 replace)" "$READY" > "$WORK/fx/log.9011"
+bs soleur-web-2 7 "$(sql '30 minutes ago')"
+run_probe; check 2 "NOT YET" "trail step as last section grades the EOF-terminated region"
+
 # ── Property sweep: the never-0 / never-1 invariant on every driven path ─────
 bad_rc=0
 for r in ${SEEN_RCS[@]+"${SEEN_RCS[@]}"}; do
@@ -500,8 +640,8 @@ if [ "${#FAILURES[@]}" -gt 0 ]; then
   printf '%s passed, %s failed\n' "$passes" "${#FAILURES[@]}"; exit 1
 fi
 # Anti-vacuity floor, reported outside the helpers it backstops.
-if [[ "$passes" -lt 30 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 30+)\n' "$passes" >&2
+if [[ "$passes" -lt 70 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 70+)\n' "$passes" >&2
   exit 1
 fi
 printf '%s passed, 0 failed\n' "$passes"
