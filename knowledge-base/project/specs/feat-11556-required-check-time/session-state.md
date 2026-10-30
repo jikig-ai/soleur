@@ -80,3 +80,8 @@ CLA author gate: commits must be authored by CLA-signed identity (jean.deruelle@
 - affected-gate `bash scripts/test-all.sh --affected` RUNNING (degraded to MODE=full since runner changed) → .work-run-affected-gate.log/.rc
 - Plan's literal `bash scripts/affected-tests.sh` doesn't exist — real mechanism is test-all.sh --affected.
 - REMAINING: p90 baseline via jobs API → runbook Measured history; tasks.md checkboxes; push --force-with-lease; soleur:review→resolve-todo-parallel→compound→ship.
+
+## Update 5 — pushed + review phase
+- Push done: a5c01e4091 forced (pre-rebase remote). Commits on branch now include e82f08c (split), d480451 (rc_g+edges), d5e9655 (floor+argv+ci.yml), 60b93ac (gen+totality+runbook topo), fe302de (regen), a5c01e4 (docs+tasks+state).
+- Affected gate: rc=4 refused (sibling) → relaunched SOLEUR_ALLOW_FULL_GATE=1 (degraded MODE=full since runner changed) → .work-run-affected-gate.rc pending.
+- Pipeline now: soleur:review (skill running) → resolve-todo-parallel → compound → ship. Review SKILL.md at plugin cache skills/review/SKILL.md; steps: classification → merge-tree check → panel agents → synthesis → issues → exit gate.
