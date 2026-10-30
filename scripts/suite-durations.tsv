@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1200
-# generated-at=2026-10-29T18:14:30Z
+# generated-at=2026-10-30T15:07:58Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -249,6 +249,7 @@ plugins/soleur/test/monitor-lock.test.sh	1200	floor
 plugins/soleur/test/monitor-pr-checks.test.sh	245125	measured
 plugins/soleur/test/net-issue-flow.test.sh	8356	measured
 plugins/soleur/test/notice-frontmatter.test.sh	7119	measured
+plugins/soleur/test/npm-publish-oidc.test.sh	1200	floor
 plugins/soleur/test/operator-9321-stages.test.sh	51837	measured
 plugins/soleur/test/operator-ack-guard.test.sh	110567	measured
 plugins/soleur/test/operator-agent-runnable.test.sh	15585	measured
@@ -393,6 +394,8 @@ scripts/followthrough-varq-ban-live	1544	measured
 scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1200	floor
+scripts/followthroughs/dispatch-recovery-sweeper-11211	1200	floor
+scripts/followthroughs/inngest-luks-keeper-dark-11265	1200	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/inngest-trace-retention-5150	1204	floor
 scripts/followthroughs/parked-green-synthesis-11362	1200	floor

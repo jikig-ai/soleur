@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1200
-# generated-at=2026-10-29T18:14:30Z
+# generated-at=2026-10-30T15:07:58Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -252,6 +252,7 @@ plugins/soleur/test/monitor-lock.test.sh	4
 plugins/soleur/test/monitor-pr-checks.test.sh	7
 plugins/soleur/test/net-issue-flow.test.sh	8
 plugins/soleur/test/notice-frontmatter.test.sh	6
+plugins/soleur/test/npm-publish-oidc.test.sh	6
 plugins/soleur/test/operator-9321-stages.test.sh	2
 plugins/soleur/test/operator-ack-guard.test.sh	2
 plugins/soleur/test/operator-agent-runnable.test.sh	4
@@ -396,6 +397,8 @@ scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/ci-draft-light-soak-9728	3
 scripts/followthroughs/ci-push-dedupe-soak-9512	3
 scripts/followthroughs/discord-blog-webhook-fallback	4
+scripts/followthroughs/dispatch-recovery-sweeper-11211	6
+scripts/followthroughs/inngest-luks-keeper-dark-11265	6
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
 scripts/followthroughs/inngest-trace-retention-5150	1
 scripts/followthroughs/parked-green-synthesis-11362	4
