@@ -74,5 +74,9 @@ text.
 - Migration 181 (#11569) narrows `public.messages` UPDATE from 174's default-era table-level grant to
   `(status, draft_preview)` for `authenticated` (revoked for `anon`), paired with the owner-draft policy
   `messages_owner_draft_update`; without the narrowing that policy would let a browser session rewrite `trust_tier`,
-  `action_class` or `template_id` of its own rows. The `table-grants.ts` column-split entry is how the grant guard sees
+  `action_class`, `template_id` or `workspace_id` of its own rows. The `table-grants.ts` column-split entry is how the grant guard sees
   it (the same mechanism as `users` in 178). The other table-level verbs on `messages` stay as 174 recorded them.
+  The policy is author-only for UPDATE while SELECT stays workspace-wide (a co-owner sees but cannot act on a
+  teammate's draft; tracked in #11629). Route-level rules that the database does not enforce (no edit or discard
+  once an approval row exists) can be bypassed by a browser session PATCHing its own draft directly; this fails
+  closed later through the WORM body-hash pin and affects only that user's own draft (accepted residual).
