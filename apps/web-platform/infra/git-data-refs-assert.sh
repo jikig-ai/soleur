@@ -13,12 +13,12 @@
 # WHAT IT PROVES, in ONE session (the repository directory's identity, owner included, is recorded before the read
 # and compared after it): the store holds exactly ONE real repository (a directory named *.git, no symlink) that is
 # owned by the git account, is self-contained (no objects/info/alternates or http-alternates), has no symlink in it
-# (anywhere but below objects/ depth 2), none of the top-level entries that redirect a read to another repository
+# (anywhere in it, objects/ included), none of the top-level entries that redirect a read to another repository
 # (commondir, gitdir, worktrees, modules, config.worktree, reftable), and no symref and no loose ref that is not a
 # 40-hex SHA-1 line under refs/soleur/worktrees/, and every ref under refs/soleur/worktrees/ in it is well formed
 #   refs/soleur/worktrees/<id>/(heads|tags)/<name>
-# with a 40-hex value of the right type (heads: a commit; tags: a commit, or a tag that peels ONE level to one: an
-# annotated tag of a tag is rc 28), and at least one ref is a heads/ branch tip (tags-only never passes: the 2026-10-27
+# with a 40-hex value of the right type (heads: a commit; tags: a commit, or an annotated tag whose chain of tags ends in one:
+# %(*objecttype) peels the whole chain; a chain that ends in a tree or blob is rc 28), and at least one ref is a heads/ branch tip (tags-only never passes: the 2026-10-27
 # failure was a rejected push to heads/main). A `shallow` file is EXPECTED (every depth-1 workspace push accepted under
 # receive.shallowUpdate=true leaves one) and is not refused: a shallow store proves the tip commits exist and are
 # commits, not their history or parents, and a corrupt `shallow` file fails the read itself (rc 26). It does NOT prove
@@ -31,7 +31,10 @@
 # only; stdout and stderr of every command are discarded, and the only stderr this file writes is a fixed reason
 # word and digits (gd_capture relays a failed session's stderr, so nothing else may reach it).
 #
-# NOTHING IS WRITTEN TO THE STORE. The one thing this file writes anywhere is a transient scratch directory under
+# NOTHING IS WRITTEN TO THE STORE, and nothing is fetched or run from a repository-local config: the read sets GIT_NO_LAZY_FETCH=1
+# (a repo `config` with extensions.partialclone, remote.<n>.promisor and remote.<n>.uploadpack plus a missing tip object would
+# otherwise make for-each-ref lazy-fetch and run that command as the git user; with the variable a missing object is just rc 128,
+# read as refs_unreadable). The one thing this file writes anywhere is a transient scratch directory under
 # /dev/shm (root-only, mode 0700) that holds git's own stderr for the ONE for-each-ref (it is tested for emptiness
 # and never printed); the EXIT trap removes it. A SIGKILL would leave that directory, holding only git's warning
 # text (which may name a ref), until the next boot; /dev/shm is a tmpfs, so it never reaches a disk.
@@ -44,11 +47,13 @@
 #   21  refs_repo_not_single  INCONCLUSIVE     repos>1, or an entry that is not a real *.git directory, or the repositories directory is a symlink or not on the store mount (not retryable)
 #   23  refs_none             FAILED           the repository holds no ref under refs/soleur/worktrees/ ("provisioned, not replicated")
 #   24  refs_no_branch_tip    FAILED           refs exist but none under heads/
-#   26  refs_unreadable       INCONCLUSIVE     for-each-ref failed (a missing tip object, an unparsable `shallow` file), a 201st line, or a failed self-check (retryable, at most once: a transient read failure; an unparsable `shallow` file and a 201st line are permanent)
+#   26  refs_unreadable       INCONCLUSIVE     for-each-ref failed (a missing tip object, an unparsable `shallow` file), a 201st line, or a failed self-check (retryable, at most once: the single retry is always spent, a second identical result stops; no attempt is made to tell the transient read failure from the permanent causes, an unparsable `shallow` file and a 201st line)
 #   27  refs_shape_failed     INCONCLUSIVE     a ref whose name is off-shape, or ANY output on git's stderr (git skips a broken ref silently, with only a warning), or a repository a push cannot have produced: reason repo_owner (not owned by git), repo_alternates (objects/info/alternates or http-alternates), repo_redirect (a top-level commondir, gitdir, worktrees, modules, config.worktree or reftable), repo_symlink (a symlink in it), ref_symref (a symref under refs/soleur/worktrees/, dangling or not), ref_content (a loose ref under refs/soleur/worktrees/ that is not exactly 40 hex plus LF) (not retryable)
 #   28  refs_bad_sha          FAILED           a value that is not 40-hex, a heads/ object that is not a commit, or a tags/ object that does not peel to a commit
 # Retry rule (ONE rule, the runbook states the same numbers): probe_failed at most twice, refs_unreadable at most once, three red runs in all
-# since the rollback; every not-retryable cause (and every FAILED word) is never retried.
+# since the rollback; every not-retryable cause and every FAILED word is never retried, and a dispatch is made only after R5 (no premature
+# dispatch, so no FAILED word is read as "too early"). The one runner-side carve-out: flag_already_true (no host was dialed) is dispatched
+# once more, after R5 reads disabled.
 # Keep the table, the `die` calls below and the case in git-data-cutover.sh equal (the suite derives the set
 # from all three, and the class column from the runbook Verdict map). Why there is no `set -e`: every failure
 # below is an explicit `|| die N`, and a script that exits on its own would exit with a code outside this table.
@@ -128,14 +133,14 @@ ra_main() {
   #   a  objects/info/alternates or http-alternates (objects that live outside the store)
   #   r  a top-level entry that redirects the read to another repository (DENYLIST: no legitimate producer in a store built by
   #      git init plus receive-pack): commondir, gitdir, worktrees, modules, config.worktree, reftable
-  #   s  a symlink anywhere in the repository except below objects/ depth 2 (a redirected refs/ or objects/)
+  #   s  a symlink anywhere in the repository, objects/ included (a redirected refs/ or objects/)
   #   y  a loose ref file under the namespace that starts `ref:` (a symref, DANGLING OR NOT: git skips a dangling symref silently,
   #      rc 0 and no stderr, so for-each-ref can never show it)
   #   u  any other loose ref file under the namespace that is not exactly 40 hex plus LF (a SHA-256 value, a ref without its LF,
   #      garbage, an empty file); a .lock file is a push in flight, not a ref
   # A symref created between this probe and the read is caught only if it resolves (the %(symref) field below).
   local lnk
-  lnk="$(find -P "$repo" \( -path "$repo/objects/info/alternates" -o -path "$repo/objects/info/http-alternates" \) -printf a -o \( -path "$repo/commondir" -o -path "$repo/gitdir" -o -path "$repo/worktrees" -o -path "$repo/modules" -o -path "$repo/config.worktree" -o -path "$repo/reftable" \) -printf r -o -type l -printf s -o \( -path "$repo/refs/soleur/worktrees/*" -type f ! -name '*.lock' \( -exec grep -q '^ref:' {} \; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E '[0-9a-f]{40}' {} \; -printf u \) \) -o -path "$repo/objects/*/*" -prune)" || die 16 shape_probe
+  lnk="$(find -P "$repo" \( -path "$repo/objects/info/alternates" -o -path "$repo/objects/info/http-alternates" \) -printf a -o \( -path "$repo/commondir" -o -path "$repo/gitdir" -o -path "$repo/worktrees" -o -path "$repo/modules" -o -path "$repo/config.worktree" -o -path "$repo/reftable" \) -printf r -o -type l -printf s -o \( -path "$repo/refs/soleur/worktrees/*" -type f ! -name '*.lock' \( -exec grep -q '^ref:' {} \; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E '[0-9a-f]{40}' {} \; -printf u \) \))" || die 16 shape_probe
   case "$lnk" in *a*) die 27 repo_alternates ;; esac
   case "$lnk" in *r*) die 27 repo_redirect ;; esac
   case "$lnk" in *s*) die 27 repo_symlink ;; esac
@@ -150,7 +155,7 @@ ra_main() {
   # ownership claim does not rest on git (--git-dir skips git's ownership check): section 3 makes it (repo_owner).
   local out="" grc=0
   sd="$(mktemp -d -p /dev/shm)" || die 16 scratch_failed
-  out="$(cd / && runuser -u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir="$repo" for-each-ref --count=$((RA_BOUND + 1)) --format='%(refname)%09%(objectname)%09%(objecttype)%09<%(*objecttype)>%09<%(symref)>' refs/soleur/worktrees/ 3>&- 4>&- 2>"$sd/err")" || grc=$?
+  out="$(cd / && runuser -u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir="$repo" for-each-ref --count=$((RA_BOUND + 1)) --format='%(refname)%09%(objectname)%09%(objecttype)%09<%(*objecttype)>%09<%(symref)>' refs/soleur/worktrees/ 3>&- 4>&- 2>"$sd/err")" || grc=$?
   [ "$grc" -eq 0 ] || die 26 refs_unreadable
   [ ! -s "$sd/err" ] || die 27 refs_shape_failed
 

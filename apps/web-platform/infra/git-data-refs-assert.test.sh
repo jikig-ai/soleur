@@ -11,8 +11,14 @@
 #      shim accepts EXACTLY the modeled argv (env -i, the hardening flags, the one for-each-ref and its
 #      format) and refuses any other with a logged violation, so a write verb or a changed flag set is RED. EVERY verb
 #      the shim dispatcher names is symlinked into the shim directory (an anchor row derives the list from the
-#      dispatcher itself), and static censuses pin the closed command set, the redirect set and the exit paths of the
-#      script, so a write the shims do not model is still RED.
+#      dispatcher itself), and a static census pins the closed command set, the redirect set and the exit paths of the
+#      script. CENSUS CONTRACT (decision row F38): the census catches ACCIDENTAL or plain-spelled additions in paths the
+#      runtime rows do not reach (a new command word, a write redirect, an extra exit or return, an unlisted argv or
+#      form, an assignment to PATH/BASH_ENV/IFS/LD_*/GIT_*, a second assignment to the scratch-dir variable, a shadowing
+#      function); it FAILS CLOSED on a construct it cannot classify (an unpaired [[, an unterminated quote, substitution or
+#      ${...}: an instrument error, never a skip). It is NOT a defence against an adversarial author: a static lexer cannot be,
+#      and the runtime PATH-shim rows are the property check for every REACHABLE path. HARD STOP: no further lexer arms race;
+#      a bypass that needs a deliberately hostile spelling is recorded as a residual (runbook "What it does not say"), not fixed.
 #   B  VERB. git-data-cutover.sh MODE=refs_assert against an `ssh` shim: the script body on stdin, the
 #      %q-quoted input, the 60 s bound, every rc -> verdict word and class, off-shape answers refused,
 #      runner-side refusals, and one end-to-end row where the ssh shim runs the body through a real
@@ -110,8 +116,9 @@ C3="$(GIT_AUTHOR_DATE='2001-01-01T00:00:03Z' GIT_COMMITTER_DATE='2001-01-01T00:0
 BLOB="$(printf 'fixture\n' | g hash-object -w --stdin)"
 TREE2="$(printf '100644 blob %s\tf\n' "$BLOB" | g mktree)"
 TAG_C="$(printf 'object %s\ntype commit\ntag t1\ntagger fx <fx@example.invalid> 978307200 +0000\n\nmsg\n' "$C1" | g hash-object -t tag -w --stdin)"
+TAG_TT="$(printf 'object %s\ntype tag\ntag t3\ntagger fx <fx@example.invalid> 978307200 +0000\n\nmsg\n' "$TAG_C" | g hash-object -t tag -w --stdin)"
 TAG_T="$(printf 'object %s\ntype tree\ntag t2\ntagger fx <fx@example.invalid> 978307200 +0000\n\nmsg\n' "$TREE2" | g hash-object -t tag -w --stdin)"
-for v in EMPTY_TREE C1 C2 C3 BLOB TREE2 TAG_C TAG_T; do
+for v in EMPTY_TREE C1 C2 C3 BLOB TREE2 TAG_C TAG_T TAG_TT; do
   [[ "${!v}" =~ ^[0-9a-f]{40}$ ]] || instrument "template object $v is not a 40-hex id: ${!v}"
 done
 # The sha order the printed field must follow (numeric/lexicographic over lowercase hex), computed, never typed.
@@ -182,6 +189,8 @@ case "$n" in
     if flag sort_trunc; then "$n" | sed '$d'; exit 0; fi
     # the right NUMBER of lines, every one a wrong sha: only the picked-sha-is-a-key check can refuse it
     if flag sort_wrong; then "$n" | sed 's/.*/0000000000000000000000000000000000000000/'; exit 0; fi
+    # ONLY the second line is wrong: a check that looks at the first picked sha alone would print it
+    if flag sort_wrong2; then "$n" | sed '2s/.*/0000000000000000000000000000000000000000/'; exit 0; fi
     exec "$n" ;;
   readlink)
     printf '%s\n' "$*" >> "$ST/readlink_argv"
@@ -231,7 +240,7 @@ case "$n" in
     REPO_ARG=""
     for a in "$@"; do case "$a" in --git-dir=*) REPO_ARG="${a#--git-dir=}" ;; esac; done
     FMT='%(refname)%09%(objectname)%09%(objecttype)%09<%(*objecttype)>%09<%(symref)>'
-    want="-u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir=$REPO_ARG for-each-ref --count=201 --format=$FMT refs/soleur/worktrees/"
+    want="-u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir=$REPO_ARG for-each-ref --count=201 --format=$FMT refs/soleur/worktrees/"
     if [ "$*" != "$want" ] || [ "${REPO_ARG#"$MNT"/repositories/}" = "$REPO_ARG" ]; then
       printf '%s\n' "$*" >> "$ST/bad_argv"; echo "fatal: bad argv" >&2; exit 64
     fi
@@ -253,7 +262,15 @@ case "$n" in
       exit "$(cat "$W/git_fake_rc" 2>/dev/null || echo 0)"
     fi
     real="$W/store/${REPO_ARG#"$MNT"/}"
-    "$REALGIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir="$real" for-each-ref --count=201 --format="$FMT" refs/soleur/worktrees/
+    # the real git runs under the MODELED env (the words between `env -i` and `/usr/bin/git`, already pinned by $want above), so an env
+    # variable the script drops or adds changes what the fixture's git does (GIT_NO_LAZY_FETCH is the one that matters)
+    ENVW=(); on=0; for a in "$@"; do
+      if [ "$a" = "-i" ] && [ "$on" = 0 ]; then on=1; continue; fi
+      [ "$a" = /usr/bin/git ] && break
+      # strip_lazy_env: the CONTROL world models a git whose env lacks the variable (argv still matches), proving the fixture really lazy-fetches
+      if [ "$on" = 1 ]; then if flag strip_lazy_env && [ "$a" = GIT_NO_LAZY_FETCH=1 ]; then :; else ENVW+=("$a"); fi; fi
+    done
+    env -i "${ENVW[@]}" "$REALGIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir="$real" for-each-ref --count=201 --format="$FMT" refs/soleur/worktrees/
     rc=$?
     if flag toctou_swap_repos; then
       # a NEW repositories directory (new inode) around the SAME repository directory: only the directory identity changes
@@ -279,7 +296,7 @@ export REALGIT
 _R='/mnt/git-data/repositories'; _RR="$_R/@R"
 {
   printf '%s\t%s\n' find '-H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! ( -type f ( -name .*.init.lock -o -name .init.lock ) ) ! ( -type d -name lost+found -empty ) -printf %y\t%f\0'
-  printf '%s\t%s\n' find "-P $_RR ( -path $_RR/objects/info/alternates -o -path $_RR/objects/info/http-alternates ) -printf a -o ( -path $_RR/commondir -o -path $_RR/gitdir -o -path $_RR/worktrees -o -path $_RR/modules -o -path $_RR/config.worktree -o -path $_RR/reftable ) -printf r -o -type l -printf s -o ( -path $_RR/refs/soleur/worktrees/* -type f ! -name *.lock ( -exec grep -q ^ref: {} ; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E [0-9a-f]{40} {} ; -printf u ) ) -o -path $_RR/objects/*/* -prune"
+  printf '%s\t%s\n' find "-P $_RR ( -path $_RR/objects/info/alternates -o -path $_RR/objects/info/http-alternates ) -printf a -o ( -path $_RR/commondir -o -path $_RR/gitdir -o -path $_RR/worktrees -o -path $_RR/modules -o -path $_RR/config.worktree -o -path $_RR/reftable ) -printf r -o -type l -printf s -o ( -path $_RR/refs/soleur/worktrees/* -type f ! -name *.lock ( -exec grep -q ^ref: {} ; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E [0-9a-f]{40} {} ; -printf u ) )"
   printf '%s\t%s\n' mktemp '-d -p /dev/shm'
   printf '%s\t%s\n' readlink "-f -- $_R"
   printf '%s\t%s\n' sort ''
@@ -350,8 +367,10 @@ shm_clean() { local d; [ -s "$W/state/shm_dirs" ] || return 0; while IFS= read -
 # argv_closed — EVERY recorded call of find/sort/rm/rmdir/mktemp/readlink/stat in the world (not only the happy one) is one of the
 # closed literal call-site forms of $T/argv_closed.txt (the repository name and the scratch directory are normalised to @R and @SD)
 ARGV_WHY=""
+ARGV_CHECK=1   # 0 only around a mutant whose proof must rest on BEHAVIOUR (the literal-argv list would turn any edit of the find text RED by itself)
 argv_closed() {
   local f="$W/state/calls" bad
+  [ "$ARGV_CHECK" = 1 ] || return 0
   [ -s "$f" ] || return 0
   bad="$(sed -E "s#/mnt/git-data/repositories/[^ /]+#/mnt/git-data/repositories/@R#g; s#$W/shm/[^ /]+#@SD#g" "$f" | /usr/bin/grep -avxFf "$T/argv_closed.txt")"
   [ -z "$bad" ] || { ARGV_WHY="$(head -n 1 <<< "$bad" | cut -c1-200)"; return 1; }
@@ -405,7 +424,7 @@ argv_ok() {
   # the only -exec is the content probe's grep, in its two literal forms
   [ "$(/usr/bin/grep -o -- '-exec [^;]*;' "$st/find_argv" | paste -sd'|' -)" = "-exec grep -q ^ref: {} ;|-exec grep -q -x -E [0-9a-f]{40} {} ;" ] || return 1
   case "$(sed -n 1p "$st/find_argv")" in "-H $r -mindepth 1 -maxdepth 1 ! ( -type f ( -name .*.init.lock -o -name .init.lock ) ) ! ( -type d -name lost+found -empty ) -printf "*) : ;; *) return 1 ;; esac
-  case "$(sed -n 2p "$st/find_argv")" in "-P $r/$REPO ( -path "*" -printf a -o ( -path "*" -printf r -o -type l -printf s -o ( -path "*" -prune") : ;; *) return 1 ;; esac
+  case "$(sed -n 2p "$st/find_argv")" in "-P $r/$REPO ( -path "*" -printf a -o ( -path "*" -printf r -o -type l -printf s -o ( -path "*" -printf u ) )") : ;; *) return 1 ;; esac
   return 0
 }
 case_happy_argv() { case_happy "$1" && argv_ok; }
@@ -612,7 +631,7 @@ case_symlink() { # <script> <variant> — a symlink the push could not have made
   HS="$1"; run_host "sym$2"
   host_is 27 "$(ERRL 27 repo_symlink)" "" && [ "$(runuser_n)" = 0 ]
 }
-case_symref() { # <script> <live|dangling|dangling-alone|dangling-nested|dangling41|dangling41-alone> — a symbolic ref under the namespace
+case_symref() { # <script> <live|dangling|dangling-alone|dangling-nested|dangling41|dangling41-alone|tags-dangling> — a symbolic ref under the namespace
   new_world "symref$2"; mkrepo "$REPO"
   local g="git --git-dir=$W/store/repositories/$REPO"
   case "$2" in
@@ -620,6 +639,7 @@ case_symref() { # <script> <live|dangling|dangling-alone|dangling-nested|danglin
     dangling) wref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"; $g symbolic-ref "$(nsref "$WT_A" "heads/ptr")" refs/heads/nonexistent ;;
     dangling-alone) $g symbolic-ref "$(nsref "$WT_A" "heads/ptr")" refs/heads/nonexistent ;;
     dangling-nested) wref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"; $g symbolic-ref "$(nsref "$WT_B" "heads/deep/er/ptr")" refs/heads/nonexistent ;;
+    tags-dangling) wref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"; $g symbolic-ref "$(nsref "$WT_B" "tags/ptr")" refs/heads/nonexistent ;;
     # EXACTLY 41 bytes ("ref: " + 35 characters + LF): a size-based probe (41 bytes = a SHA-1 ref) cannot tell it from a good ref
     dangling41|dangling41-alone)
       [ "$2" = dangling41 ] && wref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"
@@ -630,11 +650,13 @@ case_symref() { # <script> <live|dangling|dangling-alone|dangling-nested|danglin
   HS="$1"; run_host "symref$2"
   host_is 27 "$(ERRL 27 ref_symref)" ""
 }
-case_ref_content() { # <script> <nolf|sha256|empty|multiline|short-hex> — a loose ref that is not exactly 40 hex plus LF: rc 27 ref_content, beside a good ref
+case_ref_content() { # <script> <nolf|sha256|empty|multiline|short-hex|upper|tags-nolf> — a loose ref that is not exactly 40 lowercase hex plus LF: rc 27 ref_content, beside a good ref
   new_world "content$2"; mkrepo "$REPO"; want_ref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"
-  local d="$W/store/repositories/$REPO/refs/soleur/worktrees/$WT_B/heads"; mkdir -p "$d"
+  local sub=heads; case "$2" in tags-*) sub=tags ;; esac
+  local d="$W/store/repositories/$REPO/refs/soleur/worktrees/$WT_B/$sub"; mkdir -p "$d"
   case "$2" in
-    nolf) printf '%s' "$C2" > "$d/x1" ;;                                # 40 bytes, no LF (git itself accepts it)
+    nolf|tags-nolf) printf '%s' "$C2" > "$d/x1" ;;                      # 40 bytes, no LF (git itself accepts it)
+    upper) printf '%s\n' "${C2^^}" > "$d/x1" ;;                         # 41 bytes, uppercase hex (git parses it): only the [0-9a-f] test refuses it
     sha256) printf '%s%s\n' "$C2" "${C2:0:24}" > "$d/x1" ;;              # 65 bytes: a SHA-256-length value
     empty) : > "$d/x1" ;;
     multiline) printf '%s\nextra\n' "$C2" > "$d/x1" ;;
@@ -657,6 +679,47 @@ case_redirect() { # <script> <commondir|gitdir|worktrees|modules|config.worktree
   esac
   HS="$1"; run_host "redir$2"
   host_is 27 "$(ERRL 27 repo_redirect)" "" && [ "$(runuser_n)" = 0 ] && ! grep -qF -- "$C2" "$HOUT" "$HERR"
+}
+case_tag_of_tag() { # tags/x -> tag -> tag -> commit is ACCEPTED: %(*objecttype) peels the WHOLE chain (verified with real git 2.56, F39), so a tag chain ending in a commit is a commit tag
+  new_world tagtag; mkrepo "$REPO"
+  want_ref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"; want_ref "$REPO" "$(nsref "$WT_A" "tags/tt")" "$TAG_TT"
+  HS="$1"; run_host tagtag
+  host_is 0 "" "$(ANS 1 2 1 "$C1")"
+}
+case_lazy_fetch() { # <script> [unprotected] — a promisor config + a missing tip object: the read must not fetch or run the configured command
+  new_world lazy; mkrepo "$REPO"
+  local r="$W/store/repositories/$REPO" sent="$W/lazy-sentinel"
+  git --git-dir="$r" config core.repositoryformatversion 1 && git --git-dir="$r" config extensions.partialclone origin \
+    && git --git-dir="$r" config remote.origin.promisor true && git --git-dir="$r" config remote.origin.url "$W/lazy-upstream.git" \
+    && git --git-dir="$r" config remote.origin.uploadpack "touch $sent; git-upload-pack" || instrument "lazy-fetch config failed"
+  mkdir -p "$r/refs/soleur/worktrees/$WT_A/heads"; printf '%s\n' 1111111111111111111111111111111111111111 > "$r/refs/soleur/worktrees/$WT_A/heads/$BR_A"
+  [ "${2-}" = unprotected ] && : > "$W/strip_lazy_env"
+  HS="$1"; run_host lazy
+  if [ "${2-}" = unprotected ]; then [ -e "$sent" ]; else host_is 26 "$(ERRL 26 refs_unreadable)" "" && [ ! -e "$sent" ]; fi
+}
+case_sort_wrong2() { # ONLY the second sorted line is wrong: the key check must look at every picked sha, not the first
+  new_world sortwrong2; mkrepo "$REPO"
+  want_ref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"; want_ref "$REPO" "$(nsref "$WT_A" "heads/$BR_B")" "$C2"; : > "$W/sort_wrong2"
+  HS="$1"; run_host sortwrong2
+  host_is 26 "$(ERRL 26 refs_unreadable)" ""
+}
+case_invariant() { # <script> <ids|heads> — a variant of the script that breaks a counter invariant (ids<=refs, heads<=refs) is refused by the self-check
+  local v="$T/mut/inv-$2.sh"
+  case "$2" in
+    ids) sed -E 's#^( +ids\["\$id"\]=1)$#\1; ids["x$nlines"]=1#' "$1" > "$v" ;;
+    heads) sed -E 's#heads=\$\(\(heads \+ 1\)\); hs#heads=$((heads + 2)); hs#' "$1" > "$v" ;;
+  esac
+  if cmp -s "$1" "$v"; then instrument "the $2 invariant variant did not land"; fi
+  new_world "inv$2"; mkrepo "$REPO"; want_ref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"
+  HS="$v"; run_host "inv$2"
+  host_is 26 "$(ERRL 26 refs_unreadable)" ""
+}
+case_lf_first() { # a 41-byte loose ref "LF + 40 hex": the size and the line probes pass it, git warns and skips it: refs_shape_failed (not ref_content)
+  new_world lffirst; mkrepo "$REPO"; want_ref "$REPO" "$(nsref "$WT_A" "heads/$BR_A")" "$C1"
+  local d="$W/store/repositories/$REPO/refs/soleur/worktrees/$WT_B/heads"; mkdir -p "$d"; printf '\n%s' "$C2" > "$d/x1"
+  [ "$(wc -c < "$d/x1")" = 41 ] || instrument "the LF+hex fixture is not 41 bytes"
+  HS="$1"; run_host lffirst
+  host_is 27 "$(ERRL 27 refs_shape_failed)" "" && [ "$(runuser_n)" = 1 ]
 }
 case_sort_wrong() { # the sort returns the right NUMBER of lines, every one a wrong sha: the picked-sha-is-a-key check refuses it
   new_world sortwrong; mkrepo "$REPO"
@@ -857,9 +920,12 @@ mutate_cutover() {
 }
 # mutant_red <name> <case-function> <args...> — the case, run on the mutated script, must FAIL
 mutant_red() {
-  local name="$1"; shift
+  local name="$1" r=0; shift
   MUTANTS_RUN=$((MUTANTS_RUN + 1))
-  if "$@"; then no "mutant $name: the case stayed GREEN on the mutated script"; else ok "mutant $name: goes RED (the edit landed and the case caught it)"; fi
+  "$@" || r=$?
+  if [ "$r" = 0 ]; then no "mutant $name: the case stayed GREEN on the mutated script"
+  elif [ "$1" = census_ok ] && [ "$r" != 1 ]; then no "mutant $name: census_ok returned rc=$r (2 = a broken instrument), not the violation rc 1"
+  else ok "mutant $name: goes RED (the edit landed and the case caught it)"; fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -901,9 +967,10 @@ if case_garbage_short "$SCRIPT"; then ok "A26b rc 27 ref_content: a short garbag
 for _v in dangling41 dangling41-alone; do
   if case_symref "$SCRIPT" "$_v"; then ok "A26c.$_v rc 27 ref_symref: a DANGLING symref file of exactly 41 bytes ($_v) is a symref by content, not by size (git skips it silently; alone it must not read rc 23)"; else no "A26c.$_v 41-byte dangling symref: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 done
-for _v in nolf sha256 empty multiline short-hex; do
+for _v in nolf sha256 empty multiline short-hex upper tags-nolf; do
   if case_ref_content "$SCRIPT" "$_v"; then ok "A26d.$_v rc 27 ref_content: a loose ref that is not exactly 40 hex plus LF ($_v), beside a good ref, is refused and no ref was read"; else no "A26d.$_v ref content ($_v): rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 done
+if case_lf_first "$SCRIPT"; then ok "A26e rc 27 refs_shape_failed: a 41-byte loose ref LF + 40 hex passes the size and line probes, git warns and skips it, and the stderr rule refuses it (not ref_content)"; else no "A26e LF + 40 hex: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 if case_dotdot_loose "$SCRIPT"; then ok "A27 rc 27 a heads/a..b loose file written by hand (git cannot create it)"; else no "A27 a..b: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 for _i in "${!HOSTILE_NAMES[@]}"; do
   if case_hostile_name "$SCRIPT" "$_i"; then ok "A28.$_i rc 27 a hostile name git accepts, as the SECOND member beside a compliant ref (class $_i)"; else no "A28.$_i hostile name $_i: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
@@ -921,7 +988,7 @@ done
 for _v in refs-soleur deep-ref root-entry objects-entry objects-file packed-refs; do
   if case_symlink "$SCRIPT" "$_v"; then ok "A51.$_v rc 27 repo_symlink: a symlink ($_v) a push cannot have made, and no ref was read"; else no "A51.$_v symlink ($_v): rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")] calls=$(runuser_n)"; fi
 done
-for _v in live dangling dangling-alone dangling-nested; do
+for _v in live dangling dangling-alone dangling-nested tags-dangling; do
   if case_symref "$SCRIPT" "$_v"; then ok "A52.$_v rc 27 ref_symref: a symbolic ref ($_v) under the namespace is refused (git skips a dangling one silently, so it is probed on disk)"; else no "A52.$_v symref ($_v): rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 done
 for _v in commondir gitdir worktrees modules config.worktree reftable; do
@@ -961,6 +1028,13 @@ if case_toctou_repos "$SCRIPT"; then ok "A44b rc 16 identity_changed: the reposi
 if case_term "$SCRIPT"; then ok "A44c a TERM mid-run exits rc 16 (the trap) with nothing printed, and the scratch directory is removed"; else no "A44c TERM: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 if case_noisy "$SCRIPT"; then ok "A44d every shimmed command also prints a fixture name to stderr (rm/rmdir to stdout too): none of it reaches stdout or stderr"; else no "A44d noisy commands: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 if case_owner_flip "$SCRIPT"; then ok "A44f rc 16 identity_changed: the owner changing between the record and the re-check is caught (the owner is part of the identity string)"; else no "A44f owner flip: rc=$HRC err=[$(cat "$HERR")]"; fi
+if case_tag_of_tag "$SCRIPT"; then ok "A31d (positive, F39) tags/x -> tag -> tag -> commit passes: %(*objecttype) peels the whole chain, so the header and runbook no longer claim a tag of a tag is refs_bad_sha; a tag chain that ends in a tree still is (A31)"; else no "A31d tag of a tag: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
+if case_lazy_fetch "$SCRIPT" unprotected; then ok "A54a control: with GIT_NO_LAZY_FETCH absent from the modeled env (argv unchanged) the fixture's promisor config DOES run its uploadpack command on a missing tip object (the sentinel appears): the row below can fail"; else no "A54a the promisor fixture did not lazy-fetch without the variable: the lazy-fetch row proves nothing (rc=$HRC)"; fi
+if case_lazy_fetch "$SCRIPT"; then ok "A54 rc 26 refs_unreadable: a repository config with extensions.partialclone, remote.origin.promisor and a remote.origin.uploadpack command plus a missing tip object does not lazy-fetch or run the command (GIT_NO_LAZY_FETCH=1): the sentinel file is absent"; else no "A54 lazy fetch: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
+if case_sort_wrong2 "$SCRIPT"; then ok "A44h rc 26 a sort whose ONLY second line is wrong is refused (every picked sha is checked, not just the first)"; else no "A44h wrong second sha: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
+for _v in ids heads; do
+  if case_invariant "$SCRIPT" "$_v"; then ok "A44i.$_v rc 26 a script variant that breaks the $_v<=refs invariant is refused by the pre-emit self-check (the clause is live)"; else no "A44i.$_v invariant ($_v): rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
+done
 if case_sort_wrong "$SCRIPT"; then ok "A44g rc 26 a sort that returns the right NUMBER of lines, all wrong shas, is refused (every picked sha must be a key of the heads/ set)"; else no "A44g wrong sort: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 if case_sort_trunc "$SCRIPT"; then ok "A44e rc 26 a sort that returns fewer lines than there are distinct shas is refused by the self-check, never a short shas= field"; else no "A44e truncated sort: rc=$HRC out=[$(cat "$HOUT")] err=[$(cat "$HERR")]"; fi
 if case_stdin "$SCRIPT"; then ok "A45 stdin delivery: a git stand-in that reads stdin reads ZERO bytes of the script's unread tail"; else no "A45 stdin: rc=$HRC bytes=[$(cat "$W/state/runuser_stdin_bytes" 2>/dev/null)]"; fi
@@ -1022,7 +1096,7 @@ _missing=""; while IFS= read -r _f; do [ -f "$DIR/modules/git-data-userdata/$_f"
 if [ "$_n" = 16 ] && [ -z "$_missing" ]; then ok "PAR6 the hash roster is 16 file() bindings (the plan's AC1 constant), and every bound payload exists"; else no "PAR6 the roster size is $_n (the plan counted 16) or a bound payload is missing:$_missing"; fi
 if [ -z "$(grep -vE '^[[:space:]]*#' "$SCRIPT" | grep -E '\b(STORE_DEVICE|STORE_VERIFIED|cutover_freeze|MOUNT_ROOT|GIT_DATA_ROOT|REPO_ROOT)=')" ]; then ok "PAR7 the script assigns none of STORE_DEVICE, STORE_VERIFIED, cutover_freeze, MOUNT_ROOT, GIT_DATA_ROOT, REPO_ROOT (the P3 definer population is unchanged)"; else no "PAR7 the script assigns a P3 definer variable"; fi
 # the format string pin, literal
-if grep -qF -- "--format='%(refname)%09%(objectname)%09%(objecttype)%09<%(*objecttype)>%09<%(symref)>'" "$SCRIPT" && grep -qF -- '--count=$((RA_BOUND + 1))' "$SCRIPT" && grep -qxF '  readonly RA_BOUND=200' "$SCRIPT"; then ok "PAR8 the for-each-ref format (both optional fields in a non-whitespace sentinel) and the bound (RA_BOUND=200, count RA_BOUND+1 = 201 in the modeled argv) are pinned literally in the script"; else no "PAR8 the format/bound literal is absent"; fi
+if grep -qF -- "--format='%(refname)%09%(objectname)%09%(objecttype)%09<%(*objecttype)>%09<%(symref)>'" "$SCRIPT" && grep -qF -- '--count=$((RA_BOUND + 1))' "$SCRIPT" && grep -qxF '  readonly RA_BOUND=200' "$SCRIPT" && grep -qF -- ' GIT_NO_LAZY_FETCH=1 ' "$SCRIPT"; then ok "PAR8 the for-each-ref format (both optional fields in a non-whitespace sentinel) and the bound (RA_BOUND=200, count RA_BOUND+1 = 201 in the modeled argv) are pinned literally in the script, with GIT_NO_LAZY_FETCH=1 in the env -i list"; else no "PAR8 the format/bound literal is absent"; fi
 # the write-verb anchors. The dispatcher's verb list is DERIVED from the dispatcher (SHIM_VERBS); every one is a symlink
 # in the shim directory (an arm that is never linked is a dead guard), the mutation list is a subset of it, and the
 # git verbs are refused by the runuser shim's exact-argv rule.
@@ -1041,7 +1115,7 @@ import re, sys
 # None = the word writes nothing by itself (its redirects are censused separately, its substitutions are scanned as code);
 # a list = the exact source text of every statement that starts with the word; a regex = the statement must match it.
 RUNUSER = ('runuser -u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null '
-           'GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false '
+           'GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false '
            '-c core.hooksPath=/dev/null -c core.pager=cat --git-dir="$repo" for-each-ref --count=$((RA_BOUND + 1)) '
            "--format='%(refname)%09%(objectname)%09%(objecttype)%09<%(*objecttype)>%09<%(symref)>' refs/soleur/worktrees/")
 FIND1 = ('find -H "$repos" -mindepth 1 -maxdepth 1 ! \\( -type f \\( -name \'.*.init.lock\' -o -name \'.init.lock\' \\) \\) '
@@ -1049,8 +1123,7 @@ FIND1 = ('find -H "$repos" -mindepth 1 -maxdepth 1 ! \\( -type f \\( -name \'.*.
 FIND2 = ('find -P "$repo" \\( -path "$repo/objects/info/alternates" -o -path "$repo/objects/info/http-alternates" \\) -printf a -o '
          '\\( -path "$repo/commondir" -o -path "$repo/gitdir" -o -path "$repo/worktrees" -o -path "$repo/modules" -o -path "$repo/config.worktree" '
          '-o -path "$repo/reftable" \\) -printf r -o -type l -printf s -o \\( -path "$repo/refs/soleur/worktrees/*" -type f ! -name \'*.lock\' '
-         "\\( -exec grep -q '^ref:' {} \\; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E '[0-9a-f]{40}' {} \\; -printf u \\) \\) "
-         '-o -path "$repo/objects/*/*" -prune')
+         "\\( -exec grep -q '^ref:' {} \\; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E '[0-9a-f]{40}' {} \\; -printf u \\) \\)")
 RULES = {
     ':': None, '[': None, 'break': None, 'continue': None, 'die': None, 'say': None, 'local': None, 'printf': None, 'read': None, 'shift': None,
     'ra_main': ['ra_main'],
@@ -1072,13 +1145,18 @@ RULES = {
     'stat': ['stat -c %F -- "$repos"', 'stat -c %m -- "$repos"', 'stat -c %d:%i:%F -- "$repos"', 'stat -c %d:%i:%F:%U -- "$repo"'],
     'trap': ['trap ra_exit EXIT', 'trap - EXIT', "trap 'exit 16' HUP INT TERM PIPE"],
 }
-FUNCS_EXPECTED = {'ra_main', 'say', 'die', 'ra_exit'}
+FUNCS_EXPECTED = ['ra_main', 'say', 'die', 'ra_exit']      # each defined EXACTLY once (a shadowing second definition is a violation)
+SD_EXPECTED = ['sd=""', 'sd="$(mktemp -d -p /dev/shm)"']    # the EXACT set of assignments to the scratch-dir variable the EXIT trap rmdirs
+FORBIDDEN_ASSIGN = re.compile(r"^(PATH|BASH_ENV|ENV|IFS|LD_[A-Za-z0-9_]*|GIT_[A-Za-z0-9_]*)\+?=")
 KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done", "!", "time"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 TOK = re.compile(r"\{\}|;;&|;;|;&|&&|\|\||\|&|[;&|\n(){}]|[^\s;&|(){}]+")
 
 raws = []
 bad = []
+defs = []          # every function definition seen (a name defined twice is a shadow)
+assigns = []       # bare NAME=value statements (raw tokens)
+prefixed = []      # (assignment words, command word) for NAME=value cmd ...
 
 class Lex:
     """Splits one text into code units: quoted pieces become placeholders, and EVERY nested command substitution (in code, in double
@@ -1123,7 +1201,7 @@ class Lex:
                 if d == 0: return i
                 continue
             i += 1
-        return i
+        bad.append("unterminated ${"); return i
 
     def dq(self, i):                         # inside double quotes: (index after the closing quote, raw)
         s = self.s; start = i
@@ -1137,10 +1215,10 @@ class Lex:
                 i, inner = self.code(i + 2, True); self.segs.append(inner); continue
             if s.startswith("${", i): i = self.braces(i); continue
             i += 1
-        return i, s[start - 1:]
+        bad.append("unterminated double quote"); return i, s[start - 1:]
 
     def code(self, i, sub):
-        s = self.s; out = []; depth = 0
+        s = self.s; out = []; depth = 0; cdepth = 0
         while i < len(s):
             c = s[i]
             if c == "#" and (not out or out[-1] in " \t\n;(&|"):
@@ -1153,9 +1231,11 @@ class Lex:
             if c == "`": bad.append("backtick"); i += 1; continue
             if c == "$" and s.startswith("$'", i):
                 j = i + 2
-                while s[j] != "'" or s[j - 1] == "\\": j += 1
+                while j < len(s) and s[j] != "'": j += 2 if s[j] == "\\" else 1      # an escaped quote is a backslash NOT itself escaped
+                if j >= len(s): bad.append("unterminated ANSI-C quote")
                 out.append(self.ph(s[i:j + 1])); i = j + 1; continue
             if c == "\\":
+                if s.startswith("\\\n", i): i += 2; continue            # a line continuation joins the lines: a '#' after it is judged by what precedes it
                 out.append(self.ph(s[i:i + 2])); i += 2; continue
             if s.startswith("$((", i):
                 j = self.arith(i); out.append(self.ph(s[i:j])); i = j; continue
@@ -1163,11 +1243,15 @@ class Lex:
                 j, inner = self.code(i + 2, True); self.segs.append(inner); out.append(self.ph("SUBST")); i = j; continue
             if s.startswith("${", i):
                 j = self.braces(i); out.append(self.ph(s[i:j])); i = j; continue
+            if sub and c in "ce" and (not out or out[-1] in " \t\n;(&|{"):        # case ... esac inside a substitution: its label ')' does not close it
+                if s.startswith("case", i) and i + 4 < len(s) and s[i + 4] in " \t\n": cdepth += 1
+                elif s.startswith("esac", i) and (i + 4 >= len(s) or s[i + 4] in " \t\n;)&|}"): cdepth = max(0, cdepth - 1)
             if sub and c == "(": depth += 1
             if sub and c == ")":
-                if depth == 0: return i + 1, "".join(out)
-                depth -= 1
+                if depth > 0: depth -= 1
+                elif cdepth == 0: return i + 1, "".join(out)
             out.append(c); i += 1
+        if sub: bad.append("unterminated substitution")
         return i, "".join(out)
 
 def unph(t):
@@ -1176,11 +1260,12 @@ def unph(t):
 def statements(seg, funcs):
     """Command statements of one unit (words still holding placeholders). Understands case arms: the label is stripped WITHOUT
     consuming the arm's first word, and compound keywords / function headers / assignments / array literals are skipped."""
-    toks = TOK.findall(seg); out = []; cur = []; mode = "cmd"; incase = 0; i = 0; n = len(toks)
+    toks = TOK.findall(seg); out = []; cur = []; pend = []; mode = "cmd"; incase = 0; i = 0; n = len(toks)
     def flush():
         nonlocal cur
         if cur: out.append(cur)
         cur = []
+        if pend: assigns.extend(pend); pend.clear()
     def skip_paren(i):                       # toks[i] == "(": index after the matching ")"
         d = 0
         while i < n:
@@ -1214,23 +1299,39 @@ def statements(seg, funcs):
             if t == "esac": incase = max(0, incase - 1); continue
             if t in KEYWORDS: continue
             if i + 1 < n and toks[i] == "(" and toks[i + 1] == ")":   # name() { ...
-                funcs.add(t); i += 2; continue
+                funcs.add(t); defs.append(t); i += 2; continue
             if ASSIGN.match(t):
                 if t.endswith("=") and i < n and toks[i] == "(": i = skip_paren(i)
-                continue
-            cur = [t]; mode = "args"; continue
+                pend.append(t); continue
+            cur = [t]; mode = "args"
+            if pend: prefixed.append((list(pend), t)); pend.clear()
+            continue
         # args
         if t.endswith("=") and i < n and toks[i] == "(": i = skip_paren(i); continue
         cur.append(t)
     flush()
     return out
 
+def strip_dbl(seg):
+    """Removes [[ ... ]] ONLY where [[ is the keyword (command position); a plain argument '[[' is just a word, and an unpaired
+    keyword [[ is a lexer fault (fail closed: an instrument error, never a skip)."""
+    toks = list(TOK.finditer(seg)); out = []; pos = 0; cmd = True; k = 0
+    while k < len(toks):
+        t = toks[k].group(0)
+        if t == "[[" and cmd:
+            e = next((q for q in range(k + 1, len(toks)) if toks[q].group(0) == "]]"), None)
+            if e is None: bad.append("unpaired [["); break
+            out.append(seg[pos:toks[k].start()]); out.append(" T "); pos = toks[e].end(); k = e + 1; cmd = False; continue
+        cmd = t in ("(", ")", "{", "}", ";", "&&", "||", "|", "|&", "&", "\n", ";;", ";&", ";;&") or t in KEYWORDS
+        k += 1
+    out.append(seg[pos:]); return "".join(out)
+
 def analyse(text, depth=0):
     """-> (statement lists of unph'd source words, redirects) for the text and every nested unit, trap strings included."""
     lx = Lex(text); _, top = lx.code(0, False); segs = [top] + lx.segs
     funcs = set(); stmts = []; reds = []; queue = []
     for seg in segs:
-        seg = re.sub(r"\[\[.*?\]\]", " T ", seg, flags=re.S)
+        seg = strip_dbl(seg)
         def red(m):
             reds.append("%s%s%s" % (m.group(1), m.group(2), unph(m.group(3)))); return " "
         seg = re.sub(r"(\d*)(>>|>&|&>|>)\s*(-|\d+|\x01\d+\x02|[^\s;|&()\x01]*)", red, seg)
@@ -1249,17 +1350,42 @@ def analyse(text, depth=0):
 src = open(sys.argv[1]).read()
 stmts, funcs, reds = analyse(src)
 cmds = sorted(set(w[0] for w in stmts))
-viol = ["backtick" for _ in set(bad)]
+viol = ["lexer: %s" % b for b in sorted(set(bad))]
 for w in stmts:
     c = w[0]; text = " ".join(w)
     if c not in RULES: viol.append("command [%s]" % c); continue
     rule = RULES[c]
     if rule is None:
         if any(re.search(r"^'.*(\$\(|`)", a, re.S) for a in w[1:]): viol.append("opaque substitution in [%s]" % text[:80])
+        if any("\\$" in a for a in w[1:]): viol.append("escaped-dollar argument in [%s]" % text[:80])      # "nm[\$(cmd)]" is evaluated by printf -v / read / local
+        if c == "printf" and "-v" in w[1:]: viol.append("printf -v in [%s]" % text[:80])
     elif text not in rule:
         viol.append("argv [%s]" % text[:160])
+    if text != RUNUSER:
+        for a in w[1:]:
+            m = FORBIDDEN_ASSIGN.match(a)
+            if m and not (c == "local" and m.group(1) == "IFS"): viol.append("assignment to [%s] in [%s]" % (m.group(1), text[:80]))
 for c in sorted(set(RULES) - set(cmds)): viol.append("stale allowlist entry [%s]" % c)
-if funcs != FUNCS_EXPECTED: viol.append("functions %s" % sorted(funcs))
+for c, rule in RULES.items():                                  # the allowlist is derived per FORM too: a form the script no longer uses is stale
+    if isinstance(rule, list):
+        used = set(" ".join(w) for w in stmts if w[0] == c)
+        for f in rule:
+            if f not in used: viol.append("stale allowlist form [%s]" % f[:80])
+if sorted(defs) != sorted(FUNCS_EXPECTED): viol.append("functions %s" % sorted(defs))
+# assignments: the scratch-dir variable has an EXACT set of assignments (the EXIT trap rmdirs it), and nothing assigns the variables that
+# pick the binaries, the shell startup file, the word splitting, the loader or git itself (outside the one env -i list of the runuser line)
+pre = [(a, cm) for al, cm in prefixed for a in [unph(x) for x in al]]
+allas = [unph(a) for a in assigns] + [a for a, _ in pre]
+for w in stmts:
+    if " ".join(w) != RUNUSER: allas += [a for a in w[1:] if ASSIGN.match(a)]
+sdas = [a for a in allas if re.match(r"sd(\[[^\]]*\])?\+?=", a)]
+if sorted(sdas) != sorted(SD_EXPECTED): viol.append("assignments to the scratch dir %s" % sdas)
+for a, cm in pre:
+    nm = re.match(r"[A-Za-z_][A-Za-z0-9_]*", a).group(0)
+    if not (cm == "read" and nm == "IFS"): viol.append("assignment prefix [%s] on [%s]" % (a[:40], cm))
+for a in assigns:
+    m = FORBIDDEN_ASSIGN.match(unph(a))
+    if m: viol.append("assignment to [%s]" % m.group(1))
 print("CMDS", " ".join(cmds))
 print("REDIRS", "\t".join(sorted(reds)))
 print("EXITS", "\t".join(sorted(" ".join(w) for w in stmts if w[0] == "exit")))
@@ -1289,7 +1415,7 @@ CENSUS_WHY=""
 if census_ok "$SCRIPT"; then ok "CEN1 static census: every command word of the script is in the closed set AND only in its literal call-site argv (find, sort, rm, rmdir, mktemp, readlink, stat, runuser, exec, trap, mapfile, ...; case arms, \${...}, \$(...), \$((...)) and trap strings are parsed), no allowlist entry is stale, every write redirect is one of the ten known forms, there is exactly ONE write to fd 4 and ONE return 0, and exit appears only as exit 16 / exit \"\$rc\" / exit \$? (five statements)"; else no "CEN1 static census of the script: $CENSUS_WHY"; fi
 # the census must be able to see: planted constructs in the positions the first census could not reach
 _cp="$T/census-probe.sh"
-plant_sees() { printf '#!/bin/bash\n%s\n' "$1" > "$_cp"; census "$T/census.py" "$_cp" | /usr/bin/grep -aq -- "$2"; }
+plant_sees() { printf '#!/bin/bash\n%s\n' "$1" > "$_cp"; census "${3:-$T/census.py}" "$_cp" 2>/dev/null | /usr/bin/grep -aq -- "$2"; }
 _cp_ok=1
 plant_sees 'case $a in x) touch /y ;; esac' '^CMDS .*touch' || _cp_ok=0
 plant_sees 'case $a in x) exit 29 ;; esac' '^EXITS exit 29$' || _cp_ok=0
@@ -1301,6 +1427,43 @@ plant_sees ': $(( $(touch /x) ))' '^CMDS .*touch' || _cp_ok=0
 plant_sees 'x=$( (touch /y) )' '^CMDS .*touch' || _cp_ok=0
 plant_sees ': > /y; printf z >&4' '^REDIRS .*>/y' || _cp_ok=0
 if [ "$_cp_ok" = 1 ]; then ok "CEN2 harness: the census sees a command word in the FIRST arm of a case, an exit and a return there, a trap-string command, and commands inside \${...}, \$((...)) and a nested subshell (it can fail)"; else no "CEN2 the census missed a planted construct"; fi
+# fix pass 3 (T2 a-e and the P3s): the five constructs the first lexer lost, planted in plain spellings. Each lives only in the TEST's lexer.
+PL_A=$'{ : [[ ; touch /y ; : ; }\n[[ -z x ]]'                        # a plain argument [[ must not hide everything up to the next ]]
+PL_B=': "${nope:-$(case $RA_MOUNT in /nope) touch /y ;; esac)}"'      # a case-label ) inside a substitution does not end it
+PL_C=$': $\'\\\\\'; touch /y; : $\'x\''                               # ANSI-C $'\\' : the backslash pair is not an escaped quote
+PL_D='LD_PRELOAD= PATH="$PATH" readlink -f -- "$repos"'                  # an assignment prefix on a ruled word
+PL_E=$': a \\\n#it\'s\ntouch /y'                                        # a comment after a line continuation
+PL_P1=$'printf -v "nm[\\$(touch /y)]" x'                              # printf -v / read / local with an escaped-dollar subscript
+PL_P2=$'read "nm[\\$(touch /y)]"'
+PL_F=$'ra_main() { :; }\nsay() { :; }\ndie() { :; }\nra_exit() { :; }\ndie() { :; }'            # the four expected functions plus a SECOND die: a name set cannot see the shadow
+PL_U1='[[ -z x'
+PL_U2='x=$(touch'
+_cp_ok=1
+plant_sees "$PL_A" '^CMDS .*touch' || _cp_ok=0
+plant_sees "$PL_B" '^CMDS .*touch' || _cp_ok=0
+plant_sees "$PL_C" '^CMDS .*touch' || _cp_ok=0
+plant_sees "$PL_D" '^VIOL assignment prefix \[LD_PRELOAD=\] on \[readlink\]' || _cp_ok=0
+plant_sees "$PL_E" '^CMDS .*touch' || _cp_ok=0
+plant_sees "$PL_P1" '^VIOL printf -v' || _cp_ok=0
+plant_sees "$PL_P2" '^VIOL escaped-dollar argument in \[read' || _cp_ok=0
+plant_sees "$PL_F" '^VIOL functions' || _cp_ok=0
+plant_sees "$PL_U1" '^VIOL lexer: unpaired \[\[' || _cp_ok=0
+plant_sees "$PL_U2" '^VIOL lexer: unterminated substitution' || _cp_ok=0
+if [ "$_cp_ok" = 1 ]; then ok "CEN2b harness: the census sees the five constructs the first lexer lost (a plain [[ argument, a case label inside a substitution, ANSI-C backslash pair, an assignment prefix, a continuation comment), refuses an escaped-dollar subscript, a shadowing function, and FAILS CLOSED on an unpaired [[ and an unterminated substitution"; else no "CEN2b the census missed a planted construct"; fi
+# the census WITHOUT each fix must NOT see its plant (the plant can fail): one mutated copy of the census per fix
+census_mut() { # <name> <literal> <replacement> <plant-var-value> <egrep>
+  local m="$T/mut/$1.py"; MUTANTS_RUN=$((MUTANTS_RUN + 1))
+  LIT="$2" REPL="$3" python3 -I -c 'import os, sys; s = open(sys.argv[1]).read(); open(sys.argv[2], "w").write(s.replace(os.environ["LIT"], os.environ["REPL"]))' "$T/census.py" "$m"
+  if cmp -s "$T/census.py" "$m"; then no "mutation $1: the census edit did not land"; return; fi
+  if plant_sees "$4" "$5" "$m"; then no "mutant $1: the census WITHOUT this fix still sees the plant (the plant proves nothing)"; else ok "mutant $1: the census without this fix misses the plant (the fix is what catches it)"; fi
+}
+census_mut c1-dbl-bracket-anywhere 'seg = strip_dbl(seg)' 'seg = re.sub(r"\[\[.*?\]\]", " T ", seg, flags=re.S)' "$PL_A" '^CMDS .*touch'
+census_mut c2-case-label-closes 'elif cdepth == 0: return i + 1' 'else: return i + 1' "$PL_B" '^CMDS .*touch'
+census_mut c3-ansi-c-escape 'while j < len(s) and s[j] != "'"'"'": j += 2 if s[j] == "\\" else 1' 'while j < len(s) and (s[j] != "'"'"'" or s[j - 1] == "\\"): j += 1' "$PL_C" '^CMDS .*touch'
+census_mut c4-assignment-prefix 'if not (cm == "read" and nm == "IFS"): viol.append(' 'if False: viol.append(' "$PL_D" '^VIOL assignment prefix'
+census_mut c5-continuation-comment 'if s.startswith("\\\n", i): i += 2; continue' 'if False: pass' "$PL_E" '^CMDS .*touch'
+census_mut c6-escaped-dollar 'if any("\\$" in a for a in w[1:]): viol.append(' 'if False: viol.append(' "$PL_P2" '^VIOL escaped-dollar'
+census_mut c7-shadow-function 'if sorted(defs) != sorted(FUNCS_EXPECTED)' 'if set(defs) != set(FUNCS_EXPECTED)' "$PL_F" '^VIOL functions'
 # the allowlist is derived both ways: an entry the script no longer uses is a violation
 cp "$T/census.py" "$T/census-stale.py"; sed -i "s/^    ':': None, /    'tee': None, ':': None, /" "$T/census-stale.py"
 if cmp -s "$T/census.py" "$T/census-stale.py"; then no "CEN3 the stale-entry plant did not land"; elif census_ok "$SCRIPT" "$T/census-stale.py"; then no "CEN3 a STALE allowlist entry (tee) did not fail the census"; else ok "CEN3 parity: an allowlist entry the script does not use (a stale 'tee') fails the census (the allowlist is derived both ways from the script)"; fi
@@ -1380,7 +1543,6 @@ if mutate g3-alternates "$HS_SRC" 's#^(  case "\$lnk" in \*a\*\) die 27 repo_alt
 if mutate g3-http-alternates "$HS_SRC" 's# -o -path "\$repo/objects/info/http-alternates"##'; then mutant_red g3-4-http-alternates-not-probed case_all case_alternates "$MUT" http-alternates; fi
 if mutate g3-symlink-refusal "$HS_SRC" 's#^(  case "\$lnk" in \*s\*\) die 27 repo_symlink ;; esac)$#  :#'; then mutant_red g3-5-symlink-refusal-dropped case_all case_symlink "$MUT" refs-soleur deep-ref root-entry objects-entry objects-file packed-refs; fi
 if mutate g3-symlink-pred "$HS_SRC" 's# -type l -printf s -o##'; then mutant_red g3-6-symlink-predicate-dropped case_all case_symlink "$MUT" refs-soleur deep-ref root-entry objects-entry objects-file packed-refs; fi
-if mutate g3-prune-shallow "$HS_SRC" 's#-path "\$repo/objects/\*/\*" -prune#-path "$repo/objects/*" ! -path "$repo/objects/info" -prune#'; then mutant_red g3-7-prune-too-early-misses-objects-depth-2 case_symlink "$MUT" objects-file; fi
 # F33: the loose-ref probe is CONTENT, not size. The size-based predicate of the previous round is the mutant the 41-byte row must kill.
 if mutate_lit g5-size-pred "$HS_SRC" "\\( -exec grep -q '^ref:' {} \\; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E '[0-9a-f]{40}' {} \\; -printf u \\)" '! -size 41c -printf y'; then mutant_red g5-1-size-predicate-passes-41-byte-symref case_all case_symref "$MUT" dangling41 dangling41-alone; fi
 if mutate_lit g5-no-hex-exec "$HS_SRC" " -o ! -exec grep -q -x -E '[0-9a-f]{40}' {} \\; -printf u" ''; then mutant_red g5-2-hex-content-test-dropped case_broken_loose "$MUT"; fi
@@ -1409,7 +1571,7 @@ if mutate g3-stdout-redirect "$HS_SRC" 's#^(  exec 3>&2 4>&1) 1>/dev/null (2>/de
 if mutate g3-cleanup "$HS_SRC" 's#if \[ -n "\$sd" \]; then rm -f -- "\$sd/err"; rmdir -- "\$sd"; fi;#:;#'; then mutant_red g3-21-scratch-cleanup-dropped case_happy "$MUT"; fi
 if mutate g3-dot-id "$HS_SRC" 's#\[ "\$id" = \. \] \|\| ##'; then mutant_red g3-22-id-dot-accepted case_fake_dot1 "$MUT"; fi
 # argv and census guards: a command or flag the shims do not model must still be RED
-if mutate g3-find-delete "$HS_SRC" 's#-o -path "\$repo/objects/\*/\*" -prune\)#-o -path "$repo/objects/*/*" -prune -delete)#'; then mutant_red g3-23-find-delete-recorded case_happy_argv "$MUT"; fi
+if mutate_lit g3-find-delete "$HS_SRC" ' -printf u \) \))" || die 16 shape_probe' ' -printf u \) \) -delete)" || die 16 shape_probe'; then mutant_red g3-23-find-delete-recorded case_happy_argv "$MUT"; fi
 if mutate g3-mktemp-argv "$HS_SRC" 's#mktemp -d -p /dev/shm#mktemp -d -p /dev/shm/#'; then mutant_red g3-24-mktemp-argv-changed case_happy_argv "$MUT"; fi
 if mutate g3-readlink-argv "$HS_SRC" 's#readlink -f --#readlink -m --#'; then mutant_red g3-25-readlink-argv-changed case_happy_argv "$MUT"; fi
 if mutate g3-stat-argv "$HS_SRC" 's#stat -c %m --#stat -L -c %m --#'; then mutant_red g3-26-stat-argv-changed case_happy_argv "$MUT"; fi
@@ -1441,13 +1603,38 @@ if plant_in h1-arith-subst "$HS_SRC" "$_dorm : \$(( \$(touch /mnt/git-data/x) ))
 if mutate_lit h1-mapfile-c "$HS_SRC" 'mapfile -t sorted' 'mapfile -t -C touch -c 1 sorted'; then mutant_red h1-11-mapfile-callback census_ok "$MUT"; fi
 _rmv='rm'   # the verb is held in a variable so the fixture-operand ratchet does not read this mutant text as a call site
 if mutate_lit h1-rm-r "$HS_SRC" "$_rmv"' -f -- "$sd/err"' "$_rmv"' -r "$sd/.."'; then mutant_red h1-12-rm-r-static census_ok "$MUT"; mutant_red h1-13-rm-r-runtime case_happy "$MUT"; fi
-if mutate_lit h1-find-extra-exec "$HS_SRC" "-o -path \"\$repo/objects/*/*\" -prune" "-o -path \"\$repo/objects/*/*\" -prune -exec rm {} ;"; then mutant_red h1-14-find-exec-rm-static census_ok "$MUT"; fi
+if mutate_lit h1-find-extra-exec "$HS_SRC" ' -printf u \) \))" || die 16 shape_probe' ' -printf u \) \) -exec rm {} ;)" || die 16 shape_probe'; then mutant_red h1-14-find-exec-rm-static census_ok "$MUT"; fi
 # runtime: a destructive command in a REFUSAL branch a fixture reaches is caught by the recorded-argv closed list in EVERY world
 for _b in shape type empty control; do
   if mutate_lit "h2-record-$_b" "$HS_SRC" "die 16 record_$_b" "{ find \"\$repos\" -delete; die 16 record_$_b; }"; then mutant_red "h2-record-$_b-branch-find-delete" case_find_garble "$MUT" "$_b"; fi
 done
 if mutate_lit h2-enum "$HS_SRC" 'die 16 enumeration_failed' '{ find "$repos" -delete; die 16 enumeration_failed; }'; then mutant_red h2-enumeration-branch-find-delete case_find_fail "$MUT"; fi
 if mutate_lit h2-arg "$HS_SRC" 'die 16 arg_repos' '{ find /mnt/git-data/repositories -delete; die 16 arg_repos; }'; then mutant_red h2-arg-repos-branch-find-delete case_bad_input "$MUT" "relative/path"; fi
+
+# ── fix pass 3 (F38/F39): the lazy-fetch variable, the self-check clauses, the content probe's behaviour, the census's new arms ──────────────
+if mutate g6-lazy "$HS_SRC" 's# GIT_NO_LAZY_FETCH=1##'; then mutant_red g6-1-lazy-fetch-variable-dropped case_lazy_fetch "$MUT"; fi
+if mutate_lit g6-pick0 "$HS_SRC" 'for s in "${pick[@]}"; do [ -n' 'for s in "${pick[0]}"; do [ -n'; then mutant_red g6-2-only-the-first-picked-sha-checked case_sort_wrong2 "$MUT"; fi
+if mutate_lit g6-inv-ids "$HS_SRC" ' && [ "${#ids[@]}" -le "$refs" ]' ''; then mutant_red g6-3-ids-le-refs-clause-dropped case_invariant "$MUT" ids; fi
+if mutate_lit g6-inv-heads "$HS_SRC" ' && [ "$heads" -le "$refs" ]' ''; then mutant_red g6-4-heads-le-refs-clause-dropped case_invariant "$MUT" heads; fi
+# the content probe rests on BEHAVIOUR here (the literal-argv list is off): a glob narrowed to heads/ misses tags/, an uppercase value passes the hex test
+ARGV_CHECK=0
+if mutate_lit g6-glob "$HS_SRC" '-path "$repo/refs/soleur/worktrees/*" -type f' '-path "$repo/refs/soleur/worktrees/*/heads/*" -type f'; then
+  mutant_red g6-5-probe-glob-narrowed-to-heads-misses-tags-content case_ref_content "$MUT" tags-nolf
+  mutant_red g6-6-probe-glob-narrowed-to-heads-misses-tags-symref case_symref "$MUT" tags-dangling
+fi
+if mutate_lit g6-upper "$HS_SRC" "grep -q -x -E '[0-9a-f]{40}' {}" "grep -q -x -E '[0-9a-fA-F]{40}' {}"; then mutant_red g6-7-hex-class-widened-to-uppercase case_ref_content "$MUT" upper; fi
+ARGV_CHECK=1
+# T1: the scratch-dir variable has an exact assignment set, and nothing assigns the variables that pick binaries, startup file or git's behaviour
+if mutate_lit g7-sd "$HS_SRC" '  sd="$(mktemp -d -p /dev/shm)" || die 16 scratch_failed' '  sd="$(mktemp -d -p /dev/shm)" || die 16 scratch_failed
+  [ -e /nonexistent-guard ] && sd="$repos"'; then mutant_red g7-1-conditional-sd-assignment census_ok "$MUT"; fi
+if plant_in g7-path "$HS_SRC" "$_dorm PATH=/tmp:\$PATH"; then mutant_red g7-2-path-assignment census_ok "$MUT"; fi
+if plant_in g7-bashenv "$HS_SRC" "$_dorm BASH_ENV=/tmp/x"; then mutant_red g7-3-bash-env-assignment census_ok "$MUT"; fi
+if plant_in g7-gitdir "$HS_SRC" "$_dorm GIT_DIR=/tmp/x"; then mutant_red g7-4-git-variable-assignment census_ok "$MUT"; fi
+if plant_in g7-prefix "$HS_SRC" "$_dorm LD_PRELOAD= PATH=/tmp readlink -f -- \"\$repos\""; then mutant_red g7-5-assignment-prefix-on-a-ruled-word census_ok "$MUT"; fi
+# T3: the allowlist is derived per FORM too (a form the script stopped using is stale, though the word is still used)
+if mutate g7-no-trap-form "$HS_SRC" '/^  trap ra_exit EXIT$/d'; then mutant_red g7-6-trap-exit-form-deleted-stale-form census_ok "$MUT"; fi
+if mutate g7-no-stat-m "$HS_SRC" '/^  mnt="\$\(stat -c %m /d;/^  \[ "\$mnt" = "\$RA_MOUNT" \] /d'; then mutant_red g7-7-stat-mount-form-deleted-stale-form census_ok "$MUT"; fi
+if plant_in g7-shadow "$HS_SRC" 'die() { :; }'; then mutant_red g7-8-shadowing-function-definition census_ok "$MUT"; fi
 
 SCAN_ON=1
 echo "--- print scan over every tier-A run"
@@ -1616,7 +1803,12 @@ case = fn.split('case "$rc" in', 1)[1].split("esac", 1)[0]
 lines = [l for l in case.splitlines() if l.strip()]
 arms = [re.match(r"^\s+([0-9*]+)\)\s*(.*?)\s*;;$", l) for l in lines]
 if not all(arms): print("UNPARSED"); sys.exit(0)
-print(" ".join(sorted(a.group(1) for a in arms if not re.search(r"(^|\s)(_refs_refuse|exit)\s", a.group(2) + " "))))
+def terminates(b):
+    # unconditional (no && || | &) and its LAST command is the refuse call or an exit: "echo exit", "[ -n x ] && exit 5" and
+    # "true || _refs_refuse x" merely CONTAIN the word and fall through to the success emit
+    if re.search(r"&&|\|\||\||&", b): return False
+    return bool(re.match(r"^(_refs_refuse|exit)(\s|$)", b.split(";")[-1].strip()))
+print(" ".join(sorted(a.group(1) for a in arms if not terminates(a.group(2)))))
 PY
 }
 if [ "$(nonterm_arms "$CUTOVER")" = "0" ]; then ok "B26 the ONLY arm of mode_refs_assert's rc case that reaches the success emit is the pass arm 0) (every other arm ends in _refs_refuse or an exit; derived from the source)"; else no "B26 arms that can fall through: [$(nonterm_arms "$CUTOVER")]"; fi
@@ -1676,9 +1868,9 @@ fi
 # the success site (finding A): an added arm with ANY no-op body falls through; the post-case match must still refuse
 case_arm_refused() { local c="$CUTOVER"; CUTOVER="$1"; run_verb m5 - 29; local r="$VRC"; CUTOVER="$c"; [ "$r" = 5 ] && has_store "refs_shape_failed rc=96" && ! grep -q 'REFS-CONFIRMED' "$TL/out"; }
 _bi=0
-for _body in ";;" ": ;;" "true ;;"; do
-  _bi=$((_bi + 1))
-  if mutate_cutover "g4-arm29-$_bi" "s/^    0\) ;;\$/    0) ;;\n    29) $_body/"; then
+for _body in ";;" ": ;;" "true ;;" "echo exit ;;" '[ -n "$GD_CAPTURED" ] && exit 5 ;;' 'true || _refs_refuse refs_none ;;'; do
+  _bi=$((_bi + 1)); _sb="${_body//&/\\&}"
+  if mutate_cutover "g4-arm29-$_bi" "s/^    0\) ;;\$/    0) ;;\n    29) $_sb/"; then
     _arm_ctl="$MUT"
     if case_arm_refused "$_arm_ctl"; then ok "B27 control: with an added no-op arm [29) $_body] the runner STILL refuses (refs_shape_failed rc=96, no REFS-CONFIRMED): success needs the host's own answer line"; else no "B27 a no-op arm [29) $_body] confirmed or misreported: rc=$VRC out=[$(tr '\n' '|' < "$TL/out" | cut -c1-300)]"; fi
     if [ "$(nonterm_arms "$_arm_ctl")" = "0 29" ]; then ok "B28 the fall-through scan sees an added no-op arm [29) $_body] (it can fail)"; else no "B28 the scan missed the planted no-op arm [29) $_body]: [$(nonterm_arms "$_arm_ctl")]"; fi
@@ -1790,20 +1982,52 @@ if cmp -s "$RUNBOOK" "$T/mut/rb-retry.md" || cmp -s "$SCRIPT" "$T/mut/hdr-retry.
   rbp_py "$T/mut/hdr-retry.sh" "$RUNBOOK" 2>/dev/null | grep -q '^RETRY .* True$' && no "mutant rbp3-header-retry-column: stayed GREEN" || ok "mutant rbp3-header-retry-column: goes RED (the header column changed and the parity caught it)"
 fi
 
+# H4: the rc 27 reason words are ONE derived set in three places: the script's die 27 calls, the header's row 27, the runbook
+# (the Reading section and the Verdict-map row). A word added or dropped in one place and not the others is RED.
+rsn_py() { python3 - "$1" "$2" <<'PY'
+import re, sys
+script = open(sys.argv[1]).read(); rb = open(sys.argv[2]).read()
+code = "\n".join(l for l in script.splitlines() if not l.lstrip().startswith("#"))
+dies = set(re.findall(r"\bdie 27 ([a-z_]+)", code))
+hdr = script.split("# EXIT CODES", 1)[1].split("\n# Inputs", 1)[0]
+row = " ".join(l.lstrip("# ") for l in hdr.splitlines() if re.match(r"^#\s+27\s+refs_shape_failed", l))
+tail = row.split("reason ", 1)[1] if "reason " in row else ""
+hd = set(re.findall(r"(?:^|, )((?:repo|ref)_[a-z]+) \(", tail)) | {"refs_shape_failed"}
+sec = rb.split("### Reading REFS-CONFIRMED", 1)[1].split("\n### ", 1)[0]
+vm = rb.split("\n## Verdict map", 1)[1].split("\n## ", 1)[0]
+vrow = " ".join(l for l in vm.splitlines() if l.startswith("|") and "`repo_owner`" in l)
+tok = lambda t: set(re.findall(r"`((?:repo|ref)_[a-z]+)`", t)) | {"refs_shape_failed"}
+rs, rv = tok(sec), tok(vrow)
+print("SETS", sorted(dies), sorted(hd), sorted(rs), sorted(rv))
+print("RSN_OK", len(dies) >= 7 and dies == hd == rs == rv)
+PY
+}
+rsn_py "$SCRIPT" "$RUNBOOK" > "$T/rsn.out" 2> "$T/rsn.err"
+if grep -q '^RSN_OK True$' "$T/rsn.out"; then ok "RSN1 the rc 27 reason words are one set: the script's die 27 calls = the header row 27 = the runbook Reading section = the Verdict-map row (repo_owner, repo_alternates, repo_redirect, repo_symlink, ref_symref, ref_content, refs_shape_failed)"; else no "RSN1 rc 27 reason words drifted: $(tr '\n' ' ' < "$T/rsn.out" | cut -c1-400) $(head -c 200 "$T/rsn.err")"; fi
+cp "$SCRIPT" "$T/mut/rsn-script.sh"; sed -i 's/die 27 repo_owner/die 27 repo_ownerx/' "$T/mut/rsn-script.sh"
+cp "$SCRIPT" "$T/mut/rsn-hdr.sh"; sed -i 's/ repo_symlink (a symlink in it),//' "$T/mut/rsn-hdr.sh"
+cp "$RUNBOOK" "$T/mut/rsn-rb.md"; python3 -I -c 'import sys; s = open(sys.argv[1]).read(); open(sys.argv[1], "w").write(s.replace("`ref_content` (a loose ref that is not exactly", "`ref_contentx` (a loose ref that is not exactly"))' "$T/mut/rsn-rb.md"
+for _m in "script:$T/mut/rsn-script.sh:$RUNBOOK:die27-reason-renamed-in-the-script" "hdr:$T/mut/rsn-hdr.sh:$RUNBOOK:reason-dropped-from-the-header" "rb:$SCRIPT:$T/mut/rsn-rb.md:reason-renamed-in-the-runbook-verdict-row"; do
+  IFS=: read -r _n _s _r _d <<< "$_m"; MUTANTS_RUN=$((MUTANTS_RUN + 1))
+  if cmp -s "$SCRIPT" "$_s" && cmp -s "$RUNBOOK" "$_r"; then no "mutation rsn-$_n: the edit did not land"
+  elif rsn_py "$_s" "$_r" 2>/dev/null | grep -q '^RSN_OK True$'; then no "mutant rsn-$_n ($_d): stayed GREEN"
+  else ok "mutant rsn-$_n ($_d): goes RED (the reason-word parity caught it)"; fi
+done
+
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # Floors (ADR-193: reported with printf + exit, never through ok()/no())
 # ══════════════════════════════════════════════════════════════════════════════════════════
-MIN_ASSERTIONS=316
+MIN_ASSERTIONS=358
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s -- rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-MUTANT_FLOOR=107
+MUTANT_FLOOR=131
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf '[FATAL] mutant floor: %s mutants ran, the floor is exactly %s -- a mutation row did not land, was deleted, or was added without restating the floor\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
-SCAN_FLOOR_A=111
+SCAN_FLOOR_A=121
 SCAN_FLOOR_B=56
 if [ "$TIERA_SCAN_RUNS" -lt "$SCAN_FLOOR_A" ] || [ "$VERB_SCAN_RUNS" -lt "$SCAN_FLOOR_B" ]; then
   printf '[FATAL] print-scan floor: %s tier-A runs (floor %s) and %s verb runs (floor %s) were scanned\n' "$TIERA_SCAN_RUNS" "$SCAN_FLOOR_A" "$VERB_SCAN_RUNS" "$SCAN_FLOOR_B" >&2
