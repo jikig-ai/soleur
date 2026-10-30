@@ -43,9 +43,11 @@ set -uo pipefail
 
 # STDIN IS CLOSED FOR THE WHOLE SUITE (#11572 item 13). Children inherit this process's stdin, and the S6 stub `docker`
 # (written below) drains it unconditionally with `pw="$(cat)"` on every arm: under an open stdin (a terminal, a CI pipe
-# that never closes) any call that reaches it without its own piped stdin blocks forever. Nothing here reads the inherited
-# stdin: every `read` in this file takes a here-string, a file, a process substitution or a pipe. The pin row after
-# `_selftest_report` asserts this line stays a top-level line ahead of the first fixture write.
+# that never closes) any call that reaches it without its own piped stdin blocks forever. Other readers of stdin exist too
+# (the curl shim cats its body for `@-` and `--config -`); only the `read` loops in this file are all fed by a here-string, a
+# file, a process substitution or a pipe. This line gives every child that is not handed its own stdin an immediate EOF.
+# The pin rows after `_selftest_report` assert that it stays the FIRST statement after `set -uo pipefail`, and that fd 0
+# really is /dev/null at run time.
 exec < /dev/null
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -108,18 +110,38 @@ _selftest_report() {
 }
 _selftest_report
 
-# Pin of the `exec < /dev/null` above (Guard 3 of #11572 item 13): the line exists, is a top-level statement (not inside a
-# function, where it would never run at suite scope) and sits ahead of the first fixture write (the scratch-root `mktemp -d`).
+# Pin of the `exec < /dev/null` above (Guard 3 of #11572 item 13): it must be the FIRST statement after the first
+# `set -uo pipefail`, at column 0 and unconditional. A layout where it sits later, inside a function, an `if` or a `case` arm
+# is refused (each of those lets a child be started with the inherited stdin before it runs, or never runs it).
 _pin_exec_stdin() { # <suite file>
   awk '
-    /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ { depth++ }
-    /^\}/ { depth-- }
-    $0 == "exec < /dev/null" && depth == 0 && !ex { ex = NR }
-    /^TMPD="\$\(mktemp -d/ && !wr { wr = NR }
-    END { exit !(ex && wr && ex < wr) }' "$1"
+    !s && $0 == "set -uo pipefail" { s = 1; next }
+    s && !r && $0 !~ /^[[:space:]]*(#|$)/ { r = 1; ok = ($0 == "exec < /dev/null") }
+    END { exit !(s && r && ok) }' "$1"
 }
-if _pin_exec_stdin "${BASH_SOURCE[0]}"; then row "stdin: the suite closes its stdin (exec < /dev/null) as a top-level line before the first fixture write" ok
-else row "stdin: the suite closes its stdin (exec < /dev/null) as a top-level line before the first fixture write" fail "the exec line is missing, nested in a function, or after the scratch-root mktemp"; fi
+if _pin_exec_stdin "${BASH_SOURCE[0]}"; then row "stdin: the suite closes its stdin (exec < /dev/null) as the first statement after set -uo pipefail" ok
+else row "stdin: the suite closes its stdin (exec < /dev/null) as the first statement after set -uo pipefail" fail "the exec line is missing, not first, conditional, or nested"; fi
+# Runtime: fd 0 really is /dev/null (the file pin above cannot see an exec that never ran). Without /proc, a read that returns
+# EOF at once (rc 1) stands in; an open stdin would time out (rc > 128) instead.
+_fd0="$(readlink /proc/self/fd/0 2>/dev/null || true)"
+if [[ -z "$_fd0" ]]; then IFS= read -r -t 2 _fd0_line; _fd0_rc=$?; [[ "$_fd0_rc" == 1 ]] && _fd0=/dev/null; fi
+if [[ "$_fd0" == /dev/null ]]; then row "stdin: fd 0 is /dev/null at run time" ok
+else row "stdin: fd 0 is /dev/null at run time" fail "fd 0 is '$_fd0'"; fi
+# Controls: the pin accepts the canonical layout and refuses each broken one (written under the scratch root).
+printf '#!/usr/bin/env bash\n# c\nset -uo pipefail\n\n# note\nexec < /dev/null\nX=1\n' > "$TMPD/pin-good.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nX=1\nexec < /dev/null\n' > "$TMPD/pin-late.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nf() {\nexec < /dev/null\n}\nX=1\n' > "$TMPD/pin-nested.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nif false; then\nexec < /dev/null\nfi\nX=1\n' > "$TMPD/pin-conditional.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\ncase "$1" in\nx) exec < /dev/null ;;\nesac\nX=1\n' > "$TMPD/pin-case.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nif false; then exec </dev/null; fi\nX=1\n' > "$TMPD/pin-oneliner.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\n# exec < /dev/null\nX=1\n' > "$TMPD/pin-commented.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nX=1\n' > "$TMPD/pin-missing.sh"
+if _pin_exec_stdin "$TMPD/pin-good.sh"; then row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" ok
+else row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" fail "a good layout was refused"; fi
+for _pin_bad in late nested conditional case oneliner commented missing; do
+  if _pin_exec_stdin "$TMPD/pin-$_pin_bad.sh"; then row "stdin pin control: the $_pin_bad layout is refused" fail "the pin accepted a $_pin_bad layout"
+  else row "stdin pin control: the $_pin_bad layout is refused" ok; fi
+done
 
 # --------------------------------------------------------------------------------------
 # TOOLING: the real tools a probe needs, symlinked into ONE dir. curl/gh/doppler/ssh/git are
@@ -8298,7 +8320,8 @@ SELFTEST_PASSES=0
 # its DELEGATED_MANIFEST row left with it. Rebased over #11483's dispatch-recovery-sweeper-11211
 # (+1, main 825): net floor stays 824.
 # 824 -> 830 at #11572 (item 13): 829 measured on main before this change, plus the one stdin pin row (830 passed, 0 failed).
-EXPECTED_TESTS=830
+# 830 -> 839 at the #11572 review round (2026-10-30): the pin is now "first statement after set -uo pipefail", plus the run-time fd 0 row, the canonical-layout control and seven refused-layout controls (839 passed, 0 failed).
+EXPECTED_TESTS=839
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

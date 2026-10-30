@@ -28,12 +28,12 @@
 # ACTION REQUIRED (exit 5) fires on STALE > 0 alone, or on ENQ > 0 together with a stranded draft. The two Sentry
 # queries carry no `environment:` filter, so a STALE (or ENQ) event from ANY environment (preview, staging, a
 # developer's machine) counts, and since the window start is fixed, one such event keeps STALE > 0 (exit 5) every day.
-# WHY THE QUERIES STAY UNFILTERED (#11572 item 5, measured 2026-10-30, Sentry org jikig-eu, 30 d): events carrying an `op`
-# tag number 1564 with environment production and 17783 with a null environment; every web-platform@x.y.z release event
-# is production, the null-environment events are host emitters carrying other `feature` tags, and the org holds zero
-# non-production environments. `feature:spawn-agent` and `feature:dashboard-send` have 0 events, so an `environment:`
-# filter has no positive control today. Leave the queries unfiltered. Re-evaluate when a preview or staging environment
-# appears, or when the first real `feature:dashboard-send` event confirms `environment:production`.
+# WHY THE QUERIES STAY UNFILTERED (#11572 item 5, measured 2026-10-30 against the Sentry org, 30 d window): events carrying
+# an `op` tag number about 1.6k with environment production against about 18k with a null environment; every
+# web-platform@x.y.z release event is production, the null-environment events are host emitters carrying other `feature`
+# tags, and the org holds no non-production environment. `feature:spawn-agent` and `feature:dashboard-send` have 0 events,
+# so an `environment:` filter has no positive control today. Leave the queries unfiltered. Re-evaluate when a preview or
+# staging environment appears, or when the first real `feature:dashboard-send` event confirms `environment:production`.
 # RESIDUAL: the two `op` tags are read from Sentry with no runtime positive control (none exists); the suite pins the
 # tags against apps/web-platform/app/api/dashboard/today/[id]/send/route.ts, so a mistyped tag fails CI, but an op
 # renamed in the route LATER would silently read 0 here.

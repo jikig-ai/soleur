@@ -18,6 +18,16 @@
 # MUTATION CREDIT. A mutant is credited as caught only when its inner run exits 1 AND prints its own named
 # `FAIL: <fragment>` line (`mh_caught`, the single place that match lives). rc 0 = SURVIVED; any other rc, or a mutant that
 # does not parse or did not land, means the instrument itself broke.
+#   Prefix semantics, with an exact tie-break. The fragment is normally the leading words of a row label. Before any mutant
+#   runs, `mutate_run` asks `mh_frag_unique` how the fragment sits among the first FIX_N ledger labels and REFUSES (a `bad`
+#   row, "(instrument)") a fragment that is empty, ambiguous (two or more distinct labels start with it and none equals it),
+#   or that the check could not classify (fail closed). A fragment that EQUALS one label which also prefixes a longer
+#   sibling (`...: exit 5` vs `...: exit 5 (30 days or older)`) is `exact`: `mutate_run` then passes `exact` to `mh_caught`,
+#   which requires the FAIL line to equal `  FAIL: <fragment>`, so the sibling cannot credit the shorter row's mutant. A
+#   fragment matching no fixture label (it may name a battery row) is `unique`.
+#   Helper mutants. `mutate_helper` neuters check/has/hasnt in a copy of the suite and is credited by `mh_selftest_caught`:
+#   the copy must exit 4 AND print a line STARTING with `INSTRUMENT SELF-TEST FAILED`.
+#   The scorer's own controls live in scripts/lib/mutation-harness-controls.sh (`mh_lib_controls`), called once per suite.
 
 # shellcheck disable=SC2154  # the caller-supplied names above
 
@@ -92,8 +102,11 @@ mutate_run() {
   assert_fixture_dir "$f"; assert_fixture_dir "$o"
   fu="$(mh_frag_unique "$frag" "$LEDGER" "$FIX_N")" || true
   case "$fu" in
-    ambiguous|empty) bad "mutation $name: fragment [$frag] is ambiguous (instrument)"; return ;;
+    unique) ;;
     exact) ex=exact ;;
+    empty) bad "mutation $name: fragment [$frag] is empty (instrument)"; return ;;
+    ambiguous) bad "mutation $name: fragment [$frag] is ambiguous (instrument)"; return ;;
+    *) bad "mutation $name: fragment check failed (instrument)"; return ;;
   esac
   if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
   REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
