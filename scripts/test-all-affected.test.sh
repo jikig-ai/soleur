@@ -4246,11 +4246,16 @@ fi
 # The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
 # dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
 # legitimately — recompute the literal rather than misdiagnosing truncation.
-# Ranged form: scaled to the dispatched share of DECLARED_TOTAL (full run = MIN_CASES).
+# Ranged form (#11562): case emitters per block run 1-30 (non-uniform), so a
+# MIN_CASES-scaled share false-fires on sparse arms — arm -a legitimately emits
+# 19 cases in 13 blocks. The ranged floor is therefore EXPECTED_EXECUTED: every
+# dispatched block must produce >=1 case. Dispatch completeness is already
+# asserted by _site_seq==DECLARED_TOTAL + EXECUTED==EXPECTED_EXECUTED + the
+# PASS+FAIL conservation check above; a full (unranged) run keeps MIN_CASES.
 MIN_CASES=243
-MIN_ARM_CASES=$(( (MIN_CASES * EXPECTED_EXECUTED + DECLARED_TOTAL - 1) / DECLARED_TOTAL ))
+if (( ROWS_HI == 0 )); then MIN_ARM_CASES=$MIN_CASES; else MIN_ARM_CASES=$EXPECTED_EXECUTED; fi
 if (( cases < MIN_ARM_CASES )); then
-  echo "[FATAL] only $cases cases ran — below the $MIN_ARM_CASES ranged floor (MIN_CASES=$MIN_CASES x $EXPECTED_EXECUTED/$DECLARED_TOTAL blocks); a row block went missing" >&2
+  echo "[FATAL] only $cases cases ran — below the $MIN_ARM_CASES ranged floor (MIN_CASES=$MIN_CASES full / $EXPECTED_EXECUTED dispatched blocks); a row block went missing" >&2
   exit 2
 fi
 echo "test-all-affected: $PASS passed, $FAIL failed of $((PASS + FAIL)) (cases=$cases)"

@@ -1432,9 +1432,11 @@ jobs:
     # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
     # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
     # named below). The three cost-heaviest registrations moved to
-    # `test-scripts-heavy` below; what is left is ~76 min of light suite work,
-    # so eight legs measure ~9.5 min predicted suite time each (#9307; every
-    # leg under 600 s) plus setup. The one atomic mega-suite was split in
+    # `test-scripts-heavy` below; what is left is the light suite pool — per-leg
+    # predicted suite time lives in the committed manifest and the runbook
+    # topology table (it drifts with every regen; never quote a number here —
+    # the ~9.5-min figure this comment once carried measured 54.9 min on the
+    # worst leg by #11562). The one atomic mega-suite was split in
     # #8864; the duration-aware manifest keeps assignment balanced as suites
     # drift. Cost of the 8th leg: one more job competing for the runner pool
     # (see the concurrency note near the top of this file and the runbook).
@@ -1474,7 +1476,9 @@ jobs:
     # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   light leg ~9.5 min predicted at K=8 (runbook topology table has the range). No light suite carries a
+    #   light leg predicted suite time: read the committed manifest / runbook topology
+    #     table — the figure drifts per regen (the ~9.5-min value once written here was
+    #     5.7x off the worst measured leg). No light suite carries a
     #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
     #     moved to test-scripts-heavy, whose own derivation sits on that job.
     #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.

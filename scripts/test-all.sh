@@ -7246,9 +7246,11 @@ if want_scripts; then
     # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
     # the battery must land in the same commit as a re-split of these ranges.
     if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash "$f" --rows 1-193
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash "$f" --rows 194-386
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash "$f" --rows 387-578
+      # Literal path in argv, never "$f": the totality checker resolves each
+      # arm's battery from the run_suite command token and dies on <unresolved>.
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-578
       continue
     fi
     run_suite "$f" bash "$f"
