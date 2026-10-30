@@ -365,11 +365,15 @@ AFFECTED_CONSUMED_EDGES=(
   # the array). Its edges are the same two predicates _infra_in_diff checks.
   "apps/web-platform/infra/run-registered-suites.sh|AFFECTED_INFRA_RUNNER_PATHS"
   # ADR-262: four self-test mutation batteries, withdrawn from ALWAYS_ON_SUITES. The two lint-orphan
-  # halves share one array because they are two --rows ranges of one battery.
+  # halves share one array because they are two --rows ranges of one battery; the four
+  # test-all-affected arms share one array for the same reason (#11562).
   "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
-  "scripts/test-all-affected|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-a|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
 )
 
 # The infra runner's edges — the same two predicates _infra_in_diff checks

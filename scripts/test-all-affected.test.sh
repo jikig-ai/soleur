@@ -373,6 +373,15 @@ in_range() {
   fi
   return 1
 }
+
+# Whole-prefix sweep, not a named list — a named GIT_* list went stale within
+# a day once already (sc9's comment). The subshell keeps the unsets out of the
+# caller's env. GIT_TRACE is swept too — fixture ops stay quiet by design.
+# UNCONDITIONAL by necessity (ROWS-SPLIT, #11562): gated blocks 28/37/38 call
+# rc_g but land on different --rows arms than block 13 where it used to live;
+# a gated definition is invisible to a sibling arm and fails `command not found`.
+rc_g() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
+
 if in_range; then
 # --- Row a: --help ------------------------------------------------------------
 cases=$((cases + 1))
@@ -667,11 +676,6 @@ AFFECTED_A_TWO_PATHS=(
   "scripts/lib/test-affected-paths.sh"   # THIS FILE
 )
 '
-
-# Whole-prefix sweep, not a named list — a named GIT_* list went stale within
-# a day once already (sc9's comment). The subshell keeps the unsets out of the
-# caller's env. GIT_TRACE is swept too — fixture ops stay quiet by design.
-rc_g() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
 
 # Build a scratch repo whose origin/main is the base commit. $2 = "broken-lib" makes the base lib
 # unparseable (the G4 row). Never links into the live tree.
