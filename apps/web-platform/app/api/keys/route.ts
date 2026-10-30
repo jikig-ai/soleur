@@ -6,6 +6,8 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
 import { classifyCliDroppedValue, isAcceptableSubscriptionToken } from "@/server/oauth-token-shape";
 import { verifiedUserId } from "@/server/request-auth";
+import { hashUserId } from "@/server/observability";
+import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
 import * as Sentry from "@sentry/nextjs";
 
 // #11524 — remove the caller's stored subscription token (provider
@@ -55,7 +57,7 @@ export async function DELETE(request: Request) {
     logger.error({ err: rpcError }, "Failed to remove oauth credential");
     Sentry.captureException(rpcError, {
       tags: { feature: "api-keys", op: "delete-oauth" },
-      extra: { userId, provider: "anthropic_oauth" },
+      extra: { userIdHash: hashUserId(userId), provider: "anthropic_oauth" },
     });
     return NextResponse.json(
       { error: "Failed to remove token" },
@@ -65,7 +67,12 @@ export async function DELETE(request: Request) {
 
   const deleted = data === true;
   // Audit: op + outcome only. Never the token value, never the request body.
-  logger.info(
+  // Emitted at WARN on purpose: infra/vector.toml `app_container_warn_filter`
+  // ships only pino level >= 40 to Better Stack, so an info line would be
+  // dropped before the drain. A user-initiated token erase is low-volume, so
+  // the extra level is cheap. The top-level `userId` is pseudonymised to
+  // `userIdHash` by the pino formatter (ADR-029); do not hash it here too.
+  logger.warn(
     { feature: "api-keys", op: "oauth-credential-removed", userId, deleted },
     "Subscription token removed",
   );
@@ -168,10 +175,7 @@ export async function POST(request: Request) {
     // account) AND the kill-switch on. Either off ⇒ feature inert (403).
     const isOperator =
       process.env.ADMIN_USER_IDS?.split(",").includes(userId) ?? false;
-    const ccOauthEnabled =
-      process.env.CC_OAUTH_ENABLED === "1" ||
-      process.env.CC_OAUTH_ENABLED === "true";
-    if (!isOperator || !ccOauthEnabled) {
+    if (!isOperator || !isCcOauthEnabled()) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -213,7 +217,7 @@ export async function POST(request: Request) {
       logger.error({ err: rpcError }, "Failed to store oauth credential");
       Sentry.captureException(rpcError, {
         tags: { feature: "api-keys", op: "store-oauth" },
-        extra: { userId, provider: "anthropic_oauth" },
+        extra: { userIdHash: hashUserId(userId), provider: "anthropic_oauth" },
       });
       return NextResponse.json(
         { error: "Failed to store key" },

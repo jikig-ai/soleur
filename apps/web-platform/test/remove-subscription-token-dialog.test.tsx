@@ -77,7 +77,7 @@ describe("RemoveSubscriptionTokenDialog", () => {
     );
     expect(
       screen.getByText(
-        /^You will have no sign-in for Claude until you add an API key, and chat will stop working\. Removing it here does not revoke it with Anthropic/,
+        /^You will have no sign-in for Claude until you add an API key, and chat will stop working\. Conversations already open keep using the token until they end\. Removing it here does not revoke it with Anthropic/,
       ),
     ).toBeInTheDocument();
     await userEvent.click(
@@ -95,7 +95,7 @@ describe("RemoveSubscriptionTokenDialog", () => {
     );
     expect(
       screen.getByText(
-        /^Soleur is not using this token for conversations\. Removing deletes the saved copy\./,
+        /^Soleur is not using this token for conversations\. Removing deletes the saved copy\. Conversations already open keep using the token until they end\. Removing it here does not revoke it with Anthropic/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/usage charges apply/)).toBeNull();
@@ -187,11 +187,18 @@ describe("RemoveSubscriptionTokenDialog", () => {
     expect(onRemoved).not.toHaveBeenCalled();
   });
 
-  it("uses no native token-shaped text and never echoes a stored value", async () => {
+  it("a previous failure alert is cleared when the dialog is reopened", async () => {
+    fetchMock.mockRejectedValue(new Error("boom"));
     setup(basis(true, true));
     await userEvent.click(
       screen.getByRole("button", { name: "Remove subscription token" }),
     );
-    expect(document.body.textContent).not.toMatch(/sk-ant-oat/);
+    await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep token" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

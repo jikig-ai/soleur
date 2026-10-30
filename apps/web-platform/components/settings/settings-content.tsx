@@ -41,6 +41,14 @@ interface SettingsContentProps {
   workspaceIdentity?: WorkspaceIdentity | null;
 }
 
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export function SettingsContent({
   userEmail,
   hasApiKey,
@@ -56,8 +64,8 @@ export function SettingsContent({
   oauthTokenSavedAt = null,
   workspaceIdentity = null,
 }: SettingsContentProps) {
-  // Same source as the remove-token confirm dialog (KeyRotationForm derives
-  // its variant from this function too), so the two cannot disagree.
+  // Computed ONCE and passed to KeyRotationForm (null iff no token stored), so
+  // the status line and the remove-token confirm dialog cannot disagree.
   const basis = describeCredentialBasis({
     hasOauthToken,
     oauthInEffect,
@@ -132,7 +140,7 @@ export function SettingsContent({
                 {apiKeyLastValidated && (
                   <p className="text-sm text-soleur-text-secondary">
                     Last validated:{" "}
-                    {new Date(apiKeyLastValidated).toLocaleDateString()}
+                    {formatDate(apiKeyLastValidated)}
                   </p>
                 )}
               </div>
@@ -144,7 +152,7 @@ export function SettingsContent({
                 <p className="text-sm text-soleur-text-secondary">
                   Subscription token: saved
                   {oauthTokenSavedAt
-                    ? ` ${new Date(oauthTokenSavedAt).toLocaleDateString()}`
+                    ? ` ${formatDate(oauthTokenSavedAt)}`
                     : ""}
                 </p>
                 <p className="text-sm text-soleur-text-secondary">
@@ -157,8 +165,7 @@ export function SettingsContent({
           <KeyRotationForm
             hasExistingKey={hasApiKey}
             canUseOauthCredential={canUseOauthCredential}
-            hasOauthToken={hasOauthToken}
-            oauthInEffect={oauthInEffect}
+            basis={basis}
           />
         </div>
       </section>

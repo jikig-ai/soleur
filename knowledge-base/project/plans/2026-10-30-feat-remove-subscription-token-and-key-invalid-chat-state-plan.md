@@ -150,8 +150,9 @@ the route that calls it is live.
 - RPC error → the route's existing pattern (`logger.error({ err }, …)` + `Sentry.captureException(err, { tags: { feature: "api-keys", op: "delete-oauth" }, extra: { userId, provider: "anthropic_oauth" } })`)
   and 500 `{ error: "Failed to remove token" }`; never a fallback to a direct table delete. (Staying on the route's own logging pattern keeps the module graph the existing
   `api-keys-*` tests mock: `@/server/logger` default export and `@sentry/nextjs` `addBreadcrumb`/`captureException`.)
-- Audit = `logger.info({ feature: "api-keys", op: "oauth-credential-removed", userId, deleted }, …)` (top-level `userId`, pseudonymised by the pino
-  formatter, ADR-029) + `Sentry.addBreadcrumb` (no user id, no value). Never the value, never the request body.
+- Audit = `logger.warn({ feature: "api-keys", op: "oauth-credential-removed", userId, deleted }, …)` (top-level `userId`, pseudonymised by the pino
+  formatter, ADR-029; emitted at warn because the Vector `app_container_warn_filter` ships only pino level >= 40 — an info line never reaches Better Stack,
+  found at review) + `Sentry.addBreadcrumb` (no user id, no value); Sentry `extra` carries `userIdHash`, never the raw id. Never the value, never the request body.
 
 ### B. Settings UI (#11524) — F9, H5, H6, CPO, CLO copy constraints
 
@@ -397,29 +398,32 @@ CPO: threshold single-user incident, plan-time sign-off granted, conditional on 
 
 ```yaml
 liveness_signal:
-  what: pino info line op "oauth-credential-removed" (field deleted) emitted once per successful DELETE /api/keys; per-request, no heartbeat needed
+  what: pino WARN line op "oauth-credential-removed" (field deleted) emitted once per successful DELETE /api/keys. Emitted at warn on purpose - infra/vector.toml app_container_warn_filter ships only pino level >= 40, so an info line would never reach Better Stack (pino layer 2 mirrors warn to a Sentry breadcrumb; vector layer 3 ships the line). Low-volume user action, so the extra level is cheap
   cadence: per-request
-  alert_target: Better Stack logs (existing web-platform log drain); an RPC failure raises a Sentry issue
+  alert_target: Better Stack logs (existing web-platform log drain, via the Vector WARN+ filter); an RPC failure raises a Sentry issue
   configured_in: apps/web-platform/app/api/keys/route.ts
 error_reporting:
-  destination: Sentry via Sentry.captureException in the route (existing api-keys pattern), tags feature api-keys op delete-oauth
+  destination: Sentry via Sentry.captureException in the route (existing api-keys pattern), tags feature api-keys op delete-oauth; extra carries userIdHash (HMAC), never the raw user id
   fail_loud: HTTP 500 {"error":"Failed to remove token"} plus the Sentry event; a client send refused on a non-open, non-blocked socket mirrors to Sentry (feature send-message, op refused-socket-not-open)
 failure_modes:
   - mode: the RPC errors (or the migration is missing) and the token is not removed
-    detection: Sentry event tagged feature api-keys op delete-oauth; the route fails closed with 500, never a direct table delete
+    detection: sentry-correlation - Sentry event tagged feature api-keys op delete-oauth plus the pino error line (pino layer 2); the route fails closed with 500, never a direct table delete
+    alert_route: Sentry issue alert (existing project rules)
+  - mode: the Settings oauth-row read errors and the Remove control is hidden
+    detection: pino layer 2 / Sentry - reportSilentFallback feature settings op read-oauth-credential; the page renders the neutral (no token UI) state
     alert_route: Sentry issue alert (existing project rules)
   - mode: removal succeeds but a warm Query keeps billing the subscription until it ends
-    detection: documented limitation; a user report "old billing basis after removal" re-triggers #11596 (no automatic detector exists for a per-process Query env)
+    detection: NO runtime detector (accepted limitation: the per-process Query env is not observable from the server); a user report "old billing basis after removal" re-triggers the #11596 re-evaluation
     alert_route: GitHub issue #11596 re-evaluation criteria
   - mode: client refuses sends silently because the blocked state never clears
-    detection: blocked state is derived from lastError and cleared by reconnect and mount; vitest asserts the clear paths; send refusal outside the blocked state mirrors to Sentry
-    alert_route: Sentry issue feature send-message
+    detection: NO runtime detector for the stuck-blocked state itself (accepted limitation, #11596 re-evaluation); blocked state is derived from lastError and cleared by reconnect and mount, pinned by vitest. A send refused on a non-open, non-blocked socket DOES mirror to Sentry (sentry-correlation, feature send-message)
+    alert_route: Sentry issue feature send-message (only for the non-blocked refusal); stuck-blocked is user-report only
 logs:
-  where: Better Stack (pino stdout drain) for the audit line; Sentry for errors
+  where: Better Stack (pino stdout drain, WARN+ via Vector) for the audit line; Sentry for errors
   retention: per the existing Better Stack and Sentry retention plans (no new store)
 discoverability_test:
-  command: grep -o oauth-credential-removed apps/web-platform/app/api/keys/route.ts
-  expected_output: oauth-credential-removed
+  command: grep -A1 'logger\.warn($' apps/web-platform/app/api/keys/route.ts | grep -o oauth-credential-removed && ! grep -E 'logger\.info\(' apps/web-platform/app/api/keys/route.ts
+  expected_output: oauth-credential-removed (the audit op sits on a logger.warn call, and the route has no logger.info call that Vector would drop), exit 0
 ```
 
 ## Encryption Posture

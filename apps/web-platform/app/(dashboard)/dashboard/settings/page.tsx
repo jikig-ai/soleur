@@ -6,6 +6,7 @@ import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveWorkspaceIdentityForSettings } from "@/server/workspace-identity-resolver";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
+import { reportSilentFallback } from "@/server/observability";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -29,7 +30,7 @@ export default async function SettingsPage() {
   const active = await resolveActiveWorkspace(user.id, service);
 
   // Parallelize all independent queries.
-  const [{ data: apiKey }, { data: oauthRow }, wsRes] = await Promise.all([
+  const [{ data: apiKey }, { data: oauthData, error: oauthError }, wsRes] = await Promise.all([
     service
       .from("api_keys")
       .select("provider, is_valid, updated_at")
@@ -57,6 +58,17 @@ export default async function SettingsPage() {
           .maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
+
+  // A failed oauth read must not silently hide the Remove control: report it
+  // and render the neutral state (no token UI) rather than guess a row.
+  if (oauthError) {
+    reportSilentFallback(oauthError, {
+      feature: "settings",
+      op: "read-oauth-credential",
+      extra: { userId: user.id },
+    });
+  }
+  const oauthRow = oauthError ? null : oauthData;
 
   const repoData = wsRes.data;
 

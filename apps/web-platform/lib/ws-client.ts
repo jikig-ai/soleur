@@ -4,6 +4,7 @@ import { useState, useEffect, useReducer, useMemo, useRef, useCallback } from "r
 import { createClient } from "@/lib/supabase/client";
 import {
   WS_CLOSE_CODES,
+  isCredentialErrorCode,
   type WSMessage,
   type ConversationContext,
   type AttachmentRef,
@@ -32,7 +33,7 @@ import {
 } from "@/lib/session-ended-copy";
 import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observability";
 import * as Sentry from "@sentry/nextjs";
-import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
+import { STUCK_TIMEOUT_MS, CONVERSATION_NOT_FOUND_MESSAGE } from "@/lib/ws-constants";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type { CredentialScheme } from "@/lib/auth-scheme";
 import { C4_DIAGRAM_SAVED_EVENT } from "@/lib/c4-constants";
@@ -107,14 +108,15 @@ interface UseWebSocketReturn {
    *  `false` means refused (credential blocked, or socket not open): no optimistic
    *  bubble was added and the caller must keep the draft. */
   sendMessage: (content: string, attachments?: AttachmentRef[]) => boolean;
-  sendReviewGateResponse: (gateId: string, selection: string) => void;
+  /** `false` = the frame was NOT sent (closed/torn-down socket): the card stays actionable. */
+  sendReviewGateResponse: (gateId: string, selection: string) => boolean;
   /** feat-bash-autonomous-default-on: client→server ack for the first-run
    *  autonomous-mode disclosure soft-gate. Selection is "Got it" /
    *  "Keep autonomous on" / "Ask me each time". Releases the held command. */
-  sendAutonomousDisclosureResponse: (gateId: string, selection: string) => void;
+  sendAutonomousDisclosureResponse: (gateId: string, selection: string) => boolean;
   /** Stage 4 (#2886): client→server send for `interactive_prompt_response`.
    *  Used by `<InteractivePromptCard>` to post the user's choice. */
-  sendInteractivePromptResponse: (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => void;
+  sendInteractivePromptResponse: (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => boolean;
   /** Stage 4 (#2886): optimistically mark a prompt card as resolved
    *  (locally; the runner's reaper handles staleness). */
   resolveInteractivePrompt: (
@@ -699,8 +701,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [lastError, setLastError] = useState<WebSocketError | null>(null);
   // #11525 — DERIVED, never stored: blocked iff the single `lastError` slot holds
   // a credential code. Cleared by `reconnect()` / mount (both null `lastError`).
-  const credentialBlocked =
-    lastError?.code === "key_invalid" || lastError?.code === "byok_key_missing";
+  const credentialBlocked = isCredentialErrorCode(lastError?.code);
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
   const [realConversationId, setRealConversationId] = useState<string | null>(null);
@@ -750,15 +751,27 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // #11525 — synchronous mirror of the DERIVED `credentialBlocked` so
   // `sendMessage` reads the current value with no render lag. Assigned where
   // `lastError` is set/cleared (the error branch, `reconnect()`, mount) - never
-  // in an effect, so the ref and the state cannot disagree.
+  // in an effect, so the ref and the state cannot disagree. After the blocking
+  // error's `teardown()` the `mountedRef` gate in `onmessage` drops any late
+  // frame, so no later frame can overwrite `lastError` and desync the two.
   const credentialBlockedRef = useRef(false);
   // #11525 — conversation id captured before teardown for the Reconnect rebind.
   const [rebindConversationId, setRebindConversationId] = useState<string | null>(null);
   const rebindConversationIdRef = useRef<string | null>(null);
-  // True between sending the rebind `resume_session` and the first reply. An
-  // `error` while armed means the server refused the rebind (one-shot fallback).
+  // True between SENDING the rebind `resume_session` and its first reply
+  // (`session_started` / `session_resumed`) or a refusal. ONLY the genuine
+  // refusal (`CONVERSATION_NOT_FOUND_MESSAGE`) counts while armed; any other
+  // `error` (checkpoint notice, transient auth probe, rate limit...) falls
+  // through to the normal handlers and leaves it armed. Cleared by
+  // reconnect(), teardown() and the socket onclose (the pending reply died).
   const rebindArmedRef = useRef(false);
   const [rebindRefused, setRebindRefused] = useState(false);
+  /** Drop the captured rebind id and disarm (refused / completed / mount). */
+  const clearRebind = useCallback(() => {
+    rebindArmedRef.current = false;
+    rebindConversationIdRef.current = null;
+    setRebindConversationId(null);
+  }, []);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   // feat-stream-since-disconnect (#5273) — highest server-stamped `seq` this
@@ -880,6 +893,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
    *  Mirrors the key_invalid teardown pattern. */
   const teardown = useCallback(() => {
     mountedRef.current = false;
+    // The pending rebind reply (if any) died with the socket. The captured id is
+    // KEPT: the key_invalid branch captures it before calling teardown().
+    rebindArmedRef.current = false;
     clearTimeout(reconnectTimerRef.current);
     dispatch({ type: "clear_streams" });
     clearAllTimeouts();
@@ -1232,16 +1248,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
           // Key invalidation: set structured error instead of redirect.
           // #11525: `byok_key_missing` shares this branch (same blocked state).
-          if (msg.errorCode === "key_invalid" || msg.errorCode === "byok_key_missing") {
+          if (isCredentialErrorCode(msg.errorCode)) {
             // Bookkeeping BEFORE the socket is torn down: teardown clears the
             // conversation id, and the blocked ref must be set synchronously.
             const hasUserMessage = messagesRef.current.some((m) => m.role === "user");
             const rebindId = hasUserMessage
               ? (realConversationIdRef.current ?? rebindConversationIdRef.current)
               : null;
+            rebindArmedRef.current = false;
             rebindConversationIdRef.current = rebindId;
             setRebindConversationId(rebindId);
-            rebindArmedRef.current = false;
             credentialBlockedRef.current = true;
             dispatch({ type: "mark_last_user_unanswered" });
             // #11086: server-authored copy only when the frame names a known
@@ -1263,14 +1279,20 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             return;
           }
 
-          // #11525 — the rebind `resume_session` was refused (e.g. "Conversation
-          // not found"): drop the id, show no extra bubble, and let the surface
-          // fall back ONCE to `startSession` (the armed ref is cleared, so a
-          // second error is an ordinary error bubble - never a loop).
-          if (rebindArmedRef.current) {
-            rebindArmedRef.current = false;
-            rebindConversationIdRef.current = null;
-            setRebindConversationId(null);
+          // #11525 — the rebind `resume_session` was REFUSED: ONLY the genuine
+          // "Conversation not found" counts. Drop the id, show no extra bubble,
+          // mirror once, and let the surface fall back ONCE to `startSession`
+          // (the armed ref is cleared, so a second error is an ordinary error
+          // bubble - never a loop). Any other error while armed (checkpoint
+          // notice, transient auth probe, rate limit) is NOT a refusal: it falls
+          // through to the normal handlers and the rebind stays armed.
+          if (rebindArmedRef.current && msg.message === CONVERSATION_NOT_FOUND_MESSAGE) {
+            warnSilentFallback(null, {
+              feature: "credential-rebind",
+              op: "resume-refused",
+              extra: { errorCode: msg.errorCode ?? null, message: msg.message },
+            });
+            clearRebind();
             setRebindRefused(true);
             return;
           }
@@ -1485,11 +1507,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // #11525 — the server answers a rebind `resume_session` with
           // `session_started`: the rebind is complete. Retained local messages
           // stay the transcript (sessionKind "fresh" => no history refetch).
-          if (rebindArmedRef.current) {
-            rebindArmedRef.current = false;
-            rebindConversationIdRef.current = null;
-            setRebindConversationId(null);
-          }
+          clearRebind();
           break;
         }
 
@@ -1518,13 +1536,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // ONLY kind that may request resume_stream replay on reconnect.
           sessionKindRef.current = "resumed";
           setSessionConfirmed(true);
-          // #11525 — a non-"new" surface rebinds with its own id and gets
-          // `session_resumed`; that reply also completes the rebind.
-          if (rebindArmedRef.current) {
-            rebindArmedRef.current = false;
-            rebindConversationIdRef.current = null;
-            setRebindConversationId(null);
-          }
+          // #11525 — defensive: the server answers `resume_session` with
+          // `session_started` (also for a UUID surface), so this arm is not
+          // expected to complete a rebind; clearing here is harmless and keeps
+          // the armed state from outliving any session-establishing reply.
+          clearRebind();
           break;
         }
 
@@ -1664,6 +1680,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     ws.onclose = (event: CloseEvent) => {
       if (!mountedRef.current) return;
+      // The pending rebind reply died with the socket (the id stays captured).
+      rebindArmedRef.current = false;
 
       // 4010 CONCURRENCY_CAP — dispatch modal with cached preamble payload, then
       // fall through to the standard non-transient teardown (no reconnect).
@@ -1762,7 +1780,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     ws.onerror = () => {
       // onclose will fire after onerror — reconnect logic lives there
     };
-  }, [getWsUrlAndToken, teardown, clearAllTimeouts]);
+  }, [getWsUrlAndToken, teardown, clearAllTimeouts, clearRebind]);
 
   /** Fetch and map conversation history from the messages API. Shared by
    *  the mount-time effect (non-"new" IDs) and the resume effect ("new" → UUID). */
@@ -2069,9 +2087,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     mountedRef.current = true;
     setLastError(null);
     credentialBlockedRef.current = false;
-    rebindConversationIdRef.current = null;
-    rebindArmedRef.current = false;
-    setRebindConversationId(null);
+    clearRebind();
     setRebindRefused(false);
     setDisconnectReason(undefined);
     setSessionConfirmed(false);
@@ -2086,7 +2102,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         wsRef.current.close();
       }
     };
-  }, [connect, conversationId, clearAllTimeouts]);
+  }, [connect, conversationId, clearAllTimeouts, clearRebind]);
 
   const startSession = useCallback(
     (optsOrLeaderId?: StartSessionOptions | DomainLeaderId, contextArg?: ConversationContext) => {
@@ -2109,14 +2125,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const resumeSession = useCallback(
     (targetConversationId: string) => {
       setSessionConfirmed(false);
-      // #11525 — arm the one-shot rebind fallback only for the captured id.
+      const sent = send({ type: "resume_session", conversationId: targetConversationId });
+      // #11525 — arm the one-shot rebind fallback only for the captured id AND
+      // only when the frame actually left the client (no reply will ever come
+      // for a dropped send, so arming would swallow the next unrelated error).
       if (
+        sent &&
         rebindConversationIdRef.current !== null &&
         targetConversationId === rebindConversationIdRef.current
       ) {
         rebindArmedRef.current = true;
       }
-      send({ type: "resume_session", conversationId: targetConversationId });
     },
     [send],
   );
@@ -2136,6 +2155,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         });
         return false;
       }
+      // Order is deliberate: the not-OPEN refusal above returns BEFORE
+      // `reset_connection`. `unrecoverable` is entered from a non-transient close
+      // (socket CLOSED, no reconnect) or `stream_replay{incomplete}` (socket
+      // OPEN). For the CLOSED case a bare reset would hide the State-3 banner
+      // while nothing can be sent; its sanctioned escape is
+      // `resumeAfterUnrecoverable` (reset + reconnect). The OPEN case reaches the
+      // reset below.
       // #5282 — an explicit new user turn is the ONLY escape from a sticky
       // `unrecoverable` connection state (AC11). This single `sendMessage` is the
       // unified send path for BOTH the legacy fan-out and cc-soleur-go (AC9), so
@@ -2158,30 +2184,62 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
-  const sendReviewGateResponse = useCallback(
-    (gateId: string, selection: string) => {
-      send({ type: "review_gate_response", gateId, selection });
-      // Optimistically mark as resolved
-      dispatch({ type: "resolve_gate", gateId, selection });
+  /** Send a gate-style response frame. Returns whether it left the client.
+   *  A drop (torn-down socket after `key_invalid`, closed socket) must NOT be
+   *  reported as "resolved": the caller dispatches its optimistic resolve only
+   *  on `true`, so the card stays actionable. An expected credential-blocked
+   *  refusal is not a silent fallback; any other drop is mirrored to Sentry. */
+  const sendGateFrame = useCallback(
+    (frame: WSMessage, op: string): boolean => {
+      if (send(frame)) return true;
+      if (!credentialBlockedRef.current) {
+        const ws = wsRef.current;
+        reportSilentFallback(null, {
+          feature: "send-message",
+          op: "refused-socket-not-open",
+          extra: { frame: op, readyState: ws?.readyState ?? null },
+        });
+      }
+      return false;
     },
     [send],
+  );
+
+  const sendReviewGateResponse = useCallback(
+    (gateId: string, selection: string): boolean => {
+      if (!sendGateFrame({ type: "review_gate_response", gateId, selection }, "review_gate_response")) {
+        return false;
+      }
+      // Optimistically mark as resolved
+      dispatch({ type: "resolve_gate", gateId, selection });
+      return true;
+    },
+    [sendGateFrame],
   );
 
   const sendAutonomousDisclosureResponse = useCallback(
-    (gateId: string, selection: string) => {
-      send({ type: "autonomous_disclosure_response", gateId, selection });
+    (gateId: string, selection: string): boolean => {
+      if (
+        !sendGateFrame(
+          { type: "autonomous_disclosure_response", gateId, selection },
+          "autonomous_disclosure_response",
+        )
+      ) {
+        return false;
+      }
       // Optimistically mark resolved so the banner dismisses immediately; the
       // server releases the held command + writes the ack on receipt.
       dispatch({ type: "resolve_autonomous_disclosure", gateId, selection });
+      return true;
     },
-    [send],
+    [sendGateFrame],
   );
 
+  /** Returns whether the frame was sent; the surface resolves its card only on `true`. */
   const sendInteractivePromptResponse = useCallback(
-    (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => {
-      send(msg);
-    },
-    [send],
+    (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>): boolean =>
+      sendGateFrame(msg, "interactive_prompt_response"),
+    [sendGateFrame],
   );
 
   const resolveInteractivePrompt = useCallback(
@@ -2245,6 +2303,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const reconnect = useCallback(() => {
     setLastError(null);
     credentialBlockedRef.current = false;
+    rebindArmedRef.current = false;
     setRebindRefused(false);
     setDisconnectReason(undefined);
     mountedRef.current = true;

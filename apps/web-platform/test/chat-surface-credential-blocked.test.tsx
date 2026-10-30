@@ -135,10 +135,11 @@ describe("ChatSurface — credential blocked (#11525)", () => {
     expect(screen.getByText("Saved your key in Settings? Select Reconnect to continue.")).toBeInTheDocument();
   });
 
-  it("derives blocked from lastError.code even when the hook flag is false", async () => {
-    setWs({ lastError: apiKeyInvalid, credentialBlocked: false });
+  it("the hook's credentialBlocked flag is the single source: a non-credential error leaves the composer enabled and shows no helper line", async () => {
+    setWs({ lastError: { code: "rate_limited", message: "slow down" }, credentialBlocked: false });
     await mountSurface();
-    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
+    expect(screen.queryByTestId("credential-helper-reconnect")).toBeNull();
   });
 
   it("byok_key_missing: API Key Required card, Add API key in a new tab, blocked composer, no generic Error bubble", async () => {
@@ -192,7 +193,7 @@ describe("ChatSurface — credential blocked (#11525)", () => {
     const status = screen
       .getByText("Saved your token in Settings? Select Reconnect to continue.")
       .closest('[role="status"]') as HTMLElement;
-    expect(within(status).getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+    expect(within(status).getByTestId("credential-helper-reconnect")).toBeInTheDocument();
   });
 
   it("installs no visibilitychange or focus listener for the blocked state (no tab-return hint)", async () => {
@@ -288,7 +289,7 @@ describe("ChatSurface — credential blocked (#11525)", () => {
       messages: [userMsg({ unanswered: true })],
     });
     rerenderSurface();
-    await userEvent.click(screen.getByText("Saved your key in Settings? Select Reconnect to continue.").closest('[role="status"]')!.querySelector("button")!);
+    await userEvent.click(screen.getByTestId("credential-helper-reconnect"));
     expect(mockReconnect).toHaveBeenCalledTimes(1);
     expect(mockResumeSession).toHaveBeenCalledWith(CONV);
     expect(mockStartSession).not.toHaveBeenCalled();
@@ -369,5 +370,69 @@ describe("ChatSurface — credential blocked (#11525)", () => {
     setWs({ messages: [userMsg()] });
     await mountSurface();
     expect(screen.queryByText("Not answered")).toBeNull();
+  });
+
+  it("a refused ?msg= first-run send is not consumed: it is retried once the session re-confirms", async () => {
+    mockSearchParams.set("msg", "hello from the dashboard");
+    try {
+      mockSendMessage.mockReturnValueOnce(false);
+      setWs({ sessionConfirmed: true, messages: [] });
+      const { rerenderSurface } = await mountSurface();
+      await vi.waitFor(() => expect(mockSendMessage).toHaveBeenCalledTimes(1));
+      expect(mockSendMessage).toHaveBeenLastCalledWith("hello from the dashboard");
+
+      // Session re-confirms (e.g. after Reconnect) -> the message goes out again.
+      setWs({ sessionConfirmed: false, messages: [] });
+      rerenderSurface();
+      setWs({ sessionConfirmed: true, messages: [] });
+      rerenderSurface();
+      await vi.waitFor(() => expect(mockSendMessage).toHaveBeenCalledTimes(2));
+    } finally {
+      mockSearchParams.delete("msg");
+    }
+  });
+
+  // A dropped gate/prompt response must leave the card actionable.
+  describe("optimistic card resolution follows the send result", () => {
+    const askUser = (): ChatMessage =>
+      ({
+        id: "ip-1",
+        role: "assistant",
+        content: "",
+        type: "interactive_prompt",
+        promptId: "pr-1",
+        conversationId: "test-id",
+        promptKind: "ask_user",
+        promptPayload: { question: "Proceed?", options: ["Yes", "No"], multiSelect: false },
+      }) as ChatMessage;
+
+    it("does NOT resolve the interactive prompt when the response was not sent", async () => {
+      const send = vi.fn(() => false);
+      const resolve = vi.fn();
+      setWs({
+        realConversationId: "test-id",
+        messages: [userMsg(), askUser()],
+        sendInteractivePromptResponse: send,
+        resolveInteractivePrompt: resolve,
+      });
+      await mountSurface({ conversationId: "test-id" });
+      await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(resolve).not.toHaveBeenCalled();
+    });
+
+    it("resolves the interactive prompt when the response was sent", async () => {
+      const send = vi.fn(() => true);
+      const resolve = vi.fn();
+      setWs({
+        realConversationId: "test-id",
+        messages: [userMsg(), askUser()],
+        sendInteractivePromptResponse: send,
+        resolveInteractivePrompt: resolve,
+      });
+      await mountSurface({ conversationId: "test-id" });
+      await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+      expect(resolve).toHaveBeenCalledTimes(1);
+    });
   });
 });

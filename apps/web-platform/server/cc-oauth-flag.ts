@@ -6,9 +6,11 @@
  * time so a deploy-time env flip takes effect on the next lease without a
  * process restart contract.
  *
- * Single source: `byok-lease.ts` (the lease) and `settings/page.tsx` (the
- * "in effect" UI derivation, #11524) both import this so the page can never
- * drift from the predicate the lease actually applies.
+ * Single source for the KILL-SWITCH predicate only: `byok-lease.ts`,
+ * `app/api/keys/route.ts` (POST) and `settings/page.tsx` all import this so
+ * none can parse the env var differently. It is NOT the whole "in effect"
+ * rule: the lease additionally applies the owner-only fence, and the page
+ * composes `isCcOauthEnabled() && is_valid` itself (#11524).
  */
 export function isCcOauthEnabled(): boolean {
   const v = process.env.CC_OAUTH_ENABLED;

@@ -8,10 +8,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const USER_ID = "user-1";
 
 type Row = { provider: string; is_valid: boolean; updated_at: string };
-const state: { anthropic: Row | null; oauth: Row | null } = {
+const state: {
+  anthropic: Row | null;
+  oauth: Row | null;
+  oauthError: { message: string; code: string } | null;
+} = {
   anthropic: null,
   oauth: null,
+  oauthError: null,
 };
+const reportSilentFallback = vi.fn();
 const apiKeysCalls: Array<{ select: string; filters: Record<string, unknown>; terminal: string }> = [];
 
 function apiKeysChain() {
@@ -31,6 +37,9 @@ function apiKeysChain() {
     apiKeysCalls.push(call);
     const row =
       call.filters.provider === "anthropic_oauth" ? state.oauth : state.anthropic;
+    if (call.filters.provider === "anthropic_oauth" && state.oauthError) {
+      return Promise.resolve({ data: null, error: state.oauthError });
+    }
     return Promise.resolve({ data: row, error: null });
   };
   chain.single = () => finish("single");
@@ -52,6 +61,9 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: (...a: unknown[]) => reportSilentFallback(...a),
+}));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspace: async () => ({ ok: false }),
 }));
@@ -77,6 +89,8 @@ beforeEach(() => {
   saved = process.env.CC_OAUTH_ENABLED;
   state.anthropic = null;
   state.oauth = null;
+  state.oauthError = null;
+  reportSilentFallback.mockReset();
   apiKeysCalls.length = 0;
 });
 afterEach(() => {
@@ -126,6 +140,32 @@ describe("settings/page.tsx — anthropic_oauth row (#11524)", () => {
     const p = await pageProps();
     expect(p.hasOauthToken).toBe(true);
     expect(p.oauthInEffect).toBe(false);
+  });
+
+  it("an oauth-query DB error is reported and renders the neutral state (no token UI)", async () => {
+    process.env.CC_OAUTH_ENABLED = "1";
+    state.oauthError = { message: "connection reset", code: "08006" };
+    // Even if a row would have matched, an errored read must not guess one.
+    state.oauth = { provider: "anthropic_oauth", is_valid: true, updated_at: "2026-10-28T10:00:00Z" };
+    const p = await pageProps();
+    expect(p.hasOauthToken).toBe(false);
+    expect(p.oauthInEffect).toBe(false);
+    expect(p.oauthTokenSavedAt).toBeNull();
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      state.oauthError,
+      expect.objectContaining({
+        feature: "settings",
+        op: "read-oauth-credential",
+        extra: { userId: USER_ID },
+      }),
+    );
+  });
+
+  it("no oauth error: nothing is reported", async () => {
+    process.env.CC_OAUTH_ENABLED = "1";
+    await pageProps();
+    expect(reportSilentFallback).not.toHaveBeenCalled();
   });
 
   it("hasApiKey keeps its meaning (anthropic row, valid), independent of the oauth row", async () => {

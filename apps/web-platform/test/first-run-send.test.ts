@@ -578,4 +578,77 @@ describe("runFirstRunSend", () => {
       expect(res).toEqual({ sent: false, retry: true });
     });
   });
+  // #11525 - `sendMessage` refuses (returns false) while the chat is
+  // credential-blocked or the socket is not open. Only an explicit `false` is a
+  // refusal; the legacy `void` return still counts as sent.
+  describe("refused send (send() returns false)", () => {
+    it("no files + message, refused -> not consumed: sent=false, retry=true", async () => {
+      const h = setup();
+      const refused = vi.fn((..._a: unknown[]) => false);
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files: [],
+        conversationId: null,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: refused,
+      });
+      expect(refused).toHaveBeenCalledTimes(1);
+      expect(res).toEqual({ sent: false, retry: true });
+    });
+
+    it("no files + message, refused on the FINAL attempt -> sent=false, no retry", async () => {
+      const h = setup();
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files: [],
+        conversationId: null,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: () => false,
+        final: true,
+      });
+      expect(res).toEqual({ sent: false, retry: false });
+    });
+
+    it("files + message, ready but refused -> sent=false, retry=true", async () => {
+      const h = setup();
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: () => false,
+      });
+      expect(res).toEqual({ sent: false, retry: true });
+    });
+
+    it("final-attempt text-only fallback refused -> sent=false, no retry", async () => {
+      const h = setup({ live: { conversationId: "other-id" } });
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: () => false,
+        final: true,
+      });
+      expect(res).toEqual({ sent: false, retry: false });
+    });
+
+    it("a void-returning send still counts as sent (back-compat)", async () => {
+      const h = setup();
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files: [],
+        conversationId: null,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+      });
+      expect(res).toEqual({ sent: true, retry: false });
+    });
+  });
 });

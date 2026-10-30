@@ -16,8 +16,8 @@ interface RemoveSubscriptionTokenDialogProps {
   /**
    * Called once on a successful removal, with the basis the user confirmed
    * against. The parent owns the post-removal notice: this component renders
-   * nothing after success and unmounts when `router.refresh()` flips the
-   * `hasOauthToken` prop.
+   * nothing after success and unmounts when `router.refresh()` makes the
+   * `basis` prop null.
    */
   onRemoved: (confirmedAgainst: CredentialBasis) => void;
   /** Variant B only: switch the form to the API-key field and focus it. */
@@ -64,7 +64,6 @@ export function RemoveSubscriptionTokenDialog({
       }
 
       setRemoved(true);
-      setIsOpen(false);
       onRemoved(basis);
       router.refresh();
     },
@@ -85,7 +84,10 @@ export function RemoveSubscriptionTokenDialog({
         <Button
           variant="outlined"
           type="button"
-          onClick={() => setIsOpen(true)}
+          onClick={() => {
+            setError(null);
+            setIsOpen(true);
+          }}
           className="border-red-900/50 text-red-400 hover:text-red-300"
         >
           Remove subscription token
@@ -116,13 +118,12 @@ export function RemoveSubscriptionTokenDialog({
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        {basis.offerAddApiKey && (
+        {basis.variant === "B" && (
           <Button
             variant="ghost"
             type="button"
             onClick={() => {
               setIsOpen(false);
-              setError(null);
               onAddApiKey();
             }}
             disabled={isRemoving}
@@ -135,10 +136,7 @@ export function RemoveSubscriptionTokenDialog({
           variant="outlined"
           type="button"
           autoFocus
-          onClick={() => {
-            setIsOpen(false);
-            setError(null);
-          }}
+          onClick={() => setIsOpen(false)}
           disabled={isRemoving}
         >
           Keep token

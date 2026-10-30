@@ -3876,9 +3876,10 @@ async function reportDispatchSoleurGoError(
   } else if (err instanceof MissingByokKeyError) {
     // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
     // key. Info-level breadcrumb captures workspace context;
-    // `byok_key_missing` errorCode tells the client to render the
-    // configure-banner linking to /dashboard/settings/byok rather
-    // than the key-invalid prompt.
+    // `byok_key_missing` errorCode tells the client to enter the same
+    // credential-blocked state as `key_invalid` (lib/ws-client.ts
+    // `credentialBlocked`: card linking to /dashboard/settings, composer
+    // disabled until Reconnect).
     reportMissingByokKey(err);
     ctx.sendToClient(ctx.userId, {
       type: "error",

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 // #11524 — DELETE /api/keys removes the caller's stored subscription token
 // (api_keys.provider = 'anthropic_oauth') through the service-role-only
@@ -12,7 +14,6 @@ const h = vi.hoisted(() => ({
   rpc: vi.fn(async (..._args: unknown[]) => ({ data: true as unknown, error: null as unknown })),
   from: vi.fn(),
   csrfValid: true,
-  logCalls: [] as unknown[],
   loggerError: vi.fn(),
   loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
@@ -47,6 +48,10 @@ vi.mock("@/lib/auth/validate-origin", () => ({
       : { valid: false, origin: "https://evil.test" },
   ),
   rejectCsrf: vi.fn(() => new Response("csrf", { status: 403 })),
+}));
+vi.mock("@/server/observability", () => ({
+  // Deterministic stand-in: the real HMAC is pepper-dependent.
+  hashUserId: vi.fn((id: string) => `hash(${id})`),
 }));
 vi.mock("@/server/logger", () => ({
   default: { error: h.loggerError, info: h.loggerInfo, warn: h.loggerWarn },
@@ -109,23 +114,18 @@ describe("DELETE /api/keys — exact-body gate", () => {
     ["non-string credential_type", { credential_type: 1 }],
     ["null body", null],
     ["array body", [OAUTH_BODY]],
+    ["non-JSON body", "RAW:not json {"],
+    ["bodyless DELETE", "NOBODY"],
   ])("rejects %s with 400 unsupported_credential_type and never calls the RPC", async (_label, body) => {
-    const res = await DELETE(req(body));
+    const res = await DELETE(
+      body === "NOBODY"
+        ? req(null, { noBody: true })
+        : typeof body === "string" && body.startsWith("RAW:")
+          ? req(null, { raw: body.slice(4) })
+          : req(body),
+    );
     expect(res.status).toBe(400);
     expect((await res.json()).code).toBe("unsupported_credential_type");
-    expect(h.rpc).not.toHaveBeenCalled();
-    expect(h.from).not.toHaveBeenCalled();
-  });
-
-  it("rejects a non-JSON body with 400", async () => {
-    const res = await DELETE(req(null, { raw: "not json {" }));
-    expect(res.status).toBe(400);
-    expect(h.rpc).not.toHaveBeenCalled();
-  });
-
-  it("rejects a bodyless DELETE with 400", async () => {
-    const res = await DELETE(req(null, { noBody: true }));
-    expect(res.status).toBe(400);
     expect(h.rpc).not.toHaveBeenCalled();
     expect(h.from).not.toHaveBeenCalled();
   });
@@ -151,8 +151,14 @@ describe("DELETE /api/keys — RPC call and response", () => {
 
   it("the user id comes from the verified session, never from the request body", async () => {
     h.user = { id: "someone-else" };
+    // A body carrying a user_id field fails the exact-body gate, so a
+    // body-supplied id can never reach the RPC either way.
+    const smuggled = await DELETE(req({ ...OAUTH_BODY, user_id: "victim" }));
+    expect(smuggled.status).toBe(400);
+    expect(h.rpc).not.toHaveBeenCalled();
     const res = await DELETE(req({ ...OAUTH_BODY }));
     expect(res.status).toBe(200);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
     expect(h.rpc).toHaveBeenCalledWith("delete_oauth_credential", { p_user_id: "someone-else" });
   });
 });
@@ -172,15 +178,6 @@ describe("DELETE /api/keys — authn / CSRF / no operator fence", () => {
     expect(await res.text()).toBe("csrf");
     expect(h.rpc).not.toHaveBeenCalled();
   });
-
-  it("a non-operator with CC_OAUTH_ENABLED unset is NOT forbidden (users can always erase their own secret)", async () => {
-    expect(process.env.ADMIN_USER_IDS).toBeUndefined();
-    expect(process.env.CC_OAUTH_ENABLED).toBeUndefined();
-    const res = await DELETE(req(OAUTH_BODY));
-    expect(res.status).not.toBe(403);
-    expect(res.status).toBe(200);
-    expect(h.rpc).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("DELETE /api/keys — failure and audit", () => {
@@ -199,11 +196,19 @@ describe("DELETE /api/keys — failure and audit", () => {
     );
     expect(h.loggerError).toHaveBeenCalled();
     expect(h.from).not.toHaveBeenCalled();
+    // The Sentry extra carries the hashed id, never the raw one.
+    const opts = h.captureException.mock.calls[0][1] as { extra: Record<string, unknown> };
+    expect(opts.extra.userIdHash).toBe(`hash(${USER})`);
+    expect(JSON.stringify(opts.extra)).not.toContain(`"${USER}"`);
+    expect(opts.extra).not.toHaveProperty("userId");
   });
 
-  it("success emits the audit line (op oauth-credential-removed) and a breadcrumb", async () => {
+  it("success emits the audit line at WARN (Vector ships pino >= 40 only) and a breadcrumb", async () => {
     await DELETE(req(OAUTH_BODY));
-    expect(h.loggerInfo).toHaveBeenCalledWith(
+    // infra/vector.toml app_container_warn_filter drops info (30): the audit
+    // line must be warn or it never reaches Better Stack.
+    expect(h.loggerInfo).not.toHaveBeenCalled();
+    expect(h.loggerWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         feature: "api-keys",
         op: "oauth-credential-removed",
@@ -242,5 +247,26 @@ describe("DELETE /api/keys — failure and audit", () => {
     expect(sinks).not.toContain("FAKEcanary");
     expect(sinks).not.toContain("sk-ant");
     expect(sinks).not.toContain("credential_type");
+  });
+});
+
+describe("POST /api/keys — kill-switch predicate has a single source", () => {
+  // Strip comments so prose mentioning the env var cannot satisfy or trip the
+  // assertions; anchor on the call/read form, not the bare token.
+  const src = readFileSync(
+    path.join(__dirname, "../app/api/keys/route.ts"),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "");
+
+  it("never reads process.env.CC_OAUTH_ENABLED directly", () => {
+    expect(src).not.toMatch(/process\.env\.CC_OAUTH_ENABLED/);
+    expect(src).not.toMatch(/process\.env\[\s*["']CC_OAUTH_ENABLED["']\s*\]/);
+  });
+
+  it("calls isCcOauthEnabled() from the shared module", () => {
+    expect(src).toMatch(/import\s*\{\s*isCcOauthEnabled\s*\}\s*from\s*["']@\/server\/cc-oauth-flag["']/);
+    expect(src).toMatch(/!isCcOauthEnabled\(\)/);
   });
 });

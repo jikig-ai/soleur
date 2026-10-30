@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { describeCredentialBasis } from "@/lib/credential-basis";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -347,7 +348,7 @@ describe("SettingsContent — stored subscription token (#11524)", () => {
     );
     expect(
       screen.getByText(
-        `Subscription token: saved ${new Date("2026-10-28T10:00:00Z").toLocaleDateString()}`,
+        "Subscription token: saved Oct 28, 2026",
       ),
     ).toBeInTheDocument();
     expect(
@@ -402,6 +403,9 @@ describe("SettingsContent — stored subscription token (#11524)", () => {
 
 describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
   const fetchMock = vi.fn();
+  // SettingsContent computes the basis once and passes it down.
+  const basisOf = (oauthInEffect: boolean, hasApiKey: boolean) =>
+    describeCredentialBasis({ hasOauthToken: true, oauthInEffect, hasApiKey });
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
@@ -418,7 +422,7 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
     const KeyRotationForm = await loadForm();
     const { rerender } = render(
-      <KeyRotationForm hasExistingKey={false} hasOauthToken oauthInEffect />,
+      <KeyRotationForm hasExistingKey={false} basis={basisOf(true, false)} />,
     );
     await userEvent.click(
       screen.getByRole("button", { name: "Remove subscription token" }),
@@ -432,7 +436,7 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
 
     // After router.refresh() flips the props the dialog unmounts; the notice stays.
     rerender(
-      <KeyRotationForm hasExistingKey={false} hasOauthToken={false} oauthInEffect={false} />,
+      <KeyRotationForm hasExistingKey={false} basis={null} />,
     );
     expect(screen.getByRole("status")).toHaveTextContent(
       "Subscription token removed. Add an API key to keep using chat.",
@@ -442,10 +446,35 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
     ).toBeNull();
   });
 
+  it("saving an API key afterwards clears the stale post-removal notice", async () => {
+    fetchMock.mockImplementation(async (_url: string, init: { method: string }) =>
+      init.method === "DELETE"
+        ? { ok: true, status: 200, json: async () => ({ deleted: true }) }
+        : { ok: true, status: 200, json: async () => ({ valid: true }) },
+    );
+    const KeyRotationForm = await loadForm();
+    render(<KeyRotationForm hasExistingKey={false} basis={basisOf(true, false)} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Add an API key to keep using chat.",
+    );
+    await userEvent.type(
+      document.getElementById("api-key-input") as HTMLInputElement,
+      "sk-ant-fake-key",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save Key" }));
+    expect(await screen.findByText("Key saved successfully.")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/Add an API key to keep using chat/)).toBeNull();
+  });
+
   it("variant A success: notice region takes focus (tabIndex -1)", async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
     const KeyRotationForm = await loadForm();
-    render(<KeyRotationForm hasExistingKey hasOauthToken oauthInEffect />);
+    render(<KeyRotationForm hasExistingKey basis={basisOf(true, true)} />);
     await userEvent.click(
       screen.getByRole("button", { name: "Remove subscription token" }),
     );
@@ -461,7 +490,7 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
   it("variant C success: neutral notice", async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
     const KeyRotationForm = await loadForm();
-    render(<KeyRotationForm hasExistingKey hasOauthToken oauthInEffect={false} />);
+    render(<KeyRotationForm hasExistingKey basis={basisOf(false, true)} />);
     await userEvent.click(
       screen.getByRole("button", { name: "Remove subscription token" }),
     );
@@ -476,8 +505,7 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
     render(
       <KeyRotationForm
         hasExistingKey={false}
-        hasOauthToken
-        oauthInEffect
+        basis={basisOf(true, false)}
         canUseOauthCredential
       />,
     );

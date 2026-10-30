@@ -57,6 +57,28 @@ export type ChatSurfaceVariant = "full" | "sidebar";
  *  notice. State 4 is a derived render affordance, not a reducer phase. */
 const RESUMED_NOTICE_MS = 4000;
 
+/** Card title, the oauth-scheme action relabel, and the credential noun for a
+ *  chat error. The oauth scheme names a "token"; everything else a "key". */
+function credentialCardCopy(e: {
+  code: string;
+  credentialScheme?: string;
+}): { title: string; actionLabel?: string; noun: "token" | "key" } {
+  const oauth = e.code === "key_invalid" && e.credentialScheme === "oauth_token";
+  if (oauth) return { title: "Claude Sign-in Failed", actionLabel: "Update token", noun: "token" };
+  switch (e.code) {
+    case "key_invalid":
+      return { title: "Invalid API Key", noun: "key" };
+    case "byok_key_missing":
+      return { title: "API Key Required", noun: "key" };
+    case "rate_limited":
+      return { title: "Rate Limited", noun: "key" };
+    case "subscription_limit":
+      return { title: "Subscription Limit Reached", noun: "key" };
+    default:
+      return { title: "Connection Error", noun: "key" };
+  }
+}
+
 /**
  * Stage 4 review F6: typed render helper for `<InteractivePromptCard>`.
  * Replaces the prior `payload={msg.promptPayload as any}` /
@@ -298,18 +320,12 @@ export function ChatSurface({
     [lastError],
   );
 
-  // #11525 - blocked after a credential error. Derived locally from
-  // `lastError.code` as well as the hook flag so a card that is visible can
-  // never sit above an enabled composer. Dismissing the card does NOT unblock.
-  const blocked =
-    credentialBlocked ||
-    lastError?.code === "key_invalid" ||
-    lastError?.code === "byok_key_missing";
-  // Scheme wording: the oauth scheme names a "token"; everything else a "key".
-  const credentialNoun =
-    lastError?.code === "key_invalid" && lastError.credentialScheme === "oauth_token"
-      ? "token"
-      : "key";
+  // #11525 - blocked after a credential error: the hook's single derived flag
+  // (`isCredentialErrorCode(lastError.code)`), never re-derived here.
+  // Dismissing the card does NOT unblock.
+  const blocked = credentialBlocked;
+  const cardCopy = lastError ? credentialCardCopy(lastError) : null;
+  const credentialNoun = cardCopy?.noun ?? "key";
 
   // Reconnect from a credential card/helper: re-run the start/resume effect on
   // the fresh socket (it resumes the captured conversation, or starts one).
@@ -390,7 +406,8 @@ export function ChatSurface({
 
   const handleReviewGateResponse = useCallback(
     (gateId: string, selection: string) => {
-      sendReviewGateResponse(gateId, selection);
+      // A dropped send (`false`) leaves the card actionable: no prompt either.
+      if (sendReviewGateResponse(gateId, selection) === false) return;
       setShowNotificationPrompt(true);
     },
     [sendReviewGateResponse],
@@ -419,12 +436,14 @@ export function ChatSurface({
       response: InteractivePromptResponsePayload,
     ) => {
       // Send the wire frame.
-      sendInteractivePromptResponse({
+      const sent = sendInteractivePromptResponse({
         type: "interactive_prompt_response",
         promptId,
         conversationId: conversationIdArg,
         ...response,
       });
+      // A dropped send (`false`) leaves the card actionable.
+      if (sent === false) return;
       // Optimistically mark the local card as resolved.
       resolveInteractivePrompt(promptId, conversationIdArg, response.response);
     },
@@ -1037,7 +1056,7 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={lastError.code === "key_invalid" ? (lastError.credentialScheme === "oauth_token" ? "Claude Sign-in Failed" : "Invalid API Key") : lastError.code === "byok_key_missing" ? "API Key Required" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
+                title={credentialCardCopy(lastError).title}
                 message={lastError.message}
                 onRetry={
                   blocked
@@ -1048,8 +1067,8 @@ export function ChatSurface({
                 }
                 retryLabel="Reconnect"
                 action={
-                  lastError.code === "key_invalid" && lastError.credentialScheme === "oauth_token" && lastError.action
-                    ? { ...lastError.action, label: "Update token" }
+                  lastError.action && cardCopy?.actionLabel
+                    ? { ...lastError.action, label: cardCopy.actionLabel }
                     : lastError.action
                 }
                 // Settings opens in a new tab for the credential cards so this
@@ -1465,6 +1484,7 @@ export function ChatSurface({
               <Button
                 variant="ghost"
                 type="button"
+                data-testid="credential-helper-reconnect"
                 onClick={onCredentialReconnect}
                 className="px-2 py-1 text-xs"
               >

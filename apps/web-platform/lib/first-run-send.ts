@@ -30,13 +30,21 @@ export interface FirstRunSendDeps {
     conversationId: string,
     opts?: FirstRunUploadOpts,
   ) => Promise<AttachmentRef[]>;
-  send: (content: string, attachments?: AttachmentRef[]) => void;
+  /** `false` means the send was REFUSED (credential-blocked chat / socket not
+   *  open) and nothing left the client; any other return (incl. `void`) counts
+   *  as sent. A refused send must not consume the `?msg=` message. */
+  send: (content: string, attachments?: AttachmentRef[]) => boolean | void;
   /** True on the last allowed attempt: if the session still changed, fall back
    *  to sending the text alone on a live, confirmed socket instead of dropping
    *  the user's message (the URL param that carried it is already stripped). */
   final?: boolean;
   /** Upload deadline; neither the presign fetch nor the storage PUT has a timeout. */
   deadlineMs?: number;
+}
+
+/** The send was refused: keep the message for one re-arm (never on `final`). */
+function refused(d: FirstRunSendDeps): { sent: boolean; retry: boolean } {
+  return { sent: false, retry: d.final !== true };
 }
 
 const TIMED_OUT = Symbol("first-run-upload-timeout");
@@ -63,7 +71,7 @@ export async function runFirstRunSend(
   try {
     if (files.length === 0) {
       if (msgParam) {
-        d.send(msgParam);
+        if (d.send(msgParam) === false) return refused(d);
         return { sent: true, retry: false };
       }
       return { sent: false, retry: false };
@@ -168,17 +176,19 @@ export async function runFirstRunSend(
       // dropped (captured above), but the typed text is not. Only ever into a
       // live, confirmed socket; never into a dead one.
       if (msgParam && live.connected && live.sessionConfirmed) {
-        d.send(msgParam);
+        if (d.send(msgParam) === false) return refused(d);
         return { sent: true, retry: false };
       }
       return { sent: false, retry: false };
     }
 
+    let accepted: boolean | void = true;
     if (uploaded.length > 0) {
-      d.send(msgParam ?? "", uploaded);
+      accepted = d.send(msgParam ?? "", uploaded);
     } else if (msgParam) {
-      d.send(msgParam);
+      accepted = d.send(msgParam);
     }
+    if (accepted === false) return refused(d);
     return { sent: true, retry: false };
   } catch (err) {
     reportSilentFallback(sanitized("first-run batch failed", err), {

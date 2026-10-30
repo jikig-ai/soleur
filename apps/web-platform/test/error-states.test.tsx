@@ -378,6 +378,7 @@ describe("Error card dismissal on chat surface", () => {
       action: { label: "Update key", href: "/dashboard/settings" },
     });
     wsReturn.lastError = keyInvalid();
+    wsReturn.credentialBlocked = true;
     const mod = await import(
       "@/app/(dashboard)/dashboard/chat/[conversationId]/page"
     );
@@ -388,16 +389,18 @@ describe("Error card dismissal on chat surface", () => {
     expect(screen.getByRole("textbox")).toBeDisabled();
 
     // Reconnect from the always-visible helper line (the card is dismissed).
-    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    await userEvent.click(screen.getByTestId("credential-helper-reconnect"));
     expect(mockReconnect).toHaveBeenCalledTimes(1);
 
     // The hook's reconnect() nulls lastError ...
     wsReturn.lastError = null;
+    wsReturn.credentialBlocked = false;
     result.rerender(<mod.default />);
     expect(screen.getByRole("textbox")).not.toBeDisabled();
 
     // ... and the retry fails again with an identical frame.
     wsReturn.lastError = keyInvalid();
+    wsReturn.credentialBlocked = true;
     result.rerender(<mod.default />);
     expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
     expect(screen.getByRole("textbox")).toBeDisabled();

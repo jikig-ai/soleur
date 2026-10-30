@@ -30,8 +30,6 @@ export interface CredentialBasis {
   dialogBody: string;
   /** Post-removal notice, chosen from the props the user confirmed against. */
   notice: string;
-  /** Variant B only: offer `Add an API key first`. */
-  offerAddApiKey: boolean;
 }
 
 /** Never claims Soleur revokes the token at Anthropic (CLO condition). */
@@ -55,7 +53,6 @@ export function describeCredentialBasis({
       dialogBody: `Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
       notice:
         "Subscription token removed. New conversations will use your API key.",
-      offerAddApiKey: false,
     };
   }
 
@@ -63,9 +60,8 @@ export function describeCredentialBasis({
     return {
       variant: "B",
       conversationsUse: "Claude subscription",
-      dialogBody: `You will have no sign-in for Claude until you add an API key, and chat will stop working. ${REVOKE_SENTENCE}`,
+      dialogBody: `You will have no sign-in for Claude until you add an API key, and chat will stop working. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
       notice: "Subscription token removed. Add an API key to keep using chat.",
-      offerAddApiKey: true,
     };
   }
 
@@ -73,8 +69,7 @@ export function describeCredentialBasis({
   return {
     variant: "C",
     conversationsUse: hasApiKey ? "your Anthropic API key" : NOTHING_SET_UP,
-    dialogBody: `Soleur is not using this token for conversations. Removing deletes the saved copy. ${REVOKE_SENTENCE}`,
+    dialogBody: `Soleur is not using this token for conversations. Removing deletes the saved copy. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
     notice: "Subscription token removed.",
-    offerAddApiKey: false,
   };
 }
