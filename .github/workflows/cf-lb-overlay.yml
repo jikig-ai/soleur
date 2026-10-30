@@ -58,6 +58,9 @@ permissions:
 
 env:
   TERRAFORM_VERSION: "1.10.5"
+  # Parent-root parity (terraform-target-parity MAIN_ROOT_TF_WORKFLOWS): ga_overlay
+  # plans the main root, so this workflow must feed the same terraform_version var.
+  TF_VAR_terraform_version: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
   REHEARSAL_DIR: apps/web-platform/infra/lb-staging
   PROBE_LOG: /tmp/lb-staging-continuity.log
@@ -66,7 +69,7 @@ jobs:
   staging_record:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-record'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20  # worst case ≈17min: ~5min init+plan+apply + 60×(5s curl+10s) settle ≤ ~12min
     environment: infra-privileged
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -89,7 +92,7 @@ jobs:
             echo "::error::confirm must be exactly 'CONVERT-LB-STAGING' for arm=staging-record."
             exit 1
           fi
-          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
           echo "- Reason: ${REASON_RAW} (arm=staging-record, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
       - name: Extract backend credentials
         env:
@@ -107,6 +110,16 @@ jobs:
       - name: Terraform init (lb-staging root)
         working-directory: ${{ env.REHEARSAL_DIR }}
         run: terraform init -input=false -lockfile=readonly
+      - name: No prod-state reach in the throwaway root (rung2 precedent)
+        # State separation isolates MANAGEMENT, not READS — a terraform_remote_state
+        # data source or a reference to a prod managed address inside this root
+        # would launder prod values into staging plans past the graders. Refuse early.
+        run: |
+          set -euo pipefail
+          if sed 's|#.*$||' "${REHEARSAL_DIR}"/*.tf | grep -nE 'terraform_remote_state|hcloud_server\.web\[|hcloud_volume\.|doppler_secret\.|cloudflare_record\.app|cloudflare_load_balancer\.app' ; then
+            echo "::error::lb-staging root references prod state/managed addresses — the throwaway root must stay read-clean (data.hcloud_server.web_1 is the sanctioned read)."
+            exit 1
+          fi
       - name: Terraform plan (staging record only)
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
@@ -148,7 +161,7 @@ jobs:
             if [[ "$code" == "200" ]]; then echo "settled after ${i} checks"; exit 0; fi
             sleep 10
           done
-          echo "::error::lb-staging.soleur.ai/health did not reach 200 in 10min — inspect before the overlay arm."
+          echo "::error::lb-staging.soleur.ai/health did not reach 200 in 10min — inspect the zone/edge state. Re-dispatch is safe: the record gate is idempotent; if the record exists converged, run arm=staging-overlay next."
           exit 1
 
   staging_overlay:
@@ -177,7 +190,7 @@ jobs:
             echo "::error::confirm must be exactly 'CONVERT-LB-STAGING' for arm=staging-overlay."
             exit 1
           fi
-          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
           echo "- Reason: ${REASON_RAW} (arm=staging-overlay, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
       - name: Extract backend credentials
         env:
@@ -195,6 +208,16 @@ jobs:
       - name: Terraform init (lb-staging root)
         working-directory: ${{ env.REHEARSAL_DIR }}
         run: terraform init -input=false -lockfile=readonly
+      - name: No prod-state reach in the throwaway root (rung2 precedent)
+        # State separation isolates MANAGEMENT, not READS — a terraform_remote_state
+        # data source or a reference to a prod managed address inside this root
+        # would launder prod values into staging plans past the graders. Refuse early.
+        run: |
+          set -euo pipefail
+          if sed 's|#.*$||' "${REHEARSAL_DIR}"/*.tf | grep -nE 'terraform_remote_state|hcloud_server\.web\[|hcloud_volume\.|doppler_secret\.|cloudflare_record\.app|cloudflare_load_balancer\.app' ; then
+            echo "::error::lb-staging root references prod state/managed addresses — the throwaway root must stay read-clean (data.hcloud_server.web_1 is the sanctioned read)."
+            exit 1
+          fi
       - name: Start continuity probe (outside-Cloudflare vantage, 200ms tick)
         # A GHA runner IS outside the CF edge, satisfying the runbook's vantage
         # requirement (Part 2). The log lands as a run artifact — committed evidence,
@@ -202,12 +225,12 @@ jobs:
         run: |
           : > "$PROBE_LOG"
           nohup bash -c 'while true; do
-            printf "%s %s\n" "$(date +%s%3N)" "$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 https://lb-staging.soleur.ai/health || echo CURL_FAIL)"
+            printf "%s %s\n" "$(date +%s%3N)" "$(curl -s -o /dev/null -w "%{http_code} %{time_total}" --max-time 2 https://lb-staging.soleur.ai/health || echo CURL_FAIL)"
             sleep 0.2
           done' >> "$PROBE_LOG" 2>&1 &
           echo "PROBE_PID=$!" >> "$GITHUB_ENV"
-          sleep 2
-          head -3 "$PROBE_LOG" || { echo "::error::continuity probe produced no output"; exit 1; }
+          sleep 5
+          { [[ -s "$PROBE_LOG" ]] && grep -q . "$PROBE_LOG"; } || { echo "::error::continuity probe produced no output"; exit 1; }
       - name: Terraform plan (full staging overlay — monitor + pool + LB)
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
@@ -219,7 +242,7 @@ jobs:
             terraform plan -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
-            kill "${PROBE_PID:-0}" 2>/dev/null || true
+            [[ -n "${PROBE_PID:-}" ]] && kill "$PROBE_PID" 2>/dev/null || true
             echo "::error::terraform plan (staging-overlay) failed (exit $rc). NOTHING applied."
             exit $rc
           fi
@@ -231,7 +254,7 @@ jobs:
           terraform show -json tfplan > "$RUNNER_TEMP/staging-overlay-plan.json"
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
           if ! cf_lb_gate_overlay "$RUNNER_TEMP/staging-overlay-plan.json"; then
-            kill "${PROBE_PID:-0}" 2>/dev/null || true
+            [[ -n "${PROBE_PID:-}" ]] && kill "$PROBE_PID" 2>/dev/null || true
             terraform show -no-color tfplan | grep -E 'will be|Plan:' | head -20 >&2 || true
             exit 1
           fi
@@ -247,23 +270,30 @@ jobs:
         run: |
           set -euo pipefail
           sleep 75  # apply settle + one 60s monitor interval
-          kill "${PROBE_PID:-0}" 2>/dev/null || true
+          [[ -n "${PROBE_PID:-}" ]] && kill "$PROBE_PID" 2>/dev/null || true
           sleep 1
           total=$(wc -l < "$PROBE_LOG")
-          bad=$(grep -cvE ' 200$' "$PROBE_LOG" || true)
+          bad=$(grep -cvE ' 200 ' "$PROBE_LOG" || true)
           {
             echo "### Part-2 staging convert — continuity verdict"
             echo ""
-            echo "- Samples: ${total} @ 200ms tick"
+            echo "- Samples: ${total} (target 200ms tick; per-sample curl duration in the log)"
             echo "- Non-200/CURL_FAIL ticks: ${bad}"
-            if [[ "$bad" == "0" ]]; then
-              echo "- **Verdict: GO** — zero gap at 200ms sampling resolution (runbook verdict gate)."
+            if [[ "$bad" == "0" && "$total" -ge 200 ]]; then
+              echo "- **Verdict: GO** — no non-200 responses observed across ${total} samples spanning the apply (runbook verdict gate)."
+            elif [[ "$bad" == "0" ]]; then
+              echo "- **Verdict: NO-GO** — only ${total} samples captured; the probe window did not cover the apply. Re-dispatch this arm."
             else
               echo "- **Verdict: NO-GO** — ${bad} non-200 tick(s); see artifact log for the window."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$bad" != "0" ]]; then
-            echo "::error::continuity probe recorded ${bad} non-200 ticks — NO-GO per the runbook verdict gate. Do NOT run ga-overlay."
+          if [[ "$bad" == "0" && "$total" -ge 200 ]]; then
+            echo "::notice::VERDICT=GO samples=${total} — zero non-200 ticks across the apply window"
+          elif [[ "$bad" == "0" ]]; then
+            echo "::error::VERDICT=NO-GO samples=${total} — undersampled window; the probe did not cover the apply. Re-dispatch arm=staging-overlay."
+            exit 1
+          else
+            echo "::error::VERDICT=NO-GO — continuity probe recorded ${bad} non-200 ticks — NO-GO per the runbook verdict gate. Do NOT run ga-overlay."
             exit 1
           fi
       - name: Upload continuity log
@@ -277,7 +307,7 @@ jobs:
   staging_teardown:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-teardown'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment: infra-privileged
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -300,7 +330,7 @@ jobs:
             echo "::error::confirm must be exactly 'TEARDOWN-LB-STAGING' for arm=staging-teardown — a distinct literal from the create arms per the birth-vs-destroy token convention."
             exit 1
           fi
-          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
           echo "- Reason: ${REASON_RAW} (arm=staging-teardown, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
       - name: Extract backend credentials
         env:
@@ -318,6 +348,16 @@ jobs:
       - name: Terraform init (lb-staging root)
         working-directory: ${{ env.REHEARSAL_DIR }}
         run: terraform init -input=false -lockfile=readonly
+      - name: No prod-state reach in the throwaway root (rung2 precedent)
+        # State separation isolates MANAGEMENT, not READS — a terraform_remote_state
+        # data source or a reference to a prod managed address inside this root
+        # would launder prod values into staging plans past the graders. Refuse early.
+        run: |
+          set -euo pipefail
+          if sed 's|#.*$||' "${REHEARSAL_DIR}"/*.tf | grep -nE 'terraform_remote_state|hcloud_server\.web\[|hcloud_volume\.|doppler_secret\.|cloudflare_record\.app|cloudflare_load_balancer\.app' ; then
+            echo "::error::lb-staging root references prod state/managed addresses — the throwaway root must stay read-clean (data.hcloud_server.web_1 is the sanctioned read)."
+            exit 1
+          fi
       - name: Terraform plan -destroy (the whole staging root)
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
@@ -352,14 +392,22 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false -auto-approve tfplan-destroy
       - name: Zone clean check (read-only)
+        # CF edge drain is not instant — poll for a SUSTAINED non-200 rather than a
+        # single shot, or a still-propagating edge spuriously reports "teardown
+        # incomplete" on a correct destroy.
         run: |
           set -euo pipefail
-          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://lb-staging.soleur.ai/health || echo "000")
-          if [[ "$code" == "200" ]]; then
-            echo "::error::lb-staging.soleur.ai still answers 200 after destroy — teardown incomplete; re-dispatch this arm."
+          last=""
+          for i in $(seq 1 12); do
+            last=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://lb-staging.soleur.ai/health || echo "000")
+            [[ "$last" == "200" ]] || break
+            sleep 10
+          done
+          if [[ "$last" == "200" ]]; then
+            echo "::error::lb-staging.soleur.ai still answers 200 after destroy (12 polls over ~2min) — teardown incomplete; re-dispatch this arm."
             exit 1
           fi
-          echo "lb-staging.soleur.ai no longer serves (got ${code}) — zone clean." >> "$GITHUB_STEP_SUMMARY"
+          echo "lb-staging.soleur.ai no longer serves (got ${last}) — zone clean." >> "$GITHUB_STEP_SUMMARY"
 
   ga_overlay:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-overlay'
@@ -367,6 +415,10 @@ jobs:
     timeout-minutes: 20
     # REVIEWER-GATED — same environment the rung2 dispatch and vector-redeliver ride:
     # creating the live LB on app.soleur.ai is the GA act, not a rehearsal.
+    # CAVEAT (vector_redeliver precedent, apply-web-platform-infra.yml): an approval
+    # held in "Waiting" still occupies the shared terraform-apply-web-platform-host
+    # group — approve or CANCEL a dispatch you are not going to complete; a pending
+    # run in the group is also displaced by the next arrival (1 running + 1 pending).
     environment: web-platform-infra-apply
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -389,7 +441,7 @@ jobs:
             echo "::error::confirm must be exactly 'APPLY-GA-LB-OVERLAY' for arm=ga-overlay — it creates the LIVE load balancer on app.soleur.ai."
             exit 1
           fi
-          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
           echo "- Reason: ${REASON_RAW} (arm=ga-overlay, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
       - name: Extract backend credentials
         env:
@@ -411,11 +463,10 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          CI_SSH_PUB: /dev/null # hcloud_ssh_key default file() never consumed by these targets
         run: |
           set -uo pipefail
           set +e
-          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=/tmp/ci_ssh_key.pub" \

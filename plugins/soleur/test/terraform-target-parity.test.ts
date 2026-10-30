@@ -2953,6 +2953,7 @@ const PIN_REDEPLOY_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/git-data-pin
 const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-web-platform-infra.yml",
   "apply-deploy-pipeline-fix.yml",
+  "cf-lb-overlay.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
 ];
