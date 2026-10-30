@@ -2974,3 +2974,138 @@ resource "sentry_alert" "haiku_no_text_block_rate" {
     ignore_changes = [environment]
   }
 }
+
+# Approval request nobody answered (#4672, ADR-309). The 5-minute expiry cron
+# (server/inngest/functions/cron-approval-expiry.ts) fires the `gate_unanswered` op ONCE per request, 15 minutes after
+# it was created while still pending (sweep_approvals() marks `unanswered_flagged_at`, so a request flags at most once).
+# The agent has stopped waiting at 5 minutes, so a request this old means the Owner's push/inbox nudge did not land.
+# Together with approval_key_unavailable (below) and the Art. 17 anonymise alert, this is one of the only approval
+# alerts: every other approval op is a Sentry warn event whose rate is the rollout metric reviewed at the enabling
+# gate, not a page. The op has its own static message (server/approval/ops.ts),
+# so the group is one condition; `approval_id` is a row UUID tag, not personal data.
+#
+# Triggers: the event is a message event with no stack trace, so Sentry groups it by message text and EVERY unanswered
+# request lands in the same one issue for its whole life (`approval_id` is a tag, not part of the group). The three
+# transition triggers alone would therefore email once for the first request ever and then stay silent while the issue
+# is open. `event_frequency_count {1h, 0}` fires on every event, as the sibling alerts (anthropic_credit_exhausted,
+# spawn_agent_dead_letter) do. `frequency_minutes = 42` (unused elsewhere in the root) is the per-issue throttle: a
+# second unanswered request more than 42 minutes after the previous email emails again; requests inside that window
+# share one email. Triggers fire only on an UNRESOLVED issue, so resolve this issue after triage, never archive it.
+resource "sentry_alert" "approval_gate_unanswered" {
+  organization      = var.sentry_org
+  name              = "approval-gate-unanswered"
+  enabled           = true
+  frequency_minutes = 42
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "approval-queue" } },
+        { tagged_event = { key = "op", match = "eq", value = "gate_unanswered" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#4672, ADR-309) The approval HMAC key is unavailable: SENTRY_USERID_PEPPER is unset or empty in the container, so
+# deriveApprovalHashKey (server/approval/canonical.ts) throws key_unavailable and the gate FAILS CLOSED for every
+# approval-gated tool call (no request is created, the agent is told approvals are unavailable). server/approval/ops.ts
+# registers it as its own op (`approval-key-unavailable`, ERROR level via reportSilentFallback(null, ...)) so it does not
+# disappear into the shared approval-gate-failed group. It is a deploy/config fault, not a user event: while the flag is
+# on, a missing pepper blocks every gated action for every workspace until the secret is restored, and the same fault
+# during a pepper ROTATION window invalidates live approvals. The op has its own static message, so the group is one
+# condition; the filter is `feature` + `op`.
+#
+# Triggers/actions copy approval_gate_unanswered (re-pages per event: the event is a message event with no stack trace,
+# so Sentry groups every occurrence into one issue and the three transition triggers alone would email once and then
+# stay silent while the issue is open). Distinct `frequency_minutes = 44` avoids Sentry POST-time exact-duplicate dedup
+# (re-verified root-wide and against origin/main: 5,10-43,60-63,120,240,1440-1442 taken). Resolve the issue after the
+# pepper is restored, never archive it.
+resource "sentry_alert" "approval_key_unavailable" {
+  organization      = var.sentry_org
+  name              = "approval-key-unavailable"
+  enabled           = true
+  frequency_minutes = 44
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "approval-queue" } },
+        { tagged_event = { key = "op", match = "eq", value = "approval-key-unavailable" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#4672) The Art. 17 approval-queue anonymise step failed. server/account-delete.ts saga step 5.16 calls
+# anonymise_approval_request (migration 180) and mirrors BOTH failure shapes (an RPC error and a thrown error) as
+# feature=account-delete, op=anonymise-approval-request, then ABORTS the deletion with a user-facing "Account deletion
+# failed" error. The step is flag-independent (it runs for every account whether or not the approval-queue flag was ever
+# on) and fail-closed, so a persistent fault here blocks EVERY account deletion and the data subject is owed their
+# erasure. The filter is `feature` + `op` (the op string is unique to this step). Triggers/actions copy
+# art17_erasure_incomplete (re-pages per event, because an issue left open must not swallow the next refusal).
+# Distinct `frequency_minutes = 43` avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-42,60-63,120,240,1440-1443).
+# Resolve the Sentry issue after the sweep, never archive it (an archived issue silences later events).
+resource "sentry_alert" "art17_approval_anonymise_failed" {
+  organization      = var.sentry_org
+  name              = "art17-approval-anonymise-failed"
+  enabled           = true
+  frequency_minutes = 43
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "account-delete" } },
+        { tagged_event = { key = "op", match = "eq", value = "anonymise-approval-request" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

@@ -141,6 +141,7 @@ const ANONYMISE_SEQUENCE: ReadonlyArray<
   ["anonymise_outbound_sends", "p_user_id", "restrict"],
   ["anonymise_routine_runs", "p_user_id", "restrict"],
   ["anonymise_agent_engine_data", "p_user_id", "restrict"],
+  ["anonymise_approval_request", "p_user_id", "set-null"],
 ];
 
 // A schema-cache miss (function not found) — distinct from a real failure.
@@ -257,7 +258,7 @@ export async function tearDownTenantUser(
  * then throws one aggregated error, keeping the failure fail-loud without
  * abandoning the rest of the batch.
  *
- * Stays sequential deliberately: the per-user anonymise sequence is ~22
+ * Stays sequential deliberately: the per-user anonymise sequence is ~23
  * RPCs under withGoTrueRetry, so parallelising would multiply the GoTrue
  * rate-limit burst it exists to absorb.
  *
