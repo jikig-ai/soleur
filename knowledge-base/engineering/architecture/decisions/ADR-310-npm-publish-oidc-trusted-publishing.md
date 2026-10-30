@@ -8,7 +8,7 @@ related: [10723]
 related_adrs: [ADR-241]
 ---
 
-# ADR-309: npm Publish authenticates to registry.npmjs.org via OIDC trusted publishing, never a long-lived token
+# ADR-310: npm Publish authenticates to registry.npmjs.org via OIDC trusted publishing, never a long-lived token
 
 ## Context
 

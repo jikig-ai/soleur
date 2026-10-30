@@ -253,7 +253,7 @@
 "external"
 ],
 "description": {
-"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-309): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
+"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-310): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
 },
 "title": "npm registry (npmjs.org)",
 "kind": "system",
@@ -4175,7 +4175,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-309): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
+"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-310): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
 },
 "tags": [
 "external"
@@ -11036,7 +11036,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-309): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
+"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-310): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
 },
 "tags": [
 "external"
@@ -17822,7 +17822,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-309): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
+"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-310): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
 },
 "tags": [
 "external"
@@ -35345,7 +35345,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-309): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
+"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-310): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
 },
 "tags": [
 "external"
@@ -37197,7 +37197,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-309): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
+"txt": "Public npm registry hosting @soleur/opencode — the documented `npx @soleur/opencode install` delivery channel (#10723), published to by CI on every release. Auth is OIDC trusted publishing bound to jikig-ai/soleur + npm-publish.yml (ADR-310): the publish job's id-token exchanges for a repo+workflow-scoped credential; no long-lived NPM_TOKEN exists in CI (retired after the first green OIDC publish — the ~7-day granular-token expiry behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package."
 },
 "tags": [
 "external"

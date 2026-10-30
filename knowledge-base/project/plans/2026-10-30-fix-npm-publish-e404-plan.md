@@ -192,7 +192,7 @@ row T1 for the full rationale and rejected alternatives.`
 
 - Create `plugins/soleur/test/npm-publish-oidc.test.sh` asserting the OIDC
   wiring on the PARSED workflow YAML (Guard Contract below).
-- Create `knowledge-base/engineering/architecture/decisions/ADR-309-npm-publish-oidc-trusted-publishing.md`
+- Create `knowledge-base/engineering/architecture/decisions/ADR-310-npm-publish-oidc-trusted-publishing.md`
   (provisional ordinal — re-verify next-free against `origin/main` at ship
   time) with `status: adopting`.
 - Edit `knowledge-base/engineering/architecture/diagrams/model.c4` (add
@@ -245,7 +245,7 @@ T2). A manual per-tag publish remains possible if ever needed.
 ## Files to Create
 
 - `plugins/soleur/test/npm-publish-oidc.test.sh` — parsed-YAML wiring guard.
-- `knowledge-base/engineering/architecture/decisions/ADR-309-npm-publish-oidc-trusted-publishing.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-310-npm-publish-oidc-trusted-publishing.md`
   — credential-boundary decision record (provisional ordinal).
 
 ## User-Brand Impact
@@ -319,7 +319,7 @@ was triage latency).
 
 ## Architecture Decision (ADR/C4)
 
-- **ADR:** create `ADR-309-npm-publish-oidc-trusted-publishing.md` (provisional
+- **ADR:** create `ADR-310-npm-publish-oidc-trusted-publishing.md` (provisional
   ordinal — highest on `origin/main` re-verified 2026-10-30 is ADR-308;
   ship's ADR-Ordinal Collision Gate re-verifies next-free at merge, and a
   renumber must sweep this feature's artifacts in the same edit). One-line decision: CI publishes `@soleur/opencode` via
@@ -396,7 +396,7 @@ stored-hash bypass.
 |---|---|---|
 | `.github/workflows/npm-publish.yml` OIDC edits | "grant the publish token access" | asked |
 | `npm-publish-oidc.test.sh` wiring guard | — | inferred — justification: an auth-wiring revert re-deads the leg silently until the next release; the pin makes the contract PR-visible |
-| ADR-309 decision record | — | inferred — justification: token→OIDC is a credential-boundary change; plan Phase 2.10 requires the ADR as a deliverable of this plan |
+| ADR-310 decision record | — | inferred — justification: token→OIDC is a credential-boundary change; plan Phase 2.10 requires the ADR as a deliverable of this plan |
 | `model.c4`/`views.c4`/`model.likec4.json` edits | — | inferred — justification: C4 completeness mandate — `registry.npmjs.org` is an external system the feature touches and the model carries zero npm elements |
 | Operator `npm trust github` step | "grant the publish token access" | asked — the npm-side half of the same grant ask |
 
@@ -468,7 +468,7 @@ and `NPM_TOKEN`: zero body matches.
 - [x] AC-4: `bash scripts/regenerate-c4-model.sh` runs clean after the
   `npmRegistry` element + edge + view includes, and
   `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` pass.
-- [x] AC-5: `ADR-309-*.md` exists under
+- [x] AC-5: `ADR-310-*.md` exists under
   `knowledge-base/engineering/architecture/decisions/` with `status: adopting`
   and an acceptance criterion pointing at the first green OIDC publish.
 - [ ] AC-6 (operator): `npm trust list @soleur/opencode` shows a GitHub Actions

@@ -52,7 +52,7 @@ views {
       // third party here; its edges derive to `platform` (via plugin.snapshotGuard), so
       // it renders connected rather than as a disconnected box (#7332).
       playwrightMcp,
-      // ADR-309: npmRegistry is the publish target of github -> npmRegistry;
+      // ADR-310: npmRegistry is the publish target of github -> npmRegistry;
       // both endpoints are listed so the edge renders (#7332).
       npmRegistry
 
@@ -100,7 +100,7 @@ views {
       // snapshotGuard; the compound-node rule above applies, so the engine.hooks -> destructiveGuard
       // edge renders only when its descendant endpoint is listed. It has no external counterpart.
       platform.plugin.destructiveGuard,
-      // ADR-309: npmRegistry renders the github -> npmRegistry publish edge —
+      // ADR-310: npmRegistry renders the github -> npmRegistry publish edge —
       // both endpoints listed (#7332).
       npmRegistry
 
