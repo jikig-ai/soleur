@@ -119,3 +119,8 @@ Design pass (simplicity+arch+perf) found missed rename blast radius — all 3 se
 - Fix-inline applied: reorder-guard overclaims corrected (add/delete only), stale numerals (six→nine labels, M1..M16→M1..M35, one-mega-suite→plural), separate_arm_groups WARN on >n siblings + ascii_lowercase, usage hints on unknown-arg (3 batteries), regen command in totality fail msgs.
 - Defer to issues: est src tier, per-block declared floors, --rows preamble extraction (5th copy trigger=met), exit-code parity, arm-convention ADR, split-checklist doc.
 - totality re-running on final manifest; affected-gate still in flight.
+
+## Update 10 — review panel closed
+- Panel verdict: 6 seats, zero P0; 2 P1s fixed inline (fast-tier budget via --durations-seed regen; audit ratchet via accept rows), advisory items fixed (reorder overclaims, stale numerals, generator WARN/lowercase, usage hints, regen-command failure text). Security/clean: pattern-recognition + security-sentinel + data-integrity verified tiling, rename sweep, extraction pipelines fail-closed.
+- Deferral issues filed: #11647 (arm-debt bundle: est src, lib extraction, exit-code parity, per-block floors, ADR/checklist) + #11648 (always-on fast-tier drift — pre-existing, demotion per #9763). Both deferred-scope-out + meta/machinery, re-eval 2026-11-14.
+- HEAD a92495b996 pushed. Affected-gate full run still in flight (~2h, deep).
