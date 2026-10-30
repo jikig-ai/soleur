@@ -1714,8 +1714,13 @@ assert "GuardA4: the pinned tag collectors include \"memory\"" \
   "grep -qF '\"memory\"' <<<\"\$GA4_HM_TAG\""
 assert "GuardA4: the pinned tag collectors include \"filesystem\"" \
   "grep -qF '\"filesystem\"' <<<\"\$GA4_HM_TAG\""
-assert "GuardA4: the pinned tag collectors exclude cpu/disk/load (the set is exactly {memory, filesystem})" \
+assert "GuardA4: the pinned tag collectors exclude cpu/disk/load" \
   "! grep -qE '\"(cpu|disk|load)\"' <<<\"\$GA4_HM_TAG\""
+# Exclusions alone do not bound the set: a future "network" collector would
+# pass them yet trip the #11602 probe's exact-set read. The literal whole-array
+# match is the only assert that pins membership, not just non-membership.
+assert "GuardA4: the pinned tag collectors array is literally [\"memory\", \"filesystem\"] (the exact set — no third member)" \
+  "grep -qE '^[[:space:]]*collectors[[:space:]]*=[[:space:]]*\[\"memory\",[[:space:]]*\"filesystem\"\][[:space:]]*\$' <<<\"\$GA4_HM_TAG\""
 
 GA4_HM_HEAD="$(awk '/^\[sources\.host_metrics\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
 assert "GuardA4: HEAD's vector.toml carries the [sources.host_metrics] block" \
@@ -1726,12 +1731,14 @@ assert "GuardA4: HEAD collectors include \"memory\"" \
   "grep -qF '\"memory\"' <<<\"\$GA4_HM_HEAD\""
 assert "GuardA4: HEAD collectors include \"filesystem\"" \
   "grep -qF '\"filesystem\"' <<<\"\$GA4_HM_HEAD\""
-assert "GuardA4: HEAD collectors exclude cpu/disk/load (the set is exactly {memory, filesystem})" \
+assert "GuardA4: HEAD collectors exclude cpu/disk/load" \
   "! grep -qE '\"(cpu|disk|load)\"' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors array is literally [\"memory\", \"filesystem\"] (the exact set — no third member)" \
+  "grep -qE '^[[:space:]]*collectors[[:space:]]*=[[:space:]]*\[\"memory\",[[:space:]]*\"filesystem\"\][[:space:]]*\$' <<<\"\$GA4_HM_HEAD\""
 
 GUARDA4_ASSERTIONS=$(( TOTAL - GUARDA4_BEFORE ))
-assert "GuardA4 anti-vacuity: the section ran its full inventory (expected 11, ran $GUARDA4_ASSERTIONS)" \
-  "(( GUARDA4_ASSERTIONS == 11 ))"
+assert "GuardA4 anti-vacuity: the section ran its full inventory (expected 13, ran $GUARDA4_ASSERTIONS)" \
+  "(( GUARDA4_ASSERTIONS == 13 ))"
 
 # =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
