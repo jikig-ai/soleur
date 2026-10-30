@@ -307,9 +307,9 @@ for id in $ids; do
     # flows through the SAME emit_rows chokepoint as the named path, and the
     # recovered region REPLACES the named trail (the region is the step's
     # whole emitted output — a superset of whatever survived attribution).
-    TRAIL_PAT='web-host-(replace|create) web-[0-9]+ — fresh-host Sentry pointer|fresh-host boot reached fresh_boot_ready'
+    TRAIL_PATTERN='web-host-(replace|create) web-[0-9]+ — fresh-host Sentry pointer|fresh-host boot reached fresh_boot_ready'
     recovery_cause=""
-    if ! grep -qE "$TRAIL_PAT" <<<"$trail"; then
+    if ! grep -qE "$TRAIL_PATTERN" <<<"$trail"; then
       trail=""
       if [[ "$jstart" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
         region=$(awk -v ps="${jstart:0:19}" '
@@ -320,7 +320,7 @@ for id in $ids; do
           recovery_cause=" (attribution-expired log: no ##[group]Run header at/after ${jstart:0:19} yielded a region)"
         else
           region_trail=$(emit_rows <<<"$region")
-          if grep -qE "$TRAIL_PAT" <<<"$region_trail"; then
+          if grep -qE "$TRAIL_PATTERN" <<<"$region_trail"; then
             trail="$region_trail"
           elif [[ -z "$region_trail" ]]; then
             recovery_cause=" (attribution-expired log: recovered region held no emitted lines)"
