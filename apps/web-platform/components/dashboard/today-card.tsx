@@ -110,12 +110,18 @@ const DENY_REASON_COPY: Record<DenyReason, string> = {
   template_unauthorized:
     "Send couldn't verify your template authorization. Try again in a moment.",
   template_revoked:
-    "This template was revoked. Click Send again to re-authorize.",
+    "This template was revoked, so this draft can't be sent.",
   template_expired:
-    "This template authorization expired (90-day limit). Click Send again to re-authorize.",
+    "This template's 90-day authorization expired, so this draft can't be sent.",
   template_quota_exhausted:
-    "You've sent 100 messages with this template. Click Send again to re-authorize for another 100.",
+    "You've sent 100 messages with this template, so this draft can't be sent.",
 };
+
+// Discard / Edit / Dismiss 403: the messages UPDATE policy matches zero rows
+// for a draft that is already handled (second tab, double click) or not the
+// caller's. Names no button, same register as the `not_a_draft` line.
+const ALREADY_HANDLED_COPY =
+  "This draft was already handled, or it isn't yours to change. Refresh to update this card.";
 
 export function TodayCard(props: TodayCardProps) {
   if (props.source === "kb-drift") return <KbDriftCard {...props} />;
@@ -163,7 +169,11 @@ function KbDriftCard({
         });
         if (res.status !== 200) {
           setArchived(false);
-          setDismissError(`Dismiss failed (${res.status})`);
+          setDismissError(
+            res.status === 403
+              ? ALREADY_HANDLED_COPY
+              : `Dismiss failed (${res.status})`,
+          );
         }
       } catch {
         setArchived(false);
@@ -411,12 +421,15 @@ function StripeCard({
               error?: string;
             } | null;
             if (body?.error === "draft_already_approved") {
-              // Names Send only: Discard is not offered here until the messages UPDATE policy exists (#11569).
               setEditError(
-                "You already approved this draft, so it can't be edited. Send it to go ahead.",
+                "You already approved this draft, so it can't be edited. Send it to go ahead or Discard it.",
               );
               return;
             }
+          }
+          if (res.status === 403) {
+            setEditError(ALREADY_HANDLED_COPY);
+            return;
           }
           setEditError(`Edit failed (${res.status})`);
         } catch {
@@ -435,7 +448,11 @@ function StripeCard({
         });
         if (res.status !== 200) {
           setArchived(false);
-          setEditError(`Discard failed (${res.status})`);
+          setEditError(
+            res.status === 403
+              ? ALREADY_HANDLED_COPY
+              : `Discard failed (${res.status})`,
+          );
         }
       } catch {
         setArchived(false);

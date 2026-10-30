@@ -289,6 +289,21 @@ describe("dashboard mount-fetch dedup census (ADR-067 contract, #9178)", () => {
   });
 });
 
+// #11572 (D15): the Today list answers `Cache-Control: private, max-age=60`,
+// so an SWR revalidation inside 60 s could be served from the browser HTTP
+// cache and resurrect a just-discarded card. The page's Today fetcher must
+// opt out of that cache on the client fetch (the server header is unchanged).
+describe("dashboard Today fetcher bypasses the HTTP cache (#11572)", () => {
+  it("fetches /api/dashboard/today with { cache: \"no-store\" }", () => {
+    const src = stripComments(
+      readFileSync(join(ROOT, "app/(dashboard)/dashboard/page.tsx"), "utf8"),
+    );
+    expect(src).toMatch(
+      /fetch\(\s*["'`]\/api\/dashboard\/today["'`]\s*,\s*\{\s*cache:\s*["'`]no-store["'`]\s*\}\s*\)/,
+    );
+  });
+});
+
 // Accepted-evasion boundaries (#9180 review): these patterns silently evade
 // the census today. The tests pin them so the boundary is explicit — a
 // future parser upgrade (e.g. a real AST walk) SHOULD flip these.

@@ -223,7 +223,7 @@ export default function DashboardPage() {
   const { data: todayItems = [] } = useSWR(
     swrKeys.dashboardToday(),
     async (): Promise<TodayItem[]> => {
-      const res = await fetch("/api/dashboard/today");
+      const res = await fetch("/api/dashboard/today", { cache: "no-store" });
       if (!res.ok) return [];
       const body = (await res.json()) as { items: TodayItem[] };
       return body.items ?? [];

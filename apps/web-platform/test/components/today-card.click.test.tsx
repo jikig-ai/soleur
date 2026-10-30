@@ -315,7 +315,7 @@ describe("KbDriftCard onClick (PR-A)", () => {
 
 describe("StripeCard Edit refusal copy (#11486)", () => {
   const APPROVED_COPY =
-    "You already approved this draft, so it can't be edited. Send it to go ahead.";
+    "You already approved this draft, so it can't be edited. Send it to go ahead or Discard it.";
 
   const ORIGINAL_PROMPT = window.prompt;
 
@@ -392,6 +392,151 @@ describe("StripeCard Edit refusal copy (#11486)", () => {
     await editTo("Edited body");
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (500)");
+    });
+  });
+});
+
+// #11572 item 7: the three DENY_REASON_COPY strings promise nothing (a second
+// Send returns the same 403 until #11630), so pin them verbatim per reason.
+describe("DENY_REASON_COPY 403 strings (#11572)", () => {
+  const CASES: Array<[string, string]> = [
+    [
+      "template_revoked",
+      "This template was revoked, so this draft can't be sent.",
+    ],
+    [
+      "template_expired",
+      "This template's 90-day authorization expired, so this draft can't be sent.",
+    ],
+    [
+      "template_quota_exhausted",
+      "You've sent 100 messages with this template, so this draft can't be sent.",
+    ],
+  ];
+
+  it.each(CASES)("403 %s renders the button-neutral line", async (reason, copy) => {
+    nextResponse = {
+      status: 403,
+      body: { error: "template_denied", deny_reason: reason },
+    };
+    render(
+      <TodayCard
+        id="msg-1"
+        source="stripe"
+        sourceRef={null}
+        owningDomain="cfo"
+        draftPreview="Hello founder"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Send draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(copy);
+    });
+    expect(screen.queryByText(/Click Send again/)).toBeNull();
+  });
+});
+
+// #11572 (D15): after the messages UPDATE policy a second Discard or a
+// non-author click matches zero rows and answers 403; say so instead of a
+// bare status. Other statuses keep the generic `... failed (NNN)` fallback.
+describe("403 'already handled' copy for Discard, Edit and Dismiss (D15)", () => {
+  const HANDLED_COPY =
+    "This draft was already handled, or it isn't yours to change. Refresh to update this card.";
+  const ORIGINAL_PROMPT = window.prompt;
+
+  afterEach(() => {
+    window.prompt = ORIGINAL_PROMPT;
+  });
+
+  function renderStripe() {
+    render(
+      <TodayCard
+        id="msg-1"
+        source="stripe"
+        sourceRef={null}
+        owningDomain="cfo"
+        draftPreview="Hello founder"
+        urgency="normal"
+      />,
+    );
+  }
+
+  it("Discard 403 shows the already-handled line and restores the card", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(HANDLED_COPY);
+    });
+    expect(screen.queryByText(/Discard failed/)).toBeNull();
+    expect(screen.getByTestId("draft-preview-body")).toBeInTheDocument();
+  });
+
+  it("Discard 500 keeps 'Discard failed (500)'", async () => {
+    nextResponse = { status: 500, body: { error: "internal_error" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Discard failed (500)",
+      );
+    });
+  });
+
+  it("Edit 403 shows the already-handled line", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    window.prompt = vi.fn(() => "Edited body");
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Edit draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(HANDLED_COPY);
+    });
+    expect(screen.queryByText(/Edit failed/)).toBeNull();
+  });
+
+  it("kb-drift digest Dismiss 403 shows the already-handled line", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    render(
+      <TodayCard
+        id="msg-3"
+        source="kb-drift"
+        sourceRef="digest-2026-10-30"
+        owningDomain="knowledge"
+        draftPreview="3 findings"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(HANDLED_COPY);
+    });
+    expect(screen.queryByText(/Dismiss failed/)).toBeNull();
+  });
+
+  it("kb-drift digest Dismiss 500 keeps 'Dismiss failed (500)'", async () => {
+    nextResponse = { status: 500, body: { error: "internal_error" } };
+    render(
+      <TodayCard
+        id="msg-3"
+        source="kb-drift"
+        sourceRef="digest-2026-10-30"
+        owningDomain="knowledge"
+        draftPreview="3 findings"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Dismiss failed (500)",
+      );
     });
   });
 });
