@@ -470,6 +470,7 @@
 1	scripts/kb-staleness-metric.sh
 9	scripts/learning-retrieval-bench.sh
 2	scripts/lib/git-data-boot-signal-poll.sh
+6	scripts/lib/mutation-harness-controls.sh
 2	scripts/lib/scratch-root.sh
 3	scripts/lib/test-affected-derive-cache.sh
 4	scripts/lib/test-contention.sh

@@ -251,6 +251,7 @@ plugins/soleur/test/monitor-lock.test.sh	1222	floor
 plugins/soleur/test/monitor-pr-checks.test.sh	245125	measured
 plugins/soleur/test/net-issue-flow.test.sh	8356	measured
 plugins/soleur/test/notice-frontmatter.test.sh	7119	measured
+plugins/soleur/test/npm-publish-oidc.test.sh	1200	floor
 plugins/soleur/test/operator-9321-stages.test.sh	51837	measured
 plugins/soleur/test/operator-ack-guard.test.sh	110567	measured
 plugins/soleur/test/operator-agent-runnable.test.sh	15585	measured
