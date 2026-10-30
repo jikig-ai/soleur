@@ -448,22 +448,27 @@ None — queried open `code-review` issues against `.github/workflows/npm-publis
 `npm-publish`, `opencode-plugin`, `model.c4`, `views.c4`, `sync-npm-package`,
 and `NPM_TOKEN`: zero body matches.
 
+## Operator Holds
+
+- Hold: Operator-reserved: npm maintainer (`deruelle`, interactive `npm login`, npm >= 11.15.0 + 2FA) runs `npm trust github @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur --allow-publish`, then verifies `npm trust list @soleur/opencode`. Third-party credential surface with no Terraform provider or public API (decision-challenges row T1a); the leg stays red E404 until this exists — fail-safe ordering, merge is not blocked.
+- Hold: Operator-reserved: delete the `NPM_TOKEN` repo secret after the first green OIDC publish (deletion may be deferred; the leg no longer reads it).
+
 ## Acceptance Criteria
 
 <!-- founder-stated check: n/a — headless pipeline invocation -->
 
-- [ ] AC-1: `jobs.publish.permissions` in `.github/workflows/npm-publish.yml`
+- [x] AC-1: `jobs.publish.permissions` in `.github/workflows/npm-publish.yml`
   includes `id-token: write`, and the file contains no `NODE_AUTH_TOKEN` or
   `registry-url` token wiring.
-- [ ] AC-2: A step installs `npm@^11` before `npm publish`, and `npm --version`
+- [x] AC-2: A step installs `npm@^11` before `npm publish`, and `npm --version`
   in the job reports >= 11.5.1.
-- [ ] AC-3: `plugins/soleur/test/npm-publish-oidc.test.sh` exists, is registered
+- [x] AC-3: `plugins/soleur/test/npm-publish-oidc.test.sh` exists, is registered
   by `scripts/test-all.sh`'s `plugins/soleur/test/*.test.sh` glob, passes, and
   goes RED on each Guard-1 mutation-matrix row.
-- [ ] AC-4: `bash scripts/regenerate-c4-model.sh` runs clean after the
+- [x] AC-4: `bash scripts/regenerate-c4-model.sh` runs clean after the
   `npmRegistry` element + edge + view includes, and
   `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` pass.
-- [ ] AC-5: `ADR-309-*.md` exists under
+- [x] AC-5: `ADR-309-*.md` exists under
   `knowledge-base/engineering/architecture/decisions/` with `status: adopting`
   and an acceptance criterion pointing at the first green OIDC publish.
 - [ ] AC-6 (operator): `npm trust list @soleur/opencode` shows a GitHub Actions
