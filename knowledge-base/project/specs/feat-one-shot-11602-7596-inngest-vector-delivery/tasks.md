@@ -14,7 +14,7 @@ Plan: `knowledge-base/project/plans/2026-10-30-chore-inngest-vector-delivery-pla
 
 - [ ] 2.1 Add **Guard A4 (#11602)** to `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` after Guard A3: pinned-tag + HEAD `[sources.host_metrics]` asserts (`scrape_interval_secs = 900`, `collectors = ["memory", "filesystem"]`), own counted span + anti-vacuity row.
 - [ ] 2.2 Run the full `cloud-init-inngest-bootstrap.test.sh` suite green against the current `v1.1.67` pin.
-- [ ] 2.3 Edit `knowledge-base/engineering/operations/runbooks/inngest-server.md`: amend `### Post-replace: the boot-trace allowlist (#7596)` (~L298-346) in place — `leg_*` verdict taxonomy, automated sweeper close, #11602 counterpart — not merely a rider append.
+- [ ] 2.3 Edit `knowledge-base/engineering/operations/runbooks/inngest-server.md`: amend `### Post-replace: the boot-trace allowlist (#7596)` (~L298-346) in place — `leg_*` verdict taxonomy + `pass_arm=`/`journald_rows=` attribution, automated sweeper close, #11602 counterpart — not merely a rider append.
 
 ## Phase 3 — Verify + enroll
 

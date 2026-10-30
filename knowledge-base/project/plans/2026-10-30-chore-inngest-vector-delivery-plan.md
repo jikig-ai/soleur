@@ -11,6 +11,24 @@ lane: cross-domain
 
 # chore: inngest vector delivery — measured-close probes + pin-time trim guard for #11602 and #7596
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Sections enhanced:** Proposed Solution (probe floor semantics, leg attribution, PASS-arm naming), Files to Edit (test-all.sh registration, in-place runbook amendment), Acceptance Criteria (AC10-AC12), Observability (comment-noise cost), mutation matrix (row 7).
+**Agents used:** `devin -p` headless seats (sequential-fallback — no native Task tool): dhh / kieran / code-simplicity / cto-devex review seats + a soleur:engineering:cto Rule-interface ruling spawn.
+
+### Key Improvements
+
+1. Metric rows carry ONLY `tags.host`/`tags.collector` (native Vector shape, `tag_metrics` remap a measured no-op) — the #11602 probe isolates on `tags.host`, the issue's own grouping field.
+2. `leg_journald` is NOT a TRANSIENT reason: arm-2 PASS preempts it; the journald-leg verdict travels inside the PASS output (`pass_arm=boot_stage journald_rows=absent`) — removes a dead code path and a vacuous either/or fixture.
+3. `_BOOT_ID` PASS qualification requires positive resolution — unresolvable → TRANSIENT `boot_id_unresolvable` (stale-generation close defense, 10-28 learning).
+4. CI reality: `scripts/followthroughs/*.test.sh` needs explicit `run_suite` lines in `scripts/test-all.sh` (orphan-linter-blocking); enrollment is post-merge-ordered (missing `script=` reds the sweep); convention-mandated branch dry-run added as AC11.
+
+### New Considerations Discovered
+
+- Live-state anomaly: the running host (v1.1.61, allowlist-baked) shows ZERO restage/phone-home rows in 14d across two boots — the replace is a diagnostic instrument, not a guaranteed close (CTO ruling recorded).
+- The existing `inngest-server.md` `### Post-replace: the boot-trace allowlist (#7596)` section goes stale on landing — amended in place, not appended.
+
 ## Overview
 
 The inngest host's vector.toml is birth-frozen: the shared `apps/web-platform/infra/vector.toml` on main already carries the `[memory, filesystem]` + 900s host_metrics trim (#11602) and the #7457 Source-4 allowlist (#7596), and the auto-mint pipeline already baked `vinngest-v1.1.67` with both — but the live host runs `v1.1.61` and only re-reads the file at birth via the bootstrap image. What remains undelivered is (a) proof the next replace carries the trim (a pin-time guard assertion, mirroring #7596's Guard A3), and (b) the measured close conditions for both issues, automated via the follow-through sweeper so the sanctioned operator replace — a prod-mutating dispatch outside this PR's authority — closes the issues on evidence rather than human memory.
@@ -75,7 +93,7 @@ The inngest host's vector.toml is birth-frozen: the shared `apps/web-platform/in
 
 | Spec/issue claim | Codebase reality (measured) | Plan response |
 |---|---|---|
-| #7596: "the inngest host still lacks [the allowlist]" | The live host runs `v1.1.61` whose baked vector.toml **contains** the allowlist — yet the identifiers never shipped across 14d/2 boots. The delivery leg may already be live; the emit leg is dark. | Probes remain the close instrument; the enhanced #7596 probe reports leg attribution (`leg_journald` vs `leg_unit` vs `pre_replace`) in its TRANSIENT reason so a post-replace `channel_dark` names the broken leg. Recorded as a hypothesis row, not a fix. |
+| #7596: "the inngest host still lacks [the allowlist]" | The live host runs `v1.1.61` whose baked vector.toml **contains** the allowlist — yet the identifiers never shipped across 14d/2 boots. The delivery leg may already be live; the emit leg is dark. | Probes remain the close instrument; the enhanced #7596 probe reports leg attribution (`pre_replace` / `leg_unit` / `boot_id_unresolvable` in its TRANSIENT reason, or `journald_rows=absent` inside an arm-2 PASS) so a post-replace `channel_dark` names the broken leg. Recorded as a hypothesis row, not a fix. |
 | #11602: "rides the next inngest-host-replace" | Correct — and the pin (`v1.1.67`) already carries the trim; nothing repo-side blocks delivery. | PR ships the pin-time guard (Guard A4) so a future tag/pin regression reds before the bake, plus the measured-close probe. |
 | #7596: "the fix is necessarily **rebuild the bootstrap image, then replace the host**" | Image rebuild is no longer needed — `vinngest-v1.1.67` already carries both payloads (auto-minted on the carrier changes). Only the replace remains. | Plan documents the dispatch as an operator step; no build dispatch required. |
 
@@ -101,7 +119,7 @@ Ship the verification + pinning machinery; leave the prod-mutating dispatch to t
 
 ## Files to Edit
 
-- `scripts/followthroughs/inngest-bs-token-restage-7596.sh` — add generation floor (`MIN_DT` baked constant + `_BOOT_ID` match when resolvable), leg-discrimination read (BOOT_STAGE curl-marker leg), second PASS arm, TRANSIENT reasons `pre_replace`/`leg_unit`/`leg_journald`; update header's exit-code table + TRACKER note and ADD a `RETIREMENT:` block (absent today) enumerating the new suite file, the #7596 directive, and the runbook section per the 2026-09-24 underenumeration learning.
+- `scripts/followthroughs/inngest-bs-token-restage-7596.sh` — add generation floor (`MIN_DT` baked constant + `_BOOT_ID` match when resolvable), leg-discrimination read (BOOT_STAGE curl-marker leg), second PASS arm, TRANSIENT reasons `pre_replace`/`leg_unit`/`boot_id_unresolvable`; update header's exit-code table + TRACKER note and ADD a `RETIREMENT:` block (absent today) enumerating the new suite file, the #7596 directive, and the runbook section per the 2026-09-24 underenumeration learning.
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — insert **Guard A4 (#11602)** after Guard A3: pinned-tag `[sources.host_metrics]` block asserts (`scrape_interval_secs = 900`, `collectors = ["memory", "filesystem"]`) + HEAD twins + anti-vacuity count row; keep the own-span counting discipline (do NOT fold A4 into the A3 span; re-baseline any trailing count-floor comment the suite carries).
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` — amend the existing `### Post-replace: the boot-trace allowlist (#7596)` section in place: `leg_*` verdict taxonomy, automated sweeper close, #11602 counterpart.
 - `scripts/test-all.sh` — explicit `run_suite` registration lines for the two `.test.sh` files (every existing `scripts/followthroughs/*.test.sh` is registered explicitly; `SUITE_GLOBS` does not cover them and the orphan linter's `EXCLUSIONS=()` is empty — an unregistered suite is a CI blocker, not a warning).
@@ -125,12 +143,12 @@ liveness_signal:
   configured_in: .github/workflows/scheduled-followthrough-sweeper.yml + the two issue directives
 
 error_reporting:
-  destination: tracker issue comments (TRANSIENT reason strings: pre_replace / leg_unit / leg_journald / untrimmed / no_host_metrics / query_failed / credentials_unprovisioned)
+  destination: tracker issue comments (TRANSIENT reason strings: pre_replace / leg_unit / boot_id_unresolvable / untrimmed / no_host_metrics / query_failed / credentials_unprovisioned; the journald-leg verdict rides inside an arm-2 PASS as journald_rows=absent)
   fail_loud: sweeper run conclusion red on probe harness error; exit 78 on traced-credential run
 
 failure_modes:
   - mode: replace lands but emit leg still dark (#7596 anomaly)
-    detection: post-floor channel_dark persists; reason names leg_unit | leg_journald; in-surface signal is the journald→vector emit itself (the measurement is emitted FROM the host, not a host-side layer)
+    detection: post-floor channel_dark persists; reason names leg_unit | boot_id_unresolvable, or the arm-2 PASS carries journald_rows=absent; in-surface signal is the journald→vector emit itself (the measurement is emitted FROM the host, not a host-side layer)
     alert_route: daily TRANSIENT comment on #7596 → operator files a diagnostic issue naming the leg
   - mode: replace lands with a pin that lost the trim (#11602)
     detection: Guard A4 reds at the pin-bump PR's CI (pre-bake); post-bake, the probe reports untrimmed collectors forever
@@ -239,7 +257,7 @@ No cross-domain implications detected — infrastructure/observability tooling c
 
 - [ ] AC1: `scripts/followthroughs/inngest-hostmetrics-trim-11602.sh` exists, executable, header carries credential posture + exit-code contract + TRACKER + `RETIREMENT:` list; exit 0 only when the trailing-window collector set over rows with `tags.host='soleur-inngest'` (metric rows carry no `host`/`host_name` — native Vector shape; `tags.host` is the sole discriminator and the issue's own grouping field) is exactly `{memory, filesystem}` with ≥1 row of each; TRANSIENT (exit 2) on superset/absence/credential-miss/query-failure.
 - [ ] AC2: `inngest-hostmetrics-trim-11602.test.sh` exists and passes locally; includes the mutation battery rows (Guard Contract Guard 2, rows 1-3, 6) — a stubbed-probe run must go RED.
-- [ ] AC3: `inngest-bs-token-restage-7596.sh` carries the generation floor (post-floor-only evidence) and leg-attributed TRANSIENT reasons (`pre_replace` / `leg_unit` / `leg_journald`); a BOOT_STAGE `bs-token-restaged` marker post-floor satisfies PASS per the issue's "or the host's own boot-stage markers" wording.
+- [ ] AC3: `inngest-bs-token-restage-7596.sh` carries the generation floor (post-floor-only evidence) and leg-attributed TRANSIENT reasons (`pre_replace` / `leg_unit` / `boot_id_unresolvable`); a BOOT_STAGE `bs-token-restaged` marker post-floor satisfies PASS per the issue's "or the host's own boot-stage markers" wording.
 - [ ] AC4: `inngest-bs-token-restage-7596.test.sh` exists and passes; covers the floor-exclusion row (stale-generation evidence must not PASS) and both PASS arms.
 - [ ] AC5: Guard A4 block exists in `cloud-init-inngest-bootstrap.test.sh` asserting pinned-tag + HEAD `scrape_interval_secs = 900` and `collectors = ["memory", "filesystem"]`, with own-span anti-vacuity count row; the suite passes against the current `v1.1.67` pin.
 - [ ] AC6: `inngest-server.md` records the two riders and the post-window verdict → diagnostic-issue mapping.
@@ -253,7 +271,7 @@ No cross-domain implications detected — infrastructure/observability tooling c
 ## Test Scenarios
 
 - `unit` — probe verdict matrix (fixtures: trimmed set / untrimmed set / empty window / partial set / query failure / missing creds → PASS vs named TRANSIENT).
-- `unit` — restage-probe floor: fixture rows dated before `MIN_DT` must never produce exit 0; post-floor `ok=1` journald row → PASS; post-floor BOOT_STAGE-only → PASS or named `leg_journald`.
+- `unit` — restage-probe floor: fixture rows dated before `MIN_DT` must never produce exit 0; post-floor `ok=1` journald row → PASS; post-floor BOOT_STAGE-only → PASS carrying `pass_arm=boot_stage journald_rows=absent`.
 - `unit` — Guard A4: suite red when the pinned-tag blob loses the trim; red when the block is deleted (anti-vacuity).
 - `integration` — live probe runs (read-only, doppler `prd_terraform`): `inngest-hostmetrics-trim-11602.sh` currently exits 2 `untrimmed` (matches #11602's measurement); `inngest-bs-token-restage-7596.sh` currently exits 2 with a `channel_dark`-family reason (matches the census).
 - `integration` — the shard containing `cloud-init-inngest-bootstrap.test.sh` + the two probe suites is green.
@@ -268,7 +286,7 @@ No cross-domain implications detected — infrastructure/observability tooling c
 
 ## Decision Rulings
 
-Ruled by CTO agent, 2026-10-30: Item 1 — Option A (verification machinery only). The anomaly localizes #7596's defect to the emit leg on this host generation; the replace is a diagnostic instrument, not guaranteed delivery. Option B (blind emit-side edit) disqualified — undiagnosed path, unverifiable off-box, contaminates the experiment (#5733 class). Option C (diagnostic issue now, split the pair) disqualified — zero additional discriminating power. Sharpening: the #7596 probe discriminates legs (`leg_unit`/`leg_journald`/`pre_replace`) and the directive maps each verdict to its diagnostic follow-up.
+Ruled by CTO agent, 2026-10-30: Item 1 — Option A (verification machinery only). The anomaly localizes #7596's defect to the emit leg on this host generation; the replace is a diagnostic instrument, not guaranteed delivery. Option B (blind emit-side edit) disqualified — undiagnosed path, unverifiable off-box, contaminates the experiment (#5733 class). Option C (diagnostic issue now, split the pair) disqualified — zero additional discriminating power. Sharpening: the #7596 probe discriminates legs — as applied post-review, `pre_replace`/`leg_unit`/`boot_id_unresolvable` TRANSIENT reasons plus `journald_rows=absent` attribution inside an arm-2 PASS — and the directive maps each verdict to its diagnostic follow-up.
 
 Ruled by CTO agent, 2026-10-30: Item 2 — Option A (Refs + sweeper-driven measured close). `Closes` would false-close at merge on zero evidence; the sweeper's exit-0 contract executes each issue's own acceptance bar. `earliest=` reflects the replace dependency; pre-replace states report TRANSIENT, never FAIL.
 
