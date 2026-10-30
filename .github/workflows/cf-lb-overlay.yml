@@ -1,0 +1,467 @@
+# cf-lb-overlay.yml — the epic #11181 F3 staging-convert + GA LB overlay dispatches.
+#
+# WHY A DEDICATED WORKFLOW (CTO ruling 2026-10-30). apply-web-platform-infra.yml is at
+# its byte-budget gate (490,000) and its own input comment prescribes "a DEDICATED
+# workflow for the next per-target group". A dispatch arm there was physically
+# impossible — this file is that dedicated workflow.
+#
+# WHY A SEPARATE TERRAFORM ROOT for the staging arms. `-target` is transitive on
+# dependencies: a staging pool referencing web-1's IP inside the parent root drags
+# hcloud_server.web["web-1"] into every plan closure (rung2-rehearsal doctrine). The
+# lb-staging/ root shares no state with prod, so reaching a prod address is a
+# structural impossibility; teardown is a whole-root destroy that cannot name one.
+#
+# THE FOUR ARMS (exactly one runs per dispatch — each job's `if:` gates on inputs.arm):
+#   staging-record    create the throwaway lb-staging.soleur.ai proxied A record
+#   staging-overlay   create monitor+pool+LB on lb-staging + continuity probe + verdict
+#   staging-teardown  whole-root destroy of the four staging addresses
+#   ga-overlay        create the GA LB trio on app.soleur.ai (parent root, reviewer env)
+#
+# Authorization model: per-command operator go-ahead at dispatch (the epic's fresh
+# named authorization), plus per-arm confirm literals (typo-guards, NOT the
+# authorization) and `environment:` gates (infra-privileged = main-only; the GA arm
+# rides the reviewed web-platform-infra-apply environment).
+
+name: CF LB overlay (staging convert + GA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      arm:
+        description: "staging-record | staging-overlay | staging-teardown | ga-overlay — see each job header and runbook cf-lb-a-record-gaplessness-verify.md"
+        required: true
+        type: choice
+        options:
+          - staging-record
+          - staging-overlay
+          - staging-teardown
+          - ga-overlay
+      confirm:
+        description: "Typo-guard, NOT the authorization: CONVERT-LB-STAGING (record/overlay) | TEARDOWN-LB-STAGING | APPLY-GA-LB-OVERLAY"
+        required: true
+        type: string
+      reason:
+        description: "Audit trail for a production write — required."
+        required: true
+        type: string
+
+# Joins the parent's serializer: R2 has no state lock, and the ga-overlay arm mutates
+# web-platform/terraform.tfstate — the SAME group the parent uses, or a ga dispatch
+# could run beside a per-PR apply. The staging arms share it conservatively (same zone,
+# and it also serializes a teardown against an overlay dispatch).
+concurrency:
+  group: terraform-apply-web-platform-host
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+  STAGING_DIR: apps/web-platform/infra/lb-staging
+  PROBE_LOG: /tmp/lb-staging-continuity.log
+
+jobs:
+  staging_record:
+    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-record'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: infra-privileged
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Typo-guard
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "CONVERT-LB-STAGING" ]]; then
+            echo "::error::confirm must be exactly 'CONVERT-LB-STAGING' for arm=staging-record."
+            exit 1
+          fi
+          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          echo "- Reason: ${REASON_RAW} (arm=staging-record, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Terraform init (lb-staging root)
+        working-directory: ${{ env.STAGING_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+      - name: Terraform plan (staging record only)
+        working-directory: ${{ env.STAGING_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          set +e
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan -target=cloudflare_record.lb_staging
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (staging-record) failed (exit $rc). NOTHING applied."
+            exit $rc
+          fi
+          set -e
+      - name: Plan gate
+        working-directory: ${{ env.STAGING_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/staging-record-plan.json"
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_record "$RUNNER_TEMP/staging-record-plan.json" || {
+            terraform show -no-color tfplan | grep -E 'will be|Plan:' | head -20 >&2 || true
+            exit 1
+          }
+      - name: Terraform apply (the graded tfplan)
+        working-directory: ${{ env.STAGING_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan
+      - name: Settle wait (record must serve before the overlay arm runs)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://lb-staging.soleur.ai/health || true)
+            if [[ "$code" == "200" ]]; then echo "settled after ${i} checks"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::lb-staging.soleur.ai/health did not reach 200 in 10min — inspect before the overlay arm."
+          exit 1
+
+  staging_overlay:
+    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-overlay'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: infra-privileged
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Typo-guard
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "CONVERT-LB-STAGING" ]]; then
+            echo "::error::confirm must be exactly 'CONVERT-LB-STAGING' for arm=staging-overlay."
+            exit 1
+          fi
+          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          echo "- Reason: ${REASON_RAW} (arm=staging-overlay, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Terraform init (lb-staging root)
+        working-directory: ${{ env.STAGING_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+      - name: Start continuity probe (outside-Cloudflare vantage, 200ms tick)
+        # A GHA runner IS outside the CF edge, satisfying the runbook's vantage
+        # requirement (Part 2). The log lands as a run artifact — committed evidence,
+        # no operator laptop.
+        run: |
+          : > "$PROBE_LOG"
+          nohup bash -c 'while true; do
+            printf "%s %s\n" "$(date +%s%3N)" "$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 https://lb-staging.soleur.ai/health || echo CURL_FAIL)"
+            sleep 0.2
+          done' >> "$PROBE_LOG" 2>&1 &
+          echo "PROBE_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+          head -3 "$PROBE_LOG" || { echo "::error::continuity probe produced no output"; exit 1; }
+      - name: Terraform plan (full staging overlay — monitor + pool + LB)
+        working-directory: ${{ env.STAGING_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          set +e
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            kill "${PROBE_PID:-0}" 2>/dev/null || true
+            echo "::error::terraform plan (staging-overlay) failed (exit $rc). NOTHING applied."
+            exit $rc
+          fi
+          set -e
+      - name: Plan gate (allow-set + throwaway-hostname pin)
+        working-directory: ${{ env.STAGING_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/staging-overlay-plan.json"
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          if ! cf_lb_gate_overlay "$RUNNER_TEMP/staging-overlay-plan.json"; then
+            kill "${PROBE_PID:-0}" 2>/dev/null || true
+            terraform show -no-color tfplan | grep -E 'will be|Plan:' | head -20 >&2 || true
+            exit 1
+          fi
+      - name: Terraform apply (the graded tfplan)
+        working-directory: ${{ env.STAGING_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan
+      - name: Hold probe through one monitor interval, then grade
+        run: |
+          set -euo pipefail
+          sleep 75  # apply settle + one 60s monitor interval
+          kill "${PROBE_PID:-0}" 2>/dev/null || true
+          sleep 1
+          total=$(wc -l < "$PROBE_LOG")
+          bad=$(grep -cvE ' 200$' "$PROBE_LOG" || true)
+          {
+            echo "### Part-2 staging convert — continuity verdict"
+            echo ""
+            echo "- Samples: ${total} @ 200ms tick"
+            echo "- Non-200/CURL_FAIL ticks: ${bad}"
+            if [[ "$bad" == "0" ]]; then
+              echo "- **Verdict: GO** — zero gap at 200ms sampling resolution (runbook verdict gate)."
+            else
+              echo "- **Verdict: NO-GO** — ${bad} non-200 tick(s); see artifact log for the window."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$bad" != "0" ]]; then
+            echo "::error::continuity probe recorded ${bad} non-200 ticks — NO-GO per the runbook verdict gate. Do NOT run ga-overlay."
+            exit 1
+          fi
+      - name: Upload continuity log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lb-staging-continuity-${{ github.run_id }}
+          path: /tmp/lb-staging-continuity.log
+          if-no-files-found: warn
+
+  staging_teardown:
+    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-teardown'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: infra-privileged
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Typo-guard
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "TEARDOWN-LB-STAGING" ]]; then
+            echo "::error::confirm must be exactly 'TEARDOWN-LB-STAGING' for arm=staging-teardown — a distinct literal from the create arms per the birth-vs-destroy token convention."
+            exit 1
+          fi
+          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          echo "- Reason: ${REASON_RAW} (arm=staging-teardown, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Terraform init (lb-staging root)
+        working-directory: ${{ env.STAGING_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+      - name: Terraform plan -destroy (the whole staging root)
+        working-directory: ${{ env.STAGING_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          set +e
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -destroy -no-color -input=false -out=tfplan-destroy
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan -destroy (staging-teardown) failed (exit $rc). NOTHING destroyed."
+            exit $rc
+          fi
+          set -e
+      - name: Destroy plan gate (deletes confined to the four staging addresses)
+        working-directory: ${{ env.STAGING_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan-destroy > "$RUNNER_TEMP/staging-teardown-plan.json"
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_teardown "$RUNNER_TEMP/staging-teardown-plan.json" || {
+            terraform show -no-color tfplan-destroy | grep -E 'will be|Plan:' | head -20 >&2 || true
+            exit 1
+          }
+      - name: Terraform destroy (the graded plan)
+        working-directory: ${{ env.STAGING_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan-destroy
+      - name: Zone clean check (read-only)
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://lb-staging.soleur.ai/health || echo "000")
+          if [[ "$code" == "200" ]]; then
+            echo "::error::lb-staging.soleur.ai still answers 200 after destroy — teardown incomplete; re-dispatch this arm."
+            exit 1
+          fi
+          echo "lb-staging.soleur.ai no longer serves (got ${code}) — zone clean." >> "$GITHUB_STEP_SUMMARY"
+
+  ga_overlay:
+    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-overlay'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # REVIEWER-GATED — same environment the rung2 dispatch and vector-redeliver ride:
+    # creating the live LB on app.soleur.ai is the GA act, not a rehearsal.
+    environment: web-platform-infra-apply
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Typo-guard
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "APPLY-GA-LB-OVERLAY" ]]; then
+            echo "::error::confirm must be exactly 'APPLY-GA-LB-OVERLAY' for arm=ga-overlay — it creates the LIVE load balancer on app.soleur.ai."
+            exit 1
+          fi
+          [[ -n "${REASON_RAW// /}" ]] || { echo "::error::reason is required."; exit 1; }
+          echo "- Reason: ${REASON_RAW} (arm=ga-overlay, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Terraform init (parent root)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+      - name: Terraform plan (GA LB trio only)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          CI_SSH_PUB: /dev/null # hcloud_ssh_key default file() never consumed by these targets
+        run: |
+          set -uo pipefail
+          set +e
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -target=cloudflare_load_balancer_monitor.web \
+              -target=cloudflare_load_balancer_pool.web_1 \
+              -target=cloudflare_load_balancer.app
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (ga-overlay) failed (exit $rc). NOTHING applied."
+            exit $rc
+          fi
+          set -e
+      - name: Plan gate (exactly the GA trio, zero destructive)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/ga-overlay-plan.json"
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_ga "$RUNNER_TEMP/ga-overlay-plan.json" || {
+            terraform show -no-color tfplan | grep -E 'will be|Plan:' | head -30 >&2 || true
+            exit 1
+          }
+      - name: Terraform apply (the graded tfplan)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan
+      - name: Post-apply continuity check on app.soleur.ai
+        run: |
+          set -euo pipefail
+          bad=0
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://app.soleur.ai/health || echo CURL_FAIL)
+            [[ "$code" == "200" ]] || bad=$((bad+1))
+            sleep 1
+          done
+          {
+            echo "### GA overlay post-apply continuity"
+            echo "- Samples: 90 @ 1s tick"
+            echo "- Non-200 ticks: ${bad}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$bad" != "0" ]]; then
+            echo "::error::${bad} non-200 ticks on app.soleur.ai post-overlay — investigate before declaring GA."
+            exit 1
+          fi
+          echo "app.soleur.ai served 200 throughout the overlay apply — gapless observed."

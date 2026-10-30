@@ -1329,12 +1329,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
   // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
-  // (monitor, web-1 pool, LB on app.soleur.ai). Provisioning requires both the
-  // Load Balancing add-on subscription and `Account: Load Balancers: Edit` +
-  // `Zone: Load Balancers: Edit` scopes on CF_API_TOKEN (measured 2026-10-27:
-  // the per-PR CI token returns Cloudflare code 10000 Authentication error on
-  // /load_balancers, so per-PR auto-targeting would 403 and wedge every merge
-  // apply — the #5566-inverse footgun). Rides the GA maintenance-window apply.
+  // (monitor, web-1 pool, LB on app.soleur.ai). Stays deliberately excluded after
+  // the 2026-10-30 CF_API_TOKEN widen (the 2026-10-27 code-10000 premise below is
+  // obsolete): the GA overlay is a sequenced human-watched act, not a push apply —
+  // it rides the `ga-overlay` arm of cf-lb-overlay.yml (#11181 F3 machinery).
   "cloudflare_load_balancer_monitor.web",
   "cloudflare_load_balancer_pool.web_1",
   "cloudflare_load_balancer.app",

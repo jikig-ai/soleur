@@ -116,6 +116,16 @@ LB.
 
 ## Part 2 — Staging convert (empirical continuity + de-risk the one assumed step)
 
+> **Machinery (2026-10-30, #11181 F3):** the convert now runs through dedicated
+> dispatch arms of `.github/workflows/cf-lb-overlay.yml` against the throwaway
+> Terraform root `apps/web-platform/infra/lb-staging/` — `staging-record` →
+> `staging-overlay` (runs the continuity loop in-runner and grades it) →
+> `staging-teardown`, then `ga-overlay` after a GO verdict. The manual steps below
+> remain the design reference for what each arm does; run the arms, not the manual
+> path. Each dispatch needs fresh, named operator authorization plus its `confirm`
+> typo-guard literal (`CONVERT-LB-STAGING` / `TEARDOWN-LB-STAGING` /
+> `APPLY-GA-LB-OVERLAY`).
+
 Docs say the overlay is gapless, but the **Terraform provider's** exact behavior when a
 `cloudflare_load_balancer` is created while a same-name `cloudflare_dns_record` is *retained*
 is **assumed, not verified** (see "Still unverified"). Part 2 de-risks precisely that on a
