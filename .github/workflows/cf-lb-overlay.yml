@@ -59,7 +59,7 @@ permissions:
 env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
-  STAGING_DIR: apps/web-platform/infra/lb-staging
+  REHEARSAL_DIR: apps/web-platform/infra/lb-staging
   PROBE_LOG: /tmp/lb-staging-continuity.log
 
 jobs:
@@ -105,10 +105,10 @@ jobs:
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
       - name: Terraform init (lb-staging root)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         run: terraform init -input=false -lockfile=readonly
       - name: Terraform plan (staging record only)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
@@ -123,7 +123,7 @@ jobs:
           fi
           set -e
       - name: Plan gate
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         run: |
           set -euo pipefail
           terraform show -json tfplan > "$RUNNER_TEMP/staging-record-plan.json"
@@ -133,7 +133,7 @@ jobs:
             exit 1
           }
       - name: Terraform apply (the graded tfplan)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
@@ -193,7 +193,7 @@ jobs:
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
       - name: Terraform init (lb-staging root)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         run: terraform init -input=false -lockfile=readonly
       - name: Start continuity probe (outside-Cloudflare vantage, 200ms tick)
         # A GHA runner IS outside the CF edge, satisfying the runbook's vantage
@@ -209,7 +209,7 @@ jobs:
           sleep 2
           head -3 "$PROBE_LOG" || { echo "::error::continuity probe produced no output"; exit 1; }
       - name: Terraform plan (full staging overlay — monitor + pool + LB)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
@@ -225,7 +225,7 @@ jobs:
           fi
           set -e
       - name: Plan gate (allow-set + throwaway-hostname pin)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         run: |
           set -euo pipefail
           terraform show -json tfplan > "$RUNNER_TEMP/staging-overlay-plan.json"
@@ -236,7 +236,7 @@ jobs:
             exit 1
           fi
       - name: Terraform apply (the graded tfplan)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
@@ -316,10 +316,10 @@ jobs:
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
       - name: Terraform init (lb-staging root)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         run: terraform init -input=false -lockfile=readonly
       - name: Terraform plan -destroy (the whole staging root)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
@@ -334,7 +334,7 @@ jobs:
           fi
           set -e
       - name: Destroy plan gate (deletes confined to the four staging addresses)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         run: |
           set -euo pipefail
           terraform show -json tfplan-destroy > "$RUNNER_TEMP/staging-teardown-plan.json"
@@ -344,7 +344,7 @@ jobs:
             exit 1
           }
       - name: Terraform destroy (the graded plan)
-        working-directory: ${{ env.STAGING_DIR }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
