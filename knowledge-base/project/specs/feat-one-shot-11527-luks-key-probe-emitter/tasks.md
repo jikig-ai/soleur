@@ -3,6 +3,8 @@
 Plan: `knowledge-base/project/plans/2026-10-30-fix-inngest-luks-key-probe-emitter-plan.md`
 Issue: #11527 (Ref, never Closes — the merge-triggered apply is part of remediation)
 
+**Superseded vocabulary note (ruling D5, 2026-10-30):** `token=` in the tasks below reads `verdict=` as shipped — the emit key was renamed after the review panel found `token=` dead on the journald channel (vector.toml pii_scrub_string). Floors as shipped: `PRESENCE_ROWS=37`, `MUT_ROWS=46`, `_floor=83`.
+
 ## Phase 1 — Predicate + comment + guard + docs (one commit)
 
 - [x] 1.1 Restructure `local.inngest_luks_key_probe_fail_sql` in `apps/web-platform/infra/betterstack-logs-alerts.tf` to the emitter-OR form: shared `dt BETWEEN` filter + position-1 `SOLEUR_INNGEST_LUKS_KEY_PROBE` anchor; leg A `SYSLOG_IDENTIFIER='inngest-cutover-flip'` AND `token=fail_` on `message`; OR leg B `shipper='cloud-init-phone-home'` AND `stage='luks-key-probe'` AND (`detail = ''` OR `token=fail_` on `detail`); OR inside the parenthesized group (`AND` binds tighter than `OR`). If the D2 ruling prefers strict shared conjuncts, drop the `detail = '' OR` fragment and hoist the token check to a shared `message` conjunct. Extend the local's comment block: emitter-identity sentence (row set pinned to the probe's two real emitters; `{`-prefix exclusion incidental per #8846), residual edges (jq-failure payload uncounted; `detail=''` arm semantics; self-attested `dt` unmeasured; `value` ≤ 2 inflation under `higher_than 0`); scaffold the dated `LIVE-PROBED` entry. `terraform fmt -check`.

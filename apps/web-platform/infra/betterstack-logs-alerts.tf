@@ -460,7 +460,7 @@ locals {
   #   E synthetic raw evals (journald fail/ok, phone-home fail/ok, identity-pinned detail-absent,
   #     jq-failure shape, doppler-shaped forgery)               -> 1/0/1/0/1/0/0
   #   E re-run 2026-10-30 ~12:00 UTC under the verdict= needle (review found token= dead on
-  #     journald — vector.toml pii_scrub_string rewrites token=<v>; D4 ruling renamed the emit
+  #     journald — vector.toml pii_scrub_string rewrites token=<v>; D5 ruling renamed the emit
   #     key on both channels)                                         -> 1/0/1/0/1/0/0 (identical)
   #   NOTE: synthetic evals inject raw rows pre-scrub — they prove the predicate, not that a real
   #     journald row survives ingest; the guard's scrub-immunity check (vector.toml alternation)

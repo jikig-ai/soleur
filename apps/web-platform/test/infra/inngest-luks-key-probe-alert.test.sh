@@ -206,7 +206,10 @@ fi
 # before ingest, which is exactly how a `token=fail_` leg-A needle was dead on the journald
 # channel. Every needle/consumer asserts `.tf`-to-source agreement; this row asserts the needle
 # against the TRANSFORM that rewrites the row first. Covers the keeper-dark capture key too —
-# it reads the same field.
+# it reads the same field. LIMITATION: the check is anchored to the `replace(msg` idiom —
+# a scrub spelled `del(`, `map_values` or `replace(.message` naming `verdict` evades it; that is
+# the file's current rewrite style, so the idiom pin is proportionate today and flagged here for
+# the next scrub author, not rewritten into an exhaustive transform grammar.
 ! grep -E 'replace\(msg' "$VT" | grep -q 'verdict' \
   && ok "the verdict key is absent from vector.toml's scrub rewrites — the needle survives ingest on both channels" \
   || no "verdict now appears in a pii_scrub replace() — the needle is dead before ingest (the pre-rename defect recurring)"

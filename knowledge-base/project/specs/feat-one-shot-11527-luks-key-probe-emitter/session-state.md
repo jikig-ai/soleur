@@ -44,7 +44,7 @@
 ## 2026-10-30 review-phase evidence (#11527)
 
 - Panel: 10 seats, 1 P1 + 4 P2 + ~15 P3. P1 = leg-A `token=` needle dead before ingest
-  (pii_scrub_string redacts token=<v>); CTO ruling D4 = rename `token=`→`verdict=` both channels in this PR.
+  (pii_scrub_string redacts token=<v>); CTO ruling D5 = rename `token=`→`verdict=` both channels in this PR.
 - Implemented: emit verdict= at luks_probe_finish; needles+consumers swept (flip script, .tf, guard,
   probe test, keeper-dark+test, 2 runbooks, model.c4+regen, ADR-282+addendum); incident_cause decode hint;
   scrub-immunity presence row+VT mutation arm; CI/RB/VT mutate_red arms; 5 needle-source mutations;
