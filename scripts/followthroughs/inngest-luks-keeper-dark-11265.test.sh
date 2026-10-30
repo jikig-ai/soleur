@@ -504,7 +504,7 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (an --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=189; MIN_BATTERY=101
+MIN_FIXTURE=189; MIN_BATTERY=103
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-luks-keeper-dark-11265.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi

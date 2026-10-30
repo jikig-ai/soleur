@@ -132,16 +132,20 @@ printf '#!/usr/bin/env bash\n# c\nset -uo pipefail\n\n# note\nexec < /dev/null\n
 printf '#!/usr/bin/env bash\nset -uo pipefail\nX=1\nexec < /dev/null\n' > "$TMPD/pin-late.sh"
 printf '#!/usr/bin/env bash\nset -uo pipefail\nf() {\nexec < /dev/null\n}\nX=1\n' > "$TMPD/pin-nested.sh"
 printf '#!/usr/bin/env bash\nset -uo pipefail\nif false; then\nexec < /dev/null\nfi\nX=1\n' > "$TMPD/pin-conditional.sh"
-printf '#!/usr/bin/env bash\nset -uo pipefail\ncase "$1" in\nx) exec < /dev/null ;;\nesac\nX=1\n' > "$TMPD/pin-case.sh"
-printf '#!/usr/bin/env bash\nset -uo pipefail\nif false; then exec </dev/null; fi\nX=1\n' > "$TMPD/pin-oneliner.sh"
-printf '#!/usr/bin/env bash\nset -uo pipefail\n# exec < /dev/null\nX=1\n' > "$TMPD/pin-commented.sh"
-printf '#!/usr/bin/env bash\nset -uo pipefail\nX=1\n' > "$TMPD/pin-missing.sh"
+# A comment above the real `set` that quotes it: an anchor loosened to a substring match would start counting at the comment,
+# and then accept the exec line that sits between the comment and the real `set`.
+printf '#!/usr/bin/env bash\n# note: set -uo pipefail\nexec < /dev/null\nset -uo pipefail\nX=1\n' > "$TMPD/pin-set-quoted.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\n exec < /dev/null\nX=1\n' > "$TMPD/pin-exec-indented.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null || true\nX=1\n' > "$TMPD/pin-exec-trailing.sh"
 if _pin_exec_stdin "$TMPD/pin-good.sh"; then row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" ok
 else row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" fail "a good layout was refused"; fi
-for _pin_bad in late nested conditional case oneliner commented missing; do
+for _pin_bad in late nested conditional set-quoted; do
   if _pin_exec_stdin "$TMPD/pin-$_pin_bad.sh"; then row "stdin pin control: the $_pin_bad layout is refused" fail "the pin accepted a $_pin_bad layout"
   else row "stdin pin control: the $_pin_bad layout is refused" ok; fi
 done
+if _pin_exec_stdin "$TMPD/pin-exec-indented.sh" || _pin_exec_stdin "$TMPD/pin-exec-trailing.sh"; then
+  row "stdin pin control: an exec line with a leading space, or with trailing text, is refused" fail "the pin accepted an altered exec line"
+else row "stdin pin control: an exec line with a leading space, or with trailing text, is refused" ok; fi
 
 # --------------------------------------------------------------------------------------
 # TOOLING: the real tools a probe needs, symlinked into ONE dir. curl/gh/doppler/ssh/git are
@@ -8320,8 +8324,8 @@ SELFTEST_PASSES=0
 # its DELEGATED_MANIFEST row left with it. Rebased over #11483's dispatch-recovery-sweeper-11211
 # (+1, main 825): net floor stays 824.
 # 824 -> 830 at #11572 (item 13): 829 measured on main before this change, plus the one stdin pin row (830 passed, 0 failed).
-# 830 -> 839 at the #11572 review round (2026-10-30): the pin is now "first statement after set -uo pipefail", plus the run-time fd 0 row, the canonical-layout control and seven refused-layout controls (839 passed, 0 failed).
-EXPECTED_TESTS=839
+# 830 -> 837 at the #11572 review rounds (2026-10-30): the pin is "first statement after set -uo pipefail" (1 row), plus the run-time fd 0 row, the canonical-layout control, four refused-layout controls (late, nested, conditional, a quoted `set` above the real one) and one altered-exec-line control: measured (837 passed, 0 failed).
+EXPECTED_TESTS=837
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

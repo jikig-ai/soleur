@@ -13,11 +13,12 @@
 # Call it ONCE, after the suite has taken FIX_N, inside the battery block, so that every row counts toward MIN_BATTERY.
 # Each row is a capture-only `check` in THIS shell; the two lib functions that `exit` (mh_floor, assert_fixture_dir) run in a
 # subshell and their rc is read on its own line. Nothing here writes the suite's own ledger except through `check`.
-# A control that never goes RED is worthless: the lib's mutation matrix (see the PR) pins each row to the mutation it kills.
+# A control that never goes RED is worthless: each row is checked against a mutant of the lib before it is added.
 
 # shellcheck disable=SC2154  # MUT is caller-supplied (see above)
 
 mh_lib_controls() {
+  assert_fixture_dir "$MUT"   # every file below is written under $MUT
   # --- mh_frag_unique: unique / zero / ambiguous / exact / empty, FIX_N edges, literal and prefix-only matching ----------
   # Ledger lines (n = line number): the ambiguous pair sits at 3 and 4, the solo pair at 7 and 8, and two labels hold
   # `needle` only MID-label at 9 and 10 (a prefix-only matcher sees none).
@@ -88,6 +89,8 @@ mh_lib_controls() {
   check "mh_floor: a short fixture count exits 1 and names the fixture floor" "1|FLOOR: only 5 fixture assertions ran, expected at least 10" "$(mh_floor_rc 5 30 10 5)"
   check "mh_floor: a short battery count exits 1 and names the battery floor" "1|FLOOR: only 2 battery assertions ran, expected at least 5" "$(mh_floor_rc 10 12 10 5)"
   check "mh_floor: sufficient fixture and battery counts pass silently" "0|" "$(mh_floor_rc 10 20 10 5)"
+  check "mh_floor: a battery count exactly at the floor passes" "0|" "$(mh_floor_rc 10 15 10 5)"
+  check "mh_floor: a battery count one below the floor exits 1" "1|FLOOR: only 4 battery assertions ran, expected at least 5" "$(mh_floor_rc 10 14 10 5)"
   check "mh_floor: under FT_INNER a short count still passes (the inner run is not floored)" "0|" "$(mh_floor_rc 1 1 10 5 inner)"
   check "mh_floor: the suite's --no-battery argument skips the battery floor (a short battery count passes)" "0|" "$(mh_floor_rc 10 12 10 5 '' --no-battery)"
   mh_afd() { # <dir argument>: rc and the FIRST line of the refusal

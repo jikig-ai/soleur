@@ -466,7 +466,7 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (a --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=179; MIN_BATTERY=96
+MIN_FIXTURE=179; MIN_BATTERY=98
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== dispatch-recovery-sweeper-11211.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
