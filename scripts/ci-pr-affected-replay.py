@@ -48,6 +48,7 @@ SUBCOMMANDS
   cp-upper     K N [CONF]                  (a FRACTION, not a percent: 0.009936 is 0.99%)
   audit        [--root DIR] [--list FILE] [--accept FILE] [--all-refs]
   ratchet      [--root DIR] [--list FILE] [--baseline FILE] [--accept FILE] [--base REF] [--print-baseline] [--report FILE]
+  glob-rate    --candidates FILE --out DIR [--list FILE] [--pairs FILE] [--commits N] [--base REF] [--spot-check K] [--root DIR]   (S4 PR5: read-only row 6 measurement, see cmd_glob_rate)
 The receipt paths are arguments; no repository path literal lives in this file.
 
 AUDIT OUTPUT. `gap<TAB>suite<TAB>N<TAB>paths` (the first six, all with --all-refs, which also prints under it one
@@ -162,13 +163,14 @@ checkout HEAD^1 is just the previous local commit, so those are not meaningful t
   EXIT-2 REASONS  selector-failed, selector-timeout, floor-summary, floor-fallback, floor-extra, floor-short-row, floor-bad-row, floor-rows-vs-of, floor-unreadable,
   floor-no-suites, base-unresolved, baseline-unreadable, accept-unreadable, census-degraded (--print-baseline only), internal.
 
-EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
+EXIT CODES (collect, ejections, aggregate, audit, glob-rate): 0 done and clean (glob-rate: every row decided, whatever the verdicts); 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
 a value error (a malformed --since, an unknown status, an incomplete aggregate directory); 3 a remote or local READ
-failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
+failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error (glob-rate: also the model disagreeing with the real selector, or a spot-check that compared nothing). `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
 on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, never rc 1.
 """
 import argparse
 import errno
+import fnmatch
 import hashlib
 import json
 import math
@@ -971,15 +973,19 @@ def edge_hit(pt, path):
     empty entry matches everything). A `^` entry is `glob:<head>/<tail>` (a bash `[[ == ]]` glob over the whole path, `*` crosses
     `/`), `dir/` (a prefix) or a file (exact equality). Nothing is a regex: a path holding ( ) [ ] + $ matches itself, and `^a.sh`
     does not match `a.sh.bak`. EVERY malformed glob shape matches (a glob edge can only widen a selection): a byte outside
-    [A-Za-z0-9_./*-], a head that is absolute, begins with `./` or `../`, or holds `//`, `/./` or `/../`, a head not ending in `/`, a tail
-    ending in `/`, a tail without `*`. A tracked name holding a TAB or a double quote is framed differently in the selector's diff blob and
-    is not modelled (no such name is tracked)."""
+    [A-Za-z0-9_./*-], a head that is absolute, begins with `./` or `../`, or holds `//`, `/./` or `/../`, a `/`-bearing head not
+    ending in `/`, a `/`-bearing tail under a `/`-free head, a tail ending in `/`, a tail without `*`. A `/`-free head is a real
+    ROOT-ANCHORED pattern (#10198): it matches only a diff line carrying no `/` that fnmatches the pattern (`*` crosses `/` there
+    too — the dir-less conjunct is load-bearing, mirroring the bash arm's `!= */*`). A tracked name holding a TAB or a double
+    quote is framed differently in the selector's diff blob and is not modelled (no such name is tracked)."""
     if not pt.startswith("^"):
         return pt in path
     e = pt[1:]
     if e.startswith("glob:"):
         g = e[len("glob:"):]
         if GLOB_CHARSET.search(g):
+            return True
+        if "*" not in g:                # a metachar-free payload is a literal edge — always-match (bash `literal` arm)
             return True
         head = g.split("*", 1)[0]
         if head.startswith("/"):        # the head is not repo-relative: six shapes, one line each
@@ -994,13 +1000,19 @@ def edge_hit(pt, path):
             return True
         if "/../" in head:
             return True
-        if not head.endswith("/"):      # head not /-terminated
+        if "/" in head and not head.endswith("/"):  # mid-slash head — not /-terminated
             return True
         tail = g[len(head):]
+        if "/" not in head:
+            # Root-anchored (#10198): a `/`-bearing tail can never match a dir-less diff line.
+            if "/" in tail:
+                return True
+            return "/" not in path and fnmatch.fnmatchcase(path, g)
         if tail.endswith("/"):          # unmatchable tail
             return True
-        if "*" not in tail:             # a tail without a wildcard
-            return True
+        if "*" not in tail:             # a tail without a wildcard (unreachable: `*`-
+            return True                 # less payloads take the literal arm; kept to mirror
+                                        # the bash classifier's tail-no-star vocabulary)
         # `*` matches any run of characters, `/` included, and a run of stars is one star: split on `*`, anchor the first and the last
         # segment and find the middle ones in order. Linear in the path, where the equivalent regex is polynomial in the number of stars.
         segs = g.split("*")
@@ -2112,6 +2124,339 @@ def cmd_audit(a):
     return 0 if not c.gaps and not c.unaudited and not c.stale else 1
 
 
+# ---- glob-rate (S4 PR5, #10861): the PR4b row 6 measurement -----------------------------------------------------------------------------
+# READ-ONLY. For each candidate suite it answers two questions the policy asks: how long does the suite take (scripts/suite-durations*.tsv, with
+# the `src` column kept) and in how many of the last N first-parent commits of --base would the suite be selected if the candidate entries
+# were declared next to the suite's existing edges. The model decides selection from the selector's own edge column plus _edge(); the real
+# selector is run once for the edge set (the --list rows file) and on --spot-check K evenly spaced diffs to prove the model agrees with it.
+
+GLOB_MARKER = "SOLEUR_PR_AFFECTED_GLOB_RATE"
+GLOB_MAX_MS = 60000          # row 6 (1): a glob: edge needs a measured duration of at most this ...
+GLOB_ALWAYS_POLICY_MS = 30000   # row 6 (2): the policy bound for an ALWAYS_ON_SUITES entry
+GLOB_ALWAYS_MAX_MS = 10000      # but the fast-tier budget lint (scripts/test-all-fast-tier-budget.test.sh, LOCAL_FAST_CAP_MS, ADR-262) rejects any always-on label above this: a verdict that cannot be installed is `baselined`
+GLOB_TSV_COLUMNS = ("suite", "entries", "duration_ms", "src", "existing_hits", "glob_hits", "total_hits", "incremental_hits", "units",
+                    "runner_changed", "not_evaluable", "empty", "deleted_path_units", "rate_conservative", "rate_excluded",
+                    "ci_seconds_added", "drained_pairs", "tree_files", "tree_missing", "verdict", "reason")
+
+
+class Divergence(Exception):
+    """The model of the selector disagrees with the real selector, or the spot-check could not sample: no verdict is accepted (exit 4)."""
+
+
+_edge = edge_hit   # the SAME function (the audit's one-implementation guard counts the textual call to edge_hit; an alias is not a second implementation)
+
+
+def durations_src(root):
+    """{label: (ms, src)} from both duration tables, read like durations() (the heavy table wins) but KEEPING the third column. src is
+    `measured`, `floor` or whatever the table says; a label without a row is absent. durations() is left as it is (the escape-rate path uses it)."""
+    d = {}
+    for name in ("suite-durations.tsv", "suite-durations-heavy.tsv"):
+        p = os.path.join(root, "scripts", name)
+        if not os.path.exists(p):
+            continue
+        with open(p) as fh:
+            for line in fh:
+                if line.startswith("#") or not line.strip():
+                    continue
+                f = line.rstrip("\n").split("\t")
+                if len(f) >= 2 and f[1].isdigit():
+                    d[f[0]] = (int(f[1]), f[2] if len(f) >= 3 else "")
+    return d
+
+
+def glob_decide(dur, src, hits, units, complete=True):
+    """PR4b row 6, applied exactly (inclusive boundaries) -> (verdict, reason). verdict is `glob`, `always_on` or `baselined`.
+    dur is milliseconds (None with src None when the suite has no duration row). Only a `measured` row is a measurement: a `floor` row is an
+    estimate and a missing row is no figure, so neither can yield anything but `baselined` (CTO row 3). hits/units is the selection rate after
+    the edge, a ratio compared as hits * 4 <= units (25%, no float). `complete` is False when the candidate set cannot be shown to cover the
+    suite's whole scan: a glob is then not expressible and `hits` must be the EXISTING-only count, so only the always_on branch can apply."""
+    if src is None:
+        return "baselined", "duration-missing"
+    if src != "measured":
+        return "baselined", "duration-floor"
+    if dur > GLOB_MAX_MS:
+        return "baselined", "duration-over"
+    if units <= 0:
+        return "baselined", "no-units"
+    if hits * 4 <= units:
+        if complete:
+            return "glob", "within-25-percent"
+        return "baselined", "no-complete-set"
+    if dur <= GLOB_ALWAYS_MAX_MS:
+        return "always_on", "over-25-percent"
+    if dur <= GLOB_ALWAYS_POLICY_MS:
+        return "baselined", "always-on-over-fast-tier-cap"
+    return "baselined", "rate-over-and-duration-over-30s"
+
+
+def glob_read_lines(path, what):
+    try:
+        with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+            text = fh.read()
+    except OSError as e:
+        raise ReadError("cannot read the %s file %s: %s" % (what, path, e.strerror or e))
+    return [ln.rstrip("\r") for ln in text.replace("\r\n", "\n").split("\n")]
+
+
+def glob_candidates(path):
+    """-> ({suite: set(entries)}, set(suites that need a complete tree cover)). Lines are `suite<TAB>entry`; blank lines and `#` comments are
+    skipped, CRLF is accepted and the order of lines is irrelevant. A blank entry lists the suite with no candidate (its existing rate is
+    still reported); the entry `@tree` marks a suite whose scan is every tracked file of the extensions its glob entries name."""
+    cands, tree = {}, set()
+    for line in glob_read_lines(path, "candidates"):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        suite, _, entry = line.partition("\t")
+        suite, entry = suite.strip(), entry.strip()
+        if not suite:
+            raise ValueError("candidates: a line without a suite: %r" % line)
+        s = cands.setdefault(suite, set())
+        if entry == "@tree":
+            tree.add(suite)
+        elif entry:
+            s.add(entry)
+    if not cands:
+        raise ValueError("candidates: %s names no suite" % path)
+    return cands, tree
+
+
+def glob_pairs(path):
+    """-> {suite: sorted [path]} from `suite<TAB>path` lines (the pairs a glob verdict must cover)."""
+    pairs = {}
+    for line in glob_read_lines(path, "pairs"):
+        if not line.strip() or line[0] == "#":
+            continue
+        suite, _, p = line.partition("\t")
+        if not suite or not p:
+            raise ValueError("pairs: a line is not suite<TAB>path: %r" % line)
+        pairs.setdefault(suite, set()).add(p)
+    return {k: sorted(v) for k, v in pairs.items()}
+
+
+def glob_entry_edge(entry, tracked):
+    """The edge the index would mint for one declared entry, or ValueError. A `glob:` entry must hold a `*` and must not be malformed (a
+    malformed one mints an always-match edge, which would inflate the rate: it is probed with a path no well-formed pattern can match);
+    a directory entry ends in `/`, anything else is an exact file. Every entry must match at least one tracked file."""
+    if re.search(r"[\s\x00-\x1f\x7f|]", entry):
+        raise ValueError("candidate %r holds whitespace, a control character or `|`" % entry)
+    if entry.startswith("glob:"):
+        if "*" not in entry:
+            raise ValueError("candidate %r is a glob: entry without a `*`" % entry)
+        pt = "^" + entry
+        if _edge(pt, "\x01\x02"):
+            raise ValueError("candidate %r is malformed or matches every path: it would always hit" % entry)
+    else:
+        pt = "^" + entry
+    if not any(_edge(pt, f) for f in tracked):
+        raise ValueError("candidate %r matches no tracked file" % entry)
+    return pt
+
+
+def glob_selector_rows(lines):
+    """-> {label: (class, [edges])} from the selector's printed rows. Refuses a rows file without rows, without an AFFECTED_SUMMARY that says
+    `fallback=none`, or with an AFFECTED_FALLBACK line (a degraded selector prints no per-suite rows), and a label whose rows differ."""
+    by, summary_ok = {}, False
+    for line in lines:
+        f = line.split("\t")
+        if f[0] == "AFFECTED_FALLBACK":
+            raise ValueError("the rows file records %s: a degraded selector gives no per-suite edges" % quote_field(line.strip()[:200]))
+        if line.startswith("AFFECTED_SUMMARY"):
+            if "fallback=none" not in line:
+                raise ValueError("the rows file's summary does not say fallback=none: %s" % quote_field(line.strip()[:200]))
+            summary_ok = True
+        if f[0] == "AFFECTED_SELECTED" and len(f) >= 5:
+            by.setdefault(f[1], []).append((f[3], tuple(x for x in f[4].split("|") if x)))
+    if not by:
+        raise ValueError("the rows file holds no AFFECTED_SELECTED row")
+    if not summary_ok:
+        raise ValueError("the rows file holds no AFFECTED_SUMMARY line")
+    rows = {}
+    for label, rs in by.items():
+        if len(set(rs)) != 1:
+            raise ValueError("label %s has rows with differing edge sets: refused, not guessed" % quote_field(label))
+        rows[label] = (rs[0][0], list(rs[0][1]))
+    return rows
+
+
+def glob_existing_hit(cls, edges, files):
+    """The real selection bit of a row for a diff: 0 only for an `edge:` row with edges that none of the diff names hit (always_on, group,
+    unclassified and an `edge:` row without edges all select)."""
+    if not (cls.startswith("edge:") and edges):
+        return True
+    return any(_edge(pt, f) for pt in edges for f in files)
+
+
+def glob_tree_cover(entries, edges, tracked):
+    """-> (files, missing): the tracked files carrying an extension a `glob:head/**.ext` entry names, and those no candidate edge hits."""
+    exts = set()
+    for ent in entries:
+        if ent.startswith("glob:"):
+            tail = ent.rsplit("*", 1)[1]
+            if re.match(r"^(\.[A-Za-z0-9]+)+$", tail):
+                exts.add(tail)
+    files = sorted(f for f in tracked if any(f.endswith(x) for x in exts))
+    return len(files), sorted(f for f in files if not any(_edge(pt, f) for pt in edges))
+
+
+def glob_units(root, base, n):
+    """-> (base sha, [(sha, files, kind, deleted)]) for the last n first-parent commits of base. kind: attributable | runner | not_evaluable | empty."""
+    if n <= 0:
+        raise ValueError("--commits must be at least 1")
+    sha = run(["git", "rev-parse", "--verify", base + "^{commit}"], cwd=root, check=False)
+    if sha.returncode != 0:
+        raise ValueError("--base %s is not a commit" % quote_field(base))
+    base_sha = sha.stdout.strip()
+    shas = run(["git", "rev-list", "--first-parent", "-n", str(n), base_sha], cwd=root).stdout.split()
+    if len(shas) != n:
+        raise ValueError("only %d first-parent commits of %s, --commits wants %d" % (len(shas), base, n))
+    tree = set(x for x in run(["git", "ls-tree", "-r", "-z", "--name-only", base_sha], cwd=root).stdout.split("\0") if x)
+    units = []
+    for s in shas:
+        files = commit_files(root, s)
+        ok, _why = evaluable(files)
+        if not files:
+            kind = "empty"
+        elif not ok:
+            kind = "not_evaluable"
+        elif any(t in f for f in files for t in RUNNER_TRIGGERS):
+            kind = "runner"
+        else:
+            kind = "attributable"
+        units.append((s, files, kind, kind == "attributable" and any(f not in tree for f in files)))
+    return base_sha, units
+
+
+def glob_spot_check(root, rows, units, k, suites):
+    """Run the REAL selector on k evenly spaced attributable units and compare every sampled label's bit with the model's. Raises Divergence
+    on a mismatch, a fallback, or a sample that compared nothing, or never compared one of the candidate `suites` (an empty sample must not pass)."""
+    elig = [u for u in units if u[2] == "attributable"]
+    if len(elig) < k:
+        raise Divergence("spot-check wants %d units, only %d attributable units exist" % (k, len(elig)))
+    sample = [elig[(2 * i + 1) * len(elig) // (2 * k)] for i in range(k)]
+    compared, compared_by = 0, set()
+    for sha, files, _kind, _deleted in sample:
+        p = run_selector(root, ["--paths=" + ",".join(files)])
+        if p.returncode != 0:
+            raise ReadError("selector rc=%d on %s" % (p.returncode, sha[:12]))
+        real, fb = {}, None
+        for line in p.stdout.splitlines():
+            f = line.split("\t")
+            if f[0] == "AFFECTED_SELECTED" and len(f) >= 4:
+                real.setdefault(f[1], []).append(f[2])
+            elif line.startswith("AFFECTED_SUMMARY"):
+                m = re.search(r"fallback=(\S+)", line)
+                fb = m.group(1) if m else None
+        if fb != "none":
+            raise Divergence("diff %s: the real selector fell back (%s) where the model saw an evaluable diff" % (sha[:12], fb))
+        for label, (cls, edges) in sorted(rows.items()):
+            if label not in real:
+                continue   # a relevance-declined record prints no row for this diff: nothing to compare
+            want = "1" if glob_existing_hit(cls, edges, files) else "0"
+            if sorted(real[label]) != [want] * len(real[label]):
+                raise Divergence("diff %s: the model says %s for suite %s, the real selector says %s" % (sha[:12], want, quote_field(label), ",".join(sorted(real[label]))))
+            compared += 1
+            compared_by.add(label)
+    unseen = [x for x in sorted(suites) if x not in compared_by]
+    if unseen:
+        raise Divergence("spot-check never compared candidate suite %s on any sampled diff" % quote_field(unseen[0]))
+    return k, compared
+
+
+def cmd_glob_rate(a):
+    """glob-rate: the PR4b row 6 measurement for the whole-tree readers (S4 PR5, #10861). READ-ONLY: it writes only under --out and the selector
+    it may run keeps its own derive cache. Per candidate suite it prints one row of glob-rate.tsv (the stop-line table) and a marker line.
+    REACH, stated: selection is modelled from the selector's own edge column plus the edge matcher, so it covers the edge arm and the always_on/group/
+    unclassified rows; it models no fallback other than runner-changed (a diff naming scripts/test-all.sh or scripts/lib/test-affected-paths.sh by
+    substring), and it evaluates the CURRENT index against OLDER diffs (the replay's standing limit). It uses --paths, which skips the registration-only
+    classifier, so a runner-trigger diff the real gate would bound still counts as runner-changed (conservative). Units that are runner-changed,
+    not evaluable (comma or non-printable byte in a path, list over the limit) or empty count as SELECTED in the conservative reading and are excluded
+    in the other; a unit touching a path absent at --base counts as selected in the conservative reading. The verdict needs both readings to agree.
+    Exit 0 every row decided; 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged or an internal error."""
+    if a.spot_check < 1:
+        raise ValueError("--spot-check must be at least 1: a verdict is not accepted until the model has agreed with the real selector")
+    root = a.root or repo_root()
+    cands, tree_suites = glob_candidates(a.candidates)
+    rows = glob_selector_rows(load_rows(a.list, root))
+    pairs = glob_pairs(a.pairs) if a.pairs else {}
+    tracked = tracked_files(root)
+    durs = durations_src(root)
+    for suite in cands:
+        if suite not in rows:
+            raise ValueError("no selector row for suite %s (a relevance-declined record prints none): refused, not counted as zero hits" % quote_field(suite))
+    base_sha, units = glob_units(root, a.base, a.commits)
+    total_units = len(units)
+    attr = [u for u in units if u[2] == "attributable"]
+    counts = Counter(u[2] for u in units)
+    deleted_units = sum(1 for u in units if u[3])
+    spot_k, spot_cmp = glob_spot_check(root, rows, units, a.spot_check, cands)
+    out_rows, verdicts = [], Counter()
+    for suite in sorted(cands):
+        entries = sorted(cands[suite])
+        edges = [glob_entry_edge(e, tracked) for e in entries]
+        cls, own = rows[suite]
+        complete, tfiles, tmiss = True, "-", "-"
+        if suite in tree_suites:
+            n, miss = glob_tree_cover(entries, edges, tracked)
+            if n == 0:
+                raise ValueError("suite %s: @tree names no `glob:head/**.ext` extension, or no tracked file carries it: the cover cannot be shown" % quote_field(suite))
+            complete, tfiles, tmiss = not miss, str(n), str(len(miss))
+        existing = glob_only = total = 0
+        basis_cons = basis_excl = 0
+        for _sha, files, _kind, deleted in attr:
+            eh = glob_existing_hit(cls, own, files)
+            gh = any(_edge(pt, f) for pt in edges for f in files)
+            th = eh or gh
+            existing += 1 if eh else 0
+            glob_only += 1 if gh else 0
+            total += 1 if th else 0
+            b = th if complete else eh
+            basis_excl += 1 if b else 0
+            basis_cons += 1 if (b or deleted) else 0
+        nonattr = total_units - len(attr)
+        cons_hits = basis_cons + nonattr
+        dur, src = durs.get(suite, (None, None))
+        v_cons = glob_decide(dur, src, cons_hits, total_units, complete)
+        v_excl = glob_decide(dur, src, basis_excl, len(attr), complete)
+        verdict, reason = v_cons if v_cons[0] == v_excl[0] else ("baselined", "readings-disagree")
+        if verdict == "glob" and not edges:
+            verdict, reason = "baselined", "no-candidate-set"
+        if verdict == "glob" and not (pairs.get(suite) or suite in tree_suites):
+            verdict, reason = "baselined", "no-coverage-proof"   # neither a pair list to cover nor an @tree cover: a glob would rest on nothing
+        covered = "-"
+        if verdict == "glob":
+            miss = [p for p in pairs.get(suite, []) if not any(_edge(pt, p) for pt in edges)]
+            if miss:
+                raise ValueError("suite %s: the candidate set leaves %d baselined pair(s) unhit, first %s: refused for a glob verdict" % (suite, len(miss), quote_field(miss[0])))
+            covered = str(len(pairs.get(suite, [])))
+        elif verdict == "always_on":
+            covered = str(len(pairs.get(suite, [])))
+        if verdict == "glob":
+            ci = "%d" % ((dur // 1000) * (total - existing)) if dur is not None else "-"
+        elif verdict == "always_on":
+            ci = "%d" % ((dur // 1000) * (len(attr) - existing))
+        else:
+            ci = "-"
+        verdicts[verdict] += 1
+        out_rows.append((quote_field(suite), str(len(entries)), "-" if dur is None else str(dur), src or "missing", str(existing), str(glob_only), str(total),
+                         str(total - existing), str(total_units), str(counts["runner"]), str(counts["not_evaluable"]), str(counts["empty"]),
+                         str(deleted_units), "%d/%d" % (cons_hits, total_units), "%d/%d" % (basis_excl, len(attr)), ci, covered, tfiles, tmiss,
+                         verdict, reason))
+    table = "\t".join(GLOB_TSV_COLUMNS) + "\n" + "".join("\t".join(r) + "\n" for r in out_rows)
+    marker = ("%s base=%s date=%s units=%d attributable=%d runner_changed=%d not_evaluable=%d empty=%d deleted_path_units=%d suites=%d "
+              "glob=%d always_on=%d baselined=%d spot_check=%d spot_compared=%d"
+              % (GLOB_MARKER, base_sha[:12], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), total_units, len(attr), counts["runner"],
+                 counts["not_evaluable"], counts["empty"], deleted_units, len(out_rows), verdicts["glob"], verdicts["always_on"], verdicts["baselined"],
+                 spot_k, spot_cmp))
+    os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, "glob-rate.tsv"), "w") as fh:
+        fh.write(table)
+    with open(os.path.join(a.out, "glob-rate.marker"), "w") as fh:
+        fh.write(marker + "\n")
+    sys.stdout.write(table)
+    print(marker)
+    return 0
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="ci-pr-affected-replay", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2167,19 +2512,34 @@ def main(argv):
     r.add_argument("--base", default="", help="the ref the growth rule, the baseline-state table, the cause text and the helper copy come from (default HEAD^1; meaningful in CI, where HEAD is a merge commit)")
     r.add_argument("--print-baseline", action="store_true", dest="print_baseline", help="print the baseline to stdout (every live pair when no baseline exists, else the baseline lines still live) and write nothing; refuses (exit 2) on a degraded census")
     r.add_argument("--report", default="", help="also write the full, uncapped failure text to FILE (on a verdict, on an exit-2 stop and under --print-baseline; an unwritable path costs one stderr line)")
+    gr = sub.add_parser("glob-rate", formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="exit codes: 0 every row decided (read the verdict column: it does not mean a suite qualified); 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged from the real selector, or an internal error. "
+                               "Rows file: bash scripts/test-all.sh --print-selection --paths=README.md > rows.txt (take it BEFORE any index edit). Base: git rev-parse origin/main (record it).",
+                        help="row 6 measurement: per candidate suite the duration (with its src) and the selection rate over the last N first-parent commits, with a verdict (read-only)")
+    gr.add_argument("--candidates", required=True, help="TSV: suite<TAB>entry (a glob:, dir/ or file entry as spelled in the index arrays; a blank entry lists the suite with no candidate; @tree demands a complete cover of the extensions the glob entries name)")
+    gr.add_argument("--out", required=True, help="directory glob-rate.tsv and glob-rate.marker are written under")
+    gr.add_argument("--root", default="", help="the tree to read (default: the current checkout)")
+    gr.add_argument("--list", default="", help="the saved selector rows (--print-selection --paths=README.md output), the existing edges; without it the selector runs once")
+    gr.add_argument("--pairs", default="", help="TSV: suite<TAB>path, the baselined pairs a glob verdict must cover (a candidate set that leaves one unhit is refused)")
+    gr.add_argument("--commits", type=int, default=200, help="how many first-parent commits of --base form the units (default 200)")
+    gr.add_argument("--base", default="origin/main", help="the commit or ref whose first-parent history is replayed; pass the recorded SHA, not a moving ref")
+    gr.add_argument("--spot-check", type=int, default=3, dest="spot_check", help="run the REAL selector on K (at least 1, default 3) evenly spaced diffs and require the model to agree on every candidate suite (exit 4 on a divergence or an empty sample)")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)
         return 2
     try:
         return {"collect": cmd_collect, "ejections": cmd_ejections, "aggregate": cmd_aggregate, "verdict": cmd_verdict,
-                "cp-upper": cmd_cp, "audit": cmd_audit, "ratchet": cmd_ratchet}[a.cmd](a)
+                "cp-upper": cmd_cp, "audit": cmd_audit, "ratchet": cmd_ratchet, "glob-rate": cmd_glob_rate}[a.cmd](a)
     except ReadError as e:
         print("replay: %s" % e, file=sys.stderr)
         return 3
     except ValueError as e:
         print("replay: %s" % e, file=sys.stderr)
         return 2
+    except Divergence as e:
+        print("replay: model diverges from the real selector: %s" % e, file=sys.stderr)
+        return 4
     except Exception as e:  # an internal error must not exit 1, which is the audit's "gaps found"
         print("replay: internal error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
         return 4

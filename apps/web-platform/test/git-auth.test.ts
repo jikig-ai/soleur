@@ -18,6 +18,7 @@ import { randomUUID } from "crypto";
 // Real child_process, bound before any vi.doMock (doMock is not hoisted) — the ssh probe.
 import { execFileSync as realExecFileSync } from "child_process";
 import { BAD_PIN_SHAPES, makeEd25519Pin, TOFU_OPT } from "./helpers/ssh-host-key-fixture";
+import { PEM_BEGIN, PEM_END } from "./helpers/git-data-key-fixture";
 
 type ExecFileCallback = (
   err: Error | null,
@@ -861,4 +862,35 @@ describe("git-data pinned argv — what ssh resolves (ssh -G)", () => {
       }
     },
   );
+});
+
+// #8211 PR-G: the container receives the git-data keys in docker env-file form (one line,
+// literal backslash-n pairs). The two key-file writers repair it whatever the caller passed,
+// so ssh reads a parseable key (`Load key ... invalid format` was rehearsal-2's auth_refused).
+describe("git-data key file holds the REPAIRED key when handed the docker env-file form (#8211 PR-G)", () => {
+  const MULTI = [PEM_BEGIN, "c3ludGhldGljLWRvY2tlcg==", "c2Vjb25kLWJvZHktbGluZQ==", PEM_END].join("\n");
+  const DOCKER = MULTI.split("\n").join("\\n");
+
+  async function keyBytesSeenBySsh(which: "git" | "ssh"): Promise<string> {
+    const capturedCalls: ExecFileMockArgs[] = [];
+    let seen = "";
+    mockExecFile(capturedCalls, (call) => {
+      const m = which === "git" ? (call.opts?.env?.GIT_SSH_COMMAND ?? "").match(/ -i (\S+) /) : null;
+      const keyPath = which === "git" ? m?.[1] : call.args[call.args.indexOf("-i") + 1];
+      if (keyPath) seen = readFileSync(keyPath, "utf8");
+      call.cb(null, { stdout: Buffer.from("ok"), stderr: Buffer.from("") });
+    });
+    const mod = await import("../server/git-auth");
+    if (which === "git") await mod.gitWithPrivateKeyAuth(["ls-remote", "git-data"], DOCKER, makeEd25519Pin());
+    else await mod.sshWithPrivateKeyAuth("10.0.1.20", "ws", DOCKER, makeEd25519Pin());
+    return seen;
+  }
+
+  test("gitWithPrivateKeyAuth writes the multi-line key plus ONE final LF", async () => {
+    expect(await keyBytesSeenBySsh("git")).toBe(`${MULTI}\n`);
+  });
+
+  test("sshWithPrivateKeyAuth writes the multi-line key plus ONE final LF", async () => {
+    expect(await keyBytesSeenBySsh("ssh")).toBe(`${MULTI}\n`);
+  });
 });

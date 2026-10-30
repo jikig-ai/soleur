@@ -15,8 +15,8 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Adopting.** PR1 (this decision) ships the pipeline dark: nothing reads the table and collection is off for every external
-workspace. The status moves to `accepted` when PR2 (member read policy, read route, card) has merged and the owner notice has been
-out for at least 7 days. The ordinal was verified free against `origin/main` (highest ADR-287) and is re-verified at ship.
+workspace. The status moves to `accepted` when PR2 (member read path and card; see the amendment below, which replaced the read
+policy and route with a member RPC) has merged and the owner notice has been out for at least 7 days. The ordinal was verified free against `origin/main` (highest ADR-287) and is re-verified at ship.
 
 ## Context
 
@@ -90,7 +90,7 @@ gateway log held 3,434 rows, 3,425 from its own synthetic probe and 9 unauthenti
    processes rows in workspace order and either side retries, which is rare and only reachable once collection is on. Ingest counts
    an orphaned workspace as `skipped_orphan`, separately from `skipped_unknown`.
 8. **Nothing is readable in PR1.** The table has RLS enabled, no policy and every privilege revoked from `anon` and
-   `authenticated`. The member `SELECT` policy lands in PR2, with the DPIA t6 re-screen as its merge gate.
+   `authenticated`. *(Superseded 2026-10-26 by the PR2 amendment below: no member `SELECT` policy lands; members read through one RPC.)*
 9. **Counts are best-effort lower bounds; the host set is exact only below the cap.** A restart loses partial buckets and the cap
    discards events above 1,000 per workspace per window. Any later user-facing copy must say so.
 
@@ -141,7 +141,7 @@ account-delete saga calls `erase_egress_audit_rollup`, and a missing function ab
 | App reads Better Stack directly | Needs a workspace-unscopable ClickHouse read credential on the app runtime; the log-query runbook and `cron-inngest-config-drift.ts` keep that credential off the app deliberately. |
 | Per-event spool table | Per-event inserts were 63% of production WAL once (PR #5736); retained raw rows serve no stated need. |
 | Per-row HMAC with a replay window | Same trust root as a bearer token (anything that reads the app environment holds the key), `GREATEST` already makes replays harmless, and a replay window defeats the disk buffer after an app outage. Reversed by the CTO on plan review. |
-| Member `SELECT` policy in PR1 | A readable table is a viewer in fact and triggers the DPIA t6 re-screen at PR1. Ships in PR2. |
+| Member `SELECT` policy in PR1 | A readable table is a viewer in fact and triggers the DPIA t6 re-screen at PR1. *Not shipped in PR2 either: replaced by the member RPC (amendment 2026-10-26).* |
 | New Inngest prune function | Adds a Sentry cron monitor, which the two-PR monitor rule forbids routing in the PR that creates it; `pg_cron` retention sweeps already exist. |
 | Global flag read at the top of the route | Cannot see a per-org override, so the canary would be dropped or every external organisation enabled. Replaced by per-org evaluation after authentication. |
 | Cloudflare rule blocking the ingest path | A Terraform change for little gain: the other internal routes must stay public and the token is the real control. |
@@ -158,3 +158,72 @@ account-delete saga calls `erase_egress_audit_rollup`, and a missing function ab
   wording lands as the last commits of the PR1 branch and gates enabling, not merging.
 - The forced-error acceptance of ADR-281's `image_cve_scan` monitor is corrected in the same PR (the workflow fired with an email
   action; mailbox receipt was unobserved).
+
+## Amendment 2026-10-26 (#9545 PR2): the member read path is an RPC, not a policy
+
+**Decision.** Members read the rollup through ONE `SECURITY DEFINER` function, `get_egress_audit_summary(p_workspace_id, p_limit,
+p_decision)` (migration 177). There is **no member `SELECT` policy and no table grant**: a direct `.from(table).select()` stays a
+permission error, so the table is still an excluded, zero-policy target in the RLS fuzz harness. This corrects the PR1 text above
+that said a policy "lands in PR2" (migration 162 is immutable on `main`; its header and table comment are left as written).
+
+- **Authorization is the function's.** First statement: `auth.uid() IS NULL OR NOT is_workspace_member(p_workspace_id, auth.uid())`
+  raises SQLSTATE `42501` with a constant message that differs from the engine's grant-denial text. Pending invitees and removed
+  members are not members. Every aggregate carries `workspace_id = p_workspace_id`: a definer bypasses RLS, so that predicate is the
+  tenant boundary once the gate passes. `EXECUTE` is revoked from PUBLIC, `anon`, `authenticated` and `service_role`, then granted to
+  `authenticated` only.
+- **Deliberately not gated on the collection flag or on `web_egress`.** The data exists only where collection is on, and history must
+  stay readable after the toggle is switched off (ruling D: switching off stops new records and deletes nothing). The flag decides
+  only which empty state the view shows and whether the enable dialog may say hosts are recorded; the three readers share
+  `server/egress-audit-collection.ts`.
+- **No HTTP route.** A server-rendered page calls the RPC through the caller's cookie client (CTO ruling 2026-10-26, reversing the
+  earlier thin-route decision: nothing consumes a route). The workspace id comes only from the fail-loud `readWorkspaceIdFromDb`.
+- **No `statement_timeout` clause.** A function-level setting does not re-arm the already-running outer statement (proved on
+  Postgres 17); the bound is the role timeout, `p_limit` at most 500, the primary-key range scan and the caller's abort signal.
+- **Shape.** Fixed 30-day window on `last_seen` (the daily purge keys on it), bounded above by `now()`. Overflow (`'(other)'`) is a
+  separate typed field summed across buckets and source hosts, never a host row; `source_host` is never exposed. `p_limit = 0`
+  returns only the last-request probe (the card hint).
+- **Verified against the repo.** The `decision` column has a `CHECK IN ('allowed','denied','other')`; `other` is shown as a third
+  visible state, never folded into Blocked. Overflow counts merge with `GREATEST` at ingest, so they are very loose lower bounds and
+  the view always says "at least".
+
+### Read-path rulings (review round, 2026-10-26)
+
+- **Second gate statement.** After the membership check the function refuses a revoked-but-unexpired JWT of a current member
+  (`is_jti_denied_from_jwt()`, mirroring migration 127): SQLSTATE `42501`, message `'egress audit: token denied'`. A definer bypasses
+  the RESTRICTIVE jti policies, so the denylist has to be restated in the body.
+- **Cost shape.** The page query is a top-N rewrite (`ORDER BY last_seen DESC LIMIT p_limit + 1` over real-host groups), the function
+  pins `SET plan_cache_mode = force_custom_plan` (after five executions in one session plpgsql would flip to a generic plan), and sums
+  are clamped to 9007199254740991 (JS `MAX_SAFE_INTEGER`). `p_limit` stays clamped to 0..500; it is not the cost driver.
+- **Loader.** `forbidden` only when the 42501 message starts with the constant prefix `egress audit:` and a space; any other 42501 (an engine "permission denied for
+  function", a lost EXECUTE grant) is a paged `rpc_error` with `pg_code=42501`. A Flagsmith outage maps to `collection: "unknown"`
+  through `readRuntimeFlagDetailed` / `readEgressAuditCollectionState`; ingest stays boolean. The op registry gains
+  `hint_workspace_read` and `web_access_read` (unpaged) and every mirror carries a sanitised `pg_code` tag. Bounds: page pointer
+  2000 ms, collection and web-access reads 1500 ms each after the RPC; card pointer 600 ms, org 800 ms, hint 800 ms, overall 1200 ms.
+  Independent reads are not started before the RPC (rejected: they would run before the caller is authorised). Only the Scope Grants
+  page guards against a workspace mismatch (it forces the card's collection state to `unknown`); the destination page resolves the
+  workspace once, so it has no second read to compare.
+- **Agent prompt.** `WEB_EGRESS_PROMPT_ADDENDUM` no longer claims "every decision is logged with workspace attribution"; it says
+  requests may be recorded best-effort and points to the audit view.
+- **Page caching.** The page response carries `Cache-Control: no-store`.
+
+### Accepted residuals (read path)
+
+1. **Adversarial worst case.** About 1.44M (host, decision) groups for one workspace took 5.4-6.3 s on the local database after the rewrite (an earlier note here said about 3.5 s; the AC3a measurement in the plan supersedes it),
+   leaving only about 1.7-2.6 s of headroom against the 8 s role timeout. A slower production host can push this case over the timeout and turn
+   the accepted fail-closed outcome into routine `rpc_timeout` pages. Accepted as
+   a documented limit: collection is off for external organisations (gated by #11237) and the failure mode is fail-closed
+   (`unavailable`, never a wrong answer). A per-workspace distinct-host cap and fold policy at ingest (PR1 scope, a new migration
+   because 162 is immutable) and a limiter for member-callable aggregation RPCs are **#11237 enablement blockers**.
+2. **Writer-side evasion.** A prompt-injected agent can push a host out of the view by contacting more than 200 decoy hosts more
+   recently, or more than 500 in one bucket (folded into the nameless `(other)` row at ingest). This is a transparency log for
+   members, **not** a forensic or exfiltration-detection control; the overflow count is the residual signal. Ordering and filters were
+   rejected as mitigations because the attacker controls denied decoys too.
+3. **Direct member RPC loops.** A member can call the RPC in a loop from their own client; it is bounded only by the
+   `authenticated` role's 8 s `statement_timeout` and per-workspace scope. The `p_limit` clamp stays 500 because it is not the cost driver.
+4. **Router Cache window.** The 30 s Router Cache (`staleTimes.dynamic`, ADR-067) lets a just-removed member's already-open session
+   re-display a payload fetched earlier.
+5. **Agent-readable surface parity gap.** The RPC is callable by any authenticated member client but no agent/MCP tool exists. A
+   follow-up issue (#11258) tracks it.
+
+The status stays **Adopting**: it moves to `accepted` after PR2 has merged and the owner notice has been out for at least 7 days (an
+enablement step; the flag flip is tracked in #11237, not part of PR2).

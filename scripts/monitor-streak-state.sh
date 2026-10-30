@@ -187,11 +187,14 @@ cmd_seal() {
       # The probe cleared the file on a real PASS; force 0 so a failed `rm` cannot leave the old streak.
       v=0 ;;
     fail)
-      # A real FAIL clears the file (absent means 0); an escalation FAIL leaves the streak that tripped it.
-      [ -n "$v" ] || v=0 ;;
+      # The probe clears the file on a real FAIL; force 0 so a failed `rm` cannot leave a stale streak
+      # that makes the next TRANSIENT escalate early. The escalation exits rc 3 and seals as `broken`,
+      # so a `fail` verdict never legitimately carries a surviving streak.
+      v=0 ;;
     broken)
-      # The probe never reached a verdict, so it did not move the streak: keep what it left, else the
-      # value fetch restored. A broken probe is not evidence of a clean window.
+      # rc 3 (the escalation) leaves the streak that tripped it, written by the probe's own
+      # `_transient`; any other broken exit never reached that write, so the value fetch restored is
+      # kept. A broken probe is not evidence of a clean window.
       [ -n "$v" ] || v=$restored ;;
     transient)
       # The probe's `_transient` writes exactly RESTORED+1. Its write is `2>/dev/null || true`, so any

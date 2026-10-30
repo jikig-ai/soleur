@@ -53,6 +53,8 @@ vi.mock("../server/sandbox", () => ({ isPathInWorkspace: mockIsPathInWorkspace }
 vi.mock("../server/tool-tiers", () => ({
   getToolTier: mockGetToolTier,
   buildGateMessage: mockBuildGateMessage,
+  buildGateCard: (n: string, i: unknown) => ({ card: (mockBuildGateMessage as (...a: unknown[]) => string)(n, i) }),
+  pluginToolPrefix: (server: string) => `mcp__plugin_soleur_${server}__`,
 }));
 vi.mock("../server/review-gate", () => ({
   extractReviewGateInput: mockExtractReviewGateInput,

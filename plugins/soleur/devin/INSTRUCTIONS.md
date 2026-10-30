@@ -160,6 +160,10 @@ no banner, no cloud contract.
    independent review ran when it did not. `/ship` blocks a
    `single-user incident` plan carrying `sequential-fallback` coverage unless
    the operator explicitly acknowledges.
+   The requirement is capability-scoped, not detection-scoped: a Devin
+   subagent has no spawn/Task tool either, so any panel that runs in-process
+   there carries the same `sequential-fallback` trailer regardless of what
+   `cloud-detect.sh` reports for that session.
 3. **Acknowledgement gate.** Before any secrets read, production mutation,
    Doppler action, Terraform production action, mutating GitHub API call, or
    other credential-bearing operation, require an explicit session-scoped

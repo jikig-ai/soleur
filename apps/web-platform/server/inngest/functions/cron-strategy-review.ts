@@ -43,7 +43,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Octokit } from "@octokit/core";
-import matter from "gray-matter";
+import { parseFrontMatterSafe } from "@/server/front-matter-guard";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
@@ -378,9 +378,9 @@ async function runStrategyReview(args: {
       continue;
     }
 
-    let parsed: ReturnType<typeof matter>;
+    let parsed: ReturnType<typeof parseFrontMatterSafe>;
     try {
-      parsed = matter(raw);
+      parsed = parseFrontMatterSafe(raw);
     } catch (err) {
       logger.warn(
         { fn: "cron-strategy-review", filePath, err: (err as Error).message },
@@ -667,12 +667,10 @@ export const cronStrategyReview = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 8 * * 1" },
+      { event: "cron/strategy-review.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 8 * * 1" },
-    { event: "cron/strategy-review.manual-trigger" },
-  ],
-  cronStrategyReviewHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronStrategyReviewHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

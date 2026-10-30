@@ -6,8 +6,10 @@
 # NOT a bug to be fixed by fanning them out over var.web_hosts:
 #
 #   * CI can SSH exactly ONE host. outputs.tf's `server_ip` is web-1's address, the
-#     cf-tunnel-ssh-bridge installs a single iptables NAT rule for it, and the tunnel
-#     connector is web-1-only by construction. web-2's public :22 is firewalled to
+#     cf-tunnel-ssh-bridge installs a single iptables NAT rule for it, and the `ssh.`
+#     tunnel ingress is origin-relative to web-1's private IP (tunnel.tf — the
+#     connector host itself is web-2, but it proxies to 10.0.1.10:22 either way).
+#     web-2's public :22 is firewalled to
 #     var.admin_ips, which the non-static GH runner egress is not in.
 #   * The host provisioners are `-target=`ed by BARE address in
 #     apply-web-platform-infra.yml and apply-deploy-pipeline-fix.yml, and a bare -target hits

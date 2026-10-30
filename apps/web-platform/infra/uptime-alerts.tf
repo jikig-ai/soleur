@@ -529,13 +529,14 @@ resource "doppler_secret" "workspaces_luks_heartbeat_url" {
 # beat must certify a FRESH host_role=dedicated inngest-server-probe row landed in the
 # warehouse (covers sink + allowlist failures a host-side push cannot see; #6780).
 resource "betteruptime_heartbeat" "inngest_server_probe" {
-  name      = "soleur-inngest-server-probe-prd"
-  period    = 3600
-  grace     = 1800
+  name   = "soleur-inngest-server-probe-prd"
+  period = 3600
+  grace  = 1800
+  # #11068 — push armed, parity with the inngest_prd/inngest_consumer sibling heartbeats (inngest.tf); revert to `push = false` if the apply refuses it.
   call      = false
   sms       = false
   email     = true
-  push      = false
+  push      = true
   team_wait = 0
   team_name = "Your team"
   policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null

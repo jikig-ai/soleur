@@ -2,13 +2,16 @@
 // One view per C4 level. `view <id> of <element>` gives LikeC4 automatic
 // clickable drill-down: in the context view the `platform` box drills into
 // `containers`; in `containers` the `plugin` box drills into `components`.
-// GAP (2026-10-11 audit, re-confirmed 2026-10-18): platform.webapp.egressForwarder,
+// GAP (2026-10-11 audit, re-confirmed 2026-10-18 and 2026-10-25): platform.webapp.egressForwarder,
 // platform.infra.egressGw and publicInternet (#9534, ADR-278) exist in model.c4 but are
 // included in NO view, so the egress path does not render. Adding them changes the layout,
 // so it needs a regenerate-c4-model.sh run in the same change (c4-model-freshness gate).
-// GAP (2026-10-18 audit): when the `version` command component noted in model.c4 is added,
+// GAP (2026-10-18 audit, re-confirmed 2026-10-25): when the `version` command component noted in model.c4 is added,
 // it also needs a `platform.plugin.version` include in the components view below.
-// last-verified: 2026-10-18
+// GAP (2026-10-25 audit): when the OpenCode harness element noted in model.c4 ("DRIFT (2026-10-25")
+// is added, include it in BOTH the context and containers views next to cursorCli. Its
+// founder and platform.plugin endpoints are already listed in both, so its edges render (#7332).
+// last-verified: 2026-10-25
 views {
 
   // ---- C4 L1: System Context --------------------------------------------
@@ -40,6 +43,11 @@ views {
       // (betterstack, founder) are already in this view so the
       // betterstack -> slack -> founder wake path renders (#7332).
       slack,
+      // #10390/ADR-298: the incident mirror's betterstack -> github read edge
+      // and github -> founder delivery edge render without further includes —
+      // all three endpoints are already listed above. (The mirror's issue
+      // WRITE is github-internal; LikeC4 rejects self-relations, so it lives
+      // on the betterstack -> github edge description.)
       // #7980: the browser the agent drives is an L1 external system like every other
       // third party here; its edges derive to `platform` (via plugin.snapshotGuard), so
       // it renders connected rather than as a disconnected box (#7332).
@@ -69,6 +77,8 @@ views {
       // #9168/ADR-260: slack renders the betterstack -> slack -> founder wake path
       // here too — both endpoints are already included (#7332).
       slack,
+      // #10390/ADR-298: betterstack -> github and github -> founder (the
+      // incident mirror) render here as well — all endpoints included (#7332).
       connectedRepoPlugin, connectedRepoKb,
       // #8205: devin -> platform.plugin delivery edge needs both endpoints in
       // the view (#7332 rule — same mechanism as playwrightMcp below).

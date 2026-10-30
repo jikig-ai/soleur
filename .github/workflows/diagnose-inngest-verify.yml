@@ -55,6 +55,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Go (verbatim LoadJSONFromPath probe)
+        timeout-minutes: 3
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "stable"
+
       - name: Reproduce the host verify-blob invocation (stderr visible)
         env:
           BUNDLE_DIGEST: ${{ inputs.digest }}
@@ -114,6 +120,26 @@ jobs:
                  has_chain: (.verificationMaterial | has("x509CertificateChain"))}' \
               "$S/bundle/manifest.txt.sigstore.json" 2>&1 || true
             echo '```'
+            # Defect-3 locus census — the field-level discriminator for WHY
+            # sgbundle.LoadJSONFromPath rejects the real bytes (plan §Hypotheses H1-H4):
+            # kindVersion.version (0.0.1 Rekor-v1 vs 0.0.2 Rekor-v2 tiles) discriminates H1;
+            # an empty/absent inclusionProof.checkpoint.envelope names H2; a missing mandatory
+            # TLE scalar names H3; the canonicalizedBody head decode shows the v1 {kind:…} vs
+            # v2 {apiVersion,spec:…} shape. Every accessor is null-guarded — a missing field is
+            # itself the data, never a jq crash.
+            echo "### TLE census — defect-3 locus (jq)"
+            echo '```'
+            jq '{tle_keys: (.verificationMaterial.tlogEntries[0] // {} | keys),
+                 kindVersion: .verificationMaterial.tlogEntries[0].kindVersion,
+                 has_canonicalizedBody: (.verificationMaterial.tlogEntries[0] // {} | has("canonicalizedBody")),
+                 has_logId: (.verificationMaterial.tlogEntries[0] // {} | has("logId")),
+                 has_integratedTime: (.verificationMaterial.tlogEntries[0] // {} | has("integratedTime")),
+                 checkpoint_envelope_len: (.verificationMaterial.tlogEntries[0].inclusionProof.checkpoint.envelope // "" | length),
+                 canonicalizedBody_head: (.verificationMaterial.tlogEntries[0].canonicalizedBody // "" | @base64d | .[0:200]),
+                 tsvd_keys: (.verificationMaterial.timestampVerificationData // {} | keys),
+                 sig_shape: {has_messageSignature: has("messageSignature"), has_dsseEnvelope: has("dsseEnvelope")}}' \
+              "$S/bundle/manifest.txt.sigstore.json" 2>&1 || true
+            echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
           run_verify() {  # $1=label; extra argv after
@@ -151,3 +177,56 @@ jobs:
           chmod 0755 "$S/bundle"
           # Arm C — network dimension: --network host.
           run_verify nethost --network host
+
+      - name: Verbatim LoadJSONFromPath error (sigstore-go v1.2.0 probe)
+        run: |
+          set -uo pipefail
+          S="$RUNNER_TEMP/diag"
+          BUNDLE_JSON="$S/bundle/manifest.txt.sigstore.json"
+          [[ -f "$BUNDLE_JSON" ]] || { echo "::error::bundle file absent at $BUNDLE_JSON"; exit 1; }
+          # The host's checkNewBundle gate (cosign v3.1.1 verify_bundle.go:41) calls
+          # sgbundle.LoadJSONFromPath and returns only `err == nil` — the error text itself
+          # is swallowed. This probe runs the SAME loader at the SAME vendored version
+          # (cosign v3.1.1's go.mod pins sigstore-go v1.2.0) and prints the error verbatim:
+          # the exact check name inside validate() that rejects the promoted bytes.
+          P="$RUNNER_TEMP/probe"; mkdir -p "$P"
+          cat > "$P/main.go" <<'GO'
+          package main
+
+          import (
+          	"fmt"
+          	"os"
+
+          	"github.com/sigstore/sigstore-go/pkg/bundle"
+          )
+
+          func main() {
+          	if len(os.Args) != 2 {
+          		fmt.Fprintln(os.Stderr, "usage: probe <bundle.sigstore.json>")
+          		os.Exit(2)
+          	}
+          	b, err := bundle.LoadJSONFromPath(os.Args[1])
+          	if err != nil {
+          		fmt.Printf("LOAD_ERR: %v\n", err)
+          		return
+          	}
+          	ver, verr := b.Version()
+          	if verr != nil {
+          		fmt.Printf("LOAD_OK (version unreadable: %v)\n", verr)
+          		return
+          	}
+          	fmt.Printf("LOAD_OK version=%s\n", ver)
+          }
+          GO
+          cd "$P"
+          go mod init probe >/dev/null
+          go get github.com/sigstore/sigstore-go@v1.2.0
+          go mod tidy # transitives (rekor models, ct-go) need go.sum entries before go run
+          out="$(go run . "$BUNDLE_JSON" 2>&1)" || true
+          echo "$out"
+          {
+            echo "### verbatim LoadJSONFromPath (sigstore-go v1.2.0)"
+            echo '```'
+            echo "$out"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

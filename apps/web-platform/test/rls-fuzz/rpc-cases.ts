@@ -51,6 +51,8 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   get_workspace_bash_autonomous: (c) => `select get_workspace_bash_autonomous('${c.wsA}')`,
   get_workspace_debug_mode: (c) => `select get_workspace_debug_mode('${c.wsA}')`,
   get_workspace_web_egress: (c) => `select get_workspace_web_egress('${c.wsA}')`,
+  // Member-only egress audit summary (mig 177, #9545 PR2): the in-body membership check raises 42501 for tenant B.
+  get_egress_audit_summary: (c) => `select get_egress_audit_summary('${c.wsA}', 200, null)`,
   resolve_workspace_installation_id: (c) => `select resolve_workspace_installation_id('${c.wsA}')`,
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
@@ -106,6 +108,9 @@ export const EXCLUDED: Record<string, string> = {
   check_my_revocation: "self-only (p_jwt_iat is the caller's own token iat)",
   my_revocation_status: "self-only; reads auth.uid()'s revocation state, no params",
   is_jti_denied_from_jwt: "reads the caller's own request.jwt.claims jti; no tenancy param",
+  users_own_github_username: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
+  users_own_kb_sync_history: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
+  users_own_health_snapshot: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
   set_current_organization_id: "sets the CALLER's own current-org session pointer (user_session_state for auth.uid())",
   append_kb_sync_row: "appends to the caller's own kb-sync log; p_row is the caller's payload, no A-addressable id",
   // global (non-workspace) namespace: recipient-hash suppression is cross-tenant BY DESIGN (a shared send-dedup ledger)

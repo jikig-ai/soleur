@@ -88,4 +88,57 @@ describe("useWebSocket — key_invalid teardown (AC5)", () => {
     expect(socket.close).toHaveBeenCalled();
     expect(wsInstance).toBe(socket);
   });
+
+  // #11086 — server-authored copy + scheme surface only when the frame carries
+  // a recognised `credentialScheme`; otherwise the hardcoded text is unchanged.
+  it("uses the server message and scheme when credentialScheme is present", async () => {
+    const { result } = renderHook(() => useWebSocket("conv-1"));
+    await waitFor(() => expect(wsInstance).not.toBeNull());
+    deliver({ type: "auth_ok" });
+    await waitFor(() => expect(result.current.status).toBe("connected"));
+
+    const socket = wsInstance!;
+    deliver({
+      type: "error",
+      errorCode: "key_invalid",
+      message: "We couldn't sign in to Claude with your connected subscription.",
+      credentialScheme: "oauth_token",
+    });
+
+    await waitFor(() => expect(result.current.lastError?.code).toBe("key_invalid"));
+    expect(result.current.lastError?.message).toBe(
+      "We couldn't sign in to Claude with your connected subscription.",
+    );
+    expect(result.current.lastError?.credentialScheme).toBe("oauth_token");
+    expect(result.current.lastError?.action?.href).toBe("/dashboard/settings");
+    expect(socket.onclose).toBeNull();
+    expect(socket.close).toHaveBeenCalled();
+  });
+
+  it("keeps the hardcoded text byte-identical when credentialScheme is absent", async () => {
+    const { result } = renderHook(() => useWebSocket("conv-1"));
+    await waitFor(() => expect(wsInstance).not.toBeNull());
+    deliver({ type: "auth_ok" });
+    await waitFor(() => expect(result.current.status).toBe("connected"));
+
+    deliver({ type: "error", errorCode: "key_invalid", message: "server text that must be ignored" });
+
+    await waitFor(() => expect(result.current.lastError?.code).toBe("key_invalid"));
+    expect(result.current.lastError).toEqual({
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    });
+  });
+
+  it("a frame with an unrecognised credentialScheme is dropped by the strict schema, not rendered", async () => {
+    const { result } = renderHook(() => useWebSocket("conv-1"));
+    await waitFor(() => expect(wsInstance).not.toBeNull());
+    deliver({ type: "auth_ok" });
+    await waitFor(() => expect(result.current.status).toBe("connected"));
+
+    deliver({ type: "error", errorCode: "key_invalid", message: "x", credentialScheme: "bearer" });
+
+    expect(result.current.lastError).toBeNull();
+  });
 });

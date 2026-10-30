@@ -258,7 +258,7 @@ export const cfoOnPaymentFailed = inngest.createFunction(
       { scope: "account", key: '"agent-runtime"', limit: 50 },
     ],
     retries: 1, // RV2: transient SDK/network only.
+    triggers: { event: "finance.payment_failed" },
   },
-  { event: "finance.payment_failed" },
-  cfoHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cfoHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

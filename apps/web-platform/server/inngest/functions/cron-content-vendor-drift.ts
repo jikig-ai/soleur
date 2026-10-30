@@ -47,6 +47,7 @@ import {
   warnIfCronWorkspaceLowOnDisk,
   mintInstallationToken,
   postSentryHeartbeat,
+  fetchAllPages,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -345,7 +346,8 @@ export function couldNotMeasure(totals: ComparisonTotals): boolean {
  * a healthy weekly cron with the 21-day write suppression sees ages of 7, 14,
  * 21 (writes, resets to 0), so it never approaches 30. If a write fails to
  * land, the next run sees the age keep climbing, and at 30 the monitor pages —
- * one cadence after the banner would have fired for a human anyway.
+ * one cadence after the banner would have fired for a human anyway (monitor
+ * destroyed by the #6590 PR-B prune — void-posts by design, spec NG4).
  *
  * @param observedAgeDays age of `last-verified` on the default branch as read
  *   BEFORE this run's write, or `null` when it could not be read at all.
@@ -539,44 +541,9 @@ async function spawnGitStdout(
   });
 }
 
-/**
- * Walk all pages of a paginated octokit list call (`per_page: 100`) up to a
- * defensive cap of 20 pages — the `fetchAllPages` pattern established in
- * `get-workstream-issue-options.ts` (the octokit client here is bare
- * `@octokit/core`; no `paginate` plugin is installed).
- *
- * Any dedup path that ENUMERATES items to decide "does a matching open item
- * exist" must page to completion: a bounded first page makes an existing open
- * item beyond it invisible and the cron files a duplicate — a failure that
- * grows exactly when the repo is busiest (#8182). The enumeration call sites
- * are `listOpenPrHeads` (open-PR dedup for both the drift and attestation
- * arms) and the per-bundle issue scan in `open-drift-issue-<slug>`.
- */
-export async function fetchAllPages<T>(
-  fetchPage: (page: number) => Promise<{ data: T[] }>,
-  opts?: { perPage?: number; maxPages?: number },
-): Promise<T[]> {
-  const perPage = opts?.perPage ?? 100;
-  const maxPages = opts?.maxPages ?? 20;
-  const out: T[] = [];
-  let lastSize = 0;
-  for (let page = 1; page <= maxPages; page++) {
-    const { data } = await fetchPage(page);
-    out.push(...data);
-    lastSize = data.length;
-    if (data.length < perPage) break;
-  }
-  // The cap is a bound on runaway walks, not a silent truncation point: a
-  // full final page means the enumeration is INCOMPLETE and a dedup decided
-  // on it can miss an existing open item — the exact defect #8182 exists to
-  // close. Fail loud rather than dedup on a partial view.
-  if (lastSize === perPage) {
-    throw new Error(
-      `fetchAllPages hit the ${maxPages}-page cap with a full final page — enumeration is incomplete; dedup must not decide on a partial view`,
-    );
-  }
-  return out;
-}
+// `fetchAllPages` moved to `_cron-shared.ts` (#8293) so the compound-promote ledger reader can use it
+// without importing this cron function; re-exported here so existing imports resolve unchanged.
+export { fetchAllPages } from "./_cron-shared";
 
 /**
  * Rewrite ONE lifted-files record in a NOTICE frontmatter body, porting the
@@ -2723,12 +2690,10 @@ export const cronContentVendorDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "17 11 * * 1" },
+      { event: "cron/content-vendor-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "17 11 * * 1" },
-    { event: "cron/content-vendor-drift.manual-trigger" },
-  ],
-  cronContentVendorDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronContentVendorDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

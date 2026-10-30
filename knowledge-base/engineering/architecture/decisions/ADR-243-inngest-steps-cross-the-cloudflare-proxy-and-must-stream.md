@@ -196,7 +196,7 @@ untouched because any edit to it re-hashes and reloads Vector on the production 
 | Alternative | Why not |
 |---|---|
 | Streaming without the wrapper | One dropped stream crashes the web process (§1), and an unsigned request can reach the same path. |
-| Upgrade to `inngest@4` now | Fixes `createStream`, but is a major-version migration across ~70 functions and three middlewares, untested against server v1.19.4, and would need the whole spike re-run. Deferred to #8628. |
+| Upgrade to `inngest@4` now | Fixes `createStream`, but is a major-version migration across ~70 functions and three middlewares, untested against server v1.19.4, and would need the whole spike re-run. Deferred to #8628. — **EXECUTED 2026-10-28 (PR #11381, spike S7 PASS)** |
 | Detach-and-poll (plan Fix 1B) | Plan review found nine defects, all caused by runs that sleep while a detached child works. |
 | Cap every step below ~20 min | Sessions run 5–25 min, and the one observed drop (~20.5 min) looks random, not a limit. |
 | Private `serveHost` | Breaks cron planning: only the public-host registration re-plans crons (#5159). |
@@ -219,3 +219,10 @@ re-ran with them). Phase 6 of the plan closes the edge difference on production.
 - ADR-033 (child-process spawn inside one `step.run`), ADR-030 (signing), ADR-108 (cost markers),
   ADR-218 (Terraform-managed Logs alerts), ADR-077 (routine run progress), ADR-078 (deploy cron
   drain), ADR-068 / ADR-143 (multi-host serving, which reopens §2).
+
+## Amendment — 2026-10-28 (#8628, executed)
+
+- **§1 executed:** `inngest@4` fixes `createStream` upstream — verified in the published `inngest@4.26.0` tarball (`cancel()` clears the heartbeat interval, a `closed` flag gates `enqueue`, a try/catch demotes late writes to `logger.debug`). `server/inngest/stream-detach.ts`, its test, and the route POST wrapper are deleted; `serve()` now uses `streaming: true` + `serveOrigin` (v4 renames), `signingKey` moved to the client.
+- The Alternatives row "Upgrade to `inngest@4` now" is marked EXECUTED. The "wrapper kept just in case" arm stays rejected — the upstream fix removes its precondition.
+- **Observability:** `inngest-stream-consumer-cancel` / `inngest-stream-drain-error` are retired (emitted only by the deleted wrapper). Drop coverage moves to the server-side `inngest_step_524` needle; the fnId/stepId/signed attribution loss is accepted and revisitable under #8613.
+- **Checkpointing:** ships `checkpointing: false` on the client (CTO ruling 2026-10-28) — v4 turns it on by default, self-hosted support on pinned v1.45.1 is upstream-docs-only, and the unit harness models one-new-step-per-request. The spike since ran: `knowledge-base/project/specs/archive/20261028-165529-feat-one-shot-8628-inngest-4-upgrade/streaming-spike-v4.md` records **S7 PASS** (one cut destroyed 3 simultaneous live streams, zero `Invalid state`/`Controller is already closed`, app stayed up — the stream-detach deletion's kill-proof) and **S9 measured both arms** — the shipped off arm passed S2 3/3, and the default-on arm COMPLETED a ~180 s step in one attempt on v1.45.1 (the "expected degrade" hypothesis not observed; checkpoint-transport negotiation is not visible in server logs at info level). A future checkpointing flip-on is still a deliberate one-flag decision: it changes the execution model, so it must re-run `soleur:gdpr-gate` and update the Art. 30 record before shipping.

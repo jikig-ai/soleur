@@ -123,7 +123,7 @@ good3 "$OLDBOOT" > "$WORK/fx/oldboot.jsonl"
 expect dispatcher-refused 5 "[branch=dispatcher_verdict kind=refused]" "$WORK/fx/oldboot.jsonl" merged "$OLDBOOT" refused
 expect dispatcher-apply-failed 5 "kind=apply-failed" "$WORK/fx/oldboot.jsonl" merged "$OLDBOOT" apply-failed
 # ... every failure kind escalates (a bare token in FAIL_KINDS cannot be dropped silently) ...
-for k in dispatch-failed unverified cancelled gate-failed undetermined; do
+for k in dispatch-failed unverified cancelled gate-failed gate-unproven undetermined; do
   expect "dispatcher-kind-$k" 5 "kind=$k" "$WORK/fx/oldboot.jsonl" merged "$OLDBOOT" "$k"
 done
 # ... a forged success marker posted AFTER a genuine failure cannot mask it ...

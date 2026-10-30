@@ -489,12 +489,10 @@ export const cronSkillFreshness = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 2 1 * *" },
+      { event: "cron/skill-freshness.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 2 1 * *" },
-    { event: "cron/skill-freshness.manual-trigger" },
-  ],
-  cronSkillFreshnessHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronSkillFreshnessHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

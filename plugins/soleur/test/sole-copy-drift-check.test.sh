@@ -40,7 +40,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 # ANTI-VACUITY FLOOR at the REALIZED count (the number here and the number the run prints must agree).
-FLOOR=194
+FLOOR=195
 # Rows of the case table (every end_row call before the harness section), declared apart from the counters so
 # deleting one is a diff here (H3).
 TABLE_ROWS=126
@@ -1404,6 +1404,13 @@ _adr="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-282-sole-
 _rb=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$RUNBOOK" | grep -o 'v1/volumes/[0-9]*' | sort -u | tr '\n' ' ')
 if [[ "$_pin" == "$VOL_ID" && -f "$_adr" ]] && grep -qF "Hetzner id $_pin" "$_adr" && grep -qF "$_pin" "$SKILL" && [[ "$_rb" == "v1/volumes/$_pin " ]]; then pass "N1 VOLUME_ID_PIN ($_pin) equals the id in ADR-282, in the postmerge skill's section-5c one-liner and in the runbook's section-5c one-liner"
 else fail "N1 VOLUME_ID_PIN='$_pin' does not equal the ADR-282 / postmerge skill / runbook one-liner id (runbook: '$_rb')"; fi
+# N1b: the pin has exactly THREE consumers in the workflow (this probe and the two orphan sweeps), comment-stripped so a comment quoting
+# the name does not count. An exact count, not a floor: a deleted copy (a sweep that no longer proves the volume is visible) must be red.
+_pins=$(grep -v '^[[:space:]]*#' "$WF" | grep -E '^[[:space:]]*readonly VOLUME_ID_PIN=[0-9]+' | sed -E 's/^[[:space:]]*readonly VOLUME_ID_PIN=([0-9]+).*/\1/') || _pins=""
+_npins=$(grep -c . <<<"$_pins") || _npins=0
+_upins=$(sort -u <<<"$_pins")
+if [[ "$_npins" == 3 && "$_upins" == "$_pin" ]]; then pass "N1b the workflow carries exactly 3 VOLUME_ID_PIN copies (the probe and the two orphan sweeps), all equal to ${_pin}"
+else fail "N1b the workflow carries ${_npins} VOLUME_ID_PIN copies with values [$(tr '\n' ' ' <<<"$_upins")], want exactly 3 equal to '${_pin}'"; fi
 _dl=$(python3 -I - "$LOADER" "$TMP/x/job.json" <<'PYP'
 import json, sys, yaml
 steps = yaml.safe_load(open(sys.argv[1]))["runs"]["steps"]

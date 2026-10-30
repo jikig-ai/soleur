@@ -2080,7 +2080,12 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # 22 -> 23 (#9597): the alert step reads the verify script's `credential_refused` output, so a refused
 # credential (which truncates the status file and made the alert read an empty frame as a dead
 # listener) maps to its `ungraded` arm. One new env: ref on the gate chain, re-derived deliberately.
-G1_EXPECTED_REFERENCES=23
+# 23 -> 26 (#9061): the drift_plan step's own `if:` carries the two verdict refs, and the drift
+# auto-close `if:` gains `steps.drift_plan.outputs.exit_code` — three new refs on the gate chain,
+# re-derived deliberately.
+# 26 -> 27 (#9061 review): the post-apply summary echoes `steps.drift_plan.outputs.exit_code`
+# (DRIFT_PLAN_EXIT_CODE) — one more ref, re-derived deliberately.
+G1_EXPECTED_REFERENCES=27
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then
@@ -2330,9 +2335,10 @@ else
   pass "#7104 AC18: the workflow never comments on or reopens the ledger (it is created closed and only edited)"
 fi
 
-# R19.4 §4: the plan's own "six success()-gated steps" is wrong; the measured count is five.
+# R19.4 §4: the plan's own "six success()-gated steps" is wrong; the measured count was five,
+# and is six since #9061 added the post-apply full-root drift plan.
 # Pinned because the backstop's whole justification is what re-arms behind a false green --
-# two of these five close the founder's GitHub issues and one swaps the running container.
+# two of these six close the founder's GitHub issues and one swaps the running container.
 #
 # MEMBERSHIP AND STRUCTURE, NOT A COUNT (#7546 review). This was `== 5` over a set, and a
 # scalar over a set samples only its SIZE. Two mutations were measured walking straight
@@ -2367,8 +2373,14 @@ EXPECT = {
     'Close':
         "success() && env.PLAN_HAS_CHANGES == 'true' && "
         "steps.check_4804.outputs.open == 'true' && " + VERDICT,
-    'Auto-close any open drift issues for this stack':
+    # #9061: the close gate reads a FRESH full-root plan's exit code, produced
+    # by the drift_plan step below — the recorded plan on the issue predates
+    # this apply and cannot substantiate a close.
+    'Post-apply full-root drift plan':
         "success() && env.PLAN_HAS_CHANGES == 'true' && " + VERDICT,
+    'Auto-close any open drift issues for this stack':
+        "success() && env.PLAN_HAS_CHANGES == 'true' && "
+        "steps.drift_plan.outputs.exit_code == '0' && " + VERDICT,
 }
 got = {}
 for st in steps[gi+1:]:
@@ -2389,7 +2401,7 @@ print("OK" if not problems else "; ".join(problems))
 PYEOF
 ) || ac18_measured="ERR"
 if [[ "$ac18_measured" == "OK" ]]; then
-  pass "#7104 AC18: all 5 success()-gated steps downstream of the gate carry their pinned condition VERBATIM -- the 3 that re-arm production (container swap, #4804 close, drift auto-close) are structurally gated on a verdict, so an && -> || inversion is loud rather than invisible to a count"
+  pass "#7104 AC18: all 6 success()-gated steps downstream of the gate carry their pinned condition VERBATIM -- the 3 that re-arm production (container swap, #4804 close, drift auto-close) are structurally gated on a verdict (drift auto-close additionally on a fresh full-root plan, #9061), so an && -> || inversion is loud rather than invisible to a count"
 else
   fail "#7104 AC18: the success()-gated step set downstream of the gate drifted from its pin: $ac18_measured. These steps re-arm behind a false green -- two close the founder's GitHub issues and one swaps the running container. If the change is deliberate, update the EXPECT table and say why in the commit."
 fi

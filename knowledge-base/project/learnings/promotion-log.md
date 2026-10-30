@@ -9,9 +9,13 @@ type: audit-log
 
 # Compound Promotion Loop — audit log
 
-Append-only log of every promotion proposal opened by
-`.github/workflows/scheduled-compound-promote.yml`. Each cron run that opens
-one or more draft PRs appends one row per PR below the `ROWS BELOW` marker.
+Append-only log of every promotion proposal opened by the `cron-compound-promote`
+Inngest function (`apps/web-platform/server/inngest/functions/cron-compound-promote.ts`).
+Each run that opens one or more draft PRs appends one row per PR below the
+`ROWS BELOW` marker. The row rides the proposal's own commit, so a `pending` row
+reaches `main` only when its proposal PR merges: a closed-unmerged proposal never
+lands a row here. Rejection state is read from GitHub PR state through Octokit
+(ADR-300), not from this log.
 
 **Schema:**
 
@@ -25,16 +29,16 @@ one or more draft PRs appends one row per PR below the `ROWS BELOW` marker.
 - **Target** — proposed edit target (`AGENTS.core.md` or a skill SKILL.md).
 - **Source count** — number of source learnings in the cluster (>=5 to qualify).
 - **Decision** — `pending` (initial only). Live decision is **not stored** —
-  derive at read-time via `gh pr view <pr-number> --json state,merged`:
+  derive at read-time from the proposal's PR state, read through Octokit:
   `merged === true` → applied; `state === CLOSED && merged === false` →
   rejected. This keeps the log non-mutating (CLO non-repudiation requirement).
 - **Tier** — `skill` or `agents-core`.
 - **PR** — written as the literal string `(PR pending)` and never mutated
   afterwards (rows are append-only per the CLO non-repudiation requirement).
-  To resolve a row to the live PR, search by Cluster-Hash:
-  `gh pr list --search "self-healing/auto-<cluster-hash>" --state all --json url,state,number`
-  returns the PR opened from that cluster. The Cluster-Hash column is
-  load-bearing for this lookup.
+  To resolve a row to the live PR, search by Cluster-Hash through Octokit
+  (`GET /search/issues`, `is:pr head:self-healing/auto-<cluster-hash>`; the PR
+  title carries the same hash): it returns the PR opened from that cluster. The
+  Cluster-Hash column is load-bearing for this lookup.
 
 Issue: #2720.
 
