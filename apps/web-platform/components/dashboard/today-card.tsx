@@ -404,6 +404,20 @@ function StripeCard({
             setDraft(next!);
             return;
           }
+          if (res.status === 409) {
+            // /edit refuses once an approval row exists (draft_already_approved): say what to do
+            // next. Any other 409 body, or an unparseable one, keeps the bare status below.
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            } | null;
+            if (body?.error === "draft_already_approved") {
+              // Names Send only: Discard is not offered here until the messages UPDATE policy exists (#11569).
+              setEditError(
+                "You already approved this draft, so it can't be edited. Send it to go ahead.",
+              );
+              return;
+            }
+          }
           setEditError(`Edit failed (${res.status})`);
         } catch {
           setEditError("Edit failed — network error");
