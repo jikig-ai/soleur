@@ -36,7 +36,7 @@
 #     red), and exactly one call site may pass the reserved stage arg.
 #
 # Mutation rows live at the bottom. Each one COPIES a source file into a scratch dir, mutates the
-# COPY, and re-runs this guard against the copy through the KEYPROBE_GUARD_{TF,WF,FLIP,RB,CI}
+# COPY, and re-runs this guard against the copy through the KEYPROBE_GUARD_{TF,WF,FLIP,RB,CI,VT}
 # overrides. No tracked file is ever written.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -442,7 +442,7 @@ SQLEND = "\n  SQL\n"'
     esac
   }
 
-  mutate_red() {  # mutate_red <label> <TF|WF|FLIP|CI|RB> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
+  mutate_red() {  # mutate_red <label> <TF|WF|FLIP|CI|RB|VT> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
     local label="$1" which="$2" prog="$3" tag="${4:-}" want="${5:-red}" src copy rc=0 olog="$MUT_DIR/inner.log"
     rm -f "$MUT_DIR"/zz_*.tf   # a second-file row plants one; it must not leak into the next row's census
     case "$which" in

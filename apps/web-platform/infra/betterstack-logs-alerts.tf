@@ -410,7 +410,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 # /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<v> rc=<n> at=<where>`,
 # verdict in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
 # journald tag inngest-cutover-flip, and a curl-direct phone-home whose message BEGINS with the marker).
-# Rulings: decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
+# Rulings: the archived #9927 spec's decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
 # ships in a follow-up PR once an owner-authorized create-and-delete probe proves the API accepts
 # query_period = 2592000; tracked on the owner-hold issue #11266, a blocking prerequisite of the
 # bundle promotion), plan 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3.
