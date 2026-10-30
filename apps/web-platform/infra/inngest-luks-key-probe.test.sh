@@ -275,8 +275,8 @@ expect_summary() { printf '1:%s:1:%s:%s' "$1" "$1" "$2"; }
 verdict() {
   local desc="$1" tok="$2" vrc="$3" at="$4"; shift 4
   run_tick "done" "$@"
-  assert_eq "$desc: tick exits 0, flag untouched, row=token=$tok rc=$vrc at=$at on both channels" \
-    "0|$(expect_summary "token=$tok rc=$vrc at=$at" "$tok")|" \
+  assert_eq "$desc: tick exits 0, flag untouched, row=verdict=$tok rc=$vrc at=$at on both channels" \
+    "0|$(expect_summary "verdict=$tok rc=$vrc at=$at" "$tok")|" \
     "$RC|$(probe_summary)|$(paste -sd, "$TRACE")"
   EXTRA_TOKENS_SEEN="$EXTRA_TOKENS_SEEN $tok"
 }
@@ -486,19 +486,19 @@ end_case
 new_case
 run_tick "done" CUTOVER_LOGGER_CMD="$WORK/absent-logger"
 assert_eq "an absent logger loses only the logger copy: the phone-home row still carries the verdict" \
-  "0:1:token=ok rc=0 at=kdf" "$RC:$(grep -c 'argv3=SOLEUR_INNGEST_LUKS_KEY_PROBE' "$PHONETRACE" || true):$(grep 'argv3=SOLEUR_INNGEST_LUKS_KEY_PROBE' "$PHONETRACE" | sed 's/^.* :: luks-key-probe //; s/ SOLEUR_INNGEST_LUKS_KEY_PROBE$//')"
+  "0:1:verdict=ok rc=0 at=kdf" "$RC:$(grep -c 'argv3=SOLEUR_INNGEST_LUKS_KEY_PROBE' "$PHONETRACE" || true):$(grep 'argv3=SOLEUR_INNGEST_LUKS_KEY_PROBE' "$PHONETRACE" | sed 's/^.* :: luks-key-probe //; s/ SOLEUR_INNGEST_LUKS_KEY_PROBE$//')"
 end_case
 
 echo "TEST: the three hang cases (timeouts 4 s, 4 s, 30 s) collected from the background batch"
 wait
 assert_eq "findmnt hangs: killed at its 4 s bound, indeterminate at=mount rc=124, tick exits 0 inside 20 s" \
-  "0|$(expect_summary "token=indeterminate rc=124 at=mount" indeterminate)|" \
+  "0|$(expect_summary "verdict=indeterminate rc=124 at=mount" indeterminate)|" \
   "$(cat "$BG_DIR/pristine_findmnt.rc")|$(cat "$BG_DIR/pristine_findmnt.summary")|$(cat "$BG_DIR/pristine_findmnt.flag")"
 assert_eq "cryptsetup status hangs: killed at its 4 s bound, indeterminate at=status rc=124, tick exits 0" \
-  "0|$(expect_summary "token=indeterminate rc=124 at=status" indeterminate)|" \
+  "0|$(expect_summary "verdict=indeterminate rc=124 at=status" indeterminate)|" \
   "$(cat "$BG_DIR/pristine_status.rc")|$(cat "$BG_DIR/pristine_status.summary")|$(cat "$BG_DIR/pristine_status.flag")"
 assert_eq "the KDF hangs: killed at its 30 s bound, indeterminate at=kdf rc=124, tick exits 0, flag untouched" \
-  "0|$(expect_summary "token=indeterminate rc=124 at=kdf" indeterminate)|" \
+  "0|$(expect_summary "verdict=indeterminate rc=124 at=kdf" indeterminate)|" \
   "$(cat "$BG_DIR/pristine_kdf.rc")|$(cat "$BG_DIR/pristine_kdf.summary")|$(cat "$BG_DIR/pristine_kdf.flag")"
 if [[ "$(cat "$BG_DIR/pristine_kdf.secs" 2>/dev/null || echo 999)" -lt 42 ]]; then
   pass "the hung KDF tick finished inside 42 s (30 s bound + kill grace + emit bounds), far under TimeoutStartSec=420"
@@ -568,7 +568,7 @@ new_case
 seed_stamp pending "$(( $(now_s) - 7200 ))"
 run_tick "done"
 assert_eq "an hour-old pending stamp: one indeterminate rc=0 at=died row on both channels, no cryptsetup call, stamp now indeterminate" \
-  "0|$(expect_summary 'token=indeterminate rc=0 at=died' indeterminate)|0" \
+  "0|$(expect_summary 'verdict=indeterminate rc=0 at=died' indeterminate)|0" \
   "$RC|$(probe_summary)|$(wc -l < "$WORK/arglog" 2>/dev/null | tr -d ' ')"
 end_case
 
@@ -824,7 +824,7 @@ pred_g2_wire() {
   good="no"; wire_ok && good="yes"
   end_case
   SUT="$TARGET"
-  [[ "$sum" == "$(expect_summary 'token=ok rc=0 at=kdf' ok)" && "$opens" == "1" && "$good" == "yes" ]]
+  [[ "$sum" == "$(expect_summary 'verdict=ok rc=0 at=kdf' ok)" && "$opens" == "1" && "$good" == "yes" ]]
 }
 # census_clean: no file under the case dir other than the key file, the stub comparator and the
 # stub's received-bytes record contains the sentinel (logger, phone-home, stamp, argv log, env dump,
@@ -983,7 +983,7 @@ expect_red "G2-2 the call lacks --key-file - (static)" pred_g2_static g2_m2
 expect_red "G2-2 the call lacks --key-file - (wire: the stub refuses the argv shape)" pred_g2_wire g2_m2
 
 mutate g2_m3 <<'PY'
-s = s.replace('  local row="token=${tok} rc=${rc} at=${at}"', '  local row="token=${tok} rc=${rc} at=${at} k=$(sed -n \'s/^INNGEST_REDIS_LUKS_KEY=//p\' "${CUTOVER_LUKS_KEY_FILE:-/etc/default/inngest-luks}")"', 1)
+s = s.replace('  local row="verdict=${tok} rc=${rc} at=${at}"', '  local row="verdict=${tok} rc=${rc} at=${at} k=$(sed -n \'s/^INNGEST_REDIS_LUKS_KEY=//p\' "${CUTOVER_LUKS_KEY_FILE:-/etc/default/inngest-luks}")"', 1)
 PY
 mutation_landed "G2-3 debug log of the extracted value" g2_m3
 expect_red "G2-3 a debug logger of the value puts the sentinel in the logger trace" pred_g2_census g2_m3
@@ -1018,7 +1018,7 @@ pred_early_exit_rc() {
     RUN_PREFIX="env --default-signal=PIPE"
     run_tick "done" STUB_EARLY_RC=4
     RUN_PREFIX=""
-    [[ "$(probe_summary)" == "$(expect_summary 'token=indeterminate rc=4 at=kdf' indeterminate)" ]] || bad=$((bad + 1))
+    [[ "$(probe_summary)" == "$(expect_summary 'verdict=indeterminate rc=4 at=kdf' indeterminate)" ]] || bad=$((bad + 1))
   done
   end_case
   SUT="$TARGET"
@@ -1036,7 +1036,7 @@ pred_early_exit_sigpipe_ignored() {
     run_tick "done" STUB_EARLY_RC=4
     RUN_PREFIX=""
     # tr (EPIPE, exit 1) or cryptsetup's own rc both land on indeterminate; never a key verdict, never ok
-    [[ "$(probe_summary)" == 1:token=indeterminate\ *:1:token=indeterminate\ *:indeterminate ]] || bad=$((bad + 1))
+    [[ "$(probe_summary)" == 1:verdict=indeterminate\ *:1:verdict=indeterminate\ *:indeterminate ]] || bad=$((bad + 1))
   done
   end_case
   SUT="$TARGET"
@@ -1057,7 +1057,7 @@ pred_upstream_fail() {
   sum="$(probe_summary)"
   end_case
   SUT="$TARGET"
-  [[ "$sum" == "$(expect_summary 'token=indeterminate rc=1 at=key' indeterminate)" ]]
+  [[ "$sum" == "$(expect_summary 'verdict=indeterminate rc=1 at=key' indeterminate)" ]]
 }
 assert_true "pristine: a failing upstream stage is indeterminate at=key" pred_upstream_fail "$TARGET"
 assert_true "pristine: a cryptsetup that exits before reading (tr takes SIGPIPE in about 4 of 10 runs) keeps its own rc: 20 runs, all indeterminate rc=4 at=kdf" pred_early_exit_rc "$TARGET"
@@ -1280,17 +1280,17 @@ EOF
     printf '%s' "$sum"
   }
   assert_eq "the script against the real tool: the right key from the host file is ok" \
-    "$(expect_summary 'token=ok rc=0 at=kdf' ok)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$IMG")"
+    "$(expect_summary 'verdict=ok rc=0 at=kdf' ok)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$IMG")"
   assert_eq "the script against the real tool: a wrong key is fail_passphrase rc=2" \
-    "$(expect_summary 'token=fail_passphrase rc=2 at=kdf' fail_passphrase)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=notTheKey" "$IMG")"
+    "$(expect_summary 'verdict=fail_passphrase rc=2 at=kdf' fail_passphrase)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=notTheKey" "$IMG")"
   truncate -s 20M "$REAL_ROOT/blank.img"
   assert_eq "the script against a blank device: luksUUID rc 1 and isLuks rc 1 is fail_header" \
-    "$(expect_summary 'token=fail_header rc=1 at=uuid' fail_header)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$REAL_ROOT/blank.img")"
+    "$(expect_summary 'verdict=fail_header rc=1 at=uuid' fail_header)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$REAL_ROOT/blank.img")"
   assert_eq "the script against the real tool: a missing device is indeterminate, never a header verdict" \
-    "$(expect_summary 'token=indeterminate rc=4 at=uuid' indeterminate)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$REAL_ROOT/no-such.img")"
+    "$(expect_summary 'verdict=indeterminate rc=4 at=uuid' indeterminate)" "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$REAL_ROOT/no-such.img")"
 
   pred_real_right_key() {
-    [[ "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$IMG" "$1")" == "$(expect_summary 'token=ok rc=0 at=kdf' ok)" ]]
+    [[ "$(real_summary "INNGEST_REDIS_LUKS_KEY=$RKEY" "$IMG" "$1")" == "$(expect_summary 'verdict=ok rc=0 at=kdf' ok)" ]]
   }
   assert_true "pristine: the real right key is ok" pred_real_right_key "$TARGET"
   mutate g2_m6 <<'PY'

@@ -3,7 +3,7 @@
 # Drift guard for the Better Stack Logs alert that reads the on-host LUKS key-continuity probe
 # (#9927 item 2; apps/web-platform/infra/betterstack-logs-alerts.tf):
 #
-#   inngest_luks_key_probe_fail  pages on a FAILED verdict   (token=fail_*)
+#   inngest_luks_key_probe_fail  pages on a FAILED verdict   (verdict=fail_*)
 #
 # THE DEAD-MAN IS NOT SHIPPED HERE (CTO ruling D12). The self-arming absence alert
 # (`inngest_luks_key_probe_dark`, query_period 2592000) moves to a follow-up PR that lands only after
@@ -18,7 +18,7 @@
 # scripts/betterstack-query.sh) and does NOT prove the alert is unpaused in Better Stack.
 #
 # WHY EACH ROW EXISTS rather than "the SQL looks right":
-#   * The paging SQL carries `token=fail_` and NOT `indeterminate`: an unmeasured verdict must never
+#   * The paging SQL carries `verdict=fail_` and NOT `indeterminate`: an unmeasured verdict must never
 #     page on its own (a transient low-memory skip would page a day).
 #   * The paging SQL anchors the marker at message position 1 (`position(...)=1`) and never uses a
 #     `raw LIKE` prefilter: webhook payloads that QUOTE the marker (a PR body, the runbook) reach
@@ -28,10 +28,16 @@
 #   * One whole-window aggregate, no GROUP BY: a per-bucket form reads "no bucket" as "no row".
 #   * The alert resource has BOTH of its -target= lines in the apply allowlist (#5566: an
 #     untargeted resource is never applied and never exists), and exactly those two.
+#   * Since #11527 the row set is pinned to the probe's TWO REAL EMITTERS — leg A the journald tag
+#     SYSLOG_IDENTIFIER='inngest-cutover-flip' (verdict=fail_ on message), OR leg B the phone-home
+#     envelope shipper='cloud-init-phone-home' + stage='luks-key-probe' (verdict=fail_ on detail,
+#     plus a detail='' fail-loud disjunct). Marker-quoting rows under a foreign emitter never
+#     count; every literal is DERIVED from its emitter source (a rename that misses the .tf goes
+#     red), and exactly one call site may pass the reserved stage arg.
 #
 # Mutation rows live at the bottom. Each one COPIES a source file into a scratch dir, mutates the
-# COPY, and re-runs this guard against the copy through the KEYPROBE_GUARD_{TF,WF} overrides. No
-# tracked file is ever written.
+# COPY, and re-runs this guard against the copy through the KEYPROBE_GUARD_{TF,WF,FLIP,RB,CI,VT}
+# overrides. No tracked file is ever written.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -41,6 +47,8 @@ TF="${KEYPROBE_GUARD_TF:-$REPO/apps/web-platform/infra/betterstack-logs-alerts.t
 WF="${KEYPROBE_GUARD_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
 FLIP="${KEYPROBE_GUARD_FLIP:-$REPO/apps/web-platform/infra/inngest-cutover-flip.sh}"
 RB="${KEYPROBE_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md}"
+CI="${KEYPROBE_GUARD_CI:-$REPO/apps/web-platform/infra/cloud-init-inngest.yml}"
+VT="${KEYPROBE_GUARD_VT:-$REPO/apps/web-platform/infra/vector.toml}"
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -59,7 +67,7 @@ assert_fixture_dir() {
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$FLIP"; assert_fixture_dir "$RB"
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$FLIP"; assert_fixture_dir "$RB"; assert_fixture_dir "$CI"; assert_fixture_dir "$VT"
 
 # INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
 _p0=$pass; _f0=$fail
@@ -69,7 +77,7 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
 fi
 pass=$_p0; fail=$_f0; FAILED=()
 
-for f in "$TF" "$WF" "$FLIP" "$RB"; do
+for f in "$TF" "$WF" "$FLIP" "$RB" "$CI" "$VT"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
@@ -81,6 +89,30 @@ FAIL_NAME='inngest_luks_key_probe_fail'
 # adding a legitimate second key-probe pair is that one-line edit, not a rewrite of a hard-coded count.
 KEY_PROBE_EXPLORATIONS='inngest_luks_key_probe_fail'
 KEY_PROBE_STEM='inngest_luks_key_probe'
+
+# ── derived needles (#11527): emitter literals are never re-pinned. A coordinated rename that
+# updates the emitter sources but misses the .tf conjunct must go RED, which only happens when
+# the needle follows the source. Each extraction is FATAL-on-empty: an unreadable needle would
+# silently re-pin every row below on a dead literal.
+# Leg A's SYSLOG_IDENTIFIER literal: the `readonly LOG_TAG=` call-form in inngest-cutover-flip.sh.
+export MUT_TAG
+MUT_TAG="$(sed -n 's/^[^#]*readonly LOG_TAG="\([^"]*\)".*/\1/p' "$FLIP" | head -1)"
+[ -n "$MUT_TAG" ] || { printf '[FATAL] no readonly LOG_TAG= line in inngest-cutover-flip.sh — the leg-A emitter needle has no canonical source\n' >&2; exit 2; }
+# Leg B's `stage` literal is a CALL-SITE literal with no canonical lib — its authority is the
+# bounded first arg of the `inngest-boot-phone-home.sh <stage>` call form in
+# inngest-cutover-flip.sh. No `#` before the helper name, so a comment carrying the bare
+# literal cannot satisfy it, and the bounded pattern yields the arg itself — a rename to a
+# superstring (luks-key-probe-v2) extracts the NEW literal, reddening the .tf needle instead of
+# silently re-pinning a stale one.
+export MUT_STAGE
+MUT_STAGE="$(sed -n "s/^[^#]*inngest-boot-phone-home\.sh.\{0,3\}[[:space:]]\+[\"']\?\(luks-key-probe[A-Za-z0-9_-]*\)[\"']\?\([[:space:]]\|$\).*/\1/p" "$FLIP" | head -1)"
+[ -n "$MUT_STAGE" ] || { printf '[FATAL] no luks-key-probe call site on inngest-boot-phone-home.sh in inngest-cutover-flip.sh — the stage needle has no canonical source\n' >&2; exit 2; }
+# The leg-B `shipper` literal is the payload builder's own — its authority is the jq envelope in
+# cloud-init-inngest.yml (`shipper:"…"`), derived the same way so a payload-side rename that
+# misses the .tf goes red rather than leaving the needle green on a dead literal.
+export MUT_SHIPPER
+MUT_SHIPPER="$(sed -n 's/^[^#]*shipper:"\([^"]*\)".*/\1/p' "$CI" | head -1)"
+[ -n "$MUT_SHIPPER" ] || { printf '[FATAL] no shipper literal in the cloud-init-inngest.yml payload builder — the shipper needle has no canonical source\n' >&2; exit 2; }
 
 # The SQL heredoc local, extracted from its FIRST UNCOMMENTED opening line to the closing `  SQL`.
 sql_local() {  # sql_local <local-name>  -> whitespace-stripped SQL on stdout
@@ -100,7 +132,7 @@ param() {  # param <block> <key> <value-ERE>
 
 FAIL_SQL="$(sql_local inngest_luks_key_probe_fail_sql)"
 
-FAIL_CANON="SELECTtoDateTime({{end_time}})AStime,count(*)ASvalueFROM{{source}}WHEREdtBETWEEN{{start_time}}AND{{end_time}}ANDposition(JSONExtractString(raw,'message'),'${MARKER}')=1ANDposition(JSONExtractString(raw,'message'),'token=fail_')>0"
+FAIL_CANON="SELECTtoDateTime({{end_time}})AStime,count(*)ASvalueFROM{{source}}WHEREdtBETWEEN{{start_time}}AND{{end_time}}ANDposition(JSONExtractString(raw,'message'),'${MARKER}')=1AND(JSONExtractString(raw,'SYSLOG_IDENTIFIER')='${MUT_TAG}'ANDposition(JSONExtractString(raw,'message'),'verdict=fail_')>0OR(JSONExtractString(raw,'shipper')='${MUT_SHIPPER}'ANDJSONExtractString(raw,'stage')='${MUT_STAGE}'AND(JSONExtractString(raw,'detail')=''ORposition(JSONExtractString(raw,'detail'),'verdict=fail_')>0)))"
 ANCHOR="position(JSONExtractString(raw,'message'),'${MARKER}')=1"
 
 # ── presence rows: the SQL locals ─────────────────────────────────────────────────────────────
@@ -113,9 +145,9 @@ ANCHOR="position(JSONExtractString(raw,'message'),'${MARKER}')=1"
   || no "paging SQL differs from the ruled form: $FAIL_SQL"
 
 # ── presence rows: paging SQL, named properties ───────────────────────────────────────────────
-grep -qF "'token=fail_')>0" <<< "$FAIL_SQL" \
-  && ok "paging SQL matches token=fail_ (every failed verdict pages)" \
-  || no "paging SQL does not match token=fail_"
+grep -qF "'verdict=fail_')>0" <<< "$FAIL_SQL" \
+  && ok "paging SQL matches verdict=fail_ (every failed verdict pages)" \
+  || no "paging SQL does not match verdict=fail_"
 grep -qiF 'indeterminate' <<< "$FAIL_SQL" \
   && no "paging SQL names indeterminate — an unmeasured verdict would page on its own" \
   || ok "paging SQL does NOT name indeterminate (an unmeasured verdict never pages on its own)"
@@ -128,6 +160,59 @@ grep -qiE 'LIKE|GROUPBY' <<< "$FAIL_SQL" \
 grep -qE '(^|[^A-Za-z_])time(BETWEEN|>|<|=)' <<< "$FAIL_SQL" \
   && no "paging SQL filters on the time alias" \
   || ok "paging SQL filters on the dt column, not the time alias"
+
+# ── presence rows: the two emitters (#11527) — the marker alone admitted ANY emitter, so the
+# row set is pinned to the probe's two real emitters: the journald tag on leg A, the phone-home
+# envelope identity on leg B. A marker-quoting row under a foreign SYSLOG_IDENTIFIER (a doppler
+# event-log row quoting the marker) can never count.
+printf '%s' "$FAIL_SQL" | grep -cF >/dev/null "JSONExtractString(raw,'SYSLOG_IDENTIFIER')='${MUT_TAG}'" \
+  && ok "leg A pins SYSLOG_IDENTIFIER='${MUT_TAG}' — needle derived from readonly LOG_TAG=, so a tag rename missing this SQL goes red" \
+  || no "the leg-A emitter conjunct is missing or pinned to a stale literal: journald rows cannot reach leg A"
+printf '%s' "$FAIL_SQL" | grep -cF >/dev/null "JSONExtractString(raw,'shipper')='${MUT_SHIPPER}'" \
+  && ok "leg B pins shipper='${MUT_SHIPPER}' — the emitter class of the phone-home envelope, derived from the payload builder" \
+  || no "the shipper equality conjunct is missing or pinned to a stale literal: phone-home rows cannot reach leg B"
+# The stage literal is a RESERVED token on a shared helper (inngest-boot-phone-home.sh takes
+# `stage` as positional $1 at ~20 call sites across the emitters' files): a second emit site
+# passing the same stage arg is a leg-B identity collision the predicate cannot see — exactly
+# one call site may pass it, counted across BOTH emitter homes and in either quoting style
+# (quoted or bare arg; a variable-indirection site is invisible to grep — a documented limit).
+_stage_sites="$(grep -chE "^[^#]*inngest-boot-phone-home\.sh[^[:space:]]*[[:space:]]+[\"']?luks-key-probe[\"']?([[:space:]]|\$)" "$FLIP" "$CI" 2>/dev/null | awk '{s+=$1} END{print s+0}')"
+printf '%s' "$FAIL_SQL" | grep -cF >/dev/null "JSONExtractString(raw,'stage')='${MUT_STAGE}'" \
+  && [ "$_stage_sites" = "1" ] \
+  && ok "leg B pins stage='${MUT_STAGE}' AND exactly one emit site passes it — the token is reserved (needle derived from the call site, not re-pinned)" \
+  || no "the stage equality conjunct is missing/stale, or emit-site count=${_stage_sites} (want 1) — a second emitter would collide on leg-B identity"
+printf '%s' "$FAIL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw,'detail'),'verdict=fail_')>0" \
+  && ok "leg B carries verdict=fail_ read from detail — the envelope's field row, never the marker-prefixed message" \
+  || no "the detail-anchored verdict=fail_ check is missing on leg B — a phone-home fail row would not count"
+# The detail='' disjunct is the piece that makes a detail-ABSENT row fire: position('') = 0
+# rejects before any field check, so the conjunct-only form cannot deliver this fail-loud
+# (sibling's measured T4 ruling, E3 0→1).
+printf '%s' "$FAIL_SQL" | grep -cF >/dev/null "JSONExtractString(raw,'detail')=''" \
+  && ok "leg B counts a detail-ABSENT identity-pinned row via the detail='' disjunct — the schema-drop fail-loud arm" \
+  || no "the detail='' disjunct is missing — a detail-absent phone-home row would read healthy again"
+# The two-leg SHAPE, not just the tokens: one outer AND( group holding leg A plus exactly one
+# `OR (` arm, inside which one nested AND( group holds the detail disjunct. "Leg B's tokens
+# exist somewhere in the SQL" cannot satisfy this while the arm that admits them is gone.
+if [ "$(printf '%s' "$FAIL_SQL" | grep -oF 'OR(' | wc -l)" = "1" ] \
+  && [ "$(printf '%s' "$FAIL_SQL" | grep -oF 'AND(' | wc -l)" = "2" ] \
+  && printf '%s' "$FAIL_SQL" | grep -cE >/dev/null "OR\(JSONExtractString\(raw,'shipper'\)='${MUT_SHIPPER}'ANDJSONExtractString\(raw,'stage'\)='${MUT_STAGE}'AND\(JSONExtractString\(raw,'detail'\)=''ORposition\(JSONExtractString\(raw,'detail'\),'verdict=fail_'\)>0\)\)\)$"; then
+  ok "the emitter-OR shape: leg A plus exactly one OR arm (shipper+stage identity) holding the detail disjunct group, closed at end of predicate"
+else
+  no "the OR-arm structure is missing or mis-nested — leg-B tokens may exist as dead text the predicate never admits"
+fi
+
+# Scrub immunity (#11527 review, CTO ruling): the needle key `verdict` must never appear in
+# vector.toml's scrub alternations — pii_scrub_string rewrites `token=<v>` to `token=[redacted]`
+# before ingest, which is exactly how a `token=fail_` leg-A needle was dead on the journald
+# channel. Every needle/consumer asserts `.tf`-to-source agreement; this row asserts the needle
+# against the TRANSFORM that rewrites the row first. Covers the keeper-dark capture key too —
+# it reads the same field. LIMITATION: the check is anchored to the `replace(msg` idiom —
+# a scrub spelled `del(`, `map_values` or `replace(.message` naming `verdict` evades it; that is
+# the file's current rewrite style, so the idiom pin is proportionate today and flagged here for
+# the next scrub author, not rewritten into an exhaustive transform grammar.
+! grep -qE 'replace\(msg.*verdict' "$VT" \
+  && ok "the verdict key is absent from vector.toml's scrub rewrites — the needle survives ingest on both channels" \
+  || no "verdict now appears in a pii_scrub replace() — the needle is dead before ingest (the pre-rename defect recurring)"
 
 # ── presence rows: resources and parameters ───────────────────────────────────────────────────
 FAIL_EX="$(res_block logtail_exploration "$FAIL_NAME")"
@@ -360,13 +445,16 @@ SQLEND = "\n  SQL\n"'
     esac
   }
 
-  mutate_red() {  # mutate_red <label> <TF|WF|FLIP> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
+  mutate_red() {  # mutate_red <label> <TF|WF|FLIP|CI|RB|VT> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
     local label="$1" which="$2" prog="$3" tag="${4:-}" want="${5:-red}" src copy rc=0 olog="$MUT_DIR/inner.log"
     rm -f "$MUT_DIR"/zz_*.tf   # a second-file row plants one; it must not leak into the next row's census
     case "$which" in
       TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
       FLIP) src="$FLIP"; copy="$MUT_DIR/inngest-cutover-flip.sh" ;;
+      CI) src="$CI"; copy="$MUT_DIR/cloud-init-inngest.yml" ;;
+      RB) src="$RB"; copy="$MUT_DIR/inngest-luks-cutover-6894.md" ;;
+      VT) src="$VT"; copy="$MUT_DIR/vector.toml" ;;
       *) printf '[FATAL] mutate_red: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
     cp "$src" "$copy" || { printf '[FATAL] mutate_red: cp %s failed\n' "$src" >&2; exit 2; }
@@ -386,6 +474,9 @@ PY
       TF) KEYPROBE_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
       WF) KEYPROBE_GUARD_WF="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
       FLIP) KEYPROBE_GUARD_FLIP="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
+      CI) KEYPROBE_GUARD_CI="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
+      RB) KEYPROBE_GUARD_RB="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
+      VT) KEYPROBE_GUARD_VT="$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$? ;;
     esac
     # rc DISCRIMINATION. rc>=2 is this guard's own FATAL class, rc=126/127 a broken invocation: none is evidence a
     # row pins anything. want=wrong is the scorer's NEGATIVE CONTROL: a mutant that reds a row other than the one the
@@ -431,9 +522,9 @@ PY
   mutate_floor_red() {  # mutate_floor_red <label>
     local label="$1" copy rc=0
     copy="$MUT_DIR/floor-mutated.test.sh"
-    sed 's/^PRESENCE_ROWS=30$/PRESENCE_ROWS=31/' "$SELF" > "$copy"
+    sed 's/^PRESENCE_ROWS=37$/PRESENCE_ROWS=38/' "$SELF" > "$copy"
     if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
-    KEYPROBE_GUARD_TF="$TF" KEYPROBE_GUARD_WF="$WF" KEYPROBE_GUARD_FLIP="$FLIP" KEYPROBE_GUARD_RB="$RB" \
+    KEYPROBE_GUARD_TF="$TF" KEYPROBE_GUARD_WF="$WF" KEYPROBE_GUARD_FLIP="$FLIP" KEYPROBE_GUARD_RB="$RB" KEYPROBE_GUARD_CI="$CI" KEYPROBE_GUARD_VT="$VT" \
       MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
     case "$rc" in
       1) ok "mutation RED: $label" ;;
@@ -442,10 +533,10 @@ PY
     esac
   }
 
-  mutate_red "paging SQL widens to every marker row (token=fail_ dropped)" TF \
-    's = edit(s, FAILSQL, "\n      AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"token=fail_"+Q+") > 0", "", SQLEND)'
+  mutate_red "paging SQL widens to every marker row (verdict=fail_ dropped)" TF \
+    's = edit(s, FAILSQL, "position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"verdict=fail_"+Q+") > 0", "", SQLEND)'
   mutate_red "paging SQL starts naming indeterminate (an unmeasured verdict would page)" TF \
-    's = edit(s, FAILSQL, Q+"token=fail_"+Q+") > 0", Q+"token=fail_"+Q+") > 0 OR position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"indeterminate"+Q+") > 0", SQLEND)'
+    's = edit(s, FAILSQL, "position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"verdict=fail_"+Q+") > 0", "position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"verdict=fail_"+Q+") > 0 OR position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"indeterminate"+Q+") > 0", SQLEND)'
   mutate_red "paging SQL loses its position-1 marker anchor" TF \
     's = edit(s, FAILSQL, Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") = 1", Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") > 0", SQLEND)'
   mutate_red "paging SQL marker renamed (the rule would watch a row nobody emits)" TF \
@@ -525,13 +616,92 @@ s = s + "\n# second-file row\n"' \
     'old = "  inngest_luks_key_probe_runbook_url ="
 assert s.count(old) == 1
 s = s.replace(old, "  inngest_luks_key_probe_dark_sql = <<-SQL\n    SELECT 1\n  SQL\n" + old)'
+  # #11527 emitter-pin rows — the row set is pinned to the probe's two emitters. Each mutation
+  # must redden the presence row that pins it, never just move dead text.
+  mutate_red "the leg-A emitter conjunct is dropped (any journald emitter's marker row counts)" TF \
+    'import os
+tag = os.environ["MUT_TAG"]
+old = "        JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + tag + "\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the leg-A emitter literal flips to doppler (the marker-quoting offender becomes the counted set)" TF \
+    'import os
+tag = os.environ["MUT_TAG"]
+old = "JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27" + tag + "\x27"
+assert s.count(old) == 1
+s = s.replace(old, "JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27doppler\x27")'
+  mutate_red "the leg-B shipper conjunct is dropped (any stage of phone-home row counts)" TF \
+    'import os
+shipper = os.environ["MUT_SHIPPER"]
+s = edit(s, FAILSQL, "          JSONExtractString(raw, "+Q+"shipper"+Q+") = "+Q+"" + shipper + Q+"\n", "", SQLEND)'
+  mutate_red "the leg-B stage conjunct is dropped (every phone-home row counts)" TF \
+    'import os
+stage = os.environ["MUT_STAGE"]
+old = "          AND JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the leg-B stage literal flips to a foreign stage" TF \
+    'import os
+stage = os.environ["MUT_STAGE"]
+old = "JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27"
+assert s.count(old) == 1
+s = s.replace(old, "JSONExtractString(raw, \x27stage\x27) = \x27cutover-flip-other\x27")'
+  mutate_red "the whole OR arm is deleted (the #11527 regression — legs collapse to journald-only)" TF \
+    'import os
+shipper = os.environ["MUT_SHIPPER"]
+stage = os.environ["MUT_STAGE"]
+old = ("        OR (\n"
+       "          JSONExtractString(raw, \x27shipper\x27) = \x27" + shipper + "\x27\n"
+       "          AND JSONExtractString(raw, \x27stage\x27) = \x27" + stage + "\x27\n"
+       "          AND (\n"
+       "            JSONExtractString(raw, \x27detail\x27) = \x27\x27\n"
+       "            OR position(JSONExtractString(raw, \x27detail\x27), \x27verdict=fail_\x27) > 0\n"
+       "          )\n"
+       "        )\n")
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  mutate_red "the detail='' fail-loud disjunct is neutralized (detail-absent rows go quiet again)" TF \
+    's = edit(s, FAILSQL, "JSONExtractString(raw, "+Q+"detail"+Q+") = "+Q+Q, "false", SQLEND)'
+  mutate_red "the leg-B detail verdict needle is dropped (a phone-home fail row under detail no longer counts)" TF \
+    's = edit(s, FAILSQL, "OR position(JSONExtractString(raw, "+Q+"detail"+Q+"), "+Q+"verdict=fail_"+Q+") > 0", "", SQLEND)'
+  mutate_red "the scrub swallows the needle key (verdict joins the token alternation — the pre-rename defect)" VT \
+    'old = "apiKey|token|password"
+assert s.count(old) == 1
+s = s.replace(old, "apiKey|token|verdict|password")' \
+    "pii_scrub replace"
+  mutate_red "the leg-B shipper literal flips to a foreign shipper (leg B reads zero rows silently)" TF \
+    'import os
+shipper = os.environ["MUT_SHIPPER"]
+s = edit(s, FAILSQL, "shipper"+Q+") = "+Q+"" + shipper, "shipper"+Q+") = "+Q+"cloud-init-phone-other", SQLEND)'
+  mutate_red "the leg-A emitter equality weakens to a containment check" TF \
+    'import os
+tag = os.environ["MUT_TAG"]
+s = edit(s, FAILSQL, "JSONExtractString(raw, "+Q+"SYSLOG_IDENTIFIER"+Q+") = "+Q+"" + tag, "position(JSONExtractString(raw, "+Q+"SYSLOG_IDENTIFIER"+Q+"), "+Q+"" + tag + Q+") > 0", SQLEND)'
+  # Needle-source binding proofs (#11527 review): a coordinated rename that updates the emitter
+  # SOURCE but misses the .tf conjunct must go RED — the needle follows the source, so the pinned
+  # literal goes stale on purpose.
+  mutate_red "the journald tag is renamed at source only (the needle follows; the .tf literal goes stale)" FLIP \
+    's = s.replace("readonly LOG_TAG=\"inngest-cutover-flip\"", "readonly LOG_TAG=\"inngest-cutover-flip-x\"")' \
+    "leg-A emitter conjunct"
+  mutate_red "the stage literal is renamed at the call site only (the needle follows; the .tf literal goes stale)" FLIP \
+    's = s.replace("\"luks-key-probe\" \"$row\"", "\"luks-key-probe-v2\" \"$row\"")' \
+    "stage equality conjunct"
+  mutate_red "a second emit site passes the reserved stage literal (the cardinality pin reds)" FLIP \
+    's = s + "\n\"${CUTOVER_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}\" \"luks-key-probe\" \"$row\" SOLEUR_INNGEST_LUKS_KEY_PROBE\n"' \
+    "emit-site count=2"
+  mutate_red "the payload-builder shipper literal is renamed at source only" CI \
+    's = s.replace("shipper:\"cloud-init-phone-home\"", "shipper:\"cloud-init-phone-home-x\"")' \
+    "shipper equality conjunct"
+  mutate_red "the runbook heading behind the alert's clickable anchor is renamed" RB \
+    's = s.replace("### Key-continuity probe (#9927 item 2)", "### Key-continuity probe (#9927 item 2X)")' \
+    "runbook anchor is dead"
 fi
 
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer run
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
-PRESENCE_ROWS=30
-MUT_ROWS=30
+PRESENCE_ROWS=37
+MUT_ROWS=46
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
