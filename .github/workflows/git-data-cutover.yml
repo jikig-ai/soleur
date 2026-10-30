@@ -26,7 +26,8 @@
 #   refs_assert (#11431) read-only, store flag OFF (FLAG_MODE=proof, so a flag that is on refuses flag_already_true): flag read,
 #             root-key access, the verified-only store probes (a held freeze refuses cutover_frozen), then ONE host session that
 #             reads the replicated refs and prints counts and at most two commit shas, never a name. This is how REFS-CONFIRMED
-#             is attained without SSH (runbook, "Reading REFS-CONFIRMED"). Changes nothing on any host.
+#             is attained without SSH (runbook, "Reading REFS-CONFIRMED"). Writes nothing to the store; the host session makes
+#             one transient scratch directory under /dev/shm (root-only) and removes it.
 #   wipe / wipe_finish / wipe_check  (job `wipe`; the `cutover` job is skipped for them): retire the plaintext
 #             rollback volume. Owner-gated; see the runbook section "The wipe".
 #   snapshot_clear  (job `wipe`, no loader, no Hetzner write): remove a LEFTOVER throwaway device-mapper snapshot of the
@@ -843,8 +844,10 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            if [[ "$MODE" == "proof" || "$MODE" == "refs_assert" ]]; then
+            if [[ "$MODE" == "proof" ]]; then
               echo "Nothing on any host was changed."
+            elif [[ "$MODE" == "refs_assert" ]]; then
+              echo "Nothing was written to the store (the host session made and removed one transient /dev/shm scratch directory)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

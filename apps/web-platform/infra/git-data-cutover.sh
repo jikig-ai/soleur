@@ -317,8 +317,8 @@ probe_freeze() {
 # it matches the pattern in full. A multi-line value never matches. On success GD_CAPTURED holds the
 # value; on failure it is empty and the return is ssh's rc, or 96 on a mismatch. The value is never
 # printed; a failed read's stderr goes out capped and filtered through _access_stderr.
-# The two optional parameters exist for ONE caller (mode_wipe_assert, which sends a host-side script on
-# stdin to `bash -s` and needs longer than 30 s for a snapshot read); with neither, the call is
+# The two optional parameters exist for TWO callers (mode_wipe_assert and mode_refs_assert, which each send a host-side
+# script on stdin to `bash -s`; the wipe read needs longer than 30 s for a snapshot read); with neither, the call is
 # byte-for-byte the old one: stdin /dev/null, 30 s. The stdin file must be a regular file; the bound a
 # positive integer of at most three digits. A malformed one is a local failure (95), never a default.
 _capture_tmp_drop() {
@@ -1153,7 +1153,11 @@ _refs_refuse() { # <word> [rc] [reason] — emit, class, stop
   exit 5
 }
 _refs_note_unattributed() { # a refusal from the access gate or a shared store probe: INCONCLUSIVE, the word is the last one spoken
-  _refs_annotate "${STORE_LAST_VERDICT:-access_refused}" INCONCLUSIVE ""
+  # An empty last word means the access gate refused before any store probe spoke (access_refused); `ok` means the last probe
+  # passed and something after it failed (probe_failed). Both are documented words (runbook Verdict map), never a bare ok.
+  local w="${STORE_LAST_VERDICT:-}"
+  case "$w" in "") w=access_refused ;; ok) w=probe_failed ;; esac
+  _refs_annotate "$w" INCONCLUSIVE ""
 }
 mode_refs_assert() {
   step "refs_assert: host read of the replicated refs (read-only toward the store; no name leaves the host)"
@@ -1172,6 +1176,7 @@ mode_refs_assert() {
   printf -v qd '%q' "$OLD_REPOS"
   cmd="REFS_REPOS=$qd bash -s"
   pat='^refs_assert ok repos=1 namespaces=[1-9][0-9]* refs=[1-9][0-9]* heads=[1-9][0-9]* shas=[0-9a-f]{40}(,[0-9a-f]{40}){0,1}$'
+  GD_CAPTURED=""
   gd_capture "$pat" "$cmd" "$body" "$tmo" || rc=$?
   case "$rc" in
     0) ;;
@@ -1185,6 +1190,9 @@ mode_refs_assert() {
     96) _refs_refuse refs_shape_failed 96 ;;
     *) _refs_refuse probe_failed "$rc" ;;
   esac
+  # Success needs the host's OWN answer line, independent of the rc table: an arm added above with an empty body, or an ssh
+  # that returns 0 with nothing, must never read as REFS-CONFIRMED. The same anchored pattern, matched against the capture.
+  [[ "$GD_CAPTURED" =~ $pat ]] || _refs_refuse refs_shape_failed 96
   # The answer matched the fixed shape in full: counts and at most two commit shas.
   _refs_emit ok
   log "REFS-CONFIRMED"

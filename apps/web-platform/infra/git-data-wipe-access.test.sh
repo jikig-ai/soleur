@@ -774,7 +774,7 @@ class Census:
           and nbe.get("WIPE_VOLUME_ID") == "${{ inputs.volume_id }}", nbe)
         nrun = nb.get("run") or ""
         m = re.search(r'^\s*case "\$MODE" in ([^)]*)\) ;; \*\) MODE=unknown ;; esac$', nrun, re.M)
-        c("G3-notify-case-list: the MODE whitelist of the notify body lists exactly the ten modes, wipe_unknown included (a wipe-family mode dropped from it reads MODE=unknown)", bool(m) and m.group(1).split("|") == NOTIFY_MODES, m.group(1) if m else None)
+        c("G3-notify-case-list: the MODE whitelist of the notify body lists exactly the ten modes plus wipe_unknown (a wipe-family mode dropped from it reads MODE=unknown)", bool(m) and m.group(1).split("|") == NOTIFY_MODES, m.group(1) if m else None)
         c("G3-notify-lost-runner: a wipe job that published no outputs (MODE empty while the cutover job was skipped) becomes MODE=wipe_unknown BEFORE the whitelist, so it is read as a wipe-family failure",
           'if [ -z "$MODE" ] && [ "${CUTOVER_RESULT:-}" = skipped ]; then MODE=wipe_unknown; fi' in nrun and nrun.find('MODE=wipe_unknown') < nrun.find('case "$MODE" in proof'), "")
         wblock = re.search(r'case "\$MODE" in wipe\|wipe_finish\|wipe_check\|snapshot_clear\|wipe_unknown\)\n(.*?)\nesac\nif \[ "\$\{FREEZE_HELD', nrun, re.S)
