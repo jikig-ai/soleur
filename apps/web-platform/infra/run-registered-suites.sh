@@ -556,6 +556,7 @@ if (( _SHARD_N > 0 )); then
       echo "[shard] manifest assignment active: ${_shard_mcount} suite(s) from ${_shard_mfile}" >&2
     fi
   fi
+  _dur_file="${_shard_mfile%/*}/suite-durations.tsv"  # heavy-first dispatch reads the table beside the manifest
   unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mdup _shard_mcount _shard_mval
 
   # Apply the partition. Manifest rows hit by label; an untabled suite (added
@@ -590,7 +591,6 @@ if (( _SHARD_N > 0 )); then
   # puts the critical path at the front, so leg wall ~ max(longest suite, sum/JOBS) instead of
   # start-offset + longest. Order only: the set, the accounting and every verdict are
   # unchanged. Unmeasured suites rank as the table default (4000 ms); no table -> sorted order.
-  _dur_file="$ROOT/apps/web-platform/infra/suite-durations.tsv"
   if (( _shard_manifest_active == 1 )) && [[ -f "$_dur_file" ]]; then
     declare -A _dur_ms=()
     while IFS=$'\t' read -r _dl _dm _dr; do
