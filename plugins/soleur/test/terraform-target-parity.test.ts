@@ -1727,6 +1727,8 @@ describe("inngest key rotation derivation (#10540)", () => {
     // Both arms are exercised by whichever state the tree is in; this row asserts the constant points at the real path.
     expect(INNGEST_KEY_ROTATE_WORKFLOW.endsWith(".github/workflows/inngest-key-rotate.yml")).toBe(true);
     expect(existsSync(resolve(REPO_ROOT, ".github/workflows"))).toBe(true);
+  });
+});
 
 // ─── #11294: terraform plan/apply/refresh/destroy streams must not print random_* key material ─────────────────────────────
 // `random_id`'s `id` is the base64url of its bytes, and the web-platform root derives live secrets from it (Inngest signing /
