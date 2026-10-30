@@ -441,6 +441,8 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
@@ -448,7 +450,7 @@ jobs:
             -target=terraform_data.apparmor_bwrap_profile \
             -target=terraform_data.deploy_pipeline_fix_web2 \
             -var="ssh_key_path=${CI_SSH_PUB}" \
-            -no-color -input=false -out=tfplan
+            -no-color -input=false -out=tfplan 2>&1 | tf_redact_random_ids
 
           # host_creates HALT (#6718). All five -targets reference
           # hcloud_server.web (server.tf: server_id / connection host — web-1 for
@@ -743,6 +745,8 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # #7220 AC20 — record when THIS apply began, for the verify step's start_ts freshness
           # pin. Without a reference point the verify asserts a PROXY: exit_code=0,
           # files_written=19/19 and a populated restarts[] are all satisfiable by a frame the
@@ -784,7 +788,7 @@ jobs:
           # apply run outside CI now fails closed with a stale-plan error instead of silently
           # last-writer-wins.
           doppler run --preserve-env --name-transformer tf-var -- \
-            terraform apply -auto-approve -input=false tfplan
+            terraform apply -auto-approve -input=false tfplan 2>&1 | tf_redact_random_ids
 
       - name: Tear down cloudflared SSH bridge
         if: always()
@@ -1040,13 +1044,15 @@ jobs:
           # the whole graph, -target alone would plan a no-op (nothing changed since apply #1).
           # -lock-timeout so a cancelled re-push cannot leave the S3 backend lock held and
           # block every later apply on the sole no-SSH remediation path.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           rc=0
           doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan \
               -replace=terraform_data.deploy_pipeline_fix \
               -target=terraform_data.deploy_pipeline_fix \
               -var="ssh_key_path=${CI_SSH_PUB}" \
-              -no-color -input=false -lock-timeout=120s -out=tfplan-repush || rc=$?
+              -no-color -input=false -lock-timeout=120s -out=tfplan-repush 2>&1 | tf_redact_random_ids || rc=$?
           if [[ "$rc" -ne 0 ]]; then
             echo "::error::The re-push plan failed (rc=$rc). No production write was attempted."
             exit 1
@@ -1175,8 +1181,10 @@ jobs:
           # No doppler wrapper and no -target/-var here: `terraform apply <planfile>` rejects
           # both and takes every value from the graded plan file. That is the property the
           # split buys — what is applied is exactly what was graded.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           rc=0
-          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush || rc=$?
+          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush 2>&1 | tf_redact_random_ids || rc=$?
           rm -f tfplan-repush
           if [[ "$rc" -ne 0 ]]; then
             echo "::error::The bounded re-push apply FAILED (rc=$rc). The recovery is spent; pass 2 will render the terminal verdict."
@@ -2577,6 +2585,8 @@ jobs:
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           set +e
           PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan -detailed-exitcode -no-color -input=false \
@@ -2584,6 +2594,7 @@ jobs:
             -var="ssh_key_path=${CI_SSH_PUB}" 2>&1)
           EXIT_CODE=$?
           set -e
+          PLAN_OUTPUT=$(printf '%s' "$PLAN_OUTPUT" | tf_redact_random_ids)
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           case "$EXIT_CODE" in
             0) echo "::notice::Post-apply full-root plan is clean — the close step may run." ;;
