@@ -51,9 +51,11 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ]; then
 fi
 pass=$_p0; fail=$_f0; executed=0
 
+# The canonical operand guard, byte-identical to plugins/soleur/test/test-helpers.sh
+# (fixture-dir-operand-assert.test.sh compares them and reds on drift).
 assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
@@ -70,7 +72,8 @@ done
 REALGIT="$(command -v git)"
 [ "$REALGIT" = /usr/bin/git ] || instrument "git is not /usr/bin/git ($REALGIT): the modeled argv names /usr/bin/git"
 
-T="$(mktemp -d "${TMPDIR:-/var/tmp}/gd-refs-assert.XXXXXXXX")" || instrument "mktemp -d failed"
+: "${TMPDIR:=/var/tmp}"; export TMPDIR
+T="$(mktemp -d -t gd-refs-assert.XXXXXXXX)" || instrument "mktemp -d failed"
 assert_fixture_dir "$T"
 cleanup() { rm -rf "$T"; return 0; }
 trap cleanup EXIT
@@ -717,7 +720,7 @@ mkdir -p "$T/mut"
 # mutate <name> <src> <sed -E expression>: copies, applies, and requires the edit to LAND (the file differs)
 MUT=""
 mutate() {
-  MUT="$T/mut/$1"; cp "$2" "$MUT"; sed -E -i "$3" "$MUT"
+  MUT="$T/mut/$1"; assert_fixture_dir "$MUT"; cp "$2" "$MUT"; sed -E -i "$3" "$MUT"
   if cmp -s "$2" "$MUT"; then no "mutation $1: the sed expression did not change the file (the row would prove nothing)"; return 1; fi
   if ! bash -n "$MUT" 2>/dev/null; then no "mutation $1: the mutant does not parse (a RED row would prove only the syntax error)"; return 1; fi
   return 0
