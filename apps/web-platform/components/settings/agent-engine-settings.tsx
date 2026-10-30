@@ -16,6 +16,16 @@ type Engine = {
   rolloutEnabled?: boolean;
 };
 
+// Display text only: the stored values (`managed`, `api-key`) and the PUT body are unchanged. The Claude engine's
+// `managed` mode means "the credential saved to your account" (never Soleur's), so the raw word would mislead.
+// Other engines keep the raw strings. No customer-facing copy here names a subscription (CLO ruling, #11591).
+function authModeLabel(engineId: string, mode: string): string {
+  if (engineId !== DEFAULT_AGENT_ENGINE_ID) return mode;
+  if (mode === "managed") return "Automatic";
+  if (mode === "api-key") return "My API key";
+  return mode;
+}
+
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [engines, setEngines] = useState<Engine[]>([]);
   const [selected, setSelected] = useState<string>(DEFAULT_AGENT_ENGINE_ID);
@@ -92,7 +102,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
               <span>
                 <span className="block font-medium">{engine.id === DEFAULT_AGENT_ENGINE_ID ? "Claude Code" : engine.id}</span>
                 <span className="block text-xs text-soleur-text-secondary">
-                  {selectable ? `${engine.transport} · ${engine.authModes.join(" or ")}` : "Coming soon"}
+                  {selectable ? `${engine.transport} · ${engine.authModes.map((mode) => authModeLabel(engine.id, mode)).join(" or ")}` : "Coming soon"}
                 </span>
               </span>
             </label>
@@ -100,26 +110,49 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
           })}
         </div>
         {selectedEngine?.authModes.length ? (
-          <label className="mt-5 block text-sm text-soleur-text-primary">
-            <span className="mb-2 block font-medium">Authentication mode</span>
-            <select
-              aria-label="Authentication mode"
-              value={authMode}
-              disabled={!isOwner || status === "loading" || status === "saving" || !isEngineSelectable(selectedEngine)}
-              onChange={(event) => {
-                const nextMode = event.target.value;
-                const rollback = { engineId: selected, authMode };
-                setAuthMode(nextMode);
-                void save(selected, nextMode, rollback);
-              }}
-              className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2"
-            >
-              {selectedEngine.authModes.map((mode) => (
-                <option key={mode} value={mode}>{mode}</option>
-              ))}
-            </select>
-            {authMode === "api-key" && (
+          <div className="mt-5 text-sm text-soleur-text-primary">
+            <label className="block">
+              <span className="mb-2 block font-medium">Authentication mode</span>
+              <select
+                aria-label="Authentication mode"
+                aria-describedby={
+                  selectedEngine.id === DEFAULT_AGENT_ENGINE_ID
+                    ? "auth-mode-helper user-provider-disclosure"
+                    : authMode === "api-key"
+                      ? "user-provider-disclosure"
+                      : undefined
+                }
+                value={authMode}
+                disabled={!isOwner || status === "loading" || status === "saving" || !isEngineSelectable(selectedEngine)}
+                onChange={(event) => {
+                  const nextMode = event.target.value;
+                  const rollback = { engineId: selected, authMode };
+                  setAuthMode(nextMode);
+                  void save(selected, nextMode, rollback);
+                }}
+                className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2"
+              >
+                {selectedEngine.authModes.map((mode) => (
+                  <option key={mode} value={mode}>{authModeLabel(selectedEngine.id, mode)}</option>
+                ))}
+              </select>
+            </label>
+            {selectedEngine.id === DEFAULT_AGENT_ENGINE_ID && (
               <p
+                id="auth-mode-helper"
+                data-testid="auth-mode-helper"
+                className="mt-2 text-xs text-soleur-text-secondary"
+              >
+                Applies to new conversations. Existing conversations keep the mode they started with.
+                Automatic uses the credential saved to your account;
+                My API key uses your saved API key.
+              </p>
+            )}
+            {/* True in both modes for the Claude engine (the call runs under the owner's own provider
+                account); other engines keep the original api-key-only disclosure. */}
+            {(selectedEngine.id === DEFAULT_AGENT_ENGINE_ID || authMode === "api-key") && (
+              <p
+                id="user-provider-disclosure"
                 className="mt-3 rounded-lg border border-amber-600/40 bg-amber-950/20 p-3 text-xs leading-5 text-amber-100"
                 role="note"
                 data-testid="user-provider-disclosure"
@@ -130,7 +163,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 authorized to share with the provider.
               </p>
             )}
-          </label>
+          </div>
         ) : null}
         {!isOwner && <p className="mt-4 text-xs text-soleur-text-secondary">Only workspace owners can change this setting.</p>}
       </div>

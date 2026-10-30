@@ -161,12 +161,14 @@ async function registration(): Promise<void> {
   const notes: string[] = [];
   const legacyFailures: string[] = [];
   const noop = {} as never;
+  // The builders take the per-session grants as a REQUIRED option; the probe never calls a handler, so a disabled instance.
+  const { ExecutionGrants } = await import("../server/approval/grants");
   const legacyStep = async (label: string, add: () => Promise<void>) => {
     try { await add(); } catch (e) { legacyFailures.push(`${label}-import-failed:${e instanceof Error ? e.name : "?"}`); }
   };
   await legacyStep("github-tools", async () => {
     const { buildGithubTools } = await import("../server/github-tools");
-    for (const t of buildGithubTools({ installationId: 0, owner: "o", repo: "r", defaultBranch: "main", workspacePath: "/nonexistent", workflowRateLimiter: noop } as never).toolNames) LEGACY.add(t);
+    for (const t of buildGithubTools({ installationId: 0, owner: "o", repo: "r", defaultBranch: "main", workspacePath: "/nonexistent", workflowRateLimiter: noop, grants: new ExecutionGrants() } as never).toolNames) LEGACY.add(t);
   });
   await legacyStep("plausible-tools", async () => {
     const { buildPlausibleTools } = await import("../server/plausible-tools");
@@ -174,7 +176,7 @@ async function registration(): Promise<void> {
   });
   await legacyStep("workspace-settings", async () => {
     const { buildWorkspaceSettingsTools } = await import("../server/workspace-settings-tools");
-    for (const t of buildWorkspaceSettingsTools({ userId: "probe" } as never).toolNames) LEGACY.add(t);
+    for (const t of buildWorkspaceSettingsTools({ userId: "probe", grants: new ExecutionGrants() } as never).toolNames) LEGACY.add(t);
   });
   await legacyStep("account-tools", async () => {
     const { buildAccountTools } = await import("../server/account-tools");
@@ -190,7 +192,7 @@ async function registration(): Promise<void> {
   });
   // Builders that return a bare tool array (the runner pushes their names as literals).
   const arrayBuilders: [string, () => Promise<{ name: string }[]>][] = [
-    ["kb-share-tools", async () => (await import("../server/kb-share-tools")).buildKbShareTools({ serviceClient: noop, userId: "probe", kbRoot: "/nonexistent", baseUrl: "https://probe.invalid" } as never) as { name: string }[]],
+    ["kb-share-tools", async () => (await import("../server/kb-share-tools")).buildKbShareTools({ serviceClient: noop, userId: "probe", kbRoot: "/nonexistent", baseUrl: "https://probe.invalid", grants: new ExecutionGrants() } as never) as { name: string }[]],
     ["email-triage-tools", async () => (await import("../server/email-triage-tools")).buildEmailTriageTools({ userId: "probe" } as never) as { name: string }[]],
     ["inbox-tools", async () => (await import("../server/inbox-tools")).buildInboxTools({ userId: "probe" } as never) as { name: string }[]],
     ["crm-tools", async () => (await import("../server/crm/crm-tools")).buildCrmTools({ userId: "probe" } as never) as { name: string }[]],

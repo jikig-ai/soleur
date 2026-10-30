@@ -15,9 +15,9 @@
 # detection by neutering each helper in a copy of THIS file.
 #
 # MUTATION BATTERY. After the fixture rows the suite mutates a scratch copy of the probe at the `# [mut:NAME]` tag lines
-# (or at any unique text) and re-runs itself against the mutant (FT_INNER=1). A mutant is credited as caught only when
-# the inner run exits 1 AND prints its own named `FAIL: <fragment>` line; rc 0 = SURVIVED, any other rc or a mutant that
-# does not parse or did not land = the instrument itself broke. A pristine control must come back rc 0 first.
+# (or at any unique text) and re-runs itself against the mutant (FT_INNER=1). The crediting rule (a named `FAIL: <fragment>`
+# line, never a bare non-zero exit) and the instrument self-test live in scripts/lib/mutation-harness.sh, whose scorer is pinned
+# by the `scorer:` controls at the head of the battery.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,20 +34,10 @@ check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$2] got [$3
 has()   { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing [$3]" ;; esac; }
 hasnt() { case "$2" in *"$3"*) bad "$1" "unexpected [$3] present" ;; *) ok "$1" ;; esac; }
 
-instrument_selftest() {
-  local p0=$PASS f0=$FAIL n0 p1 f1 p2 f2
-  n0="$(wc -l < "$LEDGER")"
-  { check st 1 2; has st abc z; hasnt st abc b; } >/dev/null
-  p1=$((PASS - p0)); f1=$((FAIL - f0))
-  { check st 1 1; has st abc b; hasnt st abc z; } >/dev/null
-  p2=$((PASS - p0 - p1)); f2=$((FAIL - f0 - f1))
-  PASS=$p0; FAIL=$f0
-  head -n "$n0" "$LEDGER" > "$LEDGER.t" && mv "$LEDGER.t" "$LEDGER"
-  if [ "$p1/$f1/$p2/$f2" != "0/3/3/0" ]; then
-    echo "INSTRUMENT SELF-TEST FAILED: check/has/hasnt cannot tell true from false (false-block pass/fail $p1/$f1, true-block pass/fail $p2/$f2)"
-    exit 4
-  fi
-}
+MH_LIB="$REPO/scripts/lib/mutation-harness.sh"
+[ -f "$MH_LIB" ] || { echo "mutation-harness lib missing: $MH_LIB"; exit 4; }
+# shellcheck source=../lib/mutation-harness.sh
+source "$MH_LIB"
 instrument_selftest
 
 NOW=1790000000
@@ -58,7 +48,7 @@ dt_of() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S'; }
 
 # row <epoch> <message> [fraction]: the REAL stored shape, raw = a JSON string holding {message, ...}
 row() { jq -nc --arg dt "$(dt_of "$1")${3:-}" --arg m "$2" '{dt:$dt, raw:({message:$m, SYSLOG_IDENTIFIER:"inngest-cutover-flip"}|tojson)}'; }
-mrow() { row "$1" "$MARKER token=$2 rc=0 at=tick"; }   # an anchored producer row
+mrow() { row "$1" "$MARKER verdict=$2 rc=0 at=tick"; }   # an anchored producer row
 # any live Logs row (the canary's answer): an object, not a keeper row; live_row is ARCHIVE-aged (5 h), hot_row is 60 s old
 live_row() { jq -nc --arg dt "$(dt_of $((NOW - 5 * 3600)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
 hot_row() { jq -nc --arg dt "$(dt_of $((NOW - 60)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
@@ -106,7 +96,6 @@ calls()  { grep -c . "$ROOT/calls" 2>/dev/null || true; }
 mcalls() { grep -c '^MAIN$' "$ROOT/calls" 2>/dev/null || true; }
 ccalls() { grep -c '^CANARY$' "$ROOT/calls" 2>/dev/null || true; }
 reset_knobs() { unset QH QU QP NOWV XBASH XENV STUB_RC STUB_CRC CROWS; }
-run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
 reset_knobs
 echo "=== inngest-luks-keeper-dark-11265.sh tests ==="
@@ -118,18 +107,18 @@ has "no rows: says the probe is inert until the first measured row" "$OUT" "iner
 check "no rows: the canary was read once" 1 "$(ccalls)"
 
 # 2. echo isolation: a row that merely QUOTES the marker is not a producer row (anchored at message position 1)
-{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER token=ok rc=0 at=tick verbatim"
-  row $((NOW - 40 * DAY)) " $MARKER token=ok rc=0 at=tick"
-  row $((NOW - 40 * DAY)) "x$MARKER token=fail_header rc=1 at=tick"; } > "$ROOT/rows"; run
+{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER verdict=ok rc=0 at=tick verbatim"
+  row $((NOW - 40 * DAY)) " $MARKER verdict=ok rc=0 at=tick"
+  row $((NOW - 40 * DAY)) "x$MARKER verdict=fail_header rc=1 at=tick"; } > "$ROOT/rows"; run
 check "quoting rows only (marker not at position 1): exit 2, not counted" 2 "$RC"
 hasnt "quoting rows: no row count printed as a measurement" "$OUT" "measured=1"
-jq -nc --arg dt "$(dt_of $((NOW - 40 * DAY)))" --arg m "$MARKER token=ok rc=0 at=tick" '{dt:$dt, raw:({message:"unrelated", note:$m}|tojson)}' > "$ROOT/rows"; run
+jq -nc --arg dt "$(dt_of $((NOW - 40 * DAY)))" --arg m "$MARKER verdict=ok rc=0 at=tick" '{dt:$dt, raw:({message:"unrelated", note:$m}|tojson)}' > "$ROOT/rows"; run
 check "marker in a field other than message is not a producer row: exit 2" 2 "$RC"
 
 # 3. a measured row under 30 days old: NOT YET, whichever measured token it carries
 for tok in ok fail_passphrase fail_header fail_key_absent fail_other; do
   mrow $((NOW - 5 * DAY)) "$tok" > "$ROOT/rows"; run
-  check "newest measured row (token=$tok) 5 days old: exit 2" 2 "$RC"
+  check "newest measured row (verdict=$tok) 5 days old: exit 2" 2 "$RC"
 done
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; run
 has "NOT YET prints the counts" "$OUT" "rows=1 measured=1 indeterminate=0"
@@ -151,17 +140,17 @@ check "a 45-day-old failed-verdict row is a measured row too: exit 5" 5 "$RC"
 
 # 4b. the newest measured token CLASS is printed (fixed vocabulary), so a fail-then-dark composition is legible
 mrow $((NOW - 31 * DAY)) fail_header > "$ROOT/rows"; run
-has "fail-then-dark: the newest measured token class is fail" "$OUT" "newest_measured_token=fail"
+has "fail-then-dark: the newest measured token class is fail" "$OUT" "newest_measured_verdict=fail"
 mrow $((NOW - 31 * DAY)) ok > "$ROOT/rows"; run
-has "ok-then-dark: the newest measured token class is ok" "$OUT" "newest_measured_token=ok"
+has "ok-then-dark: the newest measured token class is ok" "$OUT" "newest_measured_verdict=ok"
 { mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 3 * DAY)) fail_passphrase; } > "$ROOT/rows"; run
-has "the newest measured row decides the class (ok over an older fail)" "$OUT" "newest_measured_token=ok"
+has "the newest measured row decides the class (ok over an older fail)" "$OUT" "newest_measured_verdict=ok"
 { mrow $((NOW - 2 * DAY)) fail_other; mrow $((NOW - 3 * DAY)) ok; } > "$ROOT/rows"; run
-has "the newest measured row decides the class (fail over an older ok)" "$OUT" "newest_measured_token=fail"
+has "the newest measured row decides the class (fail over an older ok)" "$OUT" "newest_measured_verdict=fail"
 { mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 2 * DAY)) fail_other; } > "$ROOT/rows"; run
-has "two measured rows in the same second: the class is fail (conservative)" "$OUT" "newest_measured_token=fail"
+has "two measured rows in the same second: the class is fail (conservative)" "$OUT" "newest_measured_verdict=fail"
 { mrow $((NOW - 2 * DAY)) fail_other; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
-has "two measured rows in the same second, fail listed first: the class is fail" "$OUT" "newest_measured_token=fail"
+has "two measured rows in the same second, fail listed first: the class is fail" "$OUT" "newest_measured_verdict=fail"
 # a NOT YET whose newest measured row is a failed verdict says a resolved page is not recovery
 mrow $((NOW - 20 * DAY)) fail_passphrase > "$ROOT/rows"; run
 check "a lone 20-day-old failed-verdict row: exit 2" 2 "$RC"
@@ -179,7 +168,7 @@ has "mixed history: counts printed" "$OUT" "rows=3 measured=1 indeterminate=2"
 check "input order does not matter (newest measured row wins)" 2 "$RC"
 { mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 3 * DAY)) ok; } | tac > "$ROOT/rows"; run
 check "reverse-ordered rows: exit 2" 2 "$RC"
-row $((NOW - 5 * DAY)) "$MARKER token=ok rc=0 at=tick" ".123" > "$ROOT/rows"; run
+row $((NOW - 5 * DAY)) "$MARKER verdict=ok rc=0 at=tick" ".123" > "$ROOT/rows"; run
 check "a fractional-second dt is read: exit 2" 2 "$RC"
 { mrow $((NOW - 40 * DAY)) ok; mrow $((NOW - 40 * DAY)) ok; } > "$ROOT/rows"; run
 check "the two shipping paths (journald and phone-home) land two rows at one instant: exit 5" 5 "$RC"
@@ -201,7 +190,7 @@ check "an anchored row with no token: exit 3" 3 "$RC"
 mrow 0 ok > "$ROOT/rows"; run
 check "a sole measured row dated at the epoch: exit 3, not a 20717-day age" 3 "$RC"
 hasnt "epoch-dated row: no ACTION REQUIRED" "$OUT" "ACTION REQUIRED"
-jq -nc --arg m "$MARKER token=ok rc=0 at=tick" '{dt:"not a date", raw:({message:$m}|tojson)}' > "$ROOT/rows"; run
+jq -nc --arg m "$MARKER verdict=ok rc=0 at=tick" '{dt:"not a date", raw:({message:$m}|tojson)}' > "$ROOT/rows"; run
 check "a measured row with an unreadable timestamp: exit 3" 3 "$RC"
 # shape drift: an OBJECT that mentions nothing decodable, ALONE (no anchored row, no other line)
 jq -nc --arg dt "$(dt_of $((NOW - 3 * DAY)))" '{dt:$dt, raw:"not json at all"}' > "$ROOT/rows"; run
@@ -277,7 +266,7 @@ check "empty body and a canary holding a hot row plus a 5 h old row: exit 2" 2 "
 jq -nc --arg dt "$(dt_of $((NOW - 25 * 3600)))" '{dt:$dt, raw:({message:"too old"}|tojson)}' > "$ROOT/crow-old"; CROWS="$ROOT/crow-old" run; reset_knobs
 check "empty body and a canary holding only a 25 h old row (outside --since 24h): exit 3" 3 "$RC"
 # quoting rows only: no anchored row, so the canary is read too
-{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER token=ok rc=0 at=tick"; } > "$ROOT/rows"; run
+{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER verdict=ok rc=0 at=tick"; } > "$ROOT/rows"; run
 check "quoting rows only and a live canary: exit 2, canary read" 2 "$RC"; check "quoting rows only: canary read once" 1 "$(ccalls)"
 CROWS="$ROOT/crow-empty" run; reset_knobs
 check "quoting rows only and a dead canary: exit 3" 3 "$RC"
@@ -400,7 +389,7 @@ check "the probe MARKER is the 30-character producer marker" "$MARKER" "$probe_m
 has "probe MARKER equals the paging alert's anchored marker in betterstack-logs-alerts.tf" "$TF_SRC" "position(JSONExtractString(raw, 'message'), '$probe_marker') = 1"
 has "probe MARKER equals the marker the flip script emits (inngest-cutover-flip.sh)" "$FLIP_SRC" "\"$probe_marker \${row}\""
 flip_tokens="$(grep -oE 'luks_probe_finish [a-z_]+ [0-9"$]' "$REPO/apps/web-platform/infra/inngest-cutover-flip.sh" | awk '{print $2}' | sort -u | tr '\n' ' ')"
-tf_tokens="$(sed -n 's/^# token in {\(.*\)}, shipped twice.*$/\1/p' "$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf" | tr -d ' ' | tr ',' '\n' | sort -u | tr '\n' ' ')"
+tf_tokens="$(sed -n 's/^# verdict in {\(.*\)}, shipped twice.*$/\1/p' "$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf" | tr -d ' ' | tr ',' '\n' | sort -u | tr '\n' ' ')"
 check "the flip script emits exactly the vocabulary {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}" "fail_header fail_key_absent fail_passphrase indeterminate ok " "$flip_tokens"
 check "the alert file documents the same token vocabulary as the flip script" "$flip_tokens" "$tf_tokens"
 for t in $flip_tokens; do
@@ -418,45 +407,49 @@ FAULT
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; XENV="BASH_ENV=$ROOT/fault.sh" run; reset_knobs
 check "an unexpected internal exit status is mapped to 3 by the EXIT trap" 3 "$RC"
 
+# shellcheck disable=SC2034  # read by mh_floor in the sourced lib
 FIX_N="$(wc -l < "$LEDGER")"
 if run_battery "${1:-}"; then
   echo "=== mutation battery ==="
   export FT_REPO="$REPO"
   MUT="$ROOT/mut"; mkdir -p "$MUT"
-  # mutate_run <name> <tag-or-unique-text> <replacement line> <expected FAIL fragment>
-  mutate_run() {
-    local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0
-    if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
-    REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
-    if cmp -s "$SUT" "$f"; then bad "mutation $name: the mutation did not land (instrument)"; return; fi
-    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant does not parse (instrument)"; return; fi
-    FT_INNER=1 FT_SUT="$f" bash "$SELF" > "$o" 2>&1 || rc=$?
-    if [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
-    elif [ "$rc" != 1 ]; then bad "mutation $name: unresolved instrument rc=$rc"
-    elif grep -qF -- "FAIL: $frag" "$o"; then ok "mutation $name: caught by its own FAIL line [$frag]"
-    else bad "mutation $name: rc=1 but no FAIL line [$frag] (killed by something else)"; fi
-  }
-  # mutate_sub <name> <unique text> <from> <to> <expected FAIL fragment>: replace <from> by <to> inside the ONE line holding <unique text>
-  mutate_sub() {
-    local line new
-    line="$(grep -F -- "$2" "$SUT" || true)"
-    if [ -z "$line" ] || [ "$(printf '%s\n' "$line" | wc -l)" != 1 ]; then bad "mutation $1: the text [$2] matches exactly one line (instrument)"; return; fi
-    new="${line/"$3"/"$4"}"
-    if [ "$new" = "$line" ]; then bad "mutation $1: [$3] is present in the line (instrument)"; return; fi
-    mutate_run "$1" "$2" "$new" "$5"
-  }
-  # mutate_helper <name> <helper> <neutered definition>: the self-test must abort the run (rc 4) on a copy of THIS file
-  mutate_helper() {
-    local name="$1" helper="$2" rep="$3" f="$MUT/$1.test.sh" o="$MUT/$1.out" rc=0
-    HELPER="$helper" REP="$rep" awk 'index($0, ENVIRON["HELPER"] "()") == 1 { print ENVIRON["REP"]; next } { print }' "$SELF" > "$f"
-    if cmp -s "$SELF" "$f"; then bad "mutation $name: the helper mutation did not land (instrument)"; return; fi
-    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant suite does not parse (instrument)"; return; fi
-    FT_INNER=1 FT_SUT="$SUT" bash "$f" > "$o" 2>&1 || rc=$?
-    if [ "$rc" = 4 ] && grep -qF -- "INSTRUMENT SELF-TEST FAILED" "$o"; then ok "mutation $name: caught by the instrument self-test (rc 4)"
-    else bad "mutation $name: the neutered helper went undetected (rc=$rc)"; fi
-  }
   ctl=0; FT_INNER=1 FT_SUT="$SUT" bash "$SELF" >/dev/null 2>&1 || ctl=$?
   check "battery control: the pristine probe passes the inner suite (rc 0)" 0 "$ctl"
+  # Scorer controls (#11520): mh_caught decides whether a mutant was caught FOR THE CLAIMED REASON. Each row calls it
+  # directly in THIS shell (an ok/bad inside a subshell would lose its PASS/FAIL increment and trip LEDGER MISMATCH) and
+  # emits exactly one check. The logs are synthetic, never recorded from a real run.
+  printf '  PASS: other\n  FAIL: frag-1 and trailing text\n' > "$MUT/sc-right.log"
+  printf '  PASS: frag-1\n'                                > "$MUT/sc-pass-only.log"
+  printf '  FAIL: a different row\n'                       > "$MUT/sc-other.log"
+  printf 'x  FAIL: frag-1\n'                              > "$MUT/sc-mid.log"
+  printf '        FAIL: frag-1\n'                        > "$MUT/sc-indented.log"
+  : > "$MUT/sc-empty.log"
+  # A missing log would read as "not caught" and let a negative control pass vacuously, so it gets its own answer.
+  sc_verdict() { [ -f "$2" ] || { echo missing; return; }; mh_caught "$1" "$2" && echo yes || echo no; }
+  check "scorer: a FAIL line starting with the fragment and trailing text is caught" yes "$(sc_verdict frag-1 "$MUT/sc-right.log")"
+  # label|fragment|log: every row must come back NOT caught
+  sc_no=(
+    "a PASS-only log|frag-1|sc-pass-only"
+    "a FAIL line for a different row|frag-1|sc-other"
+    "an empty log|frag-1|sc-empty"
+    "a fragment longer than the FAIL label (strict prefix of the fragment)|frag-1 and trailing text plus more|sc-right"
+    "a FAIL quoted mid-line (not at line start)|frag-1|sc-mid"
+    "a FAIL on an indented detail line|frag-1|sc-indented"
+    "a regex-metacharacter fragment (literal match only)|fr.g-1|sc-right"
+    "an empty fragment|-|sc-right"
+  )
+  for sc_row in "${sc_no[@]}"; do
+    IFS='|' read -r sc_lbl sc_frag sc_log <<< "$sc_row"
+    [ "$sc_frag" = "-" ] && sc_frag=""
+    check "scorer: $sc_lbl is not caught" no "$(sc_verdict "$sc_frag" "$MUT/$sc_log.log")"
+  done
+  # Teeth: with the scorer overridden to always say yes, EVERY "not caught" control above comes back wrongly caught.
+  sc_dead="$( ( mh_caught() { return 0; }; n=0
+    for sc_row in "${sc_no[@]}"; do IFS='|' read -r _l sc_frag sc_log <<< "$sc_row"; [ "$sc_frag" = "-" ] && sc_frag=""
+      mh_caught "$sc_frag" "$MUT/$sc_log.log" && n=$((n + 1)); done; echo "$n" ) )"
+  # The expected count is a literal on purpose: derived from the table it would shrink with it. Update it WITH the table.
+  check "scorer teeth: a dead scorer is caught wrongly-yes by all 8 negative controls" 8 "${sc_dead:-0}"
+  check "scorer: the negative-control table still has 8 rows" 8 "${#sc_no[@]}"
   mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
   mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
   mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
@@ -495,7 +488,7 @@ if run_battery "${1:-}"; then
   mutate_sub m6o3-raw-clause-dropped   'then "X\t-\t-"'    ' or (($r.raw | type) != "string")' '' 'an object with a dt but no raw beside a valid row: exit 3'
   mutate_sub m6p-now-epoch-octal-regex 'unusable NOW_EPOCH' '^[1-9][0-9]{0,15}$' '^[0-9]+$' 'NOW_EPOCH=017: the fixed reason'
   mutate_sub m6q-fail-note-dropped     'The newest measured row is a FAILED verdict' 'a resolved page is not recovery' 'a note' 'NOT YET after a fail row: a resolved page is not recovery'
-  mutate_sub m6h-token-class-hardcoded '[mut:tokclass]'    'newest_measured_token=${NEWCLS}' 'newest_measured_token=ok' 'fail-then-dark: the newest measured token class is fail'
+  mutate_sub m6h-token-class-hardcoded '[mut:tokclass]'    'newest_measured_verdict=${NEWCLS}' 'newest_measured_verdict=ok' 'fail-then-dark: the newest measured token class is fail'
   mutate_sub m6i-env-seam-reintroduced '[mut:query-path]'  'QUERY="$SCRIPT_DIR/../betterstack-query.sh"' 'QUERY="${LUKS_KEEPER_QUERY_SCRIPT:-$SCRIPT_DIR/../betterstack-query.sh}"' 'an exported LUKS_KEEPER_QUERY_SCRIPT is ignored: the evil script is never run'
   mutate_sub m6j-marker-typo           '[mut:marker]'      'KEY_PROBE' 'KEY_PR0BE' 'probe MARKER equals the paging alert'"'"'s anchored marker in betterstack-logs-alerts.tf'
   mutate_sub m7a-directive-bare-form   '<!-- soleur:followthrough script=' '<!-- soleur:followthrough' 'soleur:followthrough' 'the header carries exactly one single-line follow-through directive'
@@ -503,12 +496,9 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (an --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=189; MIN_BATTERY=44
+MIN_FIXTURE=189; MIN_BATTERY=55
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-luks-keeper-dark-11265.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
-if [ -z "${FT_INNER:-}" ]; then
-  if [ "$FIX_N" -lt "$MIN_FIXTURE" ]; then printf 'FLOOR: only %s fixture assertions ran, expected at least %s\n' "$FIX_N" "$MIN_FIXTURE"; exit 1; fi
-  if run_battery "${1:-}" && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
-fi
+mh_floor "$MIN_FIXTURE" "$MIN_BATTERY" "${1:-}"
 [ "$FAIL" -eq 0 ]

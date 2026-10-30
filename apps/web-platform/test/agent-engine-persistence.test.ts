@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AgentEnginePersistenceRepository } from "@/server/agent-engine-persistence";
+import { boundRun, makeTableAwareTenant } from "./helpers/table-aware-tenant";
 
 function client() {
   const rpc = vi.fn().mockResolvedValue({ data: { id: "run-1" }, error: null });
@@ -248,5 +249,37 @@ describe("AgentEnginePersistenceRepository", () => {
     });
     expect(eq).toHaveBeenCalledWith("routine_id", "cron-daily-triage");
     expect(routineRunEq).toHaveBeenCalledWith("routine_run_id", "routine-run-1");
+  });
+});
+
+// #11591 — the optional caller scope on the two reads the credential lease depends on.
+describe("AgentEnginePersistenceRepository — caller-scoped binding reads (#11591)", () => {
+  it("getConversationRun(createdBy) adds the created_by filter, so another member's run reads as no run", async () => {
+    const t = makeTableAwareTenant({
+      agent_engine_runs: [boundRun({ conversation_id: "c1", created_by: "peer", auth_mode: "api-key" })],
+    });
+    const repo = new AgentEnginePersistenceRepository(t.client as never);
+    expect(await repo.getConversationRun("c1", "me")).toBeNull();
+    expect(t.eqs).toContainEqual(["agent_engine_runs", "created_by", "me"]);
+    expect(await repo.getConversationRun("c1", "peer")).not.toBeNull();
+  });
+
+  it("getConversationRun without createdBy stays unscoped (existing callers unchanged)", async () => {
+    const t = makeTableAwareTenant({
+      agent_engine_runs: [boundRun({ conversation_id: "c1", created_by: "peer", auth_mode: "managed" })],
+    });
+    const repo = new AgentEnginePersistenceRepository(t.client as never);
+    expect(await repo.getConversationRun("c1")).not.toBeNull();
+    expect(t.eqs.some(([, col]) => col === "created_by")).toBe(false);
+  });
+
+  it("getConversationBindingState(userId) adds the user_id filter", async () => {
+    const t = makeTableAwareTenant({
+      conversations: [{ id: "c1", user_id: "peer", engine_binding_state: "legacy" }],
+    });
+    const repo = new AgentEnginePersistenceRepository(t.client as never);
+    expect(await repo.getConversationBindingState("c1", "me")).toBeNull();
+    expect(await repo.getConversationBindingState("c1", "peer")).toBe("legacy");
+    expect(await repo.getConversationBindingState("c1")).toBe("legacy");
   });
 });

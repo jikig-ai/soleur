@@ -451,6 +451,7 @@ describe("the 23h replay age gate (server clock, fail-closed)", () => {
     expect(await res.json()).toStrictEqual({
       error: "approval_expired",
       message_id: MSG_ID,
+      reason: "expired",
     });
     expect(mockInngestSend).not.toHaveBeenCalled();
     expect(store.messageStatus()).toBe("archived");
@@ -471,9 +472,12 @@ describe("the 23h replay age gate (server clock, fail-closed)", () => {
       setup({ row: { clicked_at: value } });
       const res = await POST(makeRequest({}), ctx());
       expect(res.status).toBe(409);
-      expect(((await res.json()) as { error: string }).error).toBe(
-        "approval_expired",
-      );
+      // The wire `reason` is the same value the Sentry event carries, so the client can split the copy.
+      expect(await res.json()).toStrictEqual({
+        error: "approval_expired",
+        message_id: MSG_ID,
+        reason: "future_clicked_at",
+      });
       expect(mockInngestSend).not.toHaveBeenCalled();
       expect(store.messageStatus()).toBe("draft");
       expect(mockWarnSilentFallback.mock.calls[0][1]).toMatchObject({

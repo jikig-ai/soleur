@@ -417,15 +417,17 @@ s = s.replace(old, "exploration_id = logtail_exploration.monitor_send_failed.id"
   mutate_red "the leg-B shipper conjunct is dropped (any stage's phone-home row counts)" TF \
     'import os
 shipper = os.environ["MUT_SHIPPER"]
+i = s.index("inngest_luks_wrong_volume_sql = <<-SQL"); j = s.index("\n  SQL\n", i); region = s[i:j]
 old = "          JSONExtractString(raw, \x27shipper\x27) = \x27" + shipper + "\x27\n"
-assert s.count(old) == 1
-s = s.replace(old, "")'
+assert region.count(old) == 1
+s = s[:i] + region.replace(old, "") + s[j:]'
   mutate_red "the leg-B shipper literal flips to a foreign shipper (leg B reads zero rows silently)" TF \
     'import os
 shipper = os.environ["MUT_SHIPPER"]
+i = s.index("inngest_luks_wrong_volume_sql = <<-SQL"); j = s.index("\n  SQL\n", i); region = s[i:j]
 old = "JSONExtractString(raw, \x27shipper\x27) = \x27" + shipper + "\x27"
-assert s.count(old) == 1
-s = s.replace(old, "JSONExtractString(raw, \x27shipper\x27) = \x27cloud-init-phone-other\x27")'
+assert region.count(old) == 1
+s = s[:i] + region.replace(old, "JSONExtractString(raw, \x27shipper\x27) = \x27cloud-init-phone-other\x27") + s[j:]'
   mutate_red "the leg-B stage conjunct is dropped (every phone-home row counts)" TF \
     'import os
 stage = os.environ["MUT_STAGE"]
@@ -447,9 +449,10 @@ s = s.replace(old, "JSONExtractString(raw, \x27stage\x27) = \x27inngest-server-p
 assert s.count(old) == 1
 s = s.replace(old, "JSONExtractString(raw, \x27detail\x27), \x27data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) > 0")'
   mutate_red "the detail='' fail-loud disjunct is neutralized (detail-absent rows go quiet again)" TF \
-    'old = "JSONExtractString(raw, \x27detail\x27) = \x27\x27"
-assert s.count(old) == 1
-s = s.replace(old, "false")'
+    'i = s.index("inngest_luks_wrong_volume_sql = <<-SQL"); j = s.index("\n  SQL\n", i); region = s[i:j]
+old = "JSONExtractString(raw, \x27detail\x27) = \x27\x27"
+assert region.count(old) == 1
+s = s[:i] + region.replace(old, "false") + s[j:]'
   mutate_red "the whole OR arm is deleted (the #11526 regression — legs collapse to journald-only)" TF \
     'import os
 stage = os.environ["MUT_STAGE"]

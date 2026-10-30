@@ -30,6 +30,8 @@ export interface RpcCtx extends Ctx {
   inboxA: string;
   /** An A-owned email_triage_item (wsA-owner-gated; set_email_triage_status target). */
   emailTriageA: string;
+  /** A pending A-workspace approval_request (decide_approval target; mig 180). */
+  approvalA: string;
   /** An A-owned scope_grant (authorize_template p_grant_id cross-founder-ref target). */
   scopeGrantA: string;
 }
@@ -86,6 +88,10 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   // Atomic contact-PII read + Art.5(2) audit (mig 127); ownership-guarded → a
   // non-owner reading another founder's contact PII must be denied (42501).
   crm_get_contact_detail: (c) => `select crm_get_contact_detail('${c.contactA}')`,
+  // Owner-only decision (mig 180, #4672) on a REAL pending request of workspace A: tenant B is not an Owner of wsA,
+  // so the in-body owner check raises 42501 (the same error as for a missing id: no existence oracle). The check runs
+  // before the row lock and before any status branch, so it also guards the Owner revoke (deny on an approved row).
+  decide_approval: (c) => `select decide_approval('${c.approvalA}','approve')`,
   set_inbox_item_state: (c) => `select set_inbox_item_state('${c.inboxA}','archived')`,
   // workspace-OWNER-gated (is_email_triage_workspace_owner, mig 111) on a REAL
   // A-owned triage item → a non-owner tenant-B caller raises 42501 "not authorized"

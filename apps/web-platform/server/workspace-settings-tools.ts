@@ -2,6 +2,9 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { setBashAutonomous } from "./set-bash-autonomous";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";
 
 // Issue B part 2 — agent-native parity for the autonomous-mode toggle (AC18).
 //
@@ -21,15 +24,25 @@ import { setBashAutonomous } from "./set-bash-autonomous";
 // actually talks to cannot yet honor "turn on autonomous mode" via a tool — it
 // must point the user at Settings > Privacy. This is a deliberate,
 // pre-existing cc-router limitation tracked by #3722 (V2-13 Phase 2 — promote
-// MCP tools to the cc-router via CC_MCP_ALLOWLIST); this pair should be
-// included in that promotion (the Tier-3 cross-tenant-credential rationale
-// does NOT apply — these tools are closure-bound to `userId` and owner-gated in
-// the RPC, the same property cited for the kb_share/conversations Tier-1
-// promotion candidates). Until #3722 lands, the HTTP route + UI is the user's
-// path and these tools are the leader-surface agent equivalent.
+// MCP tools to the cc-router via CC_MCP_ALLOWLIST). The READ tool can join that
+// promotion (closure-bound to `userId`; the Tier-3 cross-tenant-credential
+// rationale does not apply). The SET tool CANNOT be promoted that way: it is
+// approval-required (ADR-309), the cc runner has no approval wiring, and
+// `readCcMcpAllowlist` throws on any approval-required name. Promoting it needs
+// the approval gate wired into the cc runner first. Until #3722 lands, the HTTP
+// route + UI is the user's path and these tools are the leader-surface agent
+// equivalent.
 
 interface BuildWorkspaceSettingsToolsOpts {
   userId: string;
+  /**
+   * #4672 per-session execution grants (shared by closure with the approval gate). REQUIRED, so a forgotten wiring is a
+   * compile error. Once the approval flow ran in the session, `workspace_set_autonomous` runs only with a grant, and
+   * only in the workspace the Owner approved it for.
+   */
+  grants: ExecutionGrants;
+  /** Test seam: the user's CURRENT workspace id at execution time. */
+  resolveWorkspaceId?: (userId: string) => Promise<string>;
 }
 
 type ToolTextResponse = {
@@ -48,7 +61,10 @@ function textResponse(payload: unknown, isError = false): ToolTextResponse {
 export function buildWorkspaceSettingsTools(
   opts: BuildWorkspaceSettingsToolsOpts,
 ) {
-  const { userId } = opts;
+  const { userId, grants } = opts;
+  const resolveWorkspaceId =
+    opts.resolveWorkspaceId ??
+    (async (uid: string) => resolveCurrentWorkspaceId(uid, await getFreshTenantClient(uid)));
 
   return {
     tools: [
@@ -93,8 +109,23 @@ export function buildWorkspaceSettingsTools(
             .describe("true to enable autonomous mode, false to disable"),
         },
         async (input) => {
+          const toolName = "mcp__soleur_platform__workspace_set_autonomous";
+          const grant = checkGrant(grants, toolName, input);
+          if (grant.kind === "refuse") return grantRefusalResponse("grant_missing");
           try {
-            const autonomous = await setBashAutonomous(userId, input.value);
+            if (grant.kind === "granted") {
+              // The approval binds the workspace it was granted in. The active workspace is re-resolved at execution,
+              // so approved-on-W1 must not run on W2.
+              const current = await resolveWorkspaceId(userId);
+              if (current !== grant.binding.workspaceId) {
+                reportGrantRefused(toolName, "workspace_changed");
+                return grantRefusalResponse("workspace_changed");
+              }
+            }
+            const autonomous =
+              grant.kind === "granted"
+                ? await setBashAutonomous(userId, input.value, grant.binding.workspaceId)
+                : await setBashAutonomous(userId, input.value);
             return textResponse({ autonomous });
           } catch (err) {
             return textResponse(

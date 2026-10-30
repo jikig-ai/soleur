@@ -90,6 +90,8 @@ import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool, gateStatusWriteOp } from "./permission-callback";
+import { createApprovalGateDeps } from "./approval/gate";
+import { ExecutionGrants } from "./approval/grants";
 import { reportSilentFallback, hashUserId } from "./observability";
 import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
@@ -106,6 +108,7 @@ import {
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
+import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import {
   authFailureFrameFromLeaseError,
   isOauthUnusableLeaseError,
@@ -1140,8 +1143,9 @@ async function startAgentSessionInner(
       userId,
       async (lease) => {
     // Agent-SDK consumer — resolve the credential ({ value, scheme }) so the
-    // subprocess env carries exactly one auth var. Prefers the operator
-    // subscription oauth_token when enabled+permitted; otherwise api_key.
+    // subprocess env carries exactly one auth var. The conversation binding's
+    // auth mode (#11591) decides: the operator subscription oauth_token only
+    // for `managed` (and when enabled+permitted); `api-key` always uses api_key.
     const [credential, serviceTokens] = await Promise.all([
       lease.getAgentCredential(),
       getUserServiceTokens(userId),
@@ -1196,6 +1200,10 @@ async function startAgentSessionInner(
       throw new Error(ERR_WORKSPACE_NOT_PROVISIONED);
     }
     const activeWorkspaceId = activeWorkspace.workspaceId;
+    // #4672 — ONE per-session execution-grant object, shared by closure between the approval gate (writer) and the three
+    // tool builders that re-resolve something at execution (reader): github_push_branch, kb_share_create,
+    // workspace_set_autonomous. The model has no handle to it.
+    const approvalGrants = new ExecutionGrants();
     const workspacePath = await resolveActiveWorkspacePath(
       userId,
       sessionTenant,
@@ -1762,6 +1770,7 @@ action was not performed, tell the user that and do not retry it.`;
           defaultBranch,
           workspacePath,
           workflowRateLimiter,
+          grants: approvalGrants,
         });
         platformTools.push(...github.tools);
         platformToolNames.push(...github.toolNames);
@@ -1843,6 +1852,7 @@ are the requirements to implement.`;
       userId,
       kbRoot: path.join(workspacePath, "knowledge-base"),
       baseUrl: appUrl ?? "https://app.soleur.ai",
+      grants: approvalGrants,
     });
     platformTools.push(...kbShareTools);
     platformToolNames.push(
@@ -1927,7 +1937,7 @@ are the requirements to implement.`;
     // (flipping an approval-bypass requires a review-gate even for the agent).
     // Registered here on the leader surface only — the cc-router exposes no
     // platform tools (platformToolNames: []); see workspace-settings-tools.ts.
-    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });
+    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId, grants: approvalGrants });
     platformTools.push(...workspaceSettingsTools.tools);
     platformToolNames.push(...workspaceSettingsTools.toolNames);
 
@@ -2248,6 +2258,16 @@ are the requirements to implement.`;
             abortableReviewGate,
             sendToClient,
             notifyOfflineUser,
+            // #4672 — the durable approval flow for the slice-1 gated tools. Cheap to build (no database access until a
+            // slice-1 tool reaches the gate); the flag seam inside it decides, once per gate, whether the flow runs.
+            // Off (today: constant false) the gated branch is the in-memory review gate, unchanged.
+            approval: createApprovalGateDeps({
+              userId,
+              workspaceId: activeWorkspaceId,
+              repoSlug: repoOwner && repoName ? `${repoOwner}/${repoName}` : "",
+              workspacePath,
+              grants: approvalGrants,
+            }),
             // Closure captures `userId` from the enclosing runAgentSession
             // scope so the deps interface stays at (conversationId, status[, guard])
             // — see plan §"Transitive Coverage via deps.updateConversationStatus".
@@ -2723,7 +2743,9 @@ are the requirements to implement.`;
         }
       }
     }
-    });  // end runWithByokLease
+    },
+    { resolveAuthMode: makeConversationAuthModeResolver(userId, conversationId) },
+  );  // end runWithByokLease
   } catch (err) {
     if (controller.signal.aborted) {
       // feat-abort-conversation-web PR1 (plan §1.3): the abort branch
@@ -3329,7 +3351,9 @@ async function sendUserMessageInner(
         // lease can close before the per-leader lease bodies run.
         dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
           .catch(handleSessionError);
-      });
+      },
+    { restOnly: true },
+  );
     } catch (err) {
       await handleSessionError(err);
     }

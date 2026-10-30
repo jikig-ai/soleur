@@ -28,6 +28,7 @@ import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-nati
 import { slaIssueProcess } from "@/server/inngest/functions/sla-issue-process";
 import { cronAnthropicCostReport } from "@/server/inngest/functions/cron-anthropic-cost-report";
 import { cronAnthropicCreditProbe } from "@/server/inngest/functions/cron-anthropic-credit-probe";
+import { cronApprovalExpiry } from "@/server/inngest/functions/cron-approval-expiry";
 import { cronArchitectureDiagramSync } from "@/server/inngest/functions/cron-architecture-diagram-sync";
 import { cronBotPrReaper } from "@/server/inngest/functions/cron-bot-pr-reaper";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
@@ -134,6 +135,7 @@ const handlers = serve({
     cronAgentNativeAudit,
     cronAnthropicCostReport,
     cronAnthropicCreditProbe,
+    cronApprovalExpiry,
     cronArchitectureDiagramSync,
     cronBotPrReaper,
     cronBugFixer,

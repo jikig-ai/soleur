@@ -250,6 +250,7 @@ import {
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
+import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
@@ -294,6 +295,7 @@ const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
 // pino + supabase service client into the browser bundle.
 export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { isApprovalRequiredTool } from "./approval/tools";
 
 // Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
 // (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
@@ -302,17 +304,20 @@ import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 /**
  * Read CC_MCP_ALLOWLIST and return the cc-router's mcpServers config (#2909).
  *
- * Phase 1 deny-by-default scaffolding (this PR): returns `{}` for empty /
- * unset / whitespace-only env. Throws plain Error if any short-name in the
- * env resolves to a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
- * tools — cross-tenant credentials by construction). Phase 1 does NOT yet
- * build a populated `soleur_platform` server even when valid non-denylist
- * names are present — promotion is Phase 2 (#3722).
+ * Phase 1 deny-by-default scaffolding: returns `{}` for empty / unset /
+ * whitespace-only env. Throws a plain Error if any short-name in the env
+ * resolves to (a) a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
+ * tools — cross-tenant credentials by construction), or (b) an
+ * approval-required tool (`isApprovalRequiredTool`; ADR-309: the cc runner has
+ * no approval wiring, so a promoted approval tool would run on the legacy
+ * in-memory gate and skip the queue). Phase 1 does NOT yet build a populated
+ * `soleur_platform` server even when valid names are present — promotion is
+ * Phase 2 (#3722).
  *
- * Denylist-check-first ordering is pinned: a mixed env value like
+ * Denylist-check-first ordering is pinned per name: a mixed env value like
  * `"foo,plausible_create_site"` throws with the Plausible name in the
  * message regardless of position. Future unknown-name validation (Phase 2)
- * will fail-closed AFTER the denylist check.
+ * will fail-closed AFTER both checks.
  *
  * Exported for unit testability (`test/cc-mcp-tier-allowlist.test.ts`).
  *
@@ -332,6 +337,13 @@ export function readCcMcpAllowlist(
     if (CC_ROUTER_TIER3_DENYLIST.has(fqn)) {
       throw new Error(
         `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
+      );
+    }
+    // #4672 — the cc runner has no approval wiring, so a promoted approval tool would run on the legacy in-memory gate
+    // and silently skip the queue. Refuse it here (static message; the short name is the only env echo).
+    if (isApprovalRequiredTool(fqn)) {
+      throw new Error(
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — the cc runner has no approval wiring (ADR-309)`,
       );
     }
   }
@@ -1916,8 +1928,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `AgentCredential | Promise<AgentCredential>` union does not surface
     // awkwardly through `Promise.all`'s array element inference.
     // `buildAgentQueryOptions.credential` consumes the unwrapped value.
-    // Agent-SDK consumer: prefers the operator subscription oauth_token
-    // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
+    // Agent-SDK consumer: the conversation binding's auth mode (#11591) decides:
+    // the operator subscription oauth_token only for `managed` (when
+    // enabled+permitted), `api-key` always the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
 
     // feat-cc-cap-raise-resume (#9565) closure-capture: publish the
@@ -3379,7 +3392,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     }
     throw err;
   }
-  }); // end runWithByokLease
+  },
+    { resolveAuthMode: makeConversationAuthModeResolver(args.userId, args.conversationId) },
+  ); // end runWithByokLease
 };
 
 let _runner: SoleurGoRunner | null = null;
