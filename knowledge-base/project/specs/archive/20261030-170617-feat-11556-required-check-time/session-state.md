@@ -124,3 +124,13 @@ Design pass (simplicity+arch+perf) found missed rename blast radius — all 3 se
 - Panel verdict: 6 seats, zero P0; 2 P1s fixed inline (fast-tier budget via --durations-seed regen; audit ratchet via accept rows), advisory items fixed (reorder overclaims, stale numerals, generator WARN/lowercase, usage hints, regen-command failure text). Security/clean: pattern-recognition + security-sentinel + data-integrity verified tiling, rename sweep, extraction pipelines fail-closed.
 - Deferral issues filed: #11647 (arm-debt bundle: est src, lib extraction, exit-code parity, per-block floors, ADR/checklist) + #11648 (always-on fast-tier drift — pre-existing, demotion per #9763). Both deferred-scope-out + meta/machinery, re-eval 2026-11-14.
 - HEAD a92495b996 pushed. Affected-gate full run still in flight (~2h, deep).
+
+## Update 11 — CI is the verification channel; brainstorm revert pushed
+- Decided (user prompt): rely on CI rather than the ~2.5h local MODE=full gate. CI's test check runs the same degraded full battery across 8 legs. Local gate left running as a second channel, not waited on.
+- Prior CI run on 92e2740f (41074334390) red: affected-index-ratchet (fixed via accept rows), test (fixed via seed regen), rule-body-lint (FIXED now: brainstorm SKILL.md compound paragraph put it 1,105B over the 141k ceiling — reverted in 08a95253ea; learning doc kept), e2e (environmental — 500s on /api/team-names; sibling PRs green).
+- HEAD 08a95253ea pushed; fresh CI run pending.
+- PR #11561 isDraft=true, mergeable, BEHIND main — needs rebase before merge.
+
+## Update 12 — local gate stopped; CI-only verification
+- Local MODE=full gate killed at ~2.35h (pid 292699 process group; .rc still stale=4, never overwrote). It covered ~19k log lines / ~390 suite separators green to that point; CI run 41083325173 on 08a95253ea is now the verdict channel.
+- Remaining test-all.sh --affected processes on the box belong to sibling worktree feat-one-shot-11602 — not killed.
