@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | ~9.4-9.6 min predicted per leg (566.1-578.2 s of suite time) from the manifest regenerated on five green main runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745); the worst leg stays under 600 s by ~22 s before setup. A table prediction, not a CI measurement and not job wall-clock; derivation in Measured history 2026-10-03 (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=578 → 1-193/194-386/387-578) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -252,6 +252,31 @@ span to the NEXT registered mark.
   `gh run view <run> --json jobs,createdAt` (start delay = a job's
   `startedAt` minus the run's `createdAt`) and compare against the cohort
   shape in the section below; if the 8th leg's start delay dominates, revisit.
+- **2026-10-30 pre-split baseline (#11562):** jobs-API read over three green
+  PR/merge_group runs (41037175716, 41036790949, 41030652561) — worst
+  `test-scripts` leg wall clocks 49.4 / 51.0 / 43.2 min, per-run leg
+  spreads ~31 / ~32 / ~22 min. The two atomic suites carried it:
+  `ci-pr-affected-replay.test.sh` median 1,322,511 ms (~22 min) and
+  `scripts/test-all-affected` median 1,746,404 ms (~29 min) across five
+  green runs, both on legs already holding ~10 min of other work. Suite
+  sums ≈ wall clock (queue time was not the driver). Split to
+  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-193/194-386/387-578` of 578)
+  and `test-all-affected-{a,b,c,d}` (`--rows 1-13/14-32/33-36/37-38` of 38)
+  inside the same relevance gates; arm prices seeded at CI-median × local
+  arm-share — the first green run carrying real arm timings is the
+  re-price input (interim-pin pattern from 2026-09-26). Post-split
+  manifest: incumbent rows kept their committed prices (a full
+  `--timings-dir` re-price showed the always-on fast-tier budget breaks
+  on pre-existing main drift — 8 always-on labels at 11-378 s CI real —
+  tracked separately), arms placed on least-loaded legs by seeded weight
+  on distinct legs per the `-<letter>` rule. The ~28-min bound is
+  delivered only after real arm timings re-price; until then
+  `--incremental` regens only, since a `--runs` pass would floor-price
+  the estimated arm rows. **Ownership checkpoint:** re-check leg spread
+  and worst leg on the first green PR run after merge — that run's
+  `suite-timings-*` artifacts carry the real arm prices and are the
+  `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
+  artifact runs — main `push` runs elide the shards job).
 
 ## Runner-availability data (why extra legs are not free)
 
