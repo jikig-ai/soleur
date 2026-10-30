@@ -210,7 +210,7 @@ fi
 # a scrub spelled `del(`, `map_values` or `replace(.message` naming `verdict` evades it; that is
 # the file's current rewrite style, so the idiom pin is proportionate today and flagged here for
 # the next scrub author, not rewritten into an exhaustive transform grammar.
-! grep -E 'replace\(msg' "$VT" | grep -q 'verdict' \
+! grep -qE 'replace\(msg.*verdict' "$VT" \
   && ok "the verdict key is absent from vector.toml's scrub rewrites — the needle survives ingest on both channels" \
   || no "verdict now appears in a pii_scrub replace() — the needle is dead before ingest (the pre-rename defect recurring)"
 
