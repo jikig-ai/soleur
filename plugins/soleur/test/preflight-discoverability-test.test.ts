@@ -3084,7 +3084,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // Better Stack ClickHouse read connection (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the
   // `CAN_USE_TOOL_SHADOWED` rows exist only in production logs and the warehouse has no unauthenticated read path; the offline suites prove
   // the probe's grading, not that the stored stream carries a session's rows. Genuine.
-  const BASELINE_DECLARED_PROBES = 87;
+  // #4672 (2026-10-29): +1 (87 -> 88) for `2026-10-27-feat-durable-action-bound-approval-requests-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_APPROVAL_SWEEP`) reads the production marker stream from
+  // the Better Stack read connection (read token, Doppler prd_terraform). NO SUBSTITUTE: the sweep marker is emitted by the production cron
+  // and exists only in the stored stream; no unauthenticated probe proves the markers reach the aggregator. Genuine.
+  const BASELINE_DECLARED_PROBES = 88;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

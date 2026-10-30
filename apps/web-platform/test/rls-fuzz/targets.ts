@@ -94,6 +94,8 @@ export const EXCLUDED_ISOLATION: Record<string, string> = {
     "GDPR DSAR export jobs, user-keyed (auth.uid()=user_id), SELECT-only policy → now fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened; INSERT default-denied (no INSERT policy) so no write-forge",
   workspace_egress_audit_rollup:
     "egress audit rollup (mig 162, #9545 PR1): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated (service-role RPC writes only, nothing reads in PR1) -> every authenticated read or write is denied by grant, fuzzed in egress-audit-rollup.integration.test.ts (members of both workspaces denied 42501 with a service-role positive control). PR2 (mig 177) does NOT add a member SELECT policy: members read only through the get_egress_audit_summary RPC, so this table stays an excluded, zero-policy target (ADR-288 amendment).",
+  approval_request:
+    "durable approval requests (mig 180, #4672): workspace-OWNER-gated SELECT (is_workspace_owner(workspace_id, auth.uid())), no INSERT/UPDATE/DELETE policy and no write grant for any api role (every write is an approval RPC under a write-once trigger) -> fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened, plus the decide_approval RPC attack (non-owner tenant B denied with the same error as for a missing id; the Owner check runs BEFORE the row lock, and the Owner revoke of an approved row shares it)",
   workspace_member_actions:
     "member-action audit; authenticated has NO table grant at all (SELECT+INSERT both revoked) → direct base-table access is grant-blocked for every tenant; cross-tenant read is fuzzed via the list_workspace_member_actions RPC attack (AC8)",
   action_sends:

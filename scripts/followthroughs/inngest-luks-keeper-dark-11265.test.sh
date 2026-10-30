@@ -15,9 +15,9 @@
 # detection by neutering each helper in a copy of THIS file.
 #
 # MUTATION BATTERY. After the fixture rows the suite mutates a scratch copy of the probe at the `# [mut:NAME]` tag lines
-# (or at any unique text) and re-runs itself against the mutant (FT_INNER=1). A mutant is credited as caught only when
-# the inner run exits 1 AND prints its own named `FAIL: <fragment>` line; rc 0 = SURVIVED, any other rc or a mutant that
-# does not parse or did not land = the instrument itself broke. A pristine control must come back rc 0 first.
+# (or at any unique text) and re-runs itself against the mutant (FT_INNER=1). The crediting rule (a named `FAIL: <fragment>`
+# line, never a bare non-zero exit) and the instrument self-test live in scripts/lib/mutation-harness.sh, whose scorer is pinned
+# by the `scorer:` controls at the head of the battery.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,20 +34,10 @@ check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$2] got [$3
 has()   { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing [$3]" ;; esac; }
 hasnt() { case "$2" in *"$3"*) bad "$1" "unexpected [$3] present" ;; *) ok "$1" ;; esac; }
 
-instrument_selftest() {
-  local p0=$PASS f0=$FAIL n0 p1 f1 p2 f2
-  n0="$(wc -l < "$LEDGER")"
-  { check st 1 2; has st abc z; hasnt st abc b; } >/dev/null
-  p1=$((PASS - p0)); f1=$((FAIL - f0))
-  { check st 1 1; has st abc b; hasnt st abc z; } >/dev/null
-  p2=$((PASS - p0 - p1)); f2=$((FAIL - f0 - f1))
-  PASS=$p0; FAIL=$f0
-  head -n "$n0" "$LEDGER" > "$LEDGER.t" && mv "$LEDGER.t" "$LEDGER"
-  if [ "$p1/$f1/$p2/$f2" != "0/3/3/0" ]; then
-    echo "INSTRUMENT SELF-TEST FAILED: check/has/hasnt cannot tell true from false (false-block pass/fail $p1/$f1, true-block pass/fail $p2/$f2)"
-    exit 4
-  fi
-}
+MH_LIB="$REPO/scripts/lib/mutation-harness.sh"
+[ -f "$MH_LIB" ] || { echo "mutation-harness lib missing: $MH_LIB"; exit 4; }
+# shellcheck source=../lib/mutation-harness.sh
+source "$MH_LIB"
 instrument_selftest
 
 NOW=1790000000
@@ -106,7 +96,6 @@ calls()  { grep -c . "$ROOT/calls" 2>/dev/null || true; }
 mcalls() { grep -c '^MAIN$' "$ROOT/calls" 2>/dev/null || true; }
 ccalls() { grep -c '^CANARY$' "$ROOT/calls" 2>/dev/null || true; }
 reset_knobs() { unset QH QU QP NOWV XBASH XENV STUB_RC STUB_CRC CROWS; }
-run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
 reset_knobs
 echo "=== inngest-luks-keeper-dark-11265.sh tests ==="
@@ -418,45 +407,49 @@ FAULT
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; XENV="BASH_ENV=$ROOT/fault.sh" run; reset_knobs
 check "an unexpected internal exit status is mapped to 3 by the EXIT trap" 3 "$RC"
 
+# shellcheck disable=SC2034  # read by mh_floor in the sourced lib
 FIX_N="$(wc -l < "$LEDGER")"
 if run_battery "${1:-}"; then
   echo "=== mutation battery ==="
   export FT_REPO="$REPO"
   MUT="$ROOT/mut"; mkdir -p "$MUT"
-  # mutate_run <name> <tag-or-unique-text> <replacement line> <expected FAIL fragment>
-  mutate_run() {
-    local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0
-    if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
-    REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
-    if cmp -s "$SUT" "$f"; then bad "mutation $name: the mutation did not land (instrument)"; return; fi
-    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant does not parse (instrument)"; return; fi
-    FT_INNER=1 FT_SUT="$f" bash "$SELF" > "$o" 2>&1 || rc=$?
-    if [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
-    elif [ "$rc" != 1 ]; then bad "mutation $name: unresolved instrument rc=$rc"
-    elif grep -qF -- "FAIL: $frag" "$o"; then ok "mutation $name: caught by its own FAIL line [$frag]"
-    else bad "mutation $name: rc=1 but no FAIL line [$frag] (killed by something else)"; fi
-  }
-  # mutate_sub <name> <unique text> <from> <to> <expected FAIL fragment>: replace <from> by <to> inside the ONE line holding <unique text>
-  mutate_sub() {
-    local line new
-    line="$(grep -F -- "$2" "$SUT" || true)"
-    if [ -z "$line" ] || [ "$(printf '%s\n' "$line" | wc -l)" != 1 ]; then bad "mutation $1: the text [$2] matches exactly one line (instrument)"; return; fi
-    new="${line/"$3"/"$4"}"
-    if [ "$new" = "$line" ]; then bad "mutation $1: [$3] is present in the line (instrument)"; return; fi
-    mutate_run "$1" "$2" "$new" "$5"
-  }
-  # mutate_helper <name> <helper> <neutered definition>: the self-test must abort the run (rc 4) on a copy of THIS file
-  mutate_helper() {
-    local name="$1" helper="$2" rep="$3" f="$MUT/$1.test.sh" o="$MUT/$1.out" rc=0
-    HELPER="$helper" REP="$rep" awk 'index($0, ENVIRON["HELPER"] "()") == 1 { print ENVIRON["REP"]; next } { print }' "$SELF" > "$f"
-    if cmp -s "$SELF" "$f"; then bad "mutation $name: the helper mutation did not land (instrument)"; return; fi
-    if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant suite does not parse (instrument)"; return; fi
-    FT_INNER=1 FT_SUT="$SUT" bash "$f" > "$o" 2>&1 || rc=$?
-    if [ "$rc" = 4 ] && grep -qF -- "INSTRUMENT SELF-TEST FAILED" "$o"; then ok "mutation $name: caught by the instrument self-test (rc 4)"
-    else bad "mutation $name: the neutered helper went undetected (rc=$rc)"; fi
-  }
   ctl=0; FT_INNER=1 FT_SUT="$SUT" bash "$SELF" >/dev/null 2>&1 || ctl=$?
   check "battery control: the pristine probe passes the inner suite (rc 0)" 0 "$ctl"
+  # Scorer controls (#11520): mh_caught decides whether a mutant was caught FOR THE CLAIMED REASON. Each row calls it
+  # directly in THIS shell (an ok/bad inside a subshell would lose its PASS/FAIL increment and trip LEDGER MISMATCH) and
+  # emits exactly one check. The logs are synthetic, never recorded from a real run.
+  printf '  PASS: other\n  FAIL: frag-1 and trailing text\n' > "$MUT/sc-right.log"
+  printf '  PASS: frag-1\n'                                > "$MUT/sc-pass-only.log"
+  printf '  FAIL: a different row\n'                       > "$MUT/sc-other.log"
+  printf 'x  FAIL: frag-1\n'                              > "$MUT/sc-mid.log"
+  printf '        FAIL: frag-1\n'                        > "$MUT/sc-indented.log"
+  : > "$MUT/sc-empty.log"
+  # A missing log would read as "not caught" and let a negative control pass vacuously, so it gets its own answer.
+  sc_verdict() { [ -f "$2" ] || { echo missing; return; }; mh_caught "$1" "$2" && echo yes || echo no; }
+  check "scorer: a FAIL line starting with the fragment and trailing text is caught" yes "$(sc_verdict frag-1 "$MUT/sc-right.log")"
+  # label|fragment|log: every row must come back NOT caught
+  sc_no=(
+    "a PASS-only log|frag-1|sc-pass-only"
+    "a FAIL line for a different row|frag-1|sc-other"
+    "an empty log|frag-1|sc-empty"
+    "a fragment longer than the FAIL label (strict prefix of the fragment)|frag-1 and trailing text plus more|sc-right"
+    "a FAIL quoted mid-line (not at line start)|frag-1|sc-mid"
+    "a FAIL on an indented detail line|frag-1|sc-indented"
+    "a regex-metacharacter fragment (literal match only)|fr.g-1|sc-right"
+    "an empty fragment|-|sc-right"
+  )
+  for sc_row in "${sc_no[@]}"; do
+    IFS='|' read -r sc_lbl sc_frag sc_log <<< "$sc_row"
+    [ "$sc_frag" = "-" ] && sc_frag=""
+    check "scorer: $sc_lbl is not caught" no "$(sc_verdict "$sc_frag" "$MUT/$sc_log.log")"
+  done
+  # Teeth: with the scorer overridden to always say yes, EVERY "not caught" control above comes back wrongly caught.
+  sc_dead="$( ( mh_caught() { return 0; }; n=0
+    for sc_row in "${sc_no[@]}"; do IFS='|' read -r _l sc_frag sc_log <<< "$sc_row"; [ "$sc_frag" = "-" ] && sc_frag=""
+      mh_caught "$sc_frag" "$MUT/$sc_log.log" && n=$((n + 1)); done; echo "$n" ) )"
+  # The expected count is a literal on purpose: derived from the table it would shrink with it. Update it WITH the table.
+  check "scorer teeth: a dead scorer is caught wrongly-yes by all 8 negative controls" 8 "${sc_dead:-0}"
+  check "scorer: the negative-control table still has 8 rows" 8 "${#sc_no[@]}"
   mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
   mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
   mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
@@ -503,12 +496,9 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (an --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=189; MIN_BATTERY=44
+MIN_FIXTURE=189; MIN_BATTERY=55
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-luks-keeper-dark-11265.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
-if [ -z "${FT_INNER:-}" ]; then
-  if [ "$FIX_N" -lt "$MIN_FIXTURE" ]; then printf 'FLOOR: only %s fixture assertions ran, expected at least %s\n' "$FIX_N" "$MIN_FIXTURE"; exit 1; fi
-  if run_battery "${1:-}" && [ $((LEDGER_N - FIX_N)) -lt "$MIN_BATTERY" ]; then printf 'FLOOR: only %s battery assertions ran, expected at least %s\n' "$((LEDGER_N - FIX_N))" "$MIN_BATTERY"; exit 1; fi
-fi
+mh_floor "$MIN_FIXTURE" "$MIN_BATTERY" "${1:-}"
 [ "$FAIL" -eq 0 ]

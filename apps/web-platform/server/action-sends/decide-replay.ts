@@ -27,6 +27,10 @@ export interface ExistingApprovalRow {
 // Mirrored as `interval '23 hours'` in scripts/followthroughs/dispatch-recovery-sweeper-11211.sh; its suite pins the equality.
 export const REPLAY_MAX_AGE_MS = 23 * 60 * 60 * 1000;
 
+// Wire/Sentry vocabulary of a refused replay (the 409 `reason` field and the Sentry `extra.reason`). It differs on
+// purpose from `ReplayDecision`'s kind `clock_skew`, which is a decision name, not a value that crosses the wire.
+export type StaleReplayReason = "expired" | "future_clicked_at";
+
 // `clicked_at` is a DB-clock `DEFAULT now()` read against the app server's clock. A few hundred ms
 // of skew must not destroy an approval that was never dispatched, so a small NEGATIVE age replays;
 // beyond this (or when the value does not parse) it is not a plausible click time and the replay fails
