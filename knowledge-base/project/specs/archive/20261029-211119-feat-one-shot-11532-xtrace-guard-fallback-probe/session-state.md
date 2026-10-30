@@ -67,3 +67,5 @@ None blocking. Devin subagent has no Task/Skill tool — plan and deepen-plan fa
 - Fix in flight: `bash scripts/test-affected-kb-consumers.test.sh --write-baseline` → commit + push.
 - PR #11543 ready, auto-merge ARMED; ship subagent (8a6f1e81) in Phase 7 poll.
 - Parent AC chain done: postmerge 347d3812 verified+commented; #11531 closed (fixed by dfd4fd48f4); tracker #11549 filed (sweeps from 2026-11-03T15:30Z).
+- Baseline fix pushed 04e8972f4f → branch CI green (40957352966).
+- First queue entry ejected when push superseded head; re-queued → merge-group 40970866637 FAILED on `technical-ruling-gate.test.sh` `receipt-future` — UTC midnight-boundary flake (DTODAY captured pre-midnight, case ran 00:00:25Z), NOT our diff. Filed #11578. Re-armed --squash --auto; queue re-running.
