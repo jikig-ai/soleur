@@ -108,4 +108,3 @@ Review amendments (2026-10-30, same PR; CTO rulings recorded in the PR's decisio
 - **Mint budget.** The mode read reuses the tenant client the oauth-row read has just obtained, so a cold subscription-holder lease costs one extra `is_jti_denied` RPC and one to two indexed reads; the 60/hour `precheck_jwt_mint` ceiling is not newly spent (cache hit).
 - **Engine check at bind sites.** The auto-sync and support binds run `assertLegacyEngineBinding` on the returned run, as `ws-handler` does, so a non-Claude workspace default cannot bind a conversation the Claude runner executes.
 - **Settings PUT.** An engine-only PUT preserves the stored auth mode (the RPC would otherwise reset it to `managed`).
-
