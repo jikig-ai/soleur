@@ -450,6 +450,74 @@ if run_battery "${1:-}"; then
   # The expected count is a literal on purpose: derived from the table it would shrink with it. Update it WITH the table.
   check "scorer teeth: a dead scorer is caught wrongly-yes by all 8 negative controls" 8 "${sc_dead:-0}"
   check "scorer: the negative-control table still has 8 rows" 8 "${#sc_no[@]}"
+  # Controls for the lib's fragment-uniqueness scorer (#11572 item 11), the self-test scorer (item 8) and the refusal rows of
+  # mh_floor / assert_fixture_dir (item 9). Capture-only and synthetic, like the rows above. The two functions that `exit`
+  # run in a subshell and are read back as `rc=$?` on its own line; nothing here writes the suite's own ledger.
+  printf 'ok\tdemo: exit 5\nok\tdemo: exit 5 (30 days or older)\nok\talpha one\nbad\talpha two\nok\tonly row\nbad\tonly row\nok\tsolo\nok\tsolo too\n' > "$MUT/sc-ledger"
+  sc_fu() { local o rc; o="$(mh_frag_unique "$@")"; rc=$?; echo "$o/$rc"; }
+  check "scorer: a fragment that is the leading words of exactly one label (two ledger lines, one distinct label) is unique" unique/0 "$(sc_fu 'only' "$MUT/sc-ledger" 6)"
+  check "scorer: a fragment matching no fixture label (a battery-row name) is unique" unique/0 "$(sc_fu 'nothing here' "$MUT/sc-ledger" 6)"
+  check "scorer: a fragment that is the leading words of two distinct labels is ambiguous" ambiguous/1 "$(sc_fu 'alpha' "$MUT/sc-ledger" 6)"
+  check "scorer: a fragment equal to one label that prefixes a longer sibling is exact (the tie-break)" exact/0 "$(sc_fu 'demo: exit 5' "$MUT/sc-ledger" 6)"
+  check "scorer: the longer sibling label alone is unique" unique/0 "$(sc_fu 'demo: exit 5 (30 days or older)' "$MUT/sc-ledger" 6)"
+  check "scorer: an empty fragment is refused" empty/1 "$(sc_fu '' "$MUT/sc-ledger" 6)"
+  check "scorer: a sibling past FIX_N is not a fixture label" unique/0 "$(sc_fu 'solo' "$MUT/sc-ledger" 7)"
+  check "scorer: a fragment is matched literally, never as a regular expression" unique/0 "$(sc_fu 'al.ha' "$MUT/sc-ledger" 6)"
+  # exact-mode mh_caught: a longer sibling's FAIL line must not credit the shorter row's mutant
+  printf '  FAIL: demo: exit 5 (30 days or older)\n' > "$MUT/sc-sibling.log"
+  printf '  FAIL: demo: exit 5\n        expected [5] got [2]\n' > "$MUT/sc-own.log"
+  sc_verdict_x() { [ -f "$2" ] || { echo missing; return; }; mh_caught "$1" "$2" "${3:-}" && echo yes || echo no; }
+  check "scorer: without exact mode the longer sibling's FAIL line credits the fragment (prefix semantics)" yes "$(sc_verdict_x 'demo: exit 5' "$MUT/sc-sibling.log")"
+  check "scorer: in exact mode the longer sibling's FAIL line does NOT credit the fragment" no "$(sc_verdict_x 'demo: exit 5' "$MUT/sc-sibling.log" exact)"
+  check "scorer: in exact mode the row's own FAIL line is caught" yes "$(sc_verdict_x 'demo: exit 5' "$MUT/sc-own.log" exact)"
+  # mutate_run itself: refuses an ambiguous or empty fragment before any inner run, and scores an exact fragment in exact mode.
+  # The inner run is stubbed (a `bash` function in the subshell), so a mutate_run that skips the check or the pass-through
+  # would reach it and credit a mutant.
+  printf 'echo hi # [mut:x]\n' > "$MUT/sc-sut.sh"
+  sc_mr() { # <fragment> <stub inner-run output>
+    ( LEDGER="$MUT/sc-ledger"; FIX_N=6; SUT="$MUT/sc-sut.sh"; SELF=stub; SC_OUT="$2"
+      ok() { echo "ok: $1"; }; bad() { echo "bad: $1"; }
+      bash() { if [ "${1:-}" = -n ]; then command bash "$@"; else printf '%s\n' "$SC_OUT"; return 1; fi; }
+      mutate_run sc-mr '[mut:x]' 'echo changed' "$1" )
+  }
+  check "scorer: mutate_run refuses an ambiguous fragment before the inner run" "bad: mutation sc-mr: fragment [alpha] is ambiguous (instrument)" "$(sc_mr 'alpha' '  FAIL: alpha one')"
+  check "scorer: mutate_run refuses an empty fragment before the inner run" "bad: mutation sc-mr: fragment [] is ambiguous (instrument)" "$(sc_mr '' '  FAIL: alpha one')"
+  check "scorer: mutate_run credits a unique fragment by its FAIL line" "ok: mutation sc-mr: caught by its own FAIL line [only]" "$(sc_mr 'only' '  FAIL: only row')"
+  check "scorer: mutate_run does not credit an exact fragment by a longer sibling's FAIL line" "bad: mutation sc-mr: rc=1 but no FAIL line [demo: exit 5] (killed by something else)" "$(sc_mr 'demo: exit 5' '  FAIL: demo: exit 5 (30 days or older)')"
+  check "scorer: mutate_run credits an exact fragment by its own FAIL line" "ok: mutation sc-mr: caught by its own FAIL line [demo: exit 5]" "$(sc_mr 'demo: exit 5' '  FAIL: demo: exit 5')"
+  # mh_selftest_caught (item 8): only rc 4 AND a line STARTING with the self-test banner
+  printf 'INSTRUMENT SELF-TEST FAILED: check/has/hasnt cannot tell true from false\n' > "$MUT/sc-st-ok.log"
+  printf 'noise INSTRUMENT SELF-TEST FAILED: quoted mid-line\n' > "$MUT/sc-st-mid.log"
+  sc_st() { [ -f "$2" ] || { echo missing; return; }; mh_selftest_caught "$1" "$2" && echo yes || echo no; }
+  check "scorer: rc 4 with the self-test banner at line start is caught" yes "$(sc_st 4 "$MUT/sc-st-ok.log")"
+  check "scorer: the self-test banner with rc 1 is not caught" no "$(sc_st 1 "$MUT/sc-st-ok.log")"
+  check "scorer: rc 4 with the banner only mid-line is not caught" no "$(sc_st 4 "$MUT/sc-st-mid.log")"
+  check "scorer: rc 4 with an empty log is not caught" no "$(sc_st 4 "$MUT/sc-empty.log")"
+  check "scorer: rc 4 with an unreadable log is not caught" no "$(mh_selftest_caught 4 "$MUT/sc-st-absent.log" 2>/dev/null && echo yes || echo no)"
+  # item 9: the refusal rows. mh_floor and assert_fixture_dir both `exit`, so each runs in a subshell and its rc is read on its own line.
+  sc_floor() { # <FIX_N> <LEDGER_N> <MIN_FIXTURE> <MIN_BATTERY> [inner]
+    local out rc
+    out="$( ( FIX_N="$1"; LEDGER_N="$2"; unset FT_INNER; [ -n "${5:-}" ] && FT_INNER=1; mh_floor "$3" "$4" "" ) 2>&1 )"
+    rc=$?
+    echo "$rc|$out"
+  }
+  check "mh_floor: a short fixture count exits 1 and names the fixture floor" "1|FLOOR: only 5 fixture assertions ran, expected at least 10" "$(sc_floor 5 30 10 5)"
+  check "mh_floor: a short battery count exits 1 and names the battery floor" "1|FLOOR: only 2 battery assertions ran, expected at least 5" "$(sc_floor 10 12 10 5)"
+  check "mh_floor: sufficient fixture and battery counts pass silently" "0|" "$(sc_floor 10 20 10 5)"
+  check "mh_floor: under FT_INNER a short count still passes (the inner run is not floored)" "0|" "$(sc_floor 1 1 10 5 inner)"
+  sc_afd() { # <dir argument>
+    local out rc
+    out="$( ( assert_fixture_dir "$1" ) 2>&1 )"
+    rc=$?
+    echo "$rc|${out%%:*}"
+  }
+  check "assert_fixture_dir: an empty dir exits 2 with FATAL" "2|FATAL" "$(sc_afd '')"
+  check "assert_fixture_dir: a relative dir exits 2 with FATAL" "2|FATAL" "$(sc_afd 'rel/dir')"
+  check "assert_fixture_dir: a dir containing .. exits 2 with FATAL" "2|FATAL" "$(sc_afd '/tmp/a/../b')"
+  check "assert_fixture_dir: a trailing .. exits 2 with FATAL" "2|FATAL" "$(sc_afd '/tmp/a/..')"
+  check "assert_fixture_dir: a synthetic-fs dir exits 2 with FATAL" "2|FATAL" "$(sc_afd '/proc/self/x')"
+  check "assert_fixture_dir: the filesystem root exits 2 with FATAL" "2|FATAL" "$(sc_afd '/')"
+  check "assert_fixture_dir: an absolute temp path passes silently" "0|" "$(sc_afd "$MUT/sc-fixture")"
   mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
   mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
   mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
@@ -496,7 +564,7 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (an --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=189; MIN_BATTERY=55
+MIN_FIXTURE=189; MIN_BATTERY=87
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-luks-keeper-dark-11265.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi

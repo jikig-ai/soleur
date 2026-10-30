@@ -33,13 +33,39 @@ assert_fixture_dir() {
   esac
 }
 
-# mh_caught <fragment> <inner-run log>: 0 only when a log line STARTS with `  FAIL: <fragment>` (exactly how `bad` prints
+# mh_caught <fragment> <inner-run log> [exact]: 0 only when a log line STARTS with `  FAIL: <fragment>` (exactly how `bad` prints
 # a row label, so a `FAIL:` quoted mid-line or inside a detail line never counts). Literal match, prefix semantics (a
-# fragment is the leading words of a row label), and an empty fragment is never caught. Prints nothing; the scorer's
-# controls call it directly.
+# fragment is the leading words of a row label), and an empty fragment is never caught. With `exact` (what `mutate_run` passes
+# when `mh_frag_unique` says `exact`) the line must EQUAL `  FAIL: <fragment>`, so a longer sibling row cannot credit the shorter
+# row's mutant. Prints nothing; the scorer's controls call it directly.
 mh_caught() {
   [ -n "${1:-}" ] || return 1
-  FRAG="$1" awk 'index($0, "  FAIL: " ENVIRON["FRAG"]) == 1 { found = 1 } END { exit !found }' "$2"
+  FRAG="$1" MODE="${3:-}" awk 'BEGIN { p = "  FAIL: " ENVIRON["FRAG"] } (ENVIRON["MODE"] == "exact" ? $0 == p : index($0, p) == 1) { found = 1 } END { exit !found }' "$2"
+}
+
+# mh_frag_unique <fragment> <ledger> [fix_n]: pure. Scans the first <fix_n> ledger lines (`ok|bad<TAB>label`; all lines when
+# <fix_n> is empty) on the label field only, by literal prefix match. PRINTS one token and keeps the rc binary:
+#   unique     zero or exactly one distinct label starts with the fragment (zero: it may name a battery row)
+#   exact      the fragment EQUALS one label and two or more labels share the prefix (`...: exit 5` vs `...: exit 5 (30 days or older)`)
+#   ambiguous  two or more distinct labels start with it and none equals it
+#   empty      no fragment
+# rc 0 for unique/exact, 1 otherwise.
+mh_frag_unique() {
+  local r
+  r="$(FRAG="${1:-}" N="${3:-}" awk -F'\t' '
+    BEGIN { f = ENVIRON["FRAG"]; n = ENVIRON["N"] }
+    f == "" { print "empty"; done = 1; exit }
+    n != "" && NR > n + 0 { exit }
+    index($2, f) == 1 && !($2 in seen) { seen[$2] = 1; d++; if ($2 == f) e = 1 }
+    END { if (!done) print (d <= 1 ? "unique" : (e ? "exact" : "ambiguous")) }' "$2")"
+  printf '%s\n' "$r"
+  [ "$r" = unique ] || [ "$r" = exact ]
+}
+
+# mh_selftest_caught <rc> <log>: 0 only when the mutant suite exited 4 AND a log line STARTS with the self-test banner.
+mh_selftest_caught() {
+  [ "${1:-}" = 4 ] || return 1
+  awk 'index($0, "INSTRUMENT SELF-TEST FAILED") == 1 { found = 1 } END { exit !found }' "$2"
 }
 
 instrument_selftest() {
@@ -62,8 +88,13 @@ run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
 # mutate_run <name> <tag-or-unique-text> <replacement line> <expected FAIL fragment>
 mutate_run() {
-  local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0
+  local name="$1" tag="$2" rep="$3" frag="$4" f="$MUT/$1.sh" o="$MUT/$1.out" rc=0 fu ex=""
   assert_fixture_dir "$f"; assert_fixture_dir "$o"
+  fu="$(mh_frag_unique "$frag" "$LEDGER" "$FIX_N")" || true
+  case "$fu" in
+    ambiguous|empty) bad "mutation $name: fragment [$frag] is ambiguous (instrument)"; return ;;
+    exact) ex=exact ;;
+  esac
   if ! grep -qF -- "$tag" "$SUT"; then bad "mutation $name: tag $tag exists in the probe (instrument)"; return; fi
   REP="$rep" TAG="$tag" awk 'index($0, ENVIRON["TAG"]) { print ENVIRON["REP"]; next } { print }' "$SUT" > "$f"
   if cmp -s "$SUT" "$f"; then bad "mutation $name: the mutation did not land (instrument)"; return; fi
@@ -71,7 +102,7 @@ mutate_run() {
   FT_INNER=1 FT_SUT="$f" bash "$SELF" > "$o" 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then bad "mutation $name: SURVIVED (rc=0)"
   elif [ "$rc" != 1 ]; then bad "mutation $name: unresolved instrument rc=$rc"
-  elif mh_caught "$frag" "$o"; then ok "mutation $name: caught by its own FAIL line [$frag]"
+  elif mh_caught "$frag" "$o" "$ex"; then ok "mutation $name: caught by its own FAIL line [$frag]"
   else bad "mutation $name: rc=1 but no FAIL line [$frag] (killed by something else)"; fi
 }
 
@@ -93,7 +124,7 @@ mutate_helper() {
   if cmp -s "$SELF" "$f"; then bad "mutation $name: the helper mutation did not land (instrument)"; return; fi
   if ! bash -n "$f" 2>/dev/null; then bad "mutation $name: the mutant suite does not parse (instrument)"; return; fi
   FT_INNER=1 FT_SUT="$SUT" bash "$f" > "$o" 2>&1 || rc=$?
-  if [ "$rc" = 4 ] && grep -qF -- "INSTRUMENT SELF-TEST FAILED" "$o"; then ok "mutation $name: caught by the instrument self-test (rc 4)"
+  if mh_selftest_caught "$rc" "$o"; then ok "mutation $name: caught by the instrument self-test (rc 4)"
   else bad "mutation $name: the neutered helper went undetected (rc=$rc)"; fi
 }
 

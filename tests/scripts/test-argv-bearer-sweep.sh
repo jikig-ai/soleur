@@ -41,6 +41,13 @@
 # All tokens are SYNTHESIZED. No network, no Doppler, no real credential is ever read.
 set -uo pipefail
 
+# STDIN IS CLOSED FOR THE WHOLE SUITE (#11572 item 13). Children inherit this process's stdin, and the S6 stub `docker`
+# (written below) drains it unconditionally with `pw="$(cat)"` on every arm: under an open stdin (a terminal, a CI pipe
+# that never closes) any call that reaches it without its own piped stdin blocks forever. Nothing here reads the inherited
+# stdin: every `read` in this file takes a here-string, a file, a process substitution or a pipe. The pin row after
+# `_selftest_report` asserts this line stays a top-level line ahead of the first fixture write.
+exec < /dev/null
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT" || { echo "FATAL: cannot cd to $REPO_ROOT" >&2; exit 2; }
 
@@ -100,6 +107,19 @@ _selftest_report() {
   pass=$p0; fail=$f0; CASES=$c0
 }
 _selftest_report
+
+# Pin of the `exec < /dev/null` above (Guard 3 of #11572 item 13): the line exists, is a top-level statement (not inside a
+# function, where it would never run at suite scope) and sits ahead of the first fixture write (the scratch-root `mktemp -d`).
+_pin_exec_stdin() { # <suite file>
+  awk '
+    /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ { depth++ }
+    /^\}/ { depth-- }
+    $0 == "exec < /dev/null" && depth == 0 && !ex { ex = NR }
+    /^TMPD="\$\(mktemp -d/ && !wr { wr = NR }
+    END { exit !(ex && wr && ex < wr) }' "$1"
+}
+if _pin_exec_stdin "${BASH_SOURCE[0]}"; then row "stdin: the suite closes its stdin (exec < /dev/null) as a top-level line before the first fixture write" ok
+else row "stdin: the suite closes its stdin (exec < /dev/null) as a top-level line before the first fixture write" fail "the exec line is missing, nested in a function, or after the scratch-root mktemp"; fi
 
 # --------------------------------------------------------------------------------------
 # TOOLING: the real tools a probe needs, symlinked into ONE dir. curl/gh/doppler/ssh/git are
@@ -8277,7 +8297,8 @@ SELFTEST_PASSES=0
 # 825 -> 824 at #6590 PR-B: the orphan-sweeps-relook-10972 suite was retired (monitor destroyed);
 # its DELEGATED_MANIFEST row left with it. Rebased over #11483's dispatch-recovery-sweeper-11211
 # (+1, main 825): net floor stays 824.
-EXPECTED_TESTS=824
+# 824 -> 830 at #11572 (item 13): 829 measured on main before this change, plus the one stdin pin row (830 passed, 0 failed).
+EXPECTED_TESTS=830
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

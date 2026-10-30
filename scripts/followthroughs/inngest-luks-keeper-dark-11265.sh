@@ -19,6 +19,10 @@
 # The read is scripts/betterstack-query.sh over the hot window AND the archive arm (its default mode; `--raw-only` is
 # never passed because it excludes the journald rows, one of the two shipping paths), 60 days back, newest 5000 rows.
 # The reader's own `--max-time` bounds each request (the suite pins it); this probe makes no request itself.
+# READ-TIME BUDGET (#11572 item 3, measured 2026-10-30 against the live reader): the 60-day read takes about 4 s
+# (`--since 60d`; 30d 5 s, 7d 2 s; 41 archive rows) against the reader's `--max-time 60`, so no timeout change is needed
+# and a curl 28 (reader exit 3) stays the honest CANNOT ESTABLISH. Re-evaluate on a timeout-class exit 3 reported in a
+# sweeper comment, or when the archive arm grows past about 10x today's row count.
 #
 # TRUST IN THE READ. (i) Every non-blank reader line must decode to a JSON object carrying a string `dt` and a string
 # `raw` (the reader's row shape); one that does not (an HTML 502 page, a ClickHouse `Code: ... DB::Exception` line, or
