@@ -23,10 +23,11 @@ payload changes, so its plan is a no-op - verify by reading the run's plan, neve
 
 ### Key improvements
 
-1. Host script hardened: broken refs that git skips silently are caught through the non-empty-stderr rule, fds 3/4 closed for the git child, hardened `env -i` and `-c` flags, one NUL-delimited enumeration for count and name, `RA_MOUNT` identity and TOCTOU checks, `shallow` refusal, fail-closed field self-check.
+1. Host script hardened: broken refs that git skips silently are caught through the non-empty-stderr rule, fds 3/4 closed for the git child, hardened `env -i` and `-c` flags, one NUL-delimited enumeration for count and name, `RA_MOUNT` identity and TOCTOU checks, fail-closed field self-check (a `shallow` file is expected and NOT refused: F31).
 2. Answer line shrunk to counts plus at most two numerically smallest branch-tip shas (less fingerprint surface); verdicts carry a FAILED / INCONCLUSIVE class printed in the annotation and driving two notify words.
 3. Cross-consumer ripples closed: run-title classifier, vacuity ledger and shard map, the AC9 flag-precheck pin, the C4 edge sentence and its generated JSON, the apply-workflow path filter.
 4. Test strategy made buildable: fixtures git can actually hold, shims that match the absolute/bare command shapes, ordering and boundary rows, named print-scan helper.
+5. Fix passes 1 and 2 (rows F23-F37): the repository must be one a push can have produced (owner `git`, no alternates, no top-level redirector, no symlink, no symref and no off-shape loose ref in the namespace, probed by CONTENT not size), the runner confirms only on the host's own answer line, a real depth-1 push is the permanent positive row, and the suite's static census is a structured parse with a closed per-word argv rule and a recorded-argv closed list in every row.
 
 ### New considerations
 
@@ -154,7 +155,7 @@ session's rc being the verdict (the header `# EXIT CODES` table is the only auth
 | 21 | `refs_repo_not_single` | INCONCLUSIVE (not retryable) | repos>1, or an entry that is not a real `*.git` directory (symlink, file, non-empty `lost+found`), or the repositories directory is a symlink / not on the store mount; stderr carries digits `repos=<n>` only |
 | 23 | `refs_none` | FAILED | the repository exists and holds no ref under `refs/soleur/worktrees/` ("provisioned, not replicated"; an unborn HEAD or a ref outside the namespace does not count) |
 | 24 | `refs_no_branch_tip` | FAILED | refs exist but none under `heads/` (tags-only never passes: the 2026-10-27 failure was a rejected push to `heads/main`) |
-| 26 | `refs_unreadable` | INCONCLUSIVE (retryable) | `git for-each-ref` failed (a missing object), a shallow file, a 201st line (the bound) or a failed self-check (12-seat review: ownership moved to rc 27 `repo_owner`, F24) |
+| 26 | `refs_unreadable` | INCONCLUSIVE (retryable) | `git for-each-ref` failed (a missing tip object, an unparsable `shallow` file), a 201st line (the bound) or a failed self-check (12-seat review: ownership moved to rc 27 `repo_owner`, F24; a well-formed `shallow` file is EXPECTED and no longer refused, F31). Retry: probe_failed at most twice, refs_unreadable at most once, three red runs in all (F35) |
 | 27 | `refs_shape_failed` | INCONCLUSIVE (not retryable) | a ref under the namespace whose name is not `refs/soleur/worktrees/<id>/(heads\|tags)/<name>` (id `^[A-Za-z0-9._-]+$`, not `.`/`..`; name `[A-Za-z0-9._/-]+`, no `..`, no trailing `/` or `.lock`), or a repository a push cannot have produced (12-seat review, F23/F24/F30; fixed stderr reason words `repo_owner`, `repo_alternates`, `repo_symlink`, `ref_symref`) |
 | 28 | `refs_bad_sha` | FAILED | a ref whose value is not 40-hex, whose `heads/` object is not a commit, or whose `tags/` object does not peel to a commit |
 | (96) | `refs_shape_failed` | INCONCLUSIVE | gd_capture got an answer that is not the one anchored line (runner-side; shares the word with rc 27, suffix `rc=96`) |
@@ -183,7 +184,7 @@ confirm `case` gains `refs_assert) want="REFS-ASSERT-GIT-DATA"` (`lineage`/`volu
 `Host-side proof`, `if: steps.confirm.outputs.mode == 'refs_assert' && steps.flag_precheck.outputs.nothing_to_rollback != '1'`,
 env `WEB_HOSTS`, `GIT_DATA_SSH`, `MODE: refs_assert`, run `bash apps/web-platform/infra/git-data-cutover.sh`, id `refs`;
 (e) job output `refs_class` set from that step only on the refusal path; notify-failure: `refs_assert` joins the `case "$MODE"`
-list and gets `REFS_ASSERT_FAILED` / `REFS_ASSERT_INCONCLUSIVE` words ("read-only: nothing on any host changed"; verdict word
+list and gets `REFS_ASSERT_FAILED` / `REFS_ASSERT_INCONCLUSIVE` words ("writes nothing to the store"; verdict word
 and class only, never a sha), each word appearing once in `words=` and once in `swords=` and in no comment; (f) `Run summary`
 prints "Nothing on any host was changed." for `refs_assert`; (g) header comment counts six cutover-job modes. The job `if:`
 (wipe-family exclusion), `run-name`, inputs and credential bindings are unchanged.
@@ -316,7 +317,7 @@ no comment). It proves the notify word is wired, not that a dispatch passes; the
 (`STORE probe=refs-assert`), which this session never runs. The count is re-measured after Phase 3 and restated if it
 differs. The affected-surface rule (2.9.2) is met by the host session's design: on success the answer line carries
 `repos`, `namespaces`, `refs`, `heads` and the shas; on refusal the discriminator is the exit-code word plus digits
-(`repos=<n>` at rc 21). `refs_unreadable` may be deterministic (a foreign-owned repository, a missing object), so the
+(`repos=<n>` at rc 21). `refs_unreadable` may be deterministic (an unparsable `shallow` file, a missing object; a foreign-owned repository is rc 27 `repo_owner`), so the
 Verdict map says a second identical result stops the retries.
 
 ## Guard Contract
@@ -511,7 +512,7 @@ Restate the suite floors (`MUTANT_FLOOR`, `FLOOR`, `MIN_ASSERTIONS`) from the pr
 
 - Given one repository with `refs/soleur/worktrees/<a>/heads/main` at a commit, then `refs_assert ok repos=1 namespaces=1 refs=1 heads=1 shas=<40hex>` (integration).
 - Given two namespaces, `heads/feature/x.y` and an annotated tag, then `namespaces=2 refs=3 heads=2` and only the two `heads/` shas are printed (counter-field row).
-- Given zero repositories -> rc 20; two, a symlink entry, or a symlinked `repositories` directory -> rc 21 with digits-only stderr; a never-pushed repository -> rc 23; tags-only -> rc 24; a missing object, 201 refs or a foreign-owned repository -> rc 26; a malformed name -> rc 27; a tree under `heads/` or a tag to a tree -> rc 28.
+- Given zero repositories -> rc 20; two, a symlink entry, or a symlinked `repositories` directory -> rc 21 with digits-only stderr; a never-pushed repository -> rc 23; tags-only -> rc 24; a missing object, 201 refs or a garbage `shallow` file -> rc 26 (a foreign-owned repository -> rc 27 `repo_owner`; a real depth-1 push with a `shallow` file -> rc 0); a malformed name -> rc 27; a tree under `heads/` or a tag to a tree -> rc 28.
 - Given a held freeze sentinel, the runner refuses `cutover_frozen` before the script is sent.
 - Given any refusal, stdout+stderr contain none of the fixture identifiers.
 - Given the flag `true`, the precheck refuses `flag_already_true` (workflow-body row executed as the suite executes the precheck step today).
