@@ -1282,7 +1282,20 @@ fi
 # A floor whose mutant is not a runnable program (it reads state computed by surrounding
 # code) is NOT silently skipped: it is named here and capped by a hand-ratcheted maximum.
 # Ratcheting DOWN-only means new suites cannot quietly join the uncovered set.
-MAX_CONSTRUCTION_FAILURES=15
+#
+# 15 -> 17 (#11562): `scripts/test-all-affected.test.sh` and
+# `plugins/soleur/test/ci-pr-affected-replay.test.sh` gained ranged floors under the
+# `--rows` split — `cases < MIN_ARM_CASES` and `total -lt _expected_total` / the
+# `OW_SITES < 108` observation-window check. Their thresholds derive from argv state
+# (ROWS_HI/ROWS_LO/DECLARED_TOTAL bound at the file's arg-parse region, ~4k lines
+# from the floor), so no contiguous simple-assignment window exists for the mutant
+# slice to bind — unconstructible BY DESIGN, the same class as the precedent
+# `lint-orphan-test-suites.test.sh` --rows battery already in this set (its
+# `_EXPECTED_EXECUTED` threshold is argv-derived identically). The floors still
+# stand on the real run's conservation checks: EXECUTED/_site_seq reconciliations
+# and PASS+FAIL conservation are asserted unconditionally per arm, so a skipped
+# block reds before the count floor is even consulted.
+MAX_CONSTRUCTION_FAILURES=17
 cases=$((cases + 1))
 if [[ "$n_construct" -le "$MAX_CONSTRUCTION_FAILURES" ]]; then
   pass "mutant-construction failures within the ratchet ($n_construct <= $MAX_CONSTRUCTION_FAILURES)"
