@@ -135,3 +135,11 @@ skipped by a list the same runner composes. No deviation.
 ## Diagram
 
 No C4 impact: no actor, system, container, store or relationship changes.
+
+## Addendum (2026-10-29, #4672)
+
+Decision 5 and the first Consequence describe the in-memory gate: a card unanswered for 5 minutes denies with "the action was not performed; do not retry unless the user asks". That wording stays exact for every
+gated tool on the in-memory path, which is every tool when the `approval-queue` flag is off. For the eight tools in `APPROVAL_REQUIRED_TOOLS` with the flag on, the **durable path** replaces the in-memory wait
+([ADR-309](./ADR-309-durable-action-bound-approval-requests.md)): a wait that ends undecided denies with a different static message ("saved for the workspace Owner; do not retry now") and leaves a `pending` row
+that a later approval can release once. The decision of this ADR is unchanged: gated tools still never enter `allowedTools`, `canUseTool` is still the only approver, and the durable path sits inside the same
+gated branch. Only the timeout text for those eight tools, flag on, differs. One further exception: in a session where the approval flow already ran, turning the flag off or a flag read error makes those eight tools deny with the static "approval unavailable" text for the rest of that session instead of falling back to the in-memory card (ADR-309, rollback).

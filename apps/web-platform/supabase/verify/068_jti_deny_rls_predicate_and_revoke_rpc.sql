@@ -12,12 +12,12 @@
 --     (REVOKED FROM authenticated, service_role only).
 --   * revoke_jti is NOT granted to authenticated (service-role-only).
 --   * my_revocation_status is granted TO authenticated.
---   * Exactly 27 RESTRICTIVE policies named *_jti_not_denied exist.
---   * Each of the 27 tenant tables has its own per-table presence
+--   * Exactly 28 RESTRICTIVE policies named *_jti_not_denied exist.
+--   * Each of the 28 tenant tables has its own per-table presence
 --     assertion (21 base from mig 068 + workspace_activity (mig 076)
 --     + kb_files (mig 077) + beta_contacts / interview_notes /
 --     beta_contact_stage_transitions (mig 126) + beta_contact_access_log
---     (mig 127)) — so the named set equals the aggregate count, not just
+--     (mig 127) + approval_request (mig 180)) — so the named set equals the aggregate count, not just
 --     the count.
 
 -- (1) revoke_jti present + SECURITY DEFINER
@@ -74,17 +74,17 @@ SELECT 'my_revocation_status_authenticated_grant_present',
               'EXECUTE'
             ) THEN 0 ELSE 1 END::int
 UNION ALL
--- (7) Exactly 27 RESTRICTIVE jti_not_denied policies (21 base + workspace_activity
+-- (7) Exactly 28 RESTRICTIVE jti_not_denied policies (21 base + workspace_activity
 --     + kb_files from mig 076/077 + beta_contacts/interview_notes/beta_contact_stage_transitions from mig 126
---     + beta_contact_access_log from mig 127)
-SELECT 'jti_deny_policies_count_27',
-       CASE WHEN count(*) = 27 THEN 0 ELSE 1 END::int
+--     + beta_contact_access_log from mig 127 + approval_request from mig 180)
+SELECT 'jti_deny_policies_count_28',
+       CASE WHEN count(*) = 28 THEN 0 ELSE 1 END::int
   FROM pg_policies
  WHERE schemaname = 'public'
    AND policyname LIKE '%_jti_not_denied'
    AND permissive = 'RESTRICTIVE'
 UNION ALL
--- (8-33) Per-table presence assertions (one row per tenant table; 26 total)
+-- Per-table presence assertions (one row per tenant table; 28 total, one per jti_not_denied policy counted in (7))
 SELECT 'conversations_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='conversations'
@@ -226,6 +226,12 @@ SELECT 'beta_contact_access_log_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='beta_contact_access_log'
    AND policyname='beta_contact_access_log_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+-- approval_request (mig 180, #4672) — the 28th jti_not_denied policy.
+SELECT 'approval_request_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='approval_request'
+   AND policyname='approval_request_jti_not_denied' AND permissive='RESTRICTIVE'
 UNION ALL
 -- (34-36) anon-role REVOKE matrix: none of the three 068 functions
 -- must be EXECUTE-able by anon. Pre-fix, the sentinel asserted only
