@@ -1005,6 +1005,57 @@ resource "sentry_alert" "egress_blocked" {
   }
 }
 
+# ── Egress audit read path (#9545 PR2, ADR-288 amendment) — member view of the egress rollup ──
+# apps/web-platform/server/egress-audit-read.ts mirrors faults on the destination page with
+# feature=egress-audit-read and the reason in `op`, `err = null` and a STATIC message per reason, so
+# each reason is its own Sentry issue group and this tag filter matches (an Error object would let the
+# pino mirror capture it first and de-duplicate the tagged event away, #8629). Paged ops:
+#   rpc_error              -> the summary RPC failed or returned a malformed body
+#   rpc_timeout            -> the summary RPC outlived its bound
+#   workspace_read_error   -> the destination PAGE's current-workspace pointer read threw or timed out
+#                             (the view renders `unavailable`); page-only, the card has its own unpaged op
+# Everything else the loader emits is a WARNING-level debounced mirror of a decorative read and is
+# deliberately NOT routed here: this rule has no level filter, so routing them would email a person for
+# a hidden "Last recorded request". They stay searchable as feature:egress-audit-read, unpaged:
+# hint_timeout, hint_rpc_error, hint_workspace_read (the card), org_read, flag_eval, web_access_read.
+# The in-body 42501 denial (a removed member or stale pointer) is never mirrored at all; an engine 42501
+# ("permission denied for function", a lost grant) IS a fault and arrives as rpc_error with pg_code=42501.
+# Do NOT rename this resource or the live rule name (`egress-audit-read-failure`): a rename is a
+# destroy/create of a live paging rule. frequency_minutes=41 is distinct from every other rule (Sentry
+# de-duplicates on action_match+logic_type+frequency+actions-shape, not on conditions). The feature
+# and op literals are pinned against the loader by
+# apps/web-platform/test/sentry-egress-audit-read-alert-op-contract.test.ts.
+resource "sentry_alert" "egress_audit_read_failure" {
+  organization      = var.sentry_org
+  name              = "egress-audit-read-failure"
+  enabled           = true
+  frequency_minutes = 41
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "egress-audit-read" } },
+        { tagged_event = { key = "op", match = "in", value = "rpc_error,rpc_timeout,workspace_read_error" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── Disk-IO WAL-concentration alert (#5736) — APPLY-CREATED, NOT import-only ────
 # server/inngest/functions/cron-supabase-disk-io.ts: the 6-hourly disk-IO monitor
 # now reads the per-statement WAL signal (migration 114: top_wal_statements +
@@ -1691,6 +1742,115 @@ resource "sentry_alert" "seccomp_remediation_failed" {
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# server/agent-runner-sandbox-config.ts (buildAgentSandboxConfig) pre-creates each masked dir (peer-socket,
+# transcript, session-tmp) before every dispatch (an ungated, idempotent mkdirSync on each build); the SDK skips a deny landing that does not exist, so a failed
+# mkdir leaves a cross-tenant read channel UNMASKED for that dir (the entry stays in denyRead: fail-open per dir).
+# Before this rule the failure was an error event with nobody behind it (#10455). The emit is
+# `reportSilentFallback(null, { feature: "agent-sandbox", op: "masked-dir-precreate", tags: { dir_kind } })`: the
+# literal `null` first argument keeps it on the MESSAGE path, because an Error would be mirrored by the pino
+# logger as feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never
+# match. Contract: test/sentry-masked-dir-precreate-alert-op-contract.test.ts (emit site <-> this block) and
+# test/agent-sandbox-precreate-sentry-path.test.ts (real logger, real helper).
+#
+# GROUPING: the message is constant per `dir_kind` (peer-socket | transcript | session-tmp) and carries no path, so
+# Sentry opens ONE issue per kind (an acknowledged benign kind cannot silence a later one); no per-dir fingerprint
+# (one persistent fault would otherwise page once per dir). value=0 notifies on the first event of a group within
+# the hour, and a persistent fault re-notifies every `frequency_minutes` (an acknowledged/resolved issue stops it).
+# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
+# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
+# are carried: `op` alone would also match any future emitter reusing the op name under another feature.
+# Distinct frequency_minutes = 39 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-38,60-63,120,240,
+# 1440-1442; re-verified free after merging main, which took 38 for art17_workspace_tree_erasure_incomplete); dedup keys on action shape + action_match + filter_match + frequency, not
+# conditions. Events carry only the kind, the errno (code/syscall) and the dir path: no user content.
+resource "sentry_alert" "masked_dir_precreate_failed" {
+  organization      = var.sentry_org
+  name              = "masked-dir-precreate-failed"
+  enabled           = true
+  frequency_minutes = 39
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-sandbox" } },
+        { tagged_event = { key = "op", match = "eq", value = "masked-dir-precreate" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# server/agent-auth-failure.ts observes the SDK stream of BOTH runners (legacy agent-runner.ts, cc-dispatcher.ts)
+# and emits ONE event when the Claude CLI replies "Not logged in · Please run /login" (or its structured
+# `authentication_failed` code): `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`.
+# Before this rule that reply reached the user with nothing in Sentry or Better Stack (#10455, #10548); the cause is
+# not known, so the event carries ten closed-enum tags that separate the competing hypotheses in ONE event. The
+# literal `null` first argument keeps it on the MESSAGE path: an Error would be mirrored by the pino logger as
+# feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never match.
+# Contract: test/sentry-agent-auth-failure-alert-op-contract.test.ts (emit site <-> this block <-> alert-reference.json)
+# and test/agent-auth-failure-sentry-path.test.ts (real logger, real helper, secret canary).
+#
+# TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: step 1
+# (#11085, first real event 2026-10-27T09:01Z recorded on #10455) takes effect when this change is applied on merge: the
+# provider rejects a rule with no action, so the rule keeps ONE issue_owners email with the NoOne fallthrough, which
+# resolves to no recipient. Step 2 removes the rule when the root-cause fix merges or on 2026-11-26 (30 days after the
+# first event), whichever comes first. The removal checklist is in the header of server/agent-auth-mode.ts.
+#
+# GROUPING: the message is constant, so every event shares ONE Sentry issue; the per-user 5-minute debounce and the
+# process-wide cap (10 events per 5 minutes) bound the events. NoOne resolves to no recipient ONLY while the project has
+# no Sentry ownership rule (last measured 2026-09-06; a 2026-10-29 retry with the read-only token got 403): a rule that
+# names owners would deliver to them. This covers THIS rule only: Sentry's vendor-default workflow "Send a notification
+# for high priority issues" (not managed here) can still email active members for a new or re-prioritised high-priority
+# issue; see README.md.
+# No Slack action is wired for this rule. Both filters (feature AND op) are carried so a later diagnostic op under
+# feature=agent-auth cannot match by accident.
+#
+# DECODE KEY: README.md ("Diagnostic rule: agent-auth-failure") is the one copy of the tag decode table, the responder
+# steps and the read commands.
+# Distinct frequency_minutes = 40 avoids Sentry POST-time exact-duplicate dedup (`grep -h frequency_minutes *.tf` lists
+# the values in use); dedup keys on action shape + action_match + filter_match + frequency, not conditions. The value is
+# provisional until the last merge of origin/main: re-check it then.
+# Events carry only ten closed-enum values: no key material, env value, message body, user or workspace id, or path.
+resource "sentry_alert" "agent_auth_failure" {
+  organization      = var.sentry_org
+  name              = "agent-auth-failure"
+  enabled           = true
+  frequency_minutes = 40
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-auth" } },
+        { tagged_event = { key = "op", match = "eq", value = "cli-auth-failure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },
       ]
     },
   ]

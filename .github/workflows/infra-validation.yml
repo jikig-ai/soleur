@@ -164,6 +164,12 @@ on:
       # the Tier-B flag job the suite also reads, is already listed.)
       - ".github/workflows/inngest-link-flip.yml"
       - "scripts/inngest-link-flip.sh"
+      # (#10540) inngest-key-rotate-workflow.test.sh asserts the key-rotation workflow's posture (dispatch-only, the
+      # Tier-B environment per job, the confirm literals) and drives its body, scripts/inngest-key-rotate.sh, against
+      # stubbed gh/curl/doppler. Neither file is under apps/*/infra/**, so a PR editing only one of them would skip the
+      # suite whose job is to turn that edit red - the same defect class as the #10136 entries above.
+      - ".github/workflows/inngest-key-rotate.yml"
+      - "scripts/inngest-key-rotate.sh"
       # The flip's redeploy is the shared driver (track.sh), which the same suite runs for real against a degraded
       # fan-out frame, and its roster literal is pinned by web-hosts-fanout-parity.test.sh (under apps/*/infra/**).
       - ".github/actions/dispatch-web-redeploy/track.sh"
@@ -257,6 +263,9 @@ on:
       # (#10321) The credential-shape alert drift guard asserts the runbook its
       # incident link resolves to exists; a rename/delete must run the guard.
       - "knowledge-base/engineering/operations/runbooks/registry-zot-credential-shape-10321.md"
+      # (#9639 F8) The nic-guard unpinned_url alert drift guard asserts the runbook its
+      # incident link resolves to exists; a rename/delete must run the guard.
+      - "knowledge-base/engineering/operations/runbooks/web-nic-guard-unpinned-url-alert.md"
       # (#4699) cloud-init-inngest-bootstrap.test.sh's AC6d block asserts the scheduled
       # published-digest reconciler's wiring — the workflow is dispatched and drives the
       # script, the checkout carries full history + tags, the GHCR login is present, and
@@ -408,7 +417,9 @@ jobs:
           # annotation — inside the $() above it could only reach stderr.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
-              is_plan_skipped "$d" && echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
+              if is_plan_skipped "$d"; then
+                echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
+              fi
             done
           fi
 
@@ -743,6 +754,13 @@ jobs:
       - name: Install nftables (for the git-data ruleset syntax gate, #7772)
         run: sudo apt-get update -qq -o Acquire::Retries=5 && sudo apt-get install -y -qq -o Acquire::Retries=5 nftables
 
+      # (#9927) inngest-luks-key-probe.test.sh drives the REAL cryptsetup against a file-backed
+      # LUKS2 container (no root). It FAILS under CI when cryptsetup is absent rather than
+      # skipping: a skip would drop the arm that proves `tr -d '\n'` is load-bearing while the
+      # suite's count pin shrank to match. ubuntu-24.04 does not ship cryptsetup.
+      - name: Install cryptsetup-bin (key-continuity probe real-tool arm, #9927)
+        run: sudo apt-get update -qq -o Acquire::Retries=5 && sudo apt-get install -y -qq -o Acquire::Retries=5 cryptsetup-bin
+
       # Many glob-derived suites on the leg consume a real docker daemon (the git-data
       # fixtures, the zot/cloud-init container legs) and self-skip when it is absent —
       # which on a leg would be a silent SKIP of the only thing they assert. This step is
@@ -872,6 +890,12 @@ jobs:
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 
+      # (#9927) The LUKS key-continuity probe paging alert: its SQL (token=fail_ present, indeterminate
+      # absent), parameters, both -target lines, a negative row that no dead-man resource ships here
+      # (ruling D12), and the mutation rows that each require this guard to red.
+      - name: Run inngest LUKS key-continuity probe alert drift guard (#9927)
+        run: bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh
+
       # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
       # conjuncts (read against the fire command's own logger line), the paging semantics, both
       # -target lines, and the mutation rows that each require this guard to red.
@@ -932,6 +956,12 @@ jobs:
       # the mutation rows that each require this guard to red.
       - name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)
         run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh
+
+      # (#9639 F8) The nic-guard unpinned_url Logs alert: the needle read from the emitter, the
+      # tag+position predicate compared whole (no host conjunct), the paging windows, both -target
+      # lines, the runbook + standing-alarms row, this suite's own dispatch, and the mutation rows.
+      - name: Run web NIC guard unpinned ingest URL refusal alert drift guard (#9639)
+        run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh
 
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and

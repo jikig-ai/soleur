@@ -34,6 +34,7 @@ import {
 } from "@/server/observability";
 import { isGitDataStoreEnabled } from "@/server/workspace-resolver";
 import { gitWithPrivateKeyAuth } from "@/server/git-auth";
+import { readGitDataKeyEnv } from "@/server/git-data-key";
 // Pure transport helpers (call-time only) from the WRITE-side module. The two
 // modules reference each other exclusively inside async function bodies (this
 // file → gitDataRemoteUrl/assertSafeWorkspaceId; the write module →
@@ -212,7 +213,7 @@ export async function fetchFromGitData(params: {
     );
   }
 
-  const transportKey = process.env.GIT_TRANSPORT_SSH_PRIVATE_KEY?.trim();
+  const transportKey = readGitDataKeyEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY");
   if (!transportKey) {
     throw new Error(
       "git-data: GIT_TRANSPORT_SSH_PRIVATE_KEY is unset — cannot fetch from the " +
@@ -247,6 +248,14 @@ export async function fetchFromGitData(params: {
   await gitWithPrivateKeyAuth(
     [
       "fetch",
+      // (#8211 fix-forward 2) The workspace clone is always `--depth 1`, and the
+      // store itself is shallow once it accepts shallow pushes
+      // (receive.shallowUpdate): a pack cut at the store's boundary carries
+      // objects that need new shallow roots, which `git fetch` refuses by
+      // default (`shallow roots are not allowed to be updated` — quietly, with
+      // no ref landed). `--update-shallow` updates .git/shallow and accepts such
+      // refs; on a non-shallow or boundary-agnostic fetch it is inert.
+      "--update-shallow",
       remoteUrl,
       `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
       `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,

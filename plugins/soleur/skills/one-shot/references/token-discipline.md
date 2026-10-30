@@ -72,3 +72,9 @@ files); the cost came from three habits below, each of which multiplies.
 
 **Report cost honestly.** If a run was disproportionate, say so and name the cause — the
 operator paid for it and cannot see the breakdown.
+
+**Depth-1 harness adaptation (OpenCode family).** When the harness forbids spawned children
+from spawning further, a child skill that fans out runs its steps sequentially inline with
+`Reviewed-Coverage: sequential-fallback` disclosed, while review-panel and fix-round seats
+spawn from the pipeline session itself — gates change execution shape, never presence
+(learning: `knowledge-base/project/learnings/2026-10-28-one-shot-on-opencode-depth-1-harness-adaptations.md`).

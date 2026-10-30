@@ -38,11 +38,20 @@ SyslogIdentifier=inngest-redis
 # refuse to start Redis on the PRE-recut host (still plaintext ext4) and deadlock the cutover this
 # apparatus exists to enable. See the script's own header for the two states.
 ExecStartPre=/usr/local/bin/inngest-redis-mount-guard.sh
-# Password injected from Doppler prd at runtime, inside a bash -c so the literal
-# $INNGEST_REDIS_PASSWORD (NOT its value) appears in `ps`/journal — same
-# defense as inngest-server.service. Shipped as a FILE (not a TF inline heredoc)
-# because the doppler-wrapped nested single-quotes do not survive templating.
-ExecStart=/usr/bin/doppler run --config ${DOPPLER_CONFIG} -- /usr/bin/bash -c '/usr/bin/redis-server /mnt/data/redis/inngest-redis.conf --requirepass "$INNGEST_REDIS_PASSWORD"'
+# Password delivery via aclfile (#11103). The writer runs under `doppler run
+# --only-secrets INNGEST_REDIS_PASSWORD` — it sees exactly ONE secret name (the
+# whole prd config is no longer injected), refuses unconditionally under xtrace,
+# and atomically writes /mnt/data/redis/inngest-redis.acl (0600), which the conf
+# declares via `aclfile`. It runs AFTER the mount-guard so the file lands on the
+# proven persistent mount, and as User=deploy inside ReadWritePaths=/mnt/data/redis
+# it can only write there. This replaces the old inner-shell `-c` expansion: a
+# traced launch (SHELLOPTS=xtrace / BASH_ENV) printed the resolved password to
+# stderr and journald shipped it off-box, and --requirepass also left the
+# cleartext on redis-server's argv (/proc/<pid>/cmdline, 0444) and readable via
+# CONFIG GET — the ACL stores SHA256, so none of those surfaces carries it now.
+ExecStartPre=/usr/bin/doppler run --config ${DOPPLER_CONFIG} --only-secrets INNGEST_REDIS_PASSWORD -- /usr/local/bin/inngest-redis-acl.sh
+# The ExecStart expands NOTHING: no doppler run, no inner `-c` wrapper, no $ of any spelling.
+ExecStart=/usr/bin/redis-server /mnt/data/redis/inngest-redis.conf
 Restart=on-failure
 RestartSec=5
 # Sized for the modest queue/run-state; bound so a runaway cannot starve the

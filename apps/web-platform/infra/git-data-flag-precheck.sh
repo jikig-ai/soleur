@@ -120,6 +120,21 @@
 # verdict=sandbox_deny_coverage_{absent,unknown}, because a flip without the
 # coverage ships a sandbox that denies nothing real.
 #
+# WORKTREE ROOT OWNERSHIP (#8211 PR-E). With the flag on, every working tree lives at <WORKTREE_ROOT>/<id>, and the container runs as
+# uid 1001 with no mount there, so the IMAGE must create the directory and give it to 1001 or every session fails EACCES at mkdir
+# (the flag-on rehearsal, 2026-10-24). A source-level probe on the checkout, like SANDBOX_DENY_ROOTS: the Dockerfile's last stage must
+# carry, in RUN instructions before its USER, `mkdir -p <dir>` and `chown [-R] 1001[:1001] <dir>`, where <dir> is the literal default
+# workspace-resolver.ts declares (WORKTREE_ROOT_DEFAULT). Whole-line comments are stripped, continuations joined, and an inline
+# comment cut, so a name in a comment is not a hit. The chown must come AFTER the mkdir; a `false`/`exit` segment disables the rest of its
+# RUN; an rm/rmdir/mv naming the directory undoes both (conservative: it reads absent, never present, on anything it cannot prove).
+#   WORKTREE_ROOT_WRITABLE present  -> both found, in the final stage, before USER
+#   WORKTREE_ROOT_WRITABLE absent   -> files readable, marker missing
+#   WORKTREE_ROOT_WRITABLE unknown  -> Dockerfile or resolver unreadable, or the resolver's default unparseable (never "absent")
+# Blocking on FLAG_MODE=flip, and on any `true` write: anything but `present` refuses verdict=worktree_root_writable_{absent,unknown}.
+# This is the STATIC half. The property that matters is runtime (the directory is writable by uid 1001 inside the RUNNING container, and
+# that container reaches git-data), which no GitHub runner can read: it is checked host-side by git-data-cutover.sh MODE=proof
+# (probe=container-probe: verdict=worktree_root_not_writable | container_egress_blackhole), which the flip runs before the freeze.
+#
 # GIT-DATA HOST-KEY PIN (#7226, plan D3). The same step, with the same `prd` token, reads
 # GIT_DATA_SSH_HOST_KEY (published by Terraform when git-data is born or replaced) with the same
 # --no-exit-on-missing-secret semantics, validates its shape, and writes it to
@@ -211,6 +226,76 @@ detect_deny_roots() {
   fi
 }
 
+# The refusal verdict for a non-present state, spelled out in full so a grep for either word finds its emitter.
+worktree_verdict() { # <absent|unknown>
+  case "$1" in
+    absent) echo worktree_root_writable_absent ;;
+    *) echo worktree_root_writable_unknown ;;
+  esac
+}
+
+# --- WORKTREE_ROOT_WRITABLE detector (#8211 PR-E) ---
+# The image must create + chown the resolver's default worktree root (header). Overrides, for the suite only:
+# WORKTREE_DOCKERFILE and WORKTREE_RESOLVER (a mutant copy lives outside the tree, so the defaults would read `unknown`).
+detect_worktree_root() {
+  local df="${WORKTREE_DOCKERFILE:-$(dirname "$0")/../Dockerfile}"
+  local rs="${WORKTREE_RESOLVER:-$(dirname "$0")/../server/workspace-resolver.ts}"
+  local root
+  if [ ! -r "$df" ] || [ ! -f "$df" ] || [ ! -r "$rs" ] || [ ! -f "$rs" ]; then
+    echo unknown; return 0
+  fi
+  root="$(sed -nE 's#^[[:space:]]*const WORKTREE_ROOT_DEFAULT = "(/[A-Za-z0-9/_.-]+)";.*#\1#p' "$rs" | head -n 1)"
+  if [ -z "$root" ]; then
+    echo unknown; return 0
+  fi
+  # One logical line per instruction: whole-line comments dropped (Docker drops them inside a continued RUN too), continuations
+  # joined. A stage is the span after a FROM; only the LAST stage ships, and the RUNs must precede that stage's USER.
+  awk -v root="$root" '
+    # An inline shell comment is not code: cut at a `#` that starts a word outside quotes (on the joined logical line, as the shell sees it).
+    function strip(l,   i, c, q) {
+      q = ""
+      for (i = 1; i <= length(l); i++) {
+        c = substr(l, i, 1)
+        if (q == "") {
+          if (c == "\"" || c == "\047") q = c
+          else if (c == "#" && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:]]/)) return substr(l, 1, i - 1)
+        } else if (c == q) q = ""
+      }
+      return l
+    }
+    /^[[:space:]]*#/ { next }
+    { line = $0
+      if (sub(/\\[[:space:]]*$/, "", line)) { acc = acc line " "; next }
+      ins(acc line); acc = "" }
+    END { if (acc != "") ins(acc); print ((sm && sc) ? "present" : "absent") }
+    # State across the final stage: sm = the directory was made, sc = it was chowned to 1001 AFTER that (a mkdir resets sc). Within one RUN, a `false` or
+    # `exit` segment makes every later segment of that RUN unreliable (dead), and any rm/rmdir/mv naming the directory undoes both.
+    function ins(l,   n, cmds, i, f, nf, j, dead, k) {
+      if (l ~ /^[[:space:]]*FROM[[:space:]]/) { sm = 0; sc = 0; user = 0; return }
+      if (l ~ /^[[:space:]]*USER[[:space:]]/) { user = 1; return }
+      if (l !~ /^[[:space:]]*RUN[[:space:]]/ || user) return
+      l = strip(l)
+      n = split(l, cmds, /&&|;/)
+      dead = 0
+      for (i = 1; i <= n; i++) {
+        nf = split(cmds[i], f, /[[:space:]]+/)
+        j = 1; while (j <= nf && f[j] == "") j++
+        if (f[j] == "RUN") j++
+        if (f[j] == "false" || f[j] == "exit") { dead = 1; continue }
+        if (dead) continue
+        if (f[j] == "rm" || f[j] == "rmdir" || f[j] == "mv") {
+          for (k = j + 1; k <= nf; k++) if (f[k] == root) { sm = 0; sc = 0 }
+          continue
+        }
+        if (f[j] == "mkdir" && f[j+1] == "-p" && f[j+2] == root && (j + 3 > nf || f[j+3] == "")) { sm = 1; sc = 0 }
+        if (f[j] == "chown") {
+          if (f[j+1] == "-R") { j++ }
+          if (f[j+1] ~ /^1001(:1001)?$/ && f[j+2] == root && (j + 3 > nf || f[j+3] == "")) sc = 1
+        }
+      }
+    }' "$df"
+}
+
 # ---- Write path (#8573): returns before the read probes --------------------------
 if [ -n "${FLAG_WRITE_VALUE:-}" ]; then
   case "$FLAG_WRITE_VALUE" in
@@ -226,6 +311,16 @@ if [ -n "${FLAG_WRITE_VALUE:-}" ]; then
     if [ "$wr_deny" != present ]; then
       echo "::error title=git-data-flag-precheck::verdict=sandbox_deny_coverage_${wr_deny} — the sandbox tenant denyRead does not verifiably cover WORKTREE_ROOT; land the #9725 deny-root fix before writing GIT_DATA_STORE_ENABLED=true"
       echo "[git-data-flag-precheck] verdict=sandbox_deny_coverage_${wr_deny}"
+      exit 5
+    fi
+  fi
+  # Same posture for the worktree root (#8211 PR-E): a `true` write onto an image that does not own it fails every session at mkdir.
+  if [ "${FLAG_WRITE_VALUE}" = true ]; then
+    wr_wt="$(detect_worktree_root)"
+    if [ "$wr_wt" != present ]; then
+      wr_wtv="$(worktree_verdict "$wr_wt")"
+      echo "::error title=git-data-flag-precheck::verdict=${wr_wtv} — the Dockerfile does not verifiably create and chown the worktree root to uid 1001; land the image fix before writing GIT_DATA_STORE_ENABLED=true"
+      echo "[git-data-flag-precheck] verdict=${wr_wtv}"
       exit 5
     fi
   fi
@@ -451,6 +546,13 @@ deny_state="$(detect_deny_roots)"
 echo "SANDBOX_DENY_ROOTS $deny_state"
 if [ "$FLAG_MODE" = flip ] && [ "$deny_state" != present ]; then
   refuse "sandbox_deny_coverage_${deny_state} — the sandbox tenant denyRead does not verifiably cover WORKTREE_ROOT; land the #9725 deny-root fix before flipping GIT_DATA_STORE_ENABLED"
+fi
+
+# --- WORKTREE_ROOT_WRITABLE (#8211 PR-E) ---
+wt_state="$(detect_worktree_root)"
+echo "WORKTREE_ROOT_WRITABLE $wt_state"
+if [ "${FLAG_MODE}" = flip ] && [ "$wt_state" != present ]; then
+  refuse "$(worktree_verdict "$wt_state") — the Dockerfile does not verifiably create and chown the worktree root to uid 1001, so every session would fail EACCES at mkdir; land the image fix before flipping GIT_DATA_STORE_ENABLED"
 fi
 
 # --- git-data host-key pin ---

@@ -162,12 +162,10 @@ export const cronNag4216Readiness = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 14 * * 1" },
+      { event: "cron/nag-4216-readiness.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 14 * * 1" },
-    { event: "cron/nag-4216-readiness.manual-trigger" },
-  ],
-  cronNag4216ReadinessHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronNag4216ReadinessHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

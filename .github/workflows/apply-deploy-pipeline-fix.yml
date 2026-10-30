@@ -105,7 +105,7 @@ on:
       # TRIGGER_FILES by ship-deploy-pipeline-fix-gate.test.ts.
       - "apps/web-platform/infra/inngest-registry-probe.sh"
       - "apps/web-platform/infra/inngest-doublefire-probe.sh"
-      # #6780 — the five dedicated-host carriers (ADR-135 refresh-set members D3). Their real
+      # #6780 — the four dedicated-host carriers (ADR-135 refresh-set members D3). Their real
       # channel is the dedicated host's signed bundle pull; on web hosts they are inert
       # /usr/local/bin files — but they ARE in FILE_MAP + push payload + the
       # deploy_pipeline_fix triggers_replace hash, so a body-only edit must fire this apply
@@ -114,7 +114,6 @@ on:
       - "apps/web-platform/infra/inngest-cutover-flip.sh"
       - "apps/web-platform/infra/inngest-server-flip-guard.sh"
       - "apps/web-platform/infra/cat-inngest-cutover-state.sh"
-      - "apps/web-platform/infra/inngest-luks-cutover.sh"
       # #7095 — the re-deliverable web-host Doppler credential and the two systemd drop-ins
       # that re-point the generated units (vector, inngest-heartbeat) at it. All three are
       # host-delivered over the webhook channel AND registered in server.tf's
@@ -217,8 +216,8 @@ env:
   # SHA-256 computed against the real released binary at the pinned version
   # (NEVER paste a checksum from documentation or AI output per the 2026-03-21
   # server-provisioning learning, Session Error #4; re-verified at /work time).
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
 jobs:
   preflight:
@@ -1374,6 +1373,7 @@ jobs:
           REPUSH_APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
           WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
           WEBHOOK_LISTENER_STATE: ${{ steps.webhook_liveness.outputs.listener_state }}
+          DRIFT_PLAN_EXIT_CODE: ${{ steps.drift_plan.outputs.exit_code }}
           # #7546 review: without this the backstop could not enumerate "pass 2 RAN and
           # failed" -- the EXPECTED red path of this whole feature -- so that state fell to
           # the catch-all below, whose text asserts a wiring bug that did not happen. The
@@ -2293,6 +2293,8 @@ jobs:
           # CF-Access (same one web-platform-release.yml curls for its health gate).
           HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
           RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+          RAW_VERSION="$RUNNING_VERSION"
+          RUNNING_VERSION="${RUNNING_VERSION#v}" # canonicalize like the resolver — v-prefixed must not produce vv*
           TARGET_TAG="v${RUNNING_VERSION}"
 
           # Fail fast with the SAME semver shape ci-deploy.sh:713 enforces — never POST a
@@ -2300,7 +2302,7 @@ jobs:
           # perpetuating the wedge). A non-released image (BUILD_VERSION unset → "dev" →
           # "vdev") is caught here with a clear remediation instead of a tag_malformed loop.
           if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RUNNING_VERSION}', state-file .tag='${CURRENT_TAG}'). The container is not reporting a released BUILD_VERSION. Trigger a normal web-platform release, then re-run this apply."
+            echo "::error::Cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RAW_VERSION}', state-file .tag='${CURRENT_TAG}'). The container is not reporting a released BUILD_VERSION. Trigger a normal web-platform release, then re-run this apply."
             exit 1
           fi
           echo "Redeploying running version as ${TARGET_TAG} (state-file .tag was '${CURRENT_TAG}')."
@@ -2550,9 +2552,67 @@ jobs:
       # when its newest recorded plan is readable, complete and shows no hcloud_server action, and
       # leaves everything else open with a ::notice::. The `if:` below is pinned verbatim by
       # apps/web-platform/infra/infra-config-gate.test.sh AC18: change it there too.
+      #
+      # THIRD GATE, THIRD EVIDENCE (#9061). Neither gate above re-measures the full root: the
+      # infra-config verdict adjudicates only the host's config files, and the issue's newest
+      # recorded plan was written by the drift cron before this run. Measured on #8754, an
+      # issue was closed while its whole standing tail still stood, and the next drift run
+      # filed a duplicate. This step mirrors the drift cron's web-platform leg AFTER the apply,
+      # and the close step below requires its exit code 0 —
+      # so a close now literally means "a full-root plan read no changes". `set +e` + captured
+      # EXIT_CODE mirror the cron's drift step; PLAN_OUTPUT stays in the variable (refresh lines
+      # print random_id key bytes — #11294) and only the `^Plan:` count line reaches the summary.
+      # A non-0/2 exit is `::error::` but does NOT fail the job: the apply already ran and was
+      # verified, and a failed diagnostic must not red a green apply — it fails closed instead.
+      - name: Post-apply full-root drift plan
+        id: drift_plan
+        timeout-minutes: 15  # the drift cron bounds the identical work at 15 per leg; a provider stall must not hold web-1-swap to the 90-min job ceiling
+        if: >-
+          success() && env.PLAN_HAS_CHANGES == 'true'
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set +e
+          PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
+            terraform plan -detailed-exitcode -no-color -input=false \
+            -out=drift.tfplan \
+            -var="ssh_key_path=${CI_SSH_PUB}" 2>&1)
+          EXIT_CODE=$?
+          set -e
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          case "$EXIT_CODE" in
+            0) echo "::notice::Post-apply full-root plan is clean — the close step may run." ;;
+            2) echo "::notice::Post-apply full-root plan still shows changes — every drift issue stays open." ;;
+            *) echo "::error::Post-apply full-root plan FAILED (exit $EXIT_CODE) — not readable as clean; drift issues stay open and this run asserts nothing about drift." ;;
+          esac
+          # git-data wipe wedge (tests/scripts/test-git-data-wipe-wedge.sh): an
+          # untargeted plan reaches hcloud_server.git_data — an apply-capable
+          # reader must feed it a refusing gate. A refuse is advisory here
+          # (::error::, no job failure): the close step already requires
+          # exit_code == '0' and a wedged plan exits 2 either way.
+          if [[ -f drift.tfplan ]]; then
+            terraform show -json drift.tfplan > drift-plan.json
+            # shellcheck source=tests/scripts/lib/git-data-wedge-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-wedge-gate.sh"
+            if ! git_data_wedge_gate drift-plan.json; then
+              echo "::error::Post-apply full-root plan re-creates the retired git-data plaintext store — the wedge is open; drift issues stay open."
+            fi
+            # drift.tfplan/drift-plan.json hold cleartext secrets (same shape as
+            # the targeted tfplan.json above) — they never outlive this step.
+            rm -f drift.tfplan drift-plan.json
+          fi
+          printf '%s\n' "$PLAN_OUTPUT" | grep -E '^(Plan: [0-9]+ to |Error:)' \
+            >> "$GITHUB_STEP_SUMMARY" || true
+
       - name: Auto-close any open drift issues for this stack
         if: >-
           success() && env.PLAN_HAS_CHANGES == 'true'
+          && steps.drift_plan.outputs.exit_code == '0'
           && (steps.infra_config_gate.outputs.verdict == 'verified'
               || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         env:
@@ -2600,6 +2660,7 @@ jobs:
             # the one artifact the founder reads, on the two runs where it did not. The re-push
             # HAPPENING and the re-push WORKING are different facts; the summary now reports
             # whichever is true rather than the more comfortable one.
+            echo "**Post-apply drift plan exit:** ${DRIFT_PLAN_EXIT_CODE:-unset} (0=clean, 2=drift stands, unset=step skipped)"
             if [[ "${REPUSH_OUTCOME:-skipped}" != "skipped" ]]; then
               echo ""
               if [[ "${PASS2_VERDICT:-}" == "verified" ]]; then

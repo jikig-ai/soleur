@@ -32,6 +32,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 # shellcheck source=../../../plugins/soleur/test/test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP_ROOT:-}" ]] || rm -rf "$TMP_ROOT"' EXIT
 source "${REPO_ROOT}/plugins/soleur/test/test-helpers.sh"
 
 GO_MD="${REPO_ROOT}/plugins/soleur/commands/go.md"
@@ -45,7 +51,6 @@ BASH_BIN="$(command -v bash)"
 TMP_ROOT=$(mktemp -d -t gosessiongates.XXXXXXXX) || { echo "FATAL: no scratch root" >&2; exit 2; }
 : "${TMP_ROOT:?refusing to proceed without a scratch root}"
 assert_fixture_dir "${TMP_ROOT}"
-trap 'rm -rf "$TMP_ROOT"' EXIT
 
 passes=0; fails=0; asserted=0
 VERDICT_LOG="$TMP_ROOT/verdicts.txt"; : > "$VERDICT_LOG"

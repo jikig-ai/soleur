@@ -6,6 +6,7 @@ related_adrs: [ADR-133, ADR-177, ADR-181]
 amended_by:
   - "ADR-262 (2026-09-30, #9323) — CI's required `test` context no longer runs five self-test mutation batteries on a pull_request event when the diff misses their subject paths; see ## Amendment — 2026-09-30"
   - "ADR-276 S4 (2026-10-14, #9729) — once activated, CI's required `test` context on a pull_request event is no longer necessarily the full battery for the PR head; `merge_group` stays the authority; see ## Amendment — 2026-10-14"
+  - "ADR-196 addendum (2026-10-28, #10924 P4d) — a local battery REFUSED for sibling contention may be recorded as \"CI is the gate\" after a bounded wait, except on the infra surface and under `--full` or a force-all log"
 ---
 
 # ADR-183: The full suite runs at ship, not at the implementation exit
@@ -162,3 +163,7 @@ names. Anything above that reads "CI runs the full battery on the PR head" shoul
 ## Amendment — 2026-10-14 (S4 PR B, #9729, ADR-276)
 
 Pointer only. This record's decision (the full local battery once per PR at `/ship`) is unchanged. Its premise that CI's required `test` context is the full-battery gate for the PR head changes once ADR-276 S4 is activated: on a `pull_request` event the aggregator may then conclude green with `test-webplat`, `test-bun` or `test-scripts-heavy` skipped, under the named `PR-AFFECTED-SKIP` tolerance. `merge_group`, which runs the full battery on the candidate tree, stays the authority, and the required context's name does not change. PR B ships that mechanism dark and locked, so today's reading (including the 2026-09-30 amendment above) holds until ADR-276 records the activation. Details: ADR-276 `## Amendment 2026-10-14 (S4 PR B, #9729)`.
+
+## Amendment — 2026-10-28 (P4d, #10924, ADR-196 addendum)
+
+Pointer only. The decision (one full local battery per PR at `/ship`) is unchanged. One exit is added: when the detached battery is REFUSED because a sibling worktree runs a full-gate battery, `battery-refusal-wait.sh` waits a bounded time and then answers `CI_IS_THE_GATE` (exit 42), recorded on the PR as "local run NOT executed". Unlike an unresolved (reaped) run, a refused run is a measured, named condition and CI's required `test` context is the gate; the infra surface (no required CI check, #6480), an unresolvable diff, an operator-typed `--full` and a `force-all` log never take this exit. "CI's required `test` context is the gate" is read per the 2026-10-14 amendment above (on a pull request event the merge queue's `merge_group` run is the authority).

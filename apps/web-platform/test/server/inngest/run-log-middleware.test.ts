@@ -19,7 +19,7 @@ vi.mock("@/server/inngest/routine-run-progress", () => ({
   finishRoutineRunProgress: (...a: unknown[]) => finishProgressMock(...a),
 }));
 
-import { runLogMiddleware } from "@/server/inngest/middleware/run-log";
+import { RunLogMiddleware } from "@/server/inngest/middleware/run-log";
 
 interface RunOpts {
   fnId?: string;
@@ -29,11 +29,14 @@ interface RunOpts {
   maxAttempts?: number;
 }
 
-// Drive the middleware's per-run hooks the way Inngest ACTUALLY does:
-// onFunctionRun receives InitialRunInfo ({ event, runId } only — NO attempt/
-// maxAttempts); the retry-attempt fields arrive on transformInput's ctx. The
-// helper deliberately keeps attempt OFF the onFunctionRun ctx so a regression
-// that reads attempt from the wrong ctx (the dead-gate bug) fails this test.
+// Drive the middleware's per-request hooks the way inngest@4 ACTUALLY does:
+// a fresh class instance per request; transformFunctionInput receives the full
+// run ctx ({ event, runId }), and the terminal result splits across
+// onRunComplete (handler returned — success OR returned { ok:false }) and
+// onRunError (handler threw — carries the native isFinalAttempt flag that
+// retires the v3 `attempt >= maxAttempts - 1` approximation). The attempt/
+// maxAttempts opts are translated into that flag, so a regression that
+// ignores isFinalAttempt fails this suite.
 function makeHooks(opts: RunOpts) {
   const fnId = opts.fnId ?? "cron-daily-triage";
   const ctx = {
@@ -44,13 +47,18 @@ function makeHooks(opts: RunOpts) {
     },
   };
   const fn = { id: () => fnId };
-  // @ts-expect-error — minimal ctx/fn shapes for the unit test
-  const hooks = runLogMiddleware.init().onFunctionRun({ ctx, fn });
-  // transformInput's ctx (BaseContext) is where attempt/maxAttempts live.
-  const inputCtx = {
-    ctx: { attempt: opts.attempt ?? 0, maxAttempts: opts.maxAttempts ?? 1 },
+  const mw = new RunLogMiddleware({ client: {} as never });
+  mw.transformFunctionInput({ ctx, fn, steps: {} } as never);
+  const isFinal = (opts.attempt ?? 0) >= (opts.maxAttempts ?? 1) - 1;
+  return {
+    mw,
+    // v3 transformOutput({ result: { data } }) → v4 onRunComplete({ output })
+    runComplete: (output: unknown) =>
+      mw.onRunComplete({ ctx, fn, output } as never),
+    // v3 transformOutput({ result: { error } }) → v4 onRunError({ error, isFinalAttempt })
+    runError: (error: unknown, final = isFinal) =>
+      mw.onRunError({ ctx, fn, error, isFinalAttempt: final } as never),
   };
-  return { ...hooks, inputCtx };
 }
 
 beforeEach(() => {
@@ -63,8 +71,7 @@ beforeEach(() => {
 describe("run-log middleware — live-state finish ordering (#5766 AC6 / DI-P1-C)", () => {
   it("deletes the live row AFTER a successful terminal write", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 1 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { data: "ok" } } as never);
+    await a.runComplete("ok");
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(finishProgressMock).toHaveBeenCalledWith("run-abc");
     // Ordering: the terminal write is invoked BEFORE the live-row delete.
@@ -76,23 +83,23 @@ describe("run-log middleware — live-state finish ordering (#5766 AC6 / DI-P1-C
   it("does NOT delete the live row when the terminal write throws (run stays visible as stuck, never vanishes)", async () => {
     rpcMock.mockRejectedValueOnce(new Error("db down"));
     const a = makeHooks({ attempt: 0, maxAttempts: 1 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { data: "ok" } } as never);
+    await a.runComplete("ok");
     expect(finishProgressMock).not.toHaveBeenCalled();
   });
 
   it("does NOT delete on a step-level event (no terminal row yet)", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 1 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { data: "ok" }, step: {} } as never);
+    // v4: step-level results are onStepComplete/onStepError — this middleware
+    // defines neither, so a step event can never reach the row writer.
+    expect((a.mw as { onStepComplete?: unknown }).onStepComplete).toBeUndefined();
+    expect((a.mw as { onStepError?: unknown }).onStepError).toBeUndefined();
     expect(rpcMock).not.toHaveBeenCalled();
     expect(finishProgressMock).not.toHaveBeenCalled();
   });
 
   it("does NOT delete on a non-final failed attempt (write is gated, so is the delete)", async () => {
     const a = makeHooks({ attempt: 1, maxAttempts: 3 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { error: new Error("retry") } } as never);
+    await a.runError(new Error("retry"));
     expect(rpcMock).not.toHaveBeenCalled();
     expect(finishProgressMock).not.toHaveBeenCalled();
   });
@@ -102,14 +109,12 @@ describe("run-log middleware — final-attempt gate", () => {
   it("a fail-then-succeed run writes exactly one 'completed' row", async () => {
     // attempt 0 fails (non-final, maxAttempts=2) → no write
     const a0 = makeHooks({ attempt: 0, maxAttempts: 2 });
-    await a0.transformInput?.(a0.inputCtx as never);
-    await a0.transformOutput?.({ result: { error: new Error("boom") } } as never);
+    await a0.runError(new Error("boom"));
     expect(rpcMock).not.toHaveBeenCalled();
 
     // attempt 1 succeeds → exactly one write, status completed
     const a1 = makeHooks({ attempt: 1, maxAttempts: 2 });
-    await a1.transformInput?.(a1.inputCtx as never);
-    await a1.transformOutput?.({ result: { data: "ok" } } as never);
+    await a1.runComplete("ok");
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(rpcMock.mock.calls[0][0]).toBe("write_routine_run");
     expect(rpcMock.mock.calls[0][1].p_status).toBe("completed");
@@ -117,26 +122,25 @@ describe("run-log middleware — final-attempt gate", () => {
 
   it("a final failed attempt writes one 'failed' row", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 1 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { error: new Error("nope") } } as never);
+    await a.runError(new Error("nope"));
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(rpcMock.mock.calls[0][1].p_status).toBe("failed");
   });
 
-  it("a non-final failed attempt is gated even when maxAttempts is read from transformInput (regression: dead gate)", async () => {
-    // attempt 1 of 3 fails → must NOT write. This only passes if attempt/
-    // maxAttempts are sourced from transformInput's ctx; the prior bug read
-    // them off onFunctionRun's ctx (always undefined → always "final").
+  it("a non-final failed attempt is gated on the native isFinalAttempt flag (regression: dead gate)", async () => {
+    // attempt 1 of 3 fails → must NOT write. Under v4 the flag arrives on
+    // onRunError directly — the v3 transformInput ctx capture is gone, so a
+    // regression that ignores isFinalAttempt is the only shape left to pin.
     const a = makeHooks({ attempt: 1, maxAttempts: 3 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { error: new Error("retry me") } } as never);
+    await a.runError(new Error("retry me"));
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it("a step-level output (step present) writes no row — only the function-final result lands", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 1 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { data: "step-out" }, step: {} } as never);
+    // Same pin as above: no step-level hook exists, so only a run-final
+    // hook can land a row.
+    expect((a.mw as { onStepComplete?: unknown }).onStepComplete).toBeUndefined();
     expect(rpcMock).not.toHaveBeenCalled();
   });
 });
@@ -147,13 +151,7 @@ describe("run-log middleware — returned ok:false is terminal (#5674 P0 guard)"
     // TERMINAL under retries:1 (no retry), so the final-attempt gate must NOT
     // suppress it — it must be written on the spot.
     const a = makeHooks({ attempt: 0, maxAttempts: 2 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({
-      result: {
-        error: null,
-        data: { ok: false, errorSummary: "Credit balance is too low" },
-      },
-    } as never);
+    await a.runComplete({ ok: false, errorSummary: "Credit balance is too low" });
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(rpcMock.mock.calls[0][1].p_status).toBe("failed");
     expect(rpcMock.mock.calls[0][1].p_error_summary).toBe(
@@ -163,10 +161,7 @@ describe("run-log middleware — returned ok:false is terminal (#5674 P0 guard)"
 
   it("a returned { ok:false } with NO errorSummary still records a non-null fallback reason", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 2 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({
-      result: { error: null, data: { ok: false } },
-    } as never);
+    await a.runComplete({ ok: false });
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(rpcMock.mock.calls[0][1].p_status).toBe("failed");
     expect(rpcMock.mock.calls[0][1].p_error_summary).toBe(
@@ -176,10 +171,7 @@ describe("run-log middleware — returned ok:false is terminal (#5674 P0 guard)"
 
   it("a returned { ok:true } writes completed / error_summary null", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 2 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({
-      result: { error: null, data: { ok: true } },
-    } as never);
+    await a.runComplete({ ok: true });
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(rpcMock.mock.calls[0][1].p_status).toBe("completed");
     expect(rpcMock.mock.calls[0][1].p_error_summary).toBeNull();
@@ -187,8 +179,7 @@ describe("run-log middleware — returned ok:false is terminal (#5674 P0 guard)"
 
   it("a THROWN error on a non-final attempt is still gated (will retry → no write)", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 2 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { error: new Error("boom") } } as never);
+    await a.runError(new Error("boom"));
     expect(rpcMock).not.toHaveBeenCalled();
   });
 });
@@ -196,14 +187,11 @@ describe("run-log middleware — returned ok:false is terminal (#5674 P0 guard)"
 describe("run-log middleware — error_summary scrubbing", () => {
   it("redacts secrets/PII and truncates the first line of a failed run's error", async () => {
     const a = makeHooks({ attempt: 0, maxAttempts: 1 });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({
-      result: {
-        error: new Error(
-          "auth failed for postgres://user:s3cr3tpw@db.host:5432/x — token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 contact ops@example.com\nsecond line should be dropped",
-        ),
-      },
-    } as never);
+    await a.runError(
+      new Error(
+        "auth failed for postgres://user:s3cr3tpw@db.host:5432/x — token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 contact ops@example.com\nsecond line should be dropped",
+      ),
+    );
     expect(rpcMock).toHaveBeenCalledTimes(1);
     const summary: string = rpcMock.mock.calls[0][1].p_error_summary;
     // First-line only.
@@ -222,8 +210,7 @@ describe("run-log middleware — attribution", () => {
       eventName: "inngest/scheduled.timer",
       data: { actor_class: "human", actor_id: "forged" },
     });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { data: "ok" } } as never);
+    await a.runComplete("ok");
     const args = rpcMock.mock.calls[0][1];
     expect(args.p_trigger_source).toBe("scheduled");
     expect(args.p_actor_class).toBe("system");
@@ -235,8 +222,7 @@ describe("run-log middleware — attribution", () => {
       eventName: "cron/daily-triage.manual-trigger",
       data: { trigger: "agent", actor_class: "agent", actor_id: "u1", delegating_principal: "op1" },
     });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { data: "ok" } } as never);
+    await a.runComplete("ok");
     const args = rpcMock.mock.calls[0][1];
     expect(args.p_trigger_source).toBe("agent");
     expect(args.p_actor_class).toBe("agent");
@@ -246,8 +232,7 @@ describe("run-log middleware — attribution", () => {
 
   it("does not write for non-routine (event-driven) functions", async () => {
     const a = makeHooks({ fnId: "cfo-on-payment-failed", eventName: "finance.payment_failed" });
-    await a.transformInput?.(a.inputCtx as never);
-    await a.transformOutput?.({ result: { data: "ok" } } as never);
+    await a.runComplete("ok");
     expect(rpcMock).not.toHaveBeenCalled();
   });
 });
@@ -256,10 +241,7 @@ describe("run-log middleware — fail-soft", () => {
   it("a throwing RPC does not propagate and mirrors to Sentry", async () => {
     rpcMock.mockRejectedValue(new Error("supabase down"));
     const a = makeHooks({});
-    await a.transformInput?.(a.inputCtx as never);
-    await expect(
-      a.transformOutput?.({ result: { data: "ok" } } as never),
-    ).resolves.not.toThrow();
+    await expect(a.runComplete("ok")).resolves.not.toThrow();
     expect(captureExceptionMock).toHaveBeenCalled();
   });
 });

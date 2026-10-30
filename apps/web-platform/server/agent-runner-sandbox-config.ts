@@ -523,19 +523,36 @@ export function buildAgentSandboxConfig(
   // per-flag.
   // The SDK skips a deny landing that does not exist, so create each masked dir first (0700, the mode the CLI
   // itself uses). A failure here leaves that dir's mask OFF for a cross-tenant channel, so it is reported to
-  // Sentry (reportSilentFallback, an error event; no dedicated alert routes it yet, #10455), unlike the c4 staging root above.
+  // Sentry (unlike the c4 staging root above) and routed by the Sentry rule `masked-dir-precreate-failed`
+  // (infra/sentry/issue-alerts.tf, filters feature=agent-sandbox AND op=masked-dir-precreate; #10455). The entry
+  // stays in denyRead (fail-open per dir, never by dropping it).
+  // The emit is on the MESSAGE path: the first argument is the literal `null`, NEVER the caught Error. An Error
+  // makes reportSilentFallback log `logger.error({ err })`, whose pino mirror captures it as
+  // `feature=pino-mirror` and Sentry then drops the second, tagged capture (#8629 class), so the rule could never
+  // match. The errno goes in `extra.code` / `extra.syscall` instead; `dir_kind` is a closed three-value tag (never
+  // the env-derived path, which is unbounded). The message is constant per kind with no path, so the three kinds
+  // are three Sentry issues and an acknowledged benign one cannot silence a later one.
+  // Contract tests: sentry-masked-dir-precreate-alert-op-contract.test.ts, agent-sandbox-precreate-sentry-path.test.ts.
   const peerSocketDirs = peerMessagingSocketDirs();
   const transcriptDirs = sessionTranscriptDirs();
-  for (const dir of [...peerSocketDirs, ...transcriptDirs, AGENT_SESSION_TMP_ROOT]) {
-    try {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "agent-sandbox",
-        op: "masked-dir-precreate",
-        extra: { dir },
-        message: "agent-sandbox: a masked dir could not be created; its read-deny may not apply",
-      });
+  for (const [kind, dirs] of [
+    ["peer-socket", peerSocketDirs],
+    ["transcript", transcriptDirs],
+    ["session-tmp", [AGENT_SESSION_TMP_ROOT]],
+  ] as const) {
+    for (const dir of dirs) {
+      try {
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException;
+        reportSilentFallback(null, {
+          feature: "agent-sandbox",
+          op: "masked-dir-precreate",
+          tags: { dir_kind: kind },
+          extra: { dir, code: e?.code ?? "unknown", syscall: e?.syscall ?? "unknown" },
+          message: `agent-sandbox: ${kind} masked dir could not be created; its read-deny may not apply`,
+        });
+      }
     }
   }
   const denyRoots = workspaceTenantDenyRoots();

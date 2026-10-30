@@ -15,9 +15,13 @@ LOCKS = {
     "web-platform": "apps/web-platform/package-lock.json",
     "root": "package-lock.json",
     "pencil-setup": "plugins/soleur/skills/pencil-setup/scripts/package-lock.json",
-    # The FOURTH tracked lockfile. Its omission made this script disagree with
-    # lint-dual-lockfile.sh, whose MIN_PACKAGE_LOCK_DIRS=4 floor names spike explicitly --
-    # so one guard asserted four directories exist while this one asserted three were clean,
+    # The pinned headless engine (@pen.dev/cli, #11156): its own lockfile pair, installed by
+    # check_deps.sh with `npm ci --ignore-scripts`. A SEPARATE directory from pencil-setup (the
+    # adapter's dependencies), so Dependabot PRs titled "in /plugins/.../scripts/pen-cli" map here.
+    "pen-cli": "plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json",
+    # The tracked lockfile that was once omitted. Its omission made this script disagree with
+    # lint-dual-lockfile.sh, whose MIN_PACKAGE_LOCK_DIRS floor names spike explicitly --
+    # so one guard asserted its directories exist while this one asserted fewer were clean,
     # and a vulnerable copy here was asserted clear by nobody.
     "spike": "spike/package-lock.json",
 }
@@ -27,8 +31,8 @@ LOCKS = {
 # covered by the completeness sweep rather than by the table -- removed a whole lockfile
 # from the scan in silence. That is the precise regression the comment above says was
 # fixed; repointing a path IS caught, deletion was not. Mirrors lint-dual-lockfile.sh's
-# MIN_PACKAGE_LOCK_DIRS=4.
-MIN_LOCKS = 4
+# MIN_PACKAGE_LOCK_DIRS=5.
+MIN_LOCKS = 5
 
 # Every package this table is responsible for. Declared, not derived: substituting one
 # row's package name for another REAL package left len(REQUIRED) at 19 and both count
@@ -97,6 +101,20 @@ REQUIRED = [
     ("pencil-setup", "@hono/node-server", 1, "1.19.15"),
     ("pencil-setup", "ip-address", 10, "10.5.1"),
     ("pencil-setup", "fast-uri", 3, "3.1.7"),
+    # pen-cli resolves a DIFFERENT major line of several watched packages than the adapter does,
+    # so the completeness sweep demands a row per line (re-derived 2026-10-26 from
+    # `gh api "/advisories?ecosystem=npm&affects=<pkg>"`). Floors are the strictest first_patched
+    # of the published advisories on that line. undici 8 sits at 8.12.2 (GHSA-xjj6-f33q-929c HIGH,
+    # GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472): the engine's own dependency
+    # (@earendil-works/pi-coding-agent) pins undici 8.10.2 EXACTLY, so `npm update` cannot move it and
+    # pen-cli/package.json carries `"overrides": {"undici": "8.12.2"}`. Drop the override when the
+    # engine's dependency range itself reaches 8.12.2; bump it only after a green engine-contract-probe.sh.
+    ("pen-cli", "hono", 4, "4.13.11"),
+    ("pen-cli", "@hono/node-server", 2, "2.0.10"),
+    ("pen-cli", "ip-address", 10, "10.7.4"),
+    ("pen-cli", "fast-uri", 3, "3.1.9"),
+    ("pen-cli", "brace-expansion", 5, "5.0.12"),
+    ("pen-cli", "undici", 8, "8.12.2"),
 ]
 
 # THE FLOOR UNDER THE FLOOR. The structural check in main() asserts a row's minimum sits
@@ -125,6 +143,8 @@ FLOOR_ANCHORS = {
     ("fast-uri", 3): "3.1.7",
     ("hono", 4): "4.12.34",
     ("@hono/node-server", 1): "1.19.15",
+    ("@hono/node-server", 2): "2.0.10",
+    ("undici", 8): "8.12.2",   # GHSA-xjj6-f33q-929c (HIGH); pen-cli override, see the pen-cli rows
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",
 }
 
@@ -223,7 +243,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 21  # prior 20 + root liquidjs line 10 (#8065)
+    MIN_ROWS = 27  # prior 21 + the six pen-cli lines (#11156)
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -231,7 +251,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 21  # prior 20 + root liquidjs line 10, which resolves
+    MIN_RESOLVED = 27  # prior 21 + the six pen-cli lines, which all resolve
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "

@@ -1,4 +1,6 @@
 # Standing daily monitor for the git-data rehearsal suite's loud SKIP arms (#7574).
+# Scope: it also observes the guard-script fixture suites' g1b./g2b./fl. loud
+# skips in pr-quality-guards.yml pull_request + merge_group logs (#10921).
 #
 # <!-- gate-override: new-scheduled-cron-prefer-inngest -->
 #
@@ -29,6 +31,14 @@ on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: >-
+          Permit a missing or corrupt prior streak artifact for THIS run only (reseed after
+          a retention lapse, a deleted artifact or a poisoned one). Scheduled runs can never
+          set it. Dispatch with --ref main.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,9 +49,42 @@ concurrency:
   group: scheduled-rehearsal-skip-monitor
   cancel-in-progress: false
 
+# THE STREAK LIVES IN A WORKFLOW ARTIFACT, NOT THE ACTIONS CACHE (ADR-296 has the measured cause, the
+# alternatives and the evidence). The probe's consecutive-TRANSIENT counter has to survive between
+# daily runs; the cache entry was evicted daily by the release pipeline's cache churn. An artifact is
+# outside that quota and carries an explicit retention (90 days, above the 60-day scheduled-workflow
+# auto-disable). The decision logic is in scripts/monitor-streak-state.sh so it is testable without a
+# hosted runner: `fetch` (before the probe), `seal` and `assert` (after it). A failure of any state
+# step turns the run red AND files an alert issue (a scheduled run has no watcher).
+#
+# TO RESEED after a retention lapse, a deleted artifact or a poisoned one:
+#   gh workflow run scheduled-rehearsal-skip-monitor.yml --ref main -f bootstrap=true
+# wait for that run to finish (the concurrency group keeps only one PENDING run, so a second dispatch
+# queued behind a running one replaces the first), then dispatch once more with bootstrap=false and
+# confirm `restored=true`. Each dispatch counts like a scheduled run (the streak counts consecutive
+# TRANSIENT RUNS, not days). `bootstrap` discards a corrupt or missing artifact only; to reset a VALID
+# stale value, delete the artifact first (needs actions: write). The first scheduled run after this
+# lands, if it fires before the bootstrap dispatch, goes red once by design.
+#
+# ACCEPTED RESIDUALS, each recorded rather than hidden: a cancelled run skips the upload and can
+# under-count by one (the next daily run re-detects a real FAIL); a day on which the upload is skipped
+# or fails (fetch failure, cancelled run, upload error) leaves the stored value stale, which OVER-counts
+# if that day's verdict was a clearing PASS (a later TRANSIENT then reads N+1); there is no age bound (a
+# scheduler re-enabled after 60 days resumes from the stored value); selection is by run id, not
+# execution order, so a near-simultaneous schedule and dispatch can shadow one increment; `overwrite`
+# is delete-then-upload, so an upload that fails on a re-run loses that run's earlier artifact (stale
+# by one run, loud); any actor who can write to this repository can plant a same-named artifact from a
+# run on main, which is the same trust level as editing this workflow.
+env:
+  STREAK_ARTIFACT_NAME: rehearsal-skip-monitor-streak
+  STREAK_BRANCH: main
+
 jobs:
   monitor:
-    # `gh run view --log` over 20 multi-MB logs otherwise inherits the 6h default.
+    # Two run-sources. Typical: ~43 calls (~20 infra-validation + ~20 pr-quality-guards
+    # `gh run view --log` fetches + 3 `gh run list`), measured ~305 s of the `timeout 600` wrap on
+    # 2026-10-23. WORST CASE since the 40-run listing (#11070): ~63 calls, ~450-500 s -- which is why
+    # the probe bounds each fetch and stops each source at its own deadline (see the probe).
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
@@ -49,43 +92,43 @@ jobs:
       # PR whose subject is a supply-chain gate is the wrong default.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # THE STREAK FILE IS THE CARRIER'S RESPONSIBILITY. The probe escalates to
-      # a FAIL after N consecutive runs that could not reach a verdict; without
-      # persistence the counter resets every run and escalation never fires.
-      # That degrades OPEN, so the round-trip is asserted below rather than
-      # assumed.
-      - name: Restore transient-streak state
-        id: streak
-        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        with:
-          path: .monitor-state
-          # ROLLING WRITE KEY + PREFIX RESTORE. Actions cache entries are IMMUTABLE: a
-          # `save` against an existing key is a silent no-op (it logs and exits 0). With a
-          # FIXED key -- which is what this shipped as -- run 1 pins the cache forever, every
-          # later run restores that same value, increments it in-memory, and fails to save.
-          # The streak could never reach T5_TRANSIENT_ESCALATE_AFTER, so the one mechanism
-          # separating "permanently broken probe" from "healthy quiet window" was dead on
-          # arrival. Only a rotating write key with a prefix restore round-trips.
-          key: rehearsal-skip-monitor-streak-${{ github.run_id }}
-          restore-keys: |
-            rehearsal-skip-monitor-streak-
-
-      - name: Run the skip-persistence probe
-        id: probe
-        # `!cancelled()` because this step had NO status function and therefore inherited
-        # success(): a cache-service outage failing the restore above SKIPPED the probe, left
-        # `verdict` unset, and every gate below read unset as healthy -- a fully green run in
-        # which the monitor never ran. The alert step was hardened against this class and the
-        # two steps either side of it were not.
+      # THE STREAK FILE IS THE CARRIER'S RESPONSIBILITY. The probe escalates (rc 3, `broken`) after N
+      # consecutive runs that could not reach a verdict; without persistence the counter resets
+      # every run and escalation never fires. That degrades OPEN, so the round-trip is asserted
+      # below rather than assumed. `fetch` exits 1 on an UNREADABLE store (a failed or hung listing, a
+      # failed download) or, without `bootstrap`, a corrupt newest artifact, and reports `matched=false`
+      # for an EMPTY one; the assert step turns that into a red run.
+      # `!cancelled()` and no `continue-on-error`: a failed fetch must not skip the probe.
+      - name: Fetch transient-streak state
+        id: fetch
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          T5_PROBE_STATE: .monitor-state/streak
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          STREAK_FILE: ${{ runner.temp }}/monitor-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh fetch
+
+      - name: Run the skip-persistence probe
+        id: probe
+        # `!cancelled()` because a step with NO status function inherits success(): a failed
+        # `fetch` above would SKIP the probe, leave `verdict` unset, and every gate below would read
+        # unset as healthy -- a fully green run in which the monitor never ran.
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          T5_PROBE_STATE: ${{ runner.temp }}/monitor-state/streak
         run: |
           set -uo pipefail
-          mkdir -p .monitor-state
+          mkdir -p "$(dirname "$T5_PROBE_STATE")"
           rc=0
-          bash scripts/followthroughs/t5-skip-persistence-bound-7510.sh \
+          # `timeout 600`: a hung probe becomes rc 124, which the case below maps to `broken`
+          # (and the alert step files). Otherwise the 15-minute job timeout cancels seal,
+          # upload, the alert and the report, leaving a red job with no issue and no advance.
+          # Typical budget (2026-10-23): ~305 s for ~43 calls. The 40-run listing raised the worst case
+          # to ~63 calls, so the probe bounds each fetch (60 s) and stops fetching at 420 s (rehearsal)
+          # and 560 s (guard suites); a kill here is still rc 124 -> `broken`.
+          timeout 600 bash scripts/followthroughs/t5-skip-persistence-bound-7510.sh \
             > "${RUNNER_TEMP}/probe.out" 2> "${RUNNER_TEMP}/probe.err" || rc=$?
           cat "${RUNNER_TEMP}/probe.out"
           cat "${RUNNER_TEMP}/probe.err" >&2
@@ -94,7 +137,8 @@ jobs:
           # an UNSET output is null and `null == '0'` is TRUE -- a step gated on
           # a numeric literal alone fires on a producer that wrote nothing at
           # all, which is exactly what a crashed step looks like.
-          # THE PROBE'S CONTRACT IS 0/1/2 AND NOTHING ELSE. `*) transient` mapped every
+          # THE PROBE'S CONTRACT IS 0/1/2, PLUS 3 (CANNOT ESTABLISH) AND 78 (REFUSED), AND NOTHING ELSE.
+          # `*) transient` mapped every
           # OTHER rc -- 127 from a renamed or missing script, 2-from-bash for a syntax error,
           # 126 for a non-executable path -- onto the one verdict the report step treats as
           # GREEN. The consecutive-transient escalation cannot rescue that: its counter is
@@ -108,6 +152,9 @@ jobs:
           # is "comment TRANSIENT and leave open on any other exit". That is safe THERE because
           # leaving an issue open is the conservative direction; here `transient` means green,
           # so the identical rc carries the opposite safety semantics.
+          # rc 3 (consecutive-TRANSIENT escalation) reaches `broken` through `*)` on purpose (#10918): it
+          # used to exit 1 and was filed as "arms are skipping". scripts/monitor-streak-state.test.sh
+          # pins rc 0/1/2/3/127 against this very block.
           case "$rc" in
             0) verdict=pass ;;
             1) verdict=fail ;;
@@ -123,35 +170,47 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Assert the streak state round-trips
+      # `seal` makes the state an explicit number once the probe has run (rules in cmd_seal): a
+      # TRANSIENT verdict must have moved the streak to exactly RESTORED+1, because the probe's own
+      # write is `2>/dev/null || true` and a lost increment would otherwise be sealed silently.
+      - name: Seal the streak value
+        id: seal
         if: ${{ !cancelled() }}
         env:
-          MATCHED: ${{ steps.streak.outputs.cache-matched-key }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          set -uo pipefail
-          # ASSERT ON THE CACHE SERVICE, NOT ON THE DIRECTORY. This tested
-          # `[ -d .monitor-state ]`, which the probe step `mkdir -p`s two steps earlier in
-          # the SAME job -- so it was always true, the ::warning:: branch was unreachable
-          # code, and it passed at 100% broken persistence. A vacuous guard inside a PR whose
-          # subject is vacuous guards.
-          #
-          # It also exits NON-ZERO rather than warning. A ::warning:: does not change the job
-          # conclusion, so nothing surfaces it without someone opening the run — which
-          # hr-no-dashboard-eyeball-pull-data-yourself says will not happen. A red run is the
-          # only status GitHub surfaces on its own.
-          if [ "$RUN_NUMBER" -gt 1 ] && [ -z "$MATCHED" ]; then
-            echo "::error::cache restore returned no prior generation (run #$RUN_NUMBER). The consecutive-TRANSIENT escalation cannot fire, so a permanently broken probe is indistinguishable from a healthy quiet window."
-            exit 1
-          fi
-          echo "streak state: matched-key='${MATCHED:-<none, first run>}' value=$(cat .monitor-state/streak 2>/dev/null || echo '<cleared by a real verdict>')"
+          STREAK_FILE: ${{ runner.temp }}/monitor-state/streak
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+          RESTORED: ${{ steps.fetch.outputs.prior }}
+        run: bash scripts/monitor-streak-state.sh seal
 
-      - name: Save transient-streak state
+      # ASSERT ON THE STORE, NOT ON THE DIRECTORY (a `[ -d ]` test passed at 100% broken persistence).
+      # Non-zero rather than a ::warning::, which does not change the job conclusion. The step name is
+      # kept so history is searchable.
+      - name: Assert the streak state round-trips
+        id: assert
         if: ${{ !cancelled() }}
-        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        env:
+          MATCHED: ${{ steps.fetch.outputs.matched }}
+          STREAK_FILE: ${{ runner.temp }}/monitor-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh assert
+
+      # Published only when the store was readable (fetch succeeded), the value was sealed, and
+      # this is the streak branch: a non-main dispatch reads main's state but must not write one
+      # `fetch` would never read. Deliberately NOT gated on `assert`: a red assert on an empty store
+      # must still publish, which is how the next run self-heals. `overwrite: true` only replaces
+      # THIS run's earlier attempt (a re-run); `fetch` excludes the current run id so an attempt-2
+      # read cannot double-count attempt 1. The state directory is NOT hidden: upload-artifact
+      # v4.4+ skips dot-directories.
+      - name: Upload transient-streak state
+        id: upload
+        if: ${{ !cancelled() && github.ref == format('refs/heads/{0}', env.STREAK_BRANCH) && steps.fetch.outcome == 'success' && steps.seal.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: .monitor-state
-          key: rehearsal-skip-monitor-streak-${{ github.run_id }}
+          name: ${{ env.STREAK_ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/monitor-state/streak
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
 
       - name: Open or update the alert issue
         # `!cancelled()` IS LOAD-BEARING, not decoration. Without an explicit status
@@ -161,24 +220,32 @@ jobs:
         # scripts/alarm-issue-filing-guard.test.sh caught it here.
         # `!cancelled()` rather than `always()`: this step mutates state (it files or
         # comments on an issue), and `always()` is true on cancellation too.
-        # Fires for `broken` as well as `fail`. A scheduled run has no watcher, so the
-        # issue -- not the red run -- is the artifact that reaches a human. A dead probe
-        # that only reddened a nightly cron would be silent in practice.
-        if: ${{ !cancelled() && (steps.probe.outputs.verdict == 'fail' || steps.probe.outputs.verdict == 'broken') }}
+        # Fires for `broken` as well as `fail`, and for a failed state step (fetch, seal, assert,
+        # upload). A scheduled run has no watcher, so the issue -- not the red run -- is the
+        # artifact that reaches a human: the old assertion was red on 24 of 30 days and nobody
+        # acted. A dead probe or an unreadable store that only reddened a nightly cron would be
+        # silent in practice.
+        if: ${{ !cancelled() && (steps.probe.outputs.verdict == 'fail' || steps.probe.outputs.verdict == 'broken' || steps.fetch.outcome == 'failure' || steps.seal.outcome == 'failure' || steps.assert.outcome == 'failure' || steps.upload.outcome == 'failure') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SUMMARY: ${{ steps.probe.outputs.summary }}
           VERDICT: ${{ steps.probe.outputs.verdict }}
+          FETCH_OUTCOME: ${{ steps.fetch.outcome }}
+          SEAL_OUTCOME: ${{ steps.seal.outcome }}
+          ASSERT_OUTCOME: ${{ steps.assert.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
           # The title names the condition actually OBSERVED. These are different failures and
           # an operator triages from the title: `fail` means the arms really are skipping;
           # `broken` means the instrument never reached a verdict, which is not evidence
-          # about the arms at all.
+          # about the arms at all; anything else reaching this step is a failed STATE step (the
+          # probe verdict was pass or transient), which says nothing about the arms either.
           case "$VERDICT" in
-            broken) title="monitor: the rehearsal skip-persistence probe is not running to a verdict" ;;
-            *)      title="monitor: git-data rehearsal suite is skipping arms across runs" ;;
+            broken) title="monitor: the skip-persistence probe is not running to a verdict" ;;
+            fail)   title="monitor: a skip-persistence source is skipping arms across runs" ;;
+            *)      title="monitor: the skip monitor streak store failed" ;;
           esac
           # DEDUPE AGAINST OPEN ISSUES ONLY, and this comment now describes what the code
           # does. It previously passed `--state all` while the jq below filtered to OPEN, so
@@ -195,31 +262,86 @@ jobs:
           #
           # --limit is load-bearing: `gh issue list` silently caps at 30, and a truncated page
           # that drops the one OPEN alert reads as "none found" -> a duplicate every morning.
-          # The phrase is QUOTED: unquoted, the leading `monitor:` token can be read as a
-          # search QUALIFIER and the remaining words AND-match loosely, so the probe degrades
-          # toward "none found" -- the same defect one layer up. Same escaping ship's own
-          # Signal 3 uses, for the same reason.
           # A gh FAILURE stays fatal rather than falling through to create: `|| existing=""`
           # turned any search error into "none found" -> duplicate.
+          #
+          # DEDUPE ON A STABLE BODY MARKER, not the title: titles get renamed
+          # when the alert's scope generalizes (the #10921 rename would have
+          # filed a duplicate beside any still-open old-titled alert). Every
+          # alert body carries the fixed marker below; issues filed BEFORE the
+          # marker existed are matched by their known legacy titles so the
+          # one-time transition cannot double-file.
+          ALERT_MARK='soleur-skip-persistence-monitor-alert'
           ls_rc=0
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --state open --search "\"$title\" in:title" --limit 200 --json number,state \
+            --state open --search "\"$ALERT_MARK\" in:body" --limit 200 --json number,state \
             --jq '.[0].number // empty') || ls_rc=$?
           if [ "$ls_rc" -ne 0 ]; then
             echo "::error::gh issue list failed (exit $ls_rc); refusing to file a possibly-duplicate alert."
             exit 1
           fi
+          if [ -z "$existing" ]; then
+            # Legacy-title transition check: every title this monitor has used,
+            # today's included — a renamed title must not spawn a sibling.
+            for _t in "$title" \
+              "monitor: the rehearsal skip-persistence probe is not running to a verdict" \
+              "monitor: git-data rehearsal suite is skipping arms across runs" \
+              "monitor: the rehearsal skip monitor streak store failed"; do
+              ls_rc=0
+              existing=$(gh issue list --repo "${{ github.repository }}" \
+                --state open --search "\"$_t\" in:title" --limit 200 --json number,state \
+                --jq '.[0].number // empty') || ls_rc=$?
+              if [ "$ls_rc" -ne 0 ]; then
+                echo "::error::gh issue list failed (exit $ls_rc); refusing to file a possibly-duplicate alert."
+                exit 1
+              fi
+              [ -n "$existing" ] && break
+            done
+          fi
           body_file="${RUNNER_TEMP}/body.md"
           {
-            if [ "$VERDICT" = "broken" ]; then
-              printf '%s\n\n' "The rehearsal skip-persistence probe exited OUTSIDE its declared 0/1/2 contract -- it did not run to a verdict. This is a BROKEN INSTRUMENT, not evidence that the arms are healthy."
-            else
-              printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL."
-            fi
+            printf '<!-- %s -->\n\n' "$ALERT_MARK"
+            # EVERY body opens with the verdict it reports. The issue is SHARED across verdicts (one
+            # body marker), so a comment can land under a title written for a different condition;
+            # the first line is what tells the reader which one this run observed (CTO ruling,
+            # #11070 review). The title is brought into line below.
+            case "$VERDICT" in
+              broken) printf 'VERDICT NOW: BROKEN (probe not running to a verdict)\n\n' ;;
+              fail)   printf 'VERDICT NOW: FAIL (arms skipping)\n\n' ;;
+              *)      printf 'VERDICT NOW: STATE-STORE FAILED\n\n' ;;
+            esac
+            case "$VERDICT" in
+              broken)
+                printf '%s\n\n' "The skip-persistence probe did not run to a verdict: it either escalated after repeated TRANSIENT runs (rc 3, 'unable to reach a verdict for N consecutive runs' in the summary below), refused to run traced (rc 78), or exited OUTSIDE its declared 0/1/2/3/78 contract (a missing, non-executable or crashed script). This is a BROKEN INSTRUMENT, not evidence that the arms are healthy." ;;
+              fail)
+                printf '%s\n\n' "The skip-persistence probe returned FAIL -- a run-source is past its bound: the rehearsal arms skipped in at least two observed runs and in more than 1 in 20 (ADR-188), or a guard suite skipped at all (the probe's per-source lines name which)." ;;
+              *)
+                printf '%s\n\n' "The monitor's streak store failed, so the consecutive-TRANSIENT escalation cannot be trusted this run. The probe verdict itself was ${VERDICT:-unknown}." ;;
+            esac
             printf 'Run: %s\n\n' "$RUN_URL"
+            # A failed STATE step is reported whichever title wins: a standing probe FAIL must not hide it.
+            case "${FETCH_OUTCOME} ${SEAL_OUTCOME} ${ASSERT_OUTCOME} ${UPLOAD_OUTCOME}" in
+              *failure*)
+                printf 'Streak store step outcomes: fetch=%s seal=%s assert=%s upload=%s. See ADR-296 and the workflow header for the reseed procedure.\n\n' \
+                  "$FETCH_OUTCOME" "$SEAL_OUTCOME" "$ASSERT_OUTCOME" "$UPLOAD_OUTCOME" ;;
+            esac
+            # shellcheck disable=SC2016  # the backticks are a literal markdown fence
             printf '```\n%s\n```\n\n' "$SUMMARY"
-            printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. A sustained skip means the deferred pre-baked image (#7535) is owed."
+            printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. The probe's per-source FAIL lines name the arm family: rehearsal-arm hits mean at least two runs skipped, so diagnose the decline named in the skip lines (the mirror or runner cause; the pre-baked image was evaluated and cut on measurement in #7535); guard-suite (g1b./g2b./fl.) hits mean a runner git no longer exhibits the walk contract the corrupt-walk rows validate (#10921) -- refusal coverage is degraded until the runner image or the rows change. A lone rehearsal skip is inside ADR-188's bound and does not file this alert."
           } > "$body_file"
+          # BRING THE TITLE INTO LINE WITH THE VERDICT. The issue is shared across verdicts and is
+          # never closed by this monitor, so a title written for an earlier condition would otherwise
+          # bury a different one under it (a real FAIL commented onto a "probe is not running" issue,
+          # or the reverse). Only a probe verdict retitles: a failed STATE step must not overwrite a
+          # `fail`/`broken` title. A failed edit is not fatal -- the comment's first line still names
+          # the verdict -- but it is surfaced.
+          if [ -n "$existing" ] && { [ "$VERDICT" = fail ] || [ "$VERDICT" = broken ]; }; then
+            cur_title=$(gh issue view "$existing" --repo "${{ github.repository }}" --json title --jq .title 2>/dev/null) || cur_title=""
+            if [ -n "$cur_title" ] && [ "$cur_title" != "$title" ]; then
+              gh issue edit "$existing" --repo "${{ github.repository }}" --title "$title" >/dev/null 2>&1 \
+                || echo "::warning::could not retitle issue #${existing} to '${title}'; the comment's first line names the current verdict."
+            fi
+          fi
           # Report a FAILED filing rather than letting a red run stand for both outcomes --
           # the same treatment the postmerge job gets in this PR. Without it, "alert filed"
           # and "alert lost" are the same observable.
@@ -234,7 +356,7 @@ jobs:
           iss_rc=$?
           set -e
           if [ "$iss_rc" -ne 0 ]; then
-            echo "::error::the rehearsal-skip alert could NOT be filed (gh exited $iss_rc). The FAIL exists only in this run log; see $RUN_URL."
+            echo "::error::the skip-persistence alert could NOT be filed (gh exited $iss_rc). The FAIL exists only in this run log; see $RUN_URL."
             exit 1
           fi
 
@@ -252,6 +374,6 @@ jobs:
           case "$VERDICT" in
             pass|transient) echo "probe verdict: $VERDICT (rc=$RC)" ;;
             fail)           echo "probe verdict: fail (rc=$RC)"; exit 1 ;;
-            broken)         echo "::error::the probe exited $RC, outside its declared 0/1/2 contract -- it did not run to a verdict. The consecutive-transient escalation cannot catch this, because that counter lives inside the probe's own _transient(), which never ran. A broken instrument is not a quiet window."; exit 1 ;;
+            broken)         echo "::error::the probe exited $RC and did not run to a verdict (3 = escalated after repeated TRANSIENT runs, 78 = refused to run traced; anything else is outside its declared 0/1/2/3/78 contract). The consecutive-transient escalation cannot catch an exit outside the contract, because its counter lives inside the probe's own _transient(), which never ran. A broken instrument is not a quiet window."; exit 1 ;;
             *)              echo "::error::the probe produced no verdict ('$VERDICT', rc='$RC'). A monitor that did not run is not a clean window."; exit 1 ;;
           esac

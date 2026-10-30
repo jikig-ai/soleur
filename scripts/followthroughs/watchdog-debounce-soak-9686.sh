@@ -12,7 +12,8 @@
 #   main-health-monitor.yml runs on main AFTER the commit that introduced
 #   this file (= the debounce PR's squash-merge; `commits?path=` on a file
 #   that did not exist before this PR) are inspected newest-first. A run
-#   QUALIFIES only when its health-check job log proves the tests step
+#   QUALIFIES only when its leg-job logs (post-#9410: the union of the test-*
+#   jobs — there is no single health-check job any more) prove the suite step
 #   actually dispatched test-all.sh — a suite banner (`--- <name> ---`) or
 #   the `=== N suites` terminal. A run that never reached tests is excluded
 #   from the denominator, never counted as clean (proof-by-absence is only
@@ -122,51 +123,65 @@ while IFS= read -r ROW; do
   esac
   EXAMINED=$(( EXAMINED + 1 ))
 
-  # The health-check job for this run.
+  # The leg jobs for this run. Post-#9410 there is no single `health-check`
+  # job: the suites run as parallel legs (test-webplat k/2, test-bun,
+  # test-scripts k/8, test-scripts-heavy k/3, test-infra — matrix legs report
+  # as `test-scripts (3/8)` etc., so the name is taken at the space). The
+  # union of leg logs is the old health-check log's equivalent — a watchdog
+  # reap can surface on ANY leg, so reading one leg would under-measure in
+  # the clean direction.
   JOBS_RC=0
-  JOB_ID="$(gh api "repos/${GH_REPO}/actions/runs/${RID}/jobs?per_page=50" \
-    --jq '[.jobs[] | select(.name == "health-check")][0].id' 2>/dev/null)" || JOBS_RC=$?
-  if [[ "$JOBS_RC" != "0" ]] || [[ ! "$JOB_ID" =~ ^[0-9]+$ ]]; then
-    echo "CANNOT ESTABLISH: health-check job read failed for run ${RID}" >&2; exit 3
+  JOB_IDS="$(gh api "repos/${GH_REPO}/actions/runs/${RID}/jobs?per_page=100" \
+    --jq '[.jobs[] | select((.name | split(" ")[0]) as $n | ["test-webplat","test-bun","test-scripts","test-scripts-heavy","test-infra"] | index($n)) | .id] | .[]' 2>/dev/null)" || JOBS_RC=$?
+  if [[ "$JOBS_RC" != "0" ]] || [[ -z "$JOB_IDS" ]]; then
+    echo "CANNOT ESTABLISH: leg-jobs read failed for run ${RID}" >&2; exit 3
   fi
 
-  # One log fetch feeds all greps. `gh run view --job --log` — NOT
+  # One log per leg feeds all greps. `gh run view --job --log` — NOT
   # `gh api …/jobs/<id>/logs`: measured 2026-09-18 on gh 2.101.0 (see
   # git-data-boot-poll-8178.sh), `gh api` exits 1 on logs carrying terminal
-  # escape sequences, and the health-check `run:`-block echo always carries
-  # them. timeout bounds the fetch; a temp file bounds memory.
+  # escape sequences, and the suite `run:`-block echo always carries them.
+  # timeout bounds the fetch; a temp file bounds memory.
   LOG="$(mktemp -t wd-soak-9686-log.XXXXXXXX)" || { echo "CANNOT ESTABLISH: mktemp failed" >&2; exit 3; }
   # Owning trap (#6734): every early exit inside the loop (break-on-verdict,
-  # a set -e abort between the explicit rm -f sites) must still reap the
+  # an abort between the explicit rm -f sites) must still reap the
   # tempfile — the rm -f calls below stay for promptness between iterations.
   trap 'rm -f "$LOG"' EXIT
-  LOG_RC=0
-  timeout 120 gh run view --job "$JOB_ID" --repo "$GH_REPO" --log > "$LOG" 2>/dev/null || LOG_RC=$?
-  if [[ "$LOG_RC" != "0" ]] || [[ ! -s "$LOG" ]]; then
-    rm -f "$LOG"
-    echo "CANNOT ESTABLISH: job-log read failed for run ${RID} (rc=${LOG_RC})" >&2; exit 3
-  fi
-
-  # Watchdog-kill evidence FIRST — the emitted form `^<ts> ERROR: <text>` is
-  # dispositive proof the emitter was armed AND that it fired. The raw
-  # phrases alone are NOT a dirty signal: main-health-monitor.yml's verdict
-  # classifier greps the literal `^ERROR: parent process gone` inside its
-  # own run: block, so every job log contains an ANSI-wrapped echo of that
-  # source line — counting bare phrases would read every run as dirty.
-  WD_KILLS="$(grep -cE "^${ts_re}[[:space:]]+ERROR: (parent process gone|runner died untrappably)" "$LOG" || true)"
-
-  # Emitter-armed? A suite dispatch banner (` <ts> --- name ---` — banner
-  # shape unanchored at the front because the timestamp sits before it), the
-  # suites terminal line, or the dispositive watchdog emit itself. A reaped
-  # run can lack a terminal `===` line AND carry the reap — the emit is the
-  # one marker that can never be absent exactly where DIRTY lives. Without
-  # one, "zero watchdog lines" proves nothing.
-  if ! grep -qE ' --- .+ ---$|=== [0-9]+/[0-9]+ suites passed ===|=== [0-9]+ suites:|^'"${ts_re}"'[[:space:]]+ERROR: ' "$LOG"; then
-    rm -f "$LOG"
-    continue   # never reached the tests step: excluded, not clean
-  fi
-  KILLED_TOTAL=$(( KILLED_TOTAL + $(grep -c '\[KILLED\]' "$LOG" || true) ))
+  WD_KILLS=0
+  ARMED=0
+  KILLED_RUN=0
+  for JID in $JOB_IDS; do
+    LOG_RC=0
+    timeout 120 gh run view --job "$JID" --repo "$GH_REPO" --log > "$LOG" 2>/dev/null || LOG_RC=$?
+    if [[ "$LOG_RC" != "0" ]] || [[ ! -s "$LOG" ]]; then
+      rm -f "$LOG"
+      echo "CANNOT ESTABLISH: leg job-log read failed for run ${RID} job ${JID} (rc=${LOG_RC})" >&2; exit 3
+    fi
+    # Watchdog-kill evidence FIRST — the emitted form `^<ts> ERROR: <text>` is
+    # dispositive proof the emitter was armed AND that it fired. The raw
+    # phrases alone are NOT a dirty signal: main-health-monitor.yml's verdict
+    # classifier greps the literal `^ERROR: parent process gone` inside its
+    # own run: block, so every job log contains an ANSI-wrapped echo of that
+    # source line — counting bare phrases would read every run as dirty.
+    WD_KILLS=$(( WD_KILLS + $(grep -cE "^${ts_re}[[:space:]]+ERROR: (parent process gone|runner died untrappably)" "$LOG" || true) ))
+    KILLED_RUN=$(( KILLED_RUN + $(grep -c '\[KILLED\]' "$LOG" || true) ))
+    # Emitter-armed? A suite dispatch banner (` <ts> --- name ---` — banner
+    # shape unanchored at the front because the timestamp sits before it), the
+    # suites terminal line, or the dispositive watchdog emit itself. A reaped
+    # run can lack a terminal `===` line AND carry the reap — the emit is the
+    # one marker that can never be absent exactly where DIRTY lives. Without
+    # one on ANY leg, "zero watchdog lines" proves nothing.
+    if grep -qE ' --- .+ ---$|=== [0-9]+/[0-9]+ suites passed ===|=== [0-9]+ suites:|^'"${ts_re}"'[[:space:]]+ERROR: ' "$LOG"; then
+      ARMED=1
+    fi
+    # First dirty leg decides the run; the remaining legs change nothing.
+    if [[ "$WD_KILLS" != "0" ]]; then break; fi
+  done
   rm -f "$LOG"
+  if [[ "$ARMED" == "0" ]]; then
+    continue   # no leg reached its suite step: excluded, not clean
+  fi
+  KILLED_TOTAL=$(( KILLED_TOTAL + KILLED_RUN ))
   QUALIFYING=$(( QUALIFYING + 1 ))
 
   if [[ "$WD_KILLS" != "0" ]]; then

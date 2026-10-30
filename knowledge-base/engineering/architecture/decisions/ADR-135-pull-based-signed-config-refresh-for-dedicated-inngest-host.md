@@ -287,3 +287,84 @@ bundle producer's `zot_mirror` step now also copies the pinned cosign image to
 `ZOT_EP`, staged by an explicit bounded pull that reports `reason=pull
 member=cosign-image`. The claim is now literally true. The gcr ref remains correct on the
 web hosts, which have public egress (ADR-096 amendment 2026-09-28).
+
+## Addendum 2026-10-22 — defect 3: honest rejects were undebuggable (stderr swallowed)
+
+The verify path ran `docker run … verify-blob … >/dev/null 2>&1`, mapping EVERY non-zero
+exit — cryptographic reject, cosign flag-parse error, docker daemon error, `timeout` kill —
+onto `reason=signature`. When the promoted v3 bundle began rejecting honestly on the host,
+the channel carried no evidence of why, and the three plausible suspects (tlog reach under
+`--network none`, trusted-root staleness, identity-regexp drift) could not be separated
+without a host login.
+
+Two measurements close the suspects without one: the baked trusted root is key-identical
+to Sigstore's live root, and a v0.3 bundle reconstructed from the real Rekor entry verifies
+`Verified OK` under the verbatim `--network none` invocation — the offline machinery is
+sound. The remaining hypothesis class is bundle-load (`sgbundle.LoadJSONFromPath`, which
+cosign v3.1.1 gates `--trusted-root` on) or host-state divergence, discriminated by
+evidence rather than flags.
+
+Fix (this PR): the tick now captures stderr to a bounded on-host `$STATE_DIR/verify.stderr`
+(4 KiB, 0600, last-failure-only) — around the `timeout` wrapper so rc=124 still lands it —
+and classifies it into a `[a-z-]{1,24}` `detail=` token (`flag-newbundle|tlog|identity|
+chain|timeout|docker|other`) appended additively to the VERIFY_FAIL row, which survives the
+phone-home redaction and the drift summarizer's allowlist. A kept dispatch-only workflow
+(`diagnose-inngest-verify.yml`) reproduces the verbatim invocation in CI with stderr
+visible. No verification-relaxing flag (`--insecure-ignore-tlog`, `--insecure-ignore-sct`,
+`--key`, `--new-bundle-format`) was added — adopting one is a posture change requiring an
+amendment here, not a patch (HARD-10's spirit extended: diagnosability must not cost
+fail-closed).
+
+## Addendum 2026-10-23 — defect 3 closure: the producer-side root cause was a 0600 member mode, not the envelope
+
+The defect-3 addendum left the failing locus as "bundle-load or host-state divergence".
+The verbatim-error probe added to `diagnose-inngest-verify.yml` (sigstore-go v1.2.0
+`LoadJSONFromPath` — the version cosign v3.1.1 vendors, same function `checkNewBundle`
+calls) measured it on the real promoted digest (diagnose run 40035816173):
+**`LOAD_OK version=v0.3`** — the emitted envelope parses AND validates cleanly. The
+failing arm is therefore the READ, not the parse: cosign `sign_blob.go:132` writes the
+`--bundle` file mode 0600, `tar -czf` preserves that member mode into the OCI image,
+and the consumer verify runs inside the pinned NONROOT cosign image over a bind mount —
+EACCES on open → `LoadJSONFromPath` errors → `checkNewBundle` returns false → the
+`--trusted-root only supported with --new-bundle-format` reject the host reports as
+`detail=flag-newbundle`. The probe loads the identical bytes only because it reads the
+file as its owner. The diagnose workflow's TLE census closed the envelope hypotheses in
+parallel (Rekor v1 `hashedrekord/0.0.1` canonicalizedBody, non-empty checkpoint
+envelope, all mandatory TLE scalars present) and the stage0700 arm reproduced the
+EACCES class verbatim (`open /bundle/manifest.txt: permission denied`).
+
+Producer-side fix (this arc, three moves):
+
+1. **Emitter-side correction**: the sign step `chmod 0644`s the emitted
+   `.sigstore.json` so the tarball lands world-readable — the correction the
+   measurement names.
+2. **Emit-surface pin** (defense in depth; the envelope proved innocent this time but
+   the TUF-published default CAN still drift it under the producer — Rekor-v2 service
+   selection would force a TSA and change the emitted TLE shape): `--signing-config
+   apps/web-platform/infra/inngest-signing-config.json`, a committed signingconfig
+   v0.2 document modeled on sigstore/root-signing `targets/signing_config.v0.2.json`
+   (captured 2026-10-23) with Fulcio v1 + oauth2.sigstore.dev v1 + `rekor.sigstore.dev`
+   majorApiVersion 1 ONLY and `tsaUrls` omitted. Rekor-v1 sunset is a bounded tail
+   risk — re-evaluate on sigstore's public v1 deprecation announcements.
+3. **Verify-before-publish never-again gate**: a step between sign and assemble/push
+   runs the PINNED cosign image (same digest, same nonroot UID) over a bind-mounted
+   bundle dir — the consumer's own load path, not the runner binary, because a verify
+   run as the file's OWNER would sail past the EACCES class this defect proved. It
+   hard-fails unless `verify-blob` prints `Verified OK` under the ref-derived
+   `--certificate-identity-regexp` (ref metacharacters escaped; the host-side baked
+   `main` regexp is unchanged). An unloadable, unreadable or unverifiable bundle can
+   no longer reach GHCR/zot.
+
+Lesson: "sign-time `validate()` ≠ the on-disk load path" — and neither equals the
+CONSUMER's read path. A bundle can validate in-process and load as its owner and still
+fail the verifier that matters because WHO reads the file is part of the contract.
+Producer self-checks must run the consumer's own verifier image against the artifact
+as shipped. No verification-weakening flag was added (AC10 carries).
+
+## Addendum 2026-10-25 (#10112) — the refresh set has four members
+
+Appended; nothing above is changed. Where this ADR counts "five" carriers (and "five inert dead files"), read four: `inngest-luks-cutover.sh` left the signed set, the `DEST_SPEC` allowlist, the `FILE_MAP` and the web-host push payload when the cutover trio was retired. An old signed bundle that still lists it is refused by a newly provisioned host (`DEST_SPEC` no longer admits the path), which is fail-closed. The refusal is whole-bundle (`SOLEUR_INFRA_PULL_VERIFY_FAIL`, `applied.version` does not advance, members before the refused one may already be installed), so a replacement host that is handed a promoted bundle still listing the member never refreshes: promote a bundle without it before the replace. The promoted `INNGEST_CONFIG_DIGEST` pointer decides which bundle is live; a merge never promotes one.
+
+## Addendum 2026-10-26 (#9927) - a refresh-set member may host a bounded periodic job
+
+Appended; nothing above is changed. An existing refresh-set member that already runs on a timer may host a bounded periodic job without a new member, unit or `user_data` change; the isolation rules it must obey are in the ADR-282 addendum of this date (the first such job is the LUKS key-continuity probe in `inngest-cutover-flip.sh`).

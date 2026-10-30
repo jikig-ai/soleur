@@ -98,7 +98,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 67 |
 | Commands | 4 |
-| Skills | 104 |
+| Skills | 105 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -332,6 +332,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `pencil-setup` | Auto-detect, install, and register Pencil MCP server with Claude Code CLI |
 | `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
 | `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `registry-breakglass-mirror` | Mirror GHCR images into zot datacenter-side when the registry tunnel bridge is down (break-glass only) |
 | `resolve-parallel` | Resolve TODO comments in parallel |
 | `resolve-pr-parallel` | Resolve PR comments in parallel |
 | `resolve-todo-parallel` | Resolve CLI todos in parallel |

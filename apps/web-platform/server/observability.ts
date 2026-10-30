@@ -419,6 +419,15 @@ export function infoSilentFallback(
  * - `feature-flags` family: `flagsmith:getidentityflags-timeout` (warn-level
  *   via `mirrorWarnWithDebounce`; dedup key is the per-segment snapshot cache
  *   key `${role}:${orgId ?? "__anon__"}`, NOT a userId — see #4571).
+ * - `egress-audit-read` family (#9545, all searchable as `feature:egress-audit-read`): the error-level, PAGED
+ *   class is `rpc_error`, `rpc_timeout` and `workspace_read_error` (the latter is the destination PAGE's pointer
+ *   read only; the Terraform rule `egress-audit-read-failure` filters on exactly these three). The UNPAGED class
+ *   is warn-level via `mirrorWarnWithDebounce`: `hint_timeout`, `hint_rpc_error`, `hint_workspace_read` (the
+ *   Scope Grants card's pointer read), `org_read`, `flag_eval` (the collection state) and `web_access_read`; none
+ *   of these reaches the rule. Dedup key is the constant feature name `egress-audit-read`, an in-process token,
+ *   NOT a userId: one slot per reason per process, because these are decorative reads that can fault on every
+ *   page load. A reply error adds a low-cardinality `pg_code` tag (the code, `none` or `other`). A Flagsmith
+ *   outage is not a fault: the collection state is "unknown" and the view renders its unavailable state.
  * - `workspace-reconcile-push` family: `workspace-reconcile-push:no-workspace-match`
  *   (warn-level via `mirrorWarnWithDebounce`; dedup key is
  *   `${installationId}:${targetRepoUrl}`, an in-process token, NOT a userId —
