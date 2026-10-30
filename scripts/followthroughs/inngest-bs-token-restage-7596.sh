@@ -11,9 +11,10 @@
 #                       the newest row's _BOOT_ID pins the CURRENT host
 #                       generation; the last row of any OTHER boot id bounds it
 #   leg 3 (curl ingest): SOLEUR_INNGEST_BOOT_STAGE markers with stage
-#                       bs-token-restaged / bs-token-restage-enabled — the
-#                       host's own boot-stage markers ride the direct-curl
-#                       ingest leg (cloud-init-inngest.yml), INDEPENDENT of the
+#                       bs-token-restage-enabled / bs-token-restaged /
+#                       bs-token-restage-enable-FAILED — the host's own
+#                       boot-stage markers ride the direct-curl ingest leg
+#                       (cloud-init-inngest.yml), INDEPENDENT of the
 #                       journald→Vector leg under test
 #
 # THE GENERATION FLOOR. PASS counts only CURRENT-GENERATION evidence: a
@@ -29,6 +30,15 @@
 # probe row (or, when no previous boot is visible in the window, fall within
 # GEN_TOL_S of the current boot's earliest probe row — markers fire during
 # boot, before the probe's first emit).
+#
+# THE TWO STAGES ARE NOT INTERCHANGEABLE. `bs-token-restaged` is emitted by
+# inngest-bs-token-restage.sh on EVERY boot (per-boot phone-home — boot
+# evidence only). `bs-token-restage-enabled` is emitted ONLY in the
+# replace-bound first-boot runcmd (the `systemctl enable` arm — DELIVERY
+# proof). Arm-2 therefore requires a same-generation `bs-token-restage-enabled`
+# marker: a post-floor plain reboot ships `bs-token-restaged` with zero
+# delivery evidence, and satisfying the close on it would be a false close on
+# an undelivered unit.
 #
 #   exit 0 = PASS        current-generation close evidence, printed with
 #                        `pass_arm=journald|boot_stage` and
@@ -51,7 +61,21 @@
 #                                            current generation — the unit
 #                                            likely never ran/enabled
 #                        restage_not_ok        current-generation restage rows
-#                                            exist but none carries ok=1
+#                                            exist but none carries ok=1 /
+#                                            the enabled stage (journald
+#                                            SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED
+#                                            drc= emits, or a
+#                                            bs-token-restage-enable-FAILED
+#                                            BOOT_STAGE marker)
+#                        delivery_unproven     a current-generation
+#                                            bs-token-restaged marker fired
+#                                            (the per-boot restage ran) but
+#                                            no same-generation
+#                                            bs-token-restage-enabled marker
+#                                            arrived — the expected state of
+#                                            a plain post-floor reboot; the
+#                                            replace-bound delivery proof
+#                                            lives in an earlier generation
 #                        boot_id_unresolvable  post-floor restage evidence
 #                                            exists but the generation anchor
 #                                            cannot be resolved
@@ -60,9 +84,10 @@
 #   exit 78              refused to run under xtrace with a live credential.
 #
 # NO leg_journald TRANSIENT REASON: arm-2 PASS preempts it — a post-floor
-# BOOT_STAGE bs-token-restaged marker satisfies PASS even with journald rows
-# absent, so the journald leg's status is carried as `journald_rows=absent`
-# inside the PASS output rather than as its own TRANSIENT vocabulary entry.
+# BOOT_STAGE bs-token-restage-enabled marker satisfies PASS even with
+# journald rows absent, so the journald leg's status is carried as
+# `journald_rows=absent` inside the PASS output rather than as its own
+# TRANSIENT vocabulary entry.
 #
 # Filter fields are isolated POST-DECODE — Better Stack stores `raw`
 # double-encoded, so a literal `"host":"…"` grep on the outer row matches
@@ -79,7 +104,7 @@
 #
 # Tracker directive (goes in the issue body; a deferred operator step — the
 # probe is inert until enrolled):
-#   <!-- soleur:followthrough script=scripts/followthroughs/inngest-bs-token-restage-7596.sh earliest=<replace-date> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
+#   <!-- soleur:followthrough script=scripts/followthroughs/inngest-bs-token-restage-7596.sh earliest=2026-10-30T00:00:00Z secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
 #
 # Secrets clause: BETTERSTACK_QUERY_HOST / BETTERSTACK_QUERY_USERNAME /
 # BETTERSTACK_QUERY_PASSWORD are already wired into the sweeper env. No
@@ -150,10 +175,17 @@ fi
   exit 2
 }
 
-postf() {  # postf <dt> — true iff the row's dt is at/after the generation floor
+postf() {  # postf <dt> — true iff the row's dt is shape-valid AND at/after the generation floor
+  # The shape gate comes FIRST: the floor check is a lexical compare, and a
+  # null or non-ISO dt reaching it can sort past '2026-…' and count as
+  # post-floor evidence.
+  [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]] || return 1          # [mut:dtshape]
   [[ ! "$1" < "$MIN_DT_CUT" ]]
 }
-ep() { date -u -d "$1" +%s 2>/dev/null || printf '0'; }
+# A parse failure yields EMPTY output, never epoch 0 — a degenerate 0 bound
+# would make the GEN_TOL_S comparison vacuous (every epoch >= -7200). Callers
+# treat an empty epoch as unresolvable (gen=0), never a degraded pass.
+ep() { date -u -d "$1" +%s 2>/dev/null; }
 
 transient() { printf 'TRANSIENT: %s\n' "$1" >&2; exit 2; }
 
@@ -173,13 +205,13 @@ bout="$("$QUERY" --since "$WINDOW" --grep "$STAGE_MARKER" --limit "$LIMIT" 2>/de
 #                  payload carries no host_name; this leg is independent)
 jrc=0
 jrows="$(printf '%s\n' "$jout" | jq -R -r \
-    --arg h "$INNGEST_HOST" --arg hn "$HOST_NAME" --arg id "$IDENT" --arg mok "$MARKER ok=1" '
+    --arg h "$INNGEST_HOST" --arg hn "$HOST_NAME" --arg id "$IDENT" --arg mok "$MARKER ok=1"'($|[[:space:]])' '
     fromjson? | . as $o | ($o.raw? | fromjson?) as $r
     | select($r | type == "object")
     | select($r.SYSLOG_IDENTIFIER == $id)
     | select($r.host == $h)
     | select($r.host_name == $hn)
-    | "\($o.dt)\t\($r._BOOT_ID // "-")\t\(if ($r.message // "") | contains($mok) then "ok" else "other" end)"' 2>/dev/null)" || jrc=$?
+    | "\($o.dt)\t\($r._BOOT_ID // "-")\t\(if ($r.message // "") | test($mok) then "ok" else "other" end)"' 2>/dev/null)" || jrc=$?
 prows="$(printf '%s\n' "$pout" | jq -R -r \
     --arg h "$INNGEST_HOST" --arg hn "$HOST_NAME" --arg id "$PROBE_IDENT" '
     fromjson? | . as $o | ($o.raw? | fromjson?) as $r
@@ -198,16 +230,29 @@ srows="$(printf '%s\n' "$bout" | jq -R -r \
 [[ "$jrc" -eq 0 ]] || transient "reason=selector_failed rc=$jrc — jq failed to decode; the Better Stack raw shape may have changed."
 
 # --- the generation anchor ---------------------------------------------------
-# The NEWEST server-probe row names the current boot. Lexicographic order on
-# 'YYYY-MM-DD HH:MM:SS' is chronological.
-CUR_BOOT="$(printf '%s\n' "$prows" | awk -F'\t' 'NF >= 2 && $1 != "" { if ($1 >= m) { m = $1; b = $2 } } END { print b }')"
+# The NEWEST server-probe row CARRYING a boot id names the current boot:
+# rows whose _BOOT_ID never shipped ('-') are skipped — a newest dash row
+# must not strand the probe in boot_id_unresolvable while an earlier row
+# already named the generation. Lexicographic order on 'YYYY-MM-DD HH:MM:SS'
+# is chronological.
+CUR_BOOT="$(printf '%s\n' "$prows" | awk -F'\t' 'NF >= 2 && $1 != "" && $2 != "" && $2 != "-" { if ($1 >= m) { m = $1; b = $2 } } END { print b }')"
+# The id is echoed verbatim into PASS/TRANSIENT output, and the sweeper posts
+# probe output into issue comments — gate it to the _BOOT_ID charset before
+# it may travel (markup/mention channel). Anything else degrades to
+# unresolvable, never to output.
+[[ "$CUR_BOOT" =~ ^[0-9a-f-]+$ ]] || CUR_BOOT=""                # [mut:bootgate]
 # The last previous-generation probe row bounds the current boot from below
 # (empty when no other boot is visible in the window).
 PREV_BOUND="$(printf '%s\n' "$prows" | awk -F'\t' -v b="$CUR_BOOT" 'NF >= 2 && $2 != "" && $2 != "-" && $2 != b { if ($1 > m) m = $1 } END { print m }')"
 # The current boot's earliest observed probe row — the fallback lower bound for
 # the stage-leg generation test.
 BOOT_LOW="$(printf '%s\n' "$prows" | awk -F'\t' -v b="$CUR_BOOT" 'NF >= 2 && $2 == b { if (m == "" || $1 < m) m = $1 } END { print m }')"
-BOOT_LOW_EPOCH="$(ep "$BOOT_LOW")"
+# Shape-gate the bounds before they enter the generation test: a garbage bound
+# could sort below every real dt and prove 'current generation' for a stale
+# marker.
+[[ "$PREV_BOUND" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]] || PREV_BOUND=""
+[[ "$BOOT_LOW" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]] || BOOT_LOW=""
+BOOT_LOW_EPOCH=""; [[ -n "$BOOT_LOW" ]] && BOOT_LOW_EPOCH="$(ep "$BOOT_LOW")"
 
 # --- classify the evidence ---------------------------------------------------
 J_POST=0; J_QUAL=0; J_CURGEN=0; J_NOBOOT=0
@@ -225,7 +270,20 @@ done <<< "$jrows"
 # The stage-leg generation test: with a visible previous boot the marker must
 # postdate that generation's last probe row; without one it must fall within
 # GEN_TOL_S of the current boot's earliest probe row.
-M_POST=0; M_QUAL=0; M_CURGEN=0; M_QUAL_STAGE=""
+#
+# THE TWO STAGES ARE NOT INTERCHANGEABLE (the arm-2 false-close). All three
+# stages count as post-floor restage evidence (M_POST — liveness plus the
+# unresolvable-anchor gate), but on a resolved generation they split:
+#   bs-token-restage-enabled      replace-bound first-boot runcmd — DELIVERY
+#                                 proof; the ONLY stage that qualifies arm-2
+#   bs-token-restage-enable-FAILED same runcmd arm, failure side — feeds
+#                                 restage_not_ok
+#   bs-token-restaged             per-boot phone-home inside the restage
+#                                 script — boot evidence only; a plain
+#                                 post-floor reboot ships it with zero
+#                                 delivery proof, so it can NEVER satisfy
+#                                 the close on its own
+M_POST=0; M_QUAL=0; M_FAIL=0; M_BOOT=0; M_QUAL_STAGE=""
 while IFS=$'\t' read -r dt stage; do
   [[ -n "$dt" ]] || continue
   case "$stage" in bs-token-restaged|bs-token-restage-enabled|bs-token-restage-enable-FAILED) ;; # [mut:arm]
@@ -245,12 +303,18 @@ while IFS=$'\t' read -r dt stage; do
       # cannot see that `[[ ]]` makes it a comparison.
       [[ "$PREV_BOUND" < "$dt" ]] && gen=1                     # [mut:gen]
     else
-      e="$(ep "$dt")"; (( e >= BOOT_LOW_EPOCH - GEN_TOL_S )) && gen=1
+      # Empty epoch on ANY unparseable input leaves gen=0 — never a
+      # degraded pass on a degenerate (epoch-0) bound.
+      e="$(ep "$dt")"
+      [[ -n "$e" && -n "$BOOT_LOW_EPOCH" ]] && (( e >= BOOT_LOW_EPOCH - GEN_TOL_S )) && gen=1
     fi
   fi
   (( gen == 1 )) || continue
-  M_CURGEN=$((M_CURGEN + 1))
-  case "$stage" in bs-token-restaged|bs-token-restage-enabled) M_QUAL=$((M_QUAL + 1)); M_QUAL_STAGE="$stage" ;; esac
+  case "$stage" in
+    bs-token-restage-enabled) M_QUAL=$((M_QUAL + 1)); M_QUAL_STAGE="$stage" ;; # [mut:arm2]
+    bs-token-restage-enable-FAILED) M_FAIL=$((M_FAIL + 1)) ;;
+    bs-token-restaged) M_BOOT=$((M_BOOT + 1)) ;;
+  esac
 done <<< "$srows"
 
 # Liveness across ALL legs: any post-floor row of any kind proves the host is
@@ -272,18 +336,21 @@ if (( J_QUAL >= 1 )); then
 fi
 if (( M_QUAL >= 1 )); then
   jr="absent"; (( J_POST >= 1 )) && jr="present"
-  printf 'PASS: observed SOLEUR_INNGEST_BOOT_STAGE stage=%s marker(s) post-floor %s from host=%s on the direct-curl ingest leg (window %s) pass_arm=boot_stage journald_rows=%s — the host-side boot-stage markers satisfy the #7596 close wording; the journald leg state rides inside this verdict.\n' \
+  printf 'PASS: observed SOLEUR_INNGEST_BOOT_STAGE stage=%s marker(s) post-floor %s from host=%s on the direct-curl ingest leg (window %s) pass_arm=boot_stage journald_rows=%s — the replace-bound enable marker is the delivery proof (bs-token-restaged alone is per-boot evidence and never qualifies); the journald leg state rides inside this verdict.\n' \
     "$M_QUAL_STAGE" "$MIN_DT" "$INNGEST_HOST" "$WINDOW" "$jr"
   exit 0
 fi
 if [[ -z "$CUR_BOOT" || "$CUR_BOOT" == "-" ]]; then
-  (( J_POST + M_POST >= 1 )) && transient "reason=boot_id_unresolvable — post-floor restage evidence exists but the newest inngest-server-probe row could not be read or carries no _BOOT_ID; refusing a stale-generation close (never a degraded MIN_DT-only PASS)."
+  (( J_POST + M_POST >= 1 )) && transient "reason=boot_id_unresolvable — post-floor restage evidence exists but no inngest-server-probe row carrying _BOOT_ID could be read; refusing a stale-generation close (never a degraded MIN_DT-only PASS)."
   (( HAS_POSTFLOOR >= 1 )) && transient "reason=leg_unit — post-floor activity proves the host lives but zero restage-unit evidence on either leg, and the generation anchor is dark; the unit likely never ran/enabled."
   transient "reason=pre_replace — no post-floor (>= $MIN_DT) evidence of any kind; the inngest-host-replace has not landed or the host emits nothing."
 fi
 (( J_NOBOOT >= 1 )) && transient "reason=boot_id_unresolvable — $J_NOBOOT post-floor restage row(s) carry no _BOOT_ID against a resolved current boot ($CUR_BOOT); their generation cannot be proven."
-if (( J_CURGEN + M_CURGEN >= 1 )); then
-  transient "reason=restage_not_ok — $((J_CURGEN + M_CURGEN)) current-generation restage row(s) on boot $CUR_BOOT but none carries ok=1 / a success stage; the unit ran and did not re-stage cleanly."
+if (( J_CURGEN + M_FAIL >= 1 )); then
+  transient "reason=restage_not_ok — $((J_CURGEN + M_FAIL)) current-generation restage row(s) on boot $CUR_BOOT but none carries ok=1 / the enabled stage (journald SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc= emit(s) or a bs-token-restage-enable-FAILED BOOT_STAGE marker); the unit ran and did not re-stage/enable cleanly."
+fi
+if (( M_BOOT >= 1 )); then
+  transient "reason=delivery_unproven — a current-generation bs-token-restaged marker fired on boot $CUR_BOOT (the per-boot restage ran) but no same-generation bs-token-restage-enabled marker arrived; restaged is boot evidence only — the enabled marker is the replace-bound delivery proof, so a plain post-floor reboot can never satisfy the close on its own."
 fi
 if (( HAS_POSTFLOOR >= 1 )); then
   transient "reason=leg_unit — post-floor activity proves the host lives ($HAS_POSTFLOOR row(s) across legs) but zero restage-unit evidence in the current generation ($CUR_BOOT); the unit likely never ran/enabled — the emit leg, not the allowlist leg, is the suspect."

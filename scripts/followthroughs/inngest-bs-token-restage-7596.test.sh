@@ -120,7 +120,7 @@ EVIL="$ROOT/evil.sh"; printf '#!/usr/bin/env bash\necho EVIL >> "%s"\n' "$ROOT/e
 
 RCS="$ROOT/rcs"; : > "$RCS"
 OUT=""; RC=0; SAW_PASS=0
-run() {  # knobs: QH QU QP XBASH XENV STUB_JRC STUB_PRC STUB_BRC ; rows come from $ROOT/{j,p,b}rows
+run() {  # knobs: QH QU QP XBASH STUB_JRC STUB_PRC STUB_BRC ; rows come from $ROOT/{j,p,b}rows
   RC=0
   rm -f "$ROOT/args" "$ROOT/calls" "$ROOT/evil-called"; : > "$ROOT/calls"
   OUT="$(env -i PATH="$PATH" HOME="$ROOT" TMPDIR="$ROOT" STUB_ARGS="$ROOT/args" STUB_CALLS="$ROOT/calls" \
@@ -128,7 +128,7 @@ run() {  # knobs: QH QU QP XBASH XENV STUB_JRC STUB_PRC STUB_BRC ; rows come fro
     STUB_JRC="${STUB_JRC:-0}" STUB_PRC="${STUB_PRC:-0}" STUB_BRC="${STUB_BRC:-0}" STUB_CANARY="$CAN_STR" \
     RESTAGE_QUERY_BIN="$EVIL" \
     BETTERSTACK_QUERY_HOST="${QH-h}" BETTERSTACK_QUERY_USERNAME="${QU-u}" BETTERSTACK_QUERY_PASSWORD="${QP-p}" \
-    ${XENV:+"$XENV"} bash ${XBASH:+"$XBASH"} "$PROBE" 2>&1 </dev/null)" || RC=$?
+    bash ${XBASH:+"$XBASH"} "$PROBE" 2>&1 </dev/null)" || RC=$?
   echo "$RC" >> "$RCS"
   [ "$RC" = 0 ] && SAW_PASS=1
   return 0
@@ -137,7 +137,7 @@ calls()  { grep -c . "$ROOT/calls" 2>/dev/null || true; }
 jcalls() { grep -c '^J$' "$ROOT/calls" 2>/dev/null || true; }
 pcalls() { grep -c '^P$' "$ROOT/calls" 2>/dev/null || true; }
 bcalls() { grep -c '^B$' "$ROOT/calls" 2>/dev/null || true; }
-reset_knobs() { unset QH QU QP XBASH XENV STUB_JRC STUB_PRC STUB_BRC; }
+reset_knobs() { unset QH QU QP XBASH STUB_JRC STUB_PRC STUB_BRC; }
 empty_all() { : > "$ROOT/jrows"; : > "$ROOT/prows"; : > "$ROOT/brows"; }
 run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
@@ -190,6 +190,20 @@ empty_all
 run
 check "pre-floor ok=1 row beside a live current generation: exit 2, never 0" 2 "$RC"
 has "floor exclusion: the verdict names the leg" "$OUT" "leg_unit"
+# the dt-shape gate precedes the lexical floor: a non-ISO dt can sort past the
+# cut and must never count as post-floor evidence on either evidence leg
+empty_all
+{ jrow "not-a-timestamp" "$B1" "$OKMSG"; } > "$ROOT/jrows"
+{ prow "$POST2" "$B1"; } > "$ROOT/prows"
+run
+check "a garbage-dt ok=1 row: exit 2, never post-floor" 2 "$RC"
+hasnt "garbage-dt journald row: never a PASS" "$OUT" "PASS:"
+empty_all
+{ srow "not-a-timestamp" bs-token-restage-enabled; } > "$ROOT/brows"
+{ prow "$POST2" "$B1"; } > "$ROOT/prows"
+run
+check "a garbage-dt enabled marker: exit 2, never gen-qualified" 2 "$RC"
+hasnt "garbage-dt stage row: never a PASS" "$OUT" "PASS:"
 
 # 7. boot_id_unresolvable (Guard 2 row 7): post-floor evidence exists but the
 #    generation anchor cannot be read — never a degraded MIN_DT-only PASS
@@ -205,6 +219,23 @@ has "unverifiable marker generation: boot_id_unresolvable" "$OUT" "boot_id_unres
 empty_all; jrow_noboot "$POST" "$OKMSG" > "$ROOT/jrows"; prow "$POST" "$B1" > "$ROOT/prows"; run
 check "post-floor restage row missing its own _BOOT_ID: exit 2" 2 "$RC"
 has "row boot id unresolvable: boot_id_unresolvable" "$OUT" "boot_id_unresolvable"
+# the anchor is the newest row CARRYING a boot id: a newest dash row must not
+# strand the probe while an earlier row already named the generation
+empty_all
+{ jrow "$POST" "$B1" "$OKMSG"; } > "$ROOT/jrows"
+{ prow "$POST" "$B1"; prow_noboot "$POST2"; } > "$ROOT/prows"
+run
+check "newest probe row lacks _BOOT_ID but an earlier row carries it: exit 0" 0 "$RC"
+has "anchor skips the dash row: pass_arm=journald" "$OUT" "pass_arm=journald"
+# a forged non-charset boot id degrades to unresolvable and NEVER echoes into
+# output (the sweeper posts probe output verbatim into issue comments)
+empty_all
+{ jrow "$POST" "$B1" "$OKMSG"; } > "$ROOT/jrows"
+{ prow "$POST2" 'aa11<script>@everyone'; } > "$ROOT/prows"
+run
+check "a forged non-charset boot id: exit 2 (anchor unresolvable)" 2 "$RC"
+has "forged boot id: boot_id_unresolvable" "$OUT" "boot_id_unresolvable"
+hasnt "forged boot id never echoes into output" "$OUT" "<script>"
 
 # 8. PASS arm-1: post-floor journald ok=1 with a matching current-generation _BOOT_ID
 empty_all
@@ -214,23 +245,33 @@ run
 check "post-floor journald ok=1 row + matching boot: exit 0" 0 "$RC"
 has "arm-1 PASS names its arm" "$OUT" "pass_arm=journald"; has "arm-1 PASS: journald leg reported" "$OUT" "journald_rows=present"
 
-# 9. PASS arm-2: post-floor BOOT_STAGE bs-token-restaged marker, journald leg dark
+# 9. PASS arm-2: a same-generation bs-token-restage-enabled marker (the
+#    replace-bound first-boot runcmd — DELIVERY proof), journald leg dark.
+#    The restaged marker alongside it is boot evidence only; a reboot-
+#    generation restaged WITHOUT an enabled marker must NEVER close.
 empty_all
-{ srow "$POST" bs-token-restaged; } > "$ROOT/brows"
+{ srow "$POST" bs-token-restage-enabled; srow "$POST" bs-token-restaged; } > "$ROOT/brows"
 { prow "$POST2" "$B1"; } > "$ROOT/prows"
 run
-check "post-floor BOOT_STAGE marker, journald absent: exit 0" 0 "$RC"
+check "post-floor BOOT_STAGE enabled+restaged markers, journald absent: exit 0" 0 "$RC"
 has "arm-2 PASS names its arm" "$OUT" "pass_arm=boot_stage"; has "arm-2 PASS: journald leg dark inside the close" "$OUT" "journald_rows=absent"
 empty_all
 { srow "$POST" bs-token-restage-enabled; } > "$ROOT/brows"
 { prow "$POST2" "$B1"; } > "$ROOT/prows"
 run
-check "the bs-token-restage-enabled marker also satisfies arm-2: exit 0" 0 "$RC"; has "enabled-marker PASS arm" "$OUT" "pass_arm=boot_stage"
+check "the enabled marker alone satisfies arm-2: exit 0" 0 "$RC"; has "enabled-marker PASS arm" "$OUT" "pass_arm=boot_stage"
+empty_all
+{ srow "$POST" bs-token-restaged; } > "$ROOT/brows"
+{ prow "$POST2" "$B1"; } > "$ROOT/prows"
+run
+check "post-floor restaged WITHOUT enabled (a plain reboot): exit 2, never 0" 2 "$RC"
+has "reboot-only generation: delivery_unproven" "$OUT" "delivery_unproven"
+hasnt "reboot-only generation: never a PASS" "$OUT" "pass_arm="
 
 # 10. arm preference: journald wins when both legs carry current-generation evidence
 empty_all
 { jrow "$POST" "$B1" "$OKMSG"; } > "$ROOT/jrows"
-{ srow "$POST" bs-token-restaged; } > "$ROOT/brows"
+{ srow "$POST" bs-token-restage-enabled; } > "$ROOT/brows"
 { prow "$POST2" "$B1"; } > "$ROOT/prows"
 run
 check "both arms qualifying: exit 0" 0 "$RC"
@@ -265,6 +306,17 @@ empty_all
 { prow "$POST2" "$B1"; } > "$ROOT/prows"
 run
 check "current-generation RESTAGE_FAILED row: exit 2" 2 "$RC"; has "unit ran and failed: restage_not_ok" "$OUT" "restage_not_ok"
+empty_all
+{ srow "$POST" bs-token-restage-enable-FAILED; } > "$ROOT/brows"
+{ prow "$POST2" "$B1"; } > "$ROOT/prows"
+run
+check "current-generation enable-FAILED marker: exit 2" 2 "$RC"; has "enable-FAILED marker: restage_not_ok" "$OUT" "restage_not_ok"
+# the ok=1 test is boundary-anchored: ok=15 must not read as a qualifying row
+empty_all
+{ jrow "$POST" "$B1" "SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=15 path=/run/inngest-bs-logs-token"; } > "$ROOT/jrows"
+{ prow "$POST2" "$B1"; } > "$ROOT/prows"
+run
+check "an ok=15 message is not ok=1: exit 2" 2 "$RC"; has "ok=15: restage_not_ok" "$OUT" "restage_not_ok"
 
 # 14. isolation holds: wrong-host / wrong-host_name / wrong-ident rows never count
 empty_all
@@ -294,10 +346,10 @@ check "no \${VAR:?} form on an executable line" "" "$qform"
 dir_lines="$(grep -E '^#[[:space:]]+<!-- soleur:followthrough ' "$SUT" || true)"
 check "the header carries exactly one single-line follow-through directive" 1 "$(printf '%s\n' "$dir_lines" | grep -c .)"
 has "the directive names this script and its secrets clause" "$dir_lines" "script=scripts/followthroughs/inngest-bs-token-restage-7596.sh"
-has "the header names its tracker" "$(sed -n '1,80p' "$SUT")" "TRACKER: #7596"
-has "the header carries a RETIREMENT census" "$(sed -n '1,110p' "$SUT")" "RETIREMENT:"
-has "the RETIREMENT census names this suite" "$(sed -n '1,110p' "$SUT")" "inngest-bs-token-restage-7596.test.sh"
-has "the RETIREMENT census names the runbook section" "$(sed -n '1,110p' "$SUT")" "inngest-server.md"
+has "the header names its tracker" "$(sed -n '1,140p' "$SUT")" "TRACKER: #7596"
+has "the header carries a RETIREMENT census" "$(sed -n '1,140p' "$SUT")" "RETIREMENT:"
+has "the RETIREMENT census names this suite" "$(sed -n '1,140p' "$SUT")" "inngest-bs-token-restage-7596.test.sh"
+has "the RETIREMENT census names the runbook section" "$(sed -n '1,140p' "$SUT")" "inngest-server.md"
 
 # 18. STUBBED-PROBE GUARD: a probe that can never reach a verdict must red this suite
 check "the probe reached PASS in at least one fixture run (a neutered probe reds here)" 1 "$SAW_PASS"
@@ -333,13 +385,17 @@ if run_battery "${1:-}"; then
   mutate_run m2-cred-check-skipped    '[mut:cred]'    'if false; then' 'empty QH: credentials_unprovisioned'
   mutate_sub m3-floor-removed         '[mut:floor]'   '2026-10-30' '2026-11-02' 'post-floor journald ok=1 row + matching boot: exit 0'
   mutate_sub m4-boot-match-inverted   '[mut:boot]'    '== "$CUR_BOOT"' '!= "$CUR_BOOT"' 'post-floor journald ok=1 row + matching boot: exit 0'
-  mutate_sub m5-gen-check-inverted    '[mut:gen]'     '< "$dt"' '> "$dt"' 'old-generation marker newer than MIN_DT but before the current boot: exit 2'
-  mutate_sub m6-arm2-stages-shrunk    '[mut:arm]'     'bs-token-restage-enabled' 'bs-token-never' 'the bs-token-restage-enabled marker also satisfies arm-2: exit 0'
+  mutate_sub m5-gen-check-inverted    '[mut:gen]'     '< "$dt"' '> "$dt"' 'stale-generation marker: leg_unit, never PASS'
+  mutate_sub m6-arm2-stages-shrunk    '[mut:arm]'     'bs-token-restage-enabled' 'bs-token-never' 'the enabled marker alone satisfies arm-2: exit 0'
   mutate_sub m7-host-isolation-drift  '[mut:host]'    'soleur-inngest' 'soleur-inngest-DRIFT' 'post-floor journald ok=1 row + matching boot: exit 0'
   mutate_sub m8-env-seam-reintroduced '[mut:query-path]' 'QUERY="$SCRIPT_DIR/../betterstack-query.sh"' 'QUERY="${RESTAGE_QUERY_BIN:-$SCRIPT_DIR/../betterstack-query.sh}"' 'an exported RESTAGE_QUERY_BIN is ignored: the evil script never ran'
+  mutate_sub m9-tol-zeroed            '[mut:tol]'     'GEN_TOL_S=7200' 'GEN_TOL_S=0' 'post-floor BOOT_STAGE enabled+restaged markers, journald absent: exit 0'
+  mutate_sub m10-dtshape-dropped      '[mut:dtshape]' ']] || return 1' ']] || true' 'a garbage-dt ok=1 row: exit 2, never post-floor'
+  mutate_sub m11-restaged-qualifies   '[mut:arm2]'    'bs-token-restage-enabled' 'bs-token-restaged' 'post-floor restaged WITHOUT enabled (a plain reboot): exit 2, never 0'
+  mutate_sub m12-bootgate-dropped     '[mut:bootgate]' '|| CUR_BOOT=""' '|| true' 'forged boot id never echoes into output'
 fi
 
-MIN_FIXTURE=55; MIN_BATTERY=9
+MIN_FIXTURE=70; MIN_BATTERY=13
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-bs-token-restage-7596.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
