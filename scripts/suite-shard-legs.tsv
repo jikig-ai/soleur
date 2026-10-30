@@ -579,6 +579,7 @@ scripts/watch-live-verify-pass	7
 scripts/watch-registration-narrowing-9564	3
 scripts/watchdog-arm-soak-9237	5
 scripts/watchdog-debounce-soak-9686	3
+scripts/web-first-deploy-10585	4
 scripts/web-fresh-boot-zot-8651	7
 scripts/web-host-escrow-preflight	3
 scripts/web2-luks-live-6931	4
