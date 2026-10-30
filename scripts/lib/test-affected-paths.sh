@@ -179,8 +179,9 @@ ALWAYS_ON_SUITES=(
   # like its sibling above; renamed out of the add/add collision with #8322's.
   "scripts/test-all-group-affected"
   "scripts/suite-exit-class-parity"
-  # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected,
-  # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).
+  # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected's
+  # --rows arms (#11562), battery-tag-authorship-mutations and the two --rows halves of the
+  # lint-orphan battery (#8864).
   # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
   # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
@@ -365,11 +366,15 @@ AFFECTED_CONSUMED_EDGES=(
   # the array). Its edges are the same two predicates _infra_in_diff checks.
   "apps/web-platform/infra/run-registered-suites.sh|AFFECTED_INFRA_RUNNER_PATHS"
   # ADR-262: four self-test mutation batteries, withdrawn from ALWAYS_ON_SUITES. The two lint-orphan
-  # halves share one array because they are two --rows ranges of one battery.
+  # halves share one array because they are two --rows ranges of one battery; the four
+  # test-all-affected arms share one array for the same reason (#11562).
   "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
-  "scripts/test-all-affected|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-a|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
 )
 
 # The infra runner's edges — the same two predicates _infra_in_diff checks
@@ -884,6 +889,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/server/prompt-injection-wrap.ts"
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
+  "apps/web-platform/test/broker-mechanism-spike.test.ts"
   "knowledge-base/engineering/architecture/decisions/"
   "knowledge-base/engineering/architecture/diagrams/"
   "knowledge-base/engineering/operations/runbooks/"
@@ -905,6 +911,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
+  "tests/scripts/lib/tf-redact-random-ids.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
 )

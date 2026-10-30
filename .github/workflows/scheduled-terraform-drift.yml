@@ -175,7 +175,11 @@ jobs:
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
-          printf '%s' "$PLAN_OUTPUT" | head -c 60000 > ${RUNNER_TEMP}/plan-output.txt
+          # random_id's `id` is the base64url of the live key bytes and a full-root plan prints it on
+          # every `Refreshing state` line; plan-output.txt is cat'ed into a PUBLIC issue body (#10540).
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          printf '%s' "$PLAN_OUTPUT" | tf_redact_random_ids | head -c 60000 > ${RUNNER_TEMP}/plan-output.txt
           sed -i \
             -e 's/\(token\s*=\s*\)"[^"]*"/\1"***"/gi' \
             -e 's/\(secret\s*=\s*\)"[^"]*"/\1"***"/gi' \

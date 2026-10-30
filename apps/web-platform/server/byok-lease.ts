@@ -55,6 +55,7 @@ import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 
 import { decryptKey, decryptKeyLegacy, zeroize } from "./byok";
+import { isCcOauthEnabled } from "./cc-oauth-flag";
 import type { AgentAuthScheme, AgentCredential } from "./agent-env";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { createChildLogger } from "@/server/logger";
@@ -81,18 +82,6 @@ export type UserId = string;
  * boundaries from it).
  */
 export const CC_OAUTH_EFFECTIVE_DATE = Date.parse("2026-06-15T00:00:00Z");
-
-/**
- * Kill-switch (plan §Phase 6.2). When unset/falsey the oauth read is never
- * attempted — the lease behaves exactly as the api_key-only path did, so
- * the whole feature is inert (AC8). Instant disable without a Flagsmith
- * round-trip. Read at call time so a deploy-time env flip takes effect on
- * the next lease without a process restart contract.
- */
-function isCcOauthEnabled(): boolean {
-  const v = process.env.CC_OAUTH_ENABLED;
-  return v === "1" || v === "true";
-}
 
 /**
  * Raised when an `anthropic_oauth` credential is selected before

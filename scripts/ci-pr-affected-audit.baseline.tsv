@@ -348,9 +348,6 @@ plugins/soleur/test/ci-pr-affected-preactivation.test.sh	README.md
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	scripts/ci-pr-selection.sh
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	scripts/suite-durations-heavy.tsv
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	scripts/suite-durations.tsv
-plugins/soleur/test/ci-pr-affected-replay.test.sh	.gitignore
-plugins/soleur/test/ci-pr-affected-replay.test.sh	README.md
-plugins/soleur/test/ci-pr-affected-replay.test.sh	ruff.toml
 plugins/soleur/test/ci-shard-totality-skip.test.sh	README.md
 plugins/soleur/test/ci-shard-totality-skip.test.sh	scripts/suite-shard-legs.tsv
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	scripts/lint-encryption-posture.py
