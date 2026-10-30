@@ -71,3 +71,8 @@ text.
   banner is the #4647 silent-failure class and changes prd behavior.
 - The `.down.sql` for 174 is a documented no-op: REVOKE cannot distinguish
   grant provenance and would strip default-era effective access on prd.
+- Migration 181 (#11569) narrows `public.messages` UPDATE from 174's default-era table-level grant to
+  `(status, draft_preview)` for `authenticated` (revoked for `anon`), paired with the owner-draft policy
+  `messages_owner_draft_update`; without the narrowing that policy would let a browser session rewrite `trust_tier`,
+  `action_class` or `template_id` of its own rows. The `table-grants.ts` column-split entry is how the grant guard sees
+  it (the same mechanism as `users` in 178). The other table-level verbs on `messages` stay as 174 recorded them.
