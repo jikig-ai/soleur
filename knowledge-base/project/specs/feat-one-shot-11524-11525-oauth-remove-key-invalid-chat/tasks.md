@@ -37,7 +37,7 @@ Closes #11524, Closes #11525. Rulings: `decision-challenges.md` (same directory)
 - 4.1 RED: `test/chat-surface-credential-blocked.test.tsx`; flip the two Reconnect-absent assertions in `test/error-states.test.tsx`; add lifecycle test (dismiss -> Reconnect -> repeat shows card); `test/chat-input.test.tsx` additions.
 - 4.2 GREEN: `components/chat/chat-input.tsx` — `onSend` returns `boolean | void`; `handleSubmit` restructure (early return when `disabled`; prune attachments only when `sent`; `false` keeps draft and `onAtDismiss` state).
 - 4.3 GREEN: `components/ui/error-card.tsx` — `newTab` prop (plain `<a target="_blank" rel="noopener noreferrer">`).
-- 4.4 GREEN: `components/chat/chat-surface.tsx` — `handleSend` returns false before `onBeforeSend`; derive `blocked` from `lastError.code`; composer disabled + placeholder + helper line with inline Reconnect; `onCredentialReconnect` (`setSessionStarted(false)` + `reconnect()`); rebind effect (truthy guard) and `if (rebindRefused) setSessionStarted(false)`; `visibilitychange` hint; `newTab` for blocked codes.
+- 4.4 GREEN: `components/chat/chat-surface.tsx` — `handleSend` returns false before `onBeforeSend`; derive `blocked` from `lastError.code`; composer disabled + placeholder + helper line with inline Reconnect; `onCredentialReconnect` (`setSessionStarted(false)` + `reconnect()`); rebind effect (truthy guard) and `if (rebindRefused) setSessionStarted(false)`; `newTab` for blocked codes.
 - 4.5 GREEN: `components/chat/message-bubble.tsx` — `Not answered` flag.
 - 4.6 Verify no settings-route layout mounts `useWebSocket` (a new tab would supersede the chat socket).
 

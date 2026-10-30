@@ -45,8 +45,8 @@ Two deferred follow-ups from the #11086 Concierge sign-in work ship together in 
    removal, so the billing-basis change stays an explicit user decision.
 2. **#11525 — chat state after a `key_invalid` card.** The composer is disabled while the credential is
    blocked, a message can no longer be shown optimistically and then silently dropped, the card gains an
-   explicit **Reconnect** that re-binds the session so the next message is accepted, a tab-return hint
-   covers the fixed-in-Settings case, a repeated failure after Reconnect re-shows the card, and the
+   explicit **Reconnect** that re-binds the session so the next message is accepted, an always-visible
+   helper line ("Saved your token in Settings? Select Reconnect to continue.") covers the fixed-in-Settings case, a repeated failure after Reconnect re-shows the card, and the
    multi-tab semantics are pinned by tests.
 
 Both are the same defect family: after the lease fails closed, the user has no exit that does not involve
@@ -223,12 +223,10 @@ Surface (`components/chat/chat-surface.tsx` + `chat-input.tsx` + `error-card.tsx
   codes `onRetry={onCredentialReconnect}` with `retryLabel="Reconnect"`. No field is added to `lastError.action`.
 - Dismiss key stays `` `${lastError.code}::${lastError.message}` ``. Dismiss hides the card only; the composer stays disabled (F5). Lifecycle pinned by test
   (dismiss → Reconnect → second `key_invalid` shows the card; mutation: delete the null-reset effect → test reds).
-- `onCredentialReconnect = () => { setSessionStarted(false); setShowReturnHint(false); reconnect(); }`. The start/resume effect: `conversationId === "new"` and a truthy
+- `onCredentialReconnect = () => { setSessionStarted(false); reconnect(); }`. The start/resume effect: `conversationId === "new"` and a truthy
   `rebindConversationId` → `resumeSession(rebindConversationId)` (no duplicate conversation); `startSession` only when absent; non-`new` ids unchanged. The `?msg=`
   first-run latch stays consumed; Reconnect never auto-resends.
-- Tab-return hint (G8): while blocked, a `visibilitychange` listener (no `focus`); the first `hidden → visible` per episode (episode = the current `lastError` object
-  identity, a new object on every blocked frame) shows `Back from Settings? Select Reconnect to continue.` (`role="status"`, no focus steal); cleared on Reconnect,
-  its close control, any `lastError` change/clear and unmount; listener removed in cleanup (`cq-ref-removal-sweep-cleanup-closures`).
+- No tab-return hint (CTO ruling on plan-review cut, supersedes G8): the always-visible helper line carries the "saved" wording; no `visibilitychange` listener, hint state or close control exists. The `.pen` wireframe frame that draws a return hint is superseded by this line.
 - Orphan bubble (G5): a user message flagged `unanswered` shows `Not answered` with sr-only `No reply was started` (`message-bubble.tsx`).
 
 | Surface | Exact copy |
@@ -237,8 +235,7 @@ Surface (`components/chat/chat-surface.tsx` + `chat-input.tsx` + `error-card.tsx
 | Card action | `Update token` (oauth) / `Update key` / `Add API key` — new tab |
 | Card retry | `Reconnect` |
 | Composer placeholder | oauth: `Update your token in Settings, then reconnect` / otherwise `Update your key in Settings, then reconnect` |
-| Helper line | `Update it in Settings, then reconnect.` |
-| Return hint | `Back from Settings? Select Reconnect to continue.` |
+| Helper line | oauth: `Saved your token in Settings? Select Reconnect to continue.` / otherwise `Saved your key in Settings? Select Reconnect to continue.` |
 | Bubble flag | `Not answered` |
 
 ### Precedent diff — `delete_oauth_credential` vs `store_oauth_credential` (migration 096)
@@ -387,7 +384,7 @@ No open code-review issue names any other file in the lists above.
 
 #### Findings
 
-CPO: threshold single-user incident, plan-time sign-off granted, conditional on the wireframe existing (done), the copy fixes (applied: one noun per surface, concrete billing line, "Keep token"/"Remove token", default focus on Keep, "Add an API key first" path, visible helper text plus `aria-live`, "Not answered" marker, status line naming the billing basis) and `soleur:engineering:review:user-impact-reviewer` at review. Deferred one-click Resend acceptable (tracked #11595). Spec-flow gaps resolved: remount resets (G1), `ChatInput` boolean contract (G3), `byok_key_missing` handled client-side (G4), session rebind on Reconnect (G2/H3), new-tab Settings link (G1/H7), orphan bubble flag (G5), hint lifecycle (G8), supersede precedence (G7), Remove-flow pending/error/focus/announce states (copy table), stale `hasApiKey` sentence handled by the confirm-time props. Wireframe open question (dismissed card has no Reconnect) resolved by the inline helper-line Reconnect Button. Plan-review taste items (cut the hint / `unanswered` flag / `Conversations use:` line / `Add an API key first`) are recorded as challenges in `decision-challenges.md`; the plan keeps the CPO-conditioned scope. Brainstorm-recommended specialists: none (no brainstorm). Content Review Gate: no domain leader recommended a copywriter; CPO copy fixes applied directly.
+CPO: threshold single-user incident, plan-time sign-off granted, conditional on the wireframe existing (done), the copy fixes (applied: one noun per surface, concrete billing line, "Keep token"/"Remove token", default focus on Keep, "Add an API key first" path, visible helper text plus `aria-live`, "Not answered" marker, status line naming the billing basis) and `soleur:engineering:review:user-impact-reviewer` at review. Deferred one-click Resend acceptable (tracked #11595). Spec-flow gaps resolved: remount resets (G1), `ChatInput` boolean contract (G3), `byok_key_missing` handled client-side (G4), session rebind on Reconnect (G2/H3), new-tab Settings link (G1/H7), orphan bubble flag (G5), hint folded into the helper line (G8 superseded), supersede precedence (G7), Remove-flow pending/error/focus/announce states (copy table), stale `hasApiKey` sentence handled by the confirm-time props. Wireframe open question (dismissed card has no Reconnect) resolved by the inline helper-line Reconnect Button. Plan-review taste items (cut the hint / `unanswered` flag / `Conversations use:` line / `Add an API key first`) are recorded as challenges in `decision-challenges.md`; the plan keeps the CPO-conditioned scope. Brainstorm-recommended specialists: none (no brainstorm). Content Review Gate: no domain leader recommended a copywriter; CPO copy fixes applied directly.
 
 ## User-Brand Impact
 
@@ -470,7 +467,7 @@ The ADR text describes the shipped state; nothing is soak-gated.
 | `send()` boolean, `ChatInput` contract | "no silently dropped optimistic message" | asked |
 | Derived blocked state + disabled composer | "composer state" | asked |
 | Reconnect button + session rebind + fallback | "fixing the credential mid-conversation (saved/resend hint …)" | asked |
-| Return hint | "saved/resend hint" | asked |
+| Helper line carries the "saved" wording (no separate hint) | "saved/resend hint" | asked |
 | Lifecycle test (dismiss → Reconnect → repeat) | "lastError card lifecycle on repeated failure" | asked |
 | New-tab Settings link | — | inferred — justification: the hint and blocked UI are unreachable if the same-tab link unmounts the chat (spec-flow P2, CTO G1/H7) |
 | `byok_key_missing` client branch | "billing-basis decision (subscription to API key) stays explicit" | inferred — justification: removing the token of an API-key-less account makes this the immediate next state, which today renders as a generic bubble (CTO G4/H2) |
@@ -499,7 +496,7 @@ The ADR text describes the shipped state; nothing is soak-gated.
 - [ ] `ChatInput` keeps draft and staged attachments when `onSend` returns `false` (attachment prune only when `sent`); `handleSubmit` does nothing (no upload) when `disabled`; a `void`-returning `onSend` still clears (`test/chat-input.test.tsx`). `handleSend` returns `false` before `onBeforeSend` when blocked/not connected.
 - [ ] Reconnect from the blocked card re-binds: `setSessionStarted(false)` + `reconnect()`, then exactly one `resume_session` for the captured id (never `start_session` when an id was captured; `start_session` when none), exactly one `chat` frame in total after the user re-sends, blocked state cleared; a rebind `session_started` leaves `messages` unchanged (exactly one `user-` bubble, no `filter_prepend`, no history refetch); a refused rebind (`error` frame while armed) triggers exactly ONE `start_session` and no extra error bubble (`test/ws-client-key-invalid-teardown.test.tsx`, `test/chat-surface-credential-blocked.test.tsx`).
 - [ ] Lifecycle: dismiss → Reconnect → second `key_invalid` re-shows the card; dismissing leaves the composer disabled; mutation: deleting the null-reset effect makes the test red; the existing "dismiss then re-fire after null" test stays green (`test/error-states.test.tsx`).
-- [ ] `visibilitychange`: no hint without a prior hidden; hidden→visible shows the hint once per episode (episode = `lastError` identity); second cycle shows nothing; cleared on Reconnect/close/`lastError` change; listener removed on unmount; no `focus` listener exists (`test/chat-surface-credential-blocked.test.tsx`).
+- [ ] Helper line shows the scheme-specific "Saved your token/key in Settings? Select Reconnect to continue." copy while blocked, including after the card is dismissed; no `visibilitychange` or `focus` listener is installed (`test/chat-surface-credential-blocked.test.tsx`).
 - [ ] Supersede precedence: a 4002 close on the torn-down socket after `key_invalid` is a no-op (`lastError.code` stays `key_invalid`); a 4002 after Reconnect yields `lastError.code === "disconnected"` with `credentialBlocked === false` (`test/ws-client-key-invalid-teardown.test.tsx`).
 - [ ] `ErrorCard` with `newTab` renders `<a target="_blank" rel="noopener noreferrer">` for the three blocked cards and `NavLink` otherwise; the two existing assertions that `Reconnect` is absent for `key_invalid` (`test/error-states.test.tsx`: "reconnect button not shown for key_invalid errors" and the oauth title test) are updated to the new contract (absence was a proxy for "no AUTO reconnect", asserted separately: `socket.onclose` stays null and no second `MockWebSocket` is constructed without a Reconnect click).
 - [ ] `ws-client-key-invalid-teardown.test.tsx` existing cases and `ws-client-key-invalid-source-gate.test.ts` stay green in intent (the `lastError` `toEqual` shapes are unchanged: no field added to `lastError` or `lastError.action`; the branch still ends in `teardown();` and contains no `location.href`).
