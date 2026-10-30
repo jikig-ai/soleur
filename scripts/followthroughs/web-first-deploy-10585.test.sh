@@ -167,10 +167,13 @@ usrc() { printf '%s\tUNKNOWN STEP\t%s%s \033[36;1m%s\n' "$3" "${4:-}" "$2" "$1";
 #                    "no ##[group]Run header at/after started_at" arm)
 ulog() {
   local jn="$1" st="$2"; shift 2
-  local base pre post l hdr_ts
+  local base epoch pre post l hdr_ts
   base=${st%Z}; base=${base%%.*}
-  pre=$(date -u -d "${base} - 10 minutes" '+%Y-%m-%dT%H:%M:%S.0000000Z')
-  post=$(date -u -d "${base} + 10 minutes" '+%Y-%m-%dT%H:%M:%S.0000000Z')
+  # Epoch arithmetic: `date -d "<ISO> - 10 minutes"` misparses the relative
+  # clause on this platform (measured: +10h, not -10m) — go through %s.
+  epoch=$(date -u -d "${base}Z" +%s)
+  pre=$(date -u -d "@$((epoch - 600))" '+%Y-%m-%dT%H:%M:%S.0000000Z')
+  post=$(date -u -d "@$((epoch + 600))" '+%Y-%m-%dT%H:%M:%S.0000000Z')
   hdr_ts="$st"; [[ "${ULOG_EARLY_HDR:-0}" == 1 ]] && hdr_ts="$pre"
   printf '%s\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "$jn" "$pre"
   ul '##[group]Run terraform plan' "$pre" "$jn" "$GH_LOG_BOM"
@@ -630,8 +633,8 @@ if [ "${#FAILURES[@]}" -gt 0 ]; then
   printf '%s passed, %s failed\n' "$passes" "${#FAILURES[@]}"; exit 1
 fi
 # Anti-vacuity floor, reported outside the helpers it backstops.
-if [[ "$passes" -lt 30 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 30+)\n' "$passes" >&2
+if [[ "$passes" -lt 69 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 69+)\n' "$passes" >&2
   exit 1
 fi
 printf '%s passed, 0 failed\n' "$passes"
