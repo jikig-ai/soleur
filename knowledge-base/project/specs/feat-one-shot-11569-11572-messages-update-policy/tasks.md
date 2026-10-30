@@ -27,7 +27,7 @@ Branch: feat-one-shot-11569-11572-messages-update-policy. Draft PR: #11622. Clos
 
 ## Phase 3: Copy and client (#11572 items 7, 12)
 
-- 3.1 Tests first in `today-card.click.test.tsx`: Edit-409 restored string, three DENY strings, one 403 row each for Discard, Edit and Dismiss; dashboard fetcher `cache: "no-store"` row.
+- 3.1 Tests first in `today-card.click.test.tsx`: Edit-409 restored string, three DENY strings, one 403 row each for Discard, Edit and Dismiss; dashboard fetcher `cache: "no-store"` row (in `apps/web-platform/test/dashboard-mount-fetch-dedup.test.tsx`).
 - 3.2 Edit `today-card.tsx` (strings, delete the "Discard is not offered" comment, 403 branches) and `lib/messages/trust-tier-copy.ts`; edit `app/(dashboard)/dashboard/page.tsx` fetcher.
 - 3.3 AC6 diff invariant (no structural change) and `tsc --noEmit`.
 

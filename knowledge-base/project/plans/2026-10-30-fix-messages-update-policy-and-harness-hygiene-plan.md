@@ -15,6 +15,22 @@ lane: cross-domain
 
 # fix: messages owner draft UPDATE policy, column-narrowed grant, and #11572 hygiene
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Sections enhanced:** Scope Check (Split Assessment recommendation), Observability (single-file probe), Product/UX Gate (wireframe baseline and exemption), Phase 3 step 6 (test location), Research Insights (deepen verification).
+**Research used:** the 5-seat plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), CTO and CPO rulings, GDPR gate, live read-only prd/dev catalog and Sentry/Better Stack reads, and the deepen-plan halt gates below.
+
+### Key Improvements
+1. Kieran's P0: `verify/174_api_data_grants_snapshot.sql` asserts table-level UPDATE on `messages` and would have failed `verify-migrations` on prd, gating the deploy; it is now an edit in this PR.
+2. The fuzz targets would have gone vacuous after the column narrowing (denials from the column privilege, not the policy); `targets.ts` and the hijack helper are now in scope, and the tenant test separates the two layers by error message.
+3. Spec-flow corrected the premise: the prod backlog is 1898 github + 45 kb-drift drafts (no Stripe drafts), and draft cards are author-only end to end; the Today fetch needs `cache: "no-store"` and Discard/Edit/Dismiss need an "already handled" 403 line.
+4. The "re-authorize" promise in the 403 and Settings copy is false in the current gate; the strings now promise nothing and the gap is #11630.
+
+### New Considerations Discovered
+- Ordinal 181 vs the unmerged 179 (#11593): a dev-ledger drift risk; sequencing is a Phase 2 step.
+- ADR-303 needs a one-bullet amendment (Phase 2.10 test).
+
 ## Overview
 
 One PR closes #11569 and #11572 (the PR body carries `Closes #11569` and `Closes #11572` on separate lines).
@@ -101,6 +117,25 @@ Cut List (mechanism, property it would buy, what already covers it):
 - `2026-09-18-my-mutation-harness-counted-a-crash-as-a-kill-and-the-fixture-stacked-x-on-x`: a non-zero exit with no FAIL line is UNRESOLVED, not KILLED; re-drive the whole battery on the commit candidate.
 - `2026-09-24-editing-an-already-applied-migration-during-review-breaks-the-dev-ledger`: once the migration is applied to dev (tenant-integration does it on push) it is byte-immutable for the life of the PR, comments included; get the SQL right before the first push.
 
+### Deepen-plan verification (2026-10-30)
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | present, threshold `single-user incident`, concrete artifact and vector |
+| 4.7 Observability | five fields present; command starts with `bash`, no ssh, single verify file (well inside the 15 s cap); `expected_output` is the literal `messages_policy_single_permissive_update|0`; `credentials_required` declared with a justification (Check 10 reports SKIP-DECLARED) |
+| 4.8 PAT-shaped variable | clean (grep empty) |
+| 4.9 UI wireframe | UI glob hit on `today-card.tsx` and `dashboard/page.tsx`; copy-only exemption with committed baseline `.pen` files named in the Product/UX Gate and the AC6 diff invariant |
+| 4.10 Encryption posture | skipped with reason (no new store or connection), matching the accepted precedent in `2026-10-06-fix-sandbox-canary-bridge-spawn-placeholder-plan.md` |
+| 4.11 Guard Contract | `python3 scripts/lint-guard-contract.py` green, 3 entries, assemblies name chokepoints (catalog/ACL/`pg_policies`, `mutate_run`, the single `exec`) not member lists |
+| 4.12 Scope Check | section present once (unfenced), Ask Mapping / Provenance / Split Assessment with a `Recommendation:` line, no `unmapped` rows |
+| 4.13 Task design | no new autonomous-task surface (no workflow, Inngest function, cron) |
+| Cited issues / PRs | all 12 numbers resolved live with `gh issue view` (#11193 CLOSED, #11486/#11520 CLOSED, #11566 MERGED, #11569/#11572/#11593/#11622/#11628/#11629/#11630/#3220 OPEN) |
+| Cited rule IDs | `cq-write-failing-tests-before`, `wg-when-deferring-a-capability-create-a` exist in AGENTS.md |
+| Cited paths | every ratchet script, test file, ADR and registry path in the plan exists in `git ls-files` |
+| Attribution | `a48479b3a7` (#11253) touched `verify/174` (confirmed); ADR-303 line 70 defers narrowing to #11193 (confirmed) |
+| Labels | `type/bug`, `type/feature`, `type/chore`, `domain/product`, `domain/engineering`, `priority/p2-medium`, `priority/p3-low`, `deferred-scope-out` exist; #11628, #11629, #11630 were created with them |
+| tasks.md | propagated: verify/174 edit, targets.ts, ADR-303, 403 copy, no-store fetch, extended census |
+
 ### Related code (anchors, not line numbers)
 
 - Routes: `apps/web-platform/app/api/dashboard/today/[id]/{discard,edit,send}/route.ts` (the send route comment on
@@ -153,6 +188,13 @@ file in Files to Edit / Files to Create (checked per path with `jq --arg`).
 | Tracking issues #11628, #11629 | `asked` by the brief ("file or keep tracked ... with a re-evaluation criterion") and by `wg-when-deferring-a-capability-create-a` |
 
 ### Split Assessment
+
+Counts derived from `## Files to Edit` (about 20 files) and `## Files to Create` (6 files): the policy half touches 3 SQL
+files, 4 test files and 2 registry/verify edits; the harness half touches 1 lib, 2 suites, 3 header-only comments and 1
+suite head; the copy half touches 2 source files, 1 page fetcher and their tests.
+
+- Recommendation: keep as ONE PR (operator instruction; the copy half depends on the policy half and the harness half is
+  independent but small). Split the harness half off only if its CI stalls.
 
 The two issues share one PR by operator instruction. They are independent in code (SQL and copy versus shell harness) but
 the copy half of #11572 (items 7 and 12) is only truthful once the policy exists, which is why #11572 was written to wait
@@ -268,7 +310,7 @@ Order follows `cq-write-failing-tests-before`: each phase writes its RED test fi
 3b. Truthfulness proof for the dropped "re-authorize" promise (CPO asked for it to be verified, not assumed): already done at plan time by reading the gate and the existing `is-template-authorized.test.ts` case (c) (a revoked latest row is denied; `first_send` is reached only with no row). No new test (plan-review: it would re-prove existing behaviour); the evidence is cited in the PR body and #11630.
 4. `not_a_draft` check (CTO D8(d) asked for confirmation): done at plan time (a non-draft row answers 409 `not_a_draft`; `GET /api/dashboard/today` selects `status = draft`, so a refresh drops the card). No new test; cited in the PR body.
 5. New 403 copy for Discard, Edit and the kb-drift Dismiss (spec-flow P1, CPO note "the `forbidden` copy must not invite a retry"): after the fix a second Discard (another tab, a double click) or an Edit/Discard by a non-author matches zero rows and answers 403, which the card shows as `Discard failed (403)` / `Edit failed (403)` / `Dismiss failed (403)`. Add one 403 branch to each of the three handlers in `today-card.tsx` with a single constant: `This draft was already handled, or it isn't yours to change. Refresh to update this card.` (same register as the existing `not_a_draft` line; names no button). Tests first in `today-card.click.test.tsx` (one row per handler) and keep the generic `... failed (NNN)` fallback for every other status.
-6. Stale list after a successful Discard (spec-flow P1): `app/(dashboard)/dashboard/page.tsx` fetches the Today list through SWR with a plain `fetch("/api/dashboard/today")`, and the route answers `Cache-Control: private, max-age=60`, so a revalidation inside 60 s can serve the browser-cached list and bring a discarded card back (the next Discard then 403s). Pass `{ cache: "no-store" }` on that client fetch only (the server header and its Art. 14 rationale are unchanged). Test: the fetcher is called with `cache: "no-store"` (find the existing dashboard page test first; add one row).
+6. Stale list after a successful Discard (spec-flow P1): `app/(dashboard)/dashboard/page.tsx` fetches the Today list through SWR with a plain `fetch("/api/dashboard/today")`, and the route answers `Cache-Control: private, max-age=60`, so a revalidation inside 60 s can serve the browser-cached list and bring a discarded card back (the next Discard then 403s). Pass `{ cache: "no-store" }` on that client fetch only (the server header and its Art. 14 rationale are unchanged). Test: the fetcher is called with `cache: "no-store"`; no existing test references `/api/dashboard/today` for the page (grep of `apps/web-platform/test/`), so add one row to `apps/web-platform/test/dashboard-mount-fetch-dedup.test.tsx` (it already mounts the page and counts its fetches) or a new small test beside it. SWR (ADR-067) serves the cached list instantly and revalidates on mount and focus; the `no-store` option is what stops the browser HTTP cache answering that revalidation.
 
 ### Phase 4 — Header-only edits (items 3, 5, 10)
 
@@ -300,7 +342,7 @@ Comment-only edits (AC: every changed line starts with `#`): `inngest-luks-keepe
 - `apps/web-platform/test/rls-fuzz/rls-row-hijack.integration.test.ts` (HIJACK_TARGETS: `messages`; give `HijackTarget` optional `hijackCol`/`hijackValue` so the `messages` entry can attempt `status = 'complete'` instead of the hard-coded `workspace_id`, or state in the entry that WITH CHECK is covered only by the tenant-isolation test)
 - `apps/web-platform/test/rls-fuzz/targets.ts` (`messages` target: `updateCol: "draft_preview"`, draft-card seed with `user_id = userA`)
 - `apps/web-platform/supabase/verify/174_api_data_grants_snapshot.sql` (remove UPDATE from the `grants_messages_anon` / `grants_messages_authenticated` verb lists)
-- `apps/web-platform/app/(dashboard)/dashboard/page.tsx` (Today fetcher: `cache: "no-store"`) and its existing test (find it first)
+- `apps/web-platform/app/(dashboard)/dashboard/page.tsx` (Today fetcher: `cache: "no-store"`) and `apps/web-platform/test/dashboard-mount-fetch-dedup.test.tsx` (one row)
 - `knowledge-base/engineering/architecture/decisions/ADR-303-explicit-data-api-grants-and-two-tier-table-grant-guard.md` (one Consequences bullet, see Architecture Decision)
 - `scripts/lib/mutation-harness.sh` (`mh_frag_unique`, exact mode in `mh_caught`, `mh_selftest_caught`, `mutate_run`, `mutate_helper`)
 - `scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh`, `scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh` (controls, refusal rows, `MIN_BATTERY`)
@@ -445,8 +487,8 @@ logs:
   where:           Sentry (route events); release workflow logs (verify-migrations)
   retention:       Sentry project retention; GitHub Actions log retention
 discoverability_test:
-  command:         bash apps/web-platform/scripts/run-verify.sh
-  expected_output: ok 181_messages_owner_draft_update.sql/messages_policy_single_permissive_update (bad=0)
+  command:         bash -c 'psql "$DATABASE_URL_POOLER" --no-psqlrc -tAF "|" -f apps/web-platform/supabase/verify/181_messages_owner_draft_update.sql'
+  expected_output: messages_policy_single_permissive_update|0
   credentials_required: Doppler prd DATABASE_URL_POOLER (read-only catalog queries) - pg_policies and column privileges are not reachable without a database credential, so no unauthenticated probe verifies the same property
 ```
 
@@ -466,6 +508,7 @@ discoverability_test:
 **Agents invoked:** soleur:engineering:cto, soleur:product:cpo
 **Skipped specialists:** soleur:product:design:ux-design-lead (copy-only, no structural change; the #11566 exemption with the AC6 diff invariant), soleur:marketing:copywriter (six short strings; CPO voice check)
 **Pencil available:** not applicable (no UI surface change: copy-only exemption)
+**Wireframe baseline and exemption (`wg-ui-feature-requires-pen-wireframe`, deepen-plan Phase 4.9):** `today-card.tsx` and `dashboard/page.tsx` match the UI-surface glob, but the change is copy plus one `fetch` option, no element, layout, class or new file under `components/` (the "Pure copy or style tweaks" exclusion of `ui-surface-terms.md`). The unchanged design baseline is the committed card wireframes `knowledge-base/product/design/dashboard/action-feedback-variant-a-forge-restraint.pen`, `knowledge-base/product/design/dashboard/action-feedback-variant-b-instrumented-spec.pen` and `knowledge-base/product/design/dashboard/action-feedback-variant-c-ember-glow.pen`. The exemption is backed by the mechanical diff invariant in AC6 and lapses on any added element, button, modal, toast, layout or class change (the work phase then stops to design).
 
 #### Findings
 
