@@ -59,6 +59,15 @@ interface Wiring {
   error?: { message: string } | null;
   approval?: { id: string } | null;
   approvalError?: { message: string } | null;
+  /** The message_id the approval row belongs to; the lookup only finds it when the route asks for exactly that id. */
+  approvalFor?: string;
+  /** Successive approval lookups (the second is the post-archive race recheck); defaults to [approval, null]. */
+  approvals?: Array<{ id: string } | null>;
+  /** The messages.status read made once an approval exists: a status string, or null for "no such row". */
+  messageStatus?: string | null;
+  statusError?: { message: string } | null;
+  /** An error returned by the post-archive recheck only (the second approval lookup). */
+  recheckError?: { message: string } | null;
 }
 
 function wire({
@@ -66,7 +75,14 @@ function wire({
   error = null,
   approval = null,
   approvalError = null,
+  approvalFor = MSG,
+  approvals,
+  messageStatus = "draft",
+  statusError = null,
+  recheckError = null,
 }: Wiring = {}) {
+  const queue = approvals ?? [approval, null];
+  let lookups = 0;
   const calls = {
     table: "" as string,
     update: undefined as unknown,
@@ -86,11 +102,29 @@ function wire({
       calls.select = cols;
       return chain;
     },
-    maybeSingle: async () => ({ data: row, error }),
+    maybeSingle: async () => {
+      // The status read made after an approval was found selects "status"; the update selects "id".
+      if (calls.select === "status") {
+        return { data: messageStatus === null ? null : { status: messageStatus }, error: statusError };
+      }
+      return { data: row, error };
+    },
   };
+  const approvalFilters: Array<[string, unknown]> = [];
   const approvalChain = {
-    eq: () => approvalChain,
-    maybeSingle: async () => ({ data: approval, error: approvalError }),
+    eq(col: string, val: unknown) {
+      approvalFilters.push([col, val]);
+      return approvalChain;
+    },
+    // Like the real table: the approval is found only for the message and user it belongs to.
+    maybeSingle: async () => {
+      const f = Object.fromEntries(approvalFilters);
+      const hit = f.message_id === approvalFor && f.user_id === FOUNDER;
+      const n = lookups++;
+      const found = queue[Math.min(n, queue.length - 1)] ?? null;
+      approvalFilters.length = 0;
+      return { data: hit ? found : null, error: n >= 1 ? (recheckError ?? approvalError) : approvalError };
+    },
   };
   mockFrom.mockImplementation((table: string) => {
     if (table === "action_sends") return { select: () => approvalChain };
@@ -154,6 +188,54 @@ describe("POST /api/dashboard/today/[id]/discard", () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "draft_already_approved", message_id: MSG });
     expect(calls.update).toBeUndefined();
+  });
+
+  test("an approval row but the message is already archived (sent in another tab): 403 forbidden, not the 409", async () => {
+    const calls = wire({ approval: { id: "as-1" }, messageStatus: "archived" });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "forbidden" });
+    expect(calls.update).toBeUndefined();
+  });
+
+  test("an approval row and the message row is gone: 403 forbidden", async () => {
+    wire({ approval: { id: "as-1" }, messageStatus: null });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(403);
+  });
+
+  test("an approval row and the status read fails: fail closed 500, mirrored to Sentry", async () => {
+    const calls = wire({ approval: { id: "as-1" }, statusError: { message: "boom" } });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(500);
+    expect(mockReport.mock.calls[0][1]).toMatchObject({ feature: "dashboard-discard", op: "messages-status-lookup" });
+    expect(calls.update).toBeUndefined();
+  });
+
+  test("a Send raced this Discard (an approval row appears after the archive): still 200, reported as discard-send-race", async () => {
+    wire({ approvals: [null, { id: "as-late" }] });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(200);
+    expect(mockReport).toHaveBeenCalledTimes(1);
+    expect(mockReport.mock.calls[0][1]).toMatchObject({ feature: "dashboard-discard", op: "discard-send-race" });
+  });
+
+  test("the post-archive recheck itself failing is reported and does not change the 200", async () => {
+    wire({ recheckError: { message: "boom" } });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(200);
+    expect(mockReport).toHaveBeenCalledTimes(1);
+    expect(mockReport.mock.calls[0][1]).toMatchObject({
+      op: "discard-send-race",
+      message: "Post-archive approval recheck failed",
+    });
+  });
+
+  test("an approval that belongs to a DIFFERENT message does not block this discard (the lookup is scoped by message_id)", async () => {
+    const calls = wire({ approval: { id: "as-1" }, approvalFor: "22222222-2222-4222-bbbb-222222222222" });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(200);
+    expect(calls.update).toEqual({ status: "archived" });
   });
 
   test("an approval lookup error fails closed: 500, mirrored to Sentry, nothing archived", async () => {

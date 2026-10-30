@@ -508,13 +508,76 @@ describe("403 'already handled' copy for Discard, Edit and Dismiss (D15)", () =>
     expect(screen.getByTestId("draft-preview-body")).toBeInTheDocument();
   });
 
-  it("Discard 200 drops the cached Today list", async () => {
+  // The optimistic drop: SWR's mutate(key, fn, { revalidate: true }) with fn filtering the acted-on id out of the cached list.
+  function expectDrop(id: string) {
+    expect(mutateSpy).toHaveBeenCalledTimes(1);
+    const [key, fn, opts] = mutateSpy.mock.calls[0];
+    expect(key).toEqual(["/api/dashboard/today"]);
+    expect(opts).toEqual({ revalidate: true });
+    expect(typeof fn).toBe("function");
+    expect(fn([{ id }, { id: "other" }])).toEqual([{ id: "other" }]);
+    expect(fn(undefined)).toBeUndefined();
+  }
+
+  it("Discard 200 drops the card from the cached Today list and revalidates", async () => {
     nextResponse = { status: 200, body: { id: "msg-1", status: "archived" } };
     renderStripe();
     const user = userEvent.setup();
     await user.click(screen.getByLabelText(/Discard draft/));
     await waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
-    expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]);
+    expectDrop("msg-1");
+  });
+
+  it("Stripe Send 200 drops its own card (it unmounts itself), unlike the GitHub and kb-drift cards", async () => {
+    nextResponse = { status: 200, body: {} };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Send draft/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
+    expectDrop("msg-1");
+  });
+
+  it("GitHub Send 200 keeps the card mounted AND does not touch the Today list (the run panel must survive)", async () => {
+    nextResponse = { status: 200, body: { id: "as-1", action_class: "engineering.pr_review_pending", tier: "draft_one_click", action_send_id: "as-1", artifact_view_url: "https://github.com/acme/repo/pull/7" } };
+    render(
+      <TodayCard id="msg-9" source="github" sourceRef="pr-acme:repo:7" owningDomain="engineering" draftPreview="fix: leak" urgency="normal" />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Let CTO spawn a PR-review agent/));
+    await waitFor(() => expect(screen.getByTestId("leader-loop-status")).toBeInTheDocument());
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+
+  it("kb-drift digest Dismiss 200 drops the card; Dismiss 403 forbidden only revalidates", async () => {
+    nextResponse = { status: 200, body: {} };
+    const digest = (
+      <TodayCard id="msg-3" source="kb-drift" sourceRef="digest-2026-10-30" owningDomain="knowledge" draftPreview="3 findings" urgency="normal" />
+    );
+    const { unmount } = render(digest);
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
+    expectDrop("msg-3");
+    unmount();
+    mutateSpy.mockReset();
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    render(digest);
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]));
+  });
+
+  it("kb-drift digest Dismiss 409 draft_already_approved does not tell the user to Send", async () => {
+    nextResponse = { status: 409, body: { error: "draft_already_approved" } };
+    render(
+      <TodayCard id="msg-3" source="kb-drift" sourceRef="digest-2026-10-30" owningDomain="knowledge" draftPreview="3 findings" urgency="normal" />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("You already approved this item, so it can't be dismissed.");
+    });
+    expect(screen.queryByText(/Send it to go ahead/)).toBeNull();
+    expect(mutateSpy).not.toHaveBeenCalled();
   });
 
   it("Discard 403 forbidden also refreshes the list so the stale card goes away", async () => {
@@ -548,6 +611,8 @@ describe("403 'already handled' copy for Discard, Edit and Dismiss (D15)", () =>
       expect(screen.getByRole("alert")).toHaveTextContent(HANDLED_COPY);
     });
     expect(screen.queryByText(/Edit failed/)).toBeNull();
+    // The card cannot act any more, so the stale list is revalidated (no id: Edit never removes the card itself).
+    expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]);
   });
 
   it("kb-drift digest Dismiss 403 shows the already-handled line", async () => {

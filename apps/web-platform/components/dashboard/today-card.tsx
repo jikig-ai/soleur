@@ -15,16 +15,15 @@
 // stay clean (no conditional hooks after early returns).
 
 import { useState } from "react";
-import { useSWRConfig } from "swr";
 
 import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
 import { LeaderLoopStatus } from "@/components/dashboard/leader-loop-status";
 import { Button } from "@/components/ui/button";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
+import { useRefreshToday } from "@/hooks/use-refresh-today";
 import { usePendingAction, PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import { humanTitle } from "@/lib/messages/action-class-copy";
-import { swrKeys } from "@/lib/swr-config";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
 
@@ -130,6 +129,9 @@ const ALREADY_APPROVED_EDIT_COPY =
   "You already approved this draft, so it can't be edited. Send it to go ahead.";
 const ALREADY_APPROVED_DISCARD_COPY =
   "You already approved this draft, so it can't be discarded. Send it to go ahead.";
+// The kb-drift digest card has a Dismiss and no Send button, so it must not tell the user to Send.
+const ALREADY_APPROVED_DISMISS_COPY =
+  "You already approved this item, so it can't be dismissed.";
 
 // The copy for a failed Edit / Discard / Dismiss. Keyed on the response BODY, not the bare status: a CSRF origin
 // rejection is also a 403 (`{error:"Forbidden"}`), and only the routes' zero-row answer (`{error:"forbidden"}`) means
@@ -144,7 +146,12 @@ async function failureCopy(
   }
   if (res.status === 409 && body?.error === "draft_already_approved") {
     return {
-      copy: verb === "Edit" ? ALREADY_APPROVED_EDIT_COPY : ALREADY_APPROVED_DISCARD_COPY,
+      copy:
+        verb === "Edit"
+          ? ALREADY_APPROVED_EDIT_COPY
+          : verb === "Dismiss"
+            ? ALREADY_APPROVED_DISMISS_COPY
+            : ALREADY_APPROVED_DISCARD_COPY,
       handled: false,
     };
   }
@@ -180,8 +187,7 @@ function KbDriftCard({
 
   const [archived, setArchived] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
-  const { mutate: globalMutate } = useSWRConfig();
-  const refreshToday = () => void globalMutate(swrKeys.dashboardToday());
+  const refreshToday = useRefreshToday();
 
   // Keep AbortSignal.timeout: the hook releases the flag on watchdog but does
   // not abort the zombie fetch — the signal bound is what kills the flight.
@@ -198,7 +204,7 @@ function KbDriftCard({
           signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
         if (res.status === 200) {
-          refreshToday();
+          refreshToday(id);
         } else {
           setArchived(false);
           const { copy, handled } = await failureCopy(res, "Dismiss");
@@ -410,8 +416,7 @@ function StripeCard({
   urgency,
 }: TodayCardProps) {
   const [archived, setArchived] = useState(false);
-  const { mutate: globalMutate } = useSWRConfig();
-  const refreshToday = () => void globalMutate(swrKeys.dashboardToday());
+  const refreshToday = useRefreshToday();
   const [draft, setDraft] = useState(draftPreview);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -426,7 +431,12 @@ function StripeCard({
   } = useActionSend({
     messageId: id,
     denyReasonCopy: DENY_REASON_COPY,
-    onAcknowledgedArchive: () => setArchived(true),
+    // Only this card unmounts itself after Send; the GitHub and kb-drift cards stay mounted to show the run
+    // (AcknowledgedPill / LeaderLoopStatus), so they must NOT be dropped from the list here.
+    onAcknowledgedArchive: () => {
+      setArchived(true);
+      refreshToday(id);
+    },
   });
 
   // Keep AbortSignal.timeout on both fetches: the hook releases the flag on
@@ -466,7 +476,7 @@ function StripeCard({
           signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
         if (res.status === 200) {
-          refreshToday();
+          refreshToday(id);
         } else {
           setArchived(false);
           const { copy, handled } = await failureCopy(res, "Discard");

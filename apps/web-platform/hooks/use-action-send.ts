@@ -41,13 +41,11 @@
 //   onCancelConfirm   — called from the typed-confirm modal cancel.
 
 import { useRef, useState, useTransition } from "react";
-import { useSWRConfig } from "swr";
 
 import { reportSilentFallback } from "@/lib/client-observability";
 // Shared 30s termination horizon with the pending watchdog — one clock for
 // every "hung request must not hold the UI" path in the feature.
 import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
-import { swrKeys } from "@/lib/swr-config";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
 
 export interface ConfirmationPayload {
@@ -95,10 +93,6 @@ export function useActionSend(
   const [isPending, startTransition] = useTransition();
   const [confirmPending, startConfirmTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  // The send route archives the draft server-side; drop the in-memory Today list so a remount cannot render the sent card
-  // from the SWR cache before the (no-store) revalidation lands (ADR-067).
-  const { mutate: globalMutate } = useSWRConfig();
-  const refreshToday = () => void globalMutate(swrKeys.dashboardToday());
   const [acknowledged, setAcknowledged] = useState(false);
   const [artifactUrl, setArtifactUrl] = useState("");
   const [degraded, setDegraded] = useState<"no_artifact_in_pr_a" | undefined>(
@@ -216,7 +210,6 @@ export function useActionSend(
       json.degraded === "no_artifact_in_pr_a" ? "no_artifact_in_pr_a" : undefined,
     );
     onAcknowledgedArchive?.();
-    refreshToday();
   }
 
   function onSend() {
@@ -265,7 +258,6 @@ export function useActionSend(
             // as a soft success — the row already exists.
             setAcknowledged(true);
             onAcknowledgedArchive?.();
-            refreshToday();
             return;
           }
         }
@@ -321,7 +313,6 @@ export function useActionSend(
             setConfirming(null);
             setAcknowledged(true);
             onAcknowledgedArchive?.();
-            refreshToday();
             return;
           }
           if (json.error === "requires_confirmation") {

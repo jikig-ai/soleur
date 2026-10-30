@@ -51,10 +51,18 @@ describe("181_messages_owner_draft_update.sql", () => {
     expect(upExec).toMatch(/WITH CHECK \(user_id = \(SELECT auth\.uid\(\)\)\s+AND status IN \('draft', 'archived'\)/);
   });
 
-  it("keeps the workspace-membership conjunct in BOTH clauses and no OR that could widen either", () => {
+  it("keeps ONE workspace-membership conjunct in EACH clause and no OR (any case) that could widen either", () => {
+    const u = upExec.indexOf("USING (");
+    const w = upExec.indexOf("WITH CHECK (");
+    expect(u).toBeGreaterThan(-1);
+    expect(w).toBeGreaterThan(u);
+    const usingBody = upExec.slice(u, w);
+    const checkBody = upExec.slice(w, upExec.indexOf(";", w));
     const member = /AND public\.is_workspace_member\(workspace_id, \(SELECT auth\.uid\(\)\)\)/g;
-    expect(upExec.match(member) ?? []).toHaveLength(2);
-    expect(upExec).not.toMatch(/\bOR\b/);
+    for (const [name, body] of [["USING", usingBody], ["WITH CHECK", checkBody]] as const) {
+      expect(body.match(member) ?? [], `${name} membership conjunct`).toHaveLength(1);
+      expect(body, `${name} must not contain OR`).not.toMatch(/\bor\b/i);
+    }
   });
 
   it("revokes the table-level UPDATE BEFORE granting the two columns (a later REVOKE would strip the grant)", () => {
@@ -88,6 +96,7 @@ describe("181_messages_owner_draft_update.sql", () => {
       "messages_policy_single_permissive_update",
       "messages_policy_using_author_member_draft",
       "messages_policy_with_check_author_member_draft_archived",
+      "messages_rls_enabled",
       "messages_jti_policy_still_restrictive_all",
       "messages_authenticated_update_columns_exact",
       "messages_no_uncovered_update_col_grants",
@@ -95,6 +104,8 @@ describe("181_messages_owner_draft_update.sql", () => {
     ]) {
       expect(verifyExec, name).toContain(`'${name}'`);
     }
+    // The OR guards: one on qual, one on with_check (a widened clause must not satisfy the substring checks).
+    expect(verifyExec.match(/position\(' OR ' IN (qual|with_check)\) = 0/g) ?? []).toHaveLength(2);
     // The deparsed literal, not a bare auth.uid() (tautological: is_workspace_member(..., auth.uid()) contains it).
     expect(verifyExec).toContain("user_id = ( SELECT auth.uid()");
   });

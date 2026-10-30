@@ -76,7 +76,11 @@ text.
   `messages_owner_draft_update`; without the narrowing that policy would let a browser session rewrite `trust_tier`,
   `action_class`, `template_id` or `workspace_id` of its own rows. The `table-grants.ts` column-split entry is how the grant guard sees
   it (the same mechanism as `users` in 178). The other table-level verbs on `messages` stay as 174 recorded them.
-  The policy is author-only for UPDATE while SELECT stays workspace-wide (a co-owner sees but cannot act on a
-  teammate's draft; tracked in #11629). Route-level rules that the database does not enforce (no edit or discard
+  The policy is author-only for UPDATE and the Today surface lists only the author's own cards, while the data
+  layer's SELECT stays workspace-wide (whether a co-owner may see or act on a teammate's draft is tracked in #11629). Route-level rules that the database does not enforce (no edit or discard
   once an approval row exists) can be bypassed by a browser session PATCHing its own draft directly; this fails
   closed later through the WORM body-hash pin and affects only that user's own draft (accepted residual).
+  Two residuals are detected rather than prevented: Discard refuses (409) once an approval row exists, but a Send in
+  another tab that lands between that lookup and the archive is reported to Sentry as op `discard-send-race`; and
+  for Stripe drafts whose replay is blocked (revoked grant or template, clock skew, draft changed since approval) the
+  card offers Send while Send cannot proceed (#11630). Either flips to a migration-182 trigger on a repro.
