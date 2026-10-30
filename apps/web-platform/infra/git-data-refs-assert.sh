@@ -10,9 +10,10 @@
 # unaffected) and it is NOT a test double: the suite drives THIS file over real git fixtures, and the host
 # commands it calls are replaced only by PATH shims.
 #
-# WHAT IT PROVES, in ONE session (the repository directory's identity is recorded before the read and
-# compared after it): the store holds exactly ONE real repository (a directory named *.git, no symlink),
-# and every ref under refs/soleur/worktrees/ in it is well formed
+# WHAT IT PROVES, in ONE session (the repository directory's identity, owner included, is recorded before the read
+# and compared after it): the store holds exactly ONE real repository (a directory named *.git, no symlink) that is
+# owned by the git account, is self-contained (no objects/info/alternates or http-alternates), has no symlink in it
+# (anywhere but below objects/ depth 2) and no symref under refs/, and every ref under refs/soleur/worktrees/ in it is well formed
 #   refs/soleur/worktrees/<id>/(heads|tags)/<name>
 # with a 40-hex value of the right type (heads: a commit; tags: a commit, or a tag that peels to one), and at
 # least one ref is a heads/ branch tip (tags-only never passes: the 2026-10-27 failure was a rejected push to
@@ -21,9 +22,14 @@
 #
 # NO NAME LEAVES THE HOST. The one answer line carries counts and at most TWO commit shas of heads/ tips (the
 # numerically smallest distinct ones, sorted by sha value, never by ref name). No repository name, worktree
-# id, branch name or hash of one is printed, hashed or stored. Names are read into shell variables for
-# classification only; stdout and stderr of every command are discarded, and the only stderr this file writes
-# is a fixed reason word and digits (gd_capture relays a failed session's stderr, so nothing else may reach it).
+# id, branch name or hash of one is printed or hashed. Names are read into shell variables for classification
+# only; stdout and stderr of every command are discarded, and the only stderr this file writes is a fixed reason
+# word and digits (gd_capture relays a failed session's stderr, so nothing else may reach it).
+#
+# NOTHING IS WRITTEN TO THE STORE. The one thing this file writes anywhere is a transient scratch directory under
+# /dev/shm (root-only, mode 0700) that holds git's own stderr for the ONE for-each-ref (it is tested for emptiness
+# and never printed); the EXIT trap removes it. A SIGKILL would leave that directory, holding only git's warning
+# text (which may name a ref), until the next boot; /dev/shm is a tmpfs, so it never reaches a disk.
 #
 # EXIT CODES (the session's rc IS the verdict; git-data-cutover.sh maps each to a word and a class). Anything
 # not in this table, and every transport rc (124 timeout, 255 ssh), is `probe_failed rc=<n>` there:
@@ -33,11 +39,12 @@
 #   21  refs_repo_not_single  INCONCLUSIVE     repos>1, or an entry that is not a real *.git directory, or the repositories directory is a symlink or not on the store mount (not retryable)
 #   23  refs_none             FAILED           the repository holds no ref under refs/soleur/worktrees/ ("provisioned, not replicated")
 #   24  refs_no_branch_tip    FAILED           refs exist but none under heads/
-#   26  refs_unreadable       INCONCLUSIVE     for-each-ref failed (missing object, foreign owner, dubious ownership), a shallow file, a 201st line, or a failed self-check (retryable)
-#   27  refs_shape_failed     INCONCLUSIVE     a ref whose name is off-shape, or ANY output on git's stderr (git skips a broken ref silently, with only a warning) (not retryable)
+#   26  refs_unreadable       INCONCLUSIVE     for-each-ref failed (a missing object), a shallow file, a 201st line, or a failed self-check (retryable)
+#   27  refs_shape_failed     INCONCLUSIVE     a ref whose name is off-shape, or ANY output on git's stderr (git skips a broken ref silently, with only a warning), or a repository a push cannot have produced: reason repo_owner (not owned by git), repo_alternates (objects/info/alternates or http-alternates), repo_symlink (a symlink in it), ref_symref (a symref under refs/) (not retryable)
 #   28  refs_bad_sha          FAILED           a value that is not 40-hex, a heads/ object that is not a commit, or a tags/ object that does not peel to a commit
 # Keep the table, the `die` calls below and the case in git-data-cutover.sh equal (the suite derives the set
-# from all three, and the class column from the runbook Verdict map).
+# from all three, and the class column from the runbook Verdict map). Why there is no `set -e`: every failure
+# below is an explicit `|| die N`, and a script that exits on its own would exit with a code outside this table.
 #
 # Inputs (validated before anything is read): REFS_REPOS, which must be exactly /mnt/git-data/repositories
 # (the argument supplies no root of its own).
@@ -69,10 +76,8 @@ ra_main() {
   trap ra_exit EXIT
   trap 'exit 16' HUP INT TERM PIPE
 
-  # ---- 1. the input: exactly the store's repositories directory, no ".." ------------------------------------
+  # ---- 1. the input: exactly the store's repositories directory (one literal; no charset or ".." rule can add to it) --
   local repos="${REFS_REPOS-}"
-  [[ "$repos" =~ ^/[A-Za-z0-9/_.-]+$ ]] || die 16 arg_repos
-  case "$repos" in *..*) die 16 arg_repos ;; esac
   [ "$repos" = "$RA_MOUNT/repositories" ] || die 16 arg_repos
 
   # ---- 2. the repositories directory: a real directory, on the store mount, recorded for the re-check -------
@@ -105,33 +110,57 @@ ra_main() {
   [ "$nrepo" -le 1 ] || die 21 repos_not_single "repos=$nrepo"
   [ "$nbad" = 0 ] || die 21 repos_entry_not_repository
   local repo="$repos/$name"
-  rid0="$(stat -c %d:%i:%F -- "$repo")" || die 16 stat_failed
+  rid0="$(stat -c %d:%i:%F:%U -- "$repo")" || die 16 stat_failed
+  # An explicit --git-dir skips git's own ownership check, so it is made here: the repository must be owned by the account
+  # replication pushes as. The owner is part of the identity string, so a chown between here and the re-check is caught too.
+  [ "${rid0##*:}" = git ] || die 27 repo_owner
 
   # ---- 4. a shallow repository is not a complete one ---------------------------------------------------------
   local shl
   shl="$(find "$repo" -maxdepth 1 -name shallow -printf x)" || die 16 shallow_probe
   [ -z "$shl" ] || die 26 refs_unreadable
 
+  # ---- 4b. a repository a push cannot have produced is not read: alternates, symlinks, symref files --------------
+  # ONE typed find, no name printed, a distinct character per cause (-P: a link is never followed):
+  #   a  objects/info/alternates or http-alternates (objects that live outside the store)
+  #   s  a symlink anywhere in the repository except below objects/ depth 2 (a redirected refs/ or objects/)
+  #   f  a loose ref file under the namespace that is not exactly 41 bytes (40 hex + LF): a symref, DANGLING OR NOT. git
+  #      skips a dangling symref silently (rc 0, no stderr), so for-each-ref can never show it; a .lock file is not a ref.
+  # A symref created between this probe and the read is caught only if it resolves (the %(symref) field below).
+  local lnk
+  lnk="$(find -P "$repo" \( -path "$repo/objects/info/alternates" -o -path "$repo/objects/info/http-alternates" \) -printf a -o -type l -printf s -o \( -path "$repo/refs/soleur/worktrees/*" -type f ! -size 41c ! -name '*.lock' -printf f \) -o -path "$repo/objects/*/*" -prune)" || die 16 shape_probe
+  case "$lnk" in *a*) die 27 repo_alternates ;; esac
+  case "$lnk" in *s*) die 27 repo_symlink ;; esac
+  [ -z "$lnk" ] || die 27 ref_symref
+
   # ---- 5. the read: one for-each-ref, as the git user, hardened -----------------------------------------------
   # runuser is called bare (resolved by root's PATH, as the push line in mode_probe is). git's stderr goes to a
   # root-owned file under /dev/shm and is never printed; ANY output there, even with rc 0, is rc 27, because git
   # skips a broken ref (heads/a..b, a garbage loose file) and says so only with a `warning: ignoring ...`. There
-  # is no -c safe.directory: GIT_CONFIG_NOSYSTEM=1 means the bootstrap's system safe.directory is never read, a
-  # repository owned by uid git passes, and a foreign-owned one fails as rc 26.
+  # is no -c safe.directory: GIT_CONFIG_NOSYSTEM=1 means the bootstrap's system safe.directory is never read. The
+  # ownership claim does not rest on git (--git-dir skips git's ownership check): section 3 makes it (repo_owner).
   local out="" grc=0
   sd="$(mktemp -d -p /dev/shm)" || die 16 scratch_failed
-  out="$(cd / && runuser -u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir="$repo" for-each-ref --count=201 --format='%(refname)%09%(objectname)%09%(objecttype)%09%(*objecttype)' refs/soleur/worktrees/ 3>&- 4>&- 2>"$sd/err")" || grc=$?
+  out="$(cd / && runuser -u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir="$repo" for-each-ref --count=$((RA_BOUND + 1)) --format='%(refname)%09%(objectname)%09%(objecttype)%09<%(*objecttype)>%09<%(symref)>' refs/soleur/worktrees/ 3>&- 4>&- 2>"$sd/err")" || grc=$?
   [ "$grc" -eq 0 ] || die 26 refs_unreadable
   [ ! -s "$sd/err" ] || die 27 refs_shape_failed
 
   # ---- 6. classify every line (current shell; counters survive the loop) -----------------------------------
-  local ref sha ty pty id nm nlines=0 refs=0 heads=0 bad_shape=0 bad_sha=0 ty_kind
+  local ref sha ty pty sym id nm nlines=0 refs=0 heads=0 bad_shape=0 bad_sha=0 bad_sym=0 ty_kind
   local -A ids=() hs=()
+  local re_pty='^[<]([a-z]*)[>]$' re_sym='^[<].+[>]$'
   if [ -n "$out" ]; then
-    while IFS=$'\t' read -r ref sha ty pty; do
+    # The two optional fields are wrapped in a non-whitespace sentinel: tab is IFS whitespace, so `read` collapses an empty
+    # field and a symref target would otherwise land in the peel-type field.
+    while IFS=$'\t' read -r ref sha ty pty sym; do
       nlines=$((nlines + 1))
       [ "$nlines" -le "$RA_BOUND" ] || die 26 refs_unreadable
       refs=$((refs + 1))
+      if [[ "$pty" =~ $re_pty ]]; then pty="${BASH_REMATCH[1]}"; else bad_shape=1; continue; fi
+      if [ "$sym" != '<>' ]; then
+        if [[ "$sym" =~ $re_sym ]]; then bad_sym=1; else bad_shape=1; fi
+        continue
+      fi
       if [[ "$ref" =~ ^refs/soleur/worktrees/([A-Za-z0-9._-]+)/(heads|tags)/([A-Za-z0-9._/-]+)$ ]]; then
         id="${BASH_REMATCH[1]}"; ty_kind="${BASH_REMATCH[2]}"; nm="${BASH_REMATCH[3]}"
       else
@@ -150,32 +179,29 @@ ra_main() {
     done <<< "$out"
   fi
 
-  # ---- 7. refuse in a fixed order: 23, 27, 28, 24 -----------------------------------------------------------
+  # ---- 7. refuse in a fixed order: 23, 27 (symref, then shape), 28, 24 -----------------------------------------------------------
   [ "$refs" -ge 1 ] || die 23 refs_none
+  [ "$bad_sym" = 0 ] || die 27 ref_symref
   [ "$bad_shape" = 0 ] || die 27 refs_shape_failed
   [ "$bad_sha" = 0 ] || die 28 refs_bad_sha
   [ "$heads" -ge 1 ] || die 24 refs_no_branch_tip
 
-  # ---- 8. the two numerically smallest distinct heads/ shas, by array slice (no head under pipefail) --------
-  local -a sorted=() pick=()
-  local nshas want_shas nns
+  # ---- 8. the two numerically smallest distinct heads/ shas (sort, then an array slice: no head under pipefail) -----
+  local -a sorted=()
   mapfile -t sorted < <(printf '%s\n' "${!hs[@]}" | sort)
-  pick=("${sorted[@]:0:$RA_CAP}")
-  nshas="${#pick[@]}"
-  want_shas="${#sorted[@]}"
-  [ "$want_shas" -le "$RA_CAP" ] || want_shas="$RA_CAP"
-  nns="${#ids[@]}"
-  # the fail-closed self-check: a line the script cannot reconcile with itself is never printed
-  [ "$nshas" -eq "$want_shas" ] || die 26 refs_unreadable
-  [ "$nshas" -ge 1 ] && [ "$nns" -ge 1 ] && [ "$nns" -le "$refs" ] && [ "$heads" -le "$refs" ] || die 26 refs_unreadable
+  # the fail-closed self-check: a sort that returned fewer (or no) lines than there are distinct shas, or counts the script
+  # cannot reconcile with each other, is never printed
+  [ "${#sorted[@]}" -eq "${#hs[@]}" ] || die 26 refs_unreadable
+  [ "${#sorted[@]}" -ge 1 ] && [ "${#ids[@]}" -le "$refs" ] && [ "$heads" -le "$refs" ] || die 26 refs_unreadable
 
   # ---- 9. the repository is the one that was counted: nothing was swapped under the read --------------------
   id1="$(stat -c %d:%i:%F -- "$repos")" || die 16 stat_failed
-  rid1="$(stat -c %d:%i:%F -- "$repo")" || die 16 stat_failed
+  rid1="$(stat -c %d:%i:%F:%U -- "$repo")" || die 16 stat_failed
   [ "$id1" = "$id0" ] && [ "$rid1" = "$rid0" ] || die 16 identity_changed
 
   local IFS=,
-  printf 'refs_assert ok repos=1 namespaces=%s refs=%s heads=%s shas=%s\n' "$nns" "$refs" "$heads" "${pick[*]}" >&4
+  local -a pick=("${sorted[@]:0:$RA_CAP}")
+  printf 'refs_assert ok repos=1 namespaces=%s refs=%s heads=%s shas=%s\n' "${#ids[@]}" "$refs" "$heads" "${pick[*]}" >&4 || die 16 answer_write
   return 0
 }
 ra_main; exit $?
