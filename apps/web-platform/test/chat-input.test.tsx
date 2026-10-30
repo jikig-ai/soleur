@@ -292,4 +292,40 @@ describe("ChatInput", () => {
       await waitFor(() => expect(screen.queryByText(/keep\.png/)).toBeNull());
     });
   });
+
+  // A final first-run refusal hands the typed text back via `restoredDraft`. It
+  // must never be silently dropped (the `?msg=` param is already stripped) and
+  // never overwrite what the user is already writing.
+  describe("restoredDraft (first-run restore)", () => {
+    const props = { onSend: vi.fn(), onAtTrigger: vi.fn(), onAtDismiss: vi.fn() };
+
+    it("fills an empty composer", async () => {
+      const { rerender } = render(<ChatInput {...props} />);
+      rerender(<ChatInput {...props} restoredDraft="restored text" />);
+      await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("restored text"));
+    });
+
+    it("APPENDS on a new line to an existing draft, never overwriting it", async () => {
+      const { rerender } = render(<ChatInput {...props} />);
+      await userEvent.type(screen.getByRole("textbox"), "typed meanwhile");
+      rerender(<ChatInput {...props} restoredDraft="restored text" />);
+      await waitFor(() =>
+        expect(screen.getByRole("textbox")).toHaveValue("typed meanwhile\nrestored text"),
+      );
+    });
+
+    it("applies once: a later change of the prop does not re-apply or clobber", async () => {
+      const { rerender } = render(<ChatInput {...props} restoredDraft="first" />);
+      await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("first"));
+      await userEvent.type(screen.getByRole("textbox"), " more");
+      rerender(<ChatInput {...props} restoredDraft="second" />);
+      expect(screen.getByRole("textbox")).toHaveValue("first more");
+    });
+
+    it("an empty restoredDraft is a no-op that does not burn the latch", async () => {
+      const { rerender } = render(<ChatInput {...props} restoredDraft="" />);
+      rerender(<ChatInput {...props} restoredDraft="late" />);
+      await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("late"));
+    });
+  });
 });

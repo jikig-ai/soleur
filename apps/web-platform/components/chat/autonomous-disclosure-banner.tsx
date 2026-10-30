@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { RefusedSendNotice } from "@/components/chat/refused-send-notice";
+import { RefusedSendNotice, type RefusalContext } from "@/components/chat/refused-send-notice";
 
 /**
  * feat-bash-autonomous-default-on — first-run consent soft-gate banner.
@@ -40,19 +40,30 @@ export function AutonomousDisclosureBanner({
   gateId,
   existingWorkspace,
   resolved,
+  refusal,
+  resetKey,
   onRespond,
 }: {
   gateId: string;
   existingWorkspace: boolean;
   resolved?: boolean;
+  /** Why a refused response was refused (credential vs plain connection). */
+  refusal?: RefusalContext;
+  /** Changes when the connection is sendable again: clears a stale refusal line. */
+  resetKey?: number;
   /** Return `false` when the response was REFUSED (nothing left the client). */
   onRespond: (gateId: string, selection: string) => boolean | void;
 }) {
   // #11525 — a refused response keeps the banner actionable; say why.
-  const [refused, setRefused] = useState(false);
+  // The count is the notice's React key: a second refusal remounts the alert.
+  const [refusalCount, setRefusalCount] = useState(0);
   const respond = (selection: string) => {
-    setRefused(onRespond(gateId, selection) === false);
+    if (onRespond(gateId, selection) === false) setRefusalCount((n) => n + 1);
+    else setRefusalCount(0);
   };
+  useEffect(() => {
+    setRefusalCount(0);
+  }, [resetKey]);
   return (
     <div
       role="alertdialog"
@@ -101,7 +112,7 @@ export function AutonomousDisclosureBanner({
           </Button>
         )}
       </div>
-      {refused && !resolved && <RefusedSendNotice />}
+      {refusalCount > 0 && !resolved && <RefusedSendNotice key={refusalCount} refusal={refusal} />}
     </div>
   );
 }

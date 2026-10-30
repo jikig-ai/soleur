@@ -518,7 +518,7 @@ describe("useWebSocket — credential blocked state (#11525)", () => {
     expect(errorBubbles(result.current.messages)).toHaveLength(2); // the refusal adds no bubble
   });
 
-  it("mount effect clears the rebind: re-rendering with a new conversationId after a block drops the captured id, the blocked state and rebindRefused", async () => {
+  it("a new conversationId drops the captured rebind id and the blocked state", async () => {
     const hook = renderHook(({ id }) => useWebSocket(id), { initialProps: { id: "new" } });
     await waitFor(() => expect(wsInstance).not.toBeNull());
     deliver({ type: "auth_ok" });
@@ -535,8 +535,62 @@ describe("useWebSocket — credential blocked state (#11525)", () => {
     hook.rerender({ id: "22222222-2222-4222-8222-222222222222" });
     await waitFor(() => expect(hook.result.current.rebindConversationId).toBeNull());
     expect(hook.result.current.credentialBlocked).toBe(false);
-    expect(hook.result.current.rebindRefused).toBe(false);
     expect(hook.result.current.lastError).toBeNull();
+  });
+
+  it("a new conversationId clears a set rebindRefused, the blocked flag (sends are no longer refused) and lastError", async () => {
+    const hook = renderHook(({ id }) => useWebSocket(id), { initialProps: { id: "new" } });
+    await waitFor(() => expect(wsInstance).not.toBeNull());
+    deliver({ type: "auth_ok" });
+    await waitFor(() => expect(hook.result.current.status).toBe("connected"));
+    deliver({ type: "session_started", conversationId: CONV_ID });
+    await waitFor(() => expect(hook.result.current.realConversationId).toBe(CONV_ID));
+    act(() => {
+      hook.result.current.sendMessage("hello");
+    });
+    deliver({ type: "error", errorCode: "key_invalid", message: "x" });
+    await waitFor(() => expect(hook.result.current.credentialBlocked).toBe(true));
+    expect(hook.result.current.rebindConversationId).toBe(CONV_ID);
+
+    // Reconnect, arm the rebind, and have the server REFUSE it -> rebindRefused true.
+    act(() => {
+      hook.result.current.reconnect();
+    });
+    await waitFor(() => expect(allSockets).toHaveLength(2));
+    deliver({ type: "auth_ok" });
+    await waitFor(() => expect(hook.result.current.status).toBe("connected"));
+    act(() => {
+      hook.result.current.resumeSession(CONV_ID);
+    });
+    deliver({ type: "error", message: CONVERSATION_NOT_FOUND_MESSAGE });
+    await waitFor(() => expect(hook.result.current.rebindRefused).toBe(true));
+    // ... and the key is rejected again: blocked, with a captured id and an error.
+    deliver({ type: "error", errorCode: "key_invalid", message: "x again" });
+    await waitFor(() => expect(hook.result.current.credentialBlocked).toBe(true));
+    expect(hook.result.current.rebindRefused).toBe(true);
+    expect(hook.result.current.lastError).not.toBeNull();
+    let refused: boolean | undefined;
+    act(() => {
+      refused = hook.result.current.sendMessage("blocked");
+    });
+    expect(refused).toBe(false);
+
+    hook.rerender({ id: "22222222-2222-4222-8222-222222222222" });
+    await waitFor(() => expect(hook.result.current.rebindRefused).toBe(false));
+    expect(hook.result.current.rebindConversationId).toBeNull();
+    expect(hook.result.current.credentialBlocked).toBe(false);
+    expect(hook.result.current.lastError).toBeNull();
+
+    // credentialBlockedRef was reset too: on the fresh socket a send is accepted.
+    await waitFor(() => expect(allSockets.length).toBeGreaterThanOrEqual(3));
+    deliver({ type: "auth_ok" });
+    await waitFor(() => expect(hook.result.current.status).toBe("connected"));
+    let accepted: boolean | undefined;
+    act(() => {
+      accepted = hook.result.current.sendMessage("fresh conversation");
+    });
+    expect(accepted).toBe(true);
+    expect(chatFrames(wsInstance!)).toHaveLength(1);
   });
 
   it("rebind: after session_started the armed state is disarmed - an unrelated later error is a plain bubble (no rebindRefused, no start_session)", async () => {
@@ -646,6 +700,7 @@ describe("useWebSocket — credential blocked state (#11525)", () => {
       expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
         feature: "send-message",
         op: "refused-socket-not-open",
+        extra: { frame: "review_gate_response" },
       });
     });
 

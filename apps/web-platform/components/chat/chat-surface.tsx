@@ -23,6 +23,7 @@ import { uploadPendingFiles } from "@/lib/upload-attachments";
 import { runFirstRunSend } from "@/lib/first-run-send";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
+import type { RefusalContext } from "@/components/chat/refused-send-notice";
 import { StatusIndicator } from "@/components/chat/status-indicator";
 import { AutoRunChip } from "@/components/chat/auto-run-chip";
 import { AutonomousDisclosureBanner } from "@/components/chat/autonomous-disclosure-banner";
@@ -90,6 +91,8 @@ function credentialCardCopy(e: {
 function renderInteractivePromptCard(
   msg: ChatInteractivePromptMessage,
   onRespond: (response: InteractivePromptResponsePayload) => boolean,
+  refusal: RefusalContext,
+  resetKey: number,
 ): React.ReactNode {
   switch (msg.promptKind) {
     case "ask_user":
@@ -102,6 +105,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "plan_preview":
@@ -114,6 +119,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "diff":
@@ -126,6 +133,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "bash_approval":
@@ -138,6 +147,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "todo_write":
@@ -150,6 +161,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "notebook_edit":
@@ -162,6 +175,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     default: {
@@ -315,6 +330,18 @@ export function ChatSurface({
   const [sessionTimeoutDismissed, setSessionTimeoutDismissed] = useState(false);
   const prevSessionTimeoutRef = useRef(false);
 
+  // Refusal-line lifecycle: the gate / disclosure / prompt cards clear their
+  // "Couldn't send" line when this epoch changes, i.e. when the connection
+  // becomes sendable again (status back to "connected", or the credential block
+  // lifting) or the user hits Reconnect. A line must not outlive its condition.
+  const [refusalEpoch, setRefusalEpoch] = useState(0);
+  const prevSendableRef = useRef(status === "connected" && !credentialBlocked);
+  useEffect(() => {
+    const sendable = status === "connected" && !credentialBlocked;
+    if (sendable && !prevSendableRef.current) setRefusalEpoch((e) => e + 1);
+    prevSendableRef.current = sendable;
+  }, [status, credentialBlocked]);
+
   const activeErrorKey = useMemo(
     () => (lastError ? `${lastError.code}::${lastError.message}` : null),
     [lastError],
@@ -326,6 +353,12 @@ export function ChatSurface({
   // No error => the default copy ("key" noun); only read while an error shows.
   const cardCopy = credentialCardCopy(lastError ?? { code: "" });
   const credentialNoun = cardCopy.noun;
+  // Why a refused card response was refused: a credential failure killed the run
+  // that raised the question (fix the key, Reconnect, re-send) vs a plain
+  // connection drop (the card is still live).
+  const refusal: RefusalContext = credentialBlocked
+    ? { reason: "credential", noun: credentialNoun }
+    : { reason: "connection" };
 
   // Reconnect from a credential card/helper AND the session-start timeout card:
   // re-run the start/resume effect on the fresh socket (it resumes the captured
@@ -336,6 +369,13 @@ export function ChatSurface({
   // one-shot arm) rather than starting a session.
   const onSessionReconnect = () => {
     setSessionStarted(false);
+    // Re-arm the session-start timeout card: both flags were set-only, so the
+    // card would stick during the retry and never re-show after a dismiss. The
+    // `sessionStarted` false -> true cycle restarts the 10s timer.
+    setSessionStartTimeout(false);
+    setSessionTimeoutDismissed(false);
+    // The user acted on the recovery path: drop stale refusal lines now.
+    setRefusalEpoch((e) => e + 1);
     reconnect();
   };
 
@@ -650,8 +690,13 @@ export function ChatSurface({
   const firstRun = useRef({ started: false, retries: 0, msg: null as string | null, rearm: false });
   const [firstRunBusy, setFirstRunBusy] = useState(false);
   // A final first-run refusal puts the typed text back in the composer (the
-  // `?msg=` param is already stripped); ChatInput applies it once via `prefill`.
+  // `?msg=` param is already stripped); ChatInput applies it once via
+  // `restoredDraft` (appended to any draft already there, never overwriting it).
+  // Between a NON-final refusal and Reconnect the message exists only in
+  // `firstRun.current.msg` (the re-arm), by design; it is restored only here.
   const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
+  // Attachments cannot be restored: say so when a final refusal dropped them.
+  const [attachmentsDropped, setAttachmentsDropped] = useState(false);
   const liveRef = useRef({ conversationId: realConversationId, connected: status === "connected", sessionConfirmed });
   liveRef.current = { conversationId: realConversationId, connected: status === "connected", sessionConfirmed };
   useEffect(() => {
@@ -681,8 +726,10 @@ export function ChatSurface({
       getLive: () => liveRef.current,
       upload: uploadPendingFiles,
       send: sendMessage,
-      onFinalRefusal: (text) => {
-        if (!unmountedRef.current) setRestoredDraft(text);
+      onFinalRefusal: (text, droppedAttachments) => {
+        if (unmountedRef.current) return;
+        if (text) setRestoredDraft(text);
+        if (droppedAttachments > 0) setAttachmentsDropped(true);
       },
       final: fr.retries >= MAX_FIRST_RUN_RETRIES,
     })
@@ -904,10 +951,12 @@ export function ChatSurface({
   function handleSend(message: string, attachments?: AttachmentRef[]): boolean {
     if (status !== "connected" || credentialBlocked) return false;
     onBeforeSend?.(message);
-    if (attachments && attachments.length > 0) {
-      return sendMessage(message, attachments);
-    }
-    return sendMessage(message);
+    const sent =
+      attachments && attachments.length > 0
+        ? sendMessage(message, attachments)
+        : sendMessage(message);
+    if (sent !== false) setAttachmentsDropped(false);
+    return sent;
   }
 
   const isFull = variant === "full";
@@ -1092,7 +1141,7 @@ export function ChatSurface({
           </div>
         )}
 
-        {sessionStartTimeout && !sessionConfirmed && !sessionTimeoutDismissed && (
+        {sessionStartTimeout && !sessionConfirmed && !sessionTimeoutDismissed && !credentialBlocked && (
           <div className={`mb-4 ${widthWrapper}`}>
             <ErrorCard
               title="Session Failed to Start"
@@ -1171,6 +1220,8 @@ export function ChatSurface({
                       resolved={msg.resolved}
                       selectedOption={msg.selectedOption}
                       gateError={msg.gateError}
+                      refusal={refusal}
+                      resetKey={refusalEpoch}
                       onSelect={handleReviewGateResponse}
                     />
                   );
@@ -1181,6 +1232,8 @@ export function ChatSurface({
                       gateId={msg.gateId}
                       existingWorkspace={msg.existingWorkspace}
                       resolved={msg.resolved}
+                      refusal={refusal}
+                      resetKey={refusalEpoch}
                       onRespond={handleAutonomousDisclosureResponse}
                     />
                   );
@@ -1205,6 +1258,8 @@ export function ChatSurface({
                       msg.conversationId,
                       response,
                     ),
+                    refusal,
+                    refusalEpoch,
                   );
                   break;
                 }
@@ -1470,21 +1525,27 @@ export function ChatSurface({
             // `""` collapses to undefined so a bare `?q=` is a no-op
             // downstream, not a latch burn.
             prefill={
-              (variant === "full" &&
+              variant === "full" &&
               conversationId === "new" &&
               !msgParam &&
               !frParam
                 ? qParam || undefined
-                : undefined) ??
-              restoredDraft ??
-              undefined
+                : undefined
             }
+            restoredDraft={restoredDraft ?? undefined}
             streamState={streamState}
             onStop={abort}
             repoSetupState={repoSetupState}
           />
           {/* Always mounted so the live region is announced when its content
               appears (a region inserted together with its text is often missed). */}
+          <div role="status" aria-live="polite" data-testid="first-run-restore-status">
+            {attachmentsDropped && (
+              <p className="mt-2 px-1 text-xs text-soleur-text-secondary">
+                Your attachments weren&apos;t sent - attach them again.
+              </p>
+            )}
+          </div>
           <div role="status" aria-live="polite" data-testid="credential-helper-status">
             {credentialBlocked && (
               // Always-visible recovery path (survives a dismissed card): the

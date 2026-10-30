@@ -35,10 +35,12 @@ export interface FirstRunSendDeps {
    *  `?msg=` message. Every caller (`sendMessage`, the test doubles) returns a
    *  boolean, so only an explicit `false` is a refusal. */
   send: (content: string, attachments?: AttachmentRef[]) => boolean;
-  /** Called with the typed text when the FINAL attempt is refused: the `?msg=`
-   *  param is already stripped, so the caller must put the text back where the
-   *  user can see and resend it (the composer draft). */
-  onFinalRefusal?: (text: string) => void;
+  /** Called when the FINAL attempt is refused / dropped: the `?msg=` param is
+   *  already stripped, so the caller must put `text` back where the user can see
+   *  and resend it (the composer draft) and tell the user when attachments were
+   *  dropped (`droppedAttachments` > 0; attachments cannot be restored).
+   *  `text` is null for an attachments-only send. */
+  onFinalRefusal?: (text: string | null, droppedAttachments: number) => void;
   /** True on the last allowed attempt: if the session still changed, fall back
    *  to sending the text alone on a live, confirmed socket instead of dropping
    *  the user's message (the URL param that carried it is already stripped). */
@@ -53,11 +55,11 @@ export interface FirstRunSendDeps {
 function refused(d: FirstRunSendDeps, text: string | null): { sent: boolean; retry: boolean } {
   if (d.final !== true) return { sent: false, retry: true };
   reportSilentFallback(new Error("[kb-chat] first-run send refused on the final attempt"), {
-    feature: "first-run-send",
+    feature: FEATURE,
     op: "refused-final",
     extra: { hasText: Boolean(text), attempted: d.files.length },
   });
-  if (text) d.onFinalRefusal?.(text);
+  if (text || d.files.length > 0) d.onFinalRefusal?.(text, d.files.length);
   return { sent: false, retry: false };
 }
 
@@ -193,7 +195,9 @@ export async function runFirstRunSend(
         if (d.send(msgParam) === false) return refused(d, msgParam);
         return { sent: true, retry: false };
       }
-      return { sent: false, retry: false };
+      // No live socket to send into (or nothing but attachments): the message and
+      // the attachments are lost, so hand them back like any other final refusal.
+      return refused(d, msgParam);
     }
 
     let accepted = true;

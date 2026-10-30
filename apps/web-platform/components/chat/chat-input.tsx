@@ -63,6 +63,11 @@ interface ChatInputProps {
    *  typed text is never clobbered. Seeds the draft; it NEVER auto-sends
    *  (auto-send is `?msg=`'s contract). */
   prefill?: string;
+  /** Text handed back after a FINAL first-run send refusal (the `?msg=` param is
+   *  already stripped, so this is the only copy). Unlike `prefill` it is NEVER
+   *  skipped: an empty composer takes it, a non-empty draft gets it APPENDED on a
+   *  new line (nothing the user typed is overwritten). Applied at most once. */
+  restoredDraft?: string;
   /** When true, Enter key defers to the @mention dropdown instead of sending. */
   atMentionVisible?: boolean;
   /** Stage 4 (#2886): when true, force-disable the input and show the
@@ -104,6 +109,7 @@ export function ChatInput({
   focusRef,
   draftKey,
   prefill,
+  restoredDraft,
   atMentionVisible = false,
   workflowEnded = false,
   streamState = "idle",
@@ -237,6 +243,14 @@ export function ChatInput({
     setValue((prev) => (prev === "" ? prefill : prev));
     textareaRef.current?.focus();
   }, [prefill]);
+
+  const restoreAppliedRef = useRef(false);
+  useEffect(() => {
+    if (restoreAppliedRef.current || !restoredDraft) return;
+    restoreAppliedRef.current = true;
+    setValue((prev) => (prev === "" ? restoredDraft : `${prev}\n${restoredDraft}`));
+    textareaRef.current?.focus();
+  }, [restoredDraft]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());

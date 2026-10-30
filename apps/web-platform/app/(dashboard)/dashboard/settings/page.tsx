@@ -64,7 +64,8 @@ export default async function SettingsPage() {
   if (oauthError) {
     // Debounced (5 min, in-process): this runs on every Settings render while
     // the read keeps failing. The key is a constant, NOT a user id, so a
-    // sustained DB outage yields one event per process, not one per visit.
+    // sustained DB outage yields one event per process per 5 minutes, not one
+    // per visit.
     mirrorWithDebounce(
       oauthError,
       {

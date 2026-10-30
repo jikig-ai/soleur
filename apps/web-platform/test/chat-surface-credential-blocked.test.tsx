@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { ChatMessage } from "@/lib/chat-state-machine";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { createWebSocketMock } from "./mocks/use-websocket";
+import { setPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
 
 // #11525 — chat surface after a `key_invalid` / `byok_key_missing` card: the
 // composer is disabled, a visible helper line carries the "saved" wording with
@@ -16,11 +17,16 @@ const mockStartSession = vi.fn();
 const mockResumeSession = vi.fn();
 const mockSendMessage = vi.fn((..._args: unknown[]) => true);
 const mockReconnect = vi.fn();
+const mockUpload = vi.fn();
 
 let wsReturn = createWebSocketMock();
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
+}));
+
+vi.mock("@/lib/upload-attachments", () => ({
+  uploadPendingFiles: (files: File[], id: string) => mockUpload(files, id),
 }));
 
 vi.mock("@/hooks/use-team-names", () => ({
@@ -154,6 +160,15 @@ describe("ChatSurface — credential blocked (#11525)", () => {
       expect(screen.getByRole("textbox")).not.toBeDisabled();
       expect(screen.queryByTestId("credential-helper-reconnect")).toBeNull();
       expect(screen.queryByText(/Select Reconnect to continue/)).toBeNull();
+      // Every consumer of the flag, not just two: placeholder, card newTab, handleSend.
+      expect(screen.getByRole("textbox")).toHaveAttribute(
+        "placeholder",
+        "Follow up or ask another question... Type @ to switch leader",
+      );
+      const link = screen.getByText(err.action.label).closest("a")!;
+      expect(link).not.toHaveAttribute("target");
+      expect(capturedOnSend!("still sends")).toBe(true);
+      expect(mockSendMessage).toHaveBeenCalledWith("still sends");
     },
   );
 
@@ -605,6 +620,180 @@ describe("ChatSurface — credential blocked (#11525)", () => {
       await userEvent.click(screen.getByRole("button", { name: "Yes" }));
       expect(screen.getByRole("alert")).toHaveTextContent(REFUSAL);
       expect(screen.getByRole("button", { name: "Yes" })).not.toBeDisabled();
+    });
+
+    // #11525 — after a key failure the gate/prompt that raised the question
+    // probably died with the failed run: "choose again" would land on a dead gate.
+    it.each([
+      ["oauth", oauthKeyInvalid, "token"],
+      ["api key", apiKeyInvalid, "key"],
+    ] as const)(
+      "credential-blocked (%s): every card's refusal line says to fix the credential in Settings, Reconnect, and re-send",
+      async (_n, err, noun) => {
+        const no = vi.fn(() => false);
+        setWs({
+          realConversationId: "test-id",
+          lastError: err,
+          credentialBlocked: true,
+          messages: [userMsg(), gateMsg(), disclosureMsg(), askUser()],
+          sendReviewGateResponse: no,
+          sendAutonomousDisclosureResponse: no,
+          sendInteractivePromptResponse: no,
+        });
+        await mountSurface({ conversationId: "test-id" });
+        const expected = `Couldn't send. Update your ${noun} in Settings, select Reconnect, then send your message again.`;
+        await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await userEvent.click(screen.getByRole("button", { name: "Got it" }));
+        await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+        expect(screen.getAllByText(expected)).toHaveLength(3);
+        expect(screen.queryByText(REFUSAL)).toBeNull();
+      },
+    );
+
+    // The red line must not outlive the condition it reports: once the socket is
+    // sendable again (status back to "connected") every card's line clears.
+    it("a refusal line clears when the connection becomes sendable again (all three cards)", async () => {
+      const no = vi.fn(() => false);
+      const base = {
+        realConversationId: "test-id",
+        messages: [userMsg(), gateMsg(), disclosureMsg(), askUser()],
+        sendReviewGateResponse: no,
+        sendAutonomousDisclosureResponse: no,
+        sendInteractivePromptResponse: no,
+      };
+      setWs(base);
+      const { rerenderSurface } = await mountSurface({ conversationId: "test-id" });
+      await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await userEvent.click(screen.getByRole("button", { name: "Got it" }));
+      await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+      expect(screen.getAllByText(REFUSAL)).toHaveLength(3);
+
+      // Still connected, nothing changed: lines stay.
+      rerenderSurface();
+      expect(screen.getAllByText(REFUSAL)).toHaveLength(3);
+
+      setWs({ ...base, status: "connecting" });
+      rerenderSurface();
+      expect(screen.getAllByText(REFUSAL)).toHaveLength(3); // not yet sendable
+      setWs({ ...base, status: "connected" });
+      rerenderSurface();
+      expect(screen.queryByText(REFUSAL)).toBeNull();
+    });
+  });
+
+  // Timeout-card flags used to be set-only: the card stuck during a retry and a
+  // dismissed card never re-showed.
+  describe("session-start timeout card re-arms on Reconnect", () => {
+    const TIMEOUT = "Session Failed to Start";
+    const advance = (ms: number) => act(async () => { vi.advanceTimersByTime(ms); });
+
+    it("Reconnect hides the card for the retry and a second timeout shows it again", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        setWs({ sessionConfirmed: false, messages: [userMsg()] });
+        await mountSurface();
+        await advance(10_500);
+        const card = screen.getByText(TIMEOUT).closest('[role="alert"]') as HTMLElement;
+        fireEvent.click(within(card).getByRole("button", { name: "Reconnect" }));
+        expect(screen.queryByText(TIMEOUT)).toBeNull(); // retry in flight
+        await advance(10_500);
+        expect(screen.getByText(TIMEOUT)).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a DISMISSED card shows again after Reconnect + a fresh timeout", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        setWs({ sessionConfirmed: false, messages: [userMsg()] });
+        const { rerenderSurface } = await mountSurface();
+        await advance(10_500);
+        const card = screen.getByText(TIMEOUT).closest('[role="alert"]') as HTMLElement;
+        fireEvent.click(within(card).getByRole("button", { name: /dismiss/i }));
+        expect(screen.queryByText(TIMEOUT)).toBeNull();
+
+        // A credential Reconnect (helper line) re-runs the session start.
+        setWs({ sessionConfirmed: false, lastError: apiKeyInvalid, credentialBlocked: true, messages: [userMsg()] });
+        rerenderSurface();
+        fireEvent.click(screen.getByTestId("credential-helper-reconnect"));
+        setWs({ sessionConfirmed: false, messages: [userMsg()] });
+        rerenderSurface();
+        await advance(10_500);
+        expect(screen.getByText(TIMEOUT)).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("is suppressed while credential-blocked (the credential card is the actionable one)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        setWs({ sessionConfirmed: false, lastError: apiKeyInvalid, credentialBlocked: true, messages: [userMsg()] });
+        await mountSurface();
+        await advance(10_500);
+        expect(screen.queryByText(TIMEOUT)).toBeNull();
+        expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // A final first-run refusal cannot restore attachments: say so, visibly.
+  describe("first-run final refusal drops attachments", () => {
+    const NOTICE = "Your attachments weren't sent - attach them again.";
+    const REAL = "0a1b2c3d-0000-4000-8000-00000000000a";
+    const ref = (f: File) => ({ storagePath: `u/${REAL}/${f.name}`, filename: f.name, contentType: "text/markdown", sizeBytes: 9 });
+
+    async function runToFinalRefusal(msg: string | null) {
+      const f = new File(["synthetic"], "notes.md", { type: "text/markdown" });
+      setPendingFiles([f]);
+      mockSearchParams.set("fr", "1");
+      if (msg) mockSearchParams.set("msg", msg);
+      mockUpload.mockImplementation(async () => [ref(f)]);
+      mockSendMessage.mockImplementation(() => false);
+      setWs({ sessionConfirmed: true, realConversationId: REAL, messages: [] });
+      await mountSurface();
+      // attempt 1 (re-armed once) then the FINAL attempt: both refused.
+      await vi.waitFor(() => expect(mockSendMessage).toHaveBeenCalledTimes(2));
+    }
+
+    afterEach(() => {
+      mockSendMessage.mockReset();
+      mockSendMessage.mockImplementation(() => true);
+      mockUpload.mockReset();
+      clearPendingFiles();
+      mockSearchParams.delete("msg");
+      mockSearchParams.delete("fr");
+    });
+
+    it("attachments-only: a visible role=status line says they were not sent (no text to restore)", async () => {
+      await runToFinalRefusal(null);
+      const region = await screen.findByTestId("first-run-restore-status");
+      expect(region).toHaveAttribute("role", "status");
+      await vi.waitFor(() => expect(within(region).getByText(NOTICE)).toBeInTheDocument());
+      expect(screen.getByRole("textbox")).toHaveValue("");
+    });
+
+    it("text + attachments: the text is restored AND the attachments line is shown", async () => {
+      await runToFinalRefusal("keep this text");
+      await vi.waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("keep this text"));
+      expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    });
+
+    it("no line when nothing was dropped (text-only final refusal)", async () => {
+      mockSearchParams.set("msg", "just text");
+      mockSendMessage.mockImplementation(() => false);
+      setWs({ sessionConfirmed: true, messages: [] });
+      const { rerenderSurface } = await mountSurface();
+      await vi.waitFor(() => expect(mockSendMessage).toHaveBeenCalledTimes(1));
+      setWs({ sessionConfirmed: false, messages: [] });
+      rerenderSurface();
+      setWs({ sessionConfirmed: true, messages: [] });
+      rerenderSurface();
+      await vi.waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("just text"));
+      expect(screen.queryByText(NOTICE)).toBeNull();
     });
   });
 });

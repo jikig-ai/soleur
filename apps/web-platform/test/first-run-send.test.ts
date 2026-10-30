@@ -537,7 +537,8 @@ describe("runFirstRunSend", () => {
       const res = await run(h);
       expect(h.send).not.toHaveBeenCalled();
       expect(res).toEqual({ sent: false, retry: false });
-      expect(ops()).toEqual(["first-run-send-dropped"]);
+      // The typed text is now handed back too (mirrored as a final refusal).
+      expect(ops()).toEqual(["first-run-send-dropped", "refused-final"]);
     });
 
     it("socket up but session not confirmed -> never sends", async () => {
@@ -547,12 +548,12 @@ describe("runFirstRunSend", () => {
       expect(res).toEqual({ sent: false, retry: false });
     });
 
-    it("no message text -> nothing to fall back to, nothing sent", async () => {
+    it("no message text -> nothing to fall back to, nothing sent; the dropped attachments are surfaced", async () => {
       const h = setup({ live: { conversationId: OTHER } });
       const res = await run(h, { msgParam: null });
       expect(h.send).not.toHaveBeenCalled();
       expect(res).toEqual({ sent: false, retry: false });
-      expect(ops()).toEqual(["first-run-send-dropped"]);
+      expect(ops()).toEqual(["first-run-send-dropped", "refused-final"]);
     });
 
     it("ready on the final attempt -> normal send with refs (fallback not taken)", async () => {
@@ -614,9 +615,9 @@ describe("runFirstRunSend", () => {
       expect(res).toEqual({ sent: false, retry: false });
       const c = callFor("refused-final");
       expect(c).toBeDefined();
-      expect(c![1].feature).toBe("first-run-send");
+      expect(c![1].feature).toBe("kb-chat");
       expect(onFinalRefusal).toHaveBeenCalledTimes(1);
-      expect(onFinalRefusal).toHaveBeenCalledWith("hi");
+      expect(onFinalRefusal).toHaveBeenCalledWith("hi", 0);
     });
 
     it("a NON-final refusal neither mirrors refused-final nor hands the text back (it is re-armed)", async () => {
@@ -649,11 +650,11 @@ describe("runFirstRunSend", () => {
         final: true,
       });
       expect(res).toEqual({ sent: false, retry: false });
-      expect(onFinalRefusal).toHaveBeenCalledWith("keep me");
+      expect(onFinalRefusal).toHaveBeenCalledWith("keep me", 1); // text restored, 1 attachment dropped
       expect(ops()).toContain("refused-final");
     });
 
-    it("final refusal of an attachments-only send (no text): mirrored, nothing to hand back", async () => {
+    it("final refusal of an attachments-only send (no text): mirrored, and the caller is told attachments were dropped (no text)", async () => {
       const h = setup();
       const onFinalRefusal = vi.fn();
       await runFirstRunSend({
@@ -667,7 +668,59 @@ describe("runFirstRunSend", () => {
         final: true,
       });
       expect(ops()).toContain("refused-final");
-      expect(onFinalRefusal).not.toHaveBeenCalled();
+      expect(onFinalRefusal).toHaveBeenCalledTimes(1);
+      expect(onFinalRefusal).toHaveBeenCalledWith(null, 1);
+    });
+
+    it("the final-refusal mirror uses the module feature tag and op, with the loss shape", async () => {
+      const h = setup();
+      await runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md"), makeFile("b.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: () => false,
+        final: true,
+      });
+      const c = callFor("refused-final");
+      expect(c![1]).toMatchObject({ feature: "kb-chat", op: "refused-final" });
+      expect(c![1].extra).toMatchObject({ hasText: true, attempted: 2 });
+    });
+
+    it("final attempt, text present but the socket is not live ('session changed'): text is handed back, not dropped", async () => {
+      const h = setup({ live: { conversationId: "other-id", connected: false } });
+      const onFinalRefusal = vi.fn();
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+        onFinalRefusal,
+        final: true,
+      });
+      expect(h.send).not.toHaveBeenCalled();
+      expect(res).toEqual({ sent: false, retry: false });
+      expect(onFinalRefusal).toHaveBeenCalledWith("hi", 1);
+      expect(ops()).toContain("refused-final");
+    });
+
+    it("final attempt, attachments only and the socket is not live: the caller is told attachments were dropped", async () => {
+      const h = setup({ live: { conversationId: "other-id", connected: false } });
+      const onFinalRefusal = vi.fn();
+      await runFirstRunSend({
+        msgParam: null,
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+        onFinalRefusal,
+        final: true,
+      });
+      expect(onFinalRefusal).toHaveBeenCalledWith(null, 1);
     });
 
     it("files + message, ready but refused -> sent=false, retry=true", async () => {
@@ -697,7 +750,7 @@ describe("runFirstRunSend", () => {
         final: true,
       });
       expect(res).toEqual({ sent: false, retry: false });
-      expect(onFinalRefusal).toHaveBeenCalledWith("hi");
+      expect(onFinalRefusal).toHaveBeenCalledWith("hi", 1);
     });
 
     it("an accepted send (true) counts as sent and never reports a refusal", async () => {

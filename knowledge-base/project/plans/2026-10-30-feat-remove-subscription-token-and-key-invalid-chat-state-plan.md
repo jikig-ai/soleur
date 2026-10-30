@@ -239,6 +239,7 @@ Surface (`components/chat/chat-surface.tsx` + `chat-input.tsx` + `error-card.tsx
 | Composer placeholder | oauth: `Update your token in Settings, then reconnect` / otherwise `Update your key in Settings, then reconnect` |
 | Helper line | oauth: `Saved your token in Settings? Select Reconnect to continue.` / otherwise `Saved your key in Settings? Select Reconnect to continue.` |
 | Bubble flag | `Not answered` |
+| Refused-send notice (`RefusedSendNotice`) | connection variant: `Couldn't send. Reconnect, then choose again.` / credential-blocked variant (user-impact round 2; the run that raised the question died with the key failure, so "choose again" would hit a dead gate): `Couldn't send. Update your token in Settings, select Reconnect, then send your message again.` (`key` for the non-oauth scheme) |
 
 ### Precedent diff — `delete_oauth_credential` vs `store_oauth_credential` (migration 096)
 
@@ -411,7 +412,7 @@ failure_modes:
     detection: pino layer 2 - the logger.error line (Failed to remove oauth credential) plus the tagged Sentry.captureException (feature api-keys op delete-oauth) raised in the route; neither surface is an Inngest function, so sentry-correlation does not apply; the route fails closed with 500, never a direct table delete
     alert_route: Sentry issue alert (existing project rules)
   - mode: the Settings oauth-row read errors and the Remove control is hidden
-    detection: pino layer 2 - mirrorWithDebounce (5 min, constant in-process key) calls reportSilentFallback, whose logger.error line plus Sentry event carry feature settings op read-oauth-credential; the page renders the neutral (no token UI) state
+    detection: pino layer 2 - mirrorWithDebounce (5 min, constant in-process key) calls reportSilentFallback, whose logger.error line plus Sentry event carry feature settings op read-oauth-credential; the page renders the neutral (no token UI) state. On a DB error the Remove control is hidden: it fails closed to hidden, is reported to Sentry via the debounced mirror (one event per process per 5 minutes), and shows no user-visible banner (accepted)
     alert_route: Sentry issue alert (existing project rules)
   - mode: removal succeeds but a warm Query keeps billing the subscription until it ends
     detection: NO runtime detector (accepted limitation: the per-process Query env is not observable from the server); a user report "old billing basis after removal" re-triggers the #11596 re-evaluation

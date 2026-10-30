@@ -176,7 +176,11 @@ import {
   resolveWorktreeId,
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
-import { ERR_ATTACHMENT_NOT_FOUND, ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
+import {
+  ERR_ATTACHMENT_NOT_FOUND,
+  ERR_CONVERSATION_NOT_FOUND,
+  ERR_WORKTREE_LEASE_UNAVAILABLE,
+} from "./error-messages";
 // ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
@@ -4047,7 +4051,7 @@ async function dispatchSoleurGoInner(
     },
   );
   if (!ownership.ok) {
-    throw new Error("Conversation not found");
+    throw new Error(ERR_CONVERSATION_NOT_FOUND);
   }
 
   // #3254 — persist a `messages` row for every cc turn so

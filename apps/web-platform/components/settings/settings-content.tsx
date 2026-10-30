@@ -42,8 +42,8 @@ interface SettingsContentProps {
 }
 
 function formatDate(iso: string): string {
-  // UTC-pinned: the page renders on the server and re-renders in the browser;
-  // a zone-dependent format could show a different day in each.
+  // UTC-pinned so the rendered date does not depend on the server process's
+  // timezone (this module is server-rendered only; it has no "use client").
   return new Date(iso).toLocaleDateString("en-US", {
     timeZone: "UTC",
     month: "short",

@@ -68,13 +68,14 @@ export async function DELETE(request: Request) {
   const deleted = data === true;
   // Audit: op + outcome only. Never the token value, never the request body.
   // A real erasure (deleted: true) is emitted at WARN on purpose:
-  // infra/vector.toml `app_container_warn_filter` ships only pino level >= 40 to
-  // Better Stack, so an info line would be dropped before the drain; erasures
-  // are low-volume, so the extra level is cheap. An idempotent no-op
-  // (deleted: false) erased nothing and stays at INFO. Verified in
-  // server/logger.ts: the logMethod hook mirrors every WARN to a Sentry
-  // breadcrumb carrying this object ({ deleted } included), so no explicit
-  // breadcrumb is added. The pino formatter pseudonymises the top-level
+  // apps/web-platform/infra/vector.toml `app_container_warn_filter` ships only
+  // pino level >= 40 to Better Stack, so an info line would be dropped before
+  // the drain; erasures are low-volume, so the extra level is cheap. An
+  // idempotent no-op (deleted: false) erased nothing and stays at INFO.
+  // Verified in server/logger.ts: the logMethod hook mirrors every log at or
+  // above SENTRY_BREADCRUMB_LEVEL (default warn) to a Sentry breadcrumb
+  // carrying this object ({ deleted } included), so at the default threshold
+  // the WARN erasure is mirrored and no explicit breadcrumb is added. The pino formatter pseudonymises the top-level
   // `userId` to `userIdHash` (ADR-029) in the Better Stack output; the
   // breadcrumb mirror sees the raw args before that formatter, but
   // sentry.server.config.ts beforeBreadcrumb -> scrubSentryBreadcrumb renames
