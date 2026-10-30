@@ -599,26 +599,26 @@ bun test plugins/soleur/test/workflow-file-size.test.ts          # passes; workf
 
 ### Pre-merge (PR)
 
-- [ ] `git diff --name-only origin/main...HEAD` is a subset of: `tests/scripts/test-registry-d10-workflow-wiring.sh`,
+- [x] `git diff --name-only origin/main...HEAD` is a subset of: `tests/scripts/test-registry-d10-workflow-wiring.sh`,
   this plan, `knowledge-base/project/specs/feat-one-shot-10932-residuals-2-3-restore-w9/{tasks,decision-challenges,session-state}.md`,
   and `knowledge-base/INDEX`-style generated files if the pipeline regenerates one.
-- [ ] `git diff --stat origin/main...HEAD -- .github scripts apps tests/scripts/lib tests/scripts/test-registry-pull-path-health.sh tests/scripts/test-registry-restore-from-ghcr.sh` prints nothing.
-- [ ] `wc -c .github/workflows/apply-web-platform-infra.yml` equals the Phase 0.4 measurement taken after the
+- [x] `git diff --stat origin/main...HEAD -- .github scripts apps tests/scripts/lib tests/scripts/test-registry-pull-path-health.sh tests/scripts/test-registry-restore-from-ghcr.sh` prints nothing.
+- [x] `wc -c .github/workflows/apply-web-platform-infra.yml` equals the Phase 0.4 measurement taken after the
   rebase (no edit) and is <= 490,000; `bun test plugins/soleur/test/workflow-file-size.test.ts` passes.
-- [ ] `git grep -n 'does not list it' -- tests/scripts/test-registry-d10-workflow-wiring.sh` prints nothing and
+- [x] `git grep -n 'does not list it' -- tests/scripts/test-registry-d10-workflow-wiring.sh` prints nothing and
   `git grep -n 'fewer than 6' -- tests/scripts/test-registry-d10-workflow-wiring.sh` prints nothing;
-  `git grep -c 'fewer than 7 failure codes' -- tests/scripts/test-registry-d10-workflow-wiring.sh` prints `1`;
+  `git grep -c 'fewer than 7 failure codes' -- tests/scripts/test-registry-d10-workflow-wiring.sh` prints `tests/scripts/test-registry-d10-workflow-wiring.sh:1` (`git grep -c` names the file; verified);
   the `-ge 7` guard and the `grep -vx 1` ignore are unchanged.
-- [ ] `bash tests/scripts/test-registry-d10-workflow-wiring.sh` ends `=== N passed, 0 failed ===` where N equals
+- [x] `bash tests/scripts/test-registry-d10-workflow-wiring.sh` ends `=== N passed, 0 failed ===` where N equals
   `EXPECTED_ASSERTIONS` (count taken from the green run; the RED runs in Phases 1-3 are shown first in the PR).
-- [ ] `bash tests/scripts/test-registry-pull-path-health.sh` ends 63/0 and `bash tests/scripts/test-registry-restore-from-ghcr.sh` ends 98/0 (unchanged inputs).
+- [x] `bash tests/scripts/test-registry-pull-path-health.sh` ends 63/0 and `bash tests/scripts/test-registry-restore-from-ghcr.sh` ends 98/0 (unchanged inputs).
 - [ ] Every Guard Contract row not committed as a control was run once on a sandbox copy (pristine copy restored
   between rows) and its outcome is listed in the PR body; every committed workflow-mutating control passes the
   "mutation landed" check, every committed engine-text control asserts its appended line changed the text, and
   each control names a fragment only its own pin produces.
 - [ ] The wiring suite's added wall time is recorded in the PR body as a back-to-back before/after pair on the
   same machine state (plan-time baseline 52 s idle, 79 s under load; added cost expected ~10-20 s).
-- [ ] `python3 -I scripts/lint-guard-contract.py` passes on this plan; `python3 -I scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes.
+- [x] `python3 -I scripts/lint-guard-contract.py` passes on this plan; `python3 -I scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes.
 - [ ] The PR body's first line states that merging mutates no production system and why (the `paths:` filter, engine and lib byte-unchanged).
 - [ ] PR body carries `Ref #10932` and `Ref #9757`, no closing keyword; states "no sub-item dropped", the accepted
   residues, and that #10932 is NOT fully cleared (two items remain), asking the operator before closing it.
