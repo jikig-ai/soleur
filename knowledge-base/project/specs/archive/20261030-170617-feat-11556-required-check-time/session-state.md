@@ -140,3 +140,8 @@ Design pass (simplicity+arch+perf) found missed rename blast radius — all 3 se
 - gh pr merge --auto --merge armed (autoMergeRequest set, method=MERGE) — PR enters merge queue when required checks green on ef8c706eb7.
 - Queue-priority question answered for user: GitHub has a native "jump to top" (UI toggle + enqueuePullRequest GraphQL), admin-only on Enterprise, but jumping rebuilds every in-progress merge group — slower for everyone ahead. No custom machinery needed; the win lands when this PR merges.
 - Watching CI run on ef8c706eb7 for merge-queue admission.
+
+## Update 14 — rebased on latest main; ratchet fix #2; auto-merge re-armed
+- CI run on ef8c706eb7 red again: NEW pair scripts-shard-totality.test.sh × apps/web-platform/infra/run-registered-suites.sh — the file got tracked on main after my base; the merge ref materialized the boundary refs (regen.py:321 argv + :541 docstring). Local ratchet had passed on the older base (live=1510).
+- Rebased onto latest origin/main (19 commits, clean). Added 2 accept rows (c4bcd6fd65d6, 6f4a4a1a9301); local ratchet exit=0.
+- Pushed 9f91e41069 (force-with-lease). Auto-merge still armed (mergeStateStatus=BLOCKED=waiting checks). New CI run 41090431947 pending.
