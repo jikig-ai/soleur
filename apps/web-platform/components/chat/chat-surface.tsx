@@ -235,6 +235,9 @@ export function ChatSurface({
     disconnectReason,
     lastError,
     reconnect,
+    credentialBlocked,
+    rebindConversationId,
+    rebindRefused,
     routeSource,
     activeLeaderIds,
     usageData,
@@ -294,6 +297,27 @@ export function ChatSurface({
     () => (lastError ? `${lastError.code}::${lastError.message}` : null),
     [lastError],
   );
+
+  // #11525 - blocked after a credential error. Derived locally from
+  // `lastError.code` as well as the hook flag so a card that is visible can
+  // never sit above an enabled composer. Dismissing the card does NOT unblock.
+  const blocked =
+    credentialBlocked ||
+    lastError?.code === "key_invalid" ||
+    lastError?.code === "byok_key_missing";
+  // Scheme wording: the oauth scheme names a "token"; everything else a "key".
+  const credentialNoun =
+    lastError?.code === "key_invalid" && lastError.credentialScheme === "oauth_token"
+      ? "token"
+      : "key";
+
+  // Reconnect from a credential card/helper: re-run the start/resume effect on
+  // the fresh socket (it resumes the captured conversation, or starts one).
+  // Never auto-resends the unanswered message.
+  const onCredentialReconnect = () => {
+    setSessionStarted(false);
+    reconnect();
+  };
 
   // Edge-triggered: re-show the timeout card when sessionStartTimeout flips false -> true.
   useEffect(() => {
@@ -457,7 +481,11 @@ export function ChatSurface({
     if (status !== "connected" || sessionStarted || contextPending) return;
 
     if (conversationId === "new") {
-      if (resumeByContextPath) {
+      if (rebindConversationId) {
+        // #11525 - re-bind the same conversation after a credential Reconnect
+        // (no duplicate conversation). Truthiness guard, never `!== null`.
+        resumeSession(rebindConversationId);
+      } else if (resumeByContextPath) {
         startSession({
           leaderId: leaderId ?? undefined,
           context: initialContext,
@@ -471,7 +499,13 @@ export function ChatSurface({
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending, rebindConversationId]);
+
+  // #11525 - the server refused the rebind resume: the hook dropped the id, so
+  // re-running the effect above takes the `startSession` branch (one-shot).
+  useEffect(() => {
+    if (rebindRefused) setSessionStarted(false);
+  }, [rebindRefused]);
 
   useEffect(() => {
     if (resumedFrom && onThreadResumed) {
@@ -834,14 +868,15 @@ export function ChatSurface({
         ? "error"
         : null;
 
-  function handleSend(message: string, attachments?: AttachmentRef[]) {
-    if (status !== "connected") return;
+  // Returns `false` when the message was NOT accepted so the composer keeps the
+  // draft. Refuses BEFORE `onBeforeSend` so analytics never counts a refused send.
+  function handleSend(message: string, attachments?: AttachmentRef[]): boolean {
+    if (status !== "connected" || blocked) return false;
     onBeforeSend?.(message);
     if (attachments && attachments.length > 0) {
-      sendMessage(message, attachments);
-    } else {
-      sendMessage(message);
+      return sendMessage(message, attachments);
     }
+    return sendMessage(message);
   }
 
   const isFull = variant === "full";
@@ -1002,15 +1037,24 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={lastError.code === "key_invalid" ? (lastError.credentialScheme === "oauth_token" ? "Claude Sign-in Failed" : "Invalid API Key") : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
+                title={lastError.code === "key_invalid" ? (lastError.credentialScheme === "oauth_token" ? "Claude Sign-in Failed" : "Invalid API Key") : lastError.code === "byok_key_missing" ? "API Key Required" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
                 message={lastError.message}
-                onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" ? reconnect : undefined}
+                onRetry={
+                  blocked
+                    ? onCredentialReconnect
+                    : lastError.code !== "subscription_limit"
+                      ? reconnect
+                      : undefined
+                }
                 retryLabel="Reconnect"
                 action={
                   lastError.code === "key_invalid" && lastError.credentialScheme === "oauth_token" && lastError.action
                     ? { ...lastError.action, label: "Update token" }
                     : lastError.action
                 }
+                // Settings opens in a new tab for the credential cards so this
+                // chat (draft, transcript, helper line) survives the trip.
+                newTab={blocked}
                 onDismiss={() => setDismissedErrorKey(activeErrorKey)}
               />
             )}
@@ -1080,6 +1124,7 @@ export function ChatSurface({
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}
+                      unanswered={msg.unanswered}
                     />
                   );
                   break;
@@ -1373,13 +1418,15 @@ export function ChatSurface({
             }}
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
-            disabled={status !== "connected" || firstRunBusy}
+            disabled={status !== "connected" || firstRunBusy || blocked}
             workflowEnded={workflowEnded}
             placeholder={
-              status === "connected"
-                ? (placeholder ??
-                    "Follow up or ask another question... Type @ to switch leader")
-                : "Reconnecting..."
+              blocked
+                ? `Update your ${credentialNoun} in Settings, then reconnect`
+                : status === "connected"
+                  ? (placeholder ??
+                      "Follow up or ask another question... Type @ to switch leader")
+                  : "Reconnecting..."
             }
             insertRef={insertRef}
             quoteRef={quoteRef}
@@ -1403,6 +1450,28 @@ export function ChatSurface({
             onStop={abort}
             repoSetupState={repoSetupState}
           />
+          {blocked && (
+            // Always-visible recovery path (survives a dismissed card): the
+            // wording covers "I already saved it in Settings"; Reconnect
+            // re-binds the session. No visibilitychange/focus hint exists.
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-soleur-text-secondary"
+            >
+              <span>
+                {`Saved your ${credentialNoun} in Settings? Select Reconnect to continue.`}
+              </span>
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={onCredentialReconnect}
+                className="px-2 py-1 text-xs"
+              >
+                Reconnect
+              </Button>
+            </div>
+          )}
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (
           <div className="mt-1 px-1 text-xs text-soleur-text-muted">

@@ -32,7 +32,10 @@ interface PendingAttachment {
 }
 
 interface ChatInputProps {
-  onSend: (message: string, attachments?: AttachmentRef[]) => void;
+  /** Return an explicit `false` to refuse the send (e.g. credential blocked or
+   *  socket not open): the draft and staged attachments are kept. Any other
+   *  return value (including `void`) means accepted. */
+  onSend: (message: string, attachments?: AttachmentRef[]) => boolean | void;
   onAtTrigger: (query: string, cursorPosition: number) => void;
   onAtDismiss: () => void;
   disabled?: boolean;
@@ -449,6 +452,9 @@ export function ChatInput({
   }, [attachments, conversationId]);
 
   const handleSubmit = useCallback(async () => {
+    // A disabled composer must not start an upload or call `onSend` (the
+    // Enter key path bypasses the disabled send button).
+    if (disabled) return;
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
 
@@ -465,26 +471,25 @@ export function ChatInput({
       try {
         const uploaded = await uploadAttachments();
         if (uploaded.length > 0) {
-          onSend(trimmed, uploaded);
-          sent = true;
+          sent = onSend(trimmed, uploaded) !== false;
         } else if (trimmed) {
-          onSend(trimmed);
-          sent = true;
+          sent = onSend(trimmed) !== false;
         }
       } finally {
         setIsUploading(false);
-        setAttachments((prev) => prev.filter((a) => a.error));
+        // Prune staged attachments only when the send was accepted; a refused
+        // send keeps them (uploaded refs stay marked `uploaded`).
+        if (sent) setAttachments((prev) => prev.filter((a) => a.error));
       }
     } else {
-      onSend(trimmed);
-      sent = true;
+      sent = onSend(trimmed) !== false;
     }
 
     if (sent) {
       setValue("");
       onAtDismiss();
     }
-  }, [value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
+  }, [disabled, value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

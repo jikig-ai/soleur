@@ -103,7 +103,10 @@ interface UseWebSocketReturn {
   messages: ChatMessage[];
   startSession: (optsOrLeaderId?: StartSessionOptions | DomainLeaderId, context?: ConversationContext) => void;
   resumeSession: (conversationId: string) => void;
-  sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
+  /** #11525 — returns `true` only when the message was handed to an open socket.
+   *  `false` means refused (credential blocked, or socket not open): no optimistic
+   *  bubble was added and the caller must keep the draft. */
+  sendMessage: (content: string, attachments?: AttachmentRef[]) => boolean;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   /** feat-bash-autonomous-default-on: client→server ack for the first-run
    *  autonomous-mode disclosure soft-gate. Selection is "Got it" /
@@ -124,6 +127,17 @@ interface UseWebSocketReturn {
   disconnectReason: string | undefined;
   lastError: WebSocketError | null;
   reconnect: () => void;
+  /** #11525 — DERIVED from `lastError.code` being `key_invalid` or
+   *  `byok_key_missing`; the composer is disabled and sends are refused until
+   *  `reconnect()` (or a remount) clears `lastError`. */
+  credentialBlocked: boolean;
+  /** #11525 — the conversation id to re-bind with `resume_session` after a
+   *  credential Reconnect (captured before teardown, only when the thread had at
+   *  least one user message). `null` means start a fresh session. */
+  rebindConversationId: string | null;
+  /** #11525 — true when the server refused the rebind resume; the surface
+   *  re-runs its start effect, which then calls `startSession` once. */
+  rebindRefused: boolean;
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: DomainLeaderId[];
   usageData: UsageData | null;
@@ -329,6 +343,10 @@ export type ChatAction =
    *  on every reconnect at connect() and from abort handlers — coupling the
    *  reset to it would defeat the sticky guard). Resets to `{ phase: "live" }`. */
   | { type: "reset_connection" }
+  /** #11525 — flag the last user message `unanswered` when a credential error
+   *  blocks the turn. No-op unless the last message is a user message. Session
+   *  only: never persisted, dropped by a history hydrate. */
+  | { type: "mark_last_user_unanswered" }
   | {
       type: "resolve_interactive_prompt";
       promptId: string;
@@ -567,6 +585,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return state.connection.phase === "live" && state.connection.resumedAt === undefined
         ? state
         : { ...state, connection: { phase: "live" } };
+    case "mark_last_user_unanswered": {
+      const last = state.messages[state.messages.length - 1];
+      if (!last || last.role !== "user" || last.unanswered) return state;
+      return {
+        ...state,
+        messages: [...state.messages.slice(0, -1), { ...last, unanswered: true }],
+      };
+    }
     case "ack_timer_action":
       return state.pendingTimerAction === undefined ? state : { ...state, pendingTimerAction: undefined };
     case "add_message":
@@ -663,9 +689,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [chatState.activeStreams],
   );
 
+  // Mirror of `chatState.messages` for handlers that must read the thread
+  // without re-binding `connect` (the `error` branch).
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = chatState.messages;
+
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [disconnectReason, setDisconnectReason] = useState<string>();
   const [lastError, setLastError] = useState<WebSocketError | null>(null);
+  // #11525 — DERIVED, never stored: blocked iff the single `lastError` slot holds
+  // a credential code. Cleared by `reconnect()` / mount (both null `lastError`).
+  const credentialBlocked =
+    lastError?.code === "key_invalid" || lastError?.code === "byok_key_missing";
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
   const [realConversationId, setRealConversationId] = useState<string | null>(null);
@@ -712,6 +747,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // gate survives future refactors that decouple the two writes (#4816
   // corollary).
   const sessionKindRef = useRef<"fresh" | "resumed" | null>(null);
+  // #11525 — synchronous mirror of the DERIVED `credentialBlocked` so
+  // `sendMessage` reads the current value with no render lag. Assigned where
+  // `lastError` is set/cleared (the error branch, `reconnect()`, mount) - never
+  // in an effect, so the ref and the state cannot disagree.
+  const credentialBlockedRef = useRef(false);
+  // #11525 — conversation id captured before teardown for the Reconnect rebind.
+  const [rebindConversationId, setRebindConversationId] = useState<string | null>(null);
+  const rebindConversationIdRef = useRef<string | null>(null);
+  // True between sending the rebind `resume_session` and the first reply. An
+  // `error` while armed means the server refused the rebind (one-shot fallback).
+  const rebindArmedRef = useRef(false);
+  const [rebindRefused, setRebindRefused] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   // feat-stream-since-disconnect (#5273) — highest server-stamped `seq` this
@@ -860,11 +907,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     return { url: `${proto}://${window.location.host}/ws`, token };
   }, []);
 
-  const send = useCallback((msg: WSMessage) => {
+  const send = useCallback((msg: WSMessage): boolean => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }, []);
 
   const connect = useCallback(async () => {
@@ -1181,18 +1230,48 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           dispatch({ type: "clear_streams" });
           clearAllTimeouts();
 
-          // Key invalidation: set structured error instead of redirect
-          if (msg.errorCode === "key_invalid") {
+          // Key invalidation: set structured error instead of redirect.
+          // #11525: `byok_key_missing` shares this branch (same blocked state).
+          if (msg.errorCode === "key_invalid" || msg.errorCode === "byok_key_missing") {
+            // Bookkeeping BEFORE the socket is torn down: teardown clears the
+            // conversation id, and the blocked ref must be set synchronously.
+            const hasUserMessage = messagesRef.current.some((m) => m.role === "user");
+            const rebindId = hasUserMessage
+              ? (realConversationIdRef.current ?? rebindConversationIdRef.current)
+              : null;
+            rebindConversationIdRef.current = rebindId;
+            setRebindConversationId(rebindId);
+            rebindArmedRef.current = false;
+            credentialBlockedRef.current = true;
+            dispatch({ type: "mark_last_user_unanswered" });
             // #11086: server-authored copy only when the frame names a known
             // credential scheme; otherwise the legacy text, byte-identical.
             const scheme = msg.credentialScheme;
             const action = { label: "Update key", href: "/dashboard/settings" };
             setLastError(
-              scheme
-                ? { code: "key_invalid", message: msg.message, credentialScheme: scheme, action }
-                : { code: "key_invalid", message: "Your API key is invalid or expired.", action },
+              msg.errorCode === "byok_key_missing"
+                ? {
+                    code: "byok_key_missing",
+                    message: "Add an API key in Settings to continue.",
+                    action: { label: "Add API key", href: "/dashboard/settings" },
+                  }
+                : scheme
+                  ? { code: "key_invalid", message: msg.message, credentialScheme: scheme, action }
+                  : { code: "key_invalid", message: "Your API key is invalid or expired.", action },
             );
             teardown();
+            return;
+          }
+
+          // #11525 — the rebind `resume_session` was refused (e.g. "Conversation
+          // not found"): drop the id, show no extra bubble, and let the surface
+          // fall back ONCE to `startSession` (the armed ref is cleared, so a
+          // second error is an ordinary error bubble - never a loop).
+          if (rebindArmedRef.current) {
+            rebindArmedRef.current = false;
+            rebindConversationIdRef.current = null;
+            setRebindConversationId(null);
+            setRebindRefused(true);
             return;
           }
 
@@ -1403,6 +1482,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // reconnect gate (a fresh deferred conv must NOT request resume_stream).
           sessionKindRef.current = "fresh";
           setSessionConfirmed(true);
+          // #11525 — the server answers a rebind `resume_session` with
+          // `session_started`: the rebind is complete. Retained local messages
+          // stay the transcript (sessionKind "fresh" => no history refetch).
+          if (rebindArmedRef.current) {
+            rebindArmedRef.current = false;
+            rebindConversationIdRef.current = null;
+            setRebindConversationId(null);
+          }
           break;
         }
 
@@ -1431,6 +1518,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // ONLY kind that may request resume_stream replay on reconnect.
           sessionKindRef.current = "resumed";
           setSessionConfirmed(true);
+          // #11525 — a non-"new" surface rebinds with its own id and gets
+          // `session_resumed`; that reply also completes the rebind.
+          if (rebindArmedRef.current) {
+            rebindArmedRef.current = false;
+            rebindConversationIdRef.current = null;
+            setRebindConversationId(null);
+          }
           break;
         }
 
@@ -1974,6 +2068,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   useEffect(() => {
     mountedRef.current = true;
     setLastError(null);
+    credentialBlockedRef.current = false;
+    rebindConversationIdRef.current = null;
+    rebindArmedRef.current = false;
+    setRebindConversationId(null);
+    setRebindRefused(false);
     setDisconnectReason(undefined);
     setSessionConfirmed(false);
     connect();
@@ -2010,13 +2109,33 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const resumeSession = useCallback(
     (targetConversationId: string) => {
       setSessionConfirmed(false);
+      // #11525 — arm the one-shot rebind fallback only for the captured id.
+      if (
+        rebindConversationIdRef.current !== null &&
+        targetConversationId === rebindConversationIdRef.current
+      ) {
+        rebindArmedRef.current = true;
+      }
       send({ type: "resume_session", conversationId: targetConversationId });
     },
     [send],
   );
 
   const sendMessage = useCallback(
-    (content: string, attachments?: AttachmentRef[]) => {
+    (content: string, attachments?: AttachmentRef[]): boolean => {
+      // #11525 — refuse BEFORE `reset_connection` and the optimistic bubble: a
+      // refused send must not silently reset the sticky unrecoverable state nor
+      // show a message that never left the client.
+      if (credentialBlockedRef.current) return false;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reportSilentFallback(null, {
+          feature: "send-message",
+          op: "refused-socket-not-open",
+          extra: { readyState: ws?.readyState ?? null },
+        });
+        return false;
+      }
       // #5282 — an explicit new user turn is the ONLY escape from a sticky
       // `unrecoverable` connection state (AC11). This single `sendMessage` is the
       // unified send path for BOTH the legacy fan-out and cc-soleur-go (AC9), so
@@ -2034,7 +2153,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           attachments,
         },
       });
-      send({ type: "chat", content, attachments });
+      return send({ type: "chat", content, attachments });
     },
     [send],
   );
@@ -2125,6 +2244,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const reconnect = useCallback(() => {
     setLastError(null);
+    credentialBlockedRef.current = false;
+    setRebindRefused(false);
     setDisconnectReason(undefined);
     mountedRef.current = true;
     backoffRef.current = INITIAL_BACKOFF;
@@ -2156,6 +2277,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     disconnectReason,
     lastError,
     reconnect,
+    credentialBlocked,
+    rebindConversationId,
+    rebindRefused,
     routeSource,
     activeLeaderIds,
     usageData,

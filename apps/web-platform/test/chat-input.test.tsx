@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatInput } from "@/components/chat/chat-input";
 
@@ -160,5 +160,136 @@ describe("ChatInput", () => {
     setup();
     const textarea = screen.getByRole("textbox");
     expect(textarea.className).toContain("focus-visible:shadow-none");
+  });
+  // #11525 — `onSend` may refuse: only an explicit `false` means "not accepted".
+  describe("onSend refusal contract (#11525)", () => {
+    it("keeps the draft and skips the post-send at-mention dismiss when onSend returns false", async () => {
+      const onSend = vi.fn(() => false);
+      const onAtDismiss = vi.fn();
+      setup({ onSend, onAtDismiss });
+      const textarea = screen.getByRole("textbox");
+      await userEvent.type(textarea, "keep me");
+      const dismissals = onAtDismiss.mock.calls.length;
+      await userEvent.keyboard("{Enter}");
+      expect(onSend).toHaveBeenCalledWith("keep me");
+      expect(textarea).toHaveValue("keep me");
+      expect(onAtDismiss).toHaveBeenCalledTimes(dismissals);
+    });
+
+    it("clears the draft when onSend returns true", async () => {
+      const onSend = vi.fn(() => true);
+      setup({ onSend });
+      const textarea = screen.getByRole("textbox");
+      await userEvent.type(textarea, "go");
+      await userEvent.keyboard("{Enter}");
+      expect(textarea).toHaveValue("");
+    });
+
+    it("clears the draft when onSend returns void (legacy callers)", async () => {
+      const onSend = vi.fn();
+      setup({ onSend });
+      const textarea = screen.getByRole("textbox");
+      await userEvent.type(textarea, "go");
+      await userEvent.keyboard("{Enter}");
+      expect(textarea).toHaveValue("");
+    });
+  });
+
+  describe("handleSubmit while disabled (#11525)", () => {
+    it("does nothing - no presign upload, no onSend - when disabled", async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal("fetch", mockFetch);
+      try {
+        const onSend = vi.fn();
+        const { rerender } = setup({ onSend });
+        const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+        fireEvent.change(fileInput, {
+          target: { files: [new File(["x"], "doc.png", { type: "image/png" })] },
+        });
+        await waitFor(() => expect(screen.getByText(/doc\.png/)).toBeInTheDocument());
+
+        rerender(<ChatInput {...defaultProps} onSend={onSend} disabled />);
+        const textarea = screen.getByRole("textbox");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        // let any (wrongly) started async upload surface
+        await Promise.resolve();
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(onSend).not.toHaveBeenCalled();
+        expect(screen.getByText(/doc\.png/)).toBeInTheDocument();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
+  describe("staged attachments when onSend refuses (#11525)", () => {
+    let mockXhr: Record<string, any>;
+    const mockFetch = vi.fn();
+
+    beforeEach(() => {
+      mockFetch.mockReset();
+      vi.stubGlobal("fetch", mockFetch);
+      mockXhr = {
+        open: vi.fn(),
+        setRequestHeader: vi.fn(),
+        send: vi.fn(),
+        abort: vi.fn(),
+        upload: { onprogress: null },
+        onload: null,
+        onerror: null,
+        onabort: null,
+        status: 200,
+      };
+      vi.stubGlobal(
+        "XMLHttpRequest",
+        vi.fn(function () {
+          return mockXhr;
+        }),
+      );
+    });
+
+    async function stageAndSend(onSend: (...a: unknown[]) => unknown) {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            uploadUrl: "https://storage.supabase.co/upload/signed/abc",
+            storagePath: "user-1/conv-1/uuid.png",
+          }),
+      });
+      let completeUpload: () => void = () => {};
+      mockXhr.send.mockImplementation(() => {
+        completeUpload = () => mockXhr.onload?.();
+      });
+      setup({ onSend });
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["x"], "keep.png", { type: "image/png" })] },
+      });
+      await waitFor(() => expect(screen.getByText(/keep\.png/)).toBeInTheDocument());
+      const textarea = screen.getByRole("textbox");
+      await userEvent.type(textarea, "with file");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(mockXhr.send).toHaveBeenCalled());
+      completeUpload();
+      return textarea;
+    }
+
+    it("keeps the draft AND the staged attachment when onSend returns false", async () => {
+      const onSend = vi.fn(() => false);
+      const textarea = await stageAndSend(onSend);
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(textarea).toBeEnabled());
+      expect(textarea).toHaveValue("with file");
+      expect(screen.getByText(/keep\.png/)).toBeInTheDocument();
+    });
+
+    it("prunes the staged attachment and clears the draft when onSend accepts", async () => {
+      const onSend = vi.fn(() => true);
+      const textarea = await stageAndSend(onSend);
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(textarea).toHaveValue(""));
+      await waitFor(() => expect(screen.queryByText(/keep\.png/)).toBeNull());
+    });
   });
 });
