@@ -179,8 +179,9 @@ ALWAYS_ON_SUITES=(
   # like its sibling above; renamed out of the add/add collision with #8322's.
   "scripts/test-all-group-affected"
   "scripts/suite-exit-class-parity"
-  # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected,
-  # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).
+  # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected's
+  # --rows arms (#11562), battery-tag-authorship-mutations and the two --rows halves of the
+  # lint-orphan battery (#8864).
   # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
   # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"

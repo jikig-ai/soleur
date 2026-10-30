@@ -85,3 +85,22 @@ CLA author gate: commits must be authored by CLA-signed identity (jean.deruelle@
 - Push done: a5c01e4091 forced (pre-rebase remote). Commits on branch now include e82f08c (split), d480451 (rc_g+edges), d5e9655 (floor+argv+ci.yml), 60b93ac (gen+totality+runbook topo), fe302de (regen), a5c01e4 (docs+tasks+state).
 - Affected gate: rc=4 refused (sibling) → relaunched SOLEUR_ALLOW_FULL_GATE=1 (degraded MODE=full since runner changed) → .work-run-affected-gate.rc pending.
 - Pipeline now: soleur:review (skill running) → resolve-todo-parallel → compound → ship. Review SKILL.md at plugin cache skills/review/SKILL.md; steps: classification → merge-tree check → panel agents → synthesis → issues → exit gate.
+
+## Update 6 — rebase done, review panel starting
+- Rebased onto origin/main (dbc59724); suite-durations.tsv conflict resolved by checkout --ours + re-regen (legs 1678-1758s, spread 79s). Re-verified: totality 51/51 green. Pushed f5711f3 (PANEL_SHA).
+- Review classification: code → 8-agent panel; design-risk YES → design pass first: code-simplicity + architecture-strategist + performance-oracle (economics claim). Panel after dedup = 6.
+- Affected gate still running (SOLEUR_ALLOW_FULL_GATE=1 MODE=full) → .work-run-affected-gate.rc
+- Agent defs: /home/jean/.local/share/devin/cli/plugins/cache/github.com_jikig-ai_soleur_plugins_soleur-5a09ea60/0.0.0-unversioned/agents/engineering/review/*.md
+
+## Update 7 — design-pass findings + fixes (UNCOMMITTED)
+Design pass (simplicity+arch+perf) found missed rename blast radius — all 3 seats converge:
+- FIXED: test-all-pr-battery-gate.test.sh — L_TAA→4 labels + TAA_ARMS, own-taa/local arms, UNIVERSE, sixth-site anchor re-pointed at -d skip text
+- FIXED: test-all-infra-coverage-notice.test.sh:414 — GATED row → 4 arm rows (DOCS_SKIP floor self-corrects)
+- FIXED: ci-pr-selection.sh:202 → 4 case entries; ci-pr-selection.test.sh:1493 mutation re-anchored on -a
+- FIXED: lint-orphan surface-2 — subtract only glob_special ∩ raw1 (diverted files); c4-from-components skip-only special stays glob-covered
+- FIXED: regen — separate_arm_groups() extracted, called by BOTH assign() and incremental path; dead default=None removed
+- FIXED: totality — glob_special coverage assertion (ref_static label OR run_suite token; c4 vs replay shapes); -<letter> convention asserted on --rows labels
+- FIXED: stale comments (test-relevance-paths.sh:201, test-affected-paths.sh:182), runbook predicted-leg wording + --incremental-only guidance
+- lint-orphan re-green (773, 0 orphans). Suites running: battgate, infranotice, prsel, tot4 → .work-run-*.rc
+- DEFERRED (report to panel): est src tier (measured-tag fudge), per-block declared floors (residual), ADR for arm convention, --rows preamble extraction (4th copy), exit-code parity
+- PENDING: design-pass verdict → 6-agent panel → synthesis; affected-gate run queued position 3

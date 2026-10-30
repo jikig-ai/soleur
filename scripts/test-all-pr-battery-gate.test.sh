@@ -75,8 +75,12 @@ L_CF="scripts/cf-tunnel-liveness-gate-mutations"
 L_LA="scripts/lint-orphan-test-suites-mutations-a"
 L_LB="scripts/lint-orphan-test-suites-mutations-b"
 L_TAG="scripts/battery-tag-authorship-mutations"
-L_TAA="scripts/test-all-affected"
-ALL_LABELS=("$L_REG" "$L_CF" "$L_LA" "$L_LB" "$L_TAG" "$L_TAA")
+L_TAA="scripts/test-all-affected-a"
+L_TAB="scripts/test-all-affected-b"
+L_TAC="scripts/test-all-affected-c"
+L_TAD="scripts/test-all-affected-d"
+TAA_ARMS="$L_TAA|$L_TAB|$L_TAC|$L_TAD"
+ALL_LABELS=("$L_REG" "$L_CF" "$L_LA" "$L_LB" "$L_TAG" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD")
 ARRAYS=(REGISTRY_BATTERY_PATHS CF_TUNNEL_BATTERY_PATHS LINT_ORPHAN_BATTERY_PATHS TAG_AUTHORSHIP_BATTERY_PATHS TEST_ALL_AFFECTED_BATTERY_PATHS)
 
 # one file that belongs to exactly one battery's array (its own battery file)
@@ -282,7 +286,7 @@ add_arm own-registry      "$PR" 1 "modify:$(own_file REGISTRY_BATTERY_PATHS)" "$
 add_arm own-cf            "$PR" 1 "modify:$(own_file CF_TUNNEL_BATTERY_PATHS)" "$L_CF"
 add_arm own-lint          "$PR" 1 "modify:$(own_file LINT_ORPHAN_BATTERY_PATHS)" "$L_LA|$L_LB"
 add_arm own-tag           "$PR" 1 "modify:$(own_file TAG_AUTHORSHIP_BATTERY_PATHS)" "$L_TAG"
-add_arm own-taa           "$PR" 1 "modify:$(own_file TEST_ALL_AFFECTED_BATTERY_PATHS)" "$L_TAA"
+add_arm own-taa           "$PR" 1 "modify:$(own_file TEST_ALL_AFFECTED_BATTERY_PATHS)" "$TAA_ARMS"
 add_arm ev-push           push 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-merge-group    merge_group 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-dispatch       workflow_dispatch 1 "modify:knowledge-base/note.md" ALL
@@ -294,8 +298,8 @@ add_arm ev-pr-review      pull_request_review 1 "modify:knowledge-base/note.md" 
 # CI unset = a local run: the default local mode is the affected gate, which REFUSES (rc=4) a docs-only
 # diff that selects nothing, so these arms name an explicit group (TEST_GROUP=<g> bypasses the affected
 # axis) and a diff that touches one light battery's own file. The light group registers four of the six.
-add_arm local-pr-event    "$PR" - "modify:scripts/test-all-affected.test.sh" "$L_TAA" "TEST_GROUP=scripts"
-add_arm local-no-event    - - "modify:scripts/test-all-affected.test.sh" "$L_TAA" "TEST_GROUP=scripts"
+add_arm local-pr-event    "$PR" - "modify:scripts/test-all-affected.test.sh" "$TAA_ARMS" "TEST_GROUP=scripts"
+add_arm local-no-event    - - "modify:scripts/test-all-affected.test.sh" "$TAA_ARMS" "TEST_GROUP=scripts"
 add_arm force-all         "$PR" 1 "modify:knowledge-base/note.md" ALL "SOLEUR_TEST_FORCE_ALL=1"
 add_arm full-flag         "$PR" 1 "modify:knowledge-base/note.md" ALL "" "--full"
 add_arm rename-only       "$PR" 1 "rename:scripts/registry-pull-path-health.sh" "$L_REG"
@@ -361,7 +365,7 @@ grade_arms() {
     if (( ${#only[@]} )); then local keep=0 o; for o in "${only[@]}"; do [[ "$o" == "$id" ]] && keep=1; done; (( keep )) || continue; fi
     ARM_WHY=""
     case "$extra" in
-      TEST_GROUP=scripts) UNIVERSE=("$L_LA" "$L_LB" "$L_CF" "$L_TAA") ;;
+      TEST_GROUP=scripts) UNIVERSE=("$L_LA" "$L_LB" "$L_CF" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD") ;;
       TEST_GROUP=scripts-heavy) UNIVERSE=("$L_REG" "$L_TAG") ;;
       *) UNIVERSE=("${ALL_LABELS[@]}") ;;
     esac
@@ -560,7 +564,7 @@ done
 
 # row 8b: a sixth --pr-gated site the arms do not exercise reds the set-equality assertion
 SIXTH_DIR="$TMP/mut-sixth-site"; build_runner "$SIXTH_DIR" 1 || harness_die "could not build the sixth-site runner"
-mutate "$SIXTH_DIR" 's = sub_once(s, "skip_suite \"scripts/test-all-affected\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh\"\n  fi", "skip_suite \"scripts/test-all-affected\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh\"\n  fi\n  if _diff_touches --pr-gated \"${C4_PRODUCER_PATHS[@]}\"; then :; fi")' || harness_die "the sixth-site mutation did not land"
+mutate "$SIXTH_DIR" 's = sub_once(s, "skip_suite \"scripts/test-all-affected-d\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh --rows 37-38\"\n  fi", "skip_suite \"scripts/test-all-affected-d\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh --rows 37-38\"\n  fi\n  if _diff_touches --pr-gated \"${C4_PRODUCER_PATHS[@]}\"; then :; fi")' || harness_die "the sixth-site mutation did not land"
 bash -n "$SIXTH_DIR/scripts/test-all.sh" || harness_die "the sixth-site mutant does not parse"
 MUT_N=$((MUT_N + 1))
 if [[ "$(derive_sites "$SIXTH_DIR/scripts/test-all.sh")" != "$want_sites" ]]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "mutant sixth-site: the set-equality assertion goes RED on an unexercised --pr-gated site"

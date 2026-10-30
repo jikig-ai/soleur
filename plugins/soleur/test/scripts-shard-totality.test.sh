@@ -866,6 +866,21 @@ awk -v "tokre=--rows[[:space:]]+[^[:space:]\"']+" '
   }
 ' "$RUNNER" > "$WORK/run_suite_rows"
 
+# A glob special-cased file must still EMIT coverage — subtracting it from
+# ref_glob above trusts exactly that; a dropped-registration special case leaves
+# the file absent from BOTH the reference and the union, silently uncovered.
+# Two covering shapes exist: a literal label in ref_static (run_suite/skip_suite —
+# c4-from-components' gated decline) or a run_suite command token carrying the
+# file path (the arm registrations, whose labels are `<stem>-<letter>` instead).
+_missing_special="$(comm -23 "$WORK/glob_special" \
+  <(cat "$WORK/ref_static" \
+        <(awk -F'\t' '$2 != "<unresolved>" { print $2 }' "$WORK/run_suite_rows") \
+      | sort -u) \
+  | head -5 | tr '\n' ' ')"
+if [[ -n "$_missing_special" ]]; then
+  fail "glob special-cased file(s) emit no registration: ${_missing_special% } — subtracted from the reference but covering nothing"
+fi
+
 # Tokens of interest, in two passes (one each), not a per-token rescan:
 #  a) every token with at least one --rows registration
 #  b) every resolvable token whose battery file declares DECLARED_TOTAL — the non-vacuity arm:
@@ -911,6 +926,17 @@ while IFS= read -r _tok; do
   fi
   if (( _unflagged_n > 0 )); then
     fail "${_tok} has a MIXED --rows contract: ${_unflagged_n} registration(s) unflagged beside ${_ranges_n} flagged — a dropped flag double-executes rather than loses coverage; state the flag on every registration"
+    continue
+  fi
+
+  # The -<letter> arm convention is stated where it is load-bearing:
+  # regenerate-shard-manifest.py groups same-stem `-<letter>` siblings and pins
+  # them to DISTINCT legs. A non-conforming --rows label bypasses that grouping —
+  # LPT co-location would then emit a manifest this very check refuses, with no
+  # in-generator remedy. Reject the label shape here, naming the contract.
+  _bad_lbl="$(cut -f1 "$WORK/rs_flagged" | grep -vE -- '-[a-z]$' | head -1)"
+  if [[ -n "$_bad_lbl" ]]; then
+    fail "${_tok}: --rows label '${_bad_lbl}' does not end in -<letter> — the arm convention the generator's distinct-legs grouping keys on; rename to <stem>-a/-b/… or the next regen can co-locate the arms"
     continue
   fi
 

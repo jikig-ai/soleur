@@ -265,10 +265,14 @@ span to the NEXT registered mark.
   inside the same relevance gates; arm prices seeded at CI-median × local
   arm-share — the first green run carrying real arm timings is the
   re-price input (interim-pin pattern from 2026-09-26). Post-split
-  manifest: legs ~28-32 min predicted suite time, spread ~7 min.
-  **Ownership checkpoint:** re-check leg spread + worst leg on the first
-  green PR run after merge; if the regen drifts stale ~2 weeks out, re-run
-  `--runs 5 --write` (note: `--timings-dir` requires PR/merge_group
+  manifest: legs 1,678-1,758 s predicted suite time (~28-29.3 min,
+  ≈29-31 min wall after setup; spread ~1.3 min) — the ~28-min bound is
+  delivered only after real arm timings re-price; until then
+  `--incremental` regens only, since a `--runs` pass would floor-price
+  the estimated arm rows. **Ownership checkpoint:** re-check leg spread
+  + worst leg on the first green PR run after merge — that run's
+  `suite-timings-*` artifacts carry the real arm prices and are the
+  `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
   artifact runs — main `push` runs elide the shards job).
 
 ## Runner-availability data (why extra legs are not free)

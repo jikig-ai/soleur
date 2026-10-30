@@ -262,6 +262,14 @@ while IFS= read -r pattern; do
 done < "$WORK/globs"
 LC_ALL=C sort -u -o "$WORK/raw2" "$WORK/raw2"
 
+# Glob members the loop special-cases AND diverts to literal `run_suite … bash <file>` argv
+# land in BOTH surfaces — subtract only those, or the double-coverage check reds on a
+# legitimate diversion (#11562's ci-pr-affected-replay split). A special case that emits
+# skip_suite only (c4-from-components) stays glob-covered; surface 1 never saw it anyway.
+grep -oE '"\$f" == "[^"]+"' "$RUNNER" | sed 's/.*== "//; s/"$//' | LC_ALL=C sort -u > "$WORK/glob_special"
+comm -12 "$WORK/glob_special" "$WORK/raw1" > "$WORK/glob_diverted"
+comm -23 "$WORK/raw2" "$WORK/glob_diverted" > "$WORK/raw2.f" && mv "$WORK/raw2.f" "$WORK/raw2"
+
 # --- Surface 3: the infra suites, DELEGATED to run-registered-suites.sh --------------------
 # Three authorities already derive over this one domain (this file, run-registered-suites.sh's
 # own untracked-file report, and .github/scripts/test/test-infra-suite-registration.sh) and

@@ -490,19 +490,26 @@ def assign(timings, n, incumbent):
                           and loads[inc - 1] <= loads[least] + eps) else least
         legs[label] = leg + 1
         loads[leg] += ms
-    # Arm separation (#11562): labels sharing a `-<letter>` suffix are --rows
-    # arms of one battery — scripts-shard-totality.test.sh requires them on
-    # DISTINCT legs (co-located halves defeat the split while totality still
-    # holds). LPT ignores the constraint, so a post-pass relocates any
-    # duplicated arm onto the least-loaded leg carrying no sibling. Deterministic:
-    # groups and members processed in sorted order.
+    separate_arm_groups(legs, loads, timings.get, n)
+    return legs, loads
+
+
+def separate_arm_groups(legs, loads, weight_of, n):
+    """Arm separation (#11562): labels sharing a `-<letter>` suffix are --rows
+    arms of one battery — scripts-shard-totality.test.sh requires them on
+    DISTINCT legs (co-located halves defeat the split while totality still
+    holds). Neither LPT nor the incremental deal honours the constraint, so
+    every write path calls this post-pass: a duplicated arm relocates onto the
+    least-loaded leg carrying no sibling. Deterministic: groups and members in
+    sorted order. weight_of(label) -> ms for the load bookkeeping."""
     groups = {}
     for label in legs:
-        stem = label[:-2] if len(label) > 2 and label[-2] == "-" and label[-1].isalpha() else None
+        stem = (label[:-2] if len(label) > 2
+                and label[-2] == "-" and label[-1].isalpha() else None)
         if stem is not None:
             groups.setdefault(stem, []).append(label)
     for stem in sorted(groups):
-        members = sorted(groups[stem], key=lambda l: (-timings[l], l))
+        members = sorted(groups[stem], key=lambda l: (-(weight_of(l) or 0), l))
         if len(members) < 2 or len(members) > n:
             continue
         used = set()
@@ -510,15 +517,12 @@ def assign(timings, n, incumbent):
             leg = legs[label] - 1
             if leg in used:
                 best = min((i for i in range(n) if i not in used),
-                           key=lambda i: loads[i], default=None)
-                if best is None:
-                    break
-                loads[leg] -= timings[label]
-                loads[best] += timings[label]
+                           key=lambda i: loads[i])
+                loads[leg] -= weight_of(label) or 0
+                loads[best] += weight_of(label) or 0
                 legs[label] = best + 1
                 leg = best
             used.add(leg)
-    return legs, loads
 
 
 def render(legs, n, prov, group, runs_csv=None, floor_ms=None):
@@ -716,6 +720,11 @@ def main():
             least = min(range(n), key=lambda i: loads[i])
             legs[label] = least + 1
             loads[least] += floor_ms
+        # Arm separation holds on this path too (#11562): a newly-registered
+        # arm may deal onto a leg already holding a sibling — without the pass
+        # the manifest writes a state the totality checker refuses.
+        separate_arm_groups(
+            legs, loads, lambda l: weights_ms.get(l, floor_ms), n)
 
         # The durations delta the committed check_durations lint requires to
         # stay exact: rows for labels that left the manifest drop, and every
