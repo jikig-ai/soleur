@@ -884,6 +884,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/server/prompt-injection-wrap.ts"
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
+  "apps/web-platform/test/broker-mechanism-spike.test.ts"
   "knowledge-base/engineering/architecture/decisions/"
   "knowledge-base/engineering/architecture/diagrams/"
   "knowledge-base/engineering/operations/runbooks/"
