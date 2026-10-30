@@ -32,6 +32,7 @@
 # Presence under apps/web-platform/infra/ IS registration (run-registered-suites.sh derives it).
 set -uo pipefail
 export LC_ALL=C
+export SOLEUR_TEST_SUITE_PID=$$   # read by the runuser shim's term_self walk: it stops at this suite and never signals it or anything above it
 ulimit -c 0 2>/dev/null || true
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -248,7 +249,8 @@ case "$n" in
     if flag term_self; then
       # signal the script itself (the nearest ancestor running `bash -s`), then carry on: its trap must turn the signal into rc 16
       # (the HIGHEST such ancestor: the command substitution's subshell has the same command line)
-      p=$$; top=""; while [ "$p" -gt 1 ]; do
+      [ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || { echo "fatal: SOLEUR_TEST_SUITE_PID unset" >&2; exit 64; }
+      p=$$; top=""; while [ "$p" -gt 1 ] && [ "$p" != "$SOLEUR_TEST_SUITE_PID" ]; do
         if [ "$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)" = "bash -s " ]; then top="$p"; fi
         p="$(awk '/^PPid:/ {print $2}' "/proc/$p/status")"
       done
@@ -358,7 +360,7 @@ run_host() {
   HOUT="$W/out"; HERR="$W/err"
   : > "$W/state/runuser_calls"; : > "$HOUT"; : > "$HERR"
   HRC=0
-  env -i PATH="$SH:/usr/bin:/bin" HOME="$W/home" WORLD="$W" REALGIT="$REALGIT" \
+  env -i PATH="$SH:/usr/bin:/bin" HOME="$W/home" WORLD="$W" REALGIT="$REALGIT" SOLEUR_TEST_SUITE_PID="$SOLEUR_TEST_SUITE_PID" \
     REFS_REPOS=/mnt/git-data/repositories "$@" bash -s < <(cat "$HS") > "$HOUT" 2> "$HERR" || HRC=$?
   assert_clean "$row" "$HOUT" "$HERR"
 }
