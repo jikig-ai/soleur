@@ -99,7 +99,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
     // caller key leased, fail-closed.
     mockResolveCurrentWorkspaceId.mockResolvedValue(WORKSPACE_CTX);
     primeResolverRpc({ data: null, error: null });
-    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
+    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x", { restOnly: true });
     expect(leasedKeyOwner).toBe(CALLER);
     expect(leasedDelegationId).toBeUndefined();
   });
@@ -108,7 +108,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
     // resolveCurrentWorkspaceId is documented never-throw, but the defensive
     // try/catch must still fall to the direct (caller-key) lease if it ever does.
     mockResolveCurrentWorkspaceId.mockRejectedValue(new Error("unexpected"));
-    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
+    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x", { restOnly: true });
     expect(leasedKeyOwner).toBe(CALLER);
     expect(leasedDelegationId).toBeUndefined();
   });
@@ -116,7 +116,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
   test("flag disabled → leases caller key", async () => {
     mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     mockIsByokDelegationsEnabled.mockResolvedValue(false);
-    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
+    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x", { restOnly: true });
     expect(leasedKeyOwner).toBe(CALLER);
     expect(leasedDelegationId).toBeUndefined();
   });
@@ -124,7 +124,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
   test("RPC error → leases caller key (never the grantor)", async () => {
     mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     primeResolverRpc({ data: null, error: { message: "rpc boom" } });
-    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
+    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x", { restOnly: true });
     expect(leasedKeyOwner).toBe(CALLER);
     expect(leasedKeyOwner).not.toBe(GRANTOR);
     expect(leasedDelegationId).toBeUndefined();
@@ -133,7 +133,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
   test("no delegation row → leases caller key (MissingByokKeyError UX)", async () => {
     mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     primeResolverRpc({ data: null, error: null });
-    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
+    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x", { restOnly: true });
     expect(leasedKeyOwner).toBe(CALLER);
     expect(leasedDelegationId).toBeUndefined();
   });
@@ -143,7 +143,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
     // path from the fail-closed path (so the assertions above aren't vacuous).
     mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     primeResolverRpc({ data: { key_owner_user_id: GRANTOR, delegation_id: "deleg-1" }, error: null });
-    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
+    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x", { restOnly: true });
     expect(leasedKeyOwner).toBe(GRANTOR);
     expect(leasedDelegationId).toBe("deleg-1");
   });

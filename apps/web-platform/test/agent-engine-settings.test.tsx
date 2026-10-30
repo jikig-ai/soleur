@@ -183,4 +183,74 @@ describe("AgentEngineSettings", () => {
     fireEvent.change(mode, { target: { value: "api-key" } });
     expect(await findByTestId("user-provider-disclosure")).toHaveTextContent("retention");
   });
+
+  describe("#11591 — option labels, helper and disclosure", () => {
+    const claudeOnly = {
+      defaultEngineId: "claude-code",
+      defaultAuthMode: "managed",
+      engines: [{ id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true }],
+    };
+
+    it("shows Automatic / My API key while the stored values stay managed / api-key", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
+      const { findByLabelText, getByRole, getByText } = render(<AgentEngineSettings isOwner />);
+      const mode = (await findByLabelText("Authentication mode")) as HTMLSelectElement;
+      expect(Array.from(mode.options).map((o) => [o.value, o.textContent])).toEqual([
+        ["managed", "Automatic"],
+        ["api-key", "My API key"],
+      ]);
+      // The radio sub-label tells the same story as the select (no raw "managed or api-key").
+      expect(getByText("local · Automatic or My API key")).toBeTruthy();
+      expect(getByRole("radio", { name: /Claude Code/ })).toBeTruthy();
+    });
+
+    it("helper line for the Claude engine says new conversations and names no subscription", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
+      const { findByTestId } = render(<AgentEngineSettings isOwner />);
+      const helper = await findByTestId("auth-mode-helper");
+      expect(helper).toHaveTextContent("Applies to new conversations.");
+      expect(helper.textContent ?? "").not.toMatch(/subscription/i);
+    });
+
+    it("the amber disclosure shows under BOTH modes for Claude, and the select is described by both notes", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
+      const { findByLabelText, findByTestId, queryByTestId } = render(<AgentEngineSettings isOwner />);
+      const mode = await findByLabelText("Authentication mode");
+      expect(await findByTestId("user-provider-disclosure")).toBeTruthy();
+      expect(mode.getAttribute("aria-describedby")).toBe("auth-mode-helper user-provider-disclosure");
+      fireEvent.change(mode, { target: { value: "api-key" } });
+      expect(queryByTestId("user-provider-disclosure")).toBeTruthy();
+    });
+
+    it("the helper and disclosure sit OUTSIDE the label, so the select's accessible name stays just the title", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
+      const { findByLabelText, findByTestId } = render(<AgentEngineSettings isOwner />);
+      await findByLabelText("Authentication mode");
+      expect((await findByTestId("auth-mode-helper")).closest("label")).toBeNull();
+      expect((await findByTestId("user-provider-disclosure")).closest("label")).toBeNull();
+    });
+
+    it("another engine keeps raw mode strings, no helper, and the disclosure only under api-key", async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          defaultEngineId: "codex",
+          defaultAuthMode: "managed",
+          engines: [
+            { id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true },
+            { id: "codex", version: "v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true },
+          ],
+        }),
+      });
+      const { findByLabelText, queryByTestId } = render(<AgentEngineSettings isOwner />);
+      const mode = (await findByLabelText("Authentication mode")) as HTMLSelectElement;
+      expect(Array.from(mode.options).map((o) => o.textContent)).toEqual(["managed", "api-key"]);
+      expect(queryByTestId("auth-mode-helper")).toBeNull();
+      expect(queryByTestId("user-provider-disclosure")).toBeNull();
+      expect(mode.getAttribute("aria-describedby")).toBeNull();
+      fireEvent.change(mode, { target: { value: "api-key" } });
+      expect(queryByTestId("user-provider-disclosure")).toBeTruthy();
+      expect(mode.getAttribute("aria-describedby")).toBe("user-provider-disclosure");
+    });
+  });
 });

@@ -1556,6 +1556,223 @@ EOF
                       "REFUSED its credential" "$(cat "$root/out")"
 }
 
+# =============================================================================
+# PER-PROBE TIMEOUT (#11215, CTO ruling 2026-10-29). Runs 40776246270 / 40702857885 / 40587723911 were
+# cancelled at the 15-minute job ceiling because four probes took 1.5-5 min EACH. The hop is now
+# `timeout -k 10 $FT_PROBE_TIMEOUT` (default 300; the rows set it to 1-2 s), and rc 124 is mapped to 3
+# (CANNOT ESTABLISH) with the script name logged. Every row drives the real sweeper end to end under
+# `g3_run` (the verdict and the comment live past main()), with the probe replaced after g3_root.
+# =============================================================================
+
+# The CANONICAL copy (plugins/soleur/test/test-helpers.sh), byte-for-byte: the fixture roots below
+# are command-substitution results, so the writes into them need the absoluteness guard. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# pto_root <probe-body> [closed] -> a g3 root whose p.sh is the given body (open tracker, or a
+# COMPLETED-closed tracker when $2 is "closed").
+pto_root() {
+  local body="$1" mode="${2:-open}" root
+  if [[ "$mode" == "closed" ]]; then
+    root=$(g3_root '[]' '[{"number":9001,"body":"<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->","stateReason":"COMPLETED"}]')
+  else
+    root=$(g3_root "$(g3_body '')")
+  fi
+  assert_fixture_dir "$root"
+  printf '#!/usr/bin/env bash\n%s\n' "$body" > "$root/scripts/followthroughs/p.sh"
+  chmod +x "$root/scripts/followthroughs/p.sh"
+  printf '%s' "$root"
+}
+
+# pto_mutant <root> <sed-script> <landed-grep-ere> -> path of a mutated SUT copy, or "" when the
+# mutation did not land (the caller records a FAIL row; a mutation that does not land reports the
+# BASELINE, which is indistinguishable from a pass).
+pto_mutant() {
+  local root="$1" script="$2" must_differ_from="$3" mut="$1/sut-mut.sh"
+  assert_fixture_dir "$root"
+  assert_fixture_dir "$mut"
+  sed -e "$script" "$SUT" > "$mut"
+  if cmp -s "$SUT" "$mut" || grep -qE -- "$must_differ_from" "$mut"; then
+    printf ''
+  else
+    printf '%s' "$mut"
+  fi
+}
+
+t_pto_1_timeout_maps_to_cannot_establish_and_names_the_script() {
+  local root t0 posted="" outlog
+  root=$(pto_root 'sleep 30')
+  t0=$SECONDS
+  g3_run "$root" "$SUT" FT_PROBE_TIMEOUT=1
+  local elapsed=$(( SECONDS - t0 ))
+  [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  outlog=$(cat "$root/out")
+  assert_eq       "PTO-1 the sweep completes (rc 0) instead of hanging on the slow probe" "0" "$(cat "$root/rc")"
+  assert_eq       "PTO-1 the sweep returned inside the cap, not after the probe's 30 s sleep" "1" "$(( elapsed < 20 ? 1 : 0 ))"
+  assert_contains "PTO-1 the tracker comment renders CANNOT ESTABLISH with exit 3 (not TRANSIENT, not exit 124)" \
+                  "### Sweeper run: CANNOT ESTABLISH (exit 3" "$posted"
+  assert_not_contains "PTO-1 ... and never surfaces the raw timeout status" "exit 124" "$posted"
+  assert_contains "PTO-1 the comment says why there is no probe output" "did not finish within 1s and was killed" "$posted"
+  # EXACT line, timestamp stripped: the script NAME is on the TIMED OUT line itself, so the run log
+  # answers "which probe is slow" without diffing two timestamps.
+  local tline
+  tline=$(awk 'index($0, "TIMED OUT after") { sub(/^\[[0-9:]+\] /, ""); print }' "$root/out")
+  assert_eq       "PTO-1 the run log names the slow probe's script on one TIMED OUT line" \
+                  "issue #9001: scripts/followthroughs/p.sh TIMED OUT after 1s (rc 124 -> 3, CANNOT ESTABLISH)" "$tline"
+  assert_contains "PTO-1 the raw status is still logged beside it (exit=124)" "scripts/followthroughs/p.sh exit=124" "$outlog"
+}
+
+t_pto_2_children_die_with_the_probe() {
+  # A probe that backgrounds a long child holds the `$(...)` pipe open after the probe itself dies.
+  # `timeout` without --foreground signals the whole process group, so the sweep must not wait out
+  # the 40 s child. (Failure mode of dropping that: the row takes ~40 s and the bound below trips.)
+  local root t0
+  root=$(pto_root 'sleep 40 & wait')
+  t0=$SECONDS
+  g3_run "$root" "$SUT" FT_PROBE_TIMEOUT=1
+  assert_eq "PTO-2 a backgrounded child does not hold the sweep past the cap" "1" "$(( SECONDS - t0 < 25 ? 1 : 0 ))"
+  assert_contains "PTO-2 the timed-out verdict is still posted" "### Sweeper run: CANNOT ESTABLISH (exit 3" "$(cat "$root/comment-9001" 2>/dev/null || true)"
+}
+
+t_pto_3_fast_probe_is_untouched() {
+  local root posted=""
+  root=$(pto_root 'echo FAST-OK; exit 2')
+  g3_run "$root" "$SUT" FT_PROBE_TIMEOUT=30
+  [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_contains     "PTO-3 control: a probe inside the cap keeps its own verdict (NOT YET, exit 2)" "### Sweeper run: NOT YET (exit 2" "$posted"
+  assert_contains     "PTO-3 control: its output still reaches the comment" "FAST-OK" "$posted"
+  assert_not_contains "PTO-3 control: no TIMED OUT line for a probe that finished" "TIMED OUT" "$(cat "$root/out")"
+}
+
+t_pto_4_probe_exit_3_is_not_rewritten() {
+  # A probe that itself reports CANNOT ESTABLISH (exit 3, e.g. ci-draft-light-soak-9728) must not
+  # be logged as a timeout: the TIMED OUT line is keyed on 124 only.
+  local root posted=""
+  root=$(pto_root 'echo own-verdict; exit 3')
+  g3_run "$root" "$SUT" FT_PROBE_TIMEOUT=30
+  [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_contains     "PTO-4 a probe's own exit 3 renders CANNOT ESTABLISH" "### Sweeper run: CANNOT ESTABLISH (exit 3" "$posted"
+  assert_not_contains "PTO-4 ... and is not mislabelled as a timeout" "TIMED OUT" "$(cat "$root/out")"
+  assert_not_contains "PTO-4 ... nor given the killed-by-sweeper sentence" "was killed" "$posted"
+}
+
+t_pto_9_term_ignoring_probe_is_killed_and_still_mapped() {
+  # A probe that ignores SIGTERM is only stopped by `-k 10`'s SIGKILL, and timeout then exits 137, not 124.
+  # Without the 137 arm it reads as TRANSIENT with no script name (reviewer finding). ~11 s by design.
+  local root posted="" t0
+  root=$(pto_root "trap '' TERM; sleep 60 & wait")
+  t0=$SECONDS
+  g3_run "$root" "$SUT" FT_PROBE_TIMEOUT=1
+  [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "PTO-9 the SIGKILL escalation ended the sweep well inside the probe's 60 s" "1" "$(( SECONDS - t0 < 40 ? 1 : 0 ))"
+  assert_contains "PTO-9 the raw status was 137 (so this row exercises the escalation, not the TERM path)" "p.sh exit=137" "$(cat "$root/out")"
+  assert_contains "PTO-9 ... and it is still rendered CANNOT ESTABLISH (exit 3)" "### Sweeper run: CANNOT ESTABLISH (exit 3" "$posted"
+  assert_contains "PTO-9 ... with the script named on the TIMED OUT line" "p.sh TIMED OUT after 1s (rc 137 -> 3, CANNOT ESTABLISH)" "$(cat "$root/out")"
+}
+
+t_pto_10_a_probes_own_124_or_137_is_not_relabelled() {
+  # A probe that wraps its own `timeout` (or is OOM-killed) and exits 124/137 EARLY is a different verdict:
+  # the mapping requires the wall clock to have reached the cap.
+  local s root posted
+  for s in 124 137; do
+    posted=""
+    root=$(pto_root "exit $s")
+    g3_run "$root" "$SUT" FT_PROBE_TIMEOUT=30
+    [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+    assert_contains     "PTO-10 [exit $s] an early own-exit stays TRANSIENT with its real code" "### Sweeper run: TRANSIENT (exit $s" "$posted"
+    assert_not_contains "PTO-10 [exit $s] ... and is not logged as a sweeper timeout" "TIMED OUT" "$(cat "$root/out")"
+  done
+}
+
+t_pto_5_closed_tracker_timeout_is_silent() {
+  # The closed-set catch-all posts nothing for a transient verdict; a timed-out probe must not
+  # accrete daily comments or reopen the tracker.
+  local root calls
+  root=$(pto_root 'sleep 30' closed)
+  g3_run "$root" "$SUT" FT_PROBE_TIMEOUT=1
+  calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_eq           "PTO-5 the closed-set run completes (rc 0)" "0" "$(cat "$root/rc")"
+  assert_contains     "PTO-5 control: the gh stub log exists and shows the closed-set listing (the not_contains rows below read a real log)" "issue list" "$calls"
+  assert_contains     "PTO-5 the timeout is logged against the script on the closed path too" "p.sh TIMED OUT after 1s" "$(cat "$root/out")"
+  assert_not_contains "PTO-5 no comment on a closed tracker" "issue comment" "$calls"
+  assert_not_contains "PTO-5 no reopen" "issue reopen" "$calls"
+}
+
+t_pto_6_invalid_cap_is_refused() {
+  local v root
+  for v in abc 0 -5 "1.5" ""; do
+    root=$(pto_root 'echo ran > ran.marker; exit 0')
+    g3_run "$root" "$SUT" FT_PROBE_TIMEOUT="$v"
+    # An EMPTY value falls back to the default (300) via `:-`, which is valid: it must NOT be refused.
+    if [[ -z "$v" ]]; then
+      assert_eq "PTO-6 [empty] falls back to the default cap and runs" "0" "$(cat "$root/rc")"
+      assert_eq "PTO-6 [empty] ... and the probe did run (the sentinel the refused values must lack)" "present" "$([[ -e "$root/ran.marker" ]] && echo present || echo absent)"
+    else
+      assert_eq       "PTO-6 [$v] is refused with rc 2 before any probe runs" "2" "$(cat "$root/rc")"
+      assert_contains "PTO-6 [$v] names the variable in an ::error:: annotation" "FT_PROBE_TIMEOUT must be a positive integer" "$(cat "$root/err")"
+      assert_eq       "PTO-6 [$v] the probe never ran (no sentinel)" "absent" "$([[ -e "$root/ran.marker" ]] && echo present || echo absent)"
+    fi
+  done
+}
+
+t_pto_7_default_is_300_and_job_ceiling_covers_it() {
+  assert_contains "PTO-7 the default per-probe cap is 300 s (CTO ruling)" 'FT_PROBE_TIMEOUT="${FT_PROBE_TIMEOUT:-300}"' "$(cat "$SUT")"
+  local wf="$SCRIPT_DIR/../.github/workflows/scheduled-followthrough-sweeper.yml" mins=""
+  mins=$(awk '/^[[:space:]]+timeout-minutes:[[:space:]]*[0-9]+/ { gsub(/[^0-9]/, "", $2); print $2; exit }' "$wf")
+  assert_eq "PTO-7 the sweeper job ceiling is 30 minutes (15 cancelled three runs)" "30" "$mins"
+  assert_eq "PTO-7 the job ceiling is above one probe cap with room for several slow probes (>= 5 caps)" "1" "$(( mins * 60 >= 5 * 300 ? 1 : 0 ))"
+}
+
+t_pto_8_mutations() {
+  local root mut
+  # (a) DELETE the timeout wrapper: a slow probe now runs to completion and its own verdict stands.
+  root=$(pto_root 'sleep 4')
+  mut=$(pto_mutant "$root" 's/exec timeout -k 10 "\$FT_PROBE_TIMEOUT" python3/exec python3/' 'exec timeout -k 10')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "PTO-8a mutation did not land (the timeout wrapper is still on the exec line) -- the row would be vacuous"
+  else
+    g3_run "$root" "$mut" FT_PROBE_TIMEOUT=1
+    assert_not_contains "PTO-8a mutant (wrapper deleted): the slow probe is no longer cut off" "TIMED OUT" "$(cat "$root/out")"
+    assert_contains     "PTO-8a ... positive control: the mutant ran the probe to its own exit 0 (not a broken mutant)" "p.sh exit=0" "$(cat "$root/out")"
+  fi
+  # (b) INVERT the mapping: drop `rc=3` so 124 reaches the verdict map unchanged.
+  root=$(pto_root 'sleep 30')
+  mut=$(pto_mutant "$root" '/rc == 124 || rc == 137/,/^  fi$/ s/^    rc=3$/    :/' '^    rc=3$')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "PTO-8b mutation did not land (a lone 'rc=3' assignment survives in the 124 branch) -- the row would be vacuous"
+  else
+    g3_run "$root" "$mut" FT_PROBE_TIMEOUT=1
+    assert_contains "PTO-8b mutant (rc=3 deleted): the verdict degrades to TRANSIENT exit 124" "### Sweeper run: TRANSIENT (exit 124" "$(cat "$root/comment-9001" 2>/dev/null || true)"
+  fi
+  # (c) DELETE the script-name log line.
+  root=$(pto_root 'sleep 30')
+  mut=$(pto_mutant "$root" '/TIMED OUT after/d' 'TIMED OUT after')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "PTO-8c mutation did not land (a TIMED OUT log line survives) -- the row would be vacuous"
+  else
+    g3_run "$root" "$mut" FT_PROBE_TIMEOUT=1
+    assert_not_contains "PTO-8c mutant (log line deleted): the run log no longer names the slow probe" "TIMED OUT" "$(cat "$root/out")"
+    assert_contains     "PTO-8c ... positive control: the mutant still maps the verdict (a working sweeper minus one line)" "### Sweeper run: CANNOT ESTABLISH (exit 3" "$(cat "$root/comment-9001" 2>/dev/null || true)"
+  fi
+  # (d) INVERT the trigger: key the branch on a non-timeout status; a slow probe is then unmapped.
+  root=$(pto_root 'sleep 30')
+  mut=$(pto_mutant "$root" 's/if (( rc == 124 || rc == 137 ))/if (( rc == 0 ))/' 'rc == 124 \|\| rc == 137')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "PTO-8d mutation did not land (the 124 condition is still present) -- the row would be vacuous"
+  else
+    g3_run "$root" "$mut" FT_PROBE_TIMEOUT=1
+    assert_not_contains "PTO-8d mutant (trigger inverted): a timed-out probe is not reported as CANNOT ESTABLISH" "CANNOT ESTABLISH (exit 3" "$(cat "$root/comment-9001" 2>/dev/null || true)"
+    assert_contains     "PTO-8d ... positive control: the mutant still reaches the verdict map (TRANSIENT exit 124)" "### Sweeper run: TRANSIENT (exit 124" "$(cat "$root/comment-9001" 2>/dev/null || true)"
+  fi
+}
 
 # =============================================================================
 # GUARD 2 (#7490) -- the sweeper's FENCED-ONLY DIRECTIVE verdict is LOUD.
@@ -2000,6 +2217,16 @@ t_s2d_7_launcher_exit_mapping
 t_s2d_8_probe_stderr_reaches_the_comment
 t_s2d_9_closed_credential_refusal_is_logged
 t_s2d_10_every_probe_has_a_shebang_and_the_exec_bit
+t_pto_1_timeout_maps_to_cannot_establish_and_names_the_script
+t_pto_2_children_die_with_the_probe
+t_pto_3_fast_probe_is_untouched
+t_pto_4_probe_exit_3_is_not_rewritten
+t_pto_5_closed_tracker_timeout_is_silent
+t_pto_6_invalid_cap_is_refused
+t_pto_7_default_is_300_and_job_ceiling_covers_it
+t_pto_9_term_ignoring_probe_is_killed_and_still_mapped
+t_pto_10_a_probes_own_124_or_137_is_not_relabelled
+t_pto_8_mutations
 
 echo
 
@@ -2108,7 +2335,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=277
+MIN_ASSERTIONS=329
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

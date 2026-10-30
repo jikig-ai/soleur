@@ -108,6 +108,7 @@ import {
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
+import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import {
   authFailureFrameFromLeaseError,
   isOauthUnusableLeaseError,
@@ -1142,8 +1143,9 @@ async function startAgentSessionInner(
       userId,
       async (lease) => {
     // Agent-SDK consumer — resolve the credential ({ value, scheme }) so the
-    // subprocess env carries exactly one auth var. Prefers the operator
-    // subscription oauth_token when enabled+permitted; otherwise api_key.
+    // subprocess env carries exactly one auth var. The conversation binding's
+    // auth mode (#11591) decides: the operator subscription oauth_token only
+    // for `managed` (and when enabled+permitted); `api-key` always uses api_key.
     const [credential, serviceTokens] = await Promise.all([
       lease.getAgentCredential(),
       getUserServiceTokens(userId),
@@ -2741,7 +2743,9 @@ are the requirements to implement.`;
         }
       }
     }
-    });  // end runWithByokLease
+    },
+    { resolveAuthMode: makeConversationAuthModeResolver(userId, conversationId) },
+  );  // end runWithByokLease
   } catch (err) {
     if (controller.signal.aborted) {
       // feat-abort-conversation-web PR1 (plan §1.3): the abort branch
@@ -3347,7 +3351,9 @@ async function sendUserMessageInner(
         // lease can close before the per-leader lease bodies run.
         dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
           .catch(handleSessionError);
-      });
+      },
+    { restOnly: true },
+  );
     } catch (err) {
       await handleSessionError(err);
     }

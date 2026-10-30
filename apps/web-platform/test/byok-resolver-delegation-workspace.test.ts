@@ -231,7 +231,7 @@ describe("byok-resolver derives the CURRENT (shared) workspace, not the solo def
 
   test("resolveKeyOwnerThenLease opens the lease with the grantor key + delegationId for the active workspace", async () => {
     primeRpcSharedWorkspaceOnly({ key_owner_user_id: GRANTOR, delegation_id: "deleg-1" });
-    await resolveKeyOwnerThenLease(MEMBER, MEMBER, async () => "x");
+    await resolveKeyOwnerThenLease(MEMBER, MEMBER, async () => "x", { restOnly: true });
     expect(leasedKeyOwner).toBe(GRANTOR);
     expect(leasedDelegationId).toBe("deleg-1");
     expect(mockResolveCurrentWorkspaceId).toHaveBeenCalledWith(MEMBER, expect.anything());
@@ -262,5 +262,53 @@ describe("byok-resolver derives the CURRENT (shared) workspace, not the solo def
       "resolve_byok_key_owner",
       expect.objectContaining({ p_workspace_id: MEMBER }),
     );
+  });
+});
+
+// #11591 Guard 1 — every runWithByokLease branch inside resolveKeyOwnerThenLease forwards the SAME mode
+// resolver the caller handed over (identity, not just presence), so a branch that drops it would turn the
+// operator's Concierge into a fail-closed lease instead of silently serving a subscription token.
+describe("resolveKeyOwnerThenLease forwards the mode resolver on every lease branch", () => {
+  const branches: Array<[string, () => void]> = [
+    ["workspace lookup throws", () => mockResolveCurrentWorkspaceId.mockRejectedValue(new Error("lookup failed"))],
+    ["delegations flag off", () => mockIsByokDelegationsEnabled.mockResolvedValue(false)],
+    [
+      "resolver RPC errors",
+      () =>
+        mockServiceRpc.mockReturnValue({
+          maybeSingle: () => Promise.resolve({ data: null, error: { message: "rpc down" } }),
+        }),
+    ],
+    ["resolver returns no row", () => mockServiceRpc.mockReturnValue({ maybeSingle: () => Promise.resolve({ data: null, error: null }) })],
+    ["delegated row", () => primeRpcSharedWorkspaceOnly({ key_owner_user_id: GRANTOR, delegation_id: "deleg-1" })],
+  ];
+
+  test("five-branch table cannot be empty", () => {
+    expect(branches).toHaveLength(5);
+  });
+
+  test.each(branches)("%s: the resolver reaches runWithByokLease by identity", async (_name, arrange) => {
+    arrange();
+    const captured: Array<Record<string, unknown>> = [];
+    mockRunWithByokLease.mockImplementation((args: Record<string, unknown>) => {
+      captured.push(args);
+      return Promise.resolve("ran");
+    });
+    const resolveAuthMode = async () => "api-key";
+    await expect(resolveKeyOwnerThenLease(MEMBER, MEMBER, async () => "x", { resolveAuthMode })).resolves.toBe("ran");
+    expect(captured).toHaveLength(1);
+    expect(captured[0].resolveAuthMode).toBe(resolveAuthMode);
+  });
+
+  test.each(branches)("%s: restOnly forwards no resolver and still leases (must-pass input)", async (_name, arrange) => {
+    arrange();
+    const captured: Array<Record<string, unknown>> = [];
+    mockRunWithByokLease.mockImplementation((args: Record<string, unknown>) => {
+      captured.push(args);
+      return Promise.resolve("ran");
+    });
+    await expect(resolveKeyOwnerThenLease(MEMBER, MEMBER, async () => "x", { restOnly: true })).resolves.toBe("ran");
+    expect(captured).toHaveLength(1);
+    expect(captured[0].resolveAuthMode).toBeUndefined();
   });
 });

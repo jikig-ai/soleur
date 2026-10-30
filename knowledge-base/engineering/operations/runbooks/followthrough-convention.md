@@ -19,6 +19,7 @@ verification passes — no human revisit required.
    - Exit 0 = PASS (close-criteria met → sweeper closes the issue)
    - Exit 1 = FAIL (criteria not met → sweeper comments, leaves open)
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
+   - **Per-probe wall-clock cap (#11215).** The sweeper runs every probe under `timeout -k 10 $FT_PROBE_TIMEOUT` (default **300 s**). A probe that outlives it is killed with its whole process group, logged as `<script> TIMED OUT after <N>s (rc 124 -> 3, CANNOT ESTABLISH)`, and rendered as CANNOT ESTABLISH (exit 3) on the tracker. A probe that routinely needs more than a few minutes is a defect in the probe (bound its own reads), not a reason to raise the cap; the job ceiling (`timeout-minutes` in `scheduled-followthrough-sweeper.yml`) must stay above the cap times the number of slow probes.
    - **Exit 78 = refused to run under shell tracing** (`EX_CONFIG`, #7797). It lands in the TRANSIENT bucket above, which is the fail-safe direction — never a false PASS — but it is a *configuration* signal, not a network one: the probe declined because tracing was on while a live credential was in scope. Re-run with the credential unset to trace safely. A probe stuck reporting 78 every sweep is a caller enabling `-x`, not a flaky dependency.
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
    - **A registered sub-vocabulary inside the TRANSIENT bucket, for NOTIFY-ONLY probes.** Some
@@ -314,6 +315,23 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   closed is a defect class (#10321 — `zot-log-channel-7440.sh` claimed "enrolled as a REGRESSION
   detector" for ~7 dormant weeks). When closing such a tracker, land the standing vehicle in the
   same or a linked PR and correct the probe header's enrollment claim.
+
+## Sharp edges for `gh run view --log` probes
+
+- **GitHub drops step-name attribution ~2-3 weeks after a job completes**: every
+  log line returns under field 2 `UNKNOWN STEP` while the content survives.
+  A probe anchoring on the step-name column (`index($2, step)`) reads a proven
+  trail as zero-line and takes its own tripwire on every aged job in its
+  window (#11600). The countermeasure — proven in
+  `git-data-boot-poll-8178.sh` (#8262) and adapted in
+  `web-first-deploy-10585.sh` (#11603): strip CR + the UTF-8 BOM globally
+  (`${log//.../}` — one mark per
+  section), then slice the step's output region on the runner's `##[group]Run`
+  headers, first header stamped at or after the step's `started_at` from the
+  jobs API, next header or EOF closing the region. Feed the region through the
+  same emitted-vs-echoed filter as the named path, and evaluate any
+  zero-parseable tripwire AFTER recovery — an empty region, no `started_at`,
+  or a region with no trail-pattern lines is the same CANNOT ESTABLISH.
 
 ## What the sweeper does NOT cover
 
