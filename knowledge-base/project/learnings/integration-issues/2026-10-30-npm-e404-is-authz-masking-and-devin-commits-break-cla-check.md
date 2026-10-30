@@ -34,7 +34,7 @@ Two findings from the #11585 pipeline (npm Publish leg E404 fix):
    @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur --allow-publish`
    (interactive maintainer login; granular tokens rejected).
 2. **CLA fix:** `git filter-branch -f --env-filter` rewriting only the Devin
-   author/committer emails to `Jean Deruelle <jean.deruelle@jikigai.com>` over
+   author/committer emails to `Jean Deruelle <jean.deruelle at jikigai.com>` over
    `origin/main..HEAD` (preserves merge commits and message trailers — a plain
    rebase cannot cross the merge cleanly), then `git push --force-with-lease`.
    `pull_request_target` runs `cla.yml` from **main**, so an in-PR allowlist
