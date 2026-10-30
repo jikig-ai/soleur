@@ -15,6 +15,23 @@ lane: cross-domain
 
 # feat: remove a stored subscription token, and define chat state after a key_invalid card
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Passes:** premise/attribution re-verification (issue and PR states, rule ids, labels, migration ordinal on a fresh `origin/main`), halt gates 4.6-4.13 (all pass), precedent diff for the new SQL function, post-edit self-audit for dropped symbols, and a 4-agent plan review plus three CTO ruling rounds that preceded it.
+
+### Key Improvements
+
+1. DELETE goes through a service-role RPC (ADR-048 write boundary) instead of an app-level delete that could reach the user's `anthropic` fallback key; the precedent diff against migration 096 is recorded.
+2. Three first-draft premises were corrected with code evidence: `errorOccurrence` is unreachable (dropped), the `ws-handler.ts` ladder edit is dead code (dropped), and the Reconnect rebind relies on the server answering `resume_session` with `session_started` (pinned by a reducer test, with a one-shot `start_session` fallback split between hook and surface).
+3. Settings copy and control are keyed on "in effect" (`isCcOauthEnabled() && is_valid`) so an inert stored token stays removable without a false billing claim.
+
+### New Considerations Discovered
+
+- Removing the owner's token returns delegated leases to the owner's API key (baseline behavior): recorded in the ADR-048 addendum with a lease test.
+- The hook cannot own the `start_session` fallback because it does not hold the start options; the surface does (`rebindRefused`).
+- Existing `toEqual` pins on `lastError` forbid adding any field to `lastError` or `lastError.action`.
+
 ## Overview
 
 Two deferred follow-ups from the #11086 Concierge sign-in work ship together in one PR.
@@ -182,8 +199,10 @@ Hook (`lib/ws-client.ts`):
   `byok_key_missing` sets `{ code: "byok_key_missing", message: "Add an API key in Settings to continue.", action: { label: "Add API key", href: "/dashboard/settings" } }`.
 - Rebind (H3): the server answers `resume_session` with `session_started`, so the client sets `sessionKind="fresh"`, does NOT refetch history, and the retained
   local messages stay the transcript. A `rebindArmedRef` is set when the rebind resume is sent and cleared on `session_started`; if an `error` frame arrives while it is
-  armed, drop `rebindConversationId`, show no extra error bubble, and fall back ONCE to `startSession` with the original options (never loop). `rebindConversationId`
-  is also cleared on mount.
+  armed, drop `rebindConversationId`, show no extra error bubble, and fall back ONCE to `startSession` (never loop). The hook does not know the original start options
+  (`leaderId`, context, `resumeByContextPath` live in the surface), so the fallback is split: the hook sets a returned `rebindRefused: boolean` (and clears
+  `rebindConversationId`); the surface effect `if (rebindRefused) setSessionStarted(false)` re-fires the existing start/resume effect, which now has no rebind id and calls
+  `startSession(...)` with the surface-held options. `rebindRefused` resets on `reconnect()` and mount. `rebindConversationId` is also cleared on mount.
 - Reducer: `ChatMessage.unanswered?: boolean` (type in `lib/chat-state-machine.ts`) and action `mark_last_user_unanswered` — the reducer (`chatReducer`/`ChatAction`)
   lives in `lib/ws-client.ts` — a no-op when the last message is not a user message. Not persisted; history hydrate drops it (accepted, G5).
 
@@ -222,6 +241,21 @@ Surface (`components/chat/chat-surface.tsx` + `chat-input.tsx` + `error-card.tsx
 | Return hint | `Back from Settings? Select Reconnect to continue.` |
 | Bubble flag | `Not answered` |
 
+### Precedent diff — `delete_oauth_credential` vs `store_oauth_credential` (migration 096)
+
+| Aspect | Precedent (`store_oauth_credential`, 096) | This plan (`delete_oauth_credential`, 179) | Note |
+|---|---|---|---|
+| Definer | `SECURITY DEFINER` | `SECURITY DEFINER` | same |
+| `search_path` | `SET search_path = public, pg_temp` | `SET search_path = public, pg_temp` | same (`cq-pg-security-definer-search-path-pin-pg-temp`) |
+| Language | `sql` | `sql` | body is a data-modifying CTE: `WITH d AS (DELETE FROM public.api_keys WHERE user_id = p_user_id AND provider = 'anthropic_oauth' RETURNING 1) SELECT EXISTS (SELECT 1 FROM d)` |
+| Provider | hardcoded `'anthropic_oauth'` | hardcoded `'anthropic_oauth'` | never a parameter |
+| Return | `void` | `boolean` (row existed) | lets the route report `deleted` without a second read |
+| Grants | `REVOKE … FROM PUBLIC; … FROM authenticated; … FROM anon; GRANT … TO service_role` (4 statements) | identical four statements, new signature `(uuid)` | copy the block verbatim |
+| Comment | `COMMENT ON FUNCTION` naming the route fence | `COMMENT ON FUNCTION` stating there is deliberately NO operator fence on erase | documents the F6 ruling at the DB layer |
+| Down | `DROP FUNCTION IF EXISTS … (uuid, text, text, text)` first (then constraint work) | `DROP FUNCTION IF EXISTS public.delete_oauth_credential(uuid)` only | no schema change to reverse |
+
+No test enumerates `SECURITY DEFINER` functions by name (`git grep store_oauth_credential` outside the migration hits only the route, its two tests and ADR-048), so no snapshot needs updating; still run the migration/grants guard tests in Phase 1.
+
 ### D. Docs
 
 - ADR-308: replace the "Open follow-ups" bullet with an `## Amendment — 2026-10-30` recording both resolutions (explicit hard delete via RPC, no operator fence, no cross-host
@@ -243,7 +277,7 @@ Surface (`components/chat/chat-surface.tsx` + `chat-input.tsx` + `error-card.tsx
 - **Billing-basis explicitness (P2, P3):** the route never writes an `anthropic` row; the dialog names the consequence from props.
 - **NFR:** no new availability/latency surface; one extra single-row `maybeSingle` read on the Settings page and one RPC call on DELETE.
 - **Type-widening sweep (`hr-type-widening-cross-consumer-grep`, `cq-union-widening-grep-three-patterns`):** `UseWebSocketReturn` gains `credentialBlocked`,
-  `rebindConversationId` and `sendMessage: … => boolean`; sole consumer is `chat-surface.tsx` (the `useWebSocket(` call); the compile gate `test/mocks/use-websocket.ts`
+  `rebindConversationId`, `rebindRefused` and `sendMessage: … => boolean`; sole consumer is `chat-surface.tsx` (the `useWebSocket(` call); the compile gate `test/mocks/use-websocket.ts`
   (`satisfies WebSocketState`) is updated. `ChatMessage.unanswered`, `ErrorCard.newTab` and `ChatInput.onSend` are additive/optional. `WSErrorCode` is NOT widened
   (`byok_key_missing` is already in `lib/types.ts` and `ws-zod-schemas.ts`).
 - **`api_keys` write-site census (`hr-write-boundary-sentinel-sweep-all-write-sites`):** `git grep -n 'from("api_keys")'` → `app/api/keys/route.ts` (POST upsert + `store_oauth_credential`
