@@ -52,10 +52,13 @@ export interface TaskEntry {
 //   - strategy-review: CONDITIONAL/idempotent producer — opens an issue ONLY per
 //     knowledge-base file needing review (title-dedup, skips up_to_date), so a
 //     quiet week with everything up-to-date legitimately yields zero issues.
-//     Issue-presence is the wrong silence signal for it (#4874). Its liveness is
-//     covered by the Sentry cron monitor `scheduled-strategy-review`.
-// Cron LIVENESS for ALL excluded tasks is covered separately by the per-function
-// Sentry cron monitors — see #4708, which retired the sibling
+//     Issue-presence is the wrong silence signal for it (#4874). Its liveness was
+//     covered by the Sentry cron monitor `scheduled-strategy-review` — destroyed
+//     by the #6590 PR-B prune (void-posts by design, spec NG4).
+// Cron LIVENESS for ALL excluded tasks was covered separately by the per-function
+// Sentry cron monitors — see #4708, which retired the sibling (43 of those
+// monitors were destroyed by the #6590 PR-B prune; the emitters void-post by
+// design, spec NG4 — liveness cover is now reportSilentFallback + this watchdog)
 // cron-inngest-cron-watchdog for the same reason (Inngest `/v1/*` run-history is
 // loopback-gated and unreachable from the app container). maxGapDays is derived
 // from each task's real cron cadence; see the runbook's Threshold Derivation.

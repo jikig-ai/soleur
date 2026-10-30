@@ -106,6 +106,13 @@ import {
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
+import {
+  authFailureFrameFromLeaseError,
+  isOauthUnusableLeaseError,
+  logSessionFailure,
+  rewriteAgentAuthFailure,
+  type AuthFailureFrame,
+} from "./agent-auth-user-message";
 import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
 import {
   CREDENTIALS_PROMPT_DIRECTIVE,
@@ -1092,6 +1099,8 @@ async function startAgentSessionInner(
   // material — the catch branch reads these AFTER the lease has
   // returned, so anything that lands here outlives the zeroize.
   let fullText = "";
+  // #11086 — frame to send after this turn's `stream_end` when the CLI's sign-in failure reply was rewritten (terminal kinds).
+  let pendingAuthFrame: AuthFailureFrame | null = null;
   let messagePersisted = false;
   let accumulatedUsage: { input_tokens: number; output_tokens: number; cost_usd: number } = {
     input_tokens: 0,
@@ -2360,7 +2369,12 @@ are the requirements to implement.`;
       }
 
       if (message.type === "assistant") {
-        const content = message.message?.content;
+        // #11086 — `authProbe.observe(message)` above already saw the RAW message (this runner has no tap; the probe is called
+        // inline). The helper builds a NEW content array, so the friendly text feeds `fullText`, the stream frame and the
+        // persisted row while the SDK message stays untouched.
+        const friendly = rewriteAgentAuthFailure(message, credential.scheme);
+        if (friendly?.frame) pendingAuthFrame = friendly.frame;
+        const content = friendly ? friendly.content : message.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === "text") {
@@ -2585,6 +2599,13 @@ are the requirements to implement.`;
             sendToClient(userId, { type: "stream_end", leaderId: streamLeaderId });
             streamEndSent = true;
           }
+          // #11086 — the recovery frame follows `stream_end`: the client tears the stream down on `key_invalid`, so sent any
+          // earlier it would turn the friendly bubble into an interrupted chip.
+          const authFailedTurn = pendingAuthFrame !== null;
+          if (pendingAuthFrame !== null) {
+            sendToClient(userId, pendingAuthFrame);
+            pendingAuthFrame = null;
+          }
 
           // Mark as waiting_for_user instead of completed -- conversation
           // continues until explicit close or inactivity timeout.
@@ -2597,7 +2618,8 @@ are the requirements to implement.`;
           // Shared with the cc-soleur-go terminal via notifyTaskCompleted so the
           // two turn-boundary lineages cannot drift (arch review P1). Fire-and-
           // forget (never throws + self-mirroring).
-          if (assistantPersisted) {
+          // #11086: a turn that ended in a terminal sign-in failure is not a completion.
+          if (assistantPersisted && !authFailedTurn) {
             void notifyTaskCompleted({
               userId,
               conversationId,
@@ -2924,16 +2946,25 @@ are the requirements to implement.`;
         // workspace context.
         reportMissingByokKey(err);
         Sentry.captureException(err);
-      } else {
+      } else if (!isOauthUnusableLeaseError(err)) {
+        // #11086: an unusable stored credential was already reported by the lease (feature byok-lease, closed class only);
+        // a second raw capture would double the Sentry count for one failed turn (the cc path skips its mirror the same way).
         Sentry.captureException(err);
       }
-      log.error({ err, userId, conversationId }, "Session error");
-      const message = sanitizeErrorForClient(err);
-      sendToClient(userId, {
-        type: "error",
-        message,
-        errorCode: resolveSessionErrorCode(err),
+      logSessionFailure(log, err, { userId, conversationId }, {
+        refused: "Session refused: stored subscription credential is not usable by the CLI",
+        failed: "Session error",
       });
+      const leaseFrame = authFailureFrameFromLeaseError(err);
+      if (leaseFrame !== null) {
+        sendToClient(userId, leaseFrame);
+      } else {
+        sendToClient(userId, {
+          type: "error",
+          message: sanitizeErrorForClient(err),
+          errorCode: resolveSessionErrorCode(err),
+        });
+      }
       await updateConversationStatusIfActive(
         userId,
         conversationId,
@@ -3200,11 +3231,12 @@ async function sendUserMessageInner(
     // BEFORE the generic captureException so the workspace context lands
     // on the trail. Returns; we still surface the WS error event below.
     if (err instanceof MissingByokKeyError) reportMissingByokKey(err);
-    Sentry.captureException(err);
-    log.error(
-      { err, userId, conversationId },
-      "sendUserMessage session error",
-    );
+    // #11086: the lease already reported an unusable stored credential; skip the duplicate raw capture and error log.
+    if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
+    logSessionFailure(log, err, { userId, conversationId }, {
+      refused: "sendUserMessage refused: stored subscription credential is not usable",
+      failed: "sendUserMessage session error",
+    });
     // #4440 follow-up to #4418 — JWT-deny propagation. Detect a
     // mid-session `RuntimeAuthError("denied_jti")` BEFORE the generic
     // error frame fires so agents/API consumers receive the same
@@ -3221,12 +3253,16 @@ async function sendUserMessageInner(
         sendToClient(userId, frame),
       );
     }
-    const message = sanitizeErrorForClient(err);
-    sendToClient(userId, {
-      type: "error",
-      message,
-      errorCode: resolveSessionErrorCode(err),
-    });
+    const leaseFrame = authFailureFrameFromLeaseError(err);
+    if (leaseFrame !== null) {
+      sendToClient(userId, leaseFrame);
+    } else {
+      sendToClient(userId, {
+        type: "error",
+        message: sanitizeErrorForClient(err),
+        errorCode: resolveSessionErrorCode(err),
+      });
+    }
     // #3463: same race surface as startAgentSession's outer catch — a
     // concurrent terminal-state writer (result branch in another leader
     // session, the stuck-active reaper, ws-handler ledger-divergence)

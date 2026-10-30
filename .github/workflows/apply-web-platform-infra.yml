@@ -182,9 +182,9 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`. Its three mechanical interlocks all release now; the
-          environment approval is the remaining hold (self-approval is possible; job-rationale.md §git_data_host_create). Read
-          knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
+          needs `confirm=BIRTH-GIT-DATA`. Gated by three interlocks plus the plaintext-id one (rung-2
+          while the evidence hash differs, plaintext-id while git_data_volume_id is non-empty;
+          job-rationale.md §git_data_host_create). Read git-data-birth.md first.
         required: false
         default: manual-rerun
         type: choice
@@ -3528,19 +3528,7 @@ jobs:
   registry_store_restore:
     environment: infra-privileged
     needs: registry_luks_recut
-    # EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip
-    # the RESUME arm — and the resume arm IS the empty-store state this job exists to end. It
-    # keys on the upstream FLAG rather than on `needs.<job>.result` so it does not fire on paths
-    # where the store was never emptied (most visibly a legitimate D10 refusal, where the store
-    # is intact).
-    #
-    # `!cancelled()` rather than `always()`: on a genuine cancellation the store's state is
-    # unknown, and starting a multi-GB write into it is not obviously safe.
-    #
-    # The `== 'true'` comparison is safe against the Actions loose-equality trap: an UNSET
-    # output is null, and `null == 'true'` casts to `0 == NaN`, which is false. The failure
-    # direction is therefore "skip the restore", which is visible in the run's job list — not
-    # "run it unexpectedly".
+    # History: "Why the restore job's if: is explicit" in the registry_store_restore section of the rationale runbook.
     if: ${{ !cancelled() && needs.registry_luks_recut.outputs.store_refill_needed == 'true' }}
     runs-on: ubuntu-24.04
     # Its OWN budget, deliberately larger than the recut's and unrelated to it. The wall-clock
@@ -3670,6 +3658,7 @@ jobs:
           # exit codes consumed as a single boolean would be a contract nobody can act on.
           case "$rc" in
             0) echo "restore: production's full required pin set is present and blob-verified in the rebuilt store." ;;
+            1) echo "::error::restore FAILED exit 1 (INPUT/MANIFEST fault) — the engine refused its arguments or the pin manifest before any network call, so this attempt wrote nothing and the store is unchanged by this step. This step passes fixed arguments, so check the manifest (floor, entries, zero or duplicated required pairs) or an unreadable file: read the engine's own ::error:: line above, it names the check. This is a correct refusal, not an engine defect, and re-running this job re-downloads the SAME registry-restore-pins artifact and fails identically. Follow the runbook row for exit 1 in registry-luks-recut-6929.md." ;;
             2) echo "::error::restore FAILED exit 2 (SOURCE unavailable) — GHCR could not be read, so there is nothing to restore from, OR the runner's ghcr.io login command failed locally. This step did not measure which: read the engine's own ::error:: line above first. A login command that failed locally points at runner tooling (crane version, DOCKER_CONFIG); otherwise GHCR gives the same error for an absent image and one not visible to this credential, so check the job's 'packages: read' permission and GHCR's status before concluding either. The store is EMPTY or only partly refilled. This is NOT proof the images were deleted." ;;
             3) echo "::error::restore FAILED exit 3 (SINK unavailable) after ${max} attempts — the rebuilt registry did not accept the write and the tunnel did not converge within the backoff. The store is EMPTY. Verify the registry host is serving, then re-run this job." ;;
             4) echo "::error::restore FAILED exit 4 (VERIFICATION mismatch) — images were copied but a digest did not match, a blob is missing, or a signature is absent. The store contents are NOT trustworthy. Do not deploy; re-run this job and read the per-entry lines above." ;;
@@ -3678,7 +3667,7 @@ jobs:
             5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — read the engine's own ::error:: line above first; this step did not measure which cause applies. If it says the sink login command failed locally, that points at runner tooling (crane version, DOCKER_CONFIG) and rotating changes nothing. Otherwise the sink rejected the credential or it was unreadable, and retrying will not clear it. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating makes the rejection permanent until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
             6) echo "::error::restore FAILED exit 6 (COULD NOT CLASSIFY) — the engine hit a failure it could not name. Read the crane stderr in the per-entry line above before acting; do not assume the images are absent." ;;
             78) echo "::error::restore FAILED exit 78 (TRACED INVOCATION) — the engine refused to run under xtrace with a registry credential in the environment, before any network call, so this attempt wrote nothing and the store is still EMPTY. Remove the trace (bash -x, an exported SHELLOPTS=xtrace, or a BASH_ENV file that sets -x); a re-run replays this same workflow file, so if the trace is in it, fix it in a new commit and dispatch a new run." ;;
-            *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every documented exit code of the restore engine is enumerated above, so a new code is itself a defect worth filing alongside the recovery; exit 1 is the known exception (#10932, already filed)." ;;
+            *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every exit code the restore engine emits is enumerated above, so a new one is a defect worth filing alongside the recovery; 126/127/137/143 are shell or runner codes (not found, not executable, killed, terminated), not engine codes." ;;
           esac
           exit "$rc"
 
@@ -3716,14 +3705,12 @@ jobs:
   #   hcloud_server.git_data                   (-replace: force a fresh cloud-init boot)
   #   hcloud_server_network.git_data           (network.tf:48 — server_id ForceNew → replace;
   #                                              else the new host has no private NIC 10.0.1.20)
-  #   hcloud_volume_attachment.git_data        (git-data.tf:275 — server_id ForceNew → replace;
-  #                                              else /mnt/git-data — plaintext bare-repo store —
-  #                                              boots UNMOUNTED)
   #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf, `resource "hcloud_volume_attachment"
   #                                              "git_data_luks"` — server_id ForceNew → replace;
   #                                              else /mnt/git-data-luks — LUKS at-rest store —
   #                                              boots UNMOUNTED)
-  #   hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
+  #   hcloud_firewall_attachment.git_data      (git-data.tf, `resource "hcloud_firewall_attachment"
+  #                                              "git_data"` — server_ids update-in-place;
   git_data_host_replace:
     environment: infra-privileged
     # (#8211 PR2) git-data-host-rotate runs THIS job: same host replace plus the LUKS
@@ -3934,6 +3921,29 @@ jobs:
             exit 1
           fi
 
+      # (#11194) Plaintext-id interlock: refuses while git-data.tf still passes a non-empty
+      # git_data_volume_id (rationale: apply-web-platform-infra-job-rationale.md). UNCONDITIONAL (no
+      # `if:`, census G5c); only the exact string `true` in PLAN_ONLY downgrades a refusal to a warning.
+      - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
+        env:
+          PLAN_ONLY: ${{ inputs.plan_only }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! v="$(git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf")"; then
+            echo "$v"
+            v="${v//[$'\r\n']/ }"
+            if [[ "${PLAN_ONLY:-}" == "true" ]]; then
+              echo "::warning::plan_only: the plaintext-id interlock WOULD hold a real dispatch: ${v} (usually: set git_data_volume_id to \"\" via #11449)."
+            else
+              echo "::error::git-data-host-replace/-rotate is HELD by the plaintext-id interlock: ${v} (usually: set git_data_volume_id to \"\" via #11449). Nothing was planned or replaced."
+              exit 1
+            fi
+          else
+            echo "$v"
+          fi
+
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
         # satisfies var.ssh_key_path (never consumed by the scoped git-data replace — the host is
@@ -3985,8 +3995,8 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Scoped -replace of the git-data server + its 4 id-referencing dependents. In plain replace
-        # the two data volumes + the LUKS passphrase are PRESERVED BY OMISSION (not -targeted →
+        # Scoped -replace of the git-data server + its id-referencing dependents. In plain replace
+        # the LUKS data volume + the LUKS passphrase are PRESERVED BY OMISSION (not -targeted →
         # cannot be planned for destroy); the rotate arm adds the LUKS trio below. The sourced
         # git_data_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan JSON and
         # ABORTS unless the plan is EXACTLY the scoped recreate.
@@ -4016,7 +4026,6 @@ jobs:
               "${EXTRA_REPLACE[@]}" \
               -target='hcloud_server.git_data' \
               -target='hcloud_server_network.git_data' \
-              -target='hcloud_volume_attachment.git_data' \
               -target='hcloud_volume_attachment.git_data_luks' \
               -target='hcloud_firewall_attachment.git_data' \
               -target='doppler_secret.git_data_ssh_host_key' \
@@ -4037,9 +4046,9 @@ jobs:
           export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"
           if ! git_data_host_replace_gate tfplan.json "$GATE_MODE"; then
             if [[ "$GATE_MODE" = rotate ]]; then
-              echo "::error::git-data-host-rotate destroy-guard ABORTED: the plan is not the exact scoped ROTATE set — host + dependents + LUKS volume/passphrase/key moving together (the plaintext volume hcloud_volume.git_data is still preserved). An incomplete rotation — passphrase without volume, or volume without the key re-publish — is a stranding, not a rotate, and refuses. NO [ack-destroy] bypass on this path."
+              echo "::error::git-data-host-rotate destroy-guard ABORTED: the plan is not the exact scoped ROTATE set — host + dependents + LUKS volume/passphrase/key moving together (no retired plaintext address is touched). An incomplete rotation — passphrase without volume, or volume without the key re-publish — is a stranding, not a rotate, and refuses. NO [ack-destroy] bypass on this path."
             else
-              echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate, or the root-key arm refused it (a git-data-root-key-arm annotation then names the reason and the step log its remedy). Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
+              echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate, or the root-key arm refused it (a git-data-root-key-arm annotation then names the reason and the step log its remedy). Refusing to apply. Specifically verify: the LUKS data volume (hcloud_volume.git_data_luks) is preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, the LUKS store attachment (hcloud_volume_attachment.git_data_luks) is re-created, no retired plaintext address (hcloud_volume.git_data, hcloud_volume_attachment.git_data) appears in the plan, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
             fi
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
@@ -4107,15 +4116,15 @@ jobs:
         # Apply the saved, guarded plan. The post-apply backstop (git_data_host_post_apply_assert,
         # tests/scripts/lib/git-data-host-replace-gate.sh) re-reads the SAVED plan (the exact plan
         # we applied) under the mode the plan step's gate accepted (its gate_mode output): the
-        # plaintext data volume carries 0 delete/forget actions in BOTH modes, the LUKS volume too
-        # in plain replace (the rotate arm replaces it ON PURPOSE, #10137), and the private NIC +
-        # BOTH store attachments show a create (re-attached) — belt-and-suspenders to the guard.
+        # LUKS data volume carries 0 delete/forget actions in plain replace (the rotate arm replaces
+        # it ON PURPOSE, #10137), and the private NIC + the LUKS store attachment show a create
+        # (re-attached) — belt-and-suspenders to the guard.
         run: |
           set -euo pipefail
           # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
           # leaves git-data DOWN with the writer-side CAS fence offline. UNLIKE registry (GHCR
           # fallback) / inngest (paused reminders), git-data has NO serving fallback — in plain
-          # replace BOTH volumes are preserved (guarded), so re-dispatch recovers from them; the
+          # replace the LUKS volume is preserved (guarded), so re-dispatch recovers from it; the
           # rotate arm replaces the LUKS volume by design. Writes FAIL, not
           # corrupt (single-writer at replicas=1 → no split-brain). Emit a self-documenting
           # recovery annotation, then fail hard (gating behavior unchanged).
@@ -4126,11 +4135,11 @@ jobs:
             stock_recovery_report git-data-host-replace tfplan.json --probe-state
             case "${GATE_MODE:-}" in
               replace)
-                echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them" ;;
+                echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); the LUKS volume is preserved — re-dispatch git-data-host-replace to recover from it" ;;
               rotate)
-                echo "::error::terraform apply (git-data-host-rotate) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail. The plaintext volume is preserved (guarded); the LUKS volume, its passphrase and its published key are replaced or re-published TOGETHER by design on this arm, so a mid-apply failure can leave any of them replaced and the others not (the stranding state the gate header describes). This message does not prescribe a recovery: read the stock-recovery report above and knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md before re-dispatching." ;;
+                echo "::error::terraform apply (git-data-host-rotate) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail. The LUKS volume, its passphrase and its published key are replaced or re-published TOGETHER by design on this arm, so a mid-apply failure can leave any of them replaced and the others not (the stranding state the gate header describes). This message does not prescribe a recovery: read the stock-recovery report above and knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md before re-dispatching." ;;
               *)
-                echo "::error::terraform apply (git-data host) failed mid-replace and the dispatch mode is unknown (the plan step's gate_mode output is empty) — git-data may be DOWN. Do not assume which volumes were preserved: read the stock-recovery report above before re-dispatching." ;;
+                echo "::error::terraform apply (git-data host) failed mid-replace and the dispatch mode is unknown (the plan step's gate_mode output is empty) — git-data may be DOWN. Do not assume the LUKS volume was preserved: read the stock-recovery report above before re-dispatching." ;;
             esac
             exit 1
           fi
@@ -4213,7 +4222,7 @@ jobs:
           {
             echo "## git-data-host-replace readiness (non-SSH)"
             echo ""
-            echo "In-job gates: the destroy-guard + post-apply asserts (plaintext volume preserved, and the LUKS volume too in plain replace; NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
+            echo "In-job gates: the destroy-guard + post-apply asserts (the LUKS volume preserved in plain replace; NIC + the LUKS store attachment re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
             echo ""
             echo "Not yet checked: that git transport SERVES. The web-host \`git ls-remote\` probe is #5274 PR C; the existing web-host probe only proves :22 is open. git-data is a deny-all blind host (no SSH)."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -4728,7 +4737,7 @@ jobs:
           # The semver validator downstream is the CORRECTNESS guard; this is the injection
           # guard, and it runs first.
           if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
+            echo "::error::image_tag must be a release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
             exit 1
           fi
           printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
@@ -4894,6 +4903,7 @@ jobs:
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
+          # canonicalizes bare|v-prefixed (#11426)
           TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
           echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
@@ -4982,30 +4992,8 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
-          # #6453 STOCK preflight. GATED rather than excluded, unlike the sibling additive
-          # path inngest-host, and the difference is the fan-out. The birth gate above proves
-          # the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
-          # terraform creates this host's dependencies FIRST — the workspaces volume and the
-          # per-host Better Stack heartbeats — and only then the server. So a server_type with no
-          # stock in the target DC does not fail cleanly here: it strands a 20 GB volume
-          # attached to nothing, plus the heartbeat resources for a host that will never
-          # exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
-          # holds for a host with no such fan-out) — it is billed debris and a dirty state
-          # slot, caught by a gate we already own and can run in 2 seconds.
-          #
-          # CORRECTION, recorded because the earlier wording was load-bearing and false: this
-          # comment used to say the stranded heartbeats "will therefore PAGE as down", and
-          # that was the headline argument for gating rather than excluding. They do not page.
-          # web-probe.tf declares both with `paused = true` + `ignore_changes = [paused]`, and
-          # the ONLY unpause path is the `Arm web-host probe heartbeats` step in the `apply`
-          # job, whose `if:` is mutually exclusive with this one. The gating decision survives
-          # on the stranded-volume argument alone; the false-page claim does not, and a
-          # decision defended by a false premise is one review away from being reverted for
-          # the right reason.
-          #
-          # KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
-          # new host's heartbeats paused, so it has no active heartbeat coverage until a
-          # later merge-to-main apply arms them. The Dispatch summary says so explicitly.
+          # #6453 STOCK preflight, GATED rather than excluded (rationale, the false-page CORRECTION and the
+          # KNOWN GAP: job-rationale runbook §git_data_host_create).
           #
           # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
           # OUTSIDE the `doppler run` wrapper above — without this read the gate would
@@ -5111,6 +5099,7 @@ jobs:
             echo "Purely additive +create of the host's birth fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
             echo "**This host has NO active heartbeat coverage yet.** Its Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**First-deploy verification:** the standing \`follow-through\` tracker (probe \`web-first-deploy-10585.sh\`, \`gh issue list -l follow-through\`) grades this host's first deploy within 2d of boot — a never-landing deploy surfaces there as ACTION REQUIRED."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6969 (ADR-148): the web-host REPLACE path -------------------------------
@@ -5118,17 +5107,13 @@ jobs:
   web_host_replace:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-host-replace'
     runs-on: ubuntu-24.04
-    # The sole HUMAN authorization on this path. Same environment as web_host_create —
-    # REUSED, never re-declared: it is defined in infra/web-host-birth-environment.tf so its
-    # reviewer set is covered by the DP-11 F8 non-empty-reviewers guard, and an untracked
-    # environment emptied in the UI auto-approves. A second environment for this job would
-    # be a second thing to keep non-empty.
+    # Sole HUMAN authorization on this path — the SAME environment as web_host_create,
+    # REUSED never re-declared (infra/web-host-birth-environment.tf; DP-11 F8 covers its
+    # reviewer set; an emptied untracked environment auto-approves).
     environment: web-platform-infra-apply
-    # Shared cross-pipeline web-1-swap mutex, byte-identical to web_host_create's: this
-    # job's -target set includes hcloud_firewall_attachment.web, a singleton the release
-    # deploy and the pipeline-fix apply also touch. DO NOT RENAME — GitHub does not error on
-    # divergent group strings, they simply fail to serialize. COEXISTS with (does not
-    # replace) the workflow-level R2 serializer that protects the lockless backend.
+    # Shared web-1-swap mutex, byte-identical to web_host_create's — DO NOT RENAME
+    # (divergent strings do not error, they fail to serialize); coexists with the
+    # workflow-level R2 serializer.
     concurrency:
       group: web-1-swap
       cancel-in-progress: false
@@ -5137,9 +5122,7 @@ jobs:
       # GHCR is a PRIVATE package; the digest resolve below authenticates with
       # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
       packages: read
-    # Budget mirrors web_host_create (digest resolve ~1m + preflight ~3m + plan ~2m + apply
-    # ~5m) plus the boot-trail poll's ~16m ceiling, which a replace needs just as much as a
-    # birth: the host is new either way.
+    # Budget = web_host_create's + the ~16m boot-trail poll ceiling; host is new either way.
     timeout-minutes: 40
     env:
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
@@ -5204,7 +5187,7 @@ jobs:
           # image_tag is optional, but if supplied it is interpolated into a docker ref and a
           # shell command, so it gets the same shape-before-use treatment as the host key.
           if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
+            echo "::error::image_tag must be a release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
             exit 1
           fi
           printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
@@ -5333,6 +5316,7 @@ jobs:
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
+          # canonicalizes bare|v-prefixed (#11426)
           TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
           echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
@@ -5526,6 +5510,7 @@ jobs:
             echo "Scoped \`-replace\` of the host plus its private NIC, its workspaces volume attachment and the fleet firewall re-attachment, on a digest-pinned image. The workspaces volume, the LUKS volume and the LUKS passphrase were all kept OUT of the \`-target\` set. The workspaces volume is still in the plan graph as a no-op (\`-target\` prunes dependents, not dependencies) and is held by \`prevent_destroy\` plus two gate arms; the LUKS volume and passphrase are outside the graph entirely. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
             echo "**This host's heartbeat coverage is unchanged by this dispatch.** Its Better Stack heartbeats already exist and are not in this job's \`-target\` set; if they are still \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured), the arming step lives in the \`apply\` job. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**First-deploy verification:** the standing \`follow-through\` tracker (probe \`web-first-deploy-10585.sh\`, \`gh issue list -l follow-through\`) grades this host's first deploy within 2d of boot — a never-landing deploy surfaces there as ACTION REQUIRED."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------
@@ -5564,16 +5549,12 @@ jobs:
           authorization is this approval. Read these three first — each is measured, and each
           is a limit on what any green result downstream can tell you.
 
-          ### 1. Repositories are NOT encrypted at rest before the cutover
+          ### 1. `luks_mounted` is about the device, not what is stored on it
 
-          `luks_mounted` is about the **device**, not the repositories. `git-data-bootstrap.sh`
-          pins that wording itself, under AC30:
-
-          > `luks_mounted` is about the DEVICE. It says NOTHING about the repositories being
-          > encrypted at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume until the
-          > cutover.
-
-          A green boot is fully compatible with every repository sitting on plaintext storage.
+          `git-data-bootstrap.sh` pins that wording itself, under AC30: `luks_mounted` says the
+          mapper serves `$GIT_DATA_ROOT`. Since #8211 `REPO_ROOT` is on that device; the other
+          booleans (`fence_on_mapper`, `erasure_probe`, `plaintext_empty`) attest the rest, so read
+          those, not `luks_mounted` alone.
 
           ### 2. This approval is NOT two-party
 
@@ -5683,14 +5664,14 @@ jobs:
     permissions:
       contents: read
     # Budget: plan (~2m) + apply, whose dominant term is Hetzner provisioning the server
-    # plus two volumes (~6m), + the boot poll (20 reads x 30 s, each read capped at 45 s,
+    # plus the LUKS volume (~6m), + the boot poll (20 reads x 30 s, each read capped at 45 s,
     # worst case ~27m). No image pull on this path. Raised 20 -> 40 (#8178) so the poll
     # always reaches a VERDICT line instead of being cancelled mid-read.
     #
     # 40 -> 50 (#8178, pre-ship advisor consult). 2 + 6 + 27 = 35 priced only plan, apply
-    # and the poll, and left 5 minutes for ELEVEN steps that run before `Terraform plan`:
-    # checkout, setup-terraform, the Doppler install, `Validate dispatch inputs`, three
-    # interlocks that each reach Doppler / the GitHub API / Better Stack, keygen, `Verify
+    # and the poll, and left 5 minutes for TWELVE steps that run before `Terraform plan`:
+    # checkout, setup-terraform, the credential load, `Validate dispatch inputs`, four
+    # interlocks (three reach Doppler / the GitHub API / Better Stack), keygen, `Verify
     # required secrets present`, the R2 credential extraction and `terraform init`. If those
     # overrun, the job is cancelled MID-POLL and prints no VERDICT line at all — the exact
     # "could not tell" state this PR exists to remove, and one the follow-through probe then
@@ -5791,6 +5772,21 @@ jobs:
             exit 1
           fi
 
+      # (#11194) Plaintext-id interlock, UNCONDITIONAL; this job ignores plan_only and always blocks (job-rationale runbook).
+      - name: Plaintext-id interlock (refuses while git-data.tf names a destroyed plaintext volume)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! v="$(git_data_plaintext_id_interlock "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data.tf")"; then
+            echo "$v"
+            v="${v//[$'\r\n']/ }"
+            echo "::error::git-data-host-create is HELD by the plaintext-id interlock: ${v} (usually: set git_data_volume_id to \"\" via #11449). Nothing was created."
+            exit 1
+          else
+            echo "$v"
+          fi
+
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway
         # key satisfies var.ssh_key_path. It is never consumed: the git-data host is
@@ -5860,30 +5856,21 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # Purely ADDITIVE: no -replace anywhere, and NO [ack-destroy] bypass on this path.
         #
-        # The twenty -targets are the whole birth fan-out and MUST stay in lockstep with
+        # The -targets below are the whole birth fan-out and MUST stay in lockstep with
         # `def allow:` in tests/scripts/lib/git-data-host-birth-gate.sh, with that gate's
         # SEPARATE presence loop, and with GIT_DATA_BIRTH_TARGET_BASES in
         # plugins/soleur/test/terraform-target-parity.test.ts. That test asserts all of them
         # agree; this comment tells you why it will fail.
         #
-        # (#6982) 18 -> 20: doppler_secret.git_data_ssh_host (ADR-149 item 5 — without it
-        # every account deletion files a FALSE Art. 17 erasure-failed event from the moment
-        # the host exists) and doppler_secret.git_data_betterstack_logs_token (the ingest
-        # token the post-Doppler emits read). BOTH join the gate's PRESENCE half, never its
-        # entailed loop: entailed demands `creates == 1`, and on a resumed dispatch these
-        # legitimately re-plan as no-ops, so requiring a create would be a permanent wedge.
+        # (#6982) the two doppler_secret additions join the gate's PRESENCE half, never its entailed
+        # loop; direction notes on the SSH halves and the LUKS passphrase pair: job-rationale runbook.
         #
-        # Four of them are DOWNSTREAM of the server and so are NOT auto-pulled by
+        # Three of them are DOWNSTREAM of the server and so are NOT auto-pulled by
         # -target's upstream closure — omitting any one is a distinct catastrophe:
-        #   hcloud_server_network.git_data      -> no private IP (#6416), unrepairable
-        #   hcloud_firewall_attachment.git_data -> host NAKED on public IPv4/IPv6
-        #   hcloud_volume_attachment.git_data*  -> store boots with its volume unmounted
-        # Five more would not be pulled by the server's own graph. Note this PR's two
-        # depends_on edits changed their DIRECTION even though it does not change the
-        # conclusion: the three doppler_secret SSH halves are now DOWNSTREAM of the server
-        # (issue AC4), and the LUKS passphrase pair is now UPSTREAM of it (P13). Neither is
-        # reached by `-target`'s upstream closure from the server alone, so both stay
-        # explicitly targeted.
+        #   hcloud_server_network.git_data           -> no private IP (#6416), unrepairable
+        #   hcloud_firewall_attachment.git_data      -> host NAKED on public IPv4/IPv6
+        #   hcloud_volume_attachment.git_data_luks   -> store boots with its volume unmounted
+        # Five more would not be pulled by the server's own graph (rationale: job-rationale runbook).
         run: |
           # set +e so the rc=$? diagnostic below actually runs — GitHub runs `run:` under
           # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
@@ -5893,9 +5880,7 @@ jobs:
             terraform plan -no-color -input=false -out=tfplan \
               -target='hcloud_server.git_data' \
               -target='hcloud_server_network.git_data' \
-              -target='hcloud_volume.git_data' \
               -target='hcloud_volume.git_data_luks' \
-              -target='hcloud_volume_attachment.git_data' \
               -target='hcloud_volume_attachment.git_data_luks' \
               -target='hcloud_firewall.git_data' \
               -target='hcloud_firewall_attachment.git_data' \
@@ -5938,9 +5923,9 @@ jobs:
           fi
           # STOCK preflight, sourced AFTER the birth gate. Order is load-bearing: the birth
           # gate proves the plan IS the scoped birth, the preflight proves it is FEASIBLE.
-          # GATED rather than allowlisted, because terraform creates the two volumes BEFORE
+          # GATED rather than allowlisted, because terraform creates the LUKS volume BEFORE
           # the server — so an unorderable server_type does not fail cleanly here, it
-          # strands two billed volumes attached to nothing.
+          # strands a billed volume attached to nothing.
           #
           # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
           # OUTSIDE the `doppler run` wrapper above. Without this read the gate fails closed
@@ -5958,7 +5943,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            stock_abort_closing git-data-host-create "Refusing to apply — terraform creates both volumes before the server, so the create would fail AFTER leaving two stranded billed volumes (#6393). NO [ack-destroy] bypass."
+            stock_abort_closing git-data-host-create "Refusing to apply — terraform creates the LUKS volume before the server, so the create would fail AFTER leaving a stranded billed volume (#6393). NO [ack-destroy] bypass."
             exit 1
           fi
           echo "birth gate + stock preflight PASSED. Plan summary:"
@@ -6104,7 +6089,7 @@ jobs:
             echo ""
             echo "### What a green run gives you — and what it does not"
             echo ""
-            echo "It gives you: the twenty-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
+            echo "It gives you: the birth fan-out CREATED IN TERRAFORM — the server, the LUKS volume and its attachment, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
             echo ""
             echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step FAILED with the credentials-absent or unreadable-signal error, you are back to the old state and must verify manually before trusting this birth."
             echo ""

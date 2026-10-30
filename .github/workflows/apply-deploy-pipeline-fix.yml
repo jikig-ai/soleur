@@ -2293,6 +2293,8 @@ jobs:
           # CF-Access (same one web-platform-release.yml curls for its health gate).
           HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
           RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+          RAW_VERSION="$RUNNING_VERSION"
+          RUNNING_VERSION="${RUNNING_VERSION#v}" # canonicalize like the resolver — v-prefixed must not produce vv*
           TARGET_TAG="v${RUNNING_VERSION}"
 
           # Fail fast with the SAME semver shape ci-deploy.sh:713 enforces — never POST a
@@ -2300,7 +2302,7 @@ jobs:
           # perpetuating the wedge). A non-released image (BUILD_VERSION unset → "dev" →
           # "vdev") is caught here with a clear remediation instead of a tag_malformed loop.
           if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RUNNING_VERSION}', state-file .tag='${CURRENT_TAG}'). The container is not reporting a released BUILD_VERSION. Trigger a normal web-platform release, then re-run this apply."
+            echo "::error::Cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RAW_VERSION}', state-file .tag='${CURRENT_TAG}'). The container is not reporting a released BUILD_VERSION. Trigger a normal web-platform release, then re-run this apply."
             exit 1
           fi
           echo "Redeploying running version as ${TARGET_TAG} (state-file .tag was '${CURRENT_TAG}')."

@@ -5983,6 +5983,11 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10585: exit-code harness for the standing first-deploy watchdog probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the ONLY signal on
+  # the standing tracker's boot→first-deploy obligation — a vacuous PASS, a reachable 0 (would
+  # close the standing tracker), or a reachable 1 must redden CI.
+  run_suite "scripts/web-first-deploy-10585" bash scripts/followthroughs/web-first-deploy-10585.test.sh
   # #5150: exit-code harness for the Inngest trace-retention close probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
   # sweeper closes #5150, so a PASS on a webhook echo or on an empty read must redden CI.
@@ -5992,10 +5997,24 @@ if want_scripts; then
   # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code
   # decides whether a soak tracker closes, so a vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/post-deploy-incident-soak" bash scripts/followthroughs/post-deploy-incident-soak.test.sh
+  # Exit-code harness for the Discord blog-webhook fallback verification probe (closes #11532's
+  # companion tracker). Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). Its exit code decides whether the sweeper closes the tracker, so a vacuous
+  # PASS — before the first post-secret publish lands, or on an unmeasured Sentry read — must
+  # redden CI.
+  run_suite "scripts/followthroughs/discord-blog-webhook-fallback" bash scripts/followthroughs/discord-blog-webhook-fallback.test.sh
   # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
   run_suite "scripts/followthroughs/sdk-bash-smoke-verdict-10548" bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
+  # #11211: exit-code + row-class harness for the dispatch-recovery sweeper re-evaluation probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The probe is notify-only (never 0/1) and runs with a broad
+  # Supabase token, so a stray exit 0/1, a body echo or a non-literal query must redden CI.
+  run_suite "scripts/followthroughs/dispatch-recovery-sweeper-11211" bash scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh
+  # #11265: exit-code + row-class harness for the LUKS keeper dark-probe (the dead-man conversion trigger). Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Notify-only (never 0/1): a quoting row counted
+  # as a measurement, an indeterminate row counted as health, or a stray exit 0/1 must redden CI.
+  run_suite "scripts/followthroughs/inngest-luks-keeper-dark-11265" bash scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh
   # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
   # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
@@ -6621,8 +6640,8 @@ if want_scripts; then
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
-  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential outside the one
-  # expiring op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
+  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential anywhere —
+  # zero-tolerance since #9755 retired the op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
   # auto-discovers tests/scripts/.
   run_suite "tests/scripts/hcloud-token-readonly-no-fallback-scan" bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh
@@ -6846,10 +6865,11 @@ if want_scripts; then
   # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
   # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
-  # #10972: the orphan-sweeps re-look probe's exit-code contract (a curl shim that accepts one exact argv, an injected
-  # clock, mutant-justified rows for every branch that can end in 0 or 1, and an in-process plus nested proof that the
-  # verdict helpers and the final gate can fail). Same explicit-registration and LAST-in-block reasons as above.
-  run_suite "scripts/followthroughs/orphan-sweeps-relook-10972" bash scripts/followthroughs/orphan-sweeps-relook-10972.test.sh
+  # Code-quality follow-up watchers (code-quality-followups-watch.yml): notify-once, read-only apart from one issue
+  # comment per tracker. Explicit registration (scripts/*.test.sh is not auto-globbed); appended LAST in the block.
+  run_suite "scripts/watch-code-quality-reeval-9730" bash scripts/watch-code-quality-reeval-9730.test.sh
+  run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
+  run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
 fi
 
 # Named bun-test entries — bun shard.

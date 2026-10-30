@@ -241,6 +241,44 @@ reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLET
 run_case 2026-10-30
 expect "row 7: with #10543 fixed the ask drops the quiesced window" 5 "replaces the scheduler's signing key" "quiet window"
 
+# The A5 ask names the exact dispatch lines of the rotation route and the S5-A5-DONE handoff (#10540, ADR-307).
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="CLOSED:COMPLETED"
+run_case 2026-10-30
+expect "row 7: the ask names the read-only plan rehearsal line" 5 "gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=signing"
+expect "row 7: the ask names the exact rotate line with its typed confirm" 5 "-f mode=rotate -f keys=signing -f confirm=ROTATE-INNGEST-SIGNING-YYYY-MM-DD -f quiet_window=true"
+expect "row 7: the ask names the converge line and says it needs its own go" 5 "-f mode=converge -f keys=signing -f confirm=CONVERGE-INNGEST-SIGNING-YYYY-MM-DD" "restart-inngest-server"
+expect "row 7: the ask says only the owner dispatches and that a go on another issue does not count" 5 "only you dispatch it" "run the manual"
+expect "row 7: the ask hands off the done line to the owner and says an agent-posted line does not count" 5 "Post that line yourself as a comment on #10136"
+cases=$((cases + 1)); grep -qF "a line posted by an agent or by the workflow does not count" <<<"$OUT" && grep -qF "S5-A5-DONE: YYYY-MM-DDTHH:MM:SSZ" <<<"$OUT" \
+  && pass "row 7: the ask states the agent-posted-line rule and the done-line format" \
+  || fail "row 7: the ask lacks the agent-posted-line rule or the done-line format"
+cases=$((cases + 1)); grep -qF "the Inngest host is down for a few minutes" <<<"$OUT" \
+  && pass "row 7: the ask tells the owner what the go must say about downtime" \
+  || fail "row 7: the ask lacks the downtime sentence"
+# The go text carries everything the runbook's A5 row requires (a go composed from the daily ask must pass that precondition):
+# each fragment is one case, anchored on the phrase the probe prints.
+for frag in \
+  "budget 10 to 15 minutes" \
+  "may be skipped and not replayed" \
+  "live on the host before web catches up" \
+  "rejected with a 401" \
+  "Stripe payment_failed send" \
+  "has never been rebooted with its LUKS volume and live scheduler, so the LUKS reopen is unverified" \
+  "does not add TLS or close A6" \
+  "the rollback is the link flip off with its extra confirmation, and a re-rotation follows" \
+  "approve only if still quiet" \
+  "keys=both is a superset" \
+  "gh run view <run id> --log | grep 'inngest-key-rotate verdict='" \
+  "plan_blocked naming the first failing check" \
+  "If the first apply itself fails, converge refuses; dispatch the rotation again" \
+  "the confirm date is the UTC date of that dispatch"; do
+  cases=$((cases + 1))
+  grep -qF -- "$frag" <<<"$OUT" && pass "row 7 go text: carries '$frag'" || fail "row 7 go text: lacks '$frag'"
+done
+reset_fixture
+run_case 2026-11-09
+expect "row 2: the bridge-risk ask no longer points at a manual rotation procedure" 5 "Ways out" "manual key rotation procedure"
+
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
 run_case 2026-11-10
 expect "row 7: past the dead-man date the A5 ask carries the bridge urgency" 5 "so this is time-sensitive"
@@ -347,7 +385,8 @@ cases=$((cases + 1))
   && pass "the probe reads anchors through trusted_verdict_bodies on the epic" \
   || fail "the probe does not call trusted_verdict_bodies on the epic"
 cases=$((cases + 1))
-gh_calls="$(grep -nE '(^|[^[:alnum:]_./-])gh[[:space:]]+[a-z]' "$PROBE" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v 'for need in' || true)"
+# The four *_LINE constants hold the dispatch lines and the verdict-reading recipe the A5 ask prints as TEXT; they are authored constants, never executed.
+gh_calls="$(grep -nE '(^|[^[:alnum:]_./-])gh[[:space:]]+[a-z]' "$PROBE" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '^[0-9]+:(PLAN|ROTATE|CONVERGE|VERDICT)_LINE="' | grep -v 'for need in' || true)"
 if [[ "$(grep -c . <<<"$gh_calls")" -eq 1 ]] && grep -qF 'gh issue view "$1" --repo "$REPO" --json state,stateReason' <<<"$gh_calls"; then
   pass "the probe's only gh call is the state read (every comment read goes through the trusted lib)"
 else
@@ -362,7 +401,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   exit 1
 fi
 # Exact on purpose: deleting any case must red the suite (a floor with slack is attack budget).
-MIN_ASSERTIONS=49
+MIN_ASSERTIONS=71
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

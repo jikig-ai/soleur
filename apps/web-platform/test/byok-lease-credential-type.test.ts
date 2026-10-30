@@ -34,6 +34,57 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+// #11086 — capture every sink a stored credential could leak into (pino +
+// Sentry) and every plaintext buffer the lease decrypts (to observe zeroize).
+const sinks = vi.hoisted(() => ({
+  calls: [] as unknown[],
+  decrypted: [] as Buffer[],
+  providersQueried: [] as string[],
+  reset() {
+    this.calls.length = 0;
+    this.decrypted.length = 0;
+    this.providersQueried.length = 0;
+  },
+}));
+
+vi.mock("@/server/logger", () => {
+  const rec = (...a: unknown[]) => {
+    sinks.calls.push(a);
+  };
+  const logger: Record<string, unknown> = {
+    error: rec,
+    warn: rec,
+    info: rec,
+    debug: rec,
+    trace: rec,
+    fatal: rec,
+  };
+  logger.child = () => logger;
+  return { default: logger, createChildLogger: () => logger };
+});
+vi.mock("@sentry/nextjs", () => ({
+  captureMessage: vi.fn((...a: unknown[]) => {
+    sinks.calls.push(["sentry.captureMessage", ...a]);
+  }),
+  captureException: vi.fn((...a: unknown[]) => {
+    sinks.calls.push(["sentry.captureException", ...a]);
+  }),
+  addBreadcrumb: vi.fn((...a: unknown[]) => {
+    sinks.calls.push(["sentry.addBreadcrumb", ...a]);
+  }),
+}));
+vi.mock("@/server/byok", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/byok")>();
+  return {
+    ...actual,
+    decryptKey: (...args: Parameters<typeof actual.decryptKey>) => {
+      const buf = actual.decryptKey(...args);
+      sinks.decrypted.push(buf);
+      return buf;
+    },
+  };
+});
+
 vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: vi.fn(async (_userId: string) => ({
     from: () => {
@@ -42,7 +93,10 @@ vi.mock("@/lib/supabase/tenant", () => ({
       const chain: any = {
         select: () => chain,
         eq: (col: string, val: string) => {
-          if (col === "provider") ctx.provider = val;
+          if (col === "provider") {
+            ctx.provider = val;
+            sinks.providersQueried.push(val);
+          }
           return chain;
         },
         limit: () => chain,
@@ -62,6 +116,8 @@ vi.mock("@/lib/supabase/tenant", () => ({
 
 import {
   runWithByokLease,
+  ByokLeaseError,
+  mapByokLeaseCauseToErrorCode,
   CC_OAUTH_EFFECTIVE_DATE,
   OauthNotYetPermittedError,
   OauthDelegationForbiddenError,
@@ -90,6 +146,7 @@ let savedEnabled: string | undefined;
 
 beforeEach(() => {
   mocks.reset();
+  sinks.reset();
   delete process.env.BYOK_ENCRYPTION_KEY;
   savedEnabled = process.env.CC_OAUTH_ENABLED;
 });
@@ -219,5 +276,96 @@ describe("getAgentCredential — oauth preference + gates", () => {
       (lease) => Promise.resolve(lease.getAgentCredential()),
     );
     expect(cred).toEqual({ value: REST_PLAINTEXT, scheme: "api_key" });
+  });
+});
+
+// #11086 — a stored subscription credential the bundled CLI is known to drop
+// must fail loudly at the lease boundary (NOT be handed to the CLI, which
+// would answer "Not logged in" without using the value as a credential), and must never fall
+// back to the api_key row.
+describe("getAgentCredential — unusable stored subscription credential (#11086)", () => {
+  // Synthesized fakes only. One per class the classifier can return.
+  const UNUSABLE: Array<[string, string]> = [
+    ["api_key_shaped", "sk-ant-api03-FAKEcanaryAAAA"],
+    ["api_key_shaped", "sk-ant-admin01-FAKEcanaryAAAA"],
+    ["embedded_whitespace", "sk-ant-oat01-FAKEcanaryAAAA BBBB"],
+    ["blank", "   "],
+  ];
+
+  beforeEach(() => {
+    process.env.CC_OAUTH_ENABLED = "1";
+    vi.spyOn(Date, "now").mockReturnValue(AFTER_DATE);
+  });
+
+  it.each(UNUSABLE)(
+    "class %s: throws oauth_unusable, zeroizes the buffer, caches nothing, never reads the api row, emits one closed-class event",
+    async (shapeClass, plaintext) => {
+      seedProvider("anthropic", REST_PLAINTEXT, OPERATOR);
+      seedProvider("anthropic_oauth", plaintext, OPERATOR);
+
+      let first: unknown;
+      let second: unknown;
+      await runWithByokLease(
+        { workspaceContextUserId: OPERATOR, keyOwnerUserId: OPERATOR },
+        async (lease) => {
+          first = await Promise.resolve(lease.getAgentCredential()).catch((e) => e);
+          // A second call in the SAME scope must refetch and throw again. If the
+          // buffer had been cached into the slot before the check (reorder
+          // mutation), this would return a cached credential instead.
+          second = await Promise.resolve(lease.getAgentCredential()).catch((e) => e);
+        },
+      );
+
+      for (const err of [first, second]) {
+        expect(err).toBeInstanceOf(ByokLeaseError);
+        expect((err as ByokLeaseError).cause).toBe("oauth_unusable");
+        expect((err as ByokLeaseError).message).not.toContain("FAKEcanary");
+      }
+
+      // Zeroized: every buffer decrypted on this path is wiped before the throw.
+      expect(sinks.decrypted.length).toBe(2);
+      for (const buf of sinks.decrypted) {
+        expect(buf.every((b) => b === 0)).toBe(true);
+      }
+
+      // No fallback: the api_key row is never even queried.
+      expect(sinks.providersQueried).not.toContain("anthropic");
+
+      // Exactly one event per attempt, carrying only the closed class.
+      const events = sinks.calls.filter(
+        (c) => Array.isArray(c) && c[0] === "sentry.captureMessage",
+      ) as Array<[string, string, { tags: Record<string, string>; extra: Record<string, unknown> }]>;
+      expect(events).toHaveLength(2);
+      for (const [, , opts] of events) {
+        expect(opts.tags).toEqual({
+          feature: "byok-lease",
+          op: "oauth-credential-unusable",
+          shape_class: shapeClass,
+        });
+        const { err: _err, ...extra } = opts.extra;
+        expect(extra).toEqual({ shape_class: shapeClass });
+      }
+
+      // The submitted value (or any part of it) is in no captured sink.
+      const dump = JSON.stringify(sinks.calls);
+      expect(dump).not.toContain("FAKEcanary");
+      if (plaintext.trim() !== "") expect(dump).not.toContain(plaintext.trim());
+    },
+  );
+
+  it("a valid-shaped fake subscription token still leases", async () => {
+    seedProvider("anthropic_oauth", "sk-ant-oat01-FAKEvalid_0123-abc", OPERATOR);
+    const cred = await runWithByokLease(
+      { workspaceContextUserId: OPERATOR, keyOwnerUserId: OPERATOR },
+      (lease) => Promise.resolve(lease.getAgentCredential()),
+    );
+    expect(cred).toEqual({ value: "sk-ant-oat01-FAKEvalid_0123-abc", scheme: "oauth_token" });
+    expect(
+      sinks.calls.some((c) => Array.isArray(c) && c[0] === "sentry.captureMessage"),
+    ).toBe(false);
+  });
+
+  it("oauth_unusable maps to key_invalid", () => {
+    expect(mapByokLeaseCauseToErrorCode("oauth_unusable")).toBe("key_invalid");
   });
 });
