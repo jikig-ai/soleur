@@ -1,0 +1,8 @@
+# recorder on committed HEAD (6cec564bb8), --mode check, 2 recordings per suite, the 5 suites with the most accepted pairs
+AUDIT_READS_HEADER	rev=6cec564bb880caad2f3261b9c6da450a5b77374a	mode=check	netns=unshare	idmap=current	reps=2	cover=argv	max_load=60	out=/var/tmp/pr4b-work/rec-final
+AUDIT_READS	label=tests/scripts/lint-rule-bodies	verdict=uncovered	reason=reads-outside-cover	rc=0	files=5	dirs=3	cover=0	unresolved=0	load=5.49	rev=6cec564bb880caad2f3261b9c6da450a5b77374a	mode=check
+AUDIT_READS	label=plugins/soleur/test/audit-flag-flip.test.sh	verdict=uncovered	reason=reads-outside-cover	rc=0	files=5	dirs=1	cover=1	unresolved=3	load=5.89	rev=6cec564bb880caad2f3261b9c6da450a5b7737
+AUDIT_READS	label=plugins/soleur/test/net-issue-flow.test.sh	verdict=uncovered	reason=reads-outside-cover	rc=0	files=12	dirs=5	cover=1	unresolved=7	load=5.89	rev=6cec564bb880caad2f3261b9c6da450a5b7737
+AUDIT_READS	label=plugins/soleur/test/vendor-bundle-coverage.test.sh	verdict=uncovered	reason=reads-outside-cover	rc=0	files=11	dirs=5	cover=1	unresolved=2	load=15.16	rev=6cec564bb880caad2f3261b9c6da4
+AUDIT_READS	label=plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	verdict=uncovered	reason=reads-outside-cover	rc=0	files=19	dirs=2	cover=1	unresolved=17	load=15.16	rev=6cec564bb8
+flips (accepted path opened by a recorded suite): none

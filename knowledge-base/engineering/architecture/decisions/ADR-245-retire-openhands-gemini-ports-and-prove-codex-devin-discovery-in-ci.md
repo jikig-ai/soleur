@@ -36,6 +36,8 @@ The second half of this decision is the gap that made the first half worth actin
 
 **1. The supported harness set is Claude Code, Grok Build, Codex and Devin.** `.openhands/` and `.gemini/` are deleted. `#8306` closes as obsolete: its scope was completeness for trees that no longer exist.
 
+> *Amended 2026-10-22 (#10821): the set recorded here is the set at this record's date (2026-09-23); ADR-291 added OpenCode under this record's re-entry criterion. See §Amendment.*
+
 **Re-entry criterion — a hand port is not sufficient.** A harness re-enters the supported set only with (a) a `Harness` union member in `plugins/soleur/lib/harness.ts` and the adapter functions that implies, and (b) a GENERATOR for any per-harness tree. Never another hand-maintained copy. `knowledge-base/engineering/platform-portability-comparison.md` keeps the measurements as a historical record, banner-scoped to this date.
 
 **2. Codex and Devin discovery is proven in CI by `harness-discovery`**, a non-required job that installs the plugin hermetically from the checkout and asks each vendor CLI what it registered.
@@ -101,3 +103,11 @@ None. No new paid vendor, no tier change. The job adds roughly two CLI installs 
 ## Diagram
 
 `model.c4` gains the supply-chain edges this job creates — `github -> codex` and `github -> devin` ("CI installs a pinned CLI and asserts skill discovery"), alongside the existing `github -> sigstore` and `github -> ghcr` precedents. `github -> platform.grokBuild` is added on the same grounds: the `grok-fidelity` job has installed a vendor CLI over the network since it was written and that edge was never modelled. OpenHands and Gemini were never elements, so the retirement removes nothing from the model; the `guardrails` element's description loses its mirror clause.
+
+## Amendment — 2026-10-22 (#10821)
+
+Clause-scoped: this note amends **Decision item 1** and the §Context sentence "Soleur ships one plugin tree to four supported harnesses". Neither is rewritten above, and both are read as **the set at this record's date (2026-09-23)** — not as a current claim.
+
+A harness re-entered the set under this record's own re-entry criterion, by the later record that made the decision: **ADR-291, "Add an OpenCode plugin adapter"** (accepted, 2026-10-17). The criterion has two arms and both are satisfied — `opencode` is a member of the `Harness` union in `plugins/soleur/lib/harness.ts`, and `plugins/soleur/scripts/sync-opencode-adapter.ts` is a generator rather than a hand port. The harness names are deliberately **not** restated here: the original list above is the historical statement, and repeating it would create a second one to keep current. ADR-291 does not itself restate the supported set, which is why the criterion — not the later record — is the bridge between them.
+
+This amendment asserts nothing about the C4 model or about hook surfaces. An OpenCode element is still missing from `model.c4` (#10866), and what OpenCode can and cannot carry is ADR-291's subject.

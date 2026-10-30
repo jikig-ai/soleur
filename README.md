@@ -11,7 +11,7 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **67 agents**, **4 commands**, and **103 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **67 agents**, **4 commands**, and **105 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
@@ -49,6 +49,27 @@ grok            # interactive session
 ```
 
 Use `/go <what you want to do>` (Grok's bare entry name), not `/soleur:go`. If `grok inspect` does not list Soleur, stop — there is no `grok plugin install` command to fall back on today, so install is done by pointing Grok at this repository (`.grok/config.toml`, merged via the project plugin loader) rather than a marketplace command. Full setup — subagent spawning, trust, and command naming — is in the [Grok Build onboarding guide](knowledge-base/engineering/grok-onboarding.md).
+
+**OpenCode:**
+
+Install Soleur into your OpenCode config directory via npm (this needs `bun` on `PATH`), then start a session:
+
+```bash
+npx @soleur/opencode install
+# or: bunx @soleur/opencode install
+```
+
+Verify the install with `npx @soleur/opencode install --check` — it prints `opencode-install ok` when the vendored payload in `~/.config/opencode/soleur/` matches. (From a local checkout of this repository, you can also run `bun plugins/soleur/scripts/install-opencode-adapter.ts` and keep the checkout in place.) Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because OpenCode has no `soleur:` namespace. Two guards decide shell commands on OpenCode, and both run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. Soleur's operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](plugins/soleur/opencode/INSTRUCTIONS.md).
+
+**Google Antigravity CLI (`agy`):**
+
+Soleur loads as an Antigravity plugin via `.antigravity-plugin/plugin.json`. From a repository root containing the plugin:
+
+```bash
+agy
+```
+
+Start an Antigravity session and use `/soleur:go <what you want to do>`. Tool calls are translated natively to Antigravity primitives (`view_file`, `write_to_file`, `replace_file_content`, `run_command`, `invoke_subagent`), with background polling handled reactively through `schedule` rather than foreground sleep loops. See the [Antigravity instructions](plugins/soleur/antigravity/INSTRUCTIONS.md) for full mapping and dynamic domain subagent delegation.
 
 **Claude Code (recommended, via the published marketplace):**
 
@@ -201,17 +222,17 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
 | `/soleur:version` | Show the installed plugin version and whether a newer release exists (Claude Code only) |
 
-Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`.
+Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`. OpenCode: `/go`.
 
-| Step | Claude Code | Grok Build | Codex | Devin CLI |
-|------|-------------|------------|-------|-----------|
-| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` |
-| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` |
-| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` |
-| Version | `/soleur:version` (Claude Code only) | not available | not available | not available |
-| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` |
+| Step | Claude Code | Grok Build | Codex | Devin CLI | OpenCode |
+|------|-------------|------------|-------|-----------|----------|
+| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` | `/help` |
+| Version | `/soleur:version` (Claude Code only) | not available | not available | not available | `/version` (reports unknown) |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` | `skill` tool, bare id (`plan`) |
 
-Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](knowledge-base/engineering/grok-onboarding.md) · [Codex](knowledge-base/engineering/codex-onboarding.md) · [Devin](plugins/soleur/devin/INSTRUCTIONS.md).
+Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](knowledge-base/engineering/grok-onboarding.md) · [Codex](knowledge-base/engineering/codex-onboarding.md) · [Devin](plugins/soleur/devin/INSTRUCTIONS.md) · [OpenCode](plugins/soleur/opencode/INSTRUCTIONS.md).
 
 ### Workflow Skills
 

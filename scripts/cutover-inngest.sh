@@ -171,7 +171,7 @@ fi
 # execute gate fail closed. No-SSH by construction — betterstack-query.sh is the only transport.
 _bs_query_rows() {
   local since="$1" term="$2" limit="$3" errfile="${4:-/dev/null}" rows rc=0
-  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") || rc=$?
+  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") || rc=$?
   printf '%s\n' "$rows"
   return "$rc"
 }
@@ -321,7 +321,7 @@ _flip_transition_dt() {
   # earliest(A) — so a SUPERSET is always the safe direction. The abort reasons are kept
   # for that reason even though they fire on flips where `start_server` never ran.
   # A cross-file parity test pins this set against the emitter.
-  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
     --since "$FSM_ANCHOR_SINCE" \
     --grep '"reason":"flip-complete"' \
     --grep '"reason":"flushed-resume-no-reflush"' \
@@ -449,7 +449,7 @@ _flip_transition_dt() {
 FLUSH_LATCH_SINCE="${FLUSH_LATCH_SINCE:-365d}"
 _flush_latch_count() {
   local rows rc=0 n
-  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
     --since "$FLUSH_LATCH_SINCE" \
     --grep '"reason":"flip-complete"' \
     --grep '"reason":"refuse-rearm-after-done"' \
@@ -547,10 +547,15 @@ _hcloud_created_epoch() {
 # _inngest_server_created_epoch — I/O. Prints exactly one token (<epoch> | __ABSENT__ |
 # __UNREADABLE__) and ALWAYS returns 0; every non-epoch outcome is preceded by one ::warning:: on
 # stderr naming its cause. Public-log hygiene, each rule pinned by the suite:
-#   - Tier A first (ADR-241 D4, #8209): HCLOUD_TOKEN_READONLY, falling back to the read/write
-#     HCLOUD_TOKEN when that read returns nothing. Measured 2026-09-24: prd_terraform holds only
-#     HCLOUD_TOKEN, so the fallback is the live path until the read-only token is minted
-#     (infra-credential-tiers-8209.md step O5). A ::notice:: names which variable was used;
+#   - Tier A only (ADR-241 D4, #10664): HCLOUD_TOKEN_READONLY, read alone. There is NO fallback to
+#     the read/write HCLOUD_TOKEN. O10 (the read/write name absent from prd_terraform) was measured
+#     done by a names-only listing of soleur/prd_terraform on 2026-10-20 (the read-only name listed,
+#     the read/write name absent); the O5 write-probe (the read-only property) was last recorded
+#     2026-09-29 and has not been re-run. A reader that can reach the destroy-capable token stops
+#     being read-only the day the read-only secret goes missing. An absent, empty or unusable
+#     read-only token is `__UNREADABLE__` with one warning naming it; restore it per
+#     infra-credential-tiers-8209.md step O5. Guarded by
+#     scripts/lint-hcloud-token-readonly-no-fallback.sh;
 #   - the token is ::add-mask::ed on STDERR (stdout is the caller's $(…) token) and travels on
 #     curl's stdin (-H @-), never argv;
 #   - no -f (the HTTP class must be readable), no -S (curl's error text is not a sanctioned egress
@@ -560,15 +565,10 @@ _hcloud_created_epoch() {
 #   - no response byte is ever printed — warnings are built from the rc, the HTTP code and
 #     $INNGEST_HOST only.
 _inngest_server_created_epoch() {
-  local tok tokvar resp rc=0 code body epoch now
-  tokvar=HCLOUD_TOKEN_READONLY
+  local tok resp rc=0 code body epoch now
   tok="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain 2>/dev/null || true)"
   if [[ -z "$tok" ]]; then
-    tokvar=HCLOUD_TOKEN
-    tok="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)"
-  fi
-  if [[ -z "$tok" ]]; then
-    echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written; re-dispatch once the token read works." >&2
+    echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written. Check the Doppler read first (auth or network) and re-dispatch if that was transient; only if the secret is genuinely absent, restore it (the owner mints it in the Hetzner console, step O5 of infra-credential-tiers-8209.md)." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
@@ -577,16 +577,11 @@ _inngest_server_created_epoch() {
   # the way the other arms do; nothing about the value reaches any stream.
   if ! _bearer_ok "$tok"; then
     echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
-    echo "::warning::G3 generation anchor: the $tokvar read from prd_terraform has an unusable shape (a quote, backslash, control character, space or other character no Hetzner token carries), so it was neither masked nor sent. Nothing was written; re-mint the token in Doppler and re-dispatch." >&2
+    echo "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read from prd_terraform has an unusable shape (a quote, backslash, control character, space or other character no Hetzner token carries), so it was neither masked nor sent. Nothing was written; re-mint the token in Doppler and re-dispatch." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
   printf '::add-mask::%s\n' "$tok" >&2
-  if [[ "$tokvar" == HCLOUD_TOKEN ]]; then
-    echo "::notice::G3 generation anchor: using the read/write HCLOUD_TOKEN (HCLOUD_TOKEN_READONLY returned nothing; ADR-241 D4 fallback until it is minted)" >&2
-  else
-    echo "::notice::G3 generation anchor: using HCLOUD_TOKEN_READONLY" >&2
-  fi
   resp="$(printf 'Authorization: Bearer %s\n' "$tok" \
     | ( unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME
         curl --disable --noproxy '*' -s --proto =https --max-time 20 \
@@ -611,7 +606,7 @@ _inngest_server_created_epoch() {
   fi
   case "$code" in
     200) : ;;
-    401|403) echo "::warning::G3 generation anchor: the Hetzner API REJECTED the token (HTTP $code) — the one sent was $tokvar; verify it in prd_terraform. Nothing was written, and a re-dispatch will refuse the same way until the token is fixed." >&2
+    401|403) echo "::warning::G3 generation anchor: the Hetzner API REJECTED the token (HTTP $code) — the one sent was HCLOUD_TOKEN_READONLY; verify it in prd_terraform. Nothing was written, and a re-dispatch will refuse the same way until the token is fixed." >&2
              printf '%s' '__UNREADABLE__'; return 0 ;;
     429)     echo "::warning::G3 generation anchor: the Hetzner API rate-limited this read (HTTP 429). Nothing was written; re-dispatch later is safe." >&2
              printf '%s' '__UNREADABLE__'; return 0 ;;
@@ -1786,7 +1781,7 @@ case "$OP" in
       exit 1
     fi
     if (( 10#$REARMED + 10#$RFAILED + 10#$RHELD != 10#$RTOTAL )); then
-      echo "::error::re-arm reconciliation FAILED (P2-b): re-armed=$REARMED + failed=$RFAILED + held_back=$RHELD != total=$RTOTAL — the host's counts do not account for every captured record, so neither success nor the partial-retry path can be trusted. Do NOT proceed to op=verify; pull the inngest-rearm-reminders lines from Better Stack (doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep inngest-rearm-reminders) and file an issue with this run URL."
+      echo "::error::re-arm reconciliation FAILED (P2-b): re-armed=$REARMED + failed=$RFAILED + held_back=$RHELD != total=$RTOTAL — the host's counts do not account for every captured record, so neither success nor the partial-retry path can be trusted. Do NOT proceed to op=verify; pull the inngest-rearm-reminders lines from Better Stack (doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep inngest-rearm-reminders) and file an issue with this run URL."
       exit 1
     fi
     if [[ "$RFAILED" -ne 0 ]]; then
@@ -1895,9 +1890,16 @@ case "$OP" in
   backup)
     # #5509 pre-cutover recovery point: a Hetzner SERVER snapshot of the
     # whole root disk (incl. /var/lib/inngest SQLite). No webhook, no SSH —
-    # pure hcloud API. HCLOUD_TOKEN read from the prd_terraform-scoped
-    # DOPPLER_TOKEN (never echoed). server id 123931471 = soleur-web-platform.
-    HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
+    # pure hcloud API. server id 123931471 = soleur-web-platform.
+    # #9755 / ADR-241 O10: the read/write token now arrives through the job
+    # environment — the `infra-credentials` step exports the whole
+    # soleur-infra-privileged/prd project only on an `inputs.op == 'backup'`
+    # dispatch, itself held behind the `inngest-cutover` required-reviewer
+    # environment. This arm must never regain a `doppler secrets get` of the
+    # bare name: the name was evicted from prd_terraform at O10 (a read there
+    # returns empty) and the lint ratchet carries no allowlist entry, so any
+    # reintroduced read is a finding.
+    HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209, #9755)
     # #8767: shape-check, THEN mask, BEFORE the first request. The check comes first so a value
     # holding a newline can never inject a second `::` workflow command through the mask line (and an
     # empty read never emits a bare directive). The directive goes to stderr to match the shared
@@ -1906,7 +1908,7 @@ case "$OP" in
     # line as the first output event, once, ahead of the first request.
     if ! _bearer_ok "$HCLOUD_TOKEN"; then
       echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
-      echo "::error::backup: the HCLOUD_TOKEN read from Doppler is empty or has an unusable shape; refusing before any request"; exit 1
+      echo "::error::backup: the loader-exported HCLOUD_TOKEN (the infra-credentials step on the inngest-cutover environment) is empty or has an unusable shape; refusing before any request"; exit 1
     fi
     printf '::add-mask::%s\n' "$HCLOUD_TOKEN" >&2
     TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -2868,13 +2870,13 @@ case "$OP" in
           # finishes. Keep polling; the timeout message names this reason if it never clears.
           echo "Attempt $i/$QMAX_POLLS: reason=lock_contention — another ci-deploy invocation lost the flock and overwrote the status slot; the in-flight quiesce's verdict will replace it — polling" ;;
         quiesce_capture_failed)
-          echo "::error::quiesce-web FAILED (reason=quiesce_capture_failed): the host's pre-stop capture of the still-armed reminders failed or timed out, so NOTHING was stopped or disabled — production scheduling is still running and no quiesce marker was written. Read the capture's scrubbed stderr tail: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED. If the unit is active but its GraphQL is dead (connection refused / timeout), dispatch 'gh workflow run restart-inngest-server.yml', wait for it to go green, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesce_capture_failed): the host's pre-stop capture of the still-armed reminders failed or timed out, so NOTHING was stopped or disabled — production scheduling is still running and no quiesce marker was written. Read the capture's scrubbed stderr tail: doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED. If the unit is active but its GraphQL is dead (connection refused / timeout), dispatch 'gh workflow run restart-inngest-server.yml', wait for it to go green, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesce_capture_unavailable)
-          echo "::error::quiesce-web FAILED (reason=quiesce_capture_unavailable): the unit is neither active (so a capture cannot run) nor already quiesced — NOTHING was captured, disabled or stopped. Read its shape: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_UNAVAILABLE (logs unit= enabled= state=). If state=disabled_unattributed, dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-enables + retires the stale capture); otherwise (failed / activating / inactive but enabled) dispatch 'gh workflow run restart-inngest-server.yml'. Once the unit is active, re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesce_capture_unavailable): the unit is neither active (so a capture cannot run) nor already quiesced — NOTHING was captured, disabled or stopped. Read its shape: doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_UNAVAILABLE (logs unit= enabled= state=). If state=disabled_unattributed, dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-enables + retires the stale capture); otherwise (failed / activating / inactive but enabled) dispatch 'gh workflow run restart-inngest-server.yml'. Once the unit is active, re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesce_marker_write_failed)
-          echo "::error::quiesce-web FAILED (reason=quiesce_marker_write_failed): the capture succeeded but the quiesce marker could not be written atomically under /var/lib/inngest — NOTHING was disabled or stopped, and 2.2 could not certify a quiesce without it. Check /var/lib/inngest is writable (root disk full or remounted read-only): doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_MARKER_WRITE_FAILED, clear the cause, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesce_marker_write_failed): the capture succeeded but the quiesce marker could not be written atomically under /var/lib/inngest — NOTHING was disabled or stopped, and 2.2 could not certify a quiesce without it. Check /var/lib/inngest is writable (root disk full or remounted read-only): doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_MARKER_WRITE_FAILED, clear the cause, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesced_shape_unrecognized)
-          echo "::error::quiesce-web FAILED (reason=quiesced_shape_unrecognized): the unit was stopped and verified not-serving, so production scheduling IS stopped — but its final shape did not read as quiesced (not inactive|failed + disabled with a valid marker), so op=execute 2.2 will not certify it. Read the shape: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep 'final shape not recognised'. Then dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-opens scheduling and retires the capture + marker), and re-dispatch op=quiesce-web for a fresh capture and marker. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesced_shape_unrecognized): the unit was stopped and verified not-serving, so production scheduling IS stopped — but its final shape did not read as quiesced (not inactive|failed + disabled with a valid marker), so op=execute 2.2 will not certify it. Read the shape: doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep 'final shape not recognised'. Then dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-opens scheduling and retires the capture + marker), and re-dispatch op=quiesce-web for a fresh capture and marker. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         inngest_still_serving|inngest_still_enabled)
           echo "::error::2.2 quiesce FAILED (reason=$REASON): a persistent still-serving/still-enabled means the unit is being RESURRECTED — pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy) and investigate what restarts/re-enables it (e.g. a stray deploy re-enabling the unit). Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesced_peer_fanout_unaccepted)
@@ -3528,7 +3530,7 @@ case "$OP" in
     # while stdout is captured whole and the one verdict= line extracted from it. RS_G4_RC is
     # the PROBE's rc (doppler run propagates it); the verdict extraction cannot mask it.
     RS_G4_RAW=""; RS_G4_RC=0
-    RS_G4_RAW="$(doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh)" || RS_G4_RC=$?
+    RS_G4_RAW="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh)" || RS_G4_RC=$?
     RS_G4_OUT="$(printf '%s\n' "$RS_G4_RAW" | grep -E '^verdict=' | tail -n 1 || true)"
     case "$(resume_bootstrap_decide "$RS_G4_RC" "$RS_G4_OUT")" in
       proceed)

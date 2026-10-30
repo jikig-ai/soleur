@@ -214,6 +214,25 @@ export const MANIFEST: ManifestEntry[] = [
       "web-host-resident feeder (web-private-nic-guard.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.private_nic_guard_install), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable. No <host>-host-replace path, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
+    name: "web_bash_synthetic",
+    // #10455 b (ADR-079 addendum 2026-10-22) — the runtime Bash synthetic's liveness beat, one per host (for_each var.web_hosts).
+    // Pinged ONLY on a verified pass of one real wrapped Bash call in the RUNNING web container, so a sandbox that breaks between
+    // deploys (the 2026-10-06..16 outage, #10445) stops the beat. Same web-host-cron / SSH-provisioner delivery and measured-beat
+    // arming shape as web_nic_guard, with its own URL and its own failure domain (folding would re-introduce OR-masking). Period
+    // 900 s / grace 1800 s: a skipped run (deploy lock, restart, memory skip) must not page; a verified FAIL pages at once via /fail.
+    arming: "web-host-cron",
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/server.tf",
+        pattern: "systemctl enable --now web-bash-synthetic.timer",
+      },
+    },
+    exempt_reason:
+      "web-host-resident feeder (web-bash-synthetic.timer on web-1 and web-2) delivered by the SSH terraform_data provisioners (terraform_data.web_bash_synthetic_install / _web2) and by cloud-init + soleur-host-bootstrap.sh on a fresh host, NOT a dedicated-host boot. There is no <host>-host-replace path to re-arm it; arm-heartbeats.sh arms each host's beat with a literal arm_one call after the first measured ping.",
+  },
+  {
     name: "inngest_consumer",
     // #7228 — the inngest CONSUMER-perspective serviceability beat. web-host-cron, not
     // dedicated-host-boot, and that is the entire point of the design: its feeder runs on web-1
@@ -321,6 +340,11 @@ export const MANIFEST: ManifestEntry[] = [
     // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
     // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
     // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). FED and ARMED.
+    // Since #10390 a beat certifies TWO properties of that same freshest row — freshness AND the
+    // serving verdict: the feeder grades the row's server_active/http_code/cutover_flag through the
+    // shared classify_dedicated_host def and beats <url>/fail on not-serving (verdict fail_beat, an
+    // intended immediate incident), beats normally on healthy/stopped-by-brake, and withholds
+    // (serving_unavailable, exit 3) when the verdict cannot be established.
     // No `arming_pending` (record PR for #9703). This row carried `arming_pending: { tracking_issue: 9703 }`
     // while the monitor was paused-yet-fed. On 2026-10-12 the runbook arm block unpaused it; its read-back
     // was `status=up paused=false`, and the feeder (scripts/inngest-probe-heartbeat-feeder.sh) then reported

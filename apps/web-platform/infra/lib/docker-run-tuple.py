@@ -95,6 +95,7 @@ _COMMON_ENV = {
     "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH},
     "CRON_WORKSPACE_ROOT": {"/workspaces"},
     "SOLEUR_HOST_ID": {"$HOST_ID"},
+    "SOLEUR_PROXY_BIND": {"$PROXY_BIND"},
 }
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}
 # Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and

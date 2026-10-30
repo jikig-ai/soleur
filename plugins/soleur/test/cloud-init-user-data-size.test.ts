@@ -181,7 +181,12 @@ const HETZNER_CAP = 32_768;
 // egress-gateway runcmd call-site, the SOLEUR_EGRESS_REAPER env flag and the token-dir mount
 // on the web container — boot-time call-sites (the bootstrap script body is baked, #5921
 // pattern), so irreducibly inline. Comments trimmed first. ~8.7 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 24_100;
+// #9639: +400 B modest re-baseline (24,100 → 24,500). The egress-enforce-probe rc-capture
+// restructure (real exit code into the stage detail file + explicit boot-emit before
+// poweroff -f) is boot-time runcmd logic — irreducibly inline. Comments trimmed first
+// (render 24,364 → 24,268 local); CI ≈ local + 32 → ~24,300; 24,500 restores ~200 B of
+// headroom and stays ~8.2 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 24_500;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -1854,7 +1859,9 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // +5 (=63): egress gateway (#9534) — squid.conf + auth-helper + shared deny
     // set + bootstrap, installed by soleur-host-bootstrap.sh and mounted :ro into
     // soleur-egress-gw; the forwarder rides the image for the PR-B dispatcher.
-    expect(serverTfBakedSet().length).toBe(63);
+    // +4 (=67): the runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22) — web-bash-synthetic.{sh,service,timer} plus
+    // sdk-bash-verdict.sh, the verdict mapping it shares with ci-deploy.sh (installed beside it, sourced not executed).
+    expect(serverTfBakedSet().length).toBe(67);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

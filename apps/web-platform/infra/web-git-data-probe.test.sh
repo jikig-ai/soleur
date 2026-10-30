@@ -22,6 +22,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/web-git-data-probe.sh"
+SVC="$SCRIPT_DIR/web-git-data-probe.service"
 
 PASS=0
 FAIL=0
@@ -44,6 +45,7 @@ run_seam() {  # <reachable|unreachable>
   local override="$1" pinglog outf ec=0
   pinglog="$(mktemp "$TMP/ping.XXXXXX")"; outf="$(mktemp "$TMP/out.XXXXXX")"
   SOLEUR_GIT_DATA_PROBE_REACH_OVERRIDE="$override" SOLEUR_GIT_DATA_PROBE_PING_LOG="$pinglog" \
+    GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL \
     GIT_DATA_HEARTBEAT_URL="https://synthetic.invalid/beat/git-data" \
     bash "$SUT" >"$outf" 2>&1 || ec=$?
   EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes; OUT="$(cat "$outf")"
@@ -53,6 +55,7 @@ run_real() {  # <endpoint host:port> — real _reachable(), no override
   local endpoint="$1" pinglog outf ec=0
   pinglog="$(mktemp "$TMP/ping.XXXXXX")"; outf="$(mktemp "$TMP/out.XXXXXX")"
   GIT_DATA_ENDPOINT="$endpoint" SOLEUR_GIT_DATA_PROBE_PING_LOG="$pinglog" \
+    GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL \
     GIT_DATA_HEARTBEAT_URL="https://synthetic.invalid/beat/git-data" \
     timeout 20 bash "$SUT" >"$outf" 2>&1 || ec=$?
   EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes; OUT="$(cat "$outf")"
@@ -135,11 +138,11 @@ exit "${STUB_RC:-0}"
 STUB
 chmod +x "$STUBDIR/curl"
 
-run_transport() {  # <url value> [extra env assignment...]
+run_transport() {  # <url value> [extra env assignment...] — extra env may override the KEY default
   local url="$1" ec=0; shift
   CURL_LOG="$(mktemp "$TMP/curl.XXXXXX")"; : > "$CURL_LOG"; rm -f "$CURL_LOG.n"
   TOUT="$TMP/tout.$RANDOM"
-  env "$@" PATH="$STUBDIR:$PATH" CURL_LOG="$CURL_LOG" \
+  env GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL "$@" PATH="$STUBDIR:$PATH" CURL_LOG="$CURL_LOG" \
     SOLEUR_GIT_DATA_PROBE_REACH_OVERRIDE=reachable "GIT_DATA_HEARTBEAT_URL=$url" \
     bash "$SUT" >"$TOUT" 2>&1 || ec=$?
   TEC=$ec; TOUTTXT="$(cat "$TOUT")"
@@ -194,6 +197,10 @@ hostile_row 'a whitespace-only value' " " token_shape
 run_transport ""
 assert "empty URL: the existing WARN arm (zero curl calls, no marker, exit 0)" \
   "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 0 && '$TEC' -eq 0 ]] && grep -q 'unset' <<<\"\$TOUTTXT\""
+# a bare GIT_DATA_HEARTBEAT_URL with NO key resolves nothing (no bare-var fallback): the WARN arm
+run_transport "$GOOD" GIT_DATA_HEARTBEAT_URL_KEY=
+assert "bare var, no KEY: WARN arm (zero curl calls, no marker, exit 0); the key line names the KEY var, not the value" \
+  "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 0 && '$TEC' -eq 0 ]] && grep -q 'GIT_DATA_HEARTBEAT_URL unset' <<<\"\$TOUTTXT\" && grep -q 'GIT_DATA_HEARTBEAT_URL_KEY' <<<\"\$TOUTTXT\" && ! grep -q 'betterstack' <<<\"\$TOUTTXT\""
 # must-PASS: a different well-formed token with every allowed punctuation class
 run_transport 'https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
 assert "a well-formed URL with a different token pings once, on stdin only" \
@@ -202,6 +209,145 @@ assert "a well-formed URL with a different token pings once, on stdin only" \
 run_seam reachable
 assert "seam still routes before the transport (ping log written, no curl needed)" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
 
+# --- #9639 F6: the unit stops expanding the secret; the script resolves it AFTER its refusal ----
+# Same defect and fix as web-private-nic-guard / web-zot-consumer-probe / inngest-consumer-probe
+# (#9639 / #10637 / #10363): the unit's ExecStart expanded GIT_DATA_HEARTBEAT_URL in an inner
+# `bash -c` BEFORE the script could refuse to run under xtrace, so a traced launch
+# (SHELLOPTS=xtrace propagating through `doppler run`, or a BASH_ENV `set -x`) printed the
+# heartbeat URL to stderr -> journald -> off-box. The fix: the unit expands nothing and the
+# script resolves the key-named variable AFTER an unconditional xtrace refusal (unconditional
+# because this script's only launch context is `doppler run` and the env file always carries the
+# key name — no credential-free mode exists). Rows mirror the inngest suite's F6 block.
+echo "--- F6 (#9639): git-data probe unit wrapper expands nothing; lookup follows the refusal ---"
+# shellcheck disable=SC2016  # the F6 conditions are single-quoted on purpose: assert() evals them in this shell
+F6_URL='https://uptime.betterstack.test/api/v1/heartbeat/F6-SECRET-9639'
+F6_TOK=F6-SECRET-9639
+F6_SCRIPT_PATH=/usr/local/bin/web-git-data-probe.sh
+F6_LINE="$(sed -n 's/^ExecStart=//p' "$SVC" | sed -n '1p' | sed 's/\$\$/$/g')"   # systemd's $$ is a literal $
+# The pre-fix ExecStart, kept ONLY as the leak control's mutant (never compared with the tree).
+F6_OLD_LINE="/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export GIT_DATA_HEARTBEAT_URL=\"\${!GIT_DATA_HEARTBEAT_URL_KEY}\"; exec $F6_SCRIPT_PATH'\\'''"
+F6_EXEC="$TMP/f6-exec-web-git-data-probe.sh"; cp "$SUT" "$F6_EXEC"; chmod +x "$F6_EXEC"
+printf 'set -x\n' > "$TMP/f6-xt.env"
+mkdir -p "$TMP/f6-stubbin"
+# `doppler run ... -- CMD`: skip to the `--` and exec CMD. It never expands the secret itself (its own
+# xtrace would print the value and void the leak control); the test env pre-exports it as doppler would.
+printf '#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n' > "$TMP/f6-stubbin/doppler"
+# A recording curl: one argv line per call and, for a `--config -` call, that call's whole stdin;
+# F6_HB_ENVDUMP set -> dump ITS environment (the not-exported / export-mutant rows).
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$F6_HB_ARGV"\n[ -z "${F6_HB_ENVDUMP:-}" ] || env > "$F6_HB_ENVDUMP"\ncase " $* " in\n  *" --config - "*) cat > "$F6_HB_STDIN" ;;\nesac\nexit 0\n' > "$TMP/f6-stubbin/curl"
+chmod +x "$TMP/f6-stubbin/doppler" "$TMP/f6-stubbin/curl"
+mkdir -p "$TMP/f6-dead"; printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/f6-dead/doppler"; chmod +x "$TMP/f6-dead/doppler"
+F6_SEQ=0
+run_unit() {   # <ExecStart text> <none|xtrace|benv> [extra env words, applied last] : script path rewritten to the (mutant) script
+  local line="$1" form="$2" ec=0 sut="${F6_SUT:-$F6_EXEC}"; shift 2
+  [[ "$line" == *"$F6_SCRIPT_PATH"* ]] || { printf '[FATAL] run_unit: the ExecStart text does not name %s; the rewrite would be a silent no-op\n' "$F6_SCRIPT_PATH" >&2; exit 1; }
+  local -a fenv=()
+  case "$form" in xtrace) fenv=(SHELLOPTS=xtrace) ;; benv) fenv=(BASH_ENV="$TMP/f6-xt.env") ;; esac
+  F6_SEQ=$((F6_SEQ + 1))
+  F6_HB_ARGV="$(mktemp "$TMP/f6argv.XXXXXX")"; F6_HB_STDIN="$(mktemp "$TMP/f6stdin.XXXXXX")"; HOUT="$(mktemp "$TMP/hbout.XXXXXX")"
+  env -u SOLEUR_GIT_DATA_PROBE_PING_LOG -u SHELLOPTS -u BASH_ENV -u GIT_DATA_HEARTBEAT_URL -u GIT_DATA_HEARTBEAT_URL_KEY -u GIT_DATA_HEARTBEAT_URL_SYNTH \
+    PATH="$TMP/f6-stubbin:$PATH" \
+    F6_HB_ARGV="$F6_HB_ARGV" F6_HB_STDIN="$F6_HB_STDIN" \
+    SOLEUR_GIT_DATA_PROBE_REACH_OVERRIDE=reachable \
+    GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL_SYNTH GIT_DATA_HEARTBEAT_URL_SYNTH="$F6_URL" \
+    ${fenv[@]+"${fenv[@]}"} "$@" \
+    timeout 20 bash -c 'eval "$1"' _ "${line//"$F6_SCRIPT_PATH"/$sut}" >"$HOUT" 2>&1 || ec=$?
+  HEC=$ec
+  # shellcheck disable=SC2034  # read by NAME inside the assert() eval strings
+  HOUTTXT="$(cat "$HOUT")"
+  N_HB="$(grep -c . "$F6_HB_ARGV" 2>/dev/null || true)"
+}
+assert "F6 static: no Exec* directive of the git-data probe unit holds an indirect expansion" \
+  '[[ "$(grep -cE "^[[:space:]]*Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
+assert "F6 static: ExecStart runs the probe directly under doppler run: names it, no dollar sign, no export" \
+  '[[ "$F6_LINE" == *"$F6_SCRIPT_PATH"* && "$F6_LINE" != *\$* && "$F6_LINE" != *export* && "$F6_LINE" == *"doppler run"* ]]'
+for f6_form in xtrace benv; do
+  run_unit "$F6_LINE" "$f6_form"
+  assert "F6 unit[$f6_form]: the real ExecStart exits 78 with the refusal on a non-trace line (the script RAN; got rc=$HEC)" \
+    '[[ "$HEC" -eq 78 && "$(grep -v "^+" "$HOUT" | grep -c "refusing to run under xtrace" || true)" -ge 1 ]]'
+  assert "F6 unit[$f6_form]: the heartbeat URL (and its secret path token) is in neither stream and no request was made" \
+    '[[ "$HOUTTXT" != *"$F6_TOK"* && "$N_HB" -eq 0 ]]'
+done
+run_unit "$F6_OLD_LINE" xtrace
+assert "F6 control: the PRE-FIX ExecStart under SHELLOPTS=xtrace prints the secret (the harness can see the defect; rc=$HEC)" \
+  '[[ "$HOUTTXT" == *"$F6_TOK"* ]]'
+run_unit "$F6_LINE" xtrace PATH="$TMP/f6-dead:$TMP/f6-stubbin:$PATH"
+assert "F6 dispatch: with a doppler that never execs the probe there is NO refusal text (so the rows above discriminate)" \
+  '[[ "$HOUTTXT" != *"refusing to run under xtrace"* && "$HEC" -eq 0 ]]'
+run_unit "$F6_LINE" none
+assert "F6 positive: the untraced real ExecStart resolves the key-named URL and delivers it to the heartbeat curl on its stdin config, once (rc=$HEC)" \
+  '[[ "$HEC" -eq 0 && "$N_HB" -eq 1 && "$(cat "$F6_HB_STDIN")" == "url = \"$F6_URL\"" ]]'
+run_unit "$F6_LINE" none GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL GIT_DATA_HEARTBEAT_URL="$F6_URL"
+assert "F6 production-shaped identity key [GIT_DATA_HEARTBEAT_URL] resolves and delivers" \
+  '[[ "$N_HB" -eq 1 && "$(cat "$F6_HB_STDIN")" == "url = \"$F6_URL\"" ]]'
+run_unit "$F6_LINE" none GIT_DATA_HEARTBEAT_URL="https://uptime.betterstack.test/api/v1/heartbeat/STRAY-9639" GIT_DATA_HEARTBEAT_URL_KEY= GIT_DATA_HEARTBEAT_URL_SYNTH=
+assert "F6 no-key: a bare exported GIT_DATA_HEARTBEAT_URL without the KEY name resolves nothing (exit 0, WARN arm, no curl)" \
+  '[[ "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"GIT_DATA_HEARTBEAT_URL unset"* && "$HOUTTXT" == *"GIT_DATA_HEARTBEAT_URL_KEY"* ]]'
+run_unit "$F6_LINE" xtrace GIT_DATA_HEARTBEAT_URL_KEY= GIT_DATA_HEARTBEAT_URL_SYNTH=
+assert "F6 unconditional: a traced launch with NO credential set still refuses (rc=$HEC)" \
+  '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to run under xtrace"* ]]'
+F6_PLANT="$TMP/f6-plant"; rm -f "$F6_PLANT"
+run_unit "$F6_LINE" none "GIT_DATA_HEARTBEAT_URL_KEY=a[\$(touch $F6_PLANT)]"
+assert "F6 hostile key a[\$(touch ...)]: nothing executed, no heartbeat, a key line that does not echo the name, exit 0" \
+  '[[ ! -e "$F6_PLANT" && "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"GIT_DATA_HEARTBEAT_URL_KEY"* && "$HOUTTXT" != *touch* ]]'
+run_unit "$F6_LINE" none "GIT_DATA_HEARTBEAT_URL_KEY=lowercase"
+assert "F6 lowercase key: refused, no heartbeat, a KEY_BAD line, exit 0" \
+  '[[ "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"GIT_DATA_HEARTBEAT_URL_KEY"* ]]'
+# Upper-case-led hostile keys: these exercise _key_ok's BODY clause (`*[!A-Z0-9_]*` — the one that
+# stops the bytes bash evaluates inside ${!name}: array subscripts, command substitutions). Both
+# rows above are lowercase-led and die in the lead clause, so without this table a mutant dropping
+# the body clause ships green (the zot/inngest suites' body-clause tables are the shape).
+for f6_k in "A[\$(touch $F6_PLANT)]" "A[0]" "A=B" "A.B" "A/B"; do
+  rm -f "$F6_PLANT"; run_unit "$F6_LINE" none "GIT_DATA_HEARTBEAT_URL_KEY=$f6_k"
+  assert "F6 body-clause key [$f6_k]: nothing executed, no heartbeat, a key line that does not echo the name, exit 0" \
+    '[[ ! -e "$F6_PLANT" && "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"GIT_DATA_HEARTBEAT_URL_KEY"* && "$HOUTTXT" != *"$f6_k"* ]]'
+done
+# _key_ok is the FOURTH copy; each sibling suite's parity row binds only pairwise. Pin this copy to
+# all three siblings — the file's own comment predicates safety on byte-identity.
+assert "F6 parity: _key_ok is byte-identical to the zot, nic-guard AND inngest copies" \
+  '[[ "$(grep -m1 "^_key_ok()" "$SUT")" == "$(grep -m1 "^_key_ok()" "$SCRIPT_DIR/web-zot-consumer-probe.sh")" && "$(grep -m1 "^_key_ok()" "$SUT")" == "$(grep -m1 "^_key_ok()" "$SCRIPT_DIR/web-private-nic-guard.sh")" && "$(grep -m1 "^_key_ok()" "$SUT")" == "$(grep -m1 "^_key_ok()" "$SCRIPT_DIR/inngest-consumer-probe.sh")" ]]'
+# A valid key name whose variable is UNSET resolves to "" -> the WARN arm, exit 0 (the last input
+# cell: empty KEY, invalid KEY, stray URL without key, and unset named var).
+run_unit "$F6_LINE" none GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL_UNSETVAR GIT_DATA_HEARTBEAT_URL_SYNTH=
+assert "F6 unset-named-var key: resolves to empty, WARN arm, no heartbeat, exit 0" \
+  '[[ "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"GIT_DATA_HEARTBEAT_URL unset"* ]]'
+# Every Exec* directive of the unit (backslash continuations joined, as systemd reads them) is
+# dollar-free and export-free — a future ExecStartPre must not be able to smuggle a plain-$ expansion
+# past the ExecStart-only static rows.
+F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^[[:space:]]*Exec[A-Za-z]*=' || true)"
+assert "F6 static: EVERY Exec* directive of the git-data probe unit (continuations joined) is dollar-free and export-free" \
+  '[[ -n "$F6_ALLEXEC" && "$F6_ALLEXEC" != *\$* && "$F6_ALLEXEC" != *export* ]]'
+# `unset URL; URL=""` (the resolve block) drops an inherited export attribute so the resolved secret
+# cannot ride child environments: the heartbeat curl's environ must hold the URL ONLY under the
+# doppler-injected key-named variable.
+F6_ENVD="$TMP/f6-envdump"; rm -f "$F6_ENVD"
+run_unit "$F6_LINE" none F6_HB_ENVDUMP="$F6_ENVD"
+assert "F6 not exported: the resolved URL reaches no child environment (only the injected key-named variable holds it)" \
+  '[[ -s "$F6_ENVD" && "$(grep -v "^GIT_DATA_HEARTBEAT_URL_SYNTH=" "$F6_ENVD" | grep -cF -- "$F6_URL" || true)" -eq 0 && "$(grep -cF -- "$F6_URL" "$F6_ENVD" || true)" -eq 1 ]]'
+F6_MUT_EXP="$TMP/f6-mut-export.sh"; sed 's/^URL=""$/export URL=""/' "$SUT" > "$F6_MUT_EXP"; chmod +x "$F6_MUT_EXP"
+assert "F6 mutant[export]: the edit landed (the copy differs from the SUT)" '! cmp -s "$SUT" "$F6_MUT_EXP"'
+rm -f "$F6_ENVD"
+F6_SUT="$F6_MUT_EXP" run_unit "$F6_LINE" none F6_HB_ENVDUMP="$F6_ENVD"
+assert "F6 mutant[export]: an exported URL DOES ride the heartbeat curl's environment (the not-exported row can see it)" \
+  '[[ -s "$F6_ENVD" && "$(grep -c "^URL=" "$F6_ENVD" || true)" -ge 1 && "$(grep "^URL=" "$F6_ENVD" | grep -cF -- "$F6_URL" || true)" -eq 1 ]]'
+# Preset URL: an exported `URL` inherited from the environment — `unset URL` is the load-bearing
+# line this row discriminates (deleting it ships green and exports the preset; the sibling suites
+# carry the same arm).
+rm -f "$F6_ENVD"
+run_unit "$F6_LINE" none URL='https://uptime.betterstack.test/api/v1/heartbeat/PRESET-9639' F6_HB_ENVDUMP="$F6_ENVD"
+assert "F6 preset URL: an exported URL inherited from the environment does not ride the heartbeat curl's environment (unset URL is load-bearing)" \
+  '[[ -s "$F6_ENVD" && "$(grep -c "^URL=" "$F6_ENVD" || true)" -eq 0 && "$N_HB" -eq 1 ]]'
+# Order: a mutant that resolves the URL above the refusal leaks it under SHELLOPTS=xtrace.
+F6_MUT="$TMP/f6-mut-hoist-gitdata.sh"
+sed '/^set -u$/a\
+__leak="${!GIT_DATA_HEARTBEAT_URL_KEY:-}"' "$SUT" > "$F6_MUT"; chmod +x "$F6_MUT"
+assert "F6 mutant[hoist]: the edit landed (the copy differs from the SUT)" '! cmp -s "$SUT" "$F6_MUT"'
+F6_SUT="$F6_MUT" run_unit "$F6_LINE" xtrace
+assert "F6 mutant[hoist]: a lookup hoisted above the refusal leaks the URL under SHELLOPTS=xtrace (the order row can see it)" '[[ "$HOUTTXT" == *"$F6_TOK"* ]]'
+f6g_line_of() { awk -v n="$1" 'index($0, n) && $0 !~ /^[[:space:]]*#/ { print NR; exit }' "$SUT"; }   # first NON-comment line holding the text
+assert "F6 order: the indirect lookup is on a later line than the refusal" \
+  '[[ -n "$(f6g_line_of "refusing to run under xtrace")" && "$(f6g_line_of "\${!GIT_DATA_HEARTBEAT_URL_KEY")" -gt "$(f6g_line_of "refusing to run under xtrace")" ]]'
+
 # --- static drift-guard: doppler-auth unit-start contract (#6548 unit-start fix) ----------
 # The unit runs `doppler run` as ROOT. Without Environment=HOME=/root the doppler CLI's
 # os.UserHomeDir() init dies "$HOME is not defined" BEFORE it exec's the probe; without a
@@ -209,7 +355,6 @@ assert "seam still routes before the transport (ping log written, no curl needed
 # unit fail to start on web-1 (delivered-but-inert). Assert both, and that the fix does not
 # re-open the #6536 /tmp/.doppler ownership clash surface.
 echo "--- static: doppler-auth unit-start contract ---"
-SVC="$SCRIPT_DIR/web-git-data-probe.service"
 SERVER_TF="$SCRIPT_DIR/server.tf"
 assert "git-data .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
   "grep -qE '^Environment=HOME=/root\$' '$SVC'"
@@ -227,4 +372,12 @@ assert "server.tf git_data_probe_install writes DOPPLER_TOKEN=<web_probes.key> i
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="
+# Anti-vacuity floor: a skipped block or a disarmed assert() must not read as green. Raise it in the SAME edit that adds
+# rows; it is reported with printf and exit, never through assert() (scripts/guard-vacuity-floor.test.sh builds its mutant
+# from the literal sitting directly above the `if`).
+MIN_ASSERTS=82
+if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
+  printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

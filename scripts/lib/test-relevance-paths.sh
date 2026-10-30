@@ -107,6 +107,7 @@
 PR_GATE_MACHINERY_PATHS=(
   "scripts/test-all.sh"                                     # the predicate, the canary and every call site
   "scripts/lib/test-affected-paths.sh"                      # ALWAYS_ON / consumed-edge classification of these batteries
+  "scripts/lib/affected-glob.sh"                            # the shared glob: shape classifier every ^glob: edge classifies through (#10198)
   ".github/workflows/ci.yml"                                # binds the event and the shard legs the gate runs in
   "scripts/suite-shard-legs.tsv"                            # leg assignment: a mid-block shift changes which leg RUNS a battery
   "scripts/suite-shard-legs-heavy.tsv"
@@ -122,6 +123,7 @@ REGISTRY_BATTERY_PATHS=(
   "scripts/registry-restore-from-ghcr.sh"                   # SUT_ENGINE
   "tests/scripts/test-registry-pull-path-health.sh"         # SUITE_GATE (the oracle)
   "tests/scripts/test-registry-restore-from-ghcr.sh"        # SUITE_ENGINE (the oracle)
+  "tests/scripts/lib/restore-engine-header.sh"              # shared exit-code extractor, copied into the sandbox
   "scripts/zot-mirror-diagnosis.sh"                         # sourced companion; absence changes which arm runs
   "scripts/check-cloudflare-token-drift.sh"                 # copied, but seam-overridden on every run
   "apps/web-platform/infra/cloud-init.yml"                  # copied fixture
@@ -379,8 +381,8 @@ webplat_related_meta_hit() {
 }
 
 # webplat_related_files <diff_names_blob> — prints app-relative paths under
-# apps/web-platform/, one per line, deduped. Tokenizes like the runner's
-# _AFFECT_PATTERNS loop (IFS space+tab: `M\tpath` and `R100\told\tnew` rows keep
+# apps/web-platform/, one per line, deduped. Tokenizes the way the runner's
+# diff blob readers do (IFS space+tab: `M\tpath` and `R100\told\tnew` rows keep
 # every path field and drop status tokens).
 webplat_related_files() {
   local _line _tok

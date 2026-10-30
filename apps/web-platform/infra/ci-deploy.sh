@@ -326,6 +326,26 @@ resolve_host_id() {
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
 
+# Per-host owner-side relay bind (ADR-068 §(a), item 2). SOLEUR_PROXY_BIND is the
+# host's OWN private-net IP; it cannot be a fleet-wide Doppler value (two hosts
+# would bind each other's address). Resolve from the 10.0.1.0/24 interface.
+# Best-effort: empty value keeps the listener fail-closed (createProxyServer.no-bind).
+resolve_proxy_bind() {
+  if [[ -n "${SOLEUR_PROXY_BIND_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_PROXY_BIND_OVERRIDE"
+    return 0
+  fi
+  local ip
+  ip=$(ip -4 -o addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | head -1 || true)
+  if [[ -n "$ip" ]]; then
+    printf '%s' "$ip"
+    return 0
+  fi
+  return 1
+}
+PROXY_BIND="$(resolve_proxy_bind || true)"
+readonly PROXY_BIND
+
 # 2-host deploy fan-out (#5274 Phase 3, ADR-068 "deploy fan-out" amendment).
 # After the receiving host's OWN prod swap succeeds, forward the SAME deploy to
 # every PEER web host over the private net, so one webhook trigger delivers the
@@ -488,6 +508,25 @@ if [[ "$SDK_BASH_SMOKE_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" || "$SDK_BASH
   SDK_BASH_SMOKE_LEDGER_ALIAS=1
   logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STATE_FILE aliases another canary ledger ($SDK_BASH_SMOKE_STATE_FILE) — SDK Bash smoke SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
 fi
+# The rc/marker -> verdict mapping, shared with the runtime synthetic (web-bash-synthetic.sh) so the two cannot drift (ADR-079
+# "Addendum — 2026-10-22 (#10455 b)"). It sits NEXT TO THIS FILE in both layouts (infra/ in the repo, /usr/local/bin on a host: delivered
+# there by the web_bash_synthetic install blocks on running hosts and baked via cloud-init on fresh ones). A host that has this
+# script but not yet the lib reports smoke_infra_error reason=verdict_lib_absent (a HOLD, never a rollback): the smoke is
+# non-blocking, and it stays blind until the lib lands. KNOWN TRANSITIONAL GAP (recorded in the ADR addendum): this script ships
+# through apply-deploy-pipeline-fix.yml while the lib ships only with the install blocks, so the two can land minutes apart; an
+# inline fallback copy of the mapping was rejected because a second copy is the drift the lib exists to remove. There is NO
+# environment override of the lib path: this script runs as root, and an overridable `source` is arbitrary code execution (the
+# runtime synthetic gates its equivalent seam behind --fixture-seams for the same reason). ci-deploy.test.sh hides the lib by
+# running a copy of this script from a directory that lacks it.
+SDK_BASH_VERDICT_LIB=""
+_sbv_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _sbv_here=""
+for _sbv_c in "$_sbv_here/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
+  if [[ -r "$_sbv_c" ]]; then SDK_BASH_VERDICT_LIB="$_sbv_c"; break; fi
+done
+if [[ -n "$SDK_BASH_VERDICT_LIB" ]]; then
+  # shellcheck source=sdk-bash-verdict.sh
+  source "$SDK_BASH_VERDICT_LIB" || true
+fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
 # check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
@@ -529,6 +568,10 @@ TAG=""
 # #8609: the probe's closed `rejected` sub-reason (github-app-key-probe.mjs REJECT_REASONS, plus
 # no_verdict when the exec produced no verdict line, unspecified for a bare `rejected` line). Reset like the three fields at the top.
 GITHUB_APP_KEY_PROBE_REASON=""
+# #10934 (CTO R2): the stage the Inngest https self-gate's LAST attempt reached (_inngest_link_selfgate_phase's closed set). Assigned ONLY
+# by the self-gate's failure tail, reset at the top of resolve_inngest_link, and written by write_state as the closed-enum deploy-state key
+# `inngest_link_selfgate_phase` (ABSENT when empty). The run-log reason stays the constant inngest_link_selfgate_failed.
+INNGEST_LINK_SELFGATE_PHASE=""
 
 # _gak_enum <value> <a|b|…>: <value> when it is one of the alternatives, else `invalid`. write_state
 # splices these fields into JSON unescaped, so only a closed-enum value may reach it.
@@ -559,6 +602,12 @@ write_state() {
     if [[ -n "${GITHUB_APP_KEY_PROBE_REASON:-}" ]]; then
       gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
     fi
+  fi
+  # #10934: the self-gate's stage rides ONLY a deploy whose https self-gate failed (ABSENT otherwise, the same convention), as a
+  # closed-enum value checked here like the fields above, so an unexpected value is written as `invalid`, never spliced into the JSON.
+  local sgp=""
+  if [[ -n "${INNGEST_LINK_SELFGATE_PHASE:-}" ]]; then
+    sgp=",\"inngest_link_selfgate_phase\":\"$(_gak_enum "$INNGEST_LINK_SELFGATE_PHASE" 'connect|handshake|verify|ca_file|request|status|unknown')\""
   fi
   # #8743 Phase 2 (ADR-068 constraint (c)): persist `fanout_peers` — the
   # EFFECTIVE SOLEUR_DEPLOY_PEERS list (blank-stripped, minus this host's own
@@ -595,8 +644,8 @@ write_state() {
   fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" "$sgp" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -3217,7 +3266,7 @@ run_sdk_bash_smoke() {
     return 0 # aliased ledger: refuse to write into another canary's ledger
   fi
   local ctr="soleur-web-platform-canary"
-  local verdict reason coverage="" exec_rc=0 out="" err_file docker_err home="" nonce="" line="" json="" t0
+  local verdict reason coverage="" exec_rc=0 out="" err_file docker_err home="" nonce="" t0
   local prior_ledger prior_cie=0 cie=0 extra ledger_ok=0 pre_rc=0 stale_emitted=0 ledger_ours=0
   t0="$(date +%s)"
   err_file="$(mktemp 2>/dev/null || echo /dev/null)"
@@ -3256,48 +3305,13 @@ run_sdk_bash_smoke() {
         exec_rc=$?
       fi
       docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
-      case "$exec_rc" in
-        0)
-          line="$(printf '%s\n' "$out" | { grep -a '^SDK_BASH_RESULT ' || true; } | tail -n 1)"
-          json="${line#SDK_BASH_RESULT }"
-          verdict="$(printf '%s' "$json" | jq -r '.verdict // ""' 2>/dev/null || echo '')"
-          reason="$(printf '%s' "$json" | jq -r '.reason // ""' 2>/dev/null || echo '')"
-          coverage="$(printf '%s' "$json" | jq -r '.coverage // ""' 2>/dev/null || echo '')"
-          [[ "$coverage" == "sdk_wrapper_shim_prodtuple" || "$coverage" == "replay_only" ]] || coverage=""
-          case "$verdict" in
-            pass)
-              # The probe already holds a replay_only pass; refuse one here too (defense in depth): only the
-              # shim-and-wrapper tuple may count toward promotion.
-              if [[ "$coverage" != "sdk_wrapper_shim_prodtuple" ]]; then
-                verdict="smoke_infra_error"; reason="coverage_replay_only"
-              fi ;;
-            sdk_bash_smoke_failed|smoke_infra_error) : ;;
-            *) verdict="smoke_infra_error"; reason="no_result_line${docker_err:+: $docker_err}"; coverage="" ;;
-          esac ;;
-        124)
-          # `out` still holds whatever the probe printed before `timeout` killed the docker exec client.
-          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
-            verdict="sdk_bash_smoke_failed"; reason="host_timeout_${SDK_BASH_SMOKE_TIMEOUT}s${docker_err:+: $docker_err}"
-          else
-            verdict="smoke_infra_error"; reason="host_timeout_before_dispatch${docker_err:+: $docker_err}"
-          fi ;;
-        *)
-          # Any other non-zero rc: if the probe had already printed SDK_BASH_DISPATCHED, Bash was handed to the SDK and the
-          # run died after that (a crash, a kill): the #10445 shape, not an infra hiccup. Otherwise it never got that far.
-          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
-            if [[ "$exec_rc" == "137" || "$exec_rc" == "143" ]]; then
-              # SIGKILL / SIGTERM after dispatch: the OOM killer, a container stop or a deploy signal, not a Bash result. Not a
-              # page; the reason says what happened.
-              verdict="smoke_infra_error"; reason="probe_killed_rc_${exec_rc}${docker_err:+: $docker_err}"
-            else
-              verdict="sdk_bash_smoke_failed"; reason="probe_rc_${exec_rc}_after_dispatch${docker_err:+: $docker_err}"
-            fi
-          elif [[ "$exec_rc" == "125" || "$exec_rc" == "126" || "$exec_rc" == "127" ]]; then
-            verdict="smoke_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"
-          else
-            verdict="smoke_infra_error"; reason="probe_rc_${exec_rc}${docker_err:+: $docker_err}"
-          fi ;;
-      esac
+      # The mapping is the shared function (sdk-bash-verdict.sh): ONE definition for this smoke and the runtime synthetic.
+      if declare -F sdk_bash_map_result >/dev/null 2>&1; then
+        sdk_bash_map_result "$exec_rc" "$out" "$docker_err" "$SDK_BASH_SMOKE_TIMEOUT"
+        verdict="$SBV_VERDICT"; reason="$SBV_REASON"; coverage="$SBV_COVERAGE"
+      else
+        verdict="smoke_infra_error"; reason="verdict_lib_absent"; coverage=""
+      fi
     fi
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
@@ -3672,8 +3686,9 @@ github_app_key_canary_check() {
 # so it is journald/Sentry-issue evidence only) and proceeds; with an UNVERIFIED scope it fails closed (above).
 # $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
 # probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
-# (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure),
-# INNGEST_LINK_CA_STRICT. Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
+# (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure; inngest_link_scrub_env_file also sets it),
+# INNGEST_LINK_CA_STRICT, INNGEST_LINK_SELFGATE_PHASE (reset to empty on every call; one of the seven stage tokens only when the https
+# self-gate failed, which write_state records as the deploy-state key inngest_link_selfgate_phase). Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
 # `|| rc=$?` (set -e is OFF inside), so every step below handles its own failure.
 INNGEST_LINK_HTTP_URL="http://10.0.1.40:8288"
 INNGEST_LINK_HTTPS_URL="https://10.0.1.40:8443"
@@ -3780,19 +3795,95 @@ _inngest_link_install() {
   return 1
 }
 
+# _inngest_link_time_nonzero <t>: classifies ONE curl timer field (time_connect or time_appconnect). Pure: no I/O, never aborts. The ONE
+# place a timer is interpreted: the phase helper below and the tcp/tls counters of the attempt loop both call it, so the two can never
+# disagree about what a zero or an unreadable timer is (resolver-suite row S6b pins the comma-decimal zero, through mutants M22ab and M22ac;
+# row S4 pins the counters, S6 and S6c the unreadable timer).
+#   returns 0  a decimal number that is not zero (the stage happened)
+#   returns 1  a decimal number that is zero, dot or comma separated, `0.000000` or `0,000000` (the stage never happened)
+#   returns 2  not a decimal number (empty, text, an exponent): it says nothing about the stage
+_inngest_link_time_nonzero() { # <t>
+  local t="${1-}" num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$'
+  if [[ ! "$t" =~ $num ]]; then return 2; fi
+  if [[ "$t" =~ $zero ]]; then return 1; fi
+  return 0
+}
+
+# _inngest_link_selfgate_phase <rc> <code> <time_connect> <time_appconnect>: prints ONE fixed token naming the stage the LAST attempt
+# reached (#10934). Pure: no I/O, no side effect, never aborts. The input is what one curl attempt printed, split into fields; this is
+# the only code that turns the fields into a STAGE (the timers themselves are read by _inngest_link_time_nonzero, and the attempt loop
+# reads only the HTTP code and the verification result for the event). Order matters (rc 124 or an empty line first, then the two exit
+# codes that are certain without any timer, then a received HTTP status, then the timers):
+#   unknown    rc 124 (the timeout wrapper killed curl: a hang), an empty line, or a timer that is not a decimal number. Never a
+#              success-looking token: an unparsable attempt must not read as a stage. The rc 77, rc 60 and validated-status arms run
+#              BEFORE the timers are looked at, so a non-numeric timer beside them still reads ca_file, verify or status.
+#   ca_file    rc 77 (curl could not use the pinned CA file).
+#   verify     rc 60 (the served certificate does not verify against the pinned file; the handshake did not complete, tls is 0).
+#   status     a validated three-digit code other than 000 and 200 (TLS verified and an HTTP status other than 200 came back). A 200
+#              code with a non-zero rc is a body cut short: it is NOT status, it falls through to the timers and reads request.
+#   connect    time_connect is zero (no TCP connection: refused, firewall drop, unreachable).
+#   handshake  TCP connected, time_appconnect is zero (the TLS handshake did not complete).
+#   request    TLS completed and verified, no HTTP status came back. It does NOT prove a cause: it means only that the certificate is
+#              not the problem and the terminator or whatever sits behind it is to be checked. Classified by the timers, never by an
+#              rc list, because one wire event prints rc 52 on one curl build and rc 56 on another.
+# The rc tests are string compares on purpose (`${1-}` may be empty or a bare word, which `-eq` would evaluate as an arithmetic
+# variable name and abort on under `set -u`): keep them string compares.
+_inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
+  local rc="${1-}" code="${2-}" tc="${3-}" ta="${4-}" tcr=0 tar=0
+  local c3='^[0-9]{3}$'
+  if [[ "$rc" == 124 || -z "$code$tc$ta" ]]; then printf unknown; return 0; fi
+  if [[ "$rc" == 77 ]]; then printf ca_file; return 0; fi
+  if [[ "$rc" == 60 ]]; then printf verify; return 0; fi
+  if [[ "$code" =~ $c3 && "$code" != 000 && "$code" != 200 ]]; then printf status; return 0; fi
+  _inngest_link_time_nonzero "$tc" || tcr=$?
+  _inngest_link_time_nonzero "$ta" || tar=$?
+  if [[ "$tcr" -eq 2 || "$tar" -eq 2 ]]; then printf unknown; return 0; fi
+  if [[ "$tcr" -eq 1 ]]; then printf connect; return 0; fi
+  if [[ "$tar" -eq 1 ]]; then printf handshake; return 0; fi
+  printf request
+}
+
+# _inngest_link_selfgate <cafile>: success = TLS verified against the pinned file AND a 200, decided from curl's exit code and the first
+# token of its write-out line alone, before any other field is looked at (a short or odd line from a healthy listener can never fail the
+# gate). Every attempt prints one line of four space-separated fields: the HTTP code, the TCP connect time, the TLS handshake time and
+# curl's certificate verification result. They feed ONE failure event, never a value of their own:
+#   INNGEST_LINK: class=selfgate_failed level=error rc=<n> http=<ddd|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>
+#   rc, http  the LAST attempt's curl exit code and HTTP code (http from the validated three-digit token, else none).
+#   phase     the stage the LAST attempt reached (see _inngest_link_selfgate_phase). Read it together with rc: when tcp=0 only rc tells
+#             rc 7 (refused) from rc 28 (a drop).
+#   tcp, tls  how many of ALL attempts printed a non-zero TCP connect time and a non-zero TLS handshake time, each clamped to 0-99;
+#             attempts= is the denominator. They show a listener that changed state between tries, which phase (last attempt only)
+#             hides. An attempt whose own timer field is not a decimal number adds nothing, so unknown with tcp=0 tls=0 is not
+#             "connect failed".
+#   verify    0 unless phase=verify, then the last attempt's verification result clamped to 0-99 (18 the served certificate is not the
+#             pinned one, 10 expired, 1 name mismatch; the raw value is 1 after a handshake or CA file failure, so it is suppressed).
+# Reading rule: phase=request means only that TLS verified and no HTTP response came back; check the terminator and its upstream, not
+# the certificate. It does not establish which of them failed. No -k and no second probe: the verdict path is the same one curl.
 _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verified against the pinned file AND 200
-  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" code rc=0
+  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" out code tc ta ver rc=0
+  local phase=unknown http=none vv=0 tcpn=0 tlsn=0
+  local c3='^[0-9]{3}$'
   case "$max" in '' | *[!0-9]*) max=3 ;; esac
   while :; do
     rc=0
-    code="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+    out="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code} %{time_connect} %{time_appconnect} %{ssl_verify_result}' --connect-timeout 5 --max-time 10 \
       --cacert "$1" "$INNGEST_LINK_HTTPS_URL/health" 2>/dev/null)" || rc=$?
+    code=""; tc=""; ta=""; ver=""
+    IFS=' ' read -r code tc ta ver <<< "$out" || true
     if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi
+    phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"
+    if _inngest_link_time_nonzero "$tc"; then tcpn=$((tcpn + 1)); fi
+    if _inngest_link_time_nonzero "$ta"; then tlsn=$((tlsn + 1)); fi
+    http=none
+    if [[ "$code" =~ $c3 ]]; then http="$code"; fi
+    vv=0
+    if [[ "$phase" == verify ]]; then vv="$(_inngest_link_count99 "${ver%% *}")"; fi
     if [[ "$i" -ge "$max" ]]; then break; fi
     sleep 2
     i=$((i + 1))
   done
-  inngest_link_event selfgate_failed error "rc=$rc http=${code:-none} attempts=$i"
+  INNGEST_LINK_SELFGATE_PHASE="$phase"
+  inngest_link_event selfgate_failed error "rc=$rc http=$http attempts=$i phase=$phase tcp=$(_inngest_link_count99 "$tcpn") tls=$(_inngest_link_count99 "$tlsn") verify=$vv"
   return 1
 }
 
@@ -3812,6 +3903,7 @@ resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
   local proj_n proj_v cfg_n cfg_v scope_verified=1
   INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""; INNGEST_LINK_PENDING_CA_RESET=0
+  INNGEST_LINK_SELFGATE_PHASE=""
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 
@@ -3965,6 +4057,65 @@ inngest_link_commit_scheme() {
   return 0
 }
 
+# inngest_link_scrub_env_file (#10136): remove every line that names INNGEST_BASE_URL or NODE_EXTRA_CA_CERTS from <env-file>, so the `-e`
+# flags of the canary and prod `docker run`s are the ONLY source of those two names. Docker keeps BOTH entries in Config.Env when a key
+# is in the --env-file and on a -e flag (the -e value wins when the process starts, but `docker inspect` lists both), so a Doppler
+# snapshot that pins INNGEST_BASE_URL (the likely case; unconfirmed) made the canary's strict inspect check count 2. The name prefix class tolerates ANY non-name byte
+# (a space, a no-break space, a BOM) because Docker trims leading whitespace itself and `[[:space:]]` under LC_ALL=C is ASCII only;
+# a bare-name line goes too (Docker would resolve it from its own environment); lookalikes (INNGEST_BASE_URL_EXTRA, XINNGEST_BASE_URL)
+# survive. A name ends at the first byte outside [A-Za-z0-9_.-]: Docker reads `INNGEST_BASE_URL.bak` and `INNGEST_BASE_URL-X` as other
+# variables (measured, docker-evidence.md), so they survive, while other punctuation after the name (`:`, `/`) is over-removed, and so is a
+# `.` or `-` BEFORE the name; all harmless in practice (nothing sets such names) and counted. A comment line that names the variable is dropped too.
+# Every grep runs as `LC_ALL=C grep -a`: under a UTF-8 locale `grep -v` silently drops a line with an invalid byte, and a NUL
+# byte makes grep print nothing for a "binary" file, both with rc 0. Order: count, write the kept lines to a temp file, check conservation
+# (kept + removed = total) and recount the pattern on the temp file (0), and only then rename over the original, so every failure
+# leaves <env-file> byte-identical. The temp name is held in _gak_tmp, which the deploy EXIT trap already removes (the overlay's merge
+# uses the same variable, with its own `.gak.` template). Kept lines are byte-exact, the file stays mode 0600 (mktemp), a final newline is
+# guaranteed on a rewrite. Events carry counts and a fixed stage token only. Returns 0, or 1 with INNGEST_LINK_REASON=inngest_env_scrub_failed.
+# Call it directly (never as `x=$(...)`: a subshell would discard _gak_tmp). The caller decides what a failure means. Another reader of the
+# file after this point, `_cred_redact_env_values` (error-tail redaction), simply loses these two non-secret values from its literal set.
+# The overlay (`overlay_github_app_key`) runs first and refuses a plainly spelled NODE_* name, so a pinned NODE_EXTRA_CA_CERTS reaches this
+# scrub only through spellings the overlay's match misses (a no-break-space or BOM prefix). Keep the names in
+# step with REQUIRED_ENV in lib/docker-run-tuple.py and with the two `^NAME=` counts in inngest_link_canary_check (resolver-suite row L8 pins all three).
+INNGEST_LINK_SCRUB_RE='^[^A-Za-z0-9_]*(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)([^A-Za-z0-9_.-]|$)'
+_inngest_link_scrub_fail() { # <stage: read|write|recount>
+  if [[ -n "${_gak_tmp:-}" ]]; then rm -f "$_gak_tmp"; fi
+  _gak_tmp=
+  INNGEST_LINK_REASON=inngest_env_scrub_failed
+  inngest_link_event env_scrub_failed error "stage=$1"
+}
+_inngest_link_count99() { # <n>: a fixed integer 0-99 for an event field (non-numeric reads 0); never aborts, whatever it is handed
+  local s="${1-}"
+  case "$s" in '' | *[!0-9]*) printf '0'; return 0 ;; esac
+  s="${s#"${s%%[!0]*}"}"
+  if [[ "${#s}" -gt 2 ]]; then printf '99'; else printf '%s' "${s:-0}"; fi
+}
+inngest_link_scrub_env_file() { # <env-file>
+  local f="$1" n=0 total=0 kept=0 left=0 rc=0
+  _gak_tmp=
+  INNGEST_LINK_REASON=""
+  n="$(LC_ALL=C grep -a -c -E -- "$INNGEST_LINK_SCRUB_RE" "$f" 2>/dev/null)" || rc=$?
+  if [[ "$rc" -gt 1 ]]; then _inngest_link_scrub_fail read; return 1; fi
+  case "$n" in '' | *[!0-9]*) n=0 ;; esac
+  if [[ "$n" -eq 0 ]]; then return 0; fi
+  total="$(LC_ALL=C grep -a -c '' "$f" 2>/dev/null)" || true
+  case "$total" in '' | *[!0-9]*) total=0 ;; esac
+  _gak_tmp="$(mktemp "$f.scrub.XXXXXX" 2>/dev/null)" || { _gak_tmp=; _inngest_link_scrub_fail write; return 1; }
+  rc=0
+  LC_ALL=C grep -a -v -E -- "$INNGEST_LINK_SCRUB_RE" "$f" > "$_gak_tmp" 2>/dev/null || rc=$?
+  if [[ "$rc" -gt 1 ]]; then _inngest_link_scrub_fail write; return 1; fi
+  kept="$(LC_ALL=C grep -a -c '' "$_gak_tmp" 2>/dev/null)" || true
+  case "$kept" in '' | *[!0-9]*) kept=0 ;; esac
+  if [[ $((kept + n)) -ne "$total" ]]; then _inngest_link_scrub_fail write; return 1; fi
+  left="$(LC_ALL=C grep -a -c -E -- "$INNGEST_LINK_SCRUB_RE" "$_gak_tmp" 2>/dev/null)" || true
+  case "$left" in '' | *[!0-9]*) left=1 ;; esac
+  if [[ "$left" -ne 0 ]]; then _inngest_link_scrub_fail recount; return 1; fi
+  if ! mv -f "$_gak_tmp" "$f"; then _inngest_link_scrub_fail write; return 1; fi
+  _gak_tmp=
+  inngest_link_event env_scrubbed info "removed=$(_inngest_link_count99 "$n")"
+  return 0
+}
+
 # inngest_link_canary_check (#10136, canary layer 5 of canary-probe-set.md): the container-level proof, run against the CANARY
 # before promotion and ONLY when the resolver chose https (the host-side self-gate proves the host OUTPUT path and the pinned
 # bytes, never container egress or Node trust). Five checks: (1) `docker inspect` shows the canary was handed exactly the https
@@ -3978,18 +4129,36 @@ inngest_link_commit_scheme() {
 # `ok` or `fail[:<CAUSE>]` where CAUSE is mapped inside the container from a FIXED allowlist (errno / TLS-verification codes, `HTTP_<status>`,
 # `EMPTY`, else `other`; never raw error text), so the `canary_failed` event reads `check=<name> cause=<token>` and a failed check is not a
 # boolean (egress dropped = ETIMEDOUT/ECONNREFUSED, Node not trusting the pin = DEPTH_ZERO_SELF_SIGNED_CERT, the listener answering = HTTP_5xx).
-# Sets CANARY_FAIL_REASON (a constant: the cause lives in the event, Better Stack tag ci-deploy, Sentry op=inngest-link).
+# The inspect check names its FIRST failing condition, in a fixed order: `cause=inspect_failed` (docker inspect failed or printed nothing),
+# `url_count` (INNGEST_BASE_URL= is not on exactly one line), `url_value` (that one line is not the https URL), `ca_count`
+# (NODE_EXTRA_CA_CERTS= is not on exactly one line), `ca_value` (that one line is not the pinned path), followed by four fixed integers
+# clamped to 99: `url_lines` `url_https` `ca_lines` `ca_ok`. Never a value, a key or raw text: the event is integers and fixed tokens only.
+# Docker keeps BOTH entries when a key is in the env-file and on a -e flag, which is why the deploy scrubs the two names from the
+# env-file (inngest_link_scrub_env_file) and this check stays strict: a real duplicate still fails.
+# Sets CANARY_FAIL_REASON: canary_inngest_link_inspect_failed for the inspect check (usually the container was handed the wrong env, a
+# composition defect; cause=inspect_failed is the daemon call itself failing), canary_inngest_link_failed for every in-container check
+# (egress, TLS, registry). A literal per branch, never built from the cause. The cause lives in the event (Better Stack tag ci-deploy,
+# Sentry op=inngest-link).
 INNGEST_LINK_CANARY_POS='const c=require("crypto"),b=process.env.INNGEST_BASE_URL,o=[];const g=v=>typeof v==="string"?v:"";const w=e=>{const x=g(e&&e.cause&&e.cause.code)||g(e&&e.code)||g(e&&e.name);return /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]{1,30}|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|CERT_HAS_EXPIRED|ERR_TLS_[A-Z_]{1,30}|TimeoutError|AbortError|SyntaxError)$/.test(x)?x:"other"};const k=(n,v)=>o.push(n+"="+(v?"fail:"+v:"ok"));const h=r=>r.status===200?"":"HTTP_"+r.status;const hs=s=>{const p=(s.match(/^signkey-\w+-/)||[""])[0];return p+c.createHash("sha256").update(s.slice(p.length),"hex").digest("hex")};const t=(u,x)=>fetch(u,Object.assign({signal:AbortSignal.timeout(15000)},x));(async()=>{try{k("health",h(await t(b+"/health")))}catch(e){k("health",w(e))}try{k("events",h(await t(b+"/v1/events?limit=1",{headers:{Authorization:"Bearer "+hs(process.env.INNGEST_SIGNING_KEY||"")}})))}catch(e){k("events",w(e))}try{k("send",h(await t(b+"/e/"+encodeURIComponent(process.env.INNGEST_EVENT_KEY||""),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify([{name:"soleur.tls-canary.ping",data:{canary:true}}])})))}catch(e){k("send",w(e))}try{const r=await t(b+"/v0/gql",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({query:"query{functions{id}}"})});const j=await r.json();k("registry",r.status!==200?"HTTP_"+r.status:(Array.isArray(j&&j.data&&j.data.functions)&&j.data.functions.length>0?"":"EMPTY"))}catch(e){k("registry",w(e))}console.log("inngest_link_canary "+o.join(" "))})()'
 INNGEST_LINK_CANARY_NEG='fetch(process.env.INNGEST_BASE_URL+"/health",{signal:AbortSignal.timeout(15000)}).then(()=>console.log("inngest_link_canary_neg=accepted"),e=>{const c=(e&&e.cause&&e.cause.code)||"";console.log("inngest_link_canary_neg="+(/^(DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|ERR_TLS_CERT_ALTNAME_INVALID)$/.test(c)?"verify_error":"other"))})'
 inngest_link_canary_check() {
-  local cname="soleur-web-platform-canary" envs out="" rc=0 why="" cause="none" part name val
+  local cname="soleur-web-platform-canary" envs="" out="" rc=0 irc=0 why="" cause="none" part name val
+  local url_n=0 https_n=0 ca_n=0 ca_ok=0
   local -a parts
   [[ "$INNGEST_LINK_CA_STRICT" == 1 ]] || return 0
-  envs="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cname" 2>/dev/null)" || envs=""
-  if [[ "$(printf '%s\n' "$envs" | grep -c '^INNGEST_BASE_URL=')" != 1 \
-     || "$(printf '%s\n' "$envs" | grep -cxF "INNGEST_BASE_URL=$INNGEST_LINK_HTTPS_URL")" != 1 \
-     || "$(printf '%s\n' "$envs" | grep -cxF 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem')" != 1 ]]; then
-    why="inspect"
+  envs="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cname" 2>/dev/null)" || irc=$?
+  # the four counts the event reports (grep -c prints 0 and exits 1 on no match; each is a fixed integer, clamped to 99)
+  url_n="$(printf '%s\n' "$envs" | grep -c '^INNGEST_BASE_URL=')" || true
+  https_n="$(printf '%s\n' "$envs" | grep -cxF "INNGEST_BASE_URL=$INNGEST_LINK_HTTPS_URL")" || true
+  ca_n="$(printf '%s\n' "$envs" | grep -c '^NODE_EXTRA_CA_CERTS=')" || true
+  ca_ok="$(printf '%s\n' "$envs" | grep -cxF 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem')" || true
+  url_n="$(_inngest_link_count99 "$url_n")"; https_n="$(_inngest_link_count99 "$https_n")"
+  ca_n="$(_inngest_link_count99 "$ca_n")"; ca_ok="$(_inngest_link_count99 "$ca_ok")"
+  if [[ "$irc" -ne 0 || -z "$envs" ]]; then why="inspect"; cause="inspect_failed"
+  elif [[ "$url_n" != 1 ]]; then why="inspect"; cause="url_count"
+  elif [[ "$https_n" != 1 ]]; then why="inspect"; cause="url_value"
+  elif [[ "$ca_n" != 1 ]]; then why="inspect"; cause="ca_count"
+  elif [[ "$ca_ok" != 1 ]]; then why="inspect"; cause="ca_value"
   fi
   if [[ -z "$why" ]]; then
     out="$(timeout 90 docker exec "$cname" /usr/local/bin/node -e "$INNGEST_LINK_CANARY_POS" 2>/dev/null)" || rc=$?
@@ -4016,8 +4185,13 @@ inngest_link_canary_check() {
     fi
   fi
   if [[ -n "$why" ]]; then
-    inngest_link_event canary_failed error "check=$why cause=$cause"
-    CANARY_FAIL_REASON="canary_inngest_link_failed"
+    if [[ "$why" == inspect ]]; then
+      inngest_link_event canary_failed error "check=$why cause=$cause url_lines=$url_n url_https=$https_n ca_lines=$ca_n ca_ok=$ca_ok"
+      CANARY_FAIL_REASON="canary_inngest_link_inspect_failed"
+    else
+      inngest_link_event canary_failed error "check=$why cause=$cause"
+      CANARY_FAIL_REASON="canary_inngest_link_failed"
+    fi
     return 1
   fi
   inngest_link_event canary_ok info "checks=inspect,health,events,send,registry,negative_control"
@@ -4975,6 +5149,19 @@ case "$COMPONENT" in
       exit 1
     fi
 
+    # #10136: the `-e INNGEST_BASE_URL` / `-e NODE_EXTRA_CA_CERTS` flags below must be the ONLY source of those names (rationale at
+    # inngest_link_scrub_env_file). Once per deploy, flag on or off. A scrub fault aborts only a strict (https) deploy, before any
+    # container starts, and the old container keeps serving; otherwise it is logged and the deploy continues with the file unchanged, so
+    # `action=off`, the flip's revert and any flag-off deploy are never blocked by it (with the flag on it blocks like a resolver fault).
+    INNGEST_SCRUB_RC=0
+    inngest_link_scrub_env_file "$ENV_FILE" || INNGEST_SCRUB_RC=$?
+    if (( INNGEST_SCRUB_RC != 0 )) && (( INNGEST_LINK_CA_STRICT == 1 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the env-file scrub failed (${INNGEST_LINK_REASON:-inngest_env_scrub_failed}) — keeping previous version"
+      final_write_state 1 "${INNGEST_LINK_REASON:-inngest_env_scrub_failed}"
+      exit 1
+    fi
+    INNGEST_LINK_REASON="" # hygiene: a later hunk must not see a stale scrub reason after a non-strict continue
+
     # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
     # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
     # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
@@ -5005,6 +5192,7 @@ case "$COMPONENT" in
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
+      -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -5386,6 +5574,7 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
+        -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -e SOLEUR_EGRESS_REAPER=1 \
         -v /mnt/data/workspaces:/workspaces \

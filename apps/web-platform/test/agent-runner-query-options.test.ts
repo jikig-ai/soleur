@@ -218,10 +218,10 @@ describe("buildAgentQueryOptions — per-call overrides (T2/T3)", () => {
   it("T2: allowedTools is wired through verbatim", () => {
     const opts = buildAgentQueryOptions({
       ...minArgs,
-      allowedTools: ["mcp__soleur_platform__kb_share_create"],
+      allowedTools: ["mcp__soleur_platform__kb_share_list"],
     });
     expect(opts.allowedTools).toEqual([
-      "mcp__soleur_platform__kb_share_create",
+      "mcp__soleur_platform__kb_share_list",
     ]);
   });
 
@@ -495,7 +495,7 @@ describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
       ...minArgs,
       maxTurns: 50,
       maxBudgetUsd: 5.0,
-      allowedTools: ["mcp__soleur_platform__kb_share_create"],
+      allowedTools: ["mcp__soleur_platform__kb_share_list"],
     });
     const cc = buildAgentQueryOptions({
       ...minArgs,
@@ -618,5 +618,124 @@ describe("verifyOuterWrapInterpose — emit fork", () => {
       op: "outer-wrap-selfprobe",
     });
     vi.unstubAllEnvs();
+  });
+});
+
+// #11303 — second line of defence behind `buildAllowedTools`: the SDK approves a bare `allowedTools` entry BEFORE it
+// consults `canUseTool`, so the single assignment that hands the list to the SDK accepts only (a) an exact platform FQN
+// whose tier is auto-approve, or (b) a validated plugin MCP wildcard for any `mcp__`-ish entry. Both real runners flow
+// through here; the probe's `:raw` canary overrides after the builder on purpose.
+describe("buildAgentQueryOptions — allowedTools pre-approval allowlist (#11303)", () => {
+  const P = "mcp__soleur_platform__";
+  const REJECTED: [string, string][] = [
+    ["a gated FQN", `${P}email_send`],
+    ["another gated FQN", `${P}github_push_branch`],
+    ["an unclassified (default-gated) FQN", `${P}new_write_tool`],
+    ["the bare server entry (every tool on the server)", "mcp__soleur_platform"],
+    ["a global mcp wildcard", "mcp__*"],
+    ["a server-prefix wildcard", "mcp__soleur*"],
+    ["a server wildcard", `${P}*`],
+    ["a rule-content form", `${P}email_send(*)`],
+    ["a rule-content form on an auto tool", `${P}kb_share_list(*)`],
+    ["a case variant", `MCP__soleur_platform__email_send`],
+    ["a leading-whitespace variant", ` ${P}email_send`],
+    ["a trailing-whitespace variant", `${P}kb_share_list `],
+    ["an empty tool suffix", P],
+    ["an unknown server", "mcp__other_server__tool"],
+    ["a plugin entry that is not a wildcard", "mcp__plugin_soleur_context7__query"],
+    ["a plugin wildcard with an invalid server name", "mcp__plugin_soleur_Bad Name__*"],
+    ["a plugin wildcard with an empty server name", "mcp__plugin_soleur___*"],
+    ["a plugin wildcard with a path-ish server name", "mcp__plugin_soleur_a/b__*"],
+  ];
+  // A pre-approved Bash skips the Bash review gate: the whole family is rejected, in any case or spacing.
+  const BASH_FAMILY: [string, string][] = [
+    ["bare Bash", "Bash"],
+    ["lower-case bash", "bash"],
+    ["upper-case BASH", "BASH"],
+    ["padded Bash", "  Bash  "],
+    ["a Bash rule-content form", "Bash(git status:*)"],
+    ["a wildcard Bash rule", "Bash(*)"],
+    ["a lower-case Bash rule", "bash(ls)"],
+    ["a Bash rule with a space before the paren", "Bash (npm *)"],
+    ["a Bash rule with a tab before the paren", "Bash\t(npm *)"],
+    ["a Bash rule with a newline before the paren", "Bash\n(x)"],
+    ["a Bash rule with a single space before the paren", "Bash (x)"],
+    ["a Bash rule with a vertical tab before the paren", "Bash\u000b(x)"],
+  ];
+
+  it.each(REJECTED)("throws on %s", (_label, entry) => {
+    expect(() => buildAgentQueryOptions({ ...minArgs, allowedTools: ["Read", entry] })).toThrow(/pre-approv/i);
+  });
+
+  it.each(BASH_FAMILY)("throws on %s", (_label, entry) => {
+    expect(() => buildAgentQueryOptions({ ...minArgs, allowedTools: ["Read", entry] })).toThrow(
+      /pre-approve Bash ahead of canUseTool/,
+    );
+  });
+
+  it("entries that merely start with the letters of Bash are not the Bash family", () => {
+    const list = ["BashOutput", "KillBash"];
+    expect(buildAgentQueryOptions({ ...minArgs, allowedTools: list }).allowedTools).toEqual(list);
+  });
+
+  it("the error names the offending entry and nothing else (static prefix, no tool input)", () => {
+    expect(() => buildAgentQueryOptions({ ...minArgs, allowedTools: [`${P}email_send`] })).toThrow(
+      `buildAgentQueryOptions: allowedTools entry would pre-approve a tool ahead of canUseTool: ${JSON.stringify(`${P}email_send`)}`,
+    );
+  });
+
+  it("an over-long offending entry is echoed truncated to 120 characters", () => {
+    const entry = `${P}${"x".repeat(500)}`;
+    let message = "";
+    try {
+      buildAgentQueryOptions({ ...minArgs, allowedTools: [entry] });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain(JSON.stringify(entry.slice(0, 120)));
+    expect(message).not.toContain(entry.slice(0, 121));
+  });
+
+  it("an unclassified platform name appended after compliant entries still throws", () => {
+    expect(() =>
+      buildAgentQueryOptions({
+        ...minArgs,
+        allowedTools: [`${P}kb_share_list`, `${P}narrate`, `${P}new_write_tool`],
+      }),
+    ).toThrow(/pre-approv/i);
+  });
+
+  it.each([
+    ["built-in tools", ["Read", "Glob", "Grep", "LS", "WebFetch", "TodoWrite"]],
+    ["auto-approve platform FQNs", [`${P}kb_share_list`, `${P}narrate`, `${P}summarize`, `${P}conversations_lookup`]],
+    ["validated plugin wildcards", ["mcp__plugin_soleur_context7__*", "mcp__plugin_soleur_cloudflare__*", "mcp__plugin_soleur_a1-b2__*"]],
+    ["an empty list", []],
+  ])("passes %s through verbatim", (_label, list) => {
+    const opts = buildAgentQueryOptions({ ...minArgs, allowedTools: list });
+    expect(opts.allowedTools).toEqual(list);
+  });
+
+  it("omitting allowedTools sets no allowedTools key", () => {
+    expect("allowedTools" in buildAgentQueryOptions(minArgs)).toBe(false);
+  });
+
+  it.each(["bypassPermissions", "acceptEdits", "dontAsk", "plan", "auto"])(
+    "throws on permissionMode %s (anything but undefined or default decides before canUseTool)",
+    (mode) => {
+      expect(() => buildAgentQueryOptions({ ...minArgs, permissionMode: mode as never })).toThrow(
+        new RegExp(`permissionMode "${mode}" would pre-approve tools ahead of canUseTool`),
+      );
+    },
+  );
+
+  it("throws on a future / unknown permissionMode (allowlist, not denylist)", () => {
+    expect(() => buildAgentQueryOptions({ ...minArgs, permissionMode: "zz-future-mode" as never })).toThrow(
+      /permissionMode "zz-future-mode" would pre-approve tools ahead of canUseTool/,
+    );
+  });
+
+  it("accepts an undefined or default permissionMode", () => {
+    expect(buildAgentQueryOptions({ ...minArgs, permissionMode: "default" }).permissionMode).toBe("default");
+    expect(buildAgentQueryOptions(minArgs).permissionMode).toBe("default");
   });
 });

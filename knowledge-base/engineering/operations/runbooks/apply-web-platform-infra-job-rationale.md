@@ -11,6 +11,8 @@ related_issues: [8361]
 
 # `apply-web-platform-infra.yml` job rationale
 
+<!-- markdownlint-disable MD046 -->
+
 This file exists because GitHub refuses to start any run of a workflow file larger than 512,000 bytes
 (zero jobs — conclusion `startup_failure` on a `workflow_dispatch`, plain `failure` on a push — and
 no message; #8361 measured it, and the bracket is recorded in the gate test's header).
@@ -25,8 +27,11 @@ holds the original. The
 workflow keeps the block's first line, any comment line a test suite anchors on (its pointer says
 so when it does), and one pointer of the form
 `# Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §<job_id>`.
-Section headings are the job ids verbatim (a step-level block is `## <job_id>/<step name>`), so the
-pointer's `§<job_id>` is an exact anchor. Line-number citations inside the prose are as of the
+Section headings are the job ids verbatim (a step-level block is `## <job_id>/<step name>`; a block
+moved out of a step of a job that already has its pointer is a `###` subsection under that job's
+heading, e.g. under `## registry_store_restore`, and its stub in the workflow quotes the subsection
+title in plain words instead of adding a second pointer), so the pointer's `§<job_id>` is an exact
+anchor. Line-number citations inside the prose are as of the
 commit that wrote them and drift the way ADR-116 already accepts. The gate that keeps the workflow
 under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decision is ADR-231. If a
 RED run of this workflow shows zero jobs, start at
@@ -107,7 +112,8 @@ its evidence covers and what it does not.
 
   Measurement note that feeds the ladder: a timeout kill overshoots its declared ceiling by
   13–31 s of API wall clock (313 s against 300, 859–930 s against 840, 4243 s against 4200).
-  The job ceiling's 69 s of slack over the step ceiling absorbs that; do not shrink it below it.
+  The job ceiling's slack over the step ceiling absorbs that (69 s as of 2026-08-20; 39 s since the
+  2026-10-22 addendum under `## apply`, still above the 13–31 s overshoot measured); do not shrink it below it.
 
 This job's HEADER COMMENT is inside `extractJobBlock(wf, "apply")` — that helper resets only
 on `/^ {2}[A-Za-z0-9_-]+:/` and `#` is not in that class, so 2-space-indented comment lines
@@ -249,14 +255,20 @@ A NEW DISPATCH JOB INHERITS NOTHING (ADR-145). The per-PR `host_creates > 0` HAL
 a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
 one, so for this path the sourced birth gate is the ONLY check.
 
-THIS JOB CARRIES THREE MECHANICAL INTERLOCKS. ALL THREE CURRENTLY RELEASE.
+THIS JOB CARRIES THREE MECHANICAL INTERLOCKS PLUS THE PLAINTEXT-ID INTERLOCK (#11194). THE
+RUNG-2 INTERLOCK HOLDS WHILE THE COMMITTED EVIDENCE HASH DIFFERS FROM THE TREE'S; THE
+PLAINTEXT-ID INTERLOCK HOLDS WHILE `git_data_volume_id` IS NON-EMPTY.
+
+(Dated 2026-10-28, a fact and not a live verdict: the evidence has been stale since #11342
+changed a hash-bound payload, and the `git_data_volume_id = ""` change is #11449.)
 
 An earlier version of this header read "STILL HELD, BY TWO GATES". That inverted the
 moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting
 a live verdict invites -- so it now states what the gates ARE rather than what they
 currently answer. What held the route before the birth was the runbook's
 DO-NOT-DISPATCH banner (cleared by PR #8128, merged 2026-09-14) and the environment approval;
-the approval is the remaining hold, and it
+the approval was then the remaining hold (until 2026-10-27, when #11342 made the rung-2 evidence
+stale, and 2026-10-28, when the plaintext-id interlock was added). The environment approval
 reports prevent_self_review:false with a single reviewer (declared nowhere in this
 repo's Terraform, so that is the provider default rather than a chosen setting).
 
@@ -275,7 +287,9 @@ COMMENT said "the interlock is released", inviting the dispatch the banner forbi
 ADR-149's own Alternatives table rejects a capability held only by prose. So the rung-2
 precondition is now enforced here: git_data_rung2_rehearsal_gate requires committed boot
 evidence hash-bound to the template being dispatched, and re-holds automatically on any
-later edit to cloud-init-git-data.yml.
+later edit to cloud-init-git-data.yml. (Dated 2026-10-28: the evidence is stale again since
+#11342 changed a hash-bound payload, so this interlock holds the route today; a fresh rehearsal is
+the owner's paid-host act, `plan_only` holding it is tracked in #11460. `plan_only` also holds here.)
 
 Rung 2 — booting the rendered template once on a throwaway host outside the
 hcloud_server.git_data address — is carried as #7025's own precondition and was
@@ -295,6 +309,62 @@ DELTAS FROM web_host_create, each evidenced rather than inherited:
     `server_ids = [hcloud_server.git_data.id]`, a direct singleton, unlike the web
     fleet's for-loop. No other hcloud_server can enter this plan's closure, which is
     why the gate's reboot arm is a backstop here rather than live coverage.
+
+### Birth fan-out target notes (relocated from the `git_data_host_create` plan step, #11194)
+
+Moved verbatim from the workflow comment to keep `apply-web-platform-infra.yml` under its byte gate (#8361):
+
+```
+(#6982) 18 -> 20: doppler_secret.git_data_ssh_host (ADR-149 item 5 — without it
+every account deletion files a FALSE Art. 17 erasure-failed event from the moment
+the host exists) and doppler_secret.git_data_betterstack_logs_token (the ingest
+token the post-Doppler emits read). BOTH join the gate's PRESENCE half, never its
+entailed loop: entailed demands `creates == 1`, and on a resumed dispatch these
+legitimately re-plan as no-ops, so requiring a create would be a permanent wedge.
+
+Five more would not be pulled by the server's own graph. Note this PR's two
+depends_on edits changed their DIRECTION even though it does not change the
+conclusion: the three doppler_secret SSH halves are now DOWNSTREAM of the server
+(issue AC4), and the LUKS passphrase pair is now UPSTREAM of it (P13). Neither is
+reached by `-target`'s upstream closure from the server alone, so both stay
+explicitly targeted.
+```
+
+### Plaintext-id interlock placement (#11194)
+
+The interlock step is UNCONDITIONAL in both dispatch jobs: the census suite's G5c row (ADR-241 D-Guard-5) forbids any `if:` on a gate step, because a condition is a way to skip it. In `git_data_host_replace` a refusal is downgraded to a warning only when `PLAN_ONLY` is exactly the string `true` (unset, empty or any other value blocks), because a `plan_only` dispatch grades a real plan with the plaintext-free gate and stops before any apply, so there is no host to destroy; the verdict still prints (CTO ruling, `decision-challenges.md` row H). `git_data_host_create` ignores `plan_only` (it is a workflow-level input the create job does not read) and always blocks. Both steps capture the function's output (`if ! v="$(git_data_plaintext_id_interlock ...)"`), echo it to the step log, and put the CR/LF-stripped verdict inside the `::warning::` / `::error::` text, because an annotation has no "verdict above"; the remedy in the annotation is generic ("usually: set git_data_volume_id to \"\" via #11449") since the function aborts for several reasons. The verdict carries a line number, never the value.
+
+### #6453 stock preflight rationale (relocated from the `git_data_host_create` plan step, #11194)
+
+Moved verbatim from the workflow comment to keep the file under its byte gate (#8361):
+
+```
+#6453 STOCK preflight. GATED rather than excluded, unlike the sibling additive
+path inngest-host, and the difference is the fan-out. The birth gate above proves
+the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
+terraform creates this host's dependencies FIRST — the workspaces volume and the
+per-host Better Stack heartbeats — and only then the server. So a server_type with no
+stock in the target DC does not fail cleanly here: it strands a 20 GB volume
+attached to nothing, plus the heartbeat resources for a host that will never
+exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
+holds for a host with no such fan-out) — it is billed debris and a dirty state
+slot, caught by a gate we already own and can run in 2 seconds.
+
+CORRECTION, recorded because the earlier wording was load-bearing and false: this
+comment used to say the stranded heartbeats "will therefore PAGE as down", and
+that was the headline argument for gating rather than excluding. They do not page.
+web-probe.tf declares both with `paused = true` + `ignore_changes = [paused]`, and
+the ONLY unpause path is the `Arm web-host probe heartbeats` step in the `apply`
+job, whose `if:` is mutually exclusive with this one. The gating decision survives
+on the stranded-volume argument alone; the false-page claim does not, and a
+decision defended by a false premise is one review away from being reverted for
+the right reason.
+
+KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
+new host's heartbeats paused, so it has no active heartbeat coverage until a
+later merge-to-main apply arms them. The Dispatch summary says so explicitly.
+
+```
 
 ## web_host_create
 
@@ -460,7 +530,8 @@ job, and `registry_store_restore`.
 2026-08-20 (#7587, corrected #7657): that same workflow-level accounting moved on the OTHER
 side of the file. The per-merge `apply` job went 15 → 41 and gained a `notify-apply-failure`
 sibling at 5, so the routine-merge arm of this group now has a run-level worst case of
-preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
+preflight 1 + apply 41 + notify 5 = 47 min rather than 15 (as of 2026-10-22 apply is 53 and the sum 59 min:
+see the addendum under `## apply`). (`preflight` is chained by `needs:`
 and was uncounted in the first version of this paragraph, which said 40 for what was then 41.)
 This job is dispatch-only and runs by deliberate action — but "deliberate" governs when a
 dispatch is ISSUED, not whether a merge apply is already in flight, and the measurement below
@@ -468,7 +539,7 @@ says it queues: over 80 completed runs of the shared group across 35 days the ov
 was {0 concurrent: 69, 1 concurrent: 11}, i.e. 11 of 80 runs DID queue. Observed queue depth
 never exceeded 1 and the longest run took 23.7 min. Priced consequence, because it lands on the
 dispatches issued during an outage: worst-case wait for an emergency dispatch stuck behind a
-routine merge apply moves from 16 min to 47 min, and this group covers `ci_ssh_token_replace`
+routine merge apply moves from 16 min to 47 min (59 min since 2026-10-22), and this group covers `ci_ssh_token_replace`
 — described in this same file as "the ONE arm that can run while the SSH bridge is dead".
 
 ### Retired job: `inngest_backstop_retire` (formerly `inngest_volume_recut`)
@@ -536,6 +607,8 @@ which is exactly when you most want to know.
 
 ## git_data_host_replace
 
+> **Dispatch gating (#11194, ADR-239 Amendment 2026-10-28).** This job, `git_data_host_create` and the rotate selector no longer `-target` the retired plaintext volume and attachment, and their gates no longer demand them; a create, update, delete or forget on either address is refused as out-of-scope (a `no-op` or `read` is not a change). Each runs a plaintext-id interlock before it plans and refuses while `git-data.tf` passes a non-empty `git_data_volume_id` to `module "git_data_userdata"` (that literal names the plaintext device destroyed on 2026-10-27); under `plan_only` this job reports the verdict without blocking and stops before any apply, and `git_data_host_create` ignores `plan_only` and always blocks. The verdict is echoed to the step log and carried inside the `::warning::` / `::error::` annotation (an annotation has no "verdict above"); the remedy text there is generic because the function aborts for several reasons (usually: set `git_data_volume_id` to `""` via #11449). The rung-2 evidence gate holds this job too (stale since #11342, and `plan_only` also holds there), so the interlock reaching PASS releases nothing by itself. Release sequence, the drift issue and the unrehearsed empty-id boot (#10296): the banner of `git-data-birth.md`.
+
 Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
 git-data-luks.tf + network.tf resources are OPERATOR_APPLIED_EXCLUSIONS (ADR-068) —
 deliberately NOT in the per-PR `-target=` allow-list, and the per-PR path bridges over SSH
@@ -543,21 +616,20 @@ to the EXISTING web host so it cannot reprovision the git-data host at all. Befo
 git-data had ZERO non-SSH reprovision path (a standing hr-prod-host-config-change-immutable-
 redeploy gap on the fleet's most irreplaceable data store). This scoped -replace is the
 sanctioned non-SSH reprovision path (mirrors registry_host_replace / inngest_host_replace):
-it re-runs the git-data cloud-init WITHOUT SSH and WITHOUT touching either data volume.
+it re-runs the git-data cloud-init WITHOUT SSH and WITHOUT touching the data volume.
 
-5-target scope (server + its 4 id-referencing dependents; BOTH data volumes + the LUKS
-passphrase are PRESERVED BY OMISSION — an untargeted resource cannot be planned for destroy):
+Scope: the server + its 3 id-referencing dependents (plus the host-key pin pair, #7226); the
+LUKS data volume + the LUKS passphrase are PRESERVED BY OMISSION — an untargeted resource
+cannot be planned for destroy. (Until #11194 the scope also named the plaintext volume
+attachment; that address was destroyed on 2026-10-27 and is retired.)
   hcloud_server.git_data                   (-replace: force a fresh cloud-init boot)
-  hcloud_server_network.git_data           (network.tf:48 — server_id ForceNew → replace;
+  hcloud_server_network.git_data           (network.tf — server_id ForceNew → replace;
                                              else the new host has no private NIC 10.0.1.20)
-  hcloud_volume_attachment.git_data        (git-data.tf:275 — server_id ForceNew → replace;
-                                             else /mnt/git-data — plaintext bare-repo store —
-                                             boots UNMOUNTED)
   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf, `resource "hcloud_volume_attachment"
                                              "git_data_luks"` — server_id ForceNew → replace;
                                              else /mnt/git-data-luks — LUKS at-rest store —
                                              boots UNMOUNTED)
-  hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
+  hcloud_firewall_attachment.git_data      (git-data.tf — server_ids update-in-place;
                                              registry-style INCLUDE — else the fresh host boots
                                              NAKED on its public IPv4/IPv6)
 LUKS re-open on fresh boot is SAFE because the passphrase is unchanged: the idempotent isLuks
@@ -566,7 +638,7 @@ holds ONLY while random_password.git_data_luks / doppler_secret.git_data_luks_ke
 scope — the sourced git_data_host_replace_gate's luks_passphrase_touched backstop asserts it.
 
 The sourced git_data_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
-JSON and ABORTS unless the plan is EXACTLY this scoped recreate with BOTH volumes preserved.
+JSON and ABORTS unless the plan is EXACTLY this scoped recreate with the LUKS volume preserved.
 
 ## ci_ssh_token_replace
 
@@ -641,6 +713,94 @@ this chain, this arithmetic moves with it. That is still far better than the 360
 default the 30 was chosen against, but it is 4.5x the number that comment defends, and saying
 otherwise would be naming a property the change does not have. Genuinely releasing it needs a
 SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not done here.
+
+### Why the exit-5 annotation must not say rotate
+
+Moved from a comment in the restore step's `case "$rc"` block (ADR-231 section 2), verbatim; "here" below means that block's exit-5 arm in the workflow:
+
+DO NOT reinstate "rotate ZOT_PUSH_*" here. This annotation is the first thing the
+operator reads, and rotating is the one action that makes this PERMANENT:
+/etc/zot/htpasswd is baked ONCE at boot from the ISOLATED soleur-registry/prd
+config, so a hand-rotation of soleur/prd desyncs CI from a host that will not
+re-read anything until it is replaced. The runbook was corrected first and this
+string was left behind — which is worse than never fixing either, because the
+runbook is the document the annotation is supposed to route people INTO.
+
+### Why the restore step names DOPPLER_TOKEN and not DOPPLER_TOKEN_PRD
+
+Moved from a comment in the restore step's `env:` block (ADR-231 section 2), verbatim:
+
+DOPPLER_TOKEN, not DOPPLER_TOKEN_PRD. The Doppler CLI reads `DOPPLER_TOKEN` (or
+`--token`); it does not know the `_PRD` suffix. This step declared the suffixed name,
+referenced it NOWHERE in its body, and called `doppler secrets get` bare -- so the CLI
+ran unauthenticated and returned "you must provide a token", the sink credentials came
+back empty, and the engine aborted exit 3 (SINK unavailable).
+
+It failed POST-DESTROY. The store was already wiped when this ran, so the one job whose
+entire purpose is refilling it could not read the credential it needed. The bridge step
+directly above sets `DOPPLER_TOKEN` correctly and succeeded, which is what made the
+failure look like a bridge problem in the log.
+
+This was LATENT behind the D10 gate: A2 had never once passed, so this leg had never
+run. Fixing A2 did not create this bug, it exposed it -- a saga only ever surfaces its
+FIRST broken step.
+
+### Why the restore job's if: is explicit
+
+Moved from the comment block above the job's `if:` (ADR-231 section 2), verbatim:
+
+EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip
+the RESUME arm — and the resume arm IS the empty-store state this job exists to end. It
+keys on the upstream FLAG rather than on `needs.<job>.result` so it does not fire on paths
+where the store was never emptied (most visibly a legitimate D10 refusal, where the store
+is intact).
+
+`!cancelled()` rather than `always()`: on a genuine cancellation the store's state is
+unknown, and starting a multi-GB write into it is not obviously safe.
+
+The `== 'true'` comparison is safe against the Actions loose-equality trap: an UNSET
+output is null, and `null == 'true'` casts to `0 == NaN`, which is false. The failure
+direction is therefore "skip the restore", which is visible in the run's job list — not
+"run it unexpectedly".
+
+### Why exit 1 has its own restore-step arm (#10932)
+
+Before this arm, an engine exit 1 reached the `*)` arm, whose text claims every engine code is
+enumerated and carried an aside naming exit 1 as the known exception. Exit 1 is the engine's
+input refusal: it exits 1 for an unknown argument, an option missing a value, the removed
+`--rehearse`, a missing `--target` or `--tags-from`, an unreadable `--tags-from`, a bad
+`--target`, a non-numeric `.floor`, an `.entries` that cannot be parsed or is not an array, zero
+required entries, and duplicate repo:tag pairs. Every one of those checks runs before any network
+call, so an exit 1 means THIS ATTEMPT wrote nothing. That is a statement about the attempt, not
+about the store: the restore job can chain against a store that was not empty (the refill flag is
+set before the apply, so an apply that fails before the destroy still chains it), which is why the
+arm says the store is "unchanged by this step" and not "empty".
+
+Which of those can fire here is narrower than the list. The step passes fixed arguments (the
+local sink as `--target`, the downloaded pins file as `--tags-from`), so the argument checks cannot
+fire, and an unreadable file is near-impossible because the artifact download and its
+`if-no-files-found: error` fail earlier. What remains is a manifest-content fault (floor, entries,
+zero or duplicated required pairs). In a normal dispatch the uploaded `registry-restore-pins` bytes
+are the file the D10 verdict step wrote and the pull-path gate already ran the engine against, and
+no step between that upload and this download rewrites the file. The traceable route to an exit 1
+here is the resume arm: it skips the verdict step, so the engine never ran on this manifest in this
+run, and the gate's own manifest check only asserts that `.entries` is an array carrying at least
+the resolved entry count (it does not apply the engine's required-disposition, distinct repo:tag or
+floor checks). The other possibility is the gate and the engine disagreeing about
+a manifest shape, which is a defect.
+
+That is why the arm does not say "re-run this job": a re-run re-downloads the same artifact
+(seven-day retention) and fails identically. There is no restore-only dispatch input. A new
+`registry-luks-recut` with the NEW volume id re-derives and re-rehearses the manifest before it
+destroys anything, but that path is unmeasured for this failure, so the arm and the runbook row stay
+conservative: read the engine's own `::error::` line and fix the cause it names. The arm says "a
+correct refusal, not an engine defect", the same position as the rehearsal gate's own exit-1 arm,
+and the runbook row adds the one case worth filing (the engine line names a check the rehearsal
+gate accepted on the same manifest), so the two are close but not identical.
+
+The step's own `exit 1` after a failed Doppler read happens before the retry loop and never reaches
+the `case`; the arm text says "engine" so the two exit-1 origins are not conflated. Ruling:
+`knowledge-base/project/specs/feat-one-shot-10932-restore-exit-1/decision-challenges.md`.
 
 ## confirm and the gate model
 
@@ -877,6 +1037,10 @@ workflow-injection guidance. All action references are SHA-pinned.
     entire "the ARM gate's deadline sum must be truncated to fit" framing rested on treating
     900 s as fixed.
 
+    HISTORICAL FIGURES BELOW (2026-08-20): the derivation that follows is kept as the record of how the terms were
+    chosen. The numbers it ends on (six arms, 2020 < 2100 < 2460, a 47-minute mutex) are superseded by the
+    `### Addendum — 2026-10-22 (#10455)` at the end of this section (eight arms, 2790 < 2820 < 3180, a 59-minute mutex).
+
     The replacement is a two-part inequality, every term measured or derived from the shipped
     script, and both asserted by the `the ARM gate's deadlines fit its job` describe in
     `plugins/soleur/test/terraform-target-parity.test.ts` — which parses the deadlines, the poll
@@ -921,6 +1085,39 @@ workflow-injection guidance. All action references are SHA-pinned.
     queue depth never exceeded 1, the longest run took 23.7 min, and the sibling that shares this
     mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
     dispatch issued while a merge apply is in flight is now a 47-minute wait.
+
+### Addendum — 2026-10-22 (#10455)
+
+Two `web-bash-synthetic` arms (one literal `arm_one` per `var.web_hosts` member, 300 s each) joined the ARM gate, so the ladder and
+the fleet-wide mutex moved. Every figure below is re-derived from the shipped script and workflow, and the same inequality is asserted
+live by the `the ARM gate's deadlines fit its job` describe in `plugins/soleur/test/terraform-target-parity.test.ts` (which parses the
+deadlines, poll interval, curl ceiling and rollback attempts OUT of `arm-heartbeats.sh`, and the two timeouts out of the workflow).
+
+      (1) arm_step_timeout ≥ Σ over call sites of
+          (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
+          → 2820 ≥ (200+440+200+440+200+300+300+30) + 8 × 85 = 2110 + 680 = 2790     ✓ slack 30 s
+      (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
+          → 3180 − 2820 = 360 ≥ 111 + (8 × 15 + 30 + 60 = 210) = 321                 ✓ slack 39 s
+
+The ladder is 2790 (work) < 2820 (47 min step ceiling) < 3180 (53 min job ceiling). The mutex sum is preflight 1 + apply 53 +
+notify-apply-failure 5 = 59 min, so the worst-case wait for an emergency dispatch issued behind a merge apply is now 59 minutes
+(it was 47 in the 2026-08-20 accounting above). The sweep step keeps its 3 min ceiling: it covers one re-PATCH per call site (8 × 15 s)
+plus the 30 s mint = 150 s, with 30 s of slack inside the 210 s post-gate term.
+
+WHY 300 s AND NOT `period + grace − 40` FOR THE NEW ARMS. The sibling formula would give 900 + 1800 − 40 = 2660 s per host, about 90
+minutes of worst-case wall clock in every merge's ARM step whenever no beat can land. 300 s stays far inside the first absence alert
+(2700 s). The cost is that arming is PROBABILISTIC: the synthetic's cadence is 900 s (start-based, plus `RandomizedDelaySec` jitter,
+about 93 runs a day) against a 300 s window, so a healthy synthetic lands a beat inside one apply's window with p ≈ 1/3 per host, and
+the first run after an install usually precedes the ARM step (the SSH stage runs many resources between the timer enable and ARM) while
+a paused beat ignores pings. An unlanded beat is a soft landing (`::warning::`, exit 0), the same shape as `inngest-consumer`. A beat
+that stays paused is NOT watched by a post-merge check (none exists). The nets are the twice-daily `heartbeat-live-reconcile` job in
+`scheduled-terraform-drift.yml`, whose `fed-but-paused` class flags a paused beat whose manifest feeder is a working feeder, and
+`arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>`; the host journal separates the cases
+(`reason=probe_absent` = the image carrying the probe's resolver is not running yet; `verdict=pass` = healthy, the window was missed).
+Decision record: ADR-079 addendum 2026-10-22.
+
+The `soleur:postmerge` bound for watching this workflow moved with it: it must stay above the 53-minute job ceiling (about 65 minutes
+with queueing), because a bound below the ceiling reads a healthy slow run as "not delivered".
 
 ## registry-host scoped -replace
 

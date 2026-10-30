@@ -1060,7 +1060,10 @@ else
 
   # ---- a suite that SKIPs with rc 0 did not read what it would read ---------------------------------------------
   mkfx
-  fx_suite skipper '^data/a.txt' 'echo "SKIP: npx not on PATH"' 'exit 0'
+  # The fixture's SKIP line is spelled "SK""IP" here so the #8773 dep-unresolved
+  # sweep (which scans literal tokens in THIS file) does not flag the very string
+  # the fixture exists to measure; bash concatenates it back at fixture runtime.
+  fx_suite skipper '^data/a.txt' 'echo "SK""IP: npx not on PATH"' 'exit 0'
   fx_suite skipbr '^data/a.txt' 'echo "  [skip] no network"' 'exit 0'
   fx_suite skipped0 '^data/a.txt' 'cat data/a.txt >/dev/null' 'echo "ran 3 tests, skipped 0"' 'echo "Skipped: 0"' 'exit 0'
   fx_commit

@@ -1,0 +1,5 @@
+# Results the brief asked to check first (recorded 2026-10-25)
+push CI run for 45fe23b7671e: run 40223223185 (the plan's "40223185" is a truncation), CI, event push, conclusion success, 28 jobs, 0 failed, https://github.com/jikig-ai/soleur/actions/runs/40223223185 ; affected-index-ratchet is skipped on push by design.
+first hosted affected-index-ratchet wall time: 189 s (jobs API startedAt 18:06:57Z, completedAt 18:10:06Z, success), merge_group unit of the PR4 merge, https://github.com/jikig-ai/soleur/actions/runs/40219212415/job/121246907745
+hosted ratchet on this PR (the check present on the draft PR when recorded): 190 s (20:12:52Z to 20:16:02Z, success), https://github.com/jikig-ai/soleur/actions/runs/40229636355/job/121278558134
+local ratchet wall (cold cache): 174 s to 207 s across rounds (162 s measured on the base); warm 42 s.

@@ -9,16 +9,17 @@
 import { NextResponse } from "next/server";
 import { QUIET_WINDOW_CODE } from "@/lib/repo-connect-codes";
 import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "@/server/quiet-window";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
 
 /** A 503 response while the kill-switch is on, otherwise null (proceed). Fail-open on a throwing read. */
 export async function quietWindowRefusal(
   surface: string,
-  userIdHash: string,
+  userId: string,
 ): Promise<NextResponse | null> {
-  if (!(await newAgentSessionsRefused())) return null;
+  if (!(await newAgentSessionsRefused({ userId }))) return null;
   logger.info(
-    { feature: "quiet-window", op: "refuse-http", surface, userIdHash },
+    { feature: "quiet-window", op: "refuse-http", surface, userIdHash: hashUserIdValue(userId) },
     "quiet-window: refused a request that would start work on a host (new-sessions-paused)",
   );
   return NextResponse.json(

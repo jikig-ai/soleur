@@ -427,12 +427,10 @@ export const cronKbTemplateHealth = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 * * * *" },
+      { event: "cron/kb-template-health.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 * * * *" },
-    { event: "cron/kb-template-health.manual-trigger" },
-  ],
-  cronKbTemplateHealthHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronKbTemplateHealthHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

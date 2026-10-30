@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# block-stash.sh — PreToolUse hook emitted by soleur:verification-scaffold.
+# Decides every `git stash` at a chain boundary (any position in &&/||/;/|
+# chains, behind env-assignment or launcher prefixes). Extracted from the
+# repo-corpus stash arm; generalized for arbitrary repos.
+#
+# Documented read-only exceptions: `git stash list`, `git stash show` —
+# they mutate nothing. Everything else carrying a `git stash` subcommand
+# (`push`, `pop`, `drop`, `apply`, a bare `git stash`) is decided.
+#
+# MODE=@MODE@ — advisory (installed default): warns and allows; enforce:
+# denies. An unparseable payload is a tool error — warn+allow in advisory,
+# deny with remediation in enforce; `ask` never fires on an error path.
+#
+# Hook stdin: JSON payload with tool_input.command. Hook stdout: the PreToolUse
+# JSON decision envelope. Exit code is always 0.
+set -euo pipefail
+
+MODE="@MODE@"
+
+_vs_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' '; }
+_vs_decide() {
+  local d="$1" r="${2:-}"
+  if [ -n "$r" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":"%s"}}\n' \
+      "$d" "$(_vs_escape "$r")"
+  else
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s"}}\n' "$d"
+  fi
+  exit 0
+}
+_vs_allow() { _vs_decide allow; }
+
+# --- stdin command extraction (jq -> node -> sed fallback) --------------------
+_vs_payload="$(cat)"
+_vs_cmd=""
+if command -v jq >/dev/null 2>&1; then
+  _vs_cmd="$(printf '%s' "$_vs_payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
+elif command -v node >/dev/null 2>&1; then
+  _vs_cmd="$(printf '%s' "$_vs_payload" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const c=JSON.parse(s).tool_input.command;process.stdout.write(typeof c==="string"?c:"")}catch(e){}})' 2>/dev/null || true)"
+else
+  _vs_cmd="$(printf '%s' "$_vs_payload" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+fi
+[ -n "$_vs_cmd" ] || _vs_allow
+grep -q 'stash' <<<"$_vs_cmd" || _vs_allow
+
+# Wrapper-prefix set: env assignments and launcher words that may sit between a
+# chain boundary and `git` (LEFTHOOK=0 git stash, sudo git stash, env git stash).
+VS_ENV_ASN_RE='[A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+'
+VS_LAUNCHER_RE='(sudo|command|nice|env|xargs)'
+VS_BOUNDARY_PFX="(${VS_ENV_ASN_RE}|${VS_LAUNCHER_RE})"
+
+stash_hit=""
+while IFS= read -r seg; do
+  if grep -qE '^[[:space:]]*('"${VS_BOUNDARY_PFX}"'[[:space:]]+)*git[[:space:]]+stash([[:space:]]|$)' <<<"$seg"; then
+    # Read-only subcommands are the documented exception — everything else decides.
+    if grep -qE '^[[:space:]]*('"${VS_BOUNDARY_PFX}"'[[:space:]]+)*git[[:space:]]+stash[[:space:]]+(list|show)([[:space:]]|$)' <<<"$seg"; then
+      continue
+    fi
+    stash_hit="$seg"
+  fi
+done < <(printf '%s\n' "$_vs_cmd" | sed -E 's/&&|\|\||[;|]/\n/g')
+
+[ -n "$stash_hit" ] || _vs_allow
+
+reason="git stash is not allowed by this repo's verification gates — commit WIP to a branch instead, or use 'git stash list'/'git stash show' (read-only, allowed). Offending segment: ${stash_hit:0:120}"
+if [ "$MODE" = "enforce" ]; then
+  _vs_decide deny "BLOCKED: $reason"
+else
+  printf '[block-stash] WARN: %s\n' "$reason" >&2
+  _vs_decide allow
+fi

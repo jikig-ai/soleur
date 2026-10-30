@@ -44,6 +44,7 @@ import {
   cronSupabaseAdvisorScan,
   cronSupabaseAdvisorScanHandler,
 } from "@/server/inngest/functions/cron-supabase-advisor-scan";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
 const SUT_SOURCE = readFileSync(
   resolve(
@@ -53,12 +54,19 @@ const SUT_SOURCE = readFileSync(
   "utf-8",
 );
 
-function makeStep() {
-  return {
-    run: async <T>(_name: string, cb: () => Promise<T>): Promise<T> => cb(),
-  };
-}
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler's catch as
+// the SDK's rebuilt StepError. The inline `makeStep` this replaced ran the
+// callback in-process and hid both (the #8717/#8726 defect class).
+// maxAttempts: 1 — a throwing dispatch callback is final on its first attempt,
+// so the failure tests keep their single-call shape.
+function runHandler() {
+  return runLikeInngest(({ step }) => cronSupabaseAdvisorScanHandler({ step, logger }), {
+    maxAttempts: 1,
+  });
+}
 
 describe("cronSupabaseAdvisorScan — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -108,10 +116,9 @@ describe("cronSupabaseAdvisorScanHandler — dispatch behavior", () => {
   });
 
   it("dispatches the workflow with source=inngest so the run may post its liveness check-in", async () => {
-    const result = await cronSupabaseAdvisorScanHandler({
-      step: makeStep(),
-      logger,
-    });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    const result = out.value;
 
     expect(h.requestSpy).toHaveBeenCalledTimes(1);
     const [endpoint, params] = h.requestSpy.mock.calls[0];
@@ -139,7 +146,8 @@ describe("cronSupabaseAdvisorScanHandler — dispatch behavior", () => {
   // corrosive: an alarm that cries wolf gets muted, which is how #3366 rotted
   // for 71 days in the first place.
   it("sends the source input verbatim — the check-in gate depends on this exact value", async () => {
-    await cronSupabaseAdvisorScanHandler({ step: makeStep(), logger });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
     const [, params] = h.requestSpy.mock.calls[0];
     expect((params as { inputs?: Record<string, string> }).inputs?.source).toBe(
       "inngest",
@@ -151,10 +159,9 @@ describe("cronSupabaseAdvisorScanHandler — dispatch behavior", () => {
       new Error("fake-installation-token leaked 403"),
     );
 
-    const result = await cronSupabaseAdvisorScanHandler({
-      step: makeStep(),
-      logger,
-    });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    const result = out.value;
 
     expect(result).toEqual({ ok: false });
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);

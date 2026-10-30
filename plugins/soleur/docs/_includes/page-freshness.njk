@@ -21,11 +21,11 @@
 {% if pageSummary %}
   {% set _summary = pageSummary %}
 {% elif summaryCounts == "computed" %}
-  {% set _summary = "Soleur is the Company-as-a-Service platform: " + stats.agents + " AI agents and " + stats.skills + " skills across " + stats.departments + " departments — engineering, marketing, legal, finance, operations, product, sales, and support — source-available (BSL 1.1), built on Claude Code and the Model Context Protocol." %}
+  {% set _summary = "Soleur is the Company-as-a-Service platform: " + stats.agents + " AI agents and " + stats.skills + " skills across " + stats.departments + " departments — engineering, marketing, legal, finance, operations, product, sales, and support — source-available (BSL 1.1), built on the Model Context Protocol (MCP)." %}
 {% elif summaryRegister == "technical" %}
-  {% set _summary = "Soleur is a model-agnostic Company-as-a-Service orchestration engine: 60+ specialist AI agents and 60+ workflow skills across " + stats.departments + " departments, coordinated through one shared compounding knowledge base. Source-available (BSL 1.1), built on Claude Code and the Model Context Protocol (MCP)." %}
+  {% set _summary = "Soleur is a model-agnostic Company-as-a-Service orchestration engine: 60+ specialist AI agents and 60+ workflow skills across " + stats.departments + " departments, coordinated through one shared compounding knowledge base. Source-available (BSL 1.1), built on the Model Context Protocol (MCP)." %}
 {% else %}
-  {% set _summary = "Soleur is the Company-as-a-Service platform: 60+ AI agents and 60+ skills across " + stats.departments + " departments — engineering, marketing, legal, finance, operations, product, sales, and support — source-available (BSL 1.1), built on Claude Code and the Model Context Protocol." %}
+  {% set _summary = "Soleur is the Company-as-a-Service platform: 60+ AI agents and 60+ skills across " + stats.departments + " departments — engineering, marketing, legal, finance, operations, product, sales, and support — source-available (BSL 1.1), built on the Model Context Protocol (MCP)." %}
 {% endif %}
 <section class="page-freshness" aria-label="Page summary and last updated">
   <div class="container">

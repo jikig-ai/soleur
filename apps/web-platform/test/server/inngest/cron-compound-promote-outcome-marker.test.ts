@@ -47,7 +47,8 @@ vi.mock("pino", async (importOriginal) => {
   return { ...actual, default: factory };
 });
 
-import { emitOutcomeMarker } from "@/server/compound-promote-marker";
+import { COMPOUND_PROMOTE_STATUSES, CREATE_MARKER_NUMBERS, emitOutcomeMarker, type CompoundPromoteStatus } from "@/server/compound-promote-marker";
+import { CREATE_NO_ACTION_REASONS, CREATE_REFUSAL_CLASSES } from "@/server/compound-promote-create";
 
 beforeEach(() => expect.hasAssertions());
 afterEach(() => {
@@ -360,5 +361,170 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(`logger.warn({ [RUN_REPORT_SWEEP_MARKER]: true, ...summary }, "x")`).toMatch(CTX_LOGGER_MARKER_RE);
     expect(`logger.warn({ SOLEUR_COMPOUND_PROMOTE_OUTCOME: true, fn }, "x")`).toMatch(CTX_LOGGER_MARKER_RE);
     expect(`log.warn({ SOLEUR_COMPOUND_PROMOTE_OUTCOME: true }, "x")`).not.toMatch(CTX_LOGGER_MARKER_RE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8293 -- the patterns-path fields: numbers and closed enums only, never text.
+// ---------------------------------------------------------------------------
+/** The complete set of keys an emitted patterns-path row may carry, with the shape each value must have. */
+const ALLOWED: Record<string, (v: unknown) => boolean> = {
+  SOLEUR_COMPOUND_PROMOTE_OUTCOME: (v) => v === true,
+  fn: (v) => v === "cron-compound-promote",
+  component: (v) => v === "compound-promote",
+  level: (v) => typeof v === "number",
+  time: (v) => typeof v === "number",
+  msg: (v) => v === "compound promote outcome",
+  trigger: (v) => v === "cron" || v === "manual",
+  run_id: (v) => typeof v === "string",
+  status: (v) => (COMPOUND_PROMOTE_STATUSES as readonly unknown[]).includes(v),
+  corpus_count: (v) => typeof v === "number",
+  clusters_proposed: (v) => typeof v === "number",
+  clusters_opened: (v) => typeof v === "number",
+  corpus_input_bytes: (v) => typeof v === "number",
+  refusals: (v) => Array.isArray(v),
+  refusals_total: (v) => typeof v === "number",
+  refusal_detail: (v) => Array.isArray(v),
+  input_source: (v) => v === "corpus" || v === "patterns",
+  patterns_open: (v) => typeof v === "number",
+  ledger_read: (v) => v === "ok" || v === "failed",
+  ledger_suppressed: (v) => typeof v === "number",
+  ledger_prs_scanned: (v) => typeof v === "number",
+  ledger_title_skipped: (v) => typeof v === "number",
+  // #10550: the create arm's fields. Closed enums, numbers and one closed token; never model text.
+  kind: (v) => v === "create",
+  create_requested: (v) => typeof v === "boolean",
+  create_arm: (v) => v === "ran",
+  create_outcome: (v) => v === "no_action" || v === "refused" || v === "opened",
+  create_no_action_reason: (v) => (CREATE_NO_ACTION_REASONS as readonly unknown[]).includes(v),
+  create_offered: (v) => typeof v === "number" && Number.isInteger(v) && v >= 0,
+  create_refusal_class: (v) => (CREATE_REFUSAL_CLASSES as readonly unknown[]).includes(v),
+  create_detail: (v) => typeof v === "string" && /^[a-z0-9][a-z0-9_.:[\]-]{0,63}$/.test(v),
+  create_words: (v) => typeof v === "number",
+  create_cap: (v) => typeof v === "number",
+  create_total: (v) => typeof v === "number",
+  create_top1: (v) => typeof v === "number",
+  create_nearest_rank: (v) => typeof v === "number",
+  create_tokens: (v) => typeof v === "number",
+  create_max: (v) => typeof v === "number",
+  create_bytes: (v) => typeof v === "number",
+  create_path_index: (v) => typeof v === "number",
+  create_file_index: (v) => typeof v === "number",
+  create_missing_tools: (v) => typeof v === "number",
+  create_exit: (v) => typeof v === "number",
+  create_changed_count: (v) => typeof v === "number",
+  create_pr: (v) => typeof v === "number",
+};
+
+describe("the patterns-path marker fields (#8293)", () => {
+  it("an emitted patterns-path row carries only allowlisted keys, each a number or a closed enum", () => {
+    emitOutcomeMarker({
+      trigger: "manual",
+      run_id: "R",
+      status: "no-qualifying-clusters",
+      corpus_count: 15,
+      clusters_proposed: 2,
+      clusters_opened: 0,
+      corpus_input_bytes: 8123,
+      refusals: ["ledger-suppressed", "ledger-suppressed"],
+      refusal_detail: [{ cluster_hash: "a".repeat(64), reason: "ledger-suppressed" }],
+      input_source: "patterns",
+      patterns_open: 3,
+      ledger_read: "ok",
+      ledger_suppressed: 2,
+      ledger_prs_scanned: 4,
+      ledger_title_skipped: 1,
+    });
+    expect(captured.lines).toHaveLength(1);
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(row)) {
+      expect(Object.keys(ALLOWED), `unexpected marker key ${k}`).toContain(k);
+      expect(ALLOWED[k](v), `marker key ${k} has the wrong shape`).toBe(true);
+    }
+    for (const k of ["input_source", "patterns_open", "ledger_read", "ledger_suppressed", "ledger_prs_scanned", "ledger_title_skipped"]) {
+      expect(row, `row lacks ${k}`).toHaveProperty(k);
+    }
+  });
+
+  it("a row with none of the new fields (the scheduled path) carries none of them", () => {
+    emitOutcomeMarker({ trigger: "cron", run_id: "R", status: "completed", corpus_count: 1, clusters_proposed: 0, clusters_opened: 0 });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    for (const k of ["input_source", "patterns_open", "ledger_read", "ledger_suppressed", "ledger_prs_scanned", "ledger_title_skipped"]) {
+      expect(row).not.toHaveProperty(k);
+    }
+  });
+
+  it("the allowed-keys list is what the instrument checks: a free-text key would be flagged", () => {
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "completed", ...({ free_text: "hello" } as object) });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(Object.keys(row).filter((k) => !(k in ALLOWED))).toEqual(["free_text"]);
+  });
+
+  it("CompoundPromoteStatus has exactly the eight literals, and the runtime array mirrors the union", () => {
+    const union: CompoundPromoteStatus[] = [...COMPOUND_PROMOTE_STATUSES];
+    expect(union).toHaveLength(8);
+    expect(new Set(union).size).toBe(8);
+    const src = readFileSync(join(__dirname, "..", "..", "..", "server", "compound-promote-marker.ts"), "utf-8");
+    const body = /export type CompoundPromoteStatus =([^;]+);/.exec(src)?.[1] ?? "";
+    expect(body.match(/\|?\s*"[a-z-]+"/g)?.length).toBe(8);
+    for (const lit of union) expect(body).toContain(`"${lit}"`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #10550 -- the create arm's marker fields. The scheduled path gains NONE of them.
+// ---------------------------------------------------------------------------
+const CREATE_KEYS_ALL: string[] = Object.keys(ALLOWED);
+
+describe("the create-arm marker fields (#10550)", () => {
+  const CREATE_KEYS = [
+    "kind", "create_requested", "create_arm", "create_outcome", "create_no_action_reason", "create_offered", "create_refusal_class",
+    "create_detail", "create_words", "create_cap", "create_total", "create_top1", "create_nearest_rank", "create_pr",
+    "create_tokens", "create_max", "create_bytes", "create_path_index", "create_file_index", "create_missing_tools", "create_exit", "create_changed_count",
+  ];
+
+  it("a scheduled-path row carries none of the create fields", () => {
+    emitOutcomeMarker({ trigger: "cron", run_id: "R", status: "completed", corpus_count: 1, clusters_proposed: 0, clusters_opened: 0 });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    for (const k of CREATE_KEYS) expect(row).not.toHaveProperty(k);
+  });
+
+  it("a refused-create row carries the closed class, the closed detail token and numbers, and is JSON-flat", () => {
+    emitOutcomeMarker({
+      trigger: "manual", run_id: "R", status: "completed", input_source: "patterns", kind: "create", create_requested: true,
+      create_arm: "ran", create_outcome: "refused", create_refusal_class: "budget", create_detail: "over-headroom",
+      create_words: 31, create_cap: 2436, create_total: 2402,
+      refusals: ["create-refused"],
+    });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(row).toMatchObject({ kind: "create", create_arm: "ran", create_outcome: "refused", create_refusal_class: "budget", create_words: 31, create_cap: 2436, create_total: 2402, refusals: ["create-refused"] });
+    for (const [k, v] of Object.entries(row)) {
+      if (k.startsWith("create_") || k === "kind") expect(ALLOWED[k](v), `marker key ${k} has the wrong shape`).toBe(true);
+    }
+  });
+
+  it("create_offered is a non-negative integer count: emitted for a refused row (6) and a no_action row (0), never a CREATE_MARKER_NUMBERS value", () => {
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "completed", input_source: "patterns", kind: "create", create_requested: true, create_arm: "ran", create_outcome: "refused", create_refusal_class: "create-open", create_detail: "open-create-pr", create_offered: 6 });
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "no-qualifying-clusters", input_source: "patterns", kind: "create", create_requested: true, create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "all-owned", create_offered: 0 });
+    const rows = captured.lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(rows.map((r) => r.create_offered)).toEqual([6, 0]);
+    for (const r of rows) expect(ALLOWED.create_offered(r.create_offered), "marker key create_offered has the wrong shape").toBe(true);
+    // it is its own field, not a refusal number routed through the allowlist
+    expect(Object.values(CREATE_MARKER_NUMBERS)).not.toContain("create_offered");
+  });
+
+  it("the number allowlist: every refusal number the marker forwards maps to a typed, numeric create_* field (and nothing else is forwarded)", () => {
+    expect(Object.keys(CREATE_MARKER_NUMBERS).sort()).toEqual(
+      ["bytes", "cap", "changed_count", "exit_code", "file_index", "max", "missing_tools", "nearest_rank", "path_index", "tokens", "top1", "total", "words"],
+    );
+    for (const field of Object.values(CREATE_MARKER_NUMBERS)) {
+      expect(CREATE_KEYS_ALL).toContain(field);
+      expect(ALLOWED[field](1)).toBe(true);
+      expect(ALLOWED[field]("text")).toBe(false);
+    }
+    // and each is emitted by the marker as given
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "completed", kind: "create", create_arm: "ran", create_tokens: 12001, create_max: 12000, create_bytes: 48004, create_path_index: 5, create_file_index: 1, create_missing_tools: 3, create_exit: 3, create_changed_count: 2 });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(row).toMatchObject({ create_tokens: 12001, create_max: 12000, create_bytes: 48004, create_path_index: 5, create_file_index: 1, create_missing_tools: 3, create_exit: 3, create_changed_count: 2 });
   });
 });

@@ -122,7 +122,8 @@ jobs:
           # A directive that names a secret absent from this block is commented on
           # by the sweeper and reds the run; that is the intended reading, not noise.
           SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
-          # #5875 canary-promotion-5875.sh — GETs /hooks/deploy-status (HMAC + CF-Access).
+          # #6178 inngest-soak-6178.sh and #10548 sdk-bash-smoke-verdict-10548.sh — GET /hooks/deploy-status
+          # (HMAC + CF-Access). The probes of four closed trackers were retired by G1 PR-4a (#10937; history in git).
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}

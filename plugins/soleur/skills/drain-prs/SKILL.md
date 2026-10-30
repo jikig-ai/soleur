@@ -1,6 +1,6 @@
 ---
 name: drain-prs
-description: "This skill should be used when draining open remote GitHub PRs: triage every open pull request into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
+description: "This skill should be used when draining open GitHub PRs: triage them into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -91,7 +91,8 @@ gh pr merge <N> --squash --auto
 ### 5. Review delegation
 
 - **Feature PRs** (`needs-review`, non-trivial diff): delegate to `soleur:review`. Merge only if it passes.
-- **Single-file bot-fixes** (`bot-fix/review-required`): inline diff review (`gh pr diff <N>`) is sufficient; the diff is small and the change is mechanical.
+- **Single-file `priority/p3-low` bot-fixes**: inline diff review (`gh pr diff <N>`) is sufficient; the diff is small and the change is mechanical.
+- **Bot-fix PRs that failed the cron gate** (multi-file, or the source issue is not `priority/p3-low`, so the PR carries `bot-fix/review-required`): delegate to `soleur:review`, not an inline read. Inline reading is for single-file `priority/p3-low` PRs only.
 
 ### 6. Fix-recipes
 
@@ -106,11 +107,11 @@ See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch
 
   The `lockfile-sync` CI gate pins **npm@11**; regenerating `package-lock.json` with local npm produces a divergent shape and fails the gate. On a lockfile **merge conflict**, resolve by regenerating (`git checkout --ours -- <lockfiles>` then re-run), not by hand-picking hunks.
 - **(b) Generated-file conflicts.** Since #8377 / ADR-235 exactly one generated artifact is still committed: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (the KB index trio and `rule-metrics.json` are untracked caches and cannot conflict). Resolve it with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main`, which completes the merge and regenerates from the MERGED sources; do NOT hand-merge conflict markers in a generated artifact, and do NOT side-pick (`--ours`/`--theirs` each yield an artifact matching neither side's sources). The same holds for a HAND-AUTHORED file whose conflict sits beside clean hunks: `git checkout --theirs <file>` takes that side's WHOLE file and silently drops the other side's non-conflicting edits (#9134, `model.c4`); `git checkout -m <file>` recreates the markers so only the conflicting hunk is resolved.
-- **(c) Stale bot PR (especially crons).** Rebase first (`gh pr update-branch`) to re-validate against current `main` — an old green predates current gates. Then check for a hallucinated substrate API (`tsc --noEmit`) and missing registration locations per **ADR-033 §Registration checklist** (the canonical list of every gated location for a new `cron-*` function). Mirror the structurally-closest live twin signature-for-signature rather than the PR's prose.
+- **(c) Stale bot PR (especially crons).** Rebase first (`gh pr update-branch`) to re-validate against current `main` — an old green predates current gates — except an armed PR on a merge-queue repo, which the queue makes current itself (see the armed-on-a-merge-queue-repo bullet above; never `update-branch` it). Then check for a hallucinated substrate API (`tsc --noEmit`) and missing registration locations per **ADR-033 §Registration checklist** (the canonical list of every gated location for a new `cron-*` function). Mirror the structurally-closest live twin signature-for-signature rather than the PR's prose.
 
 ### 7. Cleanup + report
 
-Arming returns at ENQUEUE, not at merge. Run `cleanup-merged` only once the PRs it should reap read `MERGED`. Wait on each enqueued PR with a BOUND (90 polls x 60s, the Phase 7 cap), through the Monitor tool / AwaitShell (never a backgrounded loop): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/monitor-pr-checks.sh" <N> --interval 60 --max-polls 90`. It reads the merge queue (`sync-pr-behind.sh <N> --queue-state`) and ends `MERGED`, or `LEFT THE MERGE QUEUE UNMERGED` with the removal reason (the dequeue arm above: ONE re-enqueue, then report), or a timeout; it never syncs or pushes. An enqueued PR that never reaches `MERGED` is that dequeue arm, not a merged PR:
+Arming returns at ENQUEUE, not at merge. Run `cleanup-merged` only once the PRs it should reap read `MERGED`. Wait on each enqueued PR with a BOUND (90 polls x 60s, the Phase 7 cap), through the Monitor tool / AwaitShell (never a backgrounded loop): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/monitor-pr-checks.sh" <N> --interval 60 --max-polls 90`. It reads the merge queue (`sync-pr-behind.sh <N> --queue-state`) and ends `MERGED`, or `LEFT THE MERGE QUEUE UNMERGED` with the removal reason (the dequeue arm above: ONE re-enqueue, then report), or a timeout; it never syncs or pushes. A watch that exits 4 (`DUPLICATE MONITOR`) means a live monitor already watches that PR (a re-run drain re-arms every enqueued PR, so this is the expected outcome there). If that watch is a Monitor or AwaitShell task of THIS session, it is still your watch: read its output. Otherwise it reports to a session that may be gone: read the queue once with `sync-pr-behind.sh <N> --queue-state` (a `dequeued` answer is the dequeue arm below; `gh pr view` cannot show a silent dequeue), keep the PR in the set awaiting `MERGED`, never count it as done, and never loop on that read. To hear the outcome yourself, confirm `ps -o args= -p <pid>` names `monitor-pr-checks.sh`, `kill <pid>` (that ends the other session's watch with no verdict line, so that session must read the PR state rather than re-arm), and arm once. An enqueued PR that never reaches `MERGED` is that dequeue arm, not a merged PR:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged

@@ -48,13 +48,13 @@
 
    **0. Pre-flight: enforce headless Pencil MCP (HARD GATE):**
 
-   Agent-driven mockup runs MUST use the headless Pencil CLI adapter. IDE mode (VS Code / Cursor extension) and Desktop mode buffer `.pen` edits in editor memory and do not flush to disk without manual Ctrl+S — `mcp__pencil__export_nodes` reads from disk and returns `you are probably referencing the wrong .pen file` while the doc is unsaved, so the workshop's PNG export, git diff, and review trail all break. Headless CLI auto-calls `save()` after every mutating op (see `plugins/soleur/skills/pencil-setup/SKILL.md` §"No programmatic save (Desktop/IDE only)").
+   Agent-driven mockup runs MUST use the headless Pencil CLI adapter. IDE mode (VS Code / Cursor extension) and Desktop mode buffer `.pen` edits in editor memory and do not flush to disk without manual Ctrl+S — the git diff and the review trail then show a file that does not hold the mockup. Headless CLI auto-calls `save()` after every mutating op, and an edit that did not persist is marked on line 1 of the tool result (`REFUSED save:` or `NOT PERSISTED:`; `export_nodes` is prefixed `WARNING: rendered from unsaved memory` meanwhile), so a mockup is never silently unsaved (see `plugins/soleur/skills/pencil-setup/SKILL.md` §"No programmatic save (Desktop/IDE only)").
 
    ```bash
    pencil_mode=""
    pencil_listing=$(claude mcp list 2>&1 | grep pencil || true)
    case "$pencil_listing" in
-     *pencil-mcp-adapter*|*@pencil.dev/cli*|*pencil-cli*) pencil_mode=headless_cli ;;
+     *pencil-mcp-adapter*|*@pen.dev/cli*|*pencil-cli*) pencil_mode=headless_cli ;;
      *visual_studio_code*|*cursor*)                       pencil_mode=ide ;;
      *--app\ pencil*|*mcp-server*)                        pencil_mode=desktop ;;
      "")                                                  pencil_mode=unregistered ;;
@@ -69,7 +69,7 @@
    fi
    ```
 
-   If the gate exits non-zero, run pencil-setup with `--auto`, then provide the founder a copy-pasteable resume prompt (per `cm-when-proposing-to-clear-context-or` in AGENTS.md) for a fresh session that picks up at step 4.5. Do NOT proceed to step 4.5.a in IDE/Desktop mode — the rendered mockup will exist only in editor memory and the PNG export will fail.
+   If the gate exits non-zero, run pencil-setup with `--auto`, then provide the founder a copy-pasteable resume prompt (per `cm-when-proposing-to-clear-context-or` in AGENTS.md) for a fresh session that picks up at step 4.5. Do NOT proceed to step 4.5.a in IDE/Desktop mode — the rendered mockup will exist only in editor memory and never reach the file.
 
    a. **Hand off to soleur:product:design:ux-design-lead** with the new tokens, the existing palette (for paired comparison), and a target surface set:
 
@@ -85,17 +85,24 @@ a.1. **Commit the `.pen` source immediately after first save (recover-from-wipe 
    onward) — so an iteration-cycle wipe (#3274: `open_document` silently
    overwriting the source with empty state) is recoverable via
    `git checkout -- <path>`. **Gate the commit on a non-collapsed save first**:
-   `stat -c %s <pen>` must be `> 64 bytes` (a 41-byte `{"version": …, "children": []}`
+   the `.pen` must be `> 128 bytes` (the 41- to 96-byte empty `{"version": …, "children": []}`
    shell is a failed/empty save, not a baseline worth committing — committing it
-   defeats the recover-from-wipe purpose). If the `.pen` is `≤ 64 bytes`, halt and
-   surface the save failure instead of committing.
+   defeats the recover-from-wipe purpose), parse, and hold at least one top-level child.
+   Use the same `node -e` check as the `# post-save-gate` snippet in
+   `soleur:product:design:ux-design-lead` (Node is already required for the adapter; no
+   GNU-only tools). If it fails, halt and surface the save failure instead of committing
+   (also do not commit while a `REFUSED save:` or `NOT PERSISTED:` result is unresolved).
 
    ```bash
    pen=knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/<topic>.pen
-   sz=$(stat -c %s "$pen")
-   if [[ "$sz" -le 64 ]]; then
-     echo "BLOCKED: $pen is only ${sz}B — first save did not produce a real document; not committing a wiped baseline." >&2
-   else
+   if node -e '
+   const fs=require("fs");const f=process.argv[1];
+   const fail=(m)=>{console.error("BLOCKED: "+f+" "+m+"; not committing a wiped baseline.");process.exit(1)};
+   let b;try{b=fs.readFileSync(f)}catch(e){fail("cannot be read ("+e.code+")")}
+   if(b.length<=128)fail("is only "+b.length+"B, so the first save did not produce a real document");
+   let d;try{d=JSON.parse(b.toString("utf8").replace(/^\uFEFF/,""))}catch(e){fail("is not a parseable .pen document")}
+   if(!Array.isArray(d&&d.children)||d.children.length<1)fail("has no top-level children");
+   ' "$pen"; then
      git add "$pen"
      git commit -m "docs: commit design source <topic>.pen (recover-from-wipe safety)"
    fi

@@ -59,6 +59,10 @@ set -uo pipefail
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The shared glob: shape classifier — materialise() classifies declared glob:
+# members through it (the same function the SUT's census arm calls).
+# shellcheck source=scripts/lib/affected-glob.sh
+source "$REPO_ROOT/scripts/lib/affected-glob.sh"
 # Overridable so this battery can be pointed at an older or already-broken copy and PROVED to
 # red against it. A guard that has never been shown to fail is not evidence.
 SUT="${LINT_ORPHAN_TARGET_OVERRIDE:-$REPO_ROOT/scripts/lint-orphan-test-suites.sh}"
@@ -77,7 +81,7 @@ export LC_ALL=C
 # the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
 # One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
 # the last flag win — the tiling extractor would then assert a coverage the battery ignores.
-DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional
+DECLARED_TOTAL=35   # the gated mutation rows M1..M35; C0/R1/R1b are unconditional
 ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
 _seen_rows_flag=0
 while (( $# )); do
@@ -159,11 +163,17 @@ materialise() {
     case "$p" in
       glob:*)
         # Third declared kind (#9813): materialise the head dir only — the census
-        # arm probes [[ -d ]] on it; the pattern tail is not a path.
-        _mp="${p#glob:}"; _mp="${_mp%%[*?[]*}"
-        [[ "$_mp" == */ ]] || continue
-        mkdir -p "$PRISTINE/${_mp%/}" || return 1
-        : > "$PRISTINE/${_mp%/}/.keep" || return 1
+        # arm probes [[ -d ]] on it; the pattern tail is not a path. Classified
+        # through the shared helper: a /-terminated head (dir or literal) gets a
+        # dir; every other class materialises nothing.
+        _mp="${p#glob:}"
+        _affected_glob_split "$_mp"
+        # Repo-relative confinement (P2, review): a `..`-headed or absolute head
+        # must never reach mkdir — it would escape $PRISTINE.
+        case "$_AGS_CLASS" in dir|literal) ;; *) continue ;; esac
+        [[ "$_AGS_HEAD" == */ && "$_AGS_HEAD" != /* && "$_AGS_HEAD" != ../* && "$_AGS_HEAD" != */../* ]] || continue
+        mkdir -p "$PRISTINE/${_AGS_HEAD%/}" || return 1
+        : > "$PRISTINE/${_AGS_HEAD%/}/.keep" || return 1
         continue
         ;;
     esac
@@ -187,6 +197,12 @@ build_pristine() {
   # (2) tests/commands/*.sh — the SUT's dedicated non-suffix loop walks this directory and
   #     reds on a zero count.
   git -C "$REPO_ROOT" ls-files 'tests/commands/*.sh' | materialise || return 1
+  # (2b) tests/scripts/ — the SUT's second dedicated loop (#7718) walks this directory's
+  #     suite-named files against the sandbox runner's run_suite lines and reds on a
+  #     per-convention floor. Materialise the WHOLE tree — suites AND non-suite members
+  #     (_git_fixture_env.py, trio-baseline.tsv, lib/, fixtures/) — so the basename filter
+  #     has the real mixture to select from and the floors measure the real counts.
+  git -C "$REPO_ROOT" ls-files 'tests/scripts/' | materialise || return 1
   # (3) Every path declared in the relevance-predicate arrays: the SUT asserts each is a
   #     tracked file, so a sandbox missing them would red for a reason unrelated to any row.
   ( set +u
@@ -221,6 +237,8 @@ build_pristine() {
   # receipts — without both copies that call exits 2 and every census row
   # reds for a reason unrelated to the row under test.
   cp "$REPO_ROOT/scripts/lib/test-affected-paths.sh" "$PRISTINE/scripts/lib/" || return 1
+  # The shared glob: classifier — the SUT sources it fail-closed beside AFF_LIB.
+  cp "$REPO_ROOT/scripts/lib/affected-glob.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1
@@ -393,7 +411,7 @@ ORPHAN_MSG='is never run by any runner'
 # sandbox is already RED, every row below "kills" a mutant that was dead on arrival.
 # =============================================================================================
 run_C0() {
-EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row C0 "noop control — the unmutated synthetic repo is GREEN"
 new_sandbox c0
 run_lint "$SB"; rc=$?
@@ -403,6 +421,15 @@ if (( rc == 0 )); then pass "C0 — unmutated sandbox exits 0"; else
 fi
 assert_has "C0 — reports no orphans" "orphan test suites: none"
 assert_has "C0 — reports a non-empty walk over six surfaces" "walked ${real_tracked} tracked *.test.sh against 6 registration surfaces"
+# The #7718 walk's every-run evidence line. Derived from PRISTINE's index — the tree the
+# sandbox SUT actually walked — NOT the live repo's: the live index moves under this run
+# (a sibling session staging a tests/scripts/ file flips the count mid-row, which is
+# exactly the cq-ac-must-not-depend-on-concurrent-sessions failure this assert produced on
+# its first run). PRISTINE is frozen at build time and IS the reference by construction.
+_ts_sh=$(git -C "$PRISTINE" ls-files 'tests/scripts/' | grep -cE '(^|/)test-[^/]*\.sh$' || true)
+_ts_py=$(git -C "$PRISTINE" ls-files 'tests/scripts/' | grep -cE '(^|/)test_[^/]*\.py$' || true)
+assert_has "C0 — the tests/scripts/ walk ran over the suite-named set" \
+  "tests/scripts/: walked $((_ts_sh + _ts_py)) suite-named files (${_ts_sh} test-*.sh, ${_ts_py} test_*.py)"
 }
 
 # =============================================================================================
@@ -824,11 +851,61 @@ EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a
 row M22 "Guard 3: a declared glob: whose head does not end in / is malformed — static RED"
 new_sandbox m22
 mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
-  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'a*/b'
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'a/b*c'
 run_lint "$SB"; rc=$?
 assert_red "M22" "$rc"
 assert_has "M22 — names the malformed entry and the grammar reason" \
-  "declares glob: edge 'glob:a*/b', its head does not end in /"
+  "declares glob: edge 'glob:a/b*c', its head does not end in /"
+}
+
+run_M28() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M28 "Guard 3: a root-anchored glob: member is VALID — the census accepts it (#10198)"
+new_sandbox m28
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' '*.test.sh'
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M28 — glob:*.test.sh accepted (exit 0)"; else
+  fail "M28 — a root-anchored member was REJECTED (exit ${rc})"; sed 's/^/    /' "$OUT" | head -10
+fi
+new_sandbox m28b
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'x*.sh'
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M28b — glob:x*.sh (non-empty root head) accepted"; else
+  fail "M28b — a non-empty root head was REJECTED (exit ${rc})"; sed 's/^/    /' "$OUT" | head -10
+fi
+}
+
+run_M29() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M29 "Guard 3: a /-bearing tail under a root-anchored head is malformed — static RED (#10198)"
+new_sandbox m29
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'x*/y'
+run_lint "$SB"; rc=$?
+assert_red "M29" "$rc"
+assert_has "M29 — names the entry and the root-tail-slash reason" \
+  "declares glob: edge 'glob:x*/y', its tail carries a / under a root-anchored head"
+}
+
+run_M30() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M30 "Guard 3: a root glob matching a --name-status token is declined — a disguised always-match (#10198)"
+new_sandbox m30
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'M*'
+run_lint "$SB"; rc=$?
+assert_red "M30" "$rc"
+assert_has "M30 — names the disguised always-match reason" \
+  "declares glob: edge 'glob:M*', its pattern matches the name-status token M"
+new_sandbox m30b
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'R0*'
+run_lint "$SB"; rc=$?
+assert_red "M30b" "$rc"
+assert_has "M30b — names the disguised always-match reason" \
+  "declares glob: edge 'glob:R0*', its pattern matches the name-status token R000"
 }
 
 run_M23() {
@@ -911,6 +988,108 @@ assert_has "M27c — a /-terminated tail is well-formed but unmatchable" \
   "declares glob: edge 'glob:x/*/', its tail ends in /"
 }
 
+# =============================================================================================
+# M31-M35 — the tests/scripts/ dedicated walk (#7718). The directory registers ONLY through
+# explicit run_suite lines and the *.test.sh producer cannot see it, so before #7718 an
+# unregistered suite there gated nothing while printing green — the #3366 shape the issue
+# cites. M31 is the issue's prey (both at top level and under a subdirectory, which only the
+# basename filter reaches); M32/M33 are the de-registration directions for the two suite
+# conventions; M34 is the anti-vacuity pair; M35 is the non-suite positive control. These
+# rows need no require_single_surface: a test-*.sh/test_*.py path is visible to exactly ONE
+# check — this one — so a named error is attributable by construction.
+# =============================================================================================
+run_M31() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M31 "an unregistered tests/scripts/ test-*.sh is named — at top level AND under a subdir"
+new_sandbox m31
+mkdir -p "$SB/tests/scripts/lib" || harness_die "M31 mkdir"
+: > "$SB/tests/scripts/test-m31-orphan.sh"
+: > "$SB/tests/scripts/lib/test-m31-misplaced.sh"
+git -C "$SB" add -A >/dev/null 2>&1 || harness_die "M31 git add"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m31 >/dev/null 2>&1 || harness_die "M31 git commit"
+run_lint "$SB"; rc=$?
+assert_red "M31" "$rc"
+assert_has "M31 — names the unregistered top-level suite" "tests/scripts/test-m31-orphan.sh is never run by test-all.sh"
+assert_has "M31 — and the suite-shaped name under lib/ (basename reach, not top-level glob)" "tests/scripts/lib/test-m31-misplaced.sh is never run by test-all.sh"
+}
+
+run_M32() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M32 "delete a tests/scripts/ run_suite line — the de-registration direction (bash arm)"
+new_sandbox m32
+# tests/scripts/tmp-purge's label sits in neither ALWAYS_ON_SUITES nor
+# AFFECTED_CONSUMED_EDGES, so this line is the suite's ONLY coverage anywhere — removing it
+# reds for exactly one reason, and that reason is the check under test.
+mutate_or_die "$SB/scripts/test-all.sh" \
+  '  run_suite "tests/scripts/tmp-purge" bash tests/scripts/test-tmp-purge.sh'$'\n' ""
+run_lint "$SB"; rc=$?
+assert_red "M32" "$rc"
+assert_has "M32 — names the de-registered suite" "tests/scripts/test-tmp-purge.sh is never run by test-all.sh"
+}
+
+run_M33() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M33 "delete a tests/scripts/ unittest registration — the test_*.py arm"
+new_sandbox m33
+# The .py arm anchors on the dotted MODULE the run_suite line invokes, not the file path —
+# deleting the line is the only way the suite stops running, and tests/scripts/lint-rule-ids
+# is absent from both classification indexes, so the kill is attributable to this check.
+mutate_or_die "$SB/scripts/test-all.sh" \
+  '  run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids'$'\n' ""
+run_lint "$SB"; rc=$?
+assert_red "M33" "$rc"
+assert_has "M33 — names the de-registered unittest suite" "tests/scripts/test_lint_rule_ids.py is never run by test-all.sh"
+}
+
+run_M34() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M34 "the tests/scripts/ producer cannot silently narrow — per-convention floors"
+new_sandbox m34a
+# Producer pointed at a directory that does not exist: a single combined count could not
+# tell this from a healthy walk of a smaller directory; the per-convention floor can.
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" \
+  "git -C \"\$REPO_ROOT\" ls-files 'tests/scripts/'" \
+  "git -C \"\$REPO_ROOT\" ls-files 'tests/scripts-nonexistent-dir/'"
+run_lint "$SB"; rc=$?
+assert_red "M34a" "$rc"
+assert_has "M34a — the test-*.sh floor fires on an emptied producer" "enumerated 0 test-*.sh suite files, below the floor of 80"
+new_sandbox m34b
+# The OTHER direction: the .sh arm stays at 88 and only the test_*.py case arm goes dark —
+# exactly the narrowing a combined floor would absorb.
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" \
+  '    test_*.py)
+      ts_py=$((ts_py + 1))' \
+  '    zzz_no_match_*.py)
+      ts_py=$((ts_py + 1))'
+run_lint "$SB"; rc=$?
+assert_red "M34b" "$rc"
+assert_has "M34b — the test_*.py floor fires when its case arm goes dark" "enumerated ZERO test_*.py suite files"
+}
+
+run_M35() {
+EXPECTED_ASSERTIONS=6   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M35 "non-suite files under tests/scripts/ are never flagged"
+new_sandbox m35
+mkdir -p "$SB/tests/scripts/lib" "$SB/tests/scripts/fixtures" || harness_die "M35 mkdir"
+: > "$SB/tests/scripts/helper-util.sh"
+: > "$SB/tests/scripts/_helper_data.py"
+: > "$SB/tests/scripts/notes.tsv"
+: > "$SB/tests/scripts/lib/helper-gate.sh"
+: > "$SB/tests/scripts/fixtures/testdata.sh"
+git -C "$SB" add -A >/dev/null 2>&1 || harness_die "M35 git add"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m35 >/dev/null 2>&1 || harness_die "M35 git commit"
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M35 — non-suite files are not flagged (exit 0)"; else
+  fail "M35 — non-suite files were flagged (exit ${rc}); the walk over-reached"
+  sed 's/^/    /' "$OUT" | head -10
+fi
+assert_lacks "M35 — top-level helper .sh not named" "tests/scripts/helper-util.sh is never run"
+assert_lacks "M35 — underscore-prefixed .py helper not named" "tests/scripts/_helper_data.py is never run"
+assert_lacks "M35 — .tsv data not named" "tests/scripts/notes.tsv is never run"
+assert_lacks "M35 — lib/ helper not named" "tests/scripts/lib/helper-gate.sh is never run"
+assert_lacks "M35 — fixture .sh (no test- basename) not named" "tests/scripts/fixtures/testdata.sh is never run"
+}
+
 # --- Row dispatch: bounded-parallel -----------------------------------------------------------
 # Every row builds its own sandbox from PRISTINE (read-only once the harness is built) and
 # asserts against its own .lint-out — the matrix is order-free by construction. Serial cost was
@@ -928,7 +1107,7 @@ assert_has "M27c — a /-terminated tail is well-formed but unmatchable" \
 #   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
 #     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
-ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27"
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 # JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
 # the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
@@ -1067,6 +1246,36 @@ else
 fi
 ROWS=$(( ROWS + 1 ))
 
+# R2 (#9441) — a slash-less declared DIRECTORY is a static RED. Since #9441
+# declared/consumed edges mint through _affected_add_declared_edge (no `-e`
+# filter), the declared SPELLING is the only thing carrying dir-ness to a
+# deleted subject: `scripts/` mints `^scripts/` on the deleting diff, `scripts`
+# mints `^scripts` — an exact line a diff can never produce. `_tracked_member`
+# cannot see it (its dir-prefix arm passes on any tracked member beneath).
+#
+# A UNIT ROW, deliberately not an M row: it mutates DECLARATIONS in the
+# sandbox's edge-index copy, never the SUT — the mutation matrix is for
+# breaking the linter, and DECLARED_TOTAL plus the two registered --rows
+# ranges would have to re-tile for a fixture this small. `scripts` is a real
+# directory in PRISTINE (materialise() -d branch + the copied real inputs).
+new_sandbox r2
+python3 - "$SB/scripts/lib/test-affected-paths.sh" <<'PY' || harness_die "R2 fixture edit did not land"
+import sys
+p = sys.argv[1]; s = open(p).read()
+anchor = 'AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(\n'
+assert s.count(anchor) == 1, s.count(anchor)
+i = s.index(anchor) + len(anchor)
+s = s[:i] + '  "scripts"\n' + s[i:]
+open(p, 'w').write(s)
+PY
+run_lint "$SB"; rc=$?
+assert_red "R2" "$rc"
+assert_has "R2 — the slash-less-directory arm names the entry" \
+  "AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS declares 'scripts', an existing directory written without a trailing '/'"
+assert_lacks "R2 — the correctly-slashed twin stays unflagged" \
+  "declares 'scripts/'"
+ROWS=$(( ROWS + 1 ))
+
 
 # POSITIVE CONTROL on the dispatch. Measured at review: rewriting `fail()` to increment PASS
 # left this suite fully green (rc 0) while a real regression was live in the SUT. Every
@@ -1099,12 +1308,12 @@ if (( EXECUTED != _EXPECTED_EXECUTED )); then
   echo "FATAL: ${EXECUTED} rows dispatched, expected ${_EXPECTED_EXECUTED} for --rows ${ROWS_LO}-${ROWS_HI} — the gate mis-selected." >&2
   exit 1
 fi
-# Conservation over UNCONDITIONAL sites: ROWS counts C0 + executed gated rows + R1 + R1b. A
-# deleted R1/R1b/C0 drops ROWS below EXECUTED+3 — the check that makes removing an
+# Conservation over UNCONDITIONAL sites: ROWS counts C0 + executed gated rows + R1 + R1b + R2. A
+# deleted R1/R1b/R2/C0 drops ROWS below EXECUTED+4 — the check that makes removing an
 # unconditional row loud.
-_UNCONDITIONAL_SITES=3
+_UNCONDITIONAL_SITES=4
 if (( ROWS != EXECUTED + _UNCONDITIONAL_SITES )); then
-  echo "FATAL: ${ROWS} rows ran but EXECUTED+${_UNCONDITIONAL_SITES} = $((EXECUTED + _UNCONDITIONAL_SITES)) — an unconditional site (C0, R1, R1b) was deleted or double-counted." >&2
+  echo "FATAL: ${ROWS} rows ran but EXECUTED+${_UNCONDITIONAL_SITES} = $((EXECUTED + _UNCONDITIONAL_SITES)) — an unconditional site (C0, R1, R1b, R2) was deleted or double-counted." >&2
   exit 1
 fi
 # Parent-side assertion floor: assertions that live OUTSIDE workers — the enumeration pass,

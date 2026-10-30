@@ -493,3 +493,26 @@ describe("wsMessageSchema: bash_approval payload size caps (CWE-400)", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+// #11086 — the server may tag a `key_invalid` error frame with the credential
+// scheme the CLI ran under so the client can show scheme-correct copy.
+describe("wsMessageSchema: error frame credentialScheme (#11086)", () => {
+  const base = { type: "error", message: "msg", errorCode: "key_invalid" } as const;
+
+  test.each(["api_key", "oauth_token"])("accepts credentialScheme %s", (scheme) => {
+    const r = parseWSMessage({ ...base, credentialScheme: scheme });
+    expect(r.ok).toBe(true);
+    if (r.ok && r.msg.type === "error") expect(r.msg.credentialScheme).toBe(scheme);
+  });
+
+  test("scheme-less frame still parses (old servers)", () => {
+    const r = parseWSMessage(base);
+    expect(r.ok).toBe(true);
+    if (r.ok && r.msg.type === "error") expect(r.msg.credentialScheme).toBeUndefined();
+  });
+
+  test("rejects an unknown credentialScheme value", () => {
+    expect(parseWSMessage({ ...base, credentialScheme: "bearer" }).ok).toBe(false);
+    expect(parseWSMessage({ ...base, credentialScheme: "" }).ok).toBe(false);
+  });
+});

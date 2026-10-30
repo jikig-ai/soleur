@@ -148,7 +148,8 @@ describe("the docker suite's probe literal tracks the production config (#10445)
     // The derivation lives in the probe's exported maskedDirs() (also used by the smoke mode); the probe's own parity suite
     // (test/sdk-bash-probe-parity.test.ts) pins its output to the production functions. Here: the default mode uses it.
     expect(probeSrc).toContain("const MASKED_DIRS = maskedDirs(uid, HOME);");
-    expect(probeSrc).toContain('return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${home}/.claude/projects`];');
+    expect(probeSrc).toContain('return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, transcriptDir(home)];');
+    expect(probeSrc).toContain("return `${home}/.claude/projects`;");
     expect(probeSrc).toContain("const HOME = process.env.HOME;");
     expect(peerMessagingSocketDirs({}, 1001)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001"]);
     expect(sessionTranscriptDirs({ HOME: "/home/soleur" })).toEqual(["/home/soleur/.claude/projects"]);

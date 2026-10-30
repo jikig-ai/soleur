@@ -47,6 +47,8 @@ SUBCOMMANDS
   verdict      --a S --b S --c S --d S     (status: pass | fail | within-10% | unmeasured; a and c only for within-10%)
   cp-upper     K N [CONF]                  (a FRACTION, not a percent: 0.009936 is 0.99%)
   audit        [--root DIR] [--list FILE] [--accept FILE] [--all-refs]
+  ratchet      [--root DIR] [--list FILE] [--baseline FILE] [--accept FILE] [--base REF] [--print-baseline] [--report FILE]
+  glob-rate    --candidates FILE --out DIR [--list FILE] [--pairs FILE] [--commits N] [--base REF] [--spot-check K] [--root DIR]   (S4 PR5: read-only row 6 measurement, see cmd_glob_rate)
 The receipt paths are arguments; no repository path literal lives in this file.
 
 AUDIT OUTPUT. `gap<TAB>suite<TAB>N<TAB>paths` (the first six, all with --all-refs, which also prints under it one
@@ -72,27 +74,103 @@ DECLARED LIMITS. The walk costs the text length times the longest tracked compon
 name such as 'a-a-...' against a suite that repeats it took 2.7 s at 100 KB and 11.5 s at 400 KB (about 230 s per view at the 8 MiB read cap);
 real names and real suites are far below this, and it needs a hostile tracked name plus a hostile suite on the pinned tree. A tracked path
 that contains a newline is found by the scan (it is reported as a gap) but lines are split on newline, so it has no `ref` line and no accept
-row can exempt it: fail-closed, and no such name is tracked. The audit sees literal names only (see the runbook); `source` hops are one
-level; a path glued to the tail of an ANSI colour code is display text and is not a read.
+row can exempt it: fail-closed, and no such name is tracked. A path glued to the tail of an ANSI colour code is display text and is not a
+read. The reach and its limits are in the next section.
+
+REACH (S4 index completion PR1b, #10448; frozen here: the ADR-276 amendment points at it, it does not quote it). `gap_suites=0` means LITERAL-NAME COMPLETENESS OVER
+WHAT THIS AUDIT READS (the suite file, its source closure and the naming walk below, an approximation of the selector closure from inside):
+necessary, not sufficient. What the audit reads for one selector row, in this order:
+  1. the suite's own file (a directory suite: its bun-discoverable test files);
+  2. the SOURCE CLOSURE of each of them: `source X` / `. X` lines, to depth 8 (the selector expands the files at distance 0 to 7; its 8th pass
+     names the distance-8 files as edges without expanding them, so the audit reads one level further: it over-reports, the safe direction), breadth first, each
+     real file once, a cycle ending at the visited file. Operands: `$(dirname "$0")/`, `$(dirname "${BASH_SOURCE[0]}")/`, `$SCRIPT_DIR/`,
+     `${SCRIPT_DIR}/`, `$HERE/`, `${HERE}/`, `$DIR/` and `${DIR}/` resolve against the directory of the INCLUDING file (`..` normalised);
+     `$REPO_ROOT/`, `${REPO_ROOT}/`, `$ROOT_DIR/`, any other `$X/` prefix and a bare path resolve against the repo root. Only a tracked .sh or
+     .bash target is read, never a runner trigger;
+  3. the NAMING WALK: a CODE file (.sh .bash .py .ts .tsx .jsx .js .mjs .cjs .mts .cts .rb) that the row lists in `pats` as an exact `^file`
+     entry and that an already-read text names literally, to depth 8 (sorted within a level), per row. After each level is read, the source
+     closure of its files is read too (a fresh 8-level closure per walk file, or the depth left for a file already read as a closure member) and both feed the next level's naming. The two
+     runner triggers are never nodes; a `glob:` or `dir/` entry never is.
+Every file is read at most once per run and the read order is canonical (per row: each input followed by its closure; then, level by level,
+the walk files of the level by sorted path followed by their closures; the rows of a label ordered by their whole pattern list), so an
+accept row's ordinal never depends on the order the selector printed the rows. An edge is credited exactly when the selector would select
+the suite for a diff naming the path (edge_hit mirrors `_diff_touches`).
+DRAIN-REVEAL: reach is frozen as a definition but its result moves through declared edges and through the text of files it reads: declaring
+a code file as an edge makes the audit read that file, which can reveal more pairs. Accept an anchor-keyed row when the suite does not read or
+execute the file, declare an edge only when it does, and re-run the audit to a fixpoint.
+DECLARED LIMITS (what no run of this audit proves):
+  - literal names only: no computed path, glob expansion or variable-indirect operand;
+  - hops are `source` / `.` lines to .sh or .bash targets. The selector also mints edges from `bash|sh|python3|node|bun|exec` invocations of a
+    path, from `VAR=path; source "$VAR"` assignments, `source --`, other extensions, dotted python imports (`import pkg.mod`), the stem fan of a
+    stem suite and prefixes assigned from `$(cd ... && pwd)` (80 tracked lines use `. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/x.sh"`
+    and are not followed; about 90 tracked lines use a `source` or `.` of a `$(cd ...)` prefix). Measured when this was reviewed: 295 of 536
+    audited labels list in `pats` a code file (CODE_EXT, exact `^file`) that the audit never reads (1,166 label-path pairs; command: code_pats_of(pats)
+    minus the files reach_texts() returns, over `test-all.sh --print-selection --paths=README.md`);
+  - `$(dirname "$0")` inside a sourced file resolves against that file, as the selector's own convention does (bash resolves $0 to the entry script);
+  - the first pattern of a row is taken to be the suite's own file (true by the selector's construction); a runner trigger as first pattern is unaudited;
+  - data inputs in `pats` (manifests, workflows, SKILL.md files, baselines, tsv tables, docs) are checked as declared edges but their contents
+    are never scanned, and code reached only through them is not read; code files that a `dir/` or `glob:` entry covers are read by nothing
+    (making them nodes would add 621 pairs and 10 gap suites on the pinned tree);
+  - suites the runner declines under `--pr-gated` (ADR-262), directory and glob reads, bun helper files and the bunfig preload are not modelled;
+  - the comment table strips only a whole-line comment of the file's own language: a line inside a docstring or heredoc body that begins with the
+    comment marker is blanked (under-read), other block-comment and heredoc lines stay an over-report;
+  - a tracked name holding a TAB or a double quote is framed differently in the selector's diff blob (no such name is tracked);
+  - a runner trigger is covered by the trigger list (a diff touching one runs the full battery), not by its own edges; the registration-only and
+    staged-diff premise of the runner classifier is unchanged.
 
 ACCEPT FILE (--accept FILE; tab-separated, `#` lines and blank lines skipped; a missing file exempts nothing and says so on stderr):
   suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>     one row per source line that names the path
   suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason>                   a whole suite that has NO inputs at all (never one with any)
   anchor    the first 12 hex of sha256 over `" ".join(line.split())`, where `line` is the comment-stripped source line AS WRITTEN
             (whitespace collapsed; Unicode whitespace too, as str.split() does; a comment line is blanked, never removed)
-  ordinal   1, 2, ...: the Nth line with that anchor, counted over the suite file and then the libraries it sources, in hop order
+  ordinal   1, 2, ...: the Nth line with that anchor, counted over the files in the canonical read order (see REACH): the suite file, its
+            source closure, then the naming-walk files
 A gap is accepted only when every boundary line that names it has a row. The 3-column form `suite<TAB>path<TAB>reason` was retired.
 STALE rows (exit 1, reason printed): not-a-gap (the pair is not a gap before the exemptions: an edge declares it, or no line names
 it), anchor-not-live, path-untracked, suite-unaudited, suite-unregistered, suite-always-on, star-row-readable-suite,
 star-row-unreadable-members, star-row-tracked-suite (git tracks the suite's input, so it is not a suite with no inputs even if the
 file is missing, dangling or a directory link). Delete the row.
 
-EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
+RATCHET (S4 index completion PR3a, #10448; the amendment of ADR-276). `ratchet` is the audit as a CI check that is green on a tree whose audit exits 1: the live gap
+set (after the --accept exemptions) must EQUAL a committed, shrink-only baseline (scripts/ci-pr-affected-audit.baseline.tsv, repo-relative, one
+`suite<TAB>path` line per pair, each field written by quote_field, sorted and unique in the C locale, with a final newline). What it proves is the
+literal-name completeness over what the audit reads (REACH above): necessary but not sufficient, and never "index complete". It is advisory until a later PR
+makes its CI context required. The live set and the baseline are read from the checkout; the base (HEAD^1, or --base REF) is read for the baseline-state table
+(adoption, deletion), the growth rule, the cause text of a new pair, the oracle notice and the merge-base copy of the lint-ratchet.py helper (on a developer
+checkout HEAD^1 is just the previous local commit, so those are not meaningful there; read the CI result or pass --base).
+  EXIT CODES  0 clean; 1 drift (a verdict about the tree); 2 infrastructure (the check could not be trusted). A usage error is argparse's rc 2 and prints no marker.
+  ORDER  every exit-2 condition comes before every exit-1 verdict, so infrastructure is never a verdict: the selector (rc, hang), then the FLOORS on what it
+         printed (exactly one AFFECTED_SUMMARY naming fallback= and of=; fallback=none; no other non-blank line; no short row; every row within the selector's
+         grammar: five columns, a selected flag of 0 or 1 and a reason that is one of the non-empty `_AC_CLASS="..."` literals of the tracked scripts/test-all.sh,
+         read at run time; the AFFECTED_SELECTED row count equals its of=; no tracked input unreadable for a reason other than absence (EACCES, EIO: floor-unreadable);
+         at least one suite and one file read), then the base (resolved with git, its lint-ratchet.py loaded from the BASE commit, not the PR tree: a PR cannot weaken
+         the helper and the baseline together; a base without the file, or one that does not compile, is internal). Then the verdicts, each class printed and the first one named in the marker: unaudited suite; a `*`
+         accept row for a readable suite; a stale or invalid accept row; a new pair (or baseline-deleted); a stale baseline line; a duplicate baseline
+         line; a baseline not in C-locale order or without its final newline; a baseline line the base does not have (grown).
+  BASELINE STATE  base absent / HEAD present: adoption, passes when live equals the baseline. Base present / HEAD absent: passes only when nothing is live
+         (the strict-zero end state), else baseline-deleted. Absent at both: strict zero (a live pair is a new pair). Present at both: equality, plus the
+         growth rule as a GLOBAL pair-set check (`head lines - base lines` must be empty, so a swap, a new suite and a count that did not move are all refused).
+  The baseline is compared as OPAQUE rendered lines (there is no baseline parser); the failure text names the suite, the path and the referencing file:line, gives the two
+  remedies (declare an edge only when the suite really reads the file; add an anchor-keyed accept row when it merely names it) and never offers a way to add a pair.
+  --print-baseline writes ONLY the baseline bytes to stdout (the marker and diagnostics go to stderr, nothing is written to disk): with no baseline file it prints every
+  live pair; once one exists it prints only the baseline lines that are still live (prune-only), so a regeneration can shrink the file and never grow it. It refuses
+  (exit 2, census-degraded) when the census is degraded (an unaudited suite, a stale or malformed accept row): a file printed from it would lose live pairs.
+  --report FILE also writes the full, uncapped failure text (stdout prints the first 25 entries of each class and a count): on a verdict, on an exit-2 stop (the reason line and
+  the marker) and under --print-baseline (the notice and the marker); a path that cannot be written is one stderr line, never the verdict. The last stdout line is
+  `SOLEUR_PR_AFFECTED_RATCHET exit=<0|1|2> reason=<token> live=<n> baseline=<n>`; `oracle-inputs-changed: <files>` is printed, non-blocking, when the diff to the base
+  touches the check's own oracle: .github/workflows/ci.yml, this script, plugins/soleur/scripts/lint-ratchet.py, the accept file, scripts/lib/test-affected-paths.sh,
+  scripts/test-all.sh or the baseline. A new accept row is therefore announced, and is the drain tool, not a verdict.
+  EXIT-2 REASONS  selector-failed, selector-timeout, floor-summary, floor-fallback, floor-extra, floor-short-row, floor-bad-row, floor-rows-vs-of, floor-unreadable,
+  floor-no-suites, base-unresolved, baseline-unreadable, accept-unreadable, census-degraded (--print-baseline only), internal.
+
+EXIT CODES (collect, ejections, aggregate, audit, glob-rate): 0 done and clean (glob-rate: every row decided, whatever the verdicts); 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
 a value error (a malformed --since, an unknown status, an incomplete aggregate directory); 3 a remote or local READ
-failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
+failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error (glob-rate: also the model disagreeing with the real selector, or a spot-check that compared nothing). `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
 on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, never rc 1.
 """
 import argparse
+import errno
+import fnmatch
 import hashlib
 import json
 import math
@@ -102,7 +180,9 @@ import stat
 import subprocess
 import sys
 import time
+import types
 from bisect import bisect_left
+from collections import Counter
 
 RULE_TEXT = (
     "skip a suite iff AFFECTED_SELECTED sel=0 and reason is not always_on and "
@@ -119,7 +199,7 @@ ALWAYS_RUN_JOBS = frozenset((
     "encryption-posture", "marketplace-manifest-guard", "service-role-allowlist-gate", "tc-document-sha-guard",
     "adr-ordinals", "rule-body-lint", "lockfile-sync", "sandbox-canary-capture-gate", "plugin-root-propagation-gate",
     "lint-webplat", "web-platform-build", "shard-totality-mutations", "grok-fidelity", "harness-discovery", "test", "e2e",
-    "critical-css-gate",
+    "critical-css-gate", "affected-index-ratchet",
 ))
 FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")
 FULL_EVENTS = ("merge_group", "push")
@@ -132,11 +212,16 @@ class ReadError(Exception):
     """A remote or local read failed. Callers class the unit not-evaluable; it is never 'nothing found'."""
 
 
+class ReadTimeout(ReadError):
+    """A subprocess outlived its timeout (the ratchet maps one on the selector to selector-timeout)."""
+
+
 try:
     GH_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_GH_TIMEOUT", "180"))
     SELECT_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_SELECT_TIMEOUT", "900"))
+    GIT_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_GIT_TIMEOUT", "120"))
 except ValueError as _e:  # import time is before main()'s handlers: a bad seam value is a usage error (rc 2), never rc 1
-    print("replay: PR_AFFECTED_REPLAY_GH_TIMEOUT / _SELECT_TIMEOUT must be numbers: %s" % _e, file=sys.stderr)
+    print("replay: PR_AFFECTED_REPLAY_GH_TIMEOUT / _SELECT_TIMEOUT / _GIT_TIMEOUT must be numbers: %s" % _e, file=sys.stderr)
     sys.exit(2)
 # The same nine names as GIT_LOCATION_VARS in plugins/soleur/test/lib/git-fixture-env.sh and the gate's git_ro (a parity row pins all three).
 GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
@@ -155,7 +240,7 @@ def run(cmd, cwd=None, env=None, check=True, timeout=None, binary=False):
         else:
             p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise ReadError("%s timed out after %ss" % (cmd[0], timeout))
+        raise ReadTimeout("%s timed out after %ss" % (cmd[0], timeout))
     if check and p.returncode != 0:
         raise ReadError("%s rc=%d %s" % (cmd[0], p.returncode, (p.stderr.decode("utf-8", "replace") if binary else p.stderr).strip()[:160]))
     return p
@@ -847,16 +932,28 @@ def cmd_cp(a):
 RUNNER_TRIGGERS = ("scripts/test-all.sh", "scripts/lib/test-affected-paths.sh")
 
 
-def strip_comments(text):
-    """Blank whole-line comments: a path named only in a comment is a mention, not a read. Lines are split on "\\n" only (bash does
-    not split on a vertical tab, a form feed, a lone carriage return or U+2028); a carriage return is removed only when it directly
-    precedes the line feed (CRLF), a lone one is an ordinary character. A stripped line becomes an empty line, so every line keeps
-    its number."""
-    keep = []
-    for line in text.replace("\r\n", "\n").split("\n"):
-        t = line.lstrip()
-        keep.append("" if t.startswith("#") or t.startswith("//") else line)
-    return "\n".join(keep)
+# The whole-line comment marker of a file's OWN language, by extension of its real path. A line that is a comment in a different
+# language is not blanked (`// docs/a.md` in a .sh is a command word and a path), and an extension that is not listed strips
+# nothing: over-reporting is the audit's safe direction. Block comments, docstrings and heredoc bodies are a declared over-report.
+COMMENT_PREFIX = {
+    ".sh": "#", ".bash": "#", ".py": "#", ".rb": "#", ".yml": "#", ".yaml": "#",
+    ".ts": "//", ".tsx": "//", ".js": "//", ".jsx": "//", ".mjs": "//", ".cjs": "//", ".mts": "//", ".cts": "//",
+}
+
+
+def comment_prefix(path):
+    return COMMENT_PREFIX.get(os.path.splitext(path)[1], "")
+
+
+def strip_comments(text, prefix):
+    """Blank whole-line comments of the file's own language (`prefix`, from comment_prefix; empty strips nothing; only space and tab may
+    precede the marker, as in bash): a path named only in a comment is a mention, not a read. Lines are split on "\\n" only (bash does not split on a vertical tab, a form feed, a lone
+    carriage return or U+2028); a carriage return is removed only when it directly precedes the line feed (CRLF), a lone one is an
+    ordinary character. A stripped line becomes an empty line, so every line keeps its number."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    if not prefix:
+        return "\n".join(lines)
+    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else line for line in lines)
 
 
 def tracked_files(root):
@@ -866,14 +963,69 @@ def tracked_files(root):
     return {f.decode("utf-8", errors="replace") for f in run(["git", "ls-files", "-z"], cwd=root, binary=True).stdout.split(b"\0") if f}
 
 
+GLOB_CHARSET = re.compile(r"[^A-Za-z0-9_./*-]")
+
+
 def edge_hit(pt, path):
-    """The selector's own edge grammar (`_diff_edge_hit` in the runner), applied to one path: `^glob:<head>/<tail>` is a
-    bash `[[ == ]]` glob (`*` crosses `/`); `^dir/` is a prefix; `^file` is exact equality. Nothing is a regex: a path
-    holding ( ) [ ] + $ matches itself, and `^a.sh` does not match `a.sh.bak`."""
-    e = pt[1:] if pt.startswith("^") else pt
+    """True exactly when the selector would select the suite for a diff whose only name is `path`: `_diff_touches` with the single
+    entry `pt`, over `_diff_edge_hit` (one function, one call site; a bash-versus-python differential in the suite pins it to the
+    real functions). An entry WITHOUT a `^` is a plain substring of the path (a non-caret `glob:` entry is therefore dead, and the
+    empty entry matches everything). A `^` entry is `glob:<head>/<tail>` (a bash `[[ == ]]` glob over the whole path, `*` crosses
+    `/`), `dir/` (a prefix) or a file (exact equality). Nothing is a regex: a path holding ( ) [ ] + $ matches itself, and `^a.sh`
+    does not match `a.sh.bak`. EVERY malformed glob shape matches (a glob edge can only widen a selection): a byte outside
+    [A-Za-z0-9_./*-], a head that is absolute, begins with `./` or `../`, or holds `//`, `/./` or `/../`, a `/`-bearing head not
+    ending in `/`, a `/`-bearing tail under a `/`-free head, a tail ending in `/`, a tail without `*`. A `/`-free head is a real
+    ROOT-ANCHORED pattern (#10198): it matches only a diff line carrying no `/` that fnmatches the pattern (`*` crosses `/` there
+    too — the dir-less conjunct is load-bearing, mirroring the bash arm's `!= */*`). A tracked name holding a TAB or a double
+    quote is framed differently in the selector's diff blob and is not modelled (no such name is tracked)."""
+    if not pt.startswith("^"):
+        return pt in path
+    e = pt[1:]
     if e.startswith("glob:"):
         g = e[len("glob:"):]
-        return re.match("^" + "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in g) + "$", path) is not None
+        if GLOB_CHARSET.search(g):
+            return True
+        if "*" not in g:                # a metachar-free payload is a literal edge — always-match (bash `literal` arm)
+            return True
+        head = g.split("*", 1)[0]
+        if head.startswith("/"):        # the head is not repo-relative: six shapes, one line each
+            return True
+        if head.startswith("./"):
+            return True
+        if head.startswith("../"):
+            return True
+        if "//" in head:
+            return True
+        if "/./" in head:
+            return True
+        if "/../" in head:
+            return True
+        if "/" in head and not head.endswith("/"):  # mid-slash head — not /-terminated
+            return True
+        tail = g[len(head):]
+        if "/" not in head:
+            # Root-anchored (#10198): a `/`-bearing tail can never match a dir-less diff line.
+            if "/" in tail:
+                return True
+            return "/" not in path and fnmatch.fnmatchcase(path, g)
+        if tail.endswith("/"):          # unmatchable tail
+            return True
+        if "*" not in tail:             # a tail without a wildcard (unreachable: `*`-
+            return True                 # less payloads take the literal arm; kept to mirror
+                                        # the bash classifier's tail-no-star vocabulary)
+        # `*` matches any run of characters, `/` included, and a run of stars is one star: split on `*`, anchor the first and the last
+        # segment and find the middle ones in order. Linear in the path, where the equivalent regex is polynomial in the number of stars.
+        segs = g.split("*")
+        first, last = segs[0], segs[-1]
+        if len(path) < len(first) + len(last) or not path.startswith(first) or not path.endswith(last):
+            return False
+        pos, stop = len(first), len(path) - len(last)
+        for seg in segs[1:-1]:
+            k = path.find(seg, pos, stop)
+            if k < 0:
+                return False
+            pos = k + len(seg)
+        return True
     if e.endswith("/"):
         return path.startswith(e)
     return path == e
@@ -881,10 +1033,10 @@ def edge_hit(pt, path):
 
 def suite_file(root, pattern):
     """The suite's own file is the FIRST pattern of its selector row (`^path`, dots literal). None when that is not a
-    readable file (a directory suite, or a pattern the selector derived differently): the caller counts it unaudited."""
+    readable file (a directory suite, a runner trigger, or a pattern the selector derived differently): the caller counts it unaudited."""
     path = pattern[1:] if pattern.startswith("^") else pattern
     full = os.path.join(root, path)
-    return full if path and not path.endswith("/") and os.path.isfile(full) else None
+    return full if path and path not in RUNNER_TRIGGERS and not path.endswith("/") and os.path.isfile(full) else None
 
 
 # ONE BOUNDARY DEFINITION. A match starts where the character before it is not a word character [A-Za-z0-9_] (or at the start of
@@ -904,7 +1056,22 @@ WORD_CHARS = "A-Za-z0-9_"
 WORD = re.compile("[%s]" % WORD_CHARS)
 ESCAPE = re.compile(r"\\(?:[abefnrtv]|0[0-7]{0,3}|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{4})")
 SHORT_OPTION = re.compile(r"""(?<![^\s"'])-[A-Za-z](?=\S)""")
-SOURCE_HOP = re.compile(r"""(?:source|\.)\s+["']?(?:\$\{?[A-Za-z_]+\}?/)?([A-Za-z0-9_./-]+\.sh)""")
+# A `source X` / `. X` line. group 1 is the operand prefix (`$(dirname "$0")`, `$(dirname "${BASH_SOURCE[0]}")` or `$VAR` / `${VAR}`), group 2 the
+# rest of the path (it starts with `/` after a prefix). The keyword must not be glued to a word or to a dot (`resource x.sh` and a prose
+# `see. lib/x.sh` are not hops), and the blank after it is a space or tab (never a newline). Only .sh and .bash targets are followed. A prefix
+# is recognised only when a `/` follows it (the lookahead), which also keeps one long `source $<identifier>` token linear instead of quadratic.
+SOURCE_HOP = re.compile(
+    r"""(?<![\w.])(?:source|\.)[ \t]+["']?"""
+    r"""(\$\(dirname[ \t]+"?(?:\$0|\$\{BASH_SOURCE\[0\]\})"?\)(?=/)|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?=/))?"""
+    r"""([A-Za-z0-9_./-]+\.(?:sh|bash))""")
+# The operand prefixes that stand for the INCLUDING file's directory (the selector's `_affected_edge_token` resolves `$HERE`, `$SCRIPT_DIR`
+# and both `$(dirname ...)` spellings that way; `$DIR` is added). Every other prefix (`$REPO_ROOT`, `$ROOT_DIR`, an unknown `$X`, no prefix)
+# is tried at the repo root; only a TRACKED target is ever read, so a wrong guess costs nothing.
+HOP_DIR_VARS = frozenset(("SCRIPT_DIR", "HERE", "DIR"))
+HOP_DEPTH = 8    # source-hop levels followed from a suite input (the selector reads distance 0 to 7: the audit reads one level further, the safe direction)
+WALK_DEPTH = 8   # naming-walk levels followed over code files the selector row lists
+# The files the naming walk may read: code, by extension. A data file in `pats` is a declared input the audit checks but never scans.
+CODE_EXT = frozenset((".sh", ".bash", ".py", ".ts", ".tsx", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".rb"))
 # bun's test discovery: *.test.* *_test.* *.spec.* *_spec.* over js, jsx, ts, tsx and the module-flavoured mjs, cjs, mts, cts. A
 # SUPERSET on purpose: bunfig `pathIgnorePatterns` are not applied (over-scanning is the safe direction).
 BUN_TEST = re.compile(r"[._](?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs|mts|cts)$")
@@ -970,8 +1137,9 @@ class PathNode:
 
 class PathIndex:
     """The tracked paths as a component trie, plus what one audit run memoises across suites: each file's comment-stripped text as
-    written (`raws`), its two views (`views`) and the tracked paths it names (`refs`), keyed on the FULL path (two libraries named
-    helper.sh in different directories are two entries). `ops` counts every start candidate and every trie step, so a test can
+    written (`raws`), its two views (`views`), the RAW `source` operands it holds (`hops`: (prefix, rest) pairs, resolved per call against
+    the including file's logical path) and the tracked paths it names (`refs`), keyed on the FULL path (two libraries named helper.sh in
+    different directories are two entries). `ops` counts every start candidate and every trie step, so a test can
     bound the work by an operation count instead of a clock."""
 
     def __init__(self, tracked):
@@ -990,9 +1158,11 @@ class PathIndex:
         names = {p.split("/")[0] for p in self.paths}
         self.start = re.compile(r"(?<![%s])(?=%s)" % (WORD_CHARS, name_regex(names))) if names else None
         self.ops = 0
+        self.faults = set()   # real paths whose read failed with an OSError other than ENOENT (EACCES, EIO ...): the census is incomplete, not "unaudited"
         self.raws = {}
         self.views = {}
         self.refs = {}
+        self.hops = {}
 
     def under(self, prefix):
         """The tracked paths that start with `prefix`, in order."""
@@ -1093,7 +1263,7 @@ def read_text(index, path, base=None):
     views. ReadError when the file is not a readable regular file (see read_bytes)."""
     v = index.views.get(path)
     if v is None:
-        raw = strip_comments(read_bytes(path, base).decode("utf-8", errors="replace"))
+        raw = strip_comments(read_bytes(path, base).decode("utf-8", errors="replace"), comment_prefix(path))
         index.raws[path] = raw
         v = index.views[path] = views(raw)
     return v
@@ -1119,7 +1289,9 @@ def try_read(index, path, bad, base=None):
     real = os.path.realpath(path)
     try:
         full, light = read_text(index, real, base)
-    except ReadError:
+    except ReadError as e:
+        if isinstance(e.__context__, OSError) and e.__context__.errno not in (None, errno.ENOENT):
+            index.faults.add(real)
         if bad is None:
             raise
         if path not in bad:
@@ -1128,41 +1300,147 @@ def try_read(index, path, bad, base=None):
     return real, full, light, index.raws[real]
 
 
+def hop_targets(rel, raws, tracked):
+    """The tracked, repo-relative targets of the `source` operands `raws` of the file whose LOGICAL repo-relative path is `rel`, in text
+    order. A prefix that stands for the including file's directory resolves against it, every other prefix and a bare path against the
+    repo root; a target that is not tracked, is a runner trigger or leaves the tree is dropped."""
+    out = []
+    for pre, rest in raws:
+        if pre:
+            if not rest.startswith("/"):
+                continue
+            home = os.path.dirname(rel) if pre.startswith("$(dirname") or pre.strip("${}") in HOP_DIR_VARS else ""
+            q = os.path.normpath(os.path.join(home, rest.lstrip("/")))
+        elif rest.startswith("/"):
+            continue
+        else:
+            q = os.path.normpath(rest)
+        if q in tracked and q not in RUNNER_TRIGGERS and q not in out:
+            out.append(q)
+    return out
+
+
+def hops_of(index, real, rel):
+    """The tracked files the file at `real` (logical path `rel`) sources. The raw matches are memoised per real path, unexcluded;
+    the resolution is per call, because it depends on the logical path the file was reached by."""
+    raws = index.hops.get(real)
+    if raws is None:
+        raws = index.hops[real] = [(m.group(1) or "", m.group(2)) for m in SOURCE_HOP.finditer(index.raws[real])]
+    return hop_targets(rel, raws, index.tracked)
+
+
+def source_closure(root, got, rel, index, bad):
+    """-> [try_read() tuple]: `got` (reached as the repo-relative path `rel`), then the files it sources, then theirs, breadth first, in
+    discovery order, to HOP_DEPTH levels. A visited set keyed on the real path ends a cycle. A tracked target that cannot be read is
+    listed in `bad` (the suite is then unaudited, never clean)."""
+    out, visited, level = [got], {got[0]}, [(got, rel)]
+    for _ in range(HOP_DEPTH):
+        nxt = []
+        for g, r in level:
+            for q in hops_of(index, g[0], r):
+                path = os.path.normpath(os.path.join(root, q))
+                real = os.path.realpath(path)
+                if real in visited:
+                    continue
+                visited.add(real)
+                h = try_read(index, path, bad, root)
+                if h is not None:
+                    out.append(h)
+                    nxt.append((h, q))
+        level = nxt
+        if not level:
+            break
+    return out
+
+
 def suite_texts(root, inputs, index, bad=None):
-    """-> [(real path, full view, light view, text as written)]: the suite's own files, then the libraries they source (one hop, in
-    hop order), each real file once. A file that cannot be read is skipped and listed in `bad` (ReadError when `bad` is None). A
-    sourced path counts only when it is a TRACKED path (so the count does not depend on untracked files in the work tree); one that
-    is not a readable regular file inside the tree (a dangling symlink, a directory, a file deleted from the work tree) is an
-    unreadable file; a sourced name that is not tracked is not read."""
+    """-> [(real path, full view, light view, text as written)]: the suite's own files, each followed by the libraries it sources (the
+    `source` closure to HOP_DEPTH levels, breadth first, discovery order), each real file once. A file that cannot be read is skipped
+    and listed in `bad` (ReadError when `bad` is None). A sourced path counts only when it is a TRACKED path (so the count does not
+    depend on untracked files in the work tree); one that is not a readable regular file inside the tree (a dangling symlink, a
+    directory, a file deleted from the work tree) is an unreadable file; a sourced name that is not tracked is not read. This is the
+    closure only: the naming walk over the selector row's code files is reach_texts()."""
     out, seen = [], set()
     for p in inputs:
-        got = try_read(index, os.path.normpath(p), bad, root)
+        path = os.path.normpath(p)
+        got = try_read(index, path, bad, root)
         if got is None:
             continue
-        chain = [got]
-        for m in SOURCE_HOP.finditer(got[3]):
-            q = os.path.normpath(os.path.join(root, m.group(1)))
-            if os.path.relpath(q, root) in index.tracked:
-                g = try_read(index, q, bad, root)
-                if g is not None:
-                    chain.append(g)
-        for g in chain:
+        for g in source_closure(root, got, os.path.relpath(path, root), index, bad):
             if g[0] not in seen:
                 seen.add(g[0])
                 out.append(g)
     return out
 
 
+def code_pats_of(pats, index):
+    """The tracked code files a selector row lists as exact `^file` entries, in order, once each: the nodes of the naming walk. A
+    `glob:` or `dir/` entry, a non-caret entry, a data file and a runner trigger are never a node."""
+    out, seen = [], set()
+    for pt in pats:
+        e = pt[1:]
+        if (pt.startswith("^") and e and not e.startswith("glob:") and not e.endswith("/") and e not in RUNNER_TRIGGERS
+                and os.path.splitext(e)[1] in CODE_EXT and e in index.tracked and e not in seen):
+            seen.add(e)
+            out.append(e)
+    return out
+
+
+def reach_texts(root, inputs, pats, index, bad):
+    """suite_texts() plus the naming walk: from the files read so far, every code file the selector row lists in `pats` (code_pats_of)
+    that one of them names literally is read, level by level to WALK_DEPTH (sorted within a level); after each level the source closure
+    of its files is read too, and both feed the next level's naming (the selector expands every file's edges, so a library a walk file
+    sources can name the next code pat). All state is row-local (`seen` is per call; PathIndex only memoises contents), so a verdict
+    never depends on the order of the rows."""
+    out = suite_texts(root, inputs, index, bad)
+    code = set(code_pats_of(pats, index))
+    if not code:
+        return out
+    seen, frontier = {t[0] for t in out}, list(out)
+    for _ in range(WALK_DEPTH):
+        named = set()
+        for g in frontier:
+            named |= refs_of(index, g) & code
+        level = []
+        for q in sorted(named):
+            path = os.path.join(root, q)
+            if os.path.realpath(path) in seen:
+                continue
+            got = try_read(index, path, bad, root)
+            if got is not None and got[0] not in seen:
+                seen.add(got[0])
+                out.append(got)
+                level.append((got, q))
+        frontier = [got for got, _ in level]
+        for got, q in level:
+            for g in source_closure(root, got, q, index, bad)[1:]:
+                if g[0] not in seen:
+                    seen.add(g[0])
+                    out.append(g)
+                    frontier.append(g)
+        if not frontier:
+            break
+    return out
+
+
+def refs_of(index, got):
+    """The tracked paths one file (a try_read() tuple) names, memoised on the real path and UNEXCLUDED: the suite's own path is
+    dropped by the caller, per call, because the same library is read for other suites that do name it. The ONE scan site of the
+    audit: suite_refs() and the naming walk both read through it."""
+    r = index.refs.get(got[0])
+    if r is None:
+        r = index.refs[got[0]] = scan_views(index, got[1], got[2])
+    return r
+
+
 def suite_refs(root, suite, inputs, index, texts=None, bad=None):
-    """Tracked repo paths this suite (its file, or a directory suite's test files) and the libs it sources, one level, names
-    literally. The per-file result is memoised UNEXCLUDED: the suite's own path is dropped here, per call, because the same
-    library is read for other suites that do name it. `texts` is suite_texts() when the caller already has it."""
+    """Tracked repo paths that the texts of this suite name literally. `texts` is reach_texts() (the suite's files, the libraries they
+    source and the code files its selector row lists and the texts name); without it only the suite_texts() closure is read, which is
+    what the memoisation fixtures want. The per-file result is memoised UNEXCLUDED: the suite's own path is dropped here, per call,
+    because the same library is read for other suites that do name it."""
     named = set()
-    for q, full, light, _ in (texts if texts is not None else suite_texts(root, inputs, index, bad)):
-        r = index.refs.get(q)
-        if r is None:
-            r = index.refs[q] = scan_views(index, full, light)
-        named |= r
+    for got in (texts if texts is not None else suite_texts(root, inputs, index, bad)):
+        named |= refs_of(index, got)
     top = os.path.realpath(root)
     own = {os.path.relpath(p, root) for p in inputs} | {os.path.relpath(os.path.realpath(p), top) for p in inputs}
     return sorted(f for f in named if f != suite and f not in own and f not in RUNNER_TRIGGERS)
@@ -1192,7 +1470,8 @@ def pair_anchors(texts, path):
     """-> [(anchor, ordinal, file, lineno, text)] for every line of the suite's texts that holds a boundary match of `path` in
     either view, in order. The anchor and `text` are the line AS WRITTEN with its whitespace collapsed (" ".join(line.split()), so
     re-indenting or CRLF do not move it), and the anchor is the first 12 hex of its sha256. The ordinal numbers identical anchors
-    1, 2, ... over the suite file and then its sourced libraries in hop order, so two identical reading lines are two rows.
+    1, 2, ... over the files in the canonical read order (the suite file, its source closure, then the naming-walk files; see REACH), so two
+    identical reading lines are two rows.
     `lineno` counts physical lines (a comment line is blanked, never removed)."""
     count, out = {}, []
     for q, no, written in boundary_lines(texts, path):
@@ -1203,17 +1482,21 @@ def pair_anchors(texts, path):
     return out
 
 
-def load_accept(path):
+def load_accept(path, base=None):
     """Exemptions: see the ACCEPT FILE section of --help. A missing file is no exemptions (one stderr line says so); a file that
-    cannot be read is a ReadError (rc 3); a malformed row is a ValueError (rc 2) that names the failing column.
+    cannot be read is a ReadError (rc 3); a malformed row is a ValueError (rc 2) that names the failing column. With `base` (the ratchet's default
+    accept file inside the checkout) the file is read through read_bytes: a symlink that leaves `base`, a device or an oversized file is refused.
     -> {suite: {path: [(anchor, ordinal, reason)]}}"""
     acc = {}
     if not os.path.exists(path):
         print("replay: --accept %s does not exist: no exemptions" % path, file=sys.stderr)
         return acc
     try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
+        if base is None:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        else:
+            text = read_bytes(path, base).decode("utf-8")
     except OSError as e:
         raise ReadError("cannot read the accept file %s: %s" % (path, e.strerror or e))
     seen = set()
@@ -1252,7 +1535,7 @@ class Census:
     except `suites`, which counts selector rows.
       gaps        {label: [paths still undeclared after the exemptions]}, in row order
       miss        {label: [paths undeclared BEFORE the exemptions]}
-      pair_texts  {label: {path: suite_texts() of the rows that left the path undeclared}} for the gaps (ref_lines)
+      pair_texts  {label: {path: reach_texts() of the rows that left the path undeclared}} for the gaps (ref_lines)
       unaudited   [(label, why, quoted)] unique; `quoted` says `why` was already passed through quote_field
       stale       [(label, path, anchor/ordinal, why)], sorted and unique
       extra       the selector lines that are not AFFECTED_SELECTED rows (AFFECTED_SUMMARY, AFFECTED_FALLBACK)
@@ -1265,6 +1548,7 @@ class Census:
         self.gaps, self.miss, self.registered, self.pair_texts = {}, {}, {}, {}
         self.labels, self.short_rows, self.always_on_labels, self.accepted_unread_labels = set(), set(), set(), set()
         self.unaudited, self.stale, self.extra = [], [], []
+        self.grammar = []   # (selected flag, reason, column count) of every row with at least five columns, for the ratchet's row-grammar floor
 
     @property
     def gap_refs(self):
@@ -1303,7 +1587,7 @@ def stale_entries(suite, path, entries, why):
 
 
 def judge_rules(suite, rules, miss, texts_of, tracked, star_why, partial=False):
-    """The accept rows of one readable suite against its live gaps -> (stale, accepted, kept). `texts_of[path]` is the suite_texts()
+    """The accept rows of one readable suite against its live gaps -> (stale, accepted, kept). `texts_of[path]` is the reach_texts()
     of the rows that left `path` undeclared. A row is stale when it is a `*` row (a suite with any input is not accepted whole),
     names an untracked path, names a pair that is not a gap before the exemptions (an edge now declares it, or no line names it any
     more), or an (anchor, ordinal) that no live boundary line carries. A gap is accepted only when EVERY boundary line of the pair has
@@ -1367,12 +1651,14 @@ def audit_census(root, rows, accept):
             c.add_unaudited(label, "short-row")
             c.short_rows.add(label)
             continue
+        c.grammar.append((f[2], f[3], len(f)))
         g = groups.setdefault(label, {"always_on": False, "reason": f[3], "rows": []})
         if f[3] == "always_on":
             g["always_on"] = True
         g["reason"] = f[3]
         g["rows"].append(f[4].split("|"))
     for label, g in groups.items():
+        g["rows"].sort()   # ordinals must not depend on the order the selector printed a label's rows: the whole pattern list is the key
         c.registered[label] = "always_on" if g["always_on"] else g["reason"]
         if g["always_on"]:
             c.always_on_labels.add(label)
@@ -1384,7 +1670,7 @@ def audit_census(root, rows, accept):
             if inputs is None:
                 dead.append(pats[0])
                 continue
-            texts = suite_texts(root, inputs, index, bad)
+            texts = reach_texts(root, inputs, pats, index, bad)
             refs = suite_refs(root, label, inputs, index, texts)
             found.update(refs)
             ok.append((texts, [r for r in refs if not any(edge_hit(pt, r) for pt in pats)]))
@@ -1456,6 +1742,359 @@ def load_rows(list_path, root):
     return sp.stdout.split("\n")
 
 
+# ---- ratchet (S4 index completion PR3a): the audit as a check that is green on a tree the audit fails -----------------------------------------------
+RATCHET_BASELINE = "scripts/ci-pr-affected-audit.baseline.tsv"
+RATCHET_ACCEPT = "scripts/ci-pr-affected-audit.accept.tsv"
+RATCHET_LINT = "plugins/soleur/scripts/lint-ratchet.py"
+RATCHET_TEST_ALL = "scripts/test-all.sh"
+RATCHET_PATHS_LIB = "scripts/lib/test-affected-paths.sh"
+RATCHET_MARKER = "SOLEUR_PR_AFFECTED_RATCHET"
+RATCHET_CAP = 25
+# The files whose change in a diff makes the check's OWN oracle part of that diff (a non-blocking notice, never a verdict): the workflow, this script, the
+# helper (its merge-base copy decides the base text, but the PR-tree copy is what a later run trusts), the accept file (a new row exempts a new pair), the path
+# library and the runner (they decide what the selector prints, so what is "live") and the baseline.
+RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-affected-replay.py", RATCHET_LINT, RATCHET_ACCEPT, RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE)
+STAR_WHYS = ("star-row-readable-suite", "star-row-unreadable-members", "star-row-tracked-suite")
+RATCHET_REMEDY_NEW = (
+    "remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file "
+    "(that is what the selector must know); editing that file runs the full battery once",
+    "remedy: or add an anchor-keyed accept row to " + RATCHET_ACCEPT + " only when the suite merely names the file (a message, a fixture it writes "
+    "into a scratch tree, a negative-test string); the reason names the line kind",
+    "remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)",
+    "remedy: an accept row on a file the suite really reads is a false negative once the lever flips; no automated control checks that the suite does not "
+    "read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository's ruleset",
+    "remedy: a baseline row cannot be added",
+)
+QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")
+AC_CLASS = re.compile(r'(?<![A-Za-z0-9_])_AC_CLASS="([^"]+)"')
+
+
+class RatchetInfra(Exception):
+    """Infrastructure, not a verdict: the ratchet exits 2 with `reason`, a fixed token that never carries a path, a ref or a SHA."""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def no_suites(c):
+    """True, after one stderr line, when the selector printed no AFFECTED_SELECTED row: a census over nothing proves nothing (audit shares this)."""
+    if c.suites == 0:
+        print("replay audit: the selector printed no AFFECTED_SELECTED rows", file=sys.stderr)
+        return True
+    return False
+
+
+def ratchet_reasons(root, tracked=None):
+    """The reasons the selector assigns a row: every non-empty `_AC_CLASS="<literal>"` assignment on a non-comment line of the tracked scripts/test-all.sh,
+    read at run time through the audit's confined reader (never listed here). An unreadable or untracked file, or a set that lacks `always_on`, is exit 2."""
+    if tracked is not None and RATCHET_TEST_ALL not in tracked:
+        raise RatchetInfra("internal", "cannot derive the selector's row grammar: %s is not tracked" % RATCHET_TEST_ALL)
+    try:
+        text = read_bytes(os.path.join(root, RATCHET_TEST_ALL), root).decode("utf-8", errors="replace")
+    except ReadError as e:
+        raise RatchetInfra("internal", "cannot derive the selector's row grammar from %s: %s" % (RATCHET_TEST_ALL, quote_field(str(e))))
+    found = set()
+    for line in text.split("\n"):
+        if not line.lstrip().startswith("#"):
+            found.update(AC_CLASS.findall(line))
+    if "always_on" not in found:
+        raise RatchetInfra("internal", "cannot derive the selector's row grammar: %s names no _AC_CLASS=\"always_on\" literal" % RATCHET_TEST_ALL)
+    return found
+
+
+def ratchet_floors(c):
+    """Every input the ratchet cannot trust is exit 2, never a verdict. `c.extra` is a CLOSED set: after the AFFECTED_SELECTED rows the real selector
+    prints exactly one AFFECTED_SUMMARY on stdout in this mode (a measurement, plan Phase 0), so any other non-blank line (AFFECTED_FALLBACK,
+    AFFECTED_UNRESOLVED, AFFECTED_RUNNER_IN_SCOPE, AFFECTED_DIVERGENT, an unknown prefix, a stray line, a space-prefixed row) is a hazard. A row is held to the
+    selector's grammar (five columns, a selected flag of 0 or 1, a reason the selector assigns: ratchet_reasons)."""
+    summaries = [x for x in c.extra if x.startswith("AFFECTED_SUMMARY ")]
+    if len(summaries) != 1:
+        raise RatchetInfra("floor-summary", "want exactly one AFFECTED_SUMMARY line, the selector printed %d" % len(summaries))
+    fb = re.search(r"\bfallback=(\S+)", summaries[0])
+    if fb is None:
+        raise RatchetInfra("floor-summary", "the AFFECTED_SUMMARY line names no fallback=")
+    if fb.group(1) != "none":
+        raise RatchetInfra("floor-fallback", "the selector fell back (fallback=%s) and printed no per-suite decision" % quote_field(fb.group(1)))
+    others = [x for x in c.extra if not x.startswith("AFFECTED_SUMMARY ")]
+    if others:
+        raise RatchetInfra("floor-extra", "%d unexpected selector line(s), the first starts %s" % (len(others), quote_field(others[0][:24])))
+    if c.short_rows:
+        raise RatchetInfra("floor-short-row", "%d AFFECTED_SELECTED row(s) too short to name their edges" % len(c.short_rows))
+    reasons = ratchet_reasons(c.root, c.index.tracked)
+    bad = [g for g in c.grammar if g[0] not in ("0", "1") or g[1] not in reasons or g[2] != 5]
+    if bad:
+        raise RatchetInfra("floor-bad-row", "%d AFFECTED_SELECTED row(s) fail the selector grammar (five columns, selected 0 or 1, a reason the selector assigns)" % len(bad))
+    of = re.search(r"\bof=(\d+)\b", summaries[0])
+    if of is None:
+        raise RatchetInfra("floor-summary", "the AFFECTED_SUMMARY line names no of=<n>")
+    if c.suites != int(of.group(1)):
+        raise RatchetInfra("floor-rows-vs-of", "the selector printed %d AFFECTED_SELECTED row(s) but its summary says of=%s" % (c.suites, of.group(1)))
+    if c.index.faults:
+        raise RatchetInfra("floor-unreadable", "%d tracked input(s) could not be read (a permission or I/O error, not a missing file): the census is incomplete" % len(c.index.faults))
+    if not c.suites:
+        raise RatchetInfra("floor-no-suites", "a census over zero suites proves nothing")
+    if c.files_read == 0:
+        raise RatchetInfra("floor-no-suites", "a census that read zero files proves nothing")
+
+
+def ratchet_load(root, sha, env):
+    """The helpers of plugins/soleur/scripts/lint-ratchet.py AS THE MERGE BASE HAS THEM (`git show <sha>:path`, compiled into a module that has no file and
+    no .pyc; ADR-290 does the same), never the PR tree's copy: one PR could otherwise weaken the helper and the baseline together. A base without the file, or
+    one that does not compile, is exit 2 internal."""
+    hint = "a PR that moves that helper must land the move first"
+    p = run(["git", "show", "%s:%s" % (sha, RATCHET_LINT)], cwd=root, env=env, check=False, timeout=GIT_TIMEOUT, binary=True)
+    if p.returncode != 0:
+        raise RatchetInfra("internal", "the merge base has no %s: %s" % (RATCHET_LINT, hint))
+    mod = types.ModuleType("lint_ratchet")
+    mod.__file__ = os.path.join(root, RATCHET_LINT)
+    try:
+        exec(compile(p.stdout, "<merge-base>/" + RATCHET_LINT, "exec", dont_inherit=True), mod.__dict__)
+    except Exception as e:
+        raise RatchetInfra("internal", "the merge-base copy of %s does not load (%s): %s" % (RATCHET_LINT, type(e).__name__, hint))
+    for name in ("baseline_at", "InfraError"):
+        if getattr(mod, name, None) is None:
+            raise RatchetInfra("internal", "%s has no %s at the merge base: %s" % (RATCHET_LINT, name, hint))
+    return mod
+
+
+def ratchet_base(root, ref, rel):
+    """-> (sha, the baseline text at the base or None when the base has no such file). An unresolvable base is exit 2, never an adoption."""
+    env = dict(os.environ)
+    for k in GIT_LOCATION_VARS:
+        env.pop(k, None)   # the helpers' git calls ignore any inherited git location, like run() does
+    if ref.startswith("-"):
+        raise RatchetInfra("base-unresolved", "--base %s looks like an option, not a ref" % quote_field(ref))
+    p = run(["git", "rev-parse", "--verify", "--end-of-options", ref + "^{commit}"], cwd=root, env=env, check=False, timeout=GIT_TIMEOUT)
+    sha = p.stdout.strip() if p.returncode == 0 else ""
+    if not sha:
+        raise RatchetInfra("base-unresolved", "%s does not resolve to a commit (a root commit or a shallow clone): fetch more history, fetch-depth: 2 is the minimum" % quote_field(ref))
+    mod = ratchet_load(root, sha, env)
+    try:
+        return sha, mod.baseline_at(root, sha, rel, env)
+    except mod.InfraError as e:
+        raise RatchetInfra("base-unresolved", "%s" % quote_field(str(e)))
+
+
+def ratchet_changed(root, sha):
+    """-> (added, touched): the paths the committed diff from the base to HEAD adds, and all it names."""
+    raw = run(["git", "diff", "--name-status", "-z", "--no-renames", sha, "HEAD", "--"], cwd=root, binary=True, timeout=GIT_TIMEOUT).stdout
+    toks = [t.decode("utf-8", errors="replace") for t in raw.split(b"\0") if t]
+    added, touched = set(), set()
+    for status, path in zip(toks[0::2], toks[1::2]):
+        touched.add(path)
+        if status == "A":
+            added.add(path)
+    return added, touched
+
+
+def ratchet_oracle(touched, rel):
+    """The files whose change makes this check's own oracle part of the diff (a non-blocking notice, never a verdict); --baseline may name another file."""
+    return [p for p in dict.fromkeys(RATCHET_ORACLE + (rel,)) if p in touched]
+
+
+def ratchet_read(root, rel):
+    """The baseline text of the checkout, or None when the file is absent. Read through the audit's confined reader: a symlink that leaves the tree, a
+    device or an oversized file is a ReadError (exit 2), never printed."""
+    try:
+        return read_bytes(os.path.join(root, rel), root).decode("utf-8", errors="replace")
+    except ReadError as e:
+        if isinstance(e.__context__, FileNotFoundError):
+            return None
+        raise
+
+
+def baseline_split(text):
+    """-> (lines, final_newline) of a baseline text: the lines are opaque."""
+    if text is None:
+        return [], True
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines, text == "" or text.endswith("\n")
+
+
+def shown(line):
+    """A baseline line for the failure text: as written, unless it holds a control character (other than the TAB column separator) or a character quote_field escapes."""
+    return quote_field(line) if QUOTE_CTL.search(line) or QUOTE_U.search(line) else line
+
+
+def ratchet_new_entry(c, pair, added, touched):
+    """The failure text of one new pair: suite, path, referencing file:line, then the cause (precedence: the change added the file; else it edited the file
+    that names it; else neither), then the line(s) an accept row is keyed on."""
+    s, p = pair
+    refs = c.ref_lines(s, p)
+    q = quote_field
+    entry = ["new-pair\t%s\t%s\t%s" % (q(s), q(p), "%s:%d" % (q(refs[0][2]), refs[0][3]) if refs else "-")]
+    edited = [r[2] for r in refs if r[2] in touched]
+    if p in added:
+        cause = "your change added file %s, which suite %s names" % (q(p), q(s))
+    elif edited:
+        cause = "your change edited %s, which suite %s reads and which names %s" % (q(edited[0]), q(s), q(p))
+    else:
+        cause = ("your change touched neither %s nor %s (main is already red for this pair, or a covering edge was removed): rebase, then declare the "
+                 "edge or add an accept row" % (q(refs[0][2]) if refs else "the suite", q(p)))
+    entry.append("  cause: " + cause)
+    for anchor, ordinal, rel, no, text in refs[:3]:
+        entry.append("  ref\t%s:%d\t%s/%d\t%s" % (q(rel), no, anchor, ordinal, q(text)))
+    return entry
+
+
+def ratchet_marker(code, reason, st):
+    return "%s exit=%d reason=%s live=%d baseline=%d" % (RATCHET_MARKER, code, reason, st["live"], st["baseline"])
+
+
+def ratchet_report(a, lines):
+    """--report FILE: written on every exit path that reaches it (a verdict, an exit-2 stop, --print-baseline). A path that cannot be written costs one stderr
+    line and never the verdict."""
+    if not a.report:
+        return
+    try:
+        with open(a.report, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except OSError as e:
+        print("replay: ratchet: cannot write --report %s: %s" % (quote_field(a.report), e.strerror or e), file=sys.stderr)
+
+
+def ratchet_infra(a, st, reason, message):
+    """Exit 2: one stderr line naming the reason, then the marker (stderr in --print-baseline mode, where stdout is only the baseline)."""
+    line, marker = "replay: ratchet: %s: %s" % (reason, message), ratchet_marker(2, reason, st)
+    print(line, file=sys.stderr)
+    print(marker, file=sys.stderr if a.print_baseline else sys.stdout)
+    ratchet_report(a, [line, marker])
+    return 2
+
+
+def cmd_ratchet(a):
+    """See RATCHET in --help. The four arms below are distinct on purpose and every one maps to exit 2 (never 3 or 4): a failure of the check is not a verdict."""
+    st = {"stage": "root", "live": 0, "baseline": 0}
+    try:
+        return ratchet_run(a, st)
+    except RatchetInfra as e:
+        return ratchet_infra(a, st, e.reason, str(e))
+    except ReadError as e:
+        reason = {"rows": "selector-failed", "accept": "accept-unreadable", "baseline": "baseline-unreadable"}.get(st["stage"], "internal")
+        if isinstance(e, ReadTimeout) and st["stage"] == "rows":
+            reason = "selector-timeout"
+        return ratchet_infra(a, st, reason, quote_field(str(e)))
+    except OSError as e:
+        return ratchet_infra(a, st, "floor-unreadable", quote_field("%s: %s" % (type(e).__name__, e)))
+    except Exception as e:
+        print("replay: internal error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+        return ratchet_infra(a, st, "internal", "an unexpected error stopped the check")
+
+
+def ratchet_run(a, st):
+    root = a.root or repo_root()
+    rel = a.baseline or RATCHET_BASELINE
+    st["stage"] = "accept"
+    accept, accept_err = {}, None
+    default_accept = os.path.join(root, RATCHET_ACCEPT)
+    apath = a.accept or (default_accept if os.path.lexists(default_accept) else "")
+    if apath:
+        try:
+            accept = load_accept(apath, None if a.accept else root)
+        except ValueError as e:
+            accept_err = str(e)
+    st["stage"] = "rows"
+    rows = load_rows(a.list, root)
+    st["stage"] = "census"
+    c = audit_census(root, rows, accept)
+    ratchet_floors(c)
+    pairs = {"%s\t%s" % (quote_field(s), quote_field(p)): (s, p) for s, ps in c.gaps.items() for p in ps}
+    live = sorted(pairs)
+    st["live"] = len(live)
+    st["stage"] = "baseline"
+    head_text = ratchet_read(root, rel)
+    head_lines, final_nl = baseline_split(head_text)
+    st["baseline"] = len(head_lines)
+    st["stage"] = "base"
+    if a.print_baseline:
+        if c.unaudited or c.stale or accept_err:
+            raise RatchetInfra("census-degraded", "an unaudited suite or a stale or malformed accept row makes the live set incomplete: a baseline printed from it would lose live pairs; fix the census first")
+        keep = live if head_text is None else sorted(set(head_lines) & set(live))
+        try:
+            sha = ratchet_base(root, a.base or "HEAD^1", rel)[0]
+            touched = ratchet_changed(root, sha)[1]
+            oracle = ratchet_oracle(touched, rel)
+        except (RatchetInfra, ReadError):
+            oracle = []   # a developer checkout without a base still prints its baseline
+        notice = ["oracle-inputs-changed: " + " ".join(oracle)] if oracle else []
+        for line in notice:
+            print(line, file=sys.stderr)
+        sys.stdout.write("".join(line + "\n" for line in keep))
+        marker = ratchet_marker(0, "pass", st)
+        print(marker, file=sys.stderr)
+        ratchet_report(a, notice + [marker])
+        return 0
+    sha, base_text = ratchet_base(root, a.base or "HEAD^1", rel)
+    added, touched = ratchet_changed(root, sha)
+    oracle = ratchet_oracle(touched, rel)
+    live_set, head_set = set(live), set(head_lines)
+    uniq = list(dict.fromkeys(head_lines))
+    base_set = set(baseline_split(base_text)[0])
+    q = quote_field
+    findings = []   # (reason, [entry, ...], remedy lines); an entry is a list of output lines
+    if c.unaudited:
+        findings.append(("unaudited", [["unaudited\t%s\t%s" % (q(s), why if quoted else q(why))] for s, why, quoted in c.unaudited],
+                         ["remedy: the audit could not read the suite above in full: make its inputs readable or correct its selector row"]))
+    stars = [x for x in c.stale if x[3] in STAR_WHYS]
+    if stars:
+        findings.append(("star-row", [["star-row\t%s\t%s\t%s\t%s" % (q(s), q(p), key, why)] for s, p, key, why in stars],
+                         ["remedy: delete the accept row: a suite with any tracked input cannot be accepted whole"]))
+    stales = [["stale-accept\t%s\t%s\t%s\t%s" % (q(s), q(p), key, why)] for s, p, key, why in c.stale if why not in STAR_WHYS]
+    if accept_err:
+        stales.append(["stale-accept\t-\t-\t-\t%s" % q(accept_err)])
+    if stales:
+        findings.append(("stale-accept", stales, ["remedy: delete the accept row: the tree no longer backs it, or it is malformed"]))
+    new = [line for line in live if line not in head_set]
+    if new and head_text is None and base_text is not None:
+        findings.append(("baseline-deleted", [["baseline-deleted\t%s\t%d pair(s) are still live" % (q(rel), len(new))]],
+                         ["remedy: restore it from main: git checkout origin/main -- %s" % rel]))
+    elif new:
+        findings.append(("new-pair", [ratchet_new_entry(c, pairs[line], added, touched) for line in new], list(RATCHET_REMEDY_NEW)))
+    gone = [line for line in uniq if line not in live_set]
+    if gone:
+        findings.append(("stale-line", [["stale-line\t%s\t%s" % (q(rel), shown(line))] for line in gone], []))
+    seen = Counter(head_lines)
+    dups = [line for line in uniq if seen[line] > 1]
+    if dups:
+        findings.append(("baseline-dup", [["baseline-dup\t%s\t%s" % (q(rel), shown(line))] for line in dups], []))
+    if uniq != sorted(uniq) or not final_nl:
+        findings.append(("baseline-order", [["baseline-order\t%s\tnot in C-locale sorted order with a final newline" % q(rel)]], []))
+    if base_text is not None and head_text is not None:
+        grown = [line for line in uniq if line not in base_set]
+        if grown:
+            findings.append(("grown", [["grown\t%s\t%s" % (q(rel), shown(line))] for line in grown], []))
+    out, rep = [], []
+    for reason, entries, remedy in findings:
+        for entry in entries:
+            rep.extend(entry)
+        for entry in entries[:RATCHET_CAP]:
+            out.extend(entry)
+        if len(entries) > RATCHET_CAP:
+            out.append("more\t%s\t%d" % (reason, len(entries) - RATCHET_CAP))
+        out.extend(remedy)
+        rep.extend(remedy)
+    names = {f[0] for f in findings}
+    if names & {"stale-line", "baseline-dup", "baseline-order", "grown"}:
+        tail = []
+        if "stale-line" in names:
+            tail.append("remedy: confirm the pair is really gone on a clean checkout; if the selector output was partial or this run exited 2, do not prune: rerun")
+        tail.append("remedy: delete the offending line(s) above from %s; if the file is in conflict, restore main's copy with git checkout origin/main -- %s, then run: "
+                    "python3 -I scripts/ci-pr-affected-replay.py ratchet --print-baseline > %s.new && mv %s.new %s" % (rel, rel, rel, rel, rel))
+        out.extend(tail)
+        rep.extend(tail)
+    if oracle:
+        out.append("oracle-inputs-changed: " + " ".join(oracle))
+        rep.append(out[-1])
+    code = 1 if findings else 0
+    out.append(ratchet_marker(code, findings[0][0] if findings else "pass", st))
+    ratchet_report(a, rep + [out[-1]])
+    sys.stdout.write("\n".join(out) + "\n")
+    return code
+
+
 def cmd_audit(a):
     """Index-completeness audit over the selector's own rows: every tracked path a registered suite names
     must be hit by one of that suite's declared/derived edges. Prints one `gap` line per suite with gaps (the first six
@@ -1468,8 +2107,7 @@ def cmd_audit(a):
     root = a.root or repo_root()
     accept = load_accept(a.accept) if a.accept else {}
     c = audit_census(root, load_rows(a.list, root), accept)
-    if c.suites == 0:
-        print("replay audit: the selector printed no AFFECTED_SELECTED rows", file=sys.stderr)
+    if no_suites(c):
         return 2
     for suite, found in c.gaps.items():
         print("gap\t%s\t%d\t%s" % (quote_field(suite), len(found), ",".join(quote_field(p, True) for p in (found if a.all_refs else found[:6]))))
@@ -1484,6 +2122,339 @@ def cmd_audit(a):
     print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d accepted=%d stale=%d refs=%d files_read=%d"
           % (c.suites, c.always_on, c.audited, c.unaudited_labels, len(c.gaps), c.gap_refs, c.accepted, len(c.stale), c.refs, c.files_read))
     return 0 if not c.gaps and not c.unaudited and not c.stale else 1
+
+
+# ---- glob-rate (S4 PR5, #10861): the PR4b row 6 measurement -----------------------------------------------------------------------------
+# READ-ONLY. For each candidate suite it answers two questions the policy asks: how long does the suite take (scripts/suite-durations*.tsv, with
+# the `src` column kept) and in how many of the last N first-parent commits of --base would the suite be selected if the candidate entries
+# were declared next to the suite's existing edges. The model decides selection from the selector's own edge column plus _edge(); the real
+# selector is run once for the edge set (the --list rows file) and on --spot-check K evenly spaced diffs to prove the model agrees with it.
+
+GLOB_MARKER = "SOLEUR_PR_AFFECTED_GLOB_RATE"
+GLOB_MAX_MS = 60000          # row 6 (1): a glob: edge needs a measured duration of at most this ...
+GLOB_ALWAYS_POLICY_MS = 30000   # row 6 (2): the policy bound for an ALWAYS_ON_SUITES entry
+GLOB_ALWAYS_MAX_MS = 10000      # but the fast-tier budget lint (scripts/test-all-fast-tier-budget.test.sh, LOCAL_FAST_CAP_MS, ADR-262) rejects any always-on label above this: a verdict that cannot be installed is `baselined`
+GLOB_TSV_COLUMNS = ("suite", "entries", "duration_ms", "src", "existing_hits", "glob_hits", "total_hits", "incremental_hits", "units",
+                    "runner_changed", "not_evaluable", "empty", "deleted_path_units", "rate_conservative", "rate_excluded",
+                    "ci_seconds_added", "drained_pairs", "tree_files", "tree_missing", "verdict", "reason")
+
+
+class Divergence(Exception):
+    """The model of the selector disagrees with the real selector, or the spot-check could not sample: no verdict is accepted (exit 4)."""
+
+
+_edge = edge_hit   # the SAME function (the audit's one-implementation guard counts the textual call to edge_hit; an alias is not a second implementation)
+
+
+def durations_src(root):
+    """{label: (ms, src)} from both duration tables, read like durations() (the heavy table wins) but KEEPING the third column. src is
+    `measured`, `floor` or whatever the table says; a label without a row is absent. durations() is left as it is (the escape-rate path uses it)."""
+    d = {}
+    for name in ("suite-durations.tsv", "suite-durations-heavy.tsv"):
+        p = os.path.join(root, "scripts", name)
+        if not os.path.exists(p):
+            continue
+        with open(p) as fh:
+            for line in fh:
+                if line.startswith("#") or not line.strip():
+                    continue
+                f = line.rstrip("\n").split("\t")
+                if len(f) >= 2 and f[1].isdigit():
+                    d[f[0]] = (int(f[1]), f[2] if len(f) >= 3 else "")
+    return d
+
+
+def glob_decide(dur, src, hits, units, complete=True):
+    """PR4b row 6, applied exactly (inclusive boundaries) -> (verdict, reason). verdict is `glob`, `always_on` or `baselined`.
+    dur is milliseconds (None with src None when the suite has no duration row). Only a `measured` row is a measurement: a `floor` row is an
+    estimate and a missing row is no figure, so neither can yield anything but `baselined` (CTO row 3). hits/units is the selection rate after
+    the edge, a ratio compared as hits * 4 <= units (25%, no float). `complete` is False when the candidate set cannot be shown to cover the
+    suite's whole scan: a glob is then not expressible and `hits` must be the EXISTING-only count, so only the always_on branch can apply."""
+    if src is None:
+        return "baselined", "duration-missing"
+    if src != "measured":
+        return "baselined", "duration-floor"
+    if dur > GLOB_MAX_MS:
+        return "baselined", "duration-over"
+    if units <= 0:
+        return "baselined", "no-units"
+    if hits * 4 <= units:
+        if complete:
+            return "glob", "within-25-percent"
+        return "baselined", "no-complete-set"
+    if dur <= GLOB_ALWAYS_MAX_MS:
+        return "always_on", "over-25-percent"
+    if dur <= GLOB_ALWAYS_POLICY_MS:
+        return "baselined", "always-on-over-fast-tier-cap"
+    return "baselined", "rate-over-and-duration-over-30s"
+
+
+def glob_read_lines(path, what):
+    try:
+        with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+            text = fh.read()
+    except OSError as e:
+        raise ReadError("cannot read the %s file %s: %s" % (what, path, e.strerror or e))
+    return [ln.rstrip("\r") for ln in text.replace("\r\n", "\n").split("\n")]
+
+
+def glob_candidates(path):
+    """-> ({suite: set(entries)}, set(suites that need a complete tree cover)). Lines are `suite<TAB>entry`; blank lines and `#` comments are
+    skipped, CRLF is accepted and the order of lines is irrelevant. A blank entry lists the suite with no candidate (its existing rate is
+    still reported); the entry `@tree` marks a suite whose scan is every tracked file of the extensions its glob entries name."""
+    cands, tree = {}, set()
+    for line in glob_read_lines(path, "candidates"):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        suite, _, entry = line.partition("\t")
+        suite, entry = suite.strip(), entry.strip()
+        if not suite:
+            raise ValueError("candidates: a line without a suite: %r" % line)
+        s = cands.setdefault(suite, set())
+        if entry == "@tree":
+            tree.add(suite)
+        elif entry:
+            s.add(entry)
+    if not cands:
+        raise ValueError("candidates: %s names no suite" % path)
+    return cands, tree
+
+
+def glob_pairs(path):
+    """-> {suite: sorted [path]} from `suite<TAB>path` lines (the pairs a glob verdict must cover)."""
+    pairs = {}
+    for line in glob_read_lines(path, "pairs"):
+        if not line.strip() or line[0] == "#":
+            continue
+        suite, _, p = line.partition("\t")
+        if not suite or not p:
+            raise ValueError("pairs: a line is not suite<TAB>path: %r" % line)
+        pairs.setdefault(suite, set()).add(p)
+    return {k: sorted(v) for k, v in pairs.items()}
+
+
+def glob_entry_edge(entry, tracked):
+    """The edge the index would mint for one declared entry, or ValueError. A `glob:` entry must hold a `*` and must not be malformed (a
+    malformed one mints an always-match edge, which would inflate the rate: it is probed with a path no well-formed pattern can match);
+    a directory entry ends in `/`, anything else is an exact file. Every entry must match at least one tracked file."""
+    if re.search(r"[\s\x00-\x1f\x7f|]", entry):
+        raise ValueError("candidate %r holds whitespace, a control character or `|`" % entry)
+    if entry.startswith("glob:"):
+        if "*" not in entry:
+            raise ValueError("candidate %r is a glob: entry without a `*`" % entry)
+        pt = "^" + entry
+        if _edge(pt, "\x01\x02"):
+            raise ValueError("candidate %r is malformed or matches every path: it would always hit" % entry)
+    else:
+        pt = "^" + entry
+    if not any(_edge(pt, f) for f in tracked):
+        raise ValueError("candidate %r matches no tracked file" % entry)
+    return pt
+
+
+def glob_selector_rows(lines):
+    """-> {label: (class, [edges])} from the selector's printed rows. Refuses a rows file without rows, without an AFFECTED_SUMMARY that says
+    `fallback=none`, or with an AFFECTED_FALLBACK line (a degraded selector prints no per-suite rows), and a label whose rows differ."""
+    by, summary_ok = {}, False
+    for line in lines:
+        f = line.split("\t")
+        if f[0] == "AFFECTED_FALLBACK":
+            raise ValueError("the rows file records %s: a degraded selector gives no per-suite edges" % quote_field(line.strip()[:200]))
+        if line.startswith("AFFECTED_SUMMARY"):
+            if "fallback=none" not in line:
+                raise ValueError("the rows file's summary does not say fallback=none: %s" % quote_field(line.strip()[:200]))
+            summary_ok = True
+        if f[0] == "AFFECTED_SELECTED" and len(f) >= 5:
+            by.setdefault(f[1], []).append((f[3], tuple(x for x in f[4].split("|") if x)))
+    if not by:
+        raise ValueError("the rows file holds no AFFECTED_SELECTED row")
+    if not summary_ok:
+        raise ValueError("the rows file holds no AFFECTED_SUMMARY line")
+    rows = {}
+    for label, rs in by.items():
+        if len(set(rs)) != 1:
+            raise ValueError("label %s has rows with differing edge sets: refused, not guessed" % quote_field(label))
+        rows[label] = (rs[0][0], list(rs[0][1]))
+    return rows
+
+
+def glob_existing_hit(cls, edges, files):
+    """The real selection bit of a row for a diff: 0 only for an `edge:` row with edges that none of the diff names hit (always_on, group,
+    unclassified and an `edge:` row without edges all select)."""
+    if not (cls.startswith("edge:") and edges):
+        return True
+    return any(_edge(pt, f) for pt in edges for f in files)
+
+
+def glob_tree_cover(entries, edges, tracked):
+    """-> (files, missing): the tracked files carrying an extension a `glob:head/**.ext` entry names, and those no candidate edge hits."""
+    exts = set()
+    for ent in entries:
+        if ent.startswith("glob:"):
+            tail = ent.rsplit("*", 1)[1]
+            if re.match(r"^(\.[A-Za-z0-9]+)+$", tail):
+                exts.add(tail)
+    files = sorted(f for f in tracked if any(f.endswith(x) for x in exts))
+    return len(files), sorted(f for f in files if not any(_edge(pt, f) for pt in edges))
+
+
+def glob_units(root, base, n):
+    """-> (base sha, [(sha, files, kind, deleted)]) for the last n first-parent commits of base. kind: attributable | runner | not_evaluable | empty."""
+    if n <= 0:
+        raise ValueError("--commits must be at least 1")
+    sha = run(["git", "rev-parse", "--verify", base + "^{commit}"], cwd=root, check=False)
+    if sha.returncode != 0:
+        raise ValueError("--base %s is not a commit" % quote_field(base))
+    base_sha = sha.stdout.strip()
+    shas = run(["git", "rev-list", "--first-parent", "-n", str(n), base_sha], cwd=root).stdout.split()
+    if len(shas) != n:
+        raise ValueError("only %d first-parent commits of %s, --commits wants %d" % (len(shas), base, n))
+    tree = set(x for x in run(["git", "ls-tree", "-r", "-z", "--name-only", base_sha], cwd=root).stdout.split("\0") if x)
+    units = []
+    for s in shas:
+        files = commit_files(root, s)
+        ok, _why = evaluable(files)
+        if not files:
+            kind = "empty"
+        elif not ok:
+            kind = "not_evaluable"
+        elif any(t in f for f in files for t in RUNNER_TRIGGERS):
+            kind = "runner"
+        else:
+            kind = "attributable"
+        units.append((s, files, kind, kind == "attributable" and any(f not in tree for f in files)))
+    return base_sha, units
+
+
+def glob_spot_check(root, rows, units, k, suites):
+    """Run the REAL selector on k evenly spaced attributable units and compare every sampled label's bit with the model's. Raises Divergence
+    on a mismatch, a fallback, or a sample that compared nothing, or never compared one of the candidate `suites` (an empty sample must not pass)."""
+    elig = [u for u in units if u[2] == "attributable"]
+    if len(elig) < k:
+        raise Divergence("spot-check wants %d units, only %d attributable units exist" % (k, len(elig)))
+    sample = [elig[(2 * i + 1) * len(elig) // (2 * k)] for i in range(k)]
+    compared, compared_by = 0, set()
+    for sha, files, _kind, _deleted in sample:
+        p = run_selector(root, ["--paths=" + ",".join(files)])
+        if p.returncode != 0:
+            raise ReadError("selector rc=%d on %s" % (p.returncode, sha[:12]))
+        real, fb = {}, None
+        for line in p.stdout.splitlines():
+            f = line.split("\t")
+            if f[0] == "AFFECTED_SELECTED" and len(f) >= 4:
+                real.setdefault(f[1], []).append(f[2])
+            elif line.startswith("AFFECTED_SUMMARY"):
+                m = re.search(r"fallback=(\S+)", line)
+                fb = m.group(1) if m else None
+        if fb != "none":
+            raise Divergence("diff %s: the real selector fell back (%s) where the model saw an evaluable diff" % (sha[:12], fb))
+        for label, (cls, edges) in sorted(rows.items()):
+            if label not in real:
+                continue   # a relevance-declined record prints no row for this diff: nothing to compare
+            want = "1" if glob_existing_hit(cls, edges, files) else "0"
+            if sorted(real[label]) != [want] * len(real[label]):
+                raise Divergence("diff %s: the model says %s for suite %s, the real selector says %s" % (sha[:12], want, quote_field(label), ",".join(sorted(real[label]))))
+            compared += 1
+            compared_by.add(label)
+    unseen = [x for x in sorted(suites) if x not in compared_by]
+    if unseen:
+        raise Divergence("spot-check never compared candidate suite %s on any sampled diff" % quote_field(unseen[0]))
+    return k, compared
+
+
+def cmd_glob_rate(a):
+    """glob-rate: the PR4b row 6 measurement for the whole-tree readers (S4 PR5, #10861). READ-ONLY: it writes only under --out and the selector
+    it may run keeps its own derive cache. Per candidate suite it prints one row of glob-rate.tsv (the stop-line table) and a marker line.
+    REACH, stated: selection is modelled from the selector's own edge column plus the edge matcher, so it covers the edge arm and the always_on/group/
+    unclassified rows; it models no fallback other than runner-changed (a diff naming scripts/test-all.sh or scripts/lib/test-affected-paths.sh by
+    substring), and it evaluates the CURRENT index against OLDER diffs (the replay's standing limit). It uses --paths, which skips the registration-only
+    classifier, so a runner-trigger diff the real gate would bound still counts as runner-changed (conservative). Units that are runner-changed,
+    not evaluable (comma or non-printable byte in a path, list over the limit) or empty count as SELECTED in the conservative reading and are excluded
+    in the other; a unit touching a path absent at --base counts as selected in the conservative reading. The verdict needs both readings to agree.
+    Exit 0 every row decided; 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged or an internal error."""
+    if a.spot_check < 1:
+        raise ValueError("--spot-check must be at least 1: a verdict is not accepted until the model has agreed with the real selector")
+    root = a.root or repo_root()
+    cands, tree_suites = glob_candidates(a.candidates)
+    rows = glob_selector_rows(load_rows(a.list, root))
+    pairs = glob_pairs(a.pairs) if a.pairs else {}
+    tracked = tracked_files(root)
+    durs = durations_src(root)
+    for suite in cands:
+        if suite not in rows:
+            raise ValueError("no selector row for suite %s (a relevance-declined record prints none): refused, not counted as zero hits" % quote_field(suite))
+    base_sha, units = glob_units(root, a.base, a.commits)
+    total_units = len(units)
+    attr = [u for u in units if u[2] == "attributable"]
+    counts = Counter(u[2] for u in units)
+    deleted_units = sum(1 for u in units if u[3])
+    spot_k, spot_cmp = glob_spot_check(root, rows, units, a.spot_check, cands)
+    out_rows, verdicts = [], Counter()
+    for suite in sorted(cands):
+        entries = sorted(cands[suite])
+        edges = [glob_entry_edge(e, tracked) for e in entries]
+        cls, own = rows[suite]
+        complete, tfiles, tmiss = True, "-", "-"
+        if suite in tree_suites:
+            n, miss = glob_tree_cover(entries, edges, tracked)
+            if n == 0:
+                raise ValueError("suite %s: @tree names no `glob:head/**.ext` extension, or no tracked file carries it: the cover cannot be shown" % quote_field(suite))
+            complete, tfiles, tmiss = not miss, str(n), str(len(miss))
+        existing = glob_only = total = 0
+        basis_cons = basis_excl = 0
+        for _sha, files, _kind, deleted in attr:
+            eh = glob_existing_hit(cls, own, files)
+            gh = any(_edge(pt, f) for pt in edges for f in files)
+            th = eh or gh
+            existing += 1 if eh else 0
+            glob_only += 1 if gh else 0
+            total += 1 if th else 0
+            b = th if complete else eh
+            basis_excl += 1 if b else 0
+            basis_cons += 1 if (b or deleted) else 0
+        nonattr = total_units - len(attr)
+        cons_hits = basis_cons + nonattr
+        dur, src = durs.get(suite, (None, None))
+        v_cons = glob_decide(dur, src, cons_hits, total_units, complete)
+        v_excl = glob_decide(dur, src, basis_excl, len(attr), complete)
+        verdict, reason = v_cons if v_cons[0] == v_excl[0] else ("baselined", "readings-disagree")
+        if verdict == "glob" and not edges:
+            verdict, reason = "baselined", "no-candidate-set"
+        if verdict == "glob" and not (pairs.get(suite) or suite in tree_suites):
+            verdict, reason = "baselined", "no-coverage-proof"   # neither a pair list to cover nor an @tree cover: a glob would rest on nothing
+        covered = "-"
+        if verdict == "glob":
+            miss = [p for p in pairs.get(suite, []) if not any(_edge(pt, p) for pt in edges)]
+            if miss:
+                raise ValueError("suite %s: the candidate set leaves %d baselined pair(s) unhit, first %s: refused for a glob verdict" % (suite, len(miss), quote_field(miss[0])))
+            covered = str(len(pairs.get(suite, [])))
+        elif verdict == "always_on":
+            covered = str(len(pairs.get(suite, [])))
+        if verdict == "glob":
+            ci = "%d" % ((dur // 1000) * (total - existing)) if dur is not None else "-"
+        elif verdict == "always_on":
+            ci = "%d" % ((dur // 1000) * (len(attr) - existing))
+        else:
+            ci = "-"
+        verdicts[verdict] += 1
+        out_rows.append((quote_field(suite), str(len(entries)), "-" if dur is None else str(dur), src or "missing", str(existing), str(glob_only), str(total),
+                         str(total - existing), str(total_units), str(counts["runner"]), str(counts["not_evaluable"]), str(counts["empty"]),
+                         str(deleted_units), "%d/%d" % (cons_hits, total_units), "%d/%d" % (basis_excl, len(attr)), ci, covered, tfiles, tmiss,
+                         verdict, reason))
+    table = "\t".join(GLOB_TSV_COLUMNS) + "\n" + "".join("\t".join(r) + "\n" for r in out_rows)
+    marker = ("%s base=%s date=%s units=%d attributable=%d runner_changed=%d not_evaluable=%d empty=%d deleted_path_units=%d suites=%d "
+              "glob=%d always_on=%d baselined=%d spot_check=%d spot_compared=%d"
+              % (GLOB_MARKER, base_sha[:12], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), total_units, len(attr), counts["runner"],
+                 counts["not_evaluable"], counts["empty"], deleted_units, len(out_rows), verdicts["glob"], verdicts["always_on"], verdicts["baselined"],
+                 spot_k, spot_cmp))
+    os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, "glob-rate.tsv"), "w") as fh:
+        fh.write(table)
+    with open(os.path.join(a.out, "glob-rate.marker"), "w") as fh:
+        fh.write(marker + "\n")
+    sys.stdout.write(table)
+    print(marker)
+    return 0
 
 
 def main(argv):
@@ -1530,22 +2501,45 @@ def main(argv):
     u.add_argument("--root", default="", help="the tree to audit (default: the current checkout; use a pinned detached one)")
     u.add_argument("--list", default="", help="read AFFECTED_SELECTED rows from FILE instead of running the selector")
     u.add_argument("--accept", default="", help="TSV of exemptions: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>, or suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason> for a suite with no inputs; "
-                  "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, then sourced libraries in hop order); "
+                  "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, its source closure, then the naming-walk files); "
                   "a missing file exempts nothing; the full format and the stale reasons are in the ACCEPT FILE section of the top-level --help)")
     u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six, and a ref line (file:line, anchor/ordinal, text) per boundary line")
+    r = sub.add_parser("ratchet", help="the audit as a check that is green on a tree the audit fails: live gap pairs must equal the committed shrink-only baseline")
+    r.add_argument("--root", default="", help="the tree to check (default: the current checkout)")
+    r.add_argument("--list", default="", help="read the selector output from FILE instead of running the selector")
+    r.add_argument("--baseline", default="", help="repo-relative baseline path (default scripts/ci-pr-affected-audit.baseline.tsv)")
+    r.add_argument("--accept", default="", help="the accept TSV (default scripts/ci-pr-affected-audit.accept.tsv when it exists)")
+    r.add_argument("--base", default="", help="the ref the growth rule, the baseline-state table, the cause text and the helper copy come from (default HEAD^1; meaningful in CI, where HEAD is a merge commit)")
+    r.add_argument("--print-baseline", action="store_true", dest="print_baseline", help="print the baseline to stdout (every live pair when no baseline exists, else the baseline lines still live) and write nothing; refuses (exit 2) on a degraded census")
+    r.add_argument("--report", default="", help="also write the full, uncapped failure text to FILE (on a verdict, on an exit-2 stop and under --print-baseline; an unwritable path costs one stderr line)")
+    gr = sub.add_parser("glob-rate", formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="exit codes: 0 every row decided (read the verdict column: it does not mean a suite qualified); 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged from the real selector, or an internal error. "
+                               "Rows file: bash scripts/test-all.sh --print-selection --paths=README.md > rows.txt (take it BEFORE any index edit). Base: git rev-parse origin/main (record it).",
+                        help="row 6 measurement: per candidate suite the duration (with its src) and the selection rate over the last N first-parent commits, with a verdict (read-only)")
+    gr.add_argument("--candidates", required=True, help="TSV: suite<TAB>entry (a glob:, dir/ or file entry as spelled in the index arrays; a blank entry lists the suite with no candidate; @tree demands a complete cover of the extensions the glob entries name)")
+    gr.add_argument("--out", required=True, help="directory glob-rate.tsv and glob-rate.marker are written under")
+    gr.add_argument("--root", default="", help="the tree to read (default: the current checkout)")
+    gr.add_argument("--list", default="", help="the saved selector rows (--print-selection --paths=README.md output), the existing edges; without it the selector runs once")
+    gr.add_argument("--pairs", default="", help="TSV: suite<TAB>path, the baselined pairs a glob verdict must cover (a candidate set that leaves one unhit is refused)")
+    gr.add_argument("--commits", type=int, default=200, help="how many first-parent commits of --base form the units (default 200)")
+    gr.add_argument("--base", default="origin/main", help="the commit or ref whose first-parent history is replayed; pass the recorded SHA, not a moving ref")
+    gr.add_argument("--spot-check", type=int, default=3, dest="spot_check", help="run the REAL selector on K (at least 1, default 3) evenly spaced diffs and require the model to agree on every candidate suite (exit 4 on a divergence or an empty sample)")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)
         return 2
     try:
         return {"collect": cmd_collect, "ejections": cmd_ejections, "aggregate": cmd_aggregate, "verdict": cmd_verdict,
-                "cp-upper": cmd_cp, "audit": cmd_audit}[a.cmd](a)
+                "cp-upper": cmd_cp, "audit": cmd_audit, "ratchet": cmd_ratchet, "glob-rate": cmd_glob_rate}[a.cmd](a)
     except ReadError as e:
         print("replay: %s" % e, file=sys.stderr)
         return 3
     except ValueError as e:
         print("replay: %s" % e, file=sys.stderr)
         return 2
+    except Divergence as e:
+        print("replay: model diverges from the real selector: %s" % e, file=sys.stderr)
+        return 4
     except Exception as e:  # an internal error must not exit 1, which is the audit's "gaps found"
         print("replay: internal error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
         return 4

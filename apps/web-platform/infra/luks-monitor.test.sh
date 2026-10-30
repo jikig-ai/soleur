@@ -599,6 +599,34 @@ else
   no "escrow passphrase never reached cryptsetup — stdin undrained (captured: $(cat "$CALLS.escrow-stdin" 2>/dev/null || echo '<absent>'))"
 fi
 
+# (t1c)(t1d)(t1e) #9325 — the escrow FAILURE split. cryptsetup rejecting every keyslot is a real
+# escrow_passphrase_mismatch (the at-rest p0 class). cryptsetup that never reached a keyslot
+# verdict — an early device/tooling error, or the feed's producer taking SIGPIPE — must NOT
+# file that verdict: it reports escrow_check_failed, which the workflow classes as
+# probe-integrity (unavailable — still alarms, never the legal claim). The stub emits the
+# knobbed stderr the SUT discriminates on.
+mon_prepare "$PROBE"
+mon_run MON_ESCROW_RC=1 MON_ESCROW_ERR='No key available with this passphrase.'
+if [ "$MON_RC" -eq 1 ] && monOut 'escrow_passphrase_mismatch'; then
+  ok "a keyslot rejection reports escrow_passphrase_mismatch (rc=1, the at-rest arm still reachable)"
+else
+  no "a keyslot rejection did not report escrow_passphrase_mismatch (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+mon_prepare "$PROBE"
+mon_run MON_ESCROW_RC=1 MON_ESCROW_ERR='Device /dev/x failed: early cryptsetup error'
+if [ "$MON_RC" -eq 1 ] && monOut 'escrow_check_failed' && monOut 'early cryptsetup error'; then
+  ok "an early cryptsetup error reports escrow_check_failed + logs the real cause (probe-integrity, never the at-rest verdict)"
+else
+  no "an early cryptsetup error was misreported (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+mon_prepare "$PROBE"
+mon_run MON_ESCROW_RC=141
+if [ "$MON_RC" -eq 1 ] && monOut 'escrow_check_failed' && ! monOut 'escrow_passphrase_mismatch'; then
+  ok "a 141 with empty stderr (the producer-SIGPIPE shape) reports escrow_check_failed, never mismatch"
+else
+  no "the SIGPIPE-shaped failure was misreported (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
 # (t2) ABSENT URL => fatal. The exact state #6808 existed to remove.
 mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
 mon_run LUKS_MONITOR_ASSERT_READYZ=1 MON_HB_URL=
@@ -867,8 +895,10 @@ kc_run() {
   mon_run "LUKS_MONITOR_BOOT_ENV_FILE=$MON_DIR/bootenv" "$@"
 }
 # kc_key_cfg: the --config the recorded WORKSPACES_LUKS_KEY read used (empty = no read happened).
-kc_key_cfg() { grep -E '^doppler secrets get WORKSPACES_LUKS_KEY ' "$CALLS" | sed -n 's/.*--config //p' | head -1; }
-kc_hb_cfg()  { grep -E '^doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL ' "$CALLS" | sed -n 's/.*--config //p' | head -1; }
+# `grep -m1`, not `| head -1`: head is an early-exit consumer, and a still-writing producer
+# takes SIGPIPE under pipefail (#9325 class). -m1 makes grep itself stop at the first match.
+kc_key_cfg() { grep -m1 -E '^doppler secrets get WORKSPACES_LUKS_KEY ' "$CALLS" | sed -n 's/.*--config //p'; }
+kc_hb_cfg()  { grep -m1 -E '^doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL ' "$CALLS" | sed -n 's/.*--config //p'; }
 BOOT_DEV='WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_123\n'
 
 kc_check() { # <label> <probe> <content> <want key cfg> <want hb cfg>|- [env...]
@@ -965,7 +995,7 @@ kc_mut "HARMLESS: a trailing comment on the fallback line" 'KEY_CONFIG=prd_works
 # Anti-vacuity: an EXACT assertion count (deleting a block of cases, e.g. (t5)/(t6), must not leave the suite
 # green; adding one means moving the number). A host with a readable /etc/default/luks-monitor reports the
 # three emit-skip cases as one skip line, hence the adjustment.
-EXPECTED_PASSES=155
+EXPECTED_PASSES=158
 [ -r /etc/default/luks-monitor ] && EXPECTED_PASSES=$((EXPECTED_PASSES - 2))
 if [ "$passes" -ne "$EXPECTED_PASSES" ]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of cases was deleted or added without moving the number"; fi
 
@@ -976,7 +1006,7 @@ echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="
 # counting. It reports through printf + exit 1, never through no() (ADR-193), and its bound is the
 # literal on the line directly above the `if`, so guard-vacuity-floor can mutation-test it. Raise it
 # when adding rows.
-LUKS_MONITOR_MIN_PASS=89
+LUKS_MONITOR_MIN_PASS=92
 if [ "$passes" -lt "$LUKS_MONITOR_MIN_PASS" ]; then
   printf '[FATAL] luks-monitor.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$passes" "$LUKS_MONITOR_MIN_PASS" >&2
   exit 1

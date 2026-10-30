@@ -305,7 +305,8 @@ export async function POST(request: Request) {
         inngest.send({
           id: `resend-${svixId}`,
           name: EMAIL_INBOUND_RECEIVED_EVENT,
-          v: "1",
+          // `v` dropped with inngest@4 (SendEventPayload omits it and
+          // email-on-received never reads `event.v` — no schema gate).
           data: eventData,
         }),
       { feature: FEATURE, deliveryId: svixId },

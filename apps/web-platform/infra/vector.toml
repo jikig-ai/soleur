@@ -44,7 +44,7 @@
 
 data_dir = "/var/lib/vector"
 
-# ---------------- Source 1: inngest-server journald (unit OR PRIORITY 3-4 arm) ----------------
+# ---------------- Source 1: inngest-server + TLS terminator journald (units OR PRIORITY 3-4 arm) ----------------
 # ADMISSION SEMANTICS (#9963 — verified against Vector 0.43.1 src/sources/journald.rs,
 # the version pinned at vector.tf:13): the journald source spawns
 # `journalctl --follow --all --show-cursor --output=json` with NO match arguments —
@@ -56,7 +56,7 @@ data_dir = "/var/lib/vector"
 # (excludes win over includes — `exclude_units` merges into
 # exclude_matches._SYSTEMD_UNIT). So this source admits a row iff:
 #
-#   ( _SYSTEMD_UNIT = inngest-server.service (ANY priority)
+#   ( _SYSTEMD_UNIT ∈ {inngest-server.service, inngest-trace-retention.service, soleur-inngest-tls.service} (ANY priority)
 #       OR
 #     PRIORITY ∈ {3,4} (ANY unit, ANY SYSLOG_IDENTIFIER) )
 #   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
@@ -86,6 +86,19 @@ data_dir = "/var/lib/vector"
 #     the path that shipped the #9939 storm (~1,240 rows/day) and the path #9963 pins;
 #     SOLEUR_SYSTEMD_JOURNALD_CONTROL (`/usr/bin/logger -t systemd -p err` in
 #     inngest-server-probe.sh, emitted by inngest-bootstrap.sh) is its positive control.
+#   - The TLS terminator (soleur-inngest-tls.service: stunnel4 in front of the :8288
+#     listener, and its ExecStartPre fetch script) rides the SAME unit arm, so its
+#     journal reaches Better Stack through this source only on a host whose image
+#     carries this file (the Inngest host, after a replace; web-1 and web-2 receive
+#     the file hot but run no such unit). Its lines carry no priority prefix and take
+#     systemd's default level, so a PRIORITY test cannot split its refusal lines from
+#     its healthy lines; inngest_terminator_filter below does that split by message
+#     text, fail-open. Unit membership is a PAIR: the unit joins this list AND
+#     Source 2's exclude_units (vector-admission.test.sh pins both lists equal), or its
+#     CRIT records would ship through both sources.
+#   - inngest-trace-retention.service is the third member of that pair of lists. Its
+#     daily stdout (priority info) ships on this unit arm. The unit sets no
+#     SyslogIdentifier. `systemd` stays out of every SYSLOG_IDENTIFIER array.
 #   - The `systemd` identifier must NEVER join ANY SYSLOG_IDENTIFIER match array in
 #     EITHER direction: an INCLUDE entry (Source 4's allowlist) would also ship
 #     every PID-1 PRIORITY-6 Started/Stopped line — the quota trap the Source 4
@@ -96,7 +109,7 @@ data_dir = "/var/lib/vector"
 # 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
 [sources.inngest_journald]
 type = "journald"
-include_units = ["inngest-server.service"]
+include_units = ["inngest-server.service", "inngest-trace-retention.service", "soleur-inngest-tls.service"]
 include_matches.PRIORITY = ["3", "4"]
 # #6551 partition mirrors: BOTH exclude sets keep this source's {3,4} arm disjoint
 # from the owners of the overlapping classes. SYSLOG_IDENTIFIER below must equal
@@ -126,7 +139,6 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "inngest-registry-probe",
   "inngest-doublefire-probe",
   "inngest-luks-stage",
-  "inngest-luks-cutover",
   "inngest-boot-phone-home",
   "inngest-bs-token-restage",
   "inngest-config-refresh",
@@ -136,6 +148,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  "web-bash-synthetic",
   "inngest-consumer-probe",
   "inngest-redis",
   "inngest-nftables",
@@ -152,7 +165,7 @@ batch_size = 16
 # Same client-side evaluator as Source 1 (#9963): the journald source streams the
 # whole journal and filter_matches admits a record iff
 #   PRIORITY ∈ {0,1,2}
-#   AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service}
+#   AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service, inngest-trace-retention.service, soleur-inngest-tls.service}
 #   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
 # (includes are OR'd over record fields; excludes then drop on any match —
 # excludes win over includes).
@@ -172,7 +185,7 @@ batch_size = 16
 # header). vector-admission.test.sh asserts the tag-set mirror verbatim.
 [sources.system_journald]
 type = "journald"
-exclude_units = ["inngest-server.service"]
+exclude_units = ["inngest-server.service", "inngest-trace-retention.service", "soleur-inngest-tls.service"]
 include_matches.PRIORITY = ["0", "1", "2"]
 # #6551 partition mirror — must equal Source 4's
 # include_matches.SYSLOG_IDENTIFIER EXACTLY (asserted tokenized by
@@ -194,7 +207,6 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "inngest-registry-probe",
   "inngest-doublefire-probe",
   "inngest-luks-stage",
-  "inngest-luks-cutover",
   "inngest-boot-phone-home",
   "inngest-bs-token-restage",
   "inngest-config-refresh",
@@ -204,6 +216,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  "web-bash-synthetic",
   "inngest-consumer-probe",
   "inngest-redis",
   "inngest-nftables",
@@ -249,6 +262,54 @@ include_matches.CONTAINER_NAME = ["soleur-web-platform"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
+# --------------- Compaction: multi-line app container logs (#7577) ----------------
+# The web-platform container pretty-prints object literals (Inngest's ctx.logger
+# renders warn(obj,msg) via util.inspect — one journald row per line), so ONE
+# logical event bills as N ingest rows. The container is ~101k of ~135k rows/day
+# (~75%, 2026-08-14 ingest post-mortem); the multi-line subset is the
+# compaction-eligible share. This reduce runs BEFORE the WARN+ filter below so
+# reassembled blobs are level-filtered like every other row — after the filter,
+# the whole multi-line class would be exempt from the level cut (fragments all
+# fail parse_json → kept).
+#
+# Reduce is a transaction model, not a shape match: once a group is open for a
+# group_by key, EVERY same-key event merges into it until an end fires — a
+# single-line pino row emitted mid-dump is absorbed into the blob and then
+# fails parse_json at pii_scrub_drop_userdata, so it is scrubbed only by
+# pii_scrub_string's backstop (extended below to cover the `"key": "v"` /
+# `key: 'v'` forms absorbed rows carry).
+#
+# Boundary (ends_when-only — Vector 0.43.x rejects starts_when+ends_when on
+# the same reduce): any line ENDING in `}` terminates the group. A complete
+# single-line pino JSON row (`{"level":50,…}`) therefore self-closes and
+# passes through unjoined; a column-0 `}`-led dump closer ends the blob (the
+# closer may carry trailing text, e.g. "} sweep starting"; indented `},`
+# nested-object closers do NOT close the group — column-0 anchoring keeps
+# nested objects joined). Mid-dump lines and stray non-JSON lines (crash
+# stacks) merge until a `}`-ending line or a bound fires. group_by pins the
+# join to one group KEY — CONTAINER_NAME alone (the journald-config guard
+# keeps SYSLOG_IDENTIFIER literal to include/exclude_matches lines, and the
+# source already restricts to the one container, so the key is a singleton);
+# all of the container's emitters (stdout pino, stderr inspect, child
+# processes) share it — it is not a per-emitter bound.
+#
+# Bounds: expire_after_ms is an IDLE flush (resets per event — a partial group
+# ships once its key goes quiet for 5 s); end_every_period_ms is the real bound
+# (an unclosed group on a busy emitter flushes every 30 s regardless);
+# max_events caps blob width (memory + the swallowed-row radius). A Vector
+# restart loses open groups.
+[transforms.app_container_compaction]
+type = "reduce"
+inputs = ["app_container_journald"]
+group_by = ["CONTAINER_NAME"]
+expire_after_ms = 5000
+end_every_period_ms = 30000
+max_events = 200
+ends_when = '''
+match(string(.message) ?? "", r'^\}') || match(string(.message) ?? "", r'\}\s*$')
+'''
+merge_strategies.message = "concat_newline"
+
 # ---------------- Filter: app container WARN+ (pino level >= 40) ----------------
 # Quota control (#4773 Vendor-tier reality check): the app container's stdout is
 # higher-volume than the supervisor journald (cron INFO output + scattered
@@ -263,7 +324,7 @@ batch_size = 16
 # Non-JSON lines (container crash / uncaught-exception stack on fd 2) are kept.
 [transforms.app_container_warn_filter]
 type = "filter"
-inputs = ["app_container_journald"]
+inputs = ["app_container_compaction"]
 condition = '''
 parsed, parse_err = parse_json(.message)
 if parse_err != null {
@@ -399,11 +460,6 @@ include_matches.SYSLOG_IDENTIFIER = [
   # two entry points to one question ("is /mnt/data on the mapper?") and splitting the tag would
   # split the query an operator has to run.
   "inngest-luks-stage",
-  # #6894: the on-host LUKS cutover FSM (inngest-luks-cutover.service). Its own tag, not
-  # inngest-luks-stage: the stage answers "is /mnt/data on the mapper at boot?", this one answers
-  # "where is the cutover?" — and it is the ONLY off-box read of a copy-and-swap on a host with no
-  # inbound channel. journald-config.test.sh asserts this entry equals the unit's SyslogIdentifier.
-  "inngest-luks-cutover",
   # #7228: the boot-trace emitter reporting its OWN death. inngest-boot-phone-home.sh
   # (cloud-init-inngest.yml) is the single delivery path for all eight
   # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
@@ -473,6 +529,7 @@ include_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  "web-bash-synthetic",
   # (#7228) The inngest consumer-perspective probe on the web host. Same argument as the three
   # above: the heartbeat only says "suppressed", this channel says WHY — UNREACHABLE (no listener
   # at 10.0.1.40:8288) vs EMPTY REGISTRY (serving, owns nothing) vs WEDGED (GraphQL error
@@ -554,21 +611,74 @@ batch_size = 16
 # own buffer dir — /mnt/data is covered by NO other monitor; / is also
 # covered by disk-monitor.sh). Predicted ~69 rows/scrape = ~19.9k rows/day
 # (20% under threshold). Snap loop devices (loop*) and device-mapper (dm-*)
-# stay excluded from the disk + filesystem collectors — pseudo-device series
+# stay excluded from the filesystem collector — pseudo-device series
 # with no diagnostic signal.
 # Decision record: knowledge-base/operations/expenses.md (Better Stack row);
 # verdict tracker: #5110; strategic re-decision tracked in #4296.
+# 2026-10-29 (#7577): scraped down to ["memory","filesystem"] at 900s —
+# the alert-ingest map (specs/feat-observability-vendor-eval/alert-ingest-map.md)
+# proves none of the 19 logtail_exploration_alert rules consume host_metrics;
+# filesystem capacity is the dashboard-convenience floor and is also covered by
+# disk-monitor.sh + the Better Stack journald pagers. cpu/disk/load dropped.
 [sources.host_metrics]
 type = "host_metrics"
-scrape_interval_secs = 300
-collectors = ["cpu", "memory", "disk", "filesystem", "load"]
-
-[sources.host_metrics.disk]
-devices.excludes = ["loop*", "dm-*"]
+scrape_interval_secs = 900
+collectors = ["memory", "filesystem"]
 
 [sources.host_metrics.filesystem]
 devices.excludes = ["loop*", "dm-*"]
 mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]
+
+# ---------------- inngest_terminator_filter: trim the TLS terminator's healthy-request rows ----------------
+# Source 1's unit arm admits soleur-inngest-tls.service (stunnel4, the TLS terminator in front of the
+# Inngest listener) at EVERY priority, so without a filter all four lines of every healthy request ship.
+# stunnel's lines carry no priority prefix and take systemd's default level (PRIORITY 6 expected: derived
+# from that default, not measured on the host), so PRIORITY cannot split the healthy lines from the
+# refusal lines; the split is by message text.
+#
+# This is a DROP-LIST that FAILS OPEN. It drops exactly three healthy-request line shapes of that one unit
+# (measured on stunnel 5.72 only: "accepted connection from", "s_connect: connected 127.0.0.1:8288" and
+# "connected remote server from"), each matched as a WHOLE line (an optional timestamp, the LOG5[pid] prefix,
+# the text and nothing after it), so a LOG3 or LOG4 variant or a line carrying a failure suffix is kept. It
+# passes every other row: any other unit, a row with no message or a message that is not a string, every LOG0
+# to LOG4 line, every Connection reset and Connection closed line, startup lines and any wording this list
+# does not know. A wording that differs on the host's stunnel build therefore over-ships (visible in the row
+# count) and never silences. This is the filter's own property; a row with no usable message is scrubbed to
+# an empty string by pii_scrub_string rather than shipped raw. Every inngest-server.service row passes
+# unchanged: the 524 alert and the cutover audibility checks read them.
+#
+# The condition is INFALLIBLE on purpose. A Vector filter treats a runtime error in its condition as false
+# and DROPS the event, and `vector validate --no-environment` does not compile VRL, so every field read
+# falls back with a coalescing default and only `vector test` (scripts/vector-terminator-filter.test.sh,
+# blocking in validate-vector-config.yml) proves the condition. A doubled dollar sign in a pattern is
+# Vector's escape for one literal dollar sign (the end-of-line anchor).
+#
+# Row budget, a HEALTHY-operation bound measured per unit after the host is replaced: count the Connection
+# closed rows with both byte counts above 0 plus the startup rows, nothing else. At most 400 a day before any
+# link flip (the host's own 5-minute health probe is expected to emit one such row per probe, about 288 a day,
+# measured against a canned-200 upstream, so the first 24-hour read settles it) and at most
+# 8,000 a day after one. 8,000 is the alarm; a second drop is asked for only at 10,000 a day sustained after
+# the flip. The lever is a SECOND drop (those rows with both byte counts above 0, never the 0-byte shapes); it
+# needs a new bootstrap image and another host replace, so the 24-hour read decides it before the flip is
+# asked for. Refusal rows (LOG3, Connection reset, the 0-byte shapes) are outage evidence: they are never
+# dropped or throttled, so an outage or a restart loop (the unit restarts on failure with no start limit) can
+# exceed the budget without the filter being wrong. More than 7 startup rows (the LOG5 startup lines counted on
+# stunnel 5.7x; the host's build is not measured) for one boot means the unit restarted: read nrestarts in
+# tls-health before touching the filter. A SyslogIdentifier added to the unit
+# would route its rows through Source 4, past this filter; the row count is the detector. The unit's debug
+# level stays untouched: a higher level is the one way this journal could start carrying more than peer
+# addresses, byte counts and error strings.
+[transforms.inngest_terminator_filter]
+type = "filter"
+inputs = ["inngest_journald"]
+condition = '''
+unit = string(._SYSTEMD_UNIT) ?? ""
+msg = string(.message) ?? ""
+healthy = match(msg, r'^(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d )?LOG5\[[^\]]+\]: Service \[inngest\] accepted connection from [0-9a-f.:]+$$') ||
+  match(msg, r'^(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d )?LOG5\[[^\]]+\]: s_connect: connected 127\.0\.0\.1:8288$$') ||
+  match(msg, r'^(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d )?LOG5\[[^\]]+\]: Service \[inngest\] connected remote server from [0-9a-f.:]+$$')
+!(unit == "soleur-inngest-tls.service" && healthy)
+'''
 
 # ---------------- Transform 1/3: drop user-content keys (Art-9) ----------------
 # Pino consumers may carry user-supplied content via `{body, content, message,
@@ -584,7 +694,7 @@ type = "remap"
 # app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
 # the app container's pino lines traverse the full 3-stage redaction (Art-9 key
 # drop → userId HMAC → string backstop) like every other source.
-inputs = ["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
+inputs = ["inngest_terminator_filter", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)
@@ -685,12 +795,22 @@ tag = string!(.pii_scrub_applied)
 if contains(tag, "structured") {
   .pii_scrub_applied = tag + "+string_skipped_already_parsed"
 } else {
-  msg = string!(.message)
+  # A message that is not a string (or absent) is coerced, or becomes "" when it cannot be: string! would abort
+  # and Vector would then ship the event UNSCRUBBED, which is the one direction this stage must not fail.
+  msg = to_string(.message) ?? ""
   # Length-bound BEFORE regex (per 2026-04-17-pii-regex-scrubber-three-invariants.md Invariant 1)
   if length(msg) > 10000 {
     msg = slice!(msg, 0, 10000)
   }
   msg = replace(msg, r'(?i)\b(userid|user_id)=[\w-]+', "$${1}=[redacted]")
+  # Merged-blob coverage (#7577): app_container_compaction can glue a previously
+  # parseable row into a non-JSON blob, skipping both structured stages and
+  # landing here — so this branch must cover the SAME Art-9 key set stage 1
+  # drops and the userId + credential keys stage 2 rewrites, in their textual
+  # forms (`"key": "v"`, `key: 'v'`, `key: v`). Key-anchored (our own schema
+  # keys), value-shaped to JSON quotes, inspect quotes, or bare tokens.
+  msg = replace(msg, r'(?i)([\x22\x27]?\b(body|content|message|userMessage|prompt|chat_message|userInput|user_input)[\x22\x27]?\s*:\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|\[[^\]]*\]|\{[^\}]*\}|[^\s,}\]]+)', "$${1}[redacted]")
+  msg = replace(msg, r'(?i)([\x22\x27]?\b(user_?id|api_?key|apiKey|token|password|secret|passwd|credentials?)[\x22\x27]?\s*[:=]\s*)(\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,}\]]+)', "$${1}[redacted]")
   # OAuth query-param redaction (PR #4293 review F2): the /api/auth/callback/...
   # path carve-out preserves the discriminator but query params can carry
   # short-lived OAuth tokens (code, state, access_token, id_token, refresh_token).
@@ -714,7 +834,20 @@ if contains(tag, "structured") {
   # a `://` ban would either mangle those or get muted. Scheme-agnostic so redis://, amqp://
   # and https:// DSNs are covered by the same rule.
   msg = replace(msg, r'([a-z][a-z0-9+.-]*://)[^:/@\s]+:[^@/\s]+@', "$${1}[redacted]@")
+  # Doppler token shape: dp. + a two-to-five letter kind + a dot + a long body (a service token also
+  # carries its config name). The TLS terminator unit's ExecStartPre sources the host's Doppler env
+  # file without redirecting stderr, so a malformed line in that file would echo the offending text,
+  # and that file holds the token. Value-shaped like the rules above; it costs no user_data bytes.
+  # Anchored on a non-alphanumeric (an underscore, a stripped character or a start counts) rather than on a
+  # word boundary. It runs TWICE around the control-character strip. The first pass sees the raw text: its
+  # body class also admits the stripped characters, so a token split anywhere in its body, or preceded by a
+  # newline, tab or carriage return, is redacted whole (a body that ends at a newline also swallows the next
+  # word, which over-redacts and never leaks). The second pass sees the stripped text and catches a split
+  # inside the dp. prefix itself. Either pass alone leaks the other case. (The older rules above run before
+  # the strip only, so a value split by a stripped character can evade them: pre-existing.)
+  msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.\-\x00-\x1f\x7f\u{2028}\u{2029}]{20,}', "$${1}dp.[redacted]")
   msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
+  msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "$${1}dp.[redacted]")
   .message = msg
   .pii_scrub_applied = tag + "+string"
 }

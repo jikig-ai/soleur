@@ -17,6 +17,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$SCRIPT_DIR/../../.."
 source "$SCRIPT_DIR/test-helpers.sh"
 
 # The detect_infra_dirs() function under test is byte-identical to the shell
@@ -95,7 +96,6 @@ echo ""
 # --- TS8: real-commit baseline (pathspec→regex equivalence per learning 2026-05-09) ---
 # Skip gracefully on shallow clones (commit absent); TS1-TS7 cover the shape matrix.
 echo "TS8: real-commit baseline against 7e6f6726 (uptime-alerting motivating commit)"
-REPO_ROOT="$SCRIPT_DIR/../../.."
 if git -C "$REPO_ROOT" rev-parse --verify --quiet '7e6f6726^{commit}' >/dev/null; then
   EXPECTED='["apps/web-platform/infra"]'
   ACTUAL=$(git -C "$REPO_ROOT" diff --name-only 7e6f6726^..7e6f6726 | detect_infra_dirs)
@@ -104,6 +104,130 @@ else
   echo "  SKIP: commit 7e6f6726 not present (shallow clone) — TS1-TS7 cover the shape matrix"
   PASS=$((PASS + 1))
 fi
+echo ""
+
+# --- TS9-TS14: plan_directories — the .pr-plan-skip exclusion (#10715) ---
+# The `plan` job runs under the Tier-A bounded-substitute credential set
+# (ADR-241); a root whose Terraform reads a data source outside that set's
+# scope can never plan green and only reds every PR that touches it. The
+# detect-changes `dirs` step derives `plan_directories` from `directories` by
+# dropping every root carrying a `.pr-plan-skip` sentinel. `directories` is
+# unchanged — `validate` still covers sentinel roots offline.
+#
+# detect_plan_dirs() mirrors the keep/drop decision of that derivation:
+# stdin is the directories JSON array, $1 is the tree the sentinel paths
+# resolve against (the checkout root in CI, a fixture root here). The CI copy
+# additionally emits a ::warning:: per exclusion.
+detect_plan_dirs() {
+  local root="$1"
+  jq -r '.[]' \
+    | while IFS= read -r d; do
+        { [ -f "${root}/${d}/.pr-plan-skip" ] && [ -s "${root}/${d}/.pr-plan-skip" ]; } || printf '%s\n' "$d"
+      done \
+    | jq -R -s -c 'split("\n") | map(select(. != ""))'
+}
+
+FIX_PLAN="$(mktemp -d -t soleur-run.$$.XXXXXXXX)"
+assert_fixture_dir "$FIX_PLAN"
+trap 'rm -rf "$FIX_PLAN"; declare -F _soleur_sb_cleanup >/dev/null && _soleur_sb_cleanup' EXIT
+mkdir -p "$FIX_PLAN/apps/cla-evidence/infra" "$FIX_PLAN/apps/fake-root/infra"
+# Sentinels must be non-empty: the derivation requires `-s`, an empty file does
+# not exclude (the sentinel's content IS its justification).
+echo "fixture sentinel" > "$FIX_PLAN/apps/cla-evidence/infra/.pr-plan-skip"
+echo "fixture sentinel" > "$FIX_PLAN/apps/fake-root/infra/.pr-plan-skip"
+
+echo "TS9: two sentinel roots filtered, sentinel-free root survives (both arms in one run)"
+OUT=$(printf '%s' '["apps/cla-evidence/infra","apps/fake-root/infra","apps/web-platform/infra"]' | detect_plan_dirs "$FIX_PLAN")
+assert_eq '["apps/web-platform/infra"]' "$OUT" "sentinel dirs dropped, free dir kept"
+echo ""
+
+echo "TS10: sentinel-free input → plan_directories == directories (must-PASS)"
+OUT=$(printf '%s' '["apps/web-platform/infra","infra/github"]' | detect_plan_dirs "$FIX_PLAN")
+assert_eq '["apps/web-platform/infra","infra/github"]' "$OUT" "no sentinels → identity filter"
+echo ""
+
+echo "TS11: sentinel-only input → empty plan matrix []"
+OUT=$(printf '%s' '["apps/cla-evidence/infra"]' | detect_plan_dirs "$FIX_PLAN")
+assert_eq '[]' "$OUT" "sentinel-only → []"
+echo ""
+
+echo "TS12: directories is NOT filtered — validate keeps sentinel roots"
+OUT=$(printf '%s\n' "apps/cla-evidence/infra/main.tf" | detect_infra_dirs)
+assert_eq '["apps/cla-evidence/infra"]' "$OUT" "diff on sentinel root → still in directories"
+echo ""
+
+echo "TS13: committed sentinel exists and is non-empty (self-justifying)"
+if [ -s "$REPO_ROOT/apps/cla-evidence/infra/.pr-plan-skip" ]; then
+  echo "  PASS: apps/cla-evidence/infra/.pr-plan-skip exists and is non-empty"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: apps/cla-evidence/infra/.pr-plan-skip missing or empty"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
+echo "TS13b: sentinel census — the on-disk set is exactly the reviewed grant"
+# A sentinel suppresses a plan leg for whoever carries it, so a NEW grant is a
+# deliberate test-touching act: this row fails until the finder output below is
+# extended to name the new root.
+SENTINEL_SET=$(find "$REPO_ROOT/apps" "$REPO_ROOT/infra" -name .pr-plan-skip 2>/dev/null \
+  | sed "s|^$REPO_ROOT/||" | sort)
+assert_eq "apps/cla-evidence/infra/.pr-plan-skip" "$SENTINEL_SET" "sentinel census == reviewed grant"
+echo ""
+
+echo "TS14: plan job consumes plan_directories, never outputs.directories (consumer pinning)"
+PLAN_BLOCK=$(awk '/^  plan:$/{f=1;next} f&&/^  [a-zA-Z0-9_-]+:$/{exit} f{print}' \
+  "$REPO_ROOT/.github/workflows/infra-validation.yml")
+assert_contains "$PLAN_BLOCK" 'fromJSON(needs.detect-changes.outputs.plan_directories)' \
+  "plan matrix reads plan_directories"
+assert_eq "0" "$(printf '%s' "$PLAN_BLOCK" | grep -cF 'outputs.directories' || true)" \
+  "plan job no longer names outputs.directories"
+echo ""
+
+echo "TS15: the run-block derivation itself is pinned (not only its mirror and consumer)"
+# The dirs step must contain the sentinel filter AND emit the output —
+# otherwise detect_plan_dirs is testing a copy nothing runs.
+DIRS_STEP=$(awk '/- name: Find changed infra directories/{f=1} f{print} f&&/GITHUB_OUTPUT/{c++} c>=2{exit}' \
+  "$REPO_ROOT/.github/workflows/infra-validation.yml")
+assert_contains "$DIRS_STEP" '.pr-plan-skip' "dirs step carries the sentinel filter"
+assert_contains "$DIRS_STEP" 'plan_directories=' "dirs step emits plan_directories"
+# Operand pinning: comments alone cannot satisfy these needles — an emission
+# swap (directories ← $PLAN_DIRS) or a dropped predicate stays visible.
+assert_contains "$DIRS_STEP" 'printf '"'"'directories=%s\n'"'"' "$DIRS"' "directories ← \$DIRS"
+assert_contains "$DIRS_STEP" 'printf '"'"'plan_directories=%s\n'"'"' "$PLAN_DIRS"' "plan_directories ← \$PLAN_DIRS"
+assert_contains "$DIRS_STEP" 'is_plan_skipped() { [ -f "$1/.pr-plan-skip" ] && [ -s "$1/.pr-plan-skip" ]; }' "predicate is -f && -s"
+echo ""
+
+echo "TS16: empty input → empty plan matrix [] (parity with TS7)"
+OUT=$(printf '%s' '[]' | detect_plan_dirs "$FIX_PLAN")
+assert_eq '[]' "$OUT" "empty directories → empty plan_directories"
+echo ""
+
+echo "TS17: a directory-shaped .pr-plan-skip does NOT exclude (the -f arm is load-bearing)"
+mkdir -p "$FIX_PLAN/apps/dir-sentinel/infra/.pr-plan-skip"
+OUT=$(printf '%s' '["apps/dir-sentinel/infra"]' | detect_plan_dirs "$FIX_PLAN")
+assert_eq '["apps/dir-sentinel/infra"]' "$OUT" "directory sentinel → root kept"
+echo ""
+
+echo "TS18: the REAL derivation + warning block exits 0 under bash -e when the last root has no sentinel"
+# The step runs under `bash -e`. A warning loop ending in `is_plan_skipped … && echo`
+# returns 1 when its last iteration is a non-sentinel root, and the pipeline
+# status of the `while` then fails the whole step (detect-changes red on every
+# PR whose last changed root carries no sentinel). Run the shipped lines, not a
+# mirror, with the sentinel root FIRST and a sentinel-free root LAST.
+REAL_BLOCK=$(awk '/^          is_plan_skipped\(\) \{/{f=1} f{print} f&&/^          fi$/{exit}' \
+  "$REPO_ROOT/.github/workflows/infra-validation.yml" | sed -E 's/^          //')
+assert_contains "$REAL_BLOCK" 'EVENT_NAME" = "pull_request"' "extracted block includes the pull_request warning loop"
+BLOCK_SCRIPT="$FIX_PLAN/ts18-block.sh"
+printf '%s\n' "$REAL_BLOCK" > "$BLOCK_SCRIPT"
+BLOCK_RC=0
+BLOCK_OUT=$(cd "$FIX_PLAN" && DIRS='["apps/cla-evidence/infra","apps/web-platform/infra"]' EVENT_NAME=pull_request \
+  GITHUB_OUTPUT="$FIX_PLAN/ts18-output" bash -e "$BLOCK_SCRIPT" 2>&1) || BLOCK_RC=$?
+assert_eq "0" "$BLOCK_RC" "block exits 0 under bash -e (last root sentinel-free)"
+assert_contains "$BLOCK_OUT" '::warning::excluding apps/cla-evidence/infra from the terraform-plan matrix' \
+  "the sentinel root still gets its exclusion annotation"
+assert_eq 'plan_directories=["apps/web-platform/infra"]' "$(cat "$FIX_PLAN/ts18-output")" \
+  "plan_directories excludes only the sentinel root"
 echo ""
 
 print_results

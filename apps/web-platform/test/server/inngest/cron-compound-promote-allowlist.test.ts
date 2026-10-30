@@ -811,3 +811,61 @@ describe("T14 (#10552) — the guard is unchanged: the three observed model-auth
     expect(v).toMatchObject({ ok: false, reason: "underivable-apply" });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// #10550 -- the gated create arm is a SECOND, separate chokepoint (`checkCreate`, its own closed verdict union and
+// six-path set; ADR-092 create-only amendment). The edit arm's chokepoint above must stay byte-identical: it never
+// accepts a creation (status `A`), whatever the create arm can now do.
+// ---------------------------------------------------------------------------------------------------------
+describe("Guard 1 (#10550) -- the edit arm never accepts a creation, the create arm's six paths are not edit targets", () => {
+  const NEW_SKILL = "plugins/soleur/skills/brand-new-skill/SKILL.md";
+
+  it("a diff that CREATES a new SKILL.md (the create arm's own output) is refused structural-op by the edit chokepoint", async () => {
+    const diff = patchFor(() => {
+      mkdirSync(join(repoRoot, "plugins/soleur/skills/brand-new-skill"), { recursive: true });
+      writeFileSync(join(repoRoot, NEW_SKILL), "---\nname: brand-new-skill\n---\nbody\n");
+    });
+    expect(diff).toContain("new file mode");
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("structural-op");
+    // and the allowlist regex itself admits the PATH (it is a SKILL.md path): only the structural gate refuses status A
+    expect(TARGET_ALLOW_RE.test(NEW_SKILL)).toBe(true);
+  });
+
+  it("none of the other five create paths is an edit target", () => {
+    const slug = "brand-new-skill";
+    for (const p of [
+      `plugins/soleur/skills/${slug}/PURPOSE.md`,
+      `plugins/soleur/cursor/skills/soleur-${slug}/SKILL.md`,
+      "README.md",
+      "plugins/soleur/README.md",
+      "knowledge-base/project/learnings/promotion-log.md",
+    ]) {
+      expect(TARGET_ALLOW_RE.test(p), p).toBe(false);
+    }
+  });
+
+  it("must-PASS control: the same chokepoint still allows a plain edit of an existing skill (the refusal is about status A, not skills)", async () => {
+    const diff = patchFor(() => writeFileSync(join(repoRoot, SKILL_A), "skill alpha\nbody\nmore\n"));
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(true);
+  });
+
+  it("the edit arm's synthetic checks and its single commit call are untouched by the create arm's source", () => {
+    const src = readFileSync(SRC, "utf-8").split("\n").map((l: string) => l.replace(/^\s*\/\/.*$/, "")).join("\n");
+    // exactly ONE persistence call in the handler module (the edit arm's); the create arm's lives in its own module
+    expect(src.split("await safeCommitAndPr({").length - 1).toBe(1);
+    expect(src).not.toContain("exactPaths");
+    expect(src).not.toContain("expectedContent");
+    const arm = readFileSync(join(__dirname, "..", "..", "..", "server", "compound-promote-create-arm.ts"), "utf-8")
+      .split("\n").map((l: string) => l.replace(/^\s*\/\/.*$/, "")).join("\n");
+    expect(arm.split("await commit({").length - 1).toBe(1);
+    expect(arm).toMatch(/names: createSyntheticCheckNames\(\)/);
+    expect(arm).not.toMatch(/names: SYNTHETIC_CHECK_NAMES/);
+    expect(arm).toContain('mergeMode: "none"');
+    expect(arm).toContain("prDraft: true");
+    expect(arm).toContain("allowedPaths: []");
+    expect(arm).not.toMatch(/enableAutoMerge|mergeMode: "(auto|direct)"/);
+  });
+});

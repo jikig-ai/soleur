@@ -1,0 +1,374 @@
+{
+  "version": "2.21",
+  "children": [
+    {
+      "type": "frame",
+      "id": "ita0D",
+      "x": 0,
+      "y": 0,
+      "name": "Acknowledged Pill States",
+      "width": 1100,
+      "fill": "#0E0E10",
+      "layout": "vertical",
+      "gap": 28,
+      "padding": 48,
+      "children": [
+        {
+          "type": "text",
+          "id": "jYPoB",
+          "name": "title",
+          "fill": "#FFFFFF",
+          "content": "Acknowledged pill - surviving states (desktop, dark, wireframe)",
+          "fontFamily": "Inter",
+          "fontSize": 24,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "aLVGy",
+          "name": "sub",
+          "fill": "#A1A1AA",
+          "textGrowth": "fixed-width",
+          "width": 1004,
+          "content": "Component: apps/web-platform/components/dashboard/acknowledged-pill.tsx. Rendered after a founder clicks Send on a dashboard card. No visual change from today; this record documents the three reachable states after deleting the unreachable 'queued' variant.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "l6QlgT",
+          "name": "State 1 - ack",
+          "width": "fill_container",
+          "fill": "#161618",
+          "cornerRadius": 8,
+          "stroke": "#27272A",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 14,
+          "padding": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "czyig",
+              "name": "header",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pu7lc",
+                  "name": "state key",
+                  "fill": "#F5B95F",
+                  "content": "1. ack",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "INFy5",
+                  "name": "trigger",
+                  "fill": "#A1A1AA",
+                  "content": "artifactUrl present and no degraded flag. Link pill: opens artifact in new tab (target _blank, rel noopener noreferrer).",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "UBzFW",
+              "name": "pill ack",
+              "fill": "#15803D4D",
+              "cornerRadius": 999,
+              "gap": 8,
+              "padding": [
+                4,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hZesc",
+                  "name": "pill label",
+                  "fill": "#DCFCE7",
+                  "content": "Acknowledged \u2014 View on GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "YjDpd",
+              "name": "spec",
+              "fill": "#848484",
+              "content": "bg green-700/30, text green-100, hover bg green-700/40. Anchor element (link).",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "OfymR",
+          "name": "State 2 - pending",
+          "width": "fill_container",
+          "fill": "#161618",
+          "cornerRadius": 8,
+          "stroke": "#27272A",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 14,
+          "padding": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "ZjPpF",
+              "name": "header",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "rXpBu",
+                  "name": "state key",
+                  "fill": "#F5B95F",
+                  "content": "2. pending",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "vLhi9",
+                  "name": "trigger",
+                  "fill": "#A1A1AA",
+                  "content": "artifactUrl empty and no degraded flag. Non-link span.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "OYO50",
+              "name": "pill pending",
+              "fill": "#15803D4D",
+              "cornerRadius": 999,
+              "gap": 8,
+              "padding": [
+                4,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Bvxay",
+                  "name": "pill label",
+                  "fill": "#DCFCE7",
+                  "content": "Acknowledged (pending artifact)",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "k5zMej",
+              "name": "spec",
+              "fill": "#848484",
+              "content": "bg green-700/30, text green-100. No hover state. Span element.",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "oheGB",
+          "name": "State 3 - no_artifact",
+          "width": "fill_container",
+          "fill": "#161618",
+          "cornerRadius": 8,
+          "stroke": "#27272A",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 14,
+          "padding": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "fyklO",
+              "name": "header",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "p4JiM",
+                  "name": "state key",
+                  "fill": "#F5B95F",
+                  "content": "3. no_artifact",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "oeuDO",
+                  "name": "trigger",
+                  "fill": "#A1A1AA",
+                  "content": "degraded = no_artifact_in_pr_a (highest precedence). Non-link span.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "HgsZw",
+              "name": "pill no_artifact",
+              "fill": "#33415566",
+              "cornerRadius": 999,
+              "gap": 8,
+              "padding": [
+                4,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "d4Ns6k",
+                  "name": "pill label",
+                  "fill": "#F1F5F9",
+                  "content": "Acknowledged \u2014 full handling lands in PR-B (#4360)",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "m74vy",
+              "name": "spec",
+              "fill": "#848484",
+              "content": "bg slate-700/40, text slate-100. No hover state. Span element.",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ajyMp",
+          "name": "Removed - queued annotation",
+          "opacity": 0.7,
+          "width": "fill_container",
+          "fill": "#0E0E10",
+          "cornerRadius": 8,
+          "stroke": "#3F3F46",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 14,
+          "padding": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "WC60y",
+              "name": "header",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Bt3Vs",
+                  "name": "state key",
+                  "fill": "#848484",
+                  "content": "REMOVED - unreachable since PR 11208",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "WMkPX",
+                  "name": "note",
+                  "fill": "#848484",
+                  "content": "Annotation only, not a live state. Variant 'queued' (degraded = enqueue_failed) is deleted.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "M24sQ",
+              "name": "pill queued (removed)",
+              "fill": "#27272A",
+              "cornerRadius": 999,
+              "stroke": "#52525B",
+              "strokeWidth": 1,
+              "gap": 8,
+              "padding": [
+                4,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "D2rFm",
+                  "name": "pill label",
+                  "fill": "#71717A",
+                  "content": "Acknowledged (queued \u2014 retry from a fresh card if no artifact appears within a minute)",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "hjPGo",
+              "name": "spec",
+              "fill": "#71717A",
+              "content": "Was: bg amber-700/30, text amber-100. Shown greyed and struck through for the record.",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "TdD9d",
+          "name": "invariants",
+          "fill": "#A1A1AA",
+          "textGrowth": "fixed-width",
+          "width": 1004,
+          "content": "Shared pill shape: inline-flex, items-center, gap 2 (8px), rounded-full, px-3 py-1 (12px / 4px), text-xs (12px) font-medium. Precedence: no_artifact > pending/ack by artifactUrl.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}

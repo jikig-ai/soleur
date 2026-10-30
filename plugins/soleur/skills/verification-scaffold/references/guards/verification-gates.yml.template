@@ -1,0 +1,49 @@
+# verification-gates.yml — emitted by soleur:verification-scaffold at the
+# REPOSITORY ROOT (.github/workflows only runs from the root — a nested copy is
+# dormant). Jobs below run advisory-first: `continue-on-error` is the chokepoint
+# the promotion step flips (see VERIFICATION.md).
+#
+# Marker convention for the emitter — a job block between
+# `# verification-scaffold:begin:<guard>` and `# verification-scaffold:end:<guard>`
+# is kept only when that guard is selected. Do not remove the markers.
+name: verification-gates
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # verification-scaffold:begin:secret-scan
+  secret-scan:
+    name: secret-scan (gitleaks)
+    runs-on: ubuntu-latest
+    continue-on-error: @CI_CONTINUE_ON_ERROR@
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: gitleaks staged+tree scan
+        # Pinned by commit SHA (supply-chain posture — never a mutable tag).
+        # Resolves gitleaks-action v2.3.9.
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        env:
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          # Honour the emitted ruleset when the repo carries one.
+          GITLEAKS_CONFIG: ".gitleaks.toml"
+  # verification-scaffold:end:secret-scan
+  # verification-scaffold:begin:orphan-test
+  orphan-test:
+    name: orphan-test registration check
+    runs-on: ubuntu-latest
+    continue-on-error: @CI_CONTINUE_ON_ERROR@
+    env:
+      # Declare the files that RUN your suites; the check searches them for each
+      # tracked *.test.sh basename. Glob runner files are fine.
+      RUNNER_GLOBS: "scripts/test-all.sh scripts/run-tests* Makefile makefile package.json"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: orphan-test check
+        run: bash scripts/verification/orphan-test-check.sh
+  # verification-scaffold:end:orphan-test

@@ -335,8 +335,8 @@ t6_pointer_index_under_cap() {
 }
 
 if [[ ! -f "$SUT" ]]; then
-  echo "SKIP: $SUT not yet present (Phase 1 RED — implementation lands in Phase 2)"
-  exit 0
+  echo "FAIL: $SUT not found — lint-agents-rule-budget.py is the file under test (the Phase-1-RED deferral ended when the implementation landed)"
+  exit 1
 fi
 
 t1a_current_tree_smoke
