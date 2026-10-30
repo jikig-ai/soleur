@@ -159,7 +159,7 @@ if [[ "$jrc" -ne 0 ]]; then
   exit 2
 fi
 
-if printf '%s\n' "$cols" | grep -qx 'BADLINE'; then
+if grep -qx 'BADLINE' <<<"$cols"; then
   printf 'TRANSIENT: reason=selector_failed — a non-JSON line rode in on the read (truncated body or exception tail); the window was not trusted.\n' >&2
   exit 2
 fi
