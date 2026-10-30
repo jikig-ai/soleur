@@ -84,6 +84,10 @@ T="$(mktemp -d -t gd-refs-assert.XXXXXXXX)" || instrument "mktemp -d failed"
 assert_fixture_dir "$T"
 cleanup() { rm -rf "$T"; return 0; }
 trap cleanup EXIT
+# The shared fixture git environment (discovery ceiling, config hermeticity, identity); the exports below then pin the same values under $T.
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+git_fixture_env "$T" || instrument "git_fixture_env refused $T"
 # Hermetic git: no ambient config, fixed identity and dates, HOME and TMPDIR under the scratch directory.
 export HOME="$T/home" TMPDIR="$T/tmp" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
 export GIT_AUTHOR_NAME=fx GIT_AUTHOR_EMAIL=fx@example.invalid GIT_COMMITTER_NAME=fx GIT_COMMITTER_EMAIL=fx@example.invalid
@@ -1417,7 +1421,7 @@ CENSUS_WHY=""
 if census_ok "$SCRIPT"; then ok "CEN1 static census: every command word of the script is in the closed set AND only in its literal call-site argv (find, sort, rm, rmdir, mktemp, readlink, stat, runuser, exec, trap, mapfile, ...; case arms, \${...}, \$(...), \$((...)) and trap strings are parsed), no allowlist entry is stale, every write redirect is one of the ten known forms, there is exactly ONE write to fd 4 and ONE return 0, and exit appears only as exit 16 / exit \"\$rc\" / exit \$? (five statements)"; else no "CEN1 static census of the script: $CENSUS_WHY"; fi
 # the census must be able to see: planted constructs in the positions the first census could not reach
 _cp="$T/census-probe.sh"
-plant_sees() { printf '#!/bin/bash\n%s\n' "$1" > "$_cp"; census "${3:-$T/census.py}" "$_cp" 2>/dev/null | /usr/bin/grep -aq -- "$2"; }
+plant_sees() { printf '#!/bin/bash\n%s\n' "$1" > "$_cp"; /usr/bin/grep -aq -- "$2" < <(census "${3:-$T/census.py}" "$_cp" 2>/dev/null); }
 _cp_ok=1
 plant_sees 'case $a in x) touch /y ;; esac' '^CMDS .*touch' || _cp_ok=0
 plant_sees 'case $a in x) exit 29 ;; esac' '^EXITS exit 29$' || _cp_ok=0
@@ -1980,8 +1984,8 @@ cp "$RUNBOOK" "$T/mut/rb-retry.md"; sed -i 's/Only `probe_failed` (at most twice
 cp "$SCRIPT" "$T/mut/hdr-retry.sh"; sed -i 's/(retryable, at most once:/(not retryable, at most once:/' "$T/mut/hdr-retry.sh"
 MUTANTS_RUN=$((MUTANTS_RUN + 2))
 if cmp -s "$RUNBOOK" "$T/mut/rb-retry.md" || cmp -s "$SCRIPT" "$T/mut/hdr-retry.sh"; then no "mutation rbp3: an edit did not land"; else
-  rbp_py "$SCRIPT" "$T/mut/rb-retry.md" 2>/dev/null | grep -q '^RETRY .* True$' && no "mutant rbp3-runbook-retry-word: stayed GREEN" || ok "mutant rbp3-runbook-retry-word: goes RED (the runbook retry sentence changed and the parity caught it)"
-  rbp_py "$T/mut/hdr-retry.sh" "$RUNBOOK" 2>/dev/null | grep -q '^RETRY .* True$' && no "mutant rbp3-header-retry-column: stayed GREEN" || ok "mutant rbp3-header-retry-column: goes RED (the header column changed and the parity caught it)"
+  grep -q '^RETRY .* True$' < <(rbp_py "$SCRIPT" "$T/mut/rb-retry.md" 2>/dev/null) && no "mutant rbp3-runbook-retry-word: stayed GREEN" || ok "mutant rbp3-runbook-retry-word: goes RED (the runbook retry sentence changed and the parity caught it)"
+  grep -q '^RETRY .* True$' < <(rbp_py "$T/mut/hdr-retry.sh" "$RUNBOOK" 2>/dev/null) && no "mutant rbp3-header-retry-column: stayed GREEN" || ok "mutant rbp3-header-retry-column: goes RED (the header column changed and the parity caught it)"
 fi
 
 # H4: the rc 27 reason words are ONE derived set in three places: the script's die 27 calls, the header's row 27, the runbook
@@ -2012,7 +2016,7 @@ cp "$RUNBOOK" "$T/mut/rsn-rb.md"; python3 -I -c 'import sys; s = open(sys.argv[1
 for _m in "script:$T/mut/rsn-script.sh:$RUNBOOK:die27-reason-renamed-in-the-script" "hdr:$T/mut/rsn-hdr.sh:$RUNBOOK:reason-dropped-from-the-header" "rb:$SCRIPT:$T/mut/rsn-rb.md:reason-renamed-in-the-runbook-verdict-row"; do
   IFS=: read -r _n _s _r _d <<< "$_m"; MUTANTS_RUN=$((MUTANTS_RUN + 1))
   if cmp -s "$SCRIPT" "$_s" && cmp -s "$RUNBOOK" "$_r"; then no "mutation rsn-$_n: the edit did not land"
-  elif rsn_py "$_s" "$_r" 2>/dev/null | grep -q '^RSN_OK True$'; then no "mutant rsn-$_n ($_d): stayed GREEN"
+  elif grep -q '^RSN_OK True$' < <(rsn_py "$_s" "$_r" 2>/dev/null); then no "mutant rsn-$_n ($_d): stayed GREEN"
   else ok "mutant rsn-$_n ($_d): goes RED (the reason-word parity caught it)"; fi
 done
 
