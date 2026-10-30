@@ -1283,18 +1283,19 @@ fi
 # code) is NOT silently skipped: it is named here and capped by a hand-ratcheted maximum.
 # Ratcheting DOWN-only means new suites cannot quietly join the uncovered set.
 #
-# 15 -> 17 (#11562): `scripts/test-all-affected.test.sh` and
-# `plugins/soleur/test/ci-pr-affected-replay.test.sh` gained ranged floors under the
-# `--rows` split — `cases < MIN_ARM_CASES` and `total -lt _expected_total` / the
-# `OW_SITES < 108` observation-window check. Their thresholds derive from argv state
-# (ROWS_HI/ROWS_LO/DECLARED_TOTAL bound at the file's arg-parse region, ~4k lines
-# from the floor), so no contiguous simple-assignment window exists for the mutant
-# slice to bind — unconstructible BY DESIGN, the same class as the precedent
-# `lint-orphan-test-suites.test.sh` --rows battery already in this set (its
-# `_EXPECTED_EXECUTED` threshold is argv-derived identically). The floors still
-# stand on the real run's conservation checks: EXECUTED/_site_seq reconciliations
-# and PASS+FAIL conservation are asserted unconditionally per arm, so a skipped
-# block reds before the count floor is even consulted.
+# 15 -> 17 (#11562): the two new `--rows` batteries — the test-all-affected arm
+# battery and the ci-pr-affected replay arm battery — gained ranged floors
+# (`cases < MIN_ARM_CASES`, `total -lt _expected_total`, the `OW_SITES < 108`
+# observation-window check) whose thresholds derive from argv state (ROWS_HI/
+# ROWS_LO/DECLARED_TOTAL bound at arg-parse, ~4k lines from the floor), so no
+# contiguous simple-assignment window exists for the mutant slice to bind —
+# unconstructible BY DESIGN, the same class as the precedent lint-orphan --rows
+# battery already in this set (its `_EXPECTED_EXECUTED` threshold is argv-derived
+# identically). The floors still stand on the real run's conservation checks:
+# EXECUTED/_site_seq reconciliations and PASS+FAIL conservation are asserted
+# unconditionally per arm, so a skipped block reds before the count floor is
+# even consulted. (Labels, not file paths, name the batteries here — a path
+# token would become a named-script hop in the kb-consumers oracle.)
 MAX_CONSTRUCTION_FAILURES=17
 cases=$((cases + 1))
 if [[ "$n_construct" -le "$MAX_CONSTRUCTION_FAILURES" ]]; then
