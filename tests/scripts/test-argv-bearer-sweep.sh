@@ -8200,7 +8200,7 @@ else row "S9 exclusions: an exclusion rule hid a credential -var it should not, 
 
 # ---- Guard 2: the four rehearsal terraform step bodies EXECUTED under strict stubs --------------------------------------------------
 S9_CANARY="S9CANARYzot0123"
-for t in date; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date; every other command in the four bodies is a builtin
+for t in date sed; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date, the sourced redaction filter (#11294) is sed; every other command in the four bodies is a builtin
 { printf '#!%s\n' "$BASH_BIN"; cat <<'S9DOP'
 # Stub doppler: records argv (NUL-delimited) and answers ONLY the two argv shapes the steps use (anything else: exit 64 and a refusal line, so a changed
 # flag, config or project is visible). `run` execs the command after `--` and injects NO TF_VAR_* (production inherits an equal value from prd_terraform; the stub
@@ -8230,6 +8230,8 @@ S9_N=0
 s9_run() { # <bodyfile> <expected terraform argv> -> S9_RC S9_DIR
   local r; S9_N=$((S9_N + 1)); r="$S9/rows/r$S9_N"; assert_fixture_dir "$r"; mkdir -p "$r/calls" "$r/cwd"
   S9_RC=0
+  # The step bodies source the redaction filter through $GITHUB_WORKSPACE (#11294); this scratch workspace gets a copy of the real one.
+  mkdir -p "$r/cwd/tests/scripts/lib" && cp "$REPO_ROOT/tests/scripts/lib/tf-redact-random-ids.sh" "$r/cwd/tests/scripts/lib/"
   ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 GITHUB_WORKSPACE="$r/cwd" DOPPLER_TOKEN="default-scope" DOPPLER_TOKEN_PRD="prd-scope" \
       S9_CANARY_VAL="$S9_CANARY" S9_TF_ARGV="$2" "$BASH_BIN" --noprofile --norc -eo pipefail "$1" ) > "$r/out" 2>&1 || S9_RC=$?
   S9_DIR="$r"
@@ -8262,12 +8264,12 @@ s9_mrow() { # <tag> <id> <want reasons> <old> <new> [<old> <new>]...: copy the b
 for spec in 'teardown-only|Teardown only (recovery arm)|destroy -auto-approve -input=false|false' 'teardown-job|Terraform destroy (everything|destroy -auto-approve -input=false|false' \
             'plan-a|Terraform plan (phase A|plan -no-color -input=false -out=tfplan-a|false' 'plan-b|Terraform plan (phase B|plan -no-color -input=false -out=tfplan-b|true'; do
   IFS='|' read -r tag sel argv nic <<<"$spec"
-  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic"$'\n'
+  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic 2>&1 | tf_redact_random_ids"$'\n' # the step tail now pipes through the redactor (#11294)
   s3_body "$REPO_ROOT/$S9_WF" "$sel" > "$S9/body-$tag.sh" || fatal "S9 could not extract the $tag step"
   s9_run "$S9/body-$tag.sh" "$S9_TF_ARGV"; s9_judge_run
   if [[ -z "$S9_R_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real step body runs GREEN under the strict stubs: one terraform call with exactly the expected argv, the token masked before terraform runs, in its environment and in no argv" ok
   else row "S9 Guard 2 control ($tag): the real step body is not GREEN under the strict stubs (every mutant below would measure the base)" fail "reasons='$S9_R_REASONS'"; fatal "S9 control not green for $tag: a red baseline voids every mutant"; fi
-  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
+  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}" 2>&1 | tf_redact_random_ids\n'
   s9_mrow "$tag" m2-reorder "env-not-set" "$S9_EXP" '' "$S9_TAIL" "$S9_TAIL$S9_EXP"
   s9_mrow "$tag" m3-mask "mask-missing" "$S9_MASK" ''
   s9_mrow "$tag" m4-doppler-scope "rc ncalls refused" "-c prd_terraform" "-c prd"

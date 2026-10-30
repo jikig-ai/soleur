@@ -101,7 +101,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // and the existsSync-guarded pins on inngest-key-rotate.yml). #11194: the plaintext-id interlock wire pins (replace job incl. rotate; create job),
 // the wiring-predicate mutation battery and the executed-step test; the retired-address assertion REPLACED the GIT_DATA_PRESERVED_VOLUMES test
 // one-for-one (declared count unchanged by it). Exact: grep -cE '^\s*test\(' = 310.
-const TEST_FLOOR = 310;
+// 310 -> 320 (#11294, +10): the "terraform stream key-material redaction" describe (sweep over every workflow, non-vacuity, no-escape rule,
+// mutation battery over every redacting step, drift ordering, variable-captured plans, and four public-sink tests: issue/comment/summary sinks, plan-output.txt writers, sticky PR comment feeds, sink mutation).
+const TEST_FLOOR = 320;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1725,6 +1727,298 @@ describe("inngest key rotation derivation (#10540)", () => {
     // Both arms are exercised by whichever state the tree is in; this row asserts the constant points at the real path.
     expect(INNGEST_KEY_ROTATE_WORKFLOW.endsWith(".github/workflows/inngest-key-rotate.yml")).toBe(true);
     expect(existsSync(resolve(REPO_ROOT, ".github/workflows"))).toBe(true);
+  });
+});
+
+// ─── #11294: terraform plan/apply/refresh/destroy streams must not print random_* key material ─────────────────────────────
+// `random_id`'s `id` is the base64url of its bytes, and the web-platform root derives live secrets from it (Inngest signing /
+// event / manual-trigger keys, the GitHub webhook secret, the egress-audit ingest token, the KB-drift signing key, the tunnel
+// secret). Any plan that refreshes one prints `random_id.X: Refreshing state... [id=<value>]` to the PUBLIC Actions log (or
+// into a public issue / PR comment body), and an apply prints it again on `Creation complete` / `Modifying`. Masking cannot
+// help (the value is never a secret to the runner) and a `-target` change cannot help (a targeted plan refreshes its
+// dependencies), so every such step pipes through tf_redact_random_ids. This sweep covers EVERY workflow, not a site list:
+// a step either redacts, or runs on a terraform root whose own .tf files declare no key-bearing random_* resource (a claim
+// the test derives from the HCL, so adding a random_id to a "clean" root turns its steps red).
+const REDACT_FN = "tf_redact_random_ids";
+const REDACT_LIB = "tests/scripts/lib/tf-redact-random-ids.sh";
+/** Types whose `id` carries the value. random_password.id is the constant "none", so it is not key-bearing. */
+const LEAKING_RANDOM = /(?:^|\.)random_(?:id|string|uuid|bytes)\./;
+const LEAKING_RANDOM_DECL = /^\s*resource\s+"(random_(?:id|string|uuid|bytes))"\s+"(\w+)"/gm;
+const INNGEST_KEY_TARGET = /^doppler_secret\.inngest_(?:signing|event)_key_(?:prd|dedicated)$/;
+const TF_VERBS = "plan|apply|refresh|destroy";
+
+type TfStep = { file: string; job: string; name: string; run: string; code: string; verb: string; dir: string; targets: string[] };
+
+function tfSteps(files: Record<string, string>): TfStep[] {
+  const out: TfStep[] = [];
+  for (const [file, text] of Object.entries(files)) {
+    const doc = parseYaml(text) as { env?: Record<string, unknown>; jobs?: Record<string, { env?: Record<string, unknown>; steps?: Array<Record<string, unknown>> }> };
+    for (const [job, def] of Object.entries(doc?.jobs ?? {})) {
+      for (const st of def?.steps ?? []) {
+        const run = typeof st.run === "string" ? st.run : "";
+        const code = run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+        // The command position excludes `echo`/`printf` lines that merely MENTION a terraform verb in a message.
+        const cmd = code.split("\n").filter((l) => !/^\s*(echo|printf)\b/.test(l)).join("\n");
+        const m = new RegExp(`^\\s*(?:.*--\\s*\\\\\\n\\s*)?terraform\\s+(${TF_VERBS})\\b`, "m").exec(cmd);
+        if (!m) continue;
+        const envs = { ...(doc.env ?? {}), ...(def?.env ?? {}) };
+        const wd = String(st["working-directory"] ?? "").replace(/\$\{\{\s*env\.(\w+)\s*\}\}/g, (_, k) => String(envs[k] ?? ""));
+        const dir = /matrix\.directory/.test(wd) ? "MATRIX" : wd;
+        const targets = [...cmd.matchAll(/-target=(?:'([^']+)'|"([^"]+)"|([^\s\\'"]+))/g)]
+          .map((t) => (t[1] ?? t[2] ?? t[3]).split("[")[0])
+          .filter((t) => !t.startsWith("$"));
+        out.push({ file, job, name: String(st.name ?? st.id ?? ""), run, code, verb: m[1], dir, targets });
+      }
+    }
+  }
+  return out;
+}
+function liveTfFiles(): Record<string, string> {
+  const dir = resolve(REPO_ROOT, ".github/workflows");
+  const files: Record<string, string> = {};
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".yml")).sort()) files[`.github/workflows/${f}`] = readFileSync(join(dir, f), "utf8");
+  return files;
+}
+/** A real pipe consumer plus the sourced library, not a comment or an echo that merely names the function. */
+const hasRedactor = (s: TfStep) => new RegExp(`\\|\\s*${REDACT_FN}\\b`).test(s.code) && s.code.includes(REDACT_LIB);
+const stripRedactor = (s: TfStep): TfStep => ({ ...s, code: s.code.replace(new RegExp(`\\|\\s*${REDACT_FN}\\b`, "g"), ""), run: s.run.replace(new RegExp(`\\|\\s*${REDACT_FN}\\b`, "g"), "") });
+/**
+ * The key-bearing random_* resources a terraform ROOT declares in its own top-level .tf files, or null when the root cannot be
+ * resolved (unknown dir, matrix, a `module` block that could hide a declaration): null is never treated as clean.
+ */
+function rootLeaks(dir: string, seen = new Set<string>()): string[] | null {
+  if (!dir || dir === "MATRIX" || dir.includes("${{")) return null;
+  const abs = resolve(REPO_ROOT, dir);
+  if (!existsSync(abs) || !lstatSync(abs).isDirectory()) return null;
+  if (seen.has(abs)) return [];
+  seen.add(abs);
+  const tf = readdirSync(abs).filter((n) => n.endsWith(".tf"));
+  if (tf.length === 0) return null;
+  const leaks: string[] = [];
+  for (const f of tf) {
+    const text = stripComments(readFileSync(join(abs, f), "utf8"));
+    for (const m of text.matchAll(LEAKING_RANDOM_DECL)) leaks.push(`${m[1]}.${m[2]}`);
+    // A module can hide a declaration: follow LOCAL sources (any other source is unresolvable, so never "clean").
+    for (const mod of text.matchAll(/^\s*module\s+"[^"]+"\s*\{[\s\S]*?\bsource\s*=\s*"([^"]+)"/gm)) {
+      const src = mod[1];
+      if (!/^\.{1,2}\//.test(src)) return null;
+      const sub = rootLeaks(relative(REPO_ROOT, resolve(abs, src)), seen);
+      if (sub === null) return null;
+      leaks.push(...sub.map((x) => `${src}:${x}`));
+    }
+  }
+  return leaks.sort();
+}
+/** Resource-reference closure of `roots` over the web-platform infra HCL (what a -target refresh pulls in). */
+function refClosure(roots: string[]): Set<string> {
+  const texts = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8")));
+  const declared = new Set(texts.flatMap((t) => extractAllResources(t)));
+  const bodyOf = (addr: string): string => {
+    const [type, name] = addr.split(".");
+    for (const t of texts) {
+      const m = new RegExp(`(?:^|\\n)\\s*resource\\s+"${type}"\\s+"${name}"\\s*\\{`).exec(t);
+      if (!m) continue;
+      let depth = 0;
+      for (let i = m.index + m[0].length - 1; i < t.length; i++) {
+        if (t[i] === "{") depth++;
+        else if (t[i] === "}" && --depth === 0) return t.slice(m.index + m[0].length, i);
+      }
+    }
+    return "";
+  };
+  const seen = new Set<string>();
+  const stack = roots.filter((r) => declared.has(r));
+  while (stack.length) {
+    const addr = stack.pop() as string;
+    if (seen.has(addr)) continue;
+    seen.add(addr);
+    for (const m of bodyOf(addr).matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.([A-Za-z0-9_]+)\b/g)) {
+      const ref = `${m[1]}.${m[2]}`;
+      if (declared.has(ref) && !seen.has(ref)) stack.push(ref);
+    }
+  }
+  return seen;
+}
+
+describe("terraform stream key-material redaction (#11294, every workflow)", () => {
+  const files = liveTfFiles();
+  const steps = tfSteps(files);
+  const WEB_ROOT = "apps/web-platform/infra";
+  const id = (s: TfStep) => `${s.file}#${s.job}#${s.name}`;
+
+  /** Steps that neither redact nor run on a root proven free of key-bearing random_* resources. */
+  function violations(pop: TfStep[]): string[] {
+    const v: string[] = [];
+    for (const s of pop) {
+      // Rule 2 (no escape): a step naming a key-bearing address in a -target must redact, whatever its root.
+      const keyed = s.targets.filter((t) => LEAKING_RANDOM.test(t) || INNGEST_KEY_TARGET.test(t) || /_dedicated$/.test(t));
+      if (keyed.length && !hasRedactor(s)) v.push(`${id(s)}: -target names ${keyed.slice(0, 3).join(", ")} but never pipes through ${REDACT_FN}`);
+      if (hasRedactor(s)) continue;
+      // Rule 1: redact, unless the step's root declares nothing key-bearing.
+      const leaks = rootLeaks(s.dir);
+      if (leaks === null) v.push(`${id(s)}: ${s.verb} on an unresolved terraform root (${s.dir || "no working-directory"}) does not redact`);
+      else if (leaks.length) v.push(`${id(s)}: ${s.verb} on ${s.dir} (declares ${leaks.slice(0, 3).join(", ")}${leaks.length > 3 ? ", ..." : ""}) does not redact`);
+    }
+    return v;
+  }
+
+  test("every terraform plan/apply/refresh/destroy step in every workflow redacts random_* ids, or runs on a root that declares none", () => {
+    expect(violations(steps)).toEqual([]);
+  });
+
+  test("the sweep is not vacuous: it sees the known workflows, and the root classification matches the HCL", () => {
+    expect(steps.length, "terraform steps found").toBeGreaterThanOrEqual(55);
+    const filesSeen = new Set(steps.map((s) => s.file.split("/").pop()));
+    for (const f of [
+      "apply-web-platform-infra.yml", "apply-deploy-pipeline-fix.yml", "scheduled-terraform-drift.yml", "infra-validation.yml",
+      "inngest-provision-rehearsal.yml", "git-data-rung2-rehearsal.yml", "apply-sentry-infra.yml", "apply-github-infra.yml", "apply-git-data-root-key.yml",
+    ]) expect(filesSeen.has(f), `${f} contributes terraform steps`).toBe(true);
+    const redacting = steps.filter(hasRedactor);
+    expect(redacting.length, "redacting steps").toBeGreaterThanOrEqual(44);
+    // Roots that print key material (the sweep requires redaction there) vs. proven-clean roots (it does not).
+    const webLeaks = rootLeaks(WEB_ROOT) as string[];
+    for (const a of ["random_id.tunnel_secret", "random_id.github_webhook_secret", "random_id.inngest_signing_key_dedicated", "random_id.egress_audit_ingest_token", "random_id.kb_drift_ingest_signing_key"]) {
+      expect(webLeaks, `web root declares ${a}`).toContain(a);
+    }
+    expect((rootLeaks("apps/web-platform/infra/inngest-provision-rehearsal") ?? []).length, "the inngest rehearsal root declares random_id keys").toBeGreaterThan(0);
+    for (const clean of ["apps/web-platform/infra/sentry", "apps/web-platform/infra/git-data-root-key", "apps/web-platform/infra/rung2-rehearsal"]) {
+      if (existsSync(resolve(REPO_ROOT, clean))) expect(rootLeaks(clean), `${clean} is a resolved root with no key-bearing random_*`).toEqual([]);
+    }
+    // Every non-redacting step is on a root classified clean (not unresolved), and the web root has none at all.
+    for (const s of steps.filter((x) => !hasRedactor(x))) expect(rootLeaks(s.dir), `${id(s)} root`).toEqual([]);
+    expect(steps.filter((s) => s.dir === WEB_ROOT && !hasRedactor(s)).map(id)).toEqual([]);
+    // The reference closure of the per-merge target set reaches the key-bearing random_ids (the reason the stream leaks at all).
+    const perMerge = steps.find((s) => s.file.endsWith("apply-web-platform-infra.yml") && s.job === "apply" && /^Terraform plan \(allow-list/.test(s.name)) as TfStep;
+    expect([...refClosure(perMerge.targets)].filter((x) => LEAKING_RANDOM.test(x))).toEqual(expect.arrayContaining(["random_id.tunnel_secret", "random_id.github_webhook_secret"]));
+    expect([...refClosure(["hcloud_firewall.inngest"])].filter((x) => LEAKING_RANDOM.test(x))).toEqual([]);
+  });
+
+  test("a step whose -target list names a key-bearing address redacts, with no escape", () => {
+    const keyedSteps = steps.filter((s) => s.targets.some((t) => LEAKING_RANDOM.test(t) || INNGEST_KEY_TARGET.test(t) || /_dedicated$/.test(t)));
+    expect(keyedSteps.length, "the population is not empty").toBeGreaterThanOrEqual(2);
+    expect(keyedSteps.filter((s) => !hasRedactor(s)).map(id)).toEqual([]);
+  });
+
+  test("mutation: deleting the redactor from ANY redacting step on a key-bearing root is reported, and a clean-root step is not", () => {
+    expect(violations(steps), "pristine baseline").toEqual([]);
+    const onLeakyRoot = steps.filter((s) => hasRedactor(s) && (rootLeaks(s.dir) === null || (rootLeaks(s.dir) as string[]).length > 0));
+    expect(onLeakyRoot.length).toBeGreaterThanOrEqual(44);
+    for (const s of onLeakyRoot) {
+      const stripped = stripRedactor(s);
+      expect(hasRedactor(stripped), `${id(s)}: mutation landed`).toBe(false);
+      expect(violations([stripped]).length, `${id(s)}: removing the redactor is caught`).toBeGreaterThan(0);
+    }
+    // A step that only SOURCES the library (or names the function in an echo) does not count as redacting.
+    const probe = onLeakyRoot[0];
+    const sourceOnly = { ...stripRedactor(probe), code: `${stripRedactor(probe).code}\necho ${REDACT_FN}` };
+    expect(violations([sourceOnly]).length, "a bare mention is not a redactor").toBeGreaterThan(0);
+    // The checker is root-driven: the same step relocated to a clean root passes, to an unresolved one fails.
+    expect(violations([{ ...stripRedactor(probe), dir: "apps/web-platform/infra/sentry", targets: [] }]), "clean root").toEqual([]);
+    expect(violations([{ ...stripRedactor(probe), dir: "MATRIX", targets: [] }]).length, "matrix root").toBeGreaterThan(0);
+  });
+
+  test("the drift plan redacts BEFORE the 60000-byte cut and the file that is cat'ed into the public issue body", () => {
+    const drift = steps.find((s) => s.file.endsWith("scheduled-terraform-drift.yml") && s.job === "drift-check" && /^Terraform plan \(drift detection\)/.test(s.name)) as TfStep;
+    expect(drift.code).toMatch(/printf '%s' "\$PLAN_OUTPUT" \| tf_redact_random_ids \| head -c 60000 > \$\{RUNNER_TEMP\}\/plan-output\.txt/);
+    const src = drift.code.indexOf(REDACT_LIB);
+    expect(src, "the library is sourced before it is used").toBeGreaterThan(-1);
+    expect(src).toBeLessThan(drift.code.indexOf("| tf_redact_random_ids"));
+    expect(existsSync(resolve(REPO_ROOT, REDACT_LIB))).toBe(true);
+  });
+
+  test("variable-captured plans (PR comment, post-apply drift) are redacted before the value leaves the step", () => {
+    const prComment = steps.find((s) => s.file.endsWith("infra-validation.yml") && s.job === "plan") as TfStep;
+    expect(prComment.code).toMatch(/PLAN_OUTPUT=\$\(printf '%s' "\$PLAN_OUTPUT" \| tf_redact_random_ids\)/);
+    expect(prComment.code.indexOf("tf_redact_random_ids)")).toBeLessThan(prComment.code.indexOf("GITHUB_OUTPUT"));
+    const post = steps.find((s) => s.file.endsWith("apply-deploy-pipeline-fix.yml") && /^Post-apply full-root drift plan/.test(s.name)) as TfStep;
+    expect(post.code).toMatch(/PLAN_OUTPUT=\$\(printf '%s' "\$PLAN_OUTPUT" \| tf_redact_random_ids\)/);
+  });
+  // ─── Public SINKS (issue bodies / comments, PR comments, step summaries), not just stdout ──────────────────────────────────
+  // The same bytes reach `gh issue comment`, a sticky PR comment and $GITHUB_STEP_SUMMARY when a step copies terraform text
+  // there (the drift workflow's issue + ledger comments carried `[id=<value>]` lines for weeks). A step that has a terraform
+  // text source AND a public sink must redact, or every line that touches the source must be a value-free selection
+  // (`grep` of plan headers, resource addresses, `Plan:`/`Error:`), or a plain redirect into a file that is itself swept.
+  type TfDoc = { jobs?: Record<string, { steps?: Array<Record<string, unknown>> }> };
+  const TEXT_SRC = /tfplan\.txt|\$\{?PLAN_OUTPUT\b|plan-output\.txt|terraform show -no-color/;
+  const PUBLIC_SINK = /GITHUB_STEP_SUMMARY|gh (?:issue|pr) |--body(?:-file)?\b/;
+  const VALUE_FREE_ALT = /^\^?(?:Plan:|Error:|will be |must be |[a-z][a-z0-9_]*\.[a-z0-9_]+)/;
+  /** Logical lines of a run block: continuations joined, comments dropped. */
+  const logicalLines = (run: string) => run.replace(/\\\n\s*/g, " ").split("\n").filter((l) => !/^\s*#/.test(l));
+  function valueFreeGrep(line: string): boolean {
+    const pats = [...line.matchAll(/\bgrep\s+(?:-[A-Za-z]+\s+)*(?:-e\s+)?(?:'([^']*)'|"([^"]*)"|([A-Za-z0-9_.^:|-]+))/g)];
+    const extra = [...line.matchAll(/\s-e\s+(?:'([^']*)'|"([^"]*)"|([A-Za-z0-9_.^:-]+))/g)];
+    const all = [...pats, ...extra].map((m) => m[1] ?? m[2] ?? m[3]).filter((p) => p !== undefined);
+    return all.length > 0 && all.every((p) => p.split("|").every((alt) => VALUE_FREE_ALT.test(alt)));
+  }
+  /** Steps copying terraform text toward a public sink without redacting and without a value-free selection. */
+  function sinkViolations(): string[] {
+    const v: string[] = [];
+    for (const [file, text] of Object.entries(files)) {
+      const doc = parseYaml(text) as TfDoc;
+      for (const [job, def] of Object.entries(doc?.jobs ?? {})) {
+        for (const st of def?.steps ?? []) {
+          const run = typeof st.run === "string" ? st.run : "";
+          const where = `${file}#${job}#${String(st.name ?? st.id ?? "")}`;
+          if (!run) continue;
+          const lines = logicalLines(run);
+          if (!lines.some((l) => TEXT_SRC.test(l)) || !lines.some((l) => PUBLIC_SINK.test(l))) continue;
+          if (new RegExp(`\\|\\s*${REDACT_FN}\\b`).test(run) && run.includes(REDACT_LIB)) continue;
+          for (const l of lines.filter((x) => TEXT_SRC.test(x))) {
+            const toFile = /terraform show -no-color[^|>]*>\s*\S+\s*(?:\|\|\s*true)?$/.test(l); // `terraform show … > tfplan.txt`
+            const echoOnly = /^\s*(?:echo|printf)\b[^|]*$/.test(l) && !/\$\{?PLAN_OUTPUT\b/.test(l);
+            // plan-output.txt is only ever written through the redactor (the writer test below), so reading it is value-free.
+            const redactedArtifact = /\bcat\s+\S*plan-output\.txt\s*$/.test(l.trim());
+            if (toFile || echoOnly || redactedArtifact) continue;
+            if (!valueFreeGrep(l)) v.push(`${where}: ${l.trim().slice(0, 140)}`);
+          }
+        }
+      }
+    }
+    return v;
+  }
+
+  test("every step that copies terraform text toward an issue/PR comment/body or step summary redacts or selects only value-free lines", () => {
+    expect(sinkViolations()).toEqual([]);
+  });
+
+  test("every writer of plan-output.txt (cat'ed into the public drift issue/comment/email) redacts before the redirect", () => {
+    const writers: string[] = [];
+    for (const [file, text] of Object.entries(files)) {
+      for (const l of logicalLines(text)) if (/>\s*\S*plan-output\.txt/.test(l)) writers.push(`${file}: ${l.trim()}`);
+    }
+    expect(writers.length, "the drift workflow writes plan-output.txt").toBeGreaterThanOrEqual(1);
+    expect(writers.filter((w) => !/\|\s*tf_redact_random_ids\b[^>]*>/.test(w))).toEqual([]);
+  });
+
+  test("a sticky PR comment that interpolates a step's plan output is fed by a redacting step", () => {
+    const fed: string[] = [];
+    for (const [file, text] of Object.entries(files)) {
+      const doc = parseYaml(text) as TfDoc;
+      for (const [job, def] of Object.entries(doc?.jobs ?? {})) {
+        const stepsOfJob = def?.steps ?? [];
+        for (const st of stepsOfJob) {
+          const msg = String((st.with as Record<string, unknown> | undefined)?.message ?? "");
+          for (const m of msg.matchAll(/steps\.([A-Za-z0-9_-]+)\.outputs\.plan\b/g)) {
+            const prod = stepsOfJob.find((p) => p.id === m[1]);
+            const run = typeof prod?.run === "string" ? prod.run : "";
+            if (!(new RegExp(`\\|\\s*${REDACT_FN}\\b`).test(run) && run.includes(REDACT_LIB))) fed.push(`${file}#${job}: steps.${m[1]}.outputs.plan is not redacted`);
+            else fed.push(`ok:${file}#${job}`);
+          }
+        }
+      }
+    }
+    expect(fed.length, "the PR plan comment exists").toBeGreaterThanOrEqual(1);
+    expect(fed.filter((x) => !x.startsWith("ok:"))).toEqual([]);
+  });
+
+  test("mutation: a summary/issue sink fed from unredacted terraform text is reported", () => {
+    const bad = { run: 'set -euo pipefail\nterraform show -no-color tfplan > tfplan.txt\ncat tfplan.txt >> "$GITHUB_STEP_SUMMARY"\n' };
+    const lines = logicalLines(bad.run);
+    expect(lines.some((l) => TEXT_SRC.test(l)) && lines.some((l) => PUBLIC_SINK.test(l))).toBe(true);
+    expect(lines.filter((l) => TEXT_SRC.test(l) && !valueFreeGrep(l) && !/terraform show -no-color[^|>]*>\s*\S+\s*$/.test(l)).length).toBeGreaterThan(0);
+    // and a header-only grep is accepted while a catch-all grep is not
+    expect(valueFreeGrep("grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >> \"$GITHUB_STEP_SUMMARY\"")).toBe(true);
+    expect(valueFreeGrep("grep -E 'id|hex' tfplan.txt >> \"$GITHUB_STEP_SUMMARY\"")).toBe(false);
   });
 });
 
@@ -7938,7 +8232,7 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
     .split("\n")
     .map((l) => l.trim().replace(/\s+/g, " "))
     .filter((l) => l !== "");
-  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
+  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+ 2>&1 \| tf_redact_random_ids$/;
   const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
   const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
   const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
@@ -7970,9 +8264,12 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
   // `${a[x=0]}` expansion has no slot to occupy (an allow-list of line SHAPES passed all four).
   const steps: Step[] = [
     { kind: "stmt", name: "set -euo pipefail", test: eq("set -euo pipefail") },
+    // #10540 Fork 1: the redaction helper is sourced under errexit (a missing file aborts the step) and the plan's stream goes
+    // through it; the plan's own status is then PIPESTATUS[0], not $?.
+    { kind: "stmt", name: "source tf-redact-random-ids.sh", test: eq('source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"') },
     { kind: "stmt", name: "set +e", test: eq("set +e") },
     { kind: "stmt", name: "the doppler-wrapped terraform plan", test: (t) => PLAN_RE.test(t) },
-    { kind: "stmt", name: "rc=$?", test: eq("rc=$?") },
+    { kind: "stmt", name: "rc=${PIPESTATUS[0]}", test: eq("rc=${PIPESTATUS[0]}") },
     { kind: "block", name: "the plan-failure block", header: eq("if [[ $rc -ne 0 ]]; then"), grep: false, exit: "exit $rc" },
     { kind: "stmt", name: "set -e", test: eq("set -e") },
     { kind: "stmt", name: "terraform show -no-color", test: eq("terraform show -no-color tfplan > tfplan.txt") },
@@ -9197,7 +9494,7 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(code).toContain("secrets.DOPPLER_TOKEN_WRITE");
     expect(code).toMatch(/--name-transformer tf-var -- \\\n\s+env "TF_VAR_inngest_link_tls=\$\{TF_LINK\}" \\\n\s+terraform plan/);
     // The apply consumes ONLY the saved, gated plan: no -target/-replace/-var, ends in tfplan.
-    expect(/^\s*terraform apply (.*)$/m.exec(code)![1]).toBe("-no-color -input=false -auto-approve tfplan");
+    expect(/^\s*terraform apply (.*)$/m.exec(code)![1]).toBe("-no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids");
     expect([...extractAllTargets(flagJob)]).toEqual([TLS_FLAG]);
     // Every `doppler run` in the job keeps the Tier-B precedence (ADR-241 D6).
     const runs = code.split("\n").filter((l) => /doppler run\b/.test(l));

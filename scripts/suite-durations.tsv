@@ -672,6 +672,7 @@ tests/scripts/stock-preflight-gate	2261	measured
 tests/scripts/supabase-advisor-scan	1002	measured
 tests/scripts/supabase-logs-query	8686	measured
 tests/scripts/tenant-integration-gate-verdict	57	measured
+tests/scripts/tf-redact-random-ids	1200	floor
 tests/scripts/tmp-purge	6916	measured
 tests/scripts/trio-baseline-census	1204	floor
 tests/scripts/vector-redeliver-gate	776	measured
