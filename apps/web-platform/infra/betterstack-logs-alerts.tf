@@ -441,9 +441,18 @@ locals {
   # identity also pages (accepted trade, sibling T4); (c) self-attested `dt` is unmeasured (the
   # emitter stamps its own row time); (d) `value` can reach 2 for one failure (journald + phone-home
   # carry no per-run dedup) — harmless under higher_than 0.
-  # LIVE-PROBED <date pending — filled by the Phase-2 emitter enumeration before merge> 48h window
-  # over the hot remote() UNION s3Cluster archive:
-  #   <controls A–E numbers pending>
+  # LIVE-PROBED 2026-10-30 (window ending ~10:00 UTC), 48h over the hot remote() UNION s3Cluster
+  # archive (216296 rows total):
+  #   A marker-anchored emitter census                          -> 0 rows (probe inert pre-#11266;
+  #     the emitter breakdown is vacuously clean — the pinned pair is the only set that can emit)
+  #   B shipper=cloud-init-phone-home stage census              -> 20 stages x 1 row each
+  #     (bootstrap journey); stage='luks-key-probe' absent — the channel is live, the stage unused
+  #   C full-predicate count                                    -> 0 rows (quiet control)
+  #   D marker-only vs emitter-pinned                           -> 0 vs 0 (delta 0 — nothing
+  #     under a foreign emitter currently quotes the marker; the exclusion is latent, synthetic E7
+  #     is its proof)
+  #   E synthetic raw evals (journald fail/ok, phone-home fail/ok, identity-pinned detail-absent,
+  #     jq-failure shape, doppler-shaped forgery)               -> 1/0/1/0/1/0/0
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}

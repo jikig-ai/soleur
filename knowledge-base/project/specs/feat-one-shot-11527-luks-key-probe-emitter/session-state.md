@@ -29,3 +29,14 @@
 ## Work Phase
 
 - Status: pending — not started (planning-phase mandate ends at deepen-plan per the pipeline contract).
+
+## 2026-10-30 work-phase evidence (#11527)
+
+- Phase 1 landed (commit 946bb895cb): emitter-OR predicate per D2 (detail='' retained inside leg B),
+  guard 36 presence / 37 mutation, suite 73/0; sibling suite rescoped for dual-occurrence literals, 44/0;
+  structural suite 110/0; c4 vitest 35/35; model.likec4.json regenerated (91 elements / 200 relations).
+- Phase 2 controls A-E, 48h window ending ~10:00 UTC (216296 rows): A marker census 0 (probe inert
+  pre-#11266); B phone-home census 20 stages x 1 row, stage='luks-key-probe' absent; C full predicate 0;
+  D marker-only 0 vs pinned 0; E synthetic evals 1/0/1/0/1/0/0. Numbers recorded in the .tf LIVE-PROBED comment.
+- V1: pre-existing deploy-script-tests red on main = vinngest drift, other worktree's — this diff's suites all green.
+- Pipeline tally: seats=0 ci_cycles=0 fix_rounds=1 agent_rounds=2 cto_spawns=1
