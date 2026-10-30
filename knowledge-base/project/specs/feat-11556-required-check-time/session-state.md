@@ -1,0 +1,82 @@
+# Session state — feat-11556-required-check-time (work resume)
+
+Branch: feat-11556-required-check-time | Worktree: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-11556-required-check-time
+PR: #11561 (draft) | Issue: #11562 | Epic: #11556
+Plugin root: /home/jean/.local/share/devin/cli/plugins/cache/github.com_jikig-ai_soleur_plugins_soleur-5a09ea60/0.0.0-unversioned (local session, hooks live)
+Plan: knowledge-base/project/plans/2026-10-29-ci-required-check-atomic-suites-plan.md
+Tasks: knowledge-base/project/specs/feat-11556-required-check-time/tasks.md
+Push: remote branch is PRE-REBASE at 1bad9ae99 → `git push --force-with-lease` needed.
+
+## Done (committed)
+- d480451773: rc_g hoisted to unconditional (was gated block 13, called by blocks 28/37/38 → command-not-found on arms b/d); AFFECTED_CONSUMED_EDGES now lists 4 arm labels sharing TEST_ALL_AFFECTED_BATTERY_PATHS (scripts/lib/test-affected-paths.sh:373-376); deleted scripts/*.tsv.n strays. lint-orphan now GREEN.
+
+## Done (UNCOMMITTED in working tree)
+- scripts/test-all.sh ~7245-7250: replay arm registrations changed `bash "$f"` → literal `bash plugins/soleur/test/ci-pr-affected-replay.test.sh` (totality checker resolves battery via argv token).
+- .github/workflows/ci.yml ~1435-1439 + ~1479-1483: stale ~9.5min/leg comments rewritten (no literal numbers; point at runbook).
+
+## Totality pre-regen (expected red): 7/50 — causes: arms not pinned in manifests + the $f unresolved (now fixed). Re-run AFTER regen.
+
+## Arm runs in flight (detached setsid, logs+rc in worktree)
+- replay arm a `--rows 1-193` → .work-run-replay-1-193.log/.rc (running since 10:10, ow_* soak probes PASSing)
+- affected arm d `--rows 37-38` → .work-run-affected-37-38.log/.rc (restarted ~10:16 post-rc_g-fix; th4 census rows [ok])
+
+## Remaining arms to run (each: cd worktree; bash X --rows A-B > log 2>&1; echo $? > rc)
+- replay: 194-386, 387-578 | affected: 1-13, 14-32, 33-36
+- LAUNCH FORM (learned): `cd` INSIDE the bash -c string, or run setsid as its own exec — `cd X && setsid A & setsid B` backgrounded the whole `cd && A` so B ran from bare root on STALE copy.
+
+## Phase 3 remaining
+- Record per-arm wall times → build --timings-dir (dir per run, suite-timings.tsv rows `label<TAB>ms`). --timings-dir mutually exclusive with --runs (elif); --durations wins. To keep incumbent medians AND price new arms: pass N downloaded green-run artifact dirs + a local dir with the 7 new labels' rows.
+- `python3 scripts/regenerate-shard-manifest.py --runs 5 --write` LIGHT ONLY as LAST isolated commit (never hand-edit TSVs; manifests committed deterministic; re-run --incremental after rebase).
+- Verify new -a/-b/-c/-d labels pin to DISTINCT legs post-regen; re-run scripts-shard-totality.test.sh → target green.
+- `--legs K` dry-run K∈{8,10,12} verification-only (K bump only if worst leg still >bound).
+- Runbook ci-test-scripts-sharding.md: topology table (~L27-40), Measured history (~L196+), add dated ~2wk regen-ownership checkpoint + rebase-regen note.
+- Affected-gate exit: `bash scripts/affected-tests.sh` before Phase-3 close.
+
+## Phase 4 remaining
+- Fresh p90 baseline via jobs API (~10-15 green PR runs; queue vs execution) → runbook Measured history.
+- CLO invariants: scripts/required-checks.txt byte-identical; fetch-depth:0 preserved; no merge_group cancel; timeout-minutes:60 unchanged.
+- tasks.md: tick 2.1-2.3, 3.1-3.4, 4.1-4.3 as verified.
+- Epic #11556 actuals + #11562 comment (post-merge follow-through ok).
+
+## Pipeline after verification
+push (--force-with-lease) → soleur:review → resolve-todo-parallel → compound → ship.
+CLA author gate: commits must be authored by CLA-signed identity (jean.deruelle@jikigai.com is fine).
+
+## Learnings this session
+- `cd X && setsid A & setsid B` → B ran from bare root, STALE suite copy. Always put cd inside bash -c.
+- Cross-arm dep: gated-block function defs invisible to sibling arms (rc_g). Static analysis found only rc_g; verified by arm-d failure + fix.
+- run_suite argv must carry LITERAL path for totality checker.
+
+## Floor finding (in-flight fix)
+- Arm affected-1-13 rc=2: 19 cases vs ceil(243*13/38)=84. Case emitters per block are 1-30 (non-uniform) — linear MIN_CASES scaling is wrong for sparse arms.
+- Fix being applied: ranged floor → `cases >= EXPECTED_EXECUTED` (≥1 case per dispatched block); full run (ROWS_HI==0) keeps MIN_CASES=243. Integrity already carried by _site_seq==DECLARED_TOTAL + EXECUTED==range + PASS+FAIL==cases.
+- Arm results so far: replay-1-193 rc=0 (891 assertions, 85 mutants); affected-1-13 rc=2 (floor only — rows all [ok]).
+
+## Update (post-fix commits)
+- d5e9655bed committed: ranged floor = EXPECTED_EXECUTED (>=1 case/block), full-run keeps MIN_CASES=243; literal argv in run_suite; ci.yml comments fixed.
+- Arm results: replay 1-193/194-386/387-578 ALL rc=0 (891/891/890 assertions); affected 1-13/33-36/37-38 ALL rc=0 (19/51/86 cases). affected-14-32 STILL RUNNING (m* rows spawn sandboxed --affected fixtures, ~5min each under contention).
+- Timings dir started at /tmp/timings-local/suite-timings.tsv (label<TAB>ms<TAB>pass); pending -b arm time.
+- Runbook topology table updated (uncommitted).
+
+## Update 2
+- d5e9655bed committed: ranged floor=EXPECTED_EXECUTED; literal argv in replay arms; ci.yml comments.
+- Arm results FINAL for 6/7: replay-1-193/194-386/387-578 all rc=0; affected-1-13=0 (19c), 33-36=0 (51c), 37-38=0 (86c). affected-14-32 (pid 4017682) STILL RUNNING at m5+ rows, ~50min, sandboxed fixture children active — NOT wedged, just slow under contention.
+- NOTE: an earlier 14-32 run seems to have finished once with "91 passed, 1 failed of 92 — l1: affected+subagent rc=1 ran=9" (investigate l1 row if the live run also fails l1: sandbox runs --affected with SOLEUR_SUBAGENT=1 + SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml, expects rc=0 ran>0).
+- Runbook topology row updated (uncommitted). Timings dir /tmp/timings-local/suite-timings.tsv has 6 arm rows (label<TAB>ms<TAB>pass); add affected-b once rc lands.
+
+## Update 3 — regen + totality state
+- ALL 7 ARMS GREEN (affected-14-32 rerun rc=0; earlier l1 fail = contention flake, passes isolated).
+- Arm timings: replay a/b/c=1756/930/971s; affected a/b/c/d=996/5915/1926/2479s (contended).
+- Pricing method: CI-median x local-share. CI medians (5 green PR/merge runs in /tmp/timings-ci): replay 1322511ms, affected 1746404ms. Estimated arm ms written to scripts/suite-durations.tsv by full regen.
+- Committed manifest (UNCOMMITTED in git): arms at legs replay 2,7,4 / affected 7,1,8,3; legs 1678-1758s, spread 79s.
+- Totality still 6 red: (a) ref_glob double-counts special-cased ci-pr-affected-replay.test.sh — FIXED in scripts-shard-totality.test.sh (subtract `"$f" == "..."` specials, lines ~155-160, UNCOMMITTED); (b) lint-orphan halves co-located 5,5 by regen — FIX IN PROGRESS: restore HEAD manifest + keep durations (has arm estimates) + run --incremental --write (pins lint-orphan 5,2 verbatim).
+- timings dirs: /tmp/timings-ci/<runid>/, /tmp/timings-local, /tmp/timings-est
+
+## Update 4 — Phase 3 essentially DONE
+- Generator arm-separation added (assign() post-pass: -<letter> siblings distinct legs). lint-orphan a=1/b=5, my arms replay 2,7,4 / affected 7,1,8,3. Spread 441s (<10min bound).
+- Totality fix: ref_glob subtracts `"$f" == "..."` glob-loop specials.
+- Commits: 60b93ac5d3 (machinery+runbook+totality), fe302de771 (regen, isolated). TOTALLITY NOW GREEN (52 rows).
+- CLO invariants OK: required-checks.txt byte-identical, fetch-depth:0 intact, no merge_group cancel.
+- affected-gate `bash scripts/test-all.sh --affected` RUNNING (degraded to MODE=full since runner changed) → .work-run-affected-gate.log/.rc
+- Plan's literal `bash scripts/affected-tests.sh` doesn't exist — real mechanism is test-all.sh --affected.
+- REMAINING: p90 baseline via jobs API → runbook Measured history; tasks.md checkboxes; push --force-with-lease; soleur:review→resolve-todo-parallel→compound→ship.

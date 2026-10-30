@@ -252,6 +252,24 @@ span to the NEXT registered mark.
   `gh run view <run> --json jobs,createdAt` (start delay = a job's
   `startedAt` minus the run's `createdAt`) and compare against the cohort
   shape in the section below; if the 8th leg's start delay dominates, revisit.
+- **2026-10-30 pre-split baseline (#11562):** jobs-API read over three green
+  PR/merge_group runs (41037175716, 41036790949, 41030652561) — worst
+  `test-scripts` leg wall clocks 49.4 / 51.0 / 43.2 min, per-run leg
+  spreads ~31 / ~32 / ~22 min. The two atomic suites carried it:
+  `ci-pr-affected-replay.test.sh` median 1,322,511 ms (~22 min) and
+  `scripts/test-all-affected` median 1,746,404 ms (~29 min) across five
+  green runs, both on legs already holding ~10 min of other work. Suite
+  sums ≈ wall clock (queue time was not the driver). Split to
+  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-193/194-386/387-578` of 578)
+  and `test-all-affected-{a,b,c,d}` (`--rows 1-13/14-32/33-36/37-38` of 38)
+  inside the same relevance gates; arm prices seeded at CI-median × local
+  arm-share — the first green run carrying real arm timings is the
+  re-price input (interim-pin pattern from 2026-09-26). Post-split
+  manifest: legs ~28-32 min predicted suite time, spread ~7 min.
+  **Ownership checkpoint:** re-check leg spread + worst leg on the first
+  green PR run after merge; if the regen drifts stale ~2 weeks out, re-run
+  `--runs 5 --write` (note: `--timings-dir` requires PR/merge_group
+  artifact runs — main `push` runs elide the shards job).
 
 ## Runner-availability data (why extra legs are not free)
 
