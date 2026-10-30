@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | ~9.4-9.6 min predicted per leg (566.1-578.2 s of suite time) from the manifest regenerated on five green main runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745); the worst leg stays under 600 s by ~22 s before setup. A table prediction, not a CI measurement and not job wall-clock; derivation in Measured history 2026-10-03 (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=578 → 1-193/194-386/387-578) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 

@@ -490,6 +490,34 @@ def assign(timings, n, incumbent):
                           and loads[inc - 1] <= loads[least] + eps) else least
         legs[label] = leg + 1
         loads[leg] += ms
+    # Arm separation (#11562): labels sharing a `-<letter>` suffix are --rows
+    # arms of one battery — scripts-shard-totality.test.sh requires them on
+    # DISTINCT legs (co-located halves defeat the split while totality still
+    # holds). LPT ignores the constraint, so a post-pass relocates any
+    # duplicated arm onto the least-loaded leg carrying no sibling. Deterministic:
+    # groups and members processed in sorted order.
+    groups = {}
+    for label in legs:
+        stem = label[:-2] if len(label) > 2 and label[-2] == "-" and label[-1].isalpha() else None
+        if stem is not None:
+            groups.setdefault(stem, []).append(label)
+    for stem in sorted(groups):
+        members = sorted(groups[stem], key=lambda l: (-timings[l], l))
+        if len(members) < 2 or len(members) > n:
+            continue
+        used = set()
+        for label in members:
+            leg = legs[label] - 1
+            if leg in used:
+                best = min((i for i in range(n) if i not in used),
+                           key=lambda i: loads[i], default=None)
+                if best is None:
+                    break
+                loads[leg] -= timings[label]
+                loads[best] += timings[label]
+                legs[label] = best + 1
+                leg = best
+            used.add(leg)
     return legs, loads
 
 
