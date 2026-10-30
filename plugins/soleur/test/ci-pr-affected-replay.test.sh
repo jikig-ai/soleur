@@ -59,6 +59,73 @@ for tool in python3 git jq; do
   command -v "$tool" >/dev/null || { echo "[FATAL] $tool required" >&2; exit 1; }
 done
 
+# --- Row-range selection (--rows A-B) ------------------------------------------------------
+# ROWS-SPLIT (#11562): as one ~25-minute atomic suite this file was the test-scripts shard's
+# worst leg, so scripts/test-all.sh registers it THREE times — the `-a`/`-b`/`-c` arms of
+# plugins/soleur/test/ci-pr-affected-replay — each carrying a `--rows A-B` range over the
+# DECLARED_TOTAL gated sites below. The gated sites are the top-level `mutate`/`ow_mutate`
+# calls: both drivers route through in_range, which sequences every call site in file order
+# (an added or deleted call shifts _site_seq against DECLARED_TOTAL at the end). All other
+# content — fixture builds, row_*/chk assertions and the ctl-* harness controls — is
+# unconditional per arm (the C0/R1/R1b shape of scripts/lint-orphan-test-suites.test.sh's
+# contract); the ctl-* controls that drive `mutate` do so through `mutate_ungated` so they
+# never consume an ordinal. The union of the registered ranges tiling 1..DECLARED_TOTAL is
+# asserted by plugins/soleur/test/scripts-shard-totality.test.sh. A DECLARED_TOTAL bump and
+# the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
+# refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
+# cheap way to iterate on a single site locally.
+DECLARED_TOTAL=578   # top-level `^mutate ` (470) + `^ow_mutate ` (108) call sites; ctl-* controls run ungated
+ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared sites
+_seen_rows_flag=0
+while (( $# )); do
+  case "$1" in
+    --rows)
+      shift
+      if [[ ! "${1:-}" =~ ^[0123456789]{1,9}-[0123456789]{1,9}$ ]]; then
+        echo "ERROR: --rows requires a decimal range A-B (got '${1:-<missing>}')" >&2
+        exit 2
+      fi
+      if (( _seen_rows_flag == 1 )); then
+        echo "ERROR: --rows given twice — a range must be stated once" >&2
+        exit 2
+      fi
+      _seen_rows_flag=1
+      ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
+      ;;
+    *)
+      echo "ERROR: unknown argument '$1'" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+# Unconditional bounds: 1 <= A <= B <= DECLARED_TOTAL. Only runs when a flag was given —
+# the no-flag state ROWS_HI=0 is unreachable as a flag value because HI >= LO >= 1, so a
+# passed "0-0"/"N-0" can never silently decode into "all sites".
+if (( _seen_rows_flag == 1 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS_HI <= DECLARED_TOTAL )); then
+  echo "ERROR: --rows ${ROWS_LO}-${ROWS_HI} is out of bounds: need 1 <= A <= B <= ${DECLARED_TOTAL} declared sites." >&2
+  exit 2
+fi
+
+# in_range: called once per gated site from inside the mutate/ow_mutate drivers, in file
+# order. _site_seq counts gated sites (never the unconditional content); EXECUTED counts
+# dispatched sites. Unlike lint-orphan's dispatch-site gate there is no per-site ordinal
+# argument — the call order IS the declared order, and the end-of-file _site_seq ==
+# DECLARED_TOTAL check is the reorder/duplicate guard.
+_site_seq=0; EXECUTED=0
+in_range() {
+  _site_seq=$(( _site_seq + 1 ))
+  if (( ROWS_HI == 0 )) || (( ROWS_LO <= _site_seq && _site_seq <= ROWS_HI )); then
+    EXECUTED=$(( EXECUTED + 1 ))
+    return 0
+  fi
+  return 1
+}
+# Control paths drive mutate() for harness self-verification; they are not gated sites and
+# must not consume a _site_seq ordinal.
+_MUT_UNGATED=0
+mutate_ungated() { local _MUT_UNGATED=1; mutate "$@"; }
+
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -3623,6 +3690,7 @@ chk "window probe: a non-numeric run id from the API is CANNOT ESTABLISH at list
 chk "window probe: an empty head_branch does not shift the tab-separated run fields" row_ow_empty_branch
 ow_mutate() {   # ow_mutate <name> <old> <new> <row>: one edit of the PROBE (it must land once and parse); the row is GREEN on the real probe and must be RED on the mutant
   local m="$SANDBOX/owmut-$1.sh" real="$OW_SCRIPT" red=0
+  in_range || return 0   # ROWS-SPLIT: every top-level call site reaches the gate; out-of-range sites dispatch nothing
   OW_MUT_RUN=$((OW_MUT_RUN + 1))   # the section's own floor counts every call (ow_mutate does not feed MUT_RUN, so FLOOR_MUTANTS is not the guard for these)
   cp "$real" "$m"
   python3 - "$m" "$2" "$3" 2>/dev/null <<'PY' || { fail "probe mutant $1: the edit did not land exactly once"; return 0; }
@@ -4153,6 +4221,7 @@ PY
 declare -A MUT_SIGS=()
 mutate() {  # mutate <name> <old> <new> <row>
   local sig
+  if [[ "$_MUT_UNGATED" != 1 ]] && ! in_range; then return 0; fi   # ROWS-SPLIT: ctl paths arrive via mutate_ungated
   mutant_outcome "$@"
   MUT_RUN=$((MUT_RUN + 1))
   if [[ "$MUT_RESULT" = killed || "$MUT_RESULT" = survived ]]; then   # the identity of a mutant is the MUTATED FILE it produced (and the row), not the spelling of its edit
@@ -5013,7 +5082,7 @@ mutant_outcome ctl-real-kill 'r = index.refs[got[0]] = scan_views(index, got[1],
 [[ "$MUT_RESULT" = killed ]] && pass "control: a mutant that still runs and returns the wrong answer is KILLED" || fail "control: a real kill scored as '$MUT_RESULT'"
 ctl_mutate_records() {  # drive mutate() with a survivor: it must record a FAILURE, then unwind
   local p0=$passes f0=$fails n0=${#FAILED[@]} m0=$MUT_RUN k0=$MUT_KILLED f1
-  mutate ctl-survive-through-mutate 'READ-ONLY. It never writes' 'READ-ONLY (edited). It never writes' row_verdict_fail >/dev/null 2>&1
+  mutate_ungated ctl-survive-through-mutate 'READ-ONLY. It never writes' 'READ-ONLY (edited). It never writes' row_verdict_fail >/dev/null 2>&1
   f1=$fails
   passes=$p0; fails=$f0; MUT_RUN=$m0; MUT_KILLED=$k0
   if (( n0 == 0 )); then FAILED=(); else FAILED=("${FAILED[@]:0:n0}"); fi
@@ -5022,8 +5091,8 @@ ctl_mutate_records() {  # drive mutate() with a survivor: it must record a FAILU
 ctl_mutate_records && pass "control: mutate() records a survivor as a failure" || fail "control: mutate() did not record a survivor as a failure"
 ctl_duplicate_refused() {  # a renamed duplicate of an earlier mutant (same edit, same row) must be REFUSED, not counted as one more kill
   local p0=$passes f0=$fails n0=${#FAILED[@]} m0=$MUT_RUN k0=$MUT_KILLED last
-  mutate ctl-dup-a 'import argparse' 'import argparse  # dup' row_verdict_fail >/dev/null 2>&1
-  mutate ctl-dup-b 'import argparse
+  mutate_ungated ctl-dup-a 'import argparse' 'import argparse  # dup' row_verdict_fail >/dev/null 2>&1
+  mutate_ungated ctl-dup-b 'import argparse
 import errno
 import fnmatch' 'import argparse  # dup
 import errno
@@ -5036,26 +5105,38 @@ import fnmatch' row_verdict_fail >/dev/null 2>&1   # spelled differently, the sa
 ctl_duplicate_refused && pass "control: a mutant that repeats an earlier one (same edit, same row) is refused by name, so a renamed duplicate cannot hold a floor" || fail "control: a renamed duplicate mutant was not refused"
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
-# Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard. Each floor is a literal (raised IN THE
-# SAME EDIT that adds rows: base + added, so a deleted row cannot hide behind a new one) AND a count taken from this file (every `mutate`
-# line and every `pass "` call site must have run at least once, whatever else changes). mutate() itself refuses a mutant that repeats an
-# earlier one (same edit, same row), so a renamed duplicate adds no kill.
+# Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard. Ranged form
+# (ROWS-SPLIT, #11562): the unconditional share is FLOOR_ASSERTIONS - DECLARED_TOTAL (698 measured passes:
+# fixture builds, row_*/chk assertions, the ctl-* controls and the kill summaries above — all run on every arm);
+# the ranged share is exactly the EXECUTED in-range sites. A full run (no flag) reproduces the old 1276 floor.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1276   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 57 added by the observation-window probe fix (20 rows, 38 mutant kills) (measured below) + the merged-PR resolution probe fix, its review rounds and the restart floor (rows and mutants for the observation-window probe, itemised in the PR); floor kept equal to the measured count of 1276 passes
+OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"
+FLOOR_ASSERTIONS=1276   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds; kept equal to the measured full-run pass count
+EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
-if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
+_expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
+if [[ "$total" -lt "$_expected_total" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, expected at least %s for --rows %s-%s (unconditional %s + dispatched %s)\n' "$total" "$_expected_total" "$ROWS_LO" "$ROWS_HI" "$((FLOOR_ASSERTIONS - DECLARED_TOTAL))" "$EXPECTED_EXECUTED" >&2; exit 1
 fi
-FLOOR_MUTANTS=469   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 63 added by its review fix round A + 3 scan-hidden collection-materialization spellings (#10724) + 49 added by S4 PR5 glob-rate
-if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
-  printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
+# Ranged-sum reconciliation (replaces FLOOR_MUTANTS/MUT_RUN>=SITES_MUTATE/OW_MUT_RUN>=OW_SITES):
+# every declared site reached the gate, the gate dispatched exactly the range, and every dispatched
+# site was a mutant run — a skipped or doubly-counted site cannot hide behind the kill floors.
+if (( _site_seq != DECLARED_TOTAL )); then
+  printf '[FATAL] range gate: %s gated sites reached in_range, expected %s — a mutate/ow_mutate line was added, deleted or reordered without re-splitting the registered --rows ranges\n' "$_site_seq" "$DECLARED_TOTAL" >&2; exit 1
 fi
-# the counted floors (not `if` openers: they need the grep counts above, which a mutant of the literal floors above cannot carry)
-# every `mutate` line must have run (an exact reconciliation: a skipped or conditional line is a missing mutant)
-[[ "$MUT_RUN" -ge "$SITES_MUTATE" ]] || { printf '[FATAL] mutation floor: %s mutants ran but this file has %s mutate lines\n' "$MUT_RUN" "$SITES_MUTATE" >&2; exit 1; }
-OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"   # the observation-window section's own floor: every ow_mutate line must have run
-[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 108 && "$OW_MUT_KILLED" -eq "$OW_MUT_RUN" ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (at least 108 are required), %s were killed\n' "$OW_MUT_RUN" "$OW_SITES" "$OW_MUT_KILLED" >&2; exit 1; }
+if (( EXECUTED != EXPECTED_EXECUTED )); then
+  printf '[FATAL] range gate: %s sites dispatched, expected %s for --rows %s-%s — the gate mis-selected\n' "$EXECUTED" "$EXPECTED_EXECUTED" "$ROWS_LO" "$ROWS_HI" >&2; exit 1
+fi
+if (( MUT_RUN + OW_MUT_RUN != EXECUTED )); then
+  printf '[FATAL] range gate: %s mutants ran but %s sites dispatched — a gated site bypassed the mutant drivers\n' "$((MUT_RUN + OW_MUT_RUN))" "$EXECUTED" >&2; exit 1
+fi
+if (( SITES_MUTATE + OW_SITES != DECLARED_TOTAL )); then
+  printf '[FATAL] census: %s top-level mutate + %s ow_mutate lines != DECLARED_TOTAL %s — bump DECLARED_TOTAL and re-split the registered --rows ranges in the same commit\n' "$SITES_MUTATE" "$OW_SITES" "$DECLARED_TOTAL" >&2; exit 1
+fi
+if (( OW_SITES < 108 || OW_MUT_KILLED != OW_MUT_RUN )); then
+  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=108 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 1
+fi
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
 printf 'FAILED: %s\n' "${FAILED[@]}" >&2

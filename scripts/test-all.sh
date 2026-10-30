@@ -7155,12 +7155,30 @@ if want_scripts; then
   # auto-globbed.
   #
   # PR-GATED (ADR-262). Declared by dependency, not by its whole-scripts/ hardlink copy set.
+  # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~29-min atomic suite this battery
+  # was a test-scripts shard worst leg, so it registers FOUR times — the -a/-b/-c/-d arms
+  # below carrying complementary --rows ranges over its DECLARED_TOTAL gated row blocks.
+  # ONE `if` over all four arms — they share TEST_ALL_AFFECTED_BATTERY_PATHS, so declines
+  # stay identical per arm and the derived-gate-count floor holds. The boundary lives in
+  # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is asserted by
+  # plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges must pin to
+  # distinct legs in the committed manifests. A DECLARED_TOTAL bump in the battery must
+  # land in the same commit as a re-split of these ranges.
   if _diff_touches --pr-gated "${TEST_ALL_AFFECTED_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/test-all-affected" bash scripts/test-all-affected.test.sh
+    run_suite "scripts/test-all-affected-a" bash scripts/test-all-affected.test.sh --rows 1-13
+    run_suite "scripts/test-all-affected-b" bash scripts/test-all-affected.test.sh --rows 14-32
+    run_suite "scripts/test-all-affected-c" bash scripts/test-all-affected.test.sh --rows 33-36
+    run_suite "scripts/test-all-affected-d" bash scripts/test-all-affected.test.sh --rows 37-38
   else
-    _relevance_declined=$((_relevance_declined + 1))
-    skip_suite "scripts/test-all-affected" "relevance" \
-      "bash scripts/test-all-affected.test.sh"
+    _relevance_declined=$((_relevance_declined + 4))
+    skip_suite "scripts/test-all-affected-a" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 1-13"
+    skip_suite "scripts/test-all-affected-b" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 14-32"
+    skip_suite "scripts/test-all-affected-c" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 33-36"
+    skip_suite "scripts/test-all-affected-d" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 37-38"
   fi
   # TEST_GROUP=affected (#8621) — the compat alias of the --affected axis
   # (the #8591 heuristic it replaced was folded in). Registered explicitly beside
@@ -7217,6 +7235,21 @@ if want_scripts; then
           "bash plugins/soleur/test/c4-from-components.test.sh"
         continue
       fi
+    fi
+    # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
+    # battery was the test-scripts shard's worst leg, so it registers THREE times —
+    # the -a/-b/-c arms below carrying complementary --rows ranges over its
+    # DECLARED_TOTAL gated sites. Unconditional like its siblings (no relevance gate,
+    # so no skip_suite pairing — the suite is never declined). The boundary lives in
+    # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
+    # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
+    # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
+    # the battery must land in the same commit as a re-split of these ranges.
+    if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash "$f" --rows 1-193
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash "$f" --rows 194-386
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash "$f" --rows 387-578
+      continue
     fi
     run_suite "$f" bash "$f"
   done
