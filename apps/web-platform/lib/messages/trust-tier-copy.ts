@@ -60,12 +60,12 @@ export const REVOCATION_REASON_COPY = {
   quota_exhausted: {
     label: "Quota exhausted",
     description:
-      "Reached the 100-send limit for this template. Click Send again to re-authorize for another 100.",
+      "Reached the 100-send limit for this template.",
   },
   expired: {
     label: "Expired",
     description:
-      "The 90-day authorization window closed. Click Send again to re-authorize.",
+      "The 90-day authorization window closed.",
   },
   dsr_erasure: {
     label: "Erased (DSAR)",
