@@ -19,6 +19,22 @@
 # block scalars DO carry `#` lines through safe_load, so run bodies are
 # comment-stripped before matching.
 #
+# CREDENTIAL-WIRING SURFACE (the member names the property, the checks name
+# every channel that reaches it). `no-cred-wiring` does not stop at step env
+# and `with:`: a token can reach npm's auth selection through `env:` at the
+# job (`jobs.publish.env`) or workflow (top-level `env:`) level, through a
+# `run:` body (env-prefixed `npm publish`, `export`, `.npmrc` heredoc,
+# `npm config set`), and through a committed `packages/opencode-plugin/.npmrc`
+# (read because the publish step's `working-directory:` is the project npmrc
+# dir). All six are scanned. `no-environment` and `github-hosted-runner` pin
+# the OIDC binding's other two silent-break channels: the npm-side trust
+# entry is bound with NO environment (a job `environment:` changes the OIDC
+# claims and re-E404s) and trusted publishing only works on GitHub-hosted
+# runners. `npm11-step`/`npm-publish-retained` pin POSITION and SHAPE, not
+# just presence: the install must precede the publish, and the publish must
+# keep `--access public --ignore-scripts` (a bare `npm publish` publishes a
+# scoped package as private or fails the access gate).
+#
 # VACUITY IS A HARD FAILURE. A workflow whose `jobs.publish` is absent, or
 # parses to a non-map, reports VIOLATION and exits non-zero — never "0 publish
 # jobs checked" green.
@@ -60,7 +76,8 @@ python3 -c 'import yaml' 2>/dev/null || { echo "FATAL: pyyaml required"; exit 2;
 echo "=== npm-publish OIDC wiring ==="
 
 # wiring_probe <workflow-file> <member|all>
-#   member: `id-token` | `no-cred-wiring` | `npm11-step` | `npm-publish-retained` | `all`
+#   member: `id-token` | `no-cred-wiring` | `npm11-step` | `npm-publish-retained`
+#         | `no-environment` | `github-hosted-runner` | `all`
 #   exit 0 when the member (or every member, for `all`) holds; prints one
 #   `VIOLATION: <member>` line per failure. `all` is the mutation-battery
 #   predicate — a file failing ANY member is RED.
@@ -69,7 +86,7 @@ echo "=== npm-publish OIDC wiring ==="
 # line inside a `run:` scalar cannot satisfy the CLI-floor member.
 wiring_probe() {
   python3 - "$1" "$2" <<'PYG'
-import re, sys, yaml
+import os, re, sys, yaml
 
 path, member = sys.argv[1], sys.argv[2]
 violations = []
@@ -91,7 +108,8 @@ if not isinstance(pub, dict):
     sys.stderr.write("VIOLATION: jobs.publish missing or not a map\n")
     raise SystemExit(1)
 
-want = lambda m: member in ("all", m)
+def want(m):
+    return member in ("all", m)
 
 if want("id-token"):
     perms = pub.get("permissions")
@@ -113,30 +131,87 @@ def run_body(st):
     )
 
 if want("no-cred-wiring"):
-    key_pat = re.compile(r"AUTH_?TOKEN|_authToken", re.IGNORECASE)
-    val_pat = re.compile(r"_authToken|secrets\.NPM_TOKEN")
+    # Every channel by which a token can reach npm's auth selection:
+    # env keys at workflow / job / step level, `with:` registry-url (setup-node
+    # writes .npmrc _authToken), run-body writes (.npmrc / npm config set /
+    # env-prefixed publish), and the project .npmrc at the publish step's
+    # working-directory.
+    key_pat = re.compile(r"AUTH_?TOKEN|_authToken|NPM_TOKEN|npm_config_", re.IGNORECASE)
+    val_pat = re.compile(r"_authToken|secrets\.NPM_TOKEN", re.IGNORECASE)
+    body_pat = re.compile(
+        r"_authToken|NPM_TOKEN|AUTH_?TOKEN\s*=|npm\s+config\s+set", re.IGNORECASE)
+    env_scopes = [
+        ("workflow", doc.get("env")),
+        ("jobs.publish", pub.get("env")),
+    ]
+    env_scopes += [
+        ("step %d" % i, st.get("env"))
+        for i, st in enumerate(steps) if isinstance(st, dict)
+    ]
+    for scope, env in env_scopes:
+        if not isinstance(env, dict):
+            continue
+        for k, v in env.items():
+            if key_pat.search(str(k)) or val_pat.search(str(v)):
+                violations.append(
+                    "no-cred-wiring: %s env carries credential wiring (%s)" % (scope, k))
     for i, st in enumerate(steps):
         if not isinstance(st, dict):
             continue
-        env = st.get("env")
-        if isinstance(env, dict):
-            for k, v in env.items():
-                if key_pat.search(str(k)) or val_pat.search(str(v)):
-                    violations.append(
-                        "no-cred-wiring: step %d env carries credential wiring (%s)" % (i, k))
         with_ = st.get("with")
         if isinstance(with_, dict) and "registry-url" in with_:
             violations.append(
                 "no-cred-wiring: step %d `with:` carries registry-url "
                 "(writes .npmrc _authToken, masks OIDC auth)" % i)
+    for i, st in enumerate(steps):
+        m = body_pat.search(run_body(st))
+        if m:
+            violations.append(
+                "no-cred-wiring: step %d run body carries credential wiring (%s)" % (i, m.group(0)))
+    # The publish step's working-directory IS a project-npmrc dir; a committed
+    # .npmrc carrying _authToken there masks OIDC selection identically.
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(path)))
+    npmrc = os.path.join(repo_root, "packages", "opencode-plugin", ".npmrc")
+    if os.path.isfile(npmrc):
+        for line in open(npmrc):
+            if re.search(r"_authToken|NPM_TOKEN", line):
+                violations.append(
+                    "no-cred-wiring: %s carries credential wiring" % npmrc)
+                break
 
 run_bodies = "\n".join(run_body(st) for st in steps)
 if want("npm11-step"):
-    if not re.search(r"npm\s+install\s+-g\s+npm@\^11\b", run_bodies):
+    install_idx = publish_idx = None
+    for i, st in enumerate(steps):
+        body = run_body(st)
+        if install_idx is None and re.search(r"npm\s+install\s+-g\s+npm@\^11\b", body):
+            install_idx = i
+        if publish_idx is None and re.search(r"\bnpm\s+publish\b", body):
+            publish_idx = i
+    if install_idx is None:
         violations.append("npm11-step: no step installs npm@^11 (>= 11.5.1 floor)")
+    elif publish_idx is not None and install_idx > publish_idx:
+        violations.append(
+            "npm11-step: npm@^11 install runs AFTER npm publish (bundled npm 10.x publishes)")
 if want("npm-publish-retained"):
     if not re.search(r"\bnpm\s+publish\b", run_bodies):
         violations.append("npm-publish-retained: no step invokes `npm publish`")
+    elif not re.search(r"\bnpm\s+publish\s+--access\s+public\s+--ignore-scripts\b", run_bodies):
+        violations.append(
+            "npm-publish-retained: `npm publish` lost its flag contract "
+            "(--access public --ignore-scripts)")
+if want("no-environment"):
+    if pub.get("environment") is not None:
+        violations.append(
+            "no-environment: jobs.publish sets `environment:` — the npm-side "
+            "trust entry is bound with no environment; OIDC claims would mismatch (E404)")
+if want("github-hosted-runner"):
+    runs_on = pub.get("runs-on")
+    labels = runs_on if isinstance(runs_on, list) else [runs_on]
+    if any("self-hosted" in str(l) for l in labels):
+        violations.append(
+            "github-hosted-runner: npm trusted publishing does not run on "
+            "self-hosted runners (no OIDC exchange)")
 
 if violations:
     for v in violations:
@@ -149,7 +224,7 @@ PYG
 # ---------------------------------------------------------------------------
 # Member rows — each contract member reported individually against the real file.
 # ---------------------------------------------------------------------------
-for m in id-token no-cred-wiring npm11-step npm-publish-retained; do
+for m in id-token no-cred-wiring npm11-step npm-publish-retained no-environment github-hosted-runner; do
   CASES=$((CASES + 1))
   rc=0; out="$(wiring_probe "$WF" "$m" 2>&1)" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
@@ -205,6 +280,36 @@ elif variant == "m5":  # jobs.publish parses to a non-map
     doc["jobs"]["publish"] = "not-a-map"
 elif variant == "m6":  # compliant superset: extra unrelated permission
     pub["permissions"]["issues"] = "read"
+elif variant == "m7":  # job-level env carries a token (step-env channel bypass)
+    pub.setdefault("env", {})["NODE_AUTH_TOKEN"] = "${{ secrets.NPM_TOKEN }}"
+elif variant == "m8":  # workflow-level env carries a token
+    doc.setdefault("env", {})["NPM_TOKEN"] = "x"
+elif variant == "m9":  # job gains environment: (breaks the no-environment OIDC binding)
+    pub["environment"] = "production"
+elif variant == "m10":  # self-hosted runner (trusted publishing unsupported)
+    pub["runs-on"] = "self-hosted"
+elif variant == "m11":  # npm@^11 install moved AFTER npm publish
+    install = publish = None
+    for i, st in enumerate(pub.get("steps", [])):
+        body = str(st.get("run", ""))
+        if install is None and "npm install -g npm@^11" in body:
+            install = i
+        if publish is None and "npm publish" in body:
+            publish = i
+    if install is not None and publish is not None:
+        pub["steps"].insert(publish + 1, pub["steps"].pop(install))
+elif variant == "m12":  # npm publish loses its flag contract
+    for st in pub.get("steps", []):
+        if "npm publish --access public --ignore-scripts" in str(st.get("run", "")):
+            st["run"] = str(st["run"]).replace(
+                "npm publish --access public --ignore-scripts", "npm publish")
+            break
+elif variant == "m13":  # run-body credential write (npm config set _authToken)
+    for st in pub.get("steps", []):
+        if "npm publish" in str(st.get("run", "")):
+            st["run"] = str(st["run"]) + \
+                "\nnpm config set //registry.npmjs.org/:_authToken=dead\n"
+            break
 else:
     sys.stderr.write("unknown variant %s\n" % variant)
     raise SystemExit(2)
@@ -233,7 +338,7 @@ expect_pass() { # expect_pass <label> <file>
   fi
 }
 
-for v in m1 m2 m3 m4 m5 m6; do
+for v in m1 m2 m3 m4 m5 m6 m7 m8 m9 m10 m11 m12 m13; do
   f="$SANDBOX/mutated-$v.yml"
   assert_fixture_dir "$(dirname "$f")"
   rc=0; mutate "$v" "$f" || rc=$?
@@ -246,6 +351,13 @@ expect_red "no publish job (vacuous dispatch)"      "$SANDBOX/mutated-m3.yml"
 expect_red "delete npm@^11 freshness step"          "$SANDBOX/mutated-m4.yml"
 expect_red "jobs.publish parses to a non-map"       "$SANDBOX/mutated-m5.yml"
 expect_pass "extra unrelated permission (superset)" "$SANDBOX/mutated-m6.yml"
+expect_red "job-level env carries a token"          "$SANDBOX/mutated-m7.yml"
+expect_red "workflow-level env carries a token"     "$SANDBOX/mutated-m8.yml"
+expect_red "job gains environment: (binding break)" "$SANDBOX/mutated-m9.yml"
+expect_red "self-hosted runner"                     "$SANDBOX/mutated-m10.yml"
+expect_red "npm@^11 install after npm publish"      "$SANDBOX/mutated-m11.yml"
+expect_red "npm publish loses flag contract"        "$SANDBOX/mutated-m12.yml"
+expect_red "run-body npm config set _authToken"     "$SANDBOX/mutated-m13.yml"
 
 # ---------------------------------------------------------------------------
 # Verdict accounting. The floor compares a counter this file increments at each
@@ -267,8 +379,8 @@ if [[ "$CASES" -ne "$((PASS + FAIL))" ]]; then
   echo "FATAL: verdict accounting desync: $CASES call sites but $((PASS + FAIL)) verdicts — assertions ran and their verdicts were discarded." >&2
   exit 1
 fi
-if [[ "$((PASS + FAIL))" -lt 11 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 11." >&2
+if [[ "$((PASS + FAIL))" -lt 20 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 20." >&2
   exit 1
 fi
 echo "$PASS passed, $FAIL failed ($((PASS + FAIL)) assertions)"
