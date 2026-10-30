@@ -1,0 +1,12 @@
+# Decision Challenges — feat-one-shot-11386-cold-run-cache-warm
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| ECR-dead latch threshold (consecutive throttle exhaustions before skipping ECR) | technical | Ruled by CTO agent, 2026-10-28: SUPABASE_ECR_DEAD_AFTER default 2 - run 40653699076 showed every image paying ~65s of ECR burn; one exhaustion could be transient contention, two consecutive exhaustions on a shared-IP bucket is saturation evidence. Cost of a false latch is ECR upside foregone for one run only (in-memory state), and the env var stays tunable. |
+| Latch counter reset semantics | technical | Ruled by CTO agent, 2026-10-28: reset the consecutive counter on ANY non-throttle ECR outcome (success or deterministic failure such as name unknown) - a deterministic answer proves the registry responded, which is evidence against saturation; matching the issue's "consecutive" wording exactly. |
+| Job timeout target | technical | Ruled by CTO agent, 2026-10-28: timeout-minutes 45 (the issue's proposal), not 60 - post-latch worst case is ~20-30 min throttled pulls + ~4 min tar write + ~10 min suite; 45 covers it with headroom while FR-4 partial save makes a residual overrun converge across runs instead of restart. 60 only extends a genuinely-hung job's blast radius. |
+| Partial-progress mechanism | technical | Ruled by CTO agent, 2026-10-28: best-effort pull loop plus present-subset save, NOT incremental per-image save - actions/cache post-job save is skipped on timeout-CANCEL, so a tar written mid-run never reaches the cache unless the step completes; a step that finishes failed still runs the post save, banking the partial set for the next run. Same property, reachable mechanism. |
+| Throttle signal for the latch | technical | Ruled by CTO agent, 2026-10-28: classify by the ECR attempt's output tail (tail -n 40 grep -qi toomanyrequests) inside the caller, keeping ghcr-pull-with-retry.sh unchanged - a distinct exhaustion rc would edit a contract pinned by the b:exhaust-rc / b:non-sig-rc suite rows and the supabase-start call site for no added property. |
+| Compression for the tar write | technical | Ruled by CTO agent, 2026-10-28: pigz -1 when command -v pigz succeeds, else gzip -1 - pigz is opportunistic (its absence degrades to gzip -1); gzip -1 alone typically cuts compression time several-fold versus the level-6 default while the docker save production rate stays the real floor. |

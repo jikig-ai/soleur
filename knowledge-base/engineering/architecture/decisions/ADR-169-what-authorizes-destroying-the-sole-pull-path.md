@@ -702,3 +702,7 @@ have been `disabled_manually` since 2026-10-01T21:30Z (the hold for the web-1 pl
 merge that changes a registry render input dispatches a workflow that does not run, and nothing re-fires the
 replace. Such a change waits until the pause is lifted; `scripts/registry-replace-preflight.sh` is read before
 it lands. The decision of this ADR is unchanged: the pause makes delivery late, not unauthorized.
+
+## Amendment 2026-10-23 — the post-destroy exit annotations (#9757 item 2)
+
+The body above says twice that the post-destroy restore step ends a rejected credential in an exit-5 arm "naming rotation as the remedy" (and, later, "a non-retryable exit 5 naming rotation"). The annotation has said the opposite since #7290: it routes to the measure-first runbook section and tells the operator not to rotate first, because the htpasswd is baked once at boot. This amendment also records that exits 2 and 5 now each name two causes (a source or credential fault, or the runner's crane login command failing locally) and that exit 78 (the engine refusing to run traced) has its own arm in the restore step and in gate A2. The decision itself is unchanged.

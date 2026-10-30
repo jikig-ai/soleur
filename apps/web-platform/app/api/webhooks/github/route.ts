@@ -299,6 +299,10 @@ export async function POST(request: Request) {
           inngest.send({
             id: `github-${deliveryId}`,
             name: WORKSPACE_RECONCILE_REQUESTED_EVENT,
+            // inngest@4's SendEventPayload type omits `v` (the EventSchemas
+            // feature it keyed was removed), but the send runtime still
+            // relays the field verbatim and workspace-reconcile-on-push
+            // reads `event.v` for schema versioning — keep it on the wire.
             v: WORKSPACE_RECONCILE_SCHEMA_V,
             data: {
               installationId,
@@ -313,7 +317,7 @@ export async function POST(request: Request) {
               fullName: reconcilable.fullName,
               pushReceivedAt: Date.now(),
             },
-          }),
+          } as Parameters<typeof inngest.send>[0]),
         { feature: "github-webhook", deliveryId },
       );
     } catch (err) {
@@ -500,6 +504,9 @@ export async function POST(request: Request) {
         inngest.send({
           id: `github-${deliveryId}`,
           name: actionClass,
+          // See the WORKSPACE_RECONCILE_REQUESTED_EVENT send above: `v` is a
+          // type-level omission in inngest@4 but still relays on the wire;
+          // github-on-event reads `event.v` for deadletter gating.
           v: "1",
           data: {
             founderId,
@@ -510,7 +517,7 @@ export async function POST(request: Request) {
             tier: grant.tier,
             rawBody: redactedRawBody,
           },
-        }),
+        } as Parameters<typeof inngest.send>[0]),
       { feature: "github-webhook", deliveryId },
     );
   } catch (err) {

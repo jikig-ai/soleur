@@ -111,12 +111,10 @@ export const cronExpensesVerifyBy = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 8 * * 1" },
+      { event: "cron/expenses-verify-by.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 8 * * 1" },
-    { event: "cron/expenses-verify-by.manual-trigger" },
-  ],
-  cronExpensesVerifyByHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronExpensesVerifyByHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

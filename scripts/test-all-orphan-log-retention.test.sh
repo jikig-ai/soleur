@@ -192,8 +192,9 @@ rc=0
 # env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL: under an agent-run gate the refusal guard would
 # bounce the sandbox run to exit 4 before any suite executes. TEST_GROUP/MODE/
 # SCRIPTS_SHARD/SOLEUR_TEST_FORCE_ALL are the outer run's selection state — an
-# inherited TEST_GROUP=affected narrows the sandbox's own selection to zero
-# suites and the run exits 0 without ever executing the fixture.
+# inherited TEST_GROUP value (a shard, or the TEST_GROUP=affected alias of
+# --affected) perturbs the sandbox's own selection and the run's fixture
+# coverage.
 env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_A/test-all.sh" >"$out" 2>&1 || rc=$?
 
 if [[ "$rc" != "0" ]]; then

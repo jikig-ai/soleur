@@ -228,11 +228,16 @@ function setupSupabaseMock(userData: Record<string, unknown>) {
       const conversationsUpdateChain: Record<string, unknown> = {
         error: null,
         eq: vi.fn(),
+        // `.in("status", ...)`: the gate's hold/restore are compare-and-set writes (#11303)
+        in: vi.fn(),
         select: vi.fn(() =>
           Promise.resolve({ data: [{ id: "mock" }], error: null }),
         ),
       };
       (conversationsUpdateChain.eq as ReturnType<typeof vi.fn>).mockReturnValue(
+        conversationsUpdateChain,
+      );
+      (conversationsUpdateChain.in as ReturnType<typeof vi.fn>).mockReturnValue(
         conversationsUpdateChain,
       );
       return {

@@ -556,6 +556,7 @@ if (( _SHARD_N > 0 )); then
       echo "[shard] manifest assignment active: ${_shard_mcount} suite(s) from ${_shard_mfile}" >&2
     fi
   fi
+  _dur_file="${_shard_mfile%/*}/suite-durations.tsv"  # heavy-first dispatch reads the table beside the manifest
   unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mdup _shard_mcount _shard_mval
 
   # Apply the partition. Manifest rows hit by label; an untabled suite (added
@@ -582,6 +583,28 @@ if (( _SHARD_N > 0 )); then
   done
   SUITES=("${_assigned[@]}")
   unset _assigned _ord _s _leg _mi
+
+  # Heavy-first dispatch (#11568). xargs hands suites out in list order, and that order is the
+  # path-sorted one, so a long suite whose name sorts late (workspaces-boot-unlock, ~690 s at
+  # -P 4) started ~210 s into leg 4/4 and the leg ran past its 15-minute ceiling (run
+  # 40964559289) although the suites summed to only ~1900 s over four slots. Longest-first
+  # puts the critical path at the front, so leg wall ~ max(longest suite, sum/JOBS) instead of
+  # start-offset + longest. Order only: the set, the accounting and every verdict are
+  # unchanged. Unmeasured suites rank as the table default (4000 ms); no table -> sorted order.
+  if (( _shard_manifest_active == 1 )) && [[ -f "$_dur_file" ]]; then
+    declare -A _dur_ms=()
+    while IFS=$'\t' read -r _dl _dm _dr; do
+      case "$_dl" in "" | "#"*) continue ;; esac
+      [[ "$_dm" =~ ^[0123456789]{1,9}$ ]] && _dur_ms["$_dl"]=$(( 10#$_dm ))
+    done < "$_dur_file"
+    mapfile -t SUITES < <(
+      for _s in "${SUITES[@]}"; do
+        printf '%s\t%s\n' "${_dur_ms[$_s]:-4000}" "$_s"
+      done | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 | cut -f2
+    )
+    unset _dur_ms _dl _dm _dr _s
+  fi
+  unset _dur_file
 
   # Zero-assignment is a REFUSAL, not an empty green leg: a leg that owns
   # nothing would report "0 failed" and read as coverage.
@@ -649,8 +672,11 @@ _SUITE_BOUNDS=(
   "apps/web-platform/infra/git-data-ownership.test.sh=300"
   # #8609: the Guard 7 mutation rows took the suite from ~360 to 485 assertions. At 180 s it was
   # bound-killed mid-run (rc=124 at 180 s, run 36730312987) while green; measured 385 s serial on a
-  # contended local host. 540 s matches the other mutation-heavy suites below and fits the 15-min leg.
-  "apps/web-platform/infra/ci-deploy.test.sh=540"
+  # contended local host. 540 s matched the other mutation-heavy suites at the time.
+  # #11568: at 735 assertions the suite now measures ~350 s serial locally and >540 s on a contended
+  # hosted leg (rc=124 at 540 s, run 40951090093 leg 2/4, twice) while green. 900 s is ≥1.5x that
+  # worst observed and still fits the leg ceiling.
+  "apps/web-platform/infra/ci-deploy.test.sh=900"
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
@@ -711,6 +737,12 @@ _SUITE_BOUNDS=(
   # block's >=1.5x-worst-observed rule and the sibling entries' same basis — a slow day renders as
   # this suite's RED, not a step-ceiling kill.
   "apps/web-platform/infra/git-data-wipe-assert.test.sh=720"
+  # #11388 (review of PR 11483): the family-wide alert structure suite runs its mutation battery as ~85 inner
+  # runs (6 at a time), each a 10-12 s lexer pass, so about 7 runnable processes compete for 4 vCPUs. Measured
+  # ~124 s wall idle and 495 s at 6-way load on the dev host (faster than a 4-core CI runner; CI width is 4)
+  # against the 360 s default. Pin at 720 (git-data-wipe-assert precedent; ~1.5x the 495 s loaded figure)
+  # so a starved leg renders as this suite's own RED rather than a leg timeout.
+  "apps/web-platform/infra/betterstack-alert-structure.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

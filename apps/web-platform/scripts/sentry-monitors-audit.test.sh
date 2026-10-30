@@ -1518,19 +1518,19 @@ rm -rf "$TMP19P"
 
 echo "T19p6: without SENTRY_TF_DIR the real map is NOT consulted (fixture run stays all-drift)"
 TMP19P=$(mktemp -d)
-printf '%s' '[{"slug":"scheduled-bot-pr-reaper","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
-printf '%s' '[{"id":"1","name":"scheduled-bot-pr-reaper","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
+printf '%s' '[{"slug":"workspaces-luks-verify-web2","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
+printf '%s' '[{"id":"1","name":"workspaces-luks-verify-web2","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
 t19_run "$TMP19P"; w19p=$(t19_warning "$TMP19P")
 # Precondition: the real map still holds this key; once it is routed, repoint this row at another declared key.
-if grep -q '^[[:space:]]*scheduled_bot_pr_reaper[[:space:]]*=' "$SCRIPT_DIR/../infra/sentry/cron-monitor-alerts.tf" \
-   && grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -q 'scheduled-bot-pr-reaper' <<<"$w19p"; then pass "no coherent tf half: partition skipped"
-else fail "partition ran without a coherent tf half, or the real map lost scheduled_bot_pr_reaper: [${w19p}]"; fi
+if grep -q '^[[:space:]]*workspaces_luks_verify_web2[[:space:]]*=' "$SCRIPT_DIR/../infra/sentry/cron-monitor-alerts.tf" \
+   && grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -q 'workspaces-luks-verify-web2' <<<"$w19p"; then pass "no coherent tf half: partition skipped"
+else fail "partition ran without a coherent tf half, or the real map lost workspaces_luks_verify_web2: [${w19p}]"; fi
 rm -rf "$TMP19P"
 
 echo "T19p7: the REAL infra/sentry tree resolves both declared-pending monitors (a /* inside a # comment must not open a block)"
 TMP19P=$(mktemp -d)
-printf '%s' '[{"slug":"scheduled-bot-pr-reaper","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}},{"slug":"workspaces-luks-verify-web2","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
-printf '%s' '[{"id":"1","name":"scheduled-bot-pr-reaper","type":"monitor_check_in_failure","workflowIds":[]},{"id":"2","name":"workspaces-luks-verify-web2","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
+printf '%s' '[{"slug":"scheduled-betterstack-incident-mirror","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}},{"slug":"workspaces-luks-verify-web2","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
+printf '%s' '[{"id":"1","name":"scheduled-betterstack-incident-mirror","type":"monitor_check_in_failure","workflowIds":[]},{"id":"2","name":"workspaces-luks-verify-web2","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
 SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform SENTRY_API_HOST=de.sentry.io SENTRY_FIXTURE_MONITORS="$TMP19P/monitors.json" \
   SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" SENTRY_FIXTURE_DETECTORS="$TMP19P/detectors.json" SENTRY_TF_DIR="$SCRIPT_DIR/../infra/sentry" AUDIT_OUT_DIR="$TMP19P" bash "$SCRIPT" >/dev/null 2>"$TMP19P/stderr.txt"
 report=$(ls "$TMP19P"/sentry-migration-audit-*.md 2>/dev/null | head -1)

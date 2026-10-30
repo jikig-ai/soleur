@@ -113,12 +113,13 @@ FAKE
 chmod +x "$TMP/bin/gh"
 
 # --- fixture builders ------------------------------------------------------------------------------------------------------
-# new_fx: a fresh fixture dir with a compliant workflow (exactly one JOBS assignment, in the tests step) and no runs
+# new_fx: a fresh fixture dir with a compliant workflow (the post-#9410 shape: a test-infra leg job and ZERO JOBS
+# assignments anywhere) and no runs
 new_fx() {
   FX="$TMP/fx.$1"; assert_fixture_dir "$FX"; rm -rf "$FX"; mkdir -p "$FX"
   export FX
-  printf '%s\n' 'name: main-health-monitor' '# JOBS: 1 in a whole-line comment is not an assignment' 'jobs:' '  health-check:' '    steps:' \
-    '      - name: Run test suite' '        id: tests' '        env:' '          JOBS: 1' '      - name: Run infra suites' '        id: infra' '        env:' '          TEST_GROUP: infra' > "$FX/workflow.txt"
+  printf '%s\n' 'name: main-health-monitor' '# JOBS: 1 in a whole-line comment is not an assignment' 'jobs:' '  test-infra:' '    steps:' \
+    '      - name: Run infra suites' '        id: suite' '        env:' '          TEST_GROUP: infra' > "$FX/workflow.txt"
   echo '[]' > "$FX/runs.json"
 }
 # mkrun <rid> <offset s> <status> <conclusion> <infra: success|failure|skipped|cancelled|ABSENT> <timeout 0|1> [red suite...]
@@ -126,7 +127,7 @@ new_fx() {
 #   MK_K (default 4; "none" omits the width line)  MK_DUPK=1 (a second width line)  MK_ELAPSED (default 1, or 0 when timeout=1)
 #   MK_UNACC=1 (the real shape: an UNACCOUNTED line AND unaccounted=1 in the tally)  MK_UNACCLINE=1 (the line only)  MK_SUMU=1 (the tally only)
 #   MK_UNACC_PRE=1 (an UNACCOUNTED line BEFORE the infra env dump, outside the slice)  MK_SUMMARY=none (no tally line)  MK_SUMF=<n> (failed count)
-#   MK_SUMDUP=1 (the tally twice)  MK_DECOY=1 (SOLEUR|-prefixed look-alike tally and width lines)  MK_JOBDECOY=1 (a non-health-check job FIRST)
+#   MK_SUMDUP=1 (the tally twice)  MK_DECOY=1 (SOLEUR|-prefixed look-alike tally and width lines)  MK_JOBDECOY=1 (a non-test-infra job FIRST)
 #   MK_ANNDECOY=1 (an annotation with another title, saying infra=success, FIRST)  MK_NOESC=1 (a log with no ESC byte)  MK_TESTTMO=1 (the tests-step timeout annotation, a decoy)
 #   MK_MSG (the whole outcome message)  MK_ANN2=1 (a second valid outcome annotation)  MK_NOLOG / MK_NOJOBS / MK_NOHC=1
 mkrun() {
@@ -137,10 +138,10 @@ mkrun() {
     '. + [{databaseId:$id, createdAt:$c, status:$s, conclusion:$k, event:"workflow_dispatch"}]' "$FX/runs.json" > "$FX/runs.tmp" && mv "$FX/runs.tmp" "$FX/runs.json"
   if [ -z "${MK_NOJOBS:-}" ]; then
     if [ -n "${MK_NOHC:-}" ]; then printf '{"jobs":[{"id":%d,"name":"other"}]}\n' "$((jid + 1))" > "$FX/jobs-$rid.json"
-    elif [ -n "${MK_JOBDECOY:-}" ]; then printf '{"jobs":[{"id":%d,"name":"other"},{"id":%d,"name":"health-check"}]}\n' "$((jid + 1))" "$jid" > "$FX/jobs-$rid.json"
-    else printf '{"jobs":[{"id":%d,"name":"health-check"},{"id":%d,"name":"other"}]}\n' "$jid" "$((jid + 1))" > "$FX/jobs-$rid.json"; fi
+    elif [ -n "${MK_JOBDECOY:-}" ]; then printf '{"jobs":[{"id":%d,"name":"other"},{"id":%d,"name":"test-infra"}]}\n' "$((jid + 1))" "$jid" > "$FX/jobs-$rid.json"
+    else printf '{"jobs":[{"id":%d,"name":"test-infra"},{"id":%d,"name":"other"}]}\n' "$jid" "$((jid + 1))" > "$FX/jobs-$rid.json"; fi
   fi
-  msg="${MK_MSG-SOLEUR_MAIN_HEALTH tests=failure infra=$infra tests_elapsed_s=100$([ "$el" = 1 ] && echo ' infra_elapsed_s=200')}"
+  msg="${MK_MSG-SOLEUR_MAIN_HEALTH infra=$infra$([ "$el" = 1 ] && echo ' infra_elapsed_s=200')}"
   if [ "$infra" = ABSENT ]; then echo '[]' > "$FX/ann-$jid.json"
   else jq -n --arg m "$msg" '[{title:"main-health-outcomes",message:$m}]' > "$FX/ann-$jid.json"
   fi
@@ -151,7 +152,7 @@ mkrun() {
     jq '. + [{title:"",message:"The action '"'"'Run test suite'"'"' has timed out after 110 minutes."}]' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
   fi
   if [ -n "${MK_ANNDECOY:-}" ]; then
-    jq '[{title:"other-title",message:"SOLEUR_MAIN_HEALTH tests=success infra=success"}] + .' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
+    jq '[{title:"other-title",message:"SOLEUR_MAIN_HEALTH infra=success"}] + .' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
   fi
   if [ -n "${MK_ANN2:-}" ]; then
     jq --arg m "$msg" '. + [{title:"main-health-outcomes",message:$m}]' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
@@ -238,7 +239,7 @@ _selftest_helpers
 
 [ -r "$PROBE" ] || { echo "[FATAL] probe not found at $PROBE"; exit 1; }
 
-# R0 control: 12 clean runs at the default width, one JOBS assignment on main
+# R0 control: 12 clean runs at the default width, zero JOBS assignments on main (post-#9410 baseline)
 new_fx r0; good_runs 12; run_probe "$PROBE"; expect "R0 12 clean runs" 0 "-P 4"
 # R1 the infra pin is still on main -> NOT YET, never 0 (bare and QUOTED keys both count)
 new_fx r1a; good_runs 12; printf '%s\n' '        env:' '          JOBS: 1' >> "$FX/workflow.txt"; run_probe "$PROBE"; expect "R1a infra pin still on main" 2
@@ -281,7 +282,7 @@ new_fx r4k; good_runs 11; MK_ELAPSED=0 mkrun 90041 40000 completed success failu
 run_probe "$PROBE"; expect "R4k infra=failure with NO infra_elapsed_s and no timeout annotation is a kill that lost its annotation" 1 90041
 new_fx r4l; good_runs 11; mkrun 90060 40000 completed success failure 0 foo.test.sh bar.test.sh
 run_probe "$PROBE"; expect "R4l ONE run holding TWO non-allowlisted REDs is two strikes, not one" 5 90060 foo.test.sh bar.test.sh
-new_fx r4l2; good_runs 11; MK_MSG="SOLEUR_MAIN_HEALTH tests=failure infra=failure infra_elapsed_s=" mkrun 90061 40000 completed success failure 0 other.test.sh
+new_fx r4l2; good_runs 11; MK_MSG="SOLEUR_MAIN_HEALTH infra=failure infra_elapsed_s=" mkrun 90061 40000 completed success failure 0 other.test.sh
 run_probe "$PROBE"; expect "R4l2 an EMPTY infra_elapsed_s token is not a number: the step did not complete" 1 90061
 new_fx r4n; good_runs 11; MK_ELAPSED=1 mkrun 90062 40000 completed success failure 1 other.test.sh
 run_probe "$PROBE"; expect "R4n the infra timeout annotation kills even when infra_elapsed_s is present" 1 90062
@@ -308,7 +309,7 @@ new_fx r4e8; good_runs 11; MK_DECOY=1 mkrun 90077 40000 completed success failur
 run_probe "$PROBE"; expect "R4e8 SOLEUR|-prefixed look-alike tally and width lines inside a suite excerpt change nothing" 0 "Allowlisted tag-drift RED in run(s): 90077"
 new_fx r4r; good_runs 11; mkrun 90078 40000 completed success failure 0 '*'
 run_probe "$PROBE"; expect "R4r a RED name of * is ONE strike named <unsafe-name>, never expanded against the working directory" 0 "Tolerated strike(s): 90078(<unsafe-name>)"
-new_fx r4s; good_runs 11; MK_JOBDECOY=1 mkrun 90079 40000 completed success success 0; run_probe "$PROBE"; expect "R4s the health-check job is picked by NAME, not by position" 0
+new_fx r4s; good_runs 11; MK_JOBDECOY=1 mkrun 90079 40000 completed success success 0; run_probe "$PROBE"; expect "R4s the test-infra job is picked by NAME, not by position" 0
 new_fx r4t; good_runs 11; MK_ANNDECOY=1 mkrun 90080 40000 completed success failure 1; run_probe "$PROBE"; expect "R4t an annotation with another title (saying infra=success) is ignored: the kill still reads" 1 90080
 # precedence: every conflict between two verdict classes, so a reordered block cannot stay green
 new_fx r10a; good_runs 10; mkrun 90080 40000 completed success skipped 0; mkrun 90081 41000 completed success failure 1
@@ -350,10 +351,10 @@ new_fx r5g; good_runs 12; rm "$FX/ann-91001.json"; run_probe "$PROBE"; expect "R
 new_fx r5h; good_runs 12; echo '[]' > "$FX/ann-91003.json"; run_probe "$PROBE"; expect "R5h an empty annotation list on a counted run" 3
 new_fx r5i; good_runs 11; MK_ANN2=1 mkrun 90042 40000 completed success success 0; run_probe "$PROBE"; expect "R5i TWO outcome annotations on one run (first=success must not be trusted)" 3 90042
 new_fx r5j; good_runs 11; MK_MSG="something else entirely infra=success" mkrun 90043 40000 completed success success 0; run_probe "$PROBE"; expect "R5j an annotation that does not start SOLEUR_MAIN_HEALTH" 3 90043
-new_fx r5k; good_runs 11; MK_MSG="SOLEUR_MAIN_HEALTH tests=failure infra=failure infra=success infra_elapsed_s=5" mkrun 90044 40000 completed success failure 0 other.test.sh; run_probe "$PROBE"; expect "R5k two infra= tokens in one message (last-wins would read success)" 3 90044
+new_fx r5k; good_runs 11; MK_MSG="SOLEUR_MAIN_HEALTH infra=failure infra=success infra_elapsed_s=5" mkrun 90044 40000 completed success failure 0 other.test.sh; run_probe "$PROBE"; expect "R5k two infra= tokens in one message (last-wins would read success)" 3 90044
 new_fx r5l; good_runs 11; MK_NOLOG=1 mkrun 90045 40000 completed success failure 0; run_probe "$PROBE"; expect "R5l a failed job-log read" 3 90045
 new_fx r5m; good_runs 11; MK_NOJOBS=1 mkrun 90046 40000 completed success success 0; run_probe "$PROBE"; expect "R5m a failed jobs read" 3 90046
-new_fx r5n; good_runs 11; MK_NOHC=1 mkrun 90047 40000 completed success success 0; run_probe "$PROBE"; expect "R5n a run with no health-check job" 3 90047
+new_fx r5n; good_runs 11; MK_NOHC=1 mkrun 90047 40000 completed success success 0; run_probe "$PROBE"; expect "R5n a run with no test-infra job" 3 90047
 # W the width proof: read from every counted run's log, BEFORE kill classification
 new_fx w1; good_runs 11; MK_K=1 mkrun 90050 40000 completed success success 0; run_probe "$PROBE"; expect "W1 a run that ran at -P 1 (a pinned run inside the window) is unreadable" 3 "90050(width:1)"
 new_fx w2; good_runs 11; MK_K=none mkrun 90051 40000 completed success success 0; run_probe "$PROBE"; expect "W2 a run whose log carries no width line" 3 "90051(width:none)"
@@ -381,9 +382,12 @@ run_probe "$PROBE"; expect "P1 shuffled, two cancelled, allowlisted RED, a bad r
 # X cross-checks against the REAL files this probe reads
 new_fx x; good_runs 12; cp "$WORKFLOW" "$FX/workflow.txt"; run_probe "$PROBE"; expect "X the real workflow on this tree passes the pin-count read" 0
 _tok="$(grep -vE '^[[:space:]]*#' "$WORKFLOW" | grep -cE "(^|[^A-Za-z0-9_])[\"']?JOBS[\"']?[[:space:]]*[:=]" || true)"
-if [ "$_tok" = 1 ]; then pass "X the real workflow carries exactly one JOBS assignment"; else fail "X the real workflow carries $_tok JOBS assignments, want 1"; fi
+if [ "$_tok" = 0 ]; then pass "X the real workflow carries no JOBS assignment (post-#9410 baseline)"; else fail "X the real workflow carries $_tok JOBS assignments, want 0"; fi
 _wfs="$(grep -vE '^[[:space:]]*#' "$WORKFLOW")"
-for _lit in 'main-health-outcomes' 'SOLEUR_MAIN_HEALTH' 'name: Run infra suites' 'id: infra' 'infra_elapsed_s' 'health-check:'; do
+# The literals the probe reads post-#9410: the job NAME it selects, the step
+# name its timeout annotation greps, the env line its log-slice anchors on,
+# and the LEG_ID wiring that makes the emitted tokens infra=/infra_elapsed_s=.
+for _lit in 'main-health-outcomes' 'SOLEUR_MAIN_HEALTH' 'name: Run infra suites' 'TEST_GROUP: infra' 'LEG_ID: infra' '${LEG_ID}_elapsed_s' 'test-infra:'; do
   case "$_wfs" in *"$_lit"*) pass "X the real workflow still carries the literal the probe reads: $_lit" ;; *) fail "X the real workflow lost the literal the probe reads: $_lit" ;; esac
 done
 _rs="$(grep -vE '^[[:space:]]*#' "$RUNNER")"
@@ -398,7 +402,7 @@ done
 
 # --- kill rows: each mutated COPY of the probe must change the verdict of the row that guards it, to an EXACT exit ------------
 new_fx m1; good_runs 12; printf '%s\n' '        env:' '          JOBS: 1' >> "$FX/workflow.txt"
-if mutate m1 '"$pins" -ge 2' '"$pins" -ge 99'; then run_probe "$MUT"; kill_row "K1 dropping the pin-count threshold is caught by R1a" 0; fi
+if mutate m1 '"$pins" -ge 1' '"$pins" -ge 99'; then run_probe "$MUT"; kill_row "K1 dropping the pin-count threshold is caught by R1a" 0; fi
 new_fx m2; good_runs 11
 if mutate m2 'N=12' 'N=11'; then run_probe "$MUT"; kill_row "K2 lowering the sample size is caught by R2a" 0; fi
 new_fx m3; good_runs 10; mkrun 90030 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh; mkrun 90031 41000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
@@ -480,7 +484,7 @@ set -f
 set +f
 '; then run_probe "$MUT"; kill_row "K37 enabling pathname expansion is caught by R4r (a RED name of * expands to the fixture files)" 5; fi
 new_fx m41; good_runs 11; MK_JOBDECOY=1 mkrun 90079 40000 completed success success 0
-if mutate m41 '[.jobs[] | select(.name == "health-check")][0].id // empty' '.jobs[0].id'; then run_probe "$MUT"; kill_row "K38 picking the first job instead of health-check is caught by R4s" 3; fi
+if mutate m41 '[.jobs[] | select(.name == "test-infra")][0].id // empty' '.jobs[0].id'; then run_probe "$MUT"; kill_row "K38 picking the first job instead of test-infra is caught by R4s" 3; fi
 new_fx m42; good_runs 11; MK_ANNDECOY=1 mkrun 90080 40000 completed success failure 1
 if mutate m42 '.title == "main-health-outcomes" and ' ''; then run_probe "$MUT"; kill_row "K39 dropping the annotation title filter is caught by R4t" 3; fi
 

@@ -774,7 +774,7 @@ export async function cronBugFixerHandler({
           feature: "cron-bug-fixer",
           op: "claude-eval-fatal",
           message:
-            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red",
+            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red (destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-bug-fixer", selectedIssue, ...decision.sentryExtra },
         },
       );
@@ -785,7 +785,7 @@ export async function cronBugFixerHandler({
           feature: "cron-bug-fixer",
           op: "claude-eval-nonzero-nofix",
           message:
-            "claude-eval exited non-zero (benign no-fix); cron monitor stays green (liveness, not success)",
+            "claude-eval exited non-zero (benign no-fix); cron monitor stays green (liveness, not success; destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-bug-fixer", selectedIssue, ...decision.sentryExtra },
         },
       );
@@ -804,7 +804,8 @@ export async function cronBugFixerHandler({
       );
       // No PR is the normal best-effort outcome → green liveness UNLESS the
       // claude exit was a FATAL class (decision.ok:false), in which case the
-      // monitor flips red and routine_runs records the scrubbed reason (#5674).
+      // monitor flips red and routine_runs records the scrubbed reason (#5674; monitor
+      // destroyed #6590 PR-B — the heartbeat void-posts by design).
       await step.run("sentry-heartbeat", async () => {
         await postSentryHeartbeat({ ok: decision.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
       });
@@ -891,7 +892,7 @@ export const cronBugFixer = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [{ cron: "0 6 * * *" }, { event: "cron/bug-fixer.manual-trigger" }],
   },
-  [{ cron: "0 6 * * *" }, { event: "cron/bug-fixer.manual-trigger" }],
-  cronBugFixerHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronBugFixerHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

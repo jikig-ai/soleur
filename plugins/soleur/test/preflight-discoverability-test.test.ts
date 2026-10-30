@@ -3018,7 +3018,73 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the rows are shipped by the host's own
   // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the hosts are no-SSH, and
   // the offline suites drive the canary check and the scrub against stubs and prove the event grammar, not that the stored stream carries it. Genuine.
-  const BASELINE_DECLARED_PROBES = 76;
+  // #10934 (2026-10-23): +1 (76 -> 77) for `2026-10-23-fix-inngest-selfgate-name-failing-phase-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep 'INNGEST_LINK: class=' --limit 1`)
+  // reads the web hosts' `ci-deploy` journald rows through the ClickHouse HTTP connection credential
+  // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the rows are shipped by the host's own
+  // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the hosts are no-SSH, and
+  // the offline suites drive the self-gate against a shared curl profile table and real curl and prove the event grammar, not that the stored
+  // stream carries the new phase fields. Genuine.
+  // #8293 (2026-10-24): +1 (77 -> 78) for `2026-10-24-feat-wikiskill-pattern-layer-proposer-index-ledger-reader-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 14d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 1`) reads the weekly
+  // marker row through the ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}). NO SUBSTITUTE: the marker is
+  // shipped by the web host's pino WARN path and the warehouse has no unauthenticated read path; the offline suites drive the handler and the
+  // emitter against stubs and prove the field set, not that the stored stream carries it (same declaration as the #8281 probe). Genuine.
+  // #11087/#10917 (2026-10-25): +1 (78 -> 79) for `2026-10-25-fix-release-cache-cap-and-skip-monitor-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command reads the repository's Actions cache usage (`gh api repos/jikig-ai/soleur/actions/cache/usage`) with a GH_TOKEN that
+  // has actions:read. NO SUBSTITUTE: the endpoint has no unauthenticated form, and the property being verified is the repo's own cache bytes,
+  // which only that endpoint reports; the offline suite proves the probe's exit-code table, not the live number. Genuine.
+  // #10975 (2026-10-25): +1 (79 -> 80) for `2026-10-25-feat-ship-terminator-journald-to-better-stack-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash -c 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep soleur-inngest-tls.service --limit 3'`)
+  // reads the Inngest host's terminator journal rows through the ClickHouse HTTP connection credential
+  // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the rows are shipped by the host's own
+  // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the host is no-SSH, and
+  // the offline suites drive the drop-list against `vector test` fixtures and prove the filter's behaviour, not that the stored stream
+  // carries the unit's rows. Genuine.
+  // #9927 (2026-10-25): +1 (80 -> 81) for `2026-10-24-feat-inngest-host-replace-window-prework-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the post-replace check reads the keeper's host-emitted row through the Better Stack ClickHouse read connection
+  // (BETTERSTACK_QUERY_*, Doppler soleur/prd_terraform). NO SUBSTITUTE: the host is deny-all-public with no SSH and the ingest token is
+  // write-only; the offline suites prove the row grammar, not that the stored stream carries it. Genuine.
+  // #11139 (2026-10-26): +1 (81 -> 82) for `2026-10-26-chore-trim-inngest-user-data-before-host-replace-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash apps/web-platform/infra/inngest-userdata-budget.sh --json`) renders the template with Terraform's
+  // `templatefile()` and `base64gzip()`; the `terraform` binary is not on Check 10's sandbox PATH and no allowlisted verb renders it.
+  // The declaration says so and says it is a tool-absence waiver, not a credential. NO SUBSTITUTE: the real gate is the CI job
+  // `inngest-userdata-budget` (it runs on every infra PR and every push to main) plus the same script run locally. Genuine, and the
+  // narrowest reading of the field: Check 10 records SKIP-DECLARED instead of a FAIL on an `rc=127` that proves nothing.
+  // #10552 (2026-10-26): +1 (82 -> 83) for `2026-10-26-fix-compound-promote-proposer-refusal-line-cap-and-skill-guard-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/compound-promote-draft-edit-10552.sh`) reads the proposer's outcome rows from the
+  // Better Stack ClickHouse read connection (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_scheduled). NO SUBSTITUTE: the
+  // refusal rows exist only in Better Stack and the warehouse has no unauthenticated read path; the offline suites prove the marker
+  // grammar and the probe's grading, not that the stored stream carries a run's rows. Genuine.
+  // #11179 (2026-10-26): +1 (83 -> 84) for `2026-10-26-feat-git-data-plaintext-volume-terraform-destroy-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash apps/web-platform/infra/git-data-plaintext-volume-state.sh`) reads the Hetzner API (volumes and servers by
+  // name) with HCLOUD_TOKEN_READONLY from Doppler soleur/prd_terraform. NO SUBSTITUTE: the provider API has no unauthenticated read of
+  // volume state, the host is no-SSH, and the offline suite drives the probe against a curl shim, not against the provider. Genuine.
+  // #11195 (2026-10-27): the probe command above is RETIRED (the script was deleted with the one-shot destroy workflow after run
+  // 40478209838). The declaration stays in the archived plan as history, so the count stays 85 and the TRUTH note above no longer holds.
+  // #10550 (2026-10-26): +1 (84 -> 85) for `2026-10-26-feat-wikiskill-phase-2-gated-new-skill-creation-plan.md` (now under plans/archive/).
+  // #10550 (2026-10-27): +1 (85 -> 86) for `2026-10-27-fix-create-arm-reserve-week-cap-slot-plan.md` (now under plans/archive/): the same
+  // marker-stream probe as the entry above, for the same reason (the marker exists only in production logs; no unauthenticated read path). Genuine.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 5`) reads the
+  // proposer's outcome marker rows from the Better Stack ClickHouse read connection (Better Stack Logs read token, Doppler). NO SUBSTITUTE:
+  // the marker exists only in production logs and the warehouse has no unauthenticated read path; the offline suites prove the marker
+  // grammar, not that the stored stream carries a run's rows. Genuine.
+  // #11303 (2026-10-27): +1 (86 -> 87) for `2026-10-27-fix-gated-tier-allowedtools-bypass-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-assert-absence.sh --host soleur-web-platform ...`) reads production log rows from the
+  // Better Stack ClickHouse read connection (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the
+  // `CAN_USE_TOOL_SHADOWED` rows exist only in production logs and the warehouse has no unauthenticated read path; the offline suites prove
+  // the probe's grading, not that the stored stream carries a session's rows. Genuine.
+  const BASELINE_DECLARED_PROBES = 87;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

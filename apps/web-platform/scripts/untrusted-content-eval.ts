@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classify, type UntrustedSource } from "../server/untrusted-content";
+import { classify, UNTRUSTED_PREAMBLES, type UntrustedSource } from "../server/untrusted-content";
 
 export const THRESHOLDS = {
   recall: 0.9,
@@ -43,7 +43,8 @@ export const CORPUS_PATH = join(
   "corpus.json",
 );
 
-const SOURCES = new Set(["web_fetch", "email", "inbox", "crm"]);
+// Derived, not restated: a hand-kept copy of the union goes stale the moment a source is added.
+const SOURCES = new Set<string>(Object.keys(UNTRUSTED_PREAMBLES));
 
 /** Load and VALIDATE the corpus: a typo'd label/source must fail loudly, not drop a fixture. */
 export function loadCorpus(path: string = CORPUS_PATH): Fixture[] {

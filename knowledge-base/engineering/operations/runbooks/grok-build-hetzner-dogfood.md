@@ -17,10 +17,16 @@ Model selection is **config-driven** so Phase 1 is not throwaway when the brain 
 ## Phase 0 — Capacity gate
 
 ```bash
-export HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+export HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)"
 hcloud server list
 # Confirm free slot vs account server limit before enabling create.
 ```
+
+The capacity check is a GET, so the Read-permission `HCLOUD_TOKEN_READONLY` is the credential.
+`prd_terraform` no longer carries the read/write `HCLOUD_TOKEN` — it was evicted at ADR-241 O10
+and a `doppler secrets get` of it resolves empty; the read/write path is the
+`infra-credentials` loader on a Tier-B environment (see `inngest-server.md` step 0.5 /
+`infra-credential-tiers-8209.md`).
 
 Current fleet (example): web-1, web-2, inngest, registry. Cap historically 5 — verify live.
 
@@ -36,17 +42,22 @@ enable_grok_dogfood = true   # default false
 
 Operator-local apply (after free slot + stock check for `cx33` in `hel1`):
 
-> **#8209 / ADR-241 — the single-loader form below is the PRE-cutover one.** After the Tier-B
-> cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the inner
-> `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
-> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> **#8209 / ADR-241 — post-cutover credential form.** Two nested loaders — an outer
+> `soleur-infra-privileged` loader and an inner `prd_terraform` loader carrying `--preserve-env`
+> so the outer values win — plus an ambient `AWS_*` export, because the tf-var transformer
+> renames injected secrets and never sets the S3 backend's bare `AWS_*`. For this apply (a state
+> write) the ambient pair must be the Tier-B read/write pair; the `prd_terraform` pair is
+> read-only post-O5b and 403s the state push. Canonical form and rationale:
+> [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
 > invocation. This note covers both occurrences below.
 
 ```bash
 cd apps/web-platform/infra
-export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…   # R2 backend
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   env TF_VAR_enable_grok_dogfood=true \
   terraform plan \
     -target=hcloud_server.grok_dogfood \
@@ -54,7 +65,8 @@ doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
     -target=hcloud_firewall_attachment.grok_dogfood
 # Review: 0 destroy of product fleet, 1 create of soleur-grok-dogfood
 # Phase 1: no private-net attach (agent host stays off 10.0.1.0/24 trust plane)
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   env TF_VAR_enable_grok_dogfood=true \
   terraform apply \
     -target=hcloud_server.grok_dogfood \

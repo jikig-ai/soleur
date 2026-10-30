@@ -120,6 +120,8 @@ edge at all, not that the host lacks a reboot.
      off.
    - The provision unit deliberately has no `Before=` ordering on those services: the bootstrap
      restarts units synchronously, so that ordering would invite a deadlock.
+
+   > **Superseded 2026-10-26 (#11080):** the quiesce is the flip FSM only on a host born from the current template; see the addendum below.
 7. **Per-attempt recovery of first-boot state the retry depends on.** Each attempt re-runs the
    bounded private-NIC wait at its start (not only `runcmd`'s once-per-instance wait), so a NIC
    that converges late is waited for again. Before the bootstrap it runs a bounded
@@ -253,3 +255,7 @@ No element, relationship or store is added. The `inngest -> sentry` edge descrip
 `knowledge-base/engineering/architecture/diagrams/model.c4` said a zot miss "ENDS the boot"; it now
 says the miss ends the attempt and the unit retries (120 s at first, backing off to 15 minutes)
 until one succeeds.
+
+## Addendum — 2026-10-26 (#11080) — the quiesce no longer names the LUKS cutover FSM
+
+Appended; the only edit above is the inline pointer at the end of Decision item 6. Decision item 6 describes a quiesce of two FSMs: the flip timer and service, and the LUKS cutover timer and service with its `frozen-active` hold. The image stopped baking the LUKS cutover trio at `vinngest-v1.1.61` (#10966), and #11080 removed the trio from the user_data template's staged list, quiesce loop, busy check and service-status list. On a host born from that template the quiesce stops the flip timer only, waits (bounded at 300 s) for the flip service or a flip between steps (`"flag":"flipping"`), and restarts the flip timer on a failed attempt if it was active. The `provision-fsm-busy` stage, the 300 s bound and the exit-handler restore are unchanged. A host born earlier keeps its old rendered script until it is replaced.

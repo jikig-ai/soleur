@@ -643,7 +643,7 @@ if [ "$_top" = "package_update packages groups users write_files runcmd " ]; the
 # stale — a draft that named two sites was written before the cutover became the pointer's writer.
 _REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 _g4_bad=""; _g4_reads_stage=0; _g4_reads_reopen=0; _g4_total=0
-_g4_stager_count=0; _g4_unit_inject=0; _g4_write_set=0; _g4_write_clear=0; _g4_fsm_read=0; _g4_dispatch_read=0
+_g4_dispatch_read=0; _g4_stager=0
 while IFS= read -r _hit; do
   _f="${_hit%%:*}"; _rest="${_hit#*:}"; _ln="${_rest%%:*}"; _txt="${_rest#*:}"
   [[ "$_txt" =~ ^[[:space:]]*# ]] && continue
@@ -654,52 +654,32 @@ while IFS= read -r _hit; do
       if awk -v n="$_ln" 'NR<n && /bash -s <<.LUKSEOF.$/{s=NR} NR<n && /^    LUKSEOF$/{s=0} END{exit !s}' "$_f"; then _g4_reads_stage=$((_g4_reads_stage + 1))
       elif awk -v n="$_ln" 'NR<n && /^  - path: \/usr\/local\/bin\/inngest-luks-open\.sh$/{s=NR} NR<n && /^  - path: / && !/inngest-luks-open\.sh/{s=0} END{exit !s}' "$_f"; then _g4_reads_reopen=$((_g4_reads_reopen + 1))
       else _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:read-outside-both-readers"; fi ;;
-    *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$POINTER\" >> /etc/default/inngest-luks"*) : ;;  # first-boot STAGER
+    *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$POINTER\" >> /etc/default/inngest-luks"*) _g4_stager=$((_g4_stager + 1)) ;;  # first-boot STAGER (counted: G4.j)
     *'grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks'*) : ;;      # stager's own check
     *'echo "FATAL: INNGEST_LUKS_ACTIVE_VOLUME_ID is set but is not a volume id'*) : ;;          # diagnostic text
-    # ── #6894 cutover roles. The pointer gained a WRITER (the on-host FSM) and a second READER
-    # (the dispatch's pre-write gate), so the population grew by five roles. Each is named here and
-    # ASSERTED below (G4.g/G4.h) — a role that is merely allowlisted is a site nothing grades,
-    # which is the shape this whole guard exists to refuse.
-    *'--only-secrets INNGEST_LUKS_ACTIVE_VOLUME_ID'*) _g4_unit_inject=$((_g4_unit_inject + 1)) ;;  # unit INJECTION
-    *'doppler secrets set INNGEST_LUKS_ACTIVE_VOLUME_ID "$2"'*) _g4_write_set=$((_g4_write_set + 1)) ;;    # FSM writer: set
-    *'doppler secrets delete INNGEST_LUKS_ACTIVE_VOLUME_ID'*) _g4_write_clear=$((_g4_write_clear + 1)) ;; # FSM writer: clear
-    *'current_pointer() { printf'*) _g4_fsm_read=$((_g4_fsm_read + 1)) ;;                          # FSM READ of the injected value
-    *"grep -v '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) : ;;                                 # FSM stager: strip before rewrite
-    *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$1\" >> \"\$tmp\""*) : ;;                       # FSM stager: write
-    *'grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$1" "$ENVFILE"'*) : ;;                              # FSM stager: landed check
-    *"n=\"\$(grep -c '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) _g4_stager_count=$((_g4_stager_count + 1)) ;;  # FSM stager: CARDINALITY
-    *"! grep -q '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) : ;;                              # FSM stager: removed check
+    # The dispatch's pre-write READ is the only non-device reader. The pointer has NO writer, injector or stager since #10112:
+    # a site that reappears is UNCLASSIFIED (G4.b) or a direct write (G4.g3), never silently allowlisted.
     *'jq -e '"'"'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")'"'"''*) _g4_dispatch_read=$((_g4_dispatch_read + 1)) ;; # dispatch pre-write READ
+    *'doppler'*'secrets'*) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:secrets-verb-on-a-pointer-line" ;;   # never allowlisted by a text arm below
     *'::error::op='*'INNGEST_LUKS_ACTIVE_VOLUME_ID'*) : ;;                                        # operator-facing refusal text
     *) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:UNCLASSIFIED" ;;
   esac
-done < <(cd "$_REPO" && git grep -nF 'INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github/workflows \
+done < <(cd "$_REPO" && git grep -nF 'INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github \
           ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null | sed "s|^|$_REPO/|")
 if [ "$_g4_total" -ge 5 ]; then ok "G4.a found ${_g4_total} pointer sites in delivered artifacts (floor 5)"; else no "G4.a found only ${_g4_total} pointer sites — the walk is not reaching the tree"; fi
 if [ -z "$_g4_bad" ]; then ok "G4.b every pointer site in a delivered artifact is classified (no reader the guard has never seen)"; else no "G4.b unclassified pointer sites:${_g4_bad} — classify each, or it is a reader nothing grades"; fi
 if [ "$_g4_reads_stage" -eq 1 ] && [ "$_g4_reads_reopen" -eq 1 ]; then ok "G4.c the pointer is read by BOTH device readers exactly once (first-boot resolver and boot-reopen)"; else no "G4.c pointer reads: first-boot=${_g4_reads_stage} reopen=${_g4_reads_reopen} — each reader must apply it exactly once (mutation row 4)"; fi
-# G4.g THE POINTER HAS EXACTLY ONE WRITER, and it is the on-host FSM. Two writers on a value that
-# decides which device holds the store is the shape where a race decides where user data lives — and
-# the dispatch deliberately does not write it, so its only pointer contact is a READ.
-if [ "$_g4_write_set" -eq 1 ] && [ "$_g4_write_clear" -eq 1 ]; then ok "G4.g1 the pointer has exactly one set site and one clear site, both in the on-host FSM"; else no "G4.g1 pointer writers: set=${_g4_write_set} clear=${_g4_write_clear} — expected exactly one of each"; fi
-_g4_disp_write="$(cd "$_REPO" && git grep -nE 'secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' -- scripts .github/workflows 2>/dev/null || true)"
-if [ -z "$_g4_disp_write" ]; then ok "G4.g2 no dispatch-side writer: the operator verbs read the pointer and never set it"; else no "G4.g2 a dispatch-side pointer WRITE exists (${_g4_disp_write}) — two writers decide where the store lives"; fi
-# G4.g3 the FSM's own writes go through the pointer_cmd seam, never a bare doppler call in a phase.
-# Scoped by the FUNCTION BODY, never by a line range (cq-cite-content-anchor-not-line-number): a
-# range pins where the seam sits today, which is the one thing a refactor is allowed to change.
-_g4_seam="$(awk '/^pointer_cmd\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$_REPO/apps/web-platform/infra/inngest-luks-cutover.sh")"
-_g4_outside="$(awk '/^pointer_cmd\(\) \{/{f=1} f&&/^\}$/{f=0;next} !f' "$_REPO/apps/web-platform/infra/inngest-luks-cutover.sh" | grep -nE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' || true)"
-_g4_inside="$(printf '%s\n' "$_g4_seam" | grep -cE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' || true)"
-_g4_bare="$_g4_outside"
-if [ -z "$_g4_bare" ] && [ "$_g4_inside" -eq 2 ]; then ok "G4.g3 both FSM pointer writes are inside the pointer_cmd seam, and no phase body writes it directly"; else no "G4.g3 seam writes=${_g4_inside} (expected 2); writes outside the seam: ${_g4_bare:-none}"; fi
-# G4.h the pointer is INJECTED into the unit, and the FSM reads the injected value rather than
-# shelling out — a read that needed its own credential would be a second failure mode mid-swap.
-if [ "$_g4_unit_inject" -ge 1 ] && [ "$_g4_fsm_read" -eq 1 ]; then ok "G4.h the unit injects the pointer and the FSM reads it exactly once, from the environment"; else no "G4.h unit injection=${_g4_unit_inject} FSM reads=${_g4_fsm_read} — the FSM must read the injected value once"; fi
-# The stager COUNTS rather than merely checking presence: systemd's EnvironmentFile is last-wins, so
-# a second pointer line would silently decide which volume the boot-reopen unit opens.
-if [ "$_g4_stager_count" -eq 1 ]; then ok "G4.j the envfile stager asserts pointer CARDINALITY, not presence (EnvironmentFile is last-wins)"; else no "G4.j the envfile stager no longer counts its pointer lines (sites=${_g4_stager_count})"; fi
+# G4.g3 THE POINTER HAS NO WRITER since #10112 (its only writer was the on-host FSM, retired with the cutover trio). Two writers on a
+# value that decides which device holds the store is the shape where a race decides where user data lives, so the property is
+# "none": a direct secrets set or delete of the literal pointer name in any non-test file under apps/web-platform/infra, scripts or
+# .github (flags may sit between the verb and the name). It sees a LITERAL name only; a write through a variable name is not matched, but any other
+# line naming the pointer literal is UNCLASSIFIED (G4.b), which is what bounds a respelled writer.
+_g4_any_write="$(cd "$_REPO" && git grep -nE '^[^#]*doppler[^#]*secrets[^#]*(set|delete)[^#]*INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null || true)"
+if [ -z "$_g4_any_write" ]; then ok "G4.g3 no delivered artifact writes the pointer with a direct doppler set or delete"; else no "G4.g3 a direct pointer write exists: ${_g4_any_write}"; fi
 if [ "$_g4_dispatch_read" -eq 1 ]; then ok "G4.i the dispatch's pointer gate reads presence from the NAME LIST (an absent name and a dead token are not the same answer)"; else no "G4.i dispatch pointer reads=${_g4_dispatch_read} — expected exactly one, via the name list"; fi
+# G4.j the first-boot stager writes the pointer line exactly ONCE: systemd's EnvironmentFile is last-wins, so a second stager line would
+# silently decide which volume the boot-reopen unit opens. (The cutover FSM's stager, which asserted cardinality itself, is retired, #10112.)
+if [ "$_g4_stager" -eq 1 ]; then ok "G4.j the first-boot stager appears exactly once in delivered artifacts"; else no "G4.j first-boot pointer stager sites=${_g4_stager} -- expected exactly one (EnvironmentFile is last-wins)"; fi
 
 # G4.d the pointer arm REFUSES; it never formats and never falls back to the other volume.
 _PTR_ARM="$(printf '%s\n' "$_G1_STAGE" | awk '/^    if \[ "\$MODE" = pointer \]; then$/{f=1;next} f&&/^    else$/{exit} f')"
@@ -798,7 +778,7 @@ if [ "$(grep -cxF "$_T116_INVOCATION" "$CLOUD_INIT")" -eq 1 ]; then ok "T1.16m t
 
 # ═══ T1.16n-q — design-review hardening of the self-heal (PR #10228 design pass) ═══
 # T1.16n ATOMIC fstab install: a mid-write death on `cat tmp > /etc/fstab` truncates the file
-# and recreates the exact unhealable state this PR eliminates (inngest-luks-cutover.sh:536-539
+# and recreates the exact unhealable state this PR eliminates (the retired inngest-luks-cutover.sh's mount-listing guard
 # documents the same defect). The install must be same-dir rename: chmod + mv -f, and no
 # redirect-to-/etc/fstab anywhere inside ensure_mount.
 if printf '%s\n' "$_EM" | grep -cF 'mv -f "$_em_tmp" /etc/fstab' >/dev/null && ! printf '%s\n' "$_EM" | grep -cE '> */etc/fstab' >/dev/null; then ok "T1.16n the fstab install is atomic (chmod + mv -f); no redirect-to-/etc/fstab survives"; else no "T1.16n the fstab install is not an atomic rename — a mid-write death truncates /etc/fstab"; fi
@@ -820,7 +800,7 @@ if printf '%s\n' "$_OA" | grep -cF 'backing_is' >/dev/null && printf '%s\n' "$_O
 if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' "$CLOUD_INIT"; then ok "T1.16q all wait-refusal sentences name the 300s bound (no stale 30s survivors)"; else no "T1.16q a wait-refusal sentence still claims the old 30s bound"; fi
 
 # T1.16r STACKED-MOUNT convergence + guarded findmnt: ensure_mount must not `head -1` a findmnt
-# listing (the shadowed-bottom read inngest-luks-cutover.sh documents), must guard the
+# listing (the shadowed-bottom read the retired inngest-luks-cutover.sh documented), must guard the
 # substitution under pipefail (`|| _em_src=""`), must compare the KERNEL-SERVED layer (tail -1),
 # and must pop wrong layers with a bounded umount loop rather than guess which layer a stack
 # serves — the loop's `mountpoint -q` re-check is the convergence condition.
@@ -864,7 +844,7 @@ if printf '%s\n' "$_EM" | grep -cF '_em_mount=0' >/dev/null && printf '%s\n' "$_
 # the measured count after the arms were final, not written ahead of them.
 # #8285 PR B: G4.b2 (the retire dispatch's pointer reader) was deleted with that dispatch, taking the measured count 58 -> 57;
 # the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
-# (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
+# (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails; deleted in #10112, G4.g3 now carries it).
 # #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
 # #9786: 64 -> 70, exact. T1.8a2 (the staging fstab write) and G1.g (the staging mapper name) went with the
 # staging block (-2); T1.16a-h (strip absence + its two controls, DEV derivation, no ext4 arm, blkid -p probe,
@@ -883,13 +863,17 @@ if printf '%s\n' "$_EM" | grep -cF '_em_mount=0' >/dev/null && printf '%s\n' "$_
 # merge. The strip takes T1.16i/j (plaintext-device and staging-mapper ensure_mount targets) and T1.16s (the
 # reopen_pointer_lost refusal on the ext4-skip arm) back out (-3); the surviving T1.16h/g were re-pointed at the
 # single-volume arms, and T1.17b/d/f/g were re-derived for the merged template.
+# #10112 (cutover trio retired): 104 -> 100, exact. G4.g1 (no FSM writer counters), G4.g2 (a dispatch-side census that excluded no test files, superseded by G4.g3), G4.h (no unit
+# injection / FSM read) and G4.j (no envfile stager) asserted that counters of deleted roles are zero; the dead classifier arms and
+# counters went with them, so a reappearing site is UNCLASSIFIED (G4.b) or a direct write (G4.g3). Four assertions out.
+# Fix round (#10966): 100 -> 101, exact. G4.j returns as the first-boot stager cardinality pin (the FSM stager's own cardinality check retired with it).
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 104 ]; then
+if [ "$executed" -lt 101 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 104. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 101. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 104)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 101)\n' "$executed"
 fi
 
 echo ""

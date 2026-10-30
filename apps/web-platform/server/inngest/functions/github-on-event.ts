@@ -267,12 +267,12 @@ export const githubOnEvent = inngest.createFunction(
       { scope: "account", key: '"agent-runtime"', limit: 50 },
     ],
     retries: 1,
+    triggers: [
+      { event: "engineering.pr_review_pending" },
+      { event: "engineering.ci_failed" },
+      { event: "triage.p0p1_issue" },
+      { event: "security.cve_alert" },
+    ],
   },
-  [
-    { event: "engineering.pr_review_pending" },
-    { event: "engineering.ci_failed" },
-    { event: "triage.p0p1_issue" },
-    { event: "security.cve_alert" },
-  ],
-  githubOnEventHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  githubOnEventHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

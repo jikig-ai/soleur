@@ -1,6 +1,6 @@
 ---
 name: drain-prs
-description: "This skill should be used when draining open remote GitHub PRs: triage every open pull request into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
+description: "This skill should be used when draining open GitHub PRs: triage them into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -111,7 +111,7 @@ See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch
 
 ### 7. Cleanup + report
 
-Arming returns at ENQUEUE, not at merge. Run `cleanup-merged` only once the PRs it should reap read `MERGED`. Wait on each enqueued PR with a BOUND (90 polls x 60s, the Phase 7 cap), through the Monitor tool / AwaitShell (never a backgrounded loop): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/monitor-pr-checks.sh" <N> --interval 60 --max-polls 90`. It reads the merge queue (`sync-pr-behind.sh <N> --queue-state`) and ends `MERGED`, or `LEFT THE MERGE QUEUE UNMERGED` with the removal reason (the dequeue arm above: ONE re-enqueue, then report), or a timeout; it never syncs or pushes. An enqueued PR that never reaches `MERGED` is that dequeue arm, not a merged PR:
+Arming returns at ENQUEUE, not at merge. Run `cleanup-merged` only once the PRs it should reap read `MERGED`. Wait on each enqueued PR with a BOUND (90 polls x 60s, the Phase 7 cap), through the Monitor tool / AwaitShell (never a backgrounded loop): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/monitor-pr-checks.sh" <N> --interval 60 --max-polls 90`. It reads the merge queue (`sync-pr-behind.sh <N> --queue-state`) and ends `MERGED`, or `LEFT THE MERGE QUEUE UNMERGED` with the removal reason (the dequeue arm above: ONE re-enqueue, then report), or a timeout; it never syncs or pushes. A watch that exits 4 (`DUPLICATE MONITOR`) means a live monitor already watches that PR (a re-run drain re-arms every enqueued PR, so this is the expected outcome there). If that watch is a Monitor or AwaitShell task of THIS session, it is still your watch: read its output. Otherwise it reports to a session that may be gone: read the queue once with `sync-pr-behind.sh <N> --queue-state` (a `dequeued` answer is the dequeue arm below; `gh pr view` cannot show a silent dequeue), keep the PR in the set awaiting `MERGED`, never count it as done, and never loop on that read. To hear the outcome yourself, confirm `ps -o args= -p <pid>` names `monitor-pr-checks.sh`, `kill <pid>` (that ends the other session's watch with no verdict line, so that session must read the PR state rather than re-arm), and arm once. An enqueued PR that never reaches `MERGED` is that dequeue arm, not a merged PR:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged

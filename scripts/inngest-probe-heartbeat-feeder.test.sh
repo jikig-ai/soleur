@@ -5,7 +5,15 @@
 # host_role=dedicated SOLEUR_INNGEST_SERVER_PROBE row is at most 4500 s old, the heartbeat resolves
 # uniquely and is unpaused. The failure this suite exists to stop is a SPURIOUS BEAT: a feeder that
 # keeps the heartbeat fed while the probe is dead suppresses the one alarm that backs the wrong-volume
-# alert. Exit 0 must mean exactly {beat, fresh_heartbeat_paused}.
+# alert. Exit 0 must mean exactly {beat, fail_beat, fresh_heartbeat_paused}.
+#
+# SERVING-VERDICT ARM (#10390 WS2). The same newest fresh row is graded by the shared
+# classify_dedicated_host def (scripts/inngest-dedicated-host-classify.sh, sourced under the same
+# load-or-fail-closed census contract as the probe-row lib; INNGEST_CLASSIFY_LIB is its test seam):
+# not-serving beats <url>/fail (verdict fail_beat), healthy and stopped-by-brake beat normally, and
+# probe-unavailable withholds (verdict serving_unavailable). The stub curl records a beat whose
+# expected URL ends in /fail as "beatfail", so a normal beat where a /fail was owed (or the inverse)
+# is counted separately and a wrong-URL beat is a refusal.
 #
 # THE FAKE TREE. The verifier is copied to $root/scripts/ and resolves its repo from its own location,
 # so the stub scripts/betterstack-query.sh and the shared lib at $root/scripts/lib are what it reads.
@@ -33,6 +41,7 @@ REPO="$(cd "$HERE/.." && pwd)"
 PROBE_NAME="inngest-probe-heartbeat-feeder.sh"
 PROBE_SRC="$HERE/$PROBE_NAME"
 LIB_SRC="$REPO/scripts/lib/inngest-probe-row.sh"
+CLASSIFY_SRC="$REPO/scripts/inngest-dedicated-host-classify.sh"
 WORKFLOW="$REPO/.github/workflows/scheduled-inngest-probe-heartbeat.yml"
 TABLE="$REPO/apps/web-platform/server/watchdog-dispatch-table.ts"
 UPTIME_TF="$REPO/apps/web-platform/infra/uptime-alerts.tf"
@@ -46,6 +55,7 @@ fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
 [[ -f "$PROBE_SRC" ]] || { echo "FATAL: verifier not found at $PROBE_SRC" >&2; exit 1; }
 [[ -f "$LIB_SRC" ]] || { echo "FATAL: probe-row lib not found at $LIB_SRC" >&2; exit 1; }
+[[ -f "$CLASSIFY_SRC" ]] || { echo "FATAL: classifier not found at $CLASSIFY_SRC" >&2; exit 1; }
 
 # Canonical guard, copied byte-for-byte from plugins/soleur/test/test-helpers.sh.
 assert_fixture_dir() {
@@ -85,11 +95,15 @@ dt_ago_t() { date -u -d "@$((NOW_EPOCH - $1))" '+%Y-%m-%dT%H:%M:%S.000000'; }
 msg() { # <host_role> [tail]
   printf 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active uptime_s=900 boot_id=synthetic probe_schema=8 host_role=%s%s' "$1" "${2:+ $2}"
 }
+msgf() { # <server_active> <http_code> [cutover_flag|''] [host_role] — a serving-verdict variant of msg()
+  printf 'SOLEUR_INNGEST_SERVER_PROBE http_code=%s server_active=%s redis_active=active uptime_s=900 boot_id=synthetic%s probe_schema=8 host_role=%s' "$2" "$1" "${3:+ cutover_flag=$3}" "${4:-dedicated}"
+}
 row() { # <dt> <message> [host] [host_name] [emitter] -> one JSONEachRow line with the double-encoded raw
   jq -cn --arg dt "$1" --arg m "$2" --arg h "${3:-soleur-inngest}" --arg hn "${4:-soleur-inngest-prd}" --arg e "${5:-inngest-server-probe}" \
     '{dt: $dt, raw: ({host: $h, host_name: $hn, SYSLOG_IDENTIFIER: $e, message: $m} | tojson)}'
 }
 ded() { row "$(dt_ago "$1")" "$(msg dedicated)"; }                            # <age_s>
+dedf() { row "$(dt_ago "$1")" "$(msgf "$2" "$3" "${4:-}")"; }                  # <age_s> <server_active> <http_code> [cutover_flag]
 fx() { cat > "$WORK/fx/$1.jsonl"; printf '%s' "$WORK/fx/$1.jsonl"; }
 hb_json() { # <name> <paused-literal|__absent__> <url> -> one-heartbeat API body
   jq -cn --arg n "$1" --arg p "$2" --arg u "$3" '
@@ -107,12 +121,14 @@ api_paused()      { hb_json "$NAME" true "$HB_URL"; }
 #   C_BEATMODE 200 | 500 | 302 | curlfail                  C_NOW    INNGEST_FEEDER_NOW (or __unset__ | raw)
 #   C_TOKEN   __unset__ | value                            C_UNSET  a BETTERSTACK_QUERY_* to blank
 #   C_LIB     lib file copied into the tree (__none__ skips) C_LIBENV INNGEST_PROBE_ROW_LIB value
+#   C_CLIB    classifier file copied into the tree (__none__ skips) C_CLIBENV INNGEST_CLASSIFY_LIB value
 #   C_XTRACE  1 -> bash -x                                 C_ARGS   argv for the verifier
-#   C_PROBE   verifier source (default shipped)            C_BEATS / C_APIS expected call counts
+#   C_PROBE   verifier source (default shipped)            C_BEATS / C_APIS / C_FAILBEATS expected call counts
 reset_case() {
   C_ROWS="/dev/null"; C_STUB="ok"; C_API=""; C_APIMODE="ok"; C_BEATMODE="200"; C_NOW="$NOW"
   C_TOKEN="$TOKEN"; C_UNSET=""; C_LIB="$LIB_SRC"; C_LIBENV=""; C_XTRACE=0; C_ARGS=""
-  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_EXPECT_URL="$HB_URL"; C_TLSENV=0; C_GHA=0; C_LOCALE=""
+  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_FAILBEATS=0; C_EXPECT_URL="$HB_URL"; C_TLSENV=0; C_GHA=0; C_LOCALE=""
+  C_CLIB="$CLASSIFY_SRC"; C_CLIBENV=""
 }
 reset_case
 
@@ -145,8 +161,10 @@ if [[ "\$argv" == "\$A_ARGV" ]]; then
   cat "\$R/api.body"
   exit 0
 elif [[ "\$argv" == "\$B_ARGV" ]]; then
-  echo beat >> "\$LOG"
   exp="\$(cat "\$R/expect_url")"
+  # A beat to the expected URL is logged as "beat", to the /fail arm as "beatfail"; a beat to any
+  # OTHER url is a refusal. Both arms ride the one call shape, so the log discriminates them.
+  case "\$exp" in */fail) echo beatfail >> "\$LOG" ;; *) echo beat >> "\$LOG" ;; esac
   if [[ "\$stdin" != "url = \"\$exp\"" ]]; then echo "refused beat-stdin" >> "\$LOG"; exit 64; fi
   case "\$(cat "\$R/beat.mode")" in
     200) printf 200; exit 0 ;;
@@ -168,6 +186,7 @@ run_probe() { # -> echoes the status; combined output in $OUT
   write_stubs "$root"
   cp "$C_PROBE" "$probe"
   if [[ "$C_LIB" != "__none__" ]]; then cp "$C_LIB" "$root/scripts/lib/inngest-probe-row.sh"; fi
+  if [[ "$C_CLIB" != "__none__" ]]; then cp "$C_CLIB" "$root/scripts/inngest-dedicated-host-classify.sh"; fi
   : > "$CALLS"
   printf '%s' "$TOKEN" > "$root/token.txt"
   printf '%s' "$C_EXPECT_URL" > "$root/expect_url"
@@ -219,6 +238,7 @@ STUB
     *) envv+=("INNGEST_FEEDER_NOW=$C_NOW") ;;
   esac
   [[ -z "$C_LIBENV" ]] || envv+=("INNGEST_PROBE_ROW_LIB=$C_LIBENV")
+  [[ -z "$C_CLIBENV" ]] || envv+=("INNGEST_CLASSIFY_LIB=$C_CLIBENV")
   if [[ "$C_TLSENV" == 1 ]]; then
     local _tn
     for _tn in $TLS_NAMES; do envv+=("$_tn=/dev/null"); done
@@ -237,12 +257,13 @@ count_calls() { # <pattern>
   { grep -cE "$1" "$CALLS" 2>/dev/null || true; } | head -1
 }
 
-# The generic invariant: exit 0 if and only if the verdict is beat or fresh_heartbeat_paused.
+# The generic invariant: exit 0 if and only if the verdict is beat, fail_beat or
+# fresh_heartbeat_paused (a delivered /fail IS a decided verdict — the incident it opens is intended).
 assert_exit_zero_iff_fed() { # <rc> <verdict-token> <label>
   local good=0
-  [[ "$2" == beat || "$2" == fresh_heartbeat_paused ]] && good=1
+  [[ "$2" == beat || "$2" == fail_beat || "$2" == fresh_heartbeat_paused ]] && good=1
   if [[ "$1" == "0" && "$good" != 1 ]] || [[ "$1" != "0" && "$good" == 1 ]]; then
-    fail "INVARIANT: rc=$1 with verdict=$2 ($3) — exit 0 must mean exactly {beat, fresh_heartbeat_paused}"
+    fail "INVARIANT: rc=$1 with verdict=$2 ($3) — exit 0 must mean exactly {beat, fail_beat, fresh_heartbeat_paused}"
     return 1
   fi
   return 0
@@ -260,12 +281,14 @@ expect() { # <name> <rc> <verdict> [reason-or-extra-token]
   if [[ -n "$extra" ]] && ! grep -qF -- "$extra" "$OUT"; then
     ok=0; printf '        | missing required token: %s\n' "$extra" >&2
   fi
-  local beats apis refused
+  local beats fbeats apis refused
   beats=$(( $(count_calls '^beat$') + $(count_calls '^refused argv$') ))
+  fbeats="$(count_calls '^beatfail$')"
   apis="$(count_calls '^api$')"
   refused="$(count_calls '^refused')"
   beat_asserts=$((beat_asserts + 1))
   if [[ "$beats" != "$C_BEATS" ]]; then ok=0; printf '        | beat calls: expected %s, saw %s\n' "$C_BEATS" "$beats" >&2; fi
+  if [[ "$fbeats" != "$C_FAILBEATS" ]]; then ok=0; printf '        | /fail beat calls: expected %s, saw %s\n' "$C_FAILBEATS" "$fbeats" >&2; fi
   if [[ "$apis" != "$C_APIS" ]]; then ok=0; printf '        | API calls: expected %s, saw %s\n' "$C_APIS" "$apis" >&2; fi
   if [[ "$refused" != 0 ]]; then ok=0; printf '        | the stub curl REFUSED %s call(s): %s\n' "$refused" "$(grep '^refused' "$CALLS" | paste -sd, -)" >&2; fi
   # No secret, bearer, URL or helper error text anywhere: stdout, stderr and every argv log.
@@ -390,9 +413,9 @@ if grep -qF 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"' "$PRO
 else fail "verifier must derive REPO_ROOT from BASH_SOURCE, not git"; fi
 
 cases=$((cases + 1))
-if [[ "$(grep -cE '^DECIDED=0$' <<<"$STRIPPED" || true)" == 1 && "$(grep -cE '^[[:space:]]*DECIDED=1$' <<<"$STRIPPED" || true)" == 3 ]] \
-   && [[ "$(awk '/^[[:space:]]*DECIDED=1$/{getline n; if (n ~ /^[[:space:]]*exit 0$/) c++} END{print c+0}' <<<"$STRIPPED")" == 3 ]]; then
-  pass "DECIDED starts 0, and is set to 1 at exactly three sites, each directly before exit 0"
+if [[ "$(grep -cE '^DECIDED=0$' <<<"$STRIPPED" || true)" == 1 && "$(grep -cE '^[[:space:]]*DECIDED=1$' <<<"$STRIPPED" || true)" == 4 ]] \
+   && [[ "$(awk '/^[[:space:]]*DECIDED=1$/{getline n; if (n ~ /^[[:space:]]*exit 0$/) c++} END{print c+0}' <<<"$STRIPPED")" == 4 ]]; then
+  pass "DECIDED starts 0, and is set to 1 at exactly four sites (selftest, paused, beat, fail_beat), each directly before exit 0"
 else fail "DECIDED=0 / DECIDED=1 sites changed (initial value, count, or the exit 0 that must follow each)"; fi
 
 echo "== static: one beat call site =="
@@ -468,11 +491,12 @@ run = feeder["run"]
 assert "bash scripts/inngest-probe-heartbeat-feeder.sh" in run, "pattern on a run line"
 assert re.search(r'out="\$\(bash scripts/inngest-probe-heartbeat-feeder\.sh 2>&1\)" \|\| rc=\$\?', run), "|| rc=$? capture"
 assert "exit_code=${rc}" in run and 'verdict=${verdict}' in run, "both step outputs are written"
-assert re.search(r"^\s*unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB\b", run, re.M), "the test seams are unset before the verifier runs"
+assert re.search(r"^\s*unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB INNGEST_CLASSIFY_LIB\b", run, re.M), "all three test seams are unset before the verifier runs"
 assert "INNGEST_FEEDER_NOW=" not in run.replace("unset INNGEST_FEEDER_NOW", ""), "no assignment of the clock seam"
+assert "INNGEST_CLASSIFY_LIB=" not in run.replace("unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB INNGEST_CLASSIFY_LIB", ""), "no assignment of the classifier seam"
 sent = steps[-1]
 assert sent["uses"] == "./.github/actions/sentry-heartbeat" and sent["with"]["monitor-slug"] == "scheduled-inngest-probe-heartbeat"
-want = "${{ (steps.feeder.outputs.exit_code == '0' && (steps.feeder.outputs.verdict == 'beat' || steps.feeder.outputs.verdict == 'fresh_heartbeat_paused')) && 'ok' || 'error' }}"
+want = "${{ (steps.feeder.outputs.exit_code == '0' && (steps.feeder.outputs.verdict == 'beat' || steps.feeder.outputs.verdict == 'fresh_heartbeat_paused' || steps.feeder.outputs.verdict == 'fail_beat')) && 'ok' || 'error' }}"
 assert sent["with"]["status"] == want, "the Sentry status expression must equal the pinned one: %r" % sent["with"]["status"]
 assert sent.get("if") == "always()" and sent.get("continue-on-error") is True
 PY
@@ -654,6 +678,46 @@ expect "beat answered 302 (passes curl -f; only 2xx counts)" 4 beat_failed "http
 reset_case; C_ROWS="$(ded 60 | fx bd3)"; C_BEATMODE="curlfail"; C_BEATS=1; C_APIS=1
 expect "beat curl fails outright" 4 beat_failed "reason=http_status"
 
+echo "== serving verdict (Guard 2 matrix, #10390 WS2) =="
+# (a) not-serving -> /fail, and ONLY /fail: the stub logs it as beatfail; a normal beat here would
+# be a refused-stdin refusal, so both counters are asserted.
+reset_case; C_ROWS="$(dedf 60 inactive 000 | fx ns)"; C_EXPECT_URL="${HB_URL}/fail"; C_FAILBEATS=1; C_APIS=1
+expect "(a) fresh not-serving row beats /fail, never the normal arm" 0 fail_beat "serving=not-serving"
+reset_case; C_ROWS="$(dedf 60 activating 000 unknown | fx nsu)"; C_EXPECT_URL="${HB_URL}/fail"; C_FAILBEATS=1; C_APIS=1
+expect "(a) the #10853 shape (activating, cutover_flag=unknown) also beats /fail" 0 fail_beat "serving=not-serving"
+# (b) healthy then rolled-back -> two normal beats, zero /fail (two runs, newest row each).
+reset_case; C_ROWS="$(dedf 60 active 200 | fx healb)"; C_BEATS=1; C_APIS=1
+expect "(b1) healthy row beats the normal arm" 0 beat "serving=healthy"
+reset_case; C_ROWS="$(dedf 60 inactive 000 rolled-back | fx brake)"; C_BEATS=1; C_APIS=1
+expect "(b2) stopped-by-brake beats the normal arm (deliberate state; the watchdog owns its issue class)" 0 beat "serving=stopped-by-brake"
+# (c) newest wins: a stale not-serving row cannot page through a fresher healthy one.
+reset_case; C_ROWS="$({ dedf 4000 inactive 000; dedf 60 active 200; } | fx newestwins)"; C_BEATS=1; C_APIS=1
+expect "(c) a stale not-serving row older than a healthy one: normal beat, never /fail" 0 beat "serving=healthy"
+reset_case; C_ROWS="$({ dedf 60 active 200; dedf 4000 inactive 000; } | fx newestwins2)"; C_BEATS=1; C_APIS=1
+expect "(c) ordering does not matter: healthy first, stale not-serving second" 0 beat "serving=healthy"
+# (d) a refused /fail POST is beat_failed, never a silent retry through the normal arm.
+reset_case; C_ROWS="$(dedf 60 inactive 000 | fx ns500)"; C_EXPECT_URL="${HB_URL}/fail"; C_BEATMODE="500"; C_FAILBEATS=1; C_APIS=1
+expect "(d) /fail POST answered 500 is beat_failed (one call only)" 4 beat_failed "reason=http_status"
+# (e) the classifier is load-or-fail-closed under the same census contract as the probe-row lib.
+reset_case; C_CLIB="__none__"; C_ROWS="$(ded 60 | fx nclib)"
+expect "(e) classifier file missing is selector_unavailable before any query" 3 query_failed "reason=selector_unavailable"
+reset_case; C_CLIBENV="/dev/null"; C_ROWS="$(ded 60 | fx nclib2)"
+expect "(e) classifier seam on a file that defines nothing is selector_unavailable" 3 query_failed "reason=selector_unavailable"
+reset_case; C_CLIB="$(printf 'classify_dedicated_host() { echo "always-healthy"; }\n' | fx badclass)"; C_ROWS="$(dedf 60 inactive 000 | fx badcls)"
+expect "(e) a classifier that fails its proof probes is selector_unavailable" 3 query_failed "reason=selector_unavailable"
+reset_case; C_GHA=1; C_CLIBENV="$CLASSIFY_SRC"; C_ROWS="$(ded 60 | fx ghac)"
+expect "a classifier seam set inside GitHub Actions is refused" 3 query_failed "reason=test_seam_in_ci"
+# probe-unavailable: the serving fields did not parse -> withhold, never a false verdict either way.
+# The withhold sits AFTER heartbeat resolution (a paused heartbeat must dominate the routing table),
+# so the API GET legitimately ran — the assertion is that NO beat shape was attempted.
+reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE uptime_s=1 probe_schema=8 host_role=dedicated' | fx nofld)"; C_APIS=1
+expect "a fresh row with no serving fields withholds (probe-unavailable)" 3 serving_unavailable "serving=probe-unavailable"
+reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 probe_schema=8 host_role=dedicated' | fx halffld)"; C_APIS=1
+expect "a fresh row missing server_active alone withholds" 3 serving_unavailable "serving=probe-unavailable"
+# (f) must-PASS: on a healthy row the harness sees the normal arm AND the absent /fail arm.
+reset_case; C_ROWS="$(dedf 60 active 200 | fx arms)"; C_BEATS=1; C_FAILBEATS=0; C_APIS=1
+expect "(f) harness sees both arms: healthy beats the normal arm, /fail absent" 0 beat
+
 echo "== workflow step behaviour (the real run: block against a stubbed verifier) =="
 WF_RUN="$WORK/wf.run.sh"
 python3 - "$WORKFLOW" "$WF_RUN" <<'PY'
@@ -679,6 +743,8 @@ wf_check() { # <name> <cond-description> <exit-status-of-condition>
 wf_run 'printf "inngest-probe-feeder: verdict=beat http=200 age_s=60\n"; echo "fed: noise line"; exit 0'
 wf_check "workflow step, beat" "step exits 0 and writes exit_code=0 verdict=beat" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=0' "$WORK/wf/out.txt" && grep -qx 'verdict=beat' "$WORK/wf/out.txt"; echo $?)"
 wf_check "workflow step, beat" "only the marker line is echoed (the explanatory line is dropped)" "$(grep -q 'verdict=beat http=200' "$WORK/wf/log.txt" && ! grep -q 'fed: noise' "$WORK/wf/log.txt"; echo $?)"
+wf_run 'printf "inngest-probe-feeder: verdict=fail_beat http=200 age_s=60 serving=not-serving\n"; exit 0'
+wf_check "workflow step, fail_beat" "step exits 0, writes verdict=fail_beat, and the annotation names not_serving distinctly" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=0' "$WORK/wf/out.txt" && grep -qx 'verdict=fail_beat' "$WORK/wf/out.txt" && grep -q '^::notice::inngest probe heartbeat feeder: not_serving' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "::set-output name=x::y\n"; printf "inngest-probe-feeder: verdict=producer_silent age_s=9999\n"; exit 3'
 wf_check "workflow step, withheld" "step exits 0, writes exit_code=3 verdict=producer_silent, and a ::error:: annotation" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=3' "$WORK/wf/out.txt" && grep -qx 'verdict=producer_silent' "$WORK/wf/out.txt" && grep -q '^::error::' "$WORK/wf/log.txt"; echo $?)"
 wf_check "workflow step, withheld" "a verifier line that starts with :: never reaches the log as a command" "$(! grep -q '^::set-output' "$WORK/wf/log.txt"; echo $?)"
@@ -686,8 +752,8 @@ wf_run 'printf "inngest-probe-feeder: verdict=weird\n"; exit 0'
 wf_check "workflow step, exit 0 without a deciding verdict" "an ::error:: annotation, not a notice" "$(grep -q '^::error::inngest probe heartbeat feeder exited 0 without a deciding verdict' "$WORK/wf/log.txt" && ! grep -q '^::notice::' "$WORK/wf/log.txt"; echo $?)"
 wf_run __missing__
 wf_check "workflow step, verifier missing" "step exits 0, exit_code=127, verdict=no_marker, and the cause is named in the log" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=127' "$WORK/wf/out.txt" && grep -qx 'verdict=no_marker' "$WORK/wf/out.txt" && grep -q 'verdict=no_marker rc=127' "$WORK/wf/log.txt"; echo $?)"
-wf_run 'printf "inngest-probe-feeder: verdict=beat now=%s lib=%s\n" "${INNGEST_FEEDER_NOW-unset}" "${INNGEST_PROBE_ROW_LIB-unset}"; exit 0' INNGEST_FEEDER_NOW=2026-01-01T00:00:00Z INNGEST_PROBE_ROW_LIB=/tmp/evil.sh
-wf_check "workflow step, test seams" "INNGEST_FEEDER_NOW and INNGEST_PROBE_ROW_LIB never reach the verifier" "$(grep -q 'now=unset lib=unset' "$WORK/wf/log.txt"; echo $?)"
+wf_run 'printf "inngest-probe-feeder: verdict=beat now=%s lib=%s clib=%s\n" "${INNGEST_FEEDER_NOW-unset}" "${INNGEST_PROBE_ROW_LIB-unset}" "${INNGEST_CLASSIFY_LIB-unset}"; exit 0' INNGEST_FEEDER_NOW=2026-01-01T00:00:00Z INNGEST_PROBE_ROW_LIB=/tmp/evil.sh INNGEST_CLASSIFY_LIB=/tmp/evil2.sh
+wf_check "workflow step, test seams" "INNGEST_FEEDER_NOW, INNGEST_PROBE_ROW_LIB and INNGEST_CLASSIFY_LIB never reach the verifier" "$(grep -q 'now=unset lib=unset clib=unset' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "inngest-probe-feeder: verdict=beat \033[31mred\033[0m\n"; exit 0'
 wf_check "workflow step, control characters" "an escape sequence in a verifier line is stripped before it is printed" "$(! LC_ALL=C grep -q $'\033' "$WORK/wf/log.txt"; echo $?)"
 # Mutant: the seam unset removed from the run block must turn the seams case red.
@@ -816,6 +882,43 @@ cases=$((cases + 1))
 if [[ "$LAST_RC" == 3 ]] && grep -qE 'verdict=trap_remapped( |$)' "$OUT"; then pass "an undecided exit 0 is remapped to 3 trap_remapped, never 0"
 else fail "undecided exit 0: expected 3 trap_remapped, got $LAST_RC [$(markers_of)]"; fi
 
+echo "== serving-verdict mutation rows (Guard 2) =="
+BEAT_R="$(fn_range "$PROBE_SRC" beat_once)"
+cases=$((cases + 1))
+if [[ -n "$BEAT_R" ]]; then pass "mutation seam located (beat_once $BEAT_R)"
+else fail "beat_once range not found — the serving mutations below would be vacuous"; fi
+# MS1: the routing table never arms /fail for not-serving — the beat goes to the normal URL and
+# reads as a healthy beat. expect_url stays the normal URL so the wrong-arm beat is ACCEPTED.
+M="$WORK/mut/ms1.sh"; sed -E 's/not-serving\) BEAT_MODE="fail"/not-serving) BEAT_MODE="ok"/' "$PROBE_SRC" > "$M"
+assert_landed MS1 "$M" "$MAIN_R"
+reset_case; C_ROWS="$(dedf 60 inactive 000 | fx ms1)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
+expect_red MS1 "not-serving routed to the normal arm" 0 fail_beat 0 beat
+# MS2: the /fail suffix is never appended — the verdict marker then LIES (fail_beat on a normal
+# ping), so the detector is the stub log, not the verdict token.
+M="$WORK/mut/ms2.sh"; sed -E 's|target="\$\{HB_URL%/\}/fail"|target="$HB_URL"|' "$PROBE_SRC" > "$M"
+assert_landed MS2 "$M" "$BEAT_R"
+reset_case; C_ROWS="$(dedf 60 inactive 000 | fx ms2)"; C_PROBE="$M"; C_APIS=1; run_case
+cases=$((cases + 1))
+if [[ "$LAST_RC" == 0 ]] && grep -qE 'verdict=fail_beat( |$)' "$OUT" \
+   && [[ "$(count_calls '^beat$')" == 1 && "$(count_calls '^beatfail$')" == 0 ]]; then
+  pass "mutation row MS2: dropping the /fail suffix claims fail_beat while beating the normal URL — the stub log catches the lie"
+else fail "mutation row MS2: expected a fail_beat claim over a logged normal beat, got rc=$LAST_RC [$(markers_of)] beats=$(count_calls '^beat$') beatfails=$(count_calls '^beatfail$')"; fi
+# MS3: the '-' placeholder-to-empty mapping dropped for server_active — an absent field then
+# classifies not-serving (a /fail on a row that proved nothing) instead of probe-unavailable.
+M="$WORK/mut/ms3.sh"; sed -E '/\[\[ "\$sa" == "-" \]\] && sa=""/d' "$PROBE_SRC" > "$M"
+assert_landed MS3 "$M" "$FRESH_R"
+reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 probe_schema=8 host_role=dedicated' | fx ms3)"; C_PROBE="$M"; C_EXPECT_URL="${HB_URL}/fail"; C_APIS=1
+expect_red MS3 "absent server_active misgraded not-serving" 3 serving_unavailable 0 fail_beat
+cases=$((cases + 1))
+if [[ "$(count_calls '^beatfail$')" == 1 ]]; then pass "mutation row MS3: the false /fail was actually sent"
+else fail "mutation row MS3: no /fail call observed — the mutant's RED path did not reach the beat"; fi
+# MS4: the classifier call bypassed — SERVING pinned healthy launders a not-serving row into a
+# normal beat.
+M="$WORK/mut/ms4.sh"; sed -E 's/SERVING="\$\(classify_dedicated_host .*\)"/SERVING="healthy"/' "$PROBE_SRC" > "$M"
+assert_landed MS4 "$M" "$FRESH_R"
+reset_case; C_ROWS="$(dedf 60 inactive 000 | fx ms4)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
+expect_red MS4 "classifier verdict ignored" 0 fail_beat 0 beat
+
 echo
 echo "== measured mutation verdicts (row, edit, verdicts seen, status) =="
 sed 's/^/  /' "$MUT_TABLE"
@@ -828,8 +931,8 @@ if (( passes + fails != cases )); then
   exit 1
 fi
 # A HARD-CODED floor: a runtime-derived one falls when a case is deleted.
-MIN_PASSES=151
-MIN_BEAT_ASSERTS=82
+MIN_PASSES=176
+MIN_BEAT_ASSERTS=96
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

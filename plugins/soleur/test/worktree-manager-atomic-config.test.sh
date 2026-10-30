@@ -56,6 +56,13 @@ export GIT_CONFIG_KEY_0=commit.gpgsign
 export GIT_CONFIG_VALUE_0=false
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before TMP is allocated.
+trap '[[ -z "${TMP:-}" ]] || { chmod -R u+w "$TMP" 2>/dev/null || true; rm -rf "$TMP"; }' EXIT
+
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"
 
@@ -63,7 +70,6 @@ echo "=== worktree-manager.sh atomic_git_config() lockless-writer fix ==="
 echo ""
 
 TMP=$(mktemp -d)
-trap 'chmod -R u+w "$TMP" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 # Source the script inside a valid work-tree so the repo-readiness gate at the top
 # passes (it exit-3s in a repo-less dir). The BASH_SOURCE==$0 guard means main()
