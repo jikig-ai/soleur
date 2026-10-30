@@ -273,7 +273,7 @@ span to the NEXT registered mark.
   delivered only after real arm timings re-price; until then
   `--incremental` regens only, since a `--runs` pass would floor-price
   the estimated arm rows. **Ownership checkpoint:** re-check leg spread
-  + worst leg on the first green PR run after merge — that run's
+  and worst leg on the first green PR run after merge — that run's
   `suite-timings-*` artifacts carry the real arm prices and are the
   `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
   artifact runs — main `push` runs elide the shards job).
