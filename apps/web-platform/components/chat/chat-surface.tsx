@@ -24,6 +24,8 @@ import { runFirstRunSend } from "@/lib/first-run-send";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import type { RefusalContext } from "@/components/chat/refused-send-notice";
+import { ApprovalRequestCard } from "@/components/chat/approval-request-card";
+import { hasNewerPendingRequest } from "@/lib/approval-card-state";
 import { StatusIndicator } from "@/components/chat/status-indicator";
 import { AutoRunChip } from "@/components/chat/auto-run-chip";
 import { AutonomousDisclosureBanner } from "@/components/chat/autonomous-disclosure-banner";
@@ -264,6 +266,7 @@ export function ChatSurface({
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendApprovalDecide,
     sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
     resolveInteractivePrompt,
@@ -457,6 +460,17 @@ export function ChatSurface({
       return true;
     },
     [sendReviewGateResponse],
+  );
+
+  // #4672 — the Owner's decision on a durable approval card. False = nothing was sent (socket not open): the card shows
+  // a static error. Never an optimistic state: the card settles only from the server's approval_status reply.
+  const handleApprovalDecide = useCallback(
+    (approvalId: string, decision: "approve" | "deny"): boolean => {
+      const sent = sendApprovalDecide(approvalId, decision);
+      if (sent) setShowNotificationPrompt(true);
+      return sent;
+    },
+    [sendApprovalDecide],
   );
 
   const handleAutonomousDisclosureResponse = useCallback(
@@ -828,8 +842,13 @@ export function ChatSurface({
   const awaitingUserInput = messages.some(
     (m, i) =>
       i > lastUserIdx &&
-      (m.type === "review_gate" || m.type === "autonomous_disclosure") &&
-      !m.resolved,
+      (((m.type === "review_gate" || m.type === "autonomous_disclosure") &&
+        !m.resolved) ||
+        // #4672 — a durable approval card the agent is still waiting on also dark-launches the spinner. Once the agent
+        // stopped waiting (timeout deny) it is working again, so only a LIVE wait counts.
+        (m.type === "approval_request" &&
+          m.status === "pending" &&
+          m.agentWaiting)),
   );
 
   // #9515 — the consolidated working box: liveNarration renders INSIDE the
@@ -1164,7 +1183,7 @@ export function ChatSurface({
         <div className={`min-w-0 space-y-4 ${widthWrapper}`}>
           {(() => {
             const seenSoFar = new Set<string>();
-            return messages.map((msg) => {
+            return messages.map((msg, idx) => {
               const isFirst = msg.leaderId && !seenSoFar.has(msg.leaderId);
               if (msg.leaderId) seenSoFar.add(msg.leaderId);
 
@@ -1317,6 +1336,30 @@ export function ChatSurface({
                         {CONTEXT_RESET_COPY[msg.reason]}
                       </p>
                     </div>
+                  );
+                  break;
+                case "approval_request":
+                  // #4672 — durable, action-bound approval card. The view is server-built from the hashed canonical
+                  // action; this surface renders it and sends the Owner's decision, nothing else.
+                  body = (
+                    <ApprovalRequestCard
+                      approvalId={msg.approvalId}
+                      view={msg.view}
+                      status={msg.status}
+                      expiresAt={msg.expiresAt}
+                      requestCount={msg.requestCount}
+                      viewerRole={msg.viewerRole}
+                      agentWaiting={msg.agentWaiting}
+                      decideOutcome={msg.decideOutcome}
+                      approvalUnusable={msg.approvalUnusable}
+                      newerRequestExists={hasNewerPendingRequest(messages, idx)}
+                      decidedLabel={
+                        msg.decideOutcome === "decided" || msg.decideOutcome === "unchanged"
+                          ? "by you"
+                          : undefined
+                      }
+                      onDecide={(decision) => handleApprovalDecide(msg.approvalId, decision)}
+                    />
                   );
                   break;
                 case "debug_event":

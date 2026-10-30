@@ -922,6 +922,91 @@ describe("deleteAccount", () => {
     );
   });
 
+  test("Art. 17 — anonymise_approval_request runs for the user id, before auth-delete (#4672, step 5.16)", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+    let anonymisedWith: unknown;
+
+    mockRpc.mockImplementation(async (name: string, args?: unknown) => {
+      callOrder.push(`rpc:${name}`);
+      if (name === "anonymise_approval_request") anonymisedWith = args;
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth.deleteUser");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(anonymisedWith).toEqual({ p_user_id: "user-123" });
+    const anonIdx = callOrder.indexOf("rpc:anonymise_approval_request");
+    const authIdx = callOrder.indexOf("auth.deleteUser");
+    expect(anonIdx).toBeGreaterThanOrEqual(0);
+    expect(anonIdx).toBeLessThan(authIdx);
+    // The RPC deletes a personal workspace's rows only when no member is left, so it MUST run after the membership
+    // removal (step 5.7) and after the egress-rollup erase (step 5.15), which use the same memberless-workspace rule.
+    const membersIdx = callOrder.indexOf("rpc:anonymise_workspace_members");
+    const rollupIdx = callOrder.indexOf("rpc:erase_egress_audit_rollup");
+    expect(membersIdx).toBeGreaterThanOrEqual(0);
+    expect(membersIdx).toBeLessThan(anonIdx);
+    expect(rollupIdx).toBeGreaterThanOrEqual(0);
+    expect(rollupIdx).toBeLessThan(anonIdx);
+  });
+
+  test("Art. 17 — anonymise_approval_request failure aborts cascade BEFORE auth-delete (#4672)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_approval_request") {
+        return { data: null, error: { message: "RPC unavailable", code: "XX000" } };
+      }
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/anonymise-approval-request/);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    // A LITERAL null first argument: an Error object would be captured by the pino mirror (feature=pino-mirror) and the
+    // art17_approval_anonymise_failed alert (feature=account-delete, op=anonymise-approval-request) could never fire.
+    const call = mockReportSilentFallback.mock.calls.find((c) => (c[1] as { op?: string })?.op === "anonymise-approval-request");
+    expect(call).toBeDefined();
+    expect(call![0]).toBeNull();
+    expect(call![1]).toMatchObject({
+      feature: "account-delete",
+      op: "anonymise-approval-request",
+      extra: { userId: "user-123", code: "XX000" },
+    });
+  });
+
+  test("Art. 17 — anonymise_approval_request throwing aborts cascade BEFORE auth-delete (#4672)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_approval_request") throw new Error("network down");
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    const call = mockReportSilentFallback.mock.calls.find((c) => (c[1] as { op?: string })?.op === "anonymise-approval-request");
+    expect(call).toBeDefined();
+    expect(call![0]).toBeNull(); // see the RPC-error case: an Error here would steal the capture and mute the alert
+    expect(call![1]).toMatchObject({ feature: "account-delete", op: "anonymise-approval-request", extra: { userId: "user-123", errName: "Error" } });
+    expect(JSON.stringify(call![1])).not.toContain("network down");
+  });
+
   test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {
     setupSupabaseMocks();
     const callOrder: string[] = [];

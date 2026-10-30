@@ -125,23 +125,36 @@ export function useActionSend(
 
   // Founder-facing copy for the statuses the send route can answer with besides 200 / already_sent /
   // requires_confirmation. Card-neutral on purpose: GitHubCard and KbDriftCard bind no `disabled` to a
-  // hook flag and have no Discard/Edit, so every state here must be recoverable by a refresh and the
-  // copy avoids naming Discard/Edit (CTO S1; the 503 line only says to click Send again). Pure over (status, parsed body) apart from the `denyReasonCopy`
-  // option it closes over; returns null when the status is not one of these (the caller falls through
+  // hook flag and have no Discard/Edit, so every state here must be recoverable by a refresh (or, for the
+  // clock-skew refusal, a short wait) and the copy avoids naming Discard/Edit and the button that sent
+  // (CTO S1; the 503 line says "try again" so it reads right from the card and from the typed-confirm modal,
+  // whose button is "Confirm send").
+  // Pure over (status, parsed body) apart from the `denyReasonCopy` option it closes over; returns null when the status is not one of these (the caller falls through
   // to its generic "Send failed (NNN)"). A 503 only reads as "approval saved" when the body says so: a
   // bare gateway 503 must not claim an approval exists.
   function failureCopy(
     status: number,
-    json: { error?: string; deny_reason?: string },
+    json: { error?: string; deny_reason?: string; reason?: unknown },
   ): string | null {
     if (status === 503 && json.error === "enqueue_unavailable") {
-      return "Your approval is saved, but we couldn't start the agent. Click Send again to retry.";
+      return "Your approval is saved, but we couldn't send it yet. Try again in a moment.";
     }
     if (status === 409) {
       switch (json.error) {
         case "approval_expired":
+          // The wire `reason` is the server's StaleReplayReason ("expired" | "future_clicked_at", decide-replay.ts).
+          // Only those two exact values split the copy; an absent or unknown one (deploy skew in either direction)
+          // keeps the unchanged string.
+          switch (json.reason) {
+            case "expired":
+              return "This approval expired, so this attempt didn't go through. Refresh to update this card.";
+            case "future_clicked_at":
+              return "We couldn't confirm when you approved this, so this attempt didn't go through. Try again shortly.";
+            default:
+              return "This approval can no longer run. Refresh to update this card.";
+          }
         case "not_a_draft":
-          return "This approval can no longer run. Refresh to update this card.";
+          return "This draft was already handled, maybe in another tab. Refresh to update this card.";
         case "draft_changed_since_approval":
           return "This draft changed after you approved it, so this approval can't run.";
         case "send_in_progress":
@@ -219,6 +232,7 @@ export function useActionSend(
         const json = (await res.json().catch(() => ({}))) as {
           error?: string;
           deny_reason?: string;
+          reason?: unknown;
           action_class?: string;
           tier?: string;
           recipient_excerpt?: string;
@@ -291,6 +305,7 @@ export function useActionSend(
         const json = (await res.json().catch(() => ({}))) as {
           error?: string;
           deny_reason?: string;
+          reason?: unknown;
           expected_draft_preview_hash?: string;
         };
         if (res.status === 409) {

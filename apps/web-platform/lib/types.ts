@@ -2,6 +2,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { WorkflowName } from "@/server/conversation-routing";
 import type { InteractivePromptKind } from "@/server/pending-prompt-registry";
 import type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
+import type { ApprovalDecideOutcomeWire, ApprovalWireStatus } from "@/lib/approval-wire";
 import type { CredentialScheme } from "@/lib/auth-scheme";
 
 // Re-export so client code can import workflow-name and branded IDs from the
@@ -292,6 +293,32 @@ export interface ConversationContext {
 // Message lifecycle states: each agent bubble progresses through these states
 export type MessageState = "thinking" | "tool_use" | "streaming" | "done" | "error";
 
+// Durable approval requests (#4672). Wire shapes only: this module is client-reachable, so it must not import
+// `@/server/*`. The card view is declared structurally here and a server-side test pins it to `ApprovalView`
+// (server/approval/render.ts) in both directions, so the two cannot drift.
+export type { ApprovalDecideOutcomeWire, ApprovalWireStatus };
+export type ApprovalDecisionWire = "approve" | "deny";
+
+export interface ApprovalCardViewRow {
+  label: string;
+  value: string;
+  kind: "text" | "code" | "block";
+}
+
+export interface ApprovalCardView {
+  tool: string;
+  title: string;
+  verbPhrase: string;
+  fields: ApprovalCardViewRow[];
+  consequence: string;
+  singleUse: string;
+  /** What the request is, as one noun ("email", "commits"): server-built, so the client never parses a display sentence. */
+  noun: string;
+  approveLabel: "Approve";
+  denyLabel: "Deny";
+  danger: boolean;
+}
+
 // WebSocket message protocol
 export type WSMessage =
   | { type: "auth"; token: string }
@@ -306,6 +333,11 @@ export type WSMessage =
   // "Ask me each time". `userId` is resolved from the authenticated socket —
   // NOT a wire field (TR4 cross-user invariant; strictObject rejects forgery).
   | { type: "autonomous_disclosure_response"; gateId: string; selection: string }
+  // #4672 — the Owner's decision on a durable approval request (client→server). `decision` is a closed enum: no option
+  // string, so "approve all" cannot be expressed. `userId` is NOT a wire field: the decider is the authenticated socket
+  // (strictObject rejects forgery) and the RPC re-derives the actor from `auth.uid()`. This frame can only ever reach
+  // the approval decide path; `review_gate_response` can never resolve an approval and vice versa.
+  | { type: "approval_decide"; approvalId: string; decision: ApprovalDecisionWire }
   // Client → server: user-initiated Stop. The server resolves `userId`
   // from the authenticated socket session — `userId` is intentionally
   // NOT part of the wire shape (TR4 cross-user invariant; see
@@ -441,6 +473,35 @@ export type WSMessage =
   // in-session ack-release). The chip reads THIS, never message presence — a
   // held (un-acked) disclosure is "Approve each", not "Auto-run on".
   | { type: "autonomous_posture"; autonomous: boolean }
+  // #4672 — a durable approval request card (server→client). Built server-side from the canonical action (the same
+  // object that is hashed). NOT in the stream replay buffer: a reattaching client gets live cards re-sent from the
+  // approval_request table on session attach. `viewerRole` "member" renders the read-only waiting card.
+  | {
+      type: "approval_request";
+      approvalId: string;
+      conversationId: string;
+      toolName: string;
+      view: ApprovalCardView;
+      status: "pending" | "approved";
+      expiresAt: string;
+      requestCount: number;
+      viewerRole: "owner" | "member";
+      /** True while the agent is still inside its in-session wait for this request. Absent = not waiting. */
+      agentWaiting?: boolean;
+    }
+  // #4672 — a status change of an approval request (server→client). `outcome` is set only on the reply to the socket
+  // that sent `approval_decide`.
+  | {
+      type: "approval_status";
+      approvalId: string;
+      conversationId: string;
+      status: ApprovalWireStatus;
+      outcome?: ApprovalDecideOutcomeWire;
+      /** Set when the agent's in-session wait state changed (false once it stopped waiting). Absent = unchanged. */
+      agentWaiting?: boolean;
+      /** True when the row stays approved but can never be used (its decider or requester lost their standing). Absent = unchanged. */
+      unusable?: boolean;
+    }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | {

@@ -32,6 +32,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-agent-native-audit",
   "cron-anthropic-cost-report",
   "cron-anthropic-credit-probe",
+  "cron-approval-expiry",
   "cron-architecture-diagram-sync",
   "cron-bot-pr-reaper",
   "cron-bug-fixer",

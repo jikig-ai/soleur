@@ -110,6 +110,9 @@ interface UseWebSocketReturn {
   sendMessage: (content: string, attachments?: AttachmentRef[]) => boolean;
   /** `false` = the frame was NOT sent (closed/torn-down socket): the card stays actionable. */
   sendReviewGateResponse: (gateId: string, selection: string) => boolean;
+  /** #4672 — the Owner's decision on a durable approval request. Returns false when the socket is not open (nothing was
+   *  sent): the card then shows a static error and never an optimistic state. The reply arrives as `approval_status`. */
+  sendApprovalDecide: (approvalId: string, decision: "approve" | "deny") => boolean;
   /** feat-bash-autonomous-default-on: client→server ack for the first-run
    *  autonomous-mode disclosure soft-gate. Selection is "Got it" /
    *  "Keep autonomous on" / "Ask me each time". Releases the held command. */
@@ -1212,6 +1215,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
+        case "approval_request":
+        case "approval_status": {
+          // #4672 — durable approval card and status. Live-only (not buffered, no seq): reattach re-sends live cards
+          // from the server. sendToClient is user-scoped, so drop a frame bound to another conversation's surface.
+          if (msg.conversationId !== realConversationIdRef.current) break;
+          dispatch({ type: "stream_event", msg });
+          break;
+        }
+
         case "autonomous_posture": {
           // Server truth for the persistent chip — never a message-presence guess.
           setAutonomousPosture(msg.autonomous);
@@ -1569,6 +1581,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         // server-side acks. Listed explicitly so a new server→client variant
         // added to `WSMessage` falls through to the `: never` rail and
         // fails `tsc --noEmit` per `cq-union-widening-grep-three-patterns`.
+        // `approval_decide` (#4672) is client→server only (the Owner's decision).
         case "auth":
         case "chat":
         case "start_session":
@@ -1576,6 +1589,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "close_conversation":
         case "review_gate_response":
         case "autonomous_disclosure_response":
+        case "approval_decide":
         case "abort_turn":
         case "interactive_prompt_response":
         case "fanout_truncated":
@@ -2223,6 +2237,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [sendGateFrame],
   );
 
+  const sendApprovalDecide = useCallback(
+    (approvalId: string, decision: "approve" | "deny"): boolean => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      // No optimistic dispatch: the card settles only from the server's approval_status reply (fail closed).
+      ws.send(JSON.stringify({ type: "approval_decide", approvalId, decision } satisfies WSMessage));
+      return true;
+    },
+    [],
+  );
+
   const sendAutonomousDisclosureResponse = useCallback(
     (gateId: string, selection: string): boolean => {
       if (
@@ -2334,6 +2359,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendApprovalDecide,
     sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
     resolveInteractivePrompt,
