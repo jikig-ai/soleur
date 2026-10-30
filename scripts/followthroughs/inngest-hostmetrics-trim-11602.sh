@@ -48,8 +48,8 @@
 # betterstack-query.sh itself.
 #
 # TRACKER: #11602 — PASS requires >=1 row of EACH collector (positive
-# liveness: a dark host can never satisfy it) AND set equality with
-# {memory, filesystem}. Anything else is TRANSIENT, never FAIL.
+# liveness: a host dark for the whole window cannot satisfy it) AND set
+# equality with {memory, filesystem}. Anything else is TRANSIENT, never FAIL.
 #
 # Tracker directive (goes in the issue body; a deferred operator step — the
 # probe is inert until enrolled):
@@ -89,21 +89,6 @@ QUERY="$SCRIPT_DIR/../betterstack-query.sh"               # [mut:query-path]
 INNGEST_HOST='soleur-inngest'                                   # [mut:host]
 WINDOW="${TRIM_WINDOW:-${SOLEUR_FT_WINDOW:-24h}}"         # [mut:window]
 
-# The trailing window maps to a ClickHouse INTERVAL. Accept only the relative
-# forms the sweeper passes (Nh/Nm/Nd); anything else is a malformed request —
-# TRANSIENT query_failed, never a silent default (a silently shortened window
-# could read "trimmed" on stale coverage).
-if [[ "$WINDOW" =~ ^([0-9]+)([hmd])$ ]]; then
-  case "${BASH_REMATCH[2]}" in
-    h) INTERVAL="${BASH_REMATCH[1]} HOUR" ;;
-    m) INTERVAL="${BASH_REMATCH[1]} MINUTE" ;;
-    d) INTERVAL="${BASH_REMATCH[1]} DAY" ;;
-  esac
-else
-  printf 'TRANSIENT: reason=query_failed detail=window_unparseable window=%s — expected <N>h|<N>m|<N>d; no verdict formed this pass.\n' "$WINDOW" >&2
-  exit 2
-fi
-
 # --- credentials: absent = TRANSIENT, never ${VAR:?} ------------------------
 missing=""
 [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]] && missing="${missing} BETTERSTACK_QUERY_HOST"
@@ -118,6 +103,23 @@ fi
   printf 'TRANSIENT: reason=query_tool_missing — %s not found.\n' "$QUERY" >&2
   exit 2
 }
+
+# The trailing window maps to a ClickHouse INTERVAL. Accept only the relative
+# forms the sweeper passes (Nh/Nm/Nd); anything else is a malformed request —
+# TRANSIENT query_failed, never a silent default (a silently shortened window
+# could read "trimmed" on stale coverage). This check sits AFTER the
+# credential and reader gates — a provisioning fault must never lose to a
+# window-parse error (sibling ordering).
+if [[ "$WINDOW" =~ ^([0-9]+)([hmd])$ ]]; then
+  case "${BASH_REMATCH[2]}" in
+    h) INTERVAL="${BASH_REMATCH[1]} HOUR" ;;
+    m) INTERVAL="${BASH_REMATCH[1]} MINUTE" ;;
+    d) INTERVAL="${BASH_REMATCH[1]} DAY" ;;
+  esac
+else
+  printf 'TRANSIENT: reason=query_failed detail=window_unparseable window=%s — expected <N>h|<N>m|<N>d; no verdict formed this pass.\n' "$WINDOW" >&2
+  exit 2
+fi
 
 # --- the read: one server-side GROUP BY over hot + archive ------------------
 # The tags.host literal sits in a SQL literal position; INNGEST_HOST is a baked
@@ -137,17 +139,21 @@ fi
 # or exception tail means the read is untrustworthy → selector_failed); a line
 # that decodes to an object without the {c:string, n:number} aggregate shape is
 # a foreign row and is ignored — the verdict reads .c, never row shape. The
-# per-collector row floor (n >= 1, positive liveness) is the awk arm — a
-# zero-count row is not evidence of a shipping collector.
+# .c value is additionally charset-gated to ^[a-z_]+$ BEFORE it can enter the
+# observed set: a forged `collector:"filesystem memory"` row would otherwise
+# satisfy the exact-set string compare on its own, and the gated charset is
+# also what makes `observed=` safe to echo into sweeper output (the comment
+# channel). The per-collector row floor (n >= 1, positive liveness) is the
+# awk arm — a zero-count row is not evidence of a shipping collector.
 jrc=0
 cols="$(printf '%s\n' "$rows" \
   | jq -R -r '
       select(length > 0)
       | (fromjson? // "BADLINE") as $d
       | if $d == "BADLINE" then "BADLINE\t-"
-        elif ($d | type) == "object" and ($d.c? | type) == "string" and ($d.n? | type) == "number" and $d.c != "" then "\($d.c)\t\($d.n)"
+        elif ($d | type) == "object" and ($d.c? | type) == "string" and ($d.c | test("^[a-z_]+$")) and ($d.n? | type) == "number" and $d.c != "" then "\($d.c)\t\($d.n)" # [mut:charset]
         else "FOREIGN\t-" end' 2>/dev/null \
-  | awk -F'\t' '$1 == "BADLINE" || $1 == "FOREIGN" {print $1; next} $2+0 >= 1 {print $1; next}')" || jrc=$?  # [mut:nfloor]
+  | awk -F'\t' '$1 == "BADLINE" || $1 == "FOREIGN" {print $1; next} $2+0 >= 1 {print $0; next}')" || jrc=$?  # [mut:nfloor]
 if [[ "$jrc" -ne 0 ]]; then
   printf 'TRANSIENT: reason=selector_failed rc=%s — jq failed to decode; the aggregate row shape may have changed.\n' "$jrc" >&2
   exit 2
@@ -157,13 +163,13 @@ if printf '%s\n' "$cols" | grep -qx 'BADLINE'; then
   printf 'TRANSIENT: reason=selector_failed — a non-JSON line rode in on the read (truncated body or exception tail); the window was not trusted.\n' >&2
   exit 2
 fi
-observed="$(printf '%s\n' "$cols" | grep -vxE 'FOREIGN|BADLINE' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+observed="$(printf '%s\n' "$cols" | grep -vxE 'FOREIGN|BADLINE' | cut -f1 | sort -u | tr '\n' ' ' | sed 's/ $//')"
 if [[ -z "$observed" ]]; then
   if [[ -z "$(printf '%s' "$rows" | tr -d '[:space:]')" ]]; then
     printf 'TRANSIENT: reason=no_host_metrics — zero host_metrics rows for tags.host=%s in the trailing %s. Expected until the next inngest-host-replace lands; also the honest state if the host or its Vector leg is dark.\n' \
       "$INNGEST_HOST" "$WINDOW" >&2
   else
-    printf 'TRANSIENT: reason=selector_failed — the read returned rows but none matched the {c,n} aggregate shape; the query contract drifted.\n' >&2
+    printf 'TRANSIENT: reason=selector_failed — the read returned rows but none matched the {c:string, n:number} aggregate shape under the collector charset gate; the query contract drifted.\n' >&2
   fi
   exit 2
 fi
@@ -173,8 +179,11 @@ fi
 # same way.
 WANT='filesystem memory'                                       # [mut:set]
 if [[ "$observed" == "$WANT" ]]; then
-  n_mem="$(printf '%s\n' "$rows" | jq -R -r 'fromjson? | select(.c? == "memory") | .n' 2>/dev/null | head -n1)"
-  n_fs="$(printf '%s\n' "$rows" | jq -R -r 'fromjson? | select(.c? == "filesystem") | .n' 2>/dev/null | head -n1)"
+  # The per-collector counts come from $cols — the already-decoded,
+  # already-typed TSV — never a second pass over raw row content: nothing
+  # unvalidated may echo verbatim into the PASS the sweeper posts.
+  n_mem="$(printf '%s\n' "$cols" | awk -F'\t' '$1 == "memory" {print $2; exit}')"
+  n_fs="$(printf '%s\n' "$cols" | awk -F'\t' '$1 == "filesystem" {print $2; exit}')"
   printf 'PASS: trailing %s over tags.host=%s shows collectors exactly {memory, filesystem} (memory rows=%s filesystem rows=%s) — the host_metrics trim is live on the inngest host; #11602 close evidence.\n' \
     "$WINDOW" "$INNGEST_HOST" "${n_mem:-?}" "${n_fs:-?}"
   exit 0

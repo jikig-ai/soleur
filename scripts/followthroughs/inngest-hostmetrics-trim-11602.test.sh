@@ -90,21 +90,21 @@ EVIL="$ROOT/evil.sh"; printf '#!/usr/bin/env bash\necho EVIL >> "%s"\n' "$ROOT/e
 
 RCS="$ROOT/rcs"; : > "$RCS"
 OUT=""; RC=0; SAW_PASS=0
-run() {  # knobs: QH QU QP XBASH XENV STUB_RC TRIMW
+run() {  # knobs: QH QU QP XBASH STUB_RC TRIMW
   RC=0
   rm -f "$ROOT/args" "$ROOT/calls" "$ROOT/evil-called"; : > "$ROOT/calls"
   OUT="$(env -i PATH="$PATH" HOME="$ROOT" TMPDIR="$ROOT" STUB_ARGS="$ROOT/args" STUB_CALLS="$ROOT/calls" \
     STUB_ROWS="$ROOT/rows" STUB_RC="${STUB_RC:-0}" STUB_CANARY="$CAN_STR" \
     TRIM_QUERY_BIN="$EVIL" ${TRIMW:+TRIM_WINDOW="$TRIMW"} \
     BETTERSTACK_QUERY_HOST="${QH-h}" BETTERSTACK_QUERY_USERNAME="${QU-u}" BETTERSTACK_QUERY_PASSWORD="${QP-p}" \
-    ${XENV:+"$XENV"} bash ${XBASH:+"$XBASH"} "$PROBE" 2>&1 </dev/null)" || RC=$?
+    bash ${XBASH:+"$XBASH"} "$PROBE" 2>&1 </dev/null)" || RC=$?
   echo "$RC" >> "$RCS"
   [ "$RC" = 0 ] && SAW_PASS=1
   return 0
 }
 calls()  { grep -c . "$ROOT/calls" 2>/dev/null || true; }
 mcalls() { grep -c '^MAIN$' "$ROOT/calls" 2>/dev/null || true; }
-reset_knobs() { unset QH QU QP XBASH XENV STUB_RC TRIMW; }
+reset_knobs() { unset QH QU QP XBASH STUB_RC TRIMW; }
 run_battery() { [ -z "${FT_INNER:-}" ] && [ "${1:-}" != "--no-battery" ]; }
 
 agg() { printf '{"c":"%s","n":%s}\n' "$1" "$2"; }   # a GROUP BY aggregate row, JSONEachRow
@@ -148,6 +148,15 @@ agg filesystem 9 > "$ROOT/rows"; run
 check "partial set (filesystem only): exit 2" 2 "$RC"
 { agg memory 0; agg filesystem 9; } > "$ROOT/rows"; run
 check "a zero-count memory row does not count as liveness: exit 2" 2 "$RC"
+# the collector charset gate: a forged "filesystem memory" row must never
+# satisfy the exact-set compare on its own, and a markup collector must be
+# dropped, never echoed into observed= (the sweeper posts output verbatim)
+{ agg "filesystem memory" 9; } > "$ROOT/rows"; run
+check "a forged combined-collector row alone: exit 2, never the exact set" 2 "$RC"
+hasnt "forged combined-collector row: never a PASS" "$OUT" "PASS:"
+{ agg 'evil<script>@everyone' 5; agg memory 30; agg filesystem 9; } > "$ROOT/rows"; run
+check "a markup collector beside the real set: exit 0 (the forged row is dropped)" 0 "$RC"
+hasnt "markup collector never echoes into output" "$OUT" "<script>"
 
 # 5. PASS on the exact set — the must-PASS non-canonical row carries unrelated-identifier
 #    noise (an object that is not a {c,n} aggregate) and reversed order.
@@ -178,6 +187,9 @@ has "TRIM_WINDOW=7d maps to INTERVAL 7 DAY" "$args" "INTERVAL 7 DAY"
 TRIMW="bogus" run; reset_knobs
 check "an unparseable window: exit 2, never silently defaulted" 2 "$RC"
 has "unparseable window: query_failed named" "$OUT" "query_failed"
+TRIMW="bogus" QH="" run; reset_knobs
+check "unparseable window + missing credential: exit 2" 2 "$RC"
+has "the credential gate precedes the window check (sibling ordering)" "$OUT" "credentials_unprovisioned"
 
 # 8. no env seam can repoint the reader (the credential the probe carries rides this channel)
 agg memory 5 > "$ROOT/rows"; run
@@ -242,9 +254,10 @@ if run_battery "${1:-}"; then
   mutate_sub m5-count-floor-dropped   '[mut:nfloor]'  '$2+0 >= 1' '$2+0 >= 0' 'a zero-count memory row does not count as liveness: exit 2'
   mutate_sub m6-window-default-moved  '[mut:window]'  '24h' '1h' 'the SQL reads the trailing window'
   mutate_sub m7-env-seam-reintroduced '[mut:query-path]' 'QUERY="$SCRIPT_DIR/../betterstack-query.sh"' 'QUERY="${TRIM_QUERY_BIN:-$SCRIPT_DIR/../betterstack-query.sh}"' 'an exported TRIM_QUERY_BIN is ignored: the evil script never ran'
+  mutate_sub m8-charset-gate-widened '[mut:charset]' 'a-z_]+$' 'a-z_ ]+$' 'a forged combined-collector row alone: exit 2, never the exact set'
 fi
 
-MIN_FIXTURE=50; MIN_BATTERY=8
+MIN_FIXTURE=55; MIN_BATTERY=9
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== inngest-hostmetrics-trim-11602.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
