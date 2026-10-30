@@ -1,0 +1,133 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override (ADR-248 amendment, eligibility clause 2): this feeder beats the two archive-fed dead-man's-switch
+# heartbeats betteruptime_heartbeat.luks_monitor_host_timer and betteruptime_heartbeat.claude_cost_capture only
+# while a qualifying row exists in the Better Stack Logs hot-plus-archive window of the retired alert it replaces
+# (#11631). It must NOT be scheduled by Inngest: each heartbeat is the sole paging surface for a check that lives on
+# the Inngest execution host (web-1's nightly luks-monitor timer; the cost markers Inngest crons emit), so an
+# Inngest-fired feeder would stop beating during any scheduler or web-1 outage while the row windows still read
+# healthy, and the page would blame the timer or the cost path for a scheduler fault. It does NOT watch the Inngest
+# scheduler, and credential placement is not the reason.
+# Triggers: the web watchdog clock is primary (one workflow_dispatch per hourly slot), `schedule:` is the fallback
+# (measured: one run every 2-7 h, which cannot hold the heartbeats' 10800 s page budget on its own); keep
+# workflow_dispatch and the concurrency group (cancel-in-progress: false) and no other trigger
+# (sentry-monitor-iac-parity.test.ts).
+# UNARMED: both heartbeats are born paused. While one is paused its target reports
+# `qualifying_row_heartbeat_paused` and this run emits an UNARMED ::warning:: every hour, so an unarmed state is
+# never silent. Arming is the owner's (runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md,
+# "Arming the probe heartbeat").
+# A Sentry `error` check-in means a target was withheld or failed (no qualifying row, query or delivery fault), not
+# "feeder broken"; a `missed` check-in means the feeder went dark (clock and fallback both dead, workflow disabled).
+
+name: "Scheduled: Dead-man Heartbeat Feeder"
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-deadman-heartbeat-feeder
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  feeder:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Verify the dead-man rows and beat
+        id: feeder
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # Read-only uptime-API token: GET only, so a leak cannot pause, edit or delete anything. It can
+          # still read the heartbeats' ping URLs (beat capabilities), so it bounds the blast radius only.
+          BETTERSTACK_API_TOKEN_READONLY: ${{ secrets.BETTERSTACK_API_TOKEN_READONLY }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          # The feeder's exit status is DATA, not a job failure. `|| rc=$?` IS THE CAPTURE: this step has no
+          # `shell:` key, so Actions runs it under `bash -e {0}`, and `set -uo pipefail` above does NOT clear -e;
+          # a bare `out="$(...)"; rc=$?` would abort the step at the assignment. The loop never stops on a failing
+          # target: one dark check must not hide the other.
+          all_decided=true
+          for t in luks-monitor-host-timer claude-cost-capture; do
+            rc=0
+            out="$(bash scripts/deadman-heartbeat-feeder.sh "$t" 2>&1)" || rc=$?
+
+            # Keep ONLY lines of the feeder's own two shapes. The raw blob is never echoed: a line that begins
+            # with two colons would run as a workflow command, and a blob-wide strip would fuse lines. A marker
+            # that does not match the shape (it would carry a value this step does not expect) is COUNTED, not
+            # printed. The ping URL is a bearer secret GitHub cannot mask; the feeder never prints it.
+            verdict=""
+            dropped=0
+            while IFS= read -r line; do
+              safe="$(strip_log_injection "$line")"
+              case "$safe" in
+                "deadman-feeder: "*)
+                  if [[ "$safe" =~ ^deadman-feeder:\ target=([a-z-]+)\ verdict=([a-z_]+)(\ [a-z_]+=[A-Za-z0-9:._-]{0,40})*$ ]]; then
+                    printf '%s\n' "$safe"
+                    if [[ "${BASH_REMATCH[1]}" == "$t" || "${BASH_REMATCH[1]}" == "none" ]]; then
+                      verdict="${BASH_REMATCH[2]}"
+                    fi
+                  else
+                    dropped=$((dropped + 1))
+                  fi ;;
+                "CANNOT BEAT: "*)
+                  printf '%s\n' "$safe" ;;
+              esac
+            done <<<"$out"
+            # A run that died before it could print a marker (script missing, parse error) would otherwise leave
+            # no cause anywhere: name that state, with a class and a length, never raw bytes.
+            if [ -z "$verdict" ]; then
+              verdict="no_marker"
+              printf 'deadman-feeder: target=%s verdict=no_marker rc=%s out_bytes=%s\n' "$t" "$rc" "${#out}"
+            fi
+            if [ "$dropped" -gt 0 ]; then
+              printf 'deadman-feeder: target=%s dropped_lines=%s\n' "$t" "$dropped"
+            fi
+            verdict="$(printf '%s' "$verdict" | tr -c 'a-z_' '?' | head -c 40)"
+
+            case "$rc" in
+              0) case "$verdict" in
+                   beat) echo "::notice::deadman heartbeat ${t}: beat" ;;
+                   qualifying_row_heartbeat_paused)
+                     echo "::warning::deadman heartbeat ${t} is UNARMED (paused): no page can fire" ;;
+                   *) all_decided=false
+                      echo "::error::deadman heartbeat feeder for ${t} exited 0 without a deciding verdict (${verdict}); Sentry will check in error." ;;
+                 esac ;;
+              3) all_decided=false
+                 echo "::error::deadman heartbeat ${t} WITHHELD (${verdict}). See the verdict line above for the cause and the counts." ;;
+              4) all_decided=false
+                 echo "::error::deadman heartbeat ${t} beat FAILED (${verdict}): a qualifying row existed but the heartbeat could not be resolved or delivered." ;;
+              *) all_decided=false
+                 echo "::warning::deadman heartbeat feeder for ${t} returned unexpected status ${rc} (${verdict})" ;;
+            esac
+          done
+
+          echo "all_decided=${all_decided}" >> "$GITHUB_OUTPUT"
+
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-deadman-heartbeat-feeder
+          # ok ONLY when EVERY target exited 0 with a deciding verdict (beat or qualifying_row_heartbeat_paused);
+          # a step that wrote no output, or any withheld/failed target, checks in `error`.
+          status: ${{ steps.feeder.outputs.all_decided == 'true' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

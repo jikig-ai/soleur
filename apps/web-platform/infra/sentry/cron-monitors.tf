@@ -458,6 +458,44 @@ resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat" {
   timezone                = "UTC"
 }
 
+# #11631: GHA-fired via .github/workflows/scheduled-deadman-heartbeat-feeder.yml (on.schedule '0 * * * *' is the
+# FALLBACK; the PRIMARY trigger is the web server's watchdog dispatch clock, ADR-248, one workflow_dispatch per
+# hourly UTC slot — see WATCHDOG_DISPATCH_TABLE). The workflow is the repo-side feeder for the two archive-fed
+# dead-man heartbeats betteruptime_heartbeat.luks_monitor_host_timer and betteruptime_heartbeat.claude_cost_capture
+# that replaced the once-a-day native logs alerts: it beats a heartbeat only while a qualifying row exists in the
+# Logs hot-plus-archive window of the retired alert. A MISSED check-in here means the feeder went dark (clock +
+# fallback both dead, workflow disabled), and the heartbeats then time out and page; a `status=error` check-in
+# means a target was WITHHELD or FAILED (no qualifying row, query or delivery fault) — it says nothing about the
+# feeder being broken. Both are read from the run log marker lines `deadman-feeder: target=<t> verdict=<v>`.
+# GHA-fired by the web watchdog clock, NOT Inngest: each heartbeat is the sole paging surface for a check on the
+# Inngest execution host, so an Inngest-fired feeder would blame the timer or the cost path for a scheduler fault
+# (ADR-248 amendment, eligibility clause 2).
+#
+# checkin_margin_minutes = 60 is the parity ceiling (MAX_MARGIN_MINUTES in sentry-monitor-iac-parity.test.ts), so
+# there is NO headroom left to widen later: 12 min clock worst case + 40.6 min measured runner-queue max (2438 s
+# over 40 runs of the zot watchdog, 2026-09-24 — the parity test's QUEUE_ALLOWANCE_MINUTES of 30 is the asserted
+# floor, this uses the observed max) + 6 min runtime (max_runtime_minutes = 6; the job's `timeout-minutes: 6`)
+# = 58.6 min <= 60. Under the `schedule:` fallback alone (one run every 2-7 h, measured) this monitor reports
+# missed and the heartbeats page: that is the intended "clock dark" signal. A dead trigger opens a Sentry issue
+# within interval + margin = 60 + 60 = 120 min. Re-measure the queue tail once this workflow has history, before
+# changing the margin:
+#   for id in $(gh run list --workflow scheduled-deadman-heartbeat-feeder.yml --limit 40 --json databaseId --jq '.[].databaseId'); do
+#     gh api repos/jikig-ai/soleur/actions/runs/$id/jobs --jq '[.jobs[] | select(.started_at != null) | ((.started_at|fromdate) - (.created_at|fromdate))] | max'; done | sort -n
+# Slug MUST match `monitor-slug` in the workflow's sentry-heartbeat step (scheduled-deadman-heartbeat-feeder).
+# Routing: declared UNROUTED under the two-PR rule — cron-monitor-alerts.tf `local.cron_monitor_alert_unrouted`;
+# a follow-up PR moves it into monitor_ids after three measured check-ins (#11631).
+resource "sentry_cron_monitor" "scheduled_deadman_heartbeat_feeder" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-deadman-heartbeat-feeder"
+  schedule                = { crontab = "0 * * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 6
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Liveness for the Better Stack incident mirror (#10390 WS1):
 # .github/workflows/scheduled-betterstack-incident-mirror.yml. The mirror is GHA-executed and
 # watchdog-dispatched (WATCHDOG_DISPATCH_TABLE, 15-min slots); its `schedule:` trigger is only the
