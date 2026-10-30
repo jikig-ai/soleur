@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
@@ -35,6 +35,8 @@ export function RemoveSubscriptionTokenDialog({
   onAddApiKey,
 }: RemoveSubscriptionTokenDialogProps) {
   const router = useRouter();
+  const headingId = useId();
+  const bodyId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,16 +100,22 @@ export function RemoveSubscriptionTokenDialog({
 
   return (
     <div
+      role="group"
+      aria-labelledby={headingId}
+      aria-describedby={bodyId}
       className={`mt-6 rounded-xl border bg-soleur-bg-surface-1/50 p-6 ${
         basis.variant === "B"
           ? "border-red-500/60"
           : "border-soleur-border-default/50"
       }`}
     >
-      <h3 className="mb-2 text-lg font-semibold text-soleur-text-primary">
+      <h3
+        id={headingId}
+        className="mb-2 text-lg font-semibold text-soleur-text-primary"
+      >
         Remove subscription token?
       </h3>
-      <p className="mb-4 text-sm text-soleur-text-secondary">
+      <p id={bodyId} className="mb-4 text-sm text-soleur-text-secondary">
         {basis.dialogBody}
       </p>
 

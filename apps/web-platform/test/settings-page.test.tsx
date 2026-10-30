@@ -319,6 +319,29 @@ const baseContentProps = {
 };
 
 describe("SettingsContent — stored subscription token (#11524)", () => {
+  it("formats dates in UTC so the saved date does not depend on the server/browser zone", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    const savedTz = process.env.TZ;
+    // 23:30Z is already Oct 29 in UTC+14; a local-zone formatter would show it.
+    process.env.TZ = "Pacific/Kiritimati";
+    try {
+      render(
+        <SettingsContent
+          {...baseContentProps}
+          hasOauthToken={true}
+          oauthInEffect={true}
+          oauthTokenSavedAt="2026-10-28T23:30:00Z"
+        />,
+      );
+      expect(screen.getByText("Subscription token: saved Oct 28, 2026")).toBeInTheDocument();
+    } finally {
+      if (savedTz === undefined) delete process.env.TZ;
+      else process.env.TZ = savedTz;
+    }
+  });
+
   it("shows no token lines and no Remove control when no oauth row exists", async () => {
     const { SettingsContent } = await import(
       "@/components/settings/settings-content"
@@ -418,6 +441,52 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
     return KeyRotationForm;
   }
 
+  // The status region is mounted from the start (empty) so assistive tech
+  // registers the live region before its content changes; wait for its text.
+  async function statusWith(text: string) {
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(text),
+    );
+    return screen.getByRole("status");
+  }
+
+  it("the status live region is mounted empty from the start (announces on change, not on insert)", async () => {
+    const KeyRotationForm = await loadForm();
+    render(<KeyRotationForm hasExistingKey={false} basis={basisOf(true, false)} />);
+    const region = screen.getByRole("status");
+    expect(region).toBeEmptyDOMElement();
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(document.getElementById("api-key-input")).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("variant B success: the API key input is described by the notice while it is shown", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
+    const KeyRotationForm = await loadForm();
+    render(<KeyRotationForm hasExistingKey={false} basis={basisOf(true, false)} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
+    const notice = await statusWith("Add an API key to keep using chat.");
+    expect(notice.id).toBeTruthy();
+    expect(document.getElementById("api-key-input")).toHaveAttribute(
+      "aria-describedby",
+      notice.id,
+    );
+  });
+
+  it("variant A success: the API key input is NOT described by the notice", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
+    const KeyRotationForm = await loadForm();
+    render(<KeyRotationForm hasExistingKey basis={basisOf(true, true)} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
+    await statusWith("New conversations will use your API key.");
+    expect(document.getElementById("api-key-input")).not.toHaveAttribute("aria-describedby");
+  });
+
   it("variant B success: notice (role=status) names the next step and focus lands on #api-key-input", async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
     const KeyRotationForm = await loadForm();
@@ -428,10 +497,7 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
       screen.getByRole("button", { name: "Remove subscription token" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
-    const notice = await screen.findByRole("status");
-    expect(notice).toHaveTextContent(
-      "Subscription token removed. Add an API key to keep using chat.",
-    );
+    await statusWith("Subscription token removed. Add an API key to keep using chat.");
     expect(document.getElementById("api-key-input")).toHaveFocus();
 
     // After router.refresh() flips the props the dialog unmounts; the notice stays.
@@ -458,17 +524,16 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
       screen.getByRole("button", { name: "Remove subscription token" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Add an API key to keep using chat.",
-    );
+    await statusWith("Add an API key to keep using chat.");
     await userEvent.type(
       document.getElementById("api-key-input") as HTMLInputElement,
       "sk-ant-fake-key",
     );
     await userEvent.click(screen.getByRole("button", { name: "Save Key" }));
     expect(await screen.findByText("Key saved successfully.")).toBeInTheDocument();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
     expect(screen.queryByText(/Add an API key to keep using chat/)).toBeNull();
+    expect(document.getElementById("api-key-input")).not.toHaveAttribute("aria-describedby");
   });
 
   it("variant A success: notice region takes focus (tabIndex -1)", async () => {
@@ -479,8 +544,7 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
       screen.getByRole("button", { name: "Remove subscription token" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
-    const notice = await screen.findByRole("status");
-    expect(notice).toHaveTextContent(
+    const notice = await statusWith(
       "Subscription token removed. New conversations will use your API key.",
     );
     expect(notice).toHaveAttribute("tabindex", "-1");
@@ -495,9 +559,7 @@ describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
       screen.getByRole("button", { name: "Remove subscription token" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Subscription token removed.",
-    );
+    await statusWith("Subscription token removed.");
   });
 
   it("Add an API key first switches the credential radio to API key and focuses the input, keeping typed text", async () => {

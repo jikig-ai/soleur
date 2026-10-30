@@ -50,7 +50,7 @@ export function describeCredentialBasis({
     return {
       variant: "A",
       conversationsUse: "Claude subscription (API key also saved)",
-      dialogBody: `Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
+      dialogBody: `Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open may keep using the token until they end. ${REVOKE_SENTENCE}`,
       notice:
         "Subscription token removed. New conversations will use your API key.",
     };
@@ -60,16 +60,19 @@ export function describeCredentialBasis({
     return {
       variant: "B",
       conversationsUse: "Claude subscription",
-      dialogBody: `You will have no sign-in for Claude until you add an API key, and chat will stop working. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
+      dialogBody: `You will have no sign-in for Claude until you add an API key, and chat will stop working. Conversations already open may keep using the token until they end. ${REVOKE_SENTENCE}`,
       notice: "Subscription token removed. Add an API key to keep using chat.",
     };
   }
 
-  // Not in effect (kill-switch off or token invalid): no billing claim.
+  // Not in effect (kill-switch off or token invalid): no billing claim, and no
+  // "open conversations keep using it" claim either - nothing uses this token.
+  // (A/B soften that claim to "may": verified only for the cc-soleur-go Query
+  // captured at cold start, unverified for the legacy runner's per-turn path.)
   return {
     variant: "C",
     conversationsUse: hasApiKey ? "your Anthropic API key" : NOTHING_SET_UP,
-    dialogBody: `Soleur is not using this token for conversations. Removing deletes the saved copy. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
+    dialogBody: `Soleur is not using this token for conversations. Removing deletes the saved copy. ${REVOKE_SENTENCE}`,
     notice: "Subscription token removed.",
   };
 }

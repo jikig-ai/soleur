@@ -61,7 +61,7 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: h.captureException,
 }));
 
-import { DELETE } from "@/app/api/keys/route";
+import { DELETE, POST } from "@/app/api/keys/route";
 
 const USER = "user-1";
 
@@ -203,11 +203,12 @@ describe("DELETE /api/keys — failure and audit", () => {
     expect(opts.extra).not.toHaveProperty("userId");
   });
 
-  it("success emits the audit line at WARN (Vector ships pino >= 40 only) and a breadcrumb", async () => {
+  it("a real erasure (deleted: true) emits the audit line at WARN (Vector ships pino >= 40 only); the pino warn mirror is the breadcrumb carrier", async () => {
     await DELETE(req(OAUTH_BODY));
-    // infra/vector.toml app_container_warn_filter drops info (30): the audit
-    // line must be warn or it never reaches Better Stack.
+    // infra/vector.toml app_container_warn_filter drops info (30): a real
+    // erasure must be warn or it never reaches Better Stack.
     expect(h.loggerInfo).not.toHaveBeenCalled();
+    expect(h.loggerWarn).toHaveBeenCalledTimes(1);
     expect(h.loggerWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         feature: "api-keys",
@@ -217,11 +218,29 @@ describe("DELETE /api/keys — failure and audit", () => {
       }),
       expect.any(String),
     );
-    expect(h.addBreadcrumb).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("oauth-credential-removed") }),
+    // server/logger.ts mirrorToSentry already turns this warn into a
+    // breadcrumb carrying { deleted }; an explicit second one is a duplicate.
+    expect(h.addBreadcrumb).not.toHaveBeenCalledWith(
+      expect.objectContaining({ category: "api-keys" }),
     );
-    // Breadcrumb carries no user id.
-    expect(JSON.stringify(h.addBreadcrumb.mock.calls)).not.toContain(USER);
+  });
+
+  it("an idempotent no-op (deleted: false) is logged at INFO, not WARN, and adds no breadcrumb", async () => {
+    h.rpc.mockResolvedValue({ data: false, error: null });
+    await DELETE(req(OAUTH_BODY));
+    expect(h.loggerWarn).not.toHaveBeenCalled();
+    expect(h.loggerInfo).toHaveBeenCalledTimes(1);
+    expect(h.loggerInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        feature: "api-keys",
+        op: "oauth-credential-removed",
+        deleted: false,
+      }),
+      expect.any(String),
+    );
+    expect(h.addBreadcrumb).not.toHaveBeenCalledWith(
+      expect.objectContaining({ category: "api-keys" }),
+    );
   });
 
   it("no token-shaped string, request body or body field name reaches any logger / Sentry argument", async () => {
@@ -268,5 +287,34 @@ describe("POST /api/keys — kill-switch predicate has a single source", () => {
   it("calls isCcOauthEnabled() from the shared module", () => {
     expect(src).toMatch(/import\s*\{\s*isCcOauthEnabled\s*\}\s*from\s*["']@\/server\/cc-oauth-flag["']/);
     expect(src).toMatch(/!isCcOauthEnabled\(\)/);
+  });
+});
+
+describe("POST /api/keys (oauth_token) — RPC-error Sentry extra is pseudonymised", () => {
+  it("store_oauth_credential error -> 500, extra carries userIdHash and never the raw userId", async () => {
+    process.env.ADMIN_USER_IDS = USER;
+    process.env.CC_OAUTH_ENABLED = "1";
+    const rpcError = { message: "store failed", code: "XX000" };
+    h.rpc.mockResolvedValue({ data: null, error: rpcError });
+    const res = await POST(
+      new Request("https://app.test/api/keys", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://app.test" },
+        body: JSON.stringify({
+          key: "sk-ant-oat01-FAKEfake_0123456789-abcdef",
+          credential_type: "oauth_token",
+        }),
+      }),
+    );
+    expect(res.status).toBe(500);
+    expect(h.captureException).toHaveBeenCalledTimes(1);
+    const opts = h.captureException.mock.calls[0][1] as {
+      tags: Record<string, string>;
+      extra: Record<string, unknown>;
+    };
+    expect(opts.tags).toEqual({ feature: "api-keys", op: "store-oauth" });
+    expect(opts.extra.userIdHash).toBe(`hash(${USER})`);
+    expect(opts.extra).not.toHaveProperty("userId");
+    expect(JSON.stringify(opts.extra)).not.toContain(`"${USER}"`);
   });
 });

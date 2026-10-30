@@ -6,7 +6,7 @@ import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveWorkspaceIdentityForSettings } from "@/server/workspace-identity-resolver";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
-import { reportSilentFallback } from "@/server/observability";
+import { mirrorWithDebounce } from "@/server/observability";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -62,11 +62,19 @@ export default async function SettingsPage() {
   // A failed oauth read must not silently hide the Remove control: report it
   // and render the neutral state (no token UI) rather than guess a row.
   if (oauthError) {
-    reportSilentFallback(oauthError, {
-      feature: "settings",
-      op: "read-oauth-credential",
-      extra: { userId: user.id },
-    });
+    // Debounced (5 min, in-process): this runs on every Settings render while
+    // the read keeps failing. The key is a constant, NOT a user id, so a
+    // sustained DB outage yields one event per process, not one per visit.
+    mirrorWithDebounce(
+      oauthError,
+      {
+        feature: "settings",
+        op: "read-oauth-credential",
+        extra: { userId: user.id },
+      },
+      "settings:read-oauth-credential",
+      "settings_read_oauth_credential",
+    );
   }
   const oauthRow = oauthError ? null : oauthData;
 

@@ -35,7 +35,7 @@ describe("describeCredentialBasis (single source for the status line and the con
     expect(b.variant).toBe("A");
     expect(b.conversationsUse).toBe("Claude subscription (API key also saved)");
     expect(b.dialogBody).toBe(
-      "Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open keep using the token until they end. Removing it here does not revoke it with Anthropic - revoke it in your Claude account if it may be exposed.",
+      "Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open may keep using the token until they end. Removing it here does not revoke it with Anthropic - revoke it in your Claude account if it may be exposed.",
     );
     expect(b.notice).toBe(
       "Subscription token removed. New conversations will use your API key.",
@@ -51,7 +51,7 @@ describe("describeCredentialBasis (single source for the status line and the con
     expect(b.variant).toBe("B");
     expect(b.conversationsUse).toBe("Claude subscription");
     expect(b.dialogBody).toBe(
-      `You will have no sign-in for Claude until you add an API key, and chat will stop working. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
+      `You will have no sign-in for Claude until you add an API key, and chat will stop working. Conversations already open may keep using the token until they end. ${REVOKE_SENTENCE}`,
     );
     expect(b.notice).toBe(
       "Subscription token removed. Add an API key to keep using chat.",
@@ -69,7 +69,7 @@ describe("describeCredentialBasis (single source for the status line and the con
       expect(b.variant).toBe("C");
       expect(b.conversationsUse).toBe(hasApiKey ? KEY_USE : NOTHING);
       expect(b.dialogBody).toBe(
-        `Soleur is not using this token for conversations. Removing deletes the saved copy. Conversations already open keep using the token until they end. ${REVOKE_SENTENCE}`,
+        `Soleur is not using this token for conversations. Removing deletes the saved copy. ${REVOKE_SENTENCE}`,
       );
       expect(b.notice).toBe("Subscription token removed.");
     },

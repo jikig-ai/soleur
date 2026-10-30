@@ -54,6 +54,23 @@ describe("RemoveSubscriptionTokenDialog", () => {
     expect(screen.queryByText("Remove subscription token?")).toBeNull();
   });
 
+  it.each([
+    ["A", true, true],
+    ["B", true, false],
+    ["C", false, true],
+  ] as const)("variant %s: the expanded container is a labelled group (title + body)", async (_v, inEffect, hasKey) => {
+    setup(basis(inEffect, hasKey));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    const group = screen.getByRole("group", { name: "Remove subscription token?" });
+    const describedBy = group.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)).toHaveTextContent(
+      basis(inEffect, hasKey).dialogBody,
+    );
+  });
+
   it("variant A: title, exact body, Keep token has default focus, no Add an API key first", async () => {
     setup(basis(true, true));
     await userEvent.click(
@@ -62,7 +79,7 @@ describe("RemoveSubscriptionTokenDialog", () => {
     expect(screen.getByText("Remove subscription token?")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open keep using the token until they end. Removing it here does not revoke it with Anthropic - revoke it in your Claude account if it may be exposed.",
+        "Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open may keep using the token until they end. Removing it here does not revoke it with Anthropic - revoke it in your Claude account if it may be exposed.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Keep token" })).toHaveFocus();
@@ -77,7 +94,7 @@ describe("RemoveSubscriptionTokenDialog", () => {
     );
     expect(
       screen.getByText(
-        /^You will have no sign-in for Claude until you add an API key, and chat will stop working\. Conversations already open keep using the token until they end\. Removing it here does not revoke it with Anthropic/,
+        /^You will have no sign-in for Claude until you add an API key, and chat will stop working\. Conversations already open may keep using the token until they end\. Removing it here does not revoke it with Anthropic/,
       ),
     ).toBeInTheDocument();
     await userEvent.click(
@@ -95,7 +112,7 @@ describe("RemoveSubscriptionTokenDialog", () => {
     );
     expect(
       screen.getByText(
-        /^Soleur is not using this token for conversations\. Removing deletes the saved copy\. Conversations already open keep using the token until they end\. Removing it here does not revoke it with Anthropic/,
+        /^Soleur is not using this token for conversations\. Removing deletes the saved copy\. Removing it here does not revoke it with Anthropic/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/usage charges apply/)).toBeNull();

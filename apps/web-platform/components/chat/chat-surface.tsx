@@ -89,7 +89,7 @@ function credentialCardCopy(e: {
  */
 function renderInteractivePromptCard(
   msg: ChatInteractivePromptMessage,
-  onRespond: (response: InteractivePromptResponsePayload) => void,
+  onRespond: (response: InteractivePromptResponsePayload) => boolean,
 ): React.ReactNode {
   switch (msg.promptKind) {
     case "ask_user":
@@ -320,17 +320,21 @@ export function ChatSurface({
     [lastError],
   );
 
-  // #11525 - blocked after a credential error: the hook's single derived flag
+  // #11525 - `credentialBlocked` is the hook's single derived flag
   // (`isCredentialErrorCode(lastError.code)`), never re-derived here.
   // Dismissing the card does NOT unblock.
-  const blocked = credentialBlocked;
-  const cardCopy = lastError ? credentialCardCopy(lastError) : null;
-  const credentialNoun = cardCopy?.noun ?? "key";
+  // No error => the default copy ("key" noun); only read while an error shows.
+  const cardCopy = credentialCardCopy(lastError ?? { code: "" });
+  const credentialNoun = cardCopy.noun;
 
-  // Reconnect from a credential card/helper: re-run the start/resume effect on
-  // the fresh socket (it resumes the captured conversation, or starts one).
-  // Never auto-resends the unanswered message.
-  const onCredentialReconnect = () => {
+  // Reconnect from a credential card/helper AND the session-start timeout card:
+  // re-run the start/resume effect on the fresh socket (it resumes the captured
+  // conversation, or starts one). Resetting `sessionStarted` is what lets a
+  // non-refusal resume failure retry the captured id; the bare hook `reconnect`
+  // would leave the effect gated off. Never auto-resends the unanswered message.
+  // On a UUID surface a refused rebind retries the resume (bounded by the hook's
+  // one-shot arm) rather than starting a session.
+  const onSessionReconnect = () => {
     setSessionStarted(false);
     reconnect();
   };
@@ -405,18 +409,19 @@ export function ChatSurface({
   }, [scrollToLatest]);
 
   const handleReviewGateResponse = useCallback(
-    (gateId: string, selection: string) => {
-      // A dropped send (`false`) leaves the card actionable: no prompt either.
-      if (sendReviewGateResponse(gateId, selection) === false) return;
+    (gateId: string, selection: string): boolean => {
+      // A dropped send (`false`) leaves the card actionable (the card shows the
+      // refusal line): no notification prompt either.
+      if (sendReviewGateResponse(gateId, selection) === false) return false;
       setShowNotificationPrompt(true);
+      return true;
     },
     [sendReviewGateResponse],
   );
 
   const handleAutonomousDisclosureResponse = useCallback(
-    (gateId: string, selection: string) => {
-      sendAutonomousDisclosureResponse(gateId, selection);
-    },
+    (gateId: string, selection: string): boolean =>
+      sendAutonomousDisclosureResponse(gateId, selection),
     [sendAutonomousDisclosureResponse],
   );
 
@@ -434,7 +439,7 @@ export function ChatSurface({
       promptId: string,
       conversationIdArg: string,
       response: InteractivePromptResponsePayload,
-    ) => {
+    ): boolean => {
       // Send the wire frame.
       const sent = sendInteractivePromptResponse({
         type: "interactive_prompt_response",
@@ -442,10 +447,11 @@ export function ChatSurface({
         conversationId: conversationIdArg,
         ...response,
       });
-      // A dropped send (`false`) leaves the card actionable.
-      if (sent === false) return;
+      // A dropped send (`false`) leaves the card actionable (it shows the refusal line).
+      if (sent === false) return false;
       // Optimistically mark the local card as resolved.
       resolveInteractivePrompt(promptId, conversationIdArg, response.response);
+      return true;
     },
     [sendInteractivePromptResponse, resolveInteractivePrompt],
   );
@@ -643,6 +649,9 @@ export function ChatSurface({
   const unmountedRef = useRef(false);
   const firstRun = useRef({ started: false, retries: 0, msg: null as string | null, rearm: false });
   const [firstRunBusy, setFirstRunBusy] = useState(false);
+  // A final first-run refusal puts the typed text back in the composer (the
+  // `?msg=` param is already stripped); ChatInput applies it once via `prefill`.
+  const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
   const liveRef = useRef({ conversationId: realConversationId, connected: status === "connected", sessionConfirmed });
   liveRef.current = { conversationId: realConversationId, connected: status === "connected", sessionConfirmed };
   useEffect(() => {
@@ -672,6 +681,9 @@ export function ChatSurface({
       getLive: () => liveRef.current,
       upload: uploadPendingFiles,
       send: sendMessage,
+      onFinalRefusal: (text) => {
+        if (!unmountedRef.current) setRestoredDraft(text);
+      },
       final: fr.retries >= MAX_FIRST_RUN_RETRIES,
     })
       .then(({ retry }) => {
@@ -890,7 +902,7 @@ export function ChatSurface({
   // Returns `false` when the message was NOT accepted so the composer keeps the
   // draft. Refuses BEFORE `onBeforeSend` so analytics never counts a refused send.
   function handleSend(message: string, attachments?: AttachmentRef[]): boolean {
-    if (status !== "connected" || blocked) return false;
+    if (status !== "connected" || credentialBlocked) return false;
     onBeforeSend?.(message);
     if (attachments && attachments.length > 0) {
       return sendMessage(message, attachments);
@@ -1056,24 +1068,24 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={credentialCardCopy(lastError).title}
+                title={cardCopy.title}
                 message={lastError.message}
                 onRetry={
-                  blocked
-                    ? onCredentialReconnect
+                  credentialBlocked
+                    ? onSessionReconnect
                     : lastError.code !== "subscription_limit"
                       ? reconnect
                       : undefined
                 }
                 retryLabel="Reconnect"
                 action={
-                  lastError.action && cardCopy?.actionLabel
+                  lastError.action && cardCopy.actionLabel
                     ? { ...lastError.action, label: cardCopy.actionLabel }
                     : lastError.action
                 }
                 // Settings opens in a new tab for the credential cards so this
                 // chat (draft, transcript, helper line) survives the trip.
-                newTab={blocked}
+                newTab={credentialBlocked}
                 onDismiss={() => setDismissedErrorKey(activeErrorKey)}
               />
             )}
@@ -1085,7 +1097,7 @@ export function ChatSurface({
             <ErrorCard
               title="Session Failed to Start"
               message="The server did not confirm the session within 10 seconds. Please try again."
-              onRetry={reconnect}
+              onRetry={onSessionReconnect}
               retryLabel="Reconnect"
               onDismiss={() => setSessionTimeoutDismissed(true)}
             />
@@ -1437,10 +1449,10 @@ export function ChatSurface({
             }}
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
-            disabled={status !== "connected" || firstRunBusy || blocked}
+            disabled={status !== "connected" || firstRunBusy || credentialBlocked}
             workflowEnded={workflowEnded}
             placeholder={
-              blocked
+              credentialBlocked
                 ? `Update your ${credentialNoun} in Settings, then reconnect`
                 : status === "connected"
                   ? (placeholder ??
@@ -1458,40 +1470,42 @@ export function ChatSurface({
             // `""` collapses to undefined so a bare `?q=` is a no-op
             // downstream, not a latch burn.
             prefill={
-              variant === "full" &&
+              (variant === "full" &&
               conversationId === "new" &&
               !msgParam &&
               !frParam
                 ? qParam || undefined
-                : undefined
+                : undefined) ??
+              restoredDraft ??
+              undefined
             }
             streamState={streamState}
             onStop={abort}
             repoSetupState={repoSetupState}
           />
-          {blocked && (
-            // Always-visible recovery path (survives a dismissed card): the
-            // wording covers "I already saved it in Settings"; Reconnect
-            // re-binds the session. No visibilitychange/focus hint exists.
-            <div
-              role="status"
-              aria-live="polite"
-              className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-soleur-text-secondary"
-            >
-              <span>
-                {`Saved your ${credentialNoun} in Settings? Select Reconnect to continue.`}
-              </span>
-              <Button
-                variant="ghost"
-                type="button"
-                data-testid="credential-helper-reconnect"
-                onClick={onCredentialReconnect}
-                className="px-2 py-1 text-xs"
-              >
-                Reconnect
-              </Button>
-            </div>
-          )}
+          {/* Always mounted so the live region is announced when its content
+              appears (a region inserted together with its text is often missed). */}
+          <div role="status" aria-live="polite" data-testid="credential-helper-status">
+            {credentialBlocked && (
+              // Always-visible recovery path (survives a dismissed card): the
+              // wording covers "I already saved it in Settings"; Reconnect
+              // re-binds the session. No visibilitychange/focus hint exists.
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-soleur-text-secondary">
+                <span>
+                  {`Saved your ${credentialNoun} in Settings? Select Reconnect to continue.`}
+                </span>
+                <Button
+                  variant="ghost"
+                  type="button"
+                  data-testid="credential-helper-reconnect"
+                  onClick={onSessionReconnect}
+                  className="px-2 py-1 text-xs"
+                >
+                  Reconnect
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (
           <div className="mt-1 px-1 text-xs text-soleur-text-muted">

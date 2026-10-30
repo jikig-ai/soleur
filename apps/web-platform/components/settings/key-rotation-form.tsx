@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
@@ -45,6 +45,7 @@ export function KeyRotationForm({
     null,
   );
   const noticeRef = useRef<HTMLParagraphElement>(null);
+  const noticeId = useId();
 
   // Focus after a successful removal: the API-key input when the account now
   // has no sign-in (variant B), otherwise the notice region. The add-key
@@ -112,17 +113,22 @@ export function KeyRotationForm({
 
   return (
     <>
-    {removedNotice && (
-      <p
-        ref={noticeRef}
-        role="status"
-        aria-live="polite"
-        tabIndex={-1}
-        className="mb-4 rounded-lg border border-green-500/60 px-4 py-3 text-sm text-green-400 focus:outline-none"
-      >
-        {removedNotice.notice}
-      </p>
-    )}
+    {/* Mounted from the start (empty) so the live region is registered
+        before its text changes; styled only while it has content. */}
+    <p
+      ref={noticeRef}
+      id={noticeId}
+      role="status"
+      aria-live="polite"
+      tabIndex={-1}
+      className={
+        removedNotice
+          ? "mb-4 rounded-lg border border-green-500/60 px-4 py-3 text-sm text-green-400 focus:outline-none"
+          : "focus:outline-none"
+      }
+    >
+      {removedNotice?.notice}
+    </p>
     <form onSubmit={handleSubmit} className="space-y-4">
       {canUseOauthCredential && (
         <div>
@@ -168,6 +174,9 @@ export function KeyRotationForm({
         </label>
         <input
           id="api-key-input"
+          aria-describedby={
+            removedNotice?.variant === "B" ? noticeId : undefined
+          }
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}

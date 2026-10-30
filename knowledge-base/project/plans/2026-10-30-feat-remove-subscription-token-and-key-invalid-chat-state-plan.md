@@ -147,12 +147,14 @@ the route that calls it is live.
 - **No operator / `CC_OAUTH_ENABLED` fence** (F6): a user can always erase their own stored secret, including after the kill-switch is flipped off.
   The route passes only `p_user_id` (the verified id) to the RPC through `createServiceClient()`.
 - Response `200 { deleted: boolean }`. Idempotent: absent row → `deleted:false`, still 200. No soft delete / `is_valid=false` (CLO: "removed" must be true).
-- RPC error → the route's existing pattern (`logger.error({ err }, …)` + `Sentry.captureException(err, { tags: { feature: "api-keys", op: "delete-oauth" }, extra: { userId, provider: "anthropic_oauth" } })`)
+- RPC error → the route's existing pattern (`logger.error({ err }, …)` + `Sentry.captureException(err, { tags: { feature: "api-keys", op: "delete-oauth" }, extra: { userIdHash: hashUserId(userId), provider: "anthropic_oauth" } })`; the POST oauth store path uses the same `userIdHash` extra, pinned by a test)
   and 500 `{ error: "Failed to remove token" }`; never a fallback to a direct table delete. (Staying on the route's own logging pattern keeps the module graph the existing
   `api-keys-*` tests mock: `@/server/logger` default export and `@sentry/nextjs` `addBreadcrumb`/`captureException`.)
-- Audit = `logger.warn({ feature: "api-keys", op: "oauth-credential-removed", userId, deleted }, …)` (top-level `userId`, pseudonymised by the pino
-  formatter, ADR-029; emitted at warn because the Vector `app_container_warn_filter` ships only pino level >= 40 — an info line never reaches Better Stack,
-  found at review) + `Sentry.addBreadcrumb` (no user id, no value); Sentry `extra` carries `userIdHash`, never the raw id. Never the value, never the request body.
+- Audit = `logger.warn({ feature: "api-keys", op: "oauth-credential-removed", userId, deleted }, …)` ONLY when `deleted === true` (a real erasure; emitted at warn
+  because the Vector `app_container_warn_filter` ships only pino level >= 40 — an info line never reaches Better Stack); `deleted === false` (idempotent no-op) uses
+  `logger.info`. No explicit `Sentry.addBreadcrumb`: `server/logger.ts` `mirrorToSentry` already turns every warn into a breadcrumb carrying `{ deleted }`. The top-level
+  `userId` is pseudonymised to `userIdHash` by the pino formatter (ADR-029) in the Better Stack output; the breadcrumb mirror sees the raw args before the formatter, and
+  `sentry.server.config.ts` `beforeBreadcrumb` (`scrubSentryBreadcrumb`) renames it before send. Sentry `extra` carries `userIdHash`, never the raw id. Never the value, never the request body.
 
 ### B. Settings UI (#11524) — F9, H5, H6, CPO, CLO copy constraints
 
@@ -174,9 +176,9 @@ the route that calls it is live.
 |---|---|
 | Control | `Remove subscription token` (outlined, destructive-leaning) |
 | Dialog title | `Remove subscription token?` |
-| Body A (in effect, API key stored) | `Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open keep using the token until they end. Removing it here does not revoke it with Anthropic - revoke it in your Claude account if it may be exposed.` |
-| Body B (in effect, no API key) | `You will have no sign-in for Claude until you add an API key, and chat will stop working.` + the same revoke sentence |
-| Body C (not in effect: kill-switch off or token invalid) | `Soleur is not using this token for conversations. Removing deletes the saved copy.` + the same revoke sentence; no billing claim, no "Add an API key first" |
+| Body A (in effect, API key stored) | `Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open may keep using the token until they end. Removing it here does not revoke it with Anthropic - revoke it in your Claude account if it may be exposed.` |
+| Body B (in effect, no API key) | `You will have no sign-in for Claude until you add an API key, and chat will stop working. Conversations already open may keep using the token until they end.` + the same revoke sentence |
+| Body C (not in effect: kill-switch off or token invalid) | `Soleur is not using this token for conversations. Removing deletes the saved copy.` + the same revoke sentence; no billing claim, no open-conversation claim (nothing uses the token), no "Add an API key first" |
 | Buttons | `Keep token` (default focus) / `Remove token` (loading label `Removing`); variant B adds `Add an API key first` (ghost Button) |
 | Post-removal notice | A: `Subscription token removed. New conversations will use your API key.` / B: `Subscription token removed. Add an API key to keep using chat.` / C: `Subscription token removed.` (`role="status"`, text chosen from the props the user confirmed against) |
 | Errors | non-OK/5xx: `Failed to remove the token. Please try again.`; network: `Network error. Please try again.` |
@@ -199,8 +201,7 @@ Hook (`lib/ws-client.ts`):
   `unanswered`, set the blocked ref — then `setLastError` and `teardown()`. `key_invalid` lastError shape is unchanged (existing `toEqual` assertions stay valid);
   `byok_key_missing` sets `{ code: "byok_key_missing", message: "Add an API key in Settings to continue.", action: { label: "Add API key", href: "/dashboard/settings" } }`.
 - Rebind (H3): the server answers `resume_session` with `session_started`, so the client sets `sessionKind="fresh"`, does NOT refetch history, and the retained
-  local messages stay the transcript. A `rebindArmedRef` is set when the rebind resume is sent and cleared on `session_started`; if an `error` frame arrives while it is
-  armed, drop `rebindConversationId`, show no extra error bubble, and fall back ONCE to `startSession` (never loop). The hook does not know the original start options
+  local messages stay the transcript. A `rebindArmedRef` is set when the rebind resume is sent and cleared on `session_started` / `session_resumed`. Only the exact `Conversation not found` error message is a refusal (H9, revises H3): then drop `rebindConversationId`, show no extra error bubble, and fall back ONCE to `startSession` (never loop). Any other `error` while armed falls through to normal handling and the rebind stays armed until `session_started` / `session_resumed`; the `Session Failed to Start` card's Reconnect re-resumes the captured id. The hook does not know the original start options
   (`leaderId`, context, `resumeByContextPath` live in the surface), so the fallback is split: the hook sets a returned `rebindRefused: boolean` (and clears
   `rebindConversationId`); the surface effect `if (rebindRefused) setSessionStarted(false)` re-fires the existing start/resume effect, which now has no rebind id and calls
   `startSession(...)` with the surface-held options. `rebindRefused` resets on `reconnect()` and mount. `rebindConversationId` is also cleared on mount.
@@ -398,32 +399,32 @@ CPO: threshold single-user incident, plan-time sign-off granted, conditional on 
 
 ```yaml
 liveness_signal:
-  what: pino WARN line op "oauth-credential-removed" (field deleted) emitted once per successful DELETE /api/keys. Emitted at warn on purpose - infra/vector.toml app_container_warn_filter ships only pino level >= 40, so an info line would never reach Better Stack (pino layer 2 mirrors warn to a Sentry breadcrumb; vector layer 3 ships the line). Low-volume user action, so the extra level is cheap
-  cadence: per-request
+  what: pino WARN line op "oauth-credential-removed" (field deleted true) emitted once per real erasure by DELETE /api/keys. A real erasure is warn on purpose - infra/vector.toml app_container_warn_filter ships only pino level >= 40 to Better Stack (pino layer 2 also mirrors the warn to a Sentry breadcrumb carrying the object incl. deleted; vector layer 3 ships the line). An idempotent no-op (deleted false) erased nothing and is logged at info, which Vector drops by design. No explicit Sentry.addBreadcrumb (the pino mirror is the carrier). userId is pseudonymised to userIdHash by the pino formatter in the Better Stack output; the breadcrumb mirror sees the raw args before the formatter and sentry.server.config.ts beforeBreadcrumb (scrubSentryBreadcrumb) renames it before send
+  cadence: per-request (real erasures only)
   alert_target: Better Stack logs (existing web-platform log drain, via the Vector WARN+ filter); an RPC failure raises a Sentry issue
   configured_in: apps/web-platform/app/api/keys/route.ts
 error_reporting:
-  destination: Sentry via Sentry.captureException in the route (existing api-keys pattern), tags feature api-keys op delete-oauth; extra carries userIdHash (HMAC), never the raw user id
-  fail_loud: HTTP 500 {"error":"Failed to remove token"} plus the Sentry event; a client send refused on a non-open, non-blocked socket mirrors to Sentry (feature send-message, op refused-socket-not-open)
+  destination: Sentry via Sentry.captureException in the route (existing api-keys pattern), tags feature api-keys op delete-oauth (store-oauth on the POST path); extra carries userIdHash (HMAC), never the raw user id
+  fail_loud: HTTP 500 {"error":"Failed to remove token"} plus the Sentry event; a client send refused on a non-open, non-blocked socket is a browser-side Sentry event (feature send-message, op refused-socket-not-open)
 failure_modes:
   - mode: the RPC errors (or the migration is missing) and the token is not removed
-    detection: sentry-correlation - Sentry event tagged feature api-keys op delete-oauth plus the pino error line (pino layer 2); the route fails closed with 500, never a direct table delete
+    detection: pino layer 2 - the logger.error line (Failed to remove oauth credential) plus the tagged Sentry.captureException (feature api-keys op delete-oauth) raised in the route; neither surface is an Inngest function, so sentry-correlation does not apply; the route fails closed with 500, never a direct table delete
     alert_route: Sentry issue alert (existing project rules)
   - mode: the Settings oauth-row read errors and the Remove control is hidden
-    detection: pino layer 2 / Sentry - reportSilentFallback feature settings op read-oauth-credential; the page renders the neutral (no token UI) state
+    detection: pino layer 2 - mirrorWithDebounce (5 min, constant in-process key) calls reportSilentFallback, whose logger.error line plus Sentry event carry feature settings op read-oauth-credential; the page renders the neutral (no token UI) state
     alert_route: Sentry issue alert (existing project rules)
   - mode: removal succeeds but a warm Query keeps billing the subscription until it ends
     detection: NO runtime detector (accepted limitation: the per-process Query env is not observable from the server); a user report "old billing basis after removal" re-triggers the #11596 re-evaluation
-    alert_route: GitHub issue #11596 re-evaluation criteria
+    alert_route: GitHub issue #11596 re-evaluation criteria (open)
   - mode: client refuses sends silently because the blocked state never clears
-    detection: NO runtime detector for the stuck-blocked state itself (accepted limitation, #11596 re-evaluation); blocked state is derived from lastError and cleared by reconnect and mount, pinned by vitest. A send refused on a non-open, non-blocked socket DOES mirror to Sentry (sentry-correlation, feature send-message)
+    detection: NO runtime detector for the stuck-blocked state itself (accepted limitation, #11596 re-evaluation); blocked state is derived from lastError and cleared by reconnect and mount, pinned by vitest. A send refused on a non-open, non-blocked socket mirrors to the browser Sentry project as a client-side event (feature send-message); this is a browser Sentry event with no numbered server layer
     alert_route: Sentry issue feature send-message (only for the non-blocked refusal); stuck-blocked is user-report only
 logs:
   where: Better Stack (pino stdout drain, WARN+ via Vector) for the audit line; Sentry for errors
   retention: per the existing Better Stack and Sentry retention plans (no new store)
 discoverability_test:
-  command: grep -A1 'logger\.warn($' apps/web-platform/app/api/keys/route.ts | grep -o oauth-credential-removed && ! grep -E 'logger\.info\(' apps/web-platform/app/api/keys/route.ts
-  expected_output: oauth-credential-removed (the audit op sits on a logger.warn call, and the route has no logger.info call that Vector would drop), exit 0
+  command: grep -Pzo 'logger\.warn\(\s*\{[^}]*oauth-credential-removed' apps/web-platform/app/api/keys/route.ts
+  expected_output: oauth-credential-removed
 ```
 
 ## Encryption Posture
@@ -498,7 +499,7 @@ The ADR text describes the shipped state; nothing is soak-gated.
 - [x] After a `key_invalid` or `byok_key_missing` frame: `credentialBlocked` is true; composer disabled with the scheme-specific placeholder; helper line + inline Reconnect visible even with the card dismissed; the last user message shows `Not answered`; `sendMessage` returns `false` and dispatches no `add_message`/`reset_connection` and no `chat` frame (with the `MockWebSocket` whose `readyState` stays OPEN) (`test/ws-client-key-invalid-teardown.test.tsx`, `test/chat-surface-credential-blocked.test.tsx`).
 - [x] `byok_key_missing` frame → "API Key Required" card, blocked state, NO generic "Error: …" assistant bubble (client test).
 - [x] `ChatInput` keeps draft and staged attachments when `onSend` returns `false` (attachment prune only when `sent`); `handleSubmit` does nothing (no upload) when `disabled`; a `void`-returning `onSend` still clears (`test/chat-input.test.tsx`). `handleSend` returns `false` before `onBeforeSend` when blocked/not connected.
-- [x] Reconnect from the blocked card re-binds: `setSessionStarted(false)` + `reconnect()`, then exactly one `resume_session` for the captured id (never `start_session` when an id was captured; `start_session` when none), exactly one `chat` frame in total after the user re-sends, blocked state cleared; a rebind `session_started` leaves `messages` unchanged (exactly one `user-` bubble, no `filter_prepend`, no history refetch); a refused rebind (`error` frame while armed) triggers exactly ONE `start_session` and no extra error bubble (`test/ws-client-key-invalid-teardown.test.tsx`, `test/chat-surface-credential-blocked.test.tsx`).
+- [x] Reconnect from the blocked card re-binds: `setSessionStarted(false)` + `reconnect()`, then exactly one `resume_session` for the captured id (never `start_session` when an id was captured; `start_session` when none), exactly one `chat` frame in total after the user re-sends, blocked state cleared; a rebind `session_started` leaves `messages` unchanged (exactly one `user-` bubble, no `filter_prepend`, no history refetch); a refused rebind (only the exact `Conversation not found` error while armed) triggers exactly ONE `start_session` and no extra error bubble, while any other `error` while armed falls through to normal handling and keeps the rebind armed until `session_started` / `session_resumed` (Reconnect on the `Session Failed to Start` card re-resumes the captured id) (`test/ws-client-key-invalid-teardown.test.tsx`, `test/chat-surface-credential-blocked.test.tsx`).
 - [x] Lifecycle: dismiss → Reconnect → second `key_invalid` re-shows the card; dismissing leaves the composer disabled; mutation: deleting the null-reset effect makes the test red; the existing "dismiss then re-fire after null" test stays green (`test/error-states.test.tsx`).
 - [x] Helper line shows the scheme-specific "Saved your token/key in Settings? Select Reconnect to continue." copy while blocked, including after the card is dismissed; no `visibilitychange` or `focus` listener is installed (`test/chat-surface-credential-blocked.test.tsx`).
 - [x] Supersede precedence: a 4002 close on the torn-down socket after `key_invalid` is a no-op (`lastError.code` stays `key_invalid`); a 4002 after Reconnect yields `lastError.code === "disconnected"` with `credentialBlocked === false` (`test/ws-client-key-invalid-teardown.test.tsx`).
@@ -523,7 +524,7 @@ Layer labels: `unit` (vitest, jsdom/happy-dom), `integration` (route handler aga
 - Given hasApiKey × enabled × `is_valid`, then `describeCredentialBasis` returns the expected strings [unit]; the dialog renders variant A/B/C accordingly [unit]. Given DELETE 200, then the parent notice matches the variant and focus lands as specified [unit]. Given a non-OK response / network failure, then the matching alert and buttons re-enabled [unit].
 - Given `key_invalid` (oauth scheme) after one user message, then `credentialBlocked`, `rebindConversationId === realId`, last user message `unanswered`, `socket.onclose === null` [unit].
 - Given blocked, when `sendMessage("x")`, then returns `false`, `messages` unchanged, `socket.send` not called with a chat frame [unit]. Given NOT blocked but `readyState` CLOSED, then returns `false` and a Sentry mirror fires [unit].
-- Given blocked then Reconnect, then `resume_session` for the captured id; given the server replies `session_started`, then `messages` unchanged; given it replies `error` while armed, then exactly one `start_session` [unit, regression: "No active session"].
+- Given blocked then Reconnect, then `resume_session` for the captured id; given the server replies `session_started`, then `messages` unchanged; given it replies the exact `Conversation not found` error while armed, then exactly one `start_session`; given any other `error` while armed, then no `start_session` and the rebind stays armed [unit, regression: "No active session"].
 - Given dismiss → Reconnect → second `key_invalid`, then the card is visible again [unit].
 - Given `byok_key_missing`, then the "API Key Required" card, composer disabled, no generic assistant bubble [unit].
 - Given ChatInput `onSend → false` with staged attachments, then draft and attachments remain [unit].

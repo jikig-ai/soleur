@@ -895,6 +895,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     mountedRef.current = false;
     // The pending rebind reply (if any) died with the socket. The captured id is
     // KEPT: the key_invalid branch captures it before calling teardown().
+    // Defensive: the key_invalid branch also disarms, and onclose is gated off
+    // after teardown; this keeps teardown self-contained for any other caller.
     rebindArmedRef.current = false;
     clearTimeout(reconnectTimerRef.current);
     dispatch({ type: "clear_streams" });
@@ -1255,7 +1257,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             const rebindId = hasUserMessage
               ? (realConversationIdRef.current ?? rebindConversationIdRef.current)
               : null;
-            rebindArmedRef.current = false;
+            rebindArmedRef.current = false; // defensive: teardown() below also disarms
             rebindConversationIdRef.current = rebindId;
             setRebindConversationId(rebindId);
             credentialBlockedRef.current = true;
@@ -1504,9 +1506,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // reconnect gate (a fresh deferred conv must NOT request resume_stream).
           sessionKindRef.current = "fresh";
           setSessionConfirmed(true);
-          // #11525 — the server answers a rebind `resume_session` with
-          // `session_started`: the rebind is complete. Retained local messages
-          // stay the transcript (sessionKind "fresh" => no history refetch).
+          // #11525 — the server answers EVERY `resume_session` (UUID surface
+          // included) with `session_started`: that completes a rebind. The
+          // clear is unconditional (a no-op when nothing was captured or
+          // armed), not gated on the armed flag. Retained local messages stay
+          // the transcript (sessionKind "fresh" => no history refetch).
           clearRebind();
           break;
         }
@@ -1536,10 +1540,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // ONLY kind that may request resume_stream replay on reconnect.
           sessionKindRef.current = "resumed";
           setSessionConfirmed(true);
-          // #11525 — defensive: the server answers `resume_session` with
-          // `session_started` (also for a UUID surface), so this arm is not
-          // expected to complete a rebind; clearing here is harmless and keeps
-          // the armed state from outliving any session-establishing reply.
+          // #11525 — defensive only: the server replies to `resume_session`
+          // with `session_started` (never `session_resumed`), so this arm is
+          // not expected to complete a rebind; clearing here is harmless and
+          // keeps the armed state from outliving any session-establishing reply.
           clearRebind();
           break;
         }
@@ -2140,6 +2144,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
+  /** Mirror a send dropped because the socket is not open (the credential-blocked
+   *  refusal is expected and never mirrored). `frame` names a gate-style frame. */
+  const mirrorRefusedSend = useCallback((frame?: string) => {
+    const ws = wsRef.current;
+    reportSilentFallback(null, {
+      feature: "send-message",
+      op: "refused-socket-not-open",
+      extra: frame
+        ? { frame, readyState: ws?.readyState ?? null }
+        : { readyState: ws?.readyState ?? null },
+    });
+  }, []);
+
   const sendMessage = useCallback(
     (content: string, attachments?: AttachmentRef[]): boolean => {
       // #11525 — refuse BEFORE `reset_connection` and the optimistic bubble: a
@@ -2148,11 +2165,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       if (credentialBlockedRef.current) return false;
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        reportSilentFallback(null, {
-          feature: "send-message",
-          op: "refused-socket-not-open",
-          extra: { readyState: ws?.readyState ?? null },
-        });
+        mirrorRefusedSend();
         return false;
       }
       // Order is deliberate: the not-OPEN refusal above returns BEFORE
@@ -2181,7 +2194,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       });
       return send({ type: "chat", content, attachments });
     },
-    [send],
+    [send, mirrorRefusedSend],
   );
 
   /** Send a gate-style response frame. Returns whether it left the client.
@@ -2192,17 +2205,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const sendGateFrame = useCallback(
     (frame: WSMessage, op: string): boolean => {
       if (send(frame)) return true;
-      if (!credentialBlockedRef.current) {
-        const ws = wsRef.current;
-        reportSilentFallback(null, {
-          feature: "send-message",
-          op: "refused-socket-not-open",
-          extra: { frame: op, readyState: ws?.readyState ?? null },
-        });
-      }
+      if (!credentialBlockedRef.current) mirrorRefusedSend(op);
       return false;
     },
-    [send],
+    [send, mirrorRefusedSend],
   );
 
   const sendReviewGateResponse = useCallback(

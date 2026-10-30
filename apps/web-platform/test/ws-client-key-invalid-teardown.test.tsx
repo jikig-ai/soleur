@@ -57,6 +57,7 @@ function deliver(msg: unknown) {
 }
 
 import { useWebSocket, chatReducer, type ChatState } from "@/lib/ws-client";
+import { CONVERSATION_NOT_FOUND_MESSAGE } from "@/lib/ws-constants";
 
 describe("useWebSocket — key_invalid teardown (AC5)", () => {
   let originalWebSocket: typeof globalThis.WebSocket;
@@ -204,8 +205,11 @@ describe("useWebSocket — credential blocked state (#11525)", () => {
   }
 
   /** Connected, session started, one user message sent, then the blocked frame.
-   *  `surfaceId` other than "new" models a deep-linked UUID surface, whose first
-   *  reply is `session_resumed` (and whose rebind later replies the same way). */
+   *  `surfaceId` other than "new" models a deep-linked UUID surface; the setup
+   *  delivers `session_resumed` there. DEFENSIVE modelling only: the real server
+   *  answers every `resume_session` with `session_started`, so `session_resumed`
+   *  is not expected to complete a rebind - these cases pin the hook's behaviour
+   *  should that reply ever arrive. */
   async function blockedAfterOneMessage(
     frame: Record<string, unknown> = {
       type: "error",
@@ -499,6 +503,42 @@ describe("useWebSocket — credential blocked state (#11525)", () => {
     expect(mockWarnSilentFallback).not.toHaveBeenCalled();
   });
 
+  it("rebind: stays armed after a non-refusal error - a later genuine refusal is still honoured (sets rebindRefused, exactly one warn mirror)", async () => {
+    const { result } = await armedRebind();
+    deliver({ type: "error", message: "Checkpoint refused - your earlier work is kept." });
+    deliver({ type: "error", message: "Auth probe failed - please retry." });
+    await waitFor(() => expect(errorBubbles(result.current.messages)).toHaveLength(2));
+    expect(result.current.rebindRefused).toBe(false);
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+
+    deliver({ type: "error", message: CONVERSATION_NOT_FOUND_MESSAGE });
+    await waitFor(() => expect(result.current.rebindRefused).toBe(true));
+    expect(result.current.rebindConversationId).toBeNull();
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+    expect(errorBubbles(result.current.messages)).toHaveLength(2); // the refusal adds no bubble
+  });
+
+  it("mount effect clears the rebind: re-rendering with a new conversationId after a block drops the captured id, the blocked state and rebindRefused", async () => {
+    const hook = renderHook(({ id }) => useWebSocket(id), { initialProps: { id: "new" } });
+    await waitFor(() => expect(wsInstance).not.toBeNull());
+    deliver({ type: "auth_ok" });
+    await waitFor(() => expect(hook.result.current.status).toBe("connected"));
+    deliver({ type: "session_started", conversationId: CONV_ID });
+    await waitFor(() => expect(hook.result.current.realConversationId).toBe(CONV_ID));
+    act(() => {
+      hook.result.current.sendMessage("hello");
+    });
+    deliver({ type: "error", errorCode: "key_invalid", message: "x" });
+    await waitFor(() => expect(hook.result.current.credentialBlocked).toBe(true));
+    expect(hook.result.current.rebindConversationId).toBe(CONV_ID);
+
+    hook.rerender({ id: "22222222-2222-4222-8222-222222222222" });
+    await waitFor(() => expect(hook.result.current.rebindConversationId).toBeNull());
+    expect(hook.result.current.credentialBlocked).toBe(false);
+    expect(hook.result.current.rebindRefused).toBe(false);
+    expect(hook.result.current.lastError).toBeNull();
+  });
+
   it("rebind: after session_started the armed state is disarmed - an unrelated later error is a plain bubble (no rebindRefused, no start_session)", async () => {
     const { result, second } = await armedRebind();
     deliver({ type: "session_started", conversationId: CONV_ID });
@@ -511,7 +551,7 @@ describe("useWebSocket — credential blocked state (#11525)", () => {
     expect(mockWarnSilentFallback).not.toHaveBeenCalled();
   });
 
-  it("rebind on a UUID surface: session_resumed disarms - an unrelated later error is a plain bubble", async () => {
+  it("defensive (the server replies session_started, never session_resumed, to resume_session): a session_resumed on a UUID surface still disarms - an unrelated later error is a plain bubble", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ messages: [] }), { status: 200 }),
     );

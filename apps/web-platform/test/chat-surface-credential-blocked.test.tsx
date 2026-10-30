@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { ChatMessage } from "@/lib/chat-state-machine";
@@ -29,6 +29,12 @@ vi.mock("@/hooks/use-team-names", () => ({
       getDisplayName: (id: DomainLeaderId) => id.toUpperCase(),
     }),
   TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+// Stub: the real prompt hides itself via localStorage / Notification state.
+vi.mock("@/components/chat/notification-prompt", () => ({
+  NotificationPrompt: ({ visible }: { visible: boolean }) =>
+    visible ? <div data-testid="notification-prompt" /> : null,
 }));
 
 const mockSearchParams = new URLSearchParams();
@@ -135,11 +141,35 @@ describe("ChatSurface — credential blocked (#11525)", () => {
     expect(screen.getByText("Saved your key in Settings? Select Reconnect to continue.")).toBeInTheDocument();
   });
 
-  it("the hook's credentialBlocked flag is the single source: a non-credential error leaves the composer enabled and shows no helper line", async () => {
-    setWs({ lastError: { code: "rate_limited", message: "slow down" }, credentialBlocked: false });
-    await mountSurface();
-    expect(screen.getByRole("textbox")).not.toBeDisabled();
-    expect(screen.queryByTestId("credential-helper-reconnect")).toBeNull();
+  // Mutation guard: re-deriving `blocked` from lastError.code in the surface
+  // would disable the composer here. The hook's flag is the only source.
+  it.each([
+    ["key_invalid", apiKeyInvalid],
+    ["byok_key_missing", byokMissing],
+  ])(
+    "the hook's credentialBlocked flag is the single source: lastError.code=%s with credentialBlocked:false keeps the composer enabled and shows no helper line",
+    async (_code, err) => {
+      setWs({ lastError: err, credentialBlocked: false });
+      await mountSurface();
+      expect(screen.getByRole("textbox")).not.toBeDisabled();
+      expect(screen.queryByTestId("credential-helper-reconnect")).toBeNull();
+      expect(screen.queryByText(/Select Reconnect to continue/)).toBeNull();
+    },
+  );
+
+  it("the helper status region is always mounted (announced when content appears) and empty when not blocked", async () => {
+    setWs();
+    const { rerenderSurface } = await mountSurface();
+    const region = screen.getByTestId("credential-helper-status");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toBeEmptyDOMElement();
+
+    setWs({ lastError: apiKeyInvalid, credentialBlocked: true });
+    rerenderSurface();
+    // Same node, now with content: a live region that was present beforehand.
+    expect(screen.getByTestId("credential-helper-status")).toBe(region);
+    expect(within(region).getByText(/Select Reconnect to continue/)).toBeInTheDocument();
   });
 
   it("byok_key_missing: API Key Required card, Add API key in a new tab, blocked composer, no generic Error bubble", async () => {
@@ -392,6 +422,29 @@ describe("ChatSurface — credential blocked (#11525)", () => {
     }
   });
 
+  it("a ?msg= first-run send refused on the FINAL attempt restores the text into the composer (the param is already stripped)", async () => {
+    mockSearchParams.set("msg", "do not lose me");
+    try {
+      mockSendMessage.mockReturnValue(false);
+      setWs({ sessionConfirmed: true, messages: [] });
+      const { rerenderSurface } = await mountSurface();
+      await vi.waitFor(() => expect(mockSendMessage).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole("textbox")).toHaveValue("");
+
+      // Session re-confirms -> the one re-arm (final attempt) is refused too.
+      setWs({ sessionConfirmed: false, messages: [] });
+      rerenderSurface();
+      setWs({ sessionConfirmed: true, messages: [] });
+      rerenderSurface();
+      await vi.waitFor(() => expect(mockSendMessage).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("do not lose me"));
+    } finally {
+      mockSendMessage.mockReset();
+      mockSendMessage.mockImplementation(() => true);
+      mockSearchParams.delete("msg");
+    }
+  });
+
   // A dropped gate/prompt response must leave the card actionable.
   describe("optimistic card resolution follows the send result", () => {
     const askUser = (): ChatMessage =>
@@ -433,6 +486,125 @@ describe("ChatSurface — credential blocked (#11525)", () => {
       await mountSurface({ conversationId: "test-id" });
       await userEvent.click(screen.getByRole("button", { name: "Yes" }));
       expect(resolve).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The 'Session Failed to Start' card's Reconnect must re-run the start/resume
+  // effect (reset sessionStarted), or a NON-refusal resume failure (transient
+  // "Auth probe failed" falls through, the rebind stays armed) is unrecoverable.
+  it("a non-refusal resume failure: the session-timeout card's Reconnect resumes the captured id again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setWs({ sessionConfirmed: true, messages: [userMsg()] });
+      const { rerenderSurface } = await mountSurface();
+      expect(mockStartSession).toHaveBeenCalledTimes(1);
+
+      // Credential Reconnect -> resume_session #1 for the captured id.
+      setWs({
+        lastError: apiKeyInvalid,
+        credentialBlocked: true,
+        rebindConversationId: CONV,
+        sessionConfirmed: false,
+        messages: [userMsg({ unanswered: true })],
+      });
+      rerenderSurface();
+      fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Reconnect" }));
+      expect(mockResumeSession).toHaveBeenCalledTimes(1);
+      expect(mockResumeSession).toHaveBeenLastCalledWith(CONV);
+
+      // Transient error (not a refusal): hook leaves the id captured, no session_started.
+      setWs({ lastError: null, credentialBlocked: false, rebindConversationId: CONV, sessionConfirmed: false, messages: [userMsg({ unanswered: true })] });
+      rerenderSurface();
+      await act(async () => {
+        vi.advanceTimersByTime(10_500);
+      });
+      expect(screen.getByText("Session Failed to Start")).toBeInTheDocument();
+
+      fireEvent.click(within(screen.getByText("Session Failed to Start").closest('[role="alert"]') as HTMLElement).getByRole("button", { name: "Reconnect" }));
+      expect(mockReconnect).toHaveBeenCalledTimes(2);
+      expect(mockResumeSession).toHaveBeenCalledTimes(2);
+      expect(mockResumeSession).toHaveBeenLastCalledWith(CONV);
+      expect(mockStartSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A refused gate / disclosure / prompt response keeps the card actionable AND
+  // says why (role="alert"); no "Selected:" text, no notification prompt.
+  describe("refused response feedback", () => {
+    const gateMsg = (): ChatMessage =>
+      ({
+        id: "gate-1",
+        role: "assistant",
+        content: "",
+        type: "review_gate",
+        gateId: "g-1",
+        question: "Ship it?",
+        options: ["Approve", "Reject"],
+      }) as ChatMessage;
+    const disclosureMsg = (): ChatMessage =>
+      ({
+        id: "ad-1",
+        role: "assistant",
+        content: "",
+        type: "autonomous_disclosure",
+        gateId: "ad-g-1",
+        existingWorkspace: false,
+      }) as ChatMessage;
+    const askUser = (): ChatMessage =>
+      ({
+        id: "ip-9",
+        role: "assistant",
+        content: "",
+        type: "interactive_prompt",
+        promptId: "pr-9",
+        conversationId: "test-id",
+        promptKind: "ask_user",
+        promptPayload: { question: "Proceed?", options: ["Yes", "No"], multiSelect: false },
+      }) as ChatMessage;
+    const REFUSAL = "Couldn't send. Reconnect, then choose again.";
+
+    it("review gate: refused send -> buttons re-enabled, no 'Selected:', refusal alert, NO notification prompt", async () => {
+      const send = vi.fn(() => false);
+      setWs({ realConversationId: "test-id", messages: [userMsg(), gateMsg()], sendReviewGateResponse: send });
+      await mountSurface({ conversationId: "test-id" });
+      await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(send).toHaveBeenCalledWith("g-1", "Approve");
+      expect(screen.getByRole("alert")).toHaveTextContent(REFUSAL);
+      expect(screen.getByRole("button", { name: "Approve" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Reject" })).not.toBeDisabled();
+      expect(screen.queryByText(/Selected:/)).toBeNull();
+      // Mutation guard for the `=== false` check in handleReviewGateResponse.
+      expect(screen.queryByTestId("notification-prompt")).toBeNull();
+    });
+
+    it("review gate: a delivered send shows the notification prompt (positive control)", async () => {
+      const send = vi.fn(() => true);
+      setWs({ realConversationId: "test-id", messages: [userMsg(), gateMsg()], sendReviewGateResponse: send });
+      await mountSurface({ conversationId: "test-id" });
+      await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(screen.getByTestId("notification-prompt")).toBeInTheDocument();
+      expect(screen.queryByText(REFUSAL)).toBeNull();
+    });
+
+    it("autonomous disclosure: refused send -> alert, banner stays actionable", async () => {
+      const send = vi.fn(() => false);
+      setWs({ realConversationId: "test-id", messages: [userMsg(), disclosureMsg()], sendAutonomousDisclosureResponse: send });
+      await mountSurface({ conversationId: "test-id" });
+      await userEvent.click(screen.getByRole("button", { name: "Got it" }));
+      expect(send).toHaveBeenCalledWith("ad-g-1", "Got it");
+      expect(screen.getByRole("alert")).toHaveTextContent(REFUSAL);
+      expect(screen.getByRole("button", { name: "Got it" })).not.toBeDisabled();
+    });
+
+    it("interactive prompt: refused send -> alert, options stay actionable", async () => {
+      const send = vi.fn(() => false);
+      setWs({ realConversationId: "test-id", messages: [userMsg(), askUser()], sendInteractivePromptResponse: send });
+      await mountSurface({ conversationId: "test-id" });
+      await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+      expect(screen.getByRole("alert")).toHaveTextContent(REFUSAL);
+      expect(screen.getByRole("button", { name: "Yes" })).not.toBeDisabled();
     });
   });
 });

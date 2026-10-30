@@ -8,6 +8,7 @@ import type {
   TodoItem,
 } from "@/lib/types";
 import { formatAssistantText } from "@/lib/format-assistant-text";
+import { RefusedSendNotice } from "@/components/chat/refused-send-notice";
 
 /**
  * Stage 4 (#2886) — InteractivePromptCard component.
@@ -37,7 +38,8 @@ interface InteractivePromptCardPropsBase {
   conversationId: string;
   resolved?: boolean;
   selectedResponse?: InteractivePromptResponsePayload["response"];
-  onRespond: (response: InteractivePromptResponsePayload) => void;
+  /** Return `false` when the response was REFUSED (nothing left the client). */
+  onRespond: (response: InteractivePromptResponsePayload) => boolean | void;
 }
 
 // Discriminated props that match `InteractivePromptPayload`'s `{kind,payload}`.
@@ -45,6 +47,22 @@ type InteractivePromptCardProps = InteractivePromptCardPropsBase &
   InteractivePromptPayload;
 
 export function InteractivePromptCard(props: InteractivePromptCardProps) {
+  // #11525 — a refused response (`false`) keeps the card actionable; say why.
+  const [refused, setRefused] = useState(false);
+  const onRespond = (response: InteractivePromptResponsePayload) => {
+    const result = props.onRespond(response);
+    setRefused(result === false);
+    return result;
+  };
+  return (
+    <>
+      <InteractivePromptVariant {...props} onRespond={onRespond} />
+      {refused && props.resolved !== true && <RefusedSendNotice />}
+    </>
+  );
+}
+
+function InteractivePromptVariant(props: InteractivePromptCardProps) {
   const baseClass =
     "rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/60 px-4 py-3";
   const disabled = props.resolved === true;

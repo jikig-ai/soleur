@@ -67,21 +67,29 @@ export async function DELETE(request: Request) {
 
   const deleted = data === true;
   // Audit: op + outcome only. Never the token value, never the request body.
-  // Emitted at WARN on purpose: infra/vector.toml `app_container_warn_filter`
-  // ships only pino level >= 40 to Better Stack, so an info line would be
-  // dropped before the drain. A user-initiated token erase is low-volume, so
-  // the extra level is cheap. The top-level `userId` is pseudonymised to
-  // `userIdHash` by the pino formatter (ADR-029); do not hash it here too.
-  logger.warn(
-    { feature: "api-keys", op: "oauth-credential-removed", userId, deleted },
-    "Subscription token removed",
-  );
-  Sentry.addBreadcrumb({
-    category: "api-keys",
-    message: "oauth-credential-removed",
-    level: "info",
-    data: { deleted },
-  });
+  // A real erasure (deleted: true) is emitted at WARN on purpose:
+  // infra/vector.toml `app_container_warn_filter` ships only pino level >= 40 to
+  // Better Stack, so an info line would be dropped before the drain; erasures
+  // are low-volume, so the extra level is cheap. An idempotent no-op
+  // (deleted: false) erased nothing and stays at INFO. Verified in
+  // server/logger.ts: the logMethod hook mirrors every WARN to a Sentry
+  // breadcrumb carrying this object ({ deleted } included), so no explicit
+  // breadcrumb is added. The pino formatter pseudonymises the top-level
+  // `userId` to `userIdHash` (ADR-029) in the Better Stack output; the
+  // breadcrumb mirror sees the raw args before that formatter, but
+  // sentry.server.config.ts beforeBreadcrumb -> scrubSentryBreadcrumb renames
+  // `userId` to `userIdHash` before send. Do not hash it here too.
+  if (deleted) {
+    logger.warn(
+      { feature: "api-keys", op: "oauth-credential-removed", userId, deleted },
+      "Subscription token removed",
+    );
+  } else {
+    logger.info(
+      { feature: "api-keys", op: "oauth-credential-removed", userId, deleted },
+      "Subscription token removal was a no-op",
+    );
+  }
 
   return NextResponse.json({ deleted });
 }

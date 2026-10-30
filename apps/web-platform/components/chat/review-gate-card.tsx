@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { RefusedSendNotice } from "@/components/chat/refused-send-notice";
 
 // A short fixed label: the full question (up to a whole email body) stays visible text, not the accessible name.
 export const REVIEW_GATE_ARIA_LABEL = "Approval needed";
@@ -27,14 +28,21 @@ export function ReviewGateCard({
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
-  onSelect: (gateId: string, selection: string) => void;
+  /** Return `false` when the response was REFUSED (nothing left the client). */
+  onSelect: (gateId: string, selection: string) => boolean | void;
 }) {
   const [pending, setPending] = useState<string | null>(null);
+  const [refused, setRefused] = useState(false);
 
   function handleSelect(option: string) {
     if (pending || resolved) return;
+    setRefused(false);
     setPending(option);
-    onSelect(gateId, option);
+    // Only an explicit `false` is a refusal: re-enable the options and say why.
+    if (onSelect(gateId, option) === false) {
+      setPending(null);
+      setRefused(true);
+    }
   }
 
   useEffect(() => {
@@ -110,6 +118,7 @@ export function ReviewGateCard({
       {gateError && (
         <p role="alert" className="mt-2 text-sm text-red-400">{gateError}</p>
       )}
+      {refused && <RefusedSendNotice />}
     </div>
   );
 }

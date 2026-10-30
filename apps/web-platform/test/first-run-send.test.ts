@@ -43,6 +43,7 @@ function setup(over: { live?: Partial<Live> } = {}) {
   });
   const send = vi.fn((..._args: unknown[]) => {
     log.push("send");
+    return true;
   });
   return { log, live, getLive, upload, send };
 }
@@ -580,7 +581,7 @@ describe("runFirstRunSend", () => {
   });
   // #11525 - `sendMessage` refuses (returns false) while the chat is
   // credential-blocked or the socket is not open. Only an explicit `false` is a
-  // refusal; the legacy `void` return still counts as sent.
+  // refusal (the `send` type is boolean; every caller returns one).
   describe("refused send (send() returns false)", () => {
     it("no files + message, refused -> not consumed: sent=false, retry=true", async () => {
       const h = setup();
@@ -597,8 +598,9 @@ describe("runFirstRunSend", () => {
       expect(res).toEqual({ sent: false, retry: true });
     });
 
-    it("no files + message, refused on the FINAL attempt -> sent=false, no retry", async () => {
+    it("no files + message, refused on the FINAL attempt -> sent=false, no retry, mirrored + text handed back", async () => {
       const h = setup();
+      const onFinalRefusal = vi.fn();
       const res = await runFirstRunSend({
         msgParam: "hi",
         files: [],
@@ -606,9 +608,66 @@ describe("runFirstRunSend", () => {
         getLive: h.getLive,
         upload: h.upload,
         send: () => false,
+        onFinalRefusal,
         final: true,
       });
       expect(res).toEqual({ sent: false, retry: false });
+      const c = callFor("refused-final");
+      expect(c).toBeDefined();
+      expect(c![1].feature).toBe("first-run-send");
+      expect(onFinalRefusal).toHaveBeenCalledTimes(1);
+      expect(onFinalRefusal).toHaveBeenCalledWith("hi");
+    });
+
+    it("a NON-final refusal neither mirrors refused-final nor hands the text back (it is re-armed)", async () => {
+      const h = setup();
+      const onFinalRefusal = vi.fn();
+      await runFirstRunSend({
+        msgParam: "hi",
+        files: [],
+        conversationId: null,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: () => false,
+        onFinalRefusal,
+      });
+      expect(ops()).not.toContain("refused-final");
+      expect(onFinalRefusal).not.toHaveBeenCalled();
+    });
+
+    it("files + message, ready, refused on the FINAL attempt -> text handed back", async () => {
+      const h = setup();
+      const onFinalRefusal = vi.fn();
+      const res = await runFirstRunSend({
+        msgParam: "keep me",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: () => false,
+        onFinalRefusal,
+        final: true,
+      });
+      expect(res).toEqual({ sent: false, retry: false });
+      expect(onFinalRefusal).toHaveBeenCalledWith("keep me");
+      expect(ops()).toContain("refused-final");
+    });
+
+    it("final refusal of an attachments-only send (no text): mirrored, nothing to hand back", async () => {
+      const h = setup();
+      const onFinalRefusal = vi.fn();
+      await runFirstRunSend({
+        msgParam: null,
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: () => false,
+        onFinalRefusal,
+        final: true,
+      });
+      expect(ops()).toContain("refused-final");
+      expect(onFinalRefusal).not.toHaveBeenCalled();
     });
 
     it("files + message, ready but refused -> sent=false, retry=true", async () => {
@@ -624,8 +683,9 @@ describe("runFirstRunSend", () => {
       expect(res).toEqual({ sent: false, retry: true });
     });
 
-    it("final-attempt text-only fallback refused -> sent=false, no retry", async () => {
+    it("final-attempt text-only fallback refused -> sent=false, no retry, text handed back", async () => {
       const h = setup({ live: { conversationId: "other-id" } });
+      const onFinalRefusal = vi.fn();
       const res = await runFirstRunSend({
         msgParam: "hi",
         files: [makeFile("a.md")],
@@ -633,13 +693,16 @@ describe("runFirstRunSend", () => {
         getLive: h.getLive,
         upload: h.upload,
         send: () => false,
+        onFinalRefusal,
         final: true,
       });
       expect(res).toEqual({ sent: false, retry: false });
+      expect(onFinalRefusal).toHaveBeenCalledWith("hi");
     });
 
-    it("a void-returning send still counts as sent (back-compat)", async () => {
+    it("an accepted send (true) counts as sent and never reports a refusal", async () => {
       const h = setup();
+      const onFinalRefusal = vi.fn();
       const res = await runFirstRunSend({
         msgParam: "hi",
         files: [],
@@ -647,8 +710,12 @@ describe("runFirstRunSend", () => {
         getLive: h.getLive,
         upload: h.upload,
         send: h.send,
+        onFinalRefusal,
+        final: true,
       });
       expect(res).toEqual({ sent: true, retry: false });
+      expect(ops()).not.toContain("refused-final");
+      expect(onFinalRefusal).not.toHaveBeenCalled();
     });
   });
 });

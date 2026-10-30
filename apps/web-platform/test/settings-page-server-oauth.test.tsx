@@ -17,7 +17,11 @@ const state: {
   oauth: null,
   oauthError: null,
 };
-const reportSilentFallback = vi.fn();
+const sentry = vi.hoisted(() => ({
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
+  addBreadcrumb: vi.fn(),
+}));
 const apiKeysCalls: Array<{ select: string; filters: Record<string, unknown>; terminal: string }> = [];
 
 function apiKeysChain() {
@@ -37,8 +41,10 @@ function apiKeysChain() {
     apiKeysCalls.push(call);
     const row =
       call.filters.provider === "anthropic_oauth" ? state.oauth : state.anthropic;
+    // An errored oauth read still carries a matching row: the page's
+    // `oauthError ? null : oauthData` guard is the only thing that hides it.
     if (call.filters.provider === "anthropic_oauth" && state.oauthError) {
-      return Promise.resolve({ data: null, error: state.oauthError });
+      return Promise.resolve({ data: row, error: state.oauthError });
     }
     return Promise.resolve({ data: row, error: null });
   };
@@ -61,8 +67,11 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
-vi.mock("@/server/observability", () => ({
-  reportSilentFallback: (...a: unknown[]) => reportSilentFallback(...a),
+// The REAL observability module runs (so the debounce is exercised end to end);
+// only its sinks are mocked.
+vi.mock("@sentry/nextjs", () => sentry);
+vi.mock("@/server/logger", () => ({
+  default: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspace: async () => ({ ok: false }),
@@ -78,6 +87,12 @@ vi.mock("@/components/settings/settings-content", () => ({
 }));
 
 import SettingsPage from "@/app/(dashboard)/dashboard/settings/page";
+import { __resetMirrorDebounceForTests } from "@/server/observability";
+
+const sentryEvents = () => [
+  ...sentry.captureException.mock.calls,
+  ...sentry.captureMessage.mock.calls,
+];
 
 async function pageProps() {
   const el = (await SettingsPage()) as { props: Record<string, unknown> };
@@ -90,7 +105,10 @@ beforeEach(() => {
   state.anthropic = null;
   state.oauth = null;
   state.oauthError = null;
-  reportSilentFallback.mockReset();
+  sentry.captureException.mockReset();
+  sentry.captureMessage.mockReset();
+  sentry.addBreadcrumb.mockReset();
+  __resetMirrorDebounceForTests();
   apiKeysCalls.length = 0;
 });
 afterEach(() => {
@@ -151,21 +169,30 @@ describe("settings/page.tsx — anthropic_oauth row (#11524)", () => {
     expect(p.hasOauthToken).toBe(false);
     expect(p.oauthInEffect).toBe(false);
     expect(p.oauthTokenSavedAt).toBeNull();
-    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
-    expect(reportSilentFallback).toHaveBeenCalledWith(
-      state.oauthError,
-      expect.objectContaining({
-        feature: "settings",
-        op: "read-oauth-credential",
-        extra: { userId: USER_ID },
-      }),
-    );
+    expect(sentryEvents()).toHaveLength(1);
+    const [, opts] = sentry.captureMessage.mock.calls[0] as [
+      string,
+      { tags: Record<string, string>; extra: Record<string, unknown> },
+    ];
+    expect(opts.tags).toMatchObject({ feature: "settings", op: "read-oauth-credential" });
+    // userId is pseudonymised at the emit boundary, never raw.
+    expect(opts.extra).not.toHaveProperty("userId");
+    expect(JSON.stringify(opts.extra)).not.toContain(`"${USER_ID}"`);
+  });
+
+  it("the read-error report is debounced: repeated renders while the read keeps failing fire ONE event", async () => {
+    process.env.CC_OAUTH_ENABLED = "1";
+    state.oauthError = { message: "connection reset", code: "08006" };
+    await pageProps();
+    await pageProps();
+    await pageProps();
+    expect(sentryEvents()).toHaveLength(1);
   });
 
   it("no oauth error: nothing is reported", async () => {
     process.env.CC_OAUTH_ENABLED = "1";
     await pageProps();
-    expect(reportSilentFallback).not.toHaveBeenCalled();
+    expect(sentryEvents()).toHaveLength(0);
   });
 
   it("hasApiKey keeps its meaning (anthropic row, valid), independent of the oauth row", async () => {
