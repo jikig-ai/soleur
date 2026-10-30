@@ -3331,6 +3331,9 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/lint-rule-bodies.py"
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
+  ".github/workflows/npm-publish.yml"
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_HTTP_DEADLINES_REQUIRED_TEST_SH_PATHS=(
   "apps/web-platform/infra/zot-config-deadlines.test.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
