@@ -67,8 +67,8 @@ export interface ClassifyInput {
   /** Concrete events the probe saw (a Bash call completed, the echo target logged a request, ...). */
   observedEvents: readonly string[];
   scan: readonly Hit[];
-  /** Did the far end receive the substituted real value? undefined = the probe could not tell. */
-  substitutionObserved: boolean | undefined;
+  /** Did the far end receive the substituted real value? */
+  substitutionObserved: boolean;
   /** Optional extra evidence lines; when passed, it must be non-empty after merging with the derived lines. */
   evidence?: readonly string[];
 }
@@ -82,9 +82,6 @@ export function classifyOutcome(input: ClassifyInput): ProbeOutcome {
   if (scan.length > 0) {
     for (const h of scan) evidence.push(`secret ${h.secretId} visible on surface ${h.surface}`);
     return { probe, outcome: "leaks", evidence: requireEvidence(probe, evidence) };
-  }
-  if (substitutionObserved === undefined) {
-    return unmeasurable(probe, "the far end's received value could not be read", evidence);
   }
   return {
     probe,

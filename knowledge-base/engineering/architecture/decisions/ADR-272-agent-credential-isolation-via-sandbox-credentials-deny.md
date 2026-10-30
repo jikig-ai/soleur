@@ -183,4 +183,4 @@ discriminator is host-PID absence, not an empty procfs; sibling/host task rows â
 `environ` files â€” are unreachable. Measured by the canary `proc_mask` probe and the FR7b isolation
 arm; pinned for regression by `test/bwrap-shim.test.ts` tail-ordering rows.
 
-> **Amended by ADR-311 (#9543, 2026-10-30).** See ADR-311.
+> **See also ADR-311 (#9543, 2026-10-30):** its deferral of the SDK `mask` mode to #9543 is measured for one carrier (see ADR-311 Decision 2).
