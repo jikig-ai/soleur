@@ -4,6 +4,7 @@ import { encryptKey } from "@/server/byok";
 import { validateToken } from "@/server/token-validators";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
+import { classifyCliDroppedValue, isAcceptableSubscriptionToken } from "@/server/oauth-token-shape";
 import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 
@@ -101,6 +102,25 @@ export async function POST(request: Request) {
       process.env.CC_OAUTH_ENABLED === "true";
     if (!isOperator || !ccOauthEnabled) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    // #11086 — shape gate (after the operator fence so a non-operator never
+    // learns anything about shape). The bundled CLI silently drops a value that
+    // is not shaped like a real subscription token and then reports "Not
+    // logged in", so reject it here with an actionable message instead of
+    // storing a credential that can never work. The message never echoes any
+    // part of the submitted value.
+    if (!isAcceptableSubscriptionToken(apiKey)) {
+      const looksLikeApiKey = classifyCliDroppedValue(apiKey) === "api_key_shaped";
+      return NextResponse.json(
+        {
+          error: looksLikeApiKey
+            ? "That looks like an API key, not a subscription token. Run claude setup-token and paste the token it prints (it starts with sk-ant-oat)."
+            : "That does not look like a subscription token. It should start with sk-ant-oat and contain no spaces; copy it again from claude setup-token.",
+          code: "oauth_token_shape_invalid",
+        },
+        { status: 400 },
+      );
     }
 
     // FR6 / deepen-plan P1: NO validation probe in v1 — `setup-token` tokens

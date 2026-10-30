@@ -242,7 +242,8 @@ export async function cronWorkspaceGcHandler({
 
   // Heartbeat: ok = the sweep RAN (not findings-present). A clean run that
   // reclaims 0 dirs is GREEN; a missed check-in (scheduler dead / fn dropped) is
-  // what turns the monitor red.
+  // what turns the monitor red (monitor destroyed by the #6590 PR-B prune —
+  // void-posts by design, spec NG4).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
       ok: true,

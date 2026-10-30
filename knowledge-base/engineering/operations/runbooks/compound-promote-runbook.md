@@ -30,7 +30,7 @@ promotion — it is the detection half of the loop this runbook operates.
 
 **Handler:** `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`
 **Inngest function ID:** `cron-compound-promote`
-**Sentry monitor:** `scheduled-compound-promote`
+**Sentry monitor:** `scheduled-compound-promote` — destroyed by the #6590 PR-B prune (void-posts by design, spec NG4)
 
 The capability is **default OFF**. Enabling sends summaries (path + first 10
 lines per file) of your learnings corpus to Anthropic.
@@ -215,7 +215,7 @@ Recorded 2026-10-24. The manual-trigger event accepts an optional `data.input`:
 - Any other value on a **manual** trigger ends the run `status=error` before any Anthropic call (a
   typo is never silently treated as `corpus`). The Sentry op and tag is `invalid-run-option` and the
   `error_message` carries that prefix; the error row carries no patterns fields (key on the `invalid-run-option:` prefix of `error_message`; `error_class` is `InvalidRunOptionError` in source, but a minified server bundle does not guarantee class names). The handler writes the raw value to no sink (no Sentry, pino or Better Stack field, no marker, no `error_message`); the manual-trigger event that carried it persists in the Inngest event store under the retention recorded at PA-31 (f). A typo also posts a failed
-  check-in to the weekly Sentry monitor (pre-existing behaviour for any manual error).
+  check-in to the (destroyed, #6590 PR-B) weekly Sentry slug — a void-post by design, spec NG4.
 
 ```bash
 # Patterns-path manual run (read the INTERIM OPERATING RULE below first).

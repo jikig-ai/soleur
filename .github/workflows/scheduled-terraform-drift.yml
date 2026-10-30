@@ -2997,7 +2997,8 @@ jobs:
 
       # ── A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON ──────────────────
       # The only reader of this job's conclusion is the orphan-sweeps-checkin job below (the cron only dispatches the
-      # workflow), and its Sentry monitor is unrouted until #10972, so a red run alone reaches nobody quickly. This fires when a step AFTER checkout fails: the Doppler install,
+      # workflow), and its Sentry monitor was destroyed by the #6590 prune (PR-B) rather than routed under #10972, so
+      # a red run alone reaches nobody quickly. This fires when a step AFTER checkout fails: the Doppler install,
       # the secret read, the Hetzner listing or an issue filer. It does not fire when checkout itself fails (the local
       # action it uses is not on disk yet) or when the job is cancelled or times out (`failure()` is false then), and
       # a Resend rejection leaves a warning, not a retry (#10430). It may send alongside the scratch-config email above:
@@ -3277,8 +3278,8 @@ jobs:
           fi
 
       # A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON. The only reader of this job's conclusion is the
-      # orphan-sweeps-checkin job below (the cron only dispatches the workflow), and its Sentry monitor is unrouted until
-      # #10972, so a red run alone reaches nobody quickly. This
+      # orphan-sweeps-checkin job below (the cron only dispatches the workflow), and its Sentry monitor was destroyed by
+      # the #6590 prune (PR-B) rather than routed under #10972, so a red run alone reaches nobody quickly. This
       # fires when a step AFTER checkout fails: the Doppler install, the secret read, the Hetzner listing or the issue
       # filer. It does not fire when checkout fails or when the job is cancelled or times out. It never fails the job.
       - name: Email notification (inngest rehearsal sweep — the job failed)
@@ -3305,12 +3306,12 @@ jobs:
   # (the residual is recorded in ADR-241). The check-in key is a public write-only ingest key, so anyone holding it can post `ok`
   # (already true of every monitor). The sole-copy-protection-check job joins later by adding itself to `needs` (#10430).
   #
-  # THE EMAIL STEP IS PERMANENT, NOT A STOPGAP. The Sentry monitor emails once per incident and never re-pages, and while it is
-  # unrouted its issues email nobody; only this step reaches a person on every failed slot. A duplicate beside a sweep's own failure
+  # THE EMAIL STEP IS PERMANENT, NOT A STOPGAP. Only this step reaches a person on every failed slot. A duplicate beside a sweep's own failure
   # email is accepted. The sweeps' emails and this one share ONE mail key, so a dead key silences all of them together: they are
-  # not independent cover for each other, and the routed Sentry monitor (#10972) is the only monitoring path that does not use
-  # it. If this job's own checkout fails nothing is sent from here; whether Sentry then reports a missed check-in for a monitor
-  # that has never checked in is unverified and nothing relies on it.
+  # not independent cover for each other. The routed Sentry monitor the #10972 tracker asked for was instead destroyed by the
+  # #6590 prune (PR-B) — the trade is recorded here so it reads as seen, not missed: it was the only orphan-sweep signal that did
+  # not share this mail key, and every surviving cover now depends on it. If that independence is wanted back, the vehicle is
+  # reopening the prune verdict, not this comment. If this job's own checkout fails nothing is sent from here.
   #
   # LEAST PRIVILEGE. The workflow-level permissions also grant `issues: write`, which this job does not need. It holds only the
   # three Sentry ingest secrets and the mail key: no Hetzner or secret-store credential, no Hetzner host name (that would make it an
@@ -3357,5 +3358,5 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[INFRA DRIFT] Orphan sweep did not complete (rung-2 ${{ needs.rung2-rehearsal-orphan-sweep.result }}, inngest ${{ needs.inngest-rehearsal-orphan-sweep.result }})'
-          body: '<p><strong>At least one of the twice-daily Hetzner orphan sweeps did not complete.</strong> A sweep that did not complete is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch config was not reported.</p><p>Results: rung-2 sweep <code>${{ needs.rung2-rehearsal-orphan-sweep.result }}</code>, inngest sweep <code>${{ needs.inngest-rehearsal-orphan-sweep.result }}</code>. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step of each sweep; a named error slug says the cause. A cancelled run (including a deliberate cancel) reads as not complete.</p><p>This email is sent on every slot where either sweep is not success, because the monitor alone emails once per incident. A sweep may also have sent its own failure email; that duplicate is expected. This job holds no Hetzner or secret-store credential.</p>'
+          body: '<p><strong>At least one of the twice-daily Hetzner orphan sweeps did not complete.</strong> A sweep that did not complete is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch config was not reported.</p><p>Results: rung-2 sweep <code>${{ needs.rung2-rehearsal-orphan-sweep.result }}</code>, inngest sweep <code>${{ needs.inngest-rehearsal-orphan-sweep.result }}</code>. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step of each sweep; a named error slug says the cause. A cancelled run (including a deliberate cancel) reads as not complete.</p><p>This email is sent on every slot where either sweep is not success, because the scheduled-orphan-sweeps Sentry monitor was destroyed by the #6590 prune and nothing else reaches a person for a silently-skipped slot. A sweep may also have sent its own failure email; that duplicate is expected. This job holds no Hetzner or secret-store credential.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
