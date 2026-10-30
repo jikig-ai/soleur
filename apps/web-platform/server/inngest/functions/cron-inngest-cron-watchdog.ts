@@ -286,7 +286,8 @@ export async function cronInngestCronWatchdogHandler({
   //   - `--poll-interval 60` (#4652, live) re-syncs AND re-plans dropped/
   //     de-planned functions within <=60s — the PRIMARY self-heal.
   //   - the per-function Sentry cron monitors (failure_issue_threshold) already
-  //     page on missed check-ins (how the #4650 regression was caught).
+  //     page on missed check-ins for the 24 retained monitors (how the #4650
+  //     regression was caught; 43 were destroyed by the #6590 PR-B prune).
   //
   // So this function just posts an ok=true liveness heartbeat: its own check-in
   // proves the inngest cron scheduler is alive enough to fire it (if the whole
@@ -331,12 +332,10 @@ export const cronInngestCronWatchdog = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 */4 * * *" },
+      { event: "cron/inngest-cron-watchdog.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 */4 * * *" },
-    { event: "cron/inngest-cron-watchdog.manual-trigger" },
-  ],
-  cronInngestCronWatchdogHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronInngestCronWatchdogHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

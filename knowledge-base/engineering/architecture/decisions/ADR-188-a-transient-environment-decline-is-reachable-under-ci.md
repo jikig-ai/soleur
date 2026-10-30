@@ -12,6 +12,8 @@ related_specs:
 brand_survival_threshold: aggregate pattern
 amended_by:
   - "ADR-262 (2026-09-30, #9323) — a third carve-out: five self-test mutation batteries decline on a pull_request run; see ## Amendment — 2026-09-30"
+  - "ADR-296 (2026-10-23) — the monitor's consecutive-TRANSIENT streak persists in a workflow artifact"
+  - "this ADR (2026-10-25, #8856, #10918) — the 1-in-20 observation window is implemented; the image is no longer the remedy; see ## Amendment — 2026-10-25"
 ---
 
 # ADR-188: a transient environment decline is reachable under CI, and must corroborate rather than infer
@@ -253,7 +255,8 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
   green required check — no greppable marker reaches an observability layer, and nothing counts
   across runs. The declared observation window is therefore manual: if the arm skips on more than
   1 in 20 post-merge runs, the skip is masking a persistent defect and the deferred pre-baked
-  container image is owed immediately.
+  container image is owed immediately. *(Superseded by the 2026-10-25 amendment below: the window is
+  no longer manual, and the image was evaluated and cut on measurement, so it is not the remedy.)*
 - **Accepted residual — the ceiling constant is not mechanically drift-proof.** Raising it is not
   detectable by any assertion that would not be text-matching the source, which is the antipattern
   this suite rejects. The mitigation is procedural and declared: the ceiling's value and derivation
@@ -394,6 +397,9 @@ the standing daily monitor `.github/workflows/scheduled-rehearsal-skip-monitor.y
 follow-through sweeper, which closes on first PASS and would retire the observer after one clean
 sample.
 
+The monitor's cross-run transient streak is persisted in a workflow artifact, not the Actions cache,
+since ADR-296 (the cache entry was evicted daily by the release pipeline's cache churn).
+
 ## Amendment — 2026-09-17 (#7535 Phase 2): T17 becomes skip-eligible
 
 Same change class as the #7572 amendment above, and recorded the same way rather than left to
@@ -520,3 +526,63 @@ rehearsal suite make `12 x budget` exceed the 600 s bound for any budget large e
 day). A wall-clock deadline (measured above). Making T5 primary, T17 healthy or R4 skip-eligible, or
 giving ownership a counted skip: not taken here; recorded as a User-Challenge for the operator because
 each weakens a guard or reverses #8744.
+
+**User-Challenge resolved (2026-10-22, #9394; Ruled by CTO agent).** No change: T5 primary, T17 healthy and R4 stay
+hard, and the ownership runtime arm gets no counted skip for a TIMEOUT cause (a bounded-apt timeout emits
+`FIXTURE_APT_FAILED`, which already takes `_runtime_skip`: a counted skip off CI and a failure when `CI=true`).
+Why: this ADR's own invariant (2026-08-20 amendment, #7572) needs at least one container-dependent arm that cannot
+decline, and during an apt failure only these three remain; T5 primary is the supply-chain checksum guard, and a guard
+whose failing direction can be skipped on a transient fault loses its anti-vacuity value (ADR-180). This concerns the
+primary arms: T5 mutation, T17 mutation and the S1 family already reach `arm_skip`. Re-evaluation triggers, as the
+issue states them: (1) the skip-persistence probe #8856 reports a skip streak; (2) two consecutive `main` runs red on a
+primary-arm `FIXTURE_APT_CAUSE` line. Live evidence at ruling time: 20 recent `main` runs of `infra-validation.yml`
+(about 2026-10-19 to 2026-10-21), 0 `FIXTURE_APT_CAUSE` / `FIXTURE_APT_FAILED` hits, so trigger 2 has not fired.
+Trigger 1 cannot fire yet: the #8856 probe has returned TRANSIENT (no `git-data-runcmd-rehearsal:` marker in the
+sampled logs, 3 consecutive as of 2026-10-18); repair is tracked in #10786. Flip condition: two consecutive red `main`
+runs on a primary-arm `FIXTURE_APT_CAUSE` line with a confirmed archive outage. The first response is a hold: a
+time-boxed, issue-tracked, human-approved edit, never an `arm_skip` and never a `CI` override. Legal note (CLO): the
+Article 30 register row PA-36 (declared, not live) lists `git-data-ownership.test.sh` as backing the ownership control;
+keep that wording at "suite exists" and do not extend it to claim CI enforcement while that arm can be declined
+locally.
+
+> **Addendum 2026-10-22 (#10786):** the evidence path of trigger 1 is repaired in code (the first observed verdict will be
+> recorded on #10786 once the relay has reached `main`), which supersedes the sentence above saying it cannot fire yet. The probe was TRANSIENT because
+> #8763 (2026-09-25) moved the rehearsal suite out of its own workflow step into the infra runner, which has captured
+> each suite's output into a per-suite file since #7423 and prints only `PASS <path>`; the marker never reached the
+> Actions log. The suite did not skip. `run-registered-suites.sh` now relays the column-0 `SKIP (loud):` lines and the rehearsal suite's
+> terminal line as `SOLEUR| relay ...` lines, and the probe's literals are unchanged. The first read after the relay
+> reaches `main` will count only the runs that carry it (the 20-run window still holds earlier runs without it), so a
+> verdict is worded around its `observed` count, not around 20 clean runs. The observed verdict will be recorded on #10786.
+
+> **Correction 2026-10-23 (#10781; appended, the amendment body above is unchanged):** the "Measured, not assumed" bullet above says
+> `Acquire::http::Timeout=20` and `Acquire::Retries=5` "were set". Only `Acquire::Retries=5` ever shipped.
+> `Acquire::http::Timeout=20` appears in #9383's first-cut experiment (its plan, learning and decision-challenges record roughly one
+> apt cycle in three stalling while it was set) and in no committed file under `apps/` or `scripts/`: `git log --all -S"Acquire::http::Timeout" -- apps scripts`
+> returns nothing. So that sentence describes an uncommitted experiment, not a shipped setting, and the experiment is not reproduced here.
+> See the 2026-10-23 amendment below.
+
+## Amendment — 2026-10-23 (#10781): the apt helper shares its lists and archives across a suite's containers
+
+**Why.** On 2026-10-22 `git-data-runcmd-rehearsal` exhausted its 420 s apt budget on three runs (7 to 11 attempts, budget gone before the last container started). Each of its ~12 containers ran a full `apt-get update` plus `install`, so a slow-mirror day multiplied the cost by 12. Two other suites (`git-data-ownership`, `htpasswd-stdin`) stalled on both attempts of the first `update` in one run. In run 39859809156 the rehearsal's budget exhaustion and those two first-`update` stalls happened within about three minutes of each other, so one slow-mirror episode is also consistent with all of them; the evidence does not show two distinct causes.
+
+**The decision.** `lib/apt-bounded.sh` passes the same `Dir::State::lists` and `Dir::Cache::archives` under the shared `/work/apt` state directory on both `update` and `install`, creates the `partial/` dirs at arm time, and makes the state directory removable by the host on every exit path. The state directory is left world-writable (`chmod -R a+rwX`) WITH the sticky bit (`chmod +t`, applied after the recursive chmod), and the sourced `apt-bounded.sh` is `go-w`. Both are needed: `go-w` stops an in-place edit of the script the next container sources as root, and the sticky bit stops another uid that can write the directory (the `_apt` download user) from renaming or removing a replacement over it. `update` still runs in every container (a conditional GET that proves the mirror is reachable). No budget, cap, backoff or exit-code contract changes and no arm becomes skip-eligible.
+
+**Measured (a cost measurement, not evidence that the red is fixed).** On the digest-pinned image, on a dev box, in one-off runs: 80 to 102 s cold and 17 to 19 s warm for the same package set; a healthy CI apt cycle is 2 to 5 s. The first local rehearsal run after the change was red (a cap kill landed mid-`dpkg`, then the retries failed with `dpkg was interrupted`) and the second was green with 37 s of budget headroom; both were observed once, locally. Whether the shared cache turns the CI red green is unknown until CI runs it: #10781 stays open until three consecutive green runs.
+
+**`Acquire::http::Timeout` is not added; it was never committed.** `git log --all -S"Acquire::http::Timeout" -- apps scripts` returns nothing, so no committed version of the helper or of any script set it. Without the pathspec the same search returns 3e5c5e0a38 (#9383), whose plan, learning and decision-challenges record a first-cut experiment (the "Measured, not assumed" bullet in the 2026-10-01 amendment, and its 2026-10-23 correction): about one apt cycle in three stalled although `Acquire::http::Timeout=20` was set, and the option is in no committed file of that PR. That experiment is not reproduced here, so this amendment neither confirms nor refutes it; therefore the option is not added. The #9379 issue body does not report a stall with nothing set: it says one stalled fetch with no `Acquire::*::Timeout` "can" consume the whole suite budget (a hypothesis), and its candidate fix proposes the timeout options. The bound that matters is the 90 s per-attempt cap. apt's default HTTP timeout is believed to be 120 s, which would put the attempt cap first, but that is UNVERIFIED (`apt-config dump` on `ubuntu:24.04`, apt 2.8.3, does not list `Acquire::http::Timeout`, and apt's source was not inspected). `Acquire::Retries=5` only helps fast failures.
+
+**Known limits.** The sticky bit and `go-w` protect the sourced script from the `_apt` download user and other non-root uids; they do not protect it from root. A process running as root inside a container is the same uid that sources the script and can replace it. The first-container stall is not fixed: a mirror outage during the first container still fails closed. The stalled phase is now visible because the scrubbed apt tail reaches the consumer suites' failure lines. A container killed from outside the helper (for example by a suite's host-side `timeout`) skips the exit-path cleanup and can leave root- or `_apt`-owned 0700 partial dirs the host cannot remove, and the orphaned container may still hold the lists lock; a local re-run needs the state dir removed by the same uid that created it (hosted runners are destroyed).
+
+## Amendment — 2026-10-25 (#8856, #10918): the observation window is implemented as stated, and the image is no longer the remedy
+
+**Why.** The "Consequences" section above declares the observation window as "more than 1 in 20 post-merge runs". The probe that carries it (`scripts/followthroughs/t5-skip-persistence-bound-7510.sh`) did not compute a rate: it FAILed on any single marker line in a sample of 20 listed runs, of which only 13 to 15 carried the suite's terminal line. Measured 2026-10-25 over the 12 newest `infra-validation.yml` main runs: exactly one carried a marker (`SKIP (loud): S1`, docker rc=100, an apt decline, 2026-10-23), the ten newest carried none, and the monitor was red for that one run. One transient decline of the class this ADR accepts was being reported as the persistent condition it was written to detect.
+
+**The decision.** The rehearsal source counts RUNS that carried at least one marker (a run on which two arms skipped is one run) over the first 20 runs carrying the suite's terminal line, taken from up to 40 listed successful `push` or `workflow_dispatch` runs on `main` (a `pull_request` run on a fork's branch named `main` is not post-merge evidence and its output is the PR author's). It FAILs when there are at least two skipping runs and `skip_runs * 20 > observed`. One skipping run is inside the bound (ADR-188 accepts one transient decline per window) and PASSes with a notice; below 10 observed runs (`MIN_OBSERVED`) and with no such FAIL the rate is unprovable either way and the verdict is TRANSIENT, so a handful of clean runs never reads as a clean bill. The guard-suite source (`g1b.`/`g2b.`/`fl.`, #10921) keeps any-hit FAIL, because a runner git that no longer exhibits the walk contract is a deterministic degradation, not a transient decline. The probe's consecutive-TRANSIENT escalation exits 3 (the sweeper's `CANNOT ESTABLISH` row; this probe's only consumer is the monitor) rather than 1, so the monitor files it under its `broken` title instead of the skip title (#10918). The skip FAIL stays exit 1: a real sustained-skip regression is never filed as "probe broken".
+
+**One alert issue, retitled to the current verdict.** The monitor keeps a single dedupe marker, so the `fail` and `broken` alerts share one open issue. The monitor retitles it when the probe verdict class changes (never for a failed state step) and opens every comment with `VERDICT NOW: FAIL`, `BROKEN` or `STATE-STORE FAILED`, so a real regression cannot be buried under a stale "probe is not running" title (CTO ruling on the #11070 review, amending the earlier "no per-verdict marker" ruling).
+
+**The image is not owed.** This ADR's earlier text says a persistent skip means the deferred pre-baked image "is owed immediately". That deferral was resolved by #7535, which was closed on measurement (a saving of $0 on a public repository with standard runners, and 0 operator-visible seconds), so the monitor's alert text now tells the operator to diagnose the decline named in the skip lines. The earlier sentences are left as written; this amendment supersedes their remedy.
+
+**Wall budget.** The 40-run listing raises the worst case from about 43 to about 63 `gh run view` calls (about 450 to 500 s against the monitor's `timeout 600`). The probe bounds each fetch (60 s) and stops fetching at 420 s (rehearsal) and 560 s (guard suites); a stopped source reports what it observed and is never read as clean (below `MIN_OBSERVED` it is TRANSIENT, an unobserved guard suite too).
+
+**Known limits.** Runs that concluded red or cancelled are excluded from numerator and denominator alike, deliberately: the bound is over runs that completed green, and counting a run whose output may be partial would change what the 1-in-20 rate measures. The cost is accepted: an apt outage that skips arms can also red the same run, and that run is then not seen. Not counted and tracked as a follow-up (#11114): push runs the workflow skipped as duplicates of a green PR run; the marker vocabulary is T5, S1 and T17 only, the S2 arms' skips match none of it, and the suite's roster guard does not count case-arm `arm_skip` calls. The bound is over a short, biased subsample of runs, not over all runs.

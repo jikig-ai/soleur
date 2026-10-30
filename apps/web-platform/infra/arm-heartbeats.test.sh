@@ -769,6 +769,99 @@ assert "T8 reports the absent address by name" "[[ \"\$OUT\" == *'git-data-prd: 
 assert_eq "T8 still arms the other five" "5" \
   "$(printf '%s' "$OUT" | grep -c 'already armed (status=up)')"
 
+# --- W: web-bash-synthetic (#10455 b), one literal arm per host --------------------------------
+# The two ids are added to a COPY of the standard fixture so every row above keeps its six-address premise (T8 counts five
+# "already armed" lines). The beat is born paused and this gate is its only unpause path.
+ID_WBS1=900107; ID_WBS2=900108
+add_wbs() {  # adds both web_bash_synthetic addresses to $TFSTATE and gives them a status
+  jq --arg a1 'betteruptime_heartbeat.web_bash_synthetic["web-1"]' --arg i1 "$ID_WBS1" \
+     --arg a2 'betteruptime_heartbeat.web_bash_synthetic["web-2"]' --arg i2 "$ID_WBS2" \
+     '.values.root_module.resources += [{"address":$a1,"values":{"id":$i1}},{"address":$a2,"values":{"id":$i2}}]' \
+     "$TFSTATE" > "$TFSTATE.wbs" || { echo "FATAL: add_wbs jq failed"; exit 2; }
+  mv "$TFSTATE.wbs" "$TFSTATE" || { echo "FATAL: add_wbs mv failed"; exit 2; }
+  printf 'paused' > "$FAKE_STATE/$ID_WBS1.status"
+  printf 'paused' > "$FAKE_STATE/$ID_WBS2.status"
+}
+echo "--- W1 both web-bash-synthetic beats dark: a SOFT landing, one rollback per host"
+case_setup w1
+add_wbs
+run_sut
+assert_eq "W1 exits 0: an unlanded beat is soft (the first merge can precede the image that carries the resolver)" "0" "$RC"
+assert "W1 names web-1 in a ::warning::" "[[ \"\$OUT\" == *'::warning::web-bash-synthetic (web-1): no beat within 300s'* ]]"
+assert "W1 names web-2 in a ::warning::" "[[ \"\$OUT\" == *'::warning::web-bash-synthetic (web-2): no beat within 300s'* ]]"
+assert "W1 says the first-apply case is expected (probe_absent), not a fault" "[[ \"\$OUT\" == *'reason=probe_absent'* ]]"
+assert_eq "W1 issues four PATCHes: unpause and rollback, per host" "4" "$(patch_count)"
+assert "W1 sequence is web-1 unpause, web-1 rollback, web-2 unpause, web-2 rollback" \
+  "[[ \"\$(patch_bodies | tr '\n' '|')\" == '$ID_WBS1 {\"paused\":false}|$ID_WBS1 {\"paused\":true}|$ID_WBS2 {\"paused\":false}|$ID_WBS2 {\"paused\":true}|' ]]"
+assert_eq "W1 leaves nothing on the re-pause sweep's books (both rolled back)" "0" "$(state_lines)"
+
+echo "--- W2 a beat lands for web-1 only: web-1 ARMED, web-2 soft-lands"
+case_setup w2
+add_wbs
+printf '10' > "$FAKE_STATE/$ID_WBS1.upat"
+FAKE_CURL_COST=1 run_sut
+assert_eq "W2 exits 0" "0" "$RC"
+assert "W2 declares web-1 ARMED on a measured beat" "[[ \"\$OUT\" == *'web-bash-synthetic (web-1): status=up within'* ]]"
+assert "W2 soft-lands web-2" "[[ \"\$OUT\" == *'::warning::web-bash-synthetic (web-2): no beat within 300s'* ]]"
+
+echo "--- W6 web-1 dark, web-2 landed: web-2 ARMED with no false warning (the wrc reset between the two calls)"
+case_setup w6
+add_wbs
+printf "360" > "$FAKE_STATE/$ID_WBS2.upat"   # absolute fake-clock second: after web-1's 300 s poll has run out, so web-2 reads paused first and flips to up in its own window
+FAKE_CURL_COST=1 run_sut
+assert_eq "W6 exits 0" "0" "$RC"
+assert "W6 soft-lands web-1" "[[ \"\$OUT\" == *'::warning::web-bash-synthetic (web-1): no beat within 300s'* ]]"
+assert "W6 declares web-2 ARMED on a measured beat" "[[ \"\$OUT\" == *'web-bash-synthetic (web-2): status=up within'* ]]"
+assert "W6 does not carry web-1's rc into a false web-2 warning" "[[ \"\$OUT\" != *'::warning::web-bash-synthetic (web-2)'* ]]"
+
+echo "--- W3 a FAILED rollback on a web-bash-synthetic arm is a real failure, never the soft landing"
+case_setup w3
+add_wbs
+printf '%s true\n' "$ID_WBS2" > "$FAKE_PATCH_FAIL"
+run_sut
+assert_eq "W3 exits 1" "1" "$RC"
+assert "W3 says the monitor is unpaused-and-unfed" "[[ \"\$OUT\" == *'unpaused-and-unfed'* ]]"
+assert "W3 leaves exactly the failed id on the sweep's books" "[[ \"\$(cat '$STATEFILE')\" == '$ID_WBS2' ]]"
+
+echo "--- W4 already armed: a true no-op naming each host"
+case_setup w4
+add_wbs
+printf 'up' > "$FAKE_STATE/$ID_WBS1.status"; printf 'up' > "$FAKE_STATE/$ID_WBS2.status"
+run_sut
+assert_eq "W4 exits 0" "0" "$RC"
+assert "W4 no-ops web-1" "[[ \"\$OUT\" == *'web-bash-synthetic (web-1): already armed (status=up)'* ]]"
+assert "W4 no-ops web-2" "[[ \"\$OUT\" == *'web-bash-synthetic (web-2): already armed (status=up)'* ]]"
+assert_eq "W4 issues no PATCH" "0" "$(patch_count)"
+
+echo "--- W5 host coverage: every var.web_hosts member has a literal arm_one for each per-host beat"
+# The keys come from variables.tf, not from this file: a member added there with no arm_one makes its beat born paused and
+# DARK forever, and nothing else notices (the twice-daily heartbeat-live-reconcile fed-but-paused alert is the only other net).
+INFRA_DIR_W="$(cd "$(dirname "$SUT")" && pwd)"
+web_hosts_keys() {  # [variables.tf path]: members at ANY indentation (a re-indented or tab-indented member must not drop out)
+  awk '/variable "web_hosts"/{f=1} f&&/default *= *\{/{d=1} d&&/^[[:space:]]+"web-[0-9]+"[[:space:]]*=[[:space:]]*\{/{gsub(/[ \t="{]/,"",$1); print $1} f&&/^}/{exit}' "${1:-$INFRA_DIR_W/variables.tf}"
+}
+host_coverage_missing() {  # <sut path> <keys...>: prints each "<beat>/<key>" lacking a literal arm_one
+  local sut="$1" k beat; shift
+  for beat in web_zot_consumer web_nic_guard web_bash_synthetic; do
+    for k in "$@"; do
+      grep -qF "arm_one 'betteruptime_heartbeat.${beat}[\"${k}\"]'" < <(grep -vE '^[[:space:]]*#' "$sut") || echo "${beat}/${k}"
+    done
+  done
+}
+mapfile -t WH_KEYS < <(web_hosts_keys)
+assert "W5 read at least web-1 and web-2 from variables.tf (the extraction is not vacuous)" "[[ \" \${WH_KEYS[*]} \" == *' web-1 '* && \" \${WH_KEYS[*]} \" == *' web-2 '* ]]"
+assert_eq "W5 the extraction derives every quoted web-N member variables.tf declares (the loose count is independent of the extractor's indentation regex)" \
+  "$(grep -cE '^[[:space:]]*"web-[0-9]+"[[:space:]]*=' "$INFRA_DIR_W/variables.tf")" "${#WH_KEYS[@]}"
+printf 'variable "web_hosts" {\n  default = {\n  "web-1" = { a = 1 }\n\t"web-3" = { a = 1 }\n  }\n}\n' > "$WORK/w5-indent.tf"
+assert "W5 RED control: members at two-space and tab indentation are still extracted" \
+  "[[ \"\$(web_hosts_keys '$WORK/w5-indent.tf' | tr '\n' ' ')\" == 'web-1 web-3 ' ]]"
+assert_eq "W5 no per-host beat lacks an arm_one" "" "$(host_coverage_missing "$SUT" "${WH_KEYS[@]}")"
+grep -v "web_bash_synthetic\[\"web-2\"\]" "$SUT" > "$WORK/w5-no-web2.sh" || { echo "FATAL: w5 mutant build failed"; exit 2; }
+assert "W5 RED control: a SUT without the web-2 web_bash_synthetic arm is reported missing" \
+  "[[ \"\$(host_coverage_missing '$WORK/w5-no-web2.sh' \"\${WH_KEYS[@]}\")\" == 'web_bash_synthetic/web-2' ]]"
+assert "W5 RED control: a new var.web_hosts member (web-3) with no arm_one is reported for every beat" \
+  "[[ \"\$(host_coverage_missing '$SUT' web-3 | tr '\n' ' ')\" == 'web_zot_consumer/web-3 web_nic_guard/web-3 web_bash_synthetic/web-3 ' ]]"
+
 # --- T8b: a READABLE but CONTENTLESS tfstate refuses (#7658 E10) -------------------------------
 echo "--- T8b a readable-but-empty tfstate is a refusal, not six silent skips and a green apply"
 case_setup t8b
@@ -2340,7 +2433,9 @@ echo "arm-heartbeats: ${PASS} passed, ${FAIL} failed ($((PASS + FAIL)) assertion
 # new-mode control M34. Ratcheted 374 -> 454 for the review round: ST1b-ST5n, AX2, AO5 (up/down/pending),
 # AO6f-g, AO7b-d, AO10-AO12 and mutation rows M35-M42. Ratcheted 454 -> 562 for the second fix-round: AO13-AO34 (record-before-act pinned
 # by a snapshot taken at the unpause PATCH, the books read-back, residual-books independence) and mutation rows M43-M54.
-ASSERT_FLOOR=562
+# Ratcheted 562 -> 583 for the web-bash-synthetic arms (#10455 b): W1-W5 (soft landing, one-host arming, failed rollback, no-op, host coverage + RED controls).
+# Ratcheted 583 -> 589 for the #10697 fix round: W6 (web-1 dark, web-2 landed: the wrc reset) and the two W5 extractor rows (independent member count, indentation RED control).
+ASSERT_FLOOR=589
 if [[ $((PASS + FAIL)) -lt "$ASSERT_FLOOR" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran against a floor of ${ASSERT_FLOOR} — the suite is narrowed or a case aborted early."
   exit 1

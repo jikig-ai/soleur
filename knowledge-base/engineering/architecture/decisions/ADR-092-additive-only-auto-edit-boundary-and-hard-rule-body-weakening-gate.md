@@ -212,7 +212,7 @@ the edits the cron can now make; it does not replace the body-weakening gate for
 
 **Compensating controls on model-authored text.** Because the inserted text lands in the
 always-loaded corpus, it is constrained in code rather than by prompt: printable ASCII only,
-caps of 20 lines and 500 characters, no credential-shaped substring (the credential tail of
+caps of 20 lines and, per line, 600 characters for `AGENTS.rules.md` (pinned by a test to the corpus lint's `PER_RULE_CAP`) or 1000 for `SKILL.md`, with a 500-character target stated in the prompt (corrected on the merge of PR #11157, #10552; this sentence previously said 500; the diff-size gate still bounds the whole diff at 16,384 characters), no credential-shaped substring (the credential tail of
 `PII_REGEX`, parity-pinned by a test, plus a private-key header and a bearer credential), no bare
 `---`, and no code fence, HTML comment, harness preprocessing marker, link or image other than a relative
 `./` / `../` one, URL (`://`) or command substitution (`$(`), and no `[mandates-filing]`-style enforcement tag. Source learnings are
@@ -235,3 +235,98 @@ diff that git then rejects, which is a server defect. The marker field set is un
 
 **C4.** No change: the same Inngest function calls the same external systems. The "C4 views
 deferred" bullet above stays accurate.
+
+## Amendment — server-enforced promotion quorum (2026-10-20)
+
+**Where the "5" is enforced changed.** The loop promises a cluster only when at least five source
+learnings back it, but that number lived only in the phase-1 prompt and as the literal `/5` in the
+draft PR trailer `Threshold-Hit: N/5`; the server never checked it, so a two-learning cluster could
+open a draft PR whose own trailer read `2/5`. The quorum is now enforced in code by the exported
+constant `PROMOTION_QUORUM` in `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`.
+It is a code constant on purpose, not a field of `promotion-config.yml`: a config-only change must not
+be able to weaken what may be proposed into the always-loaded corpus. Changing its value needs an
+amendment to this ADR and the matching line in `compound-promote-runbook.md`. The phase-1 prompt, the
+check and the trailer denominator all read it, and census Guard 1d pins one declaration and those
+three reads (it pins consistency, not the value; a value-pin test makes a change a visible diff).
+
+**The check.** It is the first statement that can refuse inside `draftAdditiveEdit`: it counts the
+cluster's DISTINCT source learnings that are keys of the collected corpus (exactly the set phase 2
+would show the model, after the PR #10553 normalisation) and refuses a count below the quorum as
+`quorum-not-met` (Sentry cause `below-quorum`). It runs before `readEditTarget`, so no git read
+happens, and before the phase-2 model call, so nothing is spent. It subsumes the former
+`edit-invalid`/`no-source` cause (zero sources is below any positive quorum), which is deleted. The
+draft callback itself still checks the API key and reads the always-loaded files before it reaches the
+drafter; those are not model calls and are accepted. Order for one cluster: duplicate target
+(`edit-target-duplicate`, handler body), then `target-path-refused` (first check in the draft step),
+then `quorum-not-met`, then the git reads and the model call.
+
+**Why inside the draft step, not beside it.** The refusal rides the existing memoized
+`draft-edit-<hash8>` step, so it reuses the one `DraftOutcome` -> `record()` -> marker `refusals[]` path
+and the Sentry event fires once per step, not once per replay. A handler-body predicate would re-fire
+the Sentry call on every replay, and a second memoized step would break census Guard 3b, which allows
+exactly one `Promise<DraftOutcome>` callback.
+
+**Vocabulary and observability.** `quorum-not-met` is a new member of the refusal vocabulary but not an
+`edit-*` one: `EDIT_REFUSAL_REASONS` stays at seven (Guard 1b pins that prefix), as `target-path-refused`
+before it. Sentry reuses op `draft-edit-refused` with tags `reason` and `cause`, plus two bare-integer
+`extra` fields, `source_count` (distinct resolved) and `proposed_count` (the model's raw list length
+before normalisation), which separate "the model proposed too few" from "normalisation dropped paths the
+corpus does not hold". The outcome-marker field set is unchanged (`compound-promote-marker.ts` is not
+edited). The follow-through probe for #10552 classes the reason N: a quorum refusal is a model-side
+outcome, never proof (PASS) and never a server defect (FAIL).
+
+**Known consequences, stated so they are not rediscovered.** A refused cluster still occupies one of the
+week-cap proposal slots (the phase-1 answer is sliced to the remaining cap, minus one on an `allow_create` run since 2026-10-27, before the server normalises
+it), and still counts in the headroom divisor `proposals.length - clusterIndex`, so a valid first
+cluster can be offered a smaller headroom share. Moving the filter ahead of the slice was rejected: it
+needs the corpus-key check inside the phase-1 step (replay risk) and would hide refusals from the marker.
+With `remaining = 2` and a model answer of `[thin, thin, valid]`, the valid cluster is dropped by the
+slice with no refusal recorded for it. The gate counts distinct corpus paths, not relatedness or
+distinct content (a repository writer can inflate the count with copies or symlinked files; that is
+inherent to a count-based gate and outside the threat model of an operator-reviewed, never-auto-merged
+loop), so `Threshold-Hit: 5/5` is a floor, and the human review of every draft PR is unchanged. A
+`draft-edit-*` step memoized by an older deploy resumes on the new code with its stored outcome, so a
+sub-quorum cluster it had already drafted still opens one PR; the window is one weekly run.
+
+**Deferral closed.** This overturns the line "Server-side quorum of 5 source learnings: unchanged
+(pre-existing)" recorded in the #10552 decision record (Review round 2 dispositions); the revisit
+trigger named there (#8293) stays open and is not something this change waits on.
+
+**C4.** No change (CTO ruling 2026-10-20): the same Inngest function calls the same external systems;
+model call volume only falls.
+
+## Amendment — create-only new-skill path (2026-10-26, #10550)
+
+*Dated, append-only; no earlier section is edited. Conditioned on the merge of the pull request that carries the create arm of `cron-compound-promote` (#10550, WikiSkill Phase 2): until then none of this describes a deployed state. The arm is dark-launched: it is reachable only on a manual trigger with `input: "patterns"` AND `allow_create: true` (default off); the scheduled run and a manual `input: "corpus"` run are unchanged.*
+
+**What is amended, and what is not.** The ADR's `## Decision` item 1 already names a new skill section as the safe primitive, and the 2026-10-19 amendment covers insertion into an EXISTING allowlisted target only. This amendment adds a second, separate admission path that may CREATE a brand-new skill. It does not loosen the first. `checkDiffPaths`, `TARGET_ALLOW_RE` and `isAdditiveDiff` are untouched and keep refusing any status other than `M`, any structural operation and any path off the target: the edit arm still never accepts status `A`, and a test pins that. `AGENTS.rules.md` and `AGENTS.md` are not written by the create arm, so the hard-rule body-weakening gate and the hash manifest have nothing to weaken.
+
+**The closed path set.** A create may commit exactly six paths, all with status `A` or, for the three shared files, `M`, and nothing deleted:
+
+- `plugins/soleur/skills/<slug>/SKILL.md` (new, markdown only)
+- `plugins/soleur/skills/<slug>/PURPOSE.md` (new, markdown only)
+- `plugins/soleur/cursor/skills/soleur-<slug>/SKILL.md` (new, the Cursor stub)
+- `README.md` and `plugins/soleur/README.md` (modified, digit-only count changes produced by `scripts/sync-readme-counts.sh`)
+- `knowledge-base/project/learnings/promotion-log.md` (modified, one appended ledger row)
+
+A seventh path, a script, a hook, a config file or anything outside this set is refused. The set is derived by one exported function, `createPathList(slug)`, read by the persistence call and the tests and pinned against this text; there is no second path-set check to drift from it.
+
+**Who authors the bytes.** The model never authors a file or a diff. One model call returns structured fields; the server renders SKILL.md, PURPOSE.md (from the template `plugins/soleur/skills/skill-creator/templates/purpose.md`) and the stub, and fixes the frontmatter (exactly `name` and `description`), the headings, the single link to `./PURPOSE.md`, the Grok invoke block and the attribution text. Every model string must pass a shape ALLOWLIST (plain printable ASCII; no backticks, fences, URLs, link syntax, `[id:`, rule-id tokens, `soleur:` tokens or leading command forms; claim words refused case-insensitively), an instruction-risk phrase denylist (destructive or privileged commands in any flag spelling, code-execution and network tools, reading or sending secrets and credential files, overriding earlier instructions or safeguards, acting without review or confirmation), then the PII and credential checks, and the screens run again over the rendered files; the denylist is applied to each line alone, and the slug is exempt from it except when it is exactly one destructive token. The Origin and Patterns addressed sections of PURPOSE.md are not model text: the server renders them from the validated pattern slug, the evidence count and the run date (the model schema has no such fields), and the only model prose in PURPOSE.md is the patch-rejection reason, which sits under the same denylist and screens.
+
+**A new checkCreate with its own closed verdict union.** The create arm has its own chokepoint, `checkCreate`, feeding the single create-arm `safeCommitAndPr` call in `exactPaths` mode with `expectedContent` (the digest precedent of #7122), `allowedPaths: []`, a draft PR, the label `self-healing/auto`, no auto-merge (`mergeMode: "none"`) and a fixed `CREATE (new skill)` PR-body line. Every refusal is the single reason `create-refused` with a closed `class`; ADR-054 (`safeCommitAndPr` is the sole write path) is honoured, not changed.
+
+**Gates on the new path.** The arm runs in two steps and the order below is the order the code runs, exported once as `CREATE_STAGE_ORDER` and pinned to this text by the parity suite. Step A (`create-propose`), in order: the week cap (shared with the edit arm, edit loop first; on an `allow_create` run the loop is held to the free slots minus one, so the arm always has a slot, amended 2026-10-27), a non-empty pattern index, a pattern the edit loop already recorded this run is not offered (nothing offerable is a clean no-action; since 2026-10-28 a pattern the ledger already owns is not offered either, and an empty offer on that account is `all-owned`), the clone being present, one open create at a time, the budget and collision populations measured from the clone, including the open pull request path scan (a readable cap and total, failing closed), the input-size ceiling (refuse, never truncate), the API key, then ONE model call with no retry. Step A runs with the installation token on disk but spawns no script. After the call comes `checkCreate`, whose gates run in this order: schema validation; slug format; shape, instruction-risk and claim-word checks over every model string; the PII and credential screen over every model string; the ledger (a pattern with an existing proposal, or a hash already used in this run, is suppressed for create too); slug collision (skill, agent, command stem, Cursor stub directory, open pull request paths); prefer-patch (the model must name an existing nearest skill, it must rank in the server's top three by overlap and the top overlap score must be under the calibrated threshold); the description budget (a readable cap and total, at least the minimum and at most 30 words, and within `cap - total`). Step B (`create-persist`), in order: the branch-taken check, before the clone is touched; then it sets the installation token, runs `git fetch --depth=1 origin main` and `git reset --hard FETCH_HEAD` to refresh the clone, strips the token from `remote.origin.url`, re-runs `checkCreate` on the refreshed tree, renders the three files and runs the rendered-output gate (size caps, PII and credential screens, link and frontmatter shape, no fences, and the instruction-risk scan over the model-derived segments of SKILL.md and PURPOSE.md, each line alone; the fixed server templates are exempt and a golden test proves them clean; the stub check is renderer self-consistency; parity with the real generator is CI `cursor-name-map --check`); then `soleur:skill-security-scan` on BOTH files, accepted only on exit 0 and a first line exactly `# skill-security-scan verdict: LOW-RISK`; the README sync (changed set exactly the two README paths); the bytes-differ check (the bytes on disk are the bytes gated); it restores the token with `setOriginToken`, fetches once more, runs the base-moved check, the slug-appeared check (a skill or Cursor stub directory with the new slug that landed on main during the gates), the branch-exists check (the head branch is already on the remote with no open pull request; the arm names it and never deletes it), and only then the commit. The scan runs with `SKILL_SECURITY_SCAN_OFFLINE=1` as the CI quality guard does. A faked green scan is the #8203 class, so only the synthetic `skill-security-scan PR gate` and `test` checks are excluded from the create PR; every other synthetic check the helper posts remains synthetic and proves nothing about the create, and the reviewer sees the repository's real checks.
+
+**Token handling and base moved.** Step A runs with the installation token on disk but spawns no script. In Step B the token is stripped from `remote.origin.url` after the first authenticated fetch and before any script spawns, and restored (`setOriginToken`) only for the final fetch and the single `safeCommitAndPr` call; a test asserts `.git/config` carries no `x-access-token` at script-spawn time. The edit loop's token handling is untouched, a recorded known limit. Step B has one time budget, and `deadline` covers the pre-commit phase only, not `safeCommitAndPr` and not the final cleanup. Because a depth-1 clone can be stale and a create must not revert a merged edit, Step B refreshes the clone to the current main before it re-checks and renders; just before the commit it compares the origin/main blob ids of `README.md`, `plugins/soleur/README.md`, `promotion-log.md` and the budget cap file with the ones it used and returns `persist/base-moved` on any difference (blob-scoped, so an unrelated merge does not refuse).
+
+**Description budget (no net growth).** The proposer never trims a sibling description, which would reopen the multi-file class of #8274. The budget is freed beforehand by human-reviewed trims in the preparing commit, and `SKILL_DESCRIPTION_WORD_BUDGET` in `plugins/soleur/test/components.test.ts` is LOWERED to the pre-trim measured total (2436 on 2026-10-26, from 2443), so total model-visible description words stay at or under 2436, enforced by CI at the cap value until a human changes the cap, and the freed 30 words are a reserve. A create is refused unless its description has at least the minimum and at most 30 words and fits in `cap - total`, counted exactly as `components.test.ts` counts (model-visible skills only, ADR-236), failing closed when the cap or a description cannot be parsed. The cap file is outside the six-path set, so the proposer cannot move it. A later human bump of the cap remains possible; a merge-base ratchet lint was cut (CTO ruling, 2026-10-26) because human new-skill pull requests legitimately bump the cap today.
+
+**What this does and does not prove (stated plainly).** "A created skill may not restate or relax an `hr-*` rule" is enforced only by the token and phrase gate (no rule-id tokens, no claim words) plus the human reviewer of the draft pull request. It is not provable deterministically. The unit suite proves the gates are consistent with each other and with this text; it does not prove integrity. The controls are the DRAFT pull request, `mergeMode: "none"`, the LOW-RISK scan and the human reviewer of every draft; the instruction-risk denylist is a tripwire, not a control (a paraphrase evades it). A created skill is model-invocable by default and the arm does not render `disable-model-invocation`; the fixed reviewer checklist asks whether the description would trigger on unrelated prompts, and a reviewer may add `disable-model-invocation: true` by hand before merge. A published skill cannot be recalled from installed copies, so the brand-survival threshold stays `single-user incident`.
+
+**Residuals accepted.** A pattern repeatedly refused for budget or scan writes no ledger row and is retried once headroom frees. The overlap threshold is calibrated on synthesized fixtures and synthetic negatives, not on a production corpus. No skill is created in production by the pull request that adds this arm; a live create is a separate, operator-authorized act.
+
+**C4.** No change: the same Inngest function calls the same external systems (a second call on the existing Anthropic edge and the existing GitHub write path). The skill-count prose in `model.c4` is hand-mirrored by the periodic audit and is not gated.
+
+**Amendment, 2026-10-28 (#10550): a ledger-owned pattern is not offered to the model.** The ledger check in `checkCreate` runs after the single model call, so a pattern the ledger already owned could win that call and end the run `no_action` while the other patterns were never evaluated (live-fire 2026-10-28: one owned of seven). The gate-list clause above carries the new order; it is folded into the `same-run` stage phrase, so `CREATE_STAGE_ORDER` has no id of its own for it and the behaviour tests, not the parity suite, pin its position. Pre-filtered hashes are not counted in `ledger_suppressed`, which still counts clusters dropped. The filter removes patterns and adds no text to the prompt, so it does not reopen ADR-300's rejected "tell the model which clusters were rejected" alternative (PR-derived text in a prompt is an injection path). An empty offer ends the step before the clone check and the open-create lookup. The effect on whether a create PR opens is unmeasured until a live-fire.
+
+**Amendment, 2026-10-29 (#10550): the prompt shows the server's per-pattern top-3 candidate skills.** A live run refused a proposed create because the model named a nearest skill outside the server's top three: the prompt stated the rule but never showed the list. The prompt now carries a fenced `create-candidates` block with, for each offered pattern, up to three existing skills ranked closest by the gate's own word-overlap ranking (user-invoked skills dropped, a zero score never listed), counted by the input ceiling. The gate, its top-three bound and its threshold are unchanged. The list is keyed on the pattern text while the gate ranks the model's own proposal text, so this is expected to reduce that refusal, not remove it, and a Sentry-only number says whether the refused model named a skill outside the candidates listed for its pattern or a listed skill fell out of the re-rank. A skill name outside the repo skill-name charset is never listed. The block carries repo skill names and the pattern slugs already in the index, so ADR-300's rejected "tell the model which clusters were rejected" alternative does not reopen. Two prompt rules go with it and are stricter than the gate: a pattern with no candidate line is not created from, and a model that finds no genuine nearest skill among the listed ones returns `no_action` with `no-pattern-qualifies`. They can lower the create rate and no field separates those declines from the maturity bar. The effect on whether a create PR opens is unmeasured until a live-fire.

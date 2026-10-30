@@ -33,6 +33,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
+import { authFailureFrameFromLeaseError, isOauthUnusableLeaseError, logSessionFailure } from "./agent-auth-user-message";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
@@ -452,7 +453,7 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * refusal count.
  */
 async function abortActiveSessionUnlessPaused(userId: string, session: ClientSession): Promise<void> {
-  if (await newAgentSessionsRefused({ observe: true })) {
+  if (await newAgentSessionsRefused({ observe: true, userId })) {
     log.info(
       { feature: "quiet-window", op: "skip-supersede-abort" },
       "quiet-window: left the in-flight session running (new-sessions-paused)",
@@ -2468,7 +2469,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // #8211 quiet-window (review P2): refuse a FIRST message BEFORE createConversation. Gating only
         // inside the dispatch left an empty "active" conversation row and a held concurrency slot behind
         // every refused first message. session.pending is kept so the user can resend after the window.
-        if (await newAgentSessionsRefused()) {
+        if (await newAgentSessionsRefused({ userId })) {
           log.info(
             { feature: "quiet-window", op: "refuse-first-message" },
             "quiet-window: refused a first message before creating its conversation (new-sessions-paused)",
@@ -2584,18 +2585,27 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           if (pendingLeader) {
             startAgentSession(userId, session.conversationId, pendingLeader, undefined, undefined, pendingContext).catch(
               (err) => {
-                Sentry.captureException(err);
-                log.error({ userId, err }, "startAgentSession error");
+                // #11086: the lease already reported an unusable stored credential; no duplicate raw capture.
+                if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
+                logSessionFailure(log, err, { userId }, {
+                  refused: "startAgentSession refused: stored subscription credential is not usable",
+                  failed: "startAgentSession error",
+                });
                 const errorCode: WSErrorCode | undefined = err instanceof KeyInvalidError
                   ? "key_invalid"
                   : err instanceof ByokDelegationError
                     ? `delegation_${err.reason}` as WSErrorCode
                     : undefined;
-                sendToClient(userId, {
-                  type: "error",
-                  message: sanitizeErrorForClient(err),
-                  errorCode,
-                });
+                // #11086 — a lease refusal of an unusable stored credential gets the recovery frame, not the generic text.
+                const leaseFrame = authFailureFrameFromLeaseError(err);
+                sendToClient(
+                  userId,
+                  leaseFrame ?? {
+                    type: "error",
+                    message: sanitizeErrorForClient(err),
+                    errorCode,
+                  },
+                );
               },
             );
           }

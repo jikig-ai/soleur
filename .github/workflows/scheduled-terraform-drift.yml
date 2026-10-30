@@ -1866,9 +1866,9 @@ jobs:
   # distinct signal. This job asks Hetzner directly (one read-only GET) and files an issue of its own. It sits in
   # its own job, not a step of the `drift-check` matrix, because that matrix runs three directories.
   #
-  # THE TOKEN, AND WHY THE LOADER IS NOT USED. The Hetzner token the two orphan sweeps below read is exported by the
-  # infra-credentials loader (#8209) and is NOT provably read-only: in the Tier-B arm it is the read/write token.
-  # This job binds no `environment:` and runs no loader. It reads the Hetzner Read-permission token
+  # THE TOKEN, AND WHY THE LOADER IS NOT USED. The infra-credentials loader (#8209) is not provably read-only: in the
+  # Tier-B arm it exports the read/write token. The two orphan sweeps below used to read it; they now take the same
+  # shape as this job. This job binds no `environment:` and runs no loader. It reads the Hetzner Read-permission token
   # (HCLOUD_TOKEN_READONLY, operator step O5 of the infra-credential-tiers runbook) from soleur/prd_terraform with the
   # repository secret DOPPLER_TOKEN, bound in the probe step only, and has NO fallback to the read/write name: an
   # absent, malformed or rejected token is its own verdict (`no-token`). The read/write token is never in this job.
@@ -2460,21 +2460,48 @@ jobs:
   # `soleur-git-data-rehearsal-<id>`, so a match written without it reports the PRODUCTION
   # git-data host as a leaked rehearsal — and the remedy an operator would reach for on that
   # report is a destroy.
+  #
+  # THE TOKEN. This job lists with GET calls only, so it holds the Hetzner Read-permission token and no Hetzner write
+  # credential: no `environment:`, no credential loader, and no fallback to the read/write name. It reads
+  # HCLOUD_TOKEN_READONLY from soleur/prd_terraform with the repository secret DOPPLER_TOKEN, the same way the
+  # sole-copy-protection-check job above does. The token's project is NOT checked here: the sole-copy job pins the
+  # Inngest store volume by name and id and pages on `volume-not-found`, so a token for another project reaches a
+  # person through that job, while this sweep would only list nothing. An absent, malformed, timed-out or rejected
+  # TOKEN read ends this job red (never a clean sweep), and the failure email below is what turns that red into a message.
   rung2-rehearsal-orphan-sweep:
-    environment: infra-privileged
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2 + 2 + 2 = 19): a job-level cancel skips `failure()`, so the cap must never fire first.
+    timeout-minutes: 25
+    # Hygiene only, NOT a security boundary (the dropped environment carried the main-only policy): it stops a branch
+    # dispatch from filing issues on an accidental run.
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Load infra credentials (tiered)
-        uses: ./.github/actions/infra-credentials
+        timeout-minutes: 2
         with:
-          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
-          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          persist-credentials: false
+
+      # PINNED like the sole-copy job's install (same release and sha256 as the credential loader). A shared step is #10431.
+      - name: Install Doppler CLI (pinned)
+        id: doppler_cli
+        timeout-minutes: 3
+        env:
+          DOPPLER_CLI_VERSION: "3.75.3"
+          DOPPLER_CLI_SHA256: "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+        run: |
+          set -euo pipefail
+          d="${RUNNER_TEMP}/doppler-cli"
+          mkdir -p "$d"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$d/doppler.tar.gz" \
+            "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_CLI_VERSION}/doppler_${DOPPLER_CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -
+          tar xzf "$d/doppler.tar.gz" -C "$d" doppler
+          rm -f "$d/doppler.tar.gz"
+          echo "$d" >> "$GITHUB_PATH"
 
       - name: Sweep for orphaned rung-2 rehearsal hosts
         id: sweep
+        timeout-minutes: 6
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           REHEARSAL_PREFIX: soleur-git-data-rehearsal-
@@ -2499,8 +2526,101 @@ jobs:
           RUNG2_CONFIGS_FLOOR: 13
         run: |
           set -euo pipefail
-          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
-          printf '::add-mask::%s\n' "$TOKEN"
+          # The token reaches curl on its stdin config through the shared library (ADR-280); a library that cannot be loaded ends the sweep with no verdict.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          # The Read-permission token, with no fallback to any other name. Bounded: rc 124 is the timeout and 137 the
+          # kill that follows it, and a timeout is NOT a missing credential. Masked per line before anything else.
+          doppler_rc=0
+          TOKEN="$(timeout -k 5 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || doppler_rc=$?
+          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"  # the masked, checked and sent value is this one
+          if [[ "$doppler_rc" == 124 || "$doppler_rc" == 137 ]]; then
+            echo "::error::orphan_sweep_doppler_timeout — the secret store was killed or did not answer within 60 s; this sweep has no verdict (this is not a missing credential)."
+            exit 1
+          fi
+          while IFS= read -r _line; do
+            if [[ -n "$_line" ]]; then printf '::add-mask::%s\n' "$_line"; fi
+          done <<<"$TOKEN"
+          if [[ -z "$TOKEN" ]]; then
+            echo "::error::orphan_sweep_no_token — the Hetzner Read token (HCLOUD_TOKEN_READONLY in soleur/prd_terraform) was empty or unreadable (secret-store exit status ${doppler_rc}); this sweep has no verdict."
+            exit 1
+          fi
+          if ! bc_ok_var TOKEN; then
+            bc_refuse scheduled-terraform-drift TOKEN
+            exit 1
+          fi
+          # ── (#10952) PROJECT-IDENTITY PROOF, BEFORE ANY LISTING ────────────────────────────────────────────
+          # This sweep lists whatever project its token belongs to. A read-only token that cannot see the production project would
+          # list nothing and report a clean sweep, so the sweep first proves the token can see the pinned production volume (ADR-282)
+          # with ONE GET by id. It proves "this token can see the volume", never "this token is project X": a 404 is not measured to
+          # distinguish a deleted volume from a volume of another project, so the failure text names both causes, and the
+          # sole-copy-protection-check issue stays the primary page for a gone volume. No `-f` (the code is read), every request is
+          # bounded, and the answer body is read by ONE closed-vocabulary jq and never printed (the repository is public).
+          # An unproven identity ends the sweep red with a named slug and suppresses the orphan listing for this run: the accepted
+          # residual recorded in ADR-241. The pin below is one of three copies (the sole-copy probe and the two sweeps) that a suite
+          # pins equal; a recreated volume bumps all three (runbook inngest-luks-cutover-6894.md).
+          # IDENTITY-PROOF-BEGIN
+          readonly VOLUME_ID_PIN=106903269
+          id_body=""
+          trap 'rm -f "$id_body"' EXIT
+          id_body="$(mktemp "${RUNNER_TEMP:?}/orphan-sweep-identity.XXXXXX")" || {
+            printf 'identity=unreachable\nidentity_http=none\nidentity_reason=transport\n' >> "$GITHUB_OUTPUT"
+            echo "::error::orphan_sweep_project_identity_unreachable — the scratch file for the project-identity proof could not be created; this sweep has no verdict."
+            exit 1; }
+          # Two attempts, 5 s apart, retried only on a transport failure, 429 and 5xx. The library's status is not branched on:
+          # its refusal code collides with the transfer tool's own, and an empty code is the same unreachable outcome.
+          id_attempt=0; id_fetched=0; id_http=""
+          while (( id_attempt < 2 )); do
+            id_attempt=$((id_attempt + 1))
+            id_got=0; id_http=""
+            id_http="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS --max-time 30 -o "$id_body" -w '%{http_code}' "https://api.hetzner.cloud/v1/volumes/${VOLUME_ID_PIN}")" || id_got=$?
+            # curl writes the literal 000 when no HTTP answer arrived; that is a transport outcome, never a status.
+            [[ "$id_http" == 000 ]] && id_http=""
+            if (( id_got == 0 )) && [[ "$id_http" =~ ^[0-9]{3}$ ]]; then
+              case "$id_http" in
+                429|5??) ;;
+                *) id_fetched=1; break ;;
+              esac
+            fi
+            if (( id_attempt < 2 )); then sleep 5; fi
+          done
+          if (( id_fetched != 1 )); then
+            if [[ "$id_http" =~ ^[0-9]{3}$ ]]; then id_state=unreachable-http; else id_state=unreachable-transport; fi
+          elif [[ "$id_http" != 200 ]]; then
+            id_state=unproven-http
+          else
+            id_facts="$(jq -r --argjson pin "$VOLUME_ID_PIN" 'if (.volume | type) != "object" or (.volume.id | type) != "number" then "bad-body" elif .volume.id == $pin then "ok" else "other-id" end' "$id_body" 2>/dev/null)" || id_facts=""
+            case "$id_facts" in
+              ok) id_state=proven ;;
+              other-id) id_state=unproven-id ;;
+              *) id_state=unproven-body ;;
+            esac
+          fi
+          # Every published value comes from a literal in this case, never from the code or the body.
+          case "$id_state" in
+            proven) id_identity=proven; id_reason=none ;;
+            unproven-http) id_identity=unproven; id_reason=http ;;
+            unproven-id) id_identity=unproven; id_reason=id_mismatch ;;
+            unproven-body) id_identity=unproven; id_reason=malformed ;;
+            unreachable-http) id_identity=unreachable; id_reason=http ;;
+            *) id_identity=unreachable; id_reason=transport ;;
+          esac
+          [[ "$id_http" =~ ^[0-9]{3}$ ]] || id_http=none
+          { echo "identity=${id_identity}"; echo "identity_http=${id_http}"; echo "identity_reason=${id_reason}"; } >> "$GITHUB_OUTPUT"
+          case "$id_identity" in
+            proven) echo "project identity: the token can see the pinned production volume (HTTP ${id_http})" ;;
+            unproven)
+              case "$id_http" in
+                401|403) id_cause="Hetzner refused the token (HTTP ${id_http}); it may be revoked or lack read access." ;;
+                404) id_cause="Either the volume is gone or this token belongs to another project; a 404 is not measured to tell them apart." ;;
+                *) id_cause="The answer did not match the pinned volume or could not be read (HTTP ${id_http}, reason ${id_reason})." ;;
+              esac
+              echo "::error::orphan_sweep_project_identity_unproven — the Hetzner Read token cannot prove the production volume is visible to it (HTTP ${id_http}, reason ${id_reason}); this sweep has no verdict and listed nothing. ${id_cause} The sole-copy-protection-check issue is the primary page for a gone volume."
+              exit 1 ;;
+            *)
+              echo "::error::orphan_sweep_project_identity_unreachable — Hetzner did not answer the project-identity request (HTTP ${id_http}, reason ${id_reason}) after ${id_attempt} attempts; this sweep has no verdict and listed nothing. This is not a statement about the token's project."
+              exit 1 ;;
+          esac
+          # IDENTITY-PROOF-END
           # SERVERS ARE NOT THE ONLY THING A PARTIAL TEARDOWN LEAVES, and they are not the
           # expensive one. A destroy that dies partway most often strands the two 10 GB volumes
           # and the scratch Doppler config — which holds a live GIT_DATA_LUKS_KEY and the real
@@ -2514,10 +2634,8 @@ jobs:
           # guards against.
           # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
           survivors=""
-          # The token reaches curl on its stdin config (ADR-280); a refusal takes the same fail-closed arm.
-          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           for _kind in servers volumes ssh_keys firewalls; do
-            body="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS -f \
+            body="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS -f --max-time 30 \
                       "https://api.hetzner.cloud/v1/${_kind}?per_page=50&label_selector=app%3Dsoleur-rung2-rehearsal")" || {
               echo "::error::could not list Hetzner ${_kind} — this sweep has no verdict. Fail-closed rather than reporting a clean sweep it did not perform."
               exit 1; }
@@ -2563,7 +2681,7 @@ jobs:
           _cfg_rc=0
           _cfg_total=0
           _cfgs=""
-          _cfg_raw="$(doppler configs list -p soleur --json)" || _cfg_rc=$?
+          _cfg_raw="$(timeout -k 5 30 doppler configs list -p soleur --json)" || _cfg_rc=$?
           if (( _cfg_rc == 0 )); then
             _cfg_total="$(printf '%s' "$_cfg_raw" | jq -r 'length')" || _cfg_rc=$?
           fi
@@ -2622,8 +2740,10 @@ jobs:
           fi
 
       - name: File an issue for orphaned rehearsal hosts
+        timeout-minutes: 2
         if: >-
           always()
+          && steps.sweep.outputs.orphans != ''
           && steps.sweep.outputs.orphans != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2653,15 +2773,16 @@ jobs:
             echo "has forgotten the resource, the dispatch will say so instead of exiting 0."
             echo ""
             echo "If that arm reports survivors, they are unreachable through Terraform. The block"
-            echo "below only makes GET calls (the token it loads is still the read/write one): it"
-            echo "lists every object still carrying the rehearsal label, with its id. Reclaiming a"
+            echo "below only makes GET calls (it loads the read-only Hetzner token, with no"
+            echo "read/write fallback): it lists every object still carrying the rehearsal label,"
+            echo "with its id. Reclaiming a"
             echo "survivor is a Hetzner write, so an agent session names each exact call and runs"
             echo "it only after the owner's per-command go-ahead; it is never a command to paste"
             echo "from an issue body. The procedure is the \"Reclaiming survivors that state"
             echo "forgot\" section of the inngest-provision-rehearsal runbook."
             echo ""
             echo '```bash'
-            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
+            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)"'
             echo '# READ-ONLY: list every stranded rehearsal object with its id'
             echo 'for k in servers volumes ssh_keys firewalls; do'
             echo '  curl -sS -H "Authorization: Bearer $TOKEN" \'
@@ -2683,6 +2804,8 @@ jobs:
             gh issue create \
               --title "Orphaned rung-2 rehearsal resource(s) on Hetzner" \
               --label "infra-drift" \
+              --label action-required \
+              --label priority/p1-high \
               --milestone "Post-MVP / Later" \
               --body-file /tmp/orphan-body.md
           fi
@@ -2860,6 +2983,7 @@ jobs:
       # `failure`) for a skipped step, so this leg preserves the positive polarity that keeps a
       # skipped filer — the steady-state `performed` run — from firing the email.
       - name: Email notification (rung-2 sweep — the scratch-config finding could not reach its issue channel)
+        timeout-minutes: 2
         if: >-
           always()
           && (steps.scratch_cfg_issue.outputs.channel_failed == 'true'
@@ -2869,6 +2993,24 @@ jobs:
         with:
           subject: '[INFRA DRIFT] The rung-2 scratch-config finding could not reach its issue channel'
           body: '<p><strong>The twice-daily rung-2 orphan sweep found that its scratch-config half was not performed, and the GitHub issue channel that carries that finding did not accept it.</strong> This email exists because the finding would otherwise have reached nothing: the cron run is GREEN, this job publishes no Sentry check-in, and its only other artifact is a run annotation.</p><p>What this run measured: probe <code>${{ steps.sweep.outputs.scratch_cfg_probe }}</code>, doppler/jq exit <code>${{ steps.sweep.outputs.scratch_cfg_rc }}</code>, <code>${{ steps.sweep.outputs.scratch_cfg_listed }}</code> config(s) listed against a declared floor of <code>${{ steps.sweep.outputs.scratch_cfg_floor }}</code>.</p><p><strong>This is a finding about the CHANNEL, not only about the sweep.</strong> <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for the named error slug — <code>rung2_scratch_cfg_list_failed</code> or <code>rung2_scratch_cfg_escalation_failed</code> — which says which call failed. Likely causes: a secondary rate limit, an API 5xx, a renamed or closed <code>Post-MVP / Later</code> milestone, or the <code>infra-drift</code> label having been deleted.</p><p>What is at stake while the channel is down: a partial rung-2 teardown strands the scratch Doppler config, which holds a live <code>GIT_DATA_LUKS_KEY</code> and the production Better Stack ingest token — and the sweep is currently reporting "no orphaned scratch Doppler config" without being able to look.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      # ── A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON ──────────────────
+      # The only reader of this job's conclusion is the orphan-sweeps-checkin job below (the cron only dispatches the
+      # workflow), and its Sentry monitor was destroyed by the #6590 prune (PR-B) rather than routed under #10972, so
+      # a red run alone reaches nobody quickly. This fires when a step AFTER checkout fails: the Doppler install,
+      # the secret read, the Hetzner listing or an issue filer. It does not fire when checkout itself fails (the local
+      # action it uses is not on disk yet) or when the job is cancelled or times out (`failure()` is false then), and
+      # a Resend rejection leaves a warning, not a retry (#10430). It may send alongside the scratch-config email above:
+      # two messages in a rare run are cheaper than losing the finding the other one did not carry. Never fails the job.
+      - name: Email notification (rung-2 sweep — the job failed)
+        if: failure()
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "${{ steps.sweep.outputs.identity == 'unproven' && '[INFRA DRIFT] rung-2 orphan sweep: cannot prove the production volume is visible to this token' || '[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed' }}"
+          body: '<p><strong>The twice-daily rung-2 rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch Doppler config was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or an issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>Project identity: <code>${{ steps.sweep.outputs.identity || ''not reached'' }}</code> (HTTP <code>${{ steps.sweep.outputs.identity_http || ''none'' }}</code>, reason <code>${{ steps.sweep.outputs.identity_reason || ''none'' }}</code>). When this reads <code>unproven</code>, this token cannot prove the production volume is visible to it: HTTP 401 or 403 means Hetzner refused the token; HTTP 404 means either the volume is gone or the token belongs to another project (a 404 is not measured to tell them apart); any other answer means the reply did not match the pinned volume or could not be read. The <code>sole-copy-protection-check</code> issue is the primary page for a gone volume (this email is the backstop). First read-only step: list the server names with the read-only token. When it reads <code>unreachable</code>, Hetzner did not answer and nothing is claimed about the identity.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
   # ── (#9175) INNGEST-PROVISION REHEARSAL ORPHAN SWEEP ───────────────────────────
@@ -2883,34 +3025,153 @@ jobs:
   # `soleur-inngest-rehearsal-<id>`, so a match written without it reports the PRODUCTION
   # inngest host as a leaked rehearsal — and the remedy an operator would reach for on that
   # report is a destroy.
+  #
+  # THE TOKEN. Same shape as the rung-2 sweep above and the sole-copy-protection-check job: GET calls only, so the
+  # job holds the Hetzner Read-permission token (HCLOUD_TOKEN_READONLY from soleur/prd_terraform, read with the
+  # repository secret DOPPLER_TOKEN) and no Hetzner write credential, with no `environment:`, no credential loader and
+  # no fallback to the read/write name. An absent, malformed, timed-out or rejected read ends this job red, and the failure email at the end of the
+  # job is what turns that red into a message.
   inngest-rehearsal-orphan-sweep:
-    environment: infra-privileged
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2 = 15): a job-level cancel skips `failure()`, so the cap must never fire first.
+    timeout-minutes: 25
+    # Hygiene only, NOT a security boundary (the dropped environment carried the main-only policy).
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Load infra credentials (tiered)
-        uses: ./.github/actions/infra-credentials
+        timeout-minutes: 2
         with:
-          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
-          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          persist-credentials: false
+
+      # PINNED like the sole-copy job's install (same release and sha256 as the credential loader). A shared step is #10431.
+      - name: Install Doppler CLI (pinned)
+        id: doppler_cli
+        timeout-minutes: 3
+        env:
+          DOPPLER_CLI_VERSION: "3.75.3"
+          DOPPLER_CLI_SHA256: "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+        run: |
+          set -euo pipefail
+          d="${RUNNER_TEMP}/doppler-cli"
+          mkdir -p "$d"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$d/doppler.tar.gz" \
+            "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_CLI_VERSION}/doppler_${DOPPLER_CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -
+          tar xzf "$d/doppler.tar.gz" -C "$d" doppler
+          rm -f "$d/doppler.tar.gz"
+          echo "$d" >> "$GITHUB_PATH"
 
       - name: Sweep for orphaned inngest rehearsal hosts
         id: sweep
+        timeout-minutes: 6
         env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           REHEARSAL_PREFIX: soleur-inngest-rehearsal-
         run: |
           set -euo pipefail
-          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
-          printf '::add-mask::%s\n' "$TOKEN"
+          # Only the shape check of the shared library is used here; the requests keep their stdin-config curl form.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          # The Read-permission token, with no fallback to any other name. Bounded: rc 124 is the timeout and 137 the
+          # kill that follows it, and a timeout is NOT a missing credential. Masked per line before anything else.
+          doppler_rc=0
+          TOKEN="$(timeout -k 5 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || doppler_rc=$?
+          unset DOPPLER_TOKEN
+          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"  # the masked, checked and sent value is this one
+          if [[ "$doppler_rc" == 124 || "$doppler_rc" == 137 ]]; then
+            echo "::error::orphan_sweep_doppler_timeout — the secret store was killed or did not answer within 60 s; this sweep has no verdict (this is not a missing credential)."
+            exit 1
+          fi
+          while IFS= read -r _line; do
+            if [[ -n "$_line" ]]; then printf '::add-mask::%s\n' "$_line"; fi
+          done <<<"$TOKEN"
+          if [[ -z "$TOKEN" ]]; then
+            echo "::error::orphan_sweep_no_token — the Hetzner Read token (HCLOUD_TOKEN_READONLY in soleur/prd_terraform) was empty or unreadable (secret-store exit status ${doppler_rc}); this sweep has no verdict."
+            exit 1
+          fi
+          if ! bc_ok_var TOKEN; then
+            bc_refuse scheduled-terraform-drift TOKEN
+            exit 1
+          fi
+          # ── (#10952) PROJECT-IDENTITY PROOF, BEFORE ANY LISTING ────────────────────────────────────────────
+          # This sweep lists whatever project its token belongs to. A read-only token that cannot see the production project would
+          # list nothing and report a clean sweep, so the sweep first proves the token can see the pinned production volume (ADR-282)
+          # with ONE GET by id. It proves "this token can see the volume", never "this token is project X": a 404 is not measured to
+          # distinguish a deleted volume from a volume of another project, so the failure text names both causes, and the
+          # sole-copy-protection-check issue stays the primary page for a gone volume. No `-f` (the code is read), every request is
+          # bounded, and the answer body is read by ONE closed-vocabulary jq and never printed (the repository is public).
+          # An unproven identity ends the sweep red with a named slug and suppresses the orphan listing for this run: the accepted
+          # residual recorded in ADR-241. The pin below is one of three copies (the sole-copy probe and the two sweeps) that a suite
+          # pins equal; a recreated volume bumps all three (runbook inngest-luks-cutover-6894.md).
+          # IDENTITY-PROOF-BEGIN
+          readonly VOLUME_ID_PIN=106903269
+          id_body=""
+          trap 'rm -f "$id_body"' EXIT
+          id_body="$(mktemp "${RUNNER_TEMP:?}/orphan-sweep-identity.XXXXXX")" || {
+            printf 'identity=unreachable\nidentity_http=none\nidentity_reason=transport\n' >> "$GITHUB_OUTPUT"
+            echo "::error::orphan_sweep_project_identity_unreachable — the scratch file for the project-identity proof could not be created; this sweep has no verdict."
+            exit 1; }
+          # Two attempts, 5 s apart, retried only on a transport failure, 429 and 5xx. The library's status is not branched on:
+          # its refusal code collides with the transfer tool's own, and an empty code is the same unreachable outcome.
+          id_attempt=0; id_fetched=0; id_http=""
+          while (( id_attempt < 2 )); do
+            id_attempt=$((id_attempt + 1))
+            id_got=0; id_http=""
+            id_http="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS --max-time 30 -o "$id_body" -w '%{http_code}' "https://api.hetzner.cloud/v1/volumes/${VOLUME_ID_PIN}")" || id_got=$?
+            # curl writes the literal 000 when no HTTP answer arrived; that is a transport outcome, never a status.
+            [[ "$id_http" == 000 ]] && id_http=""
+            if (( id_got == 0 )) && [[ "$id_http" =~ ^[0-9]{3}$ ]]; then
+              case "$id_http" in
+                429|5??) ;;
+                *) id_fetched=1; break ;;
+              esac
+            fi
+            if (( id_attempt < 2 )); then sleep 5; fi
+          done
+          if (( id_fetched != 1 )); then
+            if [[ "$id_http" =~ ^[0-9]{3}$ ]]; then id_state=unreachable-http; else id_state=unreachable-transport; fi
+          elif [[ "$id_http" != 200 ]]; then
+            id_state=unproven-http
+          else
+            id_facts="$(jq -r --argjson pin "$VOLUME_ID_PIN" 'if (.volume | type) != "object" or (.volume.id | type) != "number" then "bad-body" elif .volume.id == $pin then "ok" else "other-id" end' "$id_body" 2>/dev/null)" || id_facts=""
+            case "$id_facts" in
+              ok) id_state=proven ;;
+              other-id) id_state=unproven-id ;;
+              *) id_state=unproven-body ;;
+            esac
+          fi
+          # Every published value comes from a literal in this case, never from the code or the body.
+          case "$id_state" in
+            proven) id_identity=proven; id_reason=none ;;
+            unproven-http) id_identity=unproven; id_reason=http ;;
+            unproven-id) id_identity=unproven; id_reason=id_mismatch ;;
+            unproven-body) id_identity=unproven; id_reason=malformed ;;
+            unreachable-http) id_identity=unreachable; id_reason=http ;;
+            *) id_identity=unreachable; id_reason=transport ;;
+          esac
+          [[ "$id_http" =~ ^[0-9]{3}$ ]] || id_http=none
+          { echo "identity=${id_identity}"; echo "identity_http=${id_http}"; echo "identity_reason=${id_reason}"; } >> "$GITHUB_OUTPUT"
+          case "$id_identity" in
+            proven) echo "project identity: the token can see the pinned production volume (HTTP ${id_http})" ;;
+            unproven)
+              case "$id_http" in
+                401|403) id_cause="Hetzner refused the token (HTTP ${id_http}); it may be revoked or lack read access." ;;
+                404) id_cause="Either the volume is gone or this token belongs to another project; a 404 is not measured to tell them apart." ;;
+                *) id_cause="The answer did not match the pinned volume or could not be read (HTTP ${id_http}, reason ${id_reason})." ;;
+              esac
+              echo "::error::orphan_sweep_project_identity_unproven — the Hetzner Read token cannot prove the production volume is visible to it (HTTP ${id_http}, reason ${id_reason}); this sweep has no verdict and listed nothing. ${id_cause} The sole-copy-protection-check issue is the primary page for a gone volume."
+              exit 1 ;;
+            *)
+              echo "::error::orphan_sweep_project_identity_unreachable — Hetzner did not answer the project-identity request (HTTP ${id_http}, reason ${id_reason}) after ${id_attempt} attempts; this sweep has no verdict and listed nothing. This is not a statement about the token's project."
+              exit 1 ;;
+          esac
+          # IDENTITY-PROOF-END
           # PAGINATION IS CHECKED, not assumed: 50 is Hetzner's per_page MAXIMUM, so a
           # truncated first page would produce a clean verdict from an incomplete list.
           # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
           survivors=""
           for _kind in servers volumes ssh_keys firewalls; do
             body="$(printf 'header = "Authorization: Bearer %s"\n' "${TOKEN}" \
-                      | curl -sS -f --config - \
+                      | curl -sS -f --max-time 30 --config - \
                         "https://api.hetzner.cloud/v1/${_kind}?per_page=50&label_selector=app%3Dsoleur-inngest-provision-rehearsal")" || {
               echo "::error::could not list Hetzner ${_kind} — this sweep has no verdict. Fail-closed rather than reporting a clean sweep it did not perform."
               exit 1; }
@@ -2927,7 +3188,7 @@ jobs:
           # name-prefix listing catches a labeled-out orphan. (Servers carry the name that
           # matters.)
           _named="$(printf 'header = "Authorization: Bearer %s"\n' "${TOKEN}" \
-                    | curl -sS -f --config - \
+                    | curl -sS -f --max-time 30 --config - \
                       "https://api.hetzner.cloud/v1/servers?per_page=50&name=${REHEARSAL_PREFIX}")" || {
             echo "::error::could not name-sweep Hetzner servers — fail-closed."; exit 1; }
           _nhits="$(printf '%s' "$_named" | jq -r '[.servers[]? | .name] | .[]' 2>/dev/null || echo unreadable)"
@@ -2954,6 +3215,7 @@ jobs:
           fi
 
       - name: File an issue for orphaned rehearsal hosts
+        timeout-minutes: 2
         if: steps.sweep.outputs.orphans != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2979,15 +3241,15 @@ jobs:
             echo ""
             echo "Dispatch **inngest provision forced-race rehearsal** with \`teardown_only=true\`."
             echo "That arm exists for exactly this case. If state has forgotten the resource,"
-            echo "the block below only makes GET calls (the token it loads is still the"
-            echo "read/write one): it lists every object still carrying the rehearsal label, with"
-            echo "its id. Reclaiming a survivor is a Hetzner write, so an agent session names each"
+            echo "the block below only makes GET calls (it loads the read-only Hetzner token,"
+            echo "with no read/write fallback): it lists every object still carrying the rehearsal"
+            echo "label, with its id. Reclaiming a survivor is a Hetzner write, so an agent session names each"
             echo "exact call and runs it only after the owner's per-command go-ahead; it is never"
             echo "a command to paste from an issue body. The procedure is the \"Reclaiming"
             echo "survivors that state forgot\" section of the inngest-provision-rehearsal runbook."
             echo ""
             echo '```bash'
-            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
+            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)"'
             echo '# READ-ONLY: list every stranded rehearsal object with its id'
             echo 'for k in servers volumes ssh_keys firewalls; do'
             echo '  curl -sS -H "Authorization: Bearer $TOKEN" \'
@@ -3009,6 +3271,92 @@ jobs:
             gh issue create \
               --title "Orphaned inngest rehearsal resource(s) on Hetzner" \
               --label "infra-drift" \
+              --label action-required \
+              --label priority/p2-medium \
               --milestone "Post-MVP / Later" \
               --body-file /tmp/orphan-body-inngest.md
           fi
+
+      # A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON. The only reader of this job's conclusion is the
+      # orphan-sweeps-checkin job below (the cron only dispatches the workflow), and its Sentry monitor was destroyed by
+      # the #6590 prune (PR-B) rather than routed under #10972, so a red run alone reaches nobody quickly. This
+      # fires when a step AFTER checkout fails: the Doppler install, the secret read, the Hetzner listing or the issue
+      # filer. It does not fire when checkout fails or when the job is cancelled or times out. It never fails the job.
+      - name: Email notification (inngest rehearsal sweep — the job failed)
+        if: failure()
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "${{ steps.sweep.outputs.identity == 'unproven' && '[INFRA DRIFT] inngest orphan sweep: cannot prove the production volume is visible to this token' || '[INFRA DRIFT] The inngest rehearsal orphan sweep failed' }}"
+          body: '<p><strong>The twice-daily inngest rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall or SSH key was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or the issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>Project identity: <code>${{ steps.sweep.outputs.identity || ''not reached'' }}</code> (HTTP <code>${{ steps.sweep.outputs.identity_http || ''none'' }}</code>, reason <code>${{ steps.sweep.outputs.identity_reason || ''none'' }}</code>). When this reads <code>unproven</code>, this token cannot prove the production volume is visible to it: HTTP 401 or 403 means Hetzner refused the token; HTTP 404 means either the volume is gone or the token belongs to another project (a 404 is not measured to tell them apart); any other answer means the reply did not match the pinned volume or could not be read. The <code>sole-copy-protection-check</code> issue is the primary page for a gone volume (this email is the backstop). First read-only step: list the server names with the read-only token. When it reads <code>unreachable</code>, Hetzner did not answer and nothing is claimed about the identity.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+  # ── (#10952) ORPHAN-SWEEPS AGGREGATOR: ONE CHECK-IN AND ONE PER-SLOT EMAIL FOR BOTH SWEEPS ──────────────
+  #
+  # THE RULE (ADR-031, the #8630 amendment cited at the drift-check check-in above: a shared slug cannot do per-job liveness, so
+  # a job GROUP gets ONE slug and its status comes from the group's RESULTS): the check-in is `ok` only when every `*-orphan-sweep`
+  # job concluded `success`, and `error` for every other result (failure, cancelled, skipped, or a result missing from `needs`).
+  # Orphans found and filed is `ok`: the sweep ran and the issue is the signal, exactly like the drift-check precedent. An
+  # identity failure, a failed listing, a dead filer, a cancel and a timeout all end the sweep job non-success, so they post `error`.
+  # A sweep whose checkout fails, or that is cancelled or timed out, sends no email of its own; this job is what turns those into a
+  # message.
+  #
+  # WHAT `ok` MEANS. Job success, not delivery: a dead scratch-config issue filer plus a rejected email in one run still reads `ok`
+  # (the residual is recorded in ADR-241). The check-in key is a public write-only ingest key, so anyone holding it can post `ok`
+  # (already true of every monitor). The sole-copy-protection-check job joins later by adding itself to `needs` (#10430).
+  #
+  # THE EMAIL STEP IS PERMANENT, NOT A STOPGAP. Only this step reaches a person on every failed slot. A duplicate beside a sweep's own failure
+  # email is accepted. The sweeps' emails and this one share ONE mail key, so a dead key silences all of them together: they are
+  # not independent cover for each other. The routed Sentry monitor the #10972 tracker asked for was instead destroyed by the
+  # #6590 prune (PR-B) — the trade is recorded here so it reads as seen, not missed: it was the only orphan-sweep signal that did
+  # not share this mail key, and every surviving cover now depends on it. If that independence is wanted back, the vehicle is
+  # reopening the prune verdict, not this comment. If this job's own checkout fails nothing is sent from here.
+  #
+  # LEAST PRIVILEGE. The workflow-level permissions also grant `issues: write`, which this job does not need. It holds only the
+  # three Sentry ingest secrets and the mail key: no Hetzner or secret-store credential, no Hetzner host name (that would make it an
+  # unguarded lister), no job-level outputs (the sweeps read each other through `needs` results only). It is named without the
+  # `-orphan-sweep` suffix on purpose; R10 in token-drift-workflow-causes.test.sh guards it by behaviour.
+  orphan-sweeps-checkin:
+    runs-on: ubuntu-24.04
+    # Above the sum of the step bounds (2 + 2 + 2 = 6).
+    timeout-minutes: 8
+    needs: [rung2-rehearsal-orphan-sweep, inngest-rehearsal-orphan-sweep]
+    if: always() && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      # The local composite actions below resolve from the job's own checkout.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - name: Sentry check-in (orphan sweeps)
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-orphan-sweeps
+          status: >-
+            ${{ (needs.rung2-rehearsal-orphan-sweep.result == 'success'
+            && needs.inngest-rehearsal-orphan-sweep.result == 'success')
+            && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+      - name: Email notification (orphan sweeps — a sweep did not complete)
+        id: notify
+        if: >-
+          always()
+          && (needs.rung2-rehearsal-orphan-sweep.result != 'success'
+          || needs.inngest-rehearsal-orphan-sweep.result != 'success')
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[INFRA DRIFT] Orphan sweep did not complete (rung-2 ${{ needs.rung2-rehearsal-orphan-sweep.result }}, inngest ${{ needs.inngest-rehearsal-orphan-sweep.result }})'
+          body: '<p><strong>At least one of the twice-daily Hetzner orphan sweeps did not complete.</strong> A sweep that did not complete is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch config was not reported.</p><p>Results: rung-2 sweep <code>${{ needs.rung2-rehearsal-orphan-sweep.result }}</code>, inngest sweep <code>${{ needs.inngest-rehearsal-orphan-sweep.result }}</code>. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step of each sweep; a named error slug says the cause. A cancelled run (including a deliberate cancel) reads as not complete.</p><p>This email is sent on every slot where either sweep is not success, because the scheduled-orphan-sweeps Sentry monitor was destroyed by the #6590 prune and nothing else reaches a person for a silently-skipped slot. A sweep may also have sent its own failure email; that duplicate is expected. This job holds no Hetzner or secret-store credential.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}

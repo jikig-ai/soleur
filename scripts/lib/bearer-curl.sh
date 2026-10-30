@@ -21,6 +21,7 @@
 #   channel: a second `url = ...` directive) makes the call return 2 with zero requests made, one
 #   value-free stderr line naming only the variable, and the marker
 #       SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>
+#   (an inline site may add an ABSENCE reason beside these; `workspaces-luks-cutover` emits reason=readonly_absent, see ADR-280 Marker classes)
 #   rc 2 collides with curl's own exit 2 (init failure): no caller may branch on rc == 2, the marker
 #   is the discriminator. No default timeout is added; a caller that had `--max-time` keeps it. The
 #   transfer is confined (`--disable --noproxy '*'` first; the environment variables that redirect TLS

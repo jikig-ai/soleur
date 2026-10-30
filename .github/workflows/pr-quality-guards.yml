@@ -98,6 +98,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Run guard fixture tests
         run: bash .github/scripts/test/run-all.sh
+      # PACKED-STORE ARM (#10921 AC4): the corrupt-ancestry fixtures exist to
+      # prove the never-written-object construction on the store layout that
+      # caused the original flake — packed objects. SOLEUR_FIXTURE_PACKED=1
+      # makes each forge helper `git repack -ad` the fixture repo between
+      # seeding and forging. run-all.sh takes no suite filter, so the arm runs
+      # just the two suites carrying corrupt-walk rows rather than re-running
+      # all sixteen.
+      - name: Re-run corrupt-fixture suites against a packed object store
+        run: |
+          SOLEUR_FIXTURE_PACKED=1 bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh
+          SOLEUR_FIXTURE_PACKED=1 bash .github/scripts/test/test-mint-inngest-bootstrap-tag.sh
 
   settings-json-integrity:
     name: Block destructive .claude/settings.json edits

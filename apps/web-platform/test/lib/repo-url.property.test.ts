@@ -22,6 +22,11 @@ const suffixArb = fc.constantFrom(
   "///",
   " .git",
   " /",
+  // dot-segment exposure: a strip leaves `/.` or `/..`, which the next
+  // call's URL parse resolves (also in percent-encoded form).
+  "/..git",
+  "/..git.git",
+  "/%2e.git",
 );
 const urlishArb = fc.tuple(fc.webUrl(), suffixArb).map(([u, s]) => u + s);
 const paddedArb = fc
@@ -30,6 +35,17 @@ const paddedArb = fc
 const inputArb = fc.oneof(fc.string(), urlishArb, paddedArb);
 
 describe("normalizeRepoUrl — idempotency (property)", () => {
+  // Pinned counterexamples: the `.git` strip can expose a trailing dot-segment
+  // (`a/..git` → `a/..`) that URL parsing then collapses — #10716, surfaced by
+  // fast-check seeds -590792931 and -1488952269.
+  it.each(["http://a.aa/..git.git", " http://a.aa/..git.git/", "https://x.io/a/..git"])(
+    "pinned #10716: %j is a fixpoint",
+    (x) => {
+      const once = normalizeRepoUrl(x);
+      expect(normalizeRepoUrl(once)).toBe(once);
+    },
+  );
+
   it("normalize(normalize(x)) === normalize(x) over arbitrary + URL-ish inputs", () => {
     fc.assert(
       fc.property(inputArb, (x) => {
@@ -37,6 +53,27 @@ describe("normalizeRepoUrl — idempotency (property)", () => {
         expect(normalizeRepoUrl(once)).toBe(once);
       }),
     );
+  });
+});
+
+describe("normalizeRepoUrl — flake counterexample pins (#10732, #10713)", () => {
+  // regression fixture: counterexample from CI run 39506606768 (#10732), fast-check seed not recorded
+  // regression fixture: counterexample from CI run 39462075257 (#10713), fast-check seed not recorded
+  // Four of these fail on the pre-fixpoint code (commit 91594324ef): `.git` strip exposes a
+  // dot-segment or an unparseable first pass keeps case the next pass lowers. The two
+  // issue-named values (`http://a.aa/.` and `a://A`) are non-discriminating: they pass there
+  // in isolation, because their failing contexts depended on the shrink path.
+  it.each<[input: string, expected: string, discriminating: boolean]>([
+    ["http://a.aa/.", "http://a.aa", false],
+    ["http://a.aa/..git", "http://a.aa", true],
+    ["a://A", "a://a", false],
+    [" a://A .git", "a://a", true],
+    ["a://A /", "a://a", true],
+    [" a://A/..git", "a://a", true],
+  ])("pinned: %j -> %j is a fixpoint (discriminating: %s)", (input, expected) => {
+    const once = normalizeRepoUrl(input);
+    expect(once).toBe(expected);
+    expect(normalizeRepoUrl(once)).toBe(once);
   });
 });
 
@@ -104,6 +141,48 @@ describe("normalizeRepoUrl — regression fixtures", () => {
   // regression fixture: fast-check seed -2133206446 path 17:0:0:0:0:0
   it("space before a stripped slash suffix leaves no trailing whitespace", () => {
     expect(normalizeRepoUrl("http://a.aa /")).toBe("http://a.aa");
+  });
+});
+
+describe("normalizeRepoUrl — dot-segment exposure regression", () => {
+  // regression fixture: fast-check seed 1186074284 path 59:0:0:0:0:1:0
+  // Counterexample " http://a.aa/..git.git": the `.git` strip left `/.`, a
+  // dot-segment the NEXT call's URL parse resolves to `/` — so one pass was
+  // not a fixpoint (f(f(x)) !== f(x)). SUT fix: iterate the pipeline to a
+  // fixpoint.
+  it("a suffix strip that exposes a dot-segment is still idempotent", () => {
+    const once = normalizeRepoUrl(" http://a.aa/..git.git");
+    expect(normalizeRepoUrl(once)).toBe(once);
+    expect(once).toBe("http://a.aa");
+  });
+
+  it.each([
+    ["http://a.aa/..git.git", "http://a.aa"],
+    ["https://h.io/o/..git", "https://h.io/o"],
+    ["https://h.io/o/r/..git.git/", "https://h.io/o/r"],
+    ["http://a.aa/...git", "http://a.aa"],
+    // `%2e` is a dot-segment under the WHATWG URL rules: a regex patch that
+    // only strips a literal `/.` or `/..` stays non-idempotent here.
+    ["http://a.aa/x/%2e.git", "http://a.aa/x"],
+  ])("dot-segment exposure %s is idempotent", (x, expected) => {
+    const once = normalizeRepoUrl(x);
+    expect(once).toBe(expected);
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+
+  it("many trailing /.git segments still converge (no fixed pass cap)", () => {
+    const x = "https://github.com/o/r" + "/.git".repeat(50);
+    const once = normalizeRepoUrl(x);
+    expect(once).toBe("https://github.com/o/r");
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+
+  it("a long run followed by a non-matching character stays linear-time", () => {
+    // The former /\/+$/ and /(\.git)+$/i were quadratic here (seconds at 40k).
+    const x = "http://a/x" + "/".repeat(100_000) + "x";
+    const started = performance.now();
+    normalizeRepoUrl(x);
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });
 

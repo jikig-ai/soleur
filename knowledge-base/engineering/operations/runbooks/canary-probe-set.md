@@ -107,8 +107,10 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
    swap, so a failure refuses promotion and the old container keeps serving.
 2. **The five checks, all inside the canary container (the host's own `curl --cacert` self-gate proves the host OUTPUT path and
    the pinned bytes only, never container egress or Node trust):**
-   1. (`inspect`) `docker inspect` shows the canary's `INNGEST_BASE_URL` is exactly `https://10.0.1.40:8443` and its
-      `NODE_EXTRA_CA_CERTS` is `/etc/soleur/inngest-ca.pem`.
+   1. (`inspect`) `docker inspect` shows the canary's `Config.Env` holds exactly one `INNGEST_BASE_URL=` line, that line is
+      `https://10.0.1.40:8443`, exactly one `NODE_EXTRA_CA_CERTS=` line, and that line is `/etc/soleur/inngest-ca.pem`. Docker keeps an
+      env-file entry **and** a `-e` entry for the same key, so `ci-deploy.sh` scrubs both names from the env-file once per deploy
+      (`inngest_link_scrub_env_file`, event `class=env_scrubbed`) and this check stays strict: a real duplicate still fails.
    2. (`health`, `events`) In-container `fetch` of the URL the container was actually handed succeeds: `/health`, and
       `/v1/events?limit=1` with the hashed-signing-key Bearer.
    3. (`send`) A real in-container `inngest.send` of the synthetic event `soleur.tls-canary.ping` is accepted. A test asserts no function
@@ -121,17 +123,29 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
 4. **Counters are read only after both prod swaps complete.** Until the old prod container is drained it still dials `:8288`,
    so a `legacy_8288` read taken earlier is contaminated. T for the soak is the last prod swap plus the old-container drain (how to
    read it per host: [inngest-server.md](inngest-server.md), act A3).
-5. **Failure reads (no SSH):** the failed release run's log carries only the constant reason `canary_inngest_link_failed`, **not**
-   the failing check. The check name and its cause are in the event the resolver logs:
+5. **Failure reads (Better Stack only):** the failed release run's log carries one of two constant reasons, **not** the failing check:
+   `canary_inngest_link_inspect_failed` (the `inspect` check: usually the container was handed the wrong environment, a composition defect and
+   not a network or CA defect; `cause=inspect_failed` is the daemon call itself failing) or `canary_inngest_link_failed` (every in-container check: egress, TLS, registry). The check name and its
+   cause are in the event the resolver logs:
    `INNGEST_LINK: class=canary_failed level=error check=<inspect|health|events|send|registry|negative_control|no_verdict>
    cause=<token>` (Better Stack, journald tag `ci-deploy`; Sentry `op=inngest-link`, tag `classification=canary_failed`). The cause is
    mapped inside the container from a fixed allowlist: `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `EHOSTUNREACH` and the like mean egress
    or the listener (a missing `:8443` accept reads as a timeout), a certificate code such as `DEPTH_ZERO_SELF_SIGNED_CERT` means Node did
    not trust the pinned file, `HTTP_<status>` means the listener answered badly, `EMPTY` means an empty registry, `other` is anything
-   outside the list. For `negative_control` the cause is `accepted` (the container trusted without the CA), `other` (it failed, but not with a certificate-verification error) or `no_verdict`. The exact query
+   outside the list. For `inspect` the event reads `check=inspect cause=<token> url_lines=<n> url_https=<n> ca_lines=<n> ca_ok=<n>` (integers
+   clamped to 99, never a value) and the cause is the first failing condition: `inspect_failed` (the canary vanished or the daemon call
+   failed; on the same host read `--grep 'DEPLOY_ROLLBACK: canary failed'`, whose `reason=` separates a health failure from this one), `url_count` (`INNGEST_BASE_URL=` is not on exactly one line:
+   with no `class=env_scrubbed` row on the same host in the minutes before it, a source the scrub does not cover reached the container; with
+   one, the scrub was not the source; either way stop and file it, do not retry), `url_value` (one line, not the https URL: a non-https URL reached the container), `ca_count` or `ca_value` (the CA env is absent,
+   duplicated or not the pinned path). No `canary_ok` or `canary_failed` row at all means the resolver returned `lease_expired` (http, the
+   canary layer skipped) or the health check failed first. A `class=env_scrub_failed` row (`stage=read|write|recount`) beside it means the
+   env-file could not be rewritten: a strict deploy aborted with reason `inngest_env_scrub_failed`, a non-strict one continued unchanged.
+   For `negative_control` the cause is `accepted` (the container trusted without the CA), `other` (it failed, but not with a certificate-verification error) or `no_verdict`. The exact query
    is under "Resolver events" in [inngest-server.md](inngest-server.md) section "Link TLS (#10136)". The host-side `tls-health` row
    carries no handshake-failure counter (it was removed by ruling; do not look for `hs_fail_15m`).
-6. **A broken gate blocks ordinary releases while the flag is on** (the resolver fails the deploy rather than downgrade to http).
+6. **`canary_ok` proves the canary only.** The prod container is not inspected: its evidence is the post-swap `legacy_8288` counter read
+   (item 4) and, per host, the `class=resolved` and `class=canary_ok` rows (see the per-host flip read in [inngest-server.md](inngest-server.md)).
+7. **A broken gate blocks ordinary releases while the flag is on** (the resolver fails the deploy rather than downgrade to http).
    Rollback: `inngest-link-flip.yml` with `action=off`, then a redeploy.
 
 ## Removing a probe
@@ -630,6 +644,136 @@ agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new que
 **Reading the probes.** Boot: `op=sandbox-hardening-selfprobe` now carries `unixdenyFilter` beside `filter`; an `ok: false` with
 `unixdenyFilter: false` means the image lacks the variant artifact (flag must stay OFF). Deploy: the three hardening reasons above.
 
+## Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22)
+
+One real wrapped Bash call, every 15 minutes, in the RUNNING web container on each web host; a per-host Better Stack heartbeat
+(`soleur-web-bash-synthetic-<host>`, period 900 s, grace 1800 s) is pinged only on a verified pass. It exists because the deploy smoke above sees
+only a sandbox that is broken AT deploy (#10445 lasted ten days between deploys).
+
+**Read it without SSH.**
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep web-bash-synthetic
+```
+
+Expected on a healthy host: `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass reason=ok … consecutive_no_ping=0`, one row per run per host
+(`host_name` tells web-1 from web-2). The heartbeat itself is in Better Stack Uptime, which pages by email when it goes missing.
+
+| Signal | Meaning | What to do |
+|---|---|---|
+| heartbeat missing, journal rows under `web-bash-synthetic` but NONE carrying a `SOLEUR_WEB_BASH_SYNTHETIC` marker | the unit starts and dies BEFORE the script's first journal line: a Doppler/token failure (`doppler run`'s stderr ships under the tag, systemd's `Failed with result` row ships from the `systemd` identifier), a missing or unreadable `/etc/default/web-bash-synthetic`, or the xtrace refusal (exit 78) | read the stderr rows for the cause; fix the Doppler secret or the env file (a web-1 token rotation re-fires the installer; web-2's derived file only changes on a host replacement) |
+| heartbeat missing, no journal rows at all | the DETECTOR is dead: timer stopped, host dark, or Vector broken | check host health first (web uptime monitors and the host's own Vector rows). A STOPPED timer is not restarted by re-running apply (the installer's `triggers_replace` hashes the four delivered files plus, on web-1, the token): a merge that changes any of `web-bash-synthetic.{sh,service,timer}` or `sdk-bash-verdict.sh` re-fires `systemctl enable --now` on both hosts, and so does a `-replace` rotation of the probe token on web-1. Only if neither is possible is host access the last resort |
+| `/fail` incident, `verdict=fail` | Bash was dispatched and no verified nonce came back: the #10445 shape. `detail=` carries the probe's reason | treat as a sandbox outage; compare with the `agent_sandbox_bash_denial` alert and the deploy smoke ledger |
+| `verdict=no_ping reason=deploy_lock` | a deploy holds the lock; normal for the length of a deploy | none unless `consecutive_no_ping` keeps climbing |
+| `reason=container_down` (`detail=container not found` or `container not running`) / `container_restarted` | no container, or it was replaced or stopped during the run (a deploy swap) | none for one run; persistent means the web container is down. A dark docker DAEMON is NOT this row: it journals `infra_error detail=docker_inspect_rc_1: …` |
+| `reason=memory_pressure` | the container's memory is at or above 70 % of its cap (sampled at the start and again right before the probe exec; the detail names the stage); the run did not exec into it. The probe tree adds 172-293 MB of cgroup memory, see the ADR addendum | investigate the container memory, not the synthetic |
+| `reason=memory_pressure_host` | the HOST's `MemAvailable` is below 700 MB (on a 4 GB web host the container cap is the whole host); same two sample points; the run did not exec | investigate host memory, not the synthetic |
+| `reason=selector_unresolved` (journal `selector=unresolved`) | the dispatcher's flag read did not answer within the resolver's 3 s budget (Flagsmith slow or down, or the read fell back to the env mirror), so the host refuses to guess which artifact to test. `infra_error detail=selector_unresolved: no single sentinel line` is a different case: the resolver's output itself was malformed | none for one run; persistent means the flag service or the container's Flagsmith env is broken, and the beat goes dark after about 45 minutes. The fallback is visible here, never a silent `selector=base` |
+| `reason=selector_mismatch` | the probe reported a different `selector` than the host asked for (a stale probe in the image, or the selector env not reaching it) | treat as an image/probe skew: redeploy the web image that carries the current probe |
+| `reason=verdict_lib_absent` | `sdk-bash-verdict.sh` is not on the host (the SSH install block that delivers it has not run since the lib was added), so the host cannot map the probe result and claims nothing. | Re-run the web-host install via an infra apply; the same blindness applies to the deploy smoke until then (ADR-079 addendum, known limitation; #10777). |
+| probe `infra` reason `cli_tmp_path_too_long` | the probe's scratch config dir path exceeds the SDK CLI's 44-byte temp-path limit, so the probe refused to run rather than fall back to the shared `/tmp/claude-<uid>`. | Check the container's `TMPDIR`/`/tmp` mount: the scratch base must be short (`/tmp`). |
+| `reason=probe_absent` | the running image predates the probe or the resolver bundle (this reason now comes only from the pre-exec presence check) | expected on the first merge until the new image is deployed |
+| `verdict=fail`, `detail=host_timeout_<N>s` | Bash hung after dispatch; N is the cap that fired (150 only when the host cap fired, else the in-container 130) | treat as a sandbox outage |
+| `reason=host_timeout_before_dispatch` | docker stalled or node did not start before Bash was handed to the SDK | a daemon-level problem, not a Bash result |
+| `reason=infra_error`, `detail=probe_killed_rc_137` / `_143`, or `cli_child_killed: …` from the probe | the probe exec was killed after dispatch (the kernel OOM killer, a container stop, a deploy signal); this is not a Bash result, so it does not page `/fail` | with `memory_pressure*` rows around it, treat as memory; alone, look for a deploy or container restart at that minute |
+| `reason=infra_error`, `detail=…` | everything else that is not a claim: docker error, bad selector output, unreadable lock table, replay-only coverage | read `detail=` |
+| `reason=no_heartbeat_url` | the per-host URL secret or key name is missing or malformed (a `SOLEUR_CREDENTIAL_REFUSED script=web-bash-synthetic` row says which). The key name must be `WEB_BASH_SYNTHETIC_URL_<HOST>`, and the URL is pinned to `https://uptime.betterstack.com/api/v1/heartbeat/<token>` with no query: if Better Stack ever changes its heartbeat host this unit goes dark until the pin in `web-bash-synthetic.sh` is updated | fix the Doppler secret or the env file |
+| `[wbs] WARN: heartbeat ping FAILED (ok\|fail, url_present=yes)` next to `verdict=pass` or `verdict=fail` | the verdict is good but BOTH curl attempts to Better Stack failed (egress, a revoked or 404 heartbeat URL, Better Stack down). The beat will go dark in about 45 minutes even though the sandbox is healthy, and a real `/fail` would not have reached anyone | check Better Stack reachability and that the heartbeat still exists (`arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>`); do not read the missing beat as a sandbox outage while this row is present |
+
+`consecutive_no_ping=<n>` in the journal separates a long deploy lock from a dead host: the beat goes dark after about 45 minutes either way,
+and the journal tells which. `selector=` is the artifact the dispatcher's resolver chose (`base` until the `agent-sandbox-unix-deny` flag is on);
+`masks_missing=<n>` counts the masked dirs (of the four the app pre-creates) that are not a usable directory after the probe's own attempt to create them:
+absent, not a real directory (a symlink or a file), or owned by another uid. A value above 4 (the app pre-creates four) journals as `5+`, never as `-`, and downgrades coverage the same way. A `pass` with `masks_missing>0` journals `coverage=prodtuple_partial`
+because it tested a weaker config than production; the ping is unchanged on purpose (the run makes a claim, and withholding the beat would read as a
+dead host). `masks_created=<0-4>` is how many of those dirs THIS run created. On a FRESH container (a redeploy) it is `4`; after a plain restart
+`~/.claude/projects` survives in the writable layer and only the three tmpfs `/tmp` dirs are recreated, so it is `3`; it is `0` on every run after that.
+A real session's dispatch before the first synthetic tick lowers it (the app creates the dirs too), so the value depends on rollout order and is
+diagnostic only. `masks_note=` is the reason the probe refused to create something, from a closed list; `-` means no refusal, with a caveat: both
+fields are emitted at the END of a run and the synthetic keeps only a value inside the closed set, so `-` ALSO means an old probe (an apply that
+lands before the release), a value the synthetic rejected, or a probe killed after it created dirs but before it emitted. A `-` next to an unexpected
+`masks_missing` is therefore not proof that nothing was created or refused; read the next run.
+
+**Decode `masks_created` / `masks_note` (read `masks_note` first).**
+
+| `masks_note` | Meaning | What to do |
+|---|---|---|
+| `-` | no guard fired (or the field was not emitted: see the caveat above) | with `masks_missing=0` nothing; with `masks_missing>0` a dir is a symlink, a file, foreign-owned, or the mkdir failed: the probe could not make it usable. The journal gives a COUNT only, so WHICH of the four dirs is bad is unobservable without host access, and the `dir_kind` decode below applies only when a Sentry event exists. A `masked-dir-precreate-failed` Sentry email follows only if the app's recursive mkdir throws: the path is absent, or anything that is not a directory after symlink resolution (a regular file or a symlink to a file: `EEXIST`; a dangling symlink: `ENOENT`). A symlink to a directory, a real directory with a foreign owner or wrong mode, and a real directory make that mkdir SUCCEED, so the app emits nothing and the journal line is the only signal. Check-free remedy: redeploy (see Containment below; redeploying ends every live tenant session after a bounded drain, so pick a quiet moment), then `masks_missing=0` on the next tick confirms |
+| `uid_mismatch` | the probe's uid differs from PID 1's real or effective uid (the first two `Uid:` fields of `/proc/1/status`); NOTHING was created, because a dir owned by another uid is one the app cannot use. A future `docker exec -u root` would show this | check how the synthetic execs into the container; the app is unaffected |
+| `pid1_unreadable` | PID 1's uid could not be read; nothing was created | read the row as "no claim about the masks"; persistent means the container's `/proc` is restricted |
+| `pid1_env_unreadable` | PID 1's environment could not be read (or was over the 256 KiB cap), so the probe could not confirm it shares the app's HOME; the HOME-derived dir (`~/.claude/projects`) was NOT created and counts missing, the other three were created | expected only if the image restricts `/proc/1/environ`; the transcript mask is then unobserved by the synthetic |
+| `home_mismatch` | PID 1's HOME is not the probe's HOME; same handling as above | the synthetic's HOME comes from the container's own `$HOME` (pre-exec step); a mismatch means the app runs with another HOME, so the transcript mask the app uses is a different dir than the one the probe models |
+| `env_divergence` | informational: PID 1 has an absolute `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR`, bases the probe does not model; nothing was refused and nothing is counted missing, and coverage still reads `sdk_wrapper_shim_prodtuple` | none; it surfaces the accepted residual below, and a green line carrying this note is no proof for those bases |
+
+No Better Stack rule matches these fields; the reader is whoever runs the Logs query above (`scripts/betterstack-query.sh --grep SOLEUR_WEB_BASH_SYNTHETIC`).
+A persistent `masks_missing>0` means the probe could not make a masked dir usable. If the app's recursive mkdir throws on it (the path is absent, or anything that
+is not a directory after symlink resolution), expect a `masked-dir-precreate-failed` Sentry email on the app's next dispatch and use the section below, decoding by
+`dir_kind`. If it is a symlink to a directory, or a directory with a foreign owner or wrong mode, NO email will come (the app's recursive mkdir succeeds on it) and
+the journal line is the only signal; that line gives a count, not a dir, so WHICH of the four is bad is unobservable without host access. The check-free remedy is the
+redeploy in the Containment paragraph below (it ends every live tenant session after a bounded drain, so pick a quiet moment), and `masks_missing=0` on the next tick
+is the confirmation; a count that stays above zero after a redeploy needs a code fix.
+
+### Masked-dir pre-create alert (#10455 PR-B): Sentry rule `masked-dir-precreate-failed`
+
+`buildAgentSandboxConfig` pre-creates four dirs before every session's namespace is built (the SDK skips a deny landing that does not exist). When one
+`mkdirSync` throws, the builder emits `op=masked-dir-precreate` (`feature=agent-sandbox`, tag `dir_kind`, `extra.code`, `extra.syscall`, `extra.dir`) and
+**carries on fail-open**: the entry stays in `denyRead`, the session starts, and the read-deny may not apply. The Sentry email rule
+`masked-dir-precreate-failed` (email to issue owners, ActiveMembers fallthrough; email only until the Slack wake path of ADR-260 is verified) routes it.
+
+**Decode by `dir_kind` (one Sentry issue per kind, so acknowledging one does not silence another).**
+
+| `dir_kind` | Dir | What stays unmasked for later sessions in that container |
+|---|---|---|
+| `peer-socket` | `/tmp/cc-socks`, `/tmp/cc-socks-<uid>` (and the same names under an `XDG_RUNTIME_DIR`/`CLAUDE_CODE_TMPDIR`/`TMPDIR` base) | a sibling tenant's Bash can reach another session's bridge socket |
+| `transcript` | `~/.claude/projects` (and `<CLAUDE_CONFIG_DIR>/projects`) | a sibling can read another session's transcript, which can hold a proxy credential |
+| `session-tmp` | `/tmp/.cs` | a sibling can read persisted CLI output under the shared temp root |
+
+**Decode `extra.code`:** `EACCES` a permission problem on the parent; `EEXIST` a regular file, or a symlink to a file, is in the way (the recursive mkdir cannot replace it); `ENOENT` a dangling symlink is in the way;
+`ENOSPC` the 256 MB `/tmp` tmpfs is full (one tenant's session tmp usage can cause this for the whole container; the per-session bound is an open #10455 item);
+`EROFS` a read-only mount; `ENOTDIR` a parent component is not a directory.
+
+**Containment.** Redeploy through the existing release deploy path: `gh workflow run web-platform-release.yml --ref main -f bump_type=patch`
+(leave `skip_deploy` at its default `false`; the dispatch publishes a patch release and deploys it, which starts a fresh container on both web hosts and
+ENDS every live tenant session after a bounded drain, so pick a quiet moment). Dispatching the workflow deploys whatever is on `main` at that moment
+with the CI gate bypassed (the workflow's own comment: "On a dispatch the CI gate is bypassed too — `resolve-target` reads the in-run release job rather than requiring a
+workflow_run event"), not only the fix, and it cuts and publishes a patch release on the public repository. A plain
+container restart keeps the writable layer: `~/.claude/projects` survives it and only the tmpfs `/tmp` dirs reset, so a `transcript` fault caused by
+a file or foreign-owned dir under HOME needs the redeploy (a new container) and a fault that persists after a redeploy needs a code fix. Do not
+`chmod`/`chown` from outside the app: the app's own pre-create (and, in runtime mode, the synthetic probe) are the only creators, and a manual change
+hides the fault the alert is for. **RESOLVE the per-kind Sentry issue** once contained; do not archive or ignore it, because an archived issue silences a
+later failure of the same kind. While a fault persists the rule re-notifies every `frequency_minutes` to the same inbox as the other rules.
+
+**An email proves the app's own pre-create failed.** The first synthetic run after a container start creates the missing dirs itself (`masks_created=4`
+on a fresh container, `3` after a plain restart), so from then on the synthetic can no longer observe a cold-start mkdir failure; the Sentry rule is the
+detector for that, and the synthetic is a second, journal-only witness. The converse does not hold: no email does not prove the dirs are usable (see
+the symlink and foreign-owned cases above).
+
+### What the synthetic does and does not prove about the masks (accepted limits)
+
+- It proves the sandbox namespace can mount over the four dirs under the production tuple. It does NOT prove the app created them: dirs the probe
+  created hide an app-side regression that stops pre-creating (control: the builder-versus-reality and probe/builder set-equality tests in CI, not a
+  runtime signal).
+- The app's env subset is not modelled: bases from `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR` in PID 1's environment are not created or checked
+  (`masks_note=env_divergence` flags it). A green synthetic is no proof for those.
+- A post-creation swap of a masked dir for a symlink or file is seen only by the probe's `lstat` (journal-only, 15-minute cadence): the app's recursive
+  mkdir succeeds on an existing symlink-to-directory, so no alert route sees it. A tenant's Bash cannot write `/tmp` or `~/.claude` (`allowWrite` is the
+  workspace), so this needs a same-uid actor outside the sandbox.
+- Probe-created dirs are empty directories (mode 0700, the probe's uid = PID 1's uid); they persist after a revert and are harmless because the app's own
+  mkdir is idempotent.
+- Email delivery after the rule matches is not proven by firing a production event; the proven chain is forced failure, tagged emit, live rule with an
+  email action (`scripts/masked-dir-alert-discoverability.sh` prints `MASKED_DIR_ALERT_PATH_OK` for the committed half).
+- **#10548 soak.** The soak reads the DEPLOY-time ledger (`.sdk_bash_smoke.coverage`, read by `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`).
+  This change does not touch the deploy mode of the probe or that ledger, so the soak clock does not restart and the flag `agent-sandbox-unix-deny`
+  stays an operator-typed step (ADR-236).
+
+**Rollback (PR-B).** Revert the squash commit (`git revert --no-commit <sha>`, then a normal PR). Simulated on 2026-10-23 by reverting the branch's whole commit range in a scratch worktree: it applies with no conflicts. Effects of the revert: the Sentry rule `masked-dir-precreate-failed` is destroyed on the next infra apply (the destroy guard will ask for an ack), the synthetic returns to counting dirs without creating them (`masks_missing=3` on a quiet container again), the apt fixture helper goes back to a private cache per container. Dirs the probe already created persist and are harmless.
+
+**Arming.** The beats are born paused. `arm-heartbeats.sh` unpauses each host's beat after a measured ping with a 300 s window and a soft landing.
+Arming is PROBABILISTIC: the cadence is 900 s against a 300 s window, so a healthy synthetic lands a beat inside one apply's window with p ~ 1/3 per
+host, and an unlanded beat is a `::warning::` that is not a fault on its own. The journal separates the cases: `reason=probe_absent` means the image
+carrying the probe's resolver is not running yet; `verdict=pass` means the synthetic is healthy and the window was missed. A beat that stays paused is
+watched by the twice-daily `heartbeat-live-reconcile` job (its `fed-but-paused` class) and by `arm-heartbeats.sh --status`; no post-merge check does.
+Manual arming: `arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>` for the id, then `--arm-one soleur-web-bash-synthetic-<host> --id <id>`.
+
 ## Outer-wrap canary - RETIRED 2026-10-19 (#10454)
 
 The deploy-time outer-wrap arm (`run_outer_wrap_canary`, deploy-state key `outer_wrap_canary`, ledger
@@ -708,15 +852,14 @@ verbatim in incident notes.
 `/mnt/data/ci-deploy-workspace-isolation.json` (atomic, always returns 0) and accumulates the soak
 fields `consecutive_pass` (increments on `pass`, resets on `workspace_isolation_failed` /
 `workspace_isolation_timeout`, **holds** on `canary_infra_error`) and `first_pass_at` — the same
-accumulation `write_sandbox_canary_state` performs, so the promotion probe is a stateless GET.
+accumulation `write_sandbox_canary_state` performs, so a promotion read is a stateless GET.
 `cat-deploy-state.sh` merges the file into the `/hooks/deploy-status` payload as
 `.workspace_isolation`, and every run logs a `WORKSPACE_ISOLATION:` line under `logger -t ci-deploy`
 (the Better Stack query shape in the bwrap-probe section applies verbatim — grep on the decoded
 `message` after `fromjson`, filter `SYSLOG_IDENTIFIER == "ci-deploy"`).
 
-**Promotion contract.** The committed soak checker
-`scripts/followthroughs/workspace-isolation-verdict-2640.sh` reads `.workspace_isolation` off
-`/hooks/deploy-status` and reports PASS only when `consecutive_pass >= 5` AND the span since
+**Promotion contract.** The soak checker (retired by G1 PR-4a, #10937; history in git) read
+`.workspace_isolation` off `/hooks/deploy-status` and reported PASS only when `consecutive_pass >= 5` AND the span since
 `first_pass_at` is >= 3 days; a recorded `workspace_isolation_failed` or
 `workspace_isolation_timeout` verdict is a FAIL (investigate before promoting — do not flip the
 call site to blocking while either stands).

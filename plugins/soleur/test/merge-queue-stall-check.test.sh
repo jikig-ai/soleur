@@ -386,6 +386,18 @@ behav_check() {
   [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #111 pending"* ]] \
     || { REASON="stalled entry behind a young head was not filed (the query reads too few entries; creates=$CASE_CREATES)"; return 1; }
 
+  # UNMERGEABLE (#10641, #10319): the queue is waiting for the author to rebase; the entry has no
+  # merge_group build at all, so "pending > threshold" says nothing about a required check not
+  # reporting. It must not be filed as a stall, and must not hide a real stall beside it.
+  { node 1 120 113 UNMERGEABLE; } | queue_json > "$g"
+  run_case "$wf" "$g"
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 ]] \
+    || { REASON="an UNMERGEABLE entry older than threshold was filed as a stall (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  { node 1 120 114 UNMERGEABLE; node 2 50 115; } | queue_json > "$g"
+  run_case "$wf" "$g"
+  [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #115 pending"* ]] \
+    || { REASON="UNMERGEABLE head hid or replaced the real stall beside it (creates=$CASE_CREATES titles=$CASE_TITLES)"; return 1; }
+
   # the label-create step must tolerate an already-existing label (|| true)
   { node 1 50 112; } | queue_json > "$g"
   run_case "$wf" "$g" 0 "" 1

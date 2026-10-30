@@ -95,7 +95,7 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 **Overlap preflight.** After the OPEN-PR probes, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode start`; at the post-planning re-probe re-run it with `--files "<planned files>"`. It only reads: never edit or comment on another session's PR. Exit 12 (duplicate, no vehicle): spawn the CTO to designate one, record the ruling as a `decision-challenges.md` row `overlap vehicle`, re-run with `--vehicle <N|this>`; never an operator question. Exit 10: hold back, one plain sentence. 0, 11, 13: continue and print the notice. 2: retry once, then continue with the notice, never as clear. Detail: [pr-overlap.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pr-overlap.md).
 
-A direct run whose brief carries `#N` and a `HOLDS:` list (or an `OWNER-GATED` list, as go.md Step 1.5 defines the trigger) follows go.md Step 1.5 in headless form: no delegation means every hold stands, one `action-required` issue, then the draft PR.
+A direct run whose epic holds trigger go.md Step 1.5 (its List source bullet: the brief, the open epic body, or a named plan; brief forms `HOLDS:`, `OWNER-GATED` or a label list (go.md has the limits)) follows go.md Step 1.5 in headless form: no delegation means every hold stands, one `action-required` issue (none if classification-only), then the draft PR.
 
 **Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
 
@@ -272,7 +272,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
 4. **Claude:** Skill tool `skill: soleur:review`. **Grok:** Read `plugins/soleur/skills/review/SKILL.md` in this process (`soleur:review`).
 
-> **CONTINUATION GATE**: When review outputs `## Code Review Complete` (or any review-summary heading, "Findings Summary", "Next Steps", etc.), that is a **status marker**, not a turn boundary. Do NOT end your turn. Do NOT treat the review summary as a deliverable — your deliverable is the merged PR at step 8. After the summary, immediately proceed to step 5 in the same response. If you find yourself wanting to write a wrap-up sentence, hand off to the user, or wait for confirmation, stop — that is the failure mode this gate exists to block. The same anti-stop rule applies between every subsequent step (5 → 5.5 → 6 → 7 → 8): each skill's exit summary is a checkpoint, never a stopping point.
+> **CONTINUATION GATE**: When review outputs `## Review Phase Complete` or `## Code Review Complete` (or any review-summary heading), that is a **status marker**, not a turn boundary. Do NOT end your turn. Do NOT treat the review summary as a deliverable — your deliverable is the merged PR at step 8. After the summary, immediately proceed to step 5 in the same response. If you find yourself wanting to write a wrap-up sentence, hand off to the user, or wait for confirmation, stop — that is the failure mode this gate exists to block. The same anti-stop rule applies between every subsequent step (5 → 5.5 → 6 → 7 → 8): each skill's exit summary is a checkpoint, never a stopping point.
 
 5. **Resolve ALL review findings (P1, P2, and P3).** Technical debt compounds — fix everything now, not later. List open GitHub issues from this review session:
 
@@ -307,7 +307,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.
 
-> **The Step 8 closing is a carrier too (signage; inside this loop no Stop hook backs it):** never end it with a technical question to the operator ("Decision for you:", "Your calls"); spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`), record `Ruled by CTO agent`, ask only the authorization. [technical-ruling-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
+> **The Step 8 closing is a carrier too (signage; the loop reminds):** never end it, or a `Blocked:`/`Paused:` label, with a technical question to the operator ("Decision for you:"); spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`), record `Ruled by CTO agent`, ask only the authorization. [technical-ruling-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
 
 8. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` beside DONE. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
 

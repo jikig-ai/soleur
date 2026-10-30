@@ -1,0 +1,4 @@
+# round 2, +9 declared real reads, no accept rows for this round: new pairs 18 = 16 round-1 mentions + 2 revealed (<30, shrinking); round 3 would declare nothing (both revealed are comment mentions)
+SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=1647 baseline=1640
+new-pair entries: 18  stale-line entries: 11
+wall: wall=191

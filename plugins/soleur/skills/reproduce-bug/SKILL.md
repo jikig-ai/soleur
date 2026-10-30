@@ -1,6 +1,6 @@
 ---
 name: reproduce-bug
-description: "This skill should be used when reproducing and investigating a bug using logs, console inspection, and browser screenshots. It systematically investigates GitHub issues through log analysis, code inspection, and visual reproduction with Playwright."
+description: "This skill should be used when reproducing and investigating a bug, including GitHub issues, using logs, console inspection, code inspection, and Playwright browser screenshots."
 ---
 
 <!-- Inspired by mattpocock/skills/skills/engineering/diagnosing-bugs/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
@@ -139,6 +139,8 @@ Based on the issue description, navigate to the relevant page:
 mcp__plugin_soleur_playwright__browser_navigate({ url: "http://localhost:3000/[affected_route]" })
 mcp__plugin_soleur_playwright__browser_snapshot({})
 ```
+
+Resolve `[affected_route]` against the repository's maintained feature map (`docs/feature-map.md` by convention; soleur's own: `apps/web-platform/test/feature-map.md`) when it carries one — its `## \`/route\`` entries name selectors, the expected outcome, and gotchas for the surface under reproduction.
 
 ### Step 3: Capture Screenshots
 

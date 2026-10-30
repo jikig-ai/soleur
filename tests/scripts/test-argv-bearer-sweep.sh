@@ -911,24 +911,25 @@ sentry-checkins-3859|fixed-tmp|/tmp/ck.json|writes the fixed path /tmp/ck.json, 
 sync-health-residual-5689|fixed-tmp|/tmp/sh5689.json|writes the fixed path /tmp/sh5689.json, which a hermetic row must not touch
 cron-machinery-soak-9272|gh-chained|gh|its second and third credentialed curls (-D header file, paging) are reachable only through a gh issue/pr/api model; the fail-closed gh stub makes it exit TRANSIENT after the first call
 zot-soak-6122|gh-chained|gh|its credentialed curl sits behind START-anchor and blocker arms that call gh pr/issue view; unreachable under a fail-closed gh stub
-workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call it chains into betterstack-query.sh, a second credentialed tool with basic auth that this shim does not model'
+workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call it chains into betterstack-query.sh, a second credentialed tool with basic auth that this shim does not model
+egress-enforce-probe-11361|gh-chained|gh|its second credentialed read (the post-merge birth evidence) is a gh api workflow-runs query, reachable only through a gh model the fail-closed gh stub does not provide'
 
 # DELEGATED: name | owning test (extended in place by the conversion; not re-modelled here).
-DELEGATED_MANIFEST='anthropic-admin-key-6297|scripts/followthroughs/anthropic-admin-key-6297.test.sh
+DELEGATED_MANIFEST='post-deploy-incident-soak|scripts/followthroughs/post-deploy-incident-soak.test.sh
+anthropic-admin-key-6297|scripts/followthroughs/anthropic-admin-key-6297.test.sh
 cwv-field-rum-9178|scripts/followthroughs/cwv-field-rum-9178.test.sh
 send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097.test.sh
-betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh'
+betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh
+git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh
+discord-blog-webhook-fallback|scripts/followthroughs/discord-blog-webhook-fallback.test.sh
+dispatch-recovery-sweeper-11211|scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh'
 
-# HMAC (S2-C): the four probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
-# config channel: name | kind | hosts (regex) | min_calls | canned 200 body | owning test (delegated only). `dynamic` probes have
-# no owning suite and run under `probe_rows_hmac` and the `hmac-cf` shim profile; `delegated` probes keep their own suite, and
-# the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot pass while sending
-# no credential).
-HMAC_MANIFEST='canary-promotion-5875|dynamic|deploy\.soleur\.ai|1|canary_pass|
-workspace-isolation-verdict-2640|dynamic|deploy\.soleur\.ai|1|workspace_isolation_pass|
-infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
-infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
-inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
+# HMAC (S2-C): the probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
+# config channel: name | kind | hosts | min_calls | body | owning test. Only `delegated` rows remain, so the hosts, min_calls and
+# body columns are reserved and stay empty (the loop below still reads them). `delegated` probes keep their own suite, and the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot
+# pass while sending no credential). The `dynamic` kind (no owning suite, run under the `hmac-cf` shim profile) was retired with the
+# last probe that used it (G1 PR-4a, #10937; history in git).
+HMAC_MANIFEST='inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
 sdk-bash-smoke-verdict-10548|delegated|||none|scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh'
 
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
@@ -953,7 +954,7 @@ fi
 # DISJOINTNESS (replaces "baseline E followthrough rows equal the S2-owned list", which only held in the commit that emptied
 # the list). A followthrough probe converted to the BEARER or the HMAC form (classified in the dynamic, static-only, delegated
 # or HMAC manifest above) must not also be listed in baseline E: a listed one is an argv credential that crept back. Baseline E
-# no longer lists the four HMAC probes (the baseline-only commit removed them), so the HMAC manifest is part of the converted
+# no longer lists the HMAC probes (the baseline-only commit removed them), so the HMAC manifest is part of the converted
 # set now; re-adding one probe to baseline E is a red row. The extractor is a function so a positive control can drive it.
 be_followthrough_rows() { # <baseline file> -> followthrough probe names listed in it, one per line
   awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$1" | sed 's|^scripts/followthroughs/||; s|\.sh$||' | sort -u
@@ -1582,7 +1583,7 @@ bk_run() { # <rowname> <token> <create_status> <create_body_file> <action_body_f
   local name="$1" row="$ROWS/$1" drv="${6:-$BKDRV}"
   assert_fixture_dir "$row"; mkdir -p "$row/tmp" "$row/home" "$row/shim"
   ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" HOME="$row/home" TMPDIR="$row/tmp" BK_TMP="$row/tmp" BK_SHIM="$row/shim" \
-      BK_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
+      BK_TOKEN="$2" HCLOUD_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
       "$BASH_BIN" "$drv" < /dev/null > "$row/out" 2>&1 )
   BK_RC=$?
 }
@@ -2521,7 +2522,7 @@ ie_check() { # <row> <mode: ok|bad|empty> <token>
       [[ "$(bk_count "$o" '::add-mask::')" == 0 ]] || LD_BAD+=" mask-line"
       [[ "$(bk_calls "$row")" == 0 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
       [[ "$(bk_count "$o" "$LD_MARK")" == 0 ]] || LD_BAD+=" marker-on-empty"
-      [[ "$(bk_count "$o" 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN')" == 1 ]] || LD_BAD+=" empty-warning"
+      [[ "$(bk_count "$o" 'doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform')" == 1 ]] || LD_BAD+=" empty-warning"
       [[ "$(grep -cxF 'DRV-OUT=__UNREADABLE__' "$o" || true)" == 1 ]] || LD_BAD+=" verdict-class" ;;
   esac
 }
@@ -2550,7 +2551,7 @@ while IFS='|' read -r ld_name ld_mode ld_cls ld_from ld_to ld_must; do
 done <<'IE_MUTANTS'
 check-removed|bad|quote-newline-url|  if ! _bearer_ok "$tok"; then|  if false; then|mask-line
 marker-dropped|bad|quote|    echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|    : "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|marker-count
-warning-dropped|bad|quote|    echo "::warning::G3 generation anchor: the $tokvar read|    : "::warning::G3 generation anchor: the $tokvar read|shape-warning
+warning-dropped|bad|quote|    echo "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read|    : "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read|shape-warning
 check-inverted|ok||  if ! _bearer_ok "$tok"; then|  if _bearer_ok "$tok"; then|calls=0
 mask-dropped|ok||  printf '::add-mask::%s\n' "$tok" >&2|  : '::add-mask::%s\n' "$tok" >&2|mask-line
 IE_MUTANTS
@@ -3139,11 +3140,11 @@ echo "=== stage S2-B: Better Stack reader (basic auth off argv) done ==="
 
 # =====================================================================================
 # STAGE S2-C: the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) off curl argv in
-# scripts/check-deploy-script-parity.sh and the four followthrough probes. Same canonical HMAC snippet as the
+# scripts/check-deploy-script-parity.sh and the followthrough probes that remain in HMAC_MANIFEST. Same canonical HMAC snippet as the
 # cutover copies (key on the python3 child's ENVIRONMENT only), `_bearer_ok` (a copy of the cutover function) on both
 # Cloudflare Access values, `--disable --noproxy '*'` first, `--config -` with three `header = "..."` lines on a
 # process substitution. A refusal sends nothing and prints the value-free marker; the exit code is the SURFACE'S
-# non-verdict code (2 for the parity script and the two probes whose contract reads 2 as TRANSIENT; 3 for the soak
+# non-verdict code (2 for the parity script and the 10548 probe, whose contract reads 2 as TRANSIENT; 3 for the soak
 # probe, whose contract reserves 2 for a reading), never 1 (a FAIL verdict, a tracker reopen).
 #
 # The instrument is the `hmac-cf` auth profile of the shared curl shim. It is NOT shape-only: it RECOMPUTES the digest
@@ -3188,7 +3189,7 @@ hmx_status chm6 "$HMX_GOOD" "$HMX_CFID" "${HMX_CFSEC}x"; hmx_st6="$HMX_ST"
 [[ "$hmx_st5" == 401 && "$hmx_st6" == 401 ]] || fatal "CHM5/6 a wrong Cloudflare Access value was accepted (id $hmx_st5, secret $hmx_st6)"
 row "control CHM5: a wrong Cloudflare Access client id or secret is 401 (both compared exactly)" ok
 
-# ---- the audit of the five converted files: ONE function, so the real rows and the mutant rows judge identically ----
+# ---- the audit of the converted files: ONE function, so the real rows and the mutant rows judge identically ----
 # HM5_BAD names the failed facets: snippet (the HMAC line is not the canonical program with the deploy key, exactly once),
 # guard (no `|| VAR=""` after it), hexcheck (no ^[0-9a-f]{64}$ test), openssl (an openssl/-hmac token on a non-comment line),
 # bearer (the _bearer_ok function differs from the cutover's, or is not applied to exactly two values), config (the curl command
@@ -3214,19 +3215,27 @@ hm5_audit() { # <file>
   [[ "$(grep -cF -e 'case "$-" in' <<< "$code" || true)" -ge 1 ]] || HM5_BAD+=" preamble"
   return 0
 }
+# DERIVED from HMAC_MANIFEST (plus the parity script), never hand-listed: a hand-written list let a manifest probe (10548) sit unaudited, and a
+# swapped entry kept the row count while dropping a probe's audit.
 HM5_FILES="scripts/check-deploy-script-parity.sh
-scripts/followthroughs/canary-promotion-5875.sh
-scripts/followthroughs/infra-config-activation-7220.sh
-scripts/followthroughs/infra-config-fatal-channel-7220.sh
-scripts/followthroughs/inngest-soak-6178.sh"
+$(printf '%s\n' "$HMAC_MANIFEST" | cut -d'|' -f1 | sed 's|^|scripts/followthroughs/|; s|$|.sh|')"
+# a malformed manifest row (empty name, no separator) derives a bogus path: refuse it here, by name, before the audit and its mutants run on nothing
+while IFS= read -r hf; do
+  [[ -f "$hf" ]] || fatal "HM5_FILES derived a path that is not a file ($hf): an HMAC_MANIFEST row is malformed"
+done <<< "$HM5_FILES"
+# the files that hold the canonical HMAC program (outside *.test.sh) must be exactly the audited set: a probe classified into another manifest, or moved
+# out of this one, would otherwise leave the audit green with that probe unaudited
+HM5_HOLDERS="$(git ls-files 'scripts/*.sh' 'scripts/followthroughs/*.sh' | grep -v '\.test\.sh$' | xargs grep -lF 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' | sort)"
+if [[ -n "$HM5_HOLDERS" && "$HM5_HOLDERS" == "$(printf '%s\n' "$HM5_FILES" | sort)" ]]; then row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" ok
+else row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" fail "holders='${HM5_HOLDERS//$'\n'/,}' audited='${HM5_FILES//$'\n'/,}'"; fi
 while IFS= read -r hf; do
   hm5_audit "$hf"
   if [[ -z "$HM5_BAD" ]]; then row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" ok
   else row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" fail "failed facets:$HM5_BAD"; fi
 done <<< "$HM5_FILES"
-hm_hmacflag="$(git grep -nE -- '-hmac' -- scripts/check-deploy-script-parity.sh scripts/followthroughs/canary-promotion-5875.sh scripts/followthroughs/infra-config-activation-7220.sh scripts/followthroughs/infra-config-fatal-channel-7220.sh scripts/followthroughs/inngest-soak-6178.sh | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
-if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the four probes (the key is on no openssl argv)" ok
-else row "census: no -hmac operand remains in the parity script or the four probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
+hm_hmacflag="$(git grep -nE -- '-hmac' -- $HM5_FILES | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
+if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the manifest probes (the key is on no openssl argv)" ok
+else row "census: no -hmac operand remains in the parity script or the manifest probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
 
 # ---- per-script mutants of the audit: one mutant per script and kind, each asserting WHICH facet fails and WHICH LINE it touched ----
 hm5_mut() { # <file> <label> <from> <to> -> HM5_MUT (path); fatal when the literal is absent
@@ -3283,43 +3292,28 @@ hm5_facet_mut() { # <file> <facet> -> HM5_MUT
   return 0
 }
 while IFS= read -r hf; do
-  base="$(basename "$hf" .sh)"; hm5_fbad=""
+  base="$(basename "$hf" .sh)"; hm5_fbad=""; hm5_fn=0
   for hm5_facet in guard openssl config config-hdr-cf config-nodisable config-barecurl config-noprintf config-twoprintf preamble; do
-    hm5_facet_mut "$hf" "$hm5_facet"; hm5_audit "$HM5_MUT"
+    hm5_facet_mut "$hf" "$hm5_facet"; hm5_audit "$HM5_MUT"; hm5_fn=$((hm5_fn + 1))
     [[ "$HM5_BAD" == " ${hm5_facet%%-*}" ]] || hm5_fbad+=" [$hm5_facet:${HM5_BAD:-none}]"
   done
+  # a facet deleted from the list above and from hm5_audit together leaves every remaining mutant green: count the facets driven
+  [[ "$hm5_fn" -eq 9 ]] || hm5_fbad+=" [facet count $hm5_fn, expected 9]"
   if [[ -z "$hm5_fbad" ]]; then row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" ok
   else row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" fail "facets that did not fire alone:$hm5_fbad"; fi
 done <<< "$HM5_FILES"
 
-# ---- running the probes under the hmac-cf profile ------------------------------------------------------------
-PARBIN="$HMX/parbin"; PYSEL="$HMX/pysel"; PYBAD="$HMX/pybad"; PYGARB="$HMX/pygarb"
-for d in "$PARBIN" "$PYSEL" "$PYBAD" "$PYGARB"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+# ---- running the parity script under the hmac-cf profile ------------------------------------------------------------
+PARBIN="$HMX/parbin"; PYSEL="$HMX/pysel"; PYGARB="$HMX/pygarb"
+for d in "$PARBIN" "$PYSEL" "$PYGARB"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
 ln -s "$(type -P sha256sum)" "$PARBIN/sha256sum"                        # the parity script hashes ci-deploy.sh; not added to REALBIN
-printf '#!%s\nexit 1\n' "$BASH_BIN" > "$PYBAD/python3"                                # python3 that fails
 printf '#!%s\nprintf "not-a-digest"\n' "$BASH_BIN" > "$PYGARB/python3"                # python3 that prints a non-digest
 printf '#!%s\n[[ "${1:-}" == "-I" ]] && exit 1\nexec "%s" "$@"\n' "$BASH_BIN" "$REAL_PY" > "$PYSEL/python3"   # fails ONLY the HMAC call (-I -c), runs the host-key parse
-chmod +x "$PYBAD/python3" "$PYGARB/python3" "$PYSEL/python3"
-printf '%s' '{"sandbox_canary":{"verdict":"pass","consecutive_pass":6,"first_pass_at":1700000000,"checked_at":1700345600,"sdk_version":"0.0.0-synthetic"}}' > "$BODIES/canary_pass.json"
-printf '%s' '{"workspace_isolation":{"verdict":"pass","consecutive_pass":6,"first_pass_at":1700000000,"checked_at":1700345600}}' > "$BODIES/workspace_isolation_pass.json"
-printf '%s' '{"schema_version":2,"start_ts":1700000000,"end_ts":1700000100,"fatal_rc":0}' > "$BODIES/fatal_frame.json"
+chmod +x "$PYGARB/python3" "$PYSEL/python3"
 HMX_ENV=("WEBHOOK_DEPLOY_SECRET=$HMX_KEY" "CF_ACCESS_CLIENT_ID=$HMX_CFID" "CF_ACCESS_CLIENT_SECRET=$HMX_CFSEC"
   "BETTERSTACK_QUERY_HOST=bs.example.test" "BETTERSTACK_QUERY_USERNAME=bsu" "BETTERSTACK_QUERY_PASSWORD=bsp"
   "SHIM_AUTH=hmac-cf" "SHIM_HMAC_KEY=$HMX_KEY" "SHIM_CF_ID=$HMX_CFID" "SHIM_CF_SECRET=$HMX_CFSEC")
 HMX_PATH="$HMBIN:$PYDIR:$PARBIN"   # recording python3/openssl (real tool behind them), then the real python3, then sha256sum
-# hmx_sandbox <name> <source script> -> prints the path of the copy inside a sandbox repo root that also holds a stub betterstack-query.sh
-hmx_sandbox() {
-  local sb="$HMX/sb-$1"; assert_fixture_dir "$sb"; mkdir -p "$sb/scripts/followthroughs"
-  cp "$2" "$sb/scripts/followthroughs/$(basename "$2")"
-  printf '#!%s\nexit 0\n' "$BASH_BIN" > "$sb/scripts/betterstack-query.sh"; chmod +x "$sb/scripts/betterstack-query.sh"
-  printf '%s' "$sb/scripts/followthroughs/$(basename "$2")"
-}
-hmx_run() { # <rowname> <script> [extra NAME=value ...]   (HMX_ENV first, extras after so they win; HMX_RUN_PATH overrides the extra PATH)
-  local name="$1" script="$2"; shift 2
-  RUN_EXTRA_PATH="${HMX_RUN_PATH-$HMX_PATH}"
-  run_probe "$name" "$script" "BK_SHIM=$ROWS/$name/shim" "${HMX_ENV[@]}" "$@"
-  RUN_EXTRA_PATH=""
-}
 # evaluate_hmac <rowdir> <hosts-regex> <min_calls> -> EV_FAILED (space-separated check names, empty = GREEN)
 #   headers-not-on-stdin  a call to a manifest host whose stdin is not EXACTLY the three header lines (a 64-hex digest, then the id, then the secret)
 #   secret-in-argv        the webhook key, the Cloudflare Access id or secret, or the digest is in any recorded curl argv
@@ -3377,126 +3371,10 @@ hmx_refused() {
 HMX_CLASSES="$TOK_CLASSES"
 class_floor "$HMX_CLASSES" || { printf '[FATAL] HMX_CLASSES lost a required class or repeats one: %s\n' "$HMX_CLASSES" >&2; exit 2; }
 
-HMX_ENV_SAVED=()
-hmx_env_without() { local e; HMX_ENV_SAVED=("${HMX_ENV[@]}"); HMX_ENV=(); for e in "${HMX_ENV_SAVED[@]}"; do [[ "$e" == "$1="* ]] || HMX_ENV+=("$e"); done; }
-hmx_env_restore() { HMX_ENV=("${HMX_ENV_SAVED[@]}"); }
-
-# probe_rows_hmac <name> <hosts> <min> <body> <refusal rc> <PASS regex>
-probe_rows_hmac() {
-  local name="$1" hosts="$2" min="$3" body="$4" refrc="$5" okre="$6"
-  local src="$REPO_ROOT/scripts/followthroughs/$name.sh" script cls v rc bad
-  N_DYN=$((N_DYN + 1))
-  [[ -f "$src" ]] || { row "$name: manifest entry names an existing probe" fail "missing"; return 0; }
-  script="$(hmx_sandbox "$name" "$src")"
-  local -a bodyenv=("SHIM_BODY_FILE=$BODIES/$body.json")
-
-  # A. the full contract: the success outcome is reachable ONLY through the recomputed digest and the exact Cloudflare Access pair
-  hmx_run "$name-A" "$script" "${bodyenv[@]}"; rc=$RUN_RC; evaluate_hmac "$RUN_ROW" "$hosts" "$min"
-  if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -qE -e "$okre" "$RUN_ROW/stdout"; then
-    row "$name: full contract (the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv; HMAC_KEY in python3's environment only)" ok
-  else row "$name: full contract (the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv; HMAC_KEY in python3's environment only)" fail "rc=$rc calls=$EV_HOST_CALLS failed='$EV_FAILED'"; fi
-  # A2. must-PASS, not the canonical: a key holding a quote, a newline, a dollar and a backslash still signs correctly (the key has no shape guard)
-  v=$'wh"key\n$x\\y-'"$HMX_RAND"
-  hmx_run "$name-A2" "$script" "${bodyenv[@]}" "WEBHOOK_DEPLOY_SECRET=$v" "SHIM_HMAC_KEY=$v"; rc=$RUN_RC
-  # (the call count is a conjunct: a negated grep over a glob that matches no file is vacuously true)
-  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] && ! grep -aqF -- "$HMX_RAND" "$RUN_ROW"/shim/calls/*.argv; then
-    row "$name: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly (the shim's recomputed digest agrees) and reaches no argv" ok
-  else row "$name: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly (the shim's recomputed digest agrees) and reaches no argv" fail "rc=$rc"; fi
-  # B. a 401 never reaches the success outcome
-  hmx_run "$name-B" "$script" "${bodyenv[@]}" SHIM_MODE=deny; rc=$RUN_RC
-  if [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ ! -e "$RUN_ROW/shim/unexpected" && ! -e "$RUN_ROW/shim/unmodelled" ]]; then
-    row "$name: a 401 never reaches the success outcome" ok
-  else row "$name: a 401 never reaches the success outcome" fail "rc=$rc"; fi
-  # B2. the digest check is real: a probe signing with a different key than the shim's, and a hard-coded 64-zero digest, are both 401
-  hmx_run "$name-B2key" "$script" "${bodyenv[@]}" "SHIM_HMAC_KEY=other-$HMX_RAND"; rc=$RUN_RC
-  bad=""; [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" || bad+=" wrong-key-reached-success"
-  hm5_mut "scripts/followthroughs/$name.sh" zero "$HM_CANON_DEPLOY" "printf '%064d' 0"
-  local zsrc; zsrc="$(hmx_sandbox "$name-zero" "$HM5_MUT")"
-  hmx_run "$name-B2zero" "$zsrc" "${bodyenv[@]}"; rc=$RUN_RC
-  [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] || bad+=" zero-digest-reached-success"
-  if [[ -z "$bad" ]]; then row "$name: a signing key different from the shim's, and a hard-coded 64-zero digest (a mutant that still sends a call), are both 401 and never reach the success outcome" ok
-  else row "$name: a signing key different from the shim's, and a hard-coded 64-zero digest (a mutant that still sends a call), are both 401 and never reach the success outcome" fail "$bad"; fi
-  # C. the signature header stripped by a mutated COPY of the real probe
-  hm5_mut "scripts/followthroughs/$name.sh" strip 'header = "X-Signature-256: sha256=%s"' 'header = "X-Stripped: sha256=%s"'
-  local csrc; csrc="$(hmx_sandbox "$name-strip" "$HM5_MUT")"
-  hmx_run "$name-C" "$csrc" "${bodyenv[@]}"; rc=$RUN_RC
-  if [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout"; then row "$name: a header-stripped copy never reaches the success outcome" ok
-  else row "$name: a header-stripped copy never reaches the success outcome" fail "rc=$rc"; fi
-  # D. each credential unset or empty: zero calls, the non-verdict outcome (rc 2, TRANSIENT), no bash error
-  bad=""
-  for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-    hmx_run "$name-D-$v-empty" "$script" "${bodyenv[@]}" "$v="; rc=$RUN_RC; count_calls "$RUN_ROW"
-    [[ "$EV_CALLS" -eq 0 ]] && transient_outcome "$RUN_ROW" "$rc" || bad+=" [$v empty: rc=$rc calls=$EV_CALLS]"
-    hmx_env_without "$v"
-    hmx_run "$name-D-$v-unset" "$script" "${bodyenv[@]}"; rc=$RUN_RC; count_calls "$RUN_ROW"
-    hmx_env_restore
-    [[ "$EV_CALLS" -eq 0 ]] && transient_outcome "$RUN_ROW" "$rc" || bad+=" [$v unset: rc=$rc calls=$EV_CALLS]"
-  done
-  if [[ -z "$bad" ]]; then row "$name: each of the three credentials unset or empty produces zero calls and a TRANSIENT rc 2" ok
-  else row "$name: each of the three credentials unset or empty produces zero calls and a TRANSIENT rc 2" fail "$bad"; fi
-  # E1. hostile Cloudflare Access values: refused BEFORE curl (zero calls), the marker once, the value not echoed, rc $refrc
-  bad=""; e1_n=0
-  for v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-    for cls in $HMX_CLASSES; do
-      e1_n=$((e1_n + 1))
-      hmx_run "$name-E1-$v-$cls" "$script" "${bodyenv[@]}" "$v=$(tok_for "$cls")"; hmx_refused "$RUN_ROW" "$refrc" "$name"
-      [[ -z "$HMX_BAD" ]] || bad+=" [$v $cls:$HMX_BAD]"
-    done
-  done
-  # a zero-iteration loop must fail: an empty class list emitted `ok` over no run at all
-  [[ "$e1_n" -ge 1 && "$e1_n" -eq $((2 * $(wc -w <<< "$HMX_CLASSES"))) ]] || bad+=" [E1 ran $e1_n iterations]"
-  if [[ -z "$bad" ]]; then row "$name: hostile Cloudflare Access values (quote+newline+url, newline, non-ASCII, quote, space, backslash, tab, CR) in the id and in the secret: zero calls, rc $refrc, the marker once, nothing echoed" ok
-  else row "$name: hostile Cloudflare Access values (quote+newline+url, newline, non-ASCII, quote, space, backslash, tab, CR) in the id and in the secret: zero calls, rc $refrc, the marker once, nothing echoed" fail "$bad"; fi
-  # E1b. an unusable signature (python3 fails, prints a non-digest, or is absent) is refused BEFORE curl, not sent unsigned
-  bad=""
-  for cls in bad garbage absent; do
-    case "$cls" in bad) HMX_RUN_PATH="$PYBAD:$PYDIR" ;; garbage) HMX_RUN_PATH="$PYGARB:$PYDIR" ;; absent) HMX_RUN_PATH="$PARBIN" ;; esac
-    hmx_run "$name-E1b-$cls" "$script" "${bodyenv[@]}"; hmx_refused "$RUN_ROW" "$refrc" "$name"
-    [[ -z "$HMX_BAD" ]] || bad+=" [python3 $cls:$HMX_BAD]"
-  done
-  unset HMX_RUN_PATH
-  if [[ -z "$bad" ]]; then row "$name: python3 failing, printing a non-digest or missing is refused before curl (zero calls, rc $refrc, the marker once), never an unsigned request" ok
-  else row "$name: python3 failing, printing a non-digest or missing is refused before curl (zero calls, rc $refrc, the marker once), never an unsigned request" fail "$bad"; fi
-  # E2. xtrace refusal (both forms) with each credential set alone: rc 78, zero calls, nothing on output
-  for mode in env flag; do
-    bad=""
-    for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-      if xtrace_check "$script" "$v" "$name-E2-$v-$mode" "$mode"; then :; else bad+=" [$v: $XT_DETAIL]"; fi
-    done
-    if [[ -z "$bad" ]]; then row "$name: refuses xtrace ($mode form) with each of the three credentials set: rc 78, zero calls, no token on output" ok
-    else row "$name: refuses xtrace ($mode form) with each of the three credentials set: rc 78, zero calls, no token on output" fail "$bad"; fi
-  done
-  # E4. a 100,000-byte (class-clean) Cloudflare Access secret with a never-reading shim under pipefail: the process-substitution writer dies silently
-  hmx_run "$name-E4" "$script" "${bodyenv[@]}" SHIM_MODE=noread "CF_ACCESS_CLIENT_SECRET=$BIGTOK"; rc=$RUN_RC
-  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] && ! grep -aqi 'broken pipe' "$RUN_ROW/stderr"; then
-    row "$name: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" ok
-  else row "$name: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" fail "rc=$rc"; fi
-  # E5/E6. harness mutations against the real converted probe
-  hmx_run "$name-E5" "$script" "${bodyenv[@]}" SHIM_MUTATE=nostdin; evaluate_hmac "$RUN_ROW" "$hosts" "$min"
-  if [[ " $EV_FAILED " == *" headers-not-on-stdin "* ]]; then row "$name: a shim that stops recording stdin turns the full-contract row RED (headers-not-on-stdin)" ok
-  else row "$name: a shim that stops recording stdin turns the full-contract row RED (headers-not-on-stdin)" fail "failed='$EV_FAILED'"; fi
-  hmx_run "$name-E6" "$csrc" "${bodyenv[@]}" SHIM_MUTATE=noauth; rc=$RUN_RC
-  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout"; then row "$name: a shim that stops being auth-gated lets the stripped copy reach the success outcome, and the check sees it" ok
-  else row "$name: a shim that stops being auth-gated lets the stripped copy reach the success outcome, and the check sees it" fail "stripped copy still not reaching success (rc=$rc)"; fi
-  # M. per-script mutants of the real probe, run: the guards must be what stops the request
-  hm5_mut "scripts/followthroughs/$name.sh" bearer '*[!A-Za-z0-9._~+/=-]*) return 1' '*[!A-Za-z0-9._~+/=\"-]*) return 1'
-  local msrc; msrc="$(hmx_sandbox "$name-mbearer" "$HM5_MUT")"
-  hmx_run "$name-Mbearer" "$msrc" "${bodyenv[@]}" "CF_ACCESS_CLIENT_SECRET=$(tok_for quote)"; evaluate_hmac "$RUN_ROW" "$hosts" 0
-  if [[ "$(bk_calls "$RUN_ROW")" -ge 1 && " $EV_FAILED " == *" injected "* ]]; then row "$name: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED (the E1 row goes RED)" ok
-  else row "$name: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED (the E1 row goes RED)" fail "calls=$(bk_calls "$RUN_ROW") failed='$EV_FAILED'"; fi
-  hm5_mut "scripts/followthroughs/$name.sh" nohex '^[0-9a-f]{64}$' '^[0-9a-f]*$'
-  msrc="$(hmx_sandbox "$name-mnohex" "$HM5_MUT")"
-  HMX_RUN_PATH="$PYBAD:$PYDIR"; hmx_run "$name-Mnohex" "$msrc" "${bodyenv[@]}"; unset HMX_RUN_PATH
-  if [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]]; then row "$name: mutant weakening the 64-hex check sends an UNSIGNED request when python3 fails (the E1b row goes RED)" ok
-  else row "$name: mutant weakening the 64-hex check sends an UNSIGNED request when python3 fails (the E1b row goes RED)" fail "calls=$(bk_calls "$RUN_ROW")"; fi
-}
 
 while IFS='|' read -r h_name h_kind h_hosts h_min h_body h_test; do
   [[ -n "$h_name" ]] || continue
   case "$h_kind" in
-    dynamic)
-      refrc=2; okre='^PASS'
-      probe_rows_hmac "$h_name" "$h_hosts" "$h_min" "$h_body" "$refrc" "$okre" ;;
     delegated)
       # The delegation row is NOT "the suite names the probe": the suite must RECORD the curl stdin and assert the exact three header lines
       # (the id and secret values and a 64-hex signature), so a delegated probe cannot pass while sending no credential. A mutant copy of the
@@ -3578,6 +3456,12 @@ for mode in env flag; do
 done
 if [[ -z "$bad" ]]; then row "check-deploy-script-parity: refuses xtrace (env and flag forms) with a live credential: rc 78, zero calls, no token on output" ok
 else row "check-deploy-script-parity: refuses xtrace (env and flag forms) with a live credential: rc 78, zero calls, no token on output" fail "$bad"; fi
+# E4 (moved here from the retired per-probe rows; CTO F7): a 100,000-byte (class-clean) Cloudflare Access secret with a never-reading shim under
+# pipefail: the process-substitution writer dies silently, and the script must still reach its recorded call and exit 0 with no broken-pipe text.
+par_run par-E4 SHIM_MODE=noread "CF_ACCESS_CLIENT_SECRET=$BIGTOK"; rc=$RUN_RC
+if [[ "$rc" -eq 0 ]] && grep -qF 'PARITY(status)' "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] && ! grep -aqi 'broken pipe' "$RUN_ROW/stderr"; then
+  row "check-deploy-script-parity: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" ok
+else row "check-deploy-script-parity: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" fail "rc=$rc calls=$(bk_calls "$RUN_ROW")"; fi
 hm5_mut "$PAR" bearer '*[!A-Za-z0-9._~+/=-]*) return 1' '*[!A-Za-z0-9._~+/=\"-]*) return 1'
 PARSB="$HMX/sb-par"; assert_fixture_dir "$PARSB"; mkdir -p "$PARSB/scripts"; ln -sfn "$REPO_ROOT/apps" "$PARSB/apps"   # ROOT = the sandbox; the infra files it reads come through the symlink
 cp "$HM5_MUT" "$PARSB/scripts/check-deploy-script-parity.sh"
@@ -3586,7 +3470,7 @@ par_run par-Mbearer "CF_ACCESS_CLIENT_SECRET=$(tok_for quote)"; evaluate_hmac "$
 PAR_SCRIPT=""
 if [[ "$(bk_calls "$RUN_ROW")" -ge 1 && " $EV_FAILED " == *" injected "* ]]; then row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" ok
 else row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" fail "calls=$(bk_calls "$RUN_ROW") failed='$EV_FAILED'"; fi
-echo "=== stage S2-C: deploy-webhook triple (parity script and four probes) done ==="
+echo "=== stage S2-C: deploy-webhook triple (parity script and the HMAC manifest probes) done ==="
 
 # =====================================================================================
 # STAGE S3 (argv-bearer sweep S3, ADR-280): workflow YAML and the two composite actions send their credential
@@ -4491,7 +4375,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/inngest-key-rotate.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4529,8 +4413,8 @@ done
 [[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
 [[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
 [[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
-# The floor is the realized count (9 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), inngest-link-flip x2 (flip_webhook's POST and GET arms)). BOTH operands are literals above the `if`.
-S4_SCALLS_FLOOR=9
+# The floor is the realized count (11 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), git-data-rehearsal-evidence x1, inngest-link-flip x2 (flip_webhook's POST and GET arms), inngest-key-rotate x1 (kr_hz, the Hetzner read)). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=11
 if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
 else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
 # The lint's SCRIPT-CONSUMER derivation (scripts/lint-workflow-local-action-checkout.py, SCRIPT CONSUMERS) runs its `git ls-files` arm on the REAL tree only here
@@ -4667,9 +4551,9 @@ for f in files:
 print(n_ok, n_sig, n_brr, ",".join(bad))
 '
 read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_OK_DERIVED)
-# BOTH operands are literals above the `if`: 76 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
-# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76), 6 `_sig_curl`, 2 `_bearer_curl`.
-S4_GUARD_FLOOR=76
+# BOTH operands are literals above the `if`: 74 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
+# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76, after which later definition changes left it at 78 against this floor of 76; G1 PR-4a, #10937, retired four more, the canary-promotion, infra-config activation, infra-config fatal-channel and workspace-isolation soaks, taking the measured count from 78 to 74, and the floor now equals it), 6 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=74
 if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 6 && "$S4_G_BRR" == 2 ]]; then
   row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions of the $(printf '%s\n' "$S4_OK_DERIVED" | grep -c .) tracked files that define one equal the canonical text byte for byte (the count equals git grep's), and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
 else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK defs=$S4_OK_DEFS sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
@@ -5151,10 +5035,12 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 && "$(s4_ssh_
    && s4_creds_clean "$S4_HZ" "$S4_BOOT" && s4_genv_has 'REMOTE_DIR=/var/lib/workspaces-luks/wl-cutover.AbCd12' && grep -qF 'volumes?name=soleur-web-platform-data-luks' "$S4_ROW/calls/1.argv"; then
   row "S4 row 19 luks Hetzner read (inline): a well-formed run reads the volume with the read-only token as the ONLY stdin header, the token and the boot token are on no curl, python3, openssl or ssh argument, and the delivery follows (3 ssh calls)" ok
 else row "S4 row 19 luks Hetzner read (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) ssh=$(s4_ssh_calls) markers=$(s4_markers)"; fi
-# The fallback arm until ADR-241 O10: an unset or empty read-only name reads the read/write name, judged by the same guard.
-s4_luks_ok_run r19-fallback "$S4/b-r19.sh" D_HCLOUD_TOKEN="$S4_HZ"
-[[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $S4_HZ\"" && "$(s4_ssh_calls)" == 3 ]] && s4_calls_ok 1 && s4_creds_clean "$S4_HZ" \
-  && row "S4 row 19 luks Hetzner read (inline): with the read-only name unset the read/write fallback is used and judged by the same guard" ok || row "S4 row 19 luks Hetzner read (inline): fallback arm" fail "rc=$S4_RC calls=$(s4_ncalls)"
+# (#9927 item 8b) NO fallback arm. Until ADR-241 O10 an unset or empty read-only name read the read/write name; O5 and O10
+# are done, so the read-only name is the only one read. With it unset and a VALID read/write token present, the step must
+# REFUSE like any unusable token, and the read/write value must reach no request and no ssh invocation.
+s4_run r19-no-fallback "$S4/b-r19.sh" "$S4/real" "${S4_LUKS_BASE[@]}" D_HCLOUD_TOKEN="$S4_HZ"
+[[ "$S4_RC" == 1 && "$(s4_ncalls)" == 0 && "$(s4_ssh_calls)" == 0 && "$(s4_markers)" == 1 ]] && s4_said 'reason=readonly_absent' && s4_creds_clean "$S4_HZ" \
+  && row "S4 row 19 luks Hetzner read (inline): with the read-only name unset a valid read/write token is NOT used (named readonly_absent refusal, zero requests, zero ssh)" ok || row "S4 row 19 luks Hetzner read (inline): no-fallback arm" fail "rc=$S4_RC calls=$(s4_ncalls) ssh=$(s4_ssh_calls) markers=$(s4_markers)"
 s4_v_r19() { # a refusal: exit 1 with the step's own sentence and ONE marker, zero requests, ZERO ssh calls, no bundle dir, nothing delivered
   [[ "$S4_RC" == 1 && "$(s4_markers)" == 1 && "$(s4_ncalls)" == 0 && "$(s4_ssh_calls)" == 0 ]] && s4_said 'workspaces-luks-cutover: HCLOUD_TOKEN unusable' \
     && s4_said 'no request was made and nothing was delivered to web-1' && ! s4_said 'refusing to guess' && ! grep -q '^REMOTE_DIR=' "$S4_ROW/genv" && [[ ! -e "$S4_ROW/calls/ssh.log" ]]
@@ -5164,8 +5050,9 @@ s4_sweep r19 "$S4/b-r19.sh" "$S4/real" s4_v_r19 "D_HCLOUD_TOKEN_READONLY" ""
 s4_sweep_row "S4 row 19 luks Hetzner read (inline, data-destructive precondition): an empty, unset or hostile read-only token (the fallback unavailable) aborts the step with exit 1, ONE marker, ZERO requests and ZERO ssh invocations, before the device is resolved or anything is delivered"
 S4_BASE=("${S4_LUKS_BASE[@]}" D_HCLOUD_TOKEN="$S4_HZ")
 s4_sweep r19fb "$S4/b-r19.sh" "$S4/real" s4_v_r19 "D_HCLOUD_TOKEN" ""
-s4_sweep_row "S4 row 19 luks Hetzner read (inline): an empty, unset or hostile read/write FALLBACK token (the read-only name unset) is refused the same way, with zero requests and zero ssh invocations"
-# CROSS (ADR-241 O10): the fallback to the read/write token happens ONLY when the read-only token is EMPTY or unreadable, never because it is MALFORMED. A refused read-only token
+s4_sweep_row "S4 row 19 luks Hetzner read (inline): an empty, unset or hostile read/write token beside an unset read-only name is refused the same way, with zero requests and zero ssh invocations (the read/write name is never read)"
+# CROSS (ADR-241 O10). NOTE, 2026-10-22: since #9927 item 8b the luks lookup, the loader's legacy arm and the PR-plan step no longer fall back to the
+# read/write token at all; the rows below keep proving the stronger claim for any fallback that is ever reintroduced. The fallback happens ONLY when the read-only token is EMPTY or unreadable, never because it is MALFORMED. A refused read-only token
 # beside a VALID read/write token must still ABORT (no request, no ssh), or a refused read-only credential would be silently upgraded to the write-capable one on a data-destructive
 # path (the two sweeps above each leave the other name unset, so an `_bearer_ok "$RO" || HCLOUD_TOKEN=$RW` implementation is green in both).
 S4_X19_BAD=""
@@ -6742,7 +6629,7 @@ echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, res
 # CONVERTED SCRIPTS (S6H_CONVERTED): exactly one stdin config line (`url = "..."`) each, and exactly one copy of the shape-guard class, on a line BEFORE it.
 # =====================================================================================
 S6H_DIR="apps/web-platform/infra"
-S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh inngest-bootstrap.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh)
+S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh inngest-bootstrap.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh web-bash-synthetic.sh)
 S6H_FILE_FLOOR=7
 S6H_ALLOW_CEIL=0
 S6H_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
@@ -6880,6 +6767,47 @@ if s6_edit "$S6H_MPA/$S6H_DIR/web-zot-consumer-probe.sh" '  case "$1" in https:/
   if [[ -n "$S6H_DA" && -n "$S6H_DB" && "$S6H_DA" != "$S6H_DB" ]]; then row "S6-HB guard-copy parity mutation: loosening the scheme test in ONE copy changes its digest (the parity row would be RED)" ok
   else row "S6-HB guard-copy parity mutation: a one-copy edit of the guard is not visible to the digest" fail "a=$S6H_DA b=$S6H_DB"; fi
 else row "S6-HB guard-copy parity mutation: the edit did not land (re-anchor with the scheme case line)" fail "no scheme case line once in the scratch copy"; fi
+# web-bash-synthetic.sh (#10455) carries a FIFTH copy of the shape guard but NOT of the full pair: its `_hb_curl` takes the URL as "$1" (finish() appends `/fail`
+# to the path, so the curl must take the target as an argument), where the four siblings read "$URL". It stays out of S6H_PARITY_FILES ON PURPOSE and is pinned in
+# two parts instead: (1) its `_hb_url_ok` digest equals the siblings', and (2) its `_hb_curl` line equals the siblings' line with "$URL" replaced by "$1".
+s6h_urlok_digest() { # <file> -> md5 of the _hb_url_ok function alone, empty when it is missing or defined twice
+  python3 -I -c '
+import hashlib, sys
+src = open(sys.argv[1], encoding="utf-8", errors="replace").read().split("\n")
+heads = [i for i, l in enumerate(src) if l.startswith("_hb_url_ok() {")]
+if len(heads) != 1: sys.exit(0)
+j = heads[0]
+while j < len(src) and src[j] != "}": j += 1
+print(hashlib.md5("\n".join(src[heads[0]:j + 1]).encode()).hexdigest())
+' "$1"
+}
+s6h_curl_line() { [[ "$(grep -cF '_hb_curl() {' "$1")" == 1 ]] && grep -F '_hb_curl() {' "$1"; } # the one definition line, rc 1 when absent or repeated
+S6H_WBS_FILE="$REPO_ROOT/$S6H_DIR/web-bash-synthetic.sh"
+S6H_UO_SET=""; S6H_UO_EMPTY=0
+for f in "${S6H_PARITY_FILES[@]}" web-bash-synthetic.sh; do
+  S6H_D="$(s6h_urlok_digest "$REPO_ROOT/$S6H_DIR/$f")"
+  if [[ -z "$S6H_D" ]]; then S6H_UO_EMPTY=$((S6H_UO_EMPTY + 1)); else S6H_UO_SET+="$S6H_D"$'\n'; fi
+done
+S6H_UO_N="$(printf '%s' "$S6H_UO_SET" | sort -u | grep -c . || true)"
+S6H_SIB_CURL="$(s6h_curl_line "$REPO_ROOT/$S6H_DIR/web-git-data-probe.sh" || true)"
+S6H_WBS_CURL="$(s6h_curl_line "$S6H_WBS_FILE" || true)"
+S6H_WBS_WANT="${S6H_SIB_CURL//\"\$URL\"/\"\$1\"}"
+if [[ "$S6H_UO_EMPTY" -eq 0 && "$S6H_UO_N" -eq 1 ]]; then row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_url_ok is byte-identical to the ${#S6H_PARITY_FILES[@]} sibling copies (one digest, none missing)" ok
+else row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_url_ok drifted from the siblings' or lost its definition" fail "distinct=$S6H_UO_N missing=$S6H_UO_EMPTY"; fi
+if [[ -n "$S6H_SIB_CURL" && -n "$S6H_WBS_CURL" && "$S6H_WBS_CURL" != "$S6H_SIB_CURL" && "$S6H_WBS_CURL" == "$S6H_WBS_WANT" ]]; then row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_curl is the siblings' line with the URL taken as \$1 (the one intended divergence)" ok
+else row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_curl is not the siblings' line with \"\$URL\" replaced by \"\$1\"" fail "sib='$S6H_SIB_CURL' wbs='$S6H_WBS_CURL'"; fi
+S6H_MWU="$(s6h_fresh mwu)"
+if s6_edit "$S6H_MWU/$S6H_DIR/web-bash-synthetic.sh" '  case "$1" in https://*) ;; *) return 1 ;; esac' '  case "$1" in http*://*) ;; *) return 1 ;; esac'; then
+  S6H_DA="$(s6h_urlok_digest "$S6H_MWU/$S6H_DIR/web-bash-synthetic.sh")"; S6H_DB="$(s6h_urlok_digest "$S6H_MWU/$S6H_DIR/web-git-data-probe.sh")"
+  if [[ -n "$S6H_DA" && -n "$S6H_DB" && "$S6H_DA" != "$S6H_DB" ]]; then row "S6-HB guard-copy parity (web-bash-synthetic) mutation: loosening the scheme test in the synthetic's copy changes its _hb_url_ok digest" ok
+  else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: a one-copy edit of the synthetic's guard is not visible to the digest" fail "a=$S6H_DA b=$S6H_DB"; fi
+else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: the edit did not land (re-anchor with the scheme case line)" fail "no scheme case line once in the scratch copy"; fi
+S6H_MWC="$(s6h_fresh mwc)"
+if s6_edit "$S6H_MWC/$S6H_DIR/web-bash-synthetic.sh" "curl --disable --noproxy '*' -gfsS -m 10" "curl --disable --noproxy '*' -gsS -m 10"; then
+  S6H_CA="$(s6h_curl_line "$S6H_MWC/$S6H_DIR/web-bash-synthetic.sh" || true)"; S6H_CB="$(s6h_curl_line "$S6H_MWC/$S6H_DIR/web-git-data-probe.sh" || true)"
+  if [[ -n "$S6H_CA" && "$S6H_CA" != "${S6H_CB//\"\$URL\"/\"\$1\"}" ]]; then row "S6-HB guard-copy parity (web-bash-synthetic) mutation: dropping -f from the synthetic's _hb_curl breaks the line pin (a 404 would read as a delivered ping)" ok
+  else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: a flag dropped from the synthetic's _hb_curl is not visible to the line pin" fail "a='$S6H_CA'"; fi
+else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: the edit did not land (re-anchor with the curl flags)" fail "no curl flag string once in the scratch copy"; fi
 # M-var/M-curl (scanner reach, CTO-ruled 2026-10-15): the stage contract says *HEARTBEAT_URL, which includes the bare name, and the curl word may be path-prefixed,
 # backslashed or inside backticks. Each spelling is appended to a converted script (no allowlist to hide behind) and must be an argv violation.
 S6H_MV="$(s6h_fresh mv)"; assert_fixture_dir "$S6H_MV"; printf '%s\n' 'curl -fsS "$HEARTBEAT_URL" >/dev/null' >> "$S6H_MV/$S6H_DIR/luks-monitor.sh"
@@ -7499,7 +7427,7 @@ for v in good rc calls user-flag injected user-token user-token-bundle user-toke
 done
 ctl_row "bs_ok_call: a well-formed call is green, and each of its clauses fails ALONE when only its fact is doctored: exit 0, one call, no user flag, no INJECTED, each spelling of the user token (-u, a -sSu bundle, a -4u bundle with a digit, a -#u bundle with the hash, --user, --user=...) and each of the two values (username, password) in argv, exactly one stdin user line, USERPWD equal, SQL an argument, pinned URL, value absent from the output, no marker, no unmodelled flag (the user-line-count clause is unreachable: the exact-stdin clause fails first)"
 
-# --- hmx_refused (every hostile-credential refusal of the canary-promotion, fatal-channel and parity rows) ---
+# --- hmx_refused (every hostile-credential refusal of the parity rows) ---
 hmr_mk() { # <variant> -> row name; sets RUN_RC
   local v="$1" d; d="$(ctl_dir "hmr-$v")"; assert_fixture_dir "$d"
   RUN_RC=2
@@ -7529,7 +7457,7 @@ for v in good rc curl-called marker-line marker-count value-in-output value-in-o
 done
 ctl_row "hmx_refused: a compliant refusal is green, and each of its clauses fails ALONE when only its fact is doctored: the rc, zero calls, the marker line, one marker, nothing echoed (EACH alternative of the echo test alone: the SYNTHMARK0001 hostile-token marker, the webhook key, the Cloudflare Access id, the Cloudflare Access secret, and the same marker on stdout rather than stderr), no stub (an unexpected tool and an unmodelled flag each), no bash error"
 
-# --- evaluate_hmac (the full-contract judge of the HMAC probes) ---
+# --- evaluate_hmac (the full-contract judge of the parity script's live status arm) ---
 EHM_DIG="$(printf '%064d' 7)"
 ehm_stdin() { printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$1" "$2" "$3"; }
 ehm_mk() { # <variant> -> row dir
@@ -7630,8 +7558,8 @@ ctl_row "evaluate_body: a compliant row is green, and each of its clauses (at le
 # nerdctl, cosign, `helm registry login`; no site exists today), a variable verb with none of those names (`$ENGINE`, `$CTR`), arguments held in a
 # variable or array (`"${LOGIN_ARGS[@]}"`), a flag-variable (`$SINK_TLS_FLAG`, anything ending FLAG, FLAGS, OPTS or OPTIONS) that itself carries
 # `-p`, a command built by concatenation or an `eval`ed string, a payload inside any other quoted string (e.g. a YAML list item), a YAML folded `>` block, a backslash followed by
-# a space or CRLF, a FEEDER that itself carries the token on argv (`/usr/bin/printf '%s' "$T" |`), and the excluded trees. S8 selects on the FULL run only: the affected-test array does not name its population, and editing
-# it would arm every PR-gated battery (CTO ruling D1).
+# a space or CRLF, a FEEDER that itself carries the token on argv (`/usr/bin/printf '%s' "$T" |`), and the excluded trees. S8 stays full-run-only (CTO ruling D1): its population is the whole tree, so no declared edge could name it. Editing the affected-test array
+# degrades a LOCAL `--affected` run to the full battery; S9 (below) accepts that cost once, for its one workflow edge.
 #
 # FLOOR. The scan sees 12 sites in 7 files on the real tree (measured when this stage was written): 10 already `--password-stdin` (one is a plugin
 # doc snippet) and the engine's 2 `$CRANE` lines. A scan that sees fewer (a renamed binary, moved roots, a broken regex) is RED, never a clean bill.
@@ -8008,6 +7936,302 @@ else row "S8 exclusions: an exclusion rule hid a login it should not, or missed 
 echo "=== stage S8: Guard 3 rows (registry login password off argv: tokenised derived census, floor, mutations, evasion shapes, must-pass inputs) done ==="
 
 # =====================================================================================
+# STAGE S9 (#9757 item 2): a credential never rides terraform's argv as a `-var` option. Guard 1 is a derived static scan plus two pins (the rehearsal
+# workflow's option names; every terraform plan/destroy step exports before its `doppler run` and keeps bare --preserve-env) and a YAML-parsed step-set
+# identity; Guard 2 EXECUTES the four rehearsal terraform step bodies (two plans, two destroys) under strict `doppler`/`terraform` stubs and checks the
+# token reaches terraform by environment, is masked before terraform runs, and reaches no argv.
+#
+# GUARD 1 SCAN. Corpus = tracked + untracked non-ignored files minus S8's exclusion predicate (a deliberate copy: keep the two in lockstep), with
+# extensions .yml .yaml .sh .bash, plus .md under plugins/ only. Continuations are joined (a comment line is never continued); full-line comments are skipped
+# outside markdown. The option regex needs a LEFT boundary and the `NAME=` shape, so `--name-transformer tf-var -- \` and `-var-file` cannot match. There is NO
+# terraform-verb requirement (unlike S8): array building and `bash -c "... -var ..."` payloads carry the same exposure. A literal NAME is judged by a credential-name
+# regex; a `-var` whose name cannot be read as a literal (`$K`, `api_$x=`, `$'..'`, an escaped quote) is refused as `nonliteral`.
+# NAMED BLIND SPOTS and the rejected alternatives (stdin var-file, per-command prefix): ADR-280, the 2026-10-20 addendum. S9 selects on the full run and on an edit of
+# the rehearsal workflow; that array entry lives in scripts/lib/test-affected-paths.sh, whose edit degrades a LOCAL `--affected` run to the full battery once (CI is unaffected).
+#
+# FLOOR. The scan sees S9_VAR_FLOOR `-var` options on the tree (measured, exact like S8's). A scan below it is RED, never a clean bill. Converting or deleting a
+# benign `-var` anywhere is a floor edit in the same PR: lower S9_VAR_FLOOR to the new measured count.
+# =====================================================================================
+S9_VAR_FLOOR=44
+S9_WF=".github/workflows/inngest-provision-rehearsal.yml"
+S9_IDS_WANT="Teardown only (recovery arm)|Terraform destroy (everything this root owns)|Terraform plan (phase A — NIC absent)|Terraform plan (phase B — NIC attach)"
+S9="$TMPD/s9"; assert_fixture_dir "$S9"; mkdir -p "$S9/base" "$S9/mut" "$S9/shim" "$S9/real" "$S9/rows"
+cat > "$S9/scan.py" <<'S9PY'
+import os, re, subprocess, sys
+root = sys.argv[1]
+# A terraform/packer `-var` option: left boundary (so `tf-var --` and `-var-file` cannot match), `-var` or `--var`, an optional quote on the
+# option word, `=` or whitespace, an optional quote, then NAME= where NAME is a literal identifier or a non-literal ($K, ${K}, $(k)).
+OPT = re.compile(r"""(?<![\w-])["']?-{1,2}var["']?(?:=|\s+)["']?(?P<name>[A-Za-z_][A-Za-z0-9_]*|\$[{(]?\w+[})]?)=""")
+# A `-var` whose name cannot be read as a literal: a `$`, backtick or backslash right after the option or after a literal prefix (api_$x=, $'..', "$KV", \").
+FALLBACK = re.compile(r"""(?<![\w-])["']?-{1,2}var["']?(?:=|\s+)["']?(?:[A-Za-z_][A-Za-z0-9_]*)?[$`\\]""")
+CRED = re.compile(r"(token|secret|pass(?:w(?:or)?d|phrase)?|pwd|credential|creds|psk|api_?key|private_?key|bearer|auth|hmac|jwt|dsn|cookie|webhook)|(?:^|_)(?:key|pat|pw)$", re.I)
+CRED_CAMEL = re.compile(r"[a-z]Key")
+out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=True)
+for rel in out.stdout.decode("utf-8", "replace").split("\0"):
+    parts = rel.split("/")
+    if not rel or rel.endswith(".test.sh") or ".test." in parts[-1] or "test" in parts[:-1] or "tests" in parts[:-1] or "fixtures" in parts[:-1] or parts[0] == "knowledge-base":
+        continue
+    md = rel.endswith(".md")
+    if md and parts[0] != "plugins":
+        continue
+    if not (md or rel.endswith((".yml", ".yaml", ".sh", ".bash"))):
+        continue
+    try:
+        data = open(os.path.join(root, rel), "rb").read()
+    except OSError:
+        continue
+    if b"\0" in data[:8192] or b"-var" not in data:
+        continue
+    lines = data.decode("utf-8", "replace").split("\n")
+    i = 0
+    while i < len(lines):
+        start, buf = i + 1, [lines[i]]
+        while buf[-1].endswith("\\") and not buf[0].lstrip().startswith("#") and i + 1 < len(lines):
+            buf[-1] = buf[-1][:-1]
+            i += 1
+            buf.append(lines[i].strip())
+        cur = " ".join(buf)
+        i += 1
+        if "-var" not in cur or (not md and cur.lstrip().startswith("#")):
+            continue
+        code = cur.strip()[:200]
+        seen = set()
+        for m in OPT.finditer(cur):
+            seen.add(m.start())
+            name = m.group("name")
+            verdict = "nonliteral" if name.startswith("$") else ("name" if CRED.search(name) or CRED_CAMEL.search(name) else "ok")
+            print("\t".join([rel, str(start), name, verdict, code]))
+        for m in FALLBACK.finditer(cur):
+            if m.start() not in seen:
+                print("\t".join([rel, str(start), "<nonliteral>", "nonliteral", code]))
+S9PY
+cat > "$S9/steps.py" <<'S9STEPS'
+import re, sys, yaml
+f, mode = sys.argv[1], sys.argv[2]
+d = yaml.safe_load(open(f, encoding="utf-8"))
+steps = []
+for j in (d.get("jobs") or {}).values():
+    steps += [s for s in (j.get("steps") or []) if isinstance(s, dict)] if isinstance(j, dict) else []
+TF = re.compile(r"(?<![\w-])terraform\s+(?:-\S+\s+)*(?:plan|destroy)\b")
+EXPORT = re.compile(r'^\s*export TF_VAR_zot_pull_token="\$\{?ZOT_PULL\}?"\s*$')
+
+
+def logical(run):
+    out, cur = [], ""
+    for ln in run.split("\n"):
+        if ln.lstrip().startswith("#") and not cur:
+            continue
+        if ln.rstrip().endswith("\\"):
+            cur += ln.rstrip()[:-1] + " "
+            continue
+        out.append(cur + ln.strip())
+        cur = ""
+    return out + ([cur] if cur else [])
+
+
+tf = [(s.get("name", ""), s["run"]) for s in steps if isinstance(s.get("run"), str) and any(TF.search(x) for x in logical(s["run"]))]
+if mode == "ids":
+    print("|".join(sorted(n for n, _ in tf)))
+else:  # pin: one `<reason>\t<step>` line per violation
+    if not tf:
+        print("no-steps\t-")
+    for n, run in tf:
+        lines = [x for x in run.split("\n") if not x.lstrip().startswith("#")]
+        if len([x for x in lines if EXPORT.match(x)]) != 1:
+            print("export-count\t" + n)
+        dr = [x for x in lines if "doppler run" in x]
+        if not any(re.search(r"\bdoppler run\b.*\s--preserve-env(?=\s|$)", x) for x in dr):
+            print("preserve-env\t" + n)
+        if any("--only-secrets" in x for x in dr):
+            print("only-secrets\t" + n)
+S9STEPS
+s9_scan() { python3 -I "$S9/scan.py" "$1"; }   # <root>: one TSV record per -var option: file, line, name, verdict (ok|name|nonliteral), code
+s9_pin() { python3 -I "$S9/steps.py" "$1" pin || printf 'steps-crashed\t-\n'; }   # <workflow file>: violation lines, empty = every plan/destroy step exports and keeps bare --preserve-env
+s9_ids() { python3 -I "$S9/steps.py" "$1" ids; }   # <workflow file>: the sorted names of the steps that run terraform plan or destroy
+S9_J_REASONS=""; S9_J_N=0; S9_J_DETAIL=""
+s9_judge_text() { # <scan text>: sets S9_J_REASONS (empty = GREEN), S9_J_N, S9_J_DETAIL. Reasons: floor, name:<file>, nonliteral:<file>
+  local f
+  S9_J_REASONS=""
+  S9_J_N="$(grep -c . <<<"$1" || true)"
+  S9_J_DETAIL="$(awk -F'\t' 'NF >= 4 && $4 != "ok" { print $1 ":" $2 " (" $3 ")" }' <<<"$1" | tr '\n' ' ')"
+  [[ "$S9_J_N" -ge "$S9_VAR_FLOOR" ]] || S9_J_REASONS+=" floor"
+  while IFS= read -r f; do [[ -n "$f" ]] && S9_J_REASONS+=" $f"; done < <(awk -F'\t' 'NF >= 4 && $4 != "ok" { print $4 ":" $1 }' <<<"$1" | sort -u)
+  S9_J_REASONS="${S9_J_REASONS# }"
+}
+s9_judge() { s9_judge_text "$(s9_scan "$1")"; } # <root>
+s9_i1_text() { awk -F'\t' -v f="$S9_WF" '$1 == f { print $3 }' <<<"$1" | sort | uniq -c | awk '{ printf "%s%s=%s", s, $2, $1; s = " " }'; } # <scan text>: the rehearsal workflow's option names with counts
+s9_bad() { s9_scan "$1" | awk -F'\t' -v f="$2" '$1 == f && $4 != "ok" { n++ } END { print n + 0 }'; } # <root> <file>: BAD record count
+s9_put() { assert_fixture_dir "$1"; mkdir -p "$1/$(dirname "$2")"; printf '%s\n' "$3" > "$1/$2"; } # <root> <relative path> <content>
+s9_fresh() { local d="$S9/mut/$1"; assert_fixture_dir "$d"; rm -rf "${d:?}"; cp -a "$S9/base" "$d" && printf '%s' "$d"; } # <name>: prints a new root
+s9_edit() { s6_edit "$@" || fatal "S9 mutation did not land: $2"; } # <file> <old> <new> [<count>]: replace exactly <count> occurrences or abort the suite
+s9_edit1() { python3 -I -c '
+import sys
+p, old, new = sys.argv[1:4]
+t = open(p, encoding="utf-8").read()
+if old not in t: sys.exit(1)
+open(p, "w", encoding="utf-8").write(t.replace(old, new, 1))' "$@" || fatal "S9 first-occurrence mutation did not land: $2"; } # <file> <old> <new>: replace the FIRST occurrence only
+s9_has() { [[ " $S9_J_REASONS " == *" $1 "* ]]; }
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S9/base" || exit 1; git -C "$S9/base" init -q ) \
+  || fatal "S9 could not create the scratch repository"
+S9_REAL_SCAN="$(s9_scan "$REPO_ROOT")"
+# The base copies EVERY file that carries a -var record (a partial base would trip the floor and turn every mutant RED for the wrong reason).
+while IFS= read -r f; do [[ -n "$f" ]] || continue; mkdir -p "$S9/base/$(dirname "$f")"; cp "$REPO_ROOT/$f" "$S9/base/$f"; done < <(cut -f1 <<<"$S9_REAL_SCAN" | sort -u)
+
+# ---- Guard 1 on the real tree ---------------------------------------------------------------------------------------------------------
+s9_judge_text "$S9_REAL_SCAN"; S9_REAL_REASONS="$S9_J_REASONS"; S9_REAL_N="$S9_J_N"
+if [[ -z "$S9_REAL_REASONS" ]]; then row "S9 Guard 1: no scanned non-test file (tracked, or untracked and not ignored) passes a credential on a -var option ($S9_REAL_N options seen, floor $S9_VAR_FLOOR, derived over the whole tree)" ok
+else row "S9 Guard 1: a credential rides a -var option (file:line below), or the scan saw fewer options than its floor ($S9_VAR_FLOOR; lower it to the new measured count in the same PR when a benign -var is converted); the remedy for a credential is TF_VAR_<name> in the step environment" fail "reasons='$S9_REAL_REASONS' at=$S9_J_DETAIL options=$S9_REAL_N"; fi
+S9_I1="$(s9_i1_text "$S9_REAL_SCAN")"
+if [[ "$S9_I1" == "nic_attached=4 rehearsal_run_id=4" ]]; then row "S9 I1: the rehearsal workflow's -var options are exactly rehearsal_run_id x4 and nic_attached x4 (a new benign -var there is a deliberate edit of this row)" ok
+else row "S9 I1: the rehearsal workflow's -var option set changed" fail "got='$S9_I1'"; fi
+S9_PIN="$(s9_pin "$REPO_ROOT/$S9_WF")"
+if [[ -z "$S9_PIN" ]]; then row "S9 I2: each terraform plan/destroy step exports TF_VAR_zot_pull_token (the read variable) exactly once, keeps bare --preserve-env and has no --only-secrets" ok
+else row "S9 I2: a terraform step lost its TF_VAR_zot_pull_token export or its bare --preserve-env (expected: export TF_VAR_zot_pull_token=\"\$ZOT_PULL\" before doppler run --preserve-env)" fail "$S9_WF: $(tr '\t\n' '= ' <<<"$S9_PIN")"; fi
+S9_IDS="$(s9_ids "$REPO_ROOT/$S9_WF")"
+if [[ "$S9_IDS" == "$S9_IDS_WANT" ]]; then row "S9 step set: the steps that run terraform plan or destroy are exactly the four named steps, the four bodies Guard 2 executes (parsed from the YAML)" ok
+else row "S9 step set: a terraform plan/destroy step was added, removed or renamed (Guard 2 executes exactly four named bodies and I2 pins them)" fail "got='$S9_IDS'"; fi
+
+# ---- the baseline-GREEN control: the scratch base is judged by the SAME function and must be green --------------------------------------
+s9_judge "$S9/base"
+if [[ -z "$S9_J_REASONS" && "$S9_J_N" -eq "$S9_REAL_N" && -z "$(s9_pin "$S9/base/$S9_WF")" ]]; then row "S9 control: the scratch base (a copy of every file with a -var record) is judged GREEN with the real tree's count, so each mutant below is RED for its mutation alone" ok
+else row "S9 control: the scratch base is not GREEN with the real count (every mutant below would be measuring the base)" fail "reasons='$S9_J_REASONS' n=$S9_J_N/$S9_REAL_N"; fi
+s9_judge_text ""
+if s9_has floor; then row "S9 harness: a scanner that prints nothing is RED (reason floor), never a clean bill" ok; else row "S9 harness: an empty scan was not judged floor" fail "reasons='$S9_J_REASONS'"; fi
+
+# ---- Guard 1 mutations ------------------------------------------------------------------------------------------------------------------
+m3b=""; n3=0
+for v in 'terraform plan --var api_token=$T' 'ARGS=("-var" "api_token=$T")' 'terraform plan -var "$K=$V"' 'terraform plan -var "rehearsal_run_id=1" -var "api_token=$T"' 'VAR_ARGS+=(-var="deploy_token=$T")' 'bash -c "terraform plan -var db_password=$P"' \
+         'terraform plan -var=api_key=$T' "terraform plan -var 'client_secret=\$T'" 'echo "step #1"; terraform plan -var auth_header=$H' \
+         'terraform plan -var "$KV"' 'terraform plan -var "api_$x=$T"' "terraform plan -var \$'api_token=x'" 'bash -c "terraform plan -var \"api_token=$T\""'; do
+  n3=$((n3 + 1)); d="$(s9_fresh m3b-$n3)"; s9_put "$d" scripts/extra.sh "$v"; s9_judge "$d"
+  case "$S9_J_REASONS" in "name:scripts/extra.sh"|"nonliteral:scripts/extra.sh") : ;; *) m3b+=" [$v => '$S9_J_REASONS']" ;; esac
+done
+if [[ -z "$m3b" ]]; then row "S9 mutation 3b: the double-dash spelling, a quoted option word, a non-literal name, a second option on one line, an array append, a bash -c payload (plain and escaped-quote), -var=NAME=v, a single-quoted pair, a quoted '#' earlier on the line, a whole pair in a variable, a partly dynamic name and an ANSI-C quoted pair are each RED for that file" ok
+else row "S9 mutation 3b: a credential -var spelling was judged clean" fail "$m3b"; fi
+d="$(s9_fresh m7b)"; s9_edit1 "$d/$S9_WF" 'doppler run --preserve-env' 'doppler run'; m7b="$(s9_pin "$d/$S9_WF" | tr '\t\n' '= ')"
+if [[ "$m7b" == "preserve-env=Teardown only (recovery arm) " ]]; then row "S9 mutation 7: dropping bare --preserve-env from one step is RED in the static pin" ok
+else row "S9 mutation 7: the static pin did not see a dropped --preserve-env" fail "got='$m7b'"; fi
+d="$(s9_fresh m8b)"; s9_edit "$d/$S9_WF" '      - name: Assert no rehearsal orphans remain (Hetzner API)' $'      - name: Extra destroy\n        run: |\n          terraform -chdir=x destroy -auto-approve\n      - name: Assert no rehearsal orphans remain (Hetzner API)'; m8b="$(s9_ids "$d/$S9_WF")"
+if [[ "$m8b" != "$S9_IDS_WANT" ]]; then row "S9 mutation 8: an added third destroy step (written with a global flag) changes the YAML-derived step set" ok
+else row "S9 mutation 8: the step-set identity survived an added destroy step" fail "added='$m8b'"; fi
+
+# ---- credential-name table: one name per regex alternative (and the benign names that must stay clean) ------------------------------------
+d="$(s9_fresh names)"
+S9_NAMES_BAD="fooKey a_token a_secret a_pass a_password a_passphrase db_pwd a_credential a_creds a_psk apikey api_key privatekey private_key a_bearer a_auth a_hmac x_jwt app_dsn a_cookie a_webhook deploy_key deploy_pat db_pw apiKey"
+S9_NAMES_OK="ssh_key_path image_name rehearsal_phase rehearsal_run_id nic_attached key_name admin_ips"
+for nm in $S9_NAMES_BAD $S9_NAMES_OK; do printf 'terraform plan -var %s=1\n' "$nm"; done > "$S9/names.txt"
+s9_put "$d" scripts/names.sh "$(cat "$S9/names.txt")"
+m_nm=""; S9_NM_SCAN="$(s9_scan "$d")"
+for nm in $S9_NAMES_BAD; do [[ "$(awk -F'\t' -v n="$nm" '$1 == "scripts/names.sh" && $3 == n { print $4 }' <<<"$S9_NM_SCAN")" == name ]] || m_nm+=" [$nm not judged name]"; done
+for nm in $S9_NAMES_OK; do [[ "$(awk -F'\t' -v n="$nm" '$1 == "scripts/names.sh" && $3 == n { print $4 }' <<<"$S9_NM_SCAN")" == ok ]] || m_nm+=" [$nm not judged ok]"; done
+if [[ -z "$m_nm" ]]; then row "S9 names: one name per credential-regex alternative (token, secret, pass, pwd, credential, creds, psk, api_key, private_key, bearer, auth, hmac, jwt, dsn, cookie, webhook, _key, _pat, _pw, camelCase Key) is judged a credential, and ssh_key_path, image_name, rehearsal_*, nic_attached, key_name, admin_ips stay clean" ok
+else row "S9 names: the credential-name regex mis-judged a name" fail "$m_nm"; fi
+
+# ---- must-pass inputs that are NOT credential -var options: zero BAD records ---------------------------------------------------------
+d="$(s9_fresh pass1)"
+s9_put "$d" scripts/ok.sh "$(cat <<'S9PASS'
+terraform plan -var "ssh_key_path=${CI_SSH_PUB}" -var image_name="$PINNED"
+terraform plan -var-file=<(printf 'x=1\n')
+doppler run --preserve-env --name-transformer tf-var -- \
+  terraform plan -no-color
+# terraform plan -var api_token=x
+TOKEN="$(doppler secrets get FOO --plain)"
+terraform plan -var "image_name=${PINNED}"
+S9PASS
+)"
+s9_put "$d" scripts/bad.test.sh 'terraform plan -var "api_token=$T"'
+s9_kb_root=knowledge-base  # built from a variable so test-affected-kb-consumers reads this as a scratch-tree path, not a read of the real tree
+s9_put "$d" "$s9_kb_root/runbook.sh" 'terraform plan -var "api_token=$T"'
+if [[ "$(s9_bad "$d" scripts/ok.sh)" -eq 0 && "$(s9_scan "$d" | awk -F'\t' '$1 == "scripts/ok.sh" { n++ } END { print n + 0 }')" -eq 3 ]]; then row "S9 must-pass: a clean ssh_key_path/image_name option, -var-file, the tf-var transformer line, a comment, and a file that reads a secret AND passes a clean -var are judged GREEN (3 options counted, 0 bad)" ok
+else row "S9 must-pass: a non-credential -var shape was judged bad or mis-counted" fail "bad=$(s9_bad "$d" scripts/ok.sh)"; fi
+m_x=""; n_x=0
+for pair in 'x/test/a.sh:0' 'x/tests/a.sh:0' 'x/fixtures/a.sh:0' 'a.test.sh:0' 'knowledge-base/a.sh:0' 'docs/a.md:0' 'plugins/a.md:1' 'scripts/testing/a.sh:1' 'apps/a.sh:1'; do
+  n_x=$((n_x + 1)); d="$(s9_fresh excl-$n_x)"; s9_put "$d" "${pair%%:*}" 'terraform plan -var "api_token=$T"'
+  [[ "$(s9_bad "$d" "${pair%%:*}")" -eq "${pair##*:}" ]] || m_x+=" [${pair%%:*} => want ${pair##*:} bad]"
+done
+if [[ -z "$m_x" ]]; then row "S9 exclusions: a credential -var under test/, tests/, fixtures/, *.test.*, knowledge-base/ or a .md outside plugins/ is not scanned, and the same under plugins/*.md, scripts/testing/ and apps/ is" ok
+else row "S9 exclusions: an exclusion rule hid a credential -var it should not, or missed one it should" fail "$m_x"; fi
+
+# ---- Guard 2: the four rehearsal terraform step bodies EXECUTED under strict stubs --------------------------------------------------
+S9_CANARY="S9CANARYzot0123"
+for t in date; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date; every other command in the four bodies is a builtin
+{ printf '#!%s\n' "$BASH_BIN"; cat <<'S9DOP'
+# Stub doppler: records argv (NUL-delimited) and answers ONLY the two argv shapes the steps use (anything else: exit 64 and a refusal line, so a changed
+# flag, config or project is visible). `run` execs the command after `--` and injects NO TF_VAR_* (production inherits an equal value from prd_terraform; the stub
+# models the unmeasured case so a dropped export cannot pass by inheritance).
+printf '%s\0' "$@" > "$CALLS_DIR/doppler.$$.argv"
+case "${1-}" in
+  secrets)
+    if [[ "$*" != "secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain" ]]; then printf 'S9-STUB-64 unexpected doppler secrets argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
+    printf '%s' "$S9_CANARY_VAL"; exit 0 ;;
+  run)
+    if [[ "${*:1:9}" != "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --" ]]; then printf 'S9-STUB-64 unexpected doppler run argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
+    shift 9; exec "$@" ;;
+esac
+printf 'S9-STUB-64 unknown doppler verb\n' >> "$CALLS_DIR/refusals"; exit 64
+S9DOP
+} > "$S9/shim/doppler"
+{ printf '#!%s\n' "$BASH_BIN"; cat <<'S9TF'
+# Stub terraform: records argv and the value of TF_VAR_zot_pull_token (or the literal <unset>); exits 64 unless argv is EXACTLY the one the harness expects for the step.
+printf '%s\0' "$@" > "$CALLS_DIR/terraform.$$.argv"
+printf '%s' "${TF_VAR_zot_pull_token-<unset>}" > "$CALLS_DIR/terraform.$$.tfvar"
+echo "S9 terraform stub: $1"
+if [[ "$*" != "$S9_TF_ARGV" ]]; then printf 'S9-STUB-64 unexpected terraform argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
+S9TF
+} > "$S9/shim/terraform"
+chmod +x "$S9/shim/doppler" "$S9/shim/terraform"
+S9_N=0
+s9_run() { # <bodyfile> <expected terraform argv> -> S9_RC S9_DIR
+  local r; S9_N=$((S9_N + 1)); r="$S9/rows/r$S9_N"; assert_fixture_dir "$r"; mkdir -p "$r/calls" "$r/cwd"
+  S9_RC=0
+  ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 GITHUB_WORKSPACE="$r/cwd" DOPPLER_TOKEN="default-scope" DOPPLER_TOKEN_PRD="prd-scope" \
+      S9_CANARY_VAL="$S9_CANARY" S9_TF_ARGV="$2" "$BASH_BIN" --noprofile --norc -eo pipefail "$1" ) > "$r/out" 2>&1 || S9_RC=$?
+  S9_DIR="$r"
+}
+S9_R_REASONS=""
+s9_judge_run() { # sets S9_R_REASONS (empty = GREEN). Reasons, in this order: rc ncalls canary-in-argv env-not-set env-value-differs mask-missing refused
+  local f n=0 tv="<none>" mask_ln stub_ln
+  S9_R_REASONS=""
+  [[ "$S9_RC" == 0 ]] || S9_R_REASONS+=" rc"
+  for f in "$S9_DIR"/calls/terraform.*.argv; do [[ -e "$f" ]] || continue; n=$((n + 1)); tv="$(cat "${f%.argv}.tfvar")"; done
+  [[ "$n" == 1 ]] || S9_R_REASONS+=" ncalls"
+  for f in "$S9_DIR"/calls/*.argv; do [[ -e "$f" ]] || continue; if grep -qF -- "$S9_CANARY" <(tr '\0' '\n' < "$f"); then S9_R_REASONS+=" canary-in-argv"; break; fi; done
+  if [[ "$tv" == "<unset>" ]]; then S9_R_REASONS+=" env-not-set"; elif [[ "$n" -ge 1 && "$tv" != "$S9_CANARY" ]]; then S9_R_REASONS+=" env-value-differs"; fi
+  mask_ln="$(grep -nxF -- "::add-mask::$S9_CANARY" "$S9_DIR/out" | head -n 1 | cut -d: -f1)"
+  stub_ln="$(grep -n '^S9 terraform stub:' "$S9_DIR/out" | head -n 1 | cut -d: -f1)"
+  if [[ -z "$mask_ln" || ( -n "$stub_ln" && "$mask_ln" -gt "$stub_ln" ) ]]; then S9_R_REASONS+=" mask-missing"; fi
+  [[ ! -s "$S9_DIR/calls/refusals" ]] || S9_R_REASONS+=" refused"
+  S9_R_REASONS="${S9_R_REASONS# }"
+}
+s9_verdict_ok() { [[ "$1" == "$2" ]]; } # <got reasons> <want reasons>: the one comparison every Guard 2 mutation row is judged by
+S9_EXP=$'export TF_VAR_zot_pull_token="$ZOT_PULL"\n'; S9_MASK="printf '::add-mask::%s\\n' \"\$ZOT_PULL\""$'\n'
+s9_mrow() { # <tag> <id> <want reasons> <old> <new> [<old> <new>]...: copy the body, apply exact edits, run it, judge it
+  local tag="$1" id="$2" want="$3" b="$S9/body-$1.sh" m="$S9/m-$1-$2.sh"; shift 3
+  cp "$b" "$m" || fatal "S9 could not copy $b"
+  while [[ $# -ge 2 ]]; do s9_edit "$m" "$1" "$2"; shift 2; done
+  s9_run "$m" "$S9_TF_ARGV"; s9_judge_run
+  if s9_verdict_ok "$S9_R_REASONS" "$want"; then row "S9 Guard 2 $id ($tag): judged '$want'" ok
+  else row "S9 Guard 2 $id ($tag): wrong verdict" fail "want='$want' got='$S9_R_REASONS'"; fi
+}
+for spec in 'teardown-only|Teardown only (recovery arm)|destroy -auto-approve -input=false|false' 'teardown-job|Terraform destroy (everything|destroy -auto-approve -input=false|false' \
+            'plan-a|Terraform plan (phase A|plan -no-color -input=false -out=tfplan-a|false' 'plan-b|Terraform plan (phase B|plan -no-color -input=false -out=tfplan-b|true'; do
+  IFS='|' read -r tag sel argv nic <<<"$spec"
+  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic"$'\n'
+  s3_body "$REPO_ROOT/$S9_WF" "$sel" > "$S9/body-$tag.sh" || fatal "S9 could not extract the $tag step"
+  s9_run "$S9/body-$tag.sh" "$S9_TF_ARGV"; s9_judge_run
+  if [[ -z "$S9_R_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real step body runs GREEN under the strict stubs: one terraform call with exactly the expected argv, the token masked before terraform runs, in its environment and in no argv" ok
+  else row "S9 Guard 2 control ($tag): the real step body is not GREEN under the strict stubs (every mutant below would measure the base)" fail "reasons='$S9_R_REASONS'"; fatal "S9 control not green for $tag: a red baseline voids every mutant"; fi
+  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
+  s9_mrow "$tag" m2-reorder "env-not-set" "$S9_EXP" '' "$S9_TAIL" "$S9_TAIL$S9_EXP"
+  s9_mrow "$tag" m3-mask "mask-missing" "$S9_MASK" ''
+  s9_mrow "$tag" m4-doppler-scope "rc ncalls refused" "-c prd_terraform" "-c prd"
+done
+# The comparison every mutation row is judged by must be able to REJECT: a doctored pair must fail it and an equal pair must pass (reported by row, never through s9_mrow).
+if s9_verdict_ok "env-not-set" "env-not-set" && ! s9_verdict_ok "env-not-set" "mask-missing" && ! s9_verdict_ok "" "rc"; then row "S9 harness: the Guard 2 verdict comparison rejects a doctored verdict and accepts an equal one" ok
+else row "S9 harness: the Guard 2 verdict comparison accepted a doctored verdict" fail "s9_verdict_ok is not discriminating"; fi
+echo "=== stage S9: Guard 1 rows (terraform -var credentials: derived scan, floor, identity, mutations, name table, must-pass inputs) and Guard 2 rows (four step bodies executed under strict stubs) done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -8046,7 +8270,14 @@ SELFTEST_PASSES=0
 # 811 -> 819 at PR C (#10120, probe scripts of #10093): four converted-script rows (the inngest body and the three probes join S6H_CONVERTED), mutations 1b (inngest body), 1c (the three probes), 3c (a probe) and the inngest guard-class mutation; the stale and growth mutations are re-anchored, the ceiling row is 0 == 0: measured (819 passed, 0 failed).
 # 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
 # 823 -> 840 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 15 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (840 passed, 0 failed).
-EXPECTED_TESTS=840
+# 841 -> 874 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 33 S9 rows. The tree measured 841 after merging main (the floor said 840, so it had 1 row of slack), so the new floor is the measured total (874 passed, 0 failed).
+# 874 -> 875 at the second merge of main: #10566 added one S4 manifest row (git-data-rehearsal-evidence), so the base is 842 and the total is the measured 875 (875 passed, 0 failed).
+# 875 -> 880 at the #10697 fix round (rebased onto the 875 above; was 842 -> 847 on its own base) (#10455): web-bash-synthetic.sh joins S6H_CONVERTED (1 row), its _hb_url_ok digest and _hb_curl line pins (2 rows) and one mutation row each (2): measured (847 passed, 0 failed). S6H_FILE_FLOOR stays 7: it detects a mis-resolved directory (the derived population is 17 files), and the S6-HB scratch tree holds only the converted scripts plus two controls.
+# 880 -> 824 at G1 PR-4a (#10937; S4_GUARD_FLOOR 76 -> 74, the measured count): the four retired followthrough probes take their per-probe HMAC rows (the dynamic rows of three, the delegated row of the fourth, their hm5_audit and mutation rows and the manifest rows) with them; the parity block gains one E4 row and HM5_FILES gains sdk-bash-smoke-verdict-10548.sh (its audit and mutation rows): measured (824 passed, 0 failed); 824 -> 825 at the same PR's review round: one census row (the files holding the canonical HMAC program are exactly the audited set): measured (825 passed, 0 failed).
+# 825 -> 824 at #6590 PR-B: the orphan-sweeps-relook-10972 suite was retired (monitor destroyed);
+# its DELEGATED_MANIFEST row left with it. Rebased over #11483's dispatch-recovery-sweeper-11211
+# (+1, main 825): net floor stays 824.
+EXPECTED_TESTS=824
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

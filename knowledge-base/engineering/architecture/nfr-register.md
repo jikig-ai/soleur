@@ -492,12 +492,13 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 
 ### NFR-026: Encryption In-Transit
 
-**Category:** Security | **Scope:** Link | **System-Level Status:** Implemented
+**Category:** Security | **Scope:** Link | **System-Level Status:** Partially Implemented (the Cloudflare edge to web-host origin link for `app.soleur.ai` is Not Implemented, #10479)
 
 | Container/Link | Status | Enforced By | Evidence |
 |----------------|--------|-------------|----------|
 | Founder -> Dashboard | Implemented | Cloudflare | TLS terminated at Cloudflare edge |
-| Dashboard -> API Routes | Implemented | HTTPS | Internal HTTPS via Next.js |
+| Cloudflare edge -> web-host origin (`app.soleur.ai`) | Not Implemented | — | Zone SSL mode for this host is `flexible` per the `set_config` rule in `apps/web-platform/infra/seo-config-rules.tf` (configuration read; live mode not measured); the container publishes plain `80:3000`/`3000:3000` and no 443 listener. Fix CLO-ruled (Origin CA + `strict` + handshake probe), target 2026-11-12, #10479 |
+| Dashboard -> API Routes | Implemented | HTTPS | **[Superseded 2026-10-29 (#10479): not HTTPS between Cloudflare and the origin; see the Cloudflare edge row above.]** Internal HTTPS via Next.js |
 | API Routes -> Agent Runtime | Implemented | WebSocket WSS | Encrypted WebSocket protocol |
 | API Routes -> Supabase | Implemented | TLS | Supabase requires TLS connections |
 | API Routes -> Stripe | Implemented | HTTPS | Stripe SDK enforces HTTPS |

@@ -65,7 +65,7 @@ jobs:
           # verified to exist by the pack script; a missing member is a hard fail-closed exit.
           mapfile -t FILES < <(grep -vE '^\s*(#|$)' apps/web-platform/infra/inngest-config-refresh-set.txt)
           if [[ "${#FILES[@]}" -eq 0 ]]; then
-            echo "::error::refresh-set is empty — the five committed members must be present; check apps/web-platform/infra/inngest-config-refresh-set.txt"
+            echo "::error::refresh-set is empty — the four committed members must be present; check apps/web-platform/infra/inngest-config-refresh-set.txt"
             exit 1
           fi
           echo "Packing ${#FILES[@]} refresh-set files at VERSION=${VERSION}"
@@ -87,10 +87,79 @@ jobs:
           # the tarball so the host `verify-blob --bundle` stays fully offline against the
           # baked trusted root. The Assemble step tars $RUNNER_TEMP/bundle wholesale, so the
           # bundle file lands in the tarball with no pack-script change.
+          # --signing-config pins the emit surface (#10390 defect 3): the committed
+          # apps/web-platform/infra/inngest-signing-config.json is signingconfig v0.2
+          # modeled on sigstore/root-signing targets/signing_config.v0.2.json (captured
+          # 2026-10-23), minus tsaUrls — Rekor v1 only and no TSA, so the emitted envelope
+          # stays inside the shape the host's pinned sigstore-go v1.2.0
+          # LoadJSONFromPath accepts (the TUF-default config let the emit surface drift).
           cosign sign-blob --yes \
             --bundle "${MANIFEST}.sigstore.json" \
+            --signing-config apps/web-platform/infra/inngest-signing-config.json \
             "${MANIFEST}"
+          # cosign writes the bundle file mode 0600 (sign_blob.go:132 at v3.1.1) —
+          # measured root cause of defect 3: the consumer verify runs inside the
+          # pinned NONROOT cosign image over a bind mount, so a 0600 member reads
+          # EACCES in-container, sgbundle.LoadJSONFromPath fails, checkNewBundle
+          # returns false and the host reports detail=flag-newbundle — even though
+          # the envelope bytes load cleanly (the Phase-0 Go probe prints LOAD_OK
+          # reading the same file as its owner). Normalize the member mode so the
+          # tarball lands world-readable.
+          chmod 0644 "${MANIFEST}.sigstore.json"
           echo "Signed ${MANIFEST}: wrote ${MANIFEST}.sigstore.json"
+
+      - name: Verify produced bundle before publish (never-again gate)
+        env:
+          MANIFEST: ${{ steps.pack.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          # DEFECT-3 NEVER-AGAIN GATE (#10390): the producer must verify its own
+          # artifact against the CONSUMER's pinned contract BEFORE any push —
+          # sign-time in-process validate() is not the on-disk LoadJSONFromPath
+          # path, and a verify run as the file's OWNER would sail past the 0600
+          # EACCES defect that killed the real channel. So this runs the PINNED
+          # cosign image (same digest the host runs, same nonroot UID) over a
+          # bind-mounted bundle dir — the exact consumer load path. The step
+          # hard-fails on non-zero rc or a missing 'Verified OK', so an unloadable,
+          # unreadable or unverifiable bundle can never reach the push steps again.
+          # The identity regexp is derived from THIS run's ref (branch dispatches
+          # sign under their own ref — Fulcio binds the true ref into the cert);
+          # ref regexp metacharacters are escaped before assembling the pattern.
+          COSIGN="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+          REF_ESCAPED="$(printf '%s' "$GITHUB_REF" | sed 's/[.[\*^$()+?{|\\]/\\&/g')"
+          IDENTITY_REGEXP="^https://github\.com/jikig-ai/soleur/\.github/workflows/build-inngest-config-bundle\.yml@${REF_ESCAPED}$"
+          timeout 300 docker pull "$COSIGN"
+          # The gate's EACCES-class coverage exists only because the pinned image's default
+          # user is nonroot (UID 65532 — asserted below via image inspect). A future pin
+          # bump to a root-default image would silently disarm exactly the defect class this
+          # step exists to catch: hard-fail if the pinned verifier ever runs as root.
+          VERIFIER_USER="$(docker image inspect -f '{{.Config.User}}' "$COSIGN")"
+          if [[ -z "$VERIFIER_USER" || "$VERIFIER_USER" == "0" || "$VERIFIER_USER" == "root" ]]; then
+            echo "::error::pinned cosign verifier image defaults to a root/empty user (Config.User='${VERIFIER_USER}') — the gate cannot see EACCES-class member-mode defects; refusing to publish"
+            exit 1
+          fi
+          # `timeout` mirrors the host's bounded verify (VERIFY_TIMEOUT_S=120): an unbounded
+          # container invocation here could hang the whole job on a wedged daemon, not just fail.
+          out="$(timeout 120 docker run --rm --network none \
+            -v "$(dirname "$MANIFEST"):/bundle:ro" \
+            -v "$GITHUB_WORKSPACE/apps/web-platform/infra/cosign-trusted-root.json:/etc/cosign/trusted_root.json:ro" \
+            "$COSIGN" verify-blob \
+            --trusted-root /etc/cosign/trusted_root.json \
+            --bundle "/bundle/$(basename "$MANIFEST").sigstore.json" \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "/bundle/$(basename "$MANIFEST")" 2>&1)" || rc=$?
+          if [[ ${rc:-0} -ne 0 ]]; then
+            echo "$out"
+            echo "::error::produced bundle failed the consumer verify contract (rc=$rc) — refusing to publish; see knowledge-base/engineering/operations/runbooks/inngest-config-refresh.md"
+            exit 1
+          fi
+          echo "$out"
+          grep -q 'Verified OK' <<<"$out" || {
+            echo "::error::verify-blob exited 0 but did not print 'Verified OK' — refusing to publish"
+            exit 1
+          }
+          echo "Produced bundle verified in the pinned nonroot verifier image: ${MANIFEST}.sigstore.json"
 
       - name: Assemble bundle tarball + minimal OCI context
         run: |
@@ -130,8 +199,8 @@ jobs:
         uses: ./.github/actions/cf-tunnel-registry-bridge
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
-          cloudflared-version: "2026.5.0"
-          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          cloudflared-version: "2026.10.4"
+          cloudflared-sha256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
       # This step is NOT gated on the bridge. Gating it on `steps.zot_bridge.outcome == 'success'`
       # made a soft-failed bridge SKIP the step, so the mirror step itself produced no warning,
@@ -148,7 +217,7 @@ jobs:
         id: zot_mirror
         if: steps.docker_build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           DIGEST: ${{ steps.docker_build.outputs.digest }}
           BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
@@ -156,10 +225,11 @@ jobs:
           set -euo pipefail
           ZOT_DST="127.0.0.1:5000/${IMAGE#ghcr.io/}:v${VERSION}"
           degraded() {
-            local reason="$1" rc="$2" detail="${3:-}"
+            local reason="$1" rc="$2" detail="${3:-}" dst="${ZOT_DST}"
+            [[ "$reason" == cosign_* ]] && dst="${COSIGN_DST:-unset}"  # cosign_ prefix = the second leg's reason namespace
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT_DST} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
+            echo "::warning::zot mirror degraded for ${dst} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
             echo "- zot mirror degraded (reason=${reason} rc=${rc}); this run's GHCR push succeeded before the mirror attempt" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
@@ -190,6 +260,18 @@ jobs:
           ZOT_DIGEST="$(timeout 60 crane digest "${ZOT_DST}")" || degraded digest_lookup "$?" "crane digest lookup failed after the copy"
           [[ "$ZOT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || degraded digest_lookup 1 "crane digest returned an unexpected shape"
           [[ "$ZOT_DIGEST" == "${DIGEST:-}" ]] || degraded digest_mismatch 1 "the zot digest differs from the built digest"
+          # The cosign verifier image is the last un-mirrored registry read on the host
+          # (#10390 defect 2): the host is deny-all-public egress, so its
+          # `docker run gcr.io/…cosign@sha256:…` verify dies on the daemon-side pull.
+          # Mirror it here — AFTER the bundle copy, so a cosign failure can never starve
+          # the owner leg — and equality-check the zot digest against the pin (a tag dst
+          # makes digest preservation a measured check, not an asserted one; the host
+          # pulls by @sha256 regardless).
+          COSIGN_DST="127.0.0.1:5000/jikig-ai/cosign:v3.1.1"
+          retry timeout 180 crane copy "gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" "$COSIGN_DST" || degraded cosign_copy "$?" "cosign mirror copy failed after 3 attempts"
+          COSIGN_ZOT_DIGEST="$(timeout 60 crane digest "$COSIGN_DST")" || degraded cosign_digest_lookup "$?" "cosign digest lookup failed after the copy"
+          [[ "$COSIGN_ZOT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || degraded cosign_digest_lookup 1 "cosign digest returned an unexpected shape"
+          [[ "$COSIGN_ZOT_DIGEST" == "sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" ]] || degraded cosign_digest_mismatch 1 "the zot cosign digest differs from the pinned digest"
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
 
       - name: Tear down cloudflared registry bridge

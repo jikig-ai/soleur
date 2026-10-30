@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-command -v date >/dev/null 2>&1 || { echo "SKIP: date missing"; exit 0; }
+command -v date >/dev/null 2>&1 || { echo "UNRESOLVED: date missing — this suite asserted nothing; install date"; exit 3; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/expenses-verify-by-check.sh"

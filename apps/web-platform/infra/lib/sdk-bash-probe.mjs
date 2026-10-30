@@ -1,6 +1,17 @@
 // One scripted Bash turn through the REAL Agent SDK (query()), a local stand-in for the Messages API, and
 // whatever `bwrap` the PATH resolves (the shim, in the suite and production images). No model, no network, no real
-// credential. Two modes, one file (the production image has no TypeScript sources, so the probe is plain ESM):
+// credential. Three entries, one file (the production image has no TypeScript sources, so the probe is plain ESM):
+//
+//   runtime (SMOKE=1 and SDK_BASH_PROBE_RUNTIME=1)  The runtime Bash synthetic (infra/web-bash-synthetic.sh, ADR-079
+//                          "Addendum — 2026-10-22 (#10455 b)") in the RUNNING production container. Same verdict function and result contract as the
+//                          deploy smoke, with three differences: the seccomp artifact comes from SDK_BASH_PROBE_SELECTOR (the
+//                          host asked the dispatcher's own resolver, so the synthetic tests what production would select now),
+//                          coverage names THAT artifact, and the only directories created outside the probe's own scratch dirs are
+//                          the closed production masked set (precreateDirs), through ensureMaskedDirs: only when absent, with
+//                          production's own mkdir call, and only as PID 1's uid (ADR-079 "Addendum — 2026-10-23 (#10455 PR-B)").
+//                          The result carries masks_missing / masks_created / masks_note. The SDK CLI's own temp base (CLAUDE_CODE_TMPDIR / TMPDIR) is the probe's scratch
+//                          config dir, never the shared /tmp/claude-<uid> (the #10445 cross-tenant channel), and the scratch dirs
+//                          are removed on the normal and infra() exits; a run killed by TERM/KILL can leave a dir (the SDK's claude child recreates it while it flushes), and leftovers older than a day are swept at start.
 //
 //   default (SMOKE unset)  The docker suite's control/treatment probe (infra/sandbox-masked-proc-docker.test.sh):
 //                          observes, under the production run tuple, what a hosted Bash call returns with and
@@ -25,7 +36,7 @@
 // the file is the entry point.
 import http from "node:http";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -55,11 +66,254 @@ export function smokeSelectorPath() {
   return SMOKE_SELECTOR_PATHS.unixdeny;
 }
 
+/** Runtime mode: the pinned path for a selector NAME (`base` | `unixdeny`), else null. A closed lookup, never a path from the
+ *  environment: an unknown name (or a prototype key) is refused rather than turned into a file path. */
+export function runtimeSelectorPath(name) {
+  return typeof name === "string" && Object.hasOwn(SMOKE_SELECTOR_PATHS, name) ? SMOKE_SELECTOR_PATHS[name] : null;
+}
+
+/** Everything runSmoke decides from its environment, as one pure value (unit-tested for both modes in test/sdk-bash-probe-runtime.test.ts).
+ *  Deploy mode (SDK_BASH_PROBE_RUNTIME unset): the pinned unixdeny artifact, every masked dir is created (`mkdir`: a canary container has
+ *  none). Runtime mode: the artifact NAMED by SDK_BASH_PROBE_SELECTOR (null when it is not one of the two), every masked dir is applied
+ *  like production does, `mkdir` is ALWAYS empty and `precreate` is the closed set ensureMaskedDirs may create (the only runtime creation
+ *  site). No I/O here. */
+export function planSmoke({ env, uid, home }) {
+  const runtime = env?.SDK_BASH_PROBE_RUNTIME === "1";
+  const selectorName = runtime ? env.SDK_BASH_PROBE_SELECTOR ?? "" : "unixdeny";
+  const selectedPath = runtime ? runtimeSelectorPath(selectorName) : smokeSelectorPath();
+  if (selectedPath === null) return { runtime, selectorName, selectedPath, masked: [], mkdir: [], precreate: [] };
+  const all = maskedDirs(uid, home);
+  if (!runtime) return { runtime, selectorName, selectedPath, masked: all, mkdir: all, precreate: [] };
+  return { runtime, selectorName, selectedPath, masked: all, mkdir: [], precreate: precreateDirs(uid, home) };
+}
+
+/** The env the SDK child gets for its own scratch. CLAUDE_CODE_TMPDIR / TMPDIR point INSIDE the probe's scratch config dir, so the
+ *  CLI never writes under the shared `<tmpdir>/claude-<uid>` of the production container (the #10445 cross-tenant channel, see
+ *  server/agent-session-tmp.ts) and one rmSync removes everything. The CLI falls back to that shared dir when its per-uid dir
+ *  `<base>/claude-<uid>` is longer than 44 bytes, so `cliTmpBaseOk` is checked before the run. */
+export function scratchEnv(cfg) {
+  return { CLAUDE_CONFIG_DIR: cfg, CLAUDE_CODE_TMPDIR: cfg, TMPDIR: cfg };
+}
+export function cliTmpBaseOk(cfg, uid) {
+  return Buffer.byteLength(`${cfg}/claude-${uid}`) <= 44;
+}
+
+/** Leftovers of a probe run that was killed (`timeout -k`, the OOM killer) before it could clean up: the probe's own scratch dirs
+ *  (`sdk-bash-probe-*`, owned by this uid) in `tmp` that are older than `maxAgeMs`. Everything is injected; nothing follows a symlink. */
+export function staleScratchDirs(tmp, nowMs, uid, { readdir, lstat }, maxAgeMs = 24 * 3600 * 1000) {
+  const out = [];
+  let names = [];
+  try { names = readdir(tmp); } catch { return out; }
+  for (const n of names) {
+    if (!n.startsWith("sdk-bash-probe-")) continue;
+    try {
+      const st = lstat(join(tmp, n));
+      if (st.isDirectory() && st.uid === uid && nowMs - st.mtimeMs > maxAgeMs) out.push(join(tmp, n));
+    } catch { /* vanished */ }
+  }
+  return out;
+}
+
+/** A thrown SDK error that says its child was killed by a signal (the OOM killer, a container stop): not a Bash result. */
+const CHILD_KILLED_SIGNATURE = /exited with code (137|143)\b|\bSIGKILL\b|\bSIGTERM\b/i;
+
 /** The per-session masked dirs of the production config for a container env with no XDG_RUNTIME_DIR /
  *  CLAUDE_CODE_TMPDIR / TMPDIR: `/tmp/cc-socks`, the CLI's `/tmp/cc-socks-<uid>` fallback and the shared-HOME transcript
  *  dir (server/agent-runner-sandbox-config.ts `peerMessagingSocketDirs` / `sessionTranscriptDirs`). */
 export function maskedDirs(uid, home) {
-  return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${home}/.claude/projects`];
+  return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, transcriptDir(home)];
+}
+
+/** The shared-HOME transcript dir: the one masked dir whose path derives from HOME. */
+export function transcriptDir(home) {
+  return `${home}/.claude/projects`;
+}
+
+/** The CLI temp base the builder pre-creates and denies (server/agent-session-tmp.ts `AGENT_SESSION_TMP_ROOT`), a literal pinned to it
+ *  by test/sdk-bash-probe-parity.test.ts. It is not in `maskedDirs` because the order of `smokeSandboxConfig.denyRead` is pinned. */
+export const SESSION_TMP_ROOT = "/tmp/.cs";
+
+/** The closed set of directories the runtime probe may create: exactly what `buildAgentSandboxConfig` pre-creates for the default
+ *  container env (set equality pinned in test/sdk-bash-probe-parity.test.ts). */
+export function precreateDirs(uid, home) {
+  return [...maskedDirs(uid, home), SESSION_TMP_ROOT];
+}
+
+// ---- PID 1 (the uid and HOME guards of ensureMaskedDirs) ------------------------------------------------------------------------
+// The synthetic execs as the container's own user (no `-u`). PID 1 is the container's init (`docker --init` / tini) running as that same
+// user, and the app is its child, so PID 1's uid and HOME stand in for the app's. A dir the probe creates must be one the app can use,
+// so creation happens only when the probe's uid is PID 1's REAL and EFFECTIVE uid. `/proc/1/environ` holds every app secret, so it is
+// read narrowly: capped, only five names looked at, only two booleans come out, the buffer is zero-filled (on every path, including a
+// throw mid-read), nothing is logged.
+
+/** Largest `/proc/1/environ` read accepted. A read of exactly this many bytes is parsed; a read of MORE is unreadable and never parsed.
+ *  readPid1 asks for PID1_ENV_CAP + 1 bytes, so a file that fits is distinguishable from one that was cut. */
+export const PID1_ENV_CAP = 256 * 1024;
+
+/** PID 1's REAL and EFFECTIVE uid: the FIRST two fields of the `Uid:` line of /proc/1/status text (`Uid: real effective saved fs`).
+ *  undefined when either cannot be read. */
+export function parsePid1Uids(text) {
+  if (typeof text !== "string") return undefined;
+  const m = /^Uid:[ \t]+(\d+)[ \t]+(\d+)(?=[ \t\n]|$)/m.exec(text);
+  if (!m) return undefined;
+  const uid = Number(m[1]);
+  const euid = Number(m[2]);
+  return Number.isSafeInteger(uid) && Number.isSafeInteger(euid) ? { uid, euid } : undefined;
+}
+
+const PID1_BASE_NAMES = ["CLAUDE_CONFIG_DIR", "XDG_RUNTIME_DIR", "CLAUDE_CODE_TMPDIR", "TMPDIR"];
+
+/** What the HOME guard needs from PID 1's environ (a Buffer of NUL-separated NAME=value entries): `homeMatches` (its HOME is exactly
+ *  `probeHome`, both absolute) and `divergent` (any of the four other base variables is an absolute path, a base the probe does not
+ *  model). Values are compared as bytes and never turned into strings; only the NAME of an entry is ever decoded. null when the read is
+ *  unusable (not a buffer, empty, or over the cap: a possibly partial entry is never parsed). */
+export function parsePid1Environ(buf, probeHome) {
+  if (!Buffer.isBuffer(buf) || buf.length === 0 || buf.length > PID1_ENV_CAP) return null;
+  const want = Buffer.from(String(probeHome), "utf8");
+  const wantAbsolute = typeof probeHome === "string" && probeHome.startsWith("/");
+  let homeSeen = false;
+  let homeMatches = false;
+  let divergent = false;
+  let start = 0;
+  while (start < buf.length) {
+    let end = buf.indexOf(0, start);
+    if (end === -1) end = buf.length;
+    const eq = buf.indexOf(0x3d, start);
+    if (eq !== -1 && eq < end) {
+      const name = buf.toString("latin1", start, eq);
+      const valStart = eq + 1;
+      if (name === "HOME") {
+        if (!homeSeen) {
+          homeSeen = true;
+          homeMatches = wantAbsolute && want.length > 0 && buf.subarray(valStart, end).equals(want);
+        }
+      } else if (PID1_BASE_NAMES.includes(name)) {
+        if (end > valStart && buf[valStart] === 0x2f) divergent = true;
+      }
+    }
+    start = end + 1;
+  }
+  return { homeMatches, divergent };
+}
+
+/** Read at most `cap` bytes of `path` (a /proc file, or a fixture in the unit tests; `read` / `close` are the injectable readSync / closeSync).
+ *  The returned Buffer is a view of the bytes read, which the CALLER zero-fills after use (readPid1 does). If the read throws part-way the
+ *  allocated buffer is zero-filled here before the error propagates, so no half-read environment outlives the call. The buffer is allocated
+ *  BEFORE the file is opened, so an allocation failure cannot leak a descriptor; the descriptor is closed on every path after the open. */
+export function readProcCapped(path, cap, read = readSync, close = closeSync) {
+  const buf = Buffer.alloc(cap);
+  const fd = openSync(path, "r");
+  let done = false;
+  try {
+    let n = 0;
+    for (;;) {
+      const got = read(fd, buf, n, cap - n, null);
+      if (got <= 0) break;
+      n += got;
+      if (n >= cap) break;
+    }
+    done = true;
+    return buf.subarray(0, n);
+  } finally {
+    if (!done) buf.fill(0);
+    close(fd);
+  }
+}
+
+/** PID 1's `{ uid, euid, env }` for the guards: uid and euid are undefined and env is null when the file cannot be read. The readers
+ *  (`readStatus`, `readEnviron`) or the two file paths (`statusPath`, `environPath`, so a unit test can run the REAL readers against fixture
+ *  files) are injectable; the defaults are the two /proc/1 files, the environ one bounded to `cap` bytes (cap = PID1_ENV_CAP + 1, so an
+ *  over-cap file is distinguishable from one that fit). The environ buffer is zero-filled before returning. */
+export function readPid1(probeHome, io = {}) {
+  const readStatus = io.readStatus ?? (() => readFileSync(io.statusPath ?? "/proc/1/status", "utf8"));
+  const readEnviron = io.readEnviron ?? ((cap) => readProcCapped(io.environPath ?? "/proc/1/environ", cap));
+  let uid;
+  let euid;
+  try { ({ uid, euid } = parsePid1Uids(readStatus()) ?? {}); } catch { uid = undefined; euid = undefined; }
+  let env = null;
+  let raw = null;
+  try {
+    raw = readEnviron(PID1_ENV_CAP + 1);
+    env = parsePid1Environ(raw, probeHome);
+  } catch {
+    env = null;
+  } finally {
+    if (Buffer.isBuffer(raw)) raw.fill(0);
+  }
+  return { uid, euid, env };
+}
+
+/** The closed set of `masks_note` values (the note ensureMaskedDirs reports, one at most). web-bash-synthetic.sh's `case` alternatives and the
+ *  runbook's decode table are copies pinned equal to this by test/sdk-bash-probe-runtime.test.ts. */
+export const MASKS_NOTES = Object.freeze(["uid_mismatch", "pid1_unreadable", "pid1_env_unreadable", "home_mismatch", "env_divergence"]);
+
+/** Create the missing members of `dirs` the way production does (`buildAgentSandboxConfig`: `mkdirSync(dir, { recursive: true, mode: 0o700 })`)
+ *  and report which are not usable afterwards. Pure: every effect is the injected `lstat` / `mkdir` (lstat, never stat: a symlink is not a
+ *  directory). Guards, in precedence order, one note at most:
+ *    uid_mismatch        the probe's real or effective uid differs from PID 1's (`uid` vs its real, `euid` vs its effective; `euid` defaults to
+ *                        `uid`): NO creation (a dir owned by another uid is one the app cannot use)
+ *    pid1_unreadable     PID 1's uid is unknown: NO creation
+ *    pid1_env_unreadable PID 1's environ is unreadable: the HOME-derived dirs (`homeDirs`) are not created, the rest are
+ *    home_mismatch       PID 1's HOME is not the probe's: same
+ *    env_divergence      informational only (PID 1 has a base the probe does not model): nothing refused, nothing counted
+ *  A dir is created only when lstat says it is absent (ENOENT); an existing path is never chmod'ed, chown'ed or replaced. A mkdir error
+ *  fails THAT dir and the loop carries on. A dir is FAILED iff after the pass it is not a real directory, is owned by another uid, or is
+ *  still absent. Mode is not asserted. Returns `{ created, failed, note }`.
+ *  @param {{ dirs: string[], homeDirs?: string[], uid: number, euid?: number, pid1: any, lstat: any, mkdir: any }} o */
+export function ensureMaskedDirs({ dirs, homeDirs = [], uid, euid = uid, pid1, lstat, mkdir }) {
+  const env = pid1?.env;
+  let note = null;
+  let createAll = true;
+  let refuseHome = false;
+  if (typeof pid1?.uid !== "number") { note = "pid1_unreadable"; createAll = false; }
+  else if (pid1.uid !== uid || pid1.euid !== euid) { note = "uid_mismatch"; createAll = false; }
+  else if (!env) { note = "pid1_env_unreadable"; refuseHome = true; }
+  else if (env.homeMatches !== true) { note = "home_mismatch"; refuseHome = true; }
+  else if (env.divergent === true) note = "env_divergence";
+
+  const state = (dir) => {
+    try {
+      const st = lstat(dir);
+      return { present: true, ok: st.isDirectory() && st.uid === uid };
+    } catch (e) {
+      return e && e.code === "ENOENT" ? { present: false, ok: false } : { present: true, ok: false };
+    }
+  };
+  let created = 0;
+  const failed = [];
+  for (const dir of dirs) {
+    const before = state(dir);
+    let attempted = false;
+    if (!before.present && createAll && !(refuseHome && homeDirs.includes(dir))) {
+      attempted = true;
+      try { mkdir(dir, { recursive: true, mode: 0o700 }); } catch { /* judged by the lstat below */ }
+    }
+    const after = attempted ? state(dir) : before;
+    if (!after.ok) failed.push(dir);
+    else if (attempted) created++;
+  }
+  return { created, failed, note };
+}
+
+/** Runtime mode's one creation step, as a function so the unit tests can drive the SAME call runSmoke makes: the closed `plan.precreate` set
+ *  goes in as `dirs`, and the transcript dir (the only one derived from HOME) as `homeDirs`, so the HOME guard can refuse it alone.
+ *  `pid1` is `readPid1(home)`'s value. */
+export function applyRuntimeMasks({ plan, home, uid, euid = uid, pid1, lstat, mkdir }) {
+  return ensureMaskedDirs({ dirs: plan.precreate, homeDirs: [transcriptDir(home)], uid, euid, pid1, lstat, mkdir });
+}
+
+/** The whole runtime-masks step of runSmoke, as one function so a unit test drives the SAME code path end to end: null for a deploy plan
+ *  (no creation, no PID 1 read), else PID 1 is read (`readPid1(home, io)`) and applyRuntimeMasks runs with the real `lstatSync` / `mkdirSync`.
+ *  `io` (all optional) injects `statusPath` / `environPath` (fixture files) or `readStatus` / `readEnviron`, and `lstat` / `mkdir`. runSmoke passes
+ *  none of them, so production always gets the real /proc files and the real filesystem. */
+export function runtimeMasks({ plan, home, uid, euid = uid, io = {} }) {
+  if (!plan.runtime) return null;
+  return applyRuntimeMasks({ plan, home, uid, euid, pid1: readPid1(home, io), lstat: io.lstat ?? lstatSync, mkdir: io.mkdir ?? mkdirSync });
+}
+
+/** The runtime result-JSON fields for an ensureMaskedDirs result (counts and a closed-enum note only; never a path or an errno). */
+export function maskFields(r) {
+  return { masks_missing: r.failed.length, masks_created: r.created, masks_note: r.note };
 }
 
 /** The literal sandbox config of the deploy smoke: what `buildAgentSandboxConfig(workspace)` returns for the NO-EGRESS
@@ -67,7 +321,7 @@ export function maskedDirs(uid, home) {
  *  production builder is TypeScript and is not in the image, so this is a literal pinned by deep equality in
  *  test/sdk-bash-probe-parity.test.ts: a builder edit reds that test and prints the exact line to change here.
  *  `workspace` is the probe's scratch dir (production passes `<workspaces root>/<uuid>`); `uid`/`home` derive the masks. */
-export function smokeSandboxConfig({ workspace, uid, home }) {
+export function smokeSandboxConfig({ workspace, uid, home, masked = maskedDirs(uid, home) }) {
   return {
     enabled: true,
     failIfUnavailable: true,
@@ -85,8 +339,8 @@ export function smokeSandboxConfig({ workspace, uid, home }) {
         "/proc",
         "/sys",
         "/var/lib/soleur/egress-tokens",
-        ...maskedDirs(uid, home),
-        "/tmp/.cs",
+        ...masked,
+        SESSION_TMP_ROOT,
       ],
     },
     credentials: {
@@ -179,6 +433,8 @@ export function smokeVerdict(obs) {
 
   if (thrown) {
     if (SANDBOX_SIGNATURE.test(thrown)) return { verdict: "sdk_bash_smoke_failed", reason: safeReason(signatureLine(thrown)), coverage };
+    // The SDK's child died to a signal (137/143): a memory or stop event on the host, not a Bash outcome. Never a /fail page.
+    if (CHILD_KILLED_SIGNATURE.test(thrown)) return { verdict: "smoke_infra_error", reason: safeReason(`cli_child_killed: ${thrown}`), coverage };
     if (dispatched) return { verdict: "sdk_bash_smoke_failed", reason: safeReason(`dispatched_then_error: ${thrown}`), coverage };
     return { verdict: "smoke_infra_error", reason: safeReason(`sdk_error_before_dispatch: ${thrown}`), coverage };
   }
@@ -212,9 +468,11 @@ export function measureShimAndFilter(pathEnv, bpfPath) {
   return { shim, filter: bytes > 0 && bytes % 8 === 0 };
 }
 
-/** `sdk_wrapper_shim_prodtuple` only when the command went through the real shim under the pinned artifact. */
-export function smokeCoverage({ shim, filter, bpfPath }) {
-  return shim && filter && bpfPath === smokeSelectorPath() ? SMOKE_COVERAGE_FULL : SMOKE_COVERAGE_REPLAY_ONLY;
+/** `sdk_wrapper_shim_prodtuple` only when the command went through the real shim under the artifact that was asked for: the
+ *  deploy smoke's pinned unixdeny path by default, the resolver-selected path in runtime mode (`expectedPath`).
+ *  @param {{ shim: boolean, filter: boolean, bpfPath: string, expectedPath?: string }} o */
+export function smokeCoverage({ shim, filter, bpfPath, expectedPath = smokeSelectorPath() }) {
+  return shim && filter && bpfPath === expectedPath ? SMOKE_COVERAGE_FULL : SMOKE_COVERAGE_REPLAY_ONLY;
 }
 
 // ---- Entry point -------------------------------------------------------------------------------------------------
@@ -324,6 +582,16 @@ async function runSmoke() {
   if (!/^[0-9a-f]{16,64}$/.test(nonce)) infra("nonce_missing_or_malformed");
   const home = process.env.HOME;
   if (!home || !home.startsWith("/")) infra("home_not_absolute");
+  const uid = process.getuid();
+  const euid = process.geteuid();
+  // Every mode decision lives in planSmoke (pure, unit-tested for both modes). Runtime mode: the host passes the selector NAME it
+  // got from the dispatcher's resolver; deploy mode always runs unixdeny. Each masked dir must exist before the namespace is built
+  // (the SDK skips a deny landing that does not exist): the deploy smoke runs in a canary that has none, so it creates them; the
+  // runtime synthetic runs in the production container, where `plan.mkdir` is empty and ensureMaskedDirs (via runtimeMasks, below)
+  // creates what a real session has not yet, under the PID-1 uid and HOME guards.
+  const plan = planSmoke({ env: process.env, uid, home });
+  if (plan.selectedPath === null) infra("selector_invalid");
+  const { runtime, selectorName, selectedPath, masked } = plan;
   const APP = process.env.APP || "/app";
   let query;
   try {
@@ -343,21 +611,39 @@ async function runSmoke() {
   const port = server.address().port;
 
   const tmp = process.env.TMPDIR || "/tmp";
+  // A run killed before it could clean up (`timeout -k`, the OOM killer) leaves its scratch dirs in the production container's
+  // /tmp. Sweep the ones older than a day (runtime mode only: the deploy smoke runs in a throwaway canary).
+  if (runtime) {
+    for (const d of staleScratchDirs(tmp, Date.now(), uid, { readdir: readdirSync, lstat: lstatSync })) {
+      try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  }
   const ws = mkdtempSync(`${tmp}/sdk-bash-probe-`);
   const cfg = mkdtempSync(`${tmp}/sdk-bash-probe-cfg-`);
-  const uid = process.getuid();
-  // Each masked dir must exist before the namespace is built (the SDK skips a deny landing that does not exist).
+  // Scratch is removed on the normal end and every `infra()` (process.exit runs this), and a TERM from the in-container
+  // `timeout` runs it too (the handler turns it into an exit, rc 143). A killed run can still leak a dir: the SDK's claude child
+  // is TERMed as well and may recreate the config dir while it flushes. The day-old sweep above reaps those (bounded, a few KB).
+  const cleanup = () => {
+    for (const d of [ws, cfg]) {
+      try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort scratch cleanup */ }
+    }
+  };
+  process.on("exit", cleanup);
+  process.on("SIGTERM", () => process.exit(143));
+  if (runtime && !cliTmpBaseOk(cfg, uid)) infra("cli_tmp_path_too_long");
   try {
-    for (const d of maskedDirs(uid, home)) mkdirSync(d, { recursive: true, mode: 0o700 });
+    for (const d of plan.mkdir) mkdirSync(d, { recursive: true, mode: 0o700 });
   } catch (e) {
-    try { rmSync(ws, { recursive: true, force: true }); rmSync(cfg, { recursive: true, force: true }); } catch { /* scratch */ }
     infra(`masked_dir_precreate_failed: ${String(e).slice(0, 120)}`);
   }
+  // Runtime mode: the one creation site (null in deploy mode). A failed create is DATA (masks_missing), never an infra exit; the sandbox below
+  // still gets every masked dir, like production (which keeps an entry in denyRead whether or not its pre-create worked).
+  const masksResult = runtimeMasks({ plan, home, uid, euid });
   // SDK_BASH_PROBE_BPF is a TEST-ONLY override (a dev machine has no /app/infra); ci-deploy.sh never sets it. Any value
   // other than the pinned path reports coverage replay_only, which the verdict treats as a hold, never a pass.
-  const bpfPath = process.env.SDK_BASH_PROBE_BPF || smokeSelectorPath();
-  const coverage = smokeCoverage({ ...measureShimAndFilter(process.env.PATH, bpfPath), bpfPath });
-  const sandbox = smokeSandboxConfig({ workspace: ws, uid, home });
+  const bpfPath = process.env.SDK_BASH_PROBE_BPF || selectedPath;
+  const coverage = smokeCoverage({ ...measureShimAndFilter(process.env.PATH, bpfPath), bpfPath, expectedPath: selectedPath });
+  const sandbox = smokeSandboxConfig({ workspace: ws, uid, home, masked });
   const env = {
     ...process.env,
     ANTHROPIC_API_KEY: SMOKE_DECOY_API_KEY,
@@ -366,8 +652,9 @@ async function runSmoke() {
     DISABLE_TELEMETRY: "1",
     DISABLE_AUTOUPDATER: "1",
     SOLEUR_BWRAP_SECCOMP_BPF: bpfPath,
-    // A scratch config dir keeps the synthetic transcript out of the shared HOME.
-    CLAUDE_CONFIG_DIR: cfg,
+    // A scratch config dir keeps the synthetic transcript out of the shared HOME. Runtime mode (the production container) also
+    // puts the CLI's temp base inside it, so its persisted Bash output stays out of the shared /tmp/claude-<uid> (see scratchEnv).
+    ...(runtime ? scratchEnv(cfg) : { CLAUDE_CONFIG_DIR: cfg }),
   };
 
   const controller = new AbortController();
@@ -405,10 +692,9 @@ async function runSmoke() {
     controller.abort();
   }
   const v = smokeVerdict({ nonce, dispatched: state.dispatched, toolResult, thrown, timedOut, coverage });
-  for (const d of [ws, cfg]) {
-    try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort scratch cleanup */ }
-  }
-  emit(v);
+  // Runtime mode adds observations the host journals and cross-checks (selector, masks_missing, masks_created, masks_note); the verdict
+  // contract is unchanged.
+  emit(runtime ? { ...v, selector: selectorName, ...maskFields(masksResult) } : v);
   server.close();
   process.exit(0);
 }

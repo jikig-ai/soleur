@@ -37,7 +37,10 @@ FAIL=0
 SKIP=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); return 0; }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); return 0; }
-skip() { echo "  SKIP: $1"; SKIP=$((SKIP + 1)); return 0; }
+# A counted per-case decline, named and floored — NOT the whole-suite
+# dependency-guard skip that #8773 reserves the `SKIP` literal for (the widened
+# dep-unresolved sweep flags any `SKIP` literal that exits/returns 0).
+skip() { echo "  skip: $1"; SKIP=$((SKIP + 1)); return 0; }
 
 # Outermost anti-vacuity guard. Every control below lives INSIDE an assertion block,
 # so deleting the blocks silences all of them at once while the suite still exits 0

@@ -39,6 +39,15 @@ export PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1
 INNGEST_LINK_TEST_DIR="$(mktemp -d)"
 export INNGEST_LINK_DIR="$INNGEST_LINK_TEST_DIR/inngest-link"
 
+# #10934: the unified curl mock answers the https self-gate (`*8443/health*`) from the SAME measured profile table and `-w` printer the
+# resolver suite uses (test-fixtures/curl-w-profiles.sh), selected by MOCK_IL_SELFGATE_PROFILE (default ok200). An unknown profile or
+# write-out variable exits 99 and drops the sentinel; a closing row asserts it was never dropped. The scratch dir is the one above
+# (removed by the EXIT trap below): no new mktemp.
+CURLW_FIXTURE="$SCRIPT_DIR/test-fixtures/curl-w-profiles.sh"
+CURL_W_SENTINEL="$INNGEST_LINK_TEST_DIR/curlw.sentinel"
+# an ambient override of the profile file would be sourced by the curl mock of every deploy in this suite
+unset CURL_W_PROFILES_FILE
+
 # #6665: the sleep mock's invocation cap has to be able to REPORT itself, and its own stderr
 # cannot. `run_deploy` merges the deploy script's stderr into the subshell's stdout
 # (`bash "$DEPLOY_SCRIPT" 2>&1`) and 18 call sites close with `>/dev/null 2>&1`, so a diagnostic
@@ -1204,15 +1213,38 @@ case "$mode" in
       echo "DOCKER_RUN_ARGS:$*"
       # The #8743 plugin-mount seed is a root helper run, not an app start: it never enters the app-start log the
       # #10136 rows count (canary + prod), exactly as the apparmor rows above exclude it from DOCKER_RUN_ARGS.
-      [[ -n "${MOCK_IL_RUN_LOG:-}" && "$*" != *":/plugin-mount"* ]] && printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
+      if [[ -n "${MOCK_IL_RUN_LOG:-}" && "$*" != *":/plugin-mount"* ]]; then
+        printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
+        # The run's EFFECTIVE env, kept beside the run log as <log>.eff<N> (N = the run's line number): the --env-file content
+        # as Docker reads it, approximated for ASCII whitespace only (real Docker also trims a no-break space and a BOM: the resolver suite's L1 row and
+        # docker-evidence.md cover those) (blank and comment lines dropped, leading whitespace trimmed, a bare-name line dropped - an
+        # approximation of "unset in the CLI environment"), then the -e pairs in order. Docker keeps BOTH entries when a key
+        # is in the env-file and on a -e flag (Config.Env is not de-duplicated), which a -e-only mock could never show.
+        _il_n="$(grep -c '^' "$MOCK_IL_RUN_LOG" || true)"
+        _il_ef=""; _il_prev=""
+        for _il_a in "$@"; do [[ "$_il_prev" == "--env-file" ]] && _il_ef="$_il_a"; _il_prev="$_il_a"; done
+        {
+          if [[ -n "$_il_ef" && -r "$_il_ef" ]]; then
+            LC_ALL=C sed -e 's/^[[:space:]]*//' "$_il_ef" | LC_ALL=C grep -a -v -e '^#' -e '^$' | LC_ALL=C grep -a '=' || true
+          fi
+          _il_prev=""
+          for _il_a in "$@"; do [[ "$_il_prev" == "-e" ]] && printf '%s\n' "$_il_a"; _il_prev="$_il_a"; done
+        } > "${MOCK_IL_RUN_LOG}.eff${_il_n}"
+      fi
       echo "abc123"
     fi
-    # #10136 (MOCK_IL_CANARY=1): answer the Inngest-link canary layer like docker would. `inspect` reports the -e pairs of the
-    # CANARY run exactly as the deploy passed them (so a clobbered INNGEST_BASE_URL shows up there); the two in-container node
+    # #10136 (MOCK_IL_CANARY=1): answer the Inngest-link canary layer like docker would. `inspect` reports the CANARY run's
+    # effective env (the env-file lines, then the -e pairs, exactly as Docker does - a key in both appears twice) followed by
+    # MOCK_IL_INSPECT_EXTRA; MOCK_IL_INSPECT_FAIL=1 makes the daemon call fail with no output. The two in-container node
     # scripts print MOCK_IL_POS / MOCK_IL_NEG. Every other exec keeps the trace line.
     if [[ "${MOCK_IL_CANARY:-}" == "1" && "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" == *soleur-web-platform-canary* ]]; then
-      grep -F -- '--name soleur-web-platform-canary ' "${MOCK_IL_RUN_LOG:?}" | head -1 \
-        | awk '{for (i = 1; i < NF; i++) if ($i == "-e") print $(i + 1)}'
+      [[ "${MOCK_IL_INSPECT_FAIL:-}" == "1" ]] && exit 1
+      _il_cn="$(grep -nF -- '--name soleur-web-platform-canary ' "${MOCK_IL_RUN_LOG:?}" | head -1 | cut -d: -f1)"
+      {
+        [[ -n "$_il_cn" && -r "${MOCK_IL_RUN_LOG}.eff${_il_cn}" ]] && cat "${MOCK_IL_RUN_LOG}.eff${_il_cn}"
+        [[ -n "${MOCK_IL_INSPECT_EXTRA:-}" ]] && printf '%s\n' "$MOCK_IL_INSPECT_EXTRA"
+        true
+      } | tee "${MOCK_IL_RUN_LOG}.inspect"
       exit 0
     fi
     if [[ "${MOCK_IL_CANARY:-}" == "1" && "${1:-}" == "exec" && "$*" == *"inngest_link_canary"* ]]; then
@@ -1310,17 +1342,21 @@ MOCK
 #   MOCK_CURL_DASH_ERROR_BODY=1 /dashboard returns 200 but body contains the
 #                               error.tsx sentinel string
 #   MOCK_CURL_LOGIN_EMPTY=1     /login returns 200 with empty body
+#   MOCK_IL_SELFGATE_PROFILE=<name>[@rc]  the Inngest https self-gate (8443/health) prints that profile of the shared curl
+#                               write-out table (test-fixtures/curl-w-profiles.sh); default ok200, an unknown name exits 99
 create_curl_mock() {
-  cat > "$1/curl" << 'MOCK'
-#!/bin/bash
+  # the absolute fixture and sentinel paths are baked in at creation (the heredoc below is quoted); the mock exits 98 when the source fails
+  { printf '#!/bin/bash\nCURLW_FIXTURE=%q\nCURL_W_SENTINEL=%q\n' "$CURLW_FIXTURE" "$CURL_W_SENTINEL"; cat << 'MOCK'
 ARGS=("$@")
 URL=""
 OUTPUT_FILE=""
 WANT_HTTP_CODE=0
+WFMT=""
 for ((i=0; i<${#ARGS[@]}; i++)); do
   case "${ARGS[$i]}" in
     -o) OUTPUT_FILE="${ARGS[$((i+1))]}" ;;
     -w)
+      WFMT="${ARGS[$((i+1))]}"
       if [[ "${ARGS[$((i+1))]}" == *"http_code"* ]]; then WANT_HTTP_CODE=1; fi
       ;;
     http*) URL="${ARGS[$i]}" ;;
@@ -1389,6 +1425,15 @@ case "$URL" in
     write_body '{"status":200,"message":"OK"}'
     exit 0
     ;;
+  *"8443/health"*)
+    # #10934: the Inngest https self-gate (`curl --cacert <candidate> -w '<four variables>' https://10.0.1.40:8443/health`). Must match
+    # before the generic /health route. The profile (and its exit code) come from the shared measured table, interpreted against the
+    # -w string the script actually passed (an unmodelled variable exits 99 and drops the sentinel: it is never answered as a 200).
+    # shellcheck disable=SC1090
+    source "${CURL_W_PROFILES_FILE:-$CURLW_FIXTURE}" || exit 98
+    curlw_print "${MOCK_IL_SELFGATE_PROFILE:-ok200}" "$WFMT"
+    exit $?
+    ;;
   *"/health"*)
     write_body "OK"
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; fi
@@ -1442,6 +1487,7 @@ if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; exit 0; fi
 write_body "OK"
 exit 0
 MOCK
+  } > "$1/curl"
   chmod +x "$1/curl"
 }
 
@@ -1604,6 +1650,15 @@ exec "$(command -p -v mv)" "$@"
 MOCK
     chmod +x "$mock_dir/mv"
   fi
+  # #10136: the env-file scrub writes its temp file as "<env-file>.scrub.XXXXXX". MOCK_SCRUB_MKTEMP_FAIL=1 makes ONLY that template fail
+  # (the overlay's ".gak." template and every state-file template run the real mktemp), so a row can reach "the scrub could not
+  # write". Installed on every run: a pass-through that execs the real binary.
+  cat > "$mock_dir/mktemp" << 'MOCK'
+#!/bin/bash
+if [[ "${MOCK_SCRUB_MKTEMP_FAIL:-}" == "1" && "$*" == *".scrub."* ]]; then exit 1; fi
+exec "$(command -p -v mktemp)" "$@"
+MOCK
+  chmod +x "$mock_dir/mktemp"
   create_mock_flock "$mock_dir"
   create_mock_systemctl "$mock_dir"
   create_mock_df "$mock_dir"
@@ -3283,11 +3338,13 @@ il_deploy() {
   rm -rf "$INNGEST_LINK_DIR"
   if [[ -n "${IL_PRESEED_CA:-}" ]]; then mkdir -p "$INNGEST_LINK_DIR"; cp "$IL_PRESEED_CA" "$INNGEST_LINK_DIR/inngest-ca.pem"; fi
   IL_STATE="$IL_DIR/$label.state"; IL_RUNLOG="$IL_DIR/$label.runs"; IL_LOG="$IL_DIR/$label.log"
-  : > "$IL_RUNLOG"; : > "$IL_LOG"
+  : > "$IL_RUNLOG"; : > "$IL_LOG"; rm -f "$IL_RUNLOG".eff* "$IL_RUNLOG".inspect
   {
     printf 'KEY=value\nDOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n'
     [[ -n "$flag" ]] && printf '%s\n' "$flag"
     [[ -n "$ca" ]] && printf 'INNGEST_TLS_CA=%s\n' "$ca"
+    # IL_SNAP_EXTRA: extra snapshot lines (newline-separated), e.g. a pinned INNGEST_BASE_URL the Doppler config carries
+    [[ -n "${IL_SNAP_EXTRA:-}" ]] && printf '%s\n' "$IL_SNAP_EXTRA"
   } > "$IL_DIR/$label.env"
   IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_CANARY=1 MOCK_IL_RUN_LOG="$IL_RUNLOG" MOCK_GAK_PRD_BODY="$IL_DIR/$label.env" \
       CI_DEPLOY_STATE="$IL_STATE" MOCK_LOGGER_CAPTURE_FILE="$IL_LOG" "$@"
@@ -3299,6 +3356,19 @@ il_url_clean() { # <expected url>: every docker run line has EXACTLY ONE INNGEST
   [[ "$n" -ge 1 ]] || return 1
   [[ "$(grep -c -- "-e INNGEST_BASE_URL=$1 " "$IL_RUNLOG")" -eq "$n" ]] || return 1
   [[ "$(grep -o -- 'INNGEST_BASE_URL=' "$IL_RUNLOG" | wc -l | tr -d ' ')" -eq "$n" ]] || return 1
+}
+# il_effective_clean <url> <ca path>: every run in the log (canary and prod) carries, in its EFFECTIVE env (<log>.eff<N>: the env-file
+# lines plus the -e pairs, as Docker keeps them), exactly one INNGEST_BASE_URL= equal to <url> and exactly one NODE_EXTRA_CA_CERTS=
+# equal to <ca path>. il_url_clean reads the -e flags only; this is the view `docker inspect` reports.
+il_effective_clean() {
+  local n i f; n="$(il_runs)"
+  [[ "$n" -ge 1 ]] || return 1
+  for ((i = 1; i <= n; i++)); do
+    f="$IL_RUNLOG.eff$i"
+    [[ -r "$f" ]] || return 1
+    [[ "$(grep -c '^INNGEST_BASE_URL=' "$f")" -eq 1 && "$(grep -cxF "INNGEST_BASE_URL=$1" "$f")" -eq 1 ]] || return 1
+    [[ "$(grep -c '^NODE_EXTRA_CA_CERTS=' "$f")" -eq 1 && "$(grep -cxF "NODE_EXTRA_CA_CERTS=$2" "$f")" -eq 1 ]] || return 1
+  done
 }
 
 TOTAL=$((TOTAL + 1))
@@ -3342,10 +3412,54 @@ else
   IL_OK=1
   [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] || IL_OK=0
   grep -qF 'class=canary_failed level=error check=health cause=ECONNREFUSED' "$IL_LOG" || IL_OK=0
+  # a failing in-container check keeps the generic reason; only the inspect check carries canary_inngest_link_inspect_failed
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == canary_inngest_link_failed ]] || IL_OK=0
   if [[ "$IL_OK" -eq 1 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: flag on + a failing in-container check: deploy fails before the swap, the event names check=health cause=ECONNREFUSED"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: failing positive check not honoured (rc=$IL_RC runs=$(il_runs))"
+  fi
+
+  # --- #10934: the self-gate failure event names the stage the LAST attempt reached (phase=, tcp=, tls=, verify=) ---
+  # End to end through the real deploy flow with the unified curl mock answering from the shared measured profile table. req_reset is
+  # the incident signature (rc 56, TLS completed and verified, no HTTP status): the gate fails (3 attempts), nothing is started, the
+  # reason stays the constant token, and the ONE event line is exactly the anchored grammar with phase=request tcp=3 tls=3 verify=0.
+  TOTAL=$((TOTAL + 1))
+  rm -f "$CURL_W_SENTINEL"
+  il_deploy sg-reset "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_IL_SELFGATE_PROFILE=req_reset
+  IL_SG_LINE="$(grep -F 'class=selfgate_failed' "$IL_LOG" | sed -E 's/^-t [^ ]+ //' || true)"
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 ]] || IL_OK=0
+  [[ "$(il_runs)" -eq 0 ]] || IL_OK=0   # no container of any kind was started
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == inngest_link_selfgate_failed ]] || IL_OK=0
+  [[ "$(printf '%s\n' "$IL_SG_LINE" | grep -c '^')" -eq 1 ]] || IL_OK=0
+  [[ "$IL_SG_LINE" == 'INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3 phase=request tcp=3 tls=3 verify=0' ]] || IL_OK=0
+  # CTO R2: the stage is ALSO a closed-enum key of the deploy state (the run-log reason stays the constant token above)
+  [[ "$(jq -r '.inngest_link_selfgate_phase' "$IL_STATE" 2>/dev/null)" == request ]] || IL_OK=0
+  [[ ! -e "$CURL_W_SENTINEL" ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + the incident signature (TLS verified, rc 56): deploy fails (reason=inngest_link_selfgate_failed), no docker run, the event reads phase=request tcp=3 tls=3 verify=0, and the deploy state carries inngest_link_selfgate_phase=request"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: self-gate failure event (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null) state_phase=$(jq -r '.inngest_link_selfgate_phase' "$IL_STATE" 2>/dev/null)) line=[$IL_SG_LINE] sentinel=$(head -n1 "$CURL_W_SENTINEL" 2>/dev/null)"
+  fi
+
+  # a healthy listener whose -w line is SHORT (rc 0, code 200, the later fields missing) still passes the gate: the verdict is decided
+  # from the exit code and the first token before any other field is looked at
+  TOTAL=$((TOTAL + 1))
+  rm -f "$CURL_W_SENTINEL"
+  il_deploy sg-short "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_IL_SELFGATE_PROFILE=raw_short3@0
+  IL_OK=1
+  [[ "$IL_RC" -eq 0 ]] || IL_OK=0
+  [[ "$(il_runs)" -eq 2 ]] || IL_OK=0   # the canary and the production container were started: the gate passed
+  il_url_clean "https://10.0.1.40:8443" || IL_OK=0
+  grep -qF 'class=selfgate_failed' "$IL_LOG" && IL_OK=0
+  # a passing gate leaves no phase key in the deploy state (ABSENT, the cat-deploy-state convention)
+  [[ "$(jq 'has("inngest_link_selfgate_phase")' "$IL_STATE" 2>/dev/null)" == false ]] || IL_OK=0
+  [[ ! -e "$CURL_W_SENTINEL" ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + a healthy listener with a short -w line (rc 0, code 200): the gate passes, both containers start, and the deploy state has no inngest_link_selfgate_phase key"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: a short -w line from a healthy listener (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"; grep -E 'selfgate' "$IL_LOG" | head -3
   fi
 
   # flag ABSENT: the canary layer is a no-op even when the container mock would fail every check, and the value stays http, once per run
@@ -3379,6 +3493,98 @@ else
     PASS=$((PASS + 1)); echo "  PASS: flag on + keyCertSign CA: refused (reason=inngest_link_ca_invalid why=ca), no container started"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: hostile CA with the flag on (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+
+  # --- #10136: the canary inspect check sees the EFFECTIVE env (env-file lines plus -e pairs, as Docker keeps them) ---
+  # T1: the Doppler snapshot carries its own INNGEST_BASE_URL. Docker keeps both entries in Config.Env, so without the env-file scrub
+  # the canary's inspect check counts 2 and fails with the cause unnamed. Both the flag-on and the flag-off deploy must run the
+  # scrub (one code path), and every run (canary and prod) must carry exactly one of each pinned name in its effective env.
+  for IL_ARM in on off; do
+    TOTAL=$((TOTAL + 1))
+    if [[ "$IL_ARM" == on ]]; then IL_T1_FLAG="INNGEST_LINK_TLS=1"; IL_T1_URL="https://10.0.1.40:8443"; else IL_T1_FLAG=""; IL_T1_URL="http://10.0.1.40:8288"; fi
+    IL_SNAP_EXTRA="INNGEST_BASE_URL=http://10.0.1.40:8288" il_deploy "t1-$IL_ARM" "$IL_T1_FLAG" "$IL_GOOD_B64"
+    IL_OK=1
+    [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 ]] || IL_OK=0
+    il_effective_clean "$IL_T1_URL" "/etc/soleur/inngest-ca.pem" || IL_OK=0
+    grep -qE 'class=env_scrubbed level=info removed=1$' "$IL_LOG" || IL_OK=0
+    # the scrub removes the two pinned names only: every other snapshot line reaches the container
+    grep -qx 'KEY=value' "$IL_RUNLOG.eff1" && grep -q '^INNGEST_TLS_CA=' "$IL_RUNLOG.eff1" || IL_OK=0
+    if [[ "$IL_ARM" == on ]]; then
+      grep -qx 'INNGEST_LINK_TLS=1' "$IL_RUNLOG.eff1" || IL_OK=0
+      grep -qF 'class=canary_ok' "$IL_LOG" || IL_OK=0
+      # harness sentinel: the mocked inspect must carry the env-file lines (a mock that reported the -e pairs only would make this row vacuous)
+      grep -qx 'KEY=value' "$IL_RUNLOG.inspect" || IL_OK=0
+    fi
+    if [[ "$IL_OK" -eq 1 ]]; then
+      PASS=$((PASS + 1)); echo "  PASS: snapshot pins INNGEST_BASE_URL (flag $IL_ARM): scrubbed (env_scrubbed removed=1), canary and prod each carry exactly one INNGEST_BASE_URL and one NODE_EXTRA_CA_CERTS in their effective env"
+    else
+      FAIL=$((FAIL + 1)); echo "  FAIL: snapshot-pinned INNGEST_BASE_URL (flag $IL_ARM; rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"; grep -E 'INNGEST_LINK' "$IL_LOG" | head -4
+    fi
+  done
+
+  # T3 (characterization): a NODE_EXTRA_CA_CERTS line in the snapshot is the existing overlay refusal, before any container starts
+  TOTAL=$((TOTAL + 1))
+  IL_SNAP_EXTRA="NODE_EXTRA_CA_CERTS=/tmp/x" il_deploy t3 "INNGEST_LINK_TLS=1" "$IL_GOOD_B64"
+  if [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 0 && "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == github_app_key_env_hijack ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: snapshot NODE_EXTRA_CA_CERTS: refused by the overlay (github_app_key_env_hijack), no container started"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: snapshot NODE_EXTRA_CA_CERTS not refused (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+
+  # T5: strictness is kept - a REAL duplicate (a second http URL reaching the canary's Config.Env) still fails the canary, and the event names why
+  TOTAL=$((TOTAL + 1))
+  il_deploy t5 "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" "MOCK_IL_INSPECT_EXTRA=INNGEST_BASE_URL=http://10.0.1.40:8288"
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] || IL_OK=0
+  grep -qF 'class=canary_failed level=error check=inspect cause=url_count url_lines=2 url_https=1 ca_lines=1 ca_ok=1' "$IL_LOG" || IL_OK=0
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == canary_inngest_link_inspect_failed ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: a real duplicate INNGEST_BASE_URL still fails the canary: check=inspect cause=url_count with the counts, reason canary_inngest_link_inspect_failed, only the canary started"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: real duplicate not named (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"; grep -E 'check=inspect' "$IL_LOG" | head -3
+  fi
+
+  # T6: a failed `docker inspect` is its own cause - never "none", never a wrong count
+  TOTAL=$((TOTAL + 1))
+  il_deploy t6 "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_IL_INSPECT_FAIL=1
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] || IL_OK=0
+  grep -qF 'class=canary_failed level=error check=inspect cause=inspect_failed url_lines=0 url_https=0 ca_lines=0 ca_ok=0' "$IL_LOG" || IL_OK=0
+  grep -qF 'cause=none' "$IL_LOG" && IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: docker inspect failing: check=inspect cause=inspect_failed with zero counts, no cause=none"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: failed inspect not named (rc=$IL_RC runs=$(il_runs))"; grep -E 'check=inspect' "$IL_LOG" | head -3
+  fi
+
+  # T8a / T8b: the scrub cannot write. A strict (flag on) deploy aborts before any container starts; a non-strict one logs the error
+  # and continues with the env-file untouched, so a persistent scrub fault can never block a rollback or a hotfix.
+  TOTAL=$((TOTAL + 1))
+  IL_SNAP_EXTRA="INNGEST_BASE_URL=http://10.0.1.99:8288" il_deploy t8a "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_SCRUB_MKTEMP_FAIL=1
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 0 ]] || IL_OK=0
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == inngest_env_scrub_failed ]] || IL_OK=0
+  grep -qE 'class=env_scrub_failed level=error stage=write$' "$IL_LOG" || IL_OK=0
+  # the Better Stack copy of the abort (the logger line), not only the state reason
+  grep -qF 'DEPLOY_ABORT: the env-file scrub failed (inngest_env_scrub_failed)' "$IL_LOG" || IL_OK=0
+  [[ ! -e "$INNGEST_LINK_DIR/last-scheme" ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + scrub cannot write: aborts (reason=inngest_env_scrub_failed, stage=write), no container started, last-scheme not recorded"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: strict scrub failure not an abort (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+  TOTAL=$((TOTAL + 1))
+  IL_SNAP_EXTRA="INNGEST_BASE_URL=http://10.0.1.99:8288" il_deploy t8b "" "$IL_GOOD_B64" MOCK_SCRUB_MKTEMP_FAIL=1
+  IL_OK=1
+  [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 ]] || IL_OK=0
+  grep -qE 'class=env_scrub_failed level=error stage=write$' "$IL_LOG" || IL_OK=0
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" != inngest_env_scrub_failed ]] || IL_OK=0
+  # the env-file reached the containers unchanged: the snapshot's own line is still there (the -e pair follows it)
+  grep -qxF 'INNGEST_BASE_URL=http://10.0.1.99:8288' "$IL_RUNLOG.eff1" || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag off + scrub cannot write: the error is logged and the deploy continues with the env-file unchanged"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: non-strict scrub failure blocked or changed the deploy (rc=$IL_RC runs=$(il_runs))"
   fi
 
   # userimpact F1: a snapshot WITHOUT the Doppler metadata lines must not fail every deploy while the flag is absent
@@ -3440,6 +3646,15 @@ else
   fi
 fi
 rm -rf "$IL_DIR"
+
+# #10934: the shared curl profile printer refused nothing during any flag-on deploy of this suite (an unknown profile or write-out variable
+# exits 99 and drops the sentinel; the deploy would only have seen one more failed gate attempt)
+TOTAL=$((TOTAL + 1))
+if [[ ! -e "$CURL_W_SENTINEL" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: the shared curl profile printer refused no profile or write-out variable in this suite"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the shared curl profile printer refused: $(head -n1 "$CURL_W_SENTINEL")"
+fi
 
 echo ""
 echo "--- tmpfs /tmp on docker run (closes #2473) ---"
@@ -4419,6 +4634,44 @@ assert_sdk_bash_smoke() {
   sbs_check "SBS-5c" "an unresolvable container HOME is smoke_infra_error container_home_unresolved (the probe is not exec'd with a guessed HOME)" \
     "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.reason')" == container_home_unresolved && "$(grep -c 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true)" == 0 ]] && echo 0 || echo 1)"
 
+  # SBS-5k: the shared verdict lib (sdk-bash-verdict.sh) is absent while this script is present: the two ship through different
+  # channels (apply-deploy-pipeline-fix.yml vs the web_bash_synthetic install blocks), so a host can run the new script before the
+  # lib lands. The smoke must be an explicit, non-blocking HOLD (smoke_infra_error verdict_lib_absent), never a pass and never a
+  # rollback. The lib is hidden by running a COPY of ci-deploy.sh from a directory that lacks it (there is no env override of the
+  # lib path: this script is root). A host-wide /usr/local/bin copy would defeat the row, so it is skipped there with a reason.
+  if [[ -e /usr/local/bin/sdk-bash-verdict.sh ]]; then
+    echo "  SKIP: SBS-5k (a real /usr/local/bin/sdk-bash-verdict.sh exists on this machine: the lib cannot be hidden)"
+  else
+    local nolib_dir nolib_mut_dir
+    nolib_dir=$(mktemp -d); nolib_mut_dir=$(mktemp -d)
+    cp "$DEPLOY_SCRIPT" "$nolib_dir/ci-deploy.sh"
+    # the mutant: the else branch (lib absent) reports a green pass instead (mutant C02 of the test-design review)
+    python3 - "$DEPLOY_SCRIPT" "$nolib_mut_dir/ci-deploy.sh" <<'PY2'
+import sys
+s = open(sys.argv[1]).read()
+old = 'verdict="smoke_infra_error"; reason="verdict_lib_absent"; coverage=""'
+assert s.count(old) == 1, "verdict_lib_absent branch not found exactly once"
+open(sys.argv[2], "w").write(s.replace(old, 'verdict="pass"; reason="ok"; coverage="sdk_wrapper_shim_prodtuple"'))
+PY2
+    out=$(run_sbs_deploy "DEPLOY_SCRIPT='$nolib_dir/ci-deploy.sh'") && rc=0 || rc=$?
+    d=$(sbs_dir "$out")
+    nolib_ok() {  # <out> <dir> <rc>: the lib-absent smoke is a HOLD: ledger verdict, no page, no Sentry event, deploy continues
+      [[ "$3" -eq 0 && "$1" == *"$swap_msg"* && "$(sbs_jq "$2/sb-state.json" '.verdict')" == smoke_infra_error \
+        && "$(sbs_jq "$2/sb-state.json" '.reason')" == verdict_lib_absent && "$(sbs_jq "$2/sb-state.json" '.coverage // ""')" == "" \
+        && "$(sbs_count "$2/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 && "$(sbs_count "$2/logger.txt" 'SDK_BASH_SMOKE: verdict=smoke_infra_error reason=verdict_lib_absent')" == 1 ]]
+    }
+    sbs_check "SBS-5k" "lib absent: smoke_infra_error verdict_lib_absent in the ledger and the SDK_BASH_SMOKE row, no page, deploy continues (no rollback)" \
+      "$(nolib_ok "$out" "$d" "$rc" && echo 0 || echo 1)" "state: $(cat "$d/sb-state.json" 2>/dev/null)"
+    out=$(run_sbs_deploy "DEPLOY_SCRIPT='$nolib_mut_dir/ci-deploy.sh'") && rc=0 || rc=$?
+    d=$(sbs_dir "$out")
+    sbs_check "SBS-5k/mutant" "mutation: a lib-absent branch that reports a pass is caught by SBS-5k (the predicate is false for it)" \
+      "$(nolib_ok "$out" "$d" "$rc" && echo 1 || echo 0)" "state: $(cat "$d/sb-state.json" 2>/dev/null)"
+    sbs_check "SBS-5l" "ci-deploy.sh has no environment override of the lib path: the lib is found only next to the script or in /usr/local/bin" \
+      "$([[ "$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE 'SDK_BASH_VERDICT_LIB:-|-z "\$\{SDK_BASH_VERDICT_LIB' || true)" == 0 \
+          && "$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE '^SDK_BASH_VERDICT_LIB=""$' || true)" == 1 ]] && echo 0 || echo 1)"
+    rm -rf "$nolib_dir" "$nolib_mut_dir"
+  fi
+
   # SBS-5d: no weak nonce. When /dev/urandom cannot supply one the smoke is an infra error, never a $RANDOM-derived nonce.
   out=$(run_sbs_deploy "export MOCK_OD_FAIL=1") && rc=0 || rc=$?
   d=$(sbs_dir "$out")
@@ -4672,9 +4925,14 @@ assert_sdk_bash_smoke() {
   # SBS-12f (F4): the dispatched marker is ONE literal in both files, next to `state.dispatched = true` in the probe.
   local probe_src
   probe_src="$(dirname "$DEPLOY_SCRIPT")/lib/sdk-bash-probe.mjs"
-  sbs_check "SBS-12f" "SDK_BASH_DISPATCHED is printed by the probe beside state.dispatched = true and read by the 124 arm (parity)" \
+  # The 124 arm moved out of run_sdk_bash_smoke into the sourced lib shared with the runtime synthetic (ADR-079 "Addendum — 2026-10-22 (#10455 b)"):
+  # the marker is read there, and the function reaches it through sdk_bash_map_result.
+  local verdict_lib
+  verdict_lib="$(dirname "$DEPLOY_SCRIPT")/sdk-bash-verdict.sh"
+  sbs_check "SBS-12f" "SDK_BASH_DISPATCHED is printed by the probe beside state.dispatched = true and read by the 124 arm in the shared verdict lib the smoke calls (parity)" \
     "$([[ "$(grep -A1 'state\.dispatched = true;' "$probe_src" | grep -c 'SDK_BASH_DISPATCHED' || true)" -ge 1 \
-        && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -cF 'SDK_BASH_DISPATCHED' || true)" -ge 1 ]] && echo 0 || echo 1)"
+        && "$(grep -cF 'SDK_BASH_DISPATCHED' "$verdict_lib" || true)" -ge 1 \
+        && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -cF 'sdk_bash_map_result' || true)" -ge 1 ]] && echo 0 || echo 1)"
   rm -rf "$d2" "$d6" "$d7" "$d8" "$d9s" "$d11"
 }
 
@@ -7377,22 +7635,15 @@ declare -A QI_PIN_B=(
   [apps/web-platform/infra/inngest-cutover-flip.sh]=1
   [apps/web-platform/infra/inngest-redis-bootstrap.sh]=1
   [apps/web-platform/infra/workspaces-cutover.sh]=2
-  # #6894 inngest-luks-cutover.sh — ONE variable-unit start, in resume_writers. Its gate is
-  # stronger than a quiesce-state predicate: the freeze RECORDS which units were active before it
-  # stopped them (into the FSM's own state dir, because the run that resumes may be a later tick or
-  # a later boot) and the resume starts exactly that set. With no record — a reboot mid-cutover —
-  # it falls back to the ENABLED set, so a unit an operator disabled is still never started.
-  # Behavioural rows: inngest-luks-cutover.test.sh "a unit that was NOT running before the freeze
-  # is not started by it" and "with no record … a disabled unit is still not started".
-  [apps/web-platform/infra/inngest-luks-cutover.sh]=1
+  # (#6894 inngest-luks-cutover.sh's single variable-unit resume was pinned here until the script was retired, #10112.)
   [apps/web-platform/infra/git-data-luks-reopen.sh]=1
   # #8562 cloud-init-inngest.yml — ONE variable-unit start, in soleur-inngest-provision's on_exit.
   # It restores the cutover-FSM timers the provision attempt paused. `_fsm_timers_stopped` is
-  # built only from the literal list `inngest-cutover-flip.timer inngest-luks-cutover.timer`, and
-  # only from those that were `active` before the stop. So the variable is provably never
-  # inngest-server, and it never starts a timer that was not already running. Behavioural row:
+  # built only from `inngest-cutover-flip.timer`, and only if it was `active`
+  # before the stop. So the variable is provably never
+  # inngest-server, and it never starts a timer that was not already running. Behavioural rows:
   # cloud-init-inngest-provision-unit.test.sh G2-r15 ("the failed attempt restarts the flip
-  # timer"). Pinned as a change detector.
+  # timer") and G2-r17 (a flip timer that was inactive is not started). Pinned as a change detector.
   [apps/web-platform/infra/cloud-init-inngest.yml]=1
   # #9123 workspaces-luks-reopen.sh — the web-1 sibling of the #8210 git-data line above:
   # `systemctl start "$_munit"` where `_munit=$(systemd-escape -p --suffix=mount "$TARGET")`
@@ -7439,11 +7690,12 @@ TOTAL=$((TOTAL + 1))
 # 16 -> 17 at #8210: git-data-luks-reopen.sh's mount-unit start (see QI_PIN_B).
 # 17 -> 18 at #8562: cloud-init-inngest.yml's FSM-timer restore (see QI_PIN_B).
 # 18 -> 19 at #9123: workspaces-luks-reopen.sh's mount-unit start (see QI_PIN_B).
-if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 19 ]]; then
+# 19 -> 18 at #10112: inngest-luks-cutover.sh (the 15 -> 16 line above) is retired with the cutover trio.
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 18 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 10 files) (Guard 2 #6c)"
+  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 9 files) (Guard 2 #6c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 19):${QI_BAD:- <per-file counts match but the total does not>}"
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 18):${QI_BAD:- <per-file counts match but the total does not>}"
 fi
 # Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
 # (a regex that silently matched nothing would pin an empty inventory as green).
@@ -12171,6 +12423,105 @@ if cmp -s "$DEPLOY_SCRIPT" "$_s1m"; then _s1_bad="$_s1_bad [mutant did not land]
 rm -f "$_s1m"
 if [[ -z "$_s1_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s1 write_state enum-checks the key fields (a JSON-breaking value is written as 'invalid'); the unchecked mutant is RED"
 else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s1 write_state enum —$_s1_bad"; fi
+# 7.s3 (#10934, CTO R2): write_state's inngest_link_selfgate_phase key is a closed enum, present only when set, and the printf still emits one
+# valid JSON object with the new field and the old ones; the unchecked mutant is RED
+_sgp_ws_harness() {  # <ci-file> → 0 when request is written as request, a hostile value as `invalid`, an empty value not at all
+  local f="$1" t v rc=0 want
+  t="$(mktemp -d)"
+  { awk '/^_gak_enum\(\) \{/,/^\}/' "$f"; awk '/^write_state\(\) \{/,/^\}/' "$f"; } > "$t/fn.sh"
+  for v in request 'request","exit_code":0,"y":"' ''; do
+    # shellcheck disable=SC2034,SC2329  # consumed by the sourced write_state; logger shadows the binary
+    ( set -euo pipefail
+      logger() { :; }
+      LOG_TAG=ci-deploy STATE_FILE="$t/state" START_TS=0 COMPONENT=web-platform IMAGE=x TAG=v1.0.0 INNGEST_LINK_SELFGATE_PHASE="$v"
+      # shellcheck source=/dev/null
+      . "$t/fn.sh"
+      write_state 7 "inngest_link_selfgate_failed" ) >/dev/null 2>&1 || rc=1
+    case "$v" in
+      request) want='.exit_code == 7 and .reason == "inngest_link_selfgate_failed" and .inngest_link_selfgate_phase == "request" and .tag == "v1.0.0"' ;;
+      '') want='.exit_code == 7 and (has("inngest_link_selfgate_phase") | not)' ;;
+      *) want='.exit_code == 7 and .inngest_link_selfgate_phase == "invalid" and (has("y") | not)' ;;
+    esac
+    jq -e "$want" "$t/state" >/dev/null 2>&1 || { GAK_WHY="value [$v]: state=[$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; }
+  done
+  rm -rf "$t"; (( rc == 0 ))
+}
+TOTAL=$((TOTAL + 1))
+_s3_bad=""; _sgp_ws_harness "$DEPLOY_SCRIPT" || _s3_bad=" [control: $GAK_WHY]"
+_s3m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_s3m" "\$(_gak_enum \"\$INNGEST_LINK_SELFGATE_PHASE\" 'connect|handshake|verify|ca_file|request|status|unknown')" "\$INNGEST_LINK_SELFGATE_PHASE"
+if cmp -s "$DEPLOY_SCRIPT" "$_s3m"; then _s3_bad="$_s3_bad [mutant did not land]"; elif _sgp_ws_harness "$_s3m"; then _s3_bad="$_s3_bad [an unchecked phase value stayed GREEN]"; fi
+rm -f "$_s3m"
+if [[ -z "$_s3_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s3 write_state writes inngest_link_selfgate_phase as a closed enum (request as request, a JSON-breaking value as 'invalid', empty as ABSENT); the unchecked mutant is RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s3 write_state selfgate phase —$_s3_bad"; fi
+# 7.s4 / 7.s5 (#10934 review round 2): the seven phase tokens are written out twice, in `_inngest_link_selfgate_phase`'s printf arms and in
+# write_state's `_gak_enum` allowlist, and nothing tied the two together (a one-token drift records a real phase as `invalid`, a diagnostic loss
+# with no failing row). 7.s4 reads both sets out of the REAL file and asserts they are EQUAL; 7.s5 drives the REAL write_state once per token
+# (each token must be written as itself), once for an out-of-enum value (`invalid`) and once for an empty value (key ABSENT).
+_sgp_helper_tokens() {  # <ci-file> → the tokens the phase helper prints, one per line, sorted
+  { awk '/^_inngest_link_selfgate_phase\(\) \{/,/^\}/' "$1" | grep -vE '^[[:space:]]*#' | grep -oE 'printf [a-z_]+(;|$)' | sed -E 's/^printf //; s/;$//' | sort -u; } || true
+}
+_sgp_enum_tokens() {  # <ci-file> → the tokens of write_state's closed enum for the key, one per line, sorted
+  { grep -oE "_gak_enum \"\\\$INNGEST_LINK_SELFGATE_PHASE\" '[^']*'" "$1" | head -n1 | sed -E "s/^[^']*'//; s/'\$//" | tr '|' '\n' | sort -u; } || true
+}
+_sgp_parity_harness() {  # <ci-file> → 0 when the helper's token set equals the enum's token set (both non-empty)
+  local h e
+  h="$(_sgp_helper_tokens "$1")"; e="$(_sgp_enum_tokens "$1")"
+  [[ -n "$h" && -n "$e" ]] || { GAK_WHY="an empty extraction: helper [$(tr '\n' ' ' <<<"$h")] enum [$(tr '\n' ' ' <<<"$e")]"; return 1; }
+  [[ "$h" == "$e" ]] || { GAK_WHY="the helper prints [$(tr '\n' ' ' <<<"$h")] but the enum allows [$(tr '\n' ' ' <<<"$e")]"; return 1; }
+}
+_sgp_each_token_harness() {  # <ci-file> → 0 when every helper token is written as itself, `bogus` as `invalid`, an empty value not at all
+  local f="$1" t v tokens rc=0
+  tokens="$(_sgp_helper_tokens "$f")"
+  [[ -n "$tokens" ]] || { GAK_WHY="the helper prints no token"; return 1; }
+  t="$(mktemp -d)"
+  { awk '/^_gak_enum\(\) \{/,/^\}/' "$f"; awk '/^write_state\(\) \{/,/^\}/' "$f"; } > "$t/fn.sh"
+  for v in $tokens bogus ''; do
+    rm -f "$t/state"
+    # shellcheck disable=SC2034,SC2329  # consumed by the sourced write_state; logger shadows the binary
+    ( set -euo pipefail
+      logger() { :; }
+      LOG_TAG=ci-deploy STATE_FILE="$t/state" START_TS=0 COMPONENT=web-platform IMAGE=x TAG=v1.0.0 INNGEST_LINK_SELFGATE_PHASE="$v"
+      # shellcheck source=/dev/null
+      . "$t/fn.sh"
+      write_state 7 "inngest_link_selfgate_failed" ) >/dev/null 2>&1 || rc=1
+    case "$v" in
+      '') jq -e '.exit_code == 7 and (has("inngest_link_selfgate_phase") | not)' "$t/state" >/dev/null 2>&1 || { GAK_WHY="an empty value did not leave the key absent: [$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; } ;;
+      bogus) jq -e '.exit_code == 7 and .inngest_link_selfgate_phase == "invalid"' "$t/state" >/dev/null 2>&1 || { GAK_WHY="an out-of-enum value was not written as invalid: [$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; } ;;
+      *) jq -e --arg v "$v" '.exit_code == 7 and .inngest_link_selfgate_phase == $v' "$t/state" >/dev/null 2>&1 || { GAK_WHY="the token [$v] was not written as itself: [$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; } ;;
+    esac
+  done
+  rm -rf "$t"; (( rc == 0 ))
+}
+_SGP_ENUM="'connect|handshake|verify|ca_file|request|status|unknown'"
+_sgp_enum_mutants() {  # <harness fn> <label=newlist>... → prints the mutants that did NOT land or did NOT go RED (empty = every one went RED)
+  local h="$1" m label list mf out=""
+  shift
+  for m in "$@"; do
+    label="${m%%=*}"; list="${m#*=}"; mf="$(mktemp)"
+    gak_mut "$DEPLOY_SCRIPT" "$mf" "$_SGP_ENUM" "'$list'"
+    if cmp -s "$DEPLOY_SCRIPT" "$mf"; then out="$out [$label: did not land]"; elif "$h" "$mf"; then out="$out [$label: stayed GREEN]"; fi
+    rm -f "$mf"
+  done
+  printf '%s' "$out"
+}
+_SGP_DROPS=(
+  "drop-unknown=connect|handshake|verify|ca_file|request|status"
+  "drop-status=connect|handshake|verify|ca_file|request|unknown"
+  "drop-ca_file=connect|handshake|verify|request|status|unknown"
+  "drop-connect=handshake|verify|ca_file|request|status|unknown"
+  "typo-handshak=connect|handshak|verify|ca_file|request|status|unknown"
+)
+TOTAL=$((TOTAL + 1))
+_s4_bad=""; _sgp_parity_harness "$DEPLOY_SCRIPT" || _s4_bad=" [control: $GAK_WHY]"
+_s4_bad="$_s4_bad$(_sgp_enum_mutants _sgp_parity_harness "${_SGP_DROPS[@]}" "extra-token=connect|handshake|verify|ca_file|request|status|unknown|extra")"
+if [[ -z "$_s4_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s4 the phase helper's token set equals write_state's enum set; a dropped token (x4), a typo and an extra token are each RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s4 selfgate phase enum parity —$_s4_bad"; fi
+TOTAL=$((TOTAL + 1))
+_s5_bad=""; _sgp_each_token_harness "$DEPLOY_SCRIPT" || _s5_bad=" [control: $GAK_WHY]"
+_s5_bad="$_s5_bad$(_sgp_enum_mutants _sgp_each_token_harness "${_SGP_DROPS[@]}")"
+if [[ -z "$_s5_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s5 write_state writes every phase token as itself, an out-of-enum value as 'invalid' and an empty value as ABSENT; a dropped token (x4) and a typo are each RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s5 write_state per-token selfgate phase —$_s5_bad"; fi
 gak_row 7.s2 "inherited GITHUB_APP_KEY_* values reach deploy state (the top-of-script reset is gone)" inherit ci \
   $'GITHUB_APP_KEY_SOURCE=""\nGITHUB_APP_KEY_FETCH=""\nGITHUB_APP_KEY_PROBE=""\n' ''
 
@@ -12581,7 +12932,12 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # SBS-8d2 (the ledger-write stale wording), SBS-8f2 (the failed-verdict + failed-write stale row), SBS-8f3/8f4 (the guarded removal keeps a foreign-stamped
 # record and one not older than the run) and SBS-12a2 (the pre-exec cap pinned in comment-stripped source).
 # Merged with main (#10136/#10501 and siblings): main's own rows took the bound 622 -> 649 (+27), so the combined bound is 692 + 27 = 719, confirmed against the measured total.
-CI_DEPLOY_ASSERT_FLOOR=719
+# #10934 (the selfgate phase fields): raised 719 -> 732, the measured total of the green run (732/732) after the https self-gate route moved onto the shared curl profile table and two end-to-end rows (raw_short3 passes the gate, req_reset fails it with the phase event) were added.
+# review round 1 (#10934, CTO R2): raised 732 -> 733 (+1 PASS row, 7.s3: write_state's inngest_link_selfgate_phase closed enum); the incident-signature and the short-line rows
+# gained assertions (the key reads request / is ABSENT) without becoming rows. Measured from the green run (733/733).
+# review round 2 (#10934): raised 733 -> 735 (+2 PASS rows: 7.s4 the helper's token set equals write_state's enum set, 7.s5 write_state writes every token as itself,
+# an out-of-enum value as invalid and an empty value as ABSENT; each carries its own mutants inside the row). Measured from the green run (735/735).
+CI_DEPLOY_ASSERT_FLOOR=735
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

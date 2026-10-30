@@ -760,3 +760,11 @@ the sole scheduler.
 
 **What this addendum does NOT change.** The pointer arm, the encryption mechanism, or the image-baked
 `inngest-luks-cutover.sh` (its `rollback)` arm needs an image release and pin bump).
+
+## Addendum — 2026-10-25 (#10112, the cutover trio is retired from the image)
+
+Appended; nothing above is changed. The 2026-10-10 and 2026-10-12 addenda scoped the image change to the `rollback)` arm and its fixtures and said the image-baked `inngest-luks-cutover.sh` was otherwise unchanged. That scope is superseded: the whole on-host executor (`inngest-luks-cutover.{sh,service,timer}` and its test) is deleted from the image build, the signed config-refresh set, the `infra-config-install.sh` allowlist and the web-host push channel. The forward cutover ran to `done` on 2026-09-20 and the `INNGEST_LUKS_ACTIVE_VOLUME_ID` pointer now has no writer in any artifact the repo delivers; a new guard (`inngest-carrier-vocabulary.test.sh`) keeps the plaintext and staging vocabulary and the trio out of every baked carrier. Live hosts that received the trio earlier keep the installed copies, and the enabled 30-second timer keeps polling them, until the next host replace; they are inert only because the flag is `done`. The dispatcher's `op=luks-cutover` arm stays inert (its guards refuse it) and is retired in a tracked follow-up. This does not change the encryption mechanism, the pointer arm, or the residual recorded in ADR-282 that Art. 32(1)(c) availability is not provided.
+
+> **Superseded 2026-10-26 (#9927), in part:** the "key-continuity probe" listed among the remaining deferred items in the
+> 2026-10-10 supersession note above. The probe half is merged in-FSM and inert on the host until the owner delivers the bundle (ADR-282 addendum 2026-10-26; the sentence superseded is the 2026-10-10 addendum's "remaining deferred items (header backup, key-continuity probe, ...)"); the other deferred items
+> stay tracked in #9927.

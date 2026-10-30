@@ -69,34 +69,89 @@ TERMINAL_LINE='git-data-runcmd-rehearsal: 73 passed, 0 failed, Skipped: 2 (75 as
 # the race is genuinely reachable, and the marker lines are placed EARLY so the
 # match happens while the producer still has most of its output pending.
 PIPE_PAD_LINES=6000
+# The pr-quality-guards source fixture: the suite COMPLETION discriminators
+# (`=== <basename> done ===`, emitted by run-all.sh after the suite returns)
+# are DERIVED from the probe's own discriminator literals so a literal edit
+# moves the fixture too. `sed -n '1p'`, not `| head -1`: grep -o into head is
+# the SIGPIPE/pipefail shape this file's header exists to document.
+BUMP_BANNER=$(grep -oF '=== test-bump-inngest-bootstrap-pin.sh done ===' "$PROBE" | sed -n '1p')
+MINT_BANNER=$(grep -oF '=== test-mint-inngest-bootstrap-tag.sh done ===' "$PROBE" | sed -n '1p')
+[ -n "$BUMP_BANNER" ] && [ -n "$MINT_BANNER" ] \
+  || { printf 'FAIL: could not derive the guard-suite banner literals from %s\n' "$PROBE" >&2; exit 2; }
+cat > "$SANDBOX/pg.default.head" <<EOF
+guard-script-fixture-tests job output
+$BUMP_BANNER
+bump suite output
+$MINT_BANNER
+mint suite output
+EOF
+
+# mkcase <name> <iv-run-count> [mode] — stdin is the infra-validation log head.
+# The pr-quality-guards source is served too: PG_HEAD_FILE supplies its log head
+# (default: both suite banners, no markers) and "$root/pg.n" its run count
+# (default 8 — write it after mkcase to change). gh stubs key on --workflow and
+# the run-id prefix (9xxx infra-validation, 7xxx pr-quality-guards).
 mkcase() {
   local nruns="$2" mode="${3:-present}" root="$SANDBOX/$1"
   mkdir -p "$root/bin"
-  cat > "$root/log.head"
+  cat > "$root/log.iv.head"
   {
-    cat "$root/log.head"
+    cat "$root/log.iv.head"
     # Padding AFTER the markers: the producer must still be writing when grep
     # exits, which is the whole condition.
     awk -v n="$PIPE_PAD_LINES" 'BEGIN{for(i=0;i<n;i++) print "2026-08-19T00:00:00Z filler log line to push this fixture past the 64KiB pipe buffer " i}'
-  } > "$root/log.txt"
+  } > "$root/log.iv.txt"
+  {
+    cat "${PG_HEAD_FILE:-$SANDBOX/pg.default.head}"
+    awk -v n="$PIPE_PAD_LINES" 'BEGIN{for(i=0;i<n;i++) print "2026-08-19T00:00:00Z filler log line to push this fixture past the 64KiB pipe buffer " i}'
+  } > "$root/log.pg.txt"
+  printf '8\n' > "$root/pg.n"
   if [ "$mode" != "missing" ]; then
     {
       printf '#!/usr/bin/env bash\n'
-      printf 'case "$1" in\n'
-      printf '  run)\n'
-      printf '    case "$2" in\n'
-      printf '      list)\n'
-      # Emit $nruns successful entries.
-      printf '        printf "["\n'
-      printf '        for i in $(seq 1 %s); do\n' "$nruns"
-      printf '          [ "$i" -gt 1 ] && printf ","\n'
-      printf '          printf "{\\"databaseId\\":%%s,\\"conclusion\\":\\"success\\"}" "$i"\n'
-      printf '        done\n'
-      printf '        printf "]"\n'
-      printf '        ;;\n'
-      printf '      view) cat %s ;;\n' "$root/log.txt"
-      printf '      *) exit 1 ;;\n'
-      printf '    esac ;;\n'
+      printf 'wf=""; pos=""; prev=""; lim=""\n'
+      printf 'for a in "$@"; do\n'
+      printf '  case "$prev" in --workflow) wf="$a";; --limit) lim="$a";; esac\n'
+      printf '  case "$a" in [0-9]*) pos="$a";; esac\n'
+      printf '  prev="$a"\n'
+      printf 'done\n'
+      printf 'case "$2" in\n'
+      printf '  list)\n'
+      printf '    case "$wf" in\n'
+      printf '      *infra-validation*) base=9000; n=%s ;;\n' "$nruns"
+      printf '      *pr-quality-guards*) base=7000; n=$(cat %s 2>/dev/null || echo 0) ;;\n' "$root/pg.n"
+      printf '      *) n=0 ;;\n'
+      printf '    esac\n'
+      # Honour --limit like the real `gh run list`: a stub that ignores it cannot express a
+      # listing larger than the probe asked for, nor a probe that asks for more than it needs.
+      printf '    if [ -n "$lim" ] && [ "$n" -gt "$lim" ]; then n="$lim"; fi\n'
+      printf '    printf "["\n'
+      printf '    for i in $(seq 1 "$n"); do\n'
+      printf '      [ "$i" -gt 1 ] && printf ","\n'
+      # Per-id overrides: iv.failed.ids lists red runs, iv.pr.ids lists runs triggered by
+      # pull_request (the real listing carries both and the probe has to filter on them). Every
+      # other run is a successful push, which is what a post-merge run is.
+      printf '      id=$((base+i)); c=success; e=push\n'
+      printf '      [ -f %s ] && grep -qx "$id" %s 2>/dev/null && c=failure\n' "$root/iv.failed.ids" "$root/iv.failed.ids"
+      printf '      [ -f %s ] && grep -qx "$id" %s 2>/dev/null && e=pull_request\n' "$root/iv.pr.ids" "$root/iv.pr.ids"
+      printf '      printf "{\\"databaseId\\":%%s,\\"conclusion\\":\\"%%s\\",\\"event\\":\\"%%s\\"}" "$id" "$c" "$e"\n'
+      printf '    done\n'
+      printf '    printf "]"\n'
+      printf '    ;;\n'
+      # Per-run logs: ids listed in iv.skip.ids return log.iv.skip.txt, every other run the case's
+      # default log. Every infra-validation fetch is appended to view.calls so a test can count
+      # how many logs the probe actually read (the early stop is otherwise unobservable).
+      printf '  view) case "$pos" in\n'
+      printf '    9*) echo "$pos" >> %s\n' "$root/view.calls"
+      printf '        if [ -f %s ] && grep -qx "$pos" %s 2>/dev/null; then exit 1; fi\n' "$root/iv.unreadable.ids" "$root/iv.unreadable.ids"
+      # iv.noterm.ids: runs whose log was fetched but does not carry the suite's terminal line
+      # (fetched = sampled, not observed).
+      printf '        if [ -f %s ] && grep -qx "$pos" %s 2>/dev/null; then cat %s; exit 0; fi\n' "$root/iv.noterm.ids" "$root/iv.noterm.ids" "$root/log.iv.noterm.txt"
+      printf '        if [ -f %s ] && grep -qx "$pos" %s 2>/dev/null; then cat %s; else cat %s; fi ;;\n' \
+        "$root/iv.skip.ids" "$root/iv.skip.ids" "$root/log.iv.skip.txt" "$root/log.iv.txt"
+      printf '    7*) cat %s ;;\n' "$root/log.pg.txt"
+      printf '    *) exit 1 ;;\n'
+      printf '  esac ;;\n'
       printf '  *) exit 1 ;;\n'
       printf 'esac\n'
     } > "$root/bin/gh"
@@ -110,9 +165,9 @@ mkcase() {
 # each incremented the SAME counter and (g) escalated to exit 1 on a streak it
 # did not earn. That is the probe behaving correctly and the harness measuring
 # the wrong thing -- exactly the class this suite exists to catch, one level up.
-run_probe() {  # $1 = case root; sets RC and OUT
+run_probe() {  # $1 = case root, $2 = optional probe file (default $PROBE); sets RC and OUT
   OUT="$SANDBOX/out.$RANDOM"
-  ( PATH="$1/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$1/streak" bash "$PROBE" ) >"$OUT" 2>&1
+  ( PATH="$1/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$1/streak" bash "${2:-$PROBE}" ) >"$OUT" 2>&1
   RC=$?
 }
 
@@ -123,6 +178,25 @@ expect() {  # $1=case label $2=expected rc $3=why
     fail "$1: exit $RC, expected $2 — $3. Output: $(head -c 400 "$OUT" | tr '\n' ' ')"
   fi
 }
+
+# ── Instrument controls (unwound, and reported by printf + exit, NOT through fail()) ──────────────
+# The ledger above is only silenced by deleting evidence, but nothing proved the helpers still move
+# their counters, or that `expect` still DECIDES. Drive each once in the direction that must reject,
+# require the counter to move, and unwind so the assertion floor below stays exact.
+_c_p=$passes; _c_f=$fails; _c_n=${#FAILURES[@]}
+pass
+fail "instrument control (expected, discarded)" 2>/dev/null
+RC=0; OUT=/dev/null
+expect "instrument control: expect must reject a mismatch" 1 "discarded" 2>/dev/null
+RC=1; OUT=/dev/null
+expect "instrument control: expect must accept a match" 1 "discarded" 2>/dev/null
+if [ "$passes" -ne $((_c_p + 2)) ] || [ "$fails" -ne $((_c_f + 2)) ] || [ "${#FAILURES[@]}" -ne $((_c_n + 2)) ]; then
+  printf 'FAIL: instrument control: pass()/fail()/expect() did not move their counters as driven (passes %s->%s, fails %s->%s, ledger %s->%s); every assertion below would be unmeasured\n' \
+    "$_c_p" "$passes" "$_c_f" "$fails" "$_c_n" "${#FAILURES[@]}" >&2
+  exit 1
+fi
+passes=$_c_p; fails=$_c_f
+FAILURES=("${FAILURES[@]:0:$_c_n}")
 
 # ── (a) a loud T5 skip must be a FAIL ────────────────────────────────────────
 _r=$(mkcase a 20 <<EOF
@@ -206,10 +280,10 @@ for _i in 1 2 3; do
   ( PATH="$_r/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$_esc_state" T5_TRANSIENT_ESCALATE_AFTER=3 bash "$PROBE" ) >"$OUT" 2>&1
   _esc_rc=$?
 done
-if [ "$_esc_rc" -eq 1 ]; then
+if [ "$_esc_rc" -eq 3 ]; then
   pass
 else
-  fail "(h) transient escalation: the 3rd consecutive TRANSIENT exited $_esc_rc, expected 1 — a probe that cannot reach a verdict must stop being indistinguishable from one that keeps reaching a clean one. Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
+  fail "(h) transient escalation: the 3rd consecutive TRANSIENT exited $_esc_rc, expected 3 (escalated) — 1 is the skip FAIL, and an escalation filed under the skip title reads as arms skipping when the instrument is what is broken (#10918). Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
 fi
 
 # (h.ii) a real verdict must CLEAR the streak, or one bad window poisons the
@@ -258,11 +332,431 @@ if [ "$_xt_rc2" -ne 78 ]; then pass; else
   fail "(j.ii) xtrace refusal is unconditional: traced WITHOUT a credential also exited 78; the guard must key on the credential, not on xtrace alone"
 fi
 
+# ── (k) END TO END: the REAL runner's stdout, fed to the probe (#10786) ──────
+# The probe reads the Actions log of infra-validation.yml. Since #8763 the rehearsal suite runs inside
+# apps/web-platform/infra/run-registered-suites.sh, which (since #7423) captures each suite's output
+# into a per-suite file and prints only `PASS <path>`; the suite's `SKIP (loud):` lines and terminal
+# summary never reached the log, and the probe was TRANSIENT from 2026-09-28 on. The runner now
+# relays them as `SOLEUR| relay <basename>: <line>`. These rows run the REAL runner over a fixture
+# infra dir and feed ITS stdout to the probe, so the three-way contract (suite text, runner relay,
+# probe literal) cannot drift apart silently a second time.
+#
+# The fixture text is DERIVED from this probe's own literals, not hand-copied: a probe literal edit
+# moves the fixture, and the (hard-coded) runner regex then no longer matches it, which reddens.
+# That holds for the TERMINAL line only: the skip fixture is built from the probe's T5 marker, which
+# always matches the runner's generic skip prefix, so the skip end of the pair is pinned separately,
+# by value, against the real suite's own `arm_skip` echo (the "suite end (skip)" row below).
+RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
+SUITE_SRC="$REPO_ROOT/apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
+[ -x "$RUNNER" ] || { printf 'FAIL: runner not executable at %s\n' "$RUNNER" >&2; exit 2; }
+
+# $1 = probe file to read the literals from. Prints: SUITE_TERMINAL, then the T5 marker (the sed is
+# keyed on that literal, not on array position).
+probe_literals() {
+  local f="$1" term mark
+  term=$(sed -n "s/^SUITE_TERMINAL='\\(.*\\)'\$/\\1/p" "$f" | sed -n '1p')
+  mark=$(sed -n "s/^  '\\(SKIP (loud): T5 \\)'\$/\\1/p" "$f" | sed -n '1p')
+  [ -n "$term" ] && [ -n "$mark" ] || return 1
+  printf '%s\n%s\n' "$term" "$mark"
+}
+
+# k_case <name> <variant> <probe file> <runner file>; sets RC/OUT via run_probe, RUNNER_LOG for the
+# precondition. Variants: skip (skip line + terminal), terminal (terminal only), neither.
+k_case() {
+  local name="$1" variant="$2" pfile="$3" rfile="$4" fx="$SANDBOX/kfix.$1" lits term mark
+  lits=$(probe_literals "$pfile") || { fail "(k) $name: could not read the probe literals from $pfile"; RC=99; return 0; }
+  term=$(sed -n '1p' <<<"$lits"); mark=$(sed -n '2p' <<<"$lits")
+  mkdir -p "$fx"
+  {
+    printf '#!/usr/bin/env bash\n'
+    [ "$variant" = skip ] && printf 'echo %q >&2\n' "${mark}MUTATION fixture skip"
+    [ "$variant" != neither ] && printf 'echo %q\n' "${term} 73 passed, 0 failed, Skipped: 2 (75 assertions)"
+    printf 'exit 0\n'
+  } > "$fx/git-data-runcmd-rehearsal.test.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fx/second.test.sh"
+  chmod +x "$fx"/*.test.sh
+  RUNNER_LOG="$SANDBOX/kout.$name"
+  ( cd "$REPO_ROOT" && SOLEUR_INFRA_DIR="$fx" timeout 120 bash "$rfile" ) > "$RUNNER_LOG" 2>&1 || true
+  local root; root=$(mkcase "k.$name" 20 < "$RUNNER_LOG")
+  run_probe "$root" "$pfile"
+}
+
+k_case skip skip "$PROBE" "$RUNNER"
+_k_relays=$(grep -cE '^SOLEUR\| relay git-data-runcmd-rehearsal\.test\.sh: SKIP \(loud\): T5 ' "$RUNNER_LOG" || true)
+if [ "$_k_relays" -ge 1 ]; then pass; else
+  fail "(k) precondition: the runner's own stdout carries ${_k_relays} relayed T5 skip line(s) — the probe is being fed a log the runner never produced evidence into"
+fi
+expect "(k) skip via the real runner" 1 "a loud skip the suite prints must survive the runner's per-suite capture and reach the probe; this is the exit-2 TRANSIENT of 2026-09-28 onwards"
+
+k_case terminal terminal "$PROBE" "$RUNNER"
+expect "(k) terminal line via the real runner" 0 "the suite's terminal line must survive the runner's capture, or the positive control reads every run as unreadable"
+
+k_case neither neither "$PROBE" "$RUNNER"
+expect "(k) neither line via the real runner" 2 "a suite that printed no evidence at all is an unreadable sample, never a clean bill of health"
+
+# The pre-fix production shape, verbatim from main run 39612112094: the runner printed ONLY the
+# PASS line for the rehearsal suite. The probe must keep refusing a verdict on it (exit 2).
+_r=$(mkcase kpre 20 <<'EOF'
+PASS apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+EOF
+)
+run_probe "$_r"
+expect "(k) pre-fix log shape" 2 "a log carrying only the runner's PASS line has no evidence; the probe must stay TRANSIENT on it rather than report a skip count of zero"
+
+# The suite end of the pin, by VALUE: expand the real suite's terminal `echo` with sample numbers
+# and match it against the regex the RUNNER relays on. A wording or separator edit that keeps the
+# statement but misses the regex reddens here, where a presence check would stay green.
+_term_stmt=$(grep -E '^echo "git-data-runcmd-rehearsal: ' "$SUITE_SRC" || true)
+_term_n=$(grep -c . <<<"$_term_stmt" || true)
+_ere=$(sed -n "s/^EVIDENCE_TERMINAL_ERE='\\(.*\\)'\$/\\1/p" "$RUNNER" | sed -n '1p')
+if [ "$_term_n" -eq 1 ] && [ -n "$_ere" ]; then
+  _expanded=${_term_stmt#echo \"}; _expanded=${_expanded%\"}
+  _expanded=${_expanded//'${passes}'/73}; _expanded=${_expanded//'${fails}'/0}
+  _expanded=${_expanded//'${SKIPPED_ASSERTIONS}'/2}; _expanded=${_expanded//'${total}'/75}
+  case "$_expanded" in
+    *'$'*) fail "(k) suite end: the terminal echo still has an unexpanded variable after substituting the four known ones: $_expanded" ;;
+    *) if grep -Eq -- "$_ere" <<<"$_expanded"; then pass; else
+         fail "(k) suite end: the real suite's terminal line '$_expanded' no longer matches the runner's EVIDENCE_TERMINAL_ERE '$_ere' — the runner would stop relaying it and the probe would go TRANSIENT again"
+       fi ;;
+  esac
+else
+  fail "(k) suite end: found ${_term_n} terminal echo statement(s) in the rehearsal suite and regex '${_ere}' in the runner, expected exactly 1 and a non-empty regex"
+fi
+
+# The suite end of the SKIP contract, by VALUE: expand the real `arm_skip` emitter with a T5 name and
+# require that the result (a) matches the runner's relay regex and (b) contains the probe's own T5
+# marker. Without this the prefix text `SKIP (loud): ` is pinned only by hand-written fixtures, and a
+# one-word edit to the real emitter zeroes the relay and the probe while the terminal-line positive
+# control keeps reporting a healthy PASS.
+_skip_stmt=$(grep -oF 'echo "SKIP (loud): $1" >&2' "$SUITE_SRC" || true)
+_skip_n=$(grep -c . <<<"$_skip_stmt" || true)
+_skip_ere=$(sed -n "s/^EVIDENCE_SKIP_ERE='\\(.*\\)'\$/\\1/p" "$RUNNER" | sed -n '1p')
+_lits=$(probe_literals "$PROBE") || _lits=""
+_t5=$(sed -n '2p' <<<"$_lits")
+if [ "$_skip_n" -eq 1 ] && [ -n "$_skip_ere" ] && [ -n "$_t5" ]; then
+  _sx=${_skip_stmt#*echo \"}; _sx=${_sx%%\" >&2*}
+  _sx=${_sx//'$1'/"${_t5#SKIP (loud): }MUTATION sample"}
+  case "$_sx" in
+    *'$'*) fail "(k) suite end (skip): the arm_skip echo still has an unexpanded variable after substituting \$1: $_sx" ;;
+    *) if grep -Eq -- "$_skip_ere" <<<"$_sx" && grep -qF -- "$_t5" <<<"$_sx"; then pass; else
+         fail "(k) suite end (skip): the real arm_skip output '$_sx' no longer matches the runner's EVIDENCE_SKIP_ERE '$_skip_ere' and the probe's T5 marker '$_t5' — the relay and the probe would both go blind to every real skip"
+       fi ;;
+  esac
+else
+  fail "(k) suite end (skip): found ${_skip_n} arm_skip echo statement(s), regex '${_skip_ere}', marker '${_t5}' — expected exactly 1, and both non-empty"
+fi
+
+# Edit-the-pair harness: a mutation to ONE end of the pair must turn the terminal-only case from 0
+# into something else. The runner suite's T9 mutates only the runner copy and greps its own output,
+# so it cannot score an edit to the PROBE literal; this can.
+for _mut in probe-literal runner-regex; do
+  _mp="$SANDBOX/mut.$_mut.probe.sh"; _mr="$SANDBOX/mut.$_mut.runner.sh"
+  cp "$PROBE" "$_mp"; cp "$RUNNER" "$_mr"; chmod +x "$_mr"
+  case "$_mut" in
+    probe-literal) sed -i "s/^SUITE_TERMINAL='git-data-runcmd-rehearsal:'/SUITE_TERMINAL='git-data-runcmd-rehearsal-moved:'/" "$_mp" ;;
+    runner-regex)  sed -i "s/^EVIDENCE_TERMINAL_ERE='\\^git-data-runcmd-rehearsal:/EVIDENCE_TERMINAL_ERE='^git-data-runcmd-rehearsal-moved:/" "$_mr" ;;
+  esac
+  if cmp -s "$PROBE" "$_mp" && cmp -s "$RUNNER" "$_mr"; then
+    fail "(k) harness[$_mut]: the mutation did not land — this row proves nothing"
+    continue
+  fi
+  k_case "mut.$_mut" terminal "$_mp" "$_mr"
+  if [ "$RC" -eq 2 ]; then pass; else
+    fail "(k) harness[$_mut]: an edit to one end of the probe/runner pair left the terminal-only case at exit $RC, expected 2 (TRANSIENT: the positive control lost the evidence) — the pin does not hold"
+  fi
+done
+# The unmutated control through the SAME copy path must read 0, or the rows above prove only that
+# copying a file breaks it.
+cp "$PROBE" "$SANDBOX/mut.control.probe.sh"; cp "$RUNNER" "$SANDBOX/mut.control.runner.sh"; chmod +x "$SANDBOX/mut.control.runner.sh"
+k_case "mut.control" terminal "$SANDBOX/mut.control.probe.sh" "$SANDBOX/mut.control.runner.sh"
+expect "(k) harness control" 0 "an unmutated copy of the pair through the harness's own copy path must read exit 0, or the mutation rows prove nothing"
+
+# ── (l) a loud g1b. guard-suite skip must be a FAIL (#10921) ─────────────────
+# The second run-source samples pr-quality-guards.yml by event; the bump
+# suite's corrupt-walk rows emit `SKIP (loud): g1b.`/`g2b.` markers.
+PG_HEAD_FILE="$SANDBOX/pg.g1b.head"
+{
+  printf '%s\n' "$BUMP_BANNER"
+  printf 'SKIP (loud): g1b.B7 runner git does not exhibit the non-empty-stderr corrupt-walk contract\n'
+  printf '%s\n' "$MINT_BANNER"
+} > "$PG_HEAD_FILE"
+_r=$(mkcase l 20 <<EOF
+everything healthy here
+$TERMINAL_LINE
+EOF
+)
+run_probe "$_r"
+expect "(l) g1b. guard skip present" 1 "a loud g1b. skip in pr-quality-guards logs is the condition the second source exists to report"
+
+# ── (m) a loud fl. guard-suite skip must ALSO be a FAIL ──────────────────────
+PG_HEAD_FILE="$SANDBOX/pg.fl.head"
+{
+  printf '%s\n' "$BUMP_BANNER"
+  printf '%s\n' "$MINT_BANNER"
+  printf 'SKIP (loud): fl.walk runner git does not exhibit the non-empty-stderr corrupt-walk contract\n'
+} > "$PG_HEAD_FILE"
+_r=$(mkcase m 20 <<EOF
+everything healthy here
+$TERMINAL_LINE
+EOF
+)
+run_probe "$_r"
+expect "(m) fl. guard skip present" 1 "a loud fl. skip in pr-quality-guards logs must fire — the marker set is not bump-only"
+
+# ── (n) guard logs without the suite banners => TRANSIENT, never pooled ──────
+# The clean infra-validation source must NOT pool into the unreadable
+# pr-quality-guards source: per-source observed >= 1 is required independently.
+PG_HEAD_FILE="$SANDBOX/pg.nobanners.head"
+printf 'guard-script-fixture-tests job output with no suite banners\n' > "$PG_HEAD_FILE"
+_r=$(mkcase n 20 <<EOF
+everything healthy here
+$TERMINAL_LINE
+EOF
+)
+run_probe "$_r"
+expect "(n) guard suites unobserved" 2 "a source whose discriminators are absent in every sampled log is unreadable; a clean other-source reading must not pool into a PASS"
+unset PG_HEAD_FILE
+
+# ── (o) a guard hit counts even when the OTHER source is unreadable ──────────
+# FAIL dominates over TRANSIENT across sources.
+PG_HEAD_FILE="$SANDBOX/pg.hit.head"
+{
+  printf '%s\n' "$BUMP_BANNER"
+  printf 'SKIP (loud): g2b.I6 runner git does not exhibit the merge-base corrupt-walk contract\n'
+  printf '%s\n' "$MINT_BANNER"
+} > "$PG_HEAD_FILE"
+_r=$(mkcase o 20 <<'EOF'
+the rehearsal suite did not run in this window
+EOF
+)
+run_probe "$_r"
+expect "(o) guard hit + rehearsal unobserved" 1 "a marker in one observed source is a real verdict; the other source's unreadability cannot downgrade it"
+unset PG_HEAD_FILE
+
+# ── (p) roster parity: probe enumeration == lib's registered prefix set ──────
+# (AC8b) Naming the two guard suite files here pulled them into the
+# tag-authorship battery's closure (35 pre-existing `git tag` call sites became
+# undeclared offenders — the suites live outside the closure because run-all.sh
+# collects them by glob). Parity is therefore asserted at the lib↔probe seam:
+# CORRUPT_SKIP_PRODUCER_PREFIXES in git-corrupt-graph.sh is the single
+# registration point; the suites' own in-file roster checks enforce
+# call-site↔prefix parity per suite, so probe↔lib agreement closes the chain.
+CORRUPT_LIB="$REPO_ROOT/plugins/soleur/test/lib/git-corrupt-graph.sh"
+_guard_prefixes=$(grep -oE "SKIP \(loud\): [a-z0-9]+\." "$PROBE" | sed 's/SKIP (loud): //' | sort -u)
+_registered=$(grep -oE "^CORRUPT_SKIP_PRODUCER_PREFIXES='[^']+'" "$CORRUPT_LIB" \
+  | sed "s/^CORRUPT_SKIP_PRODUCER_PREFIXES='//; s/'$//" | tr ' ' '\n' | sort -u)
+if [ -n "$_guard_prefixes" ] && [ "$_guard_prefixes" = "$_registered" ]; then pass; else
+  fail "(p) roster parity: probe-enumerated guard prefixes ($_guard_prefixes) != lib-registered set ($_registered) — a producer prefix is dead enumeration, or an enumeration has no registered producer"
+fi
+
+# ── (q) the lib's emitted marker literal is pinned to the probe's literals ──
+# The probe greps `SKIP (loud): g1b.`/`g2b.`/`fl.` from corrupt_skip's printf;
+# NOTHING else pins that literal for the guard source — one printf edit in
+# git-corrupt-graph.sh silently unobserves every guard-suite skip while the
+# done-line discriminators keep the source "observed" → green unobservation.
+if grep -qF "printf 'SKIP (loud): %s %s\\n'" "$CORRUPT_LIB"; then pass; else
+  fail "(q) marker literal: git-corrupt-graph.sh no longer emits the exact 'SKIP (loud): %s %s\\n' the probe greps — an edit to the literal is a RED here, not silent unobservation"
+fi
+
+# ── (r)-(v) the ADR-188 RATE: "more than 1 in 20 post-merge runs" (#8856) ────
+# Until this change the rehearsal source FAILed on any single marker line, so one transient apt
+# decline kept the monitor red for as long as that run stayed in the sample (measured 2026-10-25:
+# one S1 docker rc=100 run among the 12 newest, the ten newest clean). ADR-188's bound is a RATE
+# over RUNS, so these rows give individual runs their own logs (mkcase serves one log to every
+# run, which cannot express "one run in twenty") and count how many logs the probe read.
+# skip_runs <root> <id>... — stdin is the skip log those run ids return.
+skip_runs() {
+  # Rooted at $SANDBOX (an mktemp -d, so provably absolute) whatever the caller passed: the callers
+  # hand in a case root under it, and a relative or empty root would write into the CWD.
+  local root="$SANDBOX/${1#"$SANDBOX"/}"; shift
+  { cat; awk -v n="$PIPE_PAD_LINES" 'BEGIN{for(i=0;i<n;i++) print "2026-08-19T00:00:00Z filler log line to push this fixture past the 64KiB pipe buffer " i}'; } > "$root/log.iv.skip.txt"
+  printf '%s\n' "$@" > "$root/iv.skip.ids"
+}
+iv_calls() {  # number of infra-validation logs the probe fetched in case root $1
+  local n=0
+  [ -f "$1/view.calls" ] && n=$(grep -c . "$1/view.calls" || true)
+  printf '%s' "$n"
+}
+CLEAN_LOG="everything healthy here
+$TERMINAL_LINE"
+
+# (r) ONE skipping run among 20 observed is WITHIN the bound, on an arm other than the canonical
+# T5 (non-canonical must-PASS input), from a listing larger than the probe needs.
+_r=$(mkcase r 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9003 <<EOF
+SKIP (loud): T17 MUTATION did not run: apt starved before the mutant executed
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(r) 1 skipping run in 20 observed" 0 "ADR-188 bounds skips at MORE than 1 in 20 runs; exactly 1 in 20 is inside the bound and must not keep the monitor red"
+if grep -qF "within ADR-188" "$OUT"; then pass; else
+  fail "(r) the PASS line must say a skip was seen and was within the bound, not claim '0 loud rehearsal skips'. Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
+fi
+
+# (s) TWO skipping runs in 20 observed exceeds the bound.
+_r=$(mkcase s 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9003 9007 <<EOF
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(s) 2 skipping runs in 20 observed" 1 "2 in 20 is 10%, past ADR-188's bound; a probe that stops after the first skipping run would pass this"
+
+# (t) with fewer than 20 observed runs the rate cannot be shown either way, so ONE skip is ADR-188's
+# accepted transient and must not file an alert: the measured sample was 13 to 15 observed, and this
+# is the case the whole change exists for. It PASSes with a notice that says the rate is unprovable.
+_r=$(mkcase t 13 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9005 <<EOF
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(t) 1 skipping run in 13 observed" 0 "one skip in a short sample is the accepted transient; it was this case that kept the monitor red on the measured 13-to-15 observed sample"
+if grep -qF "unprovable below" "$OUT"; then pass; else
+  fail "(t) the PASS line must say the rate is unprovable below the window, not claim a proven bound. Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
+fi
+
+# (t.2) TWO skipping runs in the same short sample is recurrence and FAILs without waiting for a
+# full window: two is the smallest sample that shows it.
+_r=$(mkcase t2 13 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9005 9009 <<EOF
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(t.2) 2 skipping runs in 13 observed" 1 "two skipping runs is recurrence; a short window must not hide it"
+
+# (t.3) below MIN_OBSERVED a clean reading proves nothing: TRANSIENT, never PASS.
+_r=$(mkcase t3 5 <<<"$CLEAN_LOG")
+run_probe "$_r"
+expect "(t.3) 0 skips in 5 observed" 2 "a handful of clean runs is not a clean reading; it must not read as PASS"
+_r=$(mkcase t4 5 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9002 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(t.4) 1 skip in 5 observed" 2 "one skip over five runs can be shown neither within nor past the bound"
+
+# (w) the SKIP IN THE 20TH OBSERVED RUN is inside the window. The early stop must come AFTER the
+# skip accounting, or this run is dropped: one skip there is a PASS, a skip there plus one earlier
+# is a FAIL (and a probe that dropped the 20th run would call the second case a PASS).
+_r=$(mkcase w1 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9020 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(w.1) one skip, in the 20th observed run" 0 "one skip is within the bound wherever it sits in the window"
+_r=$(mkcase w2 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9019 9020 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(w.2) skips in the 19th and 20th observed runs" 1 "the 20th observed run is part of the window; stopping before its skip is counted hides the second skipping run"
+
+# (x) RED RUNS TAKE LISTING SLOTS: the reason the listing is larger than the window. 40 listed, 12
+# of them red, one skip among the rest: 28 successes reach the 20-run window and the skip is inside
+# the bound. A listing of only 20 would leave 8 observed and one skip unprovable (TRANSIENT).
+_r=$(mkcase x 40 <<<"$CLEAN_LOG")
+printf '%s\n' 9001 9002 9003 9004 9005 9006 9007 9008 9009 9010 9011 9012 > "$_r/iv.failed.ids"
+skip_runs "$_r" 9015 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(x) red runs in the listing" 0 "a listing of 20 with 12 red runs leaves 8 observed and cannot show one skip inside the bound; the larger listing is what reaches the window"
+
+# (y) ONLY POST-MERGE EVENTS COUNT. 15 pull_request runs on a branch named main (a fork can create
+# one and its suite output is its own) all carry a skip, followed by 10 push runs that are clean.
+# Counting the pull_request runs would FAIL; the push runs alone are a clean sample of 10.
+_r=$(mkcase y 25 <<<"$CLEAN_LOG")
+seq 9001 9015 > "$_r/iv.pr.ids"
+skip_runs "$_r" 9001 9002 9003 9004 9005 9006 9007 9008 9009 9010 9011 9012 9013 9014 9015 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(y) pull_request runs are not post-merge evidence" 0 "runs triggered by pull_request carry output the PR author controls; counting them lets a fork move the window"
+
+# (z) AN UNREADABLE LOG is dropped and COUNTED, never observed: 8 of 25 fetches fail, 17 remain.
+_r=$(mkcase z 25 <<<"$CLEAN_LOG")
+seq 9001 9008 > "$_r/iv.unreadable.ids"
+run_probe "$_r"
+expect "(z) unreadable logs" 0 "an unreadable log is not a run with no skip; the remaining window still reads"
+if grep -qF "8 fetch(es) failed" "$OUT"; then pass; else
+  fail "(z) the summary must say how many fetches failed, so a short window is not mistaken for a quiet one. Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
+fi
+
+# (aa) SAMPLED IS NOT OBSERVED: 40 logs fetched, only the first 15 carry the suite line, two of
+# those skip. The rate is over the 15 (40 > 15 is past the bound); a probe dividing by the 40
+# fetched would call 40 > 40 inside it.
+_r=$(mkcase aa 40 <<<"$CLEAN_LOG")
+printf 'preamble with no suite summary line\n' > "$_r/log.iv.noterm.txt"
+seq 9016 9040 > "$_r/iv.noterm.ids"
+skip_runs "$_r" 9003 9007 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(aa) sampled is not observed" 1 "the denominator is the runs that carried the suite line, not every log fetched"
+
+# (bb) THE WALL BUDGET stops fetching. With the source-1 budget at zero no log is fetched, the
+# source is unreadable and the verdict is TRANSIENT; a clean reading from an unfinished sample is
+# the failure this guards.
+_r=$(mkcase bb 25 <<<"$CLEAN_LOG")
+T5_WALL_BUDGET_S1=0 run_probe "$_r"
+expect "(bb) wall budget reached" 2 "a source that ran out of budget before reading anything is unread, never clean"
+if [ "$(iv_calls "$_r")" -eq 0 ]; then pass; else
+  fail "(bb) the probe fetched $(iv_calls "$_r") infra-validation logs with a zero wall budget, expected none"
+fi
+
+# (u) ONE run in which TWO arms skipped counts once: the bound is over runs, not marker lines.
+_r=$(mkcase u 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9002 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(u) one run, two arms skipped" 0 "an apt outage that skips two arms in ONE run is one bad run in 20, not two; counting marker lines inflates the rate"
+
+# (v) sampling stops at 20 OBSERVED runs: 40 are listed, a skip sits beyond the stop and must not
+# be read, and the call log shows exactly 20 fetches.
+_r=$(mkcase v 40 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9030 <<EOF
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(v) sampling stops at 20 observed" 0 "ADR-188's window is 20 runs; a skip in the 30th listed run is outside it"
+if [ "$(iv_calls "$_r")" -eq 20 ]; then pass; else
+  fail "(v) the probe fetched $(iv_calls "$_r") infra-validation logs from a 40-run listing, expected exactly 20 — once 20 runs carrying the suite line are observed the window is full and nothing more is read (a window in which the suite line is absent is bounded by the wall budget, case (bb))"
+fi
+
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
+# RAISED 35 -> 48 (#11070 review), ITEMISED: (t) is now a PASS + its unprovable-rate notice (was 1, now
+# 2), (t.2), (t.3), (t.4), (w.1), (w.2), (x) red runs in the listing, (y) pull_request runs excluded,
+# (z) unreadable logs + the failed-fetch count, (aa) sampled is not observed, (bb) wall budget + its
+# fetch count: +13. The instrument controls above are unwound and add nothing.
+# RAISED 28 -> 35 (#8856), ITEMISED: (r) rate pass + message, (s), (t), (u), (v) verdict + fetch count.
 # RAISED 9 -> 12 (#7535 Phase 2), ITEMISED: (i) the T17 marker registration, plus
 # (j) and (j.ii), the two directions of the xtrace credential refusal.
+# RAISED 12 -> 20 (#10786), ITEMISED: (k) has 8 assertions: the relay-line precondition, three real-runner
+# cases (skip, terminal only, neither), the pre-fix log shape, the suite-end value pin, and the two
+# edit-the-pair harness rows (probe literal, runner regex). Measured on the green run: 20.
+# RAISED 20 -> 22 after review (#10786), ITEMISED: the skip-side value pin against the real `arm_skip`
+# echo, and the unmutated control through the harness's own copy path. Measured: 22.
+# RAISED 22 -> 27 (#10921), ITEMISED: (l) g1b. marker -> FAIL, (m) fl. marker -> FAIL, (n) guard
+# discriminators absent -> TRANSIENT (per-source, never pooled), (o) guard hit + rehearsal
+# unobserved -> FAIL dominates, (p) roster parity (every enumerated guard prefix has a producer).
+# Measured on the green run: 27.
+# RAISED 27 -> 28 (#10921 fix round), ITEMISED: (q) the lib's `SKIP (loud):`
+# printf literal is pinned by value — an edit to it unobserves every guard-suite
+# skip while banners keep the source "observed". Measured on the green run: 28.
 _total=$((passes + fails))
-_FLOOR=12
+_FLOOR=48
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

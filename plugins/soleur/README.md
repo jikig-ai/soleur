@@ -14,12 +14,25 @@ devin plugins install jikig-ai/soleur#plugins/soleur -y
 
 Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
-**Claude Code (marketplace):**
+**Claude Code (recommended, via the published marketplace):**
 
 ```bash
 claude plugin marketplace add jikig-ai/soleur-marketplace
 claude plugin install soleur@soleur-marketplace
 ```
+
+**Grok Build:** load the same in-repo plugin from the repository root — `grok inspect` must list the Soleur plugin, then start a session with `grok`. Use `/go <intent>`. See the [Grok Build onboarding guide](../../knowledge-base/engineering/grok-onboarding.md).
+
+**OpenCode:**
+
+Install Soleur into your OpenCode config directory via npm (this needs `bun` on `PATH`), then start a session:
+
+```bash
+npx @soleur/opencode install
+# or: bunx @soleur/opencode install
+```
+
+Verify the install with `npx @soleur/opencode install --check` — it prints `opencode-install ok` when the vendored payload in `~/.config/opencode/soleur/` matches. (From a local checkout of this repository, you can also run `bun plugins/soleur/scripts/install-opencode-adapter.ts` and keep the checkout in place.) Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because OpenCode has no `soleur:` namespace. Two guards decide shell commands on OpenCode, and both run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. Soleur's operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](opencode/INSTRUCTIONS.md).
 
 ## The Soleur Workflow
 
@@ -51,17 +64,19 @@ The recommended way to use Soleur is through the unified entry point:
 
 This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-Claude Code: `/soleur:go`. Grok Build: `/go`.
+Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`. OpenCode: `/go`.
 
-| Step | Claude Code | Grok Build |
-|------|-------------|------------|
-| Entry | `/soleur:go` | `/go` |
-| Sync | `/soleur:sync` | `/sync` |
-| Help | `/soleur:help` | `/help` |
-| Version | `/soleur:version` (Claude Code only) | not available |
-| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
+| Step | Claude Code | Grok Build | Codex | Devin CLI | OpenCode |
+|------|-------------|------------|-------|-----------|----------|
+| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` | `/help` |
+| Version | `/soleur:version` (Claude Code only) | not available | not available | not available | `/version` (reports unknown) |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` | `skill` tool, bare id (`plan`) |
 
-The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
+Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](../../knowledge-base/engineering/grok-onboarding.md) · [Codex](codex/INSTRUCTIONS.md) · [Devin](devin/INSTRUCTIONS.md) · [OpenCode](opencode/INSTRUCTIONS.md).
+
+The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build; via `/go` then the Skill tool with the bare id on OpenCode):
 
 ```text
 brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
@@ -83,7 +98,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 67 |
 | Commands | 4 |
-| Skills | 103 |
+| Skills | 105 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -317,6 +332,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `pencil-setup` | Auto-detect, install, and register Pencil MCP server with Claude Code CLI |
 | `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
 | `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `registry-breakglass-mirror` | Mirror GHCR images into zot datacenter-side when the registry tunnel bridge is down (break-glass only) |
 | `resolve-parallel` | Resolve TODO comments in parallel |
 | `resolve-pr-parallel` | Resolve PR comments in parallel |
 | `resolve-todo-parallel` | Resolve CLI todos in parallel |
@@ -382,7 +398,7 @@ devin plugins install jikig-ai/soleur#plugins/soleur -y
 
 Use `-y` to skip the confirmation prompt. You must be signed in (`devin auth login`) for plugin installation. If the remote install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
-**From the marketplace (recommended):**
+**Claude Code (recommended, via the published marketplace):**
 
 ```bash
 claude plugin marketplace add jikig-ai/soleur-marketplace
@@ -390,6 +406,15 @@ claude plugin install soleur@soleur-marketplace
 ```
 
 This installs the plugin subtree only — about 10 MiB in well under a minute.
+
+**Grok Build:** Soleur loads the same in-repo plugin under Grok Build. From the repository root, confirm discovery and start a session:
+
+```bash
+grok inspect    # the soleur plugin, skills, agents, and MCP servers must appear
+grok            # interactive session
+```
+
+Use `/go <intent>` (Grok's bare entry name), not `/soleur:go`. If `grok inspect` does not list Soleur, stop — there is no `grok plugin install` command to fall back on today. See the [Grok Build onboarding guide](../../knowledge-base/engineering/grok-onboarding.md).
 
 <details>
 <summary>Installing from the monorepo directly (slower, and may time out)</summary>
@@ -556,7 +581,7 @@ unconditionally.
 
 ### Harness support
 
-The compaction lifecycle is a Claude Code API. The other three harnesses
+The compaction lifecycle is a Claude Code API. The other four harnesses
 degrade to **silence**, never to a false claim that the behaviour is present.
 
 | Harness | Compaction hooks | What you get instead |
@@ -565,6 +590,7 @@ degrade to **silence**, never to a false claim that the behaviour is present.
 | Codex | No | The skill-prose fallback: the end-of-work resume prompt still fires, with no `/clear` recommendation |
 | Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
 | Grok Build | No | Same as Codex |
+| OpenCode | No | Same as Codex. The adapter carries no compaction hook, so nothing is written and no directive is emitted |
 
 ## Destructive-Command Guard
 

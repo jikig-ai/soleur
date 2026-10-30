@@ -98,6 +98,13 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        # ERROR, which then never runs and leaks the sandbox. `eval` would round-trip it, but
        # ADR-156 forbids eval under .claude/hooks and the sibling copy of this block lives there —
        # one pattern across all three sites beats two spellings of the same fix.
+       #
+       # Cleanup runs FIRST (#8659 defect B): under the caller's `set -e` a FAILING prior
+       # command aborts the trap mid-list, so `<prior>; _soleur_sb_cleanup` skipped cleanup
+       # whenever the prior failed. With cleanup first it is unconditional (its own
+       # `return 0` can never trip errexit) and the prior body stays verbatim in tail
+       # position, preserving its exit semantics exactly. Same fix as the two sibling copies
+       # (plugins/soleur/test/test-helpers.sh, .claude/hooks/lib/test-incident-sandbox.sh).
        _soleur_prior_body=""
        _soleur_prior_raw="$(trap -p EXIT)"
        if [ -n "$_soleur_prior_raw" ]; then
@@ -110,7 +117,7 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        _SOLEUR_SB_OWNED="$_soleur_sb"
        _soleur_sb_cleanup() { [ -n "${_SOLEUR_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_SB_OWNED"; return 0; }
        # shellcheck disable=SC2064
-       trap "${_soleur_prior_body:+$_soleur_prior_body; }_soleur_sb_cleanup" EXIT
+       trap "_soleur_sb_cleanup${_soleur_prior_body:+; $_soleur_prior_body}" EXIT
        unset _soleur_prior_raw _soleur_s _soleur_prior_body _soleur_sb ;;
   *)   printf "FATAL: inherited INCIDENTS_REPO_ROOT is not absolute: %s\n" \
          "$INCIDENTS_REPO_ROOT" >&2
@@ -167,8 +174,10 @@ suite_exit_class() {
 # test-cancel-superseded-pr-runs.sh; 12 on 2026-09-19; was 11 until
 # test-bump-inngest-bootstrap-pin.sh landed with #8359; 15 with
 # test-vinngest-digest-freshness.sh, #10272). Raise it when suites are added; lower
-# it deliberately, with a reason.
-MIN_SUITES=15
+# it deliberately, with a reason. 17 with test-rls-fuzz-ghcr-resilience.sh
+# (#10868) — the floor also lagged the real count by one before this suite
+# landed (16 suites vs floor 15).
+MIN_SUITES=17
 
 for t in "$DIR"/test-*.sh; do
   [[ -e "$t" ]] || continue
@@ -178,7 +187,8 @@ for t in "$DIR"/test-*.sh; do
   # back, which is precisely the bit that separates a terminated suite from a failed one.
   rc=0
   bash "$t" || rc=$?
-  case "$(suite_exit_class "$rc")" in
+  _suite_class="$(suite_exit_class "$rc")"
+  case "$_suite_class" in
     ok) ;;
     killed)
       KILLED=$((KILLED + 1))
@@ -196,6 +206,15 @@ for t in "$DIR"/test-*.sh; do
     *) echo "WARNING: suite_exit_class returned unrecognized class for rc=$rc; counting as FAILED." >&2
        FAIL=1 ;;
   esac
+  # COMPLETION DISCRIMINATOR (#10921 fix round): the `=== <basename> ===` banner
+  # above proves only that the glob enumerated the suite; this `done` line
+  # proves the suite's process returned a directly-observed rc — the standing
+  # skip-persistence probe keys its per-suite "observed" positive control on
+  # it. A signal-KILLED suite gets NO done-line: a suite that never ran to
+  # completion must read unobserved (TRANSIENT) there, never clean. Residual:
+  # a suite that exits non-zero before reaching its late rows still earns the
+  # line — bounded, because that run is already red.
+  [[ "$_suite_class" == killed ]] || echo "=== $(basename "$t") done ==="
   echo ""
 done
 

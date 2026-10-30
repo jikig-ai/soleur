@@ -24,9 +24,11 @@
 # ADR-191. Registered in scripts/test-all.sh via lint-dual-lockfile.test.sh.
 set -euo pipefail
 
-# Verified 2026-08-16: root, apps/web-platform,
-# plugins/soleur/skills/pencil-setup/scripts, spike.
-MIN_PACKAGE_LOCK_DIRS=4
+# Verified 2026-10-26: root, apps/web-platform, plugins/soleur/skills/pencil-setup/scripts,
+# plugins/soleur/skills/pencil-setup/scripts/pen-cli (the pinned headless engine's lockfile pair,
+# #11156), spike. The pen-cli prefix has no .npmrc supply-chain floor by design (ADR-191
+# addendum): its single dependency is pinned exactly and installed with `npm ci --ignore-scripts`.
+MIN_PACKAGE_LOCK_DIRS=5
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"

@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHash, createHmac } from "node:crypto";
+import type { z } from "zod/v4";
+import {
+  EMAIL_ADDR_MAX,
+  EMAIL_BODY_MAX,
+  EMAIL_RAW_ADDR_MAX,
+  EMAIL_SUBJECT_MAX,
+} from "@/server/email-triage/outbound-compliance";
 
 const PEPPER = "test-pepper-0123456789";
 // Mirror outbound-compliance.recipientHash: HMAC-SHA-256(pepper, lc+trim(email)).
@@ -175,5 +182,29 @@ describe("email_suppress tool", () => {
     expect(JSON.stringify(callArgs)).not.toContain("Journalist@Example.com");
     expect(callArgs.p_recipient_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(parse(res).id).toBe("sup-1");
+  });
+});
+
+// #11303 — the review card shows these fields IN FULL, so the zod schemas and the card share ONE set of caps
+// (outbound-compliance.ts). Each schema accepts exactly the cap and rejects cap+1.
+describe("outbound email tool schemas mirror the card caps", () => {
+  const shapeOf = (name: string) => (tools()[name] as unknown as { inputSchema: Record<string, z.ZodType> }).inputSchema;
+  const accepts = (name: string, field: string, value: string) => shapeOf(name)[field]!.safeParse(value).success;
+
+  it.each([
+    ["email_send", "to", EMAIL_RAW_ADDR_MAX],
+    ["email_send", "replyTo", EMAIL_RAW_ADDR_MAX],
+    ["email_send", "subject", EMAIL_SUBJECT_MAX],
+    ["email_send", "body", EMAIL_BODY_MAX],
+    ["email_reply", "subject", EMAIL_SUBJECT_MAX],
+    ["email_reply", "body", EMAIL_BODY_MAX],
+    ["email_suppress", "recipient", EMAIL_RAW_ADDR_MAX],
+  ] as const)("%s.%s accepts exactly the cap and rejects cap+1", (name, field, cap) => {
+    expect(accepts(name, field, "a".repeat(cap))).toBe(true);
+    expect(accepts(name, field, "a".repeat(cap + 1))).toBe(false);
+  });
+
+  it("the caps are the documented figures", () => {
+    expect([EMAIL_RAW_ADDR_MAX, EMAIL_ADDR_MAX, EMAIL_SUBJECT_MAX, EMAIL_BODY_MAX]).toEqual([320, 254, 200, 4000]);
   });
 });
