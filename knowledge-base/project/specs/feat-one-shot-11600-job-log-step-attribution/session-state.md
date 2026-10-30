@@ -24,3 +24,11 @@
 - Agents: none spawnable — sequential inline fallback
 - Scripts: `cloud-detect.sh`, `collision-precheck.sh 11600`, `technical-ruling-gate.sh --branch`, `lint-guard-contract.py`, `markdownlint-cli2`
 - Artifacts: plan file, `tasks.md`, `decision-challenges.md` — committed (`a9c2f59f92`, `c5dc8d6e6c`), pushed to draft PR #11603
+
+## Work Phase
+- Status: complete (Phases 1-4 of tasks.md)
+- Suite: `web-first-deploy-10585.test.sh` 69 passed, 0 failed; floor bumped 30→69
+- Mutation spot-checks: BOM single-strip → 6 RED; dropped `ts>=ps` gate → 6 RED; recovery deleted → RED (initial RED run)
+- Follow-up filed: #11607 (sibling probes zot-8651 + rehearsal-evidence)
+- Commits: RED fixture (a258867538), fix (c59b6769ec), docs (e69f12b22a)
+- Note: probe fix was wiped once by `git checkout` on uncommitted work during mutation testing; re-applied and committed before re-running mutations — mutations must be tested via file backup or post-commit revert, never `git checkout` on uncommitted edits.
