@@ -12,7 +12,7 @@ Raw outcomes of `apps/web-platform/test/broker-mechanism-spike.test.ts`, run wit
 | curl / OpenSSL / Node | 8.23.0 / 3.6.5 / v26.12.1 |
 | Chain | sandboxed `curl` -> SDK sandbox-runtime proxy -> the real, unmodified `infra/egress-forwarder.mjs` -> a **stub gateway** in the test file (loopback only, CONNECT and absolute-URI tunnelling to local echo targets) |
 | Config | `buildAgentSandboxConfig(own, { allowWebEgress: true })` with these fields varied per arm and nothing else: `allowManagedDomainsOnly` (the production value is `true`), `allowedDomains` (empty on the control, the three test hosts elsewhere), the `credentials.envVars` `mask` entry, and where `tlsTerminate` is set |
-| Stand-in model | Scripted Anthropic stand-in; no model, no real credential. All secrets are per-run decoys; a CI runner's ambient tokens are added to the declared secrets so the run fails if one were visible. |
+| Stand-in model | Scripted Anthropic stand-in; no model, no real credential. All secrets are per-run decoys; no real ambient credential is read, and the child env is an explicit allowlist. |
 
 Measured against the test file carried by the same commit as this record (PR #11624 after its review fixes; the PR is still open, so no merge SHA exists yet). Outcomes are re-derived on every run; this table records one run, not an expected value.
 
@@ -56,7 +56,9 @@ The hermetic block and the real-sandbox suite were mutated over a pristine backu
 | Secret variable not exported to the sandbox | first version survived; killed (the control no longer leaks, the env premise fails) |
 | Env section blanked on mask arms | first version survived; killed (the floor requires a mask arm to reach a conclusion) |
 | Echo header name misspelled in the harness | fix round: survived until the floor required the control's echo to record the real value; killed |
-| `proc` and `cwdfiles` probe lines replaced by `true` | fix round: survived until the floor required both surfaces non-empty; killed |
+| `cwdfiles` probe line replaced by `true` | fix round: survived until the floor required the cwd-files surface non-empty; killed. (The `proc` line replaced by `true` is not killed: `/proc` is not mounted here, see below.) |
 | Sentinel tie on `does-not-work` removed | **survives**: in the recorded run the destination received the sentinel on every measured arm, so the tie never changes a verdict; it matters only when the header is absent or garbled |
+| Real-value-at-a-host-outside-`injectHosts` check replaced with `false` | **survives**: no measured arm delivers the real value to such a host, so no run reaches the branch; it is exercised only by reading the code |
+| Identity `redact` in `record()` | killed by the redaction negative-control test added in the verification round |
 
-Finding from that round: the `/proc/*/environ` glob was empty inside the sandbox on every arm, so the surface the scan named was never read. The probe now also reads `/proc/self/environ`, and the floor fails if either surface is empty.
+Finding from that round: `/proc` is not mounted in this sandbox, so the `proc-environ` surface held only an error line on every arm and was never read. It is not counted as a scanned surface; the environment is covered by the `env` surface and the tool-result catch-all. The floor requires only the cwd-files surface to be non-empty. The `grep` half of the cwd probe is not separately pinned (no decoy file is planted in the working directory).

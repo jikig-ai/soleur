@@ -362,6 +362,8 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     return [
       `sec() { printf '\\n<<%s %s>>\\n' SEC "$1"; }`,
       `sec env; env`,
+      // /proc is not mounted in this sandbox (measured), so this section holds no environ content here; it is kept so a
+      // topology that does mount /proc is scanned, and the floor does not count it as a scanned surface.
       `sec proc; cat /proc/self/environ 2>&1 | tr '\\0' '\\n'; for p in /proc/[0-9]*; do cat $p/environ 2>/dev/null | tr '\\0' '\\n'; done`,
       `sec cwdfiles; ls -la . 2>&1; grep -rasn . . 2>/dev/null | head -200`,
       `sec http-echo; curl -sS -m 15 -o /dev/null -w 'CODE=%{http_code}\\n' ${H} http://${ECHO_HOST}:${hp}/ 2>&1`,
@@ -637,7 +639,7 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
       const scan = scanSandboxSurfaces(run.observations, DECLARED);
       if (scan.some((h) => h.secretId.startsWith("forwarder-"))) SEEN.proxyCredHits += 1;
       for (const o of run.observations) {
-        if ((o.surface === "proc-environ" || o.surface === "cwd-files") && o.text.trim() === "") SEEN.emptySurfaces.push(`${arm.name}:${o.surface}`);
+        if (o.surface === "cwd-files" && o.text.trim() === "") SEEN.emptySurfaces.push(`${arm.name}:${o.surface}`);
       }
       const virtualHere = run.echo.some((e) => hostOf(e) === VIRTUAL_HOST);
       SEEN.virtualEchoed ||= virtualHere;
@@ -671,6 +673,15 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     );
   });
 
+  it("harness: record() redacts a declared value from evidence before it is logged or kept", () => {
+    const before = OUTCOMES.length;
+    record(unmeasurable("redaction-negative-control", "synthetic", [`client printed ${SPIKE_SECRET.value}`]));
+    const kept = OUTCOMES.pop()!;
+    expect(OUTCOMES.length).toBe(before);
+    expect(kept.evidence.join(" ")).not.toContain(SPIKE_SECRET.value);
+    expect(kept.evidence.join(" ")).toContain("<declared:spike-token>");
+  });
+
   // Reads the module-level OUTCOMES/SEEN filled by the arm tests above: it must run last, in file order,
   // and cannot be filtered with -t. Its SDK-dependent expectations are the intended re-measure signal.
   it("outcome floor: every arm produced an outcome, the control leaked, the harness proved it can see a delivered secret, and the mask and TLS arms reached conclusions", () => {
@@ -683,7 +694,7 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     // The scan alone cannot tell "mask did not substitute" from a harness that cannot read a delivered
     // secret: the control's echo must have received the real value.
     expect(control?.evidence.join(" "), "the control's echo target must record the real value").toMatch(/echo-received host=\S+ tls=false token=REAL/);
-    expect(SEEN.emptySurfaces, "proc-environ and cwd-files must be non-empty on every arm").toEqual([]);
+    expect(SEEN.emptySurfaces, "the cwd-files surface must be non-empty on every arm (proc-environ is not counted: /proc is not mounted in this sandbox)").toEqual([]);
     const maskConcluded = OUTCOMES.filter((o) => o.probe.includes("mask") && !o.probe.startsWith("control") && o.outcome !== "unmeasurable");
     expect(maskConcluded.length, "at least one mask arm must reach a conclusion").toBeGreaterThan(0);
     // The cell that could decide HTTPS masking is listed even while it is unmeasurable (the open question in ADR-311).
