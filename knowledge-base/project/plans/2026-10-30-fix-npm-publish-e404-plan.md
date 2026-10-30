@@ -14,6 +14,36 @@ brand_survival_threshold: aggregate pattern
 
 # fix(ci): npm Publish fails E404 on every merge — @soleur/opencode not in registry
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Sections enhanced:** 4 (Proposed Solution, Technical Considerations,
+Implementation Phases, Dependencies & Risks)
+**Research agents used:** inline (no Task tool on this harness) — repo research,
+npm registry + Actions-run evidence probes, npm trusted-publishers and
+`npm trust` CLI docs, E404-authz-masking precedent (npm/cli#8976), CTO Rule
+interface for the mechanism fork.
+
+### Key Improvements
+
+1. Root cause re-anchored from the issue's disproven "unclaimed scope" premise
+   to the credential-expiry class (secret-set→first-failure ≈ 7.0 days; E404 on
+   PUT masks authz on an existing package).
+2. Mechanism fork ruled: OIDC trusted publishing adopted over scope-claim
+   (moot), registry repoint (breaks `npx`), leg removal (real channel), and
+   token rotation (keeps the failing class).
+3. `npm trust github` CLI path replaces a dashboard step for the one
+   unavoidable operator act.
+
+### New Considerations Discovered
+
+- `registry-url`'s `.npmrc` `_authToken` line must be removed with
+  `NODE_AUTH_TOKEN` or it can mask OIDC auth selection (npm/cli#8976).
+- Node 22's bundled npm 10.x is below the 11.5.1 OIDC floor — the job must
+  install `npm@^11` explicitly.
+- `npm trust` rejects granular tokens with bypass-2FA: the operator step is an
+  interactive maintainer login, not a scriptable token call.
+
 ## Overview
 
 The `npm Publish` GitHub Actions leg of the release pipeline has failed with
@@ -173,9 +203,12 @@ row T1 for the full rationale and rejected alternatives.`
 
 ### Phase 3: Operator trust entry + end-to-end verification
 
-- Operator (npm maintainer `deruelle`, npm >= 11.15.0, 2FA): `npm trust github
-  @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur
-  --allow-publish`; verify with `npm trust list @soleur/opencode`.
+- Operator (npm maintainer `deruelle`, npm >= 11.15.0, 2FA on the account;
+  interactive `npm login` — granular tokens with bypass-2FA are rejected by
+  `npm trust`): `npm trust github @soleur/opencode --file npm-publish.yml
+  --repo jikig-ai/soleur --allow-publish`; verify with `npm trust list
+  @soleur/opencode`. (`--repo` would default from `package.json`'s repository
+  field; the explicit flag removes the ambiguity.)
 - `gh workflow run npm-publish.yml` on main; confirm run green and
   `npm view @soleur/opencode version` equals the newest `v*` tag.
 - After the first green OIDC publish, operator deletes the `NPM_TOKEN` repo
@@ -287,11 +320,12 @@ was triage latency).
 ## Architecture Decision (ADR/C4)
 
 - **ADR:** create `ADR-309-npm-publish-oidc-trusted-publishing.md` (provisional
-  ordinal — highest on main is ADR-308; re-verify next-free at ship time per
-  the collision rule). One-line decision: CI publishes `@soleur/opencode` via
+  ordinal — highest on `origin/main` re-verified 2026-10-30 is ADR-308;
+  ship's ADR-Ordinal Collision Gate re-verifies next-free at merge, and a
+  renumber must sweep this feature's artifacts in the same edit). One-line decision: CI publishes `@soleur/opencode` via
   npm OIDC trusted publishing bound to `jikig-ai/soleur` + `npm-publish.yml`;
   no long-lived npm credential exists in CI (`NPM_TOKEN` retired after the
-  first green publish). Status `adopting`; flips to `accepted` when AC-8's
+  first green publish). Status `adopting`; flips to `accepted` when AC-7's
   green publish is observed — recorded in the ADR body, not deferred.
 - **C4 views:** read `model.c4`/`views.c4`/`spec.c4` in full. Enumeration for
   this feature: (a) external human actors — OpenCode end users installing via

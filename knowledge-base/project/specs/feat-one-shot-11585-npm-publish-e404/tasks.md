@@ -30,7 +30,7 @@ Issue: #11585 (Closes #11585 in PR body)
 
 ## Phase 4 — Operator + End-to-End (post-merge)
 
-- [ ] 4.1 (operator, npm maintainer `deruelle`, npm >= 11.15.0, 2FA on) `npm trust github @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur --allow-publish`; verify `npm trust list @soleur/opencode` shows the entry.
+- [ ] 4.1 (operator, npm maintainer `deruelle`, npm >= 11.15.0, 2FA on the account, interactive `npm login` — `npm trust` rejects granular tokens with bypass-2FA) `npm trust github @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur --allow-publish`; verify `npm trust list @soleur/opencode` shows the entry.
 - [ ] 4.2 `gh workflow run npm-publish.yml` on main; run concludes `success`.
 - [ ] 4.3 `npm view @soleur/opencode version` prints the newest `v*` tag's version.
 - [ ] 4.4 (operator) Delete `NPM_TOKEN` repo secret after the first green OIDC publish (or record the deferral in the PR body).
