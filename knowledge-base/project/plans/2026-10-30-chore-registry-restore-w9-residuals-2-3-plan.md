@@ -16,6 +16,38 @@ brand_survival_threshold: none
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Sections enhanced:** Implementation Phases 0-4, Guard Contract (all three guards), Sharp Edges, Acceptance Criteria
+**Agents used:** a general-purpose implementation-realism seat that prototyped all three guards in a sandbox copy
+(`scripts/soleur-sandbox.sh`, measured), `soleur:engineering:review:test-design-reviewer`, and the CTO agent for
+the three resulting forks (D1-D3 in `decision-challenges.md`). The mechanical halts ran in place: 4.6 user-brand
+(threshold `none`, no sensitive path), 4.7 observability (section present, `grep` probe, literal `1`), 4.8 PAT
+sweep (no hit), 4.9 UI (no UI file), 4.11 `lint-guard-contract.py` (3 entries, green), 4.12 scope check (one live
+section, no `unmapped`), 4.10 and 4.13 skipped (no store, no `.tf`, no new autonomous task). Cited PRs
+re-verified live: #11438 and #11557 MERGED, #11551 OPEN and CONFLICTING, #11589 draft. The only rule id cited
+(`cq-write-failing-tests-before`) exists in AGENTS.md. The broad all-agents fan-out was deliberately scoped to
+these seats: the change is one bash test file with no framework or SDK.
+
+### Key improvements
+
+1. Nested meta-control: a copy missing the header lib still printed one FAIL line containing `exit 1 fell`, so a
+   fragment match would have passed; the check is now exact equality with the outer `drop1` control's output.
+2. Census: `[0-9]+\b` accepted partly computed codes (`die 3$x`, `exit 3"$c"`); the accepted shape now needs a
+   clean terminator, the `exit "$code"` line is scoped to the `die()` body, and Guard 2 row 10 was wrong as
+   written (`# exit 3` is literal-shaped and stays green) and now uses a non-literal comment word.
+3. Summary check: the `failure` value is executed explicitly, the existing `env` mode is reused, the
+   `mutate:sum*` dispatch order bug (the `78)` search crashes on this step) is pinned, and each guard carries a
+   committed must-PASS control. Expected assertion total about 64, decided by the green run.
+
+### New considerations discovered
+
+- Measured: nested run 2.8 s, W1-W8 0.7-1.1 s (no gating); suite 87 s vs a 79 s back-to-back baseline under load,
+  so the added-time AC is a back-to-back pair, not a comparison with the idle 52 s.
+- 3c is closed for the real W9 row; for the controls loop only the verdict function is proved (call-site hardcode
+  stays accepted residue, stated in the PR body).
+
 ## Overview
 
 Residuals 2 and 3 of #10932 (umbrella #9757) in one PR (draft PR #11589; the operator overrode the earlier
@@ -203,7 +235,7 @@ Cut List:
 ## Files to Edit
 
 - `tests/scripts/test-registry-d10-workflow-wiring.sh` — the only code change: new `W9_PY` modes (`sumextract`,
-  `sumenv`, `sumkeys`, `mutate:sum*`), `w9_computed_sites`, the census call inside `w9_check`,
+  `sumkeys`, `mutate:sum*`), `w9_computed_sites`, the census call inside `w9_check`,
   `w9_summary_check` and its controls, `w9_expect`, the `W9_NESTED` guard and the meta-controls, the wording
   fixes, `EXPECTED_ASSERTIONS`.
 
@@ -267,8 +299,9 @@ grammar, `sumkeys`/pairwise controls and the must-pass nested tree were cut or r
   never labelled passed locally.
 - 0.4 Re-measure `wc -c .github/workflows/apply-web-platform-infra.yml` after the rebase and record it (expected
   489,131 unless #11551 or another PR changed it). Record `git diff --stat origin/main...HEAD -- .github` empty.
-- 0.5 Measure the cost of W1-W8 (needed for Phase 3.3; CTO threshold ~5 s): in a sandbox copy of the suite, add
-  `date +%s` stamps before W1 and after W8 and run it once; record the seconds.
+- 0.5 Run the nested-run spike FIRST (before Phase 1): in a sandbox copy add `W9_NESTED` + `exit 64` and the
+  `drop1` tree, and confirm the nested run is quiet on W1-W8. Deepen-pass measurement: nested run 2.8 s, W1-W8
+  0.7-1.1 s, so no gating of W1-W8 is needed (CTO D-ruling); re-measure and record.
 
 ### Phase 1 — Guard 2: computed `die`/`exit` word census (residual 3b)
 
@@ -279,20 +312,27 @@ grammar, `sumkeys`/pairwise controls and the must-pass nested tree were cut or r
   (b) remove the two allowed line shapes, each required to occur exactly once, by anchored whole-line match:
   the definition `^die\(\) \{( #.*)?$` (its trailing comment is tolerated by the pattern; comments are not
   stripped in general) and `^[[:space:]]*exit "\$code"$` (the `die()` implementation). Zero or two occurrences of
-  either is itself an offender line ("allowed site count");
+  either is itself an offender line ("allowed site count"); the `exit "$code"` line must additionally sit after
+  the definition line and before its closing `^}` (scoped to the `die()` body, so moving it elsewhere reds);
   (c) token pass `grep -noE '\b(die|exit)\b( [0-9]+\b)?'` over the rest; a token is accepted iff it is `die N` /
-  `exit N` with exactly one space and digits (the lib extractor's literal shape); every other token is an
-  offender. Token level, so a line holding a literal and a computed site reports the computed one. `\b` excludes
+  `exit N` with exactly one space and digits (the lib extractor's literal shape) AND the character after the
+  digits is whitespace, `;`, `&`, `|`, `)` or end of line (so `die 3$x`, `exit 1${n}` and `exit 3"$c"` — partly
+  computed codes that a bare `\b` would accept — are offenders; the implementation measures this on the live
+  engine, expected still 82 accepted / 0 offenders); every other token is an offender. Token level, so a line holding a literal and a computed site reports the computed one. `\b` excludes
   `verify_die` and `exit_code`; `$exit`, `builtin exit "$c"`, `trap 'exit "$c"' ERR` and `die  7` all red (fail closed);
   (d) a floor: fewer than 1 accepted token adds the problem "census inspected zero sites — vacuous".
   Measured at plan time on the live engine: 82 accepted tokens, 0 offenders.
 - 1.3 Wire into `w9_check`: `w9_check` calls the same `w9_computed_sites` (not a copy) and adds a problem
   naming "computed die/exit site" plus the offender lines.
-- 1.4 Committed controls: computed variable (`die "$c" "x"`), bare `exit`, case-arm `NETWORK) die "$c" "x" ;;`,
-  two-space `die  7 "x"`, zero-sites floor (empty text) — each calls `w9_computed_sites` directly (cheap; the
-  appended line must differ from the engine text: the landing check for engine-text controls) — plus ONE
-  wire-in control through full `w9_check` (computed die appended, expecting "computed"). The remaining matrix
-  rows are run once in the sandbox (Phase 5.2) and listed in the PR body.
+- 1.4 Committed controls: computed variable (`die "$c" "x"`), bare `exit`, two-space `die  7 "x"`, partly
+  computed literal `die 3$x`, zero-sites floor (empty text) — each calls `w9_computed_sites` directly (cheap) and
+  asserts the EXACT offender (`<appended line number>:<token>`), after first asserting the census on the
+  unmutated text is empty (the baseline is the landing check for engine-text controls; "the appended line
+  differs" would be a tautology) — plus ONE wire-in control through full `w9_check` (computed die appended,
+  expecting the wrapper fragment "computed die/exit site"). Plus ONE committed must-PASS control: an appended
+  literal `die 7 "x"` plus a whole-line comment `# exit $x` give zero offenders. The case-arm row (identical to
+  the computed-variable row at word level) and the remaining matrix rows are run once in the sandbox (Phase 5.2)
+  and listed in the PR body.
 
 ### Phase 2 — Guard 1: "Restore summary" step (residual 3a)
 
@@ -301,22 +341,25 @@ grammar, `sumkeys`/pairwise controls and the must-pass nested tree were cut or r
   that search does `.group(1)` on a `None` for this step and would crash every summary control; and the summary
   controls use their own loop with the step name "Restore summary", not `"$RESTORE_STEP"`): `sumextract` (prints
   the run body; exit 3 none, 4 duplicated or outside job `registry_store_restore`, 6 not after the restore
-  step in `steps` order), `sumenv` (prints `k=v`, sorted), `sumkeys` (prints which of `continue-on-error shell
+  step in `steps` order), the existing `env` mode (works for this step; no `sumenv`), `sumkeys` (prints which of `continue-on-error shell
   working-directory timeout-minutes` are present and `if=<normalized>`). Do not reuse `keys` (it forbids `if`).
 - 2.3 `w9_summary_check <workflow text>` (separate function, not part of `w9_check`): pins `if` exactly `always()`;
   env exactly `RESTORE_RESULT=${{ job.status }}`; no forbidden step keys (pinned in code, no dedicated
   control); position after the restore step; runs the body under `env -i PATH=<minimal> RESTORE_RESULT=<v>
   GITHUB_STEP_SUMMARY=<tmpfile> bash -e -c "$body"` (`bash -e` is the Actions default without a `shell:` key)
-  for `success`, `cancelled` and the EMPTY string (stands in for `failure` and every other value through the
-  shared `*)` arm; the empty-vs-unset difference is stated: an unset variable behaves the same here because the
-  body has no `set -u`); asserts stdout empty, summary file non-empty, heading `## registry store restore`;
-  success has `closed` and not `failed`; cancelled has `cancelled` and not `closed`; empty has `failed` and not
+  for `success`, `cancelled`, `failure` (run explicitly: an added `failure)` arm next to `*)` is a distinct
+  failure) and the EMPTY string (stands in for every other value through `*)`; an unset variable behaves the
+  same here because the body has no `set -u`); asserts stdout empty, summary file non-empty, heading `## registry store restore`;
+  success has `closed` and not `failed`; cancelled has `cancelled` and not `closed`; failure and empty have `failed` and not
   `closed` (whole word `failed`, never `fail`: the cancelled prose says "fail for others"). Semantic anchors,
   not the full prose. No pairwise-differ check (the per-outcome anchors imply it).
-- 2.4 Real row `W9s the Restore summary step ...` plus four-plus-one controls as `mutate:sum*` modes, each
-  asserting exactly one anchor match then the mutation-landed row: `sumifdrop`, `sumenvlit`, `sumswap`,
-  `sumredirect`, `sumorder` (kept: a summary before the restore step reads `job.status` early and misreports).
-  Messages are split so no two controls share a fragment (see the Guard Contract).
+- 2.4 Real row `W9s the Restore summary step ...` plus five controls as `mutate:sum*` modes, each asserting
+  exactly one anchor match then the mutation-landed row: `sumifdrop`, `sumenvlit`, `sumswap`, `sumredirect`,
+  `sumorder` (kept: a summary before the restore step reads `job.status` early and misreports); plus ONE
+  committed must-PASS control (reworded success text containing `closed` and not `failed`, env keys reordered)
+  requiring zero problems. Messages are split so no two controls share a fragment (see the Guard Contract).
+  Deepen-pass prototype: the existing `env` mode already serves the summary step, so no `sumenv` mode is needed;
+  the five controls each went red for exactly their own fragment.
 
 ### Phase 3 — Guard 3: verdict swap (residual 3c)
 
@@ -327,8 +370,8 @@ grammar, `sumkeys`/pairwise controls and the must-pass nested tree were cut or r
   data-returning function shape. Canary row: a known-bad input must come out `fail`, a matching one `ok`.
 - 3.3 `W9_NESTED=1`: placed right after the W9 row's `_report` and before the controls loop, `exit 64`. Nested mode
   skips the controls loop, the census/summary controls, the meta-control and the floor, and can never exit 0 (an
-  operator exporting the variable in the outer environment gets a run that cannot go green). If Phase 0.5 shows
-  W1-W8 cost more than ~5 s, gate them under the guard too.
+  operator exporting the variable in the outer environment gets a run that cannot go green). W1-W8 stay enabled
+  in the nested run (measured 0.7-1.1 s).
 - 3.4 Meta-control (after the existing "engine-extra-code" control, before the floor, only when `W9_NESTED` is not
   1). Build the tree under `"$W9_TMP/meta"` (NOT a new `mktemp -d` with its own trap: bash keeps one EXIT trap and
   the suite already installs `rm -rf "$W9_TMP"`), `assert_fixture_dir` it, copy the suite itself
@@ -336,8 +379,11 @@ grammar, `sumkeys`/pairwise controls and the must-pass nested tree were cut or r
   `scripts/derive-app-domain-base.sh` (executable), `.github/actions/` and the `drop1`-mutated workflow at
   `.github/workflows/`. Run `W9_NESTED=1 timeout 120 bash <copy>`. Mutated tree only (CTO S1): require exit 64
   (a crash or a missing-file `exit 2` fails here), `cmp` shows the nested workflow differs from the real one
-  (mutation landed), exactly one `  FAIL ` line, and it names `W9 the restore step maps` and `exit 1 fell`
-  (so a partial copy failing some other W-row cannot masquerade as the swap being caught). The must-pass tree
+  (mutation landed), exactly one `  FAIL ` line, and that row's detail EQUALS, as an exact string, the outer
+  `drop1` control's `w9_check` output (CTO D1). A fragment match is not enough: the deepen-pass prototype showed
+  a copy missing `tests/scripts/lib/restore-engine-header.sh` still prints one FAIL line containing `exit 1 fell`
+  and would have passed. The harness also asserts the copy list is complete (each source file exists before
+  copying). The must-pass tree
   is not built: the outer real row proves the real tree prints ok, and a hardcoded-FAIL row reds the outer run.
 
 ### Phase 4 — Wording and header block (residual 2)
@@ -351,8 +397,10 @@ grammar, `sumkeys`/pairwise controls and the must-pass nested tree were cut or r
   what is covered now (summary step, computed sites, verdict swap) and the true residue (engine prose; a die
   whose code arrives via `eval` or an indirect call such as a command held in a variable); narrow "A text parse
   of the `case` was bypassed ... none is kept" to the workflow's `case`. Do not re-document the block.
-- 4.4 Recount `EXPECTED_ASSERTIONS` from a green run (provisional estimate ~62: 47 + summary row and 5 controls
-  + census 6 controls + canary 1 + meta 1; the green run decides) and keep it EXACT.
+- 4.4 Recount `EXPECTED_ASSERTIONS` from a green run and keep it EXACT. Deepen-pass prototype count for the
+  committed set at the time was 61 (47 + 1 summary row + 5 summary controls + 4 census controls + 1 zero-sites
+  + 1 wire-in + 1 canary + 1 meta); the two must-PASS controls (CTO D3) and the `die 3$x` control make the
+  expected total about 64. The green run decides; the number is not copied from this plan.
 
 ### Phase 5 — Verify, mutation-prove, stop
 
@@ -400,15 +448,18 @@ redirect. The pins and the controls flow through the single `w9_summary_check` c
 | 4 | Remove the `>> "$GITHUB_STEP_SUMMARY"` redirect (control `sumredirect`) | RED "summary stdout" |
 | 5 | Move the summary step before the restore step (control `sumorder`) | RED "summary step position" |
 | 6 | Second member after a compliant first (sandbox row): correct `if`, env changed | RED "summary step env" |
+| 11 | Explicit `failure) echo closed` arm added next to `*)` (sandbox row) | RED "summary outcome failed" (the `failure` value is executed) |
+| 12 | Cancelled arm printing the failure text (sandbox row) | RED "summary outcome cancelled" |
+| 13 | Duplicate step name, or the step moved to another job (sandbox row) | RED (extract rc 4) |
 | 7 | `if: always()` -> `if: success()` (sandbox row) | RED "summary step if" |
 | 8 | Add `continue-on-error: true` (sandbox row; code pin, no committed control) | RED "summary step keys" |
 | 9 | Empty the `*)` arm (sandbox row) | RED "summary outcome failed" |
 | 10 | Own dispatch: rename the step so extraction finds none (sandbox row) | RED (extract rc), not a silent pass |
 
 Harness rows: removing the env assertion from `w9_summary_check` must turn `sumenvlit` RED; replacing the body
-execution by a fixed string must turn `sumswap` RED. Must-PASS non-canonical input: the same workflow with the
+execution by a fixed string must turn `sumswap` RED. Must-PASS non-canonical input (COMMITTED as one control): the same workflow with the
 success text reworded (still containing `closed` and not `failed`) and the env keys in a different order must
-pass.
+give zero problems.
 Anchor: the expected `if`/env literals live in the suite; changing the workflow and the suite in one commit is a
 reviewable pair, which is the integrity limit of a consistency pin (stated, not hidden). The outcome anchors are
 semantic words, not prose.
@@ -431,20 +482,22 @@ in code (a message string, an inline comment) reds: fail closed, reword it.
 
 | # | Mutation (appended to / applied on engine text) | Expected |
 |---|---|---|
-| 1 | `die "$c" "x"` (control) | RED "computed die/exit site" |
+| 1 | `die "$c" "x"` (control; direct calls assert the exact `<line>:<token>`, the wrapper fragment "computed die/exit site" is asserted by wire-in control 6) | RED |
 | 2 | bare `exit` (control) | RED |
-| 3 | `NETWORK) die "$c" "x" ;;` case arm (control) | RED |
+| 3 | `NETWORK) die "$c" "x" ;;` case arm (sandbox row; identical to row 1 at word level, kept as a regression row only) | RED |
 | 4 | `die  7 "x"` two spaces, invisible to the extractor (control) | RED |
 | 5 | Own dispatch: census on empty text (control) | RED "inspected zero sites — vacuous" |
 | 6 | Wire-in: computed die appended, full `w9_check` (control) | RED naming "computed" |
 | 7 | Second member after a compliant first: `die 3 "x" \|\| exit "$c"` (sandbox row) | RED (token level) |
 | 8 | A second `exit "$code"` (sandbox row; allowed-site count must be exactly 1) | RED "allowed site count" |
 | 9 | `exit $?`, `builtin exit "$c"`, `trap 'exit "$c"' ERR` (sandbox rows) | RED |
-| 10 | Trailing inline comment containing `exit 3` on a code line (sandbox row) | RED (fail closed by design) |
+| 10 | Trailing inline comment with a NON-literal exit word, e.g. `echo y # exit $x` or `# we exit now` (sandbox row; deepen-pass measured that `# exit 3` is literal-shaped and stays GREEN, so it is not the red row) | RED (fail closed by design) |
+| 11 | Partly computed literal `die 3$x`, `exit 1${n}`, `exit 3"$c"` (committed control for `die 3$x`) | RED |
+| 12 | Move the allowed `exit "$code"` line out of the `die()` body (sandbox row) | RED "allowed site count" / scope |
 
 Harness rows: deleting the `w9_computed_sites` call from `w9_check` must turn control 6 RED; replacing the
-function body by `true` must turn controls 1-4 RED. Must-PASS inputs that are not the canonical engine: appended
-literal `die 7 "x"` and a whole-line comment `# exit $x` must NOT trip the census (and the existing
+function body by `true` must turn controls 1-4 RED. Must-PASS inputs that are not the canonical engine (COMMITTED as one control): appended
+literal `die 7 "x"` and a whole-line comment `# exit $x` must give zero offenders (and the existing
 engine-extra-code control still goes red only via "differs").
 Anchor: the two allowed line shapes and the literal shape are literals in the suite; the engine is held
 byte-unchanged by a merge-base `git diff --stat` AC, the anchor outside the suite.
@@ -453,6 +506,8 @@ byte-unchanged by a merge-base `git diff --stat` AC, the anchor outside the suit
 
 **Property.** If the W9 check finds a problem, the suite prints a FAIL row naming it and the nested proof reds if
 the W9 row cannot; the verdict function used by the row and by the controls loop maps a missing needle to `fail`.
+Scope statement (honest): 3c is closed for the real W9 row end-to-end; for the controls loop it is closed for the
+verdict function only — a hardcoded verdict at the loop's call site (23+ controls) is accepted residue.
 
 **Assembly.** Two verdict sites: (i) the real W9 row, proved end-to-end by the nested run of the suite copy on a
 `drop1`-mutated tree; (ii) the verdict function `w9_expect` used by the controls loop and the row, proved by a
@@ -473,8 +528,10 @@ the outer environment: `W9_NESTED=1` always exits 64.
 | 8 | Nested copy missing `.github/actions` (sandbox row) | RED via nested `exit 2` (missing bridge file); a partial copy that only fails another W-row is RED via the FAIL-line check |
 
 Harness rows: removing the `cmp` mutation-landed check must let a no-op mutation pass (verified by a scratch
-edit), so the check is load-bearing and is part of the committed meta-control. Must-PASS: the outer real tree
-printing the exact ok W9 row is the must-pass input (no second nested tree).
+edit), so the check is load-bearing and is part of the committed meta-control; omitting
+`tests/scripts/lib/restore-engine-header.sh` from the nested copy must RED via the exact-equality check (it
+passes a fragment match — deepen-pass measured). Must-PASS: the outer real tree printing the exact ok W9 row is
+the must-pass input (no second nested tree).
 Anchor: the sentinel 64 and the exact row/fragment text live in the suite; the real workflow is the nested run's
 input, so the proof is relative to the repo's own artifact, not to a stored copy.
 
@@ -559,7 +616,8 @@ bun test plugins/soleur/test/workflow-file-size.test.ts          # passes; workf
   between rows) and its outcome is listed in the PR body; every committed workflow-mutating control passes the
   "mutation landed" check, every committed engine-text control asserts its appended line changed the text, and
   each control names a fragment only its own pin produces.
-- [ ] The wiring suite's added wall time is recorded in the PR body (baseline 52 s; target < 90 s).
+- [ ] The wiring suite's added wall time is recorded in the PR body as a back-to-back before/after pair on the
+  same machine state (plan-time baseline 52 s idle, 79 s under load; added cost expected ~10-20 s).
 - [ ] `python3 -I scripts/lint-guard-contract.py` passes on this plan; `python3 -I scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes.
 - [ ] The PR body's first line states that merging mutates no production system and why (the `paths:` filter, engine and lib byte-unchanged).
 - [ ] PR body carries `Ref #10932` and `Ref #9757`, no closing keyword; states "no sub-item dropped", the accepted
@@ -616,5 +674,11 @@ No cross-domain implications detected — test-only change to an infrastructure 
 - Any `die`/`exit` word in engine code that is not a literal site or one of the two allowed `die()` lines reds
   (a message string, an inline comment, `$exit`); fail-closed by design — reword it, never strip comments in the
   check.
+- Residue list (stated, not hidden): an indirect call (`eval`, a command held in a variable); `return`-based or
+  last-status exits (the engine has none today); whole-line `#` blanking inside a multi-line string or heredoc;
+  a hardcoded verdict at the controls loop's call site; sandbox-only matrix rows rely on the PR body for proof.
+- Measured at deepen time (sandbox, other worktrees also running tests): whole suite 87 s against a 79 s
+  back-to-back baseline (the 52 s figure from plan time was not reproduced under load); the "< 90 s" target is
+  marginal, so record both numbers back to back rather than comparing against 52 s.
 - Re-read the suite before each phase: the W9 block is edited in several places and line numbers move.
 - The assertion count is exact; recount from a green run after the last edit, not from this plan's estimate.

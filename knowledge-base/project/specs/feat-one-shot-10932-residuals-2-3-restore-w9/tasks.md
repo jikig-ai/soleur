@@ -13,35 +13,35 @@ Only code file edited: `tests/scripts/test-registry-d10-workflow-wiring.sh`. Do 
 - 0.2 `git fetch origin main`; rebase onto it (no stash); re-confirm every item is still stale with `git grep` on `origin/main`.
 - 0.3 Baselines, one Bash call each (detached with an rc file when long): wiring 47/0, pull-path-health 63/0, restore-from-ghcr 98/0, `bun test plugins/soleur/test/workflow-file-size.test.ts`. If the local battery queues (rc 6), CI's required `test` context is the gate; never label it passed locally.
 - 0.4 `wc -c` the workflow after the rebase and record it (no edit planned; expected 489,131).
-- 0.5 Time W1-W8 in a sandbox copy (threshold ~5 s for gating them under `W9_NESTED`).
+- 0.5 Spike FIRST: in a sandbox copy add `W9_NESTED` + `exit 64` and the `drop1` tree; confirm the nested run is quiet on W1-W8 (deepen-pass: nested 2.8 s, W1-W8 0.7-1.1 s, no gating).
 
 ## 1. Guard 2 — computed die/exit word census (3b)
 
 - 1.1 RED: controls for `w9_computed_sites` fail because the function is absent (sandbox copy).
 - 1.2 Implement `w9_computed_sites`: blank whole-line comments; remove the two allowed lines (`^die\(\) \{( #.*)?$`, `^[[:space:]]*exit "\$code"$`), each exactly once; token pass `grep -noE '\b(die|exit)\b( [0-9]+\b)?'`; offenders = tokens without a single-space digit argument; floor >= 1 accepted token.
 - 1.3 Call the same function from `w9_check` ("computed die/exit site" problem with line numbers).
-- 1.4 Controls: computed variable, bare exit, case-arm `)`, two-space, zero-sites floor (direct calls) + one wire-in through `w9_check`.
+- 1.4 Controls (direct calls assert the exact `<line>:<token>` after an empty-baseline check): computed variable, bare exit, two-space, partly computed `die 3$x`, zero-sites floor; one wire-in through `w9_check` (fragment "computed die/exit site"); one committed must-PASS control (appended `die 7 "x"` + whole-line `# exit $x` -> zero offenders). Accepted shape needs a clean terminator after the digits; the `exit "$code"` line is scoped to the `die()` body.
 
 ## 2. Guard 1 — Restore summary step (3a)
 
 - 2.1 RED: controls for `w9_summary_check` fail (function absent).
 - 2.2 W9_PY modes `sumextract`/`sumenv`/`sumkeys`, and `mutate:sum*` dispatched BEFORE the `78)`-arm search; summary controls use step name "Restore summary".
-- 2.3 `w9_summary_check`: pin `if == always()`, env == exactly `RESTORE_RESULT=${{ job.status }}`, forbidden keys (code pin), position after the restore step; run the body under `env -i ... bash -e -c` for success / cancelled / empty; semantic anchors (`closed`, `cancelled`, whole word `failed`), empty stdout, non-empty summary file, heading.
-- 2.4 Row `W9s` + controls `sumifdrop`, `sumenvlit`, `sumswap`, `sumredirect`, `sumorder`.
+- 2.3 `w9_summary_check`: pin `if == always()`, env == exactly `RESTORE_RESULT=${{ job.status }}`, forbidden keys (code pin), position after the restore step; run the body under `env -i ... bash -e -c` for success / cancelled / failure / empty (use the existing `env` mode, no `sumenv`); semantic anchors (`closed`, `cancelled`, whole word `failed`), empty stdout, non-empty summary file, heading.
+- 2.4 Row `W9s` + controls `sumifdrop`, `sumenvlit`, `sumswap`, `sumredirect`, `sumorder` + one committed must-PASS control (reworded success text, reordered env keys -> zero problems).
 
 ## 3. Guard 3 — verdict swap (3c)
 
 - 3.1 RED by hand: `if true` / `-z`->`-n` on the W9 row leaves the suite 47/0 (quote in PR).
 - 3.2 `w9_expect` data-returning verdict function for the loop and the row; canary row.
 - 3.3 `W9_NESTED=1` guard: `exit 64` after the W9 row, before the controls loop; skips controls, meta-control, floor.
-- 3.4 Meta-control: tree under `$W9_TMP/meta`, nested run on the `drop1`-mutated workflow; require exit 64, `cmp` differs, exactly one FAIL line naming `W9 the restore step maps` and `exit 1 fell`.
+- 3.4 Meta-control: tree under `$W9_TMP/meta`, nested run on the `drop1`-mutated workflow; require exit 64, the copy list complete, `cmp` differs, exactly one FAIL line whose detail EQUALS the outer `drop1` control's `w9_check` output exactly (a fragment match passes a copy missing the header lib).
 
 ## 4. Residual 2 wording
 
 - 4.1 Reword the "Exit 1 is added to the tested population (the header does not list it)" comment.
 - 4.2 "fewer than 6 failure codes" -> "fewer than 7 failure codes"; keep `-ge 7`, `grep -vx 1`, "both without 1".
 - 4.3 Rewrite only the two false header-block sentences ("NOT covered here"; "A text parse of the case ... none is kept").
-- 4.4 Recount `EXPECTED_ASSERTIONS` from a green run (estimate ~62), keep it exact.
+- 4.4 Recount `EXPECTED_ASSERTIONS` from a green run (prototype count 61 plus the must-pass controls and `die 3$x` control: about 64; the green run decides), keep it exact.
 
 ## 5. Verify and ship
 
