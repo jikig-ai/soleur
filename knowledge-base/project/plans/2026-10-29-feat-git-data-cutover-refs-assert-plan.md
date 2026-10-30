@@ -17,6 +17,20 @@ Ref #8211 (epic). Draft PR #11567. The PR body may say `Closes #11431` because t
 "Merge fires apply-web-platform-infra.yml (path filter apps/web-platform/infra/**); no .tf and no file()-bound
 payload changes, so its plan is a no-op - verify by reading the run's plan, never dispatch it from here."
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-29. **Gates run:** 4.6 user-brand, 4.7 observability, 4.8 PAT sweep, 4.11 guard contract (lint green), 4.12 scope check; 4.9, 4.10, 4.13 not triggered (no UI surface, no `.tf` or store, no new workflow file). **Agents used:** plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO devex), CPO sign-off, sharp-edges verification, and deepen passes by security-sentinel, observability-coverage-reviewer, user-impact-reviewer and test-design-reviewer; technical forks ruled by `soleur:engineering:cto` (rows F1-F22 of `decision-challenges.md`).
+
+### Key improvements
+1. Host script hardened: broken refs that git skips silently are caught through the non-empty-stderr rule, fds 3/4 closed for the git child, hardened `env -i` and `-c` flags, one NUL-delimited enumeration for count and name, `RA_MOUNT` identity and TOCTOU checks, `shallow` refusal, fail-closed field self-check.
+2. Answer line shrunk to counts plus at most two numerically smallest branch-tip shas (less fingerprint surface); verdicts carry a FAILED / INCONCLUSIVE class printed in the annotation and driving two notify words.
+3. Cross-consumer ripples closed: run-title classifier, vacuity ledger and shard map, the AC9 flag-precheck pin, the C4 edge sentence and its generated JSON, the apply-workflow path filter.
+4. Test strategy made buildable: fixtures git can actually hold, shims that match the absolute/bare command shapes, ordering and boundary rows, named print-scan helper.
+
+### New considerations
+- A merge fires `apply-web-platform-infra.yml` (no-op plan expected); the PR body says so first.
+- The provenance residual (one repository, not proven to be the synthetic account's) is stated in the runbook with its three-part argument and detector; the dead end after a FAILED stop is parked on #8211 (F17).
+
 ## Overview
 
 The rehearsal runbook (`knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`, rows R3 and
@@ -28,7 +42,7 @@ deletion and any real flip cannot proceed.
 This plan adds `mode=refs_assert` to `.github/workflows/git-data-cutover.yml` (job `cutover`) and a host verb to
 `apps/web-platform/infra/git-data-cutover.sh`, delivered as a new stdin-sent host script
 `apps/web-platform/infra/git-data-refs-assert.sh` (the `wipe_assert` pattern: not `file()`-bound into user_data).
-It is read-only, runs with the store flag off, prints counts and up to eight branch-tip commit shas on one
+It is read-only, runs with the store flag off, prints counts and up to two branch-tip commit shas on one
 anchored line, has its own typed confirm token `REFS-ASSERT-GIT-DATA`, sits behind the same
 `web-platform-infra-apply` reviewer environment, and needs no SSH from the operator. It also fixes one
 cross-consumer ripple found in planning: the wipe's run-title classifier would read a `git-data refs_assert` run
@@ -114,7 +128,7 @@ step sets no `CUTOVER_LINEAGE`, so a sentinel is never tolerated as arm-A resume
 answer matched in full by:
 
 ```text
-^refs_assert ok repos=1 namespaces=[1-9][0-9]* refs=[1-9][0-9]* heads=[1-9][0-9]* shas=[0-9a-f]{40}(,[0-9a-f]{40}){0,7}$
+^refs_assert ok repos=1 namespaces=[1-9][0-9]* refs=[1-9][0-9]* heads=[1-9][0-9]* shas=[0-9a-f]{40}(,[0-9a-f]{40}){0,1}$
 ```
 
 Emitters `_refs_emit` / `_refs_refuse` wrap `_store_emit` / `_store_refuse` with probe `refs-assert` (as
@@ -122,7 +136,7 @@ Emitters `_refs_emit` / `_refs_refuse` wrap `_store_emit` / `_store_refuse` with
 `::notice`), `REFS-CONFIRMED` and `REFS_ASSERT <line>` to the log and `$GITHUB_STEP_SUMMARY`. Every refusal prints
 `::error title=git-data-cutover refs::verdict=<word> class=<FAILED|INCONCLUSIVE>` (plus the fixed-digit
 `rc=27|96` suffix for `refs_shape_failed`) and the same to the step summary; the class is looked up from the
-script's exit-code table. There is no `$GITHUB_OUTPUT` write on success.
+script's exit-code table. The only `$GITHUB_OUTPUT` write is on the refusal path: `_refs_refuse` appends `refs_class=<FAILED|INCONCLUSIVE>` for step id `refs`, and the `cutover` job's `outputs:` gains `refs_class: ${{ steps.refs.outputs.refs_class }}` for notify-failure; there is none on success.
 
 **Host side (`git-data-refs-assert.sh`, root, one session, read-only).** Shape copied from
 `git-data-wipe-assert.sh`: the whole body inside one function (`ra_main`) invoked as `ra_main; exit $?`, then
@@ -149,19 +163,16 @@ Every runner-side refusal (the access-gate words, `old_store_unmounted`, `store_
 re-dispatched. Retry rule: only `probe_failed` and `refs_unreadable` may be re-dispatched, at most twice; after that
 ONE `action-required` issue naming the ACTION is filed (CTO F11). FAILED is not retried until a new rehearsal.
 
-Host logic: (1) validate `REFS_REPOS` (absolute safe path) and refuse xtrace; (2) repeat the repositories-directory
-checks the runner's `verified-only` skips: not a symlink, a directory, `readlink -f` + `stat -c %m` equal to the store
-root; (3) count repositories with the typed predicate from `git-data-wipe-assert.sh` (lock files must be regular files,
-`lost+found` an empty directory), reading names into shell variables only; 0 -> rc 20, >1 or any off-list entry -> rc 21 -
-all BEFORE any ref or sha is read; (4) read refs as the `git` user:
-`/usr/sbin/runuser -u git -- env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 git --git-dir=<repo> for-each-ref --count=201 --format='%(refname)%09%(objectname)%09%(objecttype)%09%(*objecttype)' refs/soleur/worktrees/`
-(no `-c safe.directory`: the system `safe.directory` for `$REPO_ROOT/*` is set by bootstrap, and a foreign-owned
-repository must fail as rc 26); captured as `out="$(...)" || rc=$?` on its own statement, parsed with a here-string loop
-(no subshell pipe), counters in the current shell; (5) classify each line (name regex above, 40-hex sha, `heads/` object
-`commit`, `tags/` peeled type `commit`), count distinct worktree ids with a pipe that never prints, take the first eight
-sorted de-duplicated `heads/` shas by array slice (no `head` under pipefail); (6) refuse in order rc 23, 27, 28, 24 and print the
-line. stderr of every command is discarded; the only stderr the file writes is a fixed reason word and digits. Only
-`for-each-ref` is ever run against the repository (the `%(*objecttype)` peel replaces any per-ref `rev-parse`).
+Host logic (security pass applied):
+
+1. Validate `REFS_REPOS` and refuse xtrace; a hardcoded constant `RA_MOUNT=/mnt/git-data` is the store root, `readlink -f "$REFS_REPOS"` must equal `$RA_MOUNT/repositories` and `stat -c %m` of it must equal `$RA_MOUNT` (the argument supplies no root of its own; `..` is not admitted).
+2. Repeat the repositories-directory checks the runner's `verified-only` skips (not a symlink, a directory, on the store mount). Record `stat -c %d:%i:%F` of the repositories directory and of the repository now and again after the read; any difference is rc 16 (bounded TOCTOU).
+3. ONE NUL-delimited enumeration, `find -H "$REFS_REPOS" -mindepth 1 -maxdepth 1 ! \( -type f \( -name '.*.init.lock' -o -name '.init.lock' \) \) ! \( -type d -name lost+found -empty \) -printf '%y\t%f\0'` (the typed predicate of `git-data-wipe-assert.sh`), read into shell variables only and refusing any control character; the same enumeration yields both the count and the single name (no second `find`, no glob). 0 entries -> rc 20; more than one, or any entry that is not a `d` named `*.git` -> rc 21 - all BEFORE any ref or sha is read. The repository is passed as ONE argv element `--git-dir="$REFS_REPOS/$name"`.
+4. Read refs as the `git` user: `cd / && runuser -u git -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --git-dir=<repo> for-each-ref --count=201 --format='%(refname)%09%(objectname)%09%(objecttype)%09%(*objecttype)' refs/soleur/worktrees/ 3>&- 4>&-`. `runuser` is called bare (resolved by root's PATH, as the push line in `mode_probe` is) so a PATH shim reaches it; the suite's `runuser` shim rewrites the inner command to the shim directory, accepts exactly the modeled argv and exits 64 with a logged refusal on any other (no test seam in the script, ADR-214). `3>&- 4>&-` keeps the answer fds out of the git child. git's stderr goes to a root-owned `mktemp -d` file under `/dev/shm`, is never printed, and ANY non-empty stderr - even with rc 0 - is rc 27 `refs_shape_failed`, because git silently skips a broken ref (`heads/a..b`, a garbage loose file) with only a `warning: ignoring ...` on stderr. There is no `-c safe.directory`: `GIT_CONFIG_NOSYSTEM=1` means the bootstrap's system `safe.directory` is never read, a repository owned by uid `git` passes, and a foreign-owned one fails as rc 26. Capture as `out="$(...)" || rc=$?` on its own statement; parse with a here-string loop (no subshell pipe), counters in the current shell. If `<repo>/shallow` exists the result is rc 26 (`test -e`, no extra git verb).
+5. Classify each line (name regex above under `LC_ALL=C`; 40-hex sha; `heads/` object `commit`; `tags/` peeled type `commit`); name variables appear only as the quoted left side of `[[ =~ ]]`, never in `eval`, an unquoted expansion, a printf format or as a leading-`-` argv; count distinct worktree ids with a pipe that never prints; take the two numerically smallest distinct `heads/` shas, sorted by sha value (never by ref name), by array slice (no `head` under pipefail) - the cap is 2 (CTO F22); before printing, a fail-closed self-check (rc 26 `refs_unreadable`) asserts shas count == min(distinct heads shas, 2), namespaces <= refs and heads <= refs (CTO F21).
+6. Refuse in order rc 23, 27, 28, 24 and print the line. stderr of every command is discarded except the file above; the only stderr the script writes is a fixed reason word and digits. Only `for-each-ref` is run against the repository (the `%(*objecttype)` peel replaces any per-ref `rev-parse`).
+
+Runner side: `_refs_refuse` derives the word and class from the exit-code table by rc, never from host text; the relayed `repos=<n>` must match `^repos=[0-9]{1,6}$`; relayed stderr passes `_access_stderr` unchanged.
 
 **Workflow (`git-data-cutover.yml`, job `cutover`).** (a) `mode` options + description gain `refs_assert`; (b) the
 confirm `case` gains `refs_assert) want="REFS-ASSERT-GIT-DATA"` (`lineage`/`volume_id`/`origin_run` stay refused for it);
@@ -254,7 +265,7 @@ runs at review time; a deepen-plan pass follows this plan.
 liveness_signal:
   what: the dispatched run's own conclusion plus the STORE probe=refs-assert line (verdict and class) in the step log and step summary (an on-demand mode, no resident process)
   cadence: per dispatch
-  alert_target: the ci/git-data-cutover issue and ops email opened by the notify-failure job for a failed run
+  alert_target: the ci/git-data-cutover issue and ops email opened by the notify-failure job for a failed run (notify-failure, layer 6 workflow run log)
   configured_in: .github/workflows/git-data-cutover.yml job notify-failure (REFS_ASSERT_FAILED and REFS_ASSERT_INCONCLUSIVE words)
 error_reporting:
   destination: GitHub Actions annotations (::error title=git-data-cutover refs) plus the notify-failure issue and Resend email; Sentry is not in this surface (CI-only)
@@ -262,28 +273,32 @@ error_reporting:
 failure_modes:
   - mode: no replication reached the store (refs_none, refs_no_branch_tip, refs_repo_absent)
     detection: the host session counts repositories, refs under refs/soleur/worktrees/ and branch tips
-    alert_route: red run -> notify-failure issue "REFS_ASSERT_FAILED"
+    alert_route: red run -> notify-failure issue "REFS_ASSERT_FAILED"; layer 6: workflow run log (step log + ::error:: annotation carrying verdict=<word> class=<FAILED|INCONCLUSIVE>)
   - mode: a malformed ref, wrong-type object or unreadable repository (refs_shape_failed, refs_bad_sha, refs_unreadable)
     detection: per-ref regex and type checks, plus the for-each-ref exit code, on the host
-    alert_route: red run -> notify-failure issue (REFS_ASSERT_FAILED for refs_bad_sha, REFS_ASSERT_INCONCLUSIVE otherwise)
+    alert_route: red run -> notify-failure issue (REFS_ASSERT_FAILED for refs_bad_sha, REFS_ASSERT_INCONCLUSIVE otherwise); layer 6: workflow run log (step log + ::error:: annotation carrying verdict=<word> class=<FAILED|INCONCLUSIVE>)
   - mode: more than one repository or an off-list entry (refs_repo_not_single)
     detection: typed find over the repositories directory
-    alert_route: red run -> notify-failure issue "REFS_ASSERT_INCONCLUSIVE"; routes to the Store not empty section
+    alert_route: red run -> notify-failure issue "REFS_ASSERT_INCONCLUSIVE"; routes to the Store not empty section; layer 6: workflow run log (step log + ::error:: annotation carrying verdict=<word> class=<FAILED|INCONCLUSIVE>)
   - mode: the host or transport cannot be read (access_gate verdicts, probe_failed rc=124/255)
     detection: access gate and gd_capture exit codes
-    alert_route: red run -> notify-failure issue "REFS_ASSERT_INCONCLUSIVE"
+    alert_route: red run -> notify-failure issue "REFS_ASSERT_INCONCLUSIVE"; layer 6: workflow run log (step log + ::error:: annotation carrying verdict=<word> class=<FAILED|INCONCLUSIVE>)
 logs:
   where: GitHub Actions run log and step summary of the dispatched run (counts and shas only)
   retention: GitHub Actions default log retention (90 days); the runbook evidence block pastes the anchored result line next to the run URL
 discoverability_test:
   command: grep -c -e REFS_ASSERT_INCONCLUSIVE .github/workflows/git-data-cutover.yml
-  expected_output: 2
+  expected_output: "2"
 ```
 
-No resident process is added, so there is no heartbeat. The affected-surface rule (2.9.2) is met by the host session's
-design: each failure has its own exit code, and the single answer line carries `repos`, `namespaces`, `refs`, `heads`
-and the shas, so one event separates "no replication" from "wrong store" from "unreadable". The expected output `2` is
-re-measured after Phase 3 and restated if the notify block's word count differs.
+No resident process is added, so there is no heartbeat. The `discoverability_test` is a static wiring probe: the base
+tree prints `0` and the implemented tree prints `2` (a line count: the `words=` line and the `swords=` line, the word in
+no comment). It proves the notify word is wired, not that a dispatch passes; the live signal is the runbook dispatch
+(`STORE probe=refs-assert`), which this session never runs. The count is re-measured after Phase 3 and restated if it
+differs. The affected-surface rule (2.9.2) is met by the host session's design: on success the answer line carries
+`repos`, `namespaces`, `refs`, `heads` and the shas; on refusal the discriminator is the exit-code word plus digits
+(`repos=<n>` at rc 21). `refs_unreadable` may be deterministic (a foreign-owned repository, a missing object), so the
+Verdict map says a second identical result stops the retries.
 
 ## Guard Contract
 
@@ -298,7 +313,7 @@ re-measured after Phase 3 and restated if the notify block's word count differs.
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | drop the `heads` requirement (accept tags-only) | RED (tags-only fixture) |
-| 2 | the loop stops after the first compliant ref while a second ref is malformed (its name hostile: `..`-bearing) | RED (second-member fixture) |
+| 2 | the loop stops after the first compliant ref while a second ref is malformed (a name git accepts and the regex rejects, for example `heads/a+b`) | RED (second-member fixture) |
 | 3 | the runner regex loses its `repos=1` anchor or its `[1-9]` minima; or the verb stops sending the script and a shim forges a line (`repos=2`, `heads=0`, `refs=0`) | RED (forged-line rows) |
 | 4 | drop `%(objecttype)` (or `%(*objecttype)`) from the format: a ref to a missing object or a tag to a tree is skipped or typed wrongly | RED (missing-object and tag-to-tree fixtures; the format is also pinned literally) |
 | 5 | raise or remove the 200-ref bound | RED (201-ref fixture) |
@@ -319,7 +334,7 @@ re-measured after Phase 3 and restated if the notify block's word count differs.
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | the host script echoes a refname or the repository basename to stderr on a refusal | RED (print scan on a failure row) |
+| 1 | the host script echoes a refname or the repository basename to fd 3 or fd 4 (the only relayed channels; stderr itself goes to /dev/null) on a refusal | RED (print scan on a failure row) |
 | 2 | the host script runs `git gc`, `update-ref`, `rm`, `chown`, `mount` or `systemctl` | RED (the write-verb shim fires; shims exist for every listed verb) |
 | 3 | the runner prints `$GD_CAPTURED` on the failure path, or before the regex match | RED (print scan on a malformed-answer row) |
 | 4 | a second repository whose directory name is hostile (`.git`-suffixed, containing `::error::`) beside a clean first | RED unless the name is classified and discarded (`refs_repo_not_single`, name absent from every sink) |
@@ -399,6 +414,7 @@ Order follows `cq-write-failing-tests-before`: tests (RED) -> host script -> ver
 ### Phase 1 - RED tests
 
 1. `git-data-refs-assert.test.sh` (fixtures with real `git`, synthesized identifiers only): the happy path and the must-PASS non-canonical fixture (Guard 1 harness b); every refusal row asserting the WHOLE stdout/stderr line, not a substring: `refs_repo_absent`, `refs_repo_not_single` (two repositories; a symlink entry; a plain-file entry; a symlinked `repositories` directory; stderr digits only), `refs_none` (a REAL never-pushed `git init --bare` fixture; also a lone unborn HEAD and a loose ref outside `refs/soleur/worktrees/`, neither counts), `refs_no_branch_tip`, `refs_unreadable` (a missing object; a 201-ref repository; a wrong-owner repository via a `git` shim returning dubious ownership, no root needed), `refs_shape_failed` (a ref outside heads/tags; an id outside the charset; `heads/a..b`; the `rc=27|96` suffix; a shim answer with an extra line), `refs_bad_sha` (a tree under heads; a tag to a non-commit); `heads/feature/x.y` passes; runner-side `cutover_frozen`/`old_store_unmounted`/`store_not_on_mapper`/`store_unverified`/`probe_failed rc=124/255`; the format pin and "drop `%(objecttype)`" mutation; the stdin-delivery row (the ssh shim feeds the real body through a real `bash -s` and a `git` shim that reads stdin; the script is not `file()`-bound); the read-only shims for every write verb in the mutation list; the print scan over stdout+stderr+summary of EVERY row; one parity row (script exit-code table with classes <-> runbook Verdict map); the exclusion-predicate parity row; the guard matrices; `MIN_ASSERTIONS`.
+   - 1.1.5 Harness requirements (deepen pass, test-design review): fixtures run with `HOME` and `TMPDIR` under a `mktemp -d` scratch directory, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, fixed author/committer variables, `ulimit -c 0`, a cleanup trap, no fixed paths or ports; the 201-ref fixture is built with `git update-ref --stdin` from a template repository copied per row; fixture identifiers are long and unique (16+ characters mixing `.`, `_`, `-` and digits, for example `wt-7f3a.k_91x`) and the print scan is one named `assert_clean <row>` helper so a failure names its row; the scan also covers the relayed `_access_stderr` output and the fd 3 / fd 4 channels. Real git refuses `update-ref` of names containing `..`, a leading `.` or a `.lock` suffix and `for-each-ref` silently skips such loose refs with only a stderr warning, so (i) the broken-ref rows are built by writing loose files by hand (`heads/a..b`, a file containing `garbage`) and must reach rc 27 through the non-empty-stderr rule; (ii) the regex-rejection rows use one ref per hostile class git accepts (`heads/a+b`, `heads/a,b`, `heads/x$y`, a backtick name, `heads/-dash`, a non-ASCII name, a worktree id containing `+`), each asserting rc 27 and a clean print scan; (iii) the `.lock` / leading-dot branches are exercised through a `git` shim that fakes the `for-each-ref` output, labelled "parser-level"; (iv) a row where the ssh stub returns stderr `::error::x`, `::stop-commands::` and `::add-mask::` with rc 21 asserts the whole output (no workflow command survives); (v) a `<repo>/shallow` file gives rc 26. The missing-object row uses a `git` shim exiting 128 with fatal text (real git aborts with a version-dependent rc such as 134); a real-git row stays only if it tolerates 128 or 134. Added rows from the design: a `git` shim logs invocations so the rc 20 and rc 21 rows assert zero `for-each-ref` calls (and a mutation moves the read ahead of the count); the `exec ... </dev/null` removal turns the stdin-reading shim RED; a fixture with 4 heads (two branches on the same sha) pins the 2-sha cap, sort-by-sha and de-duplication, plus a mutation row that breaks the self-check invariants; a 200-ref must-PASS row sits beside the 201-ref row; a fixture violating two conditions at once pins the refusal order 23, 27, 28, 24; mutation rows for `-c safe.directory`, `GIT_NO_REPLACE_OBJECTS` and `HOME`; Guard 1 #3 is two rows (regex anchors; a forged line with the script not sent). AC10 is tested by running the extracted notify body with a poisoned environment and step-summary file carrying a fixture sha and id and asserting neither appears. AC1 and AC16 use `$(git merge-base origin/main HEAD)` rather than `origin/main...HEAD`. A local SKIP of the wipe-assert loopback tier without root is not evidence.
 2. Restate the pins in `git-data-cutover-access.test.sh`, `git-data-wipe-access.test.sh`, `git-data-wipe-runs.test.sh` (red until the code lands).
 
 ### Phase 2 - host script and verb
@@ -413,7 +429,7 @@ Order follows `cq-write-failing-tests-before`: tests (RED) -> host script -> ver
 ### Phase 4 - runbook and C4
 
 8. Runbook (`git-data-luks-cutover-5274.md`), shaped per CTO F16: one new subsection `### Reading REFS-CONFIRMED` holds the semantics; R3, R6 and Abort carry one line plus a link each.
-   - `### Reading REFS-CONFIRMED` contains: the dispatch string; the definition ("the store holds exactly one repository, and it has at least one well-formed commit ref under refs/soleur/worktrees/<id>/heads/"; no `<syntheticId>.git`); the residual stated plainly (the host does not prove the repository is the synthetic account's; provenance rests on (1) the store empty at flip, R0 proof `clear`, (2) the quiet window refusing everyone but the one exempt account, R3 evidence exemptConfigured=true on both hosts and refused_since_last>0, (3) R7 as the after-the-fact check, a real user's repository would survive the deletion and R7 would read `store_not_empty`; the R3 `op:exempt-pass` Sentry event with its hashed id is the detector if the exemption failed open); evidence binding (CPO C7: only a completed run with conclusion `success` and `STORE probe=refs-assert verdict=ok`, dispatched after THIS rehearsal's R4 AND after R5 reads `disabled` on both hosts, with the flag off, before the account deletion; `queued`, `cancelled`, `skipped` and awaiting-approval mean `not read`; wait for the R4 run to finish; paste the anchored `refs_assert ok ...` line next to the run URL before the deletion, because logs expire and the deletion removes the repository); necessary-not-sufficient (C6: it does not clear the "Known latent behaviours" real-flip block); the FAILED / INCONCLUSIVE meanings and the retry rule (only `probe_failed` and `refs_unreadable`, twice, then one `action-required` issue naming the ACTION; `refs_repo_not_single` and `refs_shape_failed` are INCONCLUSIVE but not retryable and route to Store not empty steps 1-4 and the CLO); `refs_repo_absent` is FAILED before the deletion and expected after it; a dispatch with the flag on is red `flag_already_true`, not a verdict, and its issue is closed with a comment before the next dispatch; a wrong token is refused at the confirm step (state its word) and `CUTOVER-GIT-DATA` is refused for this mode; ordering: dispatch `refs_assert` immediately after R5 and BEFORE the R6 proof, and a red `refs_assert` is never an expected red (no proof dispatch, no planned-run comment, its issue is genuine); a queued `refs_assert` can displace a pending recovery dispatch in the one-pending `git-data-state` group, so dispatch only when `gh run list --workflow git-data-cutover.yml --status in_progress,queued` is empty; it holds `web-1-swap` and blocks deploys for its duration, like `proof`; merging changes no live host (the 2026-10-27 shallow-update rejection is fixed only through the owner-gated `git-data-host-replace` dispatch; C9); the dead end after a FAILED stop (the synthetic account stays, the next R0 proof reads `store_not_empty`, the next move is a new decision; F17).
+   - `### Reading REFS-CONFIRMED` contains: the dispatch string; the verification command for the evidence (`gh run view <id> --json conclusion,createdAt,headSha,event,name`: conclusion `success`, event `workflow_dispatch`, `headSha` the main commit containing `refs_assert`, `createdAt` later than R5's completion and than R4's run id; a re-run attempt of an older run id does not count); dispatch only after the last synthetic push and after replication has had time to complete (replication is asynchronous; paste the push time and the run `createdAt`); an R6 gate that the R3 `op:exempt-pass` Sentry read for the rehearsal window shows no event from any hashed id other than the synthetic account's, stating the query; a line that a tip sha the owner happens to hold is extra corroboration, never a requirement (F19); the plain residual that the printed branch-tip shas are visible to repo readers and the pass attests what the git-writable store holds, not authenticity; and 'tree and history completeness are not proven here beyond git receive-pack's own connectivity check at push time' (F20); the definition ("the store holds exactly one repository, and it has at least one well-formed commit ref under refs/soleur/worktrees/<id>/heads/"; no `<syntheticId>.git`); the residual stated plainly (the host does not prove the repository is the synthetic account's; provenance rests on (1) the store empty at flip, R0 proof `clear`, (2) the quiet window refusing everyone but the one exempt account, R3 evidence exemptConfigured=true on both hosts and refused_since_last>0, (3) R7 as the after-the-fact check, a real user's repository would survive the deletion and R7 would read `store_not_empty`; the R3 `op:exempt-pass` Sentry event with its hashed id is the detector if the exemption failed open); evidence binding (CPO C7: only a completed run with conclusion `success` and `STORE probe=refs-assert verdict=ok`, dispatched after THIS rehearsal's R4 AND after R5 reads `disabled` on both hosts, with the flag off, before the account deletion; `queued`, `cancelled`, `skipped` and awaiting-approval mean `not read`; wait for the R4 run to finish; paste the anchored `refs_assert ok ...` line next to the run URL before the deletion, because logs expire and the deletion removes the repository); necessary-not-sufficient (C6: it does not clear the "Known latent behaviours" real-flip block); the FAILED / INCONCLUSIVE meanings and the retry rule (only `probe_failed` and `refs_unreadable`, twice, then one `action-required` issue naming the ACTION; `refs_repo_not_single` and `refs_shape_failed` are INCONCLUSIVE but not retryable and route to Store not empty steps 1-4 and the CLO); `refs_repo_absent` is FAILED before the deletion and expected after it; a dispatch with the flag on is red `flag_already_true`, not a verdict, and its issue is closed with a comment before the next dispatch; a wrong token is refused at the confirm step (state its word) and `CUTOVER-GIT-DATA` is refused for this mode; ordering: dispatch `refs_assert` immediately after R5 and BEFORE the R6 proof, and a red `refs_assert` is never an expected red (no proof dispatch, no planned-run comment, its issue is genuine); a queued `refs_assert` can displace a pending recovery dispatch in the one-pending `git-data-state` group, so dispatch only when `gh run list --workflow git-data-cutover.yml --status in_progress,queued` is empty; it holds `web-1-swap` and blocks deploys for its duration, like `proof`; merging changes no live host (the 2026-10-27 shallow-update rejection is fixed only through the owner-gated `git-data-host-replace` dispatch; C9); the dead end after a FAILED stop (the synthetic account stays, the next R0 proof reads `store_not_empty`, the next move is a new decision; F17).
    - R3 row: replace "(a #8211 follow-up, not yet built) after R4 with the flag off" by the link; the sentence "No other read confirms it inside the window (`proof` refuses while the flag is on, and no SSH read is permitted)" is reworded so it no longer implies REFS-CONFIRMED has no route; keep "A ref listing typed by the owner is never evidence" and the "`<id>.git` existing ... never count" sentence.
    - R6 row: edit the text containing "BEFORE the deletion (EXPECTED red": `refs_assert` runs after R5 and before the proof; REFS-CONFIRMED means that run is green.
    - Abort paragraph: "(`refs_assert` is not built)" becomes "without REFS-CONFIRMED (`refs_assert` not run, FAILED or INCONCLUSIVE)"; the clause about closing the proof's expected-red issue applies only if the proof was dispatched.
@@ -464,9 +480,9 @@ Restate the suite floors (`MUTANT_FLOOR`, `FLOOR`, `MIN_ASSERTIONS`) from the pr
 - [ ] AC7 - Same gate, no SSH from the operator: the workflow change adds no `environment`, job, secret binding or bridge `uses:`; `tests/scripts/test-git-data-root-token-census.sh` and `scripts/check-cloudflare-token-drift.test.sh` (W7) are green with counts unchanged; the runbook contains no operator SSH step for the mode.
 - [ ] AC8 - Host delivery: the ssh shim row proves the body arrives on stdin to a real `bash -s` with `REFS_REPOS` `%q`-quoted in front, with a `git` shim that reads stdin and does not consume the script, and that the gd_capture bound is 60 s.
 - [ ] AC9 - Run-title classifier: `git-data refs_assert` classifies `other`; a `refs_assert` run after the stamp leaves the wipe guard `ok`; `git-data refs_assertX` stays `unparseable`; both stale "five non-wipe modes" comment lines are reworded.
-- [ ] AC10 - notify-failure: `refs_assert` is a known `MODE`; a failed run produces `REFS_ASSERT_FAILED` or `REFS_ASSERT_INCONCLUSIVE` per `refs_class` and a body without any sha; the annotation and summary carry `class=`; `grep -c -e REFS_ASSERT_INCONCLUSIVE .github/workflows/git-data-cutover.yml` prints the value pinned in Observability.
+- [ ] AC10 - notify-failure: `refs_assert` is a known `MODE`; a failed run produces `REFS_ASSERT_FAILED` or `REFS_ASSERT_INCONCLUSIVE` per `refs_class` and a body without any sha; the annotation and summary carry `class=`; `grep -c -e REFS_ASSERT_INCONCLUSIVE .github/workflows/git-data-cutover.yml` prints `2` and the same count for `REFS_ASSERT_FAILED` prints `2` (so a stray comment mention cannot pass by accident).
 - [ ] AC11 - Census pins restated and green: `git-data-cutover-access.test.sh` (mode options, AC9 pin, ordered steps, G5 name allow-list, floors), `git-data-wipe-access.test.sh` (MODES, confirm table), `guard-vacuity-floor.test.sh` (`PROMOTED_FILES` + `MIN_FIRING_SUITES`), `lint-orphan-test-suites.sh`, and the shard-map row.
-- [ ] AC12 - Runbook: `grep -c -e 'follow-up, not yet built' -e 'refs_assert not built' -e 'refs_assert. is not built' <runbook>` prints `0` (the unrelated re-erasure "is not built" sentences stay and are not matched); `### Reading REFS-CONFIRMED` carries every item listed in Phase 4 (definition without `<syntheticId>.git`, residual, C6, C7, retry rule, flag-on red, ordering, queue displacement, C9, F17 dead end); R3, R6 and Abort link to it; the modes table, the mode list near the top, the downtime table and the Verdict map carry `refs_assert`; the single parity row (script table <-> Verdict map) is green.
+- [ ] AC12 - Runbook: `grep -c -e 'follow-up, not yet built' -e 'refs_assert not built' -e 'refs_assert. is not built' <runbook>` prints `0` (the unrelated re-erasure "is not built" sentences stay and are not matched); `### Reading REFS-CONFIRMED` carries every item listed in Phase 4 (definition without `<syntheticId>.git`, residual, C6, C7, retry rule, flag-on red, ordering, queue displacement, C9, F17 dead end); R3, R6 and Abort link to it; the modes table, the mode list near the top, the downtime table and the Verdict map carry `refs_assert`; the single parity row (script table <-> Verdict map) is green; `awk` over the new section and the Verdict-map rows for `ssh|docker exec|journalctl|systemctl` counts `0` (no SSH fallback wording).
 - [ ] AC13 - C4: the `github -> gitDataStore` edge text no longer says "five modes" and names `refs_assert`; `model.likec4.json` is regenerated; `c4-code-syntax`, `c4-render`, `c4-count-parity` green.
 - [ ] AC14 - Guard Contract rows exist as named rows in the new suite and each mutation goes RED with its landing asserted; `python3 scripts/lint-guard-contract.py` passes on this plan.
 - [ ] AC15 - Phase 6 is done or recorded: an existing tracker is cited or one #8211 comment is added; no workflow was dispatched.

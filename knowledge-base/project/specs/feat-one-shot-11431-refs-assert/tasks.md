@@ -25,7 +25,7 @@ write Doppler, run `flip.sh`, `git stash` or `git add -A`; run only the scoped s
 
 ## 2. Host script and verb
 
-- 2.1 Write `apps/web-platform/infra/git-data-refs-assert.sh` (function-wrapped, `exec` fd redirection, xtrace refusal, typed `find` predicate, repositories-dir identity checks, no `-c safe.directory`, `GIT_NO_REPLACE_OBJECTS=1`, format with `%(*objecttype)`, here-string parse, array-slice sha cap, exit-code table with class column). Do not assign `STORE_DEVICE`, `STORE_VERIFIED`, `cutover_freeze`, `MOUNT_ROOT`, `GIT_DATA_ROOT`, `REPO_ROOT`.
+- 2.1 Write `apps/web-platform/infra/git-data-refs-assert.sh` per the plan's "Host logic (security pass applied)" list: function-wrapped body, `exec` fd redirection, xtrace refusal, `RA_MOUNT` constant identity checks with before/after `stat` TOCTOU guard, ONE NUL-delimited typed `find` (count + name), `cd /`, absolute `env`/`git`, hardened env and `-c` flags, `3>&- 4>&-`, git stderr to a root-owned /dev/shm file with any non-empty stderr = rc 27, `shallow` file = rc 26, `%(*objecttype)` format, here-string parse, cap 2 numerically smallest heads shas by array slice, fail-closed self-check (rc 26), exit-code table with class column. Do not assign `STORE_DEVICE`, `STORE_VERIFIED`, `cutover_freeze`, `MOUNT_ROOT`, `GIT_DATA_ROOT`, `REPO_ROOT`.
 - 2.2 Add `mode_refs_assert`, `_refs_emit`, `_refs_refuse`, the `MODE` validation word, the `refuse_legacy_modes` remedy words and the `main()` arm to `apps/web-platform/infra/git-data-cutover.sh` (copy `mode_wipe_assert`).
 
 ## 3. Workflow, classifier, ledgers
@@ -42,7 +42,7 @@ write Doppler, run `flip.sh`, `git stash` or `git add -A`; run only the scoped s
 
 ## 5. Scoped verification
 
-- 5.1 Run the Phase 5 command list from the plan (refs-assert suite, cutover-access, wipe-access, wipe-assert, wipe-runs, root-token census, cloudflare-token-drift, guard-vacuity-floor, lint-orphan-test-suites, c4 tests, actionlint, shellcheck, the lints, markdownlint, the precheck byte-unchanged check).
+- 5.1 Run the Phase 5 command list (use `$(git merge-base origin/main HEAD)` for diff scope) from the plan (refs-assert suite, cutover-access, wipe-access, wipe-assert, wipe-runs, root-token census, cloudflare-token-drift, guard-vacuity-floor, lint-orphan-test-suites, c4 tests, actionlint, shellcheck, the lints, markdownlint, the precheck byte-unchanged check).
 - 5.2 Restate floors from the printed totals; paste totals in the commit message.
 - 5.3 Run AC1 (roster count 16 and empty intersection) before every commit.
 
