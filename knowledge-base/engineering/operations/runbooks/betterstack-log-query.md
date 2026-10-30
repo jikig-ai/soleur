@@ -125,25 +125,34 @@ Live standing alarms over this source:
     [Querying Anthropic cost markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily).
     A single source far above its `--max-budget-usd` cap (`server/inngest/cron-budgets.ts`), or two
     markers per run `id` (the query under the 524 alert above), is the lead.
-  - **`logtail_exploration_alert.claude_cost_capture_dark`** (hourly, trailing 24 h) —
-    `soleur-claude-cost-capture-dark-prd`. Pages when 24 h holds no cron cost marker with a
-    non-null `cost_usd` AND no credit-probe RED row (`op=anthropic-credit-exhausted` /
-    `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
-    again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
-    `anthropic-credit-exhausted` Sentry issue alert (the credit probe's own cron monitor is
-    routed since #8630 but muted, #8704).
-- **`logtail_exploration_alert.luks_monitor_host_timer_dark`** (#8706, hourly over a trailing 27 h
-  window, `lower_than 1`, missing data counts as zero) — `soleur-luks-monitor-host-timer-dark-prd`.
-  Pages (team email) when no `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` carries
-  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own
-  nightly LUKS probe has not reported a PASSING run. It is host-scoped to web-1: web-2
-  (`soleur-web-2`) ships to the same source. The daily `workspaces-luks-verify.yml` rows never carry
-  that unit, so they cannot mask it. A host run that fails an assert, or a Vector or Logs-source
-  outage, also trips it. Defined in
-  `apps/web-platform/infra/betterstack-logs-alerts.tf`; the unit it watches is delivered by
-  `terraform_data.luks_monitor_install` (`workspaces-luks.tf`); self-health via the `logs_alert` arm
-  of `reconcile-live-heartbeats.ts`. Runbook and no-SSH decode:
+  - **`logtail_exploration_alert.claude_cost_capture_dark` — RETIRED (#11631).** Its successor is the Better
+    Stack heartbeat `soleur-claude-cost-capture-prd` (`betteruptime_heartbeat.claude_cost_capture`, period
+    3600 s, grace 7200 s, born paused). The native alert could not see a row that arrives once a day, so
+    `scripts/deadman-heartbeat-feeder.sh claude-cost-capture` (hourly, via
+    `scheduled-deadman-heartbeat-feeder.yml`) reads the archive (`remote()` UNION `s3Cluster`) and beats the
+    heartbeat only if the trailing 24 h holds a cron cost marker with a non-null `cost_usd` OR a credit-probe
+    RED row (`op=anthropic-credit-exhausted` / `anthropic-key-invalid`). No qualifying row means no beat and the
+    heartbeat pages: the marker path is broken (the emitter, Vector, or the field moved again), so the burn
+    alert above is blind. An out-of-credit day stays quiet: that page is the `anthropic-credit-exhausted`
+    Sentry issue alert. **Step 0 on a page:** check the Sentry monitor `scheduled-deadman-heartbeat-feeder`
+    and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml` before suspecting the emitter (a
+    dark watchdog clock false-pages this heartbeat), then
+    `gh run view <id> --log | grep 'deadman-feeder: target=claude-cost-capture'`.
+- **`logtail_exploration_alert.luks_monitor_host_timer_dark` — RETIRED (#11631).** Its successor is the
+  Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`
+  (`betteruptime_heartbeat.luks_monitor_host_timer`, period 3600 s, grace 7200 s, born paused). The feeder
+  `scripts/deadman-heartbeat-feeder.sh luks-monitor-host-timer` beats it hourly only if the archive holds, in
+  the trailing 27 h (97200 s), a `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` with
+  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own nightly LUKS
+  probe passed. It is host-scoped to web-1: web-2 (`soleur-web-2`) ships to the same source. The daily
+  `workspaces-luks-verify.yml` rows never carry that unit, so they cannot mask it. A host run that fails an
+  assert, or a Vector or Logs-source outage, also withholds the beat. **Step 0 on a page:** check the Sentry
+  monitor `scheduled-deadman-heartbeat-feeder` and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml`
+  first. The unit it watches is delivered by `terraform_data.luks_monitor_install` (`workspaces-luks.tf`).
+  Runbook and no-SSH decode:
   [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
+  No native logs alert may use a `query_period` above 900 s (sentinel
+  `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh`).
 - **`logtail_exploration_alert.workspaces_luks_deadman_fired`** (#9045, `higher_than 0`, missing
   data counts as zero): `soleur-workspaces-luks-deadman-fired-prd`. It pages (team email) on any
   `luks-monitor` row from `host_name = 'soleur-web-platform'` whose message starts with

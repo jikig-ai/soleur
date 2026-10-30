@@ -570,8 +570,9 @@ down, and its `rollback_remount_failed` row carries `recorded=`/`recorded_status
   [host-timer liveness alert](#host-timer-liveness-alert-8706) catches that. The run-that-never-fires mode is
   covered one layer out by the `workspaces-luks-verify` Sentry Crons monitor, which pages on two
   consecutive missed or errored check-ins.
-- **Better Stack logs alert `soleur-luks-monitor-host-timer-dark-prd`** (#8706) — the host unit has
-  not reported a good run in about 27 h. See the next section.
+- **Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`** (#8706, rebuilt as an archive-fed
+  heartbeat in #11631) — the host unit has not reported a good run in about 27 h. It replaces the retired logs
+  alert `soleur-luks-monitor-host-timer-dark-prd`, which could not see its once-a-day row. See the next section.
 - **`betteruptime_monitor.app`** — a refused container (failed unlock) is a hard down.
 - **Better Stack logs alert `soleur-workspaces-luks-deadman-fired-prd`** (#9045): an unattended dead-man fire.
   See the next section.
@@ -631,30 +632,52 @@ Other dead-man rows and reasons:
 
 ### Host-timer liveness alert (#8706)
 
-**What it means.** `soleur-luks-monitor-host-timer-dark-prd`
-(`logtail_exploration_alert.luks_monitor_host_timer_dark` in
-`apps/web-platform/infra/betterstack-logs-alerts.tf`) fires when web-1 has had no PASSING host run
-in about 27 h. Its predicate: no `OK: /mnt/data is LUKS-backed` row from
-`_SYSTEMD_UNIT=luks-monitor.service` with `host_name = 'soleur-web-platform'` in the trailing 27 h.
-It is evaluated hourly and alerts by email.
+**What it means.** The Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`
+(`betteruptime_heartbeat.luks_monitor_host_timer` in `apps/web-platform/infra/uptime-alerts.tf`) pages when
+web-1 has had no PASSING host run in about 27 h. It is born `paused = true` behind
+`lifecycle { ignore_changes = [paused] }`, so it pages only after the owner unpauses it; until then the
+feeder logs `deadman heartbeat luks-monitor-host-timer is UNARMED (paused)` on every run.
+
+**How it is fed (#11631).** The retired logs alert `soleur-luks-monitor-host-timer-dark-prd` read
+`Current value: 0` through 33 nights of passing rows, so it could not see its once-a-day row. The heartbeat
+replaces it. `.github/workflows/scheduled-deadman-heartbeat-feeder.yml` runs hourly and calls
+`scripts/deadman-heartbeat-feeder.sh luks-monitor-host-timer`. The script asks the Logs archive (`remote()`
+UNION `s3Cluster`) whether a qualifying row exists in the trailing 97200 s (27 h) and beats the heartbeat only
+if one does. No qualifying row means NO beat: the heartbeat times out and pages. The feeder never beats
+`/fail`. Predicate: an `OK: /mnt/data is LUKS-backed` row from `_SYSTEMD_UNIT=luks-monitor.service` with
+`host_name = 'soleur-web-platform'`. Period 3600 s plus grace 7200 s means the page lands about 3 h after the
+last beat, so detection latency is the 27 h window plus roughly 2 to 3 h.
 
 It is scoped to web-1. web-2 (`host_name = 'soleur-web-2'`) ships to the same Logs source, so the
 host conjunct keeps web-2 rows out. The verify job's rows never carry the unit, so they cannot keep
 it quiet either.
 
-The alert does not say why the passing row is missing. Three causes read the same:
+The page does not say why the passing row is missing. Three causes read the same:
 
 - the host unit did not run, or died before it logged;
 - the host unit ran and FAILED an assert, for example `FAIL (device_not_luks)` or
   `FAIL (not_mounted)`, which can mean encryption is **not** in effect;
 - no row reached Better Stack (a Vector or Logs-source outage).
 
-So do not assume the volume is fine. Read the FAIL-row decode (step D) before anything else. The
-daily verify job still checks the volume on its own schedule.
+A fourth cause is not about the host at all: the feeder itself did not run. Both web hosts' watchdog clocks
+dispatch it, with a GitHub `schedule:` fallback, so a dark clock can false-page this heartbeat.
 
-**On the merge that creates it**, one email can fire before the first host row lands. The installer
-starts one probe run a few minutes after the alert is created, and the alert resolves within about
-an hour of that row.
+**Triage order.**
+
+0. Check the feeder first, before touching the timer: the Sentry monitor `scheduled-deadman-heartbeat-feeder`
+   and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml`. Both dead-man heartbeats share one
+   script, one workflow run, one Sentry monitor and one Logs credential, so a feeder outage pages both.
+1. Read the run's marker line:
+   `gh run view <id> --log | grep 'deadman-feeder: target=luks-monitor-host-timer'`. On a withhold it carries
+   counts-only diagnostics: `any_rows=0` means the host is dark (or a shipper outage), `fail_rows>0` means a
+   FAIL row exists (encryption possibly not in effect).
+2. Decode the FAIL row (step D) via `scripts/betterstack-query.sh`.
+3. Re-fire the installer (step E).
+
+So do not assume the volume is fine. The daily verify job still checks the volume on its own schedule.
+
+**On the merge that creates it**, the heartbeat is born paused, so nothing can page. Arming it (unpause plus
+read-back) is an owner step in the PR body, not a runbook step.
 
 **Read it back without a dashboard.** Raw SQL through `scripts/betterstack-query.sh`, hot and
 archive together:
@@ -674,7 +697,7 @@ WHERE dt > now() - INTERVAL 3 DAY
 GROUP BY day, host, host_unit, kind ORDER BY day FORMAT JSONEachRow"
 ```
 
-The alert's own predicate is the `host=soleur-web-platform, host_unit=1, kind=ok` cell.
+The feeder's predicate is the `host=soleur-web-platform, host_unit=1, kind=ok` cell.
 
 **Decode, one no-SSH action per branch.** The cells hold prose only. The commands are in the steps
 below the table.
@@ -684,7 +707,7 @@ below the table.
 | No `luks-monitor` rows at all, in any cell | Most likely the log pipeline (Vector or the Logs source), not the host | Check the pipeline first: step A |
 | `host_unit=0` rows present (the verify job), no `host_unit=1` rows | The host unit is not running, or it dies before it logs | Read the unit state (step B), then find the installer's last fire (step C) |
 | `host_unit=1` rows, `kind=fail` | The host probe runs and fails an assert | Read the reason from the row (step D) |
-| `host_unit=1` rows, `kind=ok`, inside the last 27 h, alert still open | Nothing: the alert recovers after an hour of passing reads | None. Re-read in an hour |
+| `host_unit=1` rows, `kind=ok`, inside the last 27 h, heartbeat still down | Nothing: the next hourly feeder run beats it, and the incident auto-resolves | None. Re-read in an hour |
 
 #### Step A: is the pipeline alive?
 
@@ -819,13 +842,14 @@ harmless one is a comment line in `apps/web-platform/infra/luks-monitor.timer`.
 
 **A bad `SENTRY_DSN` rotation.** An empty value fails only `terraform_data.luks_monitor_install`,
 with exit 10 in its SSH step. The DSN writer runs before the arming step, so that fire does not arm
-the timer. The apply stays red until the DSN is fixed, and on a first install the host-timer alert
-follows in about 27 h. A malformed non-empty value fails the resource's precondition at plan time.
+the timer. The apply stays red until the DSN is fixed, and on a first install the host-timer heartbeat
+(once unpaused) pages in about 27 h plus its 3 h timeout. A malformed non-empty value fails the resource's precondition at plan time.
 That stops the WHOLE per-merge SSH apply step, every SSH-provisioned resource in it, including the
 boot-token delivery on a rotation merge, until the DSN in Doppler `prd_terraform` is fixed. The
 reasoning is in ADR-119's 2026-09-27 addendum.
 
-**Closing #8706.** `scripts/followthroughs/luks-monitor-host-timer-8706.sh` passes on three
-consecutive UTC dates, each with a host-unit `OK:` row in the 00 UTC hour. It counts only that hour,
-to skip the installer's kick run. If the SSH apply itself lands between 00:00 and 00:59 UTC, its kick
-row falls in that hour and counts as one night. So the three-night rule can close one night early.
+**Closing #8706.** The signal that the host unit works is the heartbeat `soleur-luks-monitor-host-timer-prd`'s
+first verified beat after the owner unpauses it: a feeder run whose marker reads
+`deadman-feeder: target=luks-monitor-host-timer verdict=beat`, and the heartbeat's `status` reading `up`
+(`GET /api/v2/heartbeats` with the read-only token). The old follow-through script
+`scripts/followthroughs/luks-monitor-host-timer-8706.sh` was deleted by #10371; do not look for it.
