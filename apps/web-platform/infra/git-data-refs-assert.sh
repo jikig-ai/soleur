@@ -13,12 +13,17 @@
 # WHAT IT PROVES, in ONE session (the repository directory's identity, owner included, is recorded before the read
 # and compared after it): the store holds exactly ONE real repository (a directory named *.git, no symlink) that is
 # owned by the git account, is self-contained (no objects/info/alternates or http-alternates), has no symlink in it
-# (anywhere but below objects/ depth 2) and no symref under refs/, and every ref under refs/soleur/worktrees/ in it is well formed
+# (anywhere but below objects/ depth 2), none of the top-level entries that redirect a read to another repository
+# (commondir, gitdir, worktrees, modules, config.worktree, reftable), and no symref and no loose ref that is not a
+# 40-hex SHA-1 line under refs/soleur/worktrees/, and every ref under refs/soleur/worktrees/ in it is well formed
 #   refs/soleur/worktrees/<id>/(heads|tags)/<name>
-# with a 40-hex value of the right type (heads: a commit; tags: a commit, or a tag that peels to one), and at
-# least one ref is a heads/ branch tip (tags-only never passes: the 2026-10-27 failure was a rejected push to
-# heads/main). It does NOT prove the repository is the synthetic account's, nor tree or history completeness
-# beyond git receive-pack's own connectivity check at push time (runbook "Reading REFS-CONFIRMED").
+# with a 40-hex value of the right type (heads: a commit; tags: a commit, or a tag that peels ONE level to one: an
+# annotated tag of a tag is rc 28), and at least one ref is a heads/ branch tip (tags-only never passes: the 2026-10-27
+# failure was a rejected push to heads/main). A `shallow` file is EXPECTED (every depth-1 workspace push accepted under
+# receive.shallowUpdate=true leaves one) and is not refused: a shallow store proves the tip commits exist and are
+# commits, not their history or parents, and a corrupt `shallow` file fails the read itself (rc 26). It does NOT prove
+# the repository is the synthetic account's, nor tree or history completeness beyond git receive-pack's own
+# connectivity check at push time (runbook "Reading REFS-CONFIRMED").
 #
 # NO NAME LEAVES THE HOST. The one answer line carries counts and at most TWO commit shas of heads/ tips (the
 # numerically smallest distinct ones, sorted by sha value, never by ref name). No repository name, worktree
@@ -34,14 +39,16 @@
 # EXIT CODES (the session's rc IS the verdict; git-data-cutover.sh maps each to a word and a class). Anything
 # not in this table, and every transport rc (124 timeout, 255 ssh), is `probe_failed rc=<n>` there:
 #    0  refs_confirmed        REFS-CONFIRMED   the one answer line is printed
-#   16  probe_failed          INCONCLUSIVE     an input, an instrument or a read failed, or xtrace is on (retryable)
+#   16  probe_failed          INCONCLUSIVE     an input, an instrument or a read failed, or xtrace is on (retryable, at most twice)
 #   20  refs_repo_absent      FAILED           zero *.git entries (repos=0)
 #   21  refs_repo_not_single  INCONCLUSIVE     repos>1, or an entry that is not a real *.git directory, or the repositories directory is a symlink or not on the store mount (not retryable)
 #   23  refs_none             FAILED           the repository holds no ref under refs/soleur/worktrees/ ("provisioned, not replicated")
 #   24  refs_no_branch_tip    FAILED           refs exist but none under heads/
-#   26  refs_unreadable       INCONCLUSIVE     for-each-ref failed (a missing object), a shallow file, a 201st line, or a failed self-check (retryable)
-#   27  refs_shape_failed     INCONCLUSIVE     a ref whose name is off-shape, or ANY output on git's stderr (git skips a broken ref silently, with only a warning), or a repository a push cannot have produced: reason repo_owner (not owned by git), repo_alternates (objects/info/alternates or http-alternates), repo_symlink (a symlink in it), ref_symref (a symref under refs/) (not retryable)
+#   26  refs_unreadable       INCONCLUSIVE     for-each-ref failed (a missing tip object, an unparsable `shallow` file), a 201st line, or a failed self-check (retryable, at most once: a transient read failure; an unparsable `shallow` file and a 201st line are permanent)
+#   27  refs_shape_failed     INCONCLUSIVE     a ref whose name is off-shape, or ANY output on git's stderr (git skips a broken ref silently, with only a warning), or a repository a push cannot have produced: reason repo_owner (not owned by git), repo_alternates (objects/info/alternates or http-alternates), repo_redirect (a top-level commondir, gitdir, worktrees, modules, config.worktree or reftable), repo_symlink (a symlink in it), ref_symref (a symref under refs/soleur/worktrees/, dangling or not), ref_content (a loose ref under refs/soleur/worktrees/ that is not exactly 40 hex plus LF) (not retryable)
 #   28  refs_bad_sha          FAILED           a value that is not 40-hex, a heads/ object that is not a commit, or a tags/ object that does not peel to a commit
+# Retry rule (ONE rule, the runbook states the same numbers): probe_failed at most twice, refs_unreadable at most once, three red runs in all
+# since the rollback; every not-retryable cause (and every FAILED word) is never retried.
 # Keep the table, the `die` calls below and the case in git-data-cutover.sh equal (the suite derives the set
 # from all three, and the class column from the runbook Verdict map). Why there is no `set -e`: every failure
 # below is an explicit `|| die N`, and a script that exits on its own would exit with a code outside this table.
@@ -115,23 +122,25 @@ ra_main() {
   # replication pushes as. The owner is part of the identity string, so a chown between here and the re-check is caught too.
   [ "${rid0##*:}" = git ] || die 27 repo_owner
 
-  # ---- 4. a shallow repository is not a complete one ---------------------------------------------------------
-  local shl
-  shl="$(find "$repo" -maxdepth 1 -name shallow -printf x)" || die 16 shallow_probe
-  [ -z "$shl" ] || die 26 refs_unreadable
-
-  # ---- 4b. a repository a push cannot have produced is not read: alternates, symlinks, symref files --------------
-  # ONE typed find, no name printed, a distinct character per cause (-P: a link is never followed):
+  # ---- 4. a repository a push cannot have produced is not read: alternates, redirectors, symlinks, symref and off-shape ref files --
+  # ONE typed find, no name printed, a distinct character per cause (-P: a link is never followed). A `shallow` file is NOT probed:
+  # every depth-1 workspace push leaves one, and a corrupt one fails the read itself (rc 26).
   #   a  objects/info/alternates or http-alternates (objects that live outside the store)
+  #   r  a top-level entry that redirects the read to another repository (DENYLIST: no legitimate producer in a store built by
+  #      git init plus receive-pack): commondir, gitdir, worktrees, modules, config.worktree, reftable
   #   s  a symlink anywhere in the repository except below objects/ depth 2 (a redirected refs/ or objects/)
-  #   f  a loose ref file under the namespace that is not exactly 41 bytes (40 hex + LF): a symref, DANGLING OR NOT. git
-  #      skips a dangling symref silently (rc 0, no stderr), so for-each-ref can never show it; a .lock file is not a ref.
+  #   y  a loose ref file under the namespace that starts `ref:` (a symref, DANGLING OR NOT: git skips a dangling symref silently,
+  #      rc 0 and no stderr, so for-each-ref can never show it)
+  #   u  any other loose ref file under the namespace that is not exactly 40 hex plus LF (a SHA-256 value, a ref without its LF,
+  #      garbage, an empty file); a .lock file is a push in flight, not a ref
   # A symref created between this probe and the read is caught only if it resolves (the %(symref) field below).
   local lnk
-  lnk="$(find -P "$repo" \( -path "$repo/objects/info/alternates" -o -path "$repo/objects/info/http-alternates" \) -printf a -o -type l -printf s -o \( -path "$repo/refs/soleur/worktrees/*" -type f ! -size 41c ! -name '*.lock' -printf f \) -o -path "$repo/objects/*/*" -prune)" || die 16 shape_probe
+  lnk="$(find -P "$repo" \( -path "$repo/objects/info/alternates" -o -path "$repo/objects/info/http-alternates" \) -printf a -o \( -path "$repo/commondir" -o -path "$repo/gitdir" -o -path "$repo/worktrees" -o -path "$repo/modules" -o -path "$repo/config.worktree" -o -path "$repo/reftable" \) -printf r -o -type l -printf s -o \( -path "$repo/refs/soleur/worktrees/*" -type f ! -name '*.lock' \( -exec grep -q '^ref:' {} \; -printf y -o ! -size 41c -printf u -o ! -exec grep -q -x -E '[0-9a-f]{40}' {} \; -printf u \) \) -o -path "$repo/objects/*/*" -prune)" || die 16 shape_probe
   case "$lnk" in *a*) die 27 repo_alternates ;; esac
+  case "$lnk" in *r*) die 27 repo_redirect ;; esac
   case "$lnk" in *s*) die 27 repo_symlink ;; esac
-  [ -z "$lnk" ] || die 27 ref_symref
+  case "$lnk" in *y*) die 27 ref_symref ;; esac
+  [ -z "$lnk" ] || die 27 ref_content
 
   # ---- 5. the read: one for-each-ref, as the git user, hardened -----------------------------------------------
   # runuser is called bare (resolved by root's PATH, as the push line in mode_probe is). git's stderr goes to a
@@ -193,6 +202,10 @@ ra_main() {
   # cannot reconcile with each other, is never printed
   [ "${#sorted[@]}" -eq "${#hs[@]}" ] || die 26 refs_unreadable
   [ "${#sorted[@]}" -ge 1 ] && [ "${#ids[@]}" -le "$refs" ] && [ "$heads" -le "$refs" ] || die 26 refs_unreadable
+  # ... and every sha that will be printed is one that was read from a heads/ commit (a sort that returns the right NUMBER of wrong lines)
+  local -a pick=("${sorted[@]:0:$RA_CAP}")
+  local s
+  for s in "${pick[@]}"; do [ -n "${hs[$s]+x}" ] || die 26 refs_unreadable; done
 
   # ---- 9. the repository is the one that was counted: nothing was swapped under the read --------------------
   id1="$(stat -c %d:%i:%F -- "$repos")" || die 16 stat_failed
@@ -200,7 +213,6 @@ ra_main() {
   [ "$id1" = "$id0" ] && [ "$rid1" = "$rid0" ] || die 16 identity_changed
 
   local IFS=,
-  local -a pick=("${sorted[@]:0:$RA_CAP}")
   printf 'refs_assert ok repos=1 namespaces=%s refs=%s heads=%s shas=%s\n' "${#ids[@]}" "$refs" "$heads" "${pick[*]}" >&4 || die 16 answer_write
   return 0
 }

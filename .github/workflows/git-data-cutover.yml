@@ -1688,10 +1688,10 @@ jobs:
           if [ "$MODE" = refs_assert ]; then
             case "${REFS_CLASS:-}" in FAILED|INCONCLUSIVE) ;; *) REFS_CLASS=INCONCLUSIVE ;; esac
             if [ "$REFS_CLASS" = FAILED ]; then
-              words=" REFS_ASSERT_FAILED (mode=refs_assert is read-only: nothing on any host changed. The store was read and does not show a replicated branch tip. Rehearsal step R6, the account deletion and any flip stay blocked: read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED: gh run view ${RUN_ID} --log)"
+              words=" REFS_ASSERT_FAILED (mode=refs_assert writes nothing to the store. The store was read and does not show a replicated branch tip. Rehearsal step R6, the account deletion and any flip stay blocked: read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED: gh run view ${RUN_ID} --log)"
               swords=" REFS_ASSERT_FAILED"
             else
-              words=" REFS_ASSERT_INCONCLUSIVE (mode=refs_assert is read-only: nothing on any host changed. The read could not decide, so this is not evidence of non-replication. Read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED for the retry rule: gh run view ${RUN_ID} --log)"
+              words=" REFS_ASSERT_INCONCLUSIVE (mode=refs_assert writes nothing to the store. The read could not decide, so this is not evidence of non-replication. Read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED for the retry rule: gh run view ${RUN_ID} --log)"
               swords=" REFS_ASSERT_INCONCLUSIVE"
             fi
           fi
