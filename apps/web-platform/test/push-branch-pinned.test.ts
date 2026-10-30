@@ -1,5 +1,5 @@
 /**
- * #4672 R1 (ADR-307, execution grants): `pushBranch` with a pinned `commitSha` pushes exactly the approved commit, even when HEAD
+ * #4672 R1 (ADR-309, execution grants): `pushBranch` with a pinned `commitSha` pushes exactly the approved commit, even when HEAD
  * moved while the approval was pending. Real git, real temp repositories (a workspace and a bare "remote"); only the
  * credential-injecting wrapper is replaced by a plain `git <args>` run against the local bare repository.
  */

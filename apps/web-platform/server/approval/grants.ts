@@ -1,5 +1,5 @@
 /**
- * Per-session execution grants (#4672, ADR-307): the narrow side channel that carries what the Owner approved from
+ * Per-session execution grants (#4672, ADR-309): the narrow side channel that carries what the Owner approved from
  * the gate to the tool handler that executes it.
  *
  * Why: the approval binds identifiers (and, for a push, the commit), but three handlers re-resolve something at execution

@@ -35,7 +35,7 @@ describe("runner registration census", () => {
     expect(block).toMatch(/workspaceId:\s*activeWorkspaceId/);
   });
 
-  test("the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (ADR-307 ExecutionGrants)", () => {
+  test("the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (ADR-309 ExecutionGrants)", () => {
     const runner = src("server/agent-runner.ts");
     expect(runner.match(/new ExecutionGrants\(\)/g)).toHaveLength(1);
     const block = createCanUseToolBlock("server/agent-runner.ts");

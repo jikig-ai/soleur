@@ -40,13 +40,13 @@ Commit order in the one PR: (1) timeout-deny defect fix, (2) migration/RPCs/serv
 - [x] 4.2 `infra/sentry/cron-monitors.tf`, `alert-reference.json`, `issue-alerts.tf`, `cutover-inngest.yml`
 - [x] 4.3 Flag `approval-queue`: `lib/feature-flags/server.ts`, `.env.example`, `flip.sh` map and parity test; per-workspace identity; flag-create hand-over note
 
-- [x] 4.4 Round-2 observability (ADR-307): `approval-key-unavailable` op plus `sentry_alert.approval_key_unavailable` (frequency 44, alert-reference.json entry, contract test), `art17_approval_anonymise_failed` emitters pass a literal `null` first argument, `verify/180` row-level erasure check removed (kept as an integration test), enabling gates copied into the flag-create hand-over
+- [x] 4.4 Round-2 observability (ADR-309): `approval-key-unavailable` op plus `sentry_alert.approval_key_unavailable` (frequency 44, alert-reference.json entry, contract test), `art17_approval_anonymise_failed` emitters pass a literal `null` first argument, `verify/180` row-level erasure check removed (kept as an integration test), enabling gates copied into the flag-create hand-over
 
 ## Phase 5: Governance
 
 - [x] 5.1 C4: `approvalStore` element and edge, description fixes, `views.c4` include, regenerate `model.likec4.json`, parity counts, render tests (done 2026-10-29; the cron-monitor counts C4/C6/C9 are +1 only when 4.2 adds the `sentry_cron_monitor`: bump the `model.c4` prose then and re-run `c4-count-parity.test.sh`)
 - [ ] 5.2 Legal (own commit): Art. 30 entry, DPD, GDPR Policy, Privacy Policy and mirrors, `legal-doc-shas.ts`, `account-delete.ts` call site, `dsar-export-allowlist.ts`, posture row and flag-refusal check
-- [x] 5.3 ADR-307 (re-check ordinal against fresh `origin/main`; 305 and 306 are taken), ADR-284 and ADR-085 amendment notes, "Adding a gated tool" checklist (done 2026-10-29: 307 free on fresh origin/main; re-check immediately before merge)
+- [x] 5.3 ADR-309 (re-check ordinal against fresh `origin/main`; 305 and 306 are taken), ADR-284 and ADR-085 amendment notes, "Adding a gated tool" checklist (done 2026-10-29: 307 free on fresh origin/main; re-check immediately before merge)
 - [x] 5.4 Guard 1 mutation battery (one dedicated file, pristine-copy harness) and census guard green; re-run the real-SDK probe on the finished branch
 
 ## Phase 6: Ship

@@ -307,7 +307,7 @@ import { isApprovalRequiredTool } from "./approval/tools";
  * whitespace-only env. Throws a plain Error if any short-name in the env
  * resolves to (a) a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
  * tools — cross-tenant credentials by construction), or (b) an
- * approval-required tool (`isApprovalRequiredTool`; ADR-307: the cc runner has
+ * approval-required tool (`isApprovalRequiredTool`; ADR-309: the cc runner has
  * no approval wiring, so a promoted approval tool would run on the legacy
  * in-memory gate and skip the queue). Phase 1 does NOT yet build a populated
  * `soleur_platform` server even when valid names are present — promotion is
@@ -342,7 +342,7 @@ export function readCcMcpAllowlist(
     // and silently skip the queue. Refuse it here (static message; the short name is the only env echo).
     if (isApprovalRequiredTool(fqn)) {
       throw new Error(
-        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — the cc runner has no approval wiring (ADR-307)`,
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — the cc runner has no approval wiring (ADR-309)`,
       );
     }
   }

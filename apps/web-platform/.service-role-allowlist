@@ -390,7 +390,7 @@ apps/web-platform/server/workstream/mutate-workstream-issue.ts
 # resolve-installation-id-for-workspace.ts / workspace-identity-resolver.ts.
 apps/web-platform/server/session-proxy.ts
 
-# Durable approval requests (#4672, ADR-307): the approval RPCs create_approval_request / consume_approval /
+# Durable approval requests (#4672, ADR-309): the approval RPCs create_approval_request / consume_approval /
 # get_approval_status / list_live_approvals / sweep_approvals / anonymise_approval_request are granted to service_role
 # ONLY (migration 180: REVOKE ALL FROM PUBLIC, anon, authenticated, then an explicit service_role GRANT), so that no
 # user-JWT client - and therefore no agent holding the founder's tenant client - can mint, consume or sweep a request.

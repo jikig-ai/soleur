@@ -1,5 +1,5 @@
 /**
- * #4672 (ADR-307), round-2 Q4: `grants` is a REQUIRED option of the three grant-reading tool builders.
+ * #4672 (ADR-309), round-2 Q4: `grants` is a REQUIRED option of the three grant-reading tool builders.
  *
  * A builder that took `grants?` would let a forgotten wiring compile and silently behave as "the approval flow never ran"
  * (legacy path): the gate would mark ITS grants object enforcing while the handler consulted nothing. The runtime cannot

@@ -7,9 +7,9 @@ The PR registers the flag in code only (`lib/feature-flags/server.ts` RUNTIME_FL
 1. Create the feature with `soleur:flag-create` (name `approval-queue`, default OFF, mirror `FLAG_APPROVAL_QUEUE=0` in Doppler dev and prd).
 2. Do NOT flip it as part of the create. Enabling is a separate decision per workspace cohort via a per-workspace segment override (`soleur:flag-set-role`), evaluated per workspace identity.
 
-## Enabling gates: ADR-307 flip checklist (copied verbatim; the ADR is the source, edit both together)
+## Enabling gates: ADR-309 flip checklist (copied verbatim; the ADR is the source, edit both together)
 
-Authoritative: `knowledge-base/engineering/architecture/decisions/ADR-307-durable-action-bound-approval-requests.md`, section "Flag-flip checklist (before the flag is turned on for anyone)". "Below" and "above" in the copied text refer to the ADR sections of that name (Accepted deviation, Rollback and post-deploy verification). Nothing in this PR flips or creates the flag.
+Authoritative: `knowledge-base/engineering/architecture/decisions/ADR-309-durable-action-bound-approval-requests.md`, section "Flag-flip checklist (before the flag is turned on for anyone)". "Below" and "above" in the copied text refer to the ADR sections of that name (Accepted deviation, Rollback and post-deploy verification). Nothing in this PR flips or creates the flag.
 
 1. **Cohort rule: no workspace with more than one member gets the flag until the Owner card names the requester and `reattach` stops sending full action text to non-Owners.** Until both hold, the flag is limited to
    single-member workspaces (also: the decide path out of the agent process, or the sentinel gap re-accepted). Check the `workspace_members` count for the workspace before any per-workspace override, and **re-check it on
@@ -28,4 +28,4 @@ Authoritative: `knowledge-base/engineering/architecture/decisions/ADR-307-durabl
 ## Other preconditions
 
 - Migration 180 applied in prd (release workflow `verify-migrations` green) and the cron monitor `scheduled-approval-expiry` checking in (Sentry).
-- ADR-307 adopted; the legal records in this PR merged.
+- ADR-309 adopted; the legal records in this PR merged.

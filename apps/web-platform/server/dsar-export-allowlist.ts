@@ -571,7 +571,7 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
   // approval-queue flag is OFF by default and the table is empty until it is
   // switched on. It is NOT promoted to DSAR_TABLE_ALLOWLIST in this PR because
   // the export worker reads with service_role, and migration 180 grants
-  // service_role NO privilege on this table (RPC-only by design, ADR-307 and
+  // service_role NO privilege on this table (RPC-only by design, ADR-309 and
   // ADR-303). An allowlist entry plus a service.from("approval_request") read
   // would fail with "permission denied" and break EVERY user's Art. 15 export
   // from the day the migration applies, which is worse than the gap. Closing

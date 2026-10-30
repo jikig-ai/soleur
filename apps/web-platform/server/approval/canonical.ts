@@ -215,7 +215,7 @@ export function canonicalizeAction(tool: string, input: unknown, serverDerived?:
 /**
  * The arguments key a tool handler can recompute from the zod-parsed args it receives: `canonicalJson` of the tool's
  * model-supplied `input` shape, with the same zod defaults applied as at gate time. Used by the per-session
- * execution-grant side channel (#4672, ADR-307); contains no server-derived field.
+ * execution-grant side channel (#4672, ADR-309); contains no server-derived field.
  */
 export function handlerArgsKey(tool: string, input: unknown): string {
   if (!isApprovalRequiredTool(tool)) throw new ApprovalCanonicalError("unsupported_tool");

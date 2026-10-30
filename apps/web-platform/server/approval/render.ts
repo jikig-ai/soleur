@@ -46,7 +46,7 @@ interface Phrase {
   /**
    * What the single-use line names when "this exact {noun}" would claim more than is bound: the approval binds
    * identifiers (a path, branch names, a workflow id and ref), not the content a handler re-reads at execution
-   * (ADR-307 § Bound versus executed). Absent = the noun is fully bound.
+   * (ADR-309 § Bound versus executed). Absent = the noun is fully bound.
    */
   bound?: string;
   extra?: string;

@@ -10,7 +10,7 @@ signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v
 reviewed_head: ec1ba7a5f5
 disposition: "DISCHARGED for a merge in which the `approval-queue` flag stays OFF/absent everywhere, subject to two record-only in-PR conditions (C1, C2: no published text, no mirror, no SHA re-pin). Every implementation-detail claim in the published text matches migration 180 and server/approval/*; no unqualified 'no plaintext' claim survives; canonical and mirrors are byte-identical in their added lines and the pins are current; no [DRAFT] marker. This is NOT a flag-ON attestation: every flag-ON condition from the earlier rulings stays open."
 conditions:
-  - "C1 — compliance-posture.md, row 'Approval queue: public wording and enabling gate': the row does not carry the cohort rule or the pepper condition (both live only in ADR-307's flip checklist items 1 and 2 and in PA-38 (g)(7)). Add the clause given in section 5 after item (i). Until added, the b-canary record's statement that the row names the cohort rule is false against the file."
+  - "C1 — compliance-posture.md, row 'Approval queue: public wording and enabling gate': the row does not carry the cohort rule or the pepper condition (both live only in ADR-309's flip checklist items 1 and 2 and in PA-38 (g)(7)). Add the clause given in section 5 after item (i). Until added, the b-canary record's statement that the row names the cohort rule is false against the file."
   - "C2 — 2026-10-29-approval-queue-b-canary-record.md: (v) still says 'I ask the lead to re-run the probe at the final head'. The re-run is recorded in phase-0-measurements.md ('Addendum 2026-10-29 (#4672): probe re-run at the final head e271d9f101', PASS). Replace that sentence and add the cohort/pepper bullet given in section 5."
 non_blocking:
   - "N1 — the b-canary record is pinned at e271d9f101; the legal documents, mirrors and pins are byte-unchanged since (checked), and server/approval and migration 180 are untouched since. The later code changes (userIdHash in the cross-kind log, INVISIBLE_RE split) add no emitter that could carry action text and narrow the identifiers logged."
@@ -26,7 +26,7 @@ v1 internal counsel-review attestation for PR #11289, a `single-user incident` P
 
 **Scope.** The merge only. Rulings R1 (`CLO-RULINGS.md`) and R2 (`CLO-RULINGS-R2.md`, which corrected R1 on canary gate versus attestation) are the standard; R2 governs where they differ. Nothing here switches anything on, and nothing here waives a flag-ON condition. The `approval-queue` flag is absent/OFF by default and per workspace; with it OFF no row is written, shown or sent, so the merge itself creates no personal-data-breach event and no breach-notification duty (this is not a breach determination; the breach register's determination rows concern other matters).
 
-**Method.** Each added sentence in the three canonical documents was read at HEAD `ec1ba7a5f5` and checked against: `apps/web-platform/supabase/migrations/180_approval_request.sql` (table, CHECK constraints, `sweep_approvals`, `anonymise_approval_request`, guard GUC `app.approval_erase`), `server/approval/canonical.ts` (`deriveApprovalHashKey`), `notify.ts`, `reattach.ts`, `cron-approval-expiry.ts`, `server/notifications.ts` (`approvalExpiresAt`, first name, workspace name) and ADR-307. Mirrors were compared by sorted added lines (md5 equal for all three documents). Gates were run, not assumed.
+**Method.** Each added sentence in the three canonical documents was read at HEAD `ec1ba7a5f5` and checked against: `apps/web-platform/supabase/migrations/180_approval_request.sql` (table, CHECK constraints, `sweep_approvals`, `anonymise_approval_request`, guard GUC `app.approval_erase`), `server/approval/canonical.ts` (`deriveApprovalHashKey`), `notify.ts`, `reattach.ts`, `cron-approval-expiry.ts`, `server/notifications.ts` (`approvalExpiresAt`, first name, workspace name) and ADR-309. Mirrors were compared by sorted added lines (md5 equal for all three documents). Gates were run, not assumed.
 
 ## Gate results (run at HEAD)
 
@@ -91,17 +91,17 @@ None of the following is satisfied or waived by this merge. The posture row says
 | (b-canary) | the b-canary record | present, `conditional` on the tenant-integration suite being green; void on any later change to the three documents |
 | Canary workspace Jikigai-owned and every member a Jikigai principal | posture row | recorded; runtime fact, operator check at flip time |
 | Non-canary: full (b), (c)-(h), CPO+CLO sign-off of `AUTONOMOUS_CARD_COPY_PROVISIONAL` | posture row (b), (c)-(h) | recorded; open |
-| Cohort rule for multi-member workspaces | ADR-307 flip checklist item 1; flag-create-handover.md; NOT in the posture row | recorded in engineering docs only: C1 |
-| `SENTRY_USERID_PEPPER` non-empty in the running container and never rotated while approvals are live | ADR-307 flip checklist item 2; register PA-38 (g)(7) rotation consequence; NOT in the posture row | recorded in engineering docs and the register only: C1 |
+| Cohort rule for multi-member workspaces | ADR-309 flip checklist item 1; flag-create-handover.md; NOT in the posture row | recorded in engineering docs only: C1 |
+| `SENTRY_USERID_PEPPER` non-empty in the running container and never rotated while approvals are live | ADR-309 flip checklist item 2; register PA-38 (g)(7) rotation consequence; NOT in the posture row | recorded in engineering docs and the register only: C1 |
 | Qualifier sentences removed by a docs PR with re-pin | posture row (c) | open (non-canary) |
 
 ## 5. Conditions of discharge (record-only; apply in this PR; no re-pin)
 
 **C1 — `knowledge-base/legal/compliance-posture.md`**, row 'Approval queue: public wording and enabling gate'. After the sentence ending `both recorded in \`knowledge-base/legal/audits/\`.` that closes item (i) and before `**Owed and not done in this PR:**`, insert:
 
-> **Further flip conditions carried from the ADR-307 flip checklist, not waived by the merge (CLO, 2026-10-29):** (j) **cohort rule**: no workspace with more than one member gets the flag, canary or not, until the Owner card names the requester and `reattach` stops sending full action text to non-Owners; until then single-member workspaces only, with the `workspace_members` count checked before any per-workspace override and re-checked on every member invite (a legal condition stated independently of the engineering rule); (k) **`SENTRY_USERID_PEPPER`** is non-empty in the running container and is not rotated while any approval is live (a rotation fails every live approval closed and also changes the ADR-029 pseudonyms; see PA-38 (g)(7)).
+> **Further flip conditions carried from the ADR-309 flip checklist, not waived by the merge (CLO, 2026-10-29):** (j) **cohort rule**: no workspace with more than one member gets the flag, canary or not, until the Owner card names the requester and `reattach` stops sending full action text to non-Owners; until then single-member workspaces only, with the `workspace_members` count checked before any per-workspace override and re-checked on every member invite (a legal condition stated independently of the engineering rule); (k) **`SENTRY_USERID_PEPPER`** is non-empty in the running container and is not rotated while any approval is live (a rotation fails every live approval closed and also changes the ADR-029 pseudonyms; see PA-38 (g)(7)).
 
-Falsifier: `grep -c "Further flip conditions carried from the ADR-307" knowledge-base/legal/compliance-posture.md` returns 1.
+Falsifier: `grep -c "Further flip conditions carried from the ADR-309" knowledge-base/legal/compliance-posture.md` returns 1.
 
 **C2 — `knowledge-base/legal/audits/2026-10-29-approval-queue-b-canary-record.md`**, section (v), bullet '(a) Real-SDK probe recorded'. Replace the sentence beginning `The recorded run therefore pre-dates the committed head and I have not seen a re-run at \`e271d9f101\`; I ask the lead to re-run the probe at the final head and append one line to the addendum before a canary ON.` with:
 
@@ -109,11 +109,11 @@ Falsifier: `grep -c "Further flip conditions carried from the ADR-307" knowledge
 
 and add, at the end of the 'Before ANY ON, canary included' list:
 
-> - **Cohort and pepper (posture row (j), (k); ADR-307 flip checklist items 1 and 2).** Single-member workspaces only until the cohort rule is met; `SENTRY_USERID_PEPPER` non-empty in the container and not rotated while approvals are live. Not verifiable from the repo; operator checks at flip time.
+> - **Cohort and pepper (posture row (j), (k); ADR-309 flip checklist items 1 and 2).** Single-member workspaces only until the cohort rule is met; `SENTRY_USERID_PEPPER` non-empty in the container and not rotated while approvals are live. Not verifiable from the repo; operator checks at flip time.
 
 Falsifier: `grep -c "Cohort and pepper" knowledge-base/legal/audits/2026-10-29-approval-queue-b-canary-record.md` returns 1.
 
-If C1 or C2 does not land, the sentence in the b-canary record's section (ii) that the posture row 'names the engineering counterpart in ADR-307 (cohort rule ...)' remains false against the file, and this disposition reverts to BLOCKED for that record.
+If C1 or C2 does not land, the sentence in the b-canary record's section (ii) that the posture row 'names the engineering counterpart in ADR-309 (cohort rule ...)' remains false against the file, and this disposition reverts to BLOCKED for that record.
 
 ## Disposition
 

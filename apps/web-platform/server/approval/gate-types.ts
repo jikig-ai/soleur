@@ -17,7 +17,7 @@ export interface ApprovalGateDeps {
   /** Workspace the conversation runs in (the hash and the row are bound to it). */
   workspaceId: string;
   /**
-   * The per-session execution-grant object, shared by closure with the tool builders (#4672, ADR-307). The gate marks it
+   * The per-session execution-grant object, shared by closure with the tool builders (#4672, ADR-309). The gate marks it
    * `enforcing` once the flag is on and writes a one-shot grant right before each `allow()`.
    */
   grants: ExecutionGrants;

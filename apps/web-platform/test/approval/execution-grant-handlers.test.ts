@@ -1,5 +1,5 @@
 /**
- * #4672 R1 (ADR-307, execution grants): the two handlers that re-resolve the active workspace at execution
+ * #4672 R1 (ADR-309, execution grants): the two handlers that re-resolve the active workspace at execution
  * (`workspace_set_autonomous`, `kb_share_create`) verify the workspace the Owner approved the action for, and refuse
  * with `workspace_changed` when it moved. No grant while the approval flow is on for the session = refuse.
  */

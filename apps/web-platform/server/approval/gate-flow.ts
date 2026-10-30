@@ -187,7 +187,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
   if (!enabled) {
     // A session that already ran the approval flow never falls back to the legacy requester-answerable card for the other
     // tools after a mid-session flag-off or flag read error: only the grant-checked tools are protected by the sticky
-    // `enforcing`, so every approval-required tool denies for the rest of the session (ADR-307 rollback).
+    // `enforcing`, so every approval-required tool denies for the rest of the session (ADR-309 rollback).
     if (a.approval.grants.enforcing) {
       a.logDecision(a.toolName, "deny", "approval flow unavailable after it ran in this session");
       return deny(APPROVAL_UNAVAILABLE_DENY);
@@ -308,7 +308,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
       return deny(APPROVAL_UNAVAILABLE_DENY);
     }
 
-    // The grant carries what was approved to the handler that executes it (ADR-307, execution grants). Written immediately before allow(), on
+    // The grant carries what was approved to the handler that executes it (ADR-309, execution grants). Written immediately before allow(), on
     // both allow paths, keyed by the zod-parsed handler args; a throw here is a deny (the outer catch).
     const allowWithGrant = (): PermissionResult => {
       putGrant(a.approval.grants, a.toolName, snapshot, { workspaceId: a.approval.workspaceId, headSha: derived?.headSha });

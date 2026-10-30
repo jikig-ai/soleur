@@ -483,7 +483,7 @@ describe.skipIf(!ENABLED)("migration 180 behaviour (rolled-back real rows)", () 
   });
 
   // -------------------------------------------------------------------------------------------------------------
-  // Revoke, principal re-check, caps / notify, Art. 17 deletion of a memberless personal workspace (ADR-307 invariants 2, 3, 9).
+  // Revoke, principal re-check, caps / notify, Art. 17 deletion of a memberless personal workspace (ADR-309 invariants 2, 3, 9).
   // -------------------------------------------------------------------------------------------------------------
 
   const hashN = (n: number) => n.toString(16).padStart(2, "0").repeat(32);

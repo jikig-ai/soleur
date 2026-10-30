@@ -41,7 +41,7 @@ describe("renderApprovalView: the card is built from the SAME canonical object t
     });
   }
 
-  // ADR-307 § Bound versus executed: "this exact X" is a representation to the Owner at the moment of consent. It may only be
+  // ADR-309 § Bound versus executed: "this exact X" is a representation to the Owner at the moment of consent. It may only be
   // used where the whole X is bound; the three tools whose handler re-reads content at execution name only what is bound.
   describe("the single-use line claims no more than is bound", () => {
     it.each([

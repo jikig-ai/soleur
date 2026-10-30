@@ -6,7 +6,7 @@
  * `APPROVAL_EXEMPT_TOOLS` with a one-line reason, so a newly added gated tool cannot silently stay on the old
  * in-memory path: the census test (test/approval/tools-census.test.ts) fails until it is classified.
  *
- * Adding a gated tool: follow the checklist in ADR-307 § Adding a gated tool (it owns it; do not restate it here).
+ * Adding a gated tool: follow the checklist in ADR-309 § Adding a gated tool (it owns it; do not restate it here).
  *
  * This module is dependency-free on purpose: the migration shape test, the canonicalizer and the
  * permission callback all import it.

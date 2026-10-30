@@ -5,7 +5,7 @@
  * The plan asked for "no module reachable from the tool builders or the canUseTool deps imports decide.ts". As stated
  * that is unsatisfiable: `server/ws-handler.ts` (which MUST import decide.ts, it is the Owner's socket) is the process hub,
  * and the runners and the cost writer import its `sendToClient`. The sentinel is therefore a set of conjuncts that
- * together pin the same property (ADR-307, "Residual risk: sentinel discipline"):
+ * together pin the same property (ADR-309, "Residual risk: sentinel discipline"):
  *   1. the `decide_approval` RPC name appears, in code (comments stripped, any quote style), in exactly one module;
  *   2. decide.ts has exactly the allowlisted importers (the WebSocket handler and the HTTP decide route);
  *   3. walking the real VALUE import graph (static, dynamic, `export ... from`, `require`; a `.js` suffix is resolved to
@@ -25,7 +25,7 @@
  * approval module that starts reaching the hub fails the exemption test.
  *
  * What this does NOT prove: a module that reaches the hub's allowed exports can still call code in the same process. The
- * real fix is moving the decide path out of the agent process (ADR-307 follow-up); this is the tripwire until then.
+ * real fix is moving the decide path out of the agent process (ADR-309 follow-up); this is the tripwire until then.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";

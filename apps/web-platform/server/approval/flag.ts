@@ -2,7 +2,7 @@ import { getRuntimeFlag } from "@/lib/feature-flags/server";
 import { reportApprovalOp } from "./ops";
 
 /**
- * The `approval-queue` flag read (#4672, ADR-307).
+ * The `approval-queue` flag read (#4672, ADR-309).
  *
  * Everything that would create, show or emit an approval request reads the flag through THIS function and nothing
  * else. It is evaluated once per gate (never per poll), per workspace identity so a cohort can be targeted by a

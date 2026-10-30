@@ -2975,7 +2975,7 @@ resource "sentry_alert" "haiku_no_text_block_rate" {
   }
 }
 
-# Approval request nobody answered (#4672, ADR-307). The 5-minute expiry cron
+# Approval request nobody answered (#4672, ADR-309). The 5-minute expiry cron
 # (server/inngest/functions/cron-approval-expiry.ts) fires the `gate_unanswered` op ONCE per request, 15 minutes after
 # it was created while still pending (sweep_approvals() marks `unanswered_flagged_at`, so a request flags at most once).
 # The agent has stopped waiting at 5 minutes, so a request this old means the Owner's push/inbox nudge did not land.
@@ -3023,7 +3023,7 @@ resource "sentry_alert" "approval_gate_unanswered" {
   }
 }
 
-# (#4672, ADR-307) The approval HMAC key is unavailable: SENTRY_USERID_PEPPER is unset or empty in the container, so
+# (#4672, ADR-309) The approval HMAC key is unavailable: SENTRY_USERID_PEPPER is unset or empty in the container, so
 # deriveApprovalHashKey (server/approval/canonical.ts) throws key_unavailable and the gate FAILS CLOSED for every
 # approval-gated tool call (no request is created, the agent is told approvals are unavailable). server/approval/ops.ts
 # registers it as its own op (`approval-key-unavailable`, ERROR level via reportSilentFallback(null, ...)) so it does not

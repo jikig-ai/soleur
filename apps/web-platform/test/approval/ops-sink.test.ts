@@ -1,5 +1,5 @@
 /**
- * #4672 observability (ADR-307): an approval op reaches the REAL Sentry sink with its `feature`/`op` tags and a
+ * #4672 observability (ADR-309): an approval op reaches the REAL Sentry sink with its `feature`/`op` tags and a
  * static message, and the thrown value contributes only `{code, fn, errName}`.
  *
  * Unlike ops.test.ts this does not mock the observability module: it runs the real `reportSilentFallback` /

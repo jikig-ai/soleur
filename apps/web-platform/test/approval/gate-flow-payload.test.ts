@@ -1,5 +1,5 @@
 /**
- * #4672 (ADR-307), round-2 test-design FD-6: the PAYLOAD wiring of the gate flow, pinned field by field.
+ * #4672 (ADR-309), round-2 test-design FD-6: the PAYLOAD wiring of the gate flow, pinned field by field.
  *
  * Every other gate test asserts the verdict and the frame TYPES. Two fields survived being swapped for a wrong value:
  * `requestedByUserId` (the member whose principal status the consume re-checks) and the card's `expiresAt` (the

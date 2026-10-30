@@ -4,7 +4,7 @@ status: conditional
 date: 2026-10-29
 pinned_head: e271d9f1019c426c0e4c7101527c4d3e2e7ab6f7
 related: [4672, 11289, 11303]
-related_adrs: [ADR-307, ADR-029]
+related_adrs: [ADR-309, ADR-029]
 brand_survival_threshold: single-user incident
 scope: "verification step of posture item (b) plus the canary-workspace condition; NOT the full (b) attestation"
 ---
@@ -61,7 +61,7 @@ Emitters: the approval code reaches Sentry and Better Stack through two function
 
 ## (ii) Canary workspace condition
 
-Confirmed recorded as a gate condition: the posture row's "Does not close" clause now reads that a canary ON requires (b-canary), "plus confirmation that the canary workspace is owned by Jikigai and that every member of it is a Jikigai principal", and the same row names the engineering counterpart in ADR-307 (cohort rule: the flag is limited to single-member workspaces, `workspace_members` count checked before any per-workspace override, and re-checked on every member invite). The legal condition is stated independently of the engineering rule, so it still holds if the cohort rule is relaxed.
+Confirmed recorded as a gate condition: the posture row's "Does not close" clause now reads that a canary ON requires (b-canary), "plus confirmation that the canary workspace is owned by Jikigai and that every member of it is a Jikigai principal", and the same row names the engineering counterpart in ADR-309 (cohort rule: the flag is limited to single-member workspaces, `workspace_members` count checked before any per-workspace override, and re-checked on every member invite). The legal condition is stated independently of the engineering rule, so it still holds if the cohort rule is relaxed.
 
 This is an operator check at flip time. It cannot be verified from the repo: whether a given workspace is Jikigai-owned and who its members are is runtime data. I have verified only that the condition is written into the gate. Nothing here states that any workspace qualifies.
 
@@ -84,13 +84,13 @@ If any of the three canonical documents changes after this record, this record i
 I was given no itemised list of the clerk's calls; I diffed the committed text against my round-2 rulings (`CLO-RULINGS-R2.md`) and accept the following. Anything not named here is not accepted by this record.
 
 1. Verbatim application of the exact replacements of rulings 1.1 to 1.9, 4.1, 4.2, 5.1, 5.2 (twelve before/after pairs re-checked by string match: all twelve "after" strings present, the superseded "before" strings absent), applied in-cell with no `Superseded` marker, because the PR is unmerged.
-2. The ruling 1.10 straggler sweep (`both links`, `two user columns`, `decided, used`, `used or expired`, `forward-only`) returns only the corrected Privacy 4.15 status sentence ("decided, withdrawn, used or expired", which is the ruling's own wording) and the corrected PA-38 (g)(3) and ADR-307 "forward-only except an Owner revoke". The ruling 9 final sweep (`nothing was run`, `Only who decided`, `retention stated in those Sections (90 days)`, `removed 90 days later`) returns nothing across `docs/legal`, the mirrors, `knowledge-base/legal`, `apps/web-platform/lib` and `apps/web-platform/server`.
+2. The ruling 1.10 straggler sweep (`both links`, `two user columns`, `decided, used`, `used or expired`, `forward-only`) returns only the corrected Privacy 4.15 status sentence ("decided, withdrawn, used or expired", which is the ruling's own wording) and the corrected PA-38 (g)(3) and ADR-309 "forward-only except an Owner revoke". The ruling 9 final sweep (`nothing was run`, `Only who decided`, `retention stated in those Sections (90 days)`, `removed 90 days later`) returns nothing across `docs/legal`, the mirrors, `knowledge-base/legal`, `apps/web-platform/lib` and `apps/web-platform/server`.
 3. Ruling 8 strings: the copy-deck strings now read "ran nothing" (`resolvedNothing`, `expiredLine`, the expired-after-approval line, the push body and the email line), not "Nothing was run".
 4. Ruling 6: `detailsRemovedLine` carries the scheduled-removal wording and `detailsRemovedNeutralLine` exists as the neutral variant.
 5. Rulings 2 and 3 posture-row text (b-canary clause, "(b) the full CLO attestation" prefix, card-string note) present as worded.
 6. Ruling 4.2: the dangling "(ruling 1)" citation is gone from the PA-38 (f) cell (0 hits).
 7. The key derivation: the code is HKDF-SHA256 (`hkdfSync`, key material `SENTRY_USERID_PEPPER`, empty salt, `info` `soleur:approval-request:action-sha256:v1`, 32 bytes) followed by HMAC-SHA-256 over the canonical action, which is a stronger and more conventional construction than the "HMAC of the secret with the label" I accepted in ruling 7. I accept the change; the register is conformed to the code (section 6). Rotation consequence, residual and "does not defend" list are unchanged by it.
-8. ADR-307's cohort rule (single-member workspaces only) as the engineering counterpart of the canary condition.
+8. ADR-309's cohort rule (single-member workspaces only) as the engineering counterpart of the canary condition.
 
 ## (v) What remains owed
 
@@ -99,7 +99,7 @@ Before ANY ON, canary included:
 - **(a) Real-SDK probe recorded.** Exists: `knowledge-base/project/specs/archive/20261029-164429-feat-hitl-approval-queue/phase-0-measurements.md`, "Addendum 2026-10-29 (#4672): probe re-run on the finished branch (task 5.4)", result `RESULT: PASS (sdk=0.3.284 cli=2.1.284, cases-run=10)` with all eight gated tools `denyHonoured=true` and the raw-composition canary `CANARY-OK`. Limits that this record carries rather than hides: (1) that addendum was committed in `971c7a5916`; since then `dev-probe-approval-gate.ts` and `agent-runner.ts` changed (the probe script now passes a disabled `ExecutionGrants` to the tool builders, and the runner wires one shared grants object into the gate and three builders), and `gate-flow.ts` and `gate.ts` changed substantially. A re-run at the final head `e271d9f101` is recorded in the same file ("Addendum 2026-10-29 (#4672): probe re-run at the final head e271d9f101", PASS, cases-run=10); a later code change to the gate, the grants or the runner re-opens it. (2) The addendum itself says it does not measure the approval flow with the flag on, nor the hosted ask lane (#9776, #10111). It supports ruling 3's standing condition only for "a deny is honoured on the legacy runner path"; the single-use grant behaviour that justifies "this exact commit" and "this exact setting" remains design intent, not measured.
 - **(i) Erasure and fingerprint conformance, as a real-database run.** Owed as a recorded run: after a real-database test erasure of a personal workspace, `select count(*) from approval_request where workspace_id = :erased_user_id` is 0 and the fingerprint is keyed. The test file is `apps/web-platform/test/server/approval-request.tenant-isolation.test.ts`, gated by `describe.skipIf(!ENABLED)` (`TENANT_INTEGRATION_TEST=1`); it runs only in `tenant-integration.yml`. This record is conditional on that suite being green there for this PR (see top); the result must be recorded in `knowledge-base/legal/audits/` before a canary ON. I have not seen it.
 - **(b-canary)** is this record, subject to its conditions: the tenant-integration suite green, a probe re-run at the final head recorded, no later change to the three canonical documents, and the operator's flip-time confirmation (section ii).
-- **Cohort and pepper (posture row (j), (k); ADR-307 flip checklist items 1 and 2).** Single-member workspaces only until the cohort rule is met; `SENTRY_USERID_PEPPER` non-empty in the container and not rotated while approvals are live. Not verifiable from the repo; operator checks at flip time.
+- **Cohort and pepper (posture row (j), (k); ADR-309 flip checklist items 1 and 2).** Single-member workspaces only until the cohort rule is met; `SENTRY_USERID_PEPPER` non-empty in the container and not rotated while approvals are live. Not verifiable from the repo; operator checks at flip time.
 
 Before NON-canary ON, in addition:
 
@@ -108,7 +108,7 @@ Before NON-canary ON, in addition:
 
 ## (vi) Register conformance edit made with this record
 
-`knowledge-base/legal/article-30-register.md`, Processing Activity 38, (g) item 7: the sentence "a key derived (HMAC-SHA-256 of the secret with the domain-separation label ...)" was replaced in-cell (the PR is unmerged; no `Superseded` marker) by a description of the code in `deriveApprovalHashKey`: HKDF-SHA256 via `node:crypto` `hkdfSync`, input keying material `SENTRY_USERID_PEPPER`, empty salt, `info` label `soleur:approval-request:action-sha256:v1`, 32 bytes; the fingerprint is HMAC-SHA-256 over the canonical action under that derived key. A grep for `domain-separation label` and `HMAC-SHA-256 of the secret` over `knowledge-base/legal` now returns 0. The published documents and mirrors describe the fingerprint only as "a keyed fingerprint (an HMAC-SHA-256 computed with a secret held outside the database ...)" and do not describe the derivation; that statement stays true under HKDF-then-HMAC, so no published change and no re-pin follow from this edit. ADR-307 already says HKDF.
+`knowledge-base/legal/article-30-register.md`, Processing Activity 38, (g) item 7: the sentence "a key derived (HMAC-SHA-256 of the secret with the domain-separation label ...)" was replaced in-cell (the PR is unmerged; no `Superseded` marker) by a description of the code in `deriveApprovalHashKey`: HKDF-SHA256 via `node:crypto` `hkdfSync`, input keying material `SENTRY_USERID_PEPPER`, empty salt, `info` label `soleur:approval-request:action-sha256:v1`, 32 bytes; the fingerprint is HMAC-SHA-256 over the canonical action under that derived key. A grep for `domain-separation label` and `HMAC-SHA-256 of the secret` over `knowledge-base/legal` now returns 0. The published documents and mirrors describe the fingerprint only as "a keyed fingerprint (an HMAC-SHA-256 computed with a secret held outside the database ...)" and do not describe the derivation; that statement stays true under HKDF-then-HMAC, so no published change and no re-pin follow from this edit. ADR-309 already says HKDF.
 
 ## Re-evaluation triggers
 

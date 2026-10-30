@@ -249,7 +249,7 @@ describe("Inngest function registry — drift guards", () => {
   // 70 -> 69: cron-gh-pages-cert-state deleted (ADR-194: the origin cert it polled is abandoned).
   // 69 -> 71: cron-actions-queue-health-dispatch + cron-bot-pr-reaper (#9273/#9274).
   // 71 -> 72: cron-merge-queue-stall-dispatch (#9482 follow-up (a)).
-  // 72 -> 73: cron-approval-expiry (#4672, ADR-307).
+  // 72 -> 73: cron-approval-expiry (#4672, ADR-309).
   it("(a) route.ts functions array has expected count", () => {
     expect(routeEntries.length).toBe(73);
   });

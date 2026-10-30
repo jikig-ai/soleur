@@ -1,4 +1,4 @@
-// cron-approval-expiry — the 5-minute sweep of durable approval requests (#4672, ADR-307).
+// cron-approval-expiry — the 5-minute sweep of durable approval requests (#4672, ADR-309).
 //
 // WHY THIS SHAPE: an approval request outlives the agent session that made it (the Owner may answer hours later), so
 // something must age rows out without a session. One `sweep_approvals()` RPC does all three database jobs in one

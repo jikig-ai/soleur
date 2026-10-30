@@ -983,7 +983,7 @@ describe("Guard 1: terminal outcomes and abort edges are denies, and the release
 });
 
 // ---------------------------------------------------------------------------
-// ADR-307 (grants, denies, caps, notification): grants, reason texts, caps, notification, honest frames, observability.
+// ADR-309 (grants, denies, caps, notification): grants, reason texts, caps, notification, honest frames, observability.
 // ---------------------------------------------------------------------------
 
 describe("consume reasons map to their own static text", () => {
@@ -1325,7 +1325,7 @@ describe("concurrent gates for the same approval share one waiter (refcounted)",
 });
 
 // ---------------------------------------------------------------------------
-// Round 2 (ADR-307 rollback / observability): sticky enforcing denies EVERY approval-required tool, the card never keeps
+// Round 2 (ADR-309 rollback / observability): sticky enforcing denies EVERY approval-required tool, the card never keeps
 // claiming "your agent is continuing" after a failed consume, and the failing RPC's code is not dropped.
 // ---------------------------------------------------------------------------
 

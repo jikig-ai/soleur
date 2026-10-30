@@ -10,7 +10,7 @@ tags: [security, hosted, permission-callback, review-gate, approval, rls, flag-g
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-307: Durable, action-bound approval requests for high-risk gated agent tools
+# ADR-309: Durable, action-bound approval requests for high-risk gated agent tools
 
 ## Context
 
@@ -285,6 +285,10 @@ retention.
 - The flag is limited to single-member workspaces until the cohort rule in the flip checklist is met.
 - The decide path stays code-discipline protected in the agent's process until it moves out (Residual risk).
 - Nothing in this ADR is a measured production claim. Status is `adopting` until the flag is flipped for a canary and the path (consume success, unanswered rate) is measured.
+
+## Ordinal history
+
+This record was drafted as ADR-307 and renumbered to ADR-309 at ship time, after the Inngest key-rotation record claimed ADR-307 on main (ADR-308 was claimed by a third record in the same window). Every reference in the branch was swept. One citation is deliberately left under the old number: the header comment of `apps/web-platform/supabase/migrations/180_approval_request.sql` still reads "ADR-307", because the DEV ledger pins that file's content hash and editing it would force a DEV reset for a comment. Read that citation as this record.
 
 ## Cost Impacts
 

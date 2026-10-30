@@ -122,7 +122,7 @@ const RUNTIME_FLAGS = {
   // code ships dark. Fail-OPEN on a Flagsmith outage: FLAG_NEW_SESSIONS_PAUSED=0
   // mirror, so the live read-back line (new_sessions_paused=) is the proof.
   "new-sessions-paused": "FLAG_NEW_SESSIONS_PAUSED",
-  // #4672 / ADR-307 — durable action-bound approval requests (gated platform tools held as rows a user decides).
+  // #4672 / ADR-309 — durable action-bound approval requests (gated platform tools held as rows a user decides).
   // Dark by default; read ONLY through server/approval/flag.ts (`isApprovalQueueEnabled`), evaluated once per gate
   // per workspace identity so a cohort can be targeted by a per-workspace segment override. Fail-closed:
   // FLAG_APPROVAL_QUEUE=0 mirror; absent means OFF. Creating and flipping it is an operator step (flag-create).

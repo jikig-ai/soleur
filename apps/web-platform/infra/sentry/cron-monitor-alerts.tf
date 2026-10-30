@@ -51,7 +51,7 @@ locals {
     # missing-SOLEUR_APPROVAL_SWEEP monitor exists in infra/ (verified by grep). Until routed, a missed or failed
     # check-in only opens a Sentry issue nobody is emailed about. The flag stays off meanwhile, so no live request can be
     # stranded; routing this monitor into cron_monitor_failure is therefore a REQUIRED item on the approval-queue flag-flip
-    # checklist (ADR-307 "Flag lifecycle", flag-create-handover.md): route it before the flag is turned on for anyone.
+    # checklist (ADR-309 "Flag lifecycle", flag-create-handover.md): route it before the flag is turned on for anyone.
     scheduled_approval_expiry = "routing is a flip-checklist item: no independent cover exists (gate_unanswered is emitted by the sweep itself); route before the approval-queue flag is turned on (#4672)"
     # #10390 WS1 — the Better Stack incident mirror's liveness monitor, added under the two-PR rule:
     # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the

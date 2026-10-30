@@ -1,5 +1,5 @@
 /**
- * #4672 (ADR-307): the PRODUCTION gate-deps factory `createApprovalGateDeps` (server/approval/gate.ts), pinned.
+ * #4672 (ADR-309): the PRODUCTION gate-deps factory `createApprovalGateDeps` (server/approval/gate.ts), pinned.
  *
  * Every other gate test hand-builds an `ApprovalGateDeps`, so the one place that wires the flag seam, the service-role RPC
  * wrappers, the tenant client reads and the per-session grants was unpinned: a factory that built its own

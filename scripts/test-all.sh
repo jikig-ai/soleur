@@ -7038,7 +7038,7 @@ if want_webplat; then
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
   # shard does not install. Its own control run reds the suite when the unedited copy is not green.
   run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
-  # #4672 / ADR-307: the approval consume gate's Guard 1 mutation battery (anchor-asserted mutants of the SQL consume
+  # #4672 / ADR-309: the approval consume gate's Guard 1 mutation battery (anchor-asserted mutants of the SQL consume
   # predicate, the canonical hash, the gated flow, the wait loop, the flag read and the census, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
   run_suite "apps/web-platform/test/approval-guard1-mutation" bash apps/web-platform/test/approval-guard1-mutation.test.sh

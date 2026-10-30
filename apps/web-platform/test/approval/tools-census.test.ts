@@ -69,7 +69,7 @@ describe("Guard 2 census: every gated tool is required or exempt-with-a-reason",
   });
 });
 
-describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_ALLOWLIST (ADR-307, sentinel discipline)", () => {
+describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_ALLOWLIST (ADR-309, sentinel discipline)", () => {
   // The cc runner has no approval wiring: a promoted approval tool would run on the legacy in-memory gate and
   // silently skip the queue. readCcMcpAllowlist must therefore REFUSE every APPROVAL_REQUIRED_TOOLS short name.
   // The guard lives in server/cc-dispatcher.ts. That module is a very large import graph (~13 s cold, measured), so it
