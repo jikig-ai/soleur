@@ -61,7 +61,7 @@
 # LUKS mapper at /mnt/git-data from boot and the bootstrap plants the fence on it. There is
 # nothing to copy, because the store has never held a repository.
 #
-# MODES (#8211 PR2, #10138). MODE selects the verb — proof (default), freeze, unfreeze, probe, wipe_assert.
+# MODES (#8211 PR2, #10138, #11431). MODE selects the verb — proof (default), freeze, unfreeze, probe, wipe_assert, refs_assert.
 # The flag write and the fleet redeploy are WORKFLOW steps, not script verbs: this script
 # reads no secret store and the webhook credentials never reach it. Host-side mode mapping:
 #   workflow flip     -> precheck(flip) -> preconditions -> MODE=freeze -> flag write ->
@@ -154,12 +154,17 @@ resolve_roster() {
 ACCESS_TMP=""       # probe capture dir of the access gate; removed on every exit
 CAPTURE_TMP=""      # stderr capture dir of gd_capture; removed on every exit
 GD_CAPTURED=""      # the last value gd_capture ACCEPTED; never printed
+STORE_LAST_VERDICT=""  # the last verdict word the store emitter spoke (refs_assert reads it to class a shared-probe refusal)
+REFS_ACTIVE=0       # 1 inside mode_refs_assert
+REFS_NOTED=0        # 1 once _refs_refuse has written the class annotation
 
 # The trap only drops temp captures: nothing on any host is ever changed, so nothing is
 # ever recovered.
 cleanup() {
   local rc=$?
   trap - EXIT
+  # refs_assert: a refusal that did not come from _refs_refuse (the access gate, the shared store probes) still carries a class.
+  [ "$rc" -eq 0 ] || [ "$REFS_ACTIVE" != 1 ] || [ "$REFS_NOTED" = 1 ] || _refs_note_unattributed || true
   _access_tmp_drop || true
   _capture_tmp_drop || true
   exit "$rc"
@@ -195,12 +200,18 @@ trap cleanup EXIT
 #             and for pre: WIPE_ROW_DT (the boot_complete row's dt: epoch seconds or
 #             `YYYY-MM-DD HH:MM:SS`, UTC) and WIPE_LISTING=run|skip (skip = the finish phase: no
 #             snapshot is taken, layout_signal=not_run; wipe_check and wipe both run the listing). Verdicts are exit 5 with a fixed word.
+#   refs_assert (#11431) the READ-ONLY host read that lets REFS-CONFIRMED be attained (runbook "Reading REFS-CONFIRMED"): after the
+#             store pre-flight (mounted, on the mapper, marker bound, NOT frozen: a held freeze refuses cutover_frozen, no bypass),
+#             ONE ssh session runs git-data-refs-assert.sh (sent on stdin to `bash -s`) and prints one fixed-shape line of counts
+#             and at most two commit shas, never a name. Takes no input but the (validated) store paths. Every refusal is exit 5
+#             with a fixed word and a class (FAILED, or INCONCLUSIVE when the read could not decide); the workflow runs it with the
+#             store flag OFF (FLAG_MODE=proof).
 # The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (refused below: the wipe is the `wipe` job of
 # the workflow, which drives MODE=wipe_assert and the Hetzner helper, not this script's legacy env);
 # ROLLBACK=1 maps to MODE=rollback at the WORKFLOW level, not here.
 MODE="${MODE:-proof}"
 case "$MODE" in
-  proof|freeze|unfreeze|probe|wipe_assert) : ;;
+  proof|freeze|unfreeze|probe|wipe_assert|refs_assert) : ;;
   *) log "REFUSE verdict=mode_invalid mode=${MODE}"
      echo "::error title=git-data-cutover::verdict=mode_invalid"
      exit 5 ;;
@@ -220,7 +231,7 @@ refuse_legacy_modes() {
   [ -n "$bad" ] || return 0
   log "REFUSE verdict=real_cutover_unreconciled vars=${bad# }"
   echo "::error title=git-data-cutover::verdict=real_cutover_unreconciled"
-  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe|wipe_assert); the plaintext-volume wipe is the workflow's wipe job (#10138), not these env words."
+  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe|wipe_assert|refs_assert); the plaintext-volume wipe is the workflow's wipe job (#10138), not these env words."
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf -- '- REFUSE verdict=real_cutover_unreconciled\n' >> "$GITHUB_STEP_SUMMARY" || true
   fi
@@ -480,6 +491,7 @@ access_gate() {
 # ============================================================================
 _store_emit() { # <probe> <verdict> [rc] [reason] — pass "" for rc when a reason has no rc
   local detail="probe=$1 verdict=$2${3:+ rc=$3}${4:+ reason=$4}"
+  STORE_LAST_VERDICT="$2"
   log "STORE ${detail}"
   if [ "$2" = ok ]; then
     echo "::notice title=git-data-cutover store::probe=$1 verdict=ok"
@@ -1107,6 +1119,82 @@ mode_wipe_assert() {
 }
 
 # ============================================================================
+# refs_assert — the host-side read that lets REFS-CONFIRMED be attained (#11431)
+# ============================================================================
+# One gd_capture call: git-data-refs-assert.sh goes on STDIN to `bash -s` (60 s), REFS_REPOS %q-quoted in front of it.
+# The script's own exit code is the verdict; this verb maps each to a fixed word and a class, never from host text
+# (the table is the script's header `# EXIT CODES`; the suite derives both sides). Anything else, and every transport rc,
+# is probe_failed rc=<n>, INCONCLUSIVE: a read that failed is never evidence of non-replication. The answer is counts and
+# at most two shas, matched in full; the value is never printed on a failure and no host byte reaches a workflow command
+# (stderr is relayed only through _access_stderr). Read-only toward the host.
+_refs_emit() { _store_emit refs-assert "$@"; }
+_refs_class() { # <word> -> FAILED | INCONCLUSIVE (by word, from the exit-code table; INCONCLUSIVE is "no verdict on the refs")
+  case "$1" in
+    refs_repo_absent|refs_none|refs_no_branch_tip|refs_bad_sha) printf FAILED ;;
+    *) printf INCONCLUSIVE ;;
+  esac
+}
+_refs_annotate() { # <word> <class> [suffix] — the class beside the verdict, in the log, the annotation, the summary and the output
+  local line="verdict=$1 class=$2${3:+ $3}"
+  echo "::error title=git-data-cutover refs::${line}"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf -- '- REFS %s\n' "$line" >> "$GITHUB_STEP_SUMMARY" || true; fi
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then printf 'refs_class=%s\n' "$2" >> "$GITHUB_OUTPUT" || true; fi
+  REFS_NOTED=1
+}
+_refs_refuse() { # <word> [rc] [reason] — emit, class, stop
+  local w="$1" sfx="" n
+  _refs_emit "$@"
+  if [ "$w" = refs_shape_failed ] && [[ "${2:-}" =~ ^(27|96)$ ]]; then sfx="rc=$2"; fi
+  if [ "$w" = refs_repo_not_single ] && [ -n "$CAPTURE_TMP" ] && [ -f "$CAPTURE_TMP/capture.err" ]; then
+    n="$(sed -nE 's/^refs-assert: rc=21 reason=repos_not_single repos=([0-9]{1,6})$/\1/p' "$CAPTURE_TMP/capture.err" | head -n 1)" || n=""
+    if [[ "$n" =~ ^[0-9]{1,6}$ ]]; then sfx="repos=$n"; fi
+  fi
+  _refs_annotate "$w" "$(_refs_class "$w")" "$sfx"
+  exit 5
+}
+_refs_note_unattributed() { # a refusal from the access gate or a shared store probe: INCONCLUSIVE, the word is the last one spoken
+  _refs_annotate "${STORE_LAST_VERDICT:-access_refused}" INCONCLUSIVE ""
+}
+mode_refs_assert() {
+  step "refs_assert: host read of the replicated refs (read-only toward the store; no name leaves the host)"
+  REFS_ACTIVE=1
+  local body pat cmd tmo=60 rc=0 qd here
+  refuse_if_config_unsafe
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || _refs_refuse probe_failed "" arg_body
+  body="$here/git-data-refs-assert.sh"
+  [ -f "$body" ] && [ -s "$body" ] || _refs_refuse probe_failed "" arg_body
+  access_gate
+  refuse_if_unmounted
+  refuse_if_not_on_mapper
+  # verified-only: mounted, on the mapper, marker bound, NOT frozen. The step sets no CUTOVER_LINEAGE, so a held sentinel is
+  # never tolerated as resume arm A; and the repositories-directory checks it skips are repeated by the host script.
+  refuse_if_store_unverified_or_not_empty verified-only  # the host script repeats the repositories-directory checks
+  printf -v qd '%q' "$OLD_REPOS"
+  cmd="REFS_REPOS=$qd bash -s"
+  pat='^refs_assert ok repos=1 namespaces=[1-9][0-9]* refs=[1-9][0-9]* heads=[1-9][0-9]* shas=[0-9a-f]{40}(,[0-9a-f]{40}){0,1}$'
+  gd_capture "$pat" "$cmd" "$body" "$tmo" || rc=$?
+  case "$rc" in
+    0) ;;
+    20) _refs_refuse refs_repo_absent ;;
+    21) _refs_refuse refs_repo_not_single ;;
+    23) _refs_refuse refs_none ;;
+    24) _refs_refuse refs_no_branch_tip ;;
+    26) _refs_refuse refs_unreadable ;;
+    27) _refs_refuse refs_shape_failed 27 ;;
+    28) _refs_refuse refs_bad_sha ;;
+    96) _refs_refuse refs_shape_failed 96 ;;
+    *) _refs_refuse probe_failed "$rc" ;;
+  esac
+  # The answer matched the fixed shape in full: counts and at most two commit shas.
+  _refs_emit ok
+  log "REFS-CONFIRMED"
+  log "REFS_ASSERT ${GD_CAPTURED#refs_assert }"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    { printf -- '- REFS-CONFIRMED\n'; printf -- '- REFS_ASSERT %s\n' "${GD_CAPTURED#refs_assert }"; } >> "$GITHUB_STEP_SUMMARY" || true
+  fi
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 main() {
@@ -1129,6 +1217,7 @@ main() {
     unfreeze) mode_unfreeze ;;
     probe)    mode_probe ;;
     wipe_assert) mode_wipe_assert ;;
+    refs_assert) mode_refs_assert ;;
   esac
 }
 
