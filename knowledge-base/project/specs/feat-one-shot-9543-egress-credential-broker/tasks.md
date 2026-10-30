@@ -39,6 +39,10 @@ Branch: `feat-one-shot-9543-egress-credential-broker` | Draft PR: #11624
 - 4.3 `technical-ruling-gate.sh --branch` exits 0; `git diff --name-only origin/main...HEAD` is confined to the plan's Files lists.
 - 4.4 After merge: `soleur:postmerge`; confirm F1-F4, ADR-311 and the addenda are on main.
 
+## Filed follow-ups
+
+- F1 #11635 (cc approval gate and grants), F2 #11636 (cc push tool, blocked by F1), F3 #11637 (broker mechanism, blocked by F1), F4 #11638 (BYOK, blocked by F3 and F1); comment posted on #9543.
+
 ## Operator holds (not performed here)
 
 - Creating or flipping any feature flag, and any production enablement.

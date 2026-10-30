@@ -160,6 +160,11 @@ const TOOLS_OK = ["socat", "curl", "openssl"].every(
   (t) => spawnSync("sh", ["-c", `command -v ${t}`], { stdio: "ignore" }).status === 0,
 );
 const SANDBOX_OK = BWRAP_OK && TOOLS_OK;
+if (process.platform !== "linux" || !SANDBOX_OK) {
+  console.warn(
+    `broker-mechanism-spike: real-sandbox probes SKIPPED (linux: ${process.platform === "linux"}, bwrap usable: ${BWRAP_OK}, socat/curl/openssl on PATH: ${TOOLS_OK}); the hermetic guard block still runs.`,
+  );
+}
 if (process.platform === "linux" && !SANDBOX_OK && process.env.C4_BWRAP_REQUIRED) {
   throw new Error(
     `C4_BWRAP_REQUIRED is set but the spike cannot run here (bwrap usable: ${BWRAP_OK}, socat/curl/openssl on PATH: ${TOOLS_OK}).`,
