@@ -4,7 +4,7 @@
 
 - Plan file: knowledge-base/project/plans/2026-10-30-fix-inngest-luks-key-probe-emitter-plan.md
 - Status: complete (plan + deepen-plan executed inline)
-- cto_spawns=0
+- cto_spawns=2 (pre-worktree `Own the epic` spawn on #10390 at /soleur:go routing — delegation verified valid to 2026-11-20, holds returned as Operator-reserved; one batched Rule spawn resolving D2+D3 on 2026-10-30)
 
 ### Errors
 

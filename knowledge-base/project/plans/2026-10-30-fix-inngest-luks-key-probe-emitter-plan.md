@@ -199,7 +199,7 @@ Record the window and all numbers into the `.tf` `LIVE-PROBED` comment block.
 
 1. PR body first line states the merge-mutates-production disclosure; body carries `Ref #11527`, **not** `Closes` — the live change lands at the merge-triggered apply ("ARMING HAPPENS ON THE APPLY, NOT AT MERGE"; the sibling's CTO T2 ruling for the identical situation).
 2. The push-triggered `apply-web-platform-infra.yml` run on the merge SHA applies the exploration (already in the `-target=` allowlist, :655-656 — no workflow edit). Read the apply log: `logtail_exploration.inngest_luks_key_probe_fail` updated in place.
-3. Post-apply close: once the apply lands, `gh issue close 11527 -c "<apply run + Phase-2 numbers>"`. `scheduled-terraform-drift.yml`'s `terraform plan -detailed-exitcode` over this root is the continuous backstop; it does not gate closure.
+3. Post-apply close, gated on apply success (CTO D3 ruling): once the `apply-web-platform-infra.yml` run on the merge SHA concludes `success`, `gh issue close 11527 -c "<apply run + Phase-2 numbers>"`. If the apply fails, leave #11527 OPEN and comment the failed run URL — an unconditional close reproduces the `Closes` failure mode the `Ref` keyword exists to avoid. `scheduled-terraform-drift.yml`'s `terraform plan -detailed-exitcode` over this root is the continuous backstop; it does not gate closure.
 4. Optional same-day sanity: re-run control C once post-apply.
 
 ## Files to Edit
