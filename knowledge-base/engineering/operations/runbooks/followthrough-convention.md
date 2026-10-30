@@ -315,6 +315,22 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   detector" for ~7 dormant weeks). When closing such a tracker, land the standing vehicle in the
   same or a linked PR and correct the probe header's enrollment claim.
 
+## Sharp edges for `gh run view --log` probes
+
+- **GitHub drops step-name attribution ~2-3 weeks after a job completes**: every
+  log line returns under field 2 `UNKNOWN STEP` while the content survives.
+  A probe anchoring on the step-name column (`index($2, step)`) reads a proven
+  trail as zero-line and takes its own tripwire on every aged job in its
+  window (#11600). The countermeasure — already proven in
+  `git-data-boot-poll-8178.sh` and adapted in `web-first-deploy-10585.sh`
+  (#8262): strip CR + the UTF-8 BOM globally (`${log//.../}` — one mark per
+  section), then slice the step's output region on the runner's `##[group]Run`
+  headers, first header stamped at or after the step's `started_at` from the
+  jobs API, next header or EOF closing the region. Feed the region through the
+  same emitted-vs-echoed filter as the named path, and evaluate any
+  zero-parseable tripwire AFTER recovery — an empty region, no `started_at`,
+  or a region with no trail-pattern lines is the same CANNOT ESTABLISH.
+
 ## What the sweeper does NOT cover
 
 - **One-shot scheduling**: every sweep checks every open follow-through. If you want a script to run exactly once at a specific timestamp, that's a regular scheduled workflow, not a follow-through.
