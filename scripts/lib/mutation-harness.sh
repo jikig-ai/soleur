@@ -5,7 +5,8 @@
 # directory, and `FT_REPO` is exported before any mutant runs).
 #
 # Caller contract, all supplied by the suite:
-#   variables  SELF SUT MUT LEDGER PASS FAIL FIX_N LEDGER_N FT_INNER   (read at call time; `set -u` makes a missing one abort)
+#   variables  SELF SUT MUT LEDGER PASS FAIL FIX_N LEDGER_N   (read at call time; `set -u` makes a missing one abort)
+#              FT_INNER is optional (read as ${FT_INNER:-}): set by the battery itself on a mutant's inner run
 #   helpers    ok bad check has hasnt  (stay IN each suite: `mutate_helper` neuters them by awk over $SELF, so a
 #              definition moved out of the suite would make the h1..h5 rows report "did not land")
 #   protocol   a mutant run is `FT_INNER=1 FT_SUT=<mutant> bash $SELF`, so the suite MUST take its probe from

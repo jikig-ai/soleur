@@ -388,9 +388,11 @@ if run_battery "${1:-}"; then
   printf '  PASS: other\n  FAIL: frag-1 and trailing text\n' > "$MUT/sc-right.log"
   printf '  PASS: frag-1\n'                                > "$MUT/sc-pass-only.log"
   printf '  FAIL: a different row\n'                       > "$MUT/sc-other.log"
-  printf '  detail: FAIL: frag-1\n'                        > "$MUT/sc-mid.log"
+  printf 'x  FAIL: frag-1\n'                              > "$MUT/sc-mid.log"
+  printf '        FAIL: frag-1\n'                        > "$MUT/sc-indented.log"
   : > "$MUT/sc-empty.log"
-  sc_verdict() { mh_caught "$1" "$2" && echo yes || echo no; }
+  # A missing log would read as "not caught" and let a negative control pass vacuously, so it gets its own answer.
+  sc_verdict() { [ -f "$2" ] || { echo missing; return; }; mh_caught "$1" "$2" && echo yes || echo no; }
   check "scorer: a FAIL line starting with the fragment and trailing text is caught" yes "$(sc_verdict frag-1 "$MUT/sc-right.log")"
   # label|fragment|log: every row must come back NOT caught
   sc_no=(
@@ -398,7 +400,8 @@ if run_battery "${1:-}"; then
     "a FAIL line for a different row|frag-1|sc-other"
     "an empty log|frag-1|sc-empty"
     "a fragment longer than the FAIL label (strict prefix of the fragment)|frag-1 and trailing text plus more|sc-right"
-    "a FAIL quoted mid-line|frag-1|sc-mid"
+    "a FAIL quoted mid-line (not at line start)|frag-1|sc-mid"
+    "a FAIL on an indented detail line|frag-1|sc-indented"
     "a regex-metacharacter fragment (literal match only)|fr.g-1|sc-right"
     "an empty fragment|-|sc-right"
   )
@@ -411,7 +414,9 @@ if run_battery "${1:-}"; then
   sc_dead="$( ( mh_caught() { return 0; }; n=0
     for sc_row in "${sc_no[@]}"; do IFS='|' read -r _l sc_frag sc_log <<< "$sc_row"; [ "$sc_frag" = "-" ] && sc_frag=""
       mh_caught "$sc_frag" "$MUT/$sc_log.log" && n=$((n + 1)); done; echo "$n" ) )"
-  check "scorer teeth: a dead scorer is caught wrongly-yes by all ${#sc_no[@]} negative controls" "${#sc_no[@]}" "${sc_dead:-0}"
+  # The expected count is a literal on purpose: derived from the table it would shrink with it. Update it WITH the table.
+  check "scorer teeth: a dead scorer is caught wrongly-yes by all 8 negative controls" 8 "${sc_dead:-0}"
+  check "scorer: the negative-control table still has 8 rows" 8 "${#sc_no[@]}"
   mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
   mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
   mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
@@ -453,7 +458,7 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (a --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=179; MIN_BATTERY=48
+MIN_FIXTURE=179; MIN_BATTERY=50
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== dispatch-recovery-sweeper-11211.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi
