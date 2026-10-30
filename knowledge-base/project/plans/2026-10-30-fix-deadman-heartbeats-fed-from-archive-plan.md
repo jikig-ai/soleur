@@ -14,6 +14,24 @@ requires_cpo_signoff: false
 
 # fix(observability): replace the once-a-day dead-man logs alerts with archive-fed Better Stack heartbeats
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Sections enhanced:** Research Insights, Technical Approach (feeder, workflow), Terraform, Phase 0, Phase 2, Phase 4, Phase 5, Guard Contract, Observability, Task Design, Dependencies & Risks, Acceptance Criteria, Owner-gated appendix
+**Review/research agents used:** architecture-strategist, security-sentinel (with verify-the-negative table), terraform-architect, observability-coverage-reviewer, soleur:engineering:cto (grace fork), learnings-researcher, plus the mechanical halts 4.6-4.13 run directly (all passed: User-Brand Impact, Observability, PAT scan, Encryption Posture, Guard Contract lint, Scope Check, Task Design; no UI surface for 4.9; no downtime-class change for 4.55).
+
+### Key improvements
+1. **Grace raised to 7200 for both heartbeats (CTO-ruled).** The watchdog clock closes a slot after three failed ticks, so one lost slot would otherwise falsely page a healthy host at 7200 s; the page threshold is now 10800 s and detection about 28-29 h.
+2. **Feeder spec hardened against the sibling's traps.** `beat_once` must be copied WITHOUT the sibling's `/fail` arm; the target is selected by literal `case` equality and never interpolated; the answer contract covers the empty-aggregate row, string `n`, an `exception` line and `--fail-with-body` stdout; the ping URL (a bearer secret GitHub cannot mask) is never printed; log lines are rebuilt, not forwarded.
+3. **Missing gates found by reading the tree.** `betterstack-alert-structure.test.sh` has exact counts of 19 (-> 17); `inngest-step-524-alert.test.sh`'s discovery floor drops to 2 deterministically; `function-registry-count` `NON_INNGEST_MONITORS`; `sentry-monitors-audit` and `sentry/README.md` count 25 -> 26; the affected-index array; `workspaces-luks-provision.sh` is baked into `user_data` and its stale comment must be left alone.
+4. **Observability gaps closed.** Failure modes now name their layer and the real detector; an UNARMED `::warning::` on every paused run; a third follow-up routes the Sentry monitor; the runbook rewrite leads with "check the feeder before touching the timer" because a dark clock false-pages the heartbeat.
+
+### New considerations discovered
+- The ADR-248 eligibility reading ("a check on the substrate") needs the broadened wording drafted in Phase 2/5; the CTO did not verify it.
+- Both clocks dark (bad web image) degrades to the 2-7 h schedule fallback and can still false-page; accepted and named, not fixed here.
+- A matching row proves a row reached the shared Logs source, not that the timer ran (same as the retired alerts).
+
+
 Ref #11631 (also the root of the stuck incidents mirrored as #11048 and #11049). Never `Closes`: the PR does not
 close the issue, because unpausing the heartbeats and resolving two Better Stack incidents are owner-gated.
 
@@ -53,14 +71,16 @@ unsigned A6 draft in the worktree rides along untouched.
 - **Measured 2026-10-30 (read-only `gh run list --event schedule`, 59 gaps each):** hourly `0 * * * *` cron delivery
   for `scheduled-prod-version-drift.yml` and `scheduled-zot-restart-loop.yml`: min 7232 s / 7277 s, median
   15361 s / 16727 s, p90 22911 s / 23118 s, max 25229 s / 25096 s. The ruling's "schedule + workflow_dispatch only"
-  trigger cannot hold a 7200 s (luks) or 10800 s (cost) page budget. Ruled by the CTO agent (see
+  trigger cannot hold a 7200 s (the ruling's luks threshold) or even a 10800 s (cost) page budget. Ruled by the CTO agent (see
   `decision-challenges.md`): add a `WATCHDOG_DISPATCH_TABLE` row, `intervalMinutes: 60`.
 - **Measured 2026-10-30 (read-only `gh run list --workflow scheduled-zot-restart-loop.yml --event workflow_dispatch`, 79 gaps):**
   the watchdog-dispatched path an hourly row actually uses: consecutive run-creation gaps min 0 s (a duplicate
   dispatch), median 3600 s, p90 3639 s, max 3680 s. Adding the measured job-queue tail (max 2438 s, ADR-248) bounds
-  beat-to-beat spacing near 6100 s against the 7200 s luks budget (period 3600 + grace 3600): about 1100 s of margin.
-  Phase 0 re-measures `workflow_dispatch` gaps and queue; if the observed beat-to-beat maximum exceeds 6500 s, widen
-  the luks grace to 7200 (a ruling-sanctioned widening; it costs about one hour of detection on a 27 h window).
+  beat-to-beat spacing near 6100 s while no slot is lost. The clock closes a slot after `MAX_ATTEMPTS_PER_SLOT = 3`
+  failed ticks (2 min backoff), so one lost slot (an API blip over about 6 min, a deploy swap) makes the next beat
+  at least 7200 s after the last. Ruled by the CTO agent (2026-10-30, `decision-challenges.md`): luks-monitor grace
+  7200 (page threshold 10800 s), cost-capture grace 7200 (threshold 10800 s); period 3600 for both. Detection for
+  luks-monitor becomes the 27 h window plus about 2-3 h.
 - Archive ingestion lag is UNMEASURED (ruling risk). The retired follow-through measured presence, not lag; Phase 0
   below measures it read-only.
 
@@ -68,7 +88,7 @@ unsigned A6 draft in the worktree rides along untouched.
 
 Properties the issue and ruling ask for:
 
-1. A dead or failing nightly host check pages the owner within about the old window plus 1-2 h, from a signal the
+1. A dead or failing nightly host check pages the owner within about the old window plus 2-3 h, from a signal the
    evaluator can see.
 2. A healthy night keeps the heartbeat green (no page on a healthy host, no stuck incident).
 3. The feeder never keeps a heartbeat alive without a qualifying row (a spurious beat hides exactly what the
@@ -152,10 +172,10 @@ nightly row --> Vector --> Better Stack Logs (hot ~1 h) --> s3 archive
           4. beat the heartbeat URL once (2xx) -> exit 0
         sentry-heartbeat check-in (ok only on a deciding exit 0)
 Better Stack: betteruptime_heartbeat.{luks_monitor_host_timer, claude_cost_capture}
-              period 3600, grace 3600 / 7200, born paused, ignore_changes=[paused]
+              period 3600, grace 7200 (both), born paused, ignore_changes=[paused]
 ```
 
-Detection latency: old window + about 1-2 h (27 h + 1-2 h for luks-monitor; 24 h + 2-3 h for cost-capture).
+Detection latency: old window + about 2-3 h (27 h + 2-3 h for luks-monitor; 24 h + 2-3 h for cost-capture), because both heartbeats page at period 3600 + grace 7200 = 10800 s after the last beat.
 Archive-lag tolerance: for luks-monitor the previous night's row stays inside the 27 h window until at least 2.5 h
 after a legitimate 24.5 h gap, so an ingestion lag below about 2.5 h cannot cause a false withhold; cost-capture
 markers arrive many times a day. Phase 0 measures the lag and widens the grace only if it exceeds the margin.
@@ -185,8 +205,18 @@ SELECT count() AS n, toString(max(dt)) AS newest FROM (
 
 Behavior and contract (modelled on `inngest-probe-heartbeat-feeder.sh`, which stays untouched):
 
-- Marker lines `deadman-feeder: target=<t> verdict=<v> n=<n> newest_dt=<..> age_s=<..>` and `CANNOT BEAT: ...`; the
-  raw query output is never echoed; helper stderr goes to a temp file and only a class and length are printed.
+- Target selection: `$1` is matched by literal equality (`case "$1" in luks-monitor-host-timer) ...;; claude-cost-capture) ...;; *) exit 64`)
+  against the target table; the matched arm assigns constants `W`, `NAME`, `PRED`. `$1` is never interpolated into SQL, a
+  marker, a path or a curl config; exit 64 prints `target_len=<n>`, never the value. `W` is asserted `^[0-9]{1,6}$`; after
+  assembly `$` may appear in the SQL only as `$BS_TABLE` / `$BS_TABLE_S3`; `BS_TABLE` and `BS_TABLE_S3` are unset before the
+  helper runs. The workflow's target loop is a literal list.
+- Marker lines `deadman-feeder: target=<t> verdict=<v> n=<n> newest_dt=<..>` and `CANNOT BEAT: ...`. `newest_dt` is printed only
+  if it matches `^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]{8,16}$`, else `unparsed`; no other remote-derived string is ever echoed
+  and `CANNOT BEAT:` lines contain only script literals. On a withhold the marker also carries two counts-only diagnostics
+  from a second constant query over the same window (`any_rows`: same identifier/unit/host, no message filter;
+  `fail_rows`: same plus message `LIKE 'FAIL (%'`) for luks-monitor, so one line separates host-dark (`any_rows=0`), a FAIL row
+  (encryption possibly not in effect) and a shipper outage; no row text is echoed. The raw query output is never echoed; helper
+  stderr goes to a temp file and only a class and length are printed.
 - Verdicts: `beat` (exit 0), `qualifying_row_heartbeat_paused` (exit 0, nothing sent), `no_qualifying_row` (exit 3,
   the dead-man's input is absent), `query_failed` (exit 3, the query could not be run or its answer could not be
   read), `beat_failed` (exit 4: heartbeat not unique, URL shape, paused not boolean, API or delivery fault),
@@ -196,16 +226,25 @@ Behavior and contract (modelled on `inngest-probe-heartbeat-feeder.sh`, which st
   returns ONE row: `{"n":"0","newest":"1970-01-01 00:00:00"}`; ClickHouse quotes 64-bit integers, so `n` arrives as a
   JSON string. The script accepts `n` as a string or number matching `^[0-9]+$`, checks `n > 0` BEFORE touching
   `newest`, and treats zero lines, more than one line, a non-object, or a non-numeric `n` as `query_failed`.
-  `newest` is informational only (printed sanitized in the marker). There is deliberately no client-side age check:
+  `newest` is informational only. The helper's exit status is checked first: on non-zero, stdout is discarded unread (the
+  helper uses `--fail-with-body`) and only a class and length from the stderr temp file are printed; a line lacking `n` or carrying
+  an `exception` key is `query_failed`, nothing from it printed. `n > 0` is decided by a string test (`^[0-9]{1,18}$` and `!= 0`),
+  not bash arithmetic. There is deliberately no client-side age check:
   the SQL window (both `UNION ALL` arms) is the single place the window lives, pinned by the suite's SQL-text pins and
   proven live by Phase 0.1 (review cut a second chokepoint as unasked machinery).
-- Transport: every curl carries `--max-time` and `--connect-timeout`, no `--retry`, and success is an explicit 2xx
-  status check (a 3xx or 429 is `beat_failed`). Any value echoed into a marker or `::error::` line has CR/LF removed.
+- Transport: every curl IN THIS SCRIPT (the helper's own curl is unchanged) carries `--max-time` and `--connect-timeout`, no
+  `--retry`, `--disable --noproxy '*'`, `2>/dev/null`, and the beat uses `-o /dev/null -w '%{http_code}'` with an explicit 2xx
+  check (a 3xx or 429 is `beat_failed`). Copied from the sibling: `TOKEN_RE` shape guard before the token enters curl config, the
+  four-variable xtrace refusal (including `BETTERSTACK_API_TOKEN_READONLY`), the TLS/DNS env scrub. The ping URL is a bearer
+  secret GitHub cannot mask: it is passed on stdin config and never printed (pinned for every verdict, including a 4xx body
+  fixture carrying a credential-shaped string).
 - Heartbeat resolution: GET `https://uptime.betterstack.com/api/v2/heartbeats?per_page=250` with
   `BETTERSTACK_API_TOKEN_READONLY` on curl stdin config, exact name, exactly one match, no further page, `paused` a
   JSON boolean, URL matching `^https://uptime\.betterstack\.com/api/v1/heartbeat/[A-Za-z0-9]+$`.
-- ONE beat call site, `beat_once`, which has no `/fail` arm at all (a withheld beat times out and pages; a delivered
-  `/fail` would be a different incident class the ruling forbids).
+- ONE beat call site, `beat_once`, copied from the sibling WITHOUT `BEAT_MODE` and WITHOUT the `${HB_URL%/}/fail` branch or a
+  `fail_beat` verdict (the sibling has all three; a verbatim copy would carry the `/fail` arm). The script's comments never
+  contain the literal `/fail`; the suite strips comments before grepping, asserts exactly two `curl` invocations (the API GET
+  and `beat_once`) and that only `beat_once` reads `HB_URL`. A withheld beat times out and pages.
 - No clock seam (nothing client-side depends on the clock); the same TLS/DNS env scrub as the sibling.
 
 ### Workflow: `.github/workflows/scheduled-deadman-heartbeat-feeder.yml`
@@ -214,15 +253,24 @@ Behavior and contract (modelled on `inngest-probe-heartbeat-feeder.sh`, which st
 the template; justification: the Better Stack heartbeat is the paging surface and an Inngest-fired or schedule-only
 feeder would false-page). Triggers exactly `schedule: '0 * * * *'` and `workflow_dispatch: {}`; top-level
 `concurrency: group: scheduled-deadman-heartbeat-feeder, cancel-in-progress: false`; `permissions: contents: read`;
-one job, `timeout-minutes: 8`; one step that loops over both targets (`bash scripts/deadman-heartbeat-feeder.sh "$t"`)
-with the sibling's marker-line discipline and exit-status-as-data capture (`|| rc=$?`); an `if: always()`
+one job, `timeout-minutes: 6`; `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` with
+`persist-credentials: false`; only the feeder step carries `BETTERSTACK_QUERY_HOST|USERNAME|PASSWORD` and
+`BETTERSTACK_API_TOKEN_READONLY` in `env:`; no `${{ }}` inside a `run:` block; one step that loops over both targets
+(`for t in luks-monitor-host-timer claude-cost-capture; do rc=0; out="$(bash scripts/deadman-heartbeat-feeder.sh "$t" 2>&1)" || rc=$?; ...; done`)
+with the sibling's `strip_log_injection` verbatim and exit-status-as-data capture; the loop never breaks on a failing
+target; each surviving line must match `^deadman-feeder: target=[a-z-]+ verdict=[a-z_]+( [a-z_]+=[A-Za-z0-9:._-]{0,40})*$` or
+`^CANNOT BEAT: ` (a non-matching line is counted, not printed; the raw blob is never echoed); a final step output
+`all_decided=true` is written only if every target exited 0 with a deciding verdict (missing = Sentry `error`); on verdict
+`qualifying_row_heartbeat_paused` the step emits `::warning::deadman heartbeat <target> is UNARMED (paused): no page can fire`
+every run, so an unarmed state is never silent; the workflow is census Tier A (names none of `DOPPLER_TOKEN*`, `HCLOUD_TOKEN`),
+declares NO `environment:`, and a suite pin keeps it that way. An `if: always()`
 `./.github/actions/sentry-heartbeat` step, `monitor-slug: scheduled-deadman-heartbeat-feeder`, `ok` only when every
 target exited 0 with a deciding verdict.
 
 ### Terraform
 
 `uptime-alerts.tf`, two resources copied from `inngest_server_probe`: names `soleur-luks-monitor-host-timer-prd`
-(grace 3600) and `soleur-claude-cost-capture-prd` (grace 7200), `period = 3600`, `paused = true`,
+(grace 7200, CTO-ruled over the original 3600) and `soleur-claude-cost-capture-prd` (grace 7200), `period = 3600`, `paused = true`,
 `lifecycle { ignore_changes = [paused] }`, `policy_id` gated on `var.betterstack_paid_tier`, `email = true`,
 `push = true` (sibling parity, #11068). No `doppler_secret`.
 
@@ -232,7 +280,7 @@ target exited 0 with a deciding verdict.
 stale comment lines. `claude_cost_daily_burn` and `claude_spend_runbook_url` stay.
 
 `apply-web-platform-infra.yml`: keep the four `-target=` lines (a bare `-target` on an address with no
-configuration plans its delete, the #9062 precedent) and add `-target=betteruptime_heartbeat.luks_monitor_host_timer`
+configuration plans its delete; precedent: the census's `INTENDED_DESTROYS` entries for the #8714 ADR-096 5.4 deletes) and add `-target=betteruptime_heartbeat.luks_monitor_host_timer`
 and `-target=betteruptime_heartbeat.claude_cost_capture`. The expected plan is 2 creates + 4 deletes; the destroy
 guard demands a line `[ack-destroy]` in the merge commit message (prepared in the PR body; the PR is not merged
 here). Whether the plan shows exactly those four deletes is UNVERIFIED until CI runs it; the PR body says so.
@@ -256,8 +304,9 @@ measurement). Record in the PR body. If the lag exceeds 2 h, widen grace (ruling
 is skipped, the lag claim reads "unmeasured at merge" and the arming precondition (two consecutive
 `qualifying_row_heartbeat_paused` runs per target) is the lag gate.
 0.3 Record the 27 h archive-scan latency in the PR body; add a cheap implied `raw LIKE` pre-filter only if it exceeds 30 s.
-0.4 Re-measure watchdog `workflow_dispatch` gaps and queue per `## Research Insights`; widen the luks grace to 7200
-if the beat-to-beat maximum exceeds 6500 s.
+0.4 Re-measure watchdog `workflow_dispatch` gaps and queue per `## Research Insights`; both graces are already 7200
+(CTO-ruled); if the observed beat-to-beat maximum plus one lost slot exceeds 10800 s, stop and report (that is a
+ruling-level change).
 0.5 One-time verbatim-move check: diff each moved predicate against the deleted `*_sql` local (`git show origin/main:...`)
 and record "identical minus the window conjunct" in the PR body. This is NOT a permanent suite check (the base text
 disappears after merge).
@@ -276,12 +325,22 @@ ClickHouse; Phase 0.1 is the live positive control).
 
 - `scripts/deadman-heartbeat-feeder.sh`; `.github/workflows/scheduled-deadman-heartbeat-feeder.yml`.
 - `apps/web-platform/infra/sentry/cron-monitors.tf`: `sentry_cron_monitor.scheduled_deadman_heartbeat_feeder`,
-  `name = "scheduled-deadman-heartbeat-feeder"`, `crontab = "0 * * * *"`, `checkin_margin_minutes = 60`,
-  `max_runtime_minutes = 8` (floor `ceil(12 + 30 + 8) = 50`), with a comment block in the file's style.
+  `name = "scheduled-deadman-heartbeat-feeder"`, `crontab = "0 * * * *"`, `checkin_margin_minutes = 60` (the parity ceiling,
+  so no headroom to widen later), `max_runtime_minutes = 6` with workflow `timeout-minutes: 6` (the sibling's values): using the
+  OBSERVED queue max, 12 clock + 40.6 queue + 6 runtime = 58.6 <= 60 (the parity floor with the 30 min allowance is 48). The
+  comment block carries: the clock worst case (12 min), the measured queue max (2438 s, 40 zot-watchdog runs), the sum, the
+  reading "missed = feeder dark; error = withheld or failed, not feeder broken", the ADR-248 second-clause line, and the
+  re-measure command (`gh run list --workflow scheduled-deadman-heartbeat-feeder.yml ...`). Under the `schedule:` fallback alone
+  (2-7 h delivery) this monitor reports missed and the heartbeats page; that is the intended "clock dark" signal.
   `cron-monitor-alerts.tf`: add the label to `cron_monitor_alert_unrouted` ("the Better Stack heartbeats are the
   paging surface; route after the first measured check-in (#11631)"). Applied by `apply-sentry-infra.yml`.
-- `apps/web-platform/server/watchdog-dispatch-table.ts`: the CTO-ruled row, `intervalMinutes: 60`, eligibility
-  string as ruled. `sentry-monitor-iac-parity.test.ts`: add the slug to the expected set (`expect(new Set(WATCHDOG_DISPATCH_TABLE.map(...)))`).
+- `apps/web-platform/server/watchdog-dispatch-table.ts`: the CTO-ruled row, `intervalMinutes: 60`, with the literal
+  `workflowFile: "scheduled-deadman-heartbeat-feeder.yml",` on a non-comment line (`heartbeat-reprovision-parity` reads the
+  table as text) and this eligibility string: "Feeds the dead-man's-switch heartbeats for two checks that live on the Inngest
+  execution host (the web-1 luks-monitor host timer and the cost markers Inngest crons emit, #11631); the heartbeats are the
+  paging surface. An Inngest-fired feeder would stop beating during any scheduler or web-1 outage while the 27 h / 24 h row
+  windows still read healthy, so the page would blame the timer or cost path for a scheduler fault (ADR-248 amendment
+  2026-10-11, second clause)." `sentry-monitor-iac-parity.test.ts`: add the slug to the expected set (`expect(new Set(WATCHDOG_DISPATCH_TABLE.map(...)))`).
 - `.github/workflows/infra-validation.yml`: a step running the new suite beside the other alert guards, and the
   `paths:` entries `scripts/deadman-heartbeat-feeder.sh`, `.github/workflows/scheduled-deadman-heartbeat-feeder.yml`
   (neither is under `apps/*/infra/**`; the file's own convention for such guard subjects).
@@ -300,20 +359,30 @@ the `workspaces-luks.tf` comment ("The runtime proof that the timer fires is"): 
   `arming_pending: { tracking_issue: 11631 }`, `exempt_reason` naming the archive-reading feeder and why no host replace
   applies. Rewrite the `workspaces_luks` row comment (the line naming `logtail_exploration_alert.luks_monitor_host_timer_dark`) and `exempt_reason` clause that name the old alert.
 - `apps/web-platform/infra/luks-monitor-install.test.sh`: rewrite Guard 1 (from `dark = block(alerts, "logtail_exploration", "luks_monitor_host_timer_dark")` through the `main_runs` target loop) to assert the heartbeat
-  (resource exists, `period` 3600, `grace` 3600, `paused = true`, `ignore_changes = [paused]`, name, policy gate),
+  (resource exists, `period` 3600, `grace` 7200, `paused = true`, `ignore_changes = [paused]`, name, policy gate),
   that `logtail_exploration[_alert].luks_monitor_host_timer_dark` are ABSENT, that no logs exploration other than
   `workspaces_luks_deadman_fired` reads the luks-monitor tag, that the apply targets the heartbeat and keeps the two
   destroy targets, and that the runbook heading anchor resolves. Mutants (the `G1-*` rows): re-point 1-2/1-4/1-12/1-8/1-9/1-13
   at the heartbeat; MOVE predicate mutants (1-1, 1-5a, 1-6, 1-6b, 1-11, 1-H1, 1-H2) and the needle-vs-`luks-monitor.sh`
   pin (1-5b) to the new suite; keep 1-7, 1-10, 1-14..1-17 and the Row-10 starter scan.
 - `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`: drop every `claude_cost_capture_dark` expectation
-  (the header bullet, the `names.count("claude_cost_capture_dark")` check, the `n != "claude_cost_capture_dark"` OR guard, the capture-dark window/operator/arm-B/emitter checks, the `HDARK` heredoc header, and the capture-dark mutants such as `Q2`), keep `claude_cost_daily_burn`, and re-check
-  that the discovery floor ("fewer than 3") still holds with two explorations left plus the 524 one.
+  (the header bullet, the `names.count("claude_cost_capture_dark")` check, the `n != "claude_cost_capture_dark"` OR guard, the capture-dark window/operator/arm-B/emitter checks, the `HDARK` heredoc header, and the capture-dark mutants such as `Q2`), keep `claude_cost_daily_burn`, and fix the floors
+  deterministically: the #8611 section slice (header to the next `# ── #`) holds three explorations today and TWO after the
+  deletion (`inngest_step_524`, `claude_cost_daily_burn`), so lower the `len(names) >= 3` discovery floor, its message and the
+  header comment to 2; delete the `names.count("claude_cost_capture_dark")` check; reduce `_floor=104` and the `MUT_SKIP` floor of
+  71 by exactly the rows removed; verify by running the suite.
 - `apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh`: comment-only name list (the line listing `luks_monitor_host_timer_dark`).
 - Run `heartbeat-reprovision-parity.test.ts`, `heartbeat-live-reconcile.test.ts`, `sentry-monitor-iac-parity.test.ts`.
 
 ### Phase 5: docs, C4, ADRs
 
+- Runbook rule for the rewritten sections: the "Host-timer liveness" section keeps the three-causes list and leads, in order,
+  with (0) check the Sentry monitor `scheduled-deadman-heartbeat-feeder` and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml`
+  (a dark clock false-pages this heartbeat), (1) `gh run view <id> --log | grep 'deadman-feeder: target=luks-monitor-host-timer'`
+  (the `any_rows` / `fail_rows` counts separate host-dark, FAIL row and shipper outage), (2) the FAIL-row decode (step D) via
+  `scripts/betterstack-query.sh`, (3) the installer re-fire (step E); no `ssh`, `systemctl` or `journalctl` before a
+  `### Last resort` heading; the "Closing #8706" paragraph is rewritten to point at the heartbeat's first verified beat (it
+  cites a follow-through script deleted by #10371). The same step 0 goes into the `betterstack-log-query.md` entries.
 - Runbooks: `workspaces-luks-cutover-6604.md` (the "Better Stack logs alert `soleur-luks-monitor-host-timer-dark-prd`" bullet, the `### Host-timer liveness alert (#8706)` body, the "Closing #8706" paragraph), `betterstack-log-query.md` (the two standing-alarms entries: mark both retired, link the heartbeats),
   `inngest-server.md` ("How the external watchdogs are triggered" list and checklist item 4: add the new workflow
   and the margin; plus the ruling's note: after a host replace plus `op=resume`, the inngest server-probe heartbeat
@@ -341,6 +410,7 @@ workflow, do not unpause, do not resolve incidents.
 - `apps/web-platform/infra/workspaces-luks.tf` (comment only)
 - `apps/web-platform/infra/luks-monitor-install.test.sh`
 - `apps/web-platform/infra/sentry/cron-monitors.tf`
+- `apps/web-platform/infra/betterstack-alert-structure.test.sh` (`CENSUS_FLOOR_ALERTS` and `CENSUS_FLOOR_EXPLORATIONS` are exact counts of 19; both become 17; its mutation row M-10b states "the floor is exactly today's count")
 - `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`
 - `apps/web-platform/server/watchdog-dispatch-table.ts`
 - `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`
@@ -412,32 +482,32 @@ measured reason heartbeats are used (see the table in `betterstack-logs-alerts.t
 
 ```yaml
 liveness_signal:
-  what: Better Stack heartbeats soleur-luks-monitor-host-timer-prd and soleur-claude-cost-capture-prd (period 3600; grace 3600 / 7200) plus the Sentry cron monitor scheduled-deadman-heartbeat-feeder
+  what: Better Stack heartbeats soleur-luks-monitor-host-timer-prd and soleur-claude-cost-capture-prd (period 3600; grace 7200 for both) plus the Sentry cron monitor scheduled-deadman-heartbeat-feeder
   cadence: hourly (watchdog clock slot; schedule fallback)
-  alert_target: Better Stack escalation policy (team email and push) for the heartbeats; Sentry issue for a missed or error check-in (unrouted at first, the two-PR rule)
+  alert_target: Better Stack escalation policy (team email and push) for the heartbeats once armed; Sentry issue for a missed or error check-in, NOT emailed until the routing PR (two-PR rule; tracked by a follow-up issue)
   configured_in: apps/web-platform/infra/uptime-alerts.tf and apps/web-platform/infra/sentry/cron-monitors.tf
 error_reporting:
   destination: Sentry cron monitor check-in status error (no exception path; the feeder is a shell step)
   fail_loud: a deadman-feeder marker line with the verdict, a workflow ::error:: annotation, and the heartbeat timing out
 failure_modes:
   - mode: no qualifying nightly row in the old window (host timer dark, luks FAIL row, Vector or Logs outage)
-    detection: feeder verdict no_qualifying_row withholds the beat; the heartbeat times out
-    alert_route: Better Stack heartbeat incident to the owner policy; Sentry error check-in
+    detection: workflow run log marker 'deadman-feeder: target=<t> verdict=no_qualifying_row' with a ::error:: annotation; Sentry monitor scheduled-deadman-heartbeat-feeder check-in status error; the heartbeat times out
+    alert_route: Better Stack heartbeat incident to the owner policy once armed (layer: the paging surface); Sentry monitor error issue (not emailed until the routing PR)
   - mode: feeder cannot run (clock dark on both hosts, workflow disabled, GitHub down)
-    detection: heartbeat times out after period plus grace; Sentry missed check-in
-    alert_route: Better Stack heartbeat incident; Sentry missed-check-in issue
+    detection: Sentry monitor scheduled-deadman-heartbeat-feeder missed check-in (interval 60 + margin 60 min); the heartbeat times out after period plus grace
+    alert_route: Sentry monitor issue (not emailed until the routing PR); Better Stack heartbeat incident once armed
   - mode: archive query or API fault (credential rotated, helper failure, heartbeat not unique)
-    detection: verdict query_failed or beat_failed, exit 3 or 4, Sentry error
-    alert_route: Sentry issue (unrouted initially); the heartbeat times out and pages if it persists
+    detection: workflow run log 'verdict=query_failed' or 'verdict=beat_failed' with a ::error:: annotation, exit 3 or 4; Sentry monitor error check-in
+    alert_route: Sentry monitor issue (not emailed until the routing PR); the heartbeat times out and pages once armed if it persists
   - mode: spurious beat (SQL window or predicate widened)
-    detection: the committed suite and its mutation rows; stale_row second chokepoint at run time
+    detection: CI only - the committed suite's SQL-text pins and mutation rows; there is NO run-time chokepoint (the window lives only in the SQL), so Phase 0.1 is the live proof
     alert_route: CI red before merge
 logs:
   where: GitHub Actions run logs for the workflow (marker lines only, counts and verdicts, no row content); Better Stack heartbeat timeline
   retention: GitHub default run-log retention (90 days); Better Stack heartbeat history per plan
 discoverability_test:
   command: bash scripts/deadman-heartbeat-feeder.sh --selftest
-  expected_output: deadman-feeder: selftest=ok
+  expected_output: "deadman-feeder: selftest=ok"
 ```
 
 ## Task Design
@@ -449,7 +519,7 @@ tasks:
     services: reads the Better Stack Logs ClickHouse endpoint (hot plus s3 archive) and the Better Stack uptime API (read-only token); writes one GET to a heartbeat ping URL; writes a Sentry check-in
     next: nothing (a missing beat is the signal; Better Stack pages on timeout)
     human_reentry: gh workflow disable scheduled-deadman-heartbeat-feeder.yml stops the clock and the fallback; gh workflow run reruns it; the owner pauses or unpauses the heartbeat in Better Stack
-    dedupe: the beat is idempotent by construction (a repeat beat inside one period only resets the same timer); the watchdog clock skips a slot already covered by a run created in that slot; no tracker issue is filed by this workflow
+    dedupe: the beat is idempotent by construction (a repeat beat inside one period only resets the same timer); the watchdog clock skips a slot already covered by a run created in that slot; a collision duplicate (two dispatches in one slot) produces two independent query-and-beat runs, both safe because the beat is idempotent and no state is written; no tracker issue is filed by this workflow
     source_dedupe: not a ticket source
 ```
 
@@ -486,7 +556,15 @@ in_transit:
 No new ordinal. Amend, by dated appended sections: **ADR-218** (decision: a once-a-day absence alarm cannot be a native
 logs alert above the 900 s ceiling and is not reliably evaluable over the hot window; such dead-mans are
 archive-fed heartbeats; both alerts retired; Alternatives: host-side ping and hourly host row, both rejected for
-needing a `user_data` change); and **ADR-248** (table row 5, second clause). These are tasks of Phase 5, not follow-ups.
+needing a `user_data` change); and **ADR-248** (table row 5, second clause). The ADR-218 amendment states the new Terraform-managed logs-alert count
+(17 after retiring two of 19), marks the 2026-09-27 "query_period = 97200 measured not clamped" claim and the #8611
+`claude_cost_capture_dark` absence-alarm paragraph as superseded by name, and records that the 2026-10-12 standing rule
+("absence alerts on multiplexed sources count emitting hosts, never rows") is preserved (the luks predicate keeps
+`host_name='soleur-web-platform'`). The ADR-248 amendment broadens the second clause to checks "on or emitted from the Inngest
+execution host", notes the incident mirror (#10390) is covered only in ADR-298 so this is the fifth table row, records +24
+runs/day and that the :00 slot now has all five rows due at once on both hosts (up to 10 simultaneous ticks that each mint a
+token), and adds one ADR-033-corollary sentence: the feeder runs on a GitHub Actions runner and survives a total web-1 loss only
+while two web hosts exist (ADR-248 reversal trigger 3). These are tasks of Phase 5, not follow-ups.
 
 ### C4 views
 
@@ -506,13 +584,13 @@ The ADR amendments describe the target state and ship in this PR; nothing is def
 ### Guard 1 — the feeder never authorizes a beat without a qualifying row
 
 **Property.** A request reaches a heartbeat URL only when the archive query, run with the target's own window and
-predicate, answered a positive count with a parsable `newest` no older than the window, and the heartbeat resolved
-uniquely and unpaused; no code path sends `/fail`.
+predicate, answered a positive count `n` (the window lives only in the SQL text), and the heartbeat resolved uniquely and
+unpaused; no code path sends `/fail`.
 
 **Assembly.** The chokepoints are: (1) the SQL the script sends (window conjuncts in BOTH `UNION ALL` arms, the
-`_row_type = 1` archive filter, the predicate); (2) the client age check (`stale_row`); (3) `resolve_heartbeat`;
-(4) the single `beat_once` call site; (5) the EXIT trap; (6) the target table (every target has window, name and
-predicate). Everything that can reach the heartbeat URL flows through `beat_once`; the suite greps the script for
+`_row_type = 1` archive filter, the predicate); (2) `resolve_heartbeat`;
+(3) the single `beat_once` call site; (4) the EXIT trap; (5) the target selection (`case "$1"` against the literal table; no
+fall-through); (6) the target table (every target has window, name and predicate). Everything that can reach the heartbeat URL flows through `beat_once`; the suite greps the script for
 any other `curl` and for the literal `/fail`. Members drift (a third target), so the suite derives the target set
 from the script's table and checks the workflow loop, the manifest rows and the Terraform names against it.
 
@@ -528,6 +606,7 @@ from the script's table and checks the workflow loop, the manifest rows and the 
 | 6 | the EXIT trap lets an unknown status exit 0 | RED (trap_remapped fixture) |
 | 7 | skip the paused check (beat while paused) | RED (paused fixture records a beat) |
 | 8 | the guard's own dispatch: run the suite with the feeder pointed at an empty target table | RED (anti-vacuity: "0 targets checked" is a failure) |
+| 10 | make the unknown-target arm fall through to the first target, or restore the sibling's `BEAT_MODE`/`/fail` branch or a `fail_beat` verdict | RED |
 | 9 | answer-contract fixtures: an empty-window row `{"n":"0","newest":"1970-01-01 00:00:00"}`, a string `n`, two lines, zero lines, a non-numeric `n` | RED when any is mis-graded (`n:"0"` must withhold, `n:"1"` must beat, the rest `query_failed`) |
 
 **Harness rows.** (a) Edit the SUITE: change the stub evaluator so every row qualifies and ignores the window; the 28 h,
@@ -571,7 +650,11 @@ or a `session-N.scope` unit, a `FAIL (...)` row, a helper row, wrong identifier)
 **Harness rows.** Evaluator-side edit: make the stub evaluate `LIKE` as always-true; the negative fixtures must FAIL.
 Must-PASS non-canonical: luks conjuncts reordered and reflowed (same set) stay green (the retired G1-H2 row).
 
-**Anchor.** As Guard 1; plus a printed note that the stub evaluator is not ClickHouse.
+**Anchor.** As Guard 1; plus a printed note that the stub evaluator is not ClickHouse. Residual, unchanged from the retired
+alerts: `n > 0` proves a matching row reached the shared Logs source, not that the timer ran; any writer to that source can
+forge the plain-JSON fields (only `_SYSTEMD_UNIT` is journald-stamped). The independent `workspaces-luks-verify` job is the
+cross-check. Fixtures capture only the aggregate one-line answer (`n`, re-synthesized `newest`); no real `raw` row is ever saved
+to a fixture or pasted in the PR body (`cq-test-fixtures-synthesized-only`).
 
 ### Guard 3 — no logs alert above 900 s, and the two retired ones stay gone
 
@@ -625,7 +708,7 @@ not source-grepped); `uptime-alerts.tf` blocks; `apply-web-platform-infra.yml` t
 | 2 | change `grace` or `period` or flip `paused` or drop `ignore_changes` | RED |
 | 3 | drop one target from the workflow loop | RED |
 | 4 | remove a new heartbeat `-target` from the apply workflow | RED |
-| 5 | change the watchdog row interval or remove the row | RED (existing parity test) |
+| 5 | change the watchdog row interval or remove the row | RED via the slug-set equality in `sentry-monitor-iac-parity.test.ts` (`heartbeat-reprovision-parity` stays green because the workflow keeps `schedule:`); the new suite also greps the table for the exact `workflowFile` line |
 | 6 | the discovery of Terraform heartbeats returns none | RED (anti-vacuity) |
 
 Scope note: luks `period`/`grace`/`paused`/`ignore_changes` are pinned once, in the rewritten
@@ -706,6 +789,8 @@ Pre-merge (agent-verifiable; each names its command):
 - [ ] `cd apps/web-platform && bunx vitest run test/server/inngest/sentry-monitor-iac-parity.test.ts` passes; `bun test plugins/soleur/test/heartbeat-reprovision-parity.test.ts plugins/soleur/test/heartbeat-live-reconcile.test.ts` pass.
 - [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` and `bash plugins/soleur/test/c4-model-freshness.test.sh` pass after the count edits.
 - [ ] `bash apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh`, `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh`, `cd apps/web-platform && bunx vitest run test/server/inngest/function-registry-count.test.ts`, `bun test plugins/soleur/test/terraform-target-parity.test.ts` and `bash scripts/lint-orphan-test-suites.sh` pass.
+- [ ] `env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp timeout 15s bash scripts/deadman-heartbeat-feeder.sh --selftest </dev/null 2>/dev/null` prints `deadman-feeder: selftest=ok` and exits 0 well inside 15 s with zero network calls (the suite stubs `curl` and `betterstack-query.sh` to fail loudly if invoked); the selftest path returns 0 through the EXIT trap as a decided state.
+- [ ] The feeder workflow names no `DOPPLER_TOKEN*` / `HCLOUD_TOKEN` and declares no `environment:` (census Tier A), is pinned by SHA, and carries no `${{ }}` inside a `run:` block (suite pins).
 - [ ] `actionlint .github/workflows/scheduled-deadman-heartbeat-feeder.yml .github/workflows/infra-validation.yml` is clean, and the suite's absence greps handle grep rc 2 (an unreadable file) as a failure, not as "absent".
 - [ ] `bash scripts/deadman-heartbeat-feeder.sh --selftest` prints `deadman-feeder: selftest=ok` (identical to the Observability block's `expected_output`) and exits 0 with no network or credentials.
 - [ ] `git diff --name-only origin/main...HEAD` contains nothing matching `luks-monitor\.(sh|service|timer)$`, `server\.tf`, `cloud-init` or `scripts/inngest-probe-heartbeat-feeder.sh`; the A6 file is present, `status: draft-unsigned`, with no signature or attestation text added.
@@ -733,8 +818,8 @@ Post-merge / owner-gated (not performed by this work; text in the PR body only):
 ## Owner-gated appendix (draft text for the PR body; do not execute)
 
 1. Merge note: put a line `[ack-destroy]` in the merge commit message (4 deletes are expected: two explorations, two alerts).
-2. Post-apply read-only checks: the two heartbeats exist paused (`GET /api/v2/heartbeats` by exact name, id captured), the Sentry monitor exists, feeder runs show `qualifying_row_heartbeat_paused` for both targets for at least two consecutive hourly slots, and the Sentry check-ins are 2xx.
-3. Arm block with read-back: the "Arming the probe heartbeat (#9703)" block in `inngest-server.md`, with only two parameters changed per heartbeat (`NAME` and the poll deadline `period + grace`; the id is resolved by exact name, not hard-coded) and the forced dispatch pointed at `scheduled-deadman-heartbeat-feeder.yml`. Read-back: runs created since `ARM_AT` report `verdict=beat` for the target, then a second `beat` one slot later, then the state `<id> up false 3600 <grace>`. Only then a record PR drops `arming_pending`. Detach under `setsid` when the budget exceeds the 30-minute Monitor cap.
+2. Post-apply read-only checks (credential-free liveness read, usable by any agent since the repo is public: `curl -fsS 'https://api.github.com/repos/jikig-ai/soleur/actions/workflows/scheduled-deadman-heartbeat-feeder.yml/runs?per_page=3'`, expect `"conclusion": "success"` on runs in consecutive hourly slots; markers via `gh run view <id> --log | grep 'deadman-feeder:'`): the two heartbeats exist paused (`GET /api/v2/heartbeats` by exact name, id captured), the Sentry monitor exists, feeder runs show `qualifying_row_heartbeat_paused` for both targets for at least two consecutive hourly slots, and the Sentry check-ins are 2xx.
+3. Arm block with read-back (`arm-heartbeats.sh --arm-one`, ADR-117 #9980, is deliberately NOT used: its fixed 150 s poll budget assumes a 60 s feeder; this hourly feeder arms through the #9703 runbook block with a forced dispatch and a `period + grace` deadline): the "Arming the probe heartbeat (#9703)" block in `inngest-server.md`, with only two parameters changed per heartbeat (`NAME` and the poll deadline `period + grace`; the id is resolved by exact name, not hard-coded) and the forced dispatch pointed at `scheduled-deadman-heartbeat-feeder.yml`. Read-back: runs created since `ARM_AT` report `verdict=beat` for the target, then a second `beat` one slot later, then the state `<id> up false 3600 <grace>`. Only then a record PR drops `arming_pending`. Detach under `setsid` when the budget exceeds the 30-minute Monitor cap.
 4. Incident resolve (WRITE, owner token): `POST https://incidents.betterstack.com/api/v3/incidents/{incident_id}/resolve` with body `{"resolved_by": "<owner email>"}` and `Authorization: Bearer $BETTERSTACK_API_TOKEN` <!-- verified: 2026-10-30 source: https://betterstack.com/docs/uptime/api/resolve-an-ongoing-incident/ -->. Ids: luks-monitor `1023423999`; cost-capture id from the `<!-- betterstack-incident id=<n> -->` marker in the body of #11049 (`gh issue view 11049 --json body`). The token scope accepted by the v3 host is UNVERIFIED (the repo's reads use the v2 uptime host); read the incident back before and after. The incident mirror then closes #11048 and #11049. Deleting an alert may or may not resolve its open incident: unverified, hence the explicit resolve.
 
 ## Dependencies & Risks
@@ -744,11 +829,15 @@ Post-merge / owner-gated (not performed by this work; text in the PR body only):
 - **Stub evaluator is not ClickHouse**: a predicate that the stub accepts and ClickHouse rejects (or the reverse) is possible; mitigated by Phase 0.1 (live positive control) and by keeping the predicate text identical to the one that ran in production as an alert.
 - **Query cost**: a 27 h `s3Cluster` scan hourly; Phase 0.3 measures; `run_sql` has a 60 s cap.
 - **Coverage gap** between the destroy and the owner's arm: stated above; accepted because the replaced controls were always-red and informationless. The Sentry monitor is unrouted by its own alert rule; a vendor-default workflow may still email on error-level issues (`sentry/vendor-default-workflows.json`), unverified.
+- **Correlated failure (named).** The feeder trigger is the web-server clock on web-1 and web-2; the luks-monitor row is emitted by web-1's host timer. A web-1 outage withholds the row while web-2's clock still dispatches (correct page; holds only while two web hosts exist). A web-image fault or rollback that darkens both clocks leaves only the `schedule:` fallback (measured 7232-25229 s between runs), which can exceed even the 10800 s threshold, so a healthy host pages "luks timer dark" and the incident text cannot tell the two apart. Runbook step 0 for either heartbeat page: check the Sentry monitor `scheduled-deadman-heartbeat-feeder` and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml` before touching the timer (added to the Phase 5 runbook edits). Both dead-mans share one script, one workflow run, one Sentry monitor and one Logs credential: shared fate, accepted.
+- **Unarmed is silent-green.** `qualifying_row_heartbeat_paused` exits 0 and `arming_pending` has no expiry, so a never-armed pair reads green everywhere. Mitigation: the per-run `::warning::` UNARMED annotation, the PR-body first-line banner, and a dated arming deadline in the tracking issue body.
+- **Dark feeder is not emailed** until the Sentry monitor is routed in a second PR (the repo's two-PR rule); tracked by a third follow-up issue. Until then a dark feeder is visible only in Sentry and, once armed, as a heartbeat timeout.
+- **Provider delete semantics** for an alert with an open incident, and for a 404 on delete, are undocumented (`logtail` provider v11.2.0); a failed destroy fails the apply and blocks later merges until fixed. Ordering is by recorded state dependency (alert before exploration); confirm in the CI plan output. If the apply fails on the alert delete, the owner resolves the incident first and re-runs.
 - **Open PR #11601** edits the same `.tf` file: disjoint hunks.
 - **Destroy guard** needs `[ack-destroy]` on the merge commit; the census needs the `INTENDED_DESTROYS` rows; if the CI plan shows more than the four expected deletes, stop and report.
 - **The ADR-248 eligibility reading** ("a check on the substrate") was not verified by the CTO; the row stays regardless (false pages are the alternative).
 - A new suite may need a row in the affected-index files (`scripts/ci-pr-affected-audit.accept.tsv`) or `suite-shard-legs.tsv` depending on the CI selector; run `bash scripts/lint-orphan-test-suites.sh` and the selector self-check, and add the row the tool names.
-- Follow-ups (two GitHub issues created at ship time, each with a re-evaluation criterion and a milestone from `knowledge-base/product/roadmap.md`): (1) the ruling's key-continuity dead-man (probe bundle tracker) should reuse this feeder pattern; (2) remove the four retained destroy `-target` lines and census rows after the first verified apply. A deferral without an issue is invisible.
+- Follow-ups (three GitHub issues created at ship time: the two below plus (3) route `scheduled_deadman_heartbeat_feeder` into `sentry_alert.cron_monitor_failure.monitor_ids` after three measured check-ins, each with a re-evaluation criterion and a milestone from `knowledge-base/product/roadmap.md`): (1) the ruling's key-continuity dead-man (probe bundle tracker) should reuse this feeder pattern; (2) remove the four retained destroy `-target` lines and census rows after the first verified apply. A deferral without an issue is invisible.
 
 ## Domain Review
 
