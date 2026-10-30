@@ -7,18 +7,20 @@ Plan: `knowledge-base/project/plans/2026-10-30-feat-auth-mode-selects-agent-cred
 - 1.1 Write failing tests: `apps/web-platform/test/engine-binding-auth-mode.test.ts` (run present; no run + legacy; no run + pending throws unbound; no run + null state throws; state read error; run read error)
 - 1.2 Create `apps/web-platform/server/auth-mode-error.ts` (dependency-free leaf: reasons tuple + `ConversationAuthModeError`)
 - 1.3 Create `apps/web-platform/server/engine-binding-auth-mode.ts` (`readConversationBindingAuthMode`, `makeConversationAuthModeResolver`)
+- 1.3.1 Edit `apps/web-platform/server/agent-engine-persistence.ts`: optional `createdBy` filter on `getConversationRun`, `userId` filter on `getConversationBindingState`; extend `test/agent-engine-persistence.test.ts`; resolver tests add the co-member / decoy-run case
 - 1.4 Edit `apps/web-platform/server/agent-auth-mode.ts` to delegate; update its REMOVAL CHECKLIST (keep new modules; delete the AC10 test with the diagnostic)
 
 ## Phase 2: Core Implementation — lease honours the mode
 
 - 2.1 Write failing lease matrix in `apps/web-platform/test/byok-lease-credential-type.test.ts` (AC1-AC6, AC8, scenario 9; shared `managedResolver` fixture; mutation: remove the mode branch must fail the api-key test; reorder mode above the gates must fail the spy-never-called case)
   - 2.1.1 Update existing oauth cases to pass `managedResolver`
-- 2.2 Edit `apps/web-platform/server/byok-lease.ts`: `resolveAuthMode?` on args and slot; `resolveLeaseAuthMode`; reorder `fetchAgentCredentialIntoSlot` (gates, mode, then decrypt/shape under managed); JSDoc for third callers
+- 2.2 Edit `apps/web-platform/server/byok-lease.ts` (add `assertLeaseAlive(slot)` right after the resolver await; one `agent-credential-selected` breadcrumb `{ scheme }` on success): `resolveAuthMode?` on args and slot; `resolveLeaseAuthMode`; reorder `fetchAgentCredentialIntoSlot` (gates, mode, then decrypt/shape under managed); JSDoc for third callers
 - 2.3 Write failing five-branch forwarding test in `apps/web-platform/test/byok-resolver-delegation-workspace.test.ts` (Guard 1, incl. `{ restOnly: true }` must-pass row, exactly-five-branches floor)
 - 2.4 Edit `apps/web-platform/server/byok-resolver.ts`: required `LeaseModeOpts`, single `run` helper for all five branches, header comment
 - 2.5 Wire callers: `agent-runner.ts` startAgentSession and cc-dispatcher.ts pass `makeConversationAuthModeResolver`; `agent-runner.ts` routing lease, `cfo-on-payment-failed.ts`, `github-on-event.ts` pass `{ restOnly: true }`
 - 2.6 Write failing real-binding test `apps/web-platform/test/byok-lease-auth-mode-binding.test.ts` (AC7: flip binding between leases; legacy; pending; read error) and the AC10 divergence test; make them pass
-- 2.7 Pin `credentialScheme: credential.scheme` in both frame files (AC9) with `grep -c ... >/dev/null`
+- 2.7 Pin with `grep -c ... >/dev/null`: `credentialScheme: credential.scheme` and `setAuthScheme?.(credential.scheme)` (AC9), `resolveAuthMode: makeConversationAuthModeResolver` exactly once in each of `agent-runner.ts` and `cc-dispatcher.ts`, and `runWithByokLease(` exactly once in `byok-resolver.ts`
+- 2.8 Make the real-binding test's tenant mock table-aware (routes on table name, honours `conversation_id` / `created_by` / `user_id` eqs) with decoy runs; add AC5 cache tests with an oauth row, AC6 junk/spoof rows, AC16 member + legacy cases, AC17 breadcrumb
 
 ## Phase 3: Bind unbound agent-running conversations
 

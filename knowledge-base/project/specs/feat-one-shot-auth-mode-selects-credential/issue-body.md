@@ -11,7 +11,7 @@ Make the BYOK lease honour the conversation's authentication mode, fail-closed, 
 The friendly sign-in error, the subscription-token shape allowlist at `POST /api/keys`, and the `oauth_unusable` lease refusal (all merged 2026-10-29 under #11086 / #11523), and the owner re-saving the token (#11541). Neither of those issues is closed or edited by this work.
 
 User-Impact: Settings page component components/settings/agent-engine-settings.tsx (Authentication mode dropdown) and the Concierge chat sign-in path
-Fix-Size: 750 lines / 22 files
+Fix-Size: 750 lines / 23 files
 
 Ref #11086
 Ref #11541

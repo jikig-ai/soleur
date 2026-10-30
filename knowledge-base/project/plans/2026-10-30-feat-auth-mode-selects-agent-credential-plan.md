@@ -17,6 +17,28 @@ Tracker: #11591 (milestone "Phase 4: Validate + Scale", labels `type/feature`, `
 
 `lane:` is `cross-domain` because no `spec.md` exists for this branch (fail-closed default, the one-shot path skips brainstorm).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Sections enhanced:** Phases 1-2, Acceptance Criteria (AC3, AC5-AC7, AC16, AC17), Guard Contract rows, Test Scenarios, Observability, Risks, Domain Review.
+**Research agents used:** security-sentinel, spec-flow-analyzer, test-design-reviewer, observability-coverage-reviewer, a verify-the-negative grep sweep (Explore), plus the earlier plan-review panel (DHH, Kieran, code-simplicity, CTO, CPO, UX lead) and the CPO / CTO / CLO rulings.
+
+### Key Improvements
+1. Mode reads are scoped to the caller (`created_by` / `user_id` filters) so a co-member's conversation id cannot lend another member's mode (security P2-1).
+2. The post-resolver liveness check is restored; without it a scope that ended during the read still queried and decrypted a row, and the escape scenario could not be asserted (test-design P1, security).
+3. The wiring and forwarding guards are now falsifiable: two-file `grep -c` pins for the Agent-SDK call sites, identity (`toBe`) assertions per branch, a single-chokepoint count, a table-aware mock with decoy runs, and cache tests with an oauth row present.
+4. Success is observable: one closed-enum `agent-credential-selected` breadcrumb; failure modes cite telemetry layers; passive alerting stated honestly (no rule keys on `byok-lease`).
+
+### New Considerations Discovered
+- Legacy (pre-binding) conversations behave as Automatic, so P1 holds only for bound conversations; documented as an explicit exception (AC16, ADR-048 amendment).
+- A non-owner member's lease is still refused by the owner gate before any mode read when the key owner holds a subscription row; the bypass is #11594.
+- The operator-only `oauth_unusable` recovery sentence remains an open operator scope row; spec-flow rates the missing hint High because the failing conversation cannot self-recover (it must be restarted).
+- Verified (grep sweep): exactly five non-test `resolveKeyOwnerThenLease` callers, two `getAgentCredential` callers, five `runWithByokLease` branches, and three `conversations` inserts (ws-handler, support, auto-sync); `agent-on-spawn-requested.ts` calls `runWithByokLease` directly but only `getRestApiKey`.
+
+### Deepen-plan gate dispositions
+- 4.6 User-Brand Impact: present, threshold `aggregate pattern`: pass. 4.7 Observability: all five fields present, command verb allowlisted, literal `expected_output`; the probe string appears only after implementation, which is fine because Check 10 runs at ship time: pass. 4.8 PAT: no hits. 4.10 Encryption: no store, connection, `.tf`, migration or compose file: skip. 4.11 Guard Contract: `lint-guard-contract.py` green; assembly is structural (type, single helper, runtime floor): pass. 4.12 Scope Check: one unfenced section, no `unmapped` row, justifications present: pass. 4.13, 4.5, 4.55: no new autonomous task, network symptom or downtime operation: skip.
+- 4.9 UI-wireframe: the glob superset matches `components/settings/agent-engine-settings.tsx` and no `.pen` is referenced. Disposition: NOT halted. `wg-ui-feature-requires-pen-wireframe` defines UI surface as excluding copy/style, `ui-surface-terms.md` lists "Pure copy or style tweaks with no structural/layout change" as excluded, the CPO and UX lead both confirmed no new surface, and this run may only write under `knowledge-base/project/{plans,specs}/`, where a `.pen` (which belongs under `knowledge-base/product/design/`) cannot be committed. If a reviewer reads the glob as binding, the remedy is `pencil-setup --auto` plus a one-card wireframe at work time. Recorded in decision-challenges.md.
+
 ## Overview
 
 The "Authentication mode" dropdown (`managed` / `api-key`) in Settings > Agent engine is persisted and shown but never consulted when the Claude agent picks its secret. The pick happens in exactly one place, `fetchAgentCredentialIntoSlot` in `apps/web-platform/server/byok-lease.ts`: with the `CC_OAUTH_ENABLED` kill-switch on and an `anthropic_oauth` row saved, the subscription token wins and the `anthropic` api_key row is never read. An owner whose saved subscription token is unusable (the #11086 incident) therefore cannot say "use my API key" without deleting the token.
@@ -99,7 +121,7 @@ Detection fires: this changes a resolver/trust-boundary rule (credential selecti
 
 ### ADR
 
-- **Amend ADR-048** (`knowledge-base/engineering/architecture/decisions/ADR-048-operator-cc-oauth-credential-selection-by-consumer-class.md`) via `soleur:architecture`: dated amendment "Credential selection by the binding's auth mode". Decision text: for the Agent-SDK consumer class, selection is `anthropic_oauth` only when the kill-switch is on AND a row exists AND the date gate and owner gate pass AND the conversation binding's auth mode is exactly `managed`; `api-key` selects the `anthropic` row and never decrypts the subscription row; unreadable/invalid mode and a missing resolver fail closed with `fetch_failed`; `api-key` with no api_key row is `MissingByokKeyError`, never a subscription fallback. Add the alternatives considered (live workspace default; pre-resolving on every lease; lease reads the workspace itself; new error cause) with the rejection reason. Update the front matter `related` list with 11591.
+- **Amend ADR-048** (`knowledge-base/engineering/architecture/decisions/ADR-048-operator-cc-oauth-credential-selection-by-consumer-class.md`) via `soleur:architecture`: dated amendment "Credential selection by the binding's auth mode". Decision text: for the Agent-SDK consumer class, selection is `anthropic_oauth` only when the kill-switch is on AND a row exists AND the date gate and owner gate pass AND the conversation binding's auth mode is exactly `managed`; `api-key` selects the `anthropic` row and never decrypts the subscription row; unreadable/invalid mode and a missing resolver fail closed with `fetch_failed`; `api-key` with no api_key row is `MissingByokKeyError`, never a subscription fallback. Add the alternatives considered (live workspace default; pre-resolving on every lease; lease reads the workspace itself; new error cause) with the rejection reason. State the two documented lease-vs-diagnostic divergences (no run + `legacy`: probe `unbound`, lease `managed`; no run + `pending`: probe `unbound`, lease fails closed) and the one P1 exception (pre-binding conversations behave as Automatic). Update the front matter `related` list with 11591.
 - **Cross-reference ADR-233** with one line under its binding paragraph: the binding's `authMode` now also drives Agent-SDK credential selection (so "immutable binding" is load-bearing for credential selection, not only egress).
 - No new ADR, so no ordinal to claim; run `bash scripts/check-adr-ordinals.sh` against freshly fetched `origin/main` anyway as the work-phase gate.
 
@@ -126,7 +148,7 @@ TDD order inside every phase (`cq-write-failing-tests-before`): write the failin
 
 - Create `apps/web-platform/server/auth-mode-error.ts`: a dependency-free leaf (no imports) exporting `AUTH_MODE_ERROR_REASONS = ["unbound", "read_failed"] as const` and `class ConversationAuthModeError extends Error { reason }`. The lease imports it with `instanceof` (the lease already imports the tenant client, so the earlier "must not import the Supabase graph" rationale was false; the leaf keeps the error class free of that graph anyway).
 - Create `apps/web-platform/server/engine-binding-auth-mode.ts`, exporting only two functions:
-  - `readConversationBindingAuthMode(userId, conversationId): Promise<string | null>`: today's `makeAuthModeResolver` body (`getFreshTenantClient` + `AgentEnginePersistenceRepository.getConversationRun`), `null` when there is no run. The temporary diagnostic keeps using it.
+  - `readConversationBindingAuthMode(userId, conversationId): Promise<string | null>`: today's `makeAuthModeResolver` body (`getFreshTenantClient` + `AgentEnginePersistenceRepository.getConversationRun`), `null` when there is no run. The temporary diagnostic keeps using it. Both functions scope the read to the caller: `getConversationRun(conversationId, createdBy?)` gains an optional second argument that adds `.eq("created_by", userId)`, and the binding-state read adds `.eq("user_id", userId)`, so a co-member's conversation id (the select policies are workspace-member-wide) looks unbound to the caller and fails closed instead of lending the caller another member's mode (security review P2-1). Auto-sync, support and `ws-handler` all bind with `createdBy = userId`, so owner-created runs match.
   - `makeConversationAuthModeResolver(userId, conversationId): () => Promise<string>`: builds one repository from the tenant client and returns the lease-facing resolver. Run found: its `authMode`. No run: `getConversationBindingState`; `"legacy"` returns `"managed"`; anything else (including null) throws `ConversationAuthModeError("unbound")`. Any read error is rethrown as `ConversationAuthModeError("read_failed")` carrying no row, message text or id.
   - No Sentry or logger import in either module (the lease owns the single event).
 - Edit `apps/web-platform/server/agent-auth-mode.ts`: `makeAuthModeResolver` delegates to `readConversationBindingAuthMode` (keeps its `string | null` contract: `null` is the probe's `unbound`). Update the REMOVAL CHECKLIST: step 1 also says KEEP `server/engine-binding-auth-mode.ts` and `server/auth-mode-error.ts` (the lease reads them), and step 6 lists the AC10 divergence test for deletion with the diagnostic tests.
@@ -135,8 +157,9 @@ TDD order inside every phase (`cq-write-failing-tests-before`): write the failin
 
 - Edit `apps/web-platform/server/byok-lease.ts`:
   - `ByokLeaseArgs.resolveAuthMode?: () => Promise<string>` and the same optional field on `LeaseSlot`. It stays optional at the lease level on purpose: `runWithByokLease` is also called directly by REST-only paths, and a missing resolver with an oauth row present is a runtime fail-closed (`no_resolver`) rather than a type error there. Add one JSDoc paragraph on `getAgentCredential`: a caller with no conversation binding (for example an Inngest routine using the Agent SDK) always fails closed for an owner who holds a subscription row.
-  - New private `resolveLeaseAuthMode(slot): Promise<"managed" | "api-key">`: no resolver: reason `no_resolver`; resolver throws: reason is the error's `reason` when it is a `ConversationAuthModeError` (`instanceof`) else `resolver_failed`; value not exactly `"managed"` or `"api-key"`: `invalid_value`. Each case reports once via `reportSilentFallback(null, { feature: "byok-lease", op: "auth-mode-unresolved", message, tags: { reason }, extra: { reason } })` (null error and no raw value, mirroring `oauth-credential-unusable`) and throws `ByokLeaseError("fetch_failed", "Authentication unavailable; retry shortly")`. No extra liveness call after the `await`: both arms already end in `assertAliveAfterDecrypt`, which zeroizes and throws `escape`.
+  - New private `resolveLeaseAuthMode(slot): Promise<"managed" | "api-key">`: no resolver: reason `no_resolver`; resolver throws: reason is the error's `reason` when it is a `ConversationAuthModeError` (`instanceof`) else `resolver_failed`; value not exactly `"managed"` or `"api-key"`: `invalid_value`. Each case reports once via `reportSilentFallback(null, { feature: "byok-lease", op: "auth-mode-unresolved", message, tags: { reason }, extra: { reason } })` (null error and no raw value, mirroring `oauth-credential-unusable`) and throws `ByokLeaseError("fetch_failed", "Authentication unavailable; retry shortly")`. Call `assertLeaseAlive(slot)` synchronously right after the resolver `await` (restored after review: without it a scope that ended during the read still queries and decrypts a row before `assertAliveAfterDecrypt` throws `escape`, so "nothing read after scope end" would be false and untestable).
   - Reorder `fetchAgentCredentialIntoSlot`: kill-switch, read oauth row, (row exists) date gate, owner/delegation gate, **mode**, then for `managed` the unchanged decrypt, liveness re-check, shape check, cache and return; for `api-key` fall through to the unchanged api_key branch. Decrypt and `classifyCliDroppedValue` move under the `managed` arm only, which lets `api-key` recover from an unusable stored token. `MissingByokKeyError` for a missing api_key row in both modes.
+  - On a successful agent lease add one closed-enum breadcrumb (`Sentry.addBreadcrumb({ category: "byok", level: "info", message: "agent-credential-selected", data: { scheme } })`; `scheme` is `api_key | oauth_token`, already a non-secret field on the WS frame) so telemetry can prove which credential was chosen. No mode string, id or value in the payload.
 - Edit `apps/web-platform/server/byok-resolver.ts`: `resolveKeyOwnerThenLease(callerUserId, workspaceContextUserId, fn, opts: LeaseModeOpts)` where `LeaseModeOpts = { resolveAuthMode: () => Promise<string> } | { restOnly: true }`. The argument is **required**, so `tsc` fails any future caller that omits it. Build the lease args once (`const run = (keyOwnerUserId, delegationId?) => runWithByokLease({ workspaceContextUserId, keyOwnerUserId, delegationId, resolveAuthMode: "resolveAuthMode" in opts ? opts.resolveAuthMode : undefined }, fn)`) and call `run` from all five branches. Update the header comment's call-site list and add the third-caller note.
 - Callers: `server/agent-runner.ts` `startAgentSession` (~L1138) passes `{ resolveAuthMode: makeConversationAuthModeResolver(userId, conversationId) }`; `server/cc-dispatcher.ts` `realSdkQueryFactory` (~L1895) passes `{ resolveAuthMode: makeConversationAuthModeResolver(args.userId, args.conversationId) }`; the REST-only callers pass `{ restOnly: true }`: the routing-side lease at `agent-runner.ts` ~L3302, `server/inngest/functions/cfo-on-payment-failed.ts` and `server/inngest/functions/github-on-event.ts` (each only calls `getRestApiKey`; verify with `git grep -n "getAgentCredential" apps/web-platform/server/inngest`).
 - Do NOT touch `server/agent-env.ts` (the sandbox fence forbids the bare lowercase word `credential` there, including import paths), `server/agent-auth-user-message.ts` or `server/agent-auth-match.ts` (import-boundary pinned), or any added line pairing `log.<level>` with a bare `userId` (pr-quality-guards).
@@ -186,6 +209,7 @@ ADR-048 amendment (with one sentence cross-referencing ADR-233's binding paragra
 - `apps/web-platform/server/cc-dispatcher.ts`
 - `apps/web-platform/server/inngest/functions/cfo-on-payment-failed.ts` and `apps/web-platform/server/inngest/functions/github-on-event.ts` (pass `{ restOnly: true }`)
 - `apps/web-platform/server/agent-auth-mode.ts`
+- `apps/web-platform/server/agent-engine-persistence.ts` (optional filters; `test/agent-engine-persistence.test.ts` covers them)
 - `apps/web-platform/server/auto-sync-trigger.ts`
 - `apps/web-platform/server/support-conversation.ts`
 - `apps/web-platform/components/settings/agent-engine-settings.tsx`
@@ -197,7 +221,7 @@ ADR-048 amendment (with one sentence cross-referencing ADR-233's binding paragra
 - `knowledge-base/engineering/architecture/decisions/ADR-233-pluggable-web-agent-engine-boundary.md` (one line)
 - `knowledge-base/engineering/architecture/diagrams/model.c4`
 
-`agent-engine-persistence.ts` is no longer edited (no `ensureConversationBound`). Glob check: every path above was verified to exist (`git ls-files`) or is listed under Files to Create.
+`agent-engine-persistence.ts` gains only the optional `createdBy`/`userId` filters (no `ensureConversationBound`). Glob check: every path above was verified to exist (`git ls-files`) or is listed under Files to Create.
 
 ## Non-Goals (with tracking)
 
@@ -238,7 +262,7 @@ ADR-048 amendment (with one sentence cross-referencing ADR-233's binding paragra
 ### Split Assessment
 
 - Subsystems touched: 2 — `apps/web-platform` (server, components, tests), `knowledge-base/engineering`
-- Planned files: 4 created + 18 edited (22) | Estimated changed lines: about 750 (about 280 production, 40 records, 430 tests after plan review cut the source-scan sentinel and the repository method)
+- Planned files: 4 created + 19 edited (23) | Estimated changed lines: about 750 (about 280 production, 40 records, 430 tests after plan review cut the source-scan sentinel and the repository method)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. The line threshold is crossed only by tests; splitting the lease change from the copy change would ship a dropdown whose labels promise behaviour the server lacks, or enforcement behind labels that still say "managed". One vertical, one revert unit.
 
@@ -248,12 +272,14 @@ ADR-048 amendment (with one sentence cross-referencing ADR-233's binding paragra
 
 - [ ] AC1 (negative control, api-key): `runWithByokLease` with `CC_OAUTH_ENABLED=1`, date passed, owner match, a valid-shaped `anthropic_oauth` row AND an `anthropic` row, and `resolveAuthMode: async () => "api-key"` returns `{ scheme: "api_key", value: <api key plaintext> }`; `sinks.decrypted` holds exactly one buffer (the api key) so the subscription value was never decrypted; deleting the mode branch makes this test red.
 - [ ] AC2 (negative control, managed): same fixtures with `"managed"` return `scheme: "oauth_token"` and `providersQueried` does not contain `"anthropic"`.
-- [ ] AC3: `api-key` + a malformed subscription value (each `UNUSABLE` fixture) leases the api key with no `oauth_unusable` and no `oauth-credential-unusable` Sentry event; `managed` + the same value still throws `oauth_unusable` byte-identically to today.
+- [ ] AC3: `api-key` + a malformed subscription value (each `UNUSABLE` fixture) returns the api key (`value === REST_PLAINTEXT`, asserted on the RETURNED value, never through the suite's `.catch((e) => e)` swallow), `sinks.decrypted.length === 1`, and zero `captureMessage` calls of any kind (not merely none with that op); `managed` + the same value still throws `oauth_unusable` byte-identically to today.
 - [ ] AC4 (gates unchanged): a delegated lease, a keyOwner/workspace mismatch, and a pre-effective-date clock each still throw `OauthDelegationForbiddenError` / `OauthNotYetPermittedError` when an oauth row exists, and the `resolveAuthMode` spy is called zero times in those cases; kill-switch off with `api-key` leases the api key, calls the resolver zero times and never queries `anthropic_oauth`.
-- [ ] AC5 (lazy): no oauth row means the resolver is never called, for both `managed` and `api-key`; a second `getAgentCredential()` in the same scope does not call it again.
-- [ ] AC6 (fail closed): resolver rejects; resolver returns `""`, `"api_key"`, `undefined` (three representative junk values); no resolver passed with an oauth row present. Each throws `ByokLeaseError` with `cause === "fetch_failed"`, reads no `anthropic` row, decrypts nothing, caches nothing, and emits exactly one `reportSilentFallback` with `op: "auth-mode-unresolved"`, a `reason` from the closed set (`no_resolver | resolver_failed | invalid_value` from the lease, plus `unbound | read_failed` from `ConversationAuthModeError`, matched by `instanceof` so a spoofed reason cannot reach a tag) and no raw value, row, stored secret or user id in any captured sink (the `sinks.calls` dump contains none of the fixture strings). `mapByokLeaseCauseToErrorCode` is unchanged and still exhaustive.
-- [ ] AC7 (real lease, real binding): `byok-lease-auth-mode-binding.test.ts` drives `runWithByokLease` with `makeConversationAuthModeResolver` over a mocked tenant client; flipping the persisted binding between two leases flips the leased scheme (so the test cannot pass against a constant mode); no run + `legacy` leases per `managed`; no run + `pending` and any read error fail closed.
+- [ ] AC5 (lazy and cached): no oauth row means the resolver is never called, for both `managed` and `api-key`; WITH an oauth row present, in both modes, two `getAgentCredential()` calls in one scope call the resolver exactly once; a fail-closed call caches nothing (the resolver is called again on the next call).
+- [ ] AC6 (fail closed): resolver rejects; resolver returns `""`, `"api_key"`, `undefined` (representative junk values: `""`, `"api_key"`, `"MANAGED"`, `"managed "`, `null`, `undefined`, `{}`); a plain `Error` whose `name` or `reason` is spoofed to `"unbound"` tags `resolver_failed`, while a real `ConversationAuthModeError("unbound" | "read_failed")` reaches its own tag; no resolver passed with an oauth row present. Each throws `ByokLeaseError` with `cause === "fetch_failed"`, reads no `anthropic` row, decrypts nothing, caches nothing, and emits exactly one `reportSilentFallback` with `op: "auth-mode-unresolved"`, a `reason` from the closed set (`no_resolver | resolver_failed | invalid_value` from the lease, plus `unbound | read_failed` from `ConversationAuthModeError`, matched by `instanceof` so a spoofed reason cannot reach a tag) and no raw value, row, stored secret or user id in any captured sink (the `sinks.calls` dump contains none of the fixture strings). `mapByokLeaseCauseToErrorCode` is unchanged and still exhaustive.
+- [ ] AC7 (real lease, real binding): `byok-lease-auth-mode-binding.test.ts` drives `runWithByokLease` with `makeConversationAuthModeResolver` over a mocked tenant client; the mocked tenant client is TABLE-AWARE (it routes on the table name and honours the `conversation_id`, `created_by` and `user_id` `eq`s, instead of the existing table-blind `from: () =>`), a decoy run for another conversation (and one created by another member) with the opposite mode is never served, and flipping the persisted binding between two leases flips the leased scheme (so the test cannot pass against a constant mode); no run + `legacy` leases per `managed`; no run + `pending` and any read error fail closed.
 - [ ] AC8: `api-key` with no `anthropic` row throws `MissingByokKeyError` and never leases the subscription token.
+- [ ] AC16 (member and legacy semantics, stated not implied): a non-owner workspace member's conversation resolves its mode from a binding created by that member (`created_by` filter), and a delegated lease still throws `OauthDelegationForbiddenError` before any mode read (the grantor-subscription case is #11594). Pre-feature (`legacy`, no run) conversations always behave as Automatic: P1 ("never served the subscription token") is scoped to conversations that have a binding, and that exception is one sentence in ADR-048's amendment.
+- [ ] AC17 (success telemetry): a successful `managed`+subscription lease and a successful `api-key` lease each emit exactly one `agent-credential-selected` breadcrumb carrying only `{ scheme }`.
 - [ ] AC9: `buildAuthFailureFrame`/`authFailureCopy` call sites still receive `credential.scheme` (Guard 1 row 5): an `api-key` lease surfaces the API-key copy and `credentialScheme: "api_key"` ("Invalid API Key" title), a `managed` + subscription lease surfaces the operator copy; neither reads the mode. `agent-auth-user-message.ts` and `agent-auth-match.ts` are unmodified (`git diff --stat` shows neither).
 - [ ] AC10: a small test over one fake repository covers ONLY the two cases where the diagnostic (`makeAuthModeResolver`: `null` -> `unbound`) and the lease resolver differ, and names them: no run + `legacy` (probe `unbound`, lease `managed`) and no run + `pending` (probe `unbound`, lease fails closed); for a bound run both return the same string. The same two divergences are one sentence in ADR-048's amendment. The test is listed in `agent-auth-mode.ts`'s REMOVAL CHECKLIST so the diagnostic-removal PR deletes it.
 - [ ] AC11: `bind` is called before dispatch by `auto-sync-trigger` (service client) and `support-conversation` (tenant client; new row, and a sticky row only when `engine_binding_state` is `pending`, never `legacy`, with no extra read per message); a thrown bind is Sentry-mirrored and does not abort the session. The support test mock gains `rpc` and the test asserts the `bind_agent_engine_run` call, so it cannot pass vacuously.
@@ -279,12 +305,12 @@ ADR-048 amendment (with one sentence cross-referencing ADR-233's binding paragra
 | # | Mutation (edit that MUST drive the guard RED) | Targets |
 |---|---|---|
 | 1 | Change `run` so ONE branch (the last, delegated one) builds its lease args inline without `resolveAuthMode` while the other four stay compliant | second-member-after-compliant-first: a check that stops at the first branch passes |
-| 2 | Change one Agent-SDK caller (`cc-dispatcher.ts`) to pass `{ restOnly: true }` | the type admits it, so the guard is the real-lease test: the operator's lease throws `no_resolver` instead of leasing; also fails the real-binding test |
-| 3 | Make the five-branch test iterate zero branches (empty table) | anti-vacuity: the test asserts it ran exactly five branches and each captured a resolver |
+| 2 | Change one Agent-SDK caller (`cc-dispatcher.ts` or `agent-runner.ts` `startAgentSession`) to pass `{ restOnly: true }` | the type admits it and the lease tests never go through the dispatcher, so the guard is a two-file wiring pin: `grep -c 'resolveAuthMode: makeConversationAuthModeResolver'` must be exactly 1 in each of `agent-runner.ts` and `cc-dispatcher.ts` (counted with `grep -c ... >/dev/null`-style, never `| grep -q`) |
+| 3 | Make the five-branch test iterate zero branches (empty table), or forward `async () => "managed"` from one branch instead of `opts.resolveAuthMode` | anti-vacuity and identity: the test asserts it ran five branches and that each captured resolver `toBe(opts.resolveAuthMode)`; the chokepoint is pinned too: `grep -c 'runWithByokLease(' byok-resolver.ts` equals 1 (a sixth inline branch would sit outside the table) |
 | 4 | REORDER inside the lease: move the mode read above the date/owner gates | order property: the delegated-lease and pre-date cases assert the resolver spy is never called; a delete-only row would not catch a move |
-| 5 | Replace `credentialScheme: credential.scheme` with a mode-derived value at one frame site | the frame must come from the leased scheme (AC9); a two-file source pin with `grep -c ... >/dev/null` counts the exact expression in both files |
+| 5 | Replace `credentialScheme: credential.scheme` (or `setAuthScheme?.(credential.scheme)` in `cc-dispatcher.ts`) with a mode-derived value at one site | the frame and cost-cap bridge must come from the leased scheme (AC9); a two-file source pin with `grep -c ... >/dev/null` counts the exact expressions |
 
-Harness rows: (H1) mutate the SUITE, not the guard: drop the "exactly five branches" assertion and confirm a stub that drives zero branches still reds a separate case; (H2) a must-PASS input that is not the canonical: call `resolveKeyOwnerThenLease` with `{ restOnly: true }` and confirm the forwarded argument carries no resolver and the REST-only lease still leases (a guard that rejects everything would fail this).
+Harness rows: (H1) mutate the SUITE, not the guard: the named case `five-branch table cannot be empty` injects a stub that drives zero branches and must go RED; deleting the "five branches" assertion must make that case red; (H2) a must-PASS input that is not the canonical: call `resolveKeyOwnerThenLease` with `{ restOnly: true }` and confirm the forwarded argument carries no resolver and the REST-only lease still leases (a guard that rejects everything would fail this).
 
 **Anchor.** The behavioural lease matrix (AC1-AC6) and the real-binding test (AC7) are the independent anchor: weakening the type or the helper in one commit still turns the operator's Concierge into a visible fail-closed `fetch_failed` in those tests. No stored hash or count floor is used.
 
@@ -292,9 +318,9 @@ Harness rows: (H1) mutate the SUITE, not the guard: drop the "exactly five branc
 
 ```yaml
 liveness_signal:
-  what: "Sentry event feature:byok-lease op:auth-mode-unresolved fires on every fail-closed mode read; its absence on healthy leases is the healthy state. The existing agent_auth_failure alert still covers CLI sign-in failures."
+  what: "Error-driven only (no heartbeat): Sentry event feature:byok-lease op:auth-mode-unresolved on every fail-closed mode read, plus one closed-enum agent-credential-selected breadcrumb ({scheme}) on every successful agent lease so the chosen credential is provable from telemetry. The existing agent_auth_failure alert still covers CLI sign-in failures."
   cadence: "per credential lease (once per cold agent session for an owner who holds a subscription row; never for other users)"
-  alert_target: "Sentry web-platform issue stream, byok-lease feature (same routing as op:oauth-credential-unusable)"
+  alert_target: "Sentry web-platform issue stream, byok-lease feature; passive, no page (same as op:oauth-credential-unusable, no alert rule keys on byok-lease)"
   configured_in: "apps/web-platform/server/byok-lease.ts (reportSilentFallback call in resolveLeaseAuthMode)"
 
 error_reporting:
@@ -303,19 +329,19 @@ error_reporting:
 
 failure_modes:
   - mode: "Binding read fails (RLS deny, tenant JWT mint failure, DB error)"
-    detection: "Sentry op:auth-mode-unresolved reason:read_failed"
-    alert_route: "Sentry issue stream, byok-lease"
+    detection: "Layer 2 (reportSilentFallback null-error message path to Sentry) op:auth-mode-unresolved reason:read_failed; release tag (layer 5) bounds the regression window; up to four events per failure when isLeaseRetryable retries (AC6's one event is per lease call)"
+    alert_route: "Sentry issue stream, byok-lease (passive)"
   - mode: "Conversation has no engine-run row and is not legacy (a new unbound creation path)"
-    detection: "Sentry op:auth-mode-unresolved reason:unbound; AC11 pins the two known creation paths"
-    alert_route: "Sentry issue stream, byok-lease"
+    detection: "Layer 2 op:auth-mode-unresolved reason:unbound; AC11 pins the two known creation paths"
+    alert_route: "Sentry issue stream, byok-lease (passive)"
   - mode: "A new Agent-SDK caller forgets to pass a resolver"
     detection: "`tsc --noEmit` fails first (required LeaseModeOpts); at runtime Sentry op:auth-mode-unresolved reason:no_resolver"
     alert_route: "CI failure plus Sentry issue stream"
   - mode: "Stored binding value is not managed or api-key"
-    detection: "Sentry op:auth-mode-unresolved reason:invalid_value"
-    alert_route: "Sentry issue stream, byok-lease"
+    detection: "Layer 2 op:auth-mode-unresolved reason:invalid_value"
+    alert_route: "Sentry issue stream, byok-lease (passive)"
   - mode: "Auto-sync or support bind fails (non-fatal)"
-    detection: "Sentry feature:repo-setup op:auto-sync-bind / feature:support op:bind"
+    detection: "Layer 2 (reportSilentFallback in the route handler and headless sync, not an Inngest step, so no sentry-correlation layer is claimed) feature:repo-setup op:auto-sync-bind and feature:support op:bind"
     alert_route: "Sentry issue stream"
 
 logs:
@@ -323,7 +349,7 @@ logs:
   retention: "Sentry project retention for web-platform"
 
 discoverability_test:
-  command: grep -m1 -o auth-mode-unresolved apps/web-platform/server/byok-lease.ts
+  command: grep -rhoE -m1 auth-mode-unresolved apps/web-platform/server
   expected_output: auth-mode-unresolved
 ```
 
@@ -363,11 +389,13 @@ CPO agent (2026-10-30): keep `managed` behaviour but fix the dishonest label ("A
 6. No oauth row: resolver uncalled (AC5); cached second call does not re-invoke.
 7. Resolver rejects / junk values / absent resolver: `fetch_failed`, one event, closed reason, no secret in any sink (AC6).
 8. `api-key` with no api row: `MissingByokKeyError` (AC8).
-9. Scope escape: start the lease call inside the scope with a deferred resolver, end the scope, then settle it; await the rejection explicitly (no unhandled rejection): `escape` thrown, `sinks.decrypted` length 0 for the subscription row, `providersQueried` has no `"anthropic"` row read after the scope ended, nothing cached.
+9. Scope escape: start the lease call inside the scope with a deferred resolver, end the scope, snapshot `providersQueried.length`, then settle the resolver; await the rejection explicitly (no unhandled rejection): `escape` thrown by the post-await `assertLeaseAlive`, `providersQueried.length` unchanged from the snapshot (no row read after scope end), `sinks.decrypted` adds nothing, nothing cached.
 10. Real binding layer: binding `api-key` then flipped to `managed` between two leases flips the scheme; no run + legacy; no run + pending; read error (AC7).
 11. Diagnostic agreement table (AC10).
 12. Auto-sync/support bind-before-dispatch, sticky support row bound only when `pending`, non-fatal bind failure (AC11); five-branch forwarding and the `{ restOnly: true }` must-pass row (Guard 1).
 13. UI: labels, helper line (Claude only), disclosure in both modes, PUT bodies (AC12).
+14. Gate order with BOTH resolvers: delegated, owner-mismatch and pre-date cases run once with an `api-key` resolver and once with a `managed` resolver; the spy is asserted after awaiting the rejection (with `api-key` a mode-first mutation changes the error type; with `managed` only the call count catches it).
+15. Environment hygiene: kill-switch-off cases `delete process.env.CC_OAUTH_ENABLED` (never set it to "0"); every new test file copies the existing `afterEach` (`vi.restoreAllMocks()` plus saved-env restore) verbatim so `Date.now` and `CC_OAUTH_ENABLED` cannot leak.
 
 ## Risks and Sharp Edges
 
@@ -384,6 +412,11 @@ CPO agent (2026-10-30): keep `managed` behaviour but fix the dishonest label ("A
 - **Misleading retry copy for deterministic causes.** `fetch_failed` shows "Authentication unavailable; retry shortly" even for `unbound`, `invalid_value` and `no_resolver`, where retrying cannot help. Accepted for this PR (operator-only population, no new error cause, per the CTO ruling); recorded as a `taste` row so the owner can ask for distinct copy.
 - **Sticky support conversations bind late.** A `pending` support conversation binds at its first post-deploy message and snapshots that day's default, not the default at creation.
 - **Auto-sync retry on a permanent `unbound`.** `isLeaseRetryable` matches the lease message and would retry four times (about 13 s) before surfacing; bounded to one user, accepted.
+- **Concurrent first calls.** Two concurrent `getAgentCredential()` misses each run the fetch and the second assignment overwrites `slot.agentCredentialBuffer` without zeroizing the first plaintext buffer. Pre-existing; the new `await` widens the window slightly but the binding is immutable (no INSERT/UPDATE/DELETE for `authenticated`, unique index on `conversation_id`), so both calls resolve the same mode. Not changed here; noted for the review phase.
+- **Legacy conversations and the sticky legacy support row** behave as Automatic by ruling (AC16); for the operator a pre-feature conversation can still use the subscription token after `api-key` was chosen. Documented as the one P1 exception.
+- **Codex.** `default_auth_mode` is one value shared by engines; a Codex run never reaches the Claude lease (`assertLegacyEngineBinding`), and Codex is not live. If Codex is later enabled, validate `auth_mode` per engine in the settings PUT; out of scope here.
+- **`api-key` selected with no API key saved** surfaces only when the next conversation fails (an inline Settings warning was considered and not added; recorded in decision-challenges.md).
+- **Passive alerting.** No Sentry alert rule keys on `byok-lease` ops (verified: none under `apps/web-platform/infra/sentry`), so `auth-mode-unresolved` is a passive issue stream that pages nobody, exactly like `oauth-credential-unusable`; adding a rule is infra work outside this PR.
 - Draft PR #9051 (Codex lifecycle) also edits `components/settings/agent-engine-settings.tsx`: do not touch it; expect a rebase conflict in that file if it merges first, and keep this edit to the option text, one paragraph and one visibility predicate to keep that conflict small.
 
 ## Alternative Approaches Considered
