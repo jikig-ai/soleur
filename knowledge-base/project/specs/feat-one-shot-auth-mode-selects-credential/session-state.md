@@ -15,3 +15,4 @@ Conversation engine binding is source of truth (CTO); api-key never decrypts the
 soleur:plan, plan-review, deepen-plan, CTO/CPO/CLO/ux-design-lead, review seats.
 cto_spawns=1
 work_phase: complete (affected gate rc=6 budget-deferred; CI authoritative)
+cto_spawns=2

@@ -1917,8 +1917,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `AgentCredential | Promise<AgentCredential>` union does not surface
     // awkwardly through `Promise.all`'s array element inference.
     // `buildAgentQueryOptions.credential` consumes the unwrapped value.
-    // Agent-SDK consumer: prefers the operator subscription oauth_token
-    // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
+    // Agent-SDK consumer: the conversation binding's auth mode (#11591) decides:
+    // the operator subscription oauth_token only for `managed` (when
+    // enabled+permitted), `api-key` always the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
 
     // feat-cc-cap-raise-resume (#9565) closure-capture: publish the

@@ -124,7 +124,7 @@ import {
   MissingByokKeyError,
 } from "@/server/byok-lease";
 import { encryptKey } from "@/server/byok";
-import { ConversationAuthModeError } from "@/server/auth-mode-error";
+import { ConversationAuthModeError, AUTH_MODE_ERROR_REASONS } from "@/server/auth-mode-error";
 
 const OPERATOR = "550e8400-e29b-41d4-a716-446655440000";
 const OTHER = "660e8400-e29b-41d4-a716-446655440111";
@@ -457,7 +457,6 @@ describe("getAgentCredential — binding auth mode (#11591)", () => {
     ["pre-date", {}, OauthNotYetPermittedError, BEFORE_DATE],
   ])("AC4 gate order (%s): the gate error wins and the mode is never read, in both modes", async (_n, extra, Err, now) => {
     seedProvider("anthropic", REST_PLAINTEXT, OPERATOR);
-    seedProvider("anthropic", REST_PLAINTEXT, OTHER);
     seedProvider("anthropic_oauth", VALID_OAUTH, OPERATOR);
     for (const mode of ["api-key", "managed"]) {
       vi.spyOn(Date, "now").mockReturnValue(now);
@@ -537,12 +536,14 @@ describe("getAgentCredential — binding auth mode (#11591)", () => {
     expect(dump).not.toContain(REST_PLAINTEXT);
   });
 
-  it("AC6 no resolver with an oauth row: fetch_failed, reason no_resolver", async () => {
+  it("AC6 no resolver with an oauth row: fetch_failed, reason no_resolver, carried on the error", async () => {
     seedProvider("anthropic", REST_PLAINTEXT, OPERATOR);
     seedProvider("anthropic_oauth", VALID_OAUTH, OPERATOR);
     const err = await cred({}).catch((e) => e);
     expect(err).toBeInstanceOf(ByokLeaseError);
     expect((err as ByokLeaseError).cause).toBe("fetch_failed");
+    // auto-sync keys its retry decision on this closed reason (deterministic reasons are not retried).
+    expect((err as ByokLeaseError).reason).toBe("no_resolver");
     expect(unresolved().map((e) => e[2].tags.reason)).toEqual(["no_resolver"]);
     expect(sinks.decrypted).toHaveLength(0);
   });
@@ -550,7 +551,7 @@ describe("getAgentCredential — binding auth mode (#11591)", () => {
   it("AC6 reasons: a real ConversationAuthModeError reaches its own tag; a spoofed plain Error is resolver_failed", async () => {
     seedProvider("anthropic", REST_PLAINTEXT, OPERATOR);
     seedProvider("anthropic_oauth", VALID_OAUTH, OPERATOR);
-    for (const reason of ["unbound", "read_failed"] as const) {
+    for (const reason of AUTH_MODE_ERROR_REASONS) {
       sinks.reset();
       await cred({
         resolveAuthMode: async () => {
@@ -576,19 +577,21 @@ describe("getAgentCredential — binding auth mode (#11591)", () => {
     expect(sinks.decrypted).toHaveLength(0);
   });
 
-  it("scenario 9: a scope that ends while the mode is being read reads and decrypts nothing", async () => {
+  it.each(["managed", "api-key"])("scenario 9 (%s): a scope that ends while the mode is being read reads and decrypts nothing", async (mode) => {
     seedProvider("anthropic", REST_PLAINTEXT, OPERATOR);
     seedProvider("anthropic_oauth", VALID_OAUTH, OPERATOR);
     let release!: (v: string) => void;
     const gate = new Promise<string>((r) => { release = r; });
+    let entered!: () => void;
+    const resolverEntered = new Promise<void>((r) => { entered = r; });
     let pending!: Promise<unknown>;
-    await lease({ resolveAuthMode: () => gate }, async (l) => {
+    await lease({ resolveAuthMode: () => { entered(); return gate; } }, async (l) => {
       pending = Promise.resolve(l.getAgentCredential()).catch((e) => e);
-      // Let the oauth row read and the gates run, so the call is parked on the resolver.
-      await new Promise((r) => setTimeout(r, 20));
+      // Proves the call is parked ON the resolver: the oauth row read and the gates have run.
+      await resolverEntered;
     });
     const queried = sinks.providersQueried.length;
-    release("api-key");
+    release(mode);
     const err = await pending;
     expect(err).toBeInstanceOf(ByokLeaseError);
     expect((err as ByokLeaseError).cause).toBe("escape");
@@ -604,5 +607,15 @@ describe("getAgentCredential — binding auth mode (#11591)", () => {
     const b = breadcrumbs();
     expect(b.map((x) => x[1].data)).toEqual([{ scheme: "oauth_token" }, { scheme: "api_key" }]);
     expect(JSON.stringify(b)).not.toContain(VALID_OAUTH);
+  });
+
+  it("AC17 negative: no breadcrumb claims a credential was selected on a fail-closed or refused lease", async () => {
+    seedProvider("anthropic", REST_PLAINTEXT, OPERATOR);
+    seedProvider("anthropic_oauth", VALID_OAUTH, OPERATOR);
+    await cred({ resolveAuthMode: async () => "bogus" }).catch(() => undefined);
+    await cred({}).catch(() => undefined);
+    seedProvider("anthropic_oauth", "sk-ant-api03-FAKEcanaryAAAA", OPERATOR);
+    await cred({ resolveAuthMode: managedResolver }).catch(() => undefined);
+    expect(breadcrumbs()).toHaveLength(0);
   });
 });

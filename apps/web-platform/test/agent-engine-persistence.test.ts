@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AgentEnginePersistenceRepository } from "@/server/agent-engine-persistence";
+import { boundRun, makeTableAwareTenant } from "./helpers/table-aware-tenant";
 
 function client() {
   const rpc = vi.fn().mockResolvedValue({ data: { id: "run-1" }, error: null });
@@ -252,8 +253,6 @@ describe("AgentEnginePersistenceRepository", () => {
 });
 
 // #11591 — the optional caller scope on the two reads the credential lease depends on.
-import { boundRun, makeTableAwareTenant } from "./helpers/table-aware-tenant";
-
 describe("AgentEnginePersistenceRepository — caller-scoped binding reads (#11591)", () => {
   it("getConversationRun(createdBy) adds the created_by filter, so another member's run reads as no run", async () => {
     const t = makeTableAwareTenant({

@@ -87,13 +87,13 @@ Cut list: a new column or table for the mode (the binding already stores it); a 
 - `getAgentCredential` callers: `server/agent-runner.ts` (`startAgentSession`, ~L1138-1146) and `server/cc-dispatcher.ts` (`realSdkQueryFactory`, ~L1895-1921). The routing-side lease at `agent-runner.ts` ~L3302 uses `getRestApiKey` only. Both Agent-SDK callers go through `resolveKeyOwnerThenLease` in `server/byok-resolver.ts`, which has five `runWithByokLease` branches.
 - Credential scheme flows to the UI from the leased value: `credentialScheme: credential.scheme` at `agent-runner.ts` ~L2194 and `cc-dispatcher.ts` ~L3164; `setAuthScheme(credential.scheme)` at `cc-dispatcher.ts` ~L1929. Nothing there reads the mode.
 - `agent-engine-route-guard.ts` `assertLegacyConversationEngineBinding` already defines "legacy" (no run row + `engine_binding_state='legacy'`); `getConversationBindingState` exists on the repository.
-- `bind_agent_engine_run` (live definition: the `CREATE OR REPLACE` in migration 141, which also flips `engine_binding_state` to `bound`) is granted to `service_role` and `authenticated`; for service callers it requires `created_by` workspace membership and a conversation in that workspace.
+- `bind_agent_engine_run` (live definition: the `CREATE OR REPLACE` in migration 141, which also flips `engine_binding_state` to `bound`) is granted to `service_role` and `authenticated`; for every caller it requires a conversation in that workspace owned by `created_by` (`user_id = p_created_by`), and workspace membership of `created_by` (service) or of `auth.uid()` (authenticated). It does not check `engine_binding_state`, so a `legacy` or `pending` conversation with no run can be bound.
 - Existing lease tests: `apps/web-platform/test/byok-lease-credential-type.test.ts` (provider-aware Supabase mock recording `providersQueried`, `sinks.decrypted` for zeroize assertions, `UNUSABLE` shape fixtures).
 
 ### Institutional learnings applied
 
 - `2026-06-02-two-row-by-provider-credential-and-lease-accessor-rename-sweep.md`: gates only in the accessor that reads the gated row; never inject both auth vars. This plan adds no second injection site.
-- `2026-10-29-the-cli-dropped-my-credential-...` (#11086): the shape check is a negative predicate that fails closed with `oauth_unusable`; keep it byte-identical on the `managed` path and pin each half with the other half's real output.
+- `2026-10-29-the-cli-dropped-my-credential-...` (#11086): the shape check is a negative predicate that fails closed with `oauth_unusable`; its cause, op and copy are unchanged on the `managed` path (that path now gains one binding read and a `fetch_failed` arm before the shape check); pin each half with the other half's real output.
 - `security-issues/2026-10-06-i-claimed-a-mechanism-from-an-outcome-...`: pin the wire at what call sites hand over, claim outcomes not mechanisms. The wiring sentinel pins the call sites, not the builder.
 - `2026-03-20-middleware-error-handling-fail-open-vs-closed.md`: always destructure `{ data, error }`; pick the direction on purpose (fail closed here).
 - `best-practices/2026-05-13-mirror-with-debounce-vs-report-silent-fallback-for-high-cardinality-surfaces.md`: the fail-closed event is bounded by the subscription-holder population (one operator), so raw `reportSilentFallback` is the right tool; no debounce needed.
@@ -429,3 +429,8 @@ CPO agent (2026-10-30): keep `managed` behaviour but fix the dishonest label ("A
 | Mode decided before reading the oauth row | The row must be read to know a subscription exists; deciding before decrypt already keeps a declined token out of memory. |
 | Fail open to `managed` on a failed read | Would serve the declined account exactly when the system is least able to say so. |
 | Reuse `makeAuthModeResolver` as-is | The file is deleted with the temporary diagnostic; the lease would then break. |
+
+## Review Amendments (2026-10-30)
+
+Eleven-seat review, no P1. CTO rulings are rows in `decision-challenges.md`. Changes made inline: sticky `pending`/`legacy` support rows are bound at the next message (existing support threads are `legacy`, not `pending`); `assertLegacyEngineBinding` runs on both new bind sites; a duplicate-key bind is not mirrored; `ByokLeaseError.reason` carries the closed reason and auto-sync retries only `read_failed`/`resolver_failed`; the settings PUT preserves the stored mode; the resolver rejects empty ids and shares one run read; stale comments and the REMOVAL CHECKLIST corrected; test hardening (call-site argument pins, mirror assertions, both-mode escape test, negative breadcrumb rows, table-aware fake rejects `undefined` filters and multi-row matches). Accepted and recorded: the operator sees the `key_invalid` "Update key" copy for an unresolved mode and gets two Sentry events (lease + call site) until #11599; the mode is the workspace owner's setting; no caching of the mode (operator-only volume).
+

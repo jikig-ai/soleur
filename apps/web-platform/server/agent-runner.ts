@@ -1141,8 +1141,9 @@ async function startAgentSessionInner(
       userId,
       async (lease) => {
     // Agent-SDK consumer — resolve the credential ({ value, scheme }) so the
-    // subprocess env carries exactly one auth var. Prefers the operator
-    // subscription oauth_token when enabled+permitted; otherwise api_key.
+    // subprocess env carries exactly one auth var. The conversation binding's
+    // auth mode (#11591) decides: the operator subscription oauth_token only
+    // for `managed` (and when enabled+permitted); `api-key` always uses api_key.
     const [credential, serviceTokens] = await Promise.all([
       lease.getAgentCredential(),
       getUserServiceTokens(userId),

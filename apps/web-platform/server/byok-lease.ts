@@ -11,8 +11,10 @@
  *     properties for downstream cost-writers.
  *   - Two-row-by-provider model (feat-operator-cc-oauth): `getRestApiKey()`
  *     reads ONLY `provider='anthropic'` (raw-REST consumers, cannot return
- *     an oauth token by construction); `getAgentCredential()` prefers
- *     `provider='anthropic_oauth'` (gated) and returns `{ value, scheme }`.
+ *     an oauth token by construction); `getAgentCredential()` returns
+ *     `{ value, scheme }`: `provider='anthropic_oauth'` (gated) only when the
+ *     conversation binding's auth mode is `managed`, else `provider='anthropic'`
+ *     (#11591; pass `resolveAuthMode` in the lease args, see below).
  *   - The accessors are functions (NOT property accessors) per type-design
  *     F3. A captured-and-leaked lease reference outside the ALS scope
  *     throws `ByokLeaseError {cause: "escape"}` — the load-bearing test
@@ -58,7 +60,7 @@ import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { classifyCliDroppedValue } from "@/server/oauth-token-shape";
-import { ConversationAuthModeError } from "./auth-mode-error";
+import { ConversationAuthModeError, type AuthModeErrorReason } from "./auth-mode-error";
 
 const log = createChildLogger("byok-lease");
 
@@ -191,6 +193,9 @@ export class ByokLeaseError extends Error {
     | "subscription_limit"
     | "oauth_unusable";
 
+  /** Closed reason for a `fetch_failed` from an unresolved auth mode (#11591); never a row or value. */
+  public readonly reason?: string;
+
   constructor(
     cause:
       | "fetch_failed"
@@ -199,10 +204,12 @@ export class ByokLeaseError extends Error {
       | "subscription_limit"
       | "oauth_unusable",
     message: string,
+    reason?: string,
   ) {
     super(message);
     this.name = "ByokLeaseError";
     this.cause = cause;
+    this.reason = reason;
   }
 }
 
@@ -344,17 +351,22 @@ export interface ByokLease {
    */
   getRestApiKey(): string | Promise<string>;
   /**
-   * Agent-SDK credential. Prefers `provider='anthropic_oauth'` (the
-   * subscription token) when the kill-switch is on; falls back to
-   * `provider='anthropic'`. Returns `{ value, scheme }` so `buildAgentEnv`
-   * injects exactly one auth var. The date (CLO G1), owner (CLO G2), and
-   * kill-switch (AC8) gates fire ONLY on the oauth read.
+   * Agent-SDK credential. Selects `provider='anthropic_oauth'` (the
+   * subscription token) only when the kill-switch is on, a row exists, the
+   * gates pass AND the conversation binding's auth mode (read lazily through
+   * `resolveAuthMode`, #11591) is `managed`; otherwise `provider='anthropic'`.
+   * `api-key` never decrypts the subscription row and never falls back to it.
+   * Returns `{ value, scheme }` so `buildAgentEnv` injects exactly one auth
+   * var. The date (CLO G1), owner (CLO G2), and kill-switch (AC8) gates fire
+   * ONLY on the oauth read, before the mode is read.
    *
    * @throws {OauthNotYetPermittedError} if an oauth row is selected before
    *   `CC_OAUTH_EFFECTIVE_DATE` (fail-closed; no silent api_key fallback).
    * @throws {OauthDelegationForbiddenError} if an oauth row would fund a
    *   delegated / non-owner run (fail-closed).
    * @throws {ByokLeaseError} / {MissingByokKeyError} as `getRestApiKey`.
+   * @throws {ByokLeaseError} cause="fetch_failed" when an oauth row exists and the
+   *   mode cannot be resolved (no resolver, unreadable, unbound, invalid value).
    */
   getAgentCredential(): AgentCredential | Promise<AgentCredential>;
 }
@@ -513,7 +525,7 @@ async function fetchRestApiKeyIntoSlot(slot: LeaseSlot): Promise<string> {
 }
 
 type LeaseAuthMode = "managed" | "api-key";
-type AuthModeUnresolvedReason = "no_resolver" | "resolver_failed" | "invalid_value" | "unbound" | "read_failed";
+type AuthModeUnresolvedReason = AuthModeErrorReason | "no_resolver" | "resolver_failed" | "invalid_value";
 
 function failAuthModeClosed(reason: AuthModeUnresolvedReason): never {
   // Null error and no raw value: the event carries only the closed reason (mirrors
@@ -525,7 +537,9 @@ function failAuthModeClosed(reason: AuthModeUnresolvedReason): never {
     tags: { reason },
     extra: { reason },
   });
-  throw new ByokLeaseError("fetch_failed", "Authentication unavailable; retry shortly");
+  // The closed reason rides on the error so a caller can tell a deterministic refusal (unbound,
+  // invalid_value, no_resolver) from a transient one (auto-sync retries only the latter).
+  throw new ByokLeaseError("fetch_failed", "Authentication unavailable; retry shortly", reason);
 }
 
 /**
@@ -561,7 +575,7 @@ function noteCredentialSelected(scheme: AgentAuthScheme): void {
 async function fetchAgentCredentialIntoSlot(
   slot: LeaseSlot,
 ): Promise<AgentCredential> {
-  // Prefer the subscription oauth token — but ONLY attempt the read when the
+  // The subscription oauth token is eligible — but ONLY attempt the read when the
   // kill-switch is on, so a disabled feature behaves bit-for-bit like the
   // api_key-only path (AC8).
   if (isCcOauthEnabled()) {
@@ -614,7 +628,8 @@ async function fetchAgentCredentialIntoSlot(
     }
   }
 
-  // Fall back to the raw-REST api_key (scheme=api_key).
+  // The raw-REST api_key (scheme=api_key): the default when no subscription row is eligible, and
+  // the explicit choice under `api-key` (#11591).
   const apiRow = await fetchProviderRow(slot, "anthropic");
   if (!apiRow) {
     throw new MissingByokKeyError(

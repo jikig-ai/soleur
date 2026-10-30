@@ -132,8 +132,8 @@ export class AgentEnginePersistenceRepository {
   }
 
   /**
-   * `createdBy` (optional) scopes the read to runs bound by that user. The select policies are
-   * workspace-member-wide, so a caller that must not learn another member's binding (the
+   * `createdBy` (optional) scopes the read to runs bound by that user. The `agent_engine_runs`
+   * select policy is workspace-member-wide, so a caller that must not learn another member's binding (the
    * credential lease, #11591) passes it; a non-matching row then reads as "no run".
    */
   async getConversationRun(conversationId: string, createdBy?: string): Promise<unknown> {

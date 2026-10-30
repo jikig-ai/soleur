@@ -247,8 +247,10 @@ describe("AgentEngineSettings", () => {
       expect(Array.from(mode.options).map((o) => o.textContent)).toEqual(["managed", "api-key"]);
       expect(queryByTestId("auth-mode-helper")).toBeNull();
       expect(queryByTestId("user-provider-disclosure")).toBeNull();
+      expect(mode.getAttribute("aria-describedby")).toBeNull();
       fireEvent.change(mode, { target: { value: "api-key" } });
       expect(queryByTestId("user-provider-disclosure")).toBeTruthy();
+      expect(mode.getAttribute("aria-describedby")).toBe("user-provider-disclosure");
     });
   });
 });

@@ -137,9 +137,9 @@ describe("the lease follows the persisted binding", () => {
     expect(reads()).toBe(before);
   });
 
-  it("a member's own bound conversation resolves through their own binding (member is the key owner with no subscription row)", async () => {
+  it("a key owner with no subscription row never reads the binding at all (no new round trip for non-subscribers)", async () => {
     tenant.tables.api_keys = [keyRow(MEMBER, "anthropic", API_KEY)];
-    tenant.tables.agent_engine_runs = [boundRun({ id: "m", conversation_id: CONV, created_by: MEMBER, auth_mode: "managed" })];
+    tenant.tables.agent_engine_runs = [boundRun({ id: "m", conversation_id: CONV, created_by: MEMBER, auth_mode: "api-key" })];
     const out = await runWithByokLease(
       {
         workspaceContextUserId: MEMBER,

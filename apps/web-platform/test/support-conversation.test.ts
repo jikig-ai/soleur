@@ -4,14 +4,16 @@
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
-const { mockGetFreshTenantClient, mockResolveCurrentWorkspaceId } = vi.hoisted(() => ({
+const { mockGetFreshTenantClient, mockResolveCurrentWorkspaceId, mockReportSilentFallback } = vi.hoisted(() => ({
   mockGetFreshTenantClient: vi.fn(),
   mockResolveCurrentWorkspaceId: vi.fn(async () => "ws-123"),
+  mockReportSilentFallback: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: mockGetFreshTenantClient,
 }));
+vi.mock("@/server/observability", () => ({ reportSilentFallback: mockReportSilentFallback }));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
 }));
@@ -19,11 +21,16 @@ vi.mock("@/server/workspace-resolver", () => ({
 import { resolveOrCreateSupportConversation } from "@/server/support-conversation";
 
 /** A chainable supabase mock. `existingRow` = what the resolve SELECT returns. */
-function makeTenant(existingRow: { id: string; engine_binding_state?: string; workspace_id?: string } | null, rpcError: { message: string } | null = null) {
+function makeTenant(
+  existingRow: { id: string; engine_binding_state?: string; workspace_id?: string | null } | null,
+  rpcError: { message: string } | null = null,
+  boundEngine = "claude-code",
+) {
   const insert = vi.fn().mockResolvedValue({ error: null });
   // #11591: the support conversation is bound before dispatch via bind_agent_engine_run. The mock MUST carry
   // rpc, or the (non-fatal) bind throws a TypeError that is swallowed and the bind tests pass vacuously.
-  const rpc = vi.fn().mockResolvedValue({ data: null, error: rpcError });
+  // The RPC returns the bound run row (RETURNING *); assertLegacyEngineBinding reads its engine_id.
+  const rpc = vi.fn().mockResolvedValue({ data: rpcError ? null : { engine_id: boundEngine }, error: rpcError });
   const maybeSingle = vi.fn().mockResolvedValue({ data: existingRow, error: null });
   const chain: Record<string, unknown> = {};
   const self = () => chain;
@@ -119,23 +126,33 @@ describe("resolveOrCreateSupportConversation — engine binding before dispatch 
     });
   });
 
-  it("binds a sticky row only while it is pending", async () => {
-    const { chain, rpc } = makeTenant({ id: "conv-old", engine_binding_state: "pending", workspace_id: "ws-9" });
+  it.each(["pending", "legacy"])("binds a sticky %s row at its next message (CTO ruling: no thread keeps the subscription forever)", async (state) => {
+    const { chain, rpc } = makeTenant({ id: "conv-old", engine_binding_state: state, workspace_id: "ws-9" });
     mockGetFreshTenantClient.mockResolvedValue(chain);
 
     await expect(resolveOrCreateSupportConversation("user-1")).resolves.toBe("conv-old");
 
     expect(rpc).toHaveBeenCalledOnce();
-    expect(rpc.mock.calls[0][1]).toMatchObject({ p_workspace_id: "ws-9", p_conversation_id: "conv-old" });
+    expect(rpc.mock.calls[0][1]).toMatchObject({ p_workspace_id: "ws-9", p_conversation_id: "conv-old", p_created_by: "user-1" });
   });
 
-  it.each(["legacy", "bound"])("never binds a sticky %s row", async (state) => {
-    const { chain, rpc } = makeTenant({ id: "conv-old", engine_binding_state: state, workspace_id: "ws-9" });
+  it("never re-binds a sticky bound row, and never binds one whose workspace is unknown", async () => {
+    for (const row of [
+      { id: "conv-old", engine_binding_state: "bound", workspace_id: "ws-9" },
+      { id: "conv-old", engine_binding_state: "pending", workspace_id: null },
+    ]) {
+      const { chain, rpc } = makeTenant(row);
+      mockGetFreshTenantClient.mockResolvedValue(chain);
+      await resolveOrCreateSupportConversation("user-1");
+      expect(rpc).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a new row is bound only AFTER it is inserted", async () => {
+    const { chain, insert, rpc } = makeTenant(null);
     mockGetFreshTenantClient.mockResolvedValue(chain);
-
     await resolveOrCreateSupportConversation("user-1");
-
-    expect(rpc).not.toHaveBeenCalled();
+    expect(insert.mock.invocationCallOrder[0]).toBeLessThan(rpc.mock.invocationCallOrder[0]);
   });
 
   it("a failed bind is mirrored (feature=support, op=bind) and does not fail the conversation", async () => {
@@ -145,5 +162,27 @@ describe("resolveOrCreateSupportConversation — engine binding before dispatch 
     await expect(resolveOrCreateSupportConversation("user-1")).resolves.toEqual(expect.any(String));
 
     expect(rpc).toHaveBeenCalledOnce();
+    expect(mockReportSilentFallback).toHaveBeenCalledOnce();
+    expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({ feature: "support", op: "bind" });
+  });
+
+  it("a duplicate-key bind (a concurrent first message already bound it) is the desired state: not mirrored", async () => {
+    const { chain, rpc } = makeTenant(
+      { id: "conv-old", engine_binding_state: "pending", workspace_id: "ws-9" },
+      { message: 'engine run bind failed: duplicate key value violates unique constraint "agent_engine_runs_conversation_uniq"' },
+    );
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    await expect(resolveOrCreateSupportConversation("user-1")).resolves.toBe("conv-old");
+
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("a bind that lands on a non-Claude engine stops the dispatch (assertLegacyEngineBinding, as ws-handler does)", async () => {
+    const { chain } = makeTenant(null, null, "codex");
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    await expect(resolveOrCreateSupportConversation("user-1")).rejects.toMatchObject({ code: "engine_dispatch_required" });
   });
 });

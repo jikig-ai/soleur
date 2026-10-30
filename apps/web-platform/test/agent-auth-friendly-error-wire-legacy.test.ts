@@ -156,8 +156,9 @@ vi.mock("../server/agent-auth-mode", () => ({ makeAuthModeResolver: mockMakeAuth
 // #11591: these cases pin the subscription (oauth_token) copy and scheme, so the lease's mode resolver is
 // pinned to the managed path here; the selection itself is driven through the REAL lease and the REAL binding
 // resolver in byok-lease-auth-mode-binding.test.ts, not here.
+const mockMakeConversationAuthModeResolver = vi.hoisted(() => vi.fn((..._args: unknown[]) => async () => "managed"));
 vi.mock("../server/engine-binding-auth-mode", () => ({
-  makeConversationAuthModeResolver: () => async () => "managed",
+  makeConversationAuthModeResolver: mockMakeConversationAuthModeResolver,
   readConversationBindingAuthMode: async () => null,
 }));
 
@@ -274,6 +275,8 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
       mockBuildAgentEnv.mockReturnValue({ CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth" });
       streamOf(stream(CLI_TEXT));
       await startAgentSession(USER, "conv-oauth-copy", "cpo", "session-s");
+      // The lease is handed the resolver for THIS user and THIS conversation, in that order (both are strings).
+      expect(mockMakeConversationAuthModeResolver).toHaveBeenCalledWith(USER, "conv-oauth-copy");
       const frames = sent();
       expect(frames.filter((f) => f.type === "stream")[0].content).toBe(authFailureCopy("not_logged_in", "oauth_token"));
       const err = frames.find((f) => f.type === "error");

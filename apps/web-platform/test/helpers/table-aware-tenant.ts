@@ -31,8 +31,14 @@ export function makeTableAwareTenant(tables: Record<string, FakeRow[]> = {}): Ta
         },
         maybeSingle: async () => {
           if (state.failTables.has(table)) return { data: null, error: { message: "boom SECRETROW" } };
-          const hit = (state.tables[table] ?? []).find((row) => filters.every(([c, v]) => row[c] === v));
-          return { data: hit ?? null, error: null };
+          // Real PostgREST never matches `col = undefined`; a fake that did would serve a decoy row that
+          // lacks the filtered column to a caller whose scope argument was silently dropped.
+          const matches = (state.tables[table] ?? []).filter((row) =>
+            filters.every(([c, v]) => v !== undefined && row[c] === v),
+          );
+          // maybeSingle() errors on more than one row.
+          if (matches.length > 1) return { data: null, error: { message: "multiple rows returned" } };
+          return { data: matches[0] ?? null, error: null };
         },
       };
       return chain;
@@ -46,8 +52,9 @@ export function boundRun(over: FakeRow): FakeRow {
     id: "run-1",
     execution_kind: "conversation",
     workspace_id: "ws-1",
-    engine_id: "claude",
-    adapter_version: "1",
+    engine_id: "claude-code",
+    auth_mode: "managed",
+    adapter_version: "claude-code-v1",
     created_at: "2026-10-30T00:00:00Z",
     ...over,
   };

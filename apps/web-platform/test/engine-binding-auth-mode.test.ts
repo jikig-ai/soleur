@@ -77,6 +77,12 @@ describe("makeConversationAuthModeResolver", () => {
     expect((err as Error).message).not.toContain("SECRETROW");
   });
 
+  it.each([["", CONV], [ME, ""]])("an empty id (%j, %j) is unbound before any read: the scope arguments are optional by design", async (u, c) => {
+    const t = use({ agent_engine_runs: [boundRun({ conversation_id: CONV, created_by: ME, auth_mode: "api-key" })] });
+    await expect(makeConversationAuthModeResolver(u, c)()).rejects.toMatchObject({ reason: "unbound" });
+    expect(t.eqs).toHaveLength(0);
+  });
+
   it("a tenant-client failure throws read_failed", async () => {
     h.tenant = { get client(): never { throw new Error("jwt mint failed"); } };
     await expect(makeConversationAuthModeResolver(ME, CONV)()).rejects.toMatchObject({ reason: "read_failed" });

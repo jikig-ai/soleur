@@ -179,7 +179,7 @@ provenance in protected recovery checkpoints with authorization appropriate to
 the bound conversation or routine execution. These checkpoints must not widen
 access through the workspace-member event ledger.
 
-The binding's `authMode` also drives Agent-SDK credential selection in the BYOK lease (ADR-048 addendum, #11591), so the immutability of the binding is load-bearing for credential selection, not only for egress.
+For claude-code bindings, the binding's `authMode` also drives Agent-SDK credential selection in the BYOK lease (ADR-048 addendum, #11591), so the immutability of the binding is load-bearing for credential selection, not only for egress.
 
 Separate the immutable conversation engine binding from each turn's execution
 attempt. A terminal turn does not terminalize the conversation or prevent a later

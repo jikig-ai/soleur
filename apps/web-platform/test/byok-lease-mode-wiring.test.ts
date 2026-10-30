@@ -8,11 +8,22 @@ import { join } from "node:path";
 // credential, never from the mode (AC9). Counted with a global match (no pipe into `grep -q`).
 
 const root = join(__dirname, "..", "server");
-const src = (f: string) => readFileSync(join(root, f), "utf8");
+// Whole-line `//` comments are dropped so prose that quotes a pinned token cannot satisfy (or inflate) a pin.
+const src = (f: string) =>
+  readFileSync(join(root, f), "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*\/\//.test(l))
+    .join("\n");
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 
 describe("Agent-SDK call sites hand the lease a binding-backed mode resolver", () => {
-  it.each(["agent-runner.ts", "cc-dispatcher.ts"])("%s passes the conversation resolver exactly once", (file) => {
+  // The ARGUMENTS are pinned too: swapping (userId, conversationId) type-checks (both are strings) and would
+  // mint a tenant client for the wrong id, failing every subscription holder closed.
+  it.each([
+    ["agent-runner.ts", "resolveAuthMode: makeConversationAuthModeResolver(userId, conversationId)"],
+    ["cc-dispatcher.ts", "resolveAuthMode: makeConversationAuthModeResolver(args.userId, args.conversationId)"],
+  ])("%s passes the conversation resolver, with (user, conversation) in that order, exactly once", (file, call) => {
+    expect(count(src(file), call)).toBe(1);
     expect(count(src(file), "resolveAuthMode: makeConversationAuthModeResolver(")).toBe(1);
   });
 
@@ -52,3 +63,17 @@ describe("the UI scheme comes from the leased credential, not the mode (AC9)", (
     }
   });
 });
+
+describe("the other lease users and the mode vocabulary", () => {
+  it("the one direct runWithByokLease caller (agent-on-spawn-requested) is REST-only: it never asks for an Agent-SDK credential", () => {
+    const text = src("inngest/functions/agent-on-spawn-requested.ts");
+    expect(count(text, "runWithByokLease(")).toBeGreaterThan(0);
+    expect(count(text, "getAgentCredential(")).toBe(0);
+  });
+
+  it("the settings registry's claude-code auth modes are exactly the modes the lease accepts", async () => {
+    const { reviewedEngineRegistry } = await import("@/server/agent-engine-reviewed-definitions");
+    expect([...reviewedEngineRegistry.get("claude-code").authModes].sort()).toEqual(["api-key", "managed"]);
+  });
+});
+
