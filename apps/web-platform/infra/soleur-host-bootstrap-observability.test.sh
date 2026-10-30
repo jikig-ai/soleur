@@ -175,14 +175,15 @@ else
   no "H3: expected a 'set +e  # H3 …' restoring errexit-off after the extraction block"
 fi
 # Non-vacuity: the set +e must appear AFTER the extraction's rm -rf "$SEED" and
-# BEFORE the bare cloudflared apt install.
+# BEFORE the bare cloudflared install (now the pinned .deb block — same "first
+# leak-vulnerable downstream command" role the apt install used to fill).
 rm_ln=$(line_of "$CI" 'rm -rf "$SEED"')
 h3_ln=$(grep -nE 'set \+e.*H3' "$CI" | sed -n '1p' | cut -d: -f1 || true)
-apt_ln=$(line_of "$CI" 'apt-get install -y cloudflared')
+apt_ln=$(line_of "$CI" 'cloudflared-linux-amd64.deb')
 if [ -n "$rm_ln" ] && [ -n "$h3_ln" ] && [ -n "$apt_ln" ] && [ "$rm_ln" -lt "$h3_ln" ] && [ "$h3_ln" -lt "$apt_ln" ]; then
-  ok "H3: set +e (line $h3_ln) sits between extraction end ($rm_ln) and cloudflared apt ($apt_ln)"
+  ok "H3: set +e (line $h3_ln) sits between extraction end ($rm_ln) and the cloudflared install ($apt_ln)"
 else
-  no "H3: set +e must sit after rm -rf \$SEED ($rm_ln) and before cloudflared apt ($apt_ln); h3=$h3_ln"
+  no "H3: set +e must sit after rm -rf \$SEED ($rm_ln) and before the cloudflared install ($apt_ln); h3=$h3_ln"
 fi
 
 # ── AC6 (readiness gates — the load-bearing async-death detector) ──
@@ -731,14 +732,24 @@ if [ -n "$su_ln" ] && [ -n "$auu_ln" ] && [ -n "$armln2" ] && [ "$armln2" -lt "$
 else
   no "AC17: need trap-arm < STAGE=apt_update < apt-get update (arm=$armln2 stage=$su_ln update=$auu_ln)"
 fi
-# The cloudflare keyring must be fetched BEFORE the first apt-get update — the cloudflare source is
-# active from boot (write_files), so an update before the key deterministically fails (missing
-# signed-by keyring) and masks the real cause. (Anchor on the curl fetch, not the deb/signed-by line.)
-cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | sed -n '1p' | cut -d: -f1 || true)
-if [ -n "$cfk_ln" ] && [ -n "$auu_ln" ] && [ "$cfk_ln" -lt "$auu_ln" ]; then
-  ok "AC17: cloudflare keyring fetched (line $cfk_ln) BEFORE apt-get update ($auu_ln) — no missing-key fatal"
+# The Cloudflare apt source + keyring are GONE (eMudhra remediation): the repo rotated
+# versions, so an unpinned `apt-get install -y cloudflared` could resurrect a below-advisory-
+# floor binary on a host birth. cloudflared now installs as a pinned .deb + sha256 fail-closed
+# arm (soleur-boot-emit cloudflared_checksum), and the missing-keyring-before-apt-update
+# ordering hazard is gone with the source. Pin all three halves: no source list, no keyring
+# fetch, no unpinned install.
+if ! grep -qE 'cloudflare-main\.list|cloudflare-main\.gpg|cf_apt_key' "$CI" \
+   && ! grep -qF 'apt-get install -y cloudflared' "$CI"; then
+  ok "AC17: no Cloudflare apt source/keyring/cf_apt_key stage and no unpinned cloudflared apt install"
 else
-  no "AC17: cloudflare-main.gpg must be curl-fetched before the first apt-get update (cfk=$cfk_ln update=$auu_ln)"
+  no "AC17: Cloudflare apt machinery must be REMOVED (cloudflared installs via pinned .deb, not the rotating apt repo)"
+fi
+if grep -qF 'cloudflared-linux-amd64.deb' "$CI" \
+   && grep -qF 'sha256sum -c -' "$CI" \
+   && grep -qF 'soleur-boot-emit cloudflared_checksum fatal' "$CI"; then
+  ok "AC17: cloudflared installs via pinned .deb + sha256 fail-closed arm (cloudflared_checksum)"
+else
+  no "AC17: cloud-init must install cloudflared as a pinned .deb + sha256sum -c + soleur-boot-emit cloudflared_checksum fatal"
 fi
 
 # ── AC18 (#6090): ghcr_login/pull capture the host-side error into the emit `detail` tag ──

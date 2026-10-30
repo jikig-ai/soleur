@@ -269,12 +269,10 @@ export const cronMembershipHealth = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "17 * * * *" },
+      { event: "cron/membership-health.manual-trigger" },
+    ],
   },
-  [
-    { cron: "17 * * * *" },
-    { event: "cron/membership-health.manual-trigger" },
-  ],
-  cronMembershipHealthHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronMembershipHealthHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

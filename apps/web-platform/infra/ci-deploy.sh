@@ -326,6 +326,26 @@ resolve_host_id() {
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
 
+# Per-host owner-side relay bind (ADR-068 §(a), item 2). SOLEUR_PROXY_BIND is the
+# host's OWN private-net IP; it cannot be a fleet-wide Doppler value (two hosts
+# would bind each other's address). Resolve from the 10.0.1.0/24 interface.
+# Best-effort: empty value keeps the listener fail-closed (createProxyServer.no-bind).
+resolve_proxy_bind() {
+  if [[ -n "${SOLEUR_PROXY_BIND_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_PROXY_BIND_OVERRIDE"
+    return 0
+  fi
+  local ip
+  ip=$(ip -4 -o addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | head -1 || true)
+  if [[ -n "$ip" ]]; then
+    printf '%s' "$ip"
+    return 0
+  fi
+  return 1
+}
+PROXY_BIND="$(resolve_proxy_bind || true)"
+readonly PROXY_BIND
+
 # 2-host deploy fan-out (#5274 Phase 3, ADR-068 "deploy fan-out" amendment).
 # After the receiving host's OWN prod swap succeeds, forward the SAME deploy to
 # every PEER web host over the private net, so one webhook trigger delivers the
@@ -548,6 +568,10 @@ TAG=""
 # #8609: the probe's closed `rejected` sub-reason (github-app-key-probe.mjs REJECT_REASONS, plus
 # no_verdict when the exec produced no verdict line, unspecified for a bare `rejected` line). Reset like the three fields at the top.
 GITHUB_APP_KEY_PROBE_REASON=""
+# #10934 (CTO R2): the stage the Inngest https self-gate's LAST attempt reached (_inngest_link_selfgate_phase's closed set). Assigned ONLY
+# by the self-gate's failure tail, reset at the top of resolve_inngest_link, and written by write_state as the closed-enum deploy-state key
+# `inngest_link_selfgate_phase` (ABSENT when empty). The run-log reason stays the constant inngest_link_selfgate_failed.
+INNGEST_LINK_SELFGATE_PHASE=""
 
 # _gak_enum <value> <a|b|…>: <value> when it is one of the alternatives, else `invalid`. write_state
 # splices these fields into JSON unescaped, so only a closed-enum value may reach it.
@@ -578,6 +602,12 @@ write_state() {
     if [[ -n "${GITHUB_APP_KEY_PROBE_REASON:-}" ]]; then
       gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
     fi
+  fi
+  # #10934: the self-gate's stage rides ONLY a deploy whose https self-gate failed (ABSENT otherwise, the same convention), as a
+  # closed-enum value checked here like the fields above, so an unexpected value is written as `invalid`, never spliced into the JSON.
+  local sgp=""
+  if [[ -n "${INNGEST_LINK_SELFGATE_PHASE:-}" ]]; then
+    sgp=",\"inngest_link_selfgate_phase\":\"$(_gak_enum "$INNGEST_LINK_SELFGATE_PHASE" 'connect|handshake|verify|ca_file|request|status|unknown')\""
   fi
   # #8743 Phase 2 (ADR-068 constraint (c)): persist `fanout_peers` — the
   # EFFECTIVE SOLEUR_DEPLOY_PEERS list (blank-stripped, minus this host's own
@@ -614,8 +644,8 @@ write_state() {
   fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" "$sgp" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -3657,7 +3687,8 @@ github_app_key_canary_check() {
 # $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
 # probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
 # (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure; inngest_link_scrub_env_file also sets it),
-# INNGEST_LINK_CA_STRICT. Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
+# INNGEST_LINK_CA_STRICT, INNGEST_LINK_SELFGATE_PHASE (reset to empty on every call; one of the seven stage tokens only when the https
+# self-gate failed, which write_state records as the deploy-state key inngest_link_selfgate_phase). Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
 # `|| rc=$?` (set -e is OFF inside), so every step below handles its own failure.
 INNGEST_LINK_HTTP_URL="http://10.0.1.40:8288"
 INNGEST_LINK_HTTPS_URL="https://10.0.1.40:8443"
@@ -3764,19 +3795,95 @@ _inngest_link_install() {
   return 1
 }
 
+# _inngest_link_time_nonzero <t>: classifies ONE curl timer field (time_connect or time_appconnect). Pure: no I/O, never aborts. The ONE
+# place a timer is interpreted: the phase helper below and the tcp/tls counters of the attempt loop both call it, so the two can never
+# disagree about what a zero or an unreadable timer is (resolver-suite row S6b pins the comma-decimal zero, through mutants M22ab and M22ac;
+# row S4 pins the counters, S6 and S6c the unreadable timer).
+#   returns 0  a decimal number that is not zero (the stage happened)
+#   returns 1  a decimal number that is zero, dot or comma separated, `0.000000` or `0,000000` (the stage never happened)
+#   returns 2  not a decimal number (empty, text, an exponent): it says nothing about the stage
+_inngest_link_time_nonzero() { # <t>
+  local t="${1-}" num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$'
+  if [[ ! "$t" =~ $num ]]; then return 2; fi
+  if [[ "$t" =~ $zero ]]; then return 1; fi
+  return 0
+}
+
+# _inngest_link_selfgate_phase <rc> <code> <time_connect> <time_appconnect>: prints ONE fixed token naming the stage the LAST attempt
+# reached (#10934). Pure: no I/O, no side effect, never aborts. The input is what one curl attempt printed, split into fields; this is
+# the only code that turns the fields into a STAGE (the timers themselves are read by _inngest_link_time_nonzero, and the attempt loop
+# reads only the HTTP code and the verification result for the event). Order matters (rc 124 or an empty line first, then the two exit
+# codes that are certain without any timer, then a received HTTP status, then the timers):
+#   unknown    rc 124 (the timeout wrapper killed curl: a hang), an empty line, or a timer that is not a decimal number. Never a
+#              success-looking token: an unparsable attempt must not read as a stage. The rc 77, rc 60 and validated-status arms run
+#              BEFORE the timers are looked at, so a non-numeric timer beside them still reads ca_file, verify or status.
+#   ca_file    rc 77 (curl could not use the pinned CA file).
+#   verify     rc 60 (the served certificate does not verify against the pinned file; the handshake did not complete, tls is 0).
+#   status     a validated three-digit code other than 000 and 200 (TLS verified and an HTTP status other than 200 came back). A 200
+#              code with a non-zero rc is a body cut short: it is NOT status, it falls through to the timers and reads request.
+#   connect    time_connect is zero (no TCP connection: refused, firewall drop, unreachable).
+#   handshake  TCP connected, time_appconnect is zero (the TLS handshake did not complete).
+#   request    TLS completed and verified, no HTTP status came back. It does NOT prove a cause: it means only that the certificate is
+#              not the problem and the terminator or whatever sits behind it is to be checked. Classified by the timers, never by an
+#              rc list, because one wire event prints rc 52 on one curl build and rc 56 on another.
+# The rc tests are string compares on purpose (`${1-}` may be empty or a bare word, which `-eq` would evaluate as an arithmetic
+# variable name and abort on under `set -u`): keep them string compares.
+_inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
+  local rc="${1-}" code="${2-}" tc="${3-}" ta="${4-}" tcr=0 tar=0
+  local c3='^[0-9]{3}$'
+  if [[ "$rc" == 124 || -z "$code$tc$ta" ]]; then printf unknown; return 0; fi
+  if [[ "$rc" == 77 ]]; then printf ca_file; return 0; fi
+  if [[ "$rc" == 60 ]]; then printf verify; return 0; fi
+  if [[ "$code" =~ $c3 && "$code" != 000 && "$code" != 200 ]]; then printf status; return 0; fi
+  _inngest_link_time_nonzero "$tc" || tcr=$?
+  _inngest_link_time_nonzero "$ta" || tar=$?
+  if [[ "$tcr" -eq 2 || "$tar" -eq 2 ]]; then printf unknown; return 0; fi
+  if [[ "$tcr" -eq 1 ]]; then printf connect; return 0; fi
+  if [[ "$tar" -eq 1 ]]; then printf handshake; return 0; fi
+  printf request
+}
+
+# _inngest_link_selfgate <cafile>: success = TLS verified against the pinned file AND a 200, decided from curl's exit code and the first
+# token of its write-out line alone, before any other field is looked at (a short or odd line from a healthy listener can never fail the
+# gate). Every attempt prints one line of four space-separated fields: the HTTP code, the TCP connect time, the TLS handshake time and
+# curl's certificate verification result. They feed ONE failure event, never a value of their own:
+#   INNGEST_LINK: class=selfgate_failed level=error rc=<n> http=<ddd|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>
+#   rc, http  the LAST attempt's curl exit code and HTTP code (http from the validated three-digit token, else none).
+#   phase     the stage the LAST attempt reached (see _inngest_link_selfgate_phase). Read it together with rc: when tcp=0 only rc tells
+#             rc 7 (refused) from rc 28 (a drop).
+#   tcp, tls  how many of ALL attempts printed a non-zero TCP connect time and a non-zero TLS handshake time, each clamped to 0-99;
+#             attempts= is the denominator. They show a listener that changed state between tries, which phase (last attempt only)
+#             hides. An attempt whose own timer field is not a decimal number adds nothing, so unknown with tcp=0 tls=0 is not
+#             "connect failed".
+#   verify    0 unless phase=verify, then the last attempt's verification result clamped to 0-99 (18 the served certificate is not the
+#             pinned one, 10 expired, 1 name mismatch; the raw value is 1 after a handshake or CA file failure, so it is suppressed).
+# Reading rule: phase=request means only that TLS verified and no HTTP response came back; check the terminator and its upstream, not
+# the certificate. It does not establish which of them failed. No -k and no second probe: the verdict path is the same one curl.
 _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verified against the pinned file AND 200
-  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" code rc=0
+  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" out code tc ta ver rc=0
+  local phase=unknown http=none vv=0 tcpn=0 tlsn=0
+  local c3='^[0-9]{3}$'
   case "$max" in '' | *[!0-9]*) max=3 ;; esac
   while :; do
     rc=0
-    code="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+    out="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code} %{time_connect} %{time_appconnect} %{ssl_verify_result}' --connect-timeout 5 --max-time 10 \
       --cacert "$1" "$INNGEST_LINK_HTTPS_URL/health" 2>/dev/null)" || rc=$?
+    code=""; tc=""; ta=""; ver=""
+    IFS=' ' read -r code tc ta ver <<< "$out" || true
     if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi
+    phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"
+    if _inngest_link_time_nonzero "$tc"; then tcpn=$((tcpn + 1)); fi
+    if _inngest_link_time_nonzero "$ta"; then tlsn=$((tlsn + 1)); fi
+    http=none
+    if [[ "$code" =~ $c3 ]]; then http="$code"; fi
+    vv=0
+    if [[ "$phase" == verify ]]; then vv="$(_inngest_link_count99 "${ver%% *}")"; fi
     if [[ "$i" -ge "$max" ]]; then break; fi
     sleep 2
     i=$((i + 1))
   done
-  inngest_link_event selfgate_failed error "rc=$rc http=${code:-none} attempts=$i"
+  INNGEST_LINK_SELFGATE_PHASE="$phase"
+  inngest_link_event selfgate_failed error "rc=$rc http=$http attempts=$i phase=$phase tcp=$(_inngest_link_count99 "$tcpn") tls=$(_inngest_link_count99 "$tlsn") verify=$vv"
   return 1
 }
 
@@ -3796,6 +3903,7 @@ resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
   local proj_n proj_v cfg_n cfg_v scope_verified=1
   INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""; INNGEST_LINK_PENDING_CA_RESET=0
+  INNGEST_LINK_SELFGATE_PHASE=""
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 
@@ -5084,6 +5192,7 @@ case "$COMPONENT" in
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
+      -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -5465,6 +5574,7 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
+        -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -e SOLEUR_EGRESS_REAPER=1 \
         -v /mnt/data/workspaces:/workspaces \

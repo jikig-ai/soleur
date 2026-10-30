@@ -1068,11 +1068,11 @@ s = s.replace(old, "cat >/etc/systemd/system/disk-monitor.timer <<" + q + "TIMER
 # silently shrinks the parsed path set. The four entries chosen are the only write_files paths
 # that are NOT also SSH destinations, so the floor fires alone.
 expect_red "M32 (§0 floor: write_files key order hides paths from the extraction)" cloud-init.yml \
-  "0: cloud-init write_files parsed to only 10 paths" '
+  "0: cloud-init write_files parsed to only 9 paths" '
 for tgt in ["/etc/ssh/sshd_config.d/01-hardening.conf",
             "/etc/sudoers.d/deploy-chown",
             "/etc/systemd/system/webhook.service",
-            "/etc/apt/sources.list.d/cloudflare-main.list"]:
+            "/etc/systemd/network/99-soleur-private-fallback.network"]:
     old = "  - path: " + tgt + "\n"
     assert old in s, tgt
     s = s.replace(old, "  - defer: false\n    path: " + tgt + "\n", 1)

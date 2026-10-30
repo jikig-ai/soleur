@@ -29,7 +29,8 @@
 # monitors (`scheduled_oauth_probe`, `scheduled_github_app_drift_guard`) use a
 # 30-min margin — Inngest fires deterministically with ≤2-min jitter, so 30 is
 # honest. #8450 returned two GHA-fired monitors
-# (`scheduled_prod_version_drift`, `zot_restart_loop_alarm`) to hourly cadence
+# (`scheduled_prod_version_drift` — since destroyed by the #6590 PR-B prune;
+# `zot_restart_loop_alarm`) to hourly cadence
 # with larger margins (360/120) sized for GHA schedule-delivery jitter, not
 # Inngest's. Since #8495 `zot_restart_loop_alarm` and `scheduled_inngest_health`
 # are dispatched by the web server's watchdog clock (ADR-248), so their margins
@@ -42,7 +43,10 @@
 # (follow-through), PR-3 #4227 closing issue #4211 (oauth-probe), PR-4
 # closing issue #4235 (github-app-drift-guard).
 #
-# CLAUDE-EVAL COHORT — 60-min margin (NOT 30). The 12 `max_runtime_minutes = 55`
+# CLAUDE-EVAL COHORT — 60-min margin (NOT 30). ALL 12 monitors below were
+# destroyed by the #6590 PR-B prune (their emitters void-post by design, spec
+# NG4); the margin rationale is retained because it is the documented sizing
+# basis other stanzas cite. The 12 `max_runtime_minutes = 55`
 # monitors (scheduled_bug_fixer, scheduled_community_monitor, scheduled_roadmap_review,
 # scheduled_legal_audit, scheduled_agent_native_audit, scheduled_competitive_analysis,
 # scheduled_content_generator, scheduled_ux_audit, scheduled_campaign_calendar,
@@ -92,46 +96,12 @@
 # (which widened 180 -> 480 to absorb the jitter this PR removes at its source).
 # The dispatcher's OWN liveness is covered by cron-inngest-cron-watchdog (the
 # parity-guarded EXPECTED_CRON_FUNCTIONS manifest), not a second monitor.
-# Executor liveness for the weekly action-required SLA staleness cron (#6836). The
-# DISPATCHER (cron-action-required-sla.ts) heartbeats this slug; the event-fired WORKER
-# (sla-issue-process.ts) has NO monitor by design (no cadence → a crontab monitor would
-# page MISSED forever). Weekly Fri 12:00 UTC; 60-min margin per the Inngest-dispatch cohort.
-resource "sentry_cron_monitor" "cron_action_required_sla" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "cron-action-required-sla"
-  schedule                = { crontab = "0 12 * * 5" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
 
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-terraform-drift"
   schedule                = { crontab = "0 6,18 * * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Executor liveness for the weekly domain-model register drift cron (#5872).
-# Dispatched by apps/web-platform/server/inngest/functions/cron-domain-model-drift.ts
-# (workflow_dispatch); the GHA scheduled-domain-model-drift.yml executor POSTs
-# the heartbeat (ok on analyzer rc 0/1, error on rc 2/3 or an empty-stale
-# anomaly). Own monitor (not Design A) because weekly-cadence absence-based
-# liveness is too weak — a broken executor that files nothing would be invisible
-# for up to 7 days. Margin 60 min matches the Inngest-dispatch cohort convention.
-resource "sentry_cron_monitor" "scheduled_domain_model_drift" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-domain-model-drift"
-  schedule                = { crontab = "0 8 * * 1" }
   checkin_margin_minutes  = 60
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
@@ -172,25 +142,6 @@ resource "sentry_cron_monitor" "scheduled_anthropic_credit_probe" {
   schedule                = { crontab = "47 * * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# #cost-attribution (plan Phase 3): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-anthropic-cost-report.ts`.
-# Daily 06:17 UTC pull of the Anthropic Admin cost/usage API → the
-# SOLEUR_CLAUDE_COST_DAILY marker. RED on a missed check-in OR a classified
-# 401/403 (bad admin key). A MISSING admin key self-reports GREEN + key-missing
-# marker (benign) — it does NOT flip this monitor red (obs P4). Mirrors the
-# scheduled_domain_model_drift daily cohort (60-min margin, 15-min runtime).
-resource "sentry_cron_monitor" "scheduled_anthropic_cost_report" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-anthropic-cost-report"
-  schedule                = { crontab = "17 6 * * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
@@ -241,61 +192,6 @@ resource "sentry_cron_monitor" "cron_kb_template_health" {
   timezone                = "UTC"
 }
 
-# TR9 PR-5 (closes #4376): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts`. NEW
-# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
-# with no Sentry check-in). The GHA scheduled-bug-fixer workflow was
-# deleted in the same commit per TR9 I-13 hygiene.
-resource "sentry_cron_monitor" "scheduled_bug_fixer" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-bug-fixer"
-  schedule                = { crontab = "0 6 * * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-resource "sentry_cron_monitor" "scheduled_daily_triage" {
-  organization = var.sentry_org
-  project      = data.sentry_project.web_platform.slug
-  name         = "scheduled-daily-triage"
-  schedule     = { crontab = "0 4 * * *" }
-  # TR9 PR-1 (#3948): tightened from 240 min (GHA-era jitter tolerance) to
-  # 30 min after migration to Inngest cron (cron-daily-triage.ts). Inngest
-  # fires at most once per scheduled time with minimal jitter, vs GHA's
-  # sub-hourly runner-pool degradation of ~60 min daytime / longer overnight.
-  # Resource id, `name`, and Sentry slug UNCHANGED — historical check-in
-  # continuity preserved.
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-resource "sentry_cron_monitor" "scheduled_follow_through" {
-  organization = var.sentry_org
-  project      = data.sentry_project.web_platform.slug
-  name         = "scheduled-follow-through"
-  schedule     = { crontab = "0 9 * * 1-5" }
-  # TR9 PR-2 (#4063): NEW Inngest-fired monitor for cron-follow-through-monitor.ts.
-  # 30-min margin per Inngest-fired precedent (scheduled_daily_triage above).
-  # Weekday-only DOW range (1-5) is honored by Sentry's croniter-backed
-  # missed-checkin algorithm AND the jianyuan/sentry
-  # provider passes the crontab through verbatim (verified at Phase 0.4 of the plan
-  # via gh search against the provider's internal/provider/resource_cron_monitor_impl.go
-  # — Schedule: inSchedule.Crontab.Get()). Weekend gap is expected silence, not a
-  # false missed-checkin alert.
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
 # scheduled-realtime-probe is GHA-fired (.github/workflows/scheduled-realtime-probe.yml,
 # on.schedule "0 7 * * *"), so it is subject to GitHub Actions scheduler
 # reliability gaps. On 2026-05-26 GitHub dropped the scheduled run ENTIRELY
@@ -313,279 +209,6 @@ resource "sentry_cron_monitor" "scheduled_realtime_probe" {
   schedule                = { crontab = "0 7 * * *" }
   checkin_margin_minutes  = 1440
   max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# scheduled-integration-suites is GHA-fired
-# (.github/workflows/scheduled-integration-suites.yml, on.schedule
-# "30 4 * * *"). Same GHA-scheduler reliability class as
-# scheduled_realtime_probe — checkin_margin 1440 tolerates one wholly dropped
-# daily run (measured on the probe 2026-05-26). max_runtime tracks the job's
-# timeout-minutes: 70. Slug MUST match `monitor-slug` in the workflow's
-# sentry-heartbeat step — a typo pages "missed check-in" forever.
-resource "sentry_cron_monitor" "scheduled_integration_suites" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-integration-suites"
-  schedule                = { crontab = "30 4 * * *" }
-  checkin_margin_minutes  = 1440
-  max_runtime_minutes     = 70
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-resource "sentry_cron_monitor" "scheduled_skill_freshness" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-skill-freshness"
-  schedule                = { crontab = "0 2 1 * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-resource "sentry_cron_monitor" "scheduled_content_vendor_drift" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-content-vendor-drift"
-  schedule                = { crontab = "17 11 * * MON" }
-  checkin_margin_minutes  = 90
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-11: Inngest-fired via
-# apps/web-platform/server/inngest/functions/cron-community-monitor.ts.
-# Migrated from the GHA scheduled-community-monitor workflow (deleted in
-# the same PR per TR9 I-13 hygiene). The Sentry monitor resource pre-
-# existed (it tracked the GHA-era external heartbeat); this PR updates
-# fields in place: sets checkin_margin to 60 min (claude-eval cohort margin —
-# single end-of-run heartbeat after a 50-min budget; see header) and raises
-# max_runtime (10→55 min, claude-eval cohort budget mirroring scheduled_bug_fixer/
-# scheduled_roadmap_review/scheduled_legal_audit/scheduled_agent_native_audit/
-# scheduled_competitive_analysis).
-resource "sentry_cron_monitor" "scheduled_community_monitor" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-community-monitor"
-  schedule                = { crontab = "0 8 * * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-6 (closes #4416): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-strategy-review.ts`. NEW
-# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
-# with no Sentry check-in). The GHA scheduled-strategy-review workflow was
-# deleted in the same commit per TR9 I-13 hygiene.
-# Weekly Monday 08:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
-# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through);
-# tighter than the GHA-era 240-min margin (see scheduled_daily_triage) because
-# Inngest has minimal jitter.
-# Single-miss alert (failure_issue_threshold=1): a single missed Monday is
-# noteworthy on a weekly cadence.
-resource "sentry_cron_monitor" "scheduled_strategy_review" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-strategy-review"
-  schedule                = { crontab = "0 8 * * 1" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-7 (closes #4425): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-roadmap-review.ts`. NEW
-# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
-# with no Sentry check-in). The GHA scheduled-roadmap-review workflow was
-# deleted in the same commit per TR9 I-13 hygiene.
-# Weekly Monday 09:00 UTC. Inngest-fired (not GHA) — 60-min margin per the
-# claude-eval cohort (single end-of-run heartbeat after a 50-min budget; see
-# header), NOT the 30-min small-cron margin. Single-miss alert
-# (failure_issue_threshold=1): a single missed Monday is noteworthy on a weekly
-# cadence.
-resource "sentry_cron_monitor" "scheduled_roadmap_review" {
-  organization           = var.sentry_org
-  project                = data.sentry_project.web_platform.slug
-  name                   = "scheduled-roadmap-review"
-  schedule               = { crontab = "0 9 * * 1" }
-  checkin_margin_minutes = 60
-  # 55 min mirrors scheduled_bug_fixer (the only other claude-eval-spawning
-  # cron — both budget 50 min for MAX_TURN_DURATION_MS plus slack). NOT 10
-  # like scheduled_strategy_review, which is pure-TS with a 10-min outer
-  # wall-clock. Field is decorative under single-heartbeat pattern (see
-  # header lines 37-46) but maintained for sibling consistency with the
-  # claude-eval cohort.
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-8 (closes #4439): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-legal-audit.ts`. NEW
-# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
-# with no Sentry check-in). The GHA scheduled-legal-audit workflow was
-# deleted in the same commit per TR9 I-13 hygiene.
-# Quarterly Jan/Apr/Jul/Oct 1 @ 11:00 UTC. Inngest-fired (not GHA) — 60-min
-# margin per the claude-eval cohort (single end-of-run heartbeat after a 50-min
-# budget; see header), NOT the 30-min small-cron margin. Single-miss alert
-# (failure_issue_threshold=1): a single missed quarter is highly noteworthy on a
-# quarterly cadence. 55 min mirrors the claude-eval cohort (scheduled_bug_fixer,
-# scheduled_roadmap_review) — 50-min MAX_TURN_DURATION_MS budget plus slack.
-resource "sentry_cron_monitor" "scheduled_legal_audit" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-legal-audit"
-  schedule                = { crontab = "0 11 1 1,4,7,10 *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-9 (closes #4442): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-agent-native-audit.ts`. NEW
-# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
-# with no Sentry check-in). The GHA scheduled-agent-native-audit workflow was
-# deleted in the same commit per TR9 I-13 hygiene.
-# Monthly 15th 09:00 UTC. Inngest-fired (not GHA) — 60-min margin per the
-# claude-eval cohort (single end-of-run heartbeat after a 50-min budget; see
-# header), NOT the 30-min small-cron margin. This is the monitor that paged a
-# FALSE missed-check-in on 2026-06-15 (incident 5546660): the run succeeded and
-# filed #5318 at 09:09 UTC, but its end-of-run heartbeat landed after the old
-# 30-min margin. Single-miss alert (failure_issue_threshold=1): a single missed
-# monthly run is noteworthy on a monthly cadence. 55 min mirrors the claude-eval
-# cohort.
-resource "sentry_cron_monitor" "scheduled_agent_native_audit" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-agent-native-audit"
-  schedule                = { crontab = "0 9 15 * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-10 (closes #4448): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-competitive-analysis.ts`.
-# NEW monitor — no GHA-era predecessor.
-# Monthly 1st @ 09:00 UTC. Inngest-fired (not GHA) — 60-min margin per the
-# claude-eval cohort (single end-of-run heartbeat after a 50-min budget; see
-# header), NOT the 30-min small-cron margin. Single-miss alert. 55 min mirrors
-# the claude-eval cohort.
-resource "sentry_cron_monitor" "scheduled_competitive_analysis" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-competitive-analysis"
-  schedule                = { crontab = "0 9 1 * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 Phase 2 (#4483): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-content-generator.ts`. This
-# monitor was MISSING — the function POSTed check-ins to the
-# `scheduled-content-generator` slug that Sentry had never been told existed,
-# so a `?status=error` heartbeat opened no issue. #4689's output-aware heartbeat
-# is inert for content-generator (#4684) without this resource: the producer
-# correctly resolves ok:false, but with no monitor the red signal is dropped.
-# Tue/Thu 10:00 UTC. Inngest-fired — 60-min margin per the claude-eval cohort
-# (single end-of-run heartbeat after a 50-min budget; see header), NOT the 30-min
-# small-cron margin. 55 min mirrors the claude-eval cohort (50-min
-# MAX_TURN_DURATION_MS budget plus slack). Single-miss alert
-# (failure_issue_threshold=1): a single missed twice-weekly fire is noteworthy.
-resource "sentry_cron_monitor" "scheduled_content_generator" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-content-generator"
-  schedule                = { crontab = "0 10 * * 2,4" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# PR #4457: Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-stale-deferred-scope-outs.ts`.
-# Migrated from the GHA scheduled-stale-deferred-scope-outs workflow (deleted
-# in the same PR). NEW monitor — no GHA-era predecessor (the GHA workflow
-# shipped in PR #4452 with no Sentry check-in and was migrated before its
-# first natural fire).
-# Daily @ 12:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
-# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
-# scheduled_bug_fixer cohort). Single-miss alert (failure_issue_threshold=1):
-# a single missed daily fire is noteworthy. 10 min mirrors the small-cron
-# cohort (scheduled_oauth_probe, scheduled_github_app_drift_guard,
-# scheduled_community_monitor) — pure-TS sweep with no claude-eval spawn.
-resource "sentry_cron_monitor" "scheduled_stale_deferred_scope_outs" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-stale-deferred-scope-outs"
-  schedule                = { crontab = "0 12 * * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-11 (Refs #3948): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`.
-# NEW monitor — the GHA scheduled-compound-promote workflow ran on GHA's
-# runner pool with no Sentry check-in. The GHA workflow was deleted in
-# the same commit per TR9 I-13 hygiene.
-# Weekly Sunday 00:00 UTC. Inngest-fired (not GHA) — 30-min margin per
-# the Inngest-fired precedent. Single-miss alert. 10 min mirrors the
-# small-cron cohort (pure-TS handler, no claude-eval spawn).
-resource "sentry_cron_monitor" "scheduled_compound_promote" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-compound-promote"
-  schedule                = { crontab = "0 0 * * 0" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# TR9 PR-11 (#4464): Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-ux-audit.ts`. NEW
-# monitor — the GHA scheduled-ux-audit workflow had no Sentry check-in.
-# Monthly 1st @ 09:00 UTC. Inngest-fired (not GHA) — 60-min margin per the
-# claude-eval cohort (single end-of-run heartbeat after a 50-min budget; see
-# header), NOT the 30-min small-cron margin. Single-miss alert
-# (failure_issue_threshold=1): a single missed monthly fire is noteworthy on a
-# monthly cadence. 55 min mirrors the claude-eval cohort (scheduled_bug_fixer,
-# scheduled_roadmap_review, scheduled_legal_audit) — 50-min
-# MAX_TURN_DURATION_MS budget plus slack.
-resource "sentry_cron_monitor" "scheduled_ux_audit" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-ux-audit"
-  schedule                = { crontab = "0 9 1 * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
@@ -663,49 +286,6 @@ resource "sentry_cron_monitor" "scheduled_inngest_health" {
   timezone                = "UTC"
 }
 
-# 2026-06-02: Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts`.
-# Proactive prod Disk-IO early-warning monitor. A MISSED check-in means the
-# monitor stopped (scheduler dead / function dropped); a ?status=error heartbeat
-# means the monitor RAN and a tripwire fired (cache-hit floor breach, a dedup
-# table over the row ceiling, or the signal RPC failed). 6-hourly (0 */6 * * *) —
-# 30-min margin per the Inngest ≤2-min-jitter precedent. 10-min runtime mirrors
-# the small-cron cohort (pure-TS, one read-only RPC, no claude-eval spawn). Slug
-# MUST match SENTRY_MONITOR_SLUG in the handler.
-resource "sentry_cron_monitor" "scheduled_supabase_disk_io" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-supabase-disk-io"
-  schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# 2026-06-03: Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts`.
-# Ephemeral cron-clone garbage collector. A MISSED check-in means the GC stopped
-# (scheduler dead / function dropped) — the failure mode that let leaked clones
-# accumulate into the 2026-06-02 KB-sync ENOSPC freeze (#4882). The handler always
-# heartbeats ok:true (the sweep RAN; a clean 0-reclaim run is healthy) — the
-# actionable "volume still low after GC" condition pages via a warnSilentFallback
-# Sentry warn, not a ?status=error heartbeat. 6-hourly (0 */6 * * *), 30-min margin
-# + 10-min runtime mirror the disk-io small-cron cohort (pure-TS local fs, no
-# claude-eval spawn). Slug MUST match SENTRY_MONITOR_SLUG in the handler.
-resource "sentry_cron_monitor" "scheduled_workspace_gc" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-workspace-gc"
-  schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
 # #5046 PR-2 — host-side egress-allowlist re-resolve timer
 # (cron-egress-resolve.timer, every 1 min). A DEAD timer freezes the
 # nftables allowlist set → progressive then total container egress loss as
@@ -756,28 +336,6 @@ resource "sentry_cron_monitor" "cron_egress_resolve" {
   timezone                = "UTC"
 }
 
-# #5080: Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-weekly-release-digest.ts`.
-# Weekly community release digest -> Discord #releases, Friday 15:00 UTC.
-# Closest sibling: scheduled_strategy_review (pure-TS Inngest-fired cohort —
-# 30-min margin, NOT the 55-min claude-eval cohort). The handler's catch
-# shape always sends a check-in (ok or error); the margin is the backstop
-# for the skip/heartbeat-failure paths (Sentry env unset, or the check-in
-# POST itself failing — swallowed best-effort). Single-miss alert
-# (failure_issue_threshold=1): one missed Friday is noteworthy on a weekly
-# cadence — the digest IS the channel's only content source.
-resource "sentry_cron_monitor" "cron_weekly_release_digest" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "cron-weekly-release-digest"
-  schedule                = { crontab = "0 15 * * 5" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
 # ---------------------------------------------------------------------------
 # 2026-06-11 IaC-gap backfill (surfaced by PR #5133's AC12 verification):
 # 13 Inngest crons (+ a 14th, nag-4216-readiness, surfaced by the parity
@@ -813,204 +371,12 @@ resource "sentry_cron_monitor" "cron_workspace_sync_health" {
   timezone                = "UTC"
 }
 
-# Weekly Mon 16:00 UTC — claude-eval cohort (Tier-2 dormant; deferral
-# heartbeat fires on schedule).
-resource "sentry_cron_monitor" "scheduled_campaign_calendar" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-campaign-calendar"
-  schedule                = { crontab = "0 16 * * 1" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Daily 09:30 UTC — cloud-task heartbeat aggregator (pure TS).
-resource "sentry_cron_monitor" "scheduled_cloud_task_heartbeat" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-cloud-task-heartbeat"
-  schedule                = { crontab = "30 9 * * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Daily 14:00 UTC — content publisher (spawns content-publisher.sh,
-# MAX_RUN_DURATION_MS 10 min → 15-min runtime budget).
-resource "sentry_cron_monitor" "scheduled_content_publisher" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-content-publisher"
-  schedule                = { crontab = "0 14 * * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Weekly Mon 07:00 UTC — claude-eval cohort (Tier-2 dormant).
-resource "sentry_cron_monitor" "scheduled_growth_audit" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-growth-audit"
-  schedule                = { crontab = "0 7 * * 1" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# 1st + 15th 10:00 UTC — claude-eval cohort (Tier-2 dormant).
-resource "sentry_cron_monitor" "scheduled_growth_execution" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-growth-execution"
-  schedule                = { crontab = "0 10 1,15 * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Weekly Mon 11:00 UTC — LinkedIn token expiry check (pure TS).
-resource "sentry_cron_monitor" "scheduled_linkedin_token_check" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-linkedin-token-check"
-  schedule                = { crontab = "0 11 * * 1" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
 # Hourly :17 — membership-health invariant probe (pure TS, read-only RPC).
 resource "sentry_cron_monitor" "scheduled_membership_health" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-membership-health"
   schedule                = { crontab = "17 * * * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Monthly 1st 07:00 UTC — Plausible goals reconciliation (pure TS).
-resource "sentry_cron_monitor" "scheduled_plausible_goals" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-plausible-goals"
-  schedule                = { crontab = "0 7 1 * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Quarterly (1 Jan/Apr/Jul/Oct) 09:00 UTC — stale-rule retirement proposer
-# (spawns rule-prune.sh, MAX_RUN_DURATION_MS 5 min → 10-min runtime).
-resource "sentry_cron_monitor" "scheduled_rule_prune" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-rule-prune"
-  schedule                = { crontab = "0 9 1 1,4,7,10 *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Daily 06:13 UTC — GitHub ruleset bypass-actor audit (pure TS).
-resource "sentry_cron_monitor" "scheduled_ruleset_bypass_audit" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-ruleset-bypass-audit"
-  schedule                = { crontab = "13 6 * * *" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Weekly Mon 11:00 UTC — claude-eval cohort (Tier-2 dormant).
-resource "sentry_cron_monitor" "scheduled_seo_aeo_audit" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-seo-aeo-audit"
-  schedule                = { crontab = "0 11 * * 1" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 55
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Weekly Sun 02:00 UTC — architecture diagram sync (claude-eval, 60-min budget).
-resource "sentry_cron_monitor" "scheduled_architecture_diagram_sync" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-architecture-diagram-sync"
-  schedule                = { crontab = "0 2 * * 0" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 65
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Weekly Mon 06:00 UTC — Plausible analytics snapshot (spawns
-# weekly-analytics.sh; no explicit cap → 15-min runtime budget).
-resource "sentry_cron_monitor" "scheduled_weekly_analytics" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-weekly-analytics"
-  schedule                = { crontab = "0 6 * * 1" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 15
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Weekly Mon 14:00 UTC — #4216 readiness nag (pure TS). Surfaced by the
-# parity test below the 13-slug backfill: the initial sweep grepped only
-# `SENTRY_MONITOR_SLUG = ` declarations and the readiness nag was the 14th.
-resource "sentry_cron_monitor" "scheduled_nag_4216_readiness" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-nag-4216-readiness"
-  schedule                = { crontab = "0 14 * * 1" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Daily 06:41 UTC — #5284 self-refreshing GitHub /meta egress CIDR generator.
-# Inngest-fired via apps/web-platform/server/inngest/functions/cron-github-cidr-refresh.ts.
-# Pure-TS glue (clone + /meta fetch + shell generator + direct-merge PR on drift);
-# slug MUST match SENTRY_MONITOR_SLUG in the handler and the crontab MUST match the
-# handler's `{ cron: "41 6 * * *" }` trigger. 10-min runtime (small clone + one fetch).
-resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "cron-github-cidr-refresh"
-  schedule                = { crontab = "41 6 * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
@@ -1092,30 +458,30 @@ resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat" {
   timezone                = "UTC"
 }
 
-# Executor liveness for the nightly Supabase advisor RLS gate (#3366).
-# Dispatched by apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts;
-# the check-in is posted at the END of .github/workflows/scheduled-supabase-advisor-scan.yml
-# and ONLY for Inngest-sourced runs, so a manual smoke-test dispatch cannot forge
-# liveness while the dispatcher is dead.
-#
-# `name` MUST stay slug-shaped: Sentry derives the monitor slug by slugifying
-# `name`, and the workflow's `monitor-slug` input must equal that derived slug.
-# scan-workflow.test.sh asserts the two agree.
-#
-# 03:37 UTC placement predates #8450: the Inngest-RLS self-heal relaxed from hourly
-# to `17 */4 * * *` (4-hourly, org concurrency budget), so the scan no longer runs
-# 20 minutes after every heal. What still bounds advisor staleness is the heal's
-# own interval — the cosmetic rls_disabled_in_public lint on a new Inngest table
-# clears within <=4h regardless of when this scan samples it. A MISSED check-in is
-# what covers a dead dispatch, so the margin is what makes
-# "Inngest never fired" visible rather than silent.
-resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
+# Liveness for the Better Stack incident mirror (#10390 WS1):
+# .github/workflows/scheduled-betterstack-incident-mirror.yml. The mirror is GHA-executed and
+# watchdog-dispatched (WATCHDOG_DISPATCH_TABLE, 15-min slots); its `schedule:` trigger is only the
+# fallback. It CANNOT be Inngest-scheduled — it observes the Better Stack paging substrate the
+# Inngest fleet's own outages report through (the 2026-10-22 email-only incident delivery), so an
+# Inngest-scheduled mirror goes dark exactly when the incidents it mirrors are firing
+# (ADR-033 anti-circularity; the workflow carries the ADR-248 gate-override header). The check-in
+# is the workflow's terminal sentry-heartbeat step, `ok` only on a deciding exit 0
+# (verdict mirrored|no_incidents); every read/filing failure posts `error`, and a dead dispatch
+# clock is a missed check-in. A dead mirror opens a Sentry issue within interval + margin.
+# Margin = 12-min clock skew + measured worst queue + runtime (max_runtime_minutes = 6; the job's
+# `timeout-minutes: 6`) — capped at 60 to match the parity ceiling; re-measure the queue tail once
+# this workflow has history before narrowing it (same command as scheduled_inngest_health).
+# Slug MUST match `monitor-slug` in the workflow's sentry-heartbeat step
+# (scheduled-betterstack-incident-mirror). Routing: declared UNROUTED under the two-PR rule —
+# cron-monitor-alerts.tf `local.cron_monitor_alert_unrouted`; a follow-up PR moves it into
+# monitor_ids after the first measured apply.
+resource "sentry_cron_monitor" "scheduled_betterstack_incident_mirror" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-supabase-advisor-scan"
-  schedule                = { crontab = "37 3 * * *" }
+  name                    = "scheduled-betterstack-incident-mirror"
+  schedule                = { crontab = "*/15 * * * *" }
   checkin_margin_minutes  = 60
-  max_runtime_minutes     = 10
+  max_runtime_minutes     = 6
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
@@ -1130,7 +496,9 @@ resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
 # `name` MUST stay slug-shaped: Sentry derives the slug by slugifying `name`, and the workflow's
 # `monitor-slug` input must equal it (sentry-monitor-iac-parity.test.ts asserts the two agree).
 # 05:17 UTC mirrors the workflow's `schedule:`; checkin_margin_minutes = 360 follows the measured GHA
-# schedule-delivery jitter documented on scheduled_prod_version_drift below, NOT the nominal interval.
+# schedule-delivery jitter that scheduled_prod_version_drift's stanza documented (that monitor was
+# destroyed by the #6590 PR-B prune — the measurement rationale stays, only the stanza is gone),
+# NOT the nominal interval.
 resource "sentry_cron_monitor" "image_cve_scan" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
@@ -1228,18 +596,6 @@ resource "sentry_cron_monitor" "scheduled_marketplace_drift" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-marketplace-drift"
   schedule                = { crontab = "37 6 * * *" }
-  checkin_margin_minutes  = 360
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-resource "sentry_cron_monitor" "scheduled_prod_version_drift" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-prod-version-drift"
-  schedule                = { crontab = "0 * * * *" }
   checkin_margin_minutes  = 360
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
@@ -1380,12 +736,17 @@ resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
 # single terminal heartbeat (this file's header, lines on two-step check-ins) —
 # but it must not be FALSE.
 resource "sentry_cron_monitor" "main_health_monitor" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "main-health-monitor"
-  schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 210
-  max_runtime_minutes     = 185
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "main-health-monitor"
+  schedule     = { crontab = "0 */6 * * *" }
+  # #9410 — the monitor is sharded: the envelope is the run's bounded wall
+  # clock, i.e. the SLOWEST leg's job ceiling plus the report job's, not a
+  # single job's. Currently max(85, 80, 35, 30, 30) + 15 = 100, margin = +25.
+  # The G2 row of plugins/soleur/test/main-health-monitor-workflow.test.sh
+  # keeps these two literals coupled to the workflow.
+  checkin_margin_minutes  = 125
+  max_runtime_minutes     = 100
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
@@ -1422,121 +783,6 @@ resource "sentry_cron_monitor" "scheduled_sentry_alert_drift" {
   name                    = "scheduled-sentry-alert-drift"
   schedule                = { crontab = "15 7 * * *" }
   checkin_margin_minutes  = 60
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Weekly machinery drain + issue-flow measurement, Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-machinery-drain.ts`. The
-# handler only DISPATCHES a workflow_dispatch-only GHA workflow (ADR-033 keeps
-# Inngest as the single scheduling substrate), so the monitored work is the
-# dispatch itself: a pure-TS mint-token-and-POST, which is the small-cron
-# cohort's shape. 30-min margin per the Inngest-fired precedent
-# (scheduled_stale_deferred_scope_outs above); 10-min max_runtime for the same
-# reason -- no claude-eval spawn happens inside the Inngest runtime.
-#
-# failure_issue_threshold = 1 IS the verification. A missed weekly fire means
-# the issue-flow measurement did not run that week, and the measurement is the
-# only thing that can tell the operator whether the filing rate actually fell.
-# Per hr-no-dashboard-eyeball-pull-data-yourself this monitor pages on its own
-# rather than relying on anyone noticing a number is missing.
-resource "sentry_cron_monitor" "scheduled_machinery_drain" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-machinery-drain"
-  schedule                = { crontab = "0 9 * * 1" }
-  checkin_margin_minutes  = 30
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Liveness for the daily docs.devin.ai capability-drift watcher
-# (.github/workflows/scheduled-devin-docs-drift.yml, on.schedule "23 7 * * *").
-# DISPOSABLE with the watcher — delete this resource when #8160 closes (the
-# teardown list lives in the workflow header).
-#
-# WHY IT EXISTS. The watcher is the detection half of the #8160 upstream filing:
-# it is the only mechanism that notices when Cognition ships or documents cloud
-# hook dispatch / plugin subagents. A workflow that stops being scheduled
-# (GitHub disables schedules on repo inactivity and drops ticks under load) is
-# indistinguishable from docs that never changed — there is no red run to
-# notice, because there is no run.
-#
-# GHA-scheduled (not Inngest-dispatched) like its sibling
-# scheduled_marketplace_drift, so it inherits that cohort's 360-min margin for
-# GHA `schedule:` jitter rather than the Inngest cohort's 30.
-resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-devin-docs-drift"
-  schedule                = { crontab = "23 7 * * *" }
-  checkin_margin_minutes  = 360
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Liveness for the GitHub Actions queue-health monitor
-# (.github/workflows/scheduled-actions-queue-health.yml, on.schedule
-# "*/30 * * * *" as FALLBACK + Inngest dispatch-primary via
-# cron-actions-queue-health-dispatch, #9273). #8450 incident class: on
-# 2026-09-22 the org sat ~90 minutes at ~206 queued runs with ~8-10 jobs
-# executing against a 60-job Team entitlement — runner under-assignment — and
-# nothing paged.
-#
-# TWO failure signals land here. (1) A ?status=error heartbeat = the probe ran
-# and returned UNDER_ASSIGNED (deep+old queue with delivered concurrency below
-# half the entitlement — the starvation signature). (2) A MISSED check-in is
-# the self-referential one: if the runner pool is so starved the monitor
-# itself cannot get a runner, absence pages — the only mechanism that can
-# detect a total-assignment outage.
-#
-# #9273 — the monitor was GHA-scheduled-only and paged on GitHub's schedule
-# DEFERRAL (measured ~4 fires/day under org load → ~47 missed-checkin
-# pages/day while the probe read HEALTHY whenever it landed). Deferral is not
-# starvation, so the primary trigger is now the Inngest dispatch cron: the
-# dispatch needs no runner to FIRE, and the executor still lands in the
-# measured queue (self-reference preserved). `schedule:` stays byte-identical
-# as the fallback clock (the #8450 cadence-parity guard keys on it).
-#
-# checkin_margin_minutes = 60 covers ~2× the measured dispatch-primary
-# delivery: p90 ~20 min runner-queue wait on the dispatched cohort
-# (2026-09-24, see QUEUE_ALLOWANCE_MINUTES in sentry-monitor-iac-parity.test.ts)
-# + ~5 min runtime + jitter. A run that never lands (both triggers failed, or
-# true starvation) still pages once the window closes.
-# max_runtime_minutes = 5 matches the job's timeout-minutes. Slug MUST match
-# the workflow's `monitor-slug` (parity-asserted by
-# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts).
-resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-actions-queue-health"
-  schedule                = { crontab = "*/30 * * * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 5
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
-# Liveness for cron-bot-pr-reaper (#9274) — the every-2-hours sweep that
-# update-branches armed soleur-ai[bot] PRs stuck `mergeable_state: "behind"`
-# so auto-merge can fire, and files a [ci/bot-pr-reaper] action-required issue
-# for states update-branch cannot fix. Inngest-fired (pure REST sweep — no GHA
-# executor), so margin follows the Inngest-fired cohort convention: 30 min
-# over the */2h interval covers scheduler jitter plus a transient Inngest
-# retry; a dead reaper pages inside ~2.5 h.
-resource "sentry_cron_monitor" "scheduled_bot_pr_reaper" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-bot-pr-reaper"
-  schedule                = { crontab = "17 */2 * * *" }
-  checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1

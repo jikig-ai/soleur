@@ -161,7 +161,6 @@ render_stage() {
           -e "s|^    BYID=/dev/disk/by-id/scsi-0HC_Volume_\$|    BYID=${byid}/scsi-0HC_Volume_|" \
           -e "s|/mnt/data|${mnt}|g" \
           -e "s|/etc/fstab|${fstab}|g" \
-          -e "s|/etc/default/inngest-luks-volumes|${TMPROOT}/inngest-luks-volumes.env|g" \
           -e "s|/etc/default/inngest-luks|${TMPROOT}/inngest-luks.env|g" \
           -e "s|/run/inngest-luks-stage.log|${detail}|g" \
           -e "s|/usr/local/bin/inngest-boot-phone-home.sh|${phone}|g" \

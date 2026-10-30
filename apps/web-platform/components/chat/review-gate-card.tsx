@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
+// A short fixed label: the full question (up to a whole email body) stays visible text, not the accessible name.
+export const REVIEW_GATE_ARIA_LABEL = "Approval needed";
+
 export function ReviewGateCard({
   gateId,
   question,
@@ -50,7 +53,7 @@ export function ReviewGateCard({
   }
 
   return (
-    <div role="group" aria-label={question} aria-busy={pending !== null} className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
+    <div role="group" aria-label={REVIEW_GATE_ARIA_LABEL} aria-busy={pending !== null} className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
       {stepProgress && stepProgress.total > 0 && (() => {
         const pct = Math.round((stepProgress.current / stepProgress.total) * 100);
         return (
@@ -79,7 +82,7 @@ export function ReviewGateCard({
           <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
-        <p className="text-base font-medium text-amber-200">{question}</p>
+        <p className="min-w-0 text-base font-medium text-amber-200 whitespace-pre-wrap [overflow-wrap:anywhere]">{question}</p>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((option) => (

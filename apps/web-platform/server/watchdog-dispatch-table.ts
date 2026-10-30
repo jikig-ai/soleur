@@ -51,4 +51,11 @@ export const WATCHDOG_DISPATCH_TABLE: ReadonlyArray<WatchdogDispatchEntry> = [
     eligibility:
       "Feeds the dead-man's-switch heartbeat for the Inngest host's probe (#9703), so it must be triggered outside Inngest scheduling and web-1 execution: an Inngest-fired feeder would turn every Inngest outage into a false \"probe dark\" page (ADR-248 amendment 2026-10-11).",
   },
+  {
+    workflowFile: "scheduled-betterstack-incident-mirror.yml",
+    monitorSlug: "scheduled-betterstack-incident-mirror",
+    intervalMinutes: 15,
+    eligibility:
+      "Mirrors Better Stack's open incidents — the paging substrate the Inngest fleet's own outages report through (#10390) — to GitHub issues, so it shares Inngest's failure domain: an Inngest-scheduled mirror goes dark exactly when the incidents it mirrors are firing (ADR-033 anti-circularity).",
+  },
 ];

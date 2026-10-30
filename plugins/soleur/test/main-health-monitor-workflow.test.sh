@@ -112,6 +112,11 @@ FILER   = "Create issue on failure"
 CLOSER  = "Close issue on success"
 BEAT    = "Sentry check-in (final)"
 
+# The five leg jobs. Order is display order; the report job `needs` all five.
+LEG_JOBS = ("test-webplat", "test-bun", "test-scripts", "test-scripts-heavy", "test-infra")
+import os
+manifest_dir = os.path.dirname(runner_path)
+
 # ---- (1) the filer must not inherit the implicit success() gate -------------
 f_if = step_if(FILER)
 if f_if is None:
@@ -124,31 +129,31 @@ elif "!cancelled()" not in f_if:
 else:
     ok("(1) filer if: carries !cancelled() (defeats the implicit success())")
 
-# ---- (2) filer fires on NOT-success, disjunctively over both steps ---------
+# ---- (2) filer fires on NOT-success, disjunctively over the five leg jobs ---
 if f_if:
-    has_or   = "||" in f_if
-    tests_ne = re.search(r"steps\.tests\.outcome\s*!=\s*'success'", f_if)
-    infra_ne = re.search(r"steps\.infra\.outcome\s*!=\s*'success'", f_if)
-    if has_or and tests_ne and infra_ne:
-        ok("(2) filer fires on tests != success OR infra != success")
+    has_or = "||" in f_if
+    _needs_ne = [j for j in LEG_JOBS
+                 if re.search(r"needs\." + j + r"\.result\s*!=\s*'success'", f_if)]
+    if has_or and len(_needs_ne) == 5:
+        ok("(2) filer fires on any leg result != success")
     else:
-        bad("(2) filer fires on tests != success OR infra != success",
-            "a job/step timeout is `cancelled` and a skipped step is `skipped`; "
-            "`== 'failure'` misses both, and && would need BOTH to fail. if=" + f_if)
+        bad("(2) filer fires on any leg result != success",
+            f"matched={_needs_ne} -- a job/leg timeout is `cancelled` and a skipped leg is `skipped`; "
+            "`== 'failure'` misses both, and && would need ALL to fail. if=" + f_if)
 
-# ---- (3) closer is strict AND on success, over both steps ------------------
+# ---- (3) closer is strict AND on success, over the five leg jobs -----------
 c_if = step_if(CLOSER)
 if c_if is None:
     bad("(3) closer step and its if: exist", "step or if: not found")
 else:
-    has_and  = "&&" in c_if
-    tests_eq = re.search(r"steps\.tests\.outcome\s*==\s*'success'", c_if)
-    infra_eq = re.search(r"steps\.infra\.outcome\s*==\s*'success'", c_if)
-    if has_and and tests_eq and infra_eq:
-        ok("(3) closer requires tests == success AND infra == success")
+    has_and = "&&" in c_if
+    _needs_eq = [j for j in LEG_JOBS
+                 if re.search(r"needs\." + j + r"\.result\s*==\s*'success'", c_if)]
+    if has_and and len(_needs_eq) == 5:
+        ok("(3) closer requires all five leg results == success")
     else:
-        bad("(3) closer requires tests == success AND infra == success",
-            "a loosened closer auto-closes the tracker while main is red -- "
+        bad("(3) closer requires all five leg results == success",
+            f"matched={_needs_eq} -- a loosened closer auto-closes the tracker while main is red -- "
             "defect B's consequence. if=" + c_if)
     if "always()" in c_if:
         bad("(3b) closer must NOT be always()",
@@ -175,52 +180,80 @@ if "github.event.inputs.dry_run" in stripped:
 else:
     ok("(4b) dry_run read via the typed `inputs` context, not github.event.inputs")
 
-# ---- (5) steps.tests / steps.infra referenced in lockstep -----------------
-n_tests = len(re.findall(r'steps\.tests\.outcome', stripped))
-n_infra = len(re.findall(r'steps\.infra\.outcome', stripped))
-has_infra_step = re.search(r'^        id: infra\s*$', stripped, re.M) is not None
-if not has_infra_step:
-    if n_infra == 0:
-        ok("(5) no id: infra step and no steps.infra references (both zero)")
-    else:
-        bad("(5) steps.infra referenced with no id: infra step",
-            "a missing step context is a null dereference: GitHub casts null to 0, "
-            "so == 'success' is always false and != 'success' always true")
-elif n_tests == n_infra and n_tests > 0:
-    ok(f"(5) steps.tests and steps.infra referenced in lockstep ({n_tests} each)")
+# ---- (5) the five leg jobs are the report's needs, referenced in lockstep --
+# A partial reference set means one leg's verdict is silently dropped from the
+# filer, closer or heartbeat. The report job's needs: list is also asserted:
+# a leg missing from it makes the report run BEFORE the leg finishes.
+_rep = re.search(r'^  report:\s*\n(?P<b>(?:.*\n)*?)(?=^  [A-Za-z0-9_-]+:|\Z)',
+                 stripped + "\n", re.M)
+_rep_body = _rep.group("b") if _rep else ""
+_needs_decl = re.search(r'^    needs:\s*\[(?P<l>[^\]]*)\]', _rep_body, re.M)
+_declared = [x.strip() for x in (_needs_decl.group("l").split(",") if _needs_decl else [])]
+_missing_decl = [j for j in LEG_JOBS if j not in _declared]
+if _rep and not _missing_decl:
+    ok("(5) report needs: lists all five leg jobs")
 else:
-    bad("(5) steps.tests and steps.infra referenced in lockstep",
-        f"tests={n_tests} infra={n_infra} -- a partial reference set means one step's "
-        "verdict is silently dropped from the filer, closer, summary or heartbeat")
+    bad("(5) report needs: lists all five leg jobs",
+        f"declared={_declared} missing={_missing_decl} -- a leg outside needs: "
+        "lets the report run before the leg finishes and drops its result")
+if re.search(r'^    if:\s*always\(\)\s*$', _rep_body, re.M):
+    ok("(5b) the report job runs under if: always()")
+else:
+    bad("(5b) the report job runs under if: always()",
+        "a failed or cancelled leg would otherwise skip the reporter entirely")
+_lockstep = []
+for _j in LEG_JOBS:
+    tok = "needs." + _j + ".result"
+    _lockstep.append((tok, stripped.count(tok)))
+_counts = {c for _, c in _lockstep}
+if _counts and len(_counts) == 1 and _counts != {0}:
+    ok(f"(5c) the five needs.*.result tokens are referenced in lockstep ({_lockstep[0][1]} each)")
+else:
+    bad("(5c) the five needs.*.result tokens are referenced in lockstep",
+        repr(_lockstep) + " -- a partial reference set drops a leg's verdict")
 
-# ---- (6) ceiling arithmetic ------------------------------------------------
-job_m = re.search(r'^    timeout-minutes:\s*(\d+)', stripped, re.M)
-step_ms = re.findall(r'^        timeout-minutes:\s*(\d+)', stripped, re.M)
-if not job_m or len(step_ms) < 2:
-    bad("(6) job and both step ceilings are declared",
-        f"job={bool(job_m)} steps={step_ms}")
+# ---- (6) ceiling arithmetic -------------------------------------------------
+# Each leg job's timeout-minutes must dominate its own suite-step ceiling plus
+# the margin the stage/upload/notice steps need to still run after a step kill:
+# a JOB cancel skips every remaining step regardless of if: and the leg reports
+# nothing -- the sharded shape of defect A. The run's envelope (what Sentry's
+# max_runtime/margin must cover) is the SLOWEST leg's job ceiling plus the
+# report job's.
+_jobs_blocks = {}
+for _m in re.finditer(r'^  ([A-Za-z0-9_-]+):\s*\n((?:.*\n)*?)(?=^  [A-Za-z0-9_-]+:|\Z)', stripped + "\n", re.M):
+    _jobs_blocks[_m.group(1)] = _m.group(2)
+_ceil_p = []
+_leg_job_max = 0
+_report_job = None
+for _j in LEG_JOBS:
+    _b = _jobs_blocks.get(_j, "")
+    _jm = re.search(r'^    timeout-minutes:\s*(\d+)', _b, re.M)
+    _sm = re.search(r'^        timeout-minutes:\s*(\d+)', _b, re.M)
+    if not _jm or not _sm:
+        _ceil_p.append(f"{_j}: job timeout={bool(_jm)} step timeout={bool(_sm)}")
+        continue
+    _jv, _sv = int(_jm.group(1)), int(_sm.group(1))
+    _leg_job_max = max(_leg_job_max, _jv)
+    if _jv < _sv + 15:
+        _ceil_p.append(f"{_j}: job {_jv} < step {_sv}+15")
+    if _sv < 10:
+        _ceil_p.append(f"{_j}: step {_sv} < the 10-min leg floor")
+_rb = _jobs_blocks.get("report", "")
+_rm = re.search(r'^    timeout-minutes:\s*(\d+)', _rb, re.M)
+if not _rm:
+    _ceil_p.append("report: no job-level timeout-minutes")
 else:
-    job = int(job_m.group(1)); steps_sum = sum(int(x) for x in step_ms)
-    if job >= steps_sum + 15:
-        ok(f"(6) job ceiling dominates the SUM of step ceilings ({job} >= {steps_sum}+15)")
-    else:
-        bad("(6) job ceiling dominates the SUM of step ceilings",
-            f"job={job} sum={steps_sum}. With two timed steps a max-based job ceiling "
-            "lets the job token trip mid-second-step, and a JOB cancel skips every "
-            "remaining step regardless of if: -- defect A, restored with the fix in place")
-    # The derivation rule's floors (tests_step = max(30, ...), infra_step = max(10, ...)): a step
-    # ceiling dropped far below the measured need reproduces #8112's budget exhaustion while the
-    # SUM check above still passes (a 30-minute tests step under a 185-minute job).
-    if int(step_ms[0]) >= 30 and int(step_ms[1]) >= 10:
-        ok(f"(6c) step ceilings meet the derivation floors (tests {step_ms[0]} >= 30, infra {step_ms[1]} >= 10)")
-    else:
-        bad("(6c) step ceilings meet the derivation floors (tests >= 30, infra >= 10)",
-            f"steps={step_ms} -- a tests step ceiling this low is the original #8112 failure")
-    # 360 min is both the 6h inter-fire gap and GitHub's hosted-runner job cap.
-    if job < 360:
-        ok(f"(6b) job ceiling ({job}) is under the 360-min inter-fire gap")
-    else:
-        bad("(6b) job ceiling is under the 360-min inter-fire gap", f"job={job}")
+    _report_job = int(_rm.group(1))
+if _ceil_p:
+    bad("(6) each leg's job ceiling dominates its step ceiling + 15, report ceiling declared",
+        "; ".join(_ceil_p))
+else:
+    ok(f"(6) leg job ceilings dominate their step ceilings +15; report={_report_job}")
+ENVELOPE = _leg_job_max + (_report_job or 0)
+if _report_job and ENVELOPE < 360:
+    ok(f"(6b) the run envelope ({ENVELOPE} = slowest leg {_leg_job_max} + report {_report_job}) is under the 360-min inter-fire gap")
+else:
+    bad("(6b) the run envelope is under the 360-min inter-fire gap", f"envelope={ENVELOPE}")
 
 # ---- (7) PIPESTATUS adjacency (the repo linter cannot see this) ------------
 # `set -e` is a builtin, i.e. a pipeline, so bash RESETS PIPESTATUS after it.
@@ -530,54 +563,55 @@ if _raw_tail:
 else:
     ok("(8i) no unfiltered `tail` of the capture reaches the public body")
 
-# ---- (8k) each step's elapsed seconds reach the annotation (#8112) ---------
-# A step the runner kills reports outcome=failure and carries no duration; recording each step's
-# own elapsed seconds is what makes the NEXT ceiling derivation read uncensored figures from
-# ordinary runs. The WIRING is the property: producer (the step writes elapsed_s) -> output name
-# -> env mapping of the RIGHT step's output in BOTH consumers -> numeric guard per variable.
-# The behavioural rows inject the env value directly, so they cannot see any of the first three.
+# ---- (8k) each leg's elapsed seconds reach the status.env + notice (#8112) --
+# A step the ceiling kills never writes elapsed_s, so an absent figure marks
+# that sample as CENSORED: the next ceiling derivation reads uncensored figures
+# from ordinary runs. The WIRING is the property, asserted per leg job: the
+# suite step starts t0 and writes elapsed_s BEFORE `exit "$rc"`; the stage step
+# writes it (numeric-guarded) into status.env and the ${LEG_ID}_elapsed_s token
+# of the leg's ::notice::.
 def _step_block(name):
     # `stripped` is a "\n".join — it never ends in a newline, so `(?:.*\n)*?`
     # cannot consume the file's LAST line and the `\Z` arm of the lookahead
-    # never fires: asking for the LAST step (Sentry check-in) returned "".
-    # Search the newline-completed text so the last step is extractable too
-    # (#9082's MWb row caught this on its first run).
+    # never fires. Search the newline-completed text so the last step is
+    # extractable too (#9082's MWb row caught this on its first run).
     m = re.search(r'^      - name: ' + re.escape(name) + r'\s*$(?P<b>(?:.*\n)*?)(?=^      - (?:name|uses):|\Z)',
                   stripped + "\n", re.M)
     return m.group("b") if m else ""
+
 _kproblems = []
-for _sid, _sname in (("tests", "Run test suite"), ("infra", "Run infra suites")):
-    _sb = _step_block(_sname)
-    _w = _sb.find('echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"')
-    _x = _sb.find('exit "$rc"')
-    if _w < 0:
-        _kproblems.append(f"step {_sid!r} never writes elapsed_s to $GITHUB_OUTPUT")
-    elif _x < 0 or _w > _x:
-        _kproblems.append(f"step {_sid!r} writes elapsed_s AFTER `exit \"$rc\"` (never reached)")
-    if "t0=$SECONDS" not in _sb:
-        _kproblems.append(f"step {_sid!r} never starts its timer (t0=$SECONDS)")
-_rb = _step_block("Record step outcomes")
-_fb = _step_block("Create issue on failure")
-for _bname, _blk in (("Record step outcomes", _rb), ("Create issue on failure", _fb)):
-    for _var, _sid in (("TESTS_ELAPSED_S", "tests"), ("INFRA_ELAPSED_S", "infra")):
-        _line = f"{_var}: ${{{{ steps.{_sid}.outputs.elapsed_s }}}}"
-        if _line not in _blk:
-            _kproblems.append(f"{_bname!r} lacks the env mapping `{_line}`")
-    if _blk.count("^[0-9]+$") < 2:
-        _kproblems.append(f"{_bname!r} numeric-guards fewer than both elapsed values (^[0-9]+$ x{_blk.count('^[0-9]+$')})")
-    if re.search(r'\$\{\{ steps\.(tests|infra)\.outputs[^}]*\}\}', re.sub(r'^\s+[A-Z_]+: \$\{\{ steps\.(tests|infra)\.outputs\.elapsed_s \}\}\s*$', '', _blk, flags=re.M)):
-        _kproblems.append(f"{_bname!r} uses a step output outside its env: mapping")
-for _tok in ("tests_elapsed_s=", "infra_elapsed_s="):
-    if _tok not in _rb:
-        _kproblems.append(f"{_tok} absent from the Record step outcomes step")
-_notice = re.search(r'::notice title=main-health-outcomes::[^\n]*', _rb)
-if not _notice or "${T_EL}" not in _notice.group(0) or "${I_EL}" not in _notice.group(0):
-    _kproblems.append("the ::notice:: line does not carry the ${T_EL}/${I_EL} elapsed figures")
+for _sname in ("Run test suite", "Run infra suites"):
+    for _m in re.finditer(r'^      - name: ' + re.escape(_sname) + r'\s*$', stripped, re.M):
+        _rest = stripped[_m.end():]
+        _nxt = re.search(r'^      - (?:name|uses):', _rest, re.M)
+        _sb = _rest[:_nxt.start()] if _nxt else _rest
+        _w = _sb.find('echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"')
+        _x = _sb.find('exit "$rc"')
+        if _w < 0:
+            _kproblems.append(f"a {_sname!r} step never writes elapsed_s")
+        elif _x < 0 or _w > _x:
+            _kproblems.append(f"a {_sname!r} step writes elapsed_s after exit")
+        if "t0=$SECONDS" not in _sb:
+            _kproblems.append(f"a {_sname!r} step never starts its timer")
+_n_suite = len(re.findall(r'^        id: suite\s*$', stripped, re.M))
+if _n_suite != 5:
+    _kproblems.append(f"expected 5 `id: suite` leg suite steps, found {_n_suite}")
+_n_status = stripped.count("printf 'elapsed_s=%s\\n'")
+if _n_status != 5:
+    _kproblems.append(f"expected 5 status.env elapsed_s writes, found {_n_status}")
+if stripped.count("${LEG_ID}_elapsed_s") < 5:
+    _kproblems.append("fewer than 5 ${LEG_ID}_elapsed_s notice tokens")
+if stripped.count("^[0-9]+$") < 10:
+    _kproblems.append(f"numeric guards (^[[0-9]+$) found {stripped.count('^[0-9]+$')}, expected >= 10 (stage step x2 per leg)")
+_rbb = _step_block("Record step outcomes")
+if 'mint=${{ steps.mintwatch.outputs.verdict }}' not in _rbb and "mint=" not in _rbb:
+    _kproblems.append("the aggregate notice lacks mint=")
+if "legs=${reported}/${expected}" not in _rbb:
+    _kproblems.append("the aggregate notice lacks legs=<reported>/<expected>")
 if _kproblems:
-    bad("(8k) elapsed seconds are produced, mapped to the right step output and numeric-guarded in both consumers",
-        "; ".join(_kproblems))
+    bad("(8k) per-leg elapsed seconds reach status.env and the leg notice", "; ".join(_kproblems))
 else:
-    ok("(8k) elapsed seconds are produced, mapped to the right step output and numeric-guarded in both consumers")
+    ok("(8k) per-leg elapsed seconds reach status.env and the leg notice")
 
 # ---- (G2) Guard 2: the Sentry cron monitor's envelope tracks the job ceiling (#8112) --------
 # The monitor sends ONE terminal check-in, so max_runtime_minutes is decorative and the margin
@@ -591,8 +625,8 @@ if len(_mine) != 1:
     bad("(G2) exactly one sentry_cron_monitor block is named main-health-monitor",
         f"found {len(_mine)} of {len(_blocks)} sentry_cron_monitor block(s) -- a missing block must "
         "be a RED, not a skip, or the parity guard passes over zero blocks")
-elif not job_m:
-    bad("(G2) the workflow's job-level timeout-minutes is readable", "no job-level timeout-minutes")
+elif not (_report_job and _leg_job_max):
+    bad("(G2) the workflow's run envelope is readable", "no leg job / report timeout-minutes")
 else:
     _mr = re.search(r'^\s*max_runtime_minutes\s*=\s*(\d+)\s*$', _mine[0], re.M)
     _cm = re.search(r'^\s*checkin_margin_minutes\s*=\s*(\d+)\s*$', _mine[0], re.M)
@@ -600,18 +634,18 @@ else:
         bad("(G2) max_runtime_minutes and checkin_margin_minutes are numeric literals",
             f"max_runtime={bool(_mr)} margin={bool(_cm)}")
     else:
-        _job = int(job_m.group(1)); _mrv = int(_mr.group(1)); _cmv = int(_cm.group(1))
+        _job = ENVELOPE; _mrv = int(_mr.group(1)); _cmv = int(_cm.group(1))
         _gp = []
         if _mrv != _job:
-            _gp.append(f"max_runtime_minutes={_mrv} != job timeout-minutes={_job}")
+            _gp.append(f"max_runtime_minutes={_mrv} != run envelope={_job} (slowest leg {_leg_job_max} + report {_report_job})")
         if _cmv < _job + 25:
-            _gp.append(f"checkin_margin_minutes={_cmv} < job+25={_job + 25} (a healthy slow run would page)")
+            _gp.append(f"checkin_margin_minutes={_cmv} < envelope+25={_job + 25} (a healthy slow run would page)")
         if _cmv >= 360:
             _gp.append(f"checkin_margin_minutes={_cmv} >= the 360-min inter-fire gap (a dropped run would never page)")
         if _gp:
-            bad("(G2) Sentry max_runtime/margin track the workflow job ceiling", "; ".join(_gp))
+            bad("(G2) Sentry max_runtime/margin track the workflow run envelope", "; ".join(_gp))
         else:
-            ok(f"(G2) Sentry max_runtime ({_mrv}) == job ceiling ({_job}); margin {_cmv} in [{_job + 25}, 360)")
+            ok(f"(G2) Sentry max_runtime ({_mrv}) == run envelope ({_job}); margin {_cmv} in [{_job + 25}, 360)")
 
 # The heartbeat's monitor-slug must be the Terraform resource's `name`: a typo'd slug checks in to
 # a monitor that does not exist, so the real one pages as missed on every healthy run.
@@ -672,178 +706,145 @@ if offenders:
 else:
     ok("(10) no setup pipeline silently discards its producer's exit status")
 
-# ---- (12) the JOBS pin: kept on the tests step, ABSENT from the infra step --
-# Origin: this guard FAILED to catch its own regression once. The review moved JOBS
-# off workflow scope (node-gyp reads it as `make -j`) and did not re-add it to the
-# steps, so run 31367748528 ran the infra runner at -P 4, hit the harness flake
-# (#7376) and filed a spurious issue (#7386); (12) then asserted the pin on BOTH
-# steps. Item I of the grep -q series (#9217, tracker #7432) measured the infra pin
-# and ruled it off (evidence in this feature's spec dir; figures live in the JOBS note
-# of main-health-monitor.yml and the revert trigger in the header of
-# scripts/followthroughs/jobs1-stopgap-7432.sh -- not restated here). The tests step
-# keeps its pin (a branch diff touching apps/web-platform/infra/ nests the infra
-# runner inside it), so the check is split, not deleted:
-#   (12a) the tests step env sets JOBS to 1 (value `1`, "1" or '1' and nothing else)
-#   (12b) both suite steps were extracted with their OWN env: block, and no JOBS
-#         assignment exists anywhere outside the tests step env -- not in the infra
-#         step env, the infra run: text, a job or workflow env:, or a trailing
-#         comment on a code line, and with the key bare OR quoted ("JOBS": 1 is
-#         valid YAML and the same assignment; counted on purpose: a whole-line
-#         comment is stripped, a `# JOBS: 2` after code is not, and failing closed
-#         there is cheaper than an allowlist).
-# Scope, stated so it is not read as more: this is a TRIPWIRE against accidentally
-# re-adding the pin, not an adversary model. Width reaching the infra step by another
-# channel (OMP_NUM_THREADS, BASH_ENV, a pin inside scripts/test-all.sh or
-# run-registered-suites.sh, an `unset JOBS` in the tests run:) is not matched here;
-# the soak probe reads the real `-P K` from every counted run's log and refuses K < 2,
-# which is the authoritative width check (CTO ruling Q5, decision-challenges.md).
-# Restoring the infra pin therefore means editing (12b) in the same diff, which a
-# reviewer sees.
+# ---- (12) JOBS: no pin ANYWHERE now ------------------------------------------
+# #9410 removed the last pin: it existed only because the `all` step nested the
+# infra runner on a branch diff, and no leg runs `all` any more. The soak
+# probe's `pins >= 2` gate on main reads the same comment-stripped file, so a
+# restored pin at ANY scope must red here.
 JOBS_TOKEN = re.compile(r'(?<![A-Za-z0-9_])["\']?JOBS["\']?\s*[:=]')
-JOBS_ONE = re.compile(r'^          JOBS:\s*(?:1|"1"|\'1\')\s*$', re.M)
+_n_jobs = len(JOBS_TOKEN.findall(stripped))
+if _n_jobs == 0:
+    ok("(12) no JOBS assignment exists anywhere in the workflow")
+else:
+    bad("(12) no JOBS assignment exists anywhere in the workflow",
+        f"found {_n_jobs} -- no leg runs TEST_GROUP=all, so no nested infra run needs the pin")
 
-def step_envs(text):
-    """{step id: own env: block text, or None} for the tests and infra steps.
-    Each step is bounded by the next `- name:`/`- uses:` line, so a step WITHOUT an
-    env: block yields None instead of borrowing the env: of the step after it."""
+# ---- (12c) every job on the pinned runner label ------------------------------
+# The soak evidence ran on ubuntu-24.04; `ubuntu-latest` floats to a newer
+# image. Every job in this workflow -- legs and report -- is pinned to the same
+# label infra-validation's deploy-script-tests job uses, so one cannot drift
+# off the other.
+def _job_runs_on_all(text):
     out = {}
-    cuts = [m.start() for m in re.finditer(r'^      - (?:name|uses):', text, re.M)] + [len(text)]
-    for a, b in zip(cuts, cuts[1:]):
-        chunk = text[a:b] + "\n"
-        mid = re.search(r'^        id: (tests|infra)\s*$', chunk, re.M)
-        if not mid:
-            continue
-        menv = re.search(r'^        env:\n((?:^          .*\n)+)', chunk, re.M)
-        out[mid.group(1)] = menv.group(1) if menv else None
+    for _m in re.finditer(r'^  ([A-Za-z0-9_-]+):\s*\n((?:.*\n)*?)(?=^  [A-Za-z0-9_-]+:|\Z)', text + "\n", re.M):
+        r = re.search(r'^    runs-on:\s*(\S+)\s*$', _m.group(2), re.M)
+        out[_m.group(1)] = r.group(1) if r else None
     return out
-
-def strip_comments(raw_text):
-    return "\n".join(l for l in raw_text.splitlines() if not re.match(r'^\s*#', l))
-
-def check_jobs_pin(text):
-    """(12a_ok, 12b_ok, detail) over comment-stripped workflow text."""
-    envs = step_envs(text)
-    tests_env = envs.get("tests")
-    a_ok = tests_env is not None and bool(JOBS_ONE.search(tests_env))
-    outside = len(JOBS_TOKEN.findall(text)) - len(JOBS_TOKEN.findall(tests_env or ""))
-    structure = set(envs) == {"tests", "infra"} and all(v is not None for v in envs.values())
-    b_ok = structure and outside == 0
-    return a_ok, b_ok, f"steps_with_env={ {k: v is not None for k, v in envs.items()} } jobs_assignments_outside_tests_env={outside}"
-
-_a, _b, _d = check_jobs_pin(stripped)
-if _a:
-    ok("(12a) the tests step env pins JOBS to 1")
-else:
-    bad("(12a) the tests step env pins JOBS to 1", f"{_d} -- the tests step nests the infra runner whenever the "
-        "branch diff touches apps/web-platform/infra/, where node-gyp would also read JOBS as `make -j`")
-if _b:
-    ok("(12b) the infra step carries no JOBS pin and no JOBS assignment exists outside the tests step env")
-else:
-    bad("(12b) the infra step carries no JOBS pin and no JOBS assignment exists outside the tests step env",
-        f"{_d} -- Item I (#7432, tracker #9217) removed the infra-step pin on measured evidence. To "
-        "restore it, flip this check in the same diff and apply the revert trigger stated in the header of "
-        "scripts/followthroughs/jobs1-stopgap-7432.sh. Background: the 2026-08-09 learning on the monitor "
-        "reporting success through a field that cannot say otherwise (the spurious P1 #7386).")
-
-# Mutation matrix for (12): each row perturbs an in-memory copy of the RAW workflow, re-strips it, and
-# asserts (i) the mutation landed (a mutation that did not land would just re-grade the original) and
-# (ii) the verdict. In-memory on purpose: this suite is one python run against one file, and swapping
-# the whole file per mutation would also trip unrelated checks and blur which row fired.
-def _mutate_once(raw_text, pat, repl, flags=re.M):
-    new, n = re.subn(pat, repl, raw_text, count=1, flags=flags)
-    return new if n == 1 else raw_text
-
-def jobs_row(tag, label, mutated, want_a, want_b):
-    landed = mutated != raw
-    if landed:
-        ok(f"(12{tag}) mutation landed: {label}")
-    else:
-        bad(f"(12{tag}) mutation landed: {label}", "the mutation did not change the workflow text, so the row below would re-grade the original")
-    a, b, d = check_jobs_pin(strip_comments(mutated))
-    if (a, b) == (want_a, want_b):
-        ok(f"(12{tag}) verdict (12a={want_a}, 12b={want_b}) for: {label}")
-    else:
-        bad(f"(12{tag}) verdict (12a={want_a}, 12b={want_b}) for: {label}", f"got 12a={a} 12b={b}; {d}")
-
-_ANCHOR_INFRA_ENV = "          TEST_GROUP: infra\n"
-_ANCHOR_INFRA_RUN = "          bash scripts/test-all.sh 2>&1 | tee -a /tmp/infra-output.txt\n"
-if raw.count(_ANCHOR_INFRA_ENV) != 1 or raw.count(_ANCHOR_INFRA_RUN) != 1:
-    bad("(12) mutation anchors are unique in the workflow",
-        f"TEST_GROUP: infra x{raw.count(_ANCHOR_INFRA_ENV)}, infra runner line x{raw.count(_ANCHOR_INFRA_RUN)}")
-else:
-    ok("(12) mutation anchors are unique in the workflow")
-    # row 1: a pin restored at each of four scopes, one scope per copy -> (12b) RED, (12a) untouched
-    jobs_row("-m1a", "JOBS: 1 restored in the infra step env", raw.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + "          JOBS: 1\n", 1), True, False)
-    jobs_row("-m1b", "JOBS: 1 added at job-level env:", raw.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    env:\n      JOBS: 1\n", 1), True, False)
-    jobs_row("-m1c", "export JOBS=1 added to the infra run: script", raw.replace(_ANCHOR_INFRA_RUN, "          export JOBS=1\n" + _ANCHOR_INFRA_RUN, 1), True, False)
-    jobs_row("-m1d", "JOBS: 1 added at workflow-level env:", raw.replace('env:\n  GITLEAKS_VERSION:', 'env:\n  JOBS: 1\n  GITLEAKS_VERSION:', 1), True, False)
-    # row 2: location axis -- the tests pin deleted and a job-level pin added, so the token COUNT stays 1
-    _m2 = _mutate_once(raw, r'^          JOBS:\s*1\s*\n', '')
-    jobs_row("-m2", "tests pin deleted and a job-level pin added (token count unchanged)", _m2.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    env:\n      JOBS: 1\n", 1), False, False)
-    # row 3: value axis
-    jobs_row("-m3a", "tests pin value changed to 2", _mutate_once(raw, r'^          JOBS:\s*1\s*$', '          JOBS: 2'), False, True)
-    jobs_row("-m3b", 'tests pin written as the quoted string "1" (still the same value)', _mutate_once(raw, r'^          JOBS:\s*1\s*$', '          JOBS: "1"'), True, True)
-    # row 4: extractor failure modes must RED (12b), never read as a vacuous pass
-    jobs_row("-m4a", "infra step id renamed so only the tests step is extracted", raw.replace("        id: infra\n", "        id: infrax\n", 1), True, False)
-    jobs_row("-m4b", "infra step has no env: block", _mutate_once(raw, r'(        id: infra\n(?:.*\n)*?)        env:\n(?:          .*\n)+(        run: )', r'\1\2'), True, False)
-    # row 5: the documented fail-closed case
-    jobs_row("-m5", "trailing `# JOBS: 2` comment on a code line in the infra env", raw.replace(_ANCHOR_INFRA_ENV, "          TEST_GROUP: infra # JOBS: 2\n", 1), True, False)
-    # row 6 (CTO Q5.2): the pin moved into the WRONG block -- tests pin deleted, infra pin present (token count stays 1)
-    _m6 = _mutate_once(raw, r'^          JOBS:\s*1\s*\n', '')
-    jobs_row("-m6", "tests pin deleted and the pin sits in the infra env instead (wrong block)", _m6.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + "          JOBS: 1\n", 1), False, False)
-    # row 7 (CTO Q5.1): a QUOTED key is the same YAML assignment and must read as a pin at every scope
-    jobs_row("-m7a", 'JOBS written as a double-quoted key in the infra env', raw.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + '          "JOBS": 1\n', 1), True, False)
-    jobs_row("-m7b", "JOBS written as a single-quoted key in the infra env", raw.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + "          'JOBS': 1\n", 1), True, False)
-    jobs_row("-m7c", 'double-quoted "JOBS" key at job-level env:', raw.replace("    runs-on: ubuntu-24.04\n", '    runs-on: ubuntu-24.04\n    env:\n      "JOBS": 1\n', 1), True, False)
-    jobs_row("-m7d", "single-quoted 'JOBS' key at workflow-level env:", raw.replace('env:\n  GITLEAKS_VERSION:', "env:\n  'JOBS': 1\n  GITLEAKS_VERSION:", 1), True, False)
-    # P1: must-PASS non-canonical -- whole-line comments naming JOBS, and the infra env keys reordered
-    jobs_row("-p1", "whole-line comments mention JOBS and the infra env reorders TEST_GROUP (must PASS)",
-             raw.replace(_ANCHOR_INFRA_ENV, "          # JOBS: 9 is only a comment here\n          NOOP: x\n" + _ANCHOR_INFRA_ENV, 1), True, True)
-
-# ---- (12c) runner parity (CTO ruling Q6, Item I) ----------------------------
-# The soak evidence (688 deploy-script-tests leg executions and the five dispatches) ran on the
-# ubuntu-24.04 image. `ubuntu-latest` moves to a newer image on 2026-10-19, inside the soak, so the
-# monitor is pinned to the same label infra-validation's deploy-script-tests job uses. Asserting the
-# two labels are EQUAL (and not a floating `*latest`) keeps one from drifting off the other.
-def job_runs_on(text, job):
-    m = re.search(r'^  ' + re.escape(job) + r':\s*$', text, re.M)
-    if not m:
-        return None
-    rest = text[m.end():]
-    nxt = re.search(r'^  [A-Za-z0-9_-]+:\s*$', rest, re.M)
-    body = rest[:nxt.start()] if nxt else rest
-    r = re.search(r'^    runs-on:\s*(\S+)\s*$', body, re.M)
-    return r.group(1) if r else None
 
 _iv_raw = open(infra_validation_path).read()
 _iv_stripped = "\n".join(l for l in _iv_raw.splitlines() if not re.match(r'^\s*#', l))
-
-def runner_parity(mon_text, iv_text):
-    a = job_runs_on(mon_text, "health-check")
-    b = job_runs_on(iv_text, "deploy-script-tests")
-    return (a is not None and a == b and "latest" not in a), f"monitor runs-on={a} infra-validation deploy-script-tests runs-on={b}"
-
-_par, _pd = runner_parity(stripped, _iv_stripped)
-if _par:
-    ok("(12c) the monitor runs on the same pinned runner label as infra-validation's deploy-script-tests")
+_iv_m = re.search(r'^  deploy-script-tests:\s*\n((?:.*\n)*?)(?=^  [A-Za-z0-9_-]+:|\Z)', _iv_stripped + "\n", re.M)
+_iv_ro = re.search(r'^    runs-on:\s*(\S+)\s*$', _iv_m.group(1), re.M).group(1) if _iv_m else None
+_ro_map = {k: v for k, v in _job_runs_on_all(stripped).items() if k in LEG_JOBS + ("report",)}
+_bad_ro = {k: v for k, v in _ro_map.items() if v != _iv_ro or (v and "latest" in v)}
+if _iv_ro and not _bad_ro and len(_ro_map) == 6:
+    ok(f"(12c) all six jobs run on {_iv_ro}, the same pinned label as deploy-script-tests")
 else:
-    bad("(12c) the monitor runs on the same pinned runner label as infra-validation's deploy-script-tests", _pd)
-_mut_stripped = stripped.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-latest\n", 1)
-if _mut_stripped != stripped and not runner_parity(_mut_stripped, _iv_stripped)[0]:
-    ok("(12c) mutation: a floating ubuntu-latest label on the monitor fails the parity check")
-else:
-    bad("(12c) mutation: a floating ubuntu-latest label on the monitor fails the parity check", "the mutation did not land or the parity check still passed")
+    bad("(12c) all six jobs run on the same pinned label as deploy-script-tests",
+        f"iv={_iv_ro} monitor={_ro_map} bad={_bad_ro}")
 
-# One row per conjunct of the parity predicate, on synthetic two-job texts, so dropping `a == b` or the floating-label clause
-# cannot hide behind the other (the real-file rows above exercise only the combined predicate).
-for _mon, _iv, _want, _lbl in [("ubuntu-24.04", "ubuntu-24.04", True, "the same pinned label"),
-                               ("ubuntu-22.04", "ubuntu-24.04", False, "two different pinned labels"),
-                               ("ubuntu-latest", "ubuntu-latest", False, "both floating on ubuntu-latest")]:
-    _got = runner_parity("jobs:\n  health-check:\n    runs-on: %s\n" % _mon, "jobs:\n  deploy-script-tests:\n    runs-on: %s\n" % _iv)[0]
-    if _got == _want:
-        ok(f"(12c) parity verdict {_want} for {_lbl}")
-    else:
-        bad(f"(12c) parity verdict {_want} for {_lbl}", f"got {_got}")
+# ---- (S1) the matrices match the ADR-240 manifests' declared n --------------
+# The manifest is the assignment; the matrix's literal N must equal the `# n=`
+# line or the runner degrades to positional assignment and the duration-aware
+# pin is silently dead.
+def _manifest_n(path):
+    try:
+        for _l in open(path).read().splitlines():
+            if _l.startswith("# n="):
+                return int(_l[4:])
+    except OSError:
+        pass
+    return None
+def _job_matrix(job):
+    _b = _jobs_blocks.get(job, "")
+    _m = re.search(r'^        shard:\s*\[(?P<l>[^\]]*)\]', _b, re.M)
+    return [x.strip().strip('"\'') for x in (_m.group("l").split(",") if _m else [])]
+_s1p = []
+for _job, _mf in (("test-scripts", "suite-shard-legs.tsv"),
+                  ("test-scripts-heavy", "suite-shard-legs-heavy.tsv")):
+    _n = _manifest_n(manifest_dir + "/" + _mf)
+    _sh = _job_matrix(_job)
+    _want = [f"{i}/{_n}" for i in range(1, (_n or 0) + 1)]
+    if _n is None:
+        _s1p.append(f"{_mf}: no # n= line")
+    elif _sh != _want:
+        _s1p.append(f"{_job} matrix={_sh} != manifest n={_n} ({_want})")
+if _job_matrix("test-webplat") != ["1/2", "2/2"]:
+    _s1p.append(f"test-webplat matrix={_job_matrix('test-webplat')} != 1/2..2/2")
+if _s1p:
+    bad("(S1) shard matrices match the ADR-240 manifests", "; ".join(_s1p))
+else:
+    ok("(S1) shard matrices match the ADR-240 manifests (light=8, heavy=3, webplat=2)")
+
+# ---- (S2) SCRIPTS_SHARD is bound to matrix.shard on the two scripts jobs ------
+_s2p = []
+for _j in ("test-scripts", "test-scripts-heavy"):
+    _b = _jobs_blocks.get(_j, "")
+    if "SCRIPTS_SHARD: ${{ matrix.shard }}" not in _b:
+        _s2p.append(f"{_j}: SCRIPTS_SHARD not bound to matrix.shard")
+    if not re.search(r'TEST_GROUP:\s*' + _j.replace("test-", "scripts" if _j == "test-scripts" else "scripts-heavy") + r'\b', _b):
+        pass  # TEST_GROUP check folded below
+if _s2p:
+    bad("(S2) SCRIPTS_SHARD bound to matrix.shard on both scripts jobs", "; ".join(_s2p))
+else:
+    ok("(S2) SCRIPTS_SHARD bound to matrix.shard on test-scripts and test-scripts-heavy")
+
+# The group each leg asks for: a leg whose TEST_GROUP drifts silently runs a
+# different suite set under the same leg name.
+_tg = {"test-webplat": "webplat", "test-bun": "bun", "test-scripts": "scripts",
+       "test-scripts-heavy": "scripts-heavy", "test-infra": "infra"}
+_tgp = [f"{j}: TEST_GROUP={_tg[j]} not found" for j in _tg
+        if not re.search(r'TEST_GROUP:\s*' + _tg[j] + r'\s*$', _jobs_blocks.get(j, ""), re.M)]
+if _tgp:
+    bad("(S2b) every leg declares its TEST_GROUP", "; ".join(_tgp))
+else:
+    ok("(S2b) every leg declares its TEST_GROUP")
+
+# ---- (S3) leg reports: one artifact per leg, one download, one expected set ---
+_s3p = []
+if "pattern: monitor-leg-*" not in stripped:
+    _s3p.append("report job does not download pattern monitor-leg-*")
+if "path: /tmp/leg-reports" not in stripped:
+    _s3p.append("leg reports are not downloaded to /tmp/leg-reports")
+_up = re.findall(r'name:\s*monitor-leg-([A-Za-z0-9_${{}}.\-]+)', stripped)
+if len(_up) != 5:
+    _s3p.append(f"expected 5 monitor-leg-* upload steps, found {len(_up)}: {_up}")
+if _s3p:
+    bad("(S3) one monitor-leg-* artifact per leg job and a patterned download", "; ".join(_s3p))
+else:
+    ok("(S3) one monitor-leg-* artifact per leg job and a patterned download")
+
+# EXPECTED_LEGS must equal the derived set: webplat x2 + bun + scripts x8 +
+# heavy x3 + infra = 15.
+_exp = re.search(r'^      EXPECTED_LEGS:\s*"([^"]+)"', stripped, re.M)
+_exp_legs = _exp.group(1).split() if _exp else []
+_derived = (["webplat-0", "webplat-1", "bun"] +
+            [f"scripts-{i}" for i in range(8)] +
+            [f"heavy-{i}" for i in range(3)] +
+            ["infra"])
+if sorted(_exp_legs) == sorted(_derived):
+    ok("(S4) EXPECTED_LEGS enumerates all 15 legs")
+else:
+    bad("(S4) EXPECTED_LEGS enumerates all 15 legs",
+        f"expected={_derived} got={_exp_legs} -- a leg outside the list is invisible "
+        "to the report's missing-leg accounting")
+
+# ---- (S5) exactly one Sentry check-in owner -----------------------------------
+_n_beat = len(re.findall(r'uses:\s*\./\.github/actions/sentry-heartbeat', stripped))
+if _n_beat == 1:
+    ok("(S5) exactly one sentry-heartbeat invocation (the report job owns the check-in)")
+else:
+    bad("(S5) exactly one sentry-heartbeat invocation",
+        f"found {_n_beat} -- per-leg check-ins would each satisfy the monitor's margin "
+        "and mask a leg that never ran")
+
+# ---- (S6) every leg emits its own SOLEUR_MAIN_HEALTH notice -------------------
+_n_notice = len(re.findall(r'::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH \$\{LEG_ID\}=\$\{SUITE_OUTCOME\}', stripped))
+if _n_notice == 5:
+    ok("(S6) every leg job emits its SOLEUR_MAIN_HEALTH per-leg notice")
+else:
+    bad("(S6) every leg job emits its SOLEUR_MAIN_HEALTH per-leg notice",
+        f"found {_n_notice} -- the probe and post-hoc readers lose that leg's verdict")
 
 # ---- (11) the machine-readable verdict annotation --------------------------
 # GitHub exposes no REST field for job summaries; annotations ARE retrievable via
@@ -1345,11 +1346,23 @@ _leak_tail() { local i; for i in 1 2 3 4 5 6; do echo "SOLEUR| leaked per-suite 
 # quantifies over BOTH captures (#8112 Guard 1, mutation 3): a loop that stops at the first
 # compliant capture is only visible with a second member that is not.
 B_RC=0
+# The filer now reads leg artifact dirs, not two /tmp files: $1 (tests fixture)
+# becomes monitor-leg-scripts-0's capture and $4 (infra fixture) becomes
+# monitor-leg-infra's. The other 13 legs report outcome=success with no
+# capture, so their sections are skipped — the two-capture quantification the
+# B16/B23/B24 rows need is still exercised. `outcome=` empty in status.env is
+# the harness's "the step never ran" marker; an absent status.env would mean
+# "no leg report" instead (see the B26a row).
+EXPECTED_LEGS_FULL="webplat-0 webplat-1 bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
+_leg_dir() { # $1 leg id, $2 outcome, $3 elapsed-or-empty, $4 fixture-or-empty
+  local d="$BEHAVE_DIR/run/leg-reports/monitor-leg-$1"
+  mkdir -p "$d"
+  if [[ -n "${4:-}" ]]; then cp "$4" "$d/capture.txt"; else : > "$d/capture.txt"; fi
+  { printf 'outcome=%s\n' "$2"; printf 'elapsed_s=%s\n' "${3:-}"; } > "$d/status.env"
+}
 run_filer() {
   rm -rf "${BEHAVE_DIR:?}/run"
-  mkdir -p "$BEHAVE_DIR/run"
-  cp "$1" "$BEHAVE_DIR/run/tests-output.txt"
-  if [[ -n "${4:-}" ]]; then cp "$4" "$BEHAVE_DIR/run/infra-output.txt"; else : > "$BEHAVE_DIR/run/infra-output.txt"; fi
+  mkdir -p "$BEHAVE_DIR/run/leg-reports"
   printf '%s' "$2" > "$BEHAVE_DIR/run/list.json"
   : > "$BEHAVE_DIR/run/gh.log"
   B_RC=0
@@ -1357,6 +1370,11 @@ run_filer() {
   local _to="${6:-failure}" _io="${5:-success}"
   [[ "$_to" == "-" ]] && _to=""
   [[ "$_io" == "-" ]] && _io=""
+  _leg_dir scripts-0 "$_to" "${B_TESTS_ELAPSED_S:-}" "$1"
+  _leg_dir infra "$_io" "${B_INFRA_ELAPSED_S:-}" "${4:-}"
+  for _l in webplat-0 webplat-1 bun scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2; do
+    _leg_dir "$_l" success "" ""
+  done
   # shellcheck disable=SC2086
   env PATH="$BEHAVE_DIR/bin:$PATH" \
       MHM_GH_LOG="$BEHAVE_DIR/run/gh.log" \
@@ -1364,8 +1382,9 @@ run_filer() {
       GH_TOKEN=stub \
       RUN_URL="https://example.invalid/actions/runs/1" \
       COMMIT_SHA=deadbeefdeadbeef \
-      TESTS_OUTCOME="$_to" INFRA_OUTCOME="$_io" \
-      TESTS_ELAPSED_S="${B_TESTS_ELAPSED_S:-}" INFRA_ELAPSED_S="${B_INFRA_ELAPSED_S:-}" \
+      EXPECTED_LEGS="$EXPECTED_LEGS_FULL" \
+      R_WEBPLAT=success R_BUN=success R_SCRIPTS="$_to" R_HEAVY=success R_INFRA="$_io" \
+      MINT_VERDICT="${B_MINT_VERDICT:-green}" MINT_RUN_ID= MINT_CONCLUSION= \
       bash --noprofile --norc $3 "$BEHAVE_DIR/filer.sh" \
       > "$BEHAVE_DIR/run/stdout.txt" 2>&1 || B_RC=$?
 }
@@ -1624,7 +1643,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   # Elapsed seconds, when the step recorded them, appear next to the outcomes in the body.
   B_TESTS_ELAPSED_S=2412 run_filer "$BEHAVE_DIR/fx-fail-no-breakdown.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
   CASES=$((CASES + 1))
-  if grep -qE 'tests_elapsed_s=2412' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
+  if grep -qE 'elapsed_s=2412' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
     pass "(B19)$ARM the step-outcomes line carries the tests step's elapsed seconds"
   else
     fail "(B19)$ARM the step-outcomes line carries the tests step's elapsed seconds" \
@@ -1645,12 +1664,12 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   CASES=$((CASES + 1))
   row "(B19c)$ARM the step-outcomes line carries the infra step's elapsed seconds" \
     "rc=$B_RC -- the infra half of the figure pair was unpinned" \
-    "$([[ "$B_RC" -eq 0 ]] && grep -qF -- 'infra_elapsed_s=2326' "$BEHAVE_DIR/run/issue-body.md"; echo $?)"
+    "$([[ "$B_RC" -eq 0 ]] && grep -qF -- 'elapsed_s=2326' "$BEHAVE_DIR/run/issue-body.md"; echo $?)"
   B_TESTS_ELAPSED_S=2412 run_filer "$BEHAVE_DIR/fx-fail-no-breakdown.txt" "$HAS_TRACKER" "$SHELLOPTS_ARM"
   CASES=$((CASES + 1))
   row "(B19d)$ARM the existing-tracker comment carries the elapsed seconds too" \
     "rc=$B_RC -- a flapping run's later comments would lose the figure the first body had" \
-    "$([[ "$B_RC" -eq 0 ]] && grep -qF -- 'tests_elapsed_s=2412' "$BEHAVE_DIR/run/issue-comment.md"; echo $?)"
+    "$([[ "$B_RC" -eq 0 ]] && grep -qF -- 'elapsed_s=2412' "$BEHAVE_DIR/run/issue-comment.md"; echo $?)"
 
   # --- the runner prints no breakdown on a plain failing run: the fallback --------------------
   run_filer "$BEHAVE_DIR/fx-fail-short-terminal.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
@@ -1714,7 +1733,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     "rc=$B_RC title=$(b_title) -- a deleted success-skip re-adds the other step's PASS lines to the body" \
     "$([[ "$B_RC" -eq 0 && "$(b_title)" == "$T_FAIL" ]] \
         && b_has_line '--- infra (outcome=failure) ---' \
-        && ! grep -q '^--- tests ' "$BEHAVE_DIR/run/issue-body.md"; echo $?)"
+        && ! grep -q '^--- scripts-0 ' "$BEHAVE_DIR/run/issue-body.md"; echo $?)"
   run_filer "$BEHAVE_DIR/fx-controls-zero-failed.txt" "$NO_TRACKER" "$SHELLOPTS_ARM" "" cancelled cancelled
   CASES=$((CASES + 1))
   row "(B25)$ARM a cancelled step with no confirmed failure selects 'did not complete'" \
@@ -1741,7 +1760,7 @@ fi
 # $GITHUB_OUTPUT is inherited by every suite child, so the elapsed values are suite-controlled input
 # that reaches `echo "::notice ..."`. Only an executed body can show a value cannot smuggle a command.
 CASES=$((CASES + 1))
-if ! python3 - "$WF" > "$BEHAVE_DIR/record.sh" 2>"$BEHAVE_DIR/record.err" <<'PY'
+if ! python3 - "$WF" "$BEHAVE_DIR/run" > "$BEHAVE_DIR/record.sh" 2>"$BEHAVE_DIR/record.err" <<'PY'
 import sys
 raw = open(sys.argv[1]).read().splitlines()
 start = next(i for i, l in enumerate(raw) if l == "      - name: Record step outcomes")
@@ -1758,33 +1777,42 @@ for line in raw[j + 1:]:
     body.append(line[10:])
 text = "\n".join(body) + "\n"
 assert len(body) >= 8, f"extracted only {len(body)} lines"
-text = text.replace("${{ steps.tests.outcome }}", "failure").replace("${{ steps.infra.outcome }}", "success").replace("${{ steps.mintwatch.outputs.verdict }}", "green")
+sandbox = sys.argv[2].rstrip("/") + "/"
+text = text.replace("${{ steps.mintwatch.outputs.verdict }}", "green").replace("/tmp/", sandbox)
 # Any `${{ }}` still present is an expression the engine would interpolate INTO the script.
-assert "${{" not in text, "Record step body still contains a ${{ }} expression after the three verdict substitutions"
+assert "${{" not in text, "Record step body still contains a ${{ }} expression after the mint substitution"
 sys.stdout.write(text)
 PY
 then
-  fail "(R0) the Record step's run: body extracts with no workflow expression left beyond the three verdict substitutions" "$(head -3 "$BEHAVE_DIR/record.err")"
+  fail "(R0) the Record step's run: body extracts with no workflow expression left beyond the mint substitution" "$(head -3 "$BEHAVE_DIR/record.err")"
 else
-  pass "(R0) the Record step's run: body extracts with no workflow expression left beyond the three verdict substitutions"
+  pass "(R0) the Record step's run: body extracts with no workflow expression left beyond the mint substitution"
 fi
-rec() { # $1 tests-elapsed  $2 infra-elapsed -> the ::notice line
-  env TESTS_ELAPSED_S="$1" INFRA_ELAPSED_S="$2" GITHUB_STEP_SUMMARY="$BEHAVE_DIR/summary.txt" \
+rec() { # $1 number of status.env legs to stage -> the ::notice line
+  rm -rf "$BEHAVE_DIR/run/leg-reports"
+  mkdir -p "$BEHAVE_DIR/run/leg-reports"
+  local i=0 l
+  for l in $EXPECTED_LEGS_FULL; do
+    [[ "$i" -lt "$1" ]] || break
+    mkdir -p "$BEHAVE_DIR/run/leg-reports/monitor-leg-$l"
+    printf 'outcome=success\n' > "$BEHAVE_DIR/run/leg-reports/monitor-leg-$l/status.env"
+    i=$((i + 1))
+  done
+  env EXPECTED_LEGS="$EXPECTED_LEGS_FULL" \
+      R_WEBPLAT=success R_BUN=success R_SCRIPTS=failure R_HEAVY=success R_INFRA=success \
+      GITHUB_STEP_SUMMARY="$BEHAVE_DIR/summary.txt" \
       bash --noprofile --norc -e "$BEHAVE_DIR/record.sh" 2>&1 | grep -a '^::notice' | head -1
 }
-_N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=failure infra=success mint=green'
+_N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH webplat=success bun=success scripts=failure heavy=success infra=success mint=green'
 CASES=$((CASES + 1))
-row "(R1) two numeric figures reach the ::notice annotation" "got: $(rec 4228 2326)" \
-  "$([[ "$(rec 4228 2326)" == "$_N tests_elapsed_s=4228 infra_elapsed_s=2326" ]]; echo $?)"
+row "(R1) a full 15-leg report reaches the ::notice annotation" "got: $(rec 15)" \
+  "$([[ "$(rec 15)" == "$_N legs=15/15" ]]; echo $?)"
 CASES=$((CASES + 1))
-row "(R2) a non-numeric tests figure is dropped and the infra figure survives" "got: $(rec '12::error::x' 2326)" \
-  "$([[ "$(rec '12::error::x' 2326)" == "$_N infra_elapsed_s=2326" ]]; echo $?)"
+row "(R2) a partial report counts only staged legs" "got: $(rec 3)" \
+  "$([[ "$(rec 3)" == "$_N legs=3/15" ]]; echo $?)"
 CASES=$((CASES + 1))
-row "(R3) a non-numeric infra figure is dropped and the tests figure survives" "got: $(rec 4228 $'9\n::error::x')" \
-  "$([[ "$(rec 4228 $'9\n::error::x')" == "$_N tests_elapsed_s=4228" ]]; echo $?)"
-CASES=$((CASES + 1))
-row "(R4) empty figures (a killed step wrote none) leave the annotation without elapsed fields" "got: $(rec '' '')" \
-  "$([[ "$(rec '' '')" == "$_N" ]]; echo $?)"
+row "(R3) no leg reports still emits the annotation with legs=0/15" "got: $(rec 0)" \
+  "$([[ "$(rec 0)" == "$_N legs=0/15" ]]; echo $?)"
 
 # ── (MWd) the mintwatch step body, EXECUTED (#9082) ────────────────────────────
 #
@@ -1940,11 +1968,11 @@ fi
 # Raised from 63 to 135 in #8112 (the classifier, leak, elapsed-annotation and Sentry-parity rows;
 # every behavioural row runs in BOTH shell arms, so count rows x 2). Re-read the current total
 # from the `anti-vacuity: N assertions ran` line rather than carrying this literal forward.
-# Raised from 135 to 186 for Item I (#7432): check (12) became (12a)/(12b) plus in-memory mutation copies
-# (a "landed" row and a verdict row each), the quoted-key / wrong-block rows and the (12c) runner-parity
-# rows. Set to the MEASURED count (the `anti-vacuity: N assertions ran` line), not below it: slack here is
-# budget for deleted rows to hide in (review of #10459: six rows, twelve assertions, deletable at 159/171).
-MIN_ASSERTIONS=186
+# Recalibrated to 155 for #9410 (the sharded-leg rewrite): the JOBS-pin mutation matrix and the
+# tests/infra two-step rows retired with the single-job shape; new shard guards (S1-S6, needs-lockstep,
+# per-leg elapsed) landed in their place. Set to the MEASURED count (the `anti-vacuity: N assertions ran`
+# line), not below it: slack here is budget for deleted rows to hide in.
+MIN_ASSERTIONS=155
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

@@ -60,6 +60,13 @@
 # irreversible destroy. The runbook carries one operator action per code.
 #
 #   0  every required reference restored AND verified (blobs + signature)
+#   1  INPUT or MANIFEST fault — the engine refused its arguments or the pin manifest: an unknown
+#      argument or an option missing its value, the removed `--rehearse`, a missing `--target` or
+#      `--tags-from`, an unreadable manifest, a `--target` that is not a registry host:port, a
+#      manifest with no numeric `.floor`, an `.entries` that is unparseable or not an array, zero
+#      required entries, or duplicated repo:tag pairs. Raised before any network call, so THIS
+#      ATTEMPT wrote nothing. NOT retryable: the same inputs fail identically. A correct refusal,
+#      not an engine defect — the `::error::` line names the check that fired.
 #   2  SOURCE unavailable — GHCR could not be read. Classified sub-cause in the message. Also: the
 #      `crane auth login` command for ghcr.io failed LOCALLY (the message says so; see exit 5).
 #   3  SINK unavailable — the target registry did not accept or serve the write. RETRYABLE:

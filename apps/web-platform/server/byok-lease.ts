@@ -56,6 +56,8 @@ import { decryptKey, decryptKeyLegacy, zeroize } from "./byok";
 import type { AgentAuthScheme, AgentCredential } from "./agent-env";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { createChildLogger } from "@/server/logger";
+import { reportSilentFallback } from "@/server/observability";
+import { classifyCliDroppedValue } from "@/server/oauth-token-shape";
 
 const log = createChildLogger("byok-lease");
 
@@ -167,20 +169,25 @@ export interface ByokLeaseArgs {
  *     mismatch, wrong user-derived key, etc.).
  *   - "escape": lease accessed outside its ALS scope (capture-and-leak
  *     pattern caught by the function-not-property contract).
+ *   - "oauth_unusable": the stored subscription credential is of a class the
+ *     bundled CLI silently drops (#11086). Fail closed; never falls back to
+ *     the api_key row.
  */
 export class ByokLeaseError extends Error {
   public readonly cause:
     | "fetch_failed"
     | "decrypt_failed"
     | "escape"
-    | "subscription_limit";
+    | "subscription_limit"
+    | "oauth_unusable";
 
   constructor(
     cause:
       | "fetch_failed"
       | "decrypt_failed"
       | "escape"
-      | "subscription_limit",
+      | "subscription_limit"
+      | "oauth_unusable",
     message: string,
   ) {
     super(message);
@@ -276,6 +283,7 @@ export function mapByokLeaseCauseToErrorCode(
   switch (cause) {
     case "fetch_failed":
     case "decrypt_failed":
+    case "oauth_unusable":
       return "key_invalid";
     case "subscription_limit":
       // feat-operator-cc-oauth FR5 — credit/rate-limit exhaustion on a
@@ -517,6 +525,24 @@ async function fetchAgentCredentialIntoSlot(
       }
       const buf = decryptRow(oauthRow, slot.keyOwnerUserId);
       assertAliveAfterDecrypt(slot, buf);
+      // #11086 — refuse a stored value the bundled CLI is known to drop,
+      // BEFORE it is cached in the slot or handed out. Fail closed: no
+      // fallback to the api_key row. Only the closed class is reported.
+      const droppedClass = classifyCliDroppedValue(buf.toString("utf8"));
+      if (droppedClass) {
+        zeroize(buf);
+        reportSilentFallback(null, {
+          feature: "byok-lease",
+          op: "oauth-credential-unusable",
+          message: "byok-lease: stored subscription credential is not usable by the CLI",
+          tags: { shape_class: droppedClass },
+          extra: { shape_class: droppedClass },
+        });
+        throw new ByokLeaseError(
+          "oauth_unusable",
+          "Stored subscription credential is not usable",
+        );
+      }
       slot.agentCredentialBuffer = buf;
       slot.agentCredentialScheme = "oauth_token";
       return { value: buf.toString("utf8"), scheme: "oauth_token" };

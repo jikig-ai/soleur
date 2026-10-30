@@ -34,7 +34,7 @@ import {
   buildReviewGateResponse,
   type AgentSession,
 } from "./review-gate";
-import { getToolTier, buildGateMessage, buildOfflineGateMessage, type ToolTier } from "./tool-tiers";
+import { getToolTier, buildGateCard, buildOfflineGateMessage, pluginToolPrefix, type ToolTier } from "./tool-tiers";
 import {
   isFileTool,
   isSafeTool,
@@ -150,6 +150,11 @@ const SOLEUR_GO_SAFE_UX_TOOLS = new Set<string>([
   "ExitPlanMode",
 ]);
 
+/** A compare-and-set precondition for a conversation-status write: the current status must be one of these. */
+export interface StatusGuard {
+  onlyIfStatusIn: ReadonlyArray<"active" | "waiting_for_user">;
+}
+
 /**
  * Stateful collaborators the callback depends on. Pure helpers
  * (tool-tier, path checks, review-gate parsing) are imported directly
@@ -206,6 +211,12 @@ export interface CanUseToolDeps {
   updateConversationStatus: (
     conversationId: string,
     status: string,
+    /**
+     * Optional compare-and-set (#11303 / ADR-305): write `status` only when the row's CURRENT status is in this set,
+     * so a late gate write can never overwrite a terminal state (`completed` / `failed`). A 0-rows outcome is the
+     * success case, not a failure. Omitted = the unconditional write every other call site uses.
+     */
+    guard?: StatusGuard,
   ) => Promise<void>;
   /**
    * Optional per-(userId, conversationId) Bash command-prefix
@@ -301,6 +312,12 @@ export interface CanUseToolContext {
    * ("command_center" | "support"); only `"support"` scopes the Skill surface.
    */
   persona?: Persona;
+  /**
+   * #11303 — an explicit flag (never inferred from the prompt) for a session with no human to answer a card: the
+   * auto-sync seam (`auto-sync-trigger.ts`) sets it. A gated platform tool is denied immediately with a static
+   * message: no card, no `waiting_for_user` write, no offline notification.
+   */
+  nonInteractive?: boolean;
   deps: CanUseToolDeps;
 }
 
@@ -310,8 +327,44 @@ const BASH_NOT_RUN_NO_RETRY =
   "The command was NOT run. Do not retry it and do not rephrase or respell it to get around the check. Tell the user what you were trying to do and ask how they want to proceed.";
 const BASH_GATE_EXPIRED_MESSAGE = `The approval request for this Bash command expired without an answer. ${BASH_NOT_RUN_NO_RETRY}`;
 const BASH_REJECTED_MESSAGE = `User rejected the Bash command. ${BASH_NOT_RUN_NO_RETRY}`;
+// #11303 — the gated platform-tool deny texts: static (no tool input), plain "was not performed" wording, and an explicit
+// no-retry instruction so the agent does not loop around the gate.
+const PLATFORM_GATE_EXPIRED_MESSAGE =
+  "The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.";
+const PLATFORM_GATE_REJECTED_MESSAGE =
+  "User rejected the action. Do not retry unless the user asks. Tell the user the action was not performed and ask how they want to proceed.";
+const PLATFORM_GATE_NON_INTERACTIVE_MESSAGE =
+  "This action needs interactive approval and is not available in background sync. Do not retry.";
+const PLATFORM_GATE_TOO_MANY_PENDING_MESSAGE =
+  "Too many approvals are already waiting for the user, so this action was not performed. Tell the user to answer or decline the pending ones, then ask whether to retry. Do not retry on your own.";
+// Gated platform cards and Bash cards share ONE pending counter; past this many open cards a further gated platform call
+// is denied rather than stacking another card in front of the user.
+const MAX_PENDING_GATES = 5;
 const AUTONOMOUS_NOTICE_EXPIRED_MESSAGE =
   "The autonomous-mode notice was not answered, so this command was held and NOT run. Ask the user to open the notice and choose, then retry once.";
+
+type GateClass = "bash" | "platform";
+// Sentry op labels per gate class: each op has its own static message (never the shared default).
+const GATE_STATUS_OPS = {
+  bash: {
+    hold: { op: "bash-gate-status-hold", message: "Bash gate: failed to mark the conversation waiting_for_user" },
+    restore: { op: "bash-gate-status-restore", message: "Bash gate: failed to restore the conversation to active" },
+  },
+  platform: {
+    hold: { op: "platform-gate-status-hold", message: "Platform tool gate: failed to mark the conversation waiting_for_user" },
+    restore: { op: "platform-gate-status-restore", message: "Platform tool gate: failed to restore the conversation to active" },
+  },
+} as const satisfies Record<GateClass, Record<"hold" | "restore", { op: string; message: string }>>;
+/**
+ * The Sentry `op` the agent-runner status writer tags a guarded gate write with. Distinct ops so one Sentry dedup window
+ * never hides the other half of the lifecycle: the hold is the write TO `waiting_for_user`, the restore is the write back.
+ */
+export function gateStatusWriteOp(status: string): "updateConversationStatusGateHold" | "updateConversationStatusGateRestore" {
+  return status === "waiting_for_user" ? "updateConversationStatusGateHold" : "updateConversationStatusGateRestore";
+}
+// Hold: never revive a terminal row. Restore: waiting_for_user -> active ONLY (never overwrite completed/failed/other).
+const HOLD_GUARD: StatusGuard = { onlyIfStatusIn: ["active", "waiting_for_user"] };
+const RESTORE_GUARD: StatusGuard = { onlyIfStatusIn: ["waiting_for_user"] };
 
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
@@ -342,43 +395,92 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   //     while another card is still waiting);
   //   - a status write that fails is mirrored to Sentry and never replaces the verdict.
   let pendingGates = 0;
+  // #11303 — the platform-tool gate reuses this helper (one lifecycle path, shared pending counter). `gateClass` only
+  // selects the Sentry op labels (`GATE_STATUS_OPS`); the status policy is the same for both classes (ADR-305):
+  //   - the hold write is a compare-and-set (active|waiting_for_user -> waiting_for_user) so it can never revive a
+  //     terminal row;
+  //   - the restore runs only when the LAST pending gate resolves AND the session controller was not aborted, and it is a
+  //     compare-and-set (waiting_for_user -> active only). On abort the restore does not write: a disconnect or Stop
+  //     while a card is pending leaves the row `waiting_for_user`, which is resumable and which the 2-hour sweep
+  //     completes. The abort branch of startAgentSession finalizes from `active` only by design (#3463), so it never
+  //     overwrites that row;
+  //   - an answer that arrives with the session already aborted (or aborted during the awaited restore write) is NOT
+  //     honoured: the helper returns null, so every caller denies and none can reach `allow(...)` after an abort.
   const holdForUser = async (
     gateId: string,
     signal: AbortSignal,
     gateOptions: string[],
-    kind?: "autonomous_disclosure",
+    holdOptions: { kind?: "autonomous_disclosure"; gateClass?: GateClass } = {},
   ): Promise<string | null> => {
-    if (pendingGates++ === 0) {
-      try {
-        await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
-      } catch (err) {
-        warnSilentFallback(err, { feature: "cc-permissions", op: "bash-gate-status-hold" });
-      }
-    }
-    try {
-      return kind
+    const { kind, gateClass = "bash" } = holdOptions;
+    const ops = GATE_STATUS_OPS[gateClass];
+    const first = pendingGates++ === 0;
+    // Register the gate BEFORE the status write so a fast Approve is never "not found" and an abort during a slow write is
+    // observed. A rejection (timeout/abort only; review-gate.ts) becomes null here, so nothing can reject unobserved while
+    // the write is awaited, and the caller DENIES; it never throws out of canUseTool and never allows.
+    const verdict: Promise<string | null> = (async () =>
+      kind
         ? await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions, kind)
-        : await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions);
-    } catch {
-      // review: swallowed — rejects ONLY on timeout or abort (review-gate.ts); every rejection is an expiry. Fail closed.
-      return null;
+        : await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions))().catch(() => null);
+    let selection: string | null = null;
+    try {
+      if (first) {
+        try {
+          await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user", HOLD_GUARD);
+        } catch (err) {
+          warnSilentFallback(err, { feature: "cc-permissions", ...ops.hold });
+        }
+      }
+      selection = await verdict;
     } finally {
       pendingGates -= 1;
-      if (pendingGates === 0) {
+      if (pendingGates === 0 && !ctx.controllerSignal.aborted) {
         try {
-          await deps.updateConversationStatus(ctx.conversationId, "active");
+          await deps.updateConversationStatus(ctx.conversationId, "active", RESTORE_GUARD);
         } catch (err) {
-          warnSilentFallback(err, { feature: "cc-permissions", op: "bash-gate-status-restore" });
+          warnSilentFallback(err, { feature: "cc-permissions", ...ops.restore });
         }
       }
     }
+    // Checked AFTER the restore write has settled, so an abort that lands while that write is awaited still denies.
+    if (selection !== null && (signal?.aborted || ctx.controllerSignal.aborted)) return null;
+    return selection;
   };
-  const gateExpiredDeny = (toolName: string, reason: string, message: string): PermissionResult => {
-    log.info(
-      { sec: true, tool: toolName, decision: "bash-gate-expired", reason, repo: `${ctx.repoOwner}/${ctx.repoName}` },
-      "Bash gate expired without an answer; denied",
-    );
-    logPermissionDecision("canUseTool-bash", toolName, "deny", reason);
+  // One expiry/abort deny for both gate classes. The Bash class stays at info (an expired Bash card is routine). The
+  // platform class logs at warn ON PURPOSE: warn is the level that reaches Better Stack, and a gated write that was
+  // neither approved nor rejected is the one signal an operator has that a card went unanswered.
+  const gateExpiredDeny = (
+    gateClass: GateClass,
+    toolName: string,
+    reason: string,
+    message: string,
+    fields: Record<string, unknown> = {},
+  ): PermissionResult => {
+    if (gateClass === "platform") {
+      const aborted = reason === "aborted";
+      log.warn(
+        {
+          sec: true,
+          tool: toolName,
+          tier: "gated",
+          decision: aborted ? "platform-gate-aborted" : "platform-gate-expired",
+          reason,
+          repo: `${ctx.repoOwner}/${ctx.repoName}`,
+          conversationId: ctx.conversationId,
+          ...fields,
+        },
+        aborted
+          ? "Platform tool gate aborted before an answer; denied"
+          : "Platform tool gate expired without an answer; denied",
+      );
+      logPermissionDecision("canUseTool-platform-gated", toolName, "deny", aborted ? "gate aborted" : "gate expired");
+    } else {
+      log.info(
+        { sec: true, tool: toolName, decision: "bash-gate-expired", reason, repo: `${ctx.repoOwner}/${ctx.repoName}` },
+        "Bash gate expired without an answer; denied",
+      );
+      logPermissionDecision("canUseTool-bash", toolName, "deny", reason);
+    }
     return { behavior: "deny" as const, message };
   };
   return async (toolName, toolInput, options): Promise<PermissionResult> => {
@@ -890,10 +992,10 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             gateId,
             options.signal,
             ["Got it"],
-            "autonomous_disclosure",
+            { kind: "autonomous_disclosure" },
           );
           if (selection === null) {
-            return gateExpiredDeny(toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
+            return gateExpiredDeny("bash", toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
           }
 
           if (selection === "Ask me each time") {
@@ -1046,10 +1148,10 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             gateId,
             options.signal,
             ["Keep autonomous on", "Ask me each time"],
-            "autonomous_disclosure",
+            { kind: "autonomous_disclosure" },
           );
           if (selection === null) {
-            return gateExpiredDeny(toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
+            return gateExpiredDeny("bash", toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
           }
 
           if (selection === "Keep autonomous on") {
@@ -1181,7 +1283,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
 
       const selection = await holdForUser(gateId, options.signal, gateOptions);
       if (selection === null) {
-        return gateExpiredDeny(toolName, "bash-review-gate-expired", BASH_GATE_EXPIRED_MESSAGE);
+        return gateExpiredDeny("bash", toolName, "bash-review-gate-expired", BASH_GATE_EXPIRED_MESSAGE);
       }
 
       // Selection can be "Approve", "Approve all `<prefix>`", or "Reject".
@@ -1340,8 +1442,41 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       }
 
       if (tier === "gated") {
+        // #11303 — a session with no human to answer (the auto-sync seam) gets an immediate static deny: no card, no
+        // waiting_for_user write, no offline notification. The flag is set by the caller; it is never inferred.
+        if (ctx.nonInteractive) {
+          log.warn(
+            { sec: true, tool: toolName, tier, decision: "platform-gate-non-interactive", repo: `${ctx.repoOwner}/${ctx.repoName}` },
+            "Platform tool gate refused: non-interactive session",
+          );
+          logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "non-interactive session");
+          return { behavior: "deny" as const, message: PLATFORM_GATE_NON_INTERACTIVE_MESSAGE };
+        }
+
+        // The card is built BEFORE anything is sent or written. When the input cannot be shown in full the tool is denied
+        // here (static text, no tool input in it): there is no Approve card, no status write, no notification.
+        const gateCard = buildGateCard(toolName, toolInput);
+        if ("deny" in gateCard) {
+          log.warn(
+            { sec: true, tool: toolName, tier, decision: "platform-gate-unreviewable", repo: `${ctx.repoOwner}/${ctx.repoName}` },
+            "Platform tool gate refused: the input could not be shown in full for review",
+          );
+          logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "input not reviewable");
+          return { behavior: "deny" as const, message: gateCard.deny };
+        }
+
+        // Stacked cards are bounded: Bash and platform gates count together.
+        if (pendingGates >= MAX_PENDING_GATES) {
+          log.warn(
+            { sec: true, tool: toolName, tier, decision: "platform-gate-too-many-pending", repo: `${ctx.repoOwner}/${ctx.repoName}` },
+            "Platform tool gate refused: too many approvals are already waiting",
+          );
+          logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "too many pending approvals");
+          return { behavior: "deny" as const, message: PLATFORM_GATE_TOO_MANY_PENDING_MESSAGE };
+        }
+
         const gateId = randomUUID();
-        const question = buildGateMessage(toolName, toolInput);
+        const question = gateCard.card;
 
         const toolGateDelivered = deps.sendToClient(ctx.userId, {
           type: "review_gate",
@@ -1364,17 +1499,16 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           );
         }
 
-        await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
+        // #11303 — hold/await/restore through the shared helper: a timeout or abort resolves to null (deny), never a throw
+        // that strands the conversation in waiting_for_user; parallel cards stack on the shared pending counter.
+        const selection = await holdForUser(gateId, options.signal, ["Approve", "Reject"], { gateClass: "platform" });
 
-        const selection = await deps.abortableReviewGate(
-          ctx.session,
-          gateId,
-          options.signal,
-          undefined,
-          ["Approve", "Reject"],
-        );
-
-        await deps.updateConversationStatus(ctx.conversationId, "active");
+        if (selection === null) {
+          const aborted = options.signal?.aborted === true || ctx.controllerSignal.aborted;
+          return gateExpiredDeny("platform", toolName, aborted ? "aborted" : "timeout", PLATFORM_GATE_EXPIRED_MESSAGE, {
+            delivered: toolGateDelivered,
+          });
+        }
 
         const decision = selection === "Approve" ? "approved" : "rejected";
         log.info(
@@ -1397,7 +1531,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           );
           return {
             behavior: "deny" as const,
-            message: "User rejected the action",
+            message: PLATFORM_GATE_REJECTED_MESSAGE,
           };
         }
 
@@ -1428,12 +1562,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // Plugin MCP tools — allow only when the server is registered in
     // plugin.json. Explicit server-name matching (not blanket mcp__ prefix).
     // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
-    if (
-      toolName.startsWith("mcp__plugin_soleur_") &&
-      ctx.pluginMcpServerNames.some((server) =>
-        toolName.startsWith(`mcp__plugin_soleur_${server}__`),
-      )
-    ) {
+    if (ctx.pluginMcpServerNames.some((server) => toolName.startsWith(pluginToolPrefix(server)))) {
       log.info(
         { sec: true, toolName, agentId: options.agentID },
         "Plugin MCP tool invoked",

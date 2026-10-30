@@ -703,6 +703,9 @@ run_case() {
 #   MON_DEV_TYPE      blkid -s TYPE -o value         (default crypto_LUKS)
 #   MON_KEY           doppler WORKSPACES_LUKS_KEY    (default "k"; empty = Doppler unreachable)
 #   MON_ESCROW_RC     cryptsetup luksOpen --test-passphrase rc (default 0)
+#   MON_ESCROW_ERR    stderr text the luksOpen arm prints before exiting (default none) —
+#                     the SUT's escrow split reads it to tell a real keyslot rejection
+#                     ("No key available …") from an early cryptsetup fault (#9325)
 #   MON_UUID          cryptsetup luksUUID            (default a fixed uuid; empty = header unreadable)
 #   MON_READYZ_CODE   readyz HTTP status             (default 200)
 #   MON_READYZ_BODY   readyz body                    (default ready:true with both checks true)
@@ -764,7 +767,7 @@ esac
 case "$1" in
   status)  printf '  type:    LUKS2\n  device:  %s\n' "${MON_REAL_DEV-$FAKE_MAPPER}" ;;
   luksUUID) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
-  luksOpen) exit "${MON_ESCROW_RC:-0}" ;;
+  luksOpen) { [ -n "${MON_ESCROW_ERR:-}" ] && printf '%s\n' "$MON_ESCROW_ERR" >&2; exit "${MON_ESCROW_RC:-0}"; } ;;
 esac
 exit 0
 STUB
@@ -903,7 +906,7 @@ has()     { grep -qE -- "$1" "$CALLS"; }            # a recorded call matches
 hasF()    { grep -qF -- "$1" "$CALLS"; }            # literal
 nhas()    { ! grep -qE -- "$1" "$CALLS"; }
 cnt()     { grep -cE -- "$1" "$CALLS" || true; }
-idx()     { grep -nE -- "$1" "$CALLS" | head -1 | cut -d: -f1; }   # value only; rc unused
+idx()     { grep -m1 -nE -- "$1" "$CALLS" | cut -d: -f1; }   # value only; rc unused. -m1, not `| head -1`: an early-exit consumer can SIGPIPE a still-writing producer under pipefail (#9325 class)
 markerF() { grep -qF -- "$1" "$MARKER_LOG"; }
 outF()    { [[ "$CASE_OUT" == *"$1"* ]]; }
 undef()   { [[ "$CASE_OUT" == *"HARNESS_UNDEFINED:"* ]]; }

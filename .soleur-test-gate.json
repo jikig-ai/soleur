@@ -1,3 +1,14 @@
 {
-  "budget_seconds": 2400
+  "budget_seconds": 2400,
+  "content_trigger_pattern": "knowledge-base/",
+  "content_trigger_paths": [
+    "tests/*",
+    "plugins/soleur/test/*",
+    "plugins/soleur/skills/*/test/*",
+    "plugins/soleur/scripts/*.test.sh",
+    ".claude/hooks/*.test.sh",
+    "scripts/*.test.sh",
+    "scripts/test-*"
+  ],
+  "content_trigger_command": "bash scripts/test-affected-kb-consumers.test.sh"
 }

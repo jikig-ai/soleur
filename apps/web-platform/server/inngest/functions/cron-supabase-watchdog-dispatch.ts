@@ -134,12 +134,10 @@ export const cronSupabaseWatchdogDispatch = inngest.createFunction(
       { scope: "account", key: '"cron-dispatch"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "*/5 * * * *" },
+      { event: "cron/supabase-watchdog-dispatch.manual-trigger" },
+    ],
   },
-  [
-    { cron: "*/5 * * * *" },
-    { event: "cron/supabase-watchdog-dispatch.manual-trigger" },
-  ],
-  cronSupabaseWatchdogDispatchHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronSupabaseWatchdogDispatchHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

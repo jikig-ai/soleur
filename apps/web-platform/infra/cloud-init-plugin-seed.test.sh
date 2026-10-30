@@ -21,16 +21,25 @@ set -euo pipefail
 #   - prior-version dotfiles and regular files are removed by the cleanup glob
 #     (otherwise stale `.claude-plugin/` from a previous deploy would persist)
 #
-# Skip cleanly if Docker is unavailable (CI runner without docker-in-docker).
+# Skip cleanly if Docker is unavailable on a DEV host — but never under CI:
+# ADR-188 makes a missing runner-supplied dependency a FAILURE there, not a
+# skip that reads as a pass (#8773).
+
+_skip() {
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "$1 — and CI is set, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
+    exit 1
+  fi
+  echo "$1"
+  exit 0
+}
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "SKIP: docker not available"
-  exit 0
+  _skip "SKIP: docker not available"
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "SKIP: docker daemon not reachable"
-  exit 0
+  _skip "SKIP: docker daemon not reachable"
 fi
 
 TMP=$(mktemp -d)

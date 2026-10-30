@@ -70,22 +70,11 @@ import {
 import { sanitizeReleases } from "@/server/release-notes";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
 // --- Helpers ----------------------------------------------------------------
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-function makeStep() {
-  const calls: { name: string; result: unknown }[] = [];
-  return {
-    calls,
-    async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
-      const result = await cb();
-      calls.push({ name, result });
-      return result;
-    },
-  };
-}
 
 interface GhRelease {
   tag_name: string;
@@ -175,15 +164,23 @@ function installFetchMock() {
   );
 }
 
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler-level catch
+// as the SDK's rebuilt StepError. The in-process makeStep this replaced ran the
+// callback in-process and hid both (the #8717/#8726 defect class).
 async function runHandler() {
-  const step = makeStep();
-  const result = (await cronWeeklyReleaseDigestHandler({ step, logger })) as {
+  const out = await runLikeInngest(
+    ({ step }) => cronWeeklyReleaseDigestHandler({ step, logger }),
+    { maxAttempts: 1 },
+  );
+  expect(out.outcome).toBe("returned");
+  const result = out.value as {
     ok: boolean;
     weekKey?: string;
     highlights?: number;
     fallback?: boolean;
   };
-  return { step, result };
+  return { out, result };
 }
 
 beforeEach(() => {

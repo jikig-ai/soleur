@@ -15,6 +15,8 @@ set -euo pipefail
 # #8609: github_app_key_source / _fetch / _probe (and _probe_reason, on a rejected probe) ride the
 # base state verbatim (write_state adds them only once the GitHub App key overlay ran, each checked
 # against its closed enum; an absent key = it never ran).
+# #10934: inngest_link_selfgate_phase rides the base state verbatim the same way (write_state adds it only when the https
+# self-gate failed, so it is ABSENT when the gate did not fail; an out-of-enum value is written as `invalid`, never dropped).
 
 # Identify the host that answered this read (#6425). Today the `deploy.` ingress is
 # origin-relative to web-1's private IP (#6594), so every status read already answers
@@ -742,9 +744,10 @@ INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 # by measurement, not by bootstrap-pin inference. Two deliberate non-features,
 # both measured dead on production before this shipped lean:
 #   1. No /proc/<MainPID>/exe resolution — inngest-server's ExecStart is
-#      `doppler run -- bash -c '… exec /usr/local/bin/inngest start …'`, so the
-#      unit's MainPID is the doppler wrapper (doppler forks; exec happens in its
-#      child), and same-UID non-descendant exe readlinks are denied under
+#      `doppler run -- /usr/local/bin/inngest-server-launch.sh …` (the launch
+#      script execs `inngest start` itself, #11103), so the unit's MainPID is the
+#      doppler wrapper (doppler forks; exec happens in its child), and same-UID
+#      non-descendant exe readlinks are denied under
 #      kernel.yama.ptrace_scope=1 anyway.
 #   2. No ExecStart path= parse — the structured token is /usr/bin/doppler, and
 #      `doppler version` is not a registered subcommand, so that leg could only
@@ -784,7 +787,7 @@ VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 # #5159 follow-up 2: surface the inngest-server's OWN journal tail (its
 # sync/registration log) so a restart's re-register behavior is diagnosable with
-# no SSH — the decisive evidence the serveHost refutation left unseen.
+# no SSH — the decisive evidence the serveOrigin refutation left unseen.
 INNGEST_JOURNAL_TAIL="$(service_journal_tail inngest-server.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
 JOURNALD_STORAGE="$(journald_storage_json)"

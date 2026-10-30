@@ -54,8 +54,8 @@ are part of it, because `state pull` talks to the R2 backend:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 umask 077                                  # state holds credentials in plaintext
@@ -274,7 +274,10 @@ log, 2026-10-01. Removing the legacy arm from `main.tf` is tracked in #9361.
 > check reports as non-empty, and the "mirror" block would re-create the branch-readable copy of the
 > soleur-ai key that #8209 exists to delete. The CI key is `GITHUB_INFRA_APP_*` in
 > `soleur-infra-privileged/prd`; the installation to check is soleur-infra's, 166065653. Remedies:
-> knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.
+> knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md. The same holds for
+> the backend's `AWS_*` leg: `prd_terraform`'s pair is read-only post-O5b — state-WRITING
+> invocations export `AWS_*` from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd`
+> (§Local Terraform invocation there; blocks updated to that form 2026-10-24).
 
 Verify Doppler has both secrets:
 
@@ -330,11 +333,12 @@ manually (mirrors the CI block below), run:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository_ruleset.cla_required soleur:13304872
 ```
 
@@ -348,7 +352,10 @@ transformer is still required — this root needs `TF_VAR_github_app_id` and
 > sentinel, so a terminal run in this shape selects legacy mode and fails. Add a third layer: export
 > `TF_VAR_github_infra_app_id`, `TF_VAR_github_infra_app_installation_id` and
 > `TF_VAR_github_infra_app_private_key` from `soleur-infra-privileged/prd` before `doppler run
-> --preserve-env`, so infra mode wins exactly as it does in CI.
+> --preserve-env`, so infra mode wins exactly as it does in CI. The backend's `AWS_*` pair moved
+> too: `prd_terraform`'s is read-only post-O5b — for `import`/`apply`/`state push` export `AWS_*`
+> from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` (§Local Terraform invocation); the blocks
+> below carry that form since 2026-10-24.
 
 ### Adopting `jikig-ai/soleur-marketplace` (#7471)
 
@@ -364,11 +371,12 @@ Copying the ruleset's `owner:id` form fails at apply:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository.soleur_marketplace soleur-marketplace
 ```
 
@@ -440,18 +448,20 @@ canonical sequence is:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 # Skip the `terraform import` line below if the CI workflow has already
 # applied at least once — the resource is already in R2 state and
 # re-importing returns `Error: Resource already managed by Terraform`.
 # Run `terraform state list | grep github_repository_ruleset` to check.
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository_ruleset.ci_required soleur:14145388
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform plan
 # Expected (first apply): 10 required_check additions (9 from #3891 + 1
 # from #4384), no destroys.
@@ -499,7 +509,9 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
 
 > **Superseded 2026-10-01 (#9360):** CI applies authenticate as the Tier-B `soleur-infra` App, whose
 > key lives in `soleur-infra-privileged/prd`; rotate it there (ADR-241 D5). The text below describes
-> the soleur-ai key, which `prd_terraform` no longer holds after #8209 O10.
+> the soleur-ai key, which `prd_terraform` no longer holds after #8209 O10. Same for the backend
+> `AWS_*` pair: `prd_terraform`'s is read-only post-O5b — state-WRITING invocations source `AWS_*`
+> from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` (§Local Terraform invocation).
 
 The provider authenticates as the `soleur-ai` GitHub App. App credentials do
 not rotate operator-side -- the App PEM lives in Doppler indefinitely.
@@ -620,24 +632,30 @@ variables; only `plan`/`import`/`apply` need the `TF_VAR_*` layer.)
 
 > **Superseded 2026-10-01 (#9360):** the same third layer as Phase 1's note applies here: the
 > `prd_terraform` pair is the eviction sentinel after #8209 O10, so `plan`/`import`/`apply` also need
-> the `TF_VAR_github_infra_app_*` exports from `soleur-infra-privileged/prd`.
+> the `TF_VAR_github_infra_app_*` exports from `soleur-infra-privileged/prd`. The `AWS_*` leg moved
+> identically: `prd_terraform`'s pair is read-only post-O5b — for `import`/`apply`/`state push`
+> export `AWS_*` from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` (§Local Terraform
+> invocation); the blocks below carry that form since 2026-10-24.
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 terraform state list | grep github_                      # what is already adopted
 
 # Import only what is missing. Re-importing an adopted resource errors
 # `Resource already managed by Terraform`. Substitute any id the DR script reissued (§5b).
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository_ruleset.marketplace_pr_required soleur-marketplace:20802604
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform plan -out=tfplan-rollback.binary
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform apply tfplan-rollback.binary
 ```
 
@@ -672,8 +690,8 @@ Read all four before running anything.
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 SNAP=/path/to/your/snapshot.json          # the file from the §Authorization-model block
