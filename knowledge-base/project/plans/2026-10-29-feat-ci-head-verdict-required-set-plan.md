@@ -307,20 +307,20 @@ Execution-surface note (layer 7 is a property of the execution surface): the sam
 
 ## Acceptance Criteria
 
-- [ ] AC1: `bash plugins/soleur/scripts/ci-head-verdict.sh required <pr>` prints exactly one `SOLEUR_CI_REQUIRED_SET` marker as the last stdout line, field order `state pr sha required reason absent pending failed` (`ci-head-verdict.sh:req_marker`; rows R1, R6).
-- [ ] AC2: `complete` appears only for child rc 0 + verdict `ready` + `required` > 0 + all three arrays empty (`classify_required`; rows R1, R8, mutants 1 and 6).
-- [ ] AC3: a required context absent from another workflow reads `absent`, with the context name in `absent=[..]` (R2, and R-E1 against the REAL `admin-merge-ready.sh`).
-- [ ] AC4: the `verdict` marker, its closed six-state set and its tests are unchanged: `git diff origin/main -- plugins/soleur/scripts/ci-head-verdict.sh` shows no change inside `cmd_verdict`, `classify_run` or the `SOLEUR_CI_HEAD_VERDICT` printf, and the only change in `read_pr` is the added `PR_BASE` capture; the existing V/W/L rows pass unmodified apart from V19's added usage cases.
-- [ ] AC5: no ruleset parsing in `ci-head-verdict.sh`: `grep -nE 'rules/branches|required_status_checks|integration_id' plugins/soleur/scripts/ci-head-verdict.sh` returns only header/comment lines.
-- [ ] AC6: every read failure is `state=error` with exit 3 and `-` for unknown scalars (including `sha=` before the PR read) and arrays: own PR read, missing child, child crash, no marker, rc 2/3/4/130, marker integrity failures (R6).
-- [ ] AC7: `untrusted-ci` and `base-mismatch` with three empty arrays are `error` carrying the child's own reason, also when the real child prints `required=0` (R7, R-E2); `untrusted-ci` with a populated array maps by precedence (R7).
-- [ ] AC8: the recovery prints `gh run rerun`-bearing hints only; the gh stub's catch-all refuses any `run rerun` argv and every row asserts no `STUB-MISS` (R2, mutant 7).
-- [ ] AC9: owner resolution follows F5' exactly: one runs-list read; a single unique normalized workflow-name match prints `basis=workflow`; otherwise every cancelled run at the head prints `basis=candidate`; no per-run jobs reads exist (R2, R3).
-- [ ] AC10: a failed runs-list read leaves the state `absent` (R4); `stalled` / `awaiting-approval` skip the lookup (R4).
-- [ ] AC11: failed > absent > pending precedence (R5, mutant 3).
-- [ ] AC12: the child's marker field order is pinned by field-name tokens and the real child's marker parses (R9, H3, H4); a missing `ADMIN_MERGE_READY_BIN` seam is `error no-admin-merge-ready` (R9).
-- [ ] AC13: `ready-run-wait.md` carries the new section naming `ci-head-verdict.sh required`, `SOLEUR_CI_REQUIRED_SET`, all five states and the reason vocabulary, consistent with `--help`, the "`complete` is not provenance" sentence, the retry-once note for `head-moved`, and a run-id extraction snippet that works on sample `RECOVERY rerun` lines (R11).
-- [ ] AC14: suite green with raised floors; each of the existing mutants M1 to M49 still lands exactly once; `shellcheck` clean on the SUT and the suite; `admin-merge-ready.test.sh`, `admin-merge-ready-wiring.test.sh` and `monitor-pr-checks.test.sh` unchanged and green.
+- [x] AC1: `bash plugins/soleur/scripts/ci-head-verdict.sh required <pr>` prints exactly one `SOLEUR_CI_REQUIRED_SET` marker as the last stdout line, field order `state pr sha required reason absent pending failed` (`ci-head-verdict.sh:req_marker`; rows R1, R6).
+- [x] AC2: `complete` appears only for child rc 0 + verdict `ready` + `required` > 0 + all three arrays empty (`classify_required`; rows R1, R8, mutants 1 and 6).
+- [x] AC3: a required context absent from another workflow reads `absent`, with the context name in `absent=[..]` (R2, and R-E1 against the REAL `admin-merge-ready.sh`).
+- [x] AC4: the `verdict` marker, its closed six-state set and its tests are unchanged: `git diff origin/main -- plugins/soleur/scripts/ci-head-verdict.sh` shows no change inside `cmd_verdict`, `classify_run` or the `SOLEUR_CI_HEAD_VERDICT` printf, and the only change in `read_pr` is the added `PR_BASE` capture; the existing V/W/L rows pass unmodified apart from V19's added usage cases.
+- [x] AC5: no ruleset parsing in `ci-head-verdict.sh`: `grep -nE 'rules/branches|required_status_checks|integration_id' plugins/soleur/scripts/ci-head-verdict.sh` returns only header/comment lines.
+- [x] AC6: every read failure is `state=error` with exit 3 and `-` for unknown scalars (including `sha=` before the PR read) and arrays: own PR read, missing child, child crash, no marker, rc 2/3/4/130, marker integrity failures (R6).
+- [x] AC7: `untrusted-ci` and `base-mismatch` with three empty arrays are `error` carrying the child's own reason, also when the real child prints `required=0` (R7, R-E2); `untrusted-ci` with a populated array maps by precedence (R7).
+- [x] AC8: the recovery prints `gh run rerun`-bearing hints only; the gh stub's catch-all refuses any `run rerun` argv and every row asserts no `STUB-MISS` (R2, mutant 7).
+- [x] AC9: owner resolution follows F5' exactly: one runs-list read; a single unique normalized workflow-name match prints `basis=workflow`; otherwise every cancelled run at the head prints `basis=candidate`; no per-run jobs reads exist (R2, R3).
+- [x] AC10: a failed runs-list read leaves the state `absent` (R4); `stalled` / `awaiting-approval` skip the lookup (R4).
+- [x] AC11: failed > absent > pending precedence (R5, mutant 3).
+- [x] AC12: the child's marker field order is pinned by field-name tokens and the real child's marker parses (R9, H3, H4); a missing `ADMIN_MERGE_READY_BIN` seam is `error no-admin-merge-ready` (R9).
+- [x] AC13: `ready-run-wait.md` carries the new section naming `ci-head-verdict.sh required`, `SOLEUR_CI_REQUIRED_SET`, all five states and the reason vocabulary, consistent with `--help`, the "`complete` is not provenance" sentence, the retry-once note for `head-moved`, and a run-id extraction snippet that works on sample `RECOVERY rerun` lines (R11).
+- [x] AC14: suite green with raised floors; each of the existing mutants M1 to M49 still lands exactly once; `shellcheck` clean on the SUT and the suite; `admin-merge-ready.test.sh`, `admin-merge-ready-wiring.test.sh` and `monitor-pr-checks.test.sh` unchanged and green.
 - [ ] AC15: PR body has `## Changelog`, states the gap moves out of the epic's LUKS scope, uses `Ref #9927` (not `Closes`), links the follow-up issue; a comment (not a body edit) is added on #9927.
 
 ## Test Scenarios
