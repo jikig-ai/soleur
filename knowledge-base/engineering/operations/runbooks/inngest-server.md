@@ -76,10 +76,6 @@ gh workflow run cutover-inngest.yml -f op=resume
 > reads mid-outage, and an unexplained `Waiting` invites a second remediation on top of a
 > recovery that is already in flight.
 
-After a replace plus `op=resume`, the `soleur-inngest-server-probe-prd` heartbeat can stay down for up to
-about 1 h (the probe timer fires at boot + 90 s, then hourly); the 60 s `soleur-inngest-server-prd` heartbeat
-is the real serving signal. See [§ Arming the probe heartbeat](#arming-the-probe-heartbeat-9703).
-
 `op=resume` exists for exactly this state. Its G1 requires the flag to be `done` (only that
 evidences a completed flip), G3 requires the host to be audible, G4 (#9177) requires the current
 host generation's `bootstrap-done` — the same check the probe reports as `verdict=PASS` — and it
@@ -1142,10 +1138,11 @@ Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-lo
    (`QUEUE_ALLOWANCE_MINUTES`) + max runtime, at most `MAX_MARGIN_MINUTES` — the constants and
    the check live in `sentry-monitor-iac-parity.test.ts`. Update the expected slug set there
    and the `api -> github` watchdog edge and the `github -> sentry` workflow list in
-   `model.c4`. The hourly `scheduled-deadman-heartbeat-feeder.yml` row (#11631) adds 24 dispatches per
-   host per day and puts all five rows due in the `:00` slot on both hosts at once (up to 10 simultaneous
-   ticks, each minting a token); budget that when adding a sixth row. The feeder survives a total web-1 loss
-   only while two web hosts exist (ADR-248 reversal trigger 3). After the deploy, each host logs a new `armed` row and a tick row for the new
+   `model.c4`. The hourly `scheduled-deadman-heartbeat-feeder.yml` row (#11631) adds 24 runs a day (up to 48
+   ticks: both hosts tick each slot and the second is skipped as a duplicate) and puts all five rows due in the
+   `:00` slot on both hosts at once (up to 10 simultaneous ticks, each minting a token); budget that when adding
+   a sixth row. The feeder survives a total web-1 loss only while two web hosts exist (the `var.web_hosts`
+   reversal trigger in ADR-248). After the deploy, each host logs a new `armed` row and a tick row for the new
    workflow within one interval.
 5. **Which host sent a run?** Match the run's `created_at` to a `dispatched` row's `slot` and
    `host_name` (query in step 1); a skipped tick names the run that already covered the slot

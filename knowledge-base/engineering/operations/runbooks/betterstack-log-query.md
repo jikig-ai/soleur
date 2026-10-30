@@ -127,7 +127,12 @@ Live standing alarms over this source:
     markers per run `id` (the query under the 524 alert above), is the lead.
   - **`logtail_exploration_alert.claude_cost_capture_dark` — RETIRED (#11631).** Its successor is the Better
     Stack heartbeat `soleur-claude-cost-capture-prd` (`betteruptime_heartbeat.claude_cost_capture`, period
-    3600 s, grace 7200 s, born paused). The native alert could not see a row that arrives once a day, so
+    3600 s, grace 7200 s, born paused; **UNARMED until the owner unpauses it, and until then this condition is
+    unmonitored**). It shares the luks alert's class (a native alert with `query_period` 86400 s) but its marker
+    is not strictly once a day: it fires a few times a day (Phase 0 measured n=4 qualifying rows in 24 h), so
+    the 33-nights `Current value: 0` finding below is luks-specific (#11048), not measured for cost (#11049).
+    The sibling burn alert `claude_cost_daily_burn` (86400 s) may share the hot-window blind spot; that is
+    UNMEASURED. The native alert could not be trusted to see its row, so
     `scripts/deadman-heartbeat-feeder.sh claude-cost-capture` (hourly, via
     `scheduled-deadman-heartbeat-feeder.yml`) reads the archive (`remote()` UNION `s3Cluster`) and beats the
     heartbeat only if the trailing 24 h holds a cron cost marker with a non-null `cost_usd` OR a credit-probe
@@ -137,10 +142,18 @@ Live standing alarms over this source:
     Sentry issue alert. **Step 0 on a page:** check the Sentry monitor `scheduled-deadman-heartbeat-feeder`
     and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml` before suspecting the emitter (a
     dark watchdog clock false-pages this heartbeat), then
-    `gh run view <id> --log | grep 'deadman-feeder: target=claude-cost-capture'`.
+    `gh run view <id> --log | grep 'deadman-feeder: target=claude-cost-capture'` (verdict dictionary:
+    [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706)).
+    On `no_qualifying_row` the next action is the [Querying Anthropic cost
+    markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily) section below: query the raw markers
+    to see whether the emitter, Vector or the field moved. This target has no `any_rows` positive control, and
+    its predicate keeps the beat if EITHER one cron cost marker OR one credit-probe RED row exists in 24 h, a
+    known weak limit: a credit-probe RED row inside the window keeps the beat and can mask a dead marker path.
 - **`logtail_exploration_alert.luks_monitor_host_timer_dark` — RETIRED (#11631).** Its successor is the
   Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`
-  (`betteruptime_heartbeat.luks_monitor_host_timer`, period 3600 s, grace 7200 s, born paused). The feeder
+  (`betteruptime_heartbeat.luks_monitor_host_timer`, period 3600 s, grace 7200 s, born paused; **UNARMED until
+  the owner unpauses it, and until then this condition is unmonitored**). The retired alert read `Current
+  value: 0` through 33 nights of passing once-a-day rows (incident 1023423999, #11048). The feeder
   `scripts/deadman-heartbeat-feeder.sh luks-monitor-host-timer` beats it hourly only if the archive holds, in
   the trailing 27 h (97200 s), a `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` with
   `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own nightly LUKS
@@ -151,8 +164,10 @@ Live standing alarms over this source:
   first. The unit it watches is delivered by `terraform_data.luks_monitor_install` (`workspaces-luks.tf`).
   Runbook and no-SSH decode:
   [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
-  No native logs alert may use a `query_period` above 900 s (sentinel
-  `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh`).
+  No NEW native logs alert may use a `query_period` above 900 s (sentinel
+  `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh`; the live legacy alerts
+  `claude_cost_daily_burn` and `inngest_luks_wrong_volume` predate it and are allowlisted).
+  Arming runbook: [Arming the dead-man heartbeats](./workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631).
 - **`logtail_exploration_alert.workspaces_luks_deadman_fired`** (#9045, `higher_than 0`, missing
   data counts as zero): `soleur-workspaces-luks-deadman-fired-prd`. It pages (team email) on any
   `luks-monitor` row from `host_name = 'soleur-web-platform'` whose message starts with

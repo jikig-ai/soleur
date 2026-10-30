@@ -479,7 +479,8 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # 5 min of the first failing row. When it resolves, and why that is not recovery, is in the
   # AUTO-RESOLVE WINDOW comment above this resource.
   #
-  # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts), not inferred: this
+  # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts; as of 2026-10-28, two of them -
+  # luks_monitor_host_timer_dark and claude_cost_capture_dark - since retired by #11631), not inferred: this
   # alert was refused 422 "too resource intensive" FOUR times at merge apply, at (check, query) =
   # (300, 10800) #11260, (900, 10800) #11384, (3600, 10800) #11404 and (300, 5400) #11374. Live
   # alerts with query_period above 900 are all September-created: luks_monitor_host_timer_dark
@@ -812,12 +813,12 @@ resource "logtail_exploration_alert" "registry_clientip_not_rfc1918" {
 # serveOrigin, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
 # outlives that gets a 524, `retries: 1` re-invokes it while the first Claude session is still
 # running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
-# top-up lasted ~39 h. Three standing alarms, one per question:
+# top-up lasted ~39 h. Three standing checks, one per question (two native alerts and, since #11631, one heartbeat):
 #   (1) inngest_step_524         — is a step being cut at the proxy again? (per 15 min)
 #   (2) claude_cost_daily_burn   — is the cron fleet spending more than $25 in 24 h?
 #   (3) (retired, #11631) the cost-capture dark-man is now the archive-fed heartbeat
 #       soleur-claude-cost-capture-prd (uptime-alerts.tf), not a native logs alert
-# (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists.
+# (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists (as a heartbeat now).
 # (2) is a FLOOR on spend, not the total: a marker with a null cost_usd (a timeout, a no-result or
 # parse-error exit, the HTTP-transport crons compound-promote / weekly-release-digest / the credit
 # probe) sums as $0, and a run killed mid-flight emits no marker at all.

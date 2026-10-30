@@ -587,7 +587,14 @@ _untg="$(comm -23 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt
 # workflow KEEPS their four bare -target= lines until the first verified apply, because a bare -target on
 # an address with no configuration plans its DELETE (the census lists them in INTENDED_DESTROYS). They are
 # the ONLY targets allowed to name no declared resource; a follow-up removes both the lines and this list.
-RETIRED_DESTROY_TARGETS=$'logtail_exploration.claude_cost_capture_dark\nlogtail_exploration_alert.claude_cost_capture_dark\nlogtail_exploration.luks_monitor_host_timer_dark\nlogtail_exploration_alert.luks_monitor_host_timer_dark'
+# ONE source of truth (#11631 review): the list is READ from the census's INTENDED_DESTROYS, never retyped here, so the
+# two cannot drift. Only the logtail_* addresses count (the other entries are not this suite's business). A missing or
+# unreadable census is fatal; an empty result is a legitimate end state (the follow-up removed the entries) and then the
+# stray check below turns red on any leftover bare -target line, so a broken extraction fails loud, never green.
+CENSUS_SH="$REPO/tests/scripts/test-infra-privileged-tier-census.sh"
+[ -r "$CENSUS_SH" ] || { printf 'FATAL: census %s unreadable (the retired-destroy-target list is read from it)\n' "$CENSUS_SH" >&2; exit 2; }
+RETIRED_DESTROY_TARGETS="$(awk '/^INTENDED_DESTROYS = \{/{f=1;next} f&&/^}/{f=0} f' "$CENSUS_SH" \
+  | sed -nE 's/^[[:space:]]*"(logtail_[a-z_]+\.[a-z0-9_]+)"[[:space:]]*:.*/\1/p')"
 _stray="$(comm -13 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt" | sed '/^$/d') | grep -vxF -f <(printf '%s\n' "$RETIRED_DESTROY_TARGETS") | tr '\n' ' ')"
 [ -z "$_untg" ] && [ -n "$_tgt" ] \
   && ok "apply parity: every enumerated logtail resource has a -target= line in apply-web-platform-infra.yml" \
@@ -685,6 +692,7 @@ def mid(s): return len(list(AH.finditer(s))) // 2'
     cp -P "$INFRA/.terraform.lock.hcl" "$r/apps/web-platform/infra/" || exit 2
     cp -P "$SELF" "$r/apps/web-platform/infra/betterstack-alert-structure.test.sh" || exit 2
     cp -P "$HCL_LIB" "$r/tests/scripts/lib/hcl-effective-text.sh" || exit 2
+    cp -P "$CENSUS_SH" "$r/tests/scripts/test-infra-privileged-tier-census.sh" || exit 2   # the retired-destroy list is read from it
     cp -P "$WF" "$r/.github/workflows/infra-validation.yml" || exit 2
     for g in "$GUARDS"/*alert*.test.sh; do : > "$r/apps/web-platform/test/infra/$(basename "$g")"; done
   }

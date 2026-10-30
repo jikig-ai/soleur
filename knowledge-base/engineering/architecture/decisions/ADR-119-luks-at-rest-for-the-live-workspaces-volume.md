@@ -987,6 +987,8 @@ never carry that unit, so it cannot mask the host. The heartbeat manifest now ci
 closes when `scripts/followthroughs/luks-monitor-host-timer-8706.sh` prints
 `HOST_TIMER_PASS nights=3` after three consecutive timer-fired nights.
 
+> **Note (2026-10-30, #11631; appended, text above unchanged).** `logtail_exploration_alert.luks_monitor_host_timer_dark` and its once-a-day absence class were retired by #11631; the runtime proof is now the Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`, fed hourly from the Logs archive by `scheduled-deadman-heartbeat-feeder.yml` (ADR-218 amendment 2026-10-30), UNARMED until the owner unpauses it. #8706 closed on 2026-10-01 and the follow-through script named above was deleted by #10371. Runbook: `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631`.
+
 **Deviation from `hr-prod-host-config-change-immutable-redeploy`.** Two binaries, two unit files, one
 env-file line, a `daemon-reload`, a timer enable and one service start change web-1 in place, over
 SSH, through Terraform. This rests on ADR-154's standing exception, as the 2026-09-24 token line does:

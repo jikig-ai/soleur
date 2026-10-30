@@ -29,6 +29,22 @@ count is a presence proof, not a per-night contract).
 hold on this endpoint, but the feeder accepts both (`^[0-9]{1,18}$` on the string form, a non-negative integral number
 otherwise); the suite exercises both (`okstr` stub mode for the quoted form).
 
+**0.1 negative control (read-only, measured 2026-10-30 by the PR's lead agent over the trailing 27 h; recorded here
+from that report, not re-run by the docs edit).** The positive control above proves the predicate MATCHES; it does
+not prove the predicate EXCLUDES the look-alikes. In the last 27 h the luks OK identifier
+(`SYSLOG_IDENTIFIER=luks-monitor`, message `OK: /mnt/data is LUKS-backed`) appears from three different emitters:
+
+| | host_name | `_SYSTEMD_UNIT` | what it is | newest |
+|---|---|---|---|---|
+| (a) | `soleur-web-platform` | empty | the `workspaces-luks-verify` job's rows | 11:12 UTC |
+| (b) | `soleur-web-2` | `luks-monitor.service` | web-2's own host timer | not recorded |
+| (c) | `soleur-web-platform` | `luks-monitor.service` | web-1's host timer, the intended row | 00:04:56 UTC |
+
+The predicate (`host_name` plus `_SYSTEMD_UNIT`) admits only (c). A predicate keyed on the message alone, or on the
+unit alone, or on the host alone, would be kept fed by (a) or (b) while web-1's own timer is dead, so each of the
+three conjuncts is load-bearing, and the suite's row-level fixtures (a web-2 row withholds; a verify-job row
+without a unit withholds) model exactly (b) and (a).
+
 Writers of the predicate fields (cited in the suite header and pinned by Guard 2): `host_name` is written by
 `apps/web-platform/infra/vector.toml` (`.host_name = "@@HOST_NAME@@"`, rendered per host from `server.tf`: web-1 =
 `soleur-web-platform`); `SYSLOG_IDENTIFIER=luks-monitor` is `luks-monitor.sh`'s `LOG_TAG` and the unit's
@@ -74,15 +90,25 @@ normalisation (runs collapsed, no space inside parentheses), against the WHERE c
 `claude_cost_capture_dark_sql`): `luks_monitor_host_timer_sql` IDENTICAL, `claude_cost_capture_dark_sql` IDENTICAL.
 (One-time check; the base text disappears after merge, so there is no permanent suite check for it.)
 
+## Elapsed-time notes
+
+Wall times from Phase 0.3: 1528 ms (luks, 27 h, both arms) and 1346 ms (cost, 24 h). The feeder's marker lines now
+carry `elapsed_ms=<n>` (added in review), so growth of the archive scan cost shows in the run logs without a new
+measurement; the 30 s threshold from the plan remains the point at which a `raw LIKE` pre-filter is reconsidered.
+
 ## Decisions recorded where the plan left a fork (all within the plan's stated choices)
 
 - Guard 3 allowlist ceilings are the LIVE values: `claude_cost_daily_burn` 86400 and `inngest_luks_wrong_volume` 5400
   (the plan names the two alerts but not the second one's ceiling; 5400 is what the file declares today).
 - The suite `apps/web-platform/test/infra/deadman-heartbeat-feeder.test.sh` is not a `test-all.sh` registration
-  (nothing globs `apps/web-platform/test/infra/`); it runs from `infra-validation.yml`. The
-  `AFFECTED_APPS_WEB_PLATFORM_TEST_INFRA_DEADMAN_HEARTBEAT_FEEDER_PATHS` array in `scripts/lib/test-affected-paths.sh` is
-  the declared-edge record the plan asked for and satisfies the census linter (self-inclusion, tracked files) once the
-  new files are committed.
+  (nothing globs `apps/web-platform/test/infra/`); it runs from `infra-validation.yml`.
+  **Correction (review, 2026-10-30):** an earlier revision of this bullet said an
+  `AFFECTED_APPS_WEB_PLATFORM_TEST_INFRA_DEADMAN_HEARTBEAT_FEEDER_PATHS` array in `scripts/lib/test-affected-paths.sh`
+  records the declared edges. That array does NOT exist in the file (`grep -n DEADMAN scripts/lib/test-affected-paths.sh`
+  finds nothing); it was drafted and not applied. Why it is not needed: the file's own header says its arrays are
+  consumed by `scripts/test-all.sh` and `scripts/lint-orphan-test-suites.sh` to select REGISTERED suites, and this suite is
+  not registered there, so an array for it would classify nothing. Its dependency edges are carried instead by the
+  `pull_request` path filters of `infra-validation.yml`, which is what actually triggers the suite.
 - The manifest wiring check reads the row text with python (the `infra-validation.yml` job has no bun) and, when `bun`
   exists, ALSO imports `MANIFEST` at runtime; the bun suites `heartbeat-reprovision-parity` and
   `heartbeat-live-reconcile` remain the authoritative import-level guards.

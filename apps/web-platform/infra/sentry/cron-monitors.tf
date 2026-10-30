@@ -483,7 +483,7 @@ resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat" {
 #     gh api repos/jikig-ai/soleur/actions/runs/$id/jobs --jq '[.jobs[] | select(.started_at != null) | ((.started_at|fromdate) - (.created_at|fromdate))] | max'; done | sort -n
 # Slug MUST match `monitor-slug` in the workflow's sentry-heartbeat step (scheduled-deadman-heartbeat-feeder).
 # Routing: declared UNROUTED under the two-PR rule — cron-monitor-alerts.tf `local.cron_monitor_alert_unrouted`;
-# a follow-up PR moves it into monitor_ids after three measured check-ins (#11631).
+# a follow-up PR moves it into monitor_ids after three measured check-ins (tracked on #11631).
 resource "sentry_cron_monitor" "scheduled_deadman_heartbeat_feeder" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug

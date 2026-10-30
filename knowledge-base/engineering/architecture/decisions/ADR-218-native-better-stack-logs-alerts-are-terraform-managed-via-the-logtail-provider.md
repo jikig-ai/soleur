@@ -619,9 +619,13 @@ A dated amendment. The text above is unchanged; where it conflicts with this sec
 
 **Finding.** `luks_monitor_host_timer_dark` (`soleur-luks-monitor-host-timer-dark-prd`, `query_period`
 97200) and `claude_cost_capture_dark` (`soleur-claude-cost-capture-dark-prd`, `query_period` 86400) wait
-for a row that arrives once a day. The live luks incident (1023423999) read `Current value: 0` through 33
-nights of passing rows, so neither alert could see its own row. The reading that Better Stack evaluates a
-native logs alert over the hot window only is INFERRED, not proven; the design below does not depend on it.
+for a row that arrives once a day (luks) or a few times a day (cost: Phase 0 measured n=4 qualifying rows in
+24 h). The live luks incident (1023423999, #11048) read `Current value: 0` through 33 nights of passing rows, so
+the luks alert could not see its own row. That 33-nights fact is luks-only; the cost alert (incident
+1020832712, #11049) shares the class (a native alert with `query_period` 86400) but its blindness was not
+measured. The reading that Better Stack evaluates a native logs alert over the hot window only is INFERRED, not
+proven; the design below does not depend on it. The sibling `claude_cost_daily_burn` (86400 s) may share the
+same blind spot; that is UNMEASURED and out of scope here.
 
 **Decision.** A once-a-day absence alarm is not a native logs alert above the 900 s ceiling. Such
 dead-mans are Better Stack heartbeats (`betteruptime_heartbeat`) fed by a scheduled GitHub workflow that
@@ -655,7 +659,34 @@ replace, and the shared `workspaces_luks` heartbeat cannot tell the host timer f
 second pusher. An hourly host row with a logs alert of 900 s or less is also a host change, and
 cost-capture has no hourly cadence.
 
-**Consequences.** Detection latency is the old window plus about 2 to 3 h (period 3600 + grace 7200), fine
-for a nightly dead-man. Archive ingestion lag is the one unmeasured input: it is measured before arming and
-the grace is widened if it exceeds the margin. The heartbeats are armed by the owner, not by CI. Runbooks:
-`workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706` and `betterstack-log-query.md`.
+**Consequences.**
+
+- **Until armed there is NO paging dead-man for luks or cost.** The merge-triggered apply destroys the old
+  alerts and creates the heartbeats paused; a paused heartbeat pages nothing. The window is closed only by the
+  owner's arm (runbook `workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631`), which is why the
+  feeder reports `qualifying_row_heartbeat_paused` (UNARMED) every hour in the meantime.
+- **Detection latency is measured from the last qualifying row: window W plus 2 to 3 h** (page threshold =
+  period 3600 + grace 7200 = 10800 s after the last beat). The last beat falls in the final hour of the window that opens on the last qualifying row
+  (`(t0 + W - 1 h, t0 + W]`), so the page arrives `W + 2 h` to `W + 3 h` after that row: luks (W = 97200 s,
+  27 h) about 29 to 30 h; cost (W = 86400 s, 24 h) about 26 to 27 h. Fine for a nightly dead-man.
+- **Archive ingestion lag is MEASURED, not unmeasured: 66 minutes** (Phase 0.2, `phase0-measurements.md`: archive
+  newest 3957 s to 3968 s old, with no gap between the archive and the hot arm). The lever that absorbs it is
+  the WINDOW SLACK, not the grace: the luks window (27 h) exceeds the legitimate gap between nightly rows
+  (24.5 h) by 2.5 h, which is more than the lag. The grace (7200 s) governs only the dispatch cadence
+  (beat-to-beat spacing), so widening it would slow detection without adding lag tolerance. The cost window's
+  slack was not measured per gap (n=4 in 24 h is a mean gap near 6 h, which the 24 h window covers several
+  times over).
+- **Zero-withhold is the permitted direction (ADR-197).** ADR-197 says a zero from a log surface is not evidence
+  of absence. The feeder never reads a zero as healthy: `n = 0` withholds the beat (a fail-loud page), so a
+  truncated or lagging answer produces a false page, never a false "healthy". The coverage and instrumentation
+  assertions ADR-197 asks for are carried for luks as counts-only diagnostics (`any_rows`, `fail_rows`) on the
+  withhold line. Known limits: the cost target has NO `any_rows` positive control, and its predicate keeps the
+  beat when EITHER one cron cost marker OR one credit-probe RED row exists in 24 h, so a RED row can mask a dead
+  marker path. Both are accepted and recorded, not fixed here.
+- **Feeder-substrate false page, bounded.** The feeder runs on a GitHub Actions runner started by the watchdog
+  dispatch clock (ADR-248 amendment). One lost slot gives about 9718 s between beats against the 10800 s
+  threshold (Phase 0.4: 3680 + 3600 + 2438), so it does not page a healthy host. TWO lost slots (a GitHub or
+  GitHub App token outage that also defeats the `schedule:` fallback) give about 13300 s (3680 + 2 x 3600 +
+  2438 = 13318) and WILL false-page both heartbeats. Runbook step 0 is to check the feeder before the host.
+- The heartbeats are armed by the owner, not by CI. Runbooks:
+  `workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706` and `betterstack-log-query.md`.

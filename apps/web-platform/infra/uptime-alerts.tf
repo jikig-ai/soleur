@@ -580,10 +580,11 @@ resource "doppler_secret" "inngest_server_probe_heartbeat_url" {
 # least 7200 s after the last; the page threshold is period + grace = 10800 s, and detection is the
 # old window (27 h luks-monitor, 24 h cost-capture) plus about 2-3 h.
 #
-# paused = true forever-until-armed (same DP-10/#6210 discipline as every sibling): Better Stack
+# paused = true forever-until-armed (like the other born-paused siblings; registry_disk_prd is paused=false): Better Stack
 # starts expecting pings at creation, so an unfed unpaused heartbeat pages falsely. Arming is
 # owner-gated: after at least two consecutive feeder runs report qualifying_row_heartbeat_paused for
-# the target, the owner arms it through the runbook block "Arming the probe heartbeat (#9703)" and a
+# the target, the owner arms it through the runbook section "Arming the dead-man heartbeats (#11631)"
+# (workspaces-luks-cutover-6604.md, anchor #arming-the-dead-man-heartbeats-11631) and a
 # record PR drops the heartbeat-manifest.ts `arming_pending` declaration. No doppler_secret: the
 # feeder resolves the ping URL through the read-only API by exact name.
 resource "betteruptime_heartbeat" "luks_monitor_host_timer" {

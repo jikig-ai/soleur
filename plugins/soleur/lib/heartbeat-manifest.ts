@@ -132,7 +132,8 @@ export const MANIFEST: ManifestEntry[] = [
     //      stays a redundant second installer for a future re-cut.
     //   2. The daily workspaces-luks-verify.yml job, which ships its own copy of luks-monitor.sh.
     // The shared beat cannot tell them apart. The runtime proof that pusher 1 runs is
-    // betteruptime_heartbeat.luks_monitor_host_timer (uptime-alerts.tf, #11631), an archive-fed
+    // betteruptime_heartbeat.luks_monitor_host_timer (uptime-alerts.tf, #11631) once armed - it is born
+    // paused, so until the owner unpauses it NO paging dead-man covers this pusher. It is an archive-fed
     // heartbeat that replaced the retired once-a-day logs alert.
     // web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO host-replace path:
     // web-host-cron, NOT dedicated-host-boot, and the replace_target requirement does not fire.
@@ -371,7 +372,8 @@ export const MANIFEST: ManifestEntry[] = [
     // reads the Logs archive itself (remote() UNION s3Cluster) over the old 97200 s window and beats only
     // when web-1's luks-monitor.service recorded a passing row; with none it withholds and the heartbeat
     // times out (period 3600 + grace 7200). FED but PAUSED: born paused, armed by the owner after two
-    // consecutive `qualifying_row_heartbeat_paused` runs; a record PR then drops `arming_pending`.
+    // consecutive `qualifying_row_heartbeat_paused` runs (runbook workspaces-luks-cutover-6604.md, section
+    // "Arming the dead-man heartbeats (#11631)"); a record PR then drops `arming_pending`.
     arming: "external-probe",
     paused: true,
     feeder: {
@@ -390,7 +392,8 @@ export const MANIFEST: ManifestEntry[] = [
     // #11631 — the archive-fed dead-man that replaced logtail_exploration_alert.claude_cost_capture_dark.
     // Same feeder and workflow as luks_monitor_host_timer above, over the 86400 s window and the cost-marker
     // predicate (a cron cost marker with a non-null cost_usd, or a credit-probe RED row). FED but PAUSED,
-    // armed by the owner after two consecutive `qualifying_row_heartbeat_paused` runs.
+    // armed by the owner after two consecutive `qualifying_row_heartbeat_paused` runs (runbook
+    // workspaces-luks-cutover-6604.md, section "Arming the dead-man heartbeats (#11631)").
     arming: "external-probe",
     paused: true,
     feeder: {

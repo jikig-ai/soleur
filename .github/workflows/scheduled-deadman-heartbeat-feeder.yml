@@ -12,11 +12,18 @@
 # workflow_dispatch and the concurrency group (cancel-in-progress: false) and no other trigger
 # (sentry-monitor-iac-parity.test.ts).
 # UNARMED: both heartbeats are born paused. While one is paused its target reports
-# `qualifying_row_heartbeat_paused` and this run emits an UNARMED ::warning:: every hour, so an unarmed state is
-# never silent. Arming is the owner's (runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md,
-# "Arming the probe heartbeat").
-# A Sentry `error` check-in means a target was withheld or failed (no qualifying row, query or delivery fault), not
-# "feeder broken"; a `missed` check-in means the feeder went dark (clock and fallback both dead, workflow disabled).
+# `qualifying_row_heartbeat_paused`; this run then emits an UNARMED ::warning:: annotation and a line in the step
+# summary every hour. That is the whole surface: an unarmed state is visible only on the run page, and NOTHING PAGES
+# for it until the owner unpauses the heartbeat. Arming is the owner's (runbook:
+# knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md, "Arming the dead-man heartbeats
+# (#11631)").
+# RUN CONCLUSION. The step succeeds by design whatever the feeder decided: the feeder's exit status is data, read
+# into the annotations, the marker lines and all_decided. The signals are the Sentry check-in (`ok` only when every
+# target beat or is unarmed; `error` when a target was withheld or failed; `missed` when the feeder went dark, clock
+# and fallback both dead or the workflow disabled) and, once armed, the heartbeat timing out. A green run does NOT
+# mean the hosts are healthy; read the verdict lines.
+# TRUST BOUNDARY. A beat rests on the authenticity of the rows in the shared Logs source: anyone holding the ingest
+# token can forge a row that satisfies a predicate. This detects a dark emitter or shipper, not a hostile writer.
 
 name: "Scheduled: Dead-man Heartbeat Feeder"
 
@@ -70,8 +77,9 @@ jobs:
             # Keep ONLY lines of the feeder's own two shapes. The raw blob is never echoed: a line that begins
             # with two colons would run as a workflow command, and a blob-wide strip would fuse lines. A marker
             # that does not match the shape (it would carry a value this step does not expect) is COUNTED, not
-            # printed. The ping URL is a bearer secret GitHub cannot mask; the feeder never prints it.
+            # printed. The ping URL is a bearer secret; the feeder never prints it.
             verdict=""
+            reason=""
             dropped=0
             while IFS= read -r line; do
               safe="$(strip_log_injection "$line")"
@@ -81,6 +89,7 @@ jobs:
                     printf '%s\n' "$safe"
                     if [[ "${BASH_REMATCH[1]}" == "$t" || "${BASH_REMATCH[1]}" == "none" ]]; then
                       verdict="${BASH_REMATCH[2]}"
+                      if [[ "$safe" =~ \ reason=([A-Za-z0-9:._-]{1,40})(\ |$) ]]; then reason="${BASH_REMATCH[1]}"; fi
                     fi
                   else
                     dropped=$((dropped + 1))
@@ -104,14 +113,27 @@ jobs:
               0) case "$verdict" in
                    beat) echo "::notice::deadman heartbeat ${t}: beat" ;;
                    qualifying_row_heartbeat_paused)
-                     echo "::warning::deadman heartbeat ${t} is UNARMED (paused): no page can fire" ;;
+                     echo "::warning::deadman heartbeat ${t} is UNARMED (paused)"
+                     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                       printf '%s\n' "deadman heartbeat ${t}: UNARMED (paused); a qualifying row exists and nothing was sent" >> "$GITHUB_STEP_SUMMARY"
+                     fi ;;
                    *) all_decided=false
                       echo "::error::deadman heartbeat feeder for ${t} exited 0 without a deciding verdict (${verdict}); Sentry will check in error." ;;
                  esac ;;
-              3) all_decided=false
-                 echo "::error::deadman heartbeat ${t} WITHHELD (${verdict}). See the verdict line above for the cause and the counts." ;;
-              4) all_decided=false
-                 echo "::error::deadman heartbeat ${t} beat FAILED (${verdict}): a qualifying row existed but the heartbeat could not be resolved or delivered." ;;
+              3|4) all_decided=false
+                 if [ "$verdict" = no_qualifying_row ]; then
+                   # The one legitimate page: the query answered and found nothing. For the cost target the cause
+                   # is not established, so the text does not claim a dark host.
+                   if [ "$t" = luks-monitor-host-timer ]; then
+                     echo "::error::deadman ${t}: HOST/SOURCE DARK (no_qualifying_row)"
+                   else
+                     echo "::error::deadman ${t}: SOURCE DARK (no_qualifying_row); the cause is not established"
+                   fi
+                 elif [ "$verdict" = beat_failed ]; then
+                   echo "::error::deadman ${t}: FEEDER FAULT (${verdict}${reason:+ reason=$reason}); says nothing about the host: a qualifying row existed but the heartbeat could not be resolved or delivered"
+                 else
+                   echo "::error::deadman ${t}: FEEDER FAULT (${verdict}${reason:+ reason=$reason}); says nothing about the host"
+                 fi ;;
               *) all_decided=false
                  echo "::warning::deadman heartbeat feeder for ${t} returned unexpected status ${rc} (${verdict})" ;;
             esac

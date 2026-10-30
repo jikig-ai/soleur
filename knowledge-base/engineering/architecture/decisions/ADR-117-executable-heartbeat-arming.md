@@ -409,6 +409,9 @@ the timer then fires. That proof is a runtime signal keyed on the host unit alon
 unchanged: no static check can prove a monitor is armed; it can only prove a feeder exists. This
 amendment adds that "exists" must mean "on a path that runs".
 
+> **Note (2026-10-30, #11631; appended, text above unchanged).** The runtime proof named above, `logtail_exploration_alert.luks_monitor_host_timer_dark` and its once-a-day absence class were retired by #11631; the successor is the Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`, fed hourly from the Logs archive by `scheduled-deadman-heartbeat-feeder.yml` (ADR-218 amendment 2026-10-30), UNARMED until the owner unpauses it. Runbook: `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631`.
+
+
 ### Amendment (2026-10-11, #9980): a named-monitor entry to the same gate
 
 The arm gate has a second, operator-invoked entry: `arm-heartbeats.sh --arm-one <name> [--id <id>]`, with

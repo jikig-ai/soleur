@@ -646,7 +646,8 @@ UNION `s3Cluster`) whether a qualifying row exists in the trailing 97200 s (27 h
 if one does. No qualifying row means NO beat: the heartbeat times out and pages. The feeder never beats
 `/fail`. Predicate: an `OK: /mnt/data is LUKS-backed` row from `_SYSTEMD_UNIT=luks-monitor.service` with
 `host_name = 'soleur-web-platform'`. Period 3600 s plus grace 7200 s means the page lands about 3 h after the
-last beat, so detection latency is the 27 h window plus roughly 2 to 3 h.
+last beat (page threshold 3600 + 7200 = 10800 s). The last beat falls in the final hour of the 27 h window
+that opens on the last qualifying row, so the page arrives between 29 h and 30 h after that row.
 
 It is scoped to web-1. web-2 (`host_name = 'soleur-web-2'`) ships to the same Logs source, so the
 host conjunct keeps web-2 rows out. The verify job's rows never carry the unit, so they cannot keep
@@ -666,18 +667,63 @@ dispatch it, with a GitHub `schedule:` fallback, so a dark clock can false-page 
 
 0. Check the feeder first, before touching the timer: the Sentry monitor `scheduled-deadman-heartbeat-feeder`
    and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml`. Both dead-man heartbeats share one
-   script, one workflow run, one Sentry monitor and one Logs credential, so a feeder outage pages both.
+   script, one workflow run, one Sentry monitor and one Logs credential, so a feeder outage pages both. Two
+   causes sit upstream of every verdict below and say nothing about the host: a GitHub Actions or GitHub App
+   token incident (the watchdog clock mints an installation token per dispatch, so no run, or a late run, means
+   no beat), and an expired or rotated `BETTERSTACK_QUERY_*` (Logs read) or `BETTERSTACK_API_TOKEN_READONLY`
+   (heartbeat lookup) credential in Doppler `prd_terraform` (verdict `query_failed` or `beat_failed`).
 1. Read the run's marker line:
-   `gh run view <id> --log | grep 'deadman-feeder: target=luks-monitor-host-timer'`. On a withhold it carries
-   counts-only diagnostics: `any_rows=0` means the host is dark (or a shipper outage), `fail_rows>0` means a
-   FAIL row exists (encryption possibly not in effect).
+   `gh run view <id> --log | grep 'deadman-feeder: target=luks-monitor-host-timer'`, and decode its `verdict=`
+   with the table below. A GitHub run that shows success only means the feeder executed; the run conclusion is
+   success by design, so read the marker, not the green tick.
 2. Decode the FAIL row (step D) via `scripts/betterstack-query.sh`.
 3. Re-fire the installer (step E).
 
+**Verdict dictionary** (the same dictionary serves `target=claude-cost-capture`). Each run prints one
+`deadman-feeder: target=<t> verdict=<v> ...` line per target; the workflow loops over both targets.
+
+| `verdict=` | exit | Means | Says anything about the host? |
+|---|---|---|---|
+| `beat` | 0 | A qualifying row exists in the window and the heartbeat was beaten (`http=2xx`). | Healthy. |
+| `qualifying_row_heartbeat_paused` | 0 | A qualifying row exists but the heartbeat is still paused, so nothing was sent. **UNARMED**: nothing can page for this target until the owner arms it ([Arming the dead-man heartbeats](#arming-the-dead-man-heartbeats-11631)). | Healthy row, no paging surface. |
+| `no_qualifying_row` | 3 | The window (hot plus archive) holds no qualifying row. This is the legitimate page: the host, the shipper or the Logs source is dark. | Yes: read `any_rows` and `fail_rows` below. |
+| `query_failed` | 3 | The Logs warehouse could not be read or its answer could not be parsed (`reason=secret_unset`, `helper_status class=auth`, `malformed`, ...). A credential or helper fault. | No. |
+| `beat_failed` | 4 | A qualifying row existed but the heartbeat could not be resolved or the ping was not accepted (`reason=api_token_unset`, `api_unreadable`, `heartbeat_not_unique`, `url_shape`, `http_status`). | No: the host is fine. |
+| `no_marker` | workflow-synthesised | The feeder died before printing any marker (script missing, parse error); the line carries `rc=` and `out_bytes=`. | No. A feeder bug. |
+| `trap_remapped` | 3 | The feeder exited with a status outside its contract, or with 0 that no verdict produced; the exit trap rewrote it to 3 (`rc=` is the original). | No. A feeder bug. |
+| `usage` / `xtrace_refused` | 64 / 78 | A bad target argument, or shell tracing was refused because a live credential is set. | No. |
+
+Exit codes are 0 (`beat` or `qualifying_row_heartbeat_paused` only), 3 (withheld), 4 (a beat could not be
+delivered), 64 (usage) and 78 (tracing refused). `paged=1` appears only on `beat_failed reason=heartbeat_not_unique`
+and means the uptime API reports a further result page, so the feeder refused to trust page 1.
+
+**Reading the funnel counts** (counts only; no row text is ever printed). `n` is the number of qualifying rows
+in the window; `newest_dt` is the newest qualifying row's timestamp, or `none` when `n=0`. On a luks
+`no_qualifying_row` two diagnostics run over the same window:
+
+- `any_rows=0`: no `luks-monitor.service` row at all from web-1, so the host timer did not run, or the
+  shipper or Logs source is dark. Start at step A, then B.
+- `any_rows>0`, `fail_rows>0`: the probe ran and failed an assert. Encryption may NOT be in effect. Step D.
+- `any_rows>0`, `fail_rows=0`, `n=0`: the unit logged but never logged a passing `OK: /mnt/data is
+  LUKS-backed` line or a `FAIL (` line in the window, for example it died between start and verdict, or the
+  message text changed. Read the unit's raw rows with `scripts/betterstack-query.sh` (step B) before anything
+  else.
+- `unknown`: that diagnostic query itself failed. It never changes the verdict.
+
+**Cost target (`claude-cost-capture`).** There is no `any_rows` control for it. On `no_qualifying_row`, read the
+cost-marker section of `betterstack-log-query.md` ([Querying Anthropic cost
+markers](./betterstack-log-query.md#querying-anthropic-cost-markers-soleur_claude_cost--_daily)) to see
+whether the emitter, Vector or the field moved. The page text for this target must not be read as "the host is
+dark": the cost markers come from Inngest-executed crons, so a quiet scheduler or a credit-probe outage reads
+the same. An out-of-credit day stays quiet by design (the predicate also accepts a credit-probe RED row).
+
 So do not assume the volume is fine. The daily verify job still checks the volume on its own schedule.
 
-**On the merge that creates it**, the heartbeat is born paused, so nothing can page. Arming it (unpause plus
-read-back) is an owner step in the PR body, not a runbook step.
+**On the merge that creates it**, the heartbeat is born paused, so nothing can page, and the merge also destroys
+the old logs alert: until the owner arms it there is NO paging dead-man for the luks host timer. An unarmed state
+shows only as a run annotation and step summary on the feeder run, and as `verdict=qualifying_row_heartbeat_paused`.
+Arming (unpause plus read-back) is the owner-gated block
+[Arming the dead-man heartbeats](#arming-the-dead-man-heartbeats-11631).
 
 **Read it back without a dashboard.** Raw SQL through `scripts/betterstack-query.sh`, hot and
 archive together:
@@ -848,8 +894,193 @@ That stops the WHOLE per-merge SSH apply step, every SSH-provisioned resource in
 boot-token delivery on a rotation merge, until the DSN in Doppler `prd_terraform` is fixed. The
 reasoning is in ADR-119's 2026-09-27 addendum.
 
-**Closing #8706.** The signal that the host unit works is the heartbeat `soleur-luks-monitor-host-timer-prd`'s
-first verified beat after the owner unpauses it: a feeder run whose marker reads
-`deadman-feeder: target=luks-monitor-host-timer verdict=beat`, and the heartbeat's `status` reading `up`
-(`GET /api/v2/heartbeats` with the read-only token). The old follow-through script
-`scripts/followthroughs/luks-monitor-host-timer-8706.sh` was deleted by #10371; do not look for it.
+**Acceptance criteria for the rebuilt heartbeat (#11631).** Issue #8706 itself closed on 2026-10-01 (the old
+three-consecutive-date follow-through script `scripts/followthroughs/luks-monitor-host-timer-8706.sh` was deleted
+by #10371; do not look for it). The heartbeat that replaced the retired alert is accepted under #11631 when all
+of these hold after the owner arms it ([Arming the dead-man heartbeats](#arming-the-dead-man-heartbeats-11631)):
+
+1. a feeder run whose marker reads `deadman-feeder: target=luks-monitor-host-timer verdict=beat`, and a second
+   such run one slot later;
+2. the heartbeat `soleur-luks-monitor-host-timer-prd` reads `status=up paused=false` through
+   `GET /api/v2/heartbeats` with the read-only token;
+3. the measured archive lag (Phase 0.2, 66 minutes) still sits under the window slack (27 h window vs a 24.5 h
+   legitimate gap, so 2.5 h).
+
+## Arming the dead-man heartbeats (#11631)
+
+`betteruptime_heartbeat.luks_monitor_host_timer` (`soleur-luks-monitor-host-timer-prd`) and
+`betteruptime_heartbeat.claude_cost_capture` (`soleur-claude-cost-capture-prd`) ship born paused (period 3600,
+grace 7200, `ignore_changes = [paused]`). The merge that creates them also destroys the retired logs alerts, so
+**until a heartbeat is armed there is NO paging dead-man for its target**. Arming is the owner's step, one target
+at a time, and nothing in this section is run by an agent on its own: every command marked **production write**
+needs the owner to authorize THAT exact command as a unit (a menu answer or an earlier approval does not
+authorize it). Reads use the read-only token; the two writes (unpause, incident resolve) read the write token
+inside `doppler run` and send it through `curl --config -`, so nothing here prints a token or a ping URL.
+
+<!-- lint-infra-ignore start -->
+
+Parameters (set once per target; run every block below in the same shell):
+
+```bash
+TARGET=luks-monitor-host-timer        # or: claude-cost-capture
+case "$TARGET" in
+  luks-monitor-host-timer) HB_NAME=soleur-luks-monitor-host-timer-prd; INCIDENT=1023423999; ISSUE=11048 ;;
+  claude-cost-capture)     HB_NAME=soleur-claude-cost-capture-prd;     INCIDENT=1020832712; ISSUE=11049 ;;
+  *) echo "unknown target"; return 64 2>/dev/null || exit 64 ;;
+esac
+WORKFLOW=scheduled-deadman-heartbeat-feeder.yml
+MARKER="deadman-feeder: target=$TARGET verdict="
+PERIOD=3600; GRACE=7200
+DEADLINE=$((PERIOD + GRACE - 900))    # 9900 s, NOT 10800: the last 900 s are the rollback margin
+BASE=https://uptime.betterstack.com/api/v2/heartbeats
+hbr() { doppler run -p soleur -c prd_terraform --silent -- bash -c '
+  [[ "$BETTERSTACK_API_TOKEN_READONLY" =~ ^[A-Za-z0-9._~+/=-]{20,}$ ]] || { echo "token shape refused" >&2; exit 78; }
+  printf "header = \"Authorization: Bearer %s\"\n" "$BETTERSTACK_API_TOKEN_READONLY" | curl --disable --noproxy "*" -fsS --max-time 20 --config - "$@"' _ "$@"; }
+```
+
+### 1. Preflight (read-only)
+
+Both runs must be completed, must have a `workflow_dispatch` origin, and must read
+`verdict=qualifying_row_heartbeat_paused` for the target: that proves the feeder is on `main`, the watchdog clock
+is dispatching it, the predicate matches the live archive, and the archive lag is inside the window slack. Two
+hourly runs are at least 2400 s apart. A manual dispatch inside a slot makes the clock skip that slot, and the
+check cannot tell a clock dispatch from a manual one, so do not stack manual runs before this check.
+
+```bash
+n=0; fail=""; first=""; last=""
+while IFS=$'\t' read -r rid created; do
+  [ -n "$rid" ] || continue
+  v="$(gh run view "$rid" --log | grep -o "${MARKER}[a-z_]*" | tail -1 | sed 's/.*verdict=//')"
+  echo "$rid $created verdict=${v:-none}"
+  n=$((n + 1)); [ -n "$first" ] || first="$created"; last="$created"
+  [ "$v" = qualifying_row_heartbeat_paused ] || fail="$fail run $rid verdict=${v:-none};"
+done < <(gh run list --workflow="$WORKFLOW" --event workflow_dispatch --status completed --limit 2 \
+           --json databaseId,createdAt --jq '.[] | [.databaseId, .createdAt] | @tsv')
+[ "$n" = 2 ] || fail="$fail saw $n runs, expected 2;"
+[ "$(( $(date -u -d "$first" +%s) - $(date -u -d "$last" +%s) ))" -ge 2400 ] 2>/dev/null \
+  || fail="$fail the two runs are less than 2400 s apart;"
+[ -z "$fail" ] && echo "PREFLIGHT 1: PASS" || echo "PREFLIGHT 1: FAIL$fail"
+```
+
+If any run reads anything else, do not arm: `no_qualifying_row` means the target is currently dark (arming would
+page at once), `query_failed` or `beat_failed` means a credential fault ([Verdict dictionary](#host-timer-liveness-alert-8706)).
+
+### 2. Look the heartbeat up by exact name (read-only GET)
+
+The heartbeat id is not known before the merge-triggered apply creates it, so it is looked up by exact name, and
+the lookup must find exactly one match. The listing's `url` attribute is deliberately not selected.
+
+```bash
+live="$(hbr "$BASE?per_page=250" | jq -r --arg n "$HB_NAME" '[.data[] | select(.attributes.name==$n)]
+  | if length==1 then .[0] | [.id, .attributes.status, (.attributes.paused|tostring), (.attributes.period|tostring), (.attributes.grace|tostring)] | join(" ")
+    else "NOT_UNIQUE matches=\(length)" end')"
+echo "heartbeat: $live"                 # expect: <id> paused true 3600 7200
+HB_ID="${live%% *}"
+[ "$live" = "$HB_ID paused true 3600 7200" ] && echo "LOOKUP: PASS id=$HB_ID" || { echo "LOOKUP: FAIL"; HB_ID=""; }
+```
+
+Read the incident's state now, before anything is changed (read-only GET; field names beyond `resolved_at` are
+UNVERIFIED, so absent ones print `absent`):
+
+```bash
+hbr "https://uptime.betterstack.com/api/v2/incidents/$INCIDENT" \
+  | jq '.data.attributes | {name, started_at: (.started_at // "absent"), acknowledged_at: (.acknowledged_at // "absent"), resolved_at: (.resolved_at // "absent"), status: (.status // "absent")}'
+```
+
+### 3. Unpause (production write: authorize the exact command)
+
+One compound command so that the unpause and its rollback live in one shell under a `trap`: a catchable
+interruption (INT, TERM, HUP, a shell exit) rolls back to paused, while SIGKILL or a lost machine cannot. The
+poll deadline is `DEADLINE = PERIOD + GRACE - 900 = 9900 s`, not 10800 s: an unfed unpause pages at
+period + grace = 10800 s (assumed to count from the unpause, the same assumption the probe heartbeat's arm block makes for its
+own period + grace), so the last 900 s are the rollback margin. Run it through the Monitor tool, never as a
+foreground call: it can run for up to 165 minutes. It needs a `doppler` login that can read `prd_terraform` and a
+`gh` login with `actions: write`.
+
+```bash
+# production write: authorize the exact command
+set -uo pipefail
+[ -n "${HB_ID:-}" ] || { echo "no heartbeat id from step 2: refusing"; exit 3; }
+hb() { doppler run -p soleur -c prd_terraform --silent -- bash -c '
+  [[ "$BETTERSTACK_API_TOKEN" =~ ^[A-Za-z0-9._~+/=-]{20,}$ ]] || { echo "token shape refused" >&2; exit 78; }
+  printf "header = \"Authorization: Bearer %s\"\n" "$BETTERSTACK_API_TOKEN" | curl --disable --noproxy "*" -fsS --max-time 20 --config - "$@"' _ "$@"; }
+patch() { hb -X PATCH -H 'Content-Type: application/json' --data-binary "{\"paused\":$1}" "$BASE/$HB_ID" | jq -e ".data.attributes.paused == $1" >/dev/null; }
+rollback() {  # runs on EXIT, INT, TERM, HUP; three attempts, each confirmed by read-back
+  trap - EXIT INT TERM HUP
+  for t in 1 2 3; do patch true && { echo "ROLLED BACK (paused=true read back)"; exit 1; }; sleep 5; done
+  echo "ROLLBACK FAILED - pause heartbeat $HB_ID now (Re-pause below); Better Stack pages within $((PERIOD + GRACE)) s of the unpause"; exit 2
+}
+[ "$(hb "$BASE/$HB_ID" | jq -r '.data.attributes.name')" = "$HB_NAME" ] || { echo "id $HB_ID is not $HB_NAME: refusing"; exit 3; }
+[ "$(hb "$BASE/$HB_ID" | jq -r '.data.attributes.status')" = "paused" ] || { echo "heartbeat is not paused: refusing a second arm"; exit 3; }
+trap rollback EXIT INT TERM HUP
+patch false || { echo "unpause not confirmed by read-back"; exit 1; }      # exit fires the rollback trap
+echo "ARM_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"                               # anchor for the read-back
+gh workflow run "$WORKFLOW" --ref main \
+  || echo "FORCED DISPATCH FAILED; waiting for the watchdog clock instead"  # force one real beat now
+SECONDS=0; last=""
+while [ "$SECONDS" -lt "$DEADLINE" ]; do
+  s=$(hb "$BASE/$HB_ID" | jq -r '.data.attributes.status')
+  [ "$s" != "$last" ] || [ $((SECONDS % 300)) -lt 30 ] && echo "$(date -u +%H:%M:%S) elapsed=${SECONDS}s status=$s"; last="$s"
+  if [ "$s" = "up" ]; then trap - EXIT INT TERM HUP; echo "ARMED: status=up after ${SECONDS}s"; exit 0; fi
+  sleep 30
+done
+echo "arm failed: status never reached up in ${SECONDS}s"; exit 1        # exit fires the rollback trap
+```
+
+Exit codes: 0 armed (`status=up`), 1 rolled back or never reached `up`, 2 ROLLBACK FAILED, 3 refused before any
+write (no id, wrong name, or not paused). The forced dispatch costs one slot of beat-budget tolerance (the clock
+skips the slot a manual run covers): one lost slot gives about 9718 s between beats against a 10800 s threshold,
+so it does not page a healthy host, but arm one target at a time and read back a second `verdict=beat` before
+treating the heartbeat as armed.
+
+Re-pause (**production write: authorize the exact command**), for when the arm command printed `ROLLBACK FAILED`
+or its shell died after the unpause:
+
+```bash
+# production write: authorize the exact command
+hb -X PATCH -H 'Content-Type: application/json' --data-binary '{"paused":true}' "$BASE/$HB_ID" \
+  | jq -e '.data.attributes.paused == true' && echo PAUSED
+```
+
+(`hb` is the function defined in the arm block; define it again in a fresh shell.)
+
+### 4. Read-back (read-only)
+
+With `ARM_AT` as the instant the arm command printed, list the runs created since and read the target's marker in
+each:
+
+```bash
+for rid in $(gh run list --workflow="$WORKFLOW" --created ">=$ARM_AT" --json databaseId --jq '.[].databaseId'); do
+  echo "$rid $(gh run view "$rid" --log | grep -o "${MARKER}[a-z_]*.*" | tail -1)"
+done
+hbr "$BASE/$HB_ID" | jq -r '.data.attributes | [.status, (.paused|tostring), (.period|tostring), (.grace|tostring)] | join(" ")'
+```
+
+Expect `verdict=beat http=2xx` on the forced run, a second `verdict=beat` on a LATER run (one slot later), and the
+state `up false 3600 7200`. A `verdict=qualifying_row_heartbeat_paused` after the unpause means that run predates
+it; `beat_failed` means the feeder cannot deliver; `no_qualifying_row` means the target is dark and the
+heartbeat will page. Only after the second beat, a record PR drops the `arming_pending: { tracking_issue: 11631 }`
+declaration from the target's row in `plugins/soleur/lib/heartbeat-manifest.ts`; from its merge the nightly live
+reconcile's `fed-but-paused` class is the safety net if anything re-pauses the heartbeat (a paused heartbeat makes
+the feeder exit 0, so the feeder itself would not alert).
+
+### 5. Resolve the stuck Better Stack incident (production write: authorize the exact command)
+
+The retired logs alert's incident does not resolve itself once the alert is gone: incident `1023423999`
+(luks, issue #11048) and incident `1020832712` (cost capture, issue #11049). Do this AFTER the read-back above,
+so the open incident stays as the visible record until the replacement is proven. **The write token's scope for
+this endpoint is UNVERIFIED**: `POST /api/v2/incidents/<id>/resolve` is from Better Stack's public API reference
+and has not been exercised from this repo. If the API answers 401 or 403, stop, record the status code on #11631,
+and do not retry with a different token without a fresh authorization.
+
+```bash
+# production write: authorize the exact command
+hb -X POST -H 'Content-Type: application/json' --data-binary '{}' \
+  "https://uptime.betterstack.com/api/v2/incidents/$INCIDENT/resolve" >/dev/null && echo "RESOLVE SENT"
+```
+
+Then read the state again with the same GET as in step 2 and require a non-`absent` `resolved_at`. The incident
+mirror (`scheduled-betterstack-incident-mirror.yml`, ADR-298) comments and closes the mirrored `[ci/betterstack-incident]`
+issue on its next run once the incident leaves the open set (`gh issue view $ISSUE --json state`).
+
+<!-- lint-infra-ignore end -->

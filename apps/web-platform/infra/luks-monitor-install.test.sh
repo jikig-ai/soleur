@@ -346,6 +346,19 @@ for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_explorati
     check("G1: the MAIN plan keeps the retained destroy target %s" % t,
           any(re.search(r'(?m)^\s*-target=%s(\s*\\)?\s*$' % re.escape(t), r) for r in main_runs))
 
+# One list, two readers (#11631 review): the retained destroy targets above are ALSO listed in the census's
+# INTENDED_DESTROYS (tests/scripts/test-infra-privileged-tier-census.sh) and betterstack-alert-structure.test.sh reads
+# its own copy from there. A target kept here but absent from the census (or the reverse) is a destroy one guard allows
+# and the other refuses; this row pins the luks pair to the census.
+_census_path = os.path.join(E["LMI_REPO"], "tests/scripts/test-infra-privileged-tier-census.sh")
+_census_src = open(_census_path).read() if os.path.isfile(_census_path) else ""
+_census_block = _census_src.split("INTENDED_DESTROYS = {", 1)[-1].split("\n}", 1)[0] if "INTENDED_DESTROYS = {" in _census_src else ""
+_census_active = "\n".join(l for l in _census_block.splitlines() if not l.lstrip().startswith("#"))
+check("G1: the retained luks destroy targets equal the census's INTENDED_DESTROYS logtail entries for luks (one list, not two)",
+      all(re.search(r'(?m)^\s*"%s"\s*:' % re.escape(t), _census_active)
+          for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_exploration_alert.luks_monitor_host_timer_dark"))
+      and len(re.findall(r'(?m)^\s*"logtail_exploration(?:_alert)?\.luks_monitor_host_timer_dark"\s*:', _census_active)) == 2)
+
 # Row 10: nothing else starts the unit. Its rows would carry _SYSTEMD_UNIT=luks-monitor.service
 # and mask a dark timer exactly as the verify job's rows did.
 # Every spelling that STARTS the unit: the start-class verbs, `enable --now`, with or without the
@@ -1326,12 +1339,12 @@ fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
-# Anti-vacuity floor. The threshold sits on the line directly above its `if`. It is EXACT: 110 is the
+# Anti-vacuity floor. The threshold sits on the line directly above its `if`. It is EXACT: 111 is the
 # measured inner-run (LMI_MUTANT=1) assertion count, and the outer run adds the 76 mutation rows
 # (MUT_ROWS_EXPECTED), so deleting any one check, not only a whole block, trips it. Adding a check
-# means raising 110 here.
+# means raising 111 here.
 _lmi_mut_floor="${LMI_MUTANT:+0}"
-MIN_ASSERTIONS=$((110 + ${_lmi_mut_floor:-76}))
+MIN_ASSERTIONS=$((111 + ${_lmi_mut_floor:-76}))
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1

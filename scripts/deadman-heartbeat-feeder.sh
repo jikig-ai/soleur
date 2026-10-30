@@ -28,6 +28,11 @@
 # outside that set to 3, and rewrites a 0 that no verdict produced to 3 as well: a fall-off that exited 0 would post
 # a Sentry `ok` for a run that decided nothing.
 #
+# TRUST BOUNDARY. The beat property rests on the authenticity of the rows in the shared Logs source: anyone who
+# holds the Logs ingest token can forge a row that satisfies a predicate and keep a heartbeat fed. The predicates
+# narrow what counts (tag, unit, host, message; marker key, component, source) but cannot tell a forged row from a
+# real one. This control detects a dark emitter or shipper, not a hostile writer.
+#
 # BEAT BUDGET. Both heartbeats use period 3600 + grace 7200: the page threshold is 10800 s. The workflow runs this
 # hourly WHEN the web watchdog clock delivers it (WATCHDOG_DISPATCH_TABLE); the `schedule:` fallback alone
 # (one run every 2-7 h, measured) cannot hold the budget, and a dark clock shows as a missed Sentry check-in.
@@ -35,13 +40,14 @@
 # Secrets (repo secrets, read only): BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD
 # (the Logs warehouse) and BETTERSTACK_API_TOKEN_READONLY (the uptime API, GET only: a leak cannot pause, edit or
 # delete anything, but it CAN read the heartbeats' ping URLs, which are beat capabilities; the read-only scope
-# bounds the blast radius, it does not remove it). A ping URL is a bearer secret GitHub cannot mask: it travels on
-# curl's stdin config and is NEVER printed.
+# bounds the blast radius, it does not remove it). A ping URL is a bearer secret: it travels on curl's stdin config
+# and is NEVER printed.
 #
 # Usage: deadman-heartbeat-feeder.sh <target> | --selftest   (--selftest needs no network and no credentials)
 #
 # Harness: apps/web-platform/test/infra/deadman-heartbeat-feeder.test.sh. Arming (the unpause) is NOT done here:
-# see the arm block in knowledge-base/engineering/operations/runbooks/inngest-server.md.
+# see "Arming the dead-man heartbeats (#11631)" in
+# knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md.
 set -uo pipefail
 
 # XTRACE REFUSAL (#7797). Tracing echoes a command after expansion, so under bash -x a credential reaches the
@@ -55,6 +61,13 @@ case "$-" in
     ;;
 esac
 
+# Wall time since start, in milliseconds, from the shell's own EPOCHREALTIME (no external clock, no date): it rides
+# on the beat and withhold markers so growth in the archive scan cost is visible before it nears the job timeout.
+T0_US="${EPOCHREALTIME//[.,]/}"
+elapsed_ms() {
+  local now="${EPOCHREALTIME//[.,]/}"
+  if [[ "$now" =~ ^[0-9]{10,}$ && "$T0_US" =~ ^[0-9]{10,}$ ]]; then printf '%s' $(((now - T0_US) / 1000)); else printf 'na'; fi
+}
 TARGET_LABEL="none"
 marker() { # <verdict> [k=v ...]
   printf 'deadman-feeder: target=%s verdict=%s%s\n' "$TARGET_LABEL" "$1" "${2:+ $2}"
@@ -201,7 +214,7 @@ fi
 QN=""
 QNEWEST="unparsed"
 FUNNEL=""
-fmarker() { marker "$1" "${2:+$2 }$FUNNEL"; }
+fmarker() { marker "$1" "${2:+$2 }${FUNNEL:+$FUNNEL }elapsed_ms=$(elapsed_ms)"; }
 
 # ── THE QUERY (chokepoint 1) ──────────────────────────────────────────────────────────────────────
 # The helper's stdout is captured; its stderr goes to a temp file and is NEVER relayed (its --fail-with-body error
@@ -256,7 +269,7 @@ run_query() { # <window> <predicate> -> sets QN and QNEWEST; exits 3 query_faile
   sel="$(printf '%s\n' "$raw" | jq -r '
       if type != "object" or has("exception") or (has("n") | not) then "bad\t-"
       else (.n | if type == "number" then (if . == floor and . >= 0 and . < 1e15 then (. | floor | tostring) else "bad" end)
-                 elif type == "string" then . else "bad" end) as $n
+                 elif type == "string" then (if test("^[0-9]{1,18}$") then . else "bad" end) else "bad" end) as $n
         | (.newest // "" | if type == "string" then . else "" end) as $d
         | $n + "\t" + $d end' 2>/dev/null)"
   jrc=$?
@@ -273,6 +286,8 @@ run_query() { # <window> <predicate> -> sets QN and QNEWEST; exits 3 query_faile
   [[ -n "$QN" ]] || QN=0
   QNEWEST="unparsed"
   if [[ "$draw" =~ $NEWEST_RE ]]; then QNEWEST="${draw// /_}"; fi
+  # An empty window answers the epoch row: there is no newest row, and saying so is clearer than a 1970 date.
+  if [[ "$QN" == 0 ]]; then QNEWEST="none"; fi
 }
 count_query() { # <window> <predicate>
   run_query "$1" "$2"
@@ -295,7 +310,12 @@ withhold_no_row() {
   fi
   FUNNEL="n=$QN newest_dt=$QNEWEST${extra:+ $extra}"
   fmarker "no_qualifying_row"
-  echo "CANNOT BEAT: no qualifying row for $T in the last ${W}s (hot plus archive). The checked host, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+  if [[ "$T" == "luks-monitor-host-timer" ]]; then
+    echo "CANNOT BEAT: no qualifying row for $T in the last ${W}s (hot plus archive). The checked host, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+  else
+    echo "CANNOT BEAT: no cost marker or credit-probe RED row for $T in the last ${W}s (hot plus archive). The cron cost-capture path, the log shipper or the Logs source may be dark; this line does not say which."
+    echo "CANNOT BEAT: next action for $T: see the cost-marker section (Querying Anthropic cost markers) of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md."
+  fi
   exit 3
 }
 
@@ -363,7 +383,7 @@ resolve_heartbeat() {
 
 # ── THE ONE BEAT CALL SITE ───────────────────────────────────────────────────────────────────────
 # Success is a 2xx code only: -f does not fail a 3xx, and redirects are never followed; there is no retry (a 429
-# or a stall is beat_failed). The URL is passed on stdin and is never printed (GitHub cannot mask it).
+# or a stall is beat_failed). The URL is passed on stdin and is never printed.
 beat_once() {
   local code crc
   code="$(printf 'url = "%s"\n' "$HB_URL" \

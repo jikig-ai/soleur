@@ -118,6 +118,17 @@ on:
       # and #8079 entries below. (apply-web-platform-infra.yml, which the suite also reads, is already listed.)
       - ".github/workflows/scheduled-deadman-heartbeat-feeder.yml"
       - "scripts/deadman-heartbeat-feeder.sh"
+      # (#11631 review) The heartbeat parity/reconcile suites and the privileged-tier census read these sources
+      # (the watchdog dispatch table and the heartbeat manifest rows, the cost-marker emitter and its two Inngest
+      # emitters, and the census itself). None is under apps/*/infra/**, so a PR editing ONLY one of them would skip
+      # the guard that pins the dead-man heartbeats to those emitters. PR list only: the push list is deliberately
+      # narrower (see the comment above `push:`).
+      - "apps/web-platform/server/watchdog-dispatch-table.ts"
+      - "plugins/soleur/lib/heartbeat-manifest.ts"
+      - "apps/web-platform/server/claude-cost-marker.ts"
+      - "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts"
+      - "apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts"
+      - "tests/scripts/test-infra-privileged-tier-census.sh"
       # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
       # `wrangler pages deploy --branch` must equal cf-pages.tf's `production_branch`, and
       # its `--project-name` must equal cloudflare_pages_project.docs's `name`. Those are two

@@ -36,7 +36,18 @@
 # must match exactly once (it LANDED), and must go RED FOR THE PREDICTED REASON (status and verdict), never a
 # crash. Harness rows prove the fixtures can fail (a stub evaluator that qualifies every row flips the negative
 # fixtures) and that non-canonical must-PASS inputs stay green. A known-positive and known-negative run prove the
-# red detector first. Fixtures are synthesized (cq-test-fixtures-synthesized-only); the live captures contributed
+# red detector first.
+#
+# THE VERDICT OWNERS ARE CONTROLLED. expect, ctl, land, expect_red, expect_lost, expect_gained, expect_residue,
+# static_red, wire_red, w_mut, w_block, w_sblock, sec_mut, wfm, wf_check and wf_mut_red each decide a whole family of
+# rows; one neutered to always-pass would leave the suite green at the same count. own_ctl drives each owner, in a
+# subshell, with a known survivor and a known wrong-reason input and requires exactly one failure carrying the
+# owner's own diagnostic; a failed control stops the suite with printf and exit, not through the helpers.
+#
+# FLOORS (MIN_PASSES, MIN_BEAT_ASSERTS at the end) are EXACT: they equal the measured counts, so deleting any case
+# trips them. Adding a case means raising them to the counts the run prints.
+#
+# Fixtures are synthesized (cq-test-fixtures-synthesized-only); the live captures contributed
 # only the one-line aggregate answer SHAPE, never a row.
 
 set -uo pipefail
@@ -68,6 +79,26 @@ beat_asserts=0
 pass() { printf '  PASS: %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
+# own_ctl <label> <needle> <driver-fn> [args...]: the control of a VERDICT OWNER (expect_red, static_red, wire_red,
+# wf_check, ctl, land, ...). A helper that can be neutered to always-pass would turn every row it grades green
+# with 0 failures, so each owner is driven here, in a SUBSHELL (its counters die with it: nothing to unwind),
+# against ONE deliberately wrong input, and must emit EXACTLY ONE failure line carrying its own diagnostic and no
+# pass line. The control reports through printf and exit, never through pass()/fail() or any helper under test.
+own_ctl() {
+  local label="$1" needle="$2" out nf np
+  shift 2
+  out="$("$@" 2>&1)"
+  nf="$(grep -c '^  FAIL:' <<<"$out" || true)"; np="$(grep -c '^  PASS:' <<<"$out" || true)"
+  cases=$((cases + 1))
+  if [[ "$nf" == 1 && "$np" == 0 ]] && grep -qF -- "$needle" <<<"$out"; then
+    printf '  PASS: verdict-owner control: %s\n' "$label"; passes=$((passes + 1))
+  else
+    printf 'FATAL: verdict-owner control FAILED: %s (saw %s failure line(s) and %s pass line(s); wanted exactly one failure carrying: %s)\n' "$label" "$nf" "$np" "$needle" >&2
+    sed 's/^/        | /' <<<"$out" >&2
+    exit 1
+  fi
+}
+
 [[ -f "$FEEDER_SRC" ]] || { echo "FATAL: feeder not found at $FEEDER_SRC" >&2; exit 1; }
 PY="$(type -P python3)" || { echo "FATAL: python3 not found" >&2; exit 1; }
 BASH_BIN="$(type -P bash)"
@@ -86,7 +117,7 @@ assert_fixture_dir() {
 WORK="$(mktemp -d "${TMPDIR}/deadman-heartbeat-feeder.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 1; }
 assert_fixture_dir "$WORK"
 trap 'rm -rf -- "$WORK"' EXIT
-mkdir -p "$WORK/fx" "$WORK/mut"
+mkdir -p "$WORK/fx" "$WORK/mut" "$WORK/tmp"
 
 # ── fabricated identities and the pinned clock ────────────────────────────────────────────────
 NOW_EPOCH=1793361600   # 2026-10-30T12:00:00Z; the stub evaluator's `now()`
@@ -126,8 +157,10 @@ luks_raw() { # [identifier] [unit|__none__] [message] [host_name]
     '{SYSLOG_IDENTIFIER: $id, host_name: $host, message: $msg} + (if $unit == "__none__" then {} else {_SYSTEMD_UNIT: $unit} end)'
 }
 cost_raw() { # <source> [cost-json|"absent"] [component] [flag-key]
-  jq -cn --arg src "$1" --arg comp "${3:-claude-cost}" --arg flag "${4:-SOLEUR_CLAUDE_COST}" --argjson cost "${2:-0.25}" \
-    '{message: ({($flag): true, component: $comp, source: $src} + (if $cost == "absent" then {} else {cost_usd: $cost} end))}'
+  # The cost goes in as a string and is decoded in jq: "absent" is not JSON, so --argjson would have emitted
+  # nothing and every "absent" fixture would have been an empty window (a withhold for the wrong reason).
+  jq -cn --arg src "$1" --arg comp "${3:-claude-cost}" --arg flag "${4:-SOLEUR_CLAUDE_COST}" --arg cs "${2:-0.25}" \
+    '{message: ({($flag): true, component: $comp, source: $src} + (if $cs == "absent" then {} else {cost_usd: ($cs | fromjson)} end))}'
 }
 probe_raw() { # <op>
   jq -cn --arg op "$1" '{message: {feature: "cron-anthropic-credit-probe", op: $op}}'
@@ -140,7 +173,8 @@ hb_json() { # <name> <paused-literal|__absent__> <url> -> one-heartbeat API body
   jq -cn --arg n "$1" --arg p "$2" --arg u "$3" '
     {data: [{id: "504655", type: "heartbeat",
       attributes: ({name: $n, url: $u, period: 3600, grace: 7200, status: "paused"}
-        + (if $p == "__absent__" then {} else {paused: ($p | fromjson)} end))}], pagination: {}}'
+        + (if $p == "__absent__" then {} else {paused: ($p | fromjson)} end))}],
+     pagination: {first: "https://uptime.betterstack.com/api/v2/heartbeats?page=1", last: "https://uptime.betterstack.com/api/v2/heartbeats?page=1", prev: null, next: null}}'
 }
 
 # ── the stub evaluator (python; see the header for its limits) ───────────────────────────────────
@@ -451,7 +485,7 @@ PYM
 reset_case() {
   C_TARGET="$T_LUKS"; C_ARGS=""; C_ROWS="/dev/null"; C_STUB="ok"; C_API=""; C_APIMODE="ok"; C_BEATMODE="200"
   C_TOKEN="$TOKEN"; C_UNSET=""; C_XTRACE=0; C_SRC="$FEEDER_SRC"; C_EVAL="$WORK/evaluator.py"
-  C_BEATS=0; C_APIS=0; C_Q=1; C_TLSENV=0; C_GHA=0; C_NAME_OVERRIDE=""
+  C_BEATS=0; C_APIS=0; C_Q=1; C_TLSENV=0; C_GHA=0; C_NAME_OVERRIDE=""; C_LCALL=""
 }
 reset_case
 
@@ -553,6 +587,12 @@ case "$C_STUB" in
   nonobj) echo '[1]'; exit 0 ;;
   nulln) echo '{"n":null,"newest":"x"}'; exit 0 ;;
   hostile) echo '{"n":3,"newest":"2026-10-30 00:04:56 ::set-output name=x::y"}'; exit 0 ;;
+  zpad2) echo '{"n":"00","newest":"1970-01-01 00:00:00.000000"}'; exit 0 ;;
+  zpad3) echo '{"n":"000","newest":"1970-01-01 00:00:00.000000"}'; exit 0 ;;
+  zpad7) echo '{"n":"007","newest":"2026-10-30 00:04:56.747448"}'; exit 0 ;;
+  tabn) echo '{"n":"5\\tX","newest":"2026-10-30 00:04:56.747448"}'; exit 0 ;;
+  exceptionn) echo '{"n":3,"exception":"Code: 60. DB::Exception: Table does not exist","newest":"2026-10-30 00:04:56.747448"}'; exit 0 ;;
+  arabicnewest) echo '{"n":3,"newest":"٢٠٢٦-١٠-٣٠ ٠٠:٠٤:٥٦.٧٤٧٤٤٨"}'; exit 0 ;;
   hugenewest) echo '{"n":3,"newest":"'"\$(printf 'A%.0s' \$(seq 1 300))"'"}'; exit 0 ;;
   numnewest) echo '{"n":3,"newest":12345}'; exit 0 ;;
 esac
@@ -560,7 +600,9 @@ STUB
     chmod +x "$root/scripts/betterstack-query.sh"
   fi
 
-  local -a envv=(PATH="$root/bin" HOME="$HOME" TMPDIR="$TMPDIR")
+  # A private TMPDIR: the post-suite residue check must see only this suite's feeder runs.
+  local -a envv=(PATH="$root/bin" HOME="$HOME" TMPDIR="$WORK/tmp")
+  [[ -z "$C_LCALL" ]] || envv+=("LC_ALL=$C_LCALL" "LANG=$C_LCALL")
   local v
   for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
     if [[ "$C_UNSET" == "$v" ]]; then
@@ -723,6 +765,14 @@ land() { # <row> <old> <new> -> sets M (path) or fails the case
 ctl_mutant() { # <name> <old> <new> -> sets M
   land "$1" "$2" "$3"
 }
+# Controls of ctl itself and of land: ctl must fail when expect() does NOT trip (a known survivor) and when it
+# trips for a different reason than the one named (a known wrong reason).
+ctl_drv_survivor() { reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlx1)"; C_BEATS=1; C_APIS=1; ctl "known survivor" "NEVER_PRESENT" "x" 0 beat; }
+ctl_drv_wrongreason() { reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlx2)"; C_BEATS=1; C_APIS=1; ctl "known wrong reason" "NEEDLE_THAT_IS_NOT_PRODUCED" "x" 3 beat; }
+land_drv_absent() { land CTL-LAND 'TEXT_THAT_IS_NOT_IN_THE_FEEDER_ZZ' 'x'; }
+own_ctl "ctl() fails on a known survivor (the wrong expectation did not trip expect)" "expected 1 failure" ctl_drv_survivor
+own_ctl "ctl() fails on a known wrong reason (expect tripped, but not with the named diagnostic)" "expected 1 failure" ctl_drv_wrongreason
+own_ctl "land() fails when the edit does not land" "did NOT land" land_drv_absent
 ctl_mutant ctl-leak 'marker() { # <verdict>' 'marker() { printf "%s\n" "$BETTERSTACK_API_TOKEN_READONLY"; # <verdict>'
 reset_case; C_SRC="$M"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctl7)"; C_BEATS=1; C_APIS=1
 ctl "a feeder that prints the token is a failure" "a secret-shaped sentinel leaked" "x" 0 beat
@@ -769,6 +819,22 @@ static_violations() {
   grep -qF '/fail' <<<"$S" && echo "slash-fail-literal"
   grep -qE 'BEAT_MODE|fail_beat' <<<"$S" && echo "sibling-fail-arm"
   grep -qE -- '--no-archive' <<<"$S" && echo "no-archive-flag"
+  # No second network client of any kind: the file may reach the network ONLY through its two declared curl sites
+  # (the uptime-API read and the beat), counted above. A wget, a netcat, a /dev/tcp redirect or an interpreter
+  # one-liner would be an undeclared egress path for the ping URL or a credential.
+  if grep -qE '(^|[^[:alnum:]_./-])(wget|nc|ncat|netcat|socat|telnet|ssh|scp|ftp|tftp)([[:space:]]|$)|/dev/(tcp|udp)/|python[0-9.]*[[:space:]]+-[A-Za-z]*c|openssl[[:space:]]+s_client|(perl|ruby|node|php)[[:space:]]+-[A-Za-z]*[ec]' <<<"$S"; then echo "network-client-other-than-curl"; fi
+  # Inside the two functions allowed to touch HB_URL, only the declared lines may mention it.
+  local rb bb
+  rb="$(fn_body <(printf '%s\n' "$S") resolve_heartbeat | grep -F HB_URL || true)"
+  bb="$(fn_body <(printf '%s\n' "$S") beat_once | grep -F HB_URL || true)"
+  if [[ "$(grep -c . <<<"$rb" || true)" != 2 ]] || grep -qvxF -e '  HB_URL="$(printf '"'%s'"' "$sel" | cut -f3-)"' -e '  if [[ ! "$HB_URL" =~ $URL_RE ]]; then' <<<"$rb"; then echo "HB_URL-use-unexpected"; fi
+  if [[ "$(grep -c . <<<"$bb" || true)" != 1 ]] || grep -qvxF -e '  code="$(printf '"'url = \"%s\"\\n'"' "$HB_URL" \' <<<"$bb"; then echo "HB_URL-use-unexpected"; fi
+  # The case labels of select_target are exactly TARGETS (plus the refusing default): an orphan arm outside the
+  # table would be a target the workflow never runs and the table-parity pins never see.
+  local lbl want
+  lbl="$(fn_body <(printf '%s\n' "$S") select_target | sed -nE 's/^[[:space:]]+([A-Za-z0-9_*|-]+)\).*$/\1/p' | sort | paste -sd' ' -)"
+  want="$(sed -n 's/^TARGETS="\(.*\)"$/\1/p' "$f" | head -1 | tr ' ' '\n' | { cat; echo '*'; } | sort | paste -sd' ' -)"
+  [[ "$lbl" == "$want" ]] || echo "select_target-labels-differ-from-TARGETS"
   # HB_URL is read ONLY inside resolve_heartbeat (assignment + shape guard) and beat_once
   local outside
   outside="$(awk '
@@ -873,6 +939,8 @@ LP; C_ROWS="$(row s3 97200 "$(luks_raw)" | fx lb2)"; C_Q=3
 expect "boundary: exactly 97200 s old withholds (strict >)" 3 no_qualifying_row
 LP; C_ROWS="$(row hot 600 "$(luks_raw)" | fx lhot)"; C_BEATS=1; C_APIS=1
 expect "a passing row in the HOT arm beats" 0 beat
+LP; C_ROWS="$(row hot "$((28 * H))" "$(luks_raw)" | fx lhot28)"; C_Q=3
+expect "a passing row 28 h old in the HOT arm withholds (the hot arm carries its own lower bound)" 3 no_qualifying_row "n=0"
 LP; C_ROWS="$(printf '' | fx lempty)"; C_Q=3
 expect "empty window withholds; the diagnostics say the host is dark" 3 no_qualifying_row "any_rows=0 fail_rows=0"
 LP; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw luks-monitor luks-monitor.service "$OK_MSG" soleur-web-2)" | fx lweb2)"; C_Q=3
@@ -934,6 +1002,9 @@ CP; C_ROWS="$(row s3 "$((2 * H))" "$(jq -cn '{message:{feature:"cron-something-e
 expect "another feature with the RED op withholds" 3 no_qualifying_row
 CP; C_ROWS="$(printf '' | fx cempty)"
 expect "empty window withholds (no diagnostics for this target)" 3 no_qualifying_row "n=0"
+cases=$((cases + 1))
+if grep -qF 'cost-marker section' "$OUT" && grep -qF 'betterstack-log-query.md' "$OUT" && ! grep -qiE 'host is dark|checked host' "$OUT"; then pass "the cost withhold names the cost-marker runbook section and never claims the host is dark"
+else fail "the cost withhold text is wrong (missing next-action line, or it claims a dark host)"; fi
 CP; C_ROWS="$(row hot -400 "$(cost_raw cron:x)" | fx cfut)"
 expect "a future-dated cost marker withholds" 3 no_qualifying_row
 CP; C_ROWS="$(row s3 "$((20 * H))" "$(cost_raw cron:x)" 0 | fx crt0)"
@@ -945,8 +1016,24 @@ expect "n as a quoted string (\"1\") beats" 0 beat "n=1"
 LP; C_STUB="okstr"; C_ROWS="$(printf '' | fx a2)"; C_Q=3
 expect "n as a quoted string (\"0\") on the epoch row withholds, never beats" 3 no_qualifying_row "n=0"
 LP; C_STUB="ok"; C_ROWS="$(printf '' | fx a2b)"; C_Q=3
-expect "n as the JSON number 0 on the epoch row withholds" 3 no_qualifying_row "n=0"
-for _m in zero two garbage nonnumeric negn floatn bign exception nolinen nonobj nulln; do
+expect "n as the JSON number 0 on the epoch row withholds; no newest row is named" 3 no_qualifying_row "n=0 newest_dt=none"
+# Zero-padded counts: the string test strips leading zeros, so "00"/"000" are zero (withhold) and "007" is 7.
+LP; C_STUB="zpad2"; C_Q=3
+expect "n:\"00\" is zero: withholds, never a beat" 3 no_qualifying_row "n=0 newest_dt=none"
+LP; C_STUB="zpad3"; C_Q=3
+expect "n:\"000\" is zero: withholds, never a beat" 3 no_qualifying_row "n=0 newest_dt=none"
+LP; C_STUB="zpad7"; C_BEATS=1; C_APIS=1
+expect "n:\"007\" is seven: beats and reports n=7 (not an octal or an expression)" 0 beat "n=7 "
+# Wall time rides the marker (scan-cost growth must be visible), on a beat and on a withhold.
+LP; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx elb)"; C_BEATS=1; C_APIS=1
+expect "the beat marker carries elapsed_ms" 0 beat "elapsed_ms="
+cases=$((cases + 1))
+if grep -qE ' elapsed_ms=[0-9]+( |$)' "$OUT"; then pass "elapsed_ms is a number on the beat marker"; else fail "elapsed_ms is not numeric on the beat marker"; fi
+LP; C_ROWS="$(printf '' | fx elw)"; C_Q=3
+expect "the withhold marker carries elapsed_ms" 3 no_qualifying_row "elapsed_ms="
+cases=$((cases + 1))
+if grep -qE ' elapsed_ms=[0-9]+( |$)' "$OUT"; then pass "elapsed_ms is a number on the withhold marker"; else fail "elapsed_ms is not numeric on the withhold marker"; fi
+for _m in zero two garbage nonnumeric negn floatn bign exception nolinen nonobj nulln tabn exceptionn; do
   LP; C_STUB="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx a-$_m)"
   expect "answer shape '$_m' is query_failed (never a beat, never a withhold-as-absent)" 3 query_failed "reason="
 done
@@ -963,6 +1050,8 @@ expect "a hostile newest string is never echoed (newest_dt=unparsed)" 0 beat "ne
 cases=$((cases + 1))
 if ! grep -q 'set-output' "$OUT"; then pass "the remote-derived newest string reached no output line"
 else fail "a remote-derived string leaked into the output"; fi
+LP; C_STUB="arabicnewest"; C_LCALL="en_US.utf8"; C_BEATS=1; C_APIS=1
+expect "a non-C caller locale cannot widen [0-9]: Arabic-Indic digits in newest stay unparsed" 0 beat "newest_dt=unparsed"
 LP; C_STUB="hugenewest"; C_BEATS=1; C_APIS=1
 expect "an over-long newest string is never echoed" 0 beat "newest_dt=unparsed"
 LP; C_STUB="numnewest"; C_BEATS=1; C_APIS=1
@@ -1115,8 +1204,14 @@ need(fstep.get("env") == {
 for s in steps:
     if s is not fstep:
         need(not any(k in (s.get("env") or {}) for k in ("BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_USERNAME", "BETTERSTACK_QUERY_PASSWORD", "BETTERSTACK_API_TOKEN_READONLY")), "credential-env-outside-feeder-step")
+        # By VALUE, under any key name: a BETTERSTACK_* secret handed to another step as a `with:` input or an
+        # env var of another name is the same disclosure.
+        need("secrets.BETTERSTACK" not in repr(s), "betterstack-secret-outside-feeder-step")
+need(len(re.findall(r"secrets\.BETTERSTACK_", re.sub(r"(?m)^\s*#.*$", "", text))) == 4, "betterstack-secret-reference-count-not-4")
 run = fstep.get("run", "")
 need("${{" not in run, "expression-inside-run-block")
+# The step never makes a request of its own: every network call belongs to the feeder script.
+need(re.search(r"\bcurl\b", re.sub(r"(?m)#.*$", "", run)) is None, "curl-in-run-block")
 loops = re.findall(r"for t in ([a-z -]+); do", run)
 need(len(loops) == 1, "target-loop-count")
 need(loops and loops[0].split() == sorted(loops[0].split(), key=lambda x: loops[0].split().index(x)) and set(loops[0].split()) == set(re.search(r'^TARGETS="(.*)"$', open(feeder).read(), re.M).group(1).split()), "loop-targets-differ-from-script-table")
@@ -1125,6 +1220,7 @@ need(len(re.findall(r"^\s*bash scripts/deadman-heartbeat-feeder\.sh|bash scripts
 need("break" not in re.sub(r"#.*", "", run), "loop-breaks-on-failure")
 need("all_decided=" in run and "GITHUB_OUTPUT" in run, "all_decided-output")
 need("UNARMED (paused)" in run and "::warning::" in run, "unarmed-warning")
+need("no page can fire" not in run, "unarmed-claims-no-page")
 need("strip_log_injection()" in run, "strip_log_injection")
 sent = steps[-1] if steps else {}
 need(sent.get("uses") == "./.github/actions/sentry-heartbeat" and (sent.get("with") or {}).get("monitor-slug") == "scheduled-deadman-heartbeat-feeder", "sentry-step")
@@ -1170,18 +1266,65 @@ wf_check() { # <name> <cond-description> <exit-status-of-condition>
   cases=$((cases + 1))
   if [[ "$3" == 0 ]]; then pass "$1: $2"; else fail "$1: $2"; sed 's/^/        | /' "$WORK/wf/log.txt" >&2; fi
 }
+# Control of wf_check: a false condition must be ONE failure carrying the check's description.
+wf_drv_false() { wf_check "CTL-WF" "a condition that is false" 1; }
+wf_drv_empty() { wf_check "CTL-WF" "an empty condition status" ""; }
+own_ctl "wf_check() fails on a false condition" "CTL-WF: a condition that is false" wf_drv_false
+own_ctl "wf_check() fails on an empty status (a predicate that printed nothing)" "CTL-WF: an empty condition status" wf_drv_empty
+# wf_mut: apply an exact-once edit to the extracted run block and run it with the SAME stub and predicate as
+# the real row; the mutant must complete (rc 0 and an all_decided line) AND break the predicate.
+wf_mut_file() { # <row> <old> <new> -> prints the mutated run-block path, or fails
+  "$PY" -I - "$WF_RUN" "$WORK/wf.mut.$1.sh" "$2" "$3" <<'PYX' >/dev/null || return 3
+import sys
+s = open(sys.argv[1]).read()
+if s.count(sys.argv[3]) != 1:
+    sys.stderr.write("wf_mut: %d occurrences\n" % s.count(sys.argv[3]))
+    sys.exit(3)
+open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))
+PYX
+  printf '%s' "$WORK/wf.mut.$1.sh"
+}
+wf_mut_red() { # <row> <desc> <predicate-status-of-the-mutant-run>
+  cases=$((cases + 1))
+  if ! [[ "$WF_RC" == 0 ]] || ! grep -q '^all_decided=' "$WORK/wf/out.txt"; then
+    fail "mutation row $1 ($2) went red for another reason: the mutant run block did not complete (rc $WF_RC)"
+  elif [[ "$3" == 0 ]]; then fail "mutation row $1 ($2) SURVIVED: the real predicate still holds on the mutant"
+  else pass "mutation row $1 ($2) is RED as predicted: the run completed and the predicate broke"; fi
+}
+wfmut_drv_survivor() { wf_run "$STUB_LUKS_DARK"; wf_mut_red CTL-WFM "known survivor" "$(p_luks_dark; echo $?)"; }
+wfmut_drv_wrongreason() { printf 'if\n' > "$WORK/wf.mut.broken.sh"; WF_RUN_OVERRIDE="$WORK/wf.mut.broken.sh" wf_run "$STUB_LUKS_DARK"; wf_mut_red CTL-WFM "known wrong reason" 1; }
 GOOD='case "$1" in
   luks-monitor-host-timer) printf "deadman-feeder: target=luks-monitor-host-timer verdict=beat n=1 newest_dt=2026-10-30_00:04:56.747448\n"; echo "fed: noise line"; exit 0 ;;
   claude-cost-capture) printf "deadman-feeder: target=claude-cost-capture verdict=beat n=4\n"; exit 0 ;;
 esac'
 wf_run "$GOOD"
 wf_check "workflow step, both beat" "exits 0, all_decided=true, only marker lines echoed, no UNARMED warning" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=true' "$WORK/wf/out.txt" && grep -q 'verdict=beat n=1' "$WORK/wf/log.txt" && grep -q 'verdict=beat n=4' "$WORK/wf/log.txt" && ! grep -q 'fed: noise' "$WORK/wf/log.txt" && ! grep -q 'UNARMED' "$WORK/wf/log.txt"; echo $?)"
-wf_run 'printf "deadman-feeder: target=$1 verdict=qualifying_row_heartbeat_paused n=1\n"; exit 0'
-wf_check "workflow step, both paused" "all_decided=true and one UNARMED warning per target, every run" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=true' "$WORK/wf/out.txt" && [[ "$(grep -c '^::warning::deadman heartbeat .* is UNARMED (paused): no page can fire' "$WORK/wf/log.txt")" == 2 ]]; echo $?)"
-wf_run 'case "$1" in luks-monitor-host-timer) printf "deadman-feeder: target=luks-monitor-host-timer verdict=no_qualifying_row n=0 any_rows=0 fail_rows=0\nCANNOT BEAT: the nightly row is absent\n"; exit 3 ;; *) printf "deadman-feeder: target=$1 verdict=beat n=2\n"; exit 0 ;; esac'
-wf_check "workflow step, first target withheld" "the second target still runs (no break), all_decided=false, an ::error:: names the target" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=false' "$WORK/wf/out.txt" && grep -q 'verdict=beat n=2' "$WORK/wf/log.txt" && grep -q '^::error::.*luks-monitor-host-timer' "$WORK/wf/log.txt"; echo $?)"
+# Predicates over the last wf_run, shared by the real rows and the behaviour mutants below.
+p_unarmed() { [[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=true' "$WORK/wf/out.txt" \
+  && [[ "$(grep -c '^::warning::deadman heartbeat .* is UNARMED (paused)$' "$WORK/wf/log.txt")" == 2 ]] \
+  && ! grep -q 'no page can fire' "$WORK/wf/log.txt" \
+  && [[ "$(grep -c 'UNARMED (paused)' "$WORK/wf/summary.txt" 2>/dev/null)" == 2 ]]; }
+p_luks_dark() { [[ "$WF_RC" == 0 ]] && grep -qx '::error::deadman luks-monitor-host-timer: HOST/SOURCE DARK (no_qualifying_row)' "$WORK/wf/log.txt" && ! grep -q 'FEEDER FAULT' "$WORK/wf/log.txt"; }
+p_cost_dark() { [[ "$WF_RC" == 0 ]] && grep -qx '::error::deadman claude-cost-capture: SOURCE DARK (no_qualifying_row); the cause is not established' "$WORK/wf/log.txt" \
+  && ! grep -q 'HOST/SOURCE DARK' "$WORK/wf/log.txt" && ! grep -q 'FEEDER FAULT' "$WORK/wf/log.txt"; }
+p_fault_reason() { [[ "$WF_RC" == 0 ]] && grep -qx '::error::deadman luks-monitor-host-timer: FEEDER FAULT (query_failed reason=helper_status); says nothing about the host' "$WORK/wf/log.txt" \
+  && ! grep -q 'DARK' "$WORK/wf/log.txt"; }
+STUB_PAUSED='printf "deadman-feeder: target=$1 verdict=qualifying_row_heartbeat_paused n=1\n"; exit 0'
+STUB_LUKS_DARK='case "$1" in luks-monitor-host-timer) printf "deadman-feeder: target=luks-monitor-host-timer verdict=no_qualifying_row n=0 newest_dt=none any_rows=0 fail_rows=0\nCANNOT BEAT: the nightly row is absent\n"; exit 3 ;; *) printf "deadman-feeder: target=$1 verdict=beat n=2\n"; exit 0 ;; esac'
+STUB_COST_DARK='case "$1" in claude-cost-capture) printf "deadman-feeder: target=claude-cost-capture verdict=no_qualifying_row n=0 newest_dt=none\n"; exit 3 ;; *) printf "deadman-feeder: target=$1 verdict=beat n=2\n"; exit 0 ;; esac'
+STUB_FAULT='case "$1" in luks-monitor-host-timer) printf "deadman-feeder: target=luks-monitor-host-timer verdict=query_failed reason=helper_status status=7 class=auth body_len=12\n"; exit 3 ;; *) printf "deadman-feeder: target=$1 verdict=beat n=2\n"; exit 0 ;; esac'
+wf_run "$STUB_PAUSED" "GITHUB_STEP_SUMMARY=$WORK/wf/summary.txt"
+wf_check "workflow step, both paused" "all_decided=true; one UNARMED warning and one step-summary line per target, every run; the log does not claim that no page can fire" "$(p_unarmed; echo $?)"
+wf_run "$STUB_LUKS_DARK"
+wf_check "workflow step, first target withheld" "the second target still runs (no break), all_decided=false, the luks page names HOST/SOURCE DARK and nothing else" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=false' "$WORK/wf/out.txt" && grep -q 'verdict=beat n=2' "$WORK/wf/log.txt" && p_luks_dark; echo $?)"
+wf_run "$STUB_COST_DARK"
+wf_check "workflow step, cost target withheld" "the cost page says SOURCE DARK with the cause not established, never that the host is dark" "$(grep -qx 'all_decided=false' "$WORK/wf/out.txt" && p_cost_dark; echo $?)"
+wf_run "$STUB_FAULT"
+wf_check "workflow step, a query fault" "annotated FEEDER FAULT with the reason token, saying nothing about the host, never DARK" "$(grep -qx 'all_decided=false' "$WORK/wf/out.txt" && p_fault_reason; echo $?)"
+wf_run 'exit 3'
+wf_check "workflow step, a silent exit 3" "no marker at all is a FEEDER FAULT (no_marker), never DARK" "$(grep -q '^::error::deadman luks-monitor-host-timer: FEEDER FAULT (no_marker); says nothing about the host$' "$WORK/wf/log.txt" && ! grep -q 'DARK' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'case "$1" in claude-cost-capture) printf "deadman-feeder: target=claude-cost-capture verdict=beat_failed reason=http_status\n"; exit 4 ;; *) printf "deadman-feeder: target=$1 verdict=beat n=2\n"; exit 0 ;; esac'
-wf_check "workflow step, second target beat_failed" "all_decided=false and an ::error::" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=false' "$WORK/wf/out.txt" && grep -q '^::error::.*claude-cost-capture' "$WORK/wf/log.txt"; echo $?)"
+wf_check "workflow step, second target beat_failed" "all_decided=false and a FEEDER FAULT that carries the reason and keeps the qualifying-row fact" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=false' "$WORK/wf/out.txt" && grep -q '^::error::deadman claude-cost-capture: FEEDER FAULT (beat_failed reason=http_status); says nothing about the host: a qualifying row existed' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "::set-output name=x::y\n"; printf "deadman-feeder: target=$1 verdict=no_qualifying_row n=0\n"; exit 3'
 wf_check "workflow step, command injection" "a feeder line that starts with :: never reaches the log as a command" "$(! grep -q '^::set-output' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "deadman-feeder: target=$1 verdict=beat \033[31mred\033[0m\n"; exit 0'
@@ -1201,8 +1344,8 @@ cases=$((cases + 1))
 if cmp -s "$WF_RUN" "$WORK/wf.same.sh"; then pass "the run block contains no bare break line"; else fail "the run block contains a bare break"; fi
 
 echo "== Guard 2: predicate fidelity with the emitters =="
-guard2_checks() { # <feeder> <luks-monitor.sh> -> "OK ..." / "FAIL ..." lines
-  "$PY" -I - "$1" "$2" "$EMIT_LUKS_UNIT" "$EMIT_VECTOR" "$EMIT_SERVER_TF" "$EMIT_MARKER" "$EMIT_SUBSTRATE" "$EMIT_PROBE" <<'PYG'
+guard2_checks() { # <feeder> <luks-monitor.sh> [vector.toml] [server.tf] -> "OK ..." / "FAIL ..." lines
+  "$PY" -I - "$1" "$2" "$EMIT_LUKS_UNIT" "${3:-$EMIT_VECTOR}" "${4:-$EMIT_SERVER_TF}" "$EMIT_MARKER" "$EMIT_SUBSTRATE" "$EMIT_PROBE" <<'PYG'
 import re, sys
 feeder, luks, unit, vector, servertf, marker_ts, substrate_ts, probe_ts = [open(p, encoding="utf-8").read() for p in sys.argv[1:9]]
 out = []
@@ -1226,10 +1369,17 @@ sid = re.search(r"^SyslogIdentifier=(\S+)", unit, re.M)
 check(sid is not None and ident is not None and sid.group(1) == ident.group(1), "luks: SYSLOG_IDENTIFIER equals the unit's SyslogIdentifier")
 unitq = re.search(r"JSONExtractString\(raw, '_SYSTEMD_UNIT'\) = '([^']+)'", lp)
 check(unitq is not None and unitq.group(1) == "luks-monitor.service" and "[Service]" in unit, "luks: _SYSTEMD_UNIT is the unit this repo ships (luks-monitor.service)")
-check(re.search(r'^\s*\.host_name = "@@HOST_NAME@@"', vector, re.M) is not None, "luks: host_name is written by vector.toml's journald transform (@@HOST_NAME@@)")
+def section(text, header):
+    m = re.search(r"(?m)^\[" + re.escape(header) + r"\]\n(.*?)(?=^\[|\Z)", text, re.S)
+    return m.group(1) if m else ""
+# Scoped to the block that owns the fact: the same `.host_name` line also sits in tag_metrics, and the same
+# "luks-monitor" tag in two other sources, so an unscoped search stays green when the journald copy is lost.
+tj = section(vector, "transforms.tag_journald")
+check(re.search(r'(?m)^\s*\.host_name = "@@HOST_NAME@@"\s*$', tj) is not None, "luks: host_name is written by vector.toml's [transforms.tag_journald] (@@HOST_NAME@@)")
 hn = re.search(r"JSONExtractString\(raw, 'host_name'\) = '([^']+)'", lp)
-check(hn is not None and re.search(r'name\s*=\s*each\.key == "web-1" \? "' + re.escape(hn.group(1)) + '"', servertf) is not None, "luks: host_name literal is web-1's server name in server.tf")
-check(re.search(r"include_matches\.SYSLOG_IDENTIFIER", vector) is not None and '"luks-monitor"' in vector, "luks: the tag is in vector.toml's host_scripts_journald allowlist")
+check(hn is not None and re.search(r'(?m)^\s*host_name\s*=\s*each\.key == "web-1" \? "' + re.escape(hn.group(1)) + '"', servertf) is not None, "luks: host_name literal is web-1's host_name value in server.tf (the line the vector render is fed from)")
+hs = "\n".join(l for l in section(vector, "sources.host_scripts_journald").split("\n") if not l.lstrip().startswith("#"))
+check(re.search(r"(?m)^include_matches\.SYSLOG_IDENTIFIER\s*=\s*\[", hs) is not None and re.search(r'(?m)^\s*"luks-monitor",?\s*$', hs) is not None, "luks: the tag is in vector.toml's [sources.host_scripts_journald] allowlist")
 # --- cost: exactly two arms; literals pinned to their TS emitters
 check(len(re.findall(r"\bOR\b", cp)) == 1, "cost: exactly one OR, joining the marker arm and the credit-probe arm")
 check("raw LIKE '%\"SOLEUR_CLAUDE_COST\":true%'" in cp and "'Nullable(Float64)') IS NOT NULL" in cp, "cost: the marker arm keeps the key match and the non-null cost_usd")
@@ -1255,7 +1405,7 @@ while IFS= read -r _l; do
   case "$_l" in OK\ *) pass "${_l#OK }" ;; *) fail "${_l#FAIL }" ;; esac
 done <<<"$_g2"
 cases=$((cases + 1))
-if [[ "$(grep -c '^OK ' <<<"$_g2")" -ge 19 && "$(grep -c '^FAIL' <<<"$_g2" || true)" == 0 ]]; then pass "Guard 2: all 19 emitter pins hold (a crashing checker would print fewer)"
+if [[ "$(grep -c '^OK ' <<<"$_g2")" == 19 && "$(grep -c '^FAIL' <<<"$_g2" || true)" == 0 ]]; then pass "Guard 2: exactly 19 emitter pins hold (a crashing checker would print fewer)"
 else fail "Guard 2: emitter pins incomplete or failing ($(grep -c '^OK ' <<<"$_g2") OK)"; fi
 # the frozen-set identity: each target's predicate in the script equals the suite's independent expected text
 cases=$((cases + 1))
@@ -1275,6 +1425,7 @@ echo "== Guard 4: wiring parity across the surfaces that must agree =="
 wiring_violations() { # <uptime_tf> <apply_yml> <table_ts> <feeder> <monitors_tf> -> one line per violated pin
   "$PY" -I - "$1" "$2" "$3" "$4" "$5" "$WORKFLOW" "$ALERTS_TF" "${EXPECT_TARGETS// /,}" <<'PYW'
 import re, sys
+import yaml
 tfp, applyp, tablep, feederp, monp, wfp, alertsp, targets = sys.argv[1:9]
 tf, apply_, table, feeder, mon, wf, alerts = [open(p).read() for p in (tfp, applyp, tablep, feederp, monp, wfp, alertsp)]
 bad = []
@@ -1301,8 +1452,27 @@ for t in tl:
     need(re.search(r'^\s*paused\s*=\s*true\s*$', b, re.M) is not None, "tf-paused-" + res)
     need(re.search(r'ignore_changes\s*=\s*\[\s*paused\s*\]', b) is not None, "tf-ignore_changes-" + res)
     need("betterstack_paid_tier" in b, "tf-policy-gate-" + res)
-    need(re.search(r'^\s*-target=betteruptime_heartbeat\.' + res + r'\b', apply_, re.M) is not None, "apply-target-missing-" + res)
-need(len(re.findall(r'^\s*-target=logtail_exploration(_alert)?\.(claude_cost_capture_dark|luks_monitor_host_timer_dark)\b', apply_, re.M)) == 4, "apply-retained-destroy-targets-not-4")
+    # The notification route is part of what pages: a heartbeat that stops paging email/push would time out silently.
+    need(re.search(r'^\s*email\s*=\s*true\s*$', b, re.M) is not None, "tf-email-" + res)
+    need(re.search(r'^\s*push\s*=\s*true\s*$', b, re.M) is not None, "tf-push-" + res)
+    need(re.search(r'^\s*call\s*=\s*false\s*$', b, re.M) is not None, "tf-call-" + res)
+    need(re.search(r'^\s*sms\s*=\s*false\s*$', b, re.M) is not None, "tf-sms-" + res)
+    need(re.search(r'^\s*team_wait\s*=\s*0\s*$', b, re.M) is not None, "tf-team_wait-" + res)
+# The -target lines must sit in the PLAN step of the apply job (the saved plan the apply step runs) and nowhere in
+# the second, SSH-provisioned apply step: a heartbeat that rides the second step is applied unplanned and ungraded.
+awf = yaml.safe_load(apply_)
+ajob = (awf.get("jobs") or {}).get("apply") or {}
+asteps = ajob.get("steps") or []
+plan_runs = [st.get("run", "") for st in asteps if st.get("id") == "plan"]
+ssh_runs = [st.get("run", "") for st in asteps if str(st.get("name", "")).startswith("Terraform apply (SSH-provisioned")]
+need(len(plan_runs) == 1 and len(ssh_runs) == 1, "apply-steps-not-discovered")
+plan_run = plan_runs[0] if len(plan_runs) == 1 else ""
+ssh_run = ssh_runs[0] if len(ssh_runs) == 1 else ""
+for res in want_res.values():
+    need(re.search(r'^\s*-target=betteruptime_heartbeat\.' + res + r'\b', plan_run, re.M) is not None, "apply-target-missing-" + res)
+    need(re.search(r'-target=betteruptime_heartbeat\.' + res + r'\b', ssh_run) is None, "apply-target-in-ssh-step-" + res)
+need(len(re.findall(r'^\s*-target=logtail_exploration(_alert)?\.(claude_cost_capture_dark|luks_monitor_host_timer_dark)\b', plan_run, re.M)) == 4, "apply-retained-destroy-targets-not-4")
+need(re.search(r'-target=logtail_exploration', ssh_run) is None, "apply-destroy-target-in-ssh-step")
 need(re.search(r'^\s*workflowFile: "scheduled-deadman-heartbeat-feeder\.yml",', table, re.M) is not None, "watchdog-row-workflowFile-line")
 row = re.search(r'\{\s*workflowFile: "scheduled-deadman-heartbeat-feeder\.yml",(.*?)\n  \},', table, re.S)
 need(row is not None and 'monitorSlug: "scheduled-deadman-heartbeat-feeder"' in row.group(1) and re.search(r'intervalMinutes: 60,', row.group(1)) is not None, "watchdog-row-fields")
@@ -1314,6 +1484,9 @@ need('name                    = "scheduled-deadman-heartbeat-feeder"' in mb, "se
 need(re.search(r'crontab = "0 \* \* \* \*"', mb) is not None, "sentry-monitor-crontab")
 need(re.search(r'checkin_margin_minutes\s*=\s*60\b', mb) is not None, "sentry-monitor-margin-60")
 need(re.search(r'max_runtime_minutes\s*=\s*6\b', mb) is not None, "sentry-monitor-max_runtime-6")
+need(re.search(r'failure_issue_threshold\s*=\s*1\b', mb) is not None, "sentry-monitor-failure_issue_threshold-1")
+need(re.search(r'recovery_threshold\s*=\s*1\b', mb) is not None, "sentry-monitor-recovery_threshold-1")
+need(re.search(r'timezone\s*=\s*"UTC"', mb) is not None, "sentry-monitor-timezone-UTC")
 need(re.search(r'^\s*scheduled_deadman_heartbeat_feeder\s*=\s*"[^"]*11631', alerts, re.M) is not None, "sentry-unrouted-label")
 need("sentry_cron_monitor.scheduled_deadman_heartbeat_feeder.id" not in re.sub(r"(?s)locals \{.*?\n\}\n", "", alerts, count=1), "sentry-monitor-routed-prematurely")
 print("\n".join(bad))
@@ -1371,6 +1544,55 @@ static_red() { # <row> <mutant> <violation-name>
   if grep -qxF "$3" <<<"$v"; then pass "mutation row $1 is RED in the static pins: $3"
   else fail "mutation row $1: expected static violation '$3', got [$(paste -sd, - <<<"$v")]"; fi
 }
+expect_lost() { # <row> <desc> <ERE>: the MUTANT's run must no longer carry a token the shipped feeder emits
+  cases=$((cases + 1))
+  run_case
+  local seen; seen="$(markers_of)"
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${seen:-none}" "$LAST_RC" >> "$MUT_TABLE"
+  if [[ -z "$seen" ]]; then fail "mutation row $1 ($2) went red for another reason: no verdict line at all (status $LAST_RC)"
+  elif grep -qE -- "$3" "$OUT"; then fail "mutation row $1 ($2) SURVIVED: the marker still carries /$3/"
+  else pass "mutation row $1 ($2) is RED as predicted: the marker no longer carries /$3/ (status $LAST_RC)"; fi
+}
+expect_gained() { # <row> <desc> <ERE>: the MUTANT's run must carry a token the shipped feeder never emits
+  cases=$((cases + 1))
+  run_case
+  local seen; seen="$(markers_of)"
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${seen:-none}" "$LAST_RC" >> "$MUT_TABLE"
+  if [[ -z "$seen" ]]; then fail "mutation row $1 ($2) went red for another reason: no verdict line at all (status $LAST_RC)"
+  elif grep -qE -- "$3" "$OUT"; then pass "mutation row $1 ($2) is RED as predicted: the output now carries /$3/ (status $LAST_RC)"
+  else fail "mutation row $1 ($2) SURVIVED: the output never carries /$3/"; fi
+}
+residue_count() { find "$WORK/tmp" -maxdepth 1 -name 'deadman-feeder-err.*' 2>/dev/null | wc -l | tr -d ' '; }
+expect_residue() { # <row> <desc>: the MUTANT must leave the secret-bearing temp file behind; the file is removed here
+  cases=$((cases + 1))
+  run_case
+  local n; n="$(residue_count)"
+  find "$WORK/tmp" -maxdepth 1 -name 'deadman-feeder-err.*' -exec rm -f -- {} + 2>/dev/null
+  if [[ "$n" -ge 1 ]]; then pass "mutation row $1 ($2) is RED as predicted: $n deadman-feeder-err.* file(s) left in TMPDIR"
+  else fail "mutation row $1 ($2) SURVIVED: no temp-file residue"; fi
+}
+# Controls of the mutation-row owners. Each is driven by one known SURVIVOR (the shipped feeder, where the
+# predicted change cannot happen) and one known WRONG REASON (the run goes red, but not as predicted).
+red_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((28 * H))" "$(luks_raw)" | fx ctlr1)"; C_Q=3; expect_red CTL-RED "known survivor" 3 no_qualifying_row 0 beat; }
+red_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_STUB="garbage"; C_ROWS="$(row s3 "$((28 * H))" "$(luks_raw)" | fx ctlr2)"; expect_red CTL-RED "known wrong reason" 3 no_qualifying_row 0 beat; }
+lost_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctll1)"; C_BEATS=1; C_APIS=1; expect_lost CTL-LOST "known survivor" 'verdict=beat'; }
+lost_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_SRC="$WORK/mut/noverdict.sh"; expect_lost CTL-LOST "known wrong reason" 'NEVER_PRESENT_ZZ'; }
+gained_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlg1)"; C_BEATS=1; C_APIS=1; expect_gained CTL-GAIN "known survivor" 'NEVER_PRESENT_ZZ'; }
+gained_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_SRC="$WORK/mut/noverdict.sh"; expect_gained CTL-GAIN "known wrong reason" 'anything'; }
+residue_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctle1)"; C_BEATS=1; C_APIS=1; expect_residue CTL-RES "known survivor"; }
+static_drv_survivor() { static_red CTL-STATIC "$FEEDER_SRC" slash-fail-literal; }
+static_drv_wrongreason() { static_red CTL-STATIC "$M_CTL_STATIC" slash-fail-literal; }
+printf '#!/usr/bin/env bash\nexit 7\n' > "$WORK/mut/noverdict.sh"; chmod +x "$WORK/mut/noverdict.sh"
+M_CTL_STATIC="$(mutate ctl-static '"$QUERY" "$SQL"' '"$QUERY" --no-archive "$SQL"')"
+own_ctl "expect_red() reports SURVIVED for a known survivor" "SURVIVED" red_drv_survivor
+own_ctl "expect_red() reports another-reason for a known wrong-reason mutant" "went red for another reason" red_drv_wrongreason
+own_ctl "expect_lost() reports SURVIVED for a known survivor" "SURVIVED" lost_drv_survivor
+own_ctl "expect_lost() reports another-reason when the run has no verdict" "went red for another reason" lost_drv_wrongreason
+own_ctl "expect_gained() reports SURVIVED for a known survivor" "SURVIVED" gained_drv_survivor
+own_ctl "expect_gained() reports another-reason when the run has no verdict" "went red for another reason" gained_drv_wrongreason
+own_ctl "expect_residue() reports SURVIVED when no temp file is left behind" "SURVIVED" residue_drv_survivor
+own_ctl "static_red() fails for a known survivor (the shipped feeder lacks the violation)" "expected static violation" static_drv_survivor
+own_ctl "static_red() fails for a known wrong-reason mutant (a different violation)" "expected static violation" static_drv_wrongreason
 # Known-positive: the shipped feeder on a qualifying fixture HOLDS; known-negative: the same detector on a 28 h fixture does not.
 reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx kp)"; C_BEATS=1; C_APIS=1; run_case
 cases=$((cases + 1))
@@ -1571,6 +1793,33 @@ open(sys.argv[2], "w").write(s[:m.start(2)] + body + s[m.end(2):])
 PYX
   then pass "mutation row $1 landed"; WM="$out"; else fail "mutation row $1 did NOT land"; WM="$src"; fi
 }
+# w_sblock: like w_block, for the Sentry monitor resource (exactly once inside THAT block).
+w_sblock() { # <row> <file-var> <old> <new>
+  local srcvar="$2" src out="$WORK/mut/$1.wire"
+  src="${!srcvar}"
+  cases=$((cases + 1))
+  if "$PY" -I - "$src" "$out" "$3" "$4" <<'PYX'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r'(resource "sentry_cron_monitor" "scheduled_deadman_heartbeat_feeder" \{)(.*?)(\n\})', s, re.S)
+if not m or m.group(2).count(sys.argv[3]) != 1:
+    sys.exit(3)
+open(sys.argv[2], "w").write(s[:m.start(2)] + m.group(2).replace(sys.argv[3], sys.argv[4]) + s[m.end(2):])
+PYX
+  then pass "mutation row $1 landed"; WM="$out"; else fail "mutation row $1 did NOT land"; WM="$src"; fi
+}
+# Controls of the Guard 4 owners.
+wmut_drv_absent() { w_mut CTL-W APPLY_WF 'TEXT_THAT_IS_NOT_IN_THE_APPLY_WORKFLOW_ZZ' 'x'; }
+wblock_drv_absent() { w_block CTL-W UPTIME_TF claude_cost_capture 'TEXT_NOT_IN_THE_BLOCK_ZZ' 'x'; }
+wsblock_drv_absent() { w_sblock CTL-W MONITORS_TF 'TEXT_NOT_IN_THE_BLOCK_ZZ' 'x'; }
+wire_drv_survivor() { wire_red CTL-W 'tf-grace-claude_cost_capture' "$UPTIME_TF" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"; }
+wire_drv_wrongreason() { wire_red CTL-W 'tf-period-claude_cost_capture' "$M_CTL_WIRE" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"; }
+w_block ctl-wire UPTIME_TF claude_cost_capture 'grace  = 7200' 'grace  = 3600'; M_CTL_WIRE="$WM"
+own_ctl "w_mut() fails when the edit does not land" "did NOT land" wmut_drv_absent
+own_ctl "w_block() fails when the edit does not land" "did NOT land" wblock_drv_absent
+own_ctl "w_sblock() fails when the edit does not land" "did NOT land" wsblock_drv_absent
+own_ctl "wire_red() fails for a known survivor (the shipped tree lacks the violation)" "expected wiring violation" wire_drv_survivor
+own_ctl "wire_red() fails for a known wrong-reason mutant (a different violation)" "expected wiring violation" wire_drv_wrongreason
 w_block g4-1 UPTIME_TF claude_cost_capture 'name   = "soleur-claude-cost-capture-prd"' 'name   = "soleur-claude-cost-capture-renamed"'
 wire_red G4-1 'tf-name-differs-from-script-claude_cost_capture' "$WM" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
 w_block g4-2a UPTIME_TF claude_cost_capture 'grace  = 7200' 'grace  = 3600'
@@ -1610,11 +1859,213 @@ PYL
 cases=$((cases + 1))
 if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-reorder.yml" && ! workflow_violations "$WORK/mut/wf-reorder.yml" 2>&1 | grep -q 'loop-targets'; then pass "must-PASS (non-canonical): reordering the loop targets stays green"
 else fail "must-PASS: reordering the loop targets went red (or did not land)"; fi
-# harness row: with the loop assertion deleted from the checker the dropped-target mutation goes GREEN (the assertion is what catches it)
+# (The former harness row that demanded NO other pin catch the G4-3 mutant is gone: it coupled this row to every
+# unrelated pin, so adding a pin that also noticed the dropped target would have failed a correct row. The row
+# above is scoped to its own violation name.)
+
+echo "== mutation battery: review-fix guards =="
+# --- feeder behaviour -------------------------------------------------------------------------------------------
+# R1: the HOT arm carries its own lower bound
+land r1 "remote(\$BS_TABLE) WHERE '\"\$win\"" "remote(\$BS_TABLE) WHERE dt <= now() + INTERVAL 300 SECOND'"; _m="$M"
+reset_case; C_SRC="$_m"; C_ROWS="$(row hot "$((28 * H))" "$(luks_raw)" | fx r1)"; C_BEATS=1; C_APIS=1
+expect_red R1 "the hot arm loses its lower dt bound: a 28 h hot row beats" 3 no_qualifying_row 0 beat
+# R2: zero-padded counts
+land r2a 'if [[ "$QN" != 0 ]]; then QN="${QN#"${QN%%[!0]*}"}"; fi' ':'; _m="$M"
+reset_case; C_SRC="$_m"; C_STUB="zpad2"; C_ROWS="$(printf '' | fx r2a)"; C_BEATS=1; C_APIS=1
+expect_red R2a "leading zeros not stripped: n:\"00\" is treated as present and beats" 3 no_qualifying_row 0 beat
+land r2b '[[ -n "$QN" ]] || QN=0' ':'; _m="$M"
+reset_case; C_SRC="$_m"; C_STUB="zpad3"; C_ROWS="$(printf '' | fx r2b)"; C_BEATS=1; C_APIS=1
+expect_red R2b "an all-zero count left empty: n:\"000\" is treated as present and beats" 3 no_qualifying_row 0 beat
+# R3: a string count must be digits only (a tab in the string used to ride past the field split)
+land r3 '(if test("^[0-9]{1,18}$") then . else "bad" end)' '.'; _m="$M"
+reset_case; C_SRC="$_m"; C_STUB="tabn"; C_ROWS="$(printf '' | fx r3)"; C_BEATS=1; C_APIS=1
+expect_red R3 "the string-count digit test removed: n:\"5<TAB>X\" is read as 5 and beats" 3 query_failed 0 beat
+# R4: an `exception` key beside a good-looking n
+land r4 'has("exception") or ' ''; _m="$M"
+reset_case; C_SRC="$_m"; C_STUB="exceptionn"; C_ROWS="$(printf '' | fx r4)"; C_BEATS=1; C_APIS=1
+expect_red R4 "the exception guard removed: {n:3, exception:...} beats" 3 query_failed 0 beat
+# R5: newest_dt=none on an empty window; R6: elapsed_ms on the markers
+land r5 'if [[ "$QN" == 0 ]]; then QNEWEST="none"; fi' ':'; _m="$M"
+reset_case; C_SRC="$_m"; C_ROWS="$(printf '' | fx r5)"; C_Q=3
+expect_lost R5 "newest_dt=none dropped: an empty window names the epoch" 'newest_dt=none'
+land r6 'elapsed_ms=$(elapsed_ms)' ''; _m="$M"
+reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx r6)"; C_BEATS=1; C_APIS=1
+expect_lost R6 "elapsed_ms dropped from the marker" 'elapsed_ms='
+# R7: the cost withhold text
+land r7a 'The cron cost-capture path, the log shipper or the Logs source may be dark; this line does not say which.' 'The checked host is dark.'; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_COST"; C_ROWS="$(printf '' | fx r7a)"
+expect_gained R7a "the cost withhold asserts a dark host" 'checked host is dark'
+land r7b 'see the cost-marker section (Querying Anthropic cost markers) of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md.' 'see the runbook.'; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_COST"; C_ROWS="$(printf '' | fx r7b)"
+expect_lost R7b "the cost withhold loses its next-action pointer" 'cost-marker section'
+# R8: the secret-bearing helper stderr file is removed on every exit
+land r8 'if [[ -n "$tmp_err" ]]; then rm -f -- "$tmp_err"; fi' ':'; _m="$M"
+reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx r8)"; C_BEATS=1; C_APIS=1
+expect_residue R8 "cleanup_tmp no longer removes the helper stderr file"
+# R9: pagination: a production-shaped page ({first,last,prev:null,next:null}) is NOT a further page
+land r9 'or ((.pagination.next // null) != null) then "count\t"' 'or ((.pagination | length) > 0) then "count\t"'; _m="$M"
+reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx r9)"; C_APIS=1
+expect_red R9 "any non-empty pagination object read as a further page: the real page shape fails closed" 0 beat 4 beat_failed
+# R10: the caller's locale cannot widen [0-9]
+land r10 'export LC_ALL=C' ':'; _m="$M"
+reset_case; C_SRC="$_m"; C_STUB="arabicnewest"; C_LCALL="en_US.utf8"; C_ROWS="$(printf '' | fx r10)"; C_BEATS=1; C_APIS=1
+expect_lost R10 "the LC_ALL=C export removed: Arabic-Indic digits pass the newest shape" 'newest_dt=unparsed'
+
+# --- static pins: no second network client, HB_URL use, select_target labels ---------------------------------------
+_i=0
+for _payload in 'wget -q -O /dev/null example.invalid' 'nc -z example.invalid 80' 'exec 3<>/dev/tcp/example.invalid/80' "python3 -c 'import urllib.request'" 'openssl s_client -connect example.invalid:443'; do
+  _i=$((_i + 1))
+  land "net$_i" '  local body crc' "  local body crc
+  $_payload"; _m="$M"
+  static_red "NET$_i" "$_m" network-client-other-than-curl
+done
+land hb1 '  local body crc' '  local body crc
+  : "$HB_URL"'; _m="$M"
+static_red HB1 "$_m" HB_URL-use-unexpected
+land hb2 '  local code crc' '  local code crc
+  : "$HB_URL"'; _m="$M"
+static_red HB2 "$_m" HB_URL-use-unexpected
+land orphan '    *) return 1 ;;' '    rogue-target)
+      T="rogue-target"; W=1; NAME="x"; PRED="x" ;;
+    *) return 1 ;;'; _m="$M"
+static_red ORPH "$_m" select_target-labels-differ-from-TARGETS
+
+# --- Guard 2: the emitter pins are scoped to the block that owns the fact ---------------------------------------------
+sec_mut() { # <row> <src> <section-header> <old> <new> -> sets SM (path), exactly once inside that section
+  local out="$WORK/mut/$1.emit"
+  cases=$((cases + 1))
+  if "$PY" -I - "$2" "$out" "$3" "$4" "$5" <<'PYX'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"(?m)^\[" + re.escape(sys.argv[3]) + r"\]\n(.*?)(?=^\[|\Z)", s, re.S)
+if not m or m.group(1).count(sys.argv[4]) != 1:
+    sys.exit(3)
+open(sys.argv[2], "w").write(s[:m.start(1)] + m.group(1).replace(sys.argv[4], sys.argv[5]) + s[m.end(1):])
+PYX
+  then pass "mutation row $1 landed"; SM="$out"; else fail "mutation row $1 did NOT land"; SM="$2"; fi
+}
+sec_drv_absent() { sec_mut CTL-SEC "$EMIT_VECTOR" transforms.tag_journald 'TEXT_NOT_IN_THE_SECTION_ZZ' x; }
+own_ctl "sec_mut() fails when the edit does not land inside the section" "did NOT land" sec_drv_absent
+sec_mut g2s-1 "$EMIT_VECTOR" transforms.tag_journald '.host_name = "@@HOST_NAME@@"' '.host = "@@HOST_NAME@@"'
 cases=$((cases + 1))
-_nl="$(workflow_violations "$WORK/mut/wf-droploop.yml" 2>&1 | grep -vx 'loop-targets-differ-from-script-table' || true)"
-if [[ -z "$_nl" ]]; then pass "harness row (G4-3): without the loop-vs-script assertion the dropped-target mutant reports nothing else (that assertion is the one catching it)"
-else fail "harness row (G4-3): the dropped-target mutant is caught by another pin too: $_nl"; fi
+if guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$SM" 2>&1 | grep -q '^FAIL luks: host_name is written by vector.toml'; then pass "mutation row G2S-1 is RED: host_name lost from [transforms.tag_journald] only (tag_metrics still has it)"
+else fail "mutation row G2S-1: the scoped host_name pin did not notice"; fi
+cases=$((cases + 1))
+if grep -qE '^[[:space:]]*\.host_name = "@@HOST_NAME@@"' "$SM"; then pass "G2S-1 control: the old UNSCOPED pin would have survived this mutant (tag_metrics keeps the line)"
+else fail "G2S-1 control: the unscoped pin would also have caught it, so the scoping proved nothing"; fi
+sec_mut g2s-2 "$EMIT_VECTOR" sources.host_scripts_journald '  "luks-monitor",
+' ''
+cases=$((cases + 1))
+if guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$SM" 2>&1 | grep -q '^FAIL luks: the tag is in vector.toml'; then pass "mutation row G2S-2 is RED: the luks-monitor tag lost from [sources.host_scripts_journald] only (two other sources keep it)"
+else fail "mutation row G2S-2: the scoped allowlist pin did not notice"; fi
+cases=$((cases + 1))
+if grep -qF '"luks-monitor"' "$SM"; then pass "G2S-2 control: the old UNSCOPED pin would have survived this mutant"
+else fail "G2S-2 control: the unscoped pin would also have caught it"; fi
+"$PY" -I - "$EMIT_SERVER_TF" "$WORK/mut/server.hostname.tf" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+old = 'host_name = each.key == "web-1" ? "soleur-web-platform"'
+assert s.count(old) == 1
+open(sys.argv[2], "w").write(s.replace(old, 'host_name = each.key == "web-1" ? "soleur-web-platformX"'))
+PYX
+cases=$((cases + 1))
+if ! cmp -s "$EMIT_SERVER_TF" "$WORK/mut/server.hostname.tf" && guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$EMIT_VECTOR" "$WORK/mut/server.hostname.tf" 2>&1 | grep -q '^FAIL luks: host_name literal'; then pass "mutation row G2S-3 is RED (landed): the server.tf host_name line changed while the server name line still carries the literal"
+else fail "mutation row G2S-3: the anchored host_name pin did not notice (or the edit did not land)"; fi
+
+# --- Guard 4: the notification route, the Sentry attributes, the apply-step scoping, a single invoker ----------------
+w_block g4n-1 UPTIME_TF claude_cost_capture 'call      = false' 'call      = true'
+wire_red G4N-1 'tf-call-claude_cost_capture' "$WM" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
+w_block g4n-2 UPTIME_TF luks_monitor_host_timer 'sms       = false' 'sms       = true'
+wire_red G4N-2 'tf-sms-luks_monitor_host_timer' "$WM" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
+w_block g4n-3 UPTIME_TF claude_cost_capture 'email     = true' 'email     = false'
+wire_red G4N-3 'tf-email-claude_cost_capture' "$WM" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
+w_block g4n-4 UPTIME_TF luks_monitor_host_timer 'push      = true' 'push      = false'
+wire_red G4N-4 'tf-push-luks_monitor_host_timer' "$WM" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
+w_block g4n-5 UPTIME_TF claude_cost_capture 'team_wait = 0' 'team_wait = 5'
+wire_red G4N-5 'tf-team_wait-claude_cost_capture' "$WM" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
+w_sblock g4s-1 MONITORS_TF 'failure_issue_threshold = 1' 'failure_issue_threshold = 2'
+wire_red G4S-1 'sentry-monitor-failure_issue_threshold-1' "$UPTIME_TF" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$WM"
+w_sblock g4s-2 MONITORS_TF 'recovery_threshold      = 1' 'recovery_threshold      = 2'
+wire_red G4S-2 'sentry-monitor-recovery_threshold-1' "$UPTIME_TF" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$WM"
+w_sblock g4s-3 MONITORS_TF 'timezone                = "UTC"' 'timezone                = "Europe/Paris"'
+wire_red G4S-3 'sentry-monitor-timezone-UTC' "$UPTIME_TF" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$WM"
+w_sblock g4s-4 MONITORS_TF 'max_runtime_minutes     = 6' 'max_runtime_minutes     = 8'
+wire_red G4S-4 'sentry-monitor-max_runtime-6' "$UPTIME_TF" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$WM"
+w_mut g4a-1 APPLY_WF '              -target=terraform_data.egress_gateway_web2
+' '              -target=terraform_data.egress_gateway_web2 \
+              -target=betteruptime_heartbeat.claude_cost_capture
+'
+wire_red G4A-1 'apply-target-in-ssh-step-claude_cost_capture' "$UPTIME_TF" "$WM" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
+w_mut g4a-2 APPLY_WF '              -target=terraform_data.egress_gateway_web2
+' '              -target=terraform_data.egress_gateway_web2 \
+              -target=logtail_exploration.luks_monitor_host_timer_dark
+'
+wire_red G4A-2 'apply-destroy-target-in-ssh-step' "$UPTIME_TF" "$WM" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
+# The feeder script has exactly one invoker among the repo's workflows.
+feeder_invokers() { # <workflows-dir> -> the number of workflow files that run the feeder script (non-comment lines)
+  grep -lE '^[^#]*((bash|sh|source)[[:space:]]+[^[:space:]]*|\./[^[:space:]]*)deadman-heartbeat-feeder\.sh' "$1"/*.yml 2>/dev/null | wc -l | tr -d ' '
+}
+cases=$((cases + 1))
+if [[ "$(feeder_invokers "$REPO/.github/workflows")" == 1 ]] && grep -qE '^[^#]*bash scripts/deadman-heartbeat-feeder\.sh' "$WORKFLOW"; then pass "the feeder script is run by exactly one workflow, the dead-man feeder workflow"
+else fail "the feeder script is run by $(feeder_invokers "$REPO/.github/workflows") workflows (expected exactly the feeder workflow)"; fi
+mkdir -p "$WORK/wfdir2" "$WORK/wfdir0"
+cp "$WORKFLOW" "$WORK/wfdir2/scheduled-deadman-heartbeat-feeder.yml"
+printf 'name: x\njobs:\n  j:\n    steps:\n      - run: bash scripts/deadman-heartbeat-feeder.sh luks-monitor-host-timer\n' > "$WORK/wfdir2/other.yml"
+printf 'name: x\n# bash scripts/deadman-heartbeat-feeder.sh is only a comment here\n' > "$WORK/wfdir0/other.yml"
+cases=$((cases + 1))
+if [[ "$(feeder_invokers "$WORK/wfdir2")" == 2 ]]; then pass "mutation row INV-1 is RED: a second workflow that runs the feeder is counted (2)"
+else fail "mutation row INV-1 SURVIVED: a second invoker was not counted"; fi
+cases=$((cases + 1))
+if [[ "$(feeder_invokers "$WORK/wfdir0")" == 0 ]]; then pass "mutation row INV-2 is RED: with the feeder workflow gone (a comment-only mention) the count is 0, not 1"
+else fail "mutation row INV-2 SURVIVED: a comment counted as an invoker"; fi
+
+# --- workflow structure pins -------------------------------------------------------------------------------------------
+wfm() { # <row> <old> <new> <violation>: an exact-once edit of the real workflow file must trip the named pin
+  local out="$WORK/mut/$1.yml"
+  cases=$((cases + 1))
+  if "$PY" -I - "$WORKFLOW" "$out" "$2" "$3" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+if s.count(sys.argv[3]) != 1:
+    sys.exit(3)
+open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))
+PYX
+  then
+    if workflow_violations "$out" 2>&1 | grep -qx "$4"; then pass "mutation row $1 is RED as predicted: $4"
+    else fail "mutation row $1 SURVIVED or went red for another reason (wanted $4): [$(workflow_violations "$out" 2>&1 | paste -sd, -)]"; fi
+  else fail "mutation row $1 did NOT land"; fi
+}
+wfm_drv_absent() { wfm CTL-WFS 'TEXT_NOT_IN_THE_WORKFLOW_ZZ' x some-violation; }
+wfm_drv_survivor() { wfm CTL-WFS 'timeout-minutes: 6' 'timeout-minutes: 6 ' no-such-violation; }
+own_ctl "wfm() fails when the edit does not land" "did NOT land" wfm_drv_absent
+own_ctl "wfm() fails for a known survivor (a no-op edit cannot trip a pin)" "SURVIVED or went red for another reason" wfm_drv_survivor
+wfm WFS-1 '          strip_log_injection() {' '          curl -s https://example.invalid >/dev/null
+          strip_log_injection() {' curl-in-run-block
+wfm WFS-2 'sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}' 'sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          leaked-input: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}' betterstack-secret-outside-feeder-step
+wfm WFS-3 'timeout-minutes: 6' 'timeout-minutes: 8' timeout-minutes-not-6
+wfm WFS-4 'echo "::warning::deadman heartbeat ${t} is UNARMED (paused)"' 'echo "::warning::deadman heartbeat ${t} is UNARMED (paused): no page can fire"' unarmed-claims-no-page
+
+# --- workflow BEHAVIOUR mutants: the same stub and the same predicate as the real row, on an edited run block ---------
+own_ctl "wf_mut_red() reports SURVIVED when the predicate still holds on the run" "SURVIVED" wfmut_drv_survivor
+own_ctl "wf_mut_red() reports another-reason when the mutant run block does not complete" "went red for another reason" wfmut_drv_wrongreason
+WF_RUN_OVERRIDE="$(wf_mut_file wm1 'if [ "$verdict" = no_qualifying_row ]; then' 'if false; then')"; cases=$((cases + 1)); [[ -n "$WF_RUN_OVERRIDE" ]] && pass "mutation row WM-1 landed" || fail "mutation row WM-1 did NOT land"
+wf_run "$STUB_LUKS_DARK"; wf_mut_red WM-1 "the no_qualifying_row branch bypassed: the real page reads FEEDER FAULT" "$(p_luks_dark; echo $?)"
+WF_RUN_OVERRIDE="$(wf_mut_file wm2 'if [ "$t" = luks-monitor-host-timer ]; then' 'if true; then')"; cases=$((cases + 1)); [[ -n "$WF_RUN_OVERRIDE" ]] && pass "mutation row WM-2 landed" || fail "mutation row WM-2 did NOT land"
+wf_run "$STUB_COST_DARK"; wf_mut_red WM-2 "the cost page claims HOST/SOURCE DARK" "$(p_cost_dark; echo $?)"
+WF_RUN_OVERRIDE="$(wf_mut_file wm3 'reason="${BASH_REMATCH[1]}"' 'reason=""')"; cases=$((cases + 1)); [[ -n "$WF_RUN_OVERRIDE" ]] && pass "mutation row WM-3 landed" || fail "mutation row WM-3 did NOT land"
+wf_run "$STUB_FAULT"; wf_mut_red WM-3 "the reason= token is no longer carried into the annotation" "$(p_fault_reason; echo $?)"
+WF_RUN_OVERRIDE="$(wf_mut_file wm4 '>> "$GITHUB_STEP_SUMMARY"' '>> /dev/null')"; cases=$((cases + 1)); [[ -n "$WF_RUN_OVERRIDE" ]] && pass "mutation row WM-4 landed" || fail "mutation row WM-4 did NOT land"
+wf_run "$STUB_PAUSED" "GITHUB_STEP_SUMMARY=$WORK/wf/summary.txt"; wf_mut_red WM-4 "the UNARMED line is no longer written to the step summary" "$(p_unarmed; echo $?)"
+WF_RUN_OVERRIDE="$(wf_mut_file wm5 'echo "::warning::deadman heartbeat ${t} is UNARMED (paused)"' 'echo "::warning::deadman heartbeat ${t} is UNARMED (paused): no page can fire"')"; cases=$((cases + 1)); [[ -n "$WF_RUN_OVERRIDE" ]] && pass "mutation row WM-5 landed" || fail "mutation row WM-5 did NOT land"
+wf_run "$STUB_PAUSED" "GITHUB_STEP_SUMMARY=$WORK/wf/summary.txt"; wf_mut_red WM-5 "the public log claims that no page can fire" "$(p_unarmed; echo $?)"
+unset WF_RUN_OVERRIDE
+
+# The feeder's helper-stderr temp file can carry a credential-bearing error body: after every run in this suite
+# (the shipped feeder and the mutants alike, each of which cleans up after itself) the private TMPDIR holds none.
+cases=$((cases + 1))
+if [[ "$(residue_count)" == 0 ]]; then pass "no deadman-feeder-err.* residue is left in TMPDIR after every run in this suite"
+else fail "deadman-feeder-err.* residue left in TMPDIR: $(find "$WORK/tmp" -maxdepth 1 -name 'deadman-feeder-err.*' | wc -l) file(s)"; fi
 
 echo
 echo "== measured mutation verdicts (row, edit, verdicts seen, status) =="
@@ -1627,9 +2078,11 @@ if (( passes + fails != cases )); then
   printf 'FATAL: verdict conservation violated — %s+%s != %s cases.\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
-# HARD-CODED floors: a runtime-derived one falls when a case is deleted.
-MIN_PASSES=260
-MIN_BEAT_ASSERTS=100
+# HARD-CODED floors, EXACT: each equals the measured count of this file, so deleting any one case trips it (a
+# runtime-derived floor falls with the case). Adding a case means raising them to the counts printed on the
+# "=== N passed ... M beat-call assertions ===" line above.
+MIN_PASSES=392
+MIN_BEAT_ASSERTS=116
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1
