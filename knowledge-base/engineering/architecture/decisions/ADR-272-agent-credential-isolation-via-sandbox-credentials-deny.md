@@ -182,3 +182,5 @@ process itself (the vendored `apply-seccomp` helper requires `/proc/self/fd`), w
 discriminator is host-PID absence, not an empty procfs; sibling/host task rows — including their
 `environ` files — are unreachable. Measured by the canary `proc_mask` probe and the FR7b isolation
 arm; pinned for regression by `test/bwrap-shim.test.ts` tail-ordering rows.
+
+> **Amended by ADR-311 (#9543, 2026-10-30).** See ADR-311.
