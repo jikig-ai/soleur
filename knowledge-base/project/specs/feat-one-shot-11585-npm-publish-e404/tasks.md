@@ -25,7 +25,7 @@ Issue: #11585 (Closes #11585 in PR body)
 
 - [x] 3.1 `bash plugins/soleur/test/npm-publish-oidc.test.sh` — green; drive each Guard-1 mutation-matrix row RED/PASS as declared.
 - [x] 3.2 `bun test apps/web-platform/test/c4-code-syntax.test.ts apps/web-platform/test/c4-render.test.ts` — green.
-- [ ] 3.3 `bash scripts/test-all.sh` (or the affected-subset runner) — green including the new registered test.
+- [x] 3.3 `bash scripts/test-all.sh` (or the affected-subset runner) — green including the new registered test.
 - [x] 3.4 markdownlint clean on all edited/created docs.
 
 ## Phase 4 — Operator + End-to-End (post-merge)
