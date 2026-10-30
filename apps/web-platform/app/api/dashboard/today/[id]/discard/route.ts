@@ -8,7 +8,8 @@
 // draft_changed_since_approval stay a bounded, recoverable residual (Stripe drafts only, D21). The 409 is given
 // only while the message is still a draft; an already-archived one answers the zero-row 403. A failed approval
 // lookup fails closed (500). After a successful archive the approval is re-read once: a hit means a Send raced this
-// Discard and is reported to Sentry (op discard-send-race) without changing the 200.
+// Discard and is reported to Sentry (op discard-send-race) without changing the 200. The recheck detects, it does
+// not guarantee: an approval written just after it goes unreported, so the signal is a lower bound.
 //
 // Per cq-nextjs-route-files-http-only-exports: only HTTP exports + dynamic.
 
