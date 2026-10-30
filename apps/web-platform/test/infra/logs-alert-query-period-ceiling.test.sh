@@ -18,13 +18,16 @@
 # ALLOWLIST CHANGES ARE EDITS TO THIS FILE, which review sees; the alerts at origin/main are printed so a weakening
 # shows up as a diff of printed names.
 #
-# ANTI-VACUITY. The number of blocks the lexer parsed must equal an independent naive count of
+# ANTI-VACUITY. The number of blocks the lexer parsed must equal a naive count of
 # `resource "logtail_exploration_alert` / `logtail_dashboard_alert` headers (prefix match, no closing quote, any
-# whitespace, quoted or bare labels) and be at least 1: a lexer that finds nothing, or a rename of the resource
-# kind, is a failure. Both kinds are held to the ceiling; .tf.json files are scanned too; a lifecycle
+# whitespace, quoted or bare labels) AND a LINE-ANCHORED count over the unlexed text that shares no code with the
+# lexer (anchored_headers: it does not track strings, so a quote desync that hides a block from the lexer cannot hide
+# its header line from it), and be at least 1: a lexer that finds nothing, a desync, or a rename of the resource
+# kind, is a failure. The lexer reads a quote inside `${...}` / `%{...}` as a NESTED string (skip_interp). Both kinds are held to the ceiling; .tf.json files are scanned too; a lifecycle
 # ignore_changes over query_period (or all) is a failure; a duplicate query_period, an unterminated string,
 # heredoc or block comment is a failure; the census entries must be LIVE lines inside INTENDED_DESTROYS.
-# FLOORS are exact (EXPECT_BLOCKS, MIN_PASSES): adding a case or an alert means raising them.
+# FLOORS are exact and compared with `!=` (EXPECT_BLOCKS, MIN_PASSES): adding OR removing a case or an alert means
+# re-deriving them. ALLOW is keyed by (kind, file, name); a lifecycle ignore_changes list is bracket-matched.
 # The two ALLOW entries are GRANDFATHERED, not creatable: the API refuses a new alert above 900 (commit 744396abbb).
 #
 # MUTATIONS ARE COMMITTED. Each row is applied to a scratch copy of the .tf files by an exact-string edit that must
@@ -65,12 +68,17 @@ cat > "$WORK/checker.py" <<'PYCHK'
 import json, re, sys, os
 
 DEFAULT_CEILING = 900
-# name -> its own ceiling. The live legacy alerts only; see the header.
+# (resource kind, file relative to the infra dir, name) -> its own ceiling. The live legacy alerts only; see the
+# header. Keyed by all three, not by name alone: a same-named dashboard alert, or the same name in another file or in
+# a .tf.json, is a DIFFERENT resource and gets the default ceiling.
 # GRANDFATHERED, NOT CREATABLE: claude_cost_daily_burn (86400) and inngest_luks_wrong_volume (5400) exist from
 # September. The API now REFUSES a new alert above 900 (the fourth Better Stack 422, commit 744396abbb: the
 # key-probe alert asked for 5400 and was refused), so neither value can be copied into a new alert; an entry here
 # keeps a live legacy resource from turning the sentinel red, it is not a precedent.
-ALLOW = {"claude_cost_daily_burn": 86400, "inngest_luks_wrong_volume": 5400}
+ALLOW = {
+    ("logtail_exploration_alert", "betterstack-logs-alerts.tf", "claude_cost_daily_burn"): 86400,
+    ("logtail_exploration_alert", "betterstack-logs-alerts.tf", "inngest_luks_wrong_volume"): 5400,
+}
 ALERT_KINDS = ("logtail_exploration_alert", "logtail_dashboard_alert")
 RETIRED = ("luks_monitor_host_timer_dark", "claude_cost_capture_dark")
 RETAINED_TARGETS = (
@@ -88,11 +96,37 @@ CENSUS_ENTRIES = (
 LEX_PROBLEMS = []
 
 
+def skip_interp(s, j):
+    """s[j:j+2] is `${` or `%{`. Return the index just past the matching `}`. A quote inside opens a NESTED string
+    (lexed by skip_string, so a `}` or a `"` inside it cannot move the depth or close the outer string), a nested
+    `${`/`%{` opens a nested interpolation, and a plain `{` (an object constructor) is balanced."""
+    depth, n = 1, len(s)
+    j += 2
+    while j < n:
+        c = s[j]
+        if c == '"':
+            j = skip_string(s, j)
+            continue
+        if s.startswith("${", j) or s.startswith("%{", j):
+            depth += 1
+            j += 2
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    LEX_PROBLEMS.append("unterminated-interpolation")
+    return n
+
+
 def skip_string(s, i):
     """s[i] == '"'. Return the index just past the closing quote (len(s) if unterminated). `$${` and `%%{` are
-    LITERAL escapes (not interpolation starts); `${` and `%{` open an interpolation or directive, inside which a
-    quote does not close the string."""
-    j, depth, n = i + 1, 0, len(s)
+    LITERAL escapes (not interpolation starts); `${` and `%{` open an interpolation or directive, which is lexed by
+    skip_interp: strings nested inside it are strings, not delimiters of this one."""
+    j, n = i + 1, len(s)
     while j < n:
         if s[j] == "\\":
             j += 2
@@ -101,12 +135,9 @@ def skip_string(s, i):
             j += 3
             continue
         if s.startswith("${", j) or s.startswith("%{", j):
-            depth += 1
-            j += 2
+            j = skip_interp(s, j)
             continue
-        if s[j] == "}" and depth:
-            depth -= 1
-        elif s[j] == '"' and depth == 0:
+        if s[j] == '"':
             return j + 1
         j += 1
     LEX_PROBLEMS.append("unterminated-string")
@@ -225,8 +256,105 @@ def top_level_attrs(body, key):
     return vals
 
 
+def anchored_headers(text):
+    """An independent, LINE-based count of alert headers in the unlexed text. It shares no code with lex(): it does
+    not track strings at all, so a quote desync (the failure that hides a block from lex()) cannot hide a header from
+    it. Lines that cannot declare a resource are skipped by line shape only: a line whose first non-blank text is `#`
+    or `//`, a block comment OPENED at the start of a line (until a line containing `*/`), and heredoc bodies (opened
+    by `<<TAG` / `<<-TAG` ending a line, closed by a line that is exactly TAG). A header written on a line that does
+    not start with `resource`, or inside a block comment that opens mid-line, is not credited, so parsed > anchored
+    fails closed."""
+    n, tag, block = 0, None, False
+    for line in text.split("\n"):
+        st = line.strip()
+        if tag is not None:
+            if st == tag:
+                tag = None
+            continue
+        if block:
+            if "*/" in line:
+                block = False
+            continue
+        if st.startswith("#") or st.startswith("//"):
+            continue
+        if st.startswith("/*"):
+            if "*/" not in st[2:]:
+                block = True
+            continue
+        m = re.search(r"<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\r?$", line)
+        if m:
+            tag = m.group(1)
+        if re.match(r'[ \t]*resource\s+"?(?:' + "|".join(ALERT_KINDS) + r')\b', line):
+            n += 1
+    return n
+
+
+def covers_query_period(elem):
+    """One ignore_changes element: the attribute itself, or `all` / the legacy `*`, in the bare form, the legacy
+    quoted form (`"query_period"`), or the `${...}` interpolation form."""
+    e = elem.strip()
+    if len(e) >= 2 and e[0] == e[-1] == '"':
+        e = e[1:-1].strip()
+    m = re.fullmatch(r"\$\{\s*(.*?)\s*\}", e, re.S)
+    if m:
+        e = m.group(1)
+    return e in ("query_period", "all", "*")
+
+
+def ignore_changes_values(body):
+    """Every `ignore_changes = <value>` OUTSIDE strings, as ("list", [element text, ...]) or ("other", text). The list
+    is BRACKET-MATCHED with strings skipped (so `name["x"]`, `metadata[0]` and a multi-line list with a trailing comma
+    are one list, split at depth-1 commas); an unterminated list is "other"."""
+    n, j = len(body), 0
+    while j < n:
+        c = body[j]
+        if c == '"':
+            j = skip_string(body, j)
+            continue
+        m = None
+        if body.startswith("ignore_changes", j) and (j == 0 or not (body[j - 1].isalnum() or body[j - 1] in "_-")):
+            m = re.compile(r"ignore_changes\s*=\s*").match(body, j)
+        if not m:
+            j += 1
+            continue
+        k = m.end()
+        if k < n and body[k] == "[":
+            q, depth, start, elems = k + 1, 1, k + 1, []
+            while q < n:
+                ch = body[q]
+                if ch == '"':
+                    q = skip_string(body, q)
+                    continue
+                if ch in "[{(":
+                    depth += 1
+                elif ch in "]})":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                elif ch == "," and depth == 1:
+                    elems.append(body[start:q])
+                    start = q + 1
+                q += 1
+            if depth:
+                yield ("other", body[k:k + 40])
+                return
+            elems.append(body[start:q])
+            yield ("list", [e.strip() for e in elems if e.strip()])
+            j = q + 1
+        else:
+            yield ("other", body[k:k + 40])
+            j = k
+    return
+
+
 def ignores_query_period(body):
-    return re.search(r"ignore_changes\s*=\s*(?:all\b|\[[^\]]*?\bquery_period\b[^\]]*\])", body, re.S) is not None
+    """True when a lifecycle ignore_changes can cover query_period. A value that is neither a list literal nor read to
+    its end fails closed (counts as covering): Terraform only accepts a static list or `all`, so anything else is
+    either a typo or an attempt to be clever."""
+    for kind, val in ignore_changes_values(body):
+        if kind == "other" or any(covers_query_period(e) for e in val):
+            return True
+    return False
 
 
 def json_blocks(doc):
@@ -246,7 +374,7 @@ def json_blocks(doc):
 
 def main(infra_dir, apply_path, census_path):
     bad, seen = [], []
-    naive_total = parsed_total = raw_total = 0
+    naive_total = parsed_total = raw_total = anchored_total = 0
     tf_files = []
     for root, _d, files in os.walk(infra_dir):
         for f in files:
@@ -256,7 +384,7 @@ def main(infra_dir, apply_path, census_path):
     if not [p for p in tf_files if p.endswith(".tf")]:
         bad.append("no-tf-files-found")
 
-    def judge(rel, name, qp_vals, ignores):
+    def judge(rel, kind, name, qp_vals, ignores):
         if len(qp_vals) > 1:
             bad.append("duplicate-query_period:%s:%s" % (rel, name))
             return
@@ -267,13 +395,13 @@ def main(infra_dir, apply_path, census_path):
             bad.append("unparsable-query_period:%s:%s=%r" % (rel, name, raw))
             return
         qp = int(raw)
-        ceiling = ALLOW.get(name, DEFAULT_CEILING)
-        seen.append((name, qp, ceiling, rel))
+        ceiling = ALLOW.get((kind, rel, name), DEFAULT_CEILING)
+        seen.append((name, qp, ceiling, rel, (kind, rel, name) in ALLOW))
         if qp > ceiling:
             bad.append("query_period-above-ceiling:%s:%s:%d>%d" % (rel, name, qp, ceiling))
 
     for p in tf_files:
-        rel = os.path.relpath(p, infra_dir)
+        rel = os.path.relpath(p, infra_dir).replace(os.sep, "/")
         text = open(p, encoding="utf-8").read()
         if p.endswith(".tf.json"):
             try:
@@ -295,9 +423,10 @@ def main(infra_dir, apply_path, census_path):
                 for l in (lc if isinstance(lc, list) else [lc]):
                     if isinstance(l, dict):
                         ic = l.get("ignore_changes")
-                        if ic == "all" or ic == ["all"] or (isinstance(ic, list) and "query_period" in ic) or ic == "query_period":
+                        # A string or a list of strings, each bare or in the legacy `${...}` form; anything else fails closed.
+                        if ic is not None and any((not isinstance(e, str)) or covers_query_period(e) for e in (ic if isinstance(ic, list) else [ic])):
                             ign = True
-                judge(rel, name, [] if v is None else [str(v) if isinstance(v, int) and not isinstance(v, bool) else repr(v)], ign)
+                judge(rel, kind, name, [] if v is None else [str(v) if isinstance(v, int) and not isinstance(v, bool) else repr(v)], ign)
             continue
         before = len(LEX_PROBLEMS)
         lexed = lex(text)
@@ -309,6 +438,7 @@ def main(infra_dir, apply_path, census_path):
         naive_total += naive
         parsed_total += len(found)
         raw_total += raw_n
+        anchored_total += anchored_headers(text)
         for kind in ("logtail_exploration", "logtail_exploration_alert", "logtail_dashboard_alert"):
             for m in re.finditer(r'\bresource\s+"?' + kind + r'"?\s+"?([A-Za-z0-9_-]+)"?', lexed):
                 if m.group(1) in RETIRED:
@@ -317,9 +447,12 @@ def main(infra_dir, apply_path, census_path):
             if body is None:
                 bad.append("unbalanced-block:%s:%s" % (rel, name))
                 continue
-            judge(rel, name, top_level_attrs(body, "query_period"), ignores_query_period(body))
-    if parsed_total != naive_total or parsed_total < 1 or parsed_total > raw_total:
-        bad.append("anti-vacuity:parsed=%d naive=%d raw=%d" % (parsed_total, naive_total, raw_total))
+            judge(rel, kind, name, top_level_attrs(body, "query_period"), ignores_query_period(body))
+    # naive comes from the SAME lexer as parsed (it sees the same text), so parsed == naive proves only that the block
+    # regex agrees with the header regex; anchored comes from a different mechanism (see anchored_headers) and is the
+    # check that notices a lexer desync hiding a header.
+    if parsed_total != naive_total or parsed_total < 1 or parsed_total > raw_total or parsed_total != anchored_total:
+        bad.append("anti-vacuity:parsed=%d naive=%d raw=%d anchored=%d" % (parsed_total, naive_total, raw_total, anchored_total))
     apply_text = open(apply_path, encoding="utf-8").read()
     for t in RETAINED_TARGETS:
         if re.search(r"(?m)^[ \t]*" + re.escape(t) + r"( \\)?[ \t]*$", apply_text) is None:
@@ -328,13 +461,16 @@ def main(infra_dir, apply_path, census_path):
     # A LIVE entry: a non-comment line inside the INTENDED_DESTROYS dict, not a substring anywhere in the file (a
     # commented-out entry, or one moved to another dict, must not satisfy it).
     cm = re.search(r"(?ms)^INTENDED_DESTROYS = \{\n(.*?)^\}", census_text)
-    live = [l.strip() for l in (cm.group(1).split("\n") if cm else []) if not l.strip().startswith("#")]
+    # Only the lines under the `"apps/web-platform/infra"` key count: the same address under another root's key (or
+    # another dict) is a claim about a different Terraform root.
+    km = re.search(r'(?ms)^    "apps/web-platform/infra": \{\n(.*?)^    \},', cm.group(1) + "\n" if cm else "")
+    live = [l.strip() for l in (km.group(1).split("\n") if km else []) if not l.strip().startswith("#")]
     for e in CENSUS_ENTRIES:
         if not any(re.fullmatch(re.escape(e) + r",?\s*(#.*)?", l) for l in live):
             bad.append("census-intended-destroy-missing:%s" % e.split(":")[0].strip('"'))
-    for name, qp, ceiling, rel in sorted(seen):
-        print("alert %s query_period=%d ceiling=%d (%s)%s" % (name, qp, ceiling, rel, " grandfathered" if name in ALLOW else ""))
-    print("blocks parsed=%d naive=%d" % (parsed_total, naive_total))
+    for name, qp, ceiling, rel, grand in sorted(seen):
+        print("alert %s query_period=%d ceiling=%d (%s)%s" % (name, qp, ceiling, rel, " grandfathered" if grand else ""))
+    print("blocks parsed=%d naive=%d anchored=%d" % (parsed_total, naive_total, anchored_total))
     for b in bad:
         print("VIOLATION " + b)
     sys.exit(1 if bad else 0)
@@ -354,6 +490,45 @@ variant("checker-wide.py", "DEFAULT_CEILING = 900", "DEFAULT_CEILING = 100000")
 variant("checker-noesc.py", 'if s.startswith("$${", j) or s.startswith("%%{", j):', "if False:")
 variant("checker-nostr.py", "sk = skeleton(body)", "sk = body")
 variant("checker-noign.py", "if ignores:", "if False:")
+# The lexer as it was before the interpolation fix: a quote inside `${...}`/`%{...}` is not a string, so a `}` inside
+# it moves the depth and the next quote closes the outer string.
+OLD_SKIP = r'''def skip_string(s, i):
+    j, depth, n = i + 1, 0, len(s)
+    while j < n:
+        if s[j] == "\\":
+            j += 2
+            continue
+        if s.startswith("$${", j) or s.startswith("%%{", j):
+            j += 3
+            continue
+        if s.startswith("${", j) or s.startswith("%{", j):
+            depth += 1
+            j += 2
+            continue
+        if s[j] == "}" and depth:
+            depth -= 1
+        elif s[j] == '"' and depth == 0:
+            return j + 1
+        j += 1
+    LEX_PROBLEMS.append("unterminated-string")
+    return n
+
+
+'''
+a, b = s.index("def skip_interp(s, j):"), s.index("def lex(s):")
+old_lexer = s[:a] + OLD_SKIP + s[b:]
+open("%s/checker-oldlex.py" % sys.argv[2], "w").write(old_lexer)
+noanchor = "or parsed_total != anchored_total:"
+assert s.count(noanchor) == 1
+open("%s/checker-noanchor.py" % sys.argv[2], "w").write(s.replace(noanchor, ":"))
+assert old_lexer.count(noanchor) == 1
+open("%s/checker-oldlex-noanchor.py" % sys.argv[2], "w").write(old_lexer.replace(noanchor, ":"))
+variant("checker-oldign.py", "    for kind, val in ignore_changes_values(body):",
+        "    return re.search(r\"ignore_changes\\s*=\\s*(?:all\\b|\\[[^\\]]*?\\bquery_period\\b[^\\]]*\\])\", body, re.S) is not None\n    for kind, val in ignore_changes_values(body):")
+variant("checker-byname.py", "ceiling = ALLOW.get((kind, rel, name), DEFAULT_CEILING)",
+        "ceiling = max([v for (_k, _r, nm), v in ALLOW.items() if nm == name] or [DEFAULT_CEILING])")
+variant("checker-anykey.py", "live = [l.strip() for l in (km.group(1).split(\"\\n\") if km else [])",
+        "live = [l.strip() for l in (cm.group(1).split(\"\\n\") if cm else [])")
 PYM
 
 # ── a working-tree snapshot of the .tf files, the apply workflow and the census ───────────────
@@ -405,6 +580,33 @@ own_ctl() {
   fi
 }
 
+# own_ctl is itself a verdict owner: the condition that grades every control in this file. Replacing it with
+# `if true` would turn each of them green without a failure. own_meta runs own_ctl in a SUBSHELL against a driver of
+# known behaviour and requires the exit status and text own_ctl must produce (exit 1 with its FATAL line for two
+# failures, for a driver that fails nothing and for a wrong needle; a clean return with its PASS line for exactly one
+# failure carrying the needle). It reports through printf and exit.
+own_meta() { # <label> <want-rc> <want-text> <driver-fn>
+  local label="$1" want_rc="$2" want_text="$3" out rc
+  shift 3
+  out="$( ( own_ctl "META-SUBJECT" "NEEDLE_THE_DRIVER_MUST_CARRY" "$@" ) 2>&1 )"; rc=$?
+  cases=$((cases + 1))
+  if [[ "$rc" == "$want_rc" ]] && grep -qF -- "$want_text" <<<"$out"; then
+    printf '  PASS: own_ctl control: %s\n' "$label"; passes=$((passes + 1))
+  else
+    printf 'FATAL: own_ctl control FAILED: %s (exit %s, wanted %s; wanted the text: %s)\n' "$label" "$rc" "$want_rc" "$want_text" >&2
+    sed 's/^/        | /' <<<"$out" >&2
+    exit 1
+  fi
+}
+meta_drv_two() { printf '  FAIL: first NEEDLE_THE_DRIVER_MUST_CARRY\n  FAIL: second\n' >&2; }
+meta_drv_none() { printf '  PASS: nothing failed\n'; }
+meta_drv_needle() { printf '  FAIL: one failure that carries something else\n' >&2; }
+meta_drv_good() { printf '  FAIL: exactly one, NEEDLE_THE_DRIVER_MUST_CARRY\n' >&2; }
+own_meta "two failures stop the suite with the FATAL line" 1 "saw 2 failure line(s)" meta_drv_two
+own_meta "a driver that fails nothing stops the suite with the FATAL line" 1 "saw 0 failure line(s) and 1 pass line(s)" meta_drv_none
+own_meta "a wrong needle stops the suite with the FATAL line" 1 "verdict-owner control FAILED: META-SUBJECT" meta_drv_needle
+own_meta "exactly one failure carrying the needle returns cleanly with the PASS line" 0 "PASS: verdict-owner control: META-SUBJECT" meta_drv_good
+
 BASE="$WORK/base"; snap "$BASE"
 
 echo "== the shipped tree =="
@@ -417,8 +619,8 @@ _parsed="$(sed -n 's/^blocks parsed=\([0-9]*\) naive=.*/\1/p' "$WORK/out")"
 # EXACT, not "at least": the measured count of alert blocks in the shipped tree. A removed block (a lexer that
 # stopped seeing one) trips it; a legitimately added or removed alert means editing this number.
 EXPECT_BLOCKS=17
-if [[ "$_parsed" =~ ^[0-9]+$ ]] && (( _parsed >= EXPECT_BLOCKS )); then pass "anti-vacuity: the lexer parsed $_parsed alert blocks (an independent naive count agrees; floor $EXPECT_BLOCKS)"
-else fail "anti-vacuity: parsed '$_parsed' blocks, floor $EXPECT_BLOCKS"; fi
+if [[ "$_parsed" =~ ^[0-9]+$ ]] && (( _parsed == EXPECT_BLOCKS )); then pass "anti-vacuity: the lexer parsed exactly $EXPECT_BLOCKS alert blocks (the naive and the line-anchored counts agree)"
+else fail "anti-vacuity: parsed '$_parsed' blocks, the exact count is $EXPECT_BLOCKS"; fi
 cases=$((cases + 1))
 if ! grep -q 'alert claude_cost_capture_dark\|alert luks_monitor_host_timer_dark' "$WORK/out"; then pass "neither retired alert is among the parsed blocks"
 else fail "a retired alert block is present"; fi
@@ -566,7 +768,7 @@ locals { c = "/*" }'
 append "$M13" infra/betterstack-logs-alerts.tf "$(mk_alert synth_evil_desync 86400)"
 append "$M13" infra/betterstack-logs-alerts.tf '/* an ordinary comment */'; landed M13 0
 expect_red M13 "$M13" 'synth_evil_desync:86400>900'
-expect_green "M13x (the same fixture under a checker WITHOUT the $\${ escape: the block is hidden)" "$M13" "$WORK/checker-noesc.py"
+expect_red "M13x (the same fixture under a checker WITHOUT the $\${ escape: the interpolation lexer swallows the file, a lex-problem)" "$M13" 'lex-problem:.*unterminated-' "$WORK/checker-noesc.py"
 # M14: a nested map holding a decoy query_period, after a string that holds a lone brace
 M14="$WORK/m14"; snap "$M14"
 append "$M14" infra/betterstack-logs-alerts.tf 'resource "logtail_exploration_alert" "synth_decoy" {
@@ -624,6 +826,86 @@ M20="$WORK/m20"; snap "$M20"; append "$M20" infra/betterstack-logs-alerts.tf "$(
 }"; landed M20 0
 expect_red M20 "$M20" 'duplicate-query_period:.*synth_dup'
 
+# --- review round 2: the interpolation lexer, the independent count, the parser misses ------------------------------------
+# M21: a quote inside an interpolation. `"${format("%s}", "a")}"` used to close the string at the `}` inside the nested
+# string, flip the quote parity, turn the real string "/*" into a comment opener and hide the over-limit block below.
+M21="$WORK/m21"; snap "$M21"
+append "$M21" infra/betterstack-logs-alerts.tf 'locals { x = "${format("%s}", "a")}" }
+locals { c = "/*" }'
+append "$M21" infra/betterstack-logs-alerts.tf "$(mk_alert synth_evil_interp 86400)"
+append "$M21" infra/betterstack-logs-alerts.tf '/* an ordinary comment */'; landed M21 0
+expect_red M21 "$M21" 'synth_evil_interp:86400>900'
+expect_red "M21x (the old lexer: the line-anchored count notices the hidden header)" "$M21" 'anti-vacuity:.*anchored=' "$WORK/checker-oldlex.py"
+expect_green "M21y (the old lexer AND no anchored count: the block is hidden, parsed == naive)" "$M21" "$WORK/checker-oldlex-noanchor.py"
+# M22: the same shape through a template DIRECTIVE (`%{ ... }`).
+M22="$WORK/m22"; snap "$M22"
+append "$M22" infra/betterstack-logs-alerts.tf 'locals { y = "%{ for s in ["}"] }${s}%{ endfor }" }
+locals { c = "/*" }'
+append "$M22" infra/betterstack-logs-alerts.tf "$(mk_alert synth_evil_directive 86400)"
+append "$M22" infra/betterstack-logs-alerts.tf '/* an ordinary comment */'; landed M22 0
+expect_red M22 "$M22" 'synth_evil_directive:86400>900'
+expect_red "M22x (the old lexer: the line-anchored count notices the hidden header)" "$M22" 'anti-vacuity:.*anchored=' "$WORK/checker-oldlex.py"
+expect_green "M22y (the old lexer AND no anchored count: the block is hidden)" "$M22" "$WORK/checker-oldlex-noanchor.py"
+# M22b: nested interpolation inside a nested string inside an interpolation, then a real block (must-PASS: both counts agree)
+M22B="$WORK/m22b"; snap "$M22B"
+append "$M22B" infra/betterstack-logs-alerts.tf 'locals { z = "${join("-", ["a", "${format("%s}", "b")}"])}" }'
+append "$M22B" infra/betterstack-logs-alerts.tf "$(mk_alert synth_nested_ok 900)"; landed M22b 0
+expect_green M22b "$M22B"
+# M22c: an interpolation that never closes is a lex problem, not a pass. (The must-PASS side of the anchored count,
+# a header inside a heredoc and one inside a leading block comment, is M7.)
+M22C="$WORK/m22c"; snap "$M22C"; append "$M22C" infra/betterstack-logs-alerts.tf 'locals { u = "${format("a")'; landed M22c 0
+expect_red M22c "$M22C" 'lex-problem:.*unterminated-'
+
+# L4(a): ignore_changes parsed as a bracket-matched list, not by a regex that stops at the first `]`.
+mk_ign() { # <name> <ignore_changes value text> -> an alert whose lifecycle carries it
+  mk_alert "$1" 900 | sed '$ d'
+  printf '  lifecycle {\n    ignore_changes = %s\n  }\n}' "$2"
+}
+M26="$WORK/m26"; snap "$M26"; append "$M26" infra/betterstack-logs-alerts.tf "$(mk_ign synth_ign_index '[name["x"], query_period]')"; landed M26 0
+expect_red M26 "$M26" 'ignore_changes-covers-query_period:.*synth_ign_index'
+expect_green "M26x (the old regex stops at the first ] inside name[\"x\"] and misses query_period)" "$M26" "$WORK/checker-oldign.py"
+M27="$WORK/m27"; snap "$M27"; append "$M27" infra/betterstack-logs-alerts.tf "$(mk_ign synth_ign_multi '[
+      metadata[0],
+      query_period,
+    ]')"; landed M27 0
+expect_red M27 "$M27" 'ignore_changes-covers-query_period:.*synth_ign_multi'
+expect_green "M27x (the old regex stops at metadata[0])" "$M27" "$WORK/checker-oldign.py"
+M28="$WORK/m28"; snap "$M28"; append "$M28" infra/betterstack-logs-alerts.tf "$(mk_ign synth_ign_quoted '["query_period"]')"; landed M28 0
+expect_red M28 "$M28" 'ignore_changes-covers-query_period:.*synth_ign_quoted'
+M28B="$WORK/m28b"; snap "$M28B"; append "$M28B" infra/betterstack-logs-alerts.tf "$(mk_ign synth_ign_expr 'local.keep')"; landed M28b 0
+expect_red M28b "$M28B" 'ignore_changes-covers-query_period:.*synth_ign_expr'
+M28C="$WORK/m28c"; snap "$M28C"; append "$M28C" infra/betterstack-logs-alerts.tf "$(mk_ign synth_ign_decoy '[name["query_period"], metadata[0]]')"; landed M28c 0
+expect_green "M28c (query_period only inside an index string is not the attribute: must-PASS)" "$M28C"
+M28D="$WORK/m28d"; snap "$M28D"
+append "$M28D" infra/betterstack-logs-alerts.tf "$(mk_alert synth_str_decoy 900 | sed 's/  name           = "synth_str_decoy"/  name           = "ignore_changes = [query_period]"/')"; landed M28d 0
+expect_green "M28d (the words ignore_changes = [query_period] inside a STRING are not a lifecycle block: must-PASS)" "$M28D"
+# L4(d): the .tf.json interpolation form.
+M30="$WORK/m30"; snap "$M30"
+printf '{"resource":{"logtail_exploration_alert":{"synth_json_ign":{"query_period":900,"name":"x","lifecycle":{"ignore_changes":["${query_period}"]}}}}}\n' > "$M30/infra/zz-synth.tf.json"; landed M30 0
+expect_red M30 "$M30" 'ignore_changes-covers-query_period:.*synth_json_ign'
+M30B="$WORK/m30b"; snap "$M30B"
+printf '{"resource":{"logtail_exploration_alert":{"synth_json_ign2":{"query_period":900,"name":"x","lifecycle":{"ignore_changes":["${name}"]}}}}}\n' > "$M30B/infra/zz-synth.tf.json"; landed M30b 0
+expect_green "M30b (a .tf.json ignore_changes over another attribute: must-PASS)" "$M30B"
+
+# L4(b): the allowlist is keyed by (kind, file, name).
+M23="$WORK/m23"; snap "$M23"; append "$M23" infra/betterstack-logs-alerts.tf "$(mk_alert claude_cost_daily_burn 86400 | sed 's/logtail_exploration_alert/logtail_dashboard_alert/')"; landed M23 0
+expect_red M23 "$M23" 'claude_cost_daily_burn:86400>900'
+expect_green "M23x (allowlisted by NAME only: a same-named dashboard alert at 86400 slips through)" "$M23" "$WORK/checker-byname.py"
+M24="$WORK/m24"; snap "$M24"
+printf '{"resource":{"logtail_exploration_alert":{"inngest_luks_wrong_volume":{"query_period":5400,"name":"x"}}}}\n' > "$M24/infra/zz-synth.tf.json"; landed M24 0
+expect_red M24 "$M24" 'zz-synth.tf.json:inngest_luks_wrong_volume:5400>900'
+M25="$WORK/m25"; snap "$M25"; printf '%s\n' "$(mk_alert inngest_luks_wrong_volume 5400)" > "$M25/infra/zz-synth-extra.tf"; landed M25 0
+expect_red M25 "$M25" 'zz-synth-extra.tf:inngest_luks_wrong_volume:5400>900'
+expect_green "M25x (allowlisted by NAME only: the same name in another file slips through)" "$M25" "$WORK/checker-byname.py"
+
+# L4(c): the four census entries must sit under the "apps/web-platform/infra" key of INTENDED_DESTROYS.
+M29="$WORK/m29"; snap "$M29"
+edit "$M29" census.sh '    "apps/web-platform/infra": {
+        "doppler_secret.ghcr_read_user"' '    "apps/other-root": {
+        "doppler_secret.ghcr_read_user"'; landed M29 $?
+expect_red M29 "$M29" 'census-intended-destroy-missing'
+expect_green "M29x (any key in INTENDED_DESTROYS satisfies the census check)" "$M29" "$WORK/checker-anykey.py"
+
 echo "== harness rows =="
 # (a) the sentinel reads its ceiling: with the ceiling at 100000, M1 goes GREEN.
 cases=$((cases + 1))
@@ -644,11 +926,11 @@ if (( passes + fails != cases )); then
   printf 'FATAL: verdict conservation violated — %s+%s != %s cases.\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
-# EXACT floor: the measured pass count of this file (a case deleted, or a block that stopped running, trips it).
-# Adding a case means raising it; the pass count is printed on the line above.
-MIN_PASSES=65
-if (( passes < MIN_PASSES )); then
-  printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated.\n' "$passes" "$MIN_PASSES" >&2
+# EXACT floor: the measured pass count of this file, compared with `!=` (a case deleted, a block that stopped
+# running, AND an unaccounted case added all trip it). Changing a case means setting it to the count printed above.
+MIN_PASSES=110
+if (( passes != MIN_PASSES )); then
+  printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; re-derive the floor.\n' "$passes" "$MIN_PASSES" >&2
   exit 1
 fi
 (( fails == 0 )) || exit 1

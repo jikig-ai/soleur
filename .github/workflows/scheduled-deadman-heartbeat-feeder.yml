@@ -89,6 +89,9 @@ jobs:
                     printf '%s\n' "$safe"
                     if [[ "${BASH_REMATCH[1]}" == "$t" || "${BASH_REMATCH[1]}" == "none" ]]; then
                       verdict="${BASH_REMATCH[2]}"
+                      # reason belongs to THIS marker only: reset it before assigning so an earlier marker's reason
+                      # cannot ride onto a later verdict (query_failed reason=X then trap_remapped).
+                      reason=""
                       if [[ "$safe" =~ \ reason=([A-Za-z0-9:._-]{1,40})(\ |$) ]]; then reason="${BASH_REMATCH[1]}"; fi
                     fi
                   else

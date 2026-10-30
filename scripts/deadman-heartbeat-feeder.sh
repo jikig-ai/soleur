@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# (#11631) Feeder for the two archive-fed dead-man heartbeats that replaced the once-a-day native logs alerts
-# `luks_monitor_host_timer_dark` (window 97200 s) and `claude_cost_capture_dark` (window 86400 s):
+# (#11631) Feeder for the two archive-fed dead-man heartbeats that replaced the native logs alerts
+# `luks_monitor_host_timer_dark` (window 97200 s, once-a-day row) and `claude_cost_capture_dark` (window 86400 s):
 #
 #   luks-monitor-host-timer -> betteruptime_heartbeat.luks_monitor_host_timer  (soleur-luks-monitor-host-timer-prd)
 #   claude-cost-capture     -> betteruptime_heartbeat.claude_cost_capture      (soleur-claude-cost-capture-prd)
 #
 # A heartbeat is beaten ONLY while the target's own predicate (moved verbatim from the retired alert, minus its
 # window conjunct) finds a qualifying row inside the old window in the Better Stack Logs HOT arm (remote()) UNION
-# the ARCHIVE arm (s3Cluster). The native alerts could not see their once-a-day row (incident 1023423999 read
-# `Current value: 0` through 33 healthy nights), so this reads the archive itself. A spurious beat hides exactly
+# the ARCHIVE arm (s3Cluster). The native luks alert could not see its once-a-day row (incident 1023423999, #11048,
+# read `Current value: 0` through 33 healthy nights; the cost marker is NOT once-a-day: it fires a few times a day,
+# n=4 in 24 h), so this reads the archive itself. A spurious beat hides exactly
 # what the control exists to find, so a withheld beat is the signal: the heartbeat times out and pages.
 #
 # THE PROPERTY. A request reaches a heartbeat URL only when ALL of these hold:
@@ -63,9 +64,9 @@ esac
 
 # Wall time since start, in milliseconds, from the shell's own EPOCHREALTIME (no external clock, no date): it rides
 # on the beat and withhold markers so growth in the archive scan cost is visible before it nears the job timeout.
-T0_US="${EPOCHREALTIME//[.,]/}"
+T0_US="${EPOCHREALTIME-}"; T0_US="${T0_US//[.,]/}"
 elapsed_ms() {
-  local now="${EPOCHREALTIME//[.,]/}"
+  local now="${EPOCHREALTIME-}"; now="${now//[.,]/}"
   if [[ "$now" =~ ^[0-9]{10,}$ && "$T0_US" =~ ^[0-9]{10,}$ ]]; then printf '%s' $(((now - T0_US) / 1000)); else printf 'na'; fi
 }
 TARGET_LABEL="none"

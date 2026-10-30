@@ -986,10 +986,10 @@ jobs:
       - name: Run Anthropic-spend alerts drift guard (#8611)
         run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
 
-      # (#11631) The archive-fed dead-man heartbeat feeder (luks-monitor host timer + cost capture) that replaced the
-      # once-a-day native logs alerts: the SQL it sends (both arms, the archive filter), the exit contract, the single
-      # beat site with no /fail, the predicates pinned to their emitters, the workflow/Terraform/manifest/watchdog
-      # wiring, and its mutation rows.
+      # (#11631) The archive-fed dead-man heartbeat feeder (luks-monitor host timer + cost capture) that replaced two
+      # native logs alerts (the luks one waited for a once-a-day row; the cost one fires a few times a day): the SQL
+      # it sends (both arms, the archive filter), the exit contract, the single beat site with no /fail, the
+      # predicates pinned to their emitters, the workflow/Terraform/manifest/watchdog wiring, and its mutation rows.
       - name: Run dead-man heartbeat feeder guard (#11631)
         run: bash apps/web-platform/test/infra/deadman-heartbeat-feeder.test.sh
 

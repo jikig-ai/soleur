@@ -75,7 +75,7 @@ threshold, so NO implied `raw LIKE` pre-filter was added.
 `gh run list --workflow scheduled-zot-restart-loop.yml --event workflow_dispatch --limit 80` (79 consecutive
 run-creation gaps): min 0 s (a duplicate dispatch), median 3600 s, p90 3640 s, max **3680 s**. Runner queue
 (`created_at` to `started_at`, 40 most recent jobs of the same workflow): min 2 s, median 4 s, p90 135 s, max **786 s**
-(the ADR-248 historical maximum is 2438 s and is the conservative figure used below).
+(the conservative figure used below is the historical maximum 2438 s, measured over 40 runs of the zot watchdog on 2026-09-24: recorded in the `cron-monitors.tf` queue-tail comment and listed in `sentry-monitor-iac-parity.test.ts`, not in ADR-248).
 
 Beat-to-beat bound with the conservative queue: 3680 + 2438 = about 6118 s while no slot is lost; one lost slot adds a
 full 3600 s: **9718 s**. The page threshold is period + grace = 3600 + 7200 = **10800 s**, so one lost slot does not page a

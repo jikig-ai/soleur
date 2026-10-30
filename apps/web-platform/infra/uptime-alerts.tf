@@ -567,9 +567,11 @@ resource "doppler_secret" "inngest_server_probe_heartbeat_url" {
   }
 }
 
-# #11631 — archive-fed dead-man heartbeats that replace the once-a-day native logs alerts
-# (luks_monitor_host_timer_dark, claude_cost_capture_dark), which read `Current value: 0` through 33
-# healthy nights: their row arrives once a day and the alert evaluator cannot reliably see it. Both
+# #11631 — archive-fed dead-man heartbeats that replace two native logs alerts
+# (luks_monitor_host_timer_dark, claude_cost_capture_dark). The luks alert read `Current value: 0` through
+# 33 healthy nights (incident 1023423999, #11048): its row arrives once a day and the evaluator did not see
+# it. The cost alert shares the class (86400 s window) but its row arrives a few times a day (n=4 in 24 h)
+# and its blindness was not measured. Both
 # are fed hourly by scheduled-deadman-heartbeat-feeder.yml (scripts/deadman-heartbeat-feeder.sh),
 # which reads the Logs archive itself (remote() UNION s3Cluster) over the OLD alert window and beats
 # only when a qualifying row exists; with none it withholds the beat so the heartbeat times out and
