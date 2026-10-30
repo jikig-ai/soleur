@@ -93,6 +93,7 @@ import io
 import json
 import os
 import re
+import string
 import subprocess
 import sys
 import tempfile
@@ -505,12 +506,19 @@ def separate_arm_groups(legs, loads, weight_of, n):
     groups = {}
     for label in legs:
         stem = (label[:-2] if len(label) > 2
-                and label[-2] == "-" and label[-1].isalpha() else None)
+                and label[-2] == "-" and label[-1] in string.ascii_lowercase
+                else None)
         if stem is not None:
             groups.setdefault(stem, []).append(label)
     for stem in sorted(groups):
         members = sorted(groups[stem], key=lambda l: (-(weight_of(l) or 0), l))
-        if len(members) < 2 or len(members) > n:
+        if len(members) < 2:
+            continue
+        if len(members) > n:
+            print(f"WARN: {len(members)} '-<letter>' siblings under {stem!r} "
+                  f"exceed {n} legs — arms cannot all land on distinct legs "
+                  f"(the totality guard will refuse this manifest)",
+                  file=sys.stderr)
             continue
         used = set()
         for label in members:

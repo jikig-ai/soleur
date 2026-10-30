@@ -104,3 +104,18 @@ Design pass (simplicity+arch+perf) found missed rename blast radius — all 3 se
 - lint-orphan re-green (773, 0 orphans). Suites running: battgate, infranotice, prsel, tot4 → .work-run-*.rc
 - DEFERRED (report to panel): est src tier (measured-tag fudge), per-block declared floors (residual), ADR for arm convention, --rows preamble extraction (4th copy), exit-code parity
 - PENDING: design-pass verdict → 6-agent panel → synthesis; affected-gate run queued position 3
+
+## Update 8 — review-fix commit pushed, panel in flight
+- All design-pass fixes verified: battgate 96/96 (34/34 mutants), prsel 4583/4583 (101/101), infranotice 266/266, totality 51/51, lint-orphan 0 orphans, fixture-assert 63/63.
+- Commit 92e2740f99 pushed (normal push, no force needed).
+- Note: 3 consumer suites initially ran in BARE ROOT (main) due to `cd X && setsid A & setsid B` parsing bug — only battgate inherited the worktree. Fixed by literal-path cd inside each bash -c.
+- PANEL_SHA=92e2740f99. 6 panel seats spawned (git-history, pattern-recognition, security, data-integrity, agent-native, code-quality) — arch+perf deduped from design pass.
+- Affected gate: MODE=full running (m6* rows).
+
+## Update 9 — review panel synthesis + fixes
+- 6-seat panel: no P0s. Two P1s found and fixed:
+  1. fast-tier-budget red: full --timings-dir re-price exposed pre-existing always-on weight drift (8 labels 11-378s real vs stale committed prices). Fixed via --durations seed regen (incumbent prices preserved + arm estimates seeded). Budget suite green 9/9.
+  2. affected-index-ratchet: baseline keyed on retired replay label; each arm audits same file → 9 new-pairs. Fixed: -3 stale baseline rows + 54 anchor-keyed accept rows (18/arm: README 12, gitignore 2, ruff 4 across suite+lint-ratchet.py+ci-pr-affected-replay.py reach). Ratchet exit=0.
+- Fix-inline applied: reorder-guard overclaims corrected (add/delete only), stale numerals (six→nine labels, M1..M16→M1..M35, one-mega-suite→plural), separate_arm_groups WARN on >n siblings + ascii_lowercase, usage hints on unknown-arg (3 batteries), regen command in totality fail msgs.
+- Defer to issues: est src tier, per-block declared floors, --rows preamble extraction (5th copy trigger=met), exit-code parity, arm-convention ADR, split-checklist doc.
+- totality re-running on final manifest; affected-gate still in flight.

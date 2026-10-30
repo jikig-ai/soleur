@@ -265,8 +265,11 @@ span to the NEXT registered mark.
   inside the same relevance gates; arm prices seeded at CI-median × local
   arm-share — the first green run carrying real arm timings is the
   re-price input (interim-pin pattern from 2026-09-26). Post-split
-  manifest: legs 1,678-1,758 s predicted suite time (~28-29.3 min,
-  ≈29-31 min wall after setup; spread ~1.3 min) — the ~28-min bound is
+  manifest: incumbent rows kept their committed prices (a full
+  `--timings-dir` re-price showed the always-on fast-tier budget breaks
+  on pre-existing main drift — 8 always-on labels at 11-378 s CI real —
+  tracked separately), arms placed on least-loaded legs by seeded weight
+  on distinct legs per the `-<letter>` rule. The ~28-min bound is
   delivered only after real arm timings re-price; until then
   `--incremental` regens only, since a `--runs` pass would floor-price
   the estimated arm rows. **Ownership checkpoint:** re-check leg spread

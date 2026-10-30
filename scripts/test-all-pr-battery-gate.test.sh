@@ -297,7 +297,7 @@ add_arm ev-pr-target      pull_request_target 1 "modify:knowledge-base/note.md" 
 add_arm ev-pr-review      pull_request_review 1 "modify:knowledge-base/note.md" ALL
 # CI unset = a local run: the default local mode is the affected gate, which REFUSES (rc=4) a docs-only
 # diff that selects nothing, so these arms name an explicit group (TEST_GROUP=<g> bypasses the affected
-# axis) and a diff that touches one light battery's own file. The light group registers four of the six.
+# axis) and a diff that touches one light battery's own file. The light group registers seven of the nine.
 add_arm local-pr-event    "$PR" - "modify:scripts/test-all-affected.test.sh" "$TAA_ARMS" "TEST_GROUP=scripts"
 add_arm local-no-event    - - "modify:scripts/test-all-affected.test.sh" "$TAA_ARMS" "TEST_GROUP=scripts"
 add_arm force-all         "$PR" 1 "modify:knowledge-base/note.md" ALL "SOLEUR_TEST_FORCE_ALL=1"
@@ -430,7 +430,7 @@ if [[ -n "$got_sites" && "$got_sites" == "$want_sites" ]]; then
 else
   fail "dispatch: --pr-gated sites differ. expected: $(echo $want_sites) / derived: $(echo $got_sites)"
 fi
-# the runner must carry a skip_suite for each of the six labels (a decline is a counted verdict)
+# the runner must carry a skip_suite for each of the nine labels (a decline is a counted verdict)
 for l in "${ALL_LABELS[@]}"; do
   if grep -qF "skip_suite \"$l\" \"relevance\"" "$PRISTINE/scripts/test-all.sh"; then pass "skip_suite else-arm present for $l"; else fail "no skip_suite arm for $l"; fi
 done

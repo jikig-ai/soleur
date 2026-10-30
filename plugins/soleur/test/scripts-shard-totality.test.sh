@@ -976,7 +976,7 @@ while IFS= read -r _tok; do
     while IFS=$'\t' read -r _lbl _rr; do
       _leg="$(awk -F'\t' -v l="$_lbl" '$1 == l { print $2; exit }' "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv" 2>/dev/null | head -1)"
       if [[ -z "$_leg" ]]; then
-        fail "${_tok}: --rows registration '${_lbl}' is not pinned in either shard manifest — its leg is unverifiable (hash-fallback could co-locate the halves)"
+        fail "${_tok}: --rows registration '${_lbl}' is not pinned in either shard manifest — its leg is unverifiable (hash-fallback could co-locate the halves). Regenerate: python3 scripts/regenerate-shard-manifest.py --incremental --write"
         _legs_ok=0; break
       fi
       echo "$_leg" >> "$WORK/rs_legs"
@@ -988,7 +988,7 @@ while IFS= read -r _tok; do
     if (( _legs_ok == 1 )); then
       _uniq=$(sort -u "$WORK/rs_legs" | wc -l | tr -d ' ')
       if (( _uniq != _ranges_n )); then
-        fail "${_tok}: --rows halves pin to legs $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total"
+        fail "${_tok}: --rows halves pin to legs $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total. Regenerate: python3 scripts/regenerate-shard-manifest.py --incremental --write"
       else
         pass "${_tok}: ${_ranges_n} --rows registrations pin to distinct legs ($(tr '\n' ' ' < "$WORK/rs_legs"))"
       fi

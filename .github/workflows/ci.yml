@@ -1436,9 +1436,9 @@ jobs:
     # predicted suite time lives in the committed manifest and the runbook
     # topology table (it drifts with every regen; never quote a number here —
     # the ~9.5-min figure this comment once carried measured 54.9 min on the
-    # worst leg by #11562). The one atomic mega-suite was split in
-    # #8864; the duration-aware manifest keeps assignment balanced as suites
-    # drift. Cost of the 8th leg: one more job competing for the runner pool
+    # worst leg by #11562). The atomic mega-suites were split via in-runner
+    # --rows arms (#8864, #11562); the duration-aware manifest keeps assignment
+    # balanced as suites drift. Cost of the 8th leg: one more job competing for the runner pool
     # (see the concurrency note near the top of this file and the runbook).
     #
     # Leg membership is NOT positional: `scripts/suite-shard-legs.tsv` pins each

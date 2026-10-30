@@ -327,7 +327,7 @@ echo "== test-all-affected: mutation matrix =="
 # a test-scripts shard worst leg, so scripts/test-all.sh registers it as four `-a`..`-d` arms
 # inside the same relevance gate, each carrying a `--rows A-B` range over the DECLARED_TOTAL
 # gated blocks below. A gated site is one `# ---` row block: in_range sequences every block in
-# file order (an added, deleted or reordered block shifts _site_seq against DECLARED_TOTAL at
+# file order (an added or deleted block shifts _site_seq against DECLARED_TOTAL at
 # the end). Setup, the instrument self-test, ENV_SCRUB, the sandbox builders and the floors
 # are unconditional per arm; for-loops (q8/th census rows) stay inside their block. The union
 # tiling 1..DECLARED_TOTAL is asserted by plugins/soleur/test/scripts-shard-totality.test.sh.
@@ -351,7 +351,7 @@ while (( $# )); do
       ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
       ;;
     *)
-      echo "ERROR: unknown argument '$1'" >&2
+      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
       exit 2
       ;;
   esac
@@ -363,7 +363,7 @@ if (( _seen_rows_flag == 1 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS
 fi
 # in_range: called once per gated row block, in file order. _site_seq counts gated blocks;
 # EXECUTED counts dispatched blocks. No per-site ordinal — the block order IS the declared
-# order and the end-of-file _site_seq == DECLARED_TOTAL check is the reorder guard.
+# order and the end-of-file _site_seq == DECLARED_TOTAL check is the add/delete guard; a reorder keeps coverage total but silently re-maps which range covers which rows — a balance skew, not a gap.
 _site_seq=0; EXECUTED=0
 in_range() {
   _site_seq=$(( _site_seq + 1 ))
@@ -4232,11 +4232,11 @@ if (( PASS + FAIL != cases )); then
   exit 2
 fi
 # Ranged-sum reconciliation (ROWS-SPLIT, #11562): every declared block reached the gate and
-# the gate dispatched exactly the range — a deleted or reordered block cannot hide behind
+# the gate dispatched exactly the range — a deleted block cannot hide behind
 # the conservation check above.
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 if (( _site_seq != DECLARED_TOTAL )); then
-  echo "[FATAL] range gate: $_site_seq gated blocks reached in_range, expected $DECLARED_TOTAL — a row block was added, deleted or reordered without re-splitting the registered --rows ranges" >&2
+  echo "[FATAL] range gate: $_site_seq gated blocks reached in_range, expected $DECLARED_TOTAL — a row block was added or deleted without re-splitting the registered --rows ranges" >&2
   exit 2
 fi
 if (( EXECUTED != EXPECTED_EXECUTED )); then

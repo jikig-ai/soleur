@@ -93,7 +93,7 @@ while (( $# )); do
       ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
       ;;
     *)
-      echo "ERROR: unknown argument '$1'" >&2
+      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
       exit 2
       ;;
   esac
@@ -111,7 +111,7 @@ fi
 # order. _site_seq counts gated sites (never the unconditional content); EXECUTED counts
 # dispatched sites. Unlike lint-orphan's dispatch-site gate there is no per-site ordinal
 # argument — the call order IS the declared order, and the end-of-file _site_seq ==
-# DECLARED_TOTAL check is the reorder/duplicate guard.
+# DECLARED_TOTAL check is the add/delete guard (a reorder keeps coverage total but silently re-maps the registered ranges — a balance skew, not a gap).
 _site_seq=0; EXECUTED=0
 in_range() {
   _site_seq=$(( _site_seq + 1 ))
@@ -5123,7 +5123,7 @@ fi
 # every declared site reached the gate, the gate dispatched exactly the range, and every dispatched
 # site was a mutant run — a skipped or doubly-counted site cannot hide behind the kill floors.
 if (( _site_seq != DECLARED_TOTAL )); then
-  printf '[FATAL] range gate: %s gated sites reached in_range, expected %s — a mutate/ow_mutate line was added, deleted or reordered without re-splitting the registered --rows ranges\n' "$_site_seq" "$DECLARED_TOTAL" >&2; exit 1
+  printf '[FATAL] range gate: %s gated sites reached in_range, expected %s — a mutate/ow_mutate line was added or deleted without re-splitting the registered --rows ranges\n' "$_site_seq" "$DECLARED_TOTAL" >&2; exit 1
 fi
 if (( EXECUTED != EXPECTED_EXECUTED )); then
   printf '[FATAL] range gate: %s sites dispatched, expected %s for --rows %s-%s — the gate mis-selected\n' "$EXECUTED" "$EXPECTED_EXECUTED" "$ROWS_LO" "$ROWS_HI" >&2; exit 1
