@@ -1179,6 +1179,7 @@ hole_locale() { # the first installed UTF-8 locale in which a [0-9] range matche
   return 0
 }
 HOLE_LOC="$(hole_locale)"
+[[ -n "$HOLE_LOC" ]] || echo "  note: R17 has no installed UTF-8 locale in which [0-9] matches U+0663; its behavioural half runs under C.utf8 and C only, and the explicit-class pin carries the guard on this host"
 row_R17() { local d loc arg lab pair locs
   d=$(reqrow R17); amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; arg="00000000000$PR"
   ok R17.fifteen-digit-fixture test "${#arg}" -eq 15

@@ -485,6 +485,7 @@ AM_ERR=""; AM_VERDICT=""; AM_BASE=""; AM_REASON=""; AM_REQ=0; AM_NA=0; AM_NP=0; 
 amr_arr_ok() { # exactly ONE JSON value, an array of strings free of control characters (`[] ["x"]` is two values and fails)
   # Rejected code points: C0 (< 32), DEL, C1 (U+0080-U+009F), the line/paragraph separators U+2028 U+2029 (none of which `@json` escapes) and the bidi /
   # invisible format characters U+200B-U+200F, U+202A-U+202E, U+2060-U+2064, U+2066-U+2069, U+FEFF and the Unicode tag characters U+E0000-U+E007F.
+  # These ranges ARE the contract, not Unicode's full Bidi_Control or Cf set: U+061C, U+206A-U+206F, U+00AD, U+180E and U+E0100-U+E01EF pass through.
   printf '%s' "$1" | jq -es 'length == 1 and (.[0] | type == "array")
                               and all(.[0][]; type == "string" and ((explode | any(. < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232 or . == 8233
                                                  or (. >= 8203 and . <= 8207) or (. >= 8234 and . <= 8238)
