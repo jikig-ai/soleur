@@ -239,3 +239,7 @@ rebirth actually lands, not on the mechanism merging.
 ## Addendum — 2026-10-02 (#9356)
 
 Key-conditional arms for `web-1` now exist in `web-host-replace-gate.sh` behind a separate constant. The by-name web-1 refusal and its unblock list stand and remain first in the function; see the ADR-263 addendum of the same date.
+
+## Addendum — 2026-10-29 (#10585)
+
+Post-replace verification now extends past the boot trail to the replacement host's FIRST deploy: the standing notify-only follow-through probe `scripts/followthroughs/web-first-deploy-10585.sh` derives the owed set from this dispatch's emitted trail and raises ACTION REQUIRED when no Deploy-succeeded-class journald row lands within 2 days of a proven boot. The gate contract and `-target` set are unchanged.

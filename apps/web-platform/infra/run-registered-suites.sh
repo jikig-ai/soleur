@@ -583,6 +583,29 @@ if (( _SHARD_N > 0 )); then
   SUITES=("${_assigned[@]}")
   unset _assigned _ord _s _leg _mi
 
+  # Heavy-first dispatch (#11568). xargs hands suites out in list order, and that order is the
+  # path-sorted one, so a long suite whose name sorts late (workspaces-boot-unlock, ~690 s at
+  # -P 4) started ~210 s into leg 4/4 and the leg ran past its 15-minute ceiling (run
+  # 40964559289) although the suites summed to only ~1900 s over four slots. Longest-first
+  # puts the critical path at the front, so leg wall ~ max(longest suite, sum/JOBS) instead of
+  # start-offset + longest. Order only: the set, the accounting and every verdict are
+  # unchanged. Unmeasured suites rank as the table default (4000 ms); no table -> sorted order.
+  _dur_file="$ROOT/apps/web-platform/infra/suite-durations.tsv"
+  if (( _shard_manifest_active == 1 )) && [[ -f "$_dur_file" ]]; then
+    declare -A _dur_ms=()
+    while IFS=$'\t' read -r _dl _dm _dr; do
+      case "$_dl" in "" | "#"*) continue ;; esac
+      [[ "$_dm" =~ ^[0123456789]{1,9}$ ]] && _dur_ms["$_dl"]=$(( 10#$_dm ))
+    done < "$_dur_file"
+    mapfile -t SUITES < <(
+      for _s in "${SUITES[@]}"; do
+        printf '%s\t%s\n' "${_dur_ms[$_s]:-4000}" "$_s"
+      done | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 | cut -f2
+    )
+    unset _dur_ms _dl _dm _dr _s
+  fi
+  unset _dur_file
+
   # Zero-assignment is a REFUSAL, not an empty green leg: a leg that owns
   # nothing would report "0 failed" and read as coverage.
   (( ${#SUITES[@]} > 0 )) || {
@@ -649,12 +672,11 @@ _SUITE_BOUNDS=(
   "apps/web-platform/infra/git-data-ownership.test.sh=300"
   # #8609: the Guard 7 mutation rows took the suite from ~360 to 485 assertions. At 180 s it was
   # bound-killed mid-run (rc=124 at 180 s, run 36730312987) while green; measured 385 s serial on a
-  # contended local host. 540 s matches the other mutation-heavy suites below and fits the 15-min leg.
-  # #11568: widened 540 -> 720. CI wall time at -P 4 across Infra Validation main runs: 393, 466, 471, 493 s
-  # (green; 0.73-0.91 of 540) and a bound-kill at 540 s on shard 2 (runs 40944524196, 40950238076,
-  # 40952456472) once betterstack-alert-structure (~360 s) landed beside it. 493 s was 0.91 of the old
-  # bound; 720 s keeps the worst observed run at 0.68 and still ends inside the 900 s leg timeout.
-  "apps/web-platform/infra/ci-deploy.test.sh=720"
+  # contended local host. 540 s matched the other mutation-heavy suites at the time.
+  # #11568: at 735 assertions the suite now measures ~350 s serial locally and >540 s on a contended
+  # hosted leg (rc=124 at 540 s, run 40951090093 leg 2/4, twice) while green. 900 s is ≥1.5x that
+  # worst observed and still fits the leg ceiling.
+  "apps/web-platform/infra/ci-deploy.test.sh=900"
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
