@@ -5,6 +5,7 @@ import type { RepoStatus } from "@/components/settings/project-setup-card";
 import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveWorkspaceIdentityForSettings } from "@/server/workspace-identity-resolver";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
+import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -28,7 +29,7 @@ export default async function SettingsPage() {
   const active = await resolveActiveWorkspace(user.id, service);
 
   // Parallelize all independent queries.
-  const [{ data: apiKey }, wsRes] = await Promise.all([
+  const [{ data: apiKey }, { data: oauthRow }, wsRes] = await Promise.all([
     service
       .from("api_keys")
       .select("provider, is_valid, updated_at")
@@ -37,6 +38,15 @@ export default async function SettingsPage() {
       .eq("is_valid", true)
       .limit(1)
       .single(),
+    // #11524: the stored subscription-token row (any validity) so Settings can
+    // offer its removal. `hasApiKey` above keeps its meaning (the anthropic row
+    // the lease reads); this is a separate, independent credential row.
+    service
+      .from("api_keys")
+      .select("provider, is_valid, updated_at")
+      .eq("user_id", user.id)
+      .eq("provider", "anthropic_oauth")
+      .maybeSingle(),
     active.ok
       ? service
           .from("workspaces")
@@ -69,9 +79,7 @@ export default async function SettingsPage() {
   // the control for everyone else (AC8 "no toggle" when inert).
   const isOperator =
     process.env.ADMIN_USER_IDS?.split(",").includes(user.id) ?? false;
-  const ccOauthEnabled =
-    process.env.CC_OAUTH_ENABLED === "1" ||
-    process.env.CC_OAUTH_ENABLED === "true";
+  const ccOauthEnabled = isCcOauthEnabled();
 
   return (
     <SettingsContent
@@ -84,6 +92,11 @@ export default async function SettingsPage() {
       repoLastSyncedAt={repoData?.repo_last_synced_at ?? null}
       needsReconnect={needsReconnect}
       canUseOauthCredential={isOperator && ccOauthEnabled}
+      hasOauthToken={!!oauthRow}
+      // "In effect" = exactly what the lease applies: kill-switch on AND a
+      // valid row. A stored-but-inert token stays removable (copy variant C).
+      oauthInEffect={ccOauthEnabled && oauthRow?.is_valid === true}
+      oauthTokenSavedAt={oauthRow?.updated_at ?? null}
       workspaceIdentity={workspaceIdentity}
     />
   );

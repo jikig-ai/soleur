@@ -7,6 +7,7 @@ import { WorkspaceLogoSettings } from "./workspace-logo-settings";
 import { KeyboardShortcutsToggle } from "./keyboard-shortcuts-toggle";
 import type { WorkspaceIdentity } from "@/server/workspace-identity-resolver";
 import { AgentEngineSettings } from "./agent-engine-settings";
+import { describeCredentialBasis } from "@/lib/credential-basis";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -22,6 +23,16 @@ interface SettingsContentProps {
    * subscription-token toggle in the key form. Default false (non-operator).
    */
   canUseOauthCredential?: boolean;
+  /**
+   * #11524 — an `anthropic_oauth` row is stored (any validity). Drives the
+   * status lines and the Remove control, independent of
+   * `canUseOauthCredential`.
+   */
+  hasOauthToken?: boolean;
+  /** #11524 — the stored token is what conversations use now (flag on AND valid). */
+  oauthInEffect?: boolean;
+  /** #11524 — the stored row's `updated_at` (ISO), for `saved <date>`. */
+  oauthTokenSavedAt?: string | null;
   /**
    * #4916 follow-up: workspace-identity controls (logo + rename) relocated here
    * from the flag-gated Team page so they are reachable for all users. Absent →
@@ -40,8 +51,19 @@ export function SettingsContent({
   repoLastSyncedAt,
   needsReconnect,
   canUseOauthCredential = false,
+  hasOauthToken = false,
+  oauthInEffect = false,
+  oauthTokenSavedAt = null,
   workspaceIdentity = null,
 }: SettingsContentProps) {
+  // Same source as the remove-token confirm dialog (KeyRotationForm derives
+  // its variant from this function too), so the two cannot disagree.
+  const basis = describeCredentialBasis({
+    hasOauthToken,
+    oauthInEffect,
+    hasApiKey,
+  });
+
   return (
     <div className="space-y-10">
       <h1 className="mb-8 text-2xl font-semibold text-soleur-text-primary">Settings</h1>
@@ -117,11 +139,26 @@ export function SettingsContent({
             ) : (
               <p className="text-sm text-soleur-text-secondary">No key configured</p>
             )}
+            {basis && (
+              <div className="mt-1 space-y-1">
+                <p className="text-sm text-soleur-text-secondary">
+                  Subscription token: saved
+                  {oauthTokenSavedAt
+                    ? ` ${new Date(oauthTokenSavedAt).toLocaleDateString()}`
+                    : ""}
+                </p>
+                <p className="text-sm text-soleur-text-secondary">
+                  Conversations use: {basis.conversationsUse}
+                </p>
+              </div>
+            )}
           </div>
 
           <KeyRotationForm
             hasExistingKey={hasApiKey}
             canUseOauthCredential={canUseOauthCredential}
+            hasOauthToken={hasOauthToken}
+            oauthInEffect={oauthInEffect}
           />
         </div>
       </section>

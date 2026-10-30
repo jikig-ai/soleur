@@ -8,6 +8,77 @@ import { classifyCliDroppedValue, isAcceptableSubscriptionToken } from "@/server
 import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 
+// #11524 — remove the caller's stored subscription token (provider
+// 'anthropic_oauth') with no replacement. Goes through the service-role-only
+// delete_oauth_credential RPC (migration 179), which hardcodes the provider
+// (ADR-048 write boundary), so this path can never touch the user's
+// 'anthropic' api_key fallback. Deliberately NO operator / CC_OAUTH_ENABLED
+// fence: a user can always erase their own stored secret, including after the
+// kill-switch is flipped off. Nothing is created, copied or converted.
+export async function DELETE(request: Request) {
+  const { valid: originValid, origin } = validateOrigin(request);
+  if (!originValid) return rejectCsrf("api/keys", origin);
+
+  const userId = await verifiedUserId(request);
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // The body must be EXACTLY { credential_type: "oauth_token" }: a bare or
+  // mistyped DELETE can never reach the RPC, and the provider is never taken
+  // from input. The body is never logged.
+  const body: unknown = await request.json().catch(() => null);
+  const keys =
+    body !== null && typeof body === "object" && !Array.isArray(body)
+      ? Object.keys(body)
+      : [];
+  if (
+    keys.length !== 1 ||
+    (body as Record<string, unknown>).credential_type !== "oauth_token"
+  ) {
+    return NextResponse.json(
+      {
+        error: "Unsupported credential_type",
+        code: "unsupported_credential_type",
+      },
+      { status: 400 },
+    );
+  }
+
+  const service = createServiceClient();
+  const { data, error: rpcError } = await service.rpc(
+    "delete_oauth_credential",
+    { p_user_id: userId },
+  );
+
+  if (rpcError) {
+    logger.error({ err: rpcError }, "Failed to remove oauth credential");
+    Sentry.captureException(rpcError, {
+      tags: { feature: "api-keys", op: "delete-oauth" },
+      extra: { userId, provider: "anthropic_oauth" },
+    });
+    return NextResponse.json(
+      { error: "Failed to remove token" },
+      { status: 500 },
+    );
+  }
+
+  const deleted = data === true;
+  // Audit: op + outcome only. Never the token value, never the request body.
+  logger.info(
+    { feature: "api-keys", op: "oauth-credential-removed", userId, deleted },
+    "Subscription token removed",
+  );
+  Sentry.addBreadcrumb({
+    category: "api-keys",
+    message: "oauth-credential-removed",
+    level: "info",
+    data: { deleted },
+  });
+
+  return NextResponse.json({ deleted });
+}
+
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/keys", origin);

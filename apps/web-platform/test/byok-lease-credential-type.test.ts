@@ -277,6 +277,28 @@ describe("getAgentCredential — oauth preference + gates", () => {
     );
     expect(cred).toEqual({ value: REST_PLAINTEXT, scheme: "api_key" });
   });
+
+  // #11524 (CTO H5) — once the owner's subscription token is removed
+  // (delete_oauth_credential), a delegated lease no longer meets the oauth row
+  // that makes it throw OauthDelegationForbiddenError: it falls through to the
+  // owner's anthropic api_key (baseline pre-oauth delegation behavior). Recorded
+  // in the ADR-048 addendum; this pins it.
+  it("delegated lease with the oauth row removed falls back to the owner's api_key (no throw)", async () => {
+    process.env.CC_OAUTH_ENABLED = "1";
+    vi.spyOn(Date, "now").mockReturnValue(AFTER_DATE);
+    seedProvider("anthropic", REST_PLAINTEXT, OPERATOR);
+    // No anthropic_oauth row: the owner removed it.
+
+    const cred = await runWithByokLease(
+      {
+        workspaceContextUserId: OTHER,
+        keyOwnerUserId: OPERATOR,
+        delegationId: "11111111-1111-1111-1111-111111111111",
+      },
+      (lease) => Promise.resolve(lease.getAgentCredential()),
+    );
+    expect(cred).toEqual({ value: REST_PLAINTEXT, scheme: "api_key" });
+  });
 });
 
 // #11086 — a stored subscription credential the bundled CLI is known to drop

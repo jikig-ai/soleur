@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // ---------------------------------------------------------------------------
@@ -299,5 +299,212 @@ describe("Settings page sections", () => {
     expect(headingTexts.indexOf("Project")).toBeLessThan(
       headingTexts.indexOf("API Key"),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #11524 — stored subscription token: status lines + removal control
+// ---------------------------------------------------------------------------
+
+const baseContentProps = {
+  userEmail: "test@example.com",
+  hasApiKey: false,
+  apiKeyProvider: null,
+  apiKeyLastValidated: null,
+  repoUrl: null,
+  repoStatus: "not_connected" as const,
+  repoLastSyncedAt: null,
+  needsReconnect: false,
+};
+
+describe("SettingsContent — stored subscription token (#11524)", () => {
+  it("shows no token lines and no Remove control when no oauth row exists", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(<SettingsContent {...baseContentProps} hasApiKey={true} apiKeyProvider="anthropic" />);
+    expect(screen.queryByText(/Subscription token:/)).toBeNull();
+    expect(screen.queryByText(/Conversations use:/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Remove subscription token" }),
+    ).toBeNull();
+  });
+
+  it("shows the saved date, the billing basis and the Remove control for any stored row, even when the toggle is not offered", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(
+      <SettingsContent
+        {...baseContentProps}
+        hasApiKey={true}
+        apiKeyProvider="anthropic"
+        hasOauthToken={true}
+        oauthInEffect={true}
+        oauthTokenSavedAt="2026-10-28T10:00:00Z"
+        canUseOauthCredential={false}
+      />,
+    );
+    expect(
+      screen.getByText(
+        `Subscription token: saved ${new Date("2026-10-28T10:00:00Z").toLocaleDateString()}`,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Conversations use: Claude subscription (API key also saved)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    ).toBeInTheDocument();
+  });
+
+  it("an inert stored token (not in effect) stays removable and makes no subscription claim", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(
+      <SettingsContent
+        {...baseContentProps}
+        hasApiKey={true}
+        apiKeyProvider="anthropic"
+        hasOauthToken={true}
+        oauthInEffect={false}
+        oauthTokenSavedAt={null}
+      />,
+    );
+    expect(screen.getByText("Conversations use: your Anthropic API key")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    ).toBeInTheDocument();
+  });
+
+  it("status line and confirm dialog derive from the same source (no API key, in effect)", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(
+      <SettingsContent
+        {...baseContentProps}
+        hasOauthToken={true}
+        oauthInEffect={true}
+        oauthTokenSavedAt="2026-10-28T10:00:00Z"
+      />,
+    );
+    expect(screen.getByText("Conversations use: Claude subscription")).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Add an API key first" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("KeyRotationForm — subscription token removal flow (#11524)", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  async function loadForm() {
+    const { KeyRotationForm } = await import(
+      "@/components/settings/key-rotation-form"
+    );
+    return KeyRotationForm;
+  }
+
+  it("variant B success: notice (role=status) names the next step and focus lands on #api-key-input", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
+    const KeyRotationForm = await loadForm();
+    const { rerender } = render(
+      <KeyRotationForm hasExistingKey={false} hasOauthToken oauthInEffect />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(
+      "Subscription token removed. Add an API key to keep using chat.",
+    );
+    expect(document.getElementById("api-key-input")).toHaveFocus();
+
+    // After router.refresh() flips the props the dialog unmounts; the notice stays.
+    rerender(
+      <KeyRotationForm hasExistingKey={false} hasOauthToken={false} oauthInEffect={false} />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Subscription token removed. Add an API key to keep using chat.",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Remove subscription token" }),
+    ).toBeNull();
+  });
+
+  it("variant A success: notice region takes focus (tabIndex -1)", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
+    const KeyRotationForm = await loadForm();
+    render(<KeyRotationForm hasExistingKey hasOauthToken oauthInEffect />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(
+      "Subscription token removed. New conversations will use your API key.",
+    );
+    expect(notice).toHaveAttribute("tabindex", "-1");
+    await waitFor(() => expect(notice).toHaveFocus());
+  });
+
+  it("variant C success: neutral notice", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: true }) });
+    const KeyRotationForm = await loadForm();
+    render(<KeyRotationForm hasExistingKey hasOauthToken oauthInEffect={false} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Remove token" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Subscription token removed.",
+    );
+  });
+
+  it("Add an API key first switches the credential radio to API key and focuses the input, keeping typed text", async () => {
+    const KeyRotationForm = await loadForm();
+    render(
+      <KeyRotationForm
+        hasExistingKey={false}
+        hasOauthToken
+        oauthInEffect
+        canUseOauthCredential
+      />,
+    );
+    await userEvent.click(screen.getByRole("radio", { name: "Subscription token" }));
+    const input = document.getElementById("api-key-input") as HTMLInputElement;
+    await userEvent.type(input, "draft-text");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove subscription token" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add an API key first" }),
+    );
+    expect(screen.getByRole("radio", { name: "API key" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(document.getElementById("api-key-input")).toHaveFocus();
+    expect((document.getElementById("api-key-input") as HTMLInputElement).value).toBe(
+      "draft-text",
+    );
+  });
+
+  it("renders no Remove control when no oauth row is stored", async () => {
+    const KeyRotationForm = await loadForm();
+    render(<KeyRotationForm hasExistingKey />);
+    expect(
+      screen.queryByRole("button", { name: "Remove subscription token" }),
+    ).toBeNull();
   });
 });
