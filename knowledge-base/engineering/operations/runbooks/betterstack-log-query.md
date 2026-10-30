@@ -76,7 +76,15 @@ Live standing alarms over this source:
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
   [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) "Key-continuity probe (#9927 item 2)".
-  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`).
+  Since #11527 the predicate is pinned to the probe's two real emitters (ADR-218 dual-channel convention):
+  leg A the journald row `SYSLOG_IDENTIFIER='inngest-cutover-flip'` with `token=fail_` on `message`; leg B the
+  phone-home envelope `shipper='cloud-init-phone-home'` + `stage='luks-key-probe'` with `token=fail_` on
+  `detail` (or an empty `detail`, the fail-loud schema-drop arm). The position-1 marker anchor is shared —
+  the phone-home message begins with the marker — so marker-quoting rows under a foreign emitter never count.
+  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`),
+  then per row check `.shipper`/`.stage` on the phone-home envelope and decode `.detail` for the field row —
+  an empty `.detail` under that identity is itself a counted failure (position('')=0 never satisfies the field
+  check, so the `detail=''` disjunct is what carries it), not a healthy skip.
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:

@@ -424,12 +424,43 @@ locals {
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
   # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows). When and why it
   # resolves is recorded once, in the AUTO-RESOLVE WINDOW comment above logtail_exploration_alert.inngest_luks_key_probe_fail.
+  # EMITTER PIN (#11527, ADR-218 dual-channel convention): the marker alone admitted ANY emitter, so the
+  # row set is pinned to the probe's two real emitters — leg A the journald tag
+  # SYSLOG_IDENTIFIER='inngest-cutover-flip' (readonly LOG_TAG= at inngest-cutover-flip.sh), leg B the
+  # phone-home envelope identity shipper='cloud-init-phone-home' + stage='luks-key-probe' (payload
+  # builder at cloud-init-inngest.yml; arg-3 marker override at inngest-cutover-flip.sh:953). The
+  # position-1 marker anchor is shared: the phone-home message begins with the marker, so it reads
+  # BOTH channels with no marker OR-leg. `token=fail_` is leg-scoped (message on leg A, detail on leg
+  # B — equivalent on every real leg-B row since its message is `marker + stage=luks-key-probe +
+  # detail`). The `{`-prefix exclusion of quoting webhook rows is incidental (#8846), not the
+  # mechanism — the emitter pin is.
+  # Residual edges, recorded not silently uncounted: (a) the jq-failure fallback payload carries
+  # stage but NO shipper, so it matches neither leg and is silently uncounted (sibling T1 dissent,
+  # accepted); (b) the detail='' disjunct counts an identity-pinned row whose detail is absent —
+  # the schema-drop/degraded-emit class — so a benign malformed empty-detail emit under that
+  # identity also pages (accepted trade, sibling T4); (c) self-attested `dt` is unmeasured (the
+  # emitter stamps its own row time); (d) `value` can reach 2 for one failure (journald + phone-home
+  # carry no per-run dedup) — harmless under higher_than 0.
+  # LIVE-PROBED <date pending — filled by the Phase-2 emitter enumeration before merge> 48h window
+  # over the hot remote() UNION s3Cluster archive:
+  #   <controls A–E numbers pending>
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
       AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
-      AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip'
+        AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'luks-key-probe'
+          AND (
+            JSONExtractString(raw, 'detail') = ''
+            OR position(JSONExtractString(raw, 'detail'), 'token=fail_') > 0
+          )
+        )
+      )
   SQL
 
   # The subsection is written by the same change (runbook section 5c, "Key-continuity probe (#9927 item 2)").
