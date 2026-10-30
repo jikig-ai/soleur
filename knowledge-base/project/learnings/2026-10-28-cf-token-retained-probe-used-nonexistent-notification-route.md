@@ -22,7 +22,7 @@ A 404 is only meaningful to a permission classifier after the route itself is es
 ## Session Errors
 
 1. The first default-token baseline exited 3 because the Notifications control used the nonexistent route. The API reference and a direct read-only call established the correct route; no token permissions were changed. — **Prevention:** verify every profile endpoint against the official API reference and pin the live route in tests before using the profile as a production mutation precondition.
-2. The active token ID returned by `/user/tokens/verify` did not appear in either dashboard token list inspected in the authenticated session. A different user token's summary showed only Zone Settings, so it was not treated as the target. No dashboard edit was made. — **Prevention:** correlate the target token with the exact profile credential before opening Edit; never widen a similarly named token based on its label alone.
+2. A credential could not be confidently matched to a dashboard record, so no dashboard edit was made. — **Prevention:** positively match the exact credential to its profile through an approved source before editing permissions; stop if the match is ambiguous.
 
 ## Tags
 

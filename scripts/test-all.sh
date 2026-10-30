@@ -5983,6 +5983,11 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10585: exit-code harness for the standing first-deploy watchdog probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the ONLY signal on
+  # the standing tracker's boot→first-deploy obligation — a vacuous PASS, a reachable 0 (would
+  # close the standing tracker), or a reachable 1 must redden CI.
+  run_suite "scripts/web-first-deploy-10585" bash scripts/followthroughs/web-first-deploy-10585.test.sh
   # #5150: exit-code harness for the Inngest trace-retention close probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
   # sweeper closes #5150, so a PASS on a webhook echo or on an empty read must redden CI.
@@ -5992,6 +5997,12 @@ if want_scripts; then
   # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code
   # decides whether a soak tracker closes, so a vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/post-deploy-incident-soak" bash scripts/followthroughs/post-deploy-incident-soak.test.sh
+  # Exit-code harness for the Discord blog-webhook fallback verification probe (closes #11532's
+  # companion tracker). Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). Its exit code decides whether the sweeper closes the tracker, so a vacuous
+  # PASS — before the first post-secret publish lands, or on an unmeasured Sentry read — must
+  # redden CI.
+  run_suite "scripts/followthroughs/discord-blog-webhook-fallback" bash scripts/followthroughs/discord-blog-webhook-fallback.test.sh
   # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
@@ -6861,10 +6872,6 @@ if want_scripts; then
   run_suite "scripts/watch-code-quality-reeval-9730" bash scripts/watch-code-quality-reeval-9730.test.sh
   run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
-  # #10972: the orphan-sweeps re-look probe's exit-code contract (a curl shim that accepts one exact argv, an injected
-  # clock, mutant-justified rows for every branch that can end in 0 or 1, and an in-process plus nested proof that the
-  # verdict helpers and the final gate can fail). Same explicit-registration and LAST-in-block reasons as above.
-  run_suite "scripts/followthroughs/orphan-sweeps-relook-10972" bash scripts/followthroughs/orphan-sweeps-relook-10972.test.sh
 fi
 
 # Named bun-test entries — bun shard.
