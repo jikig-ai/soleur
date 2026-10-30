@@ -1,5 +1,22 @@
 # Session State
 
+## Review Phase
+
+- Status: complete (2026-10-30). Reviewed PR #11598 inline — Devin CLI has no Task/Agent tool, so all seats ran SEQUENTIALLY INLINE against `git diff origin/main...HEAD`; trailer carries `Reviewed-Coverage: sequential-fallback` (13/13).
+- Classification: `code` class (diff contains `plugins/soleur/test/npm-publish-oidc.test.sh`). Risk tier: `aggregate pattern` (source: plan) → mandatory design-validity pass (code-simplicity + architecture; no findings — every mechanism names a requirement) + user-impact seat (exited per its own `single-user incident` threshold contract) + structural-enumeration seat (guard-shaped diff) + test-design-reviewer + shellcheck (bash-only → semgrep skipped per skill).
+- Pre-panel: branch was CONFLICTING vs main on generated `model.likec4.json`; resolved via `resolve-regenerable-conflicts.sh origin/main` → merge commit 13af23bffb (regenerated artifact retains `npmRegistry`; merge-tree rc=0). Collision precheck: PR #11598 is this pipeline's own; sibling test-all.sh runs unrelated.
+- Findings: 4 total — 3 P2 / 1 P3, all `pr-introduced` (the guard is new in this PR), all fixed inline in `644a04e39b`:
+  - [P2] `no-cred-wiring` narrower than its property: missed `jobs.publish.env`, top-level `env:`, run-body credential channels, and `packages/opencode-plugin/.npmrc`.
+  - [P2] OIDC binding shape unpinned: `environment:` on the job and `self-hosted` `runs-on` each silently break trusted publishing.
+  - [P2] `npm11-step`/`npm-publish-retained` pinned presence, not position/shape (install-after-publish reorder, bare `npm publish` both stayed green).
+  - [P3] code-quality nits (`lambda` assignment → `def`).
+- Fix: guard widened to 6 members + 13-row mutation matrix (20/20 green, shellcheck clean); assertion floor bumped 11 → 20.
+- Files changed by fixes: `plugins/soleur/test/npm-publish-oidc.test.sh` (+128/−16).
+- Trailers: `Reviewed-By-Soleur` on d665dcad84 (sequential-fallback 13/13, risk-tier aggregate pattern); `Reviewed-Fix-Round`/`Reviewed-Fix-Range` on 41f5075a71 over `13af23bffb..HEAD` (fix-round seats: structural-enumeration, test-design-reviewer, code-quality-analyst, shellcheck — all clean).
+- Open code-review issues for PR #11598: none (`gh issue list --label code-review --search "PR #11598"` → empty; nothing was filed — all dispositions were fix-inline).
+- Verdict: green — no blocking findings; branch pushed.
+- Remaining: compound → ship → merge. Operator steps T1a/4.x (npm trust entry, first green publish, NPM_TOKEN retirement) remain post-merge per the plan.
+
 ## Plan Phase
 - Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11585-npm-publish-e404/knowledge-base/project/plans/2026-10-30-fix-npm-publish-e404-plan.md
 - Status: complete
