@@ -154,7 +154,7 @@ model {
         }
         binding = component "Run Binding and Ledger" {
           technology "Supabase RPC + event ledger"
-          description "Binds each conversation or routine run to one engine and records lifecycle events"
+          description "Binds each conversation or routine run to one engine, records lifecycle events, and supplies the auth mode that selects the Agent-SDK credential at lease time"
         }
         adapter = component "Claude Code Adapter" {
           technology "Neutral lifecycle adapter"

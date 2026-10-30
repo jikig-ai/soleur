@@ -1269,7 +1269,7 @@
 },
 "technology": "Supabase RPC + event ledger",
 "description": {
-"txt": "Binds each conversation or routine run to one engine and records lifecycle events"
+"txt": "Binds each conversation or routine run to one engine, records lifecycle events, and supplies the auth mode that selects the Agent-SDK credential at lease time"
 },
 "title": "Run Binding and Ledger",
 "kind": "component",
@@ -28892,7 +28892,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Binds each conversation or routine run to one engine and records lifecycle events"
+"txt": "Binds each conversation or routine run to one engine, records lifecycle events, and supplies the auth mode that selects the Agent-SDK credential at lease time"
 },
 "tags": [],
 "notation": "Component",
@@ -28905,9 +28905,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 307,
-"height": 85
+"height": 121
 }
 },
 {
@@ -53409,7 +53409,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Binds each conversation or routine run to one engine and records lifecycle events"
+"txt": "Binds each conversation or routine run to one engine, records lifecycle events, and supplies the auth mode that selects the Agent-SDK credential at lease time"
 },
 "tags": [],
 "notation": "Component",
@@ -53422,9 +53422,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 307,
-"height": 85
+"height": 121
 }
 },
 {
@@ -67532,7 +67532,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Binds each conversation or routine run to one engine and records lifecycle events"
+"txt": "Binds each conversation or routine run to one engine, records lifecycle events, and supplies the auth mode that selects the Agent-SDK credential at lease time"
 },
 "tags": [],
 "notation": "Component",
@@ -67544,9 +67544,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 307,
-"height": 85
+"height": 121
 }
 },
 {
@@ -67747,7 +67747,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Binds each conversation or routine run to one engine and records lifecycle events"
+"txt": "Binds each conversation or routine run to one engine, records lifecycle events, and supplies the auth mode that selects the Agent-SDK credential at lease time"
 },
 "tags": [],
 "notation": "Component",
@@ -67760,9 +67760,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 307,
-"height": 85
+"height": 121
 }
 },
 {

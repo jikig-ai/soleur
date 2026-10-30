@@ -218,7 +218,9 @@ export async function githubOnEventHandler({
         tokenCount: 0,
         unitCostCents: 0,
       };
-    });
+    },
+    { restOnly: true },
+  );
   });
 
   // I2: getFreshTenantClient + per-step JWT freshness + INSERT-time redaction

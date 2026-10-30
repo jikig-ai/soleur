@@ -218,7 +218,9 @@ export async function cfoHandler({
       } finally {
         clearTimeout(timer);
       }
-    });
+    },
+    { restOnly: true },
+  );
   });
 
   // Shared insertDraftCard helper: tenant-client write + solo-pinned
