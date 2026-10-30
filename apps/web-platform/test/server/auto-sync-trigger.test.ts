@@ -425,6 +425,18 @@ describe("triggerHeadlessSync — engine and retry rules from the auth-mode leas
     },
   );
 
+  test("the deterministic rule keys on the ByokLeaseError name: a look-alike error carrying reason=unbound is still retried", async () => {
+    const lookAlike = Object.assign(new Error("Authentication unavailable; retry shortly"), { reason: "unbound" });
+    const startAgentSession = vi.fn().mockRejectedValueOnce(lookAlike).mockResolvedValueOnce(undefined);
+    const { seams } = baseSeams(startAgentSession);
+
+    const p = triggerHeadlessSync(USER_ID, REPO_URL, seams);
+    await vi.runAllTimersAsync();
+    await expect(p).resolves.toBe("started");
+
+    expect(startAgentSession).toHaveBeenCalledTimes(2);
+  });
+
   test.each(["read_failed", "resolver_failed"])(
     "a transient unresolved-mode reason (%s) is still retried with backoff",
     async (reason) => {

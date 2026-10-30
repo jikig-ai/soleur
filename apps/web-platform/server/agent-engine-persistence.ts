@@ -110,7 +110,10 @@ export class AgentEnginePersistenceRepository {
       p_routine_run_id: input.routineRunId ?? null,
       p_created_by: input.createdBy,
     });
-    if (result.error) throw new Error(`engine run bind failed: ${result.error.message}`);
+    if (result.error) {
+      const code = (result.error as { code?: string }).code;
+      throw Object.assign(new Error(`engine run bind failed: ${result.error.message}`), code ? { code } : {});
+    }
     return result.data;
   }
 

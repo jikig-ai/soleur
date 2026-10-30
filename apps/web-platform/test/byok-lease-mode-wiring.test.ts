@@ -8,11 +8,13 @@ import { join } from "node:path";
 // credential, never from the mode (AC9). Counted with a global match (no pipe into `grep -q`).
 
 const root = join(__dirname, "..", "server");
-// Whole-line `//` comments are dropped so prose that quotes a pinned token cannot satisfy (or inflate) a pin.
+// Block comments, whole-line and trailing `//` comments are dropped so prose that quotes a pinned token
+// (JSDoc, an end-of-line note) cannot satisfy or inflate a pin.
 const src = (f: string) =>
   readFileSync(join(root, f), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
+    .map((l) => l.replace(/(^|\s)\/\/.*$/, ""))
     .join("\n");
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 
@@ -28,19 +30,20 @@ describe("Agent-SDK call sites hand the lease a binding-backed mode resolver", (
   });
 
   it("every resolveKeyOwnerThenLease call site passes a LeaseModeOpts (resolver or restOnly)", () => {
-    const sites: Array<[string, number]> = [
-      ["agent-runner.ts", 2],
-      ["cc-dispatcher.ts", 1],
-      ["inngest/functions/cfo-on-payment-failed.ts", 1],
-      ["inngest/functions/github-on-event.ts", 1],
+    // [file, resolveKeyOwnerThenLease( calls, resolver args, restOnly args] — pinned per file so moving an
+    // option between sites cannot keep the sum green.
+    const sites: Array<[string, number, number, number]> = [
+      ["agent-runner.ts", 2, 1, 1],
+      ["cc-dispatcher.ts", 1, 1, 0],
+      ["inngest/functions/cfo-on-payment-failed.ts", 1, 0, 1],
+      ["inngest/functions/github-on-event.ts", 1, 0, 1],
     ];
-    let optsFound = 0;
-    for (const [file, calls] of sites) {
+    for (const [file, calls, resolvers, restOnly] of sites) {
       const text = src(file);
       expect(count(text, "resolveKeyOwnerThenLease(")).toBe(calls);
-      optsFound += count(text, "resolveAuthMode: makeConversationAuthModeResolver(") + count(text, "{ restOnly: true }");
+      expect(count(text, "resolveAuthMode: makeConversationAuthModeResolver(")).toBe(resolvers);
+      expect(count(text, "{ restOnly: true }")).toBe(restOnly);
     }
-    expect(optsFound).toBe(5);
   });
 
   it("byok-resolver has a single runWithByokLease chokepoint for all five lease branches", () => {

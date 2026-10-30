@@ -31,7 +31,15 @@ function makeTenant(
   // rpc, or the (non-fatal) bind throws a TypeError that is swallowed and the bind tests pass vacuously.
   // The RPC returns the bound run row (RETURNING *); assertLegacyEngineBinding reads its engine_id.
   const rpc = vi.fn().mockResolvedValue({ data: rpcError ? null : { engine_id: boundEngine }, error: rpcError });
-  const maybeSingle = vi.fn().mockResolvedValue({ data: existingRow, error: null });
+  // First maybeSingle = the conversations SELECT; any later one = the sticky-bound engine re-check's run read.
+  const maybeSingle = vi
+    .fn()
+    .mockResolvedValueOnce({ data: existingRow, error: null })
+    .mockResolvedValue({
+      data: { id: "run-1", execution_kind: "conversation", conversation_id: existingRow?.id, workspace_id: "ws-9",
+        engine_id: boundEngine, auth_mode: "managed", adapter_version: "1", created_at: "2026-10-30T00:00:00Z" },
+      error: null,
+    });
   const chain: Record<string, unknown> = {};
   const self = () => chain;
   Object.assign(chain, {
@@ -136,6 +144,18 @@ describe("resolveOrCreateSupportConversation — engine binding before dispatch 
     expect(rpc.mock.calls[0][1]).toMatchObject({ p_workspace_id: "ws-9", p_conversation_id: "conv-old", p_created_by: "user-1" });
   });
 
+  it("a sticky bound row is re-checked for its engine on every message (a non-Claude bind must not run on Claude)", async () => {
+    const row = { id: "conv-old", engine_binding_state: "bound", workspace_id: "ws-9" };
+    const ok = makeTenant(row);
+    mockGetFreshTenantClient.mockResolvedValue(ok.chain);
+    await expect(resolveOrCreateSupportConversation("user-1")).resolves.toBe("conv-old");
+
+    const codex = makeTenant(row, null, "codex");
+    mockGetFreshTenantClient.mockResolvedValue(codex.chain);
+    await expect(resolveOrCreateSupportConversation("user-1")).rejects.toMatchObject({ code: "engine_dispatch_required" });
+    expect(codex.rpc).not.toHaveBeenCalled();
+  });
+
   it("never re-binds a sticky bound row, and never binds one whose workspace is unknown", async () => {
     for (const row of [
       { id: "conv-old", engine_binding_state: "bound", workspace_id: "ws-9" },
@@ -177,6 +197,17 @@ describe("resolveOrCreateSupportConversation — engine binding before dispatch 
 
     expect(rpc).toHaveBeenCalledOnce();
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("a failed bind on a sticky legacy row refuses (it would otherwise serve the subscription); pending stays soft", async () => {
+    const legacy = makeTenant({ id: "conv-old", engine_binding_state: "legacy", workspace_id: "ws-9" }, { message: "bind denied" });
+    mockGetFreshTenantClient.mockResolvedValue(legacy.chain);
+    await expect(resolveOrCreateSupportConversation("user-1")).rejects.toThrow("bind denied");
+    expect(mockReportSilentFallback).toHaveBeenCalledOnce();
+
+    const pending = makeTenant({ id: "conv-old", engine_binding_state: "pending", workspace_id: "ws-9" }, { message: "bind denied" });
+    mockGetFreshTenantClient.mockResolvedValue(pending.chain);
+    await expect(resolveOrCreateSupportConversation("user-1")).resolves.toBe("conv-old");
   });
 
   it("a bind that lands on a non-Claude engine stops the dispatch (assertLegacyEngineBinding, as ws-handler does)", async () => {

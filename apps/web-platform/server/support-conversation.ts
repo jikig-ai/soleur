@@ -14,7 +14,7 @@ import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { reportSilentFallback } from "@/server/observability";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
-import { assertLegacyEngineBinding } from "@/server/agent-engine-route-guard";
+import { assertLegacyConversationEngineBinding, assertLegacyEngineBinding } from "@/server/agent-engine-route-guard";
 
 /**
  * Bind the conversation's engine run before dispatch (#11591): the credential lease reads the binding's
@@ -31,6 +31,7 @@ async function bindSupportConversation(
   userId: string,
   conversationId: string,
   workspaceId: string,
+  failClosed = false,
 ): Promise<void> {
   let binding: unknown;
   try {
@@ -41,8 +42,12 @@ async function bindSupportConversation(
       createdBy: userId,
     });
   } catch (err) {
-    if (err instanceof Error && err.message.includes("duplicate key")) return;
+    const code = (err as { code?: unknown } | null)?.code;
+    if (code === "23505" || (err instanceof Error && err.message.includes("duplicate key"))) return;
     reportSilentFallback(err, { feature: "support", op: "bind", extra: { conversationId } });
+    // A `legacy` row with no run resolves to `managed` (the subscription), so a failed bind would serve it
+    // despite an owner's "My API key" choice: refuse instead. `pending` and new rows fail closed in the lease.
+    if (failClosed) throw err;
     return;
   }
   assertLegacyEngineBinding(binding);
@@ -93,7 +98,20 @@ export async function resolveOrCreateSupportConversation(
       // No extra read per message: the state came with the select above.
       const state = existing.data.engine_binding_state;
       if ((state === "pending" || state === "legacy") && typeof existing.data.workspace_id === "string") {
-        await bindSupportConversation(tenant, userId, existing.data.id as string, existing.data.workspace_id);
+        await bindSupportConversation(
+          tenant,
+          userId,
+          existing.data.id as string,
+          existing.data.workspace_id,
+          state === "legacy",
+        );
+      } else if (state === "bound") {
+        // The bind-time assert fires only on the request that binds; a later message must re-check the
+        // persisted engine too (ws-handler does on every resume) or a non-Claude bind runs on Claude.
+        await assertLegacyConversationEngineBinding(
+          new AgentEnginePersistenceRepository(tenant as PersistenceClient),
+          existing.data.id as string,
+        );
       }
       return existing.data.id as string;
     }

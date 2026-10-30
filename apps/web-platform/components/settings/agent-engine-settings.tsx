@@ -143,8 +143,8 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 data-testid="auth-mode-helper"
                 className="mt-2 text-xs text-soleur-text-secondary"
               >
-                Applies to new conversations. Existing conversations, including your ongoing support thread,
-                keep the mode they started with. Automatic uses the credential saved to your account;
+                Applies to new conversations. Existing conversations keep the mode they started with.
+                Automatic uses the credential saved to your account;
                 My API key uses your saved API key.
               </p>
             )}

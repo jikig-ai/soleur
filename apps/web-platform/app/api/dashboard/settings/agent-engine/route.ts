@@ -82,7 +82,7 @@ export async function PUT(request: Request) {
     }
     if (effectiveAuthMode === undefined) await repository.setDefaultEngine(resolved.workspaceId, definition.id);
     else await repository.setDefaultEngine(resolved.workspaceId, definition.id, effectiveAuthMode);
-    return NextResponse.json({ defaultEngineId: definition.id, ...(authMode ? { defaultAuthMode: authMode } : {}) });
+    return NextResponse.json({ defaultEngineId: definition.id, ...(effectiveAuthMode ? { defaultAuthMode: effectiveAuthMode } : {}) });
   } catch (error) {
     if (error instanceof Error && error.message === "engine_unknown") {
       return NextResponse.json({ error: "engine_unknown" }, { status: 400 });
