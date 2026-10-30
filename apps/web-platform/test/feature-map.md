@@ -87,6 +87,15 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - auth: bot
 - gotchas: needs a seeded inbound email — with no fixture the only reachable state is the 404, not the detail surface
 
+## `/dashboard/approvals/[id]`
+
+- route: `/dashboard/approvals/[id]`
+- entry: deep link from an approval push or email, or the inbox row of an `approval_required` item
+- selectors: `data-testid="approval-request-card"` (the card), `data-testid="approval-badge"`, `data-testid="approval-expiry"`, `data-testid="approval-bound-block"` (the exact bound action)
+- expects: an Owner of the request's workspace sees the stored action and the Approve/Deny (or Revoke) controls; a signed-out visitor is redirected to `/login?redirectTo=...`; a non-Owner, an unknown id and a malformed id all end in the same 404
+- auth: bot
+- gotchas: needs a seeded `approval_request` row, which exists only while the `approval-queue` flag has been on for the workspace (the page itself renders regardless of the flag); with no fixture the only reachable state is the 404
+
 ## `/dashboard/kb`
 
 - route: `/dashboard/kb`

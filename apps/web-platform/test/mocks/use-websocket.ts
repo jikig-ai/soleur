@@ -30,6 +30,7 @@ export function createWebSocketMock(
     resumeSession: vi.fn(),
     sendMessage: vi.fn(),
     sendReviewGateResponse: vi.fn(),
+    sendApprovalDecide: vi.fn(() => true),
     sendAutonomousDisclosureResponse: vi.fn(),
     sendInteractivePromptResponse: vi.fn(),
     resolveInteractivePrompt: vi.fn(),
