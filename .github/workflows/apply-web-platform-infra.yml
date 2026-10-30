@@ -5099,6 +5099,7 @@ jobs:
             echo "Purely additive +create of the host's birth fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
             echo "**This host has NO active heartbeat coverage yet.** Its Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**First-deploy verification:** the standing \`follow-through\` tracker (probe \`web-first-deploy-10585.sh\`, \`gh issue list -l follow-through\`) grades this host's first deploy within 2d of boot — a never-landing deploy surfaces there as ACTION REQUIRED."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6969 (ADR-148): the web-host REPLACE path -------------------------------
@@ -5106,17 +5107,13 @@ jobs:
   web_host_replace:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-host-replace'
     runs-on: ubuntu-24.04
-    # The sole HUMAN authorization on this path. Same environment as web_host_create —
-    # REUSED, never re-declared: it is defined in infra/web-host-birth-environment.tf so its
-    # reviewer set is covered by the DP-11 F8 non-empty-reviewers guard, and an untracked
-    # environment emptied in the UI auto-approves. A second environment for this job would
-    # be a second thing to keep non-empty.
+    # Sole HUMAN authorization on this path — the SAME environment as web_host_create,
+    # REUSED never re-declared (infra/web-host-birth-environment.tf; DP-11 F8 covers its
+    # reviewer set; an emptied untracked environment auto-approves).
     environment: web-platform-infra-apply
-    # Shared cross-pipeline web-1-swap mutex, byte-identical to web_host_create's: this
-    # job's -target set includes hcloud_firewall_attachment.web, a singleton the release
-    # deploy and the pipeline-fix apply also touch. DO NOT RENAME — GitHub does not error on
-    # divergent group strings, they simply fail to serialize. COEXISTS with (does not
-    # replace) the workflow-level R2 serializer that protects the lockless backend.
+    # Shared web-1-swap mutex, byte-identical to web_host_create's — DO NOT RENAME
+    # (divergent strings do not error, they fail to serialize); coexists with the
+    # workflow-level R2 serializer.
     concurrency:
       group: web-1-swap
       cancel-in-progress: false
@@ -5125,9 +5122,7 @@ jobs:
       # GHCR is a PRIVATE package; the digest resolve below authenticates with
       # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
       packages: read
-    # Budget mirrors web_host_create (digest resolve ~1m + preflight ~3m + plan ~2m + apply
-    # ~5m) plus the boot-trail poll's ~16m ceiling, which a replace needs just as much as a
-    # birth: the host is new either way.
+    # Budget = web_host_create's + the ~16m boot-trail poll ceiling; host is new either way.
     timeout-minutes: 40
     env:
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
@@ -5515,6 +5510,7 @@ jobs:
             echo "Scoped \`-replace\` of the host plus its private NIC, its workspaces volume attachment and the fleet firewall re-attachment, on a digest-pinned image. The workspaces volume, the LUKS volume and the LUKS passphrase were all kept OUT of the \`-target\` set. The workspaces volume is still in the plan graph as a no-op (\`-target\` prunes dependents, not dependencies) and is held by \`prevent_destroy\` plus two gate arms; the LUKS volume and passphrase are outside the graph entirely. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
             echo "**This host's heartbeat coverage is unchanged by this dispatch.** Its Better Stack heartbeats already exist and are not in this job's \`-target\` set; if they are still \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured), the arming step lives in the \`apply\` job. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**First-deploy verification:** the standing \`follow-through\` tracker (probe \`web-first-deploy-10585.sh\`, \`gh issue list -l follow-through\`) grades this host's first deploy within 2d of boot — a never-landing deploy surfaces there as ACTION REQUIRED."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------

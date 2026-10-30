@@ -60,6 +60,14 @@ Live standing alarms over this source:
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
+  Since #11526 the predicate is dual-channel: while Vector is down the probe POSTs the identical
+  field row curl-direct to this same source under `.shipper == "cloud-init-phone-home"` +
+  `.stage == "inngest-server-probe-vector-down"` with the fields in `.detail` (the
+  `inngest-tls-soak-10136.sh` envelope contract), and a second OR leg admits those rows — so a
+  Vector outage no longer blinds the alert. Readback for fallback rows selects on the decoded
+  envelope's `.shipper`/`.stage` equality, never a `message` substring. A page whose fallback row
+  carries an EMPTY `.detail` is the fail-loud schema-drop arm — decode it as a degraded emitter
+  (or, on the web host which has no LUKS volume, a degraded emit) rather than a mount regression.
 - **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
   900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push; `push = true` in the `.tf` is the source of truth and the apply read-back is the live proof). History, dated: it first shipped as "push once the apply accepts it", with a revert to `push = false` if refused; the apply accepted it (push run 40744937376 planned and created the alert with `push = true`; push run 40782617701 refreshed it and reported "No changes"). Pages on a `token=fail_*` row of
   `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2

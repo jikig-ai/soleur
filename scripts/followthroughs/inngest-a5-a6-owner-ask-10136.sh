@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # inngest-a5-a6-owner-ask-10136.sh -- NOTIFY-ONLY follow-through probe: asks the owner, in plain words, for the
 # next open owner-human act of the Inngest TLS arc (#10136): A5 (the scheduler signing-key rotation) and then
-# A6 (the "no known access" record).
+# A6 (the "no known access" record). The A5 ask names the exact dispatch lines of the rotation route
+# (.github/workflows/inngest-key-rotate.yml, ADR-307, #10540): the read-only plan rehearsal, the rotate line, and the converge line
+# that finishes a failed run. Only the owner dispatches rotate and converge, each under a fresh in-session go naming the exact line;
+# the route prints the S5-A5-DONE line and never posts it, and the owner posts it themselves on the epic (an agent-posted line,
+# or one posted by the workflow, does not satisfy the record).
 #
 # EXIT CONTRACT. 0 and 1 are NEVER taken: this probe never closes its tracker and never performs an act (A5 and A6
 # are owner-human: no agent runs them and no delegation covers them, runbook inngest-server.md, "Production Envelope
@@ -23,7 +27,7 @@
 #   4. soak tracker (#11215) open                    -> 2  waiting on the 48-hour check
 #   5. soak tracker closed, not COMPLETED            -> 3  cannot establish
 #   6. route (#10540) not closed COMPLETED           -> 2  A5 is blocked on the route
-#   7. otherwise                                     -> 5  ask for A5 (names #10543: fixed, or a quiet window)
+#   7. otherwise                                     -> 5  ask for A5 (names the dispatch lines and #10543: fixed, or a quiet window)
 #
 # THE ANCHORS live on the epic (#10136), not on this probe's tracker: the tracker's number does not exist when this
 # file is written (the soak probe's header names the same trap). They are read through scripts/lib/trusted-verdict.sh,
@@ -73,6 +77,13 @@ DEADMAN=2026-11-09
 BRIDGE=2026-11-12
 LAPSE=2026-12-10
 REPO="jikig-ai/soleur"
+# The exact dispatch lines of the rotation route (runbook inngest-server.md, "Key rotation"). The date in a confirm is the UTC date
+# of the dispatch, so it is shown as a pattern. These are authored constants: nothing here is read from GitHub.
+PLAN_LINE="gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=signing -f reason='A5 rehearsal'"
+ROTATE_LINE="gh workflow run inngest-key-rotate.yml -f mode=rotate -f keys=signing -f confirm=ROTATE-INNGEST-SIGNING-YYYY-MM-DD -f quiet_window=true -f reason='A5 (#10136)'"
+CONVERGE_LINE="gh workflow run inngest-key-rotate.yml -f mode=converge -f keys=signing -f confirm=CONVERGE-INNGEST-SIGNING-YYYY-MM-DD -f quiet_window=true -f reason='converge after a failed A5 run'"
+# Where the verdict of a run is read (the verdict lines are in the job log). The script prints the same recipe with the real run id.
+VERDICT_LINE="gh run view <run id> --log | grep 'inngest-key-rotate verdict='"
 
 say() { printf '%s\n' "$*"; }
 
@@ -177,7 +188,7 @@ main() {
         say "The legal bridge ends $BRIDGE (it can be extended once, to $LAPSE)."
       fi
       say "Ways out: finish what is missing above, then give your go for A5 in a session."
-      say "Or, once the 48-hour check has passed, run the manual key rotation procedure from the runbook with your go instead of waiting for #$ROUTE."
+      say "Or, once the 48-hour check has passed, the rotation route may already be usable before #$ROUTE closes: its read-only rehearsal can be run any time ($PLAN_LINE), and the rotation itself needs your go."
       [ -z "$bad_note" ] || say "$bad_note"
       return 5
     fi
@@ -221,7 +232,7 @@ main() {
 
   # 7. ask for A5
   issue_state "$REPLAY" || { say "CANNOT ESTABLISH: could not read the dashboard-send defect tracker (#$REPLAY)"; return 3; }
-  say "ACTION REQUIRED: A5 is ready. It replaces the scheduler's signing key on both the Inngest host and the web app, then restarts the server and redeploys web."
+  say "ACTION REQUIRED: A5 is ready. It replaces the scheduler's signing key on both the Inngest host and the web app, restarts the Inngest host with a reboot, and then redeploys web."
   if completed; then
     say "The dashboard-send defect (#$REPLAY) is fixed."
   else
@@ -231,7 +242,17 @@ main() {
     say "The legal bridge date is $BRIDGE (it can be extended once, to $LAPSE), so this is time-sensitive."
   fi
   [ -z "$bad_note" ] || say "$bad_note"
-  say "Give your go for A5 in a session, naming the rotation. When it is done, post this line on #$EPIC, with the real UTC time: S5-A5-DONE: $fmt"
+  say "The rotation is one dispatch of the rotation workflow, and only you dispatch it. It needs your go in a session that names the exact line. A go on another issue does not count, and no agent runs it."
+  say "Rehearsal (read-only, any session may run it; its verdict is plan_ok only when every check the rotation needs, except your confirm and attestation, passes, otherwise plan_blocked naming the first failing check): $PLAN_LINE"
+  say "Rotation (your go must name this line; the date is the UTC date of the dispatch; keys=signing is the A5 set, keys=both is a superset that also rotates the event key in the same window): $ROTATE_LINE"
+  say "If a job after the first apply fails, do not retry the rotation. Finish it with this line, which needs its own go from you (the confirm date is the UTC date of that dispatch): $CONVERGE_LINE"
+  say "If the first apply itself fails, converge refuses; dispatch the rotation again under a fresh go instead, and until then an unrelated restart of the Inngest host would load the new key while web holds the old."
+  say "Your go should also say, in plain words: the Inngest host is down for a few minutes during the reboot (budget 10 to 15 minutes), and one scheduled cron tick inside that gap may be skipped and not replayed; the new key is live on the host before web catches up."
+  say "It should also say: until the web redeploy finishes (up to 80 minutes) an approved Concierge action or a Stripe payment_failed send can be rejected with a 401 and be lost or retried late, and a release deploying then fails its canary."
+  say "It should also say: the production Inngest host has never been rebooted with its LUKS volume and live scheduler, so the LUKS reopen is unverified; the rotation is key hygiene only and does not add TLS or close A6; the rollback is the link flip off with its extra confirmation, and a re-rotation follows."
+  say "And: approve only if still quiet. quiet_window=true is your statement at the moment you approve; the route re-reads the link flag, runs in flight and the host just before the reboot, but it cannot see a cron, an approved action or a payment in flight."
+  say "To read the verdict of any run: $VERDICT_LINE"
+  say "When the rotation run is green it prints a line S5-A5-DONE: followed by the real UTC time. Post that line yourself as a comment on #$EPIC, with the run's evidence block. The workflow never posts it, and a line posted by an agent or by the workflow does not count. The line looks like this: S5-A5-DONE: $fmt"
   return 5
 }
 
