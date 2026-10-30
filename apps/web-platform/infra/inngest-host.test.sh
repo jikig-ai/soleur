@@ -1078,6 +1078,41 @@ else
 fi
 rm -rf "$TLS_T"
 
+# 10. (#10540) The key-rotation route re-propagates BOTH copies from the dedicated random_id, so the
+#     dedicated pair must stay rotatable by a plain `-replace` of the random_id: no lifecycle block on the
+#     dedicated random_ids or doppler_secrets (an `ignore_changes=[value]` here would swallow the in-place
+#     update phase 1 relies on), and the app (soleur/prd) copies in inngest.tf must derive from them.
+_tf_block() { # FILE TYPE NAME -> resource block with comment lines removed
+  awk -v t="$2" -v n="$3" '
+    $0 ~ "^resource \"" t "\" \"" n "\" \\{" { inb=1 }
+    inb && /^[[:space:]]*#/ { next }
+    inb { print }
+    inb && /^}/ { exit }
+  ' "$1"
+}
+for _n in inngest_signing_key_dedicated inngest_event_key_dedicated; do
+  _b="$(_tf_block "$HOST_TF" doppler_secret "$_n")"
+  if [ -n "$_b" ] && ! grep -q 'lifecycle' <<<"$_b"; then pass; else fail "doppler_secret.${_n} must exist and carry NO lifecycle block (#10540: phase 1 updates it in place)"; fi
+  _b="$(_tf_block "$HOST_TF" random_id "$_n")"
+  if [ -n "$_b" ] && ! grep -q 'lifecycle' <<<"$_b"; then pass; else fail "random_id.${_n} must exist and carry NO lifecycle block (#10540: -replace must regenerate it)"; fi
+done
+_app_sign="$(_tf_block "$INNGEST_TF" doppler_secret inngest_signing_key_prd)"
+_app_evt="$(_tf_block "$INNGEST_TF" doppler_secret inngest_event_key_prd)"
+if grep -q 'value[[:space:]]*=.*random_id\.inngest_signing_key_dedicated\.hex' <<<"$_app_sign" \
+   && grep -q 'value[[:space:]]*=[[:space:]]*random_id\.inngest_event_key_dedicated\.hex' <<<"$_app_evt"; then
+  pass
+else
+  fail "app soleur/prd INNGEST_SIGNING_KEY/INNGEST_EVENT_KEY must derive from the dedicated random_id hex (#10540)"
+fi
+if grep -q 'ignore_changes[[:space:]]*=[[:space:]]*\[value\]' <<<"$_app_sign" \
+   && grep -q 'ignore_changes[[:space:]]*=[[:space:]]*\[value\]' <<<"$_app_evt"; then
+  pass
+else
+  fail "app key copies must keep ignore_changes=[value] so a per-merge plan shows no diff (#10540)"
+fi
+# Harness row: the extractor discriminates (an absent resource yields an empty block, which the loop above FAILS).
+if [ -z "$(_tf_block "$HOST_TF" doppler_secret inngest_no_such_secret)" ]; then pass; else fail "block extractor returned text for a resource that does not exist"; fi
+
 # ANTI-VACUITY FLOOR. Reported by printf + exit, never through fail()/pass(), so neutering those
 # cannot disarm it. The bound is the exact passing count; raise it with every added assertion.
 # 99 -> 100 (#9786): measured 101 before the D1 rewrite (the old floor carried 2 of slack). The rewrite drops the
@@ -1091,7 +1126,9 @@ rm -rf "$TLS_T"
 # 183 -> 184 (#10390 defect 3, floor 5->6): the dark-boot replay splits into a DARK6 PASS row and a
 # 5-name FATAL row (+1 net new) and the DOPPLER_* strip row rides DARK6 (+0) — 203 passing measured
 # locally with the conditional nft row.
-INNGEST_HOST_MIN_ASSERTIONS=184
+# 184 -> 191 (#10540, +7): the dedicated pair carries no lifecycle (4 rows), the app copies derive from the dedicated hex (1)
+# and keep ignore_changes (1), plus the extractor harness row (1). The pre-existing slack is unchanged.
+INNGEST_HOST_MIN_ASSERTIONS=191
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1

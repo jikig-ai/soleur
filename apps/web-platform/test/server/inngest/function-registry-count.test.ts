@@ -11,6 +11,7 @@ vi.hoisted(() => {
 });
 
 import { EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
+import { PRUNED_MONITOR_SLUGS } from "./pruned-monitor-slugs";
 
 const ROUTE_PATH = resolve(
   __dirname,
@@ -84,12 +85,20 @@ function functionFilesWithCheckpointingKey(): string[] {
     });
 }
 
+// #6590 PR-B note: ~12 entries here now belong to the destroyed-monitor class
+// — they also sit in PRUNED_MONITOR_SLUGS (emitter void-posts by design, spec
+// NG4), while this set's remaining entries are the never-monitored class
+// (findings alert elsewhere). Keep the dual members in BOTH: guard (d) requires
+// every entry to name a live producer (they have one), and the stale-set
+// assertions police the PRUNED side — removing either would silently un-pin
+// one of those invariants.
 const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-campaign-calendar",
   "scheduled-cloud-task-heartbeat",
   // scheduled-content-generator REMOVED from exemption (#4684): it is a real
-  // output producer (creates a scheduled-content-generator issue every run) and
-  // now has a sentry_cron_monitor in cron-monitors.tf. Its prior exemption is
+  // output producer (creates a scheduled-content-generator issue every run).
+  // Its monitor was destroyed by the #6590 PR-B prune — the slug now sits in
+  // PRUNED_MONITOR_SLUGS (void-post by design, spec NG4). Its prior exemption is
   // exactly why its post-migration silence went unalerted at the per-function
   // layer — the monitor it checked into did not exist.
   "scheduled-content-publisher",
@@ -141,24 +150,12 @@ const NON_INNGEST_MONITORS = new Set([
   // through, so an Inngest-scheduled mirror goes dark exactly when the incidents it mirrors are
   // firing (ADR-033 anti-circularity). The terminal sentry-heartbeat step posts the check-in.
   "scheduled-betterstack-incident-mirror",
-  // The weekly machinery drain: cron-machinery-drain.ts only DISPATCHES
-  // scheduled-machinery-drain.yml and declares no SENTRY_MONITOR_SLUG, because
-  // the work runs in the ephemeral GitHub runner rather than the app process.
-  // The workflow's own `sentry-heartbeat` step posts the check-in (with
-  // `if: always()`, so a floor breach still checks in and a red drain stays
-  // distinguishable from a dead scheduler). Same class as main-health-monitor:
-  // the monitor is real and heartbeated, it just maps to no Inngest slug.
-  "scheduled-machinery-drain",
   // #6549 item 2: GHA-fired (scheduled-terraform-drift.yml → heartbeat-live-reconcile
   // job) — the source-vs-live Better Stack heartbeat reconcile (since #7884 it also
   // reconciles live monitors; the slug keeps its original name). Its final
   // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so
   // it maps to no SENTRY_MONITOR_SLUG — same class as scheduled-terraform-drift.
   "scheduled-heartbeat-reconcile",
-  // #10952: GHA-fired (scheduled-terraform-drift.yml -> orphan-sweeps-checkin job) -- the one check-in for
-  // the rung-2 and inngest orphan sweeps, `ok` only when both sweep jobs succeeded. There is no Inngest cron
-  // function for it, so it maps to no SENTRY_MONITOR_SLUG -- same class as scheduled-terraform-drift.
-  "scheduled-orphan-sweeps",
   // #7834: GHA-fired executor (scheduled-sentry-alert-drift.yml) posts the terminal
   // heartbeat; cron-sentry-alert-drift.ts only DISPATCHES the workflow and declares no
   // SENTRY_MONITOR_SLUG (the probe runs in the ephemeral runner, not the app process), so
@@ -171,17 +168,6 @@ const NON_INNGEST_MONITORS = new Set([
   // is precisely and only the failure mode #7834 exists to catch. The guard would then be
   // green exactly when the thing it watches is broken.
   "scheduled-sentry-alert-drift",
-  // #3366: GHA-fired executor (scheduled-supabase-advisor-scan.yml) posts the
-  // heartbeat at the end of the run; the cron-supabase-advisor-scan.ts
-  // dispatcher declares no SENTRY_MONITOR_SLUG (it only dispatches and holds no
-  // Supabase PAT), so this monitor maps to no Inngest slug — same class as
-  // scheduled-terraform-drift.
-  "scheduled-supabase-advisor-scan",
-  // #5872: GHA-fired executor (scheduled-domain-model-drift.yml) POSTs the
-  // heartbeat; the cron-domain-model-drift.ts dispatcher declares no
-  // SENTRY_MONITOR_SLUG, so this monitor maps to no Inngest slug — same class
-  // as scheduled-terraform-drift.
-  "scheduled-domain-model-drift",
   "scheduled-realtime-probe",
   // #5046 PR-2: HOST-systemd-fired (cron-egress-resolve.timer pings the
   // check-in from cron-egress-resolve.sh) — not an Inngest function and not
@@ -206,15 +192,6 @@ const NON_INNGEST_MONITORS = new Set([
   // const; its final sentry-heartbeat step pings the check-in. Same class as
   // scheduled-realtime-probe / scheduled-zot-restart-loop.
   "scheduled-inngest-health",
-  // #7091: GHA-fired (scheduled-prod-version-drift.yml, on.schedule hourly since #8450) — the
-  // production version-drift alerter. It MUST be external to the deployed image:
-  // an Inngest cron runs from whatever build is CURRENTLY serving, so a staleness
-  // checker dispatched from Inngest would judge staleness using the stale build's
-  // own logic and go dark exactly when it is needed (the same self-blindness class
-  // as scheduled-inngest-health). It also needs an independent view of origin/main,
-  // which only a fresh actions/checkout provides. No cron-*.ts counterpart and no
-  // SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings the check-in.
-  "scheduled-prod-version-drift",
   // #6808: GHA-fired (workspaces-luks-verify.yml, on.schedule '41 4 * * *') — the daily
   // /workspaces LUKS at-rest re-assert. Its native `schedule:` is ANTI-CIRCULARITY, not
   // convenience. The SCHEDULER is not the problem — since the #6178 cutover (ADR-100, superseding
@@ -237,36 +214,12 @@ const NON_INNGEST_MONITORS = new Set([
   // verifier must not run on the host it verifies. No cron-*.ts counterpart and no
   // SENTRY_MONITOR_SLUG const; its own check-in step pings sentry_cron_monitor.workspaces_luks_verify_web2.
   "workspaces-luks-verify-web2",
-  // #8160: GHA-fired (scheduled-devin-docs-drift.yml, on.schedule '23 7 * * *') — the
-  // disposable docs.devin.ai capability-drift watcher. Its subject is OUTSIDE the
-  // product (Cognition's public documentation, fetched anonymously), so it has no
-  // cron-*.ts counterpart and declares no SENTRY_MONITOR_SLUG; its final
-  // sentry-heartbeat step pings the check-in. Disposable — teardown keyed to #8160
-  // close; productization of the watch substrate is #8253's design problem. Same
-  // class as scheduled-marketplace-drift.
-  "scheduled-devin-docs-drift",
-  // #8450: GHA-executed (scheduled-actions-queue-health.yml) — the Actions
-  // runner under-assignment probe. Its subject is GitHub's hosted-runner
-  // scheduler, so the EXECUTOR runs in an ephemeral runner and this monitor
-  // maps to no SENTRY_MONITOR_SLUG (its final sentry-heartbeat step pings the
-  // check-in). #9273 demoted its native `schedule:` to a fallback: the primary
-  // trigger is now cron-actions-queue-health-dispatch.ts (dispatch-only, no
-  // slug — same class as cron-supabase-watchdog-dispatch) because GHA schedule
-  // deferral paged ~47 missed check-ins/day on a healthy queue.
-  "scheduled-actions-queue-health",
   // #9168: GHA-executed (scheduled-supabase-watchdog.yml) — the bounded
   // Postgres-hang auto-restart watchdog. The cron-supabase-watchdog-dispatch.ts
   // function only DISPATCHES the workflow (it holds no Supabase PAT) and declares
   // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
   // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
   "scheduled-supabase-watchdog",
-  // #9855: GHA-fired (scheduled-integration-suites.yml, on.schedule
-  // '30 4 * * *') — the nightly env-gated integration-suites leg's dead-man
-  // monitor. Its work is git/repo-scoped test execution on an ephemeral
-  // runner, so it has no cron-*.ts counterpart and declares no
-  // SENTRY_MONITOR_SLUG; its terminal sentry-heartbeat step posts the
-  // check-in. Same class as scheduled-realtime-probe.
-  "scheduled-integration-suites",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -332,7 +285,13 @@ describe("Inngest function registry — drift guards", () => {
   it("(c) every SENTRY_MONITOR_SLUG has a cron-monitors.tf resource (or is explicitly exempt)", () => {
     const unmonitored: string[] = [];
     for (const [file, slug] of slugMap) {
-      if (!tfMonitors.has(slug) && !KNOWN_UNMONITORED_SLUGS.has(slug)) {
+      // #6590 PR-B: pruned slugs keep their emitters (spec NG4) but lose the
+      // resource — the deliberate void-post posture, exempt via the shared set.
+      if (
+        !tfMonitors.has(slug) &&
+        !KNOWN_UNMONITORED_SLUGS.has(slug) &&
+        !PRUNED_MONITOR_SLUGS.has(slug)
+      ) {
         unmonitored.push(`${file}: ${slug}`);
       }
     }

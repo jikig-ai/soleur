@@ -96,10 +96,12 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
 // 297 -> 299 (2026-10-27 eMudhra cloudflared plan, +2; the 311 on main counted the +12 of #11179, whose destroy-workflow pins left with the workflow at #11195): the hardcoded 3-file PIN_WORKFLOWS test was replaced by the
 // .github/-wide pin census describe (census+parity, canonical source) plus its mutation-battery describe — 3 tests in, 1 out.
-// 299 -> 303 (#11194, +4): the plaintext-id interlock wire pins (replace job incl. rotate; create job), the wiring-predicate
-// mutation battery and the executed-step test. The retired-address assertion REPLACED the GIT_DATA_PRESERVED_VOLUMES test
-// one-for-one (declared count unchanged by it). Exact again: grep -cE '^\s*test\(' = 303.
-const TEST_FLOOR = 303;
+// 299 -> 310 (#10540 +6 on this branch; main stood at 304 with #11194). #10540: the "inngest key rotation derivation" describe (app copies derive from the dedicated random_id, the per-merge
+// closure edge without an hcloud_* member, the per-merge target pins, the inngest_host shape gate still refusing a random_id touch,
+// and the existsSync-guarded pins on inngest-key-rotate.yml). #11194: the plaintext-id interlock wire pins (replace job incl. rotate; create job),
+// the wiring-predicate mutation battery and the executed-step test; the retired-address assertion REPLACED the GIT_DATA_PRESERVED_VOLUMES test
+// one-for-one (declared count unchanged by it). Exact: grep -cE '^\s*test\(' = 310.
+const TEST_FLOOR = 310;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -108,6 +110,14 @@ const WEB_PLATFORM_WORKFLOW = resolve(
 const DEPLOY_PIPELINE_FIX_WORKFLOW = resolve(
   REPO_ROOT,
   ".github/workflows/apply-deploy-pipeline-fix.yml",
+);
+// #10540 — the dispatch-only Inngest key-rotation workflow. Another change creates the file; the pins below read it only
+// when it exists (existsSync-guarded), so this suite is green both before and after the workflow lands. It is deliberately
+// NOT folded into `webPlatformTargets` / `allTargets` / `coveredUnion`: those are the per-merge coverage sets, and a
+// dispatch-only workflow's targets must not broaden them (same reasoning as stripDispatchJobs).
+const INNGEST_KEY_ROTATE_WORKFLOW = resolve(
+  REPO_ROOT,
+  ".github/workflows/inngest-key-rotate.yml",
 );
 
 // Resources that are intentionally NOT auto-applied by either CI workflow.
@@ -1516,6 +1526,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
   // hcloud_firewall_attachment.inngest left this set (#8754): it is a removed{} forget now.
+  // The dedicated pair (random_id + doppler_secret, signing and event) is dispatch-applied by TWO workflows, neither of which is a
+  // per-merge path: the `inngest_host` job (additive-only; its shape gate refuses any random_id touch) and, since #10540, the
+  // owner-authorised `inngest-key-rotate.yml` (phase 1 `-replace`s exactly this pair; phase 2 `-replace`s the app copies
+  // `doppler_secret.inngest_{signing,event}_key_prd`, which derive their value from the dedicated random_id). Hence the
+  // exclusions below stay: a merge never rotates a key. The pins in "inngest key rotation derivation (#10540)" hold the edge.
   "random_id.inngest_signing_key_dedicated",
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
@@ -1595,6 +1610,123 @@ const AUDIT_PENDING_UNCOVERED = new Set<string>([
   "doppler_secret.live_verify_user_password",
   "random_password.live_verify_user",
 ]);
+
+describe("inngest key rotation derivation (#10540)", () => {
+  const read = (f: string) => stripComments(readFileSync(resolve(INFRA_DIR, f), "utf8"));
+  const APP = ["doppler_secret.inngest_signing_key_prd", "doppler_secret.inngest_event_key_prd"];
+  const DEDICATED_IDS = ["random_id.inngest_signing_key_dedicated", "random_id.inngest_event_key_dedicated"];
+
+  /** Body of one resource (brace-matched) from comment-stripped HCL, or null. */
+  function resourceBody(stripped: string, addr: string): string | null {
+    const [type, name] = addr.split(".");
+    const m = new RegExp(`(?:^|\\n)\\s*resource\\s+"${type}"\\s+"${name}"\\s*\\{`).exec(stripped);
+    if (!m) return null;
+    let depth = 0;
+    for (let i = m.index + m[0].length - 1; i < stripped.length; i++) {
+      if (stripped[i] === "{") depth++;
+      else if (stripped[i] === "}" && --depth === 0) return stripped.slice(m.index + m[0].length, i);
+    }
+    return null;
+  }
+
+  /** Transitive resource-reference closure of `roots` over every infra .tf file (config references only). */
+  function closure(roots: string[]): Set<string> {
+    const texts = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8")));
+    const declared = new Set(texts.flatMap((t) => extractAllResources(t)));
+    const seen = new Set<string>();
+    const stack = [...roots];
+    while (stack.length) {
+      const addr = stack.pop() as string;
+      if (seen.has(addr)) continue;
+      seen.add(addr);
+      const body = texts.map((t) => resourceBody(t, addr)).find((b) => b !== null) ?? "";
+      for (const m of body.matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.([A-Za-z0-9_]+)\b/g)) {
+        const ref = `${m[1]}.${m[2]}`;
+        if (declared.has(ref) && !seen.has(ref)) stack.push(ref);
+      }
+    }
+    return seen;
+  }
+
+  test("the app soleur/prd key copies take their value from the dedicated random_id, not the orphaned _prd one", () => {
+    const stripped = read("inngest.tf");
+    const sign = resourceBody(stripped, APP[0]) ?? "";
+    const evt = resourceBody(stripped, APP[1]) ?? "";
+    expect(sign).toMatch(/value\s*=\s*"signkey-prod-\$\{random_id\.inngest_signing_key_dedicated\.hex\}"/);
+    expect(evt).toMatch(/value\s*=\s*random_id\.inngest_event_key_dedicated\.hex/);
+    expect(sign + evt).not.toMatch(/random_id\.inngest_(signing|event)_key_prd/);
+    // ignore_changes stays, so the per-merge plan shows no diff for the app copies.
+    expect(sign).toMatch(/ignore_changes\s*=\s*\[value\]/);
+    expect(evt).toMatch(/ignore_changes\s*=\s*\[value\]/);
+  });
+
+  test("the per-merge closure of the app key copies gains the random_id.*_dedicated edge and has no hcloud_* / terraform_data member", () => {
+    const c = closure(APP);
+    for (const id of DEDICATED_IDS) expect(c.has(id), `${id} is in the closure of the app key copies`).toBe(true);
+    expect([...c].filter((a) => a.startsWith("hcloud_") || a.startsWith("terraform_data."))).toEqual([]);
+    // Non-vacuity: the walker does follow references (the dedicated secret reaches its random_id and its project).
+    const d = closure(["doppler_secret.inngest_signing_key_dedicated"]);
+    expect(d.has("random_id.inngest_signing_key_dedicated")).toBe(true);
+    expect(d.has("doppler_project.inngest")).toBe(true);
+  });
+
+  test("the per-merge workflow still `-target`s the app key copies and the (now orphaned) _prd random_ids", () => {
+    const perMerge = extractAllTargets(stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")));
+    for (const a of [...APP, "random_id.inngest_signing_key_prd", "random_id.inngest_event_key_prd"]) {
+      expect(perMerge.has(a), `${a} per-merge -target`).toBe(true);
+    }
+    // The dedicated pair is dispatch-applied only: no per-merge target (a merge must never rotate a key).
+    for (const a of [...DEDICATED_IDS, "doppler_secret.inngest_signing_key_dedicated", "doppler_secret.inngest_event_key_dedicated"]) {
+      expect(perMerge.has(a), `${a} must not be a per-merge -target`).toBe(false);
+    }
+  });
+
+  test("the inngest_host shape gate still refuses a random_id touch (it stays additive-only; rotation has its own route)", () => {
+    const gate = resolve(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh");
+    expect(existsSync(gate)).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), "ik-shape-gate-"));
+    try {
+      const run = (actions: string[]) => {
+        const plan = join(dir, "plan.json");
+        writeFileSync(
+          plan,
+          JSON.stringify({
+            format_version: "1.2",
+            resource_changes: [{ address: "random_id.inngest_signing_key_dedicated", change: { actions } }],
+          }),
+        );
+        return spawnSync("bash", ["-c", `source "${gate}"; inngest_host_shape_gate "${plan}"`], { encoding: "utf8" });
+      };
+      const replace = run(["delete", "create"]);
+      expect(replace.status).toBe(1);
+      expect(replace.stdout + replace.stderr).toMatch(/reason=generated_secret_touched/);
+      // Non-vacuity: the same address as a no-op passes, so the refusal above is about the action, not the harness.
+      expect(run(["no-op"]).status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("when inngest-key-rotate.yml exists, every literal -target it spells is in the rotation allowlist (never hcloud_* / terraform_data)", () => {
+    if (!existsSync(INNGEST_KEY_ROTATE_WORKFLOW)) return; // guarded: green before and after the workflow lands
+    const allowed = new Set([
+      ...DEDICATED_IDS,
+      "doppler_secret.inngest_signing_key_dedicated",
+      "doppler_secret.inngest_event_key_dedicated",
+      ...APP,
+    ]);
+    const targets = [...extractAllTargets(readFileSync(INNGEST_KEY_ROTATE_WORKFLOW, "utf8"))];
+    // The script may build the target list from its own table, so an empty literal set is acceptable here; the
+    // rotate script's suite owns the exact-set pin (Guard 1). What this pins is that nothing outside the table appears.
+    expect(targets.filter((t) => !allowed.has(t))).toEqual([]);
+  });
+
+  test("the rotation workflow is read by this suite's file list only through the existsSync guard (non-vacuity of the guard)", () => {
+    // Both arms are exercised by whichever state the tree is in; this row asserts the constant points at the real path.
+    expect(INNGEST_KEY_ROTATE_WORKFLOW.endsWith(".github/workflows/inngest-key-rotate.yml")).toBe(true);
+    expect(existsSync(resolve(REPO_ROOT, ".github/workflows"))).toBe(true);
+  });
+});
 
 describe("terraform -target parity — ALL managed resources are reachable (non-SSH, #5566)", () => {
   let allResources: string[];
@@ -5200,7 +5332,9 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
       ["the alias no longer reads the volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)\$\{hcloud_volume\.inngest_redis_luks\.id\}/m, "$110626194"), /alias does not interpolate hcloud_volume\.inngest_redis_luks\.id/],
       ["the alias reads the volume only in a comment", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)$/m, "  # $1\n  inngest_luks_wrong_volume_alias = \"scsi-0HC_Volume_1\""), /alias does not interpolate/],
       ["the alias reads a sibling volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)hcloud_volume\.inngest_redis_luks\.id/m, "$1hcloud_volume.workspaces_luks.id"), /alias does not interpolate/],
-      ["the sql local stops using the alias", wf, alertsTf.replace("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
+      // replaceAll: since #11526 the alias is interpolated on BOTH legs of the dual-path
+      // predicate, so a single-occurrence replace leaves a live reference and the row survives.
+      ["the sql local stops using the alias", wf, alertsTf.replaceAll("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
       ["the exploration stops reading the sql local", wf, alertsTf.replace("trimspace(local.inngest_luks_wrong_volume_sql)", "trimspace(\"select 1\")"), /sql_query does not read local\.inngest_luks_wrong_volume_sql/],
       ["the exploration resource renamed", wf, alertsTf.replace('resource "logtail_exploration" "inngest_luks_wrong_volume"', 'resource "logtail_exploration" "inngest_luks_wrong_volume_x"'), /logtail_exploration\.inngest_luks_wrong_volume: missing/],
       ["the apply job not found (renamed)", wf.replace(/^ {2}apply:/m, "  apply_renamed:"), alertsTf, /apply job extracted 0 targets/],

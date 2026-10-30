@@ -7,7 +7,8 @@
  *
  *  Two kinds of signature live here: a THROWN-error signature (`SDK_STALE_RESUME_SESSION_ID`, echoed through the iterator's
  *  thrown error) and REPLY signatures (`CLI_AUTH_FAILURE_REPLIES`, `SDK_AUTHENTICATION_FAILED`: messages the CLI prints
- *  as ordinary stream messages when it has no usable credential), consumed by `agent-auth-failure.ts`.
+ *  as ordinary stream messages when it has no usable credential), consumed by `agent-auth-match.ts` (the permanent
+ *  matcher, which the diagnostic in `agent-auth-failure.ts` and the user-facing rewrite both call).
  */
 
 /** Echoed through the iterator's thrown error when `query({ resume })`
@@ -58,7 +59,12 @@ export type CliAuthFailureKind =
  *  stream-reply evidence yet. Real CLI strings not matched here (`Login expired`, `Authentication required`, `Invalid auth
  *  token`, each followed by the /login hint) fall to the structured arm when the CLI also sets `authentication_failed`. A further
  *  wording, "Not logged in. This session uses a Cloud gateway; start `claude` and sign in with /login.", sits in what looks
- *  like interactive render code and is not matched here (unverified whether it can reach the SDK stream). RE-DERIVE ON EVERY
+ *  like interactive render code and is not matched here. Checked 2026-10-29 (#11086): both "Not logged in" variants sit in the
+ *  `claude auth status` text renderer (next to the `loggedIn`, `orgName` and `forcedLoginMethod` keys), not in a stream reply,
+ *  so no pattern is needed. Three more wordings measured on 2026-10-29 are deliberately left to the structured arm, which
+ *  classifies them as `structured` (CTO ruling: a new kind would widen what the #11085 removal deletes): "Failed to
+ *  authenticate. API Error: 401 ..." (a used token the API refused), "Invalid auth token \u00B7 Fix external auth token ..."
+ *  (an embedded line break) and "Invalid API key \u00B7 Fix external API key" (an API-key-shaped value in the API-key variable). RE-DERIVE ON EVERY
  *  SDK BUMP: the structured `SDK_AUTHENTICATION_FAILED` arm covers most of a wording change, but nothing else re-checks
  *  this list. */
 export const CLI_AUTH_FAILURE_REPLIES: ReadonlyArray<{ kind: CliAuthFailureKind; pattern: RegExp }> = [

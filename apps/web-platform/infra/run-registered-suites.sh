@@ -649,8 +649,11 @@ _SUITE_BOUNDS=(
   "apps/web-platform/infra/git-data-ownership.test.sh=300"
   # #8609: the Guard 7 mutation rows took the suite from ~360 to 485 assertions. At 180 s it was
   # bound-killed mid-run (rc=124 at 180 s, run 36730312987) while green; measured 385 s serial on a
-  # contended local host. 540 s matches the other mutation-heavy suites below and fits the 15-min leg.
-  "apps/web-platform/infra/ci-deploy.test.sh=540"
+  # contended local host. 540 s matched the other mutation-heavy suites at the time.
+  # #11568: at 735 assertions the suite now measures ~350 s serial locally and >540 s on a contended
+  # hosted leg (rc=124 at 540 s, run 40951090093 leg 2/4, twice) while green. 900 s is ≥1.5x that
+  # worst observed and still fits the leg ceiling.
+  "apps/web-platform/infra/ci-deploy.test.sh=900"
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
@@ -711,6 +714,12 @@ _SUITE_BOUNDS=(
   # block's >=1.5x-worst-observed rule and the sibling entries' same basis — a slow day renders as
   # this suite's RED, not a step-ceiling kill.
   "apps/web-platform/infra/git-data-wipe-assert.test.sh=720"
+  # #11388 (review of PR 11483): the family-wide alert structure suite runs its mutation battery as ~85 inner
+  # runs (6 at a time), each a 10-12 s lexer pass, so about 7 runnable processes compete for 4 vCPUs. Measured
+  # ~124 s wall idle and 495 s at 6-way load on the dev host (faster than a 4-core CI runner; CI width is 4)
+  # against the 360 s default. Pin at 720 (git-data-wipe-assert precedent; ~1.5x the 495 s loaded figure)
+  # so a starved leg renders as this suite's own RED rather than a leg timeout.
+  "apps/web-platform/infra/betterstack-alert-structure.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

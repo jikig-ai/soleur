@@ -388,6 +388,14 @@ AFFECTED_INFRA_RUNNER_PATHS=(
 # suites enumerate their subjects as data, not as sourced code. Array name is
 # the registration label uppercased with non-alphanumerics mapped to `_`.
 
+# scripts/prod-version-drift-check (#6590 PR-B) — B10g copies the shared pruned
+# set into its sandbox ($REPO_ROOT-indirected, so derivation cannot see it).
+AFFECTED_SCRIPTS_PROD_VERSION_DRIFT_CHECK_PATHS=(
+  "apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
+  "scripts/prod-version-drift-check.test.sh"             # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                   # THIS FILE
+)
+
 # tests/hooks/drop-sentinel-parity — parity over the producer/consumer file sets
 # it enumerates internally (PRODUCER_FILES / CONSUMER_FILES).
 AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
@@ -645,6 +653,26 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #11211: the dispatch-recovery probe suite pins the send route's op tags and the replay cap constant
+# by reading their source, so an edit to either file must run it.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_DISPATCH_RECOVERY_SWEEPER_11211_PATHS=(
+  "scripts/followthroughs/dispatch-recovery-sweeper-11211.sh"
+  "scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh"
+  "apps/web-platform/app/api/dashboard/today/[id]/send/route.ts"
+  "apps/web-platform/server/action-sends/decide-replay.ts"
+  "scripts/lib/test-affected-paths.sh"
+)
+# #11265: the LUKS keeper dark-period probe suite pins the key-probe alert block and the flip script's
+# probe tokens by reading their source, and runs the Better Stack reader under a stub.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_INNGEST_LUKS_KEEPER_DARK_11265_PATHS=(
+  "scripts/followthroughs/inngest-luks-keeper-dark-11265.sh"
+  "scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh"
+  "apps/web-platform/infra/betterstack-logs-alerts.tf"
+  "apps/web-platform/infra/inngest-cutover-flip.sh"
+  "scripts/betterstack-query.sh"
+  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
@@ -823,6 +851,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
+  # #10540: terraform-target-parity.test.ts reads the dispatch-only key-rotation workflow at runtime (existsSync-guarded, then parses its jobs).
+  ".github/workflows/inngest-key-rotate.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -1138,6 +1168,7 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   # G1 PR-4a (#10937): the parity script is the one HMAC surface this suite still EXECUTES directly under the shim
   # (live status arm, hostile-credential, xtrace, big-secret and mutant rows); it used to be reached only through the retired probes.
   "scripts/check-deploy-script-parity.sh"
+  "scripts/inngest-key-rotate.sh"
   "scripts/inngest-link-flip.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
