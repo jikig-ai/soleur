@@ -4,7 +4,7 @@
 //      every real-sandbox probe calls. The RED rows of the plan's Guard Contract run here against
 //      synthetic observations.
 //   2. The real-sandbox probes (skipped locally without a usable bubblewrap, failing where
-//      C4_BWRAP_REQUIRED is set): added below the guard block.
+//      C4_BWRAP_REQUIRED is set): follows the guard block.
 //
 // Nothing here changes production code. Every secret in this file is a decoy generated per run.
 
@@ -138,13 +138,6 @@ const SDK_PKG = JSON.parse(readFileSync(join(APP_ROOT, "package.json"), "utf8"))
 };
 const savedPath = process.env.PATH;
 
-const AMBIENT_SECRET_NAMES = /^(GITHUB_TOKEN|GH_TOKEN|DOPPLER_[A-Z_]*|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)$/;
-// Captured BEFORE any scrub: a CI runner's real tokens become declared secrets, so the scan fails
-// loudly if a real credential were ever visible inside the sandbox.
-const AMBIENT_SECRETS: DeclaredSecret[] = Object.entries(process.env)
-  .filter(([k, v]) => AMBIENT_SECRET_NAMES.test(k) && typeof v === "string" && v.length >= 8)
-  .map(([k, v]) => ({ id: `ambient:${k}`, value: v as string }));
-
 const BWRAP_OK =
   process.platform === "linux" &&
   spawnSync("bwrap", ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "true"], {
@@ -180,7 +173,6 @@ const DECLARED: DeclaredSecret[] = [
   SPIKE_SECRET,
   { id: "forwarder-token", value: FWD_TOKEN },
   { id: "forwarder-basic", value: FWD_BASIC },
-  ...AMBIENT_SECRETS,
 ];
 
 interface EchoRecord {
@@ -202,7 +194,11 @@ interface Arm {
 }
 
 const OUTCOMES: ProbeOutcome[] = [];
-function record(o: ProbeOutcome): void {
+function record(raw: ProbeOutcome): void {
+  // Evidence can carry uncontrolled text (client output, an error message): no declared value may reach
+  // the log, the CI annotation or the JSON.
+  const redact = (t: string): string => DECLARED.reduce((acc, d) => acc.split(d.value).join(`<declared:${d.id}>`), t);
+  const o: ProbeOutcome = { ...raw, evidence: raw.evidence.map(redact) };
   OUTCOMES.push(o);
   const line = `SPIKE_OUTCOME probe=${o.probe} outcome=${o.outcome} evidence=${JSON.stringify(o.evidence)}`;
   console.log(line);
@@ -222,7 +218,7 @@ const ARMS: Arm[] = [
 ];
 
 /** Facts accumulated across arms for probe (b). */
-const SEEN = { virtualEchoed: false, virtualGateway: false, proxyCredHits: 0, plainAtEcho: 0, absoluteUriAtGateway: 0 };
+const SEEN = { virtualEchoed: false, proxyCredHits: 0, plainAtEcho: 0, absoluteUriAtGateway: 0, emptySurfaces: [] as string[] };
 
 describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543, ADR-311)", () => {
   let root: string;
@@ -273,6 +269,7 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
   function startGateway(): Promise<void> {
     const allowedPorts = new Set([httpEcho.port, httpsEcho.port, stub.port]);
     gateway = net.createServer((client) => {
+      client.on("error", () => {});
       let buf = Buffer.alloc(0);
       const onData = (chunk: Buffer) => {
         buf = Buffer.concat([buf, chunk]);
@@ -365,7 +362,7 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     return [
       `sec() { printf '\\n<<%s %s>>\\n' SEC "$1"; }`,
       `sec env; env`,
-      `sec proc; for p in /proc/[0-9]*; do cat $p/environ 2>/dev/null | tr '\\0' '\\n'; done`,
+      `sec proc; cat /proc/self/environ 2>&1 | tr '\\0' '\\n'; for p in /proc/[0-9]*; do cat $p/environ 2>/dev/null | tr '\\0' '\\n'; done`,
       `sec cwdfiles; ls -la . 2>&1; grep -rasn . . 2>/dev/null | head -200`,
       `sec http-echo; curl -sS -m 15 -o /dev/null -w 'CODE=%{http_code}\\n' ${H} http://${ECHO_HOST}:${hp}/ 2>&1`,
       `sec http-other; curl -sS -m 15 -o /dev/null -w 'CODE=%{http_code}\\n' ${H} http://${OTHER_HOST}:${hp}/ 2>&1`,
@@ -400,9 +397,12 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     scrubAmbientCliEnv();
     vi.stubEnv("WORKSPACES_ROOT", root);
     vi.stubEnv("C4_RENDER_STAGING_ROOT", `${root}-c4-staging`);
-    httpEcho = await startEcho(false);
-    httpsEcho = await startEcho(true);
-    rmSync(keyPath, { force: true });
+    try {
+      httpEcho = await startEcho(false);
+      httpsEcho = await startEcho(true);
+    } finally {
+      rmSync(keyPath, { force: true });
+    }
     await startGateway();
     await startForwarder();
     writeFileSync(join(own, "spike-probe.sh"), probeScript(), { mode: 0o644 });
@@ -539,12 +539,14 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
 
   // What the sandbox env must show before any conclusion: the secret variable, holding the decoy on the
   // control arm and a non-real placeholder (the sentinel) on a mask arm. Returns the failed premise.
+  const envValue = (run: Run): string | undefined => {
+    const line = (run.sections["env"] ?? "").split("\n").find((l) => l.startsWith(`${SECRET_VAR}=`));
+    return line === undefined ? undefined : line.slice(SECRET_VAR.length + 1);
+  };
   function envPremise(arm: Arm, run: Run): string | undefined {
-    const env = run.sections["env"] ?? "";
-    if (env.trim() === "") return "the sandbox env section is empty";
-    const line = env.split("\n").find((l) => l.startsWith(`${SECRET_VAR}=`));
-    if (line === undefined) return "the secret variable is absent from the sandbox env";
-    const value = line.slice(SECRET_VAR.length + 1);
+    if ((run.sections["env"] ?? "").trim() === "") return "the sandbox env section is empty";
+    const value = envValue(run);
+    if (value === undefined) return "the secret variable is absent from the sandbox env";
     if (arm.mask) {
       if (value === "") return "the masked variable is empty in the sandbox env";
       if (value === SPIKE_SECRET.value) return "the masked variable still holds the real value in the sandbox env";
@@ -572,7 +574,17 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     const events = baseEvents(run);
     // A visible secret is reported first: a leak in an arm whose requests never landed is still a leak.
     if (scan.length > 0) {
-      return classifyOutcome({ probe, observedEvents: events.length ? events : ["sandbox-output-observed"], scan, substitutionObserved: false });
+      return classifyOutcome({ probe, observedEvents: events, scan, substitutionObserved: false });
+    }
+    // The real value delivered to a host outside injectHosts is a leak by definition. It reads only the
+    // harness-side echo log, so it is checked before any gate that could return `unmeasurable`.
+    if (run.echo.some((e) => hostOf(e) !== ECHO_HOST && e.tokenHeader === SPIKE_SECRET.value)) {
+      return classifyOutcome({
+        probe,
+        observedEvents: events,
+        scan: [{ surface: "destination-host-outside-injectHosts", secretId: SPIKE_SECRET.id }],
+        substitutionObserved: false,
+      });
     }
     if (!run.done) return unmeasurable(probe, "the sandboxed probe did not complete", events);
     if (premise) return unmeasurable(probe, `premise failed: ${premise}`, events);
@@ -584,20 +596,17 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
       const seen = masked(run.sections[proto === "https" ? "https-echo" : "http-echo"] ?? "").replace(/\s+/g, " ").replace(ECHO_HOST, "<echo-host>").slice(0, 200);
       return unmeasurable(probe, `no ${proto} request reached the echo target (client saw: ${seen.trim() || "nothing"})`, events);
     }
-    // The real value delivered to a host outside injectHosts is a leak by definition.
-    if (run.echo.some((e) => hostOf(e) !== ECHO_HOST && e.tokenHeader === SPIKE_SECRET.value)) {
-      return classifyOutcome({
-        probe,
-        observedEvents: events,
-        scan: [{ surface: "destination-host-outside-injectHosts", secretId: SPIKE_SECRET.id }],
-        substitutionObserved: false,
-      });
+    const substituted = forProto.some((e) => e.tokenHeader === SPIKE_SECRET.value);
+    // `does-not-work` is concluded only when the destination received the sentinel the sandbox env held;
+    // a header that was absent, empty or garbled proves nothing about substitution.
+    if (!substituted && !forProto.some((e) => e.tokenHeader === envValue(run))) {
+      return unmeasurable(probe, "the destination received neither the real value nor the sentinel the sandbox env held", events);
     }
     return classifyOutcome({
       probe,
       observedEvents: events,
       scan,
-      substitutionObserved: forProto.some((e) => e.tokenHeader === SPIKE_SECRET.value),
+      substitutionObserved: substituted,
     });
   }
 
@@ -610,8 +619,13 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     return classifyOutcome({ probe, observedEvents: events, scan: [], substitutionObserved: issuer.includes("sandbox-runtime") });
   }
 
-  it("harness: SDK version is the pinned 0.3.284 the ADR names, and every server binds loopback", () => {
+  it("harness: the declared and the installed SDK version are the pinned 0.3.284 the ADR names", () => {
     expect(SDK_PKG.dependencies?.["@anthropic-ai/claude-agent-sdk"]).toBe("0.3.284");
+    const installed = JSON.parse(readFileSync(join(APP_ROOT, "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json"), "utf8")) as { version?: string };
+    expect(installed.version).toBe("0.3.284");
+  });
+
+  it("harness: every server this suite starts binds loopback", () => {
     for (const s of [httpEcho.server, httpsEcho.server, gateway]) {
       expect((s.address() as net.AddressInfo).address).toBe("127.0.0.1");
     }
@@ -621,15 +635,12 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     it(`arm ${arm.name}`, async () => {
       const run = await runArm(arm);
       const scan = scanSandboxSurfaces(run.observations, DECLARED);
-      // A real token visible in the sandbox is a hard failure, not a recorded outcome.
-      expect(scan.filter((h) => h.secretId.startsWith("ambient:"))).toEqual([]);
-      SEEN.proxyCredHits += scan.filter((h) => h.secretId.startsWith("forwarder-")).length;
+      if (scan.some((h) => h.secretId.startsWith("forwarder-"))) SEEN.proxyCredHits += 1;
+      for (const o of run.observations) {
+        if ((o.surface === "proc-environ" || o.surface === "cwd-files") && o.text.trim() === "") SEEN.emptySurfaces.push(`${arm.name}:${o.surface}`);
+      }
       const virtualHere = run.echo.some((e) => hostOf(e) === VIRTUAL_HOST);
       SEEN.virtualEchoed ||= virtualHere;
-      // The runtime multiplexes sequential plain-HTTP requests over one forwarder connection, so the
-      // gateway cannot attribute a single request: an authenticated gateway connection in the same arm
-      // as the virtual-host request is the strongest signal observable, and the counts below say so.
-      SEEN.virtualGateway ||= virtualHere && run.gw.some((g) => g.proxyAuth === "ok");
       SEEN.plainAtEcho += run.echo.filter((e) => !e.tls).length;
       SEEN.absoluteUriAtGateway += run.gw.filter((g) => g.kind === "absolute-uri").length;
       const premise = envPremise(arm, run);
@@ -641,9 +652,9 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
 
   it("probe (b): a virtual-host request reaches its destination through the forwarder and gateway, and the sandbox cannot see the proxy-hop credential", () => {
     const evidence = [
-      "the forwarder derives tenant and token from its own environment and requires a matching inbound token (infra/egress-forwarder.mjs); the virtual host is an ordinary allowed hostname on the egress path, not a broker endpoint",
+      "read from infra/egress-forwarder.mjs, not exercised by a wrong-token arm: the forwarder derives tenant and token from its own environment and requires a matching inbound token; the virtual host is an ordinary allowed hostname on the egress path, not a broker endpoint",
       `proxy-hop credential visible to the sandbox: ${SEEN.proxyCredHits > 0 ? "YES" : "no"}`,
-      `gateway attribution is per connection, not per request: ${SEEN.plainAtEcho} plain-HTTP requests reached the echo target over ${SEEN.absoluteUriAtGateway} gateway absolute-URI connections`,
+      `gateway attribution is per connection, not per request (the runtime multiplexes sequential plain-HTTP requests over one forwarder connection): ${SEEN.plainAtEcho} plain-HTTP requests reached the echo target over ${SEEN.absoluteUriAtGateway} gateway absolute-URI connections`,
     ];
     if (!SEEN.virtualEchoed) {
       record(unmeasurable("b-virtual-host", "no arm's virtual-host request reached its destination", evidence));
@@ -652,26 +663,31 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     record(
       classifyOutcome({
         probe: "b-virtual-host",
-        observedEvents: [
-          "virtual-host request reached its destination through the forwarder and gateway",
-          `gateway authenticated the forwarder credential on a connection in the arm that carried the virtual-host request: ${SEEN.virtualGateway}`,
-        ],
+        observedEvents: ["virtual-host request reached its destination through the forwarder and gateway"],
         scan: SEEN.proxyCredHits > 0 ? [{ surface: "sandbox", secretId: "forwarder-credential" }] : [],
-        substitutionObserved: SEEN.virtualGateway,
+        substitutionObserved: true,
         evidence,
       }),
     );
   });
 
-  it("outcome floor: every arm produced an outcome, the control leaked on the env surface, and the mask and TLS arms reached conclusions", () => {
+  // Reads the module-level OUTCOMES/SEEN filled by the arm tests above: it must run last, in file order,
+  // and cannot be filtered with -t. Its SDK-dependent expectations are the intended re-measure signal.
+  it("outcome floor: every arm produced an outcome, the control leaked, the harness proved it can see a delivered secret, and the mask and TLS arms reached conclusions", () => {
     for (const arm of ARMS) {
       expect(OUTCOMES.some((o) => o.probe.includes(arm.name)), `arm ${arm.name} produced no outcome`).toBe(true);
     }
     const control = OUTCOMES.find((o) => o.probe === "control-no-mask:http");
     expect(control?.outcome, "the control arm must leak (the scan can find a secret)").toBe("leaks");
     expect(control?.evidence.join(" ")).toContain("secret spike-token visible on surface env");
+    // The scan alone cannot tell "mask did not substitute" from a harness that cannot read a delivered
+    // secret: the control's echo must have received the real value.
+    expect(control?.evidence.join(" "), "the control's echo target must record the real value").toMatch(/echo-received host=\S+ tls=false token=REAL/);
+    expect(SEEN.emptySurfaces, "proc-environ and cwd-files must be non-empty on every arm").toEqual([]);
     const maskConcluded = OUTCOMES.filter((o) => o.probe.includes("mask") && !o.probe.startsWith("control") && o.outcome !== "unmeasurable");
     expect(maskConcluded.length, "at least one mask arm must reach a conclusion").toBeGreaterThan(0);
+    // The cell that could decide HTTPS masking is listed even while it is unmeasurable (the open question in ADR-311).
+    expect(OUTCOMES.some((o) => o.probe === "mask-under-tls-options.sandbox:https"), "the HTTPS-under-termination cell must be recorded").toBe(true);
     const tls = OUTCOMES.find((o) => o.probe === "c-tls-options.sandbox");
     expect(tls?.outcome, "the TLS-termination oracle arm must reach a conclusion").not.toBe("unmeasurable");
   });

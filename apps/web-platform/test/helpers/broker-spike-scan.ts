@@ -6,7 +6,7 @@
 // print the decoy it was looking for.
 
 export interface Observation {
-  /** Where the text was read inside the sandbox: "env", "proc-environ", "file", "glob-output", "grep-output". */
+  /** Where the text was read: "env", "proc-environ", "cwd-files", "reflect-output", "http-output", "tool-result" (live suite); "glob-output", "grep-output" (hermetic block). */
   surface: string;
   text: string;
 }
@@ -69,7 +69,7 @@ export interface ClassifyInput {
   scan: readonly Hit[];
   /** Did the far end receive the substituted real value? */
   substitutionObserved: boolean;
-  /** Optional extra evidence lines; when passed, it must be non-empty after merging with the derived lines. */
+  /** Optional extra evidence lines; an explicitly passed empty list is refused. */
   evidence?: readonly string[];
 }
 

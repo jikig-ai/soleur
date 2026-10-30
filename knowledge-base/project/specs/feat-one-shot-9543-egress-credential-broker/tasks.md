@@ -6,15 +6,15 @@ Branch: `feat-one-shot-9543-egress-credential-broker` | Draft PR: #11624
 ## Phase 1: Spike harness and probes (test-first)
 
 - 1.1 Write `apps/web-platform/test/helpers/broker-spike-scan.ts` with `scanSandboxSurfaces(observations, declaredSecrets)` and `classifyOutcome({ probe, observedEvents, scan, substitutionObserved, evidence? })`; `evidence` is a required field of the outcome type.
-  - 1.1.1 Write the hermetic unit block first (RED): second unmasked secret, value reachable only through Glob/Grep, zero observed events, conclusion without evidence, randomized names (H2), probe command replaced by `true` (H1).
+  - 1.1.1 Write the hermetic unit block first (RED): second unmasked secret, value reachable only through Glob/Grep, zero observed events, conclusion without evidence, randomized names (H2). H1 is shown live by the outcome floor and the env premise, not by a hermetic row.
   - 1.1.2 Make it GREEN.
 - 1.2 Write `apps/web-platform/test/broker-mechanism-spike.test.ts` following `test/sandbox-credential-deny-runtime.test.ts` (real SDK `query`, real `buildAgentSandboxConfig`, bubblewrap shim, scripted stub, `SANDBOX_OK` skip, `C4_BWRAP_REQUIRED` fail, same Haiku 4.5 model pin and carve-out comment).
   - 1.2.1 Inline helpers: TLS echo target with ephemeral CA (openssl), plain-HTTP echo, CONNECT-tunnel stub gateway.
-  - 1.2.1a Harness hygiene: explicit allowlisted child env via `hermetic-cli-env.ts`; ambient CI token names in `declaredSecrets`; stub gateway on 127.0.0.1 ephemeral ports refusing any CONNECT but the echo host:port; CA and key under `mkdtemp` 0700, removed in `afterAll`, trusted only via `curl --cacert`.
-  - 1.2.2 Topology: non-loopback test hostname via curl `--resolve`/`--connect-to`; clear or override `NO_PROXY`; real unmodified `infra/egress-forwarder.mjs`; hostname in `allowedDomains` and `injectHosts`.
-  - 1.2.3 Probe (c) first: `options.sandbox.network.tlsTerminate` and `options.settings.sandbox.network.tlsTerminate` arms; oracle is a runtime-CA certificate (the CLI `--settings` control and the upstream-trusted variant were dropped: `unmeasurable` by construction).
+  - 1.2.1a Harness hygiene: explicit allowlisted child env via `hermetic-cli-env.ts` (no real ambient credential is read); stub gateway on 127.0.0.1 ephemeral ports refusing any CONNECT but the test hostnames on the echo ports; CA and key under `mkdtemp` 0700, key removed in a `finally` and the directory in `afterAll`, never trusted (sandboxed `curl -k`).
+  - 1.2.2 Topology: non-loopback test hostnames reached through the proxy chain; clear or override `NO_PROXY`; real unmodified `infra/egress-forwarder.mjs`; hostname in `allowedDomains` and `injectHosts`.
+  - 1.2.3 Probe (c) first: `options.sandbox.network.tlsTerminate` and `options.settings.sandbox.network.tlsTerminate` arms; oracle is a runtime-CA certificate (arms dropped as `unmeasurable` by construction are listed in `phase-0-measurements.md`).
   - 1.2.4 Probe (a): protocol (http, https) by `tlsTerminate` by `allowManagedDomainsOnly` arms, plus the control arm with the `mask` entry removed.
-  - 1.2.4a Probe (a) scoping arms: host outside `injectHosts`, reflecting echo, redirect or Host/SNI mismatch.
+  - 1.2.4a Probe (a) scoping arms: host outside `injectHosts` and a reflecting echo (a redirect or Host/SNI-mismatch arm was not built).
   - 1.2.5 Probe (b): reachability of a virtual-host request at the forwarder, how the forwarder identifies the session, whether the sandbox can read or derive the proxy-hop credential.
   - 1.2.6 Record outcomes (`works`, `does-not-work`, `leaks`, `unmeasurable(reason)`) with evidence; a treatment-arm `leaks` is recorded, not failed.
 - 1.3 Run the suite on this host with `C4_BWRAP_REQUIRED=1`; capture raw output.
