@@ -40,3 +40,16 @@
   D marker-only 0 vs pinned 0; E synthetic evals 1/0/1/0/1/0/0. Numbers recorded in the .tf LIVE-PROBED comment.
 - V1: pre-existing deploy-script-tests red on main = vinngest drift, other worktree's — this diff's suites all green.
 - Pipeline tally: seats=0 ci_cycles=0 fix_rounds=1 agent_rounds=2 cto_spawns=1
+
+## 2026-10-30 review-phase evidence (#11527)
+
+- Panel: 10 seats, 1 P1 + 4 P2 + ~15 P3. P1 = leg-A `token=` needle dead before ingest
+  (pii_scrub_string redacts token=<v>); CTO ruling D4 = rename `token=`→`verdict=` both channels in this PR.
+- Implemented: emit verdict= at luks_probe_finish; needles+consumers swept (flip script, .tf, guard,
+  probe test, keeper-dark+test, 2 runbooks, model.c4+regen, ADR-282+addendum); incident_cause decode hint;
+  scrub-immunity presence row+VT mutation arm; CI/RB/VT mutate_red arms; 5 needle-source mutations;
+  _stage_sites widened to FLIP+CI quote-optional; shipper-flip+equality-weakening+surgical detail rows.
+- Suites: key-probe guard 83/0 (37 presence + 46 mutation), probe test 158/0, keeper-dark 233/0,
+  wrong-volume 44/0, structure 110/0, c4 vitest 35/35.
+- Control E re-run under verdict= needle: 1/0/1/0/1/0/0 (identical).
+- Pipeline tally: seats=85 ci_cycles=13 fix_rounds=1 agent_rounds=13 cto_spawns=2

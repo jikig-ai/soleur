@@ -69,16 +69,16 @@ Live standing alarms over this source:
   carries an EMPTY `.detail` is the fail-loud schema-drop arm — decode it as a degraded emitter
   (or, on the web host which has no LUKS volume, a degraded emit) rather than a mount regression.
 - **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
-  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push; `push = true` in the `.tf` is the source of truth and the apply read-back is the live proof). History, dated: it first shipped as "push once the apply accepts it", with a revert to `push = false` if refused; the apply accepted it (push run 40744937376 planned and created the alert with `push = true`; push run 40782617701 refreshed it and reported "No changes"). Pages on a `token=fail_*` row of
-  `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
-  header, or is absent. `indeterminate` never pages. Auto-resolve: the incident resolves on time alone, about 4500 to 4800 s after the last failing row; no later row is needed, so a silent probe also resolves it, and resolution is therefore not evidence of recovery (only a `token=ok` row is). While the probe keeps failing it stays open; a `fail,indeterminate,fail` sequence can resolve and re-page once. The arithmetic is recorded once, in the `AUTO-RESOLVE WINDOW` comment above the alert in the `.tf`. Merged but inert until the owner delivers the signed
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push; `push = true` in the `.tf` is the source of truth and the apply read-back is the live proof). History, dated: it first shipped as "push once the apply accepts it", with a revert to `push = false` if refused; the apply accepted it (push run 40744937376 planned and created the alert with `push = true`; push run 40782617701 refreshed it and reported "No changes"). Pages on a `verdict=fail_*` row of
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE` from the probe's pinned emitters: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
+  header, or is absent. `indeterminate` never pages. Auto-resolve: the incident resolves on time alone, about 4500 to 4800 s after the last failing row; no later row is needed, so a silent probe also resolves it, and resolution is therefore not evidence of recovery (only a `verdict=ok` row is). While the probe keeps failing it stays open; a `fail,indeterminate,fail` sequence can resolve and re-page once. The arithmetic is recorded once, in the `AUTO-RESOLVE WINDOW` comment above the alert in the `.tf`. Merged but inert until the owner delivers the signed
   bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
   [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) "Key-continuity probe (#9927 item 2)".
   Since #11527 the predicate is pinned to the probe's two real emitters (ADR-218 dual-channel convention):
-  leg A the journald row `SYSLOG_IDENTIFIER='inngest-cutover-flip'` with `token=fail_` on `message`; leg B the
-  phone-home envelope `shipper='cloud-init-phone-home'` + `stage='luks-key-probe'` with `token=fail_` on
+  leg A the journald row `SYSLOG_IDENTIFIER='inngest-cutover-flip'` with `verdict=fail_` on `message`; leg B the
+  phone-home envelope `shipper='cloud-init-phone-home'` + `stage='luks-key-probe'` with `verdict=fail_` on
   `detail` (or an empty `detail`, the fail-loud schema-drop arm). The position-1 marker anchor is shared —
   the phone-home message begins with the marker — so marker-quoting rows under a foreign emitter never count.
   Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`),

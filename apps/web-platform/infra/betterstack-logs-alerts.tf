@@ -407,8 +407,8 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 # Once the owner delivers the signed bundle (#11266; merged, inert until then), the dedicated Inngest host
 # runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
 # that asks cryptsetup whether the key the host holds still unlocks the LUKS2 header behind
-# /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<where>`,
-# token in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
+# /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<v> rc=<n> at=<where>`,
+# verdict in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
 # journald tag inngest-cutover-flip, and a curl-direct phone-home whose message BEGINS with the marker).
 # Rulings: decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
 # ships in a follow-up PR once an owner-authorized create-and-delete probe proves the API accepts
@@ -428,9 +428,10 @@ locals {
   # row set is pinned to the probe's two real emitters — leg A the journald tag
   # SYSLOG_IDENTIFIER='inngest-cutover-flip' (readonly LOG_TAG= at inngest-cutover-flip.sh), leg B the
   # phone-home envelope identity shipper='cloud-init-phone-home' + stage='luks-key-probe' (payload
-  # builder at cloud-init-inngest.yml; arg-3 marker override at inngest-cutover-flip.sh:953). The
+  # builder at cloud-init-inngest.yml's jq payload line; arg-3 marker override at the
+  # inngest-boot-phone-home.sh "luks-key-probe" call in inngest-cutover-flip.sh). The
   # position-1 marker anchor is shared: the phone-home message begins with the marker, so it reads
-  # BOTH channels with no marker OR-leg. `token=fail_` is leg-scoped (message on leg A, detail on leg
+  # BOTH channels with no marker OR-leg. `verdict=fail_` is leg-scoped (message on leg A, detail on leg
   # B — equivalent on every real leg-B row since its message is `marker + stage=luks-key-probe +
   # detail`). The `{`-prefix exclusion of quoting webhook rows is incidental (#8846), not the
   # mechanism — the emitter pin is.
@@ -440,7 +441,12 @@ locals {
   # the schema-drop/degraded-emit class — so a benign malformed empty-detail emit under that
   # identity also pages (accepted trade, sibling T4); (c) self-attested `dt` is unmeasured (the
   # emitter stamps its own row time); (d) `value` can reach 2 for one failure (journald + phone-home
-  # carry no per-run dedup) — harmless under higher_than 0.
+  # carry no per-run dedup) — harmless under higher_than 0; (e) the shared marker anchor makes leg-B
+  # admission contingent on the phone-home `message` retaining its marker prefix — a
+  # message-composition regression in the payload builder silently uncounts leg-B rows, an edge the
+  # sibling leg B (envelope-only) does not have; the pin is noise-exclusion, not emitter
+  # authentication — self-attested SYSLOG_IDENTIFIER/shipper/stage fields can be forged by a local
+  # caller with journald or the bearer token (forgeability adds false pages, never masks a real one).
   # LIVE-PROBED 2026-10-30 (window ending ~10:00 UTC), 48h over the hot remote() UNION s3Cluster
   # archive (216296 rows total):
   #   A marker-anchored emitter census                          -> 0 rows (probe inert pre-#11266;
@@ -453,6 +459,12 @@ locals {
   #     is its proof)
   #   E synthetic raw evals (journald fail/ok, phone-home fail/ok, identity-pinned detail-absent,
   #     jq-failure shape, doppler-shaped forgery)               -> 1/0/1/0/1/0/0
+  #   E re-run 2026-10-30 ~12:00 UTC under the verdict= needle (review found token= dead on
+  #     journald — vector.toml pii_scrub_string rewrites token=<v>; D4 ruling renamed the emit
+  #     key on both channels)                                         -> 1/0/1/0/1/0/0 (identical)
+  #   NOTE: synthetic evals inject raw rows pre-scrub — they prove the predicate, not that a real
+  #     journald row survives ingest; the guard's scrub-immunity check (vector.toml alternation)
+  #     is the standing control for that transform.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
@@ -460,13 +472,13 @@ locals {
       AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
       AND (
         JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip'
-        AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
+        AND position(JSONExtractString(raw, 'message'), 'verdict=fail_') > 0
         OR (
           JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
           AND JSONExtractString(raw, 'stage') = 'luks-key-probe'
           AND (
             JSONExtractString(raw, 'detail') = ''
-            OR position(JSONExtractString(raw, 'detail'), 'token=fail_') > 0
+            OR position(JSONExtractString(raw, 'detail'), 'verdict=fail_') > 0
           )
         )
       )
@@ -505,7 +517,7 @@ resource "logtail_exploration" "inngest_luks_key_probe_fail" {
 # than recovery_period, and the incident stays open.
 # The incident resolves on time alone, about 4500 to 4800 s (1.25 to 1.33 h; the 300 s check cadence adds up to 300 s)
 # after the last failing row; no later row is needed, so a silent probe also resolves it. At most one hourly row (at about
-# +3600 s) can land before it resolves. Resolution is therefore not evidence of recovery; only a `token=ok` row is.
+# +3600 s) can land before it resolves. Resolution is therefore not evidence of recovery; only a `verdict=ok` row is.
 # After an `indeterminate` the next row is hourly too, so fail, indeterminate, fail leaves ~6300 s of zeros, longer than
 # recovery_period: the incident resolves and re-pages once. After an `ok` the next row is 24 h later (limit 86400).
 resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
@@ -554,7 +566,7 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (token=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
+  incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (verdict=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. If Vector was down, the evidence row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=luks-key-probe) — decode its .detail, not the message. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
   metadata = {
     runbook = local.inngest_luks_key_probe_runbook_url
   }

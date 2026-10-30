@@ -58,7 +58,7 @@ dt_of() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S'; }
 
 # row <epoch> <message> [fraction]: the REAL stored shape, raw = a JSON string holding {message, ...}
 row() { jq -nc --arg dt "$(dt_of "$1")${3:-}" --arg m "$2" '{dt:$dt, raw:({message:$m, SYSLOG_IDENTIFIER:"inngest-cutover-flip"}|tojson)}'; }
-mrow() { row "$1" "$MARKER token=$2 rc=0 at=tick"; }   # an anchored producer row
+mrow() { row "$1" "$MARKER verdict=$2 rc=0 at=tick"; }   # an anchored producer row
 # any live Logs row (the canary's answer): an object, not a keeper row; live_row is ARCHIVE-aged (5 h), hot_row is 60 s old
 live_row() { jq -nc --arg dt "$(dt_of $((NOW - 5 * 3600)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
 hot_row() { jq -nc --arg dt "$(dt_of $((NOW - 60)))" '{dt:$dt, raw:({message:"unrelated host line", SYSLOG_IDENTIFIER:"sshd"}|tojson)}'; }
@@ -118,18 +118,18 @@ has "no rows: says the probe is inert until the first measured row" "$OUT" "iner
 check "no rows: the canary was read once" 1 "$(ccalls)"
 
 # 2. echo isolation: a row that merely QUOTES the marker is not a producer row (anchored at message position 1)
-{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER token=ok rc=0 at=tick verbatim"
-  row $((NOW - 40 * DAY)) " $MARKER token=ok rc=0 at=tick"
-  row $((NOW - 40 * DAY)) "x$MARKER token=fail_header rc=1 at=tick"; } > "$ROOT/rows"; run
+{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER verdict=ok rc=0 at=tick verbatim"
+  row $((NOW - 40 * DAY)) " $MARKER verdict=ok rc=0 at=tick"
+  row $((NOW - 40 * DAY)) "x$MARKER verdict=fail_header rc=1 at=tick"; } > "$ROOT/rows"; run
 check "quoting rows only (marker not at position 1): exit 2, not counted" 2 "$RC"
 hasnt "quoting rows: no row count printed as a measurement" "$OUT" "measured=1"
-jq -nc --arg dt "$(dt_of $((NOW - 40 * DAY)))" --arg m "$MARKER token=ok rc=0 at=tick" '{dt:$dt, raw:({message:"unrelated", note:$m}|tojson)}' > "$ROOT/rows"; run
+jq -nc --arg dt "$(dt_of $((NOW - 40 * DAY)))" --arg m "$MARKER verdict=ok rc=0 at=tick" '{dt:$dt, raw:({message:"unrelated", note:$m}|tojson)}' > "$ROOT/rows"; run
 check "marker in a field other than message is not a producer row: exit 2" 2 "$RC"
 
 # 3. a measured row under 30 days old: NOT YET, whichever measured token it carries
 for tok in ok fail_passphrase fail_header fail_key_absent fail_other; do
   mrow $((NOW - 5 * DAY)) "$tok" > "$ROOT/rows"; run
-  check "newest measured row (token=$tok) 5 days old: exit 2" 2 "$RC"
+  check "newest measured row (verdict=$tok) 5 days old: exit 2" 2 "$RC"
 done
 mrow $((NOW - 5 * DAY)) ok > "$ROOT/rows"; run
 has "NOT YET prints the counts" "$OUT" "rows=1 measured=1 indeterminate=0"
@@ -151,17 +151,17 @@ check "a 45-day-old failed-verdict row is a measured row too: exit 5" 5 "$RC"
 
 # 4b. the newest measured token CLASS is printed (fixed vocabulary), so a fail-then-dark composition is legible
 mrow $((NOW - 31 * DAY)) fail_header > "$ROOT/rows"; run
-has "fail-then-dark: the newest measured token class is fail" "$OUT" "newest_measured_token=fail"
+has "fail-then-dark: the newest measured token class is fail" "$OUT" "newest_measured_verdict=fail"
 mrow $((NOW - 31 * DAY)) ok > "$ROOT/rows"; run
-has "ok-then-dark: the newest measured token class is ok" "$OUT" "newest_measured_token=ok"
+has "ok-then-dark: the newest measured token class is ok" "$OUT" "newest_measured_verdict=ok"
 { mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 3 * DAY)) fail_passphrase; } > "$ROOT/rows"; run
-has "the newest measured row decides the class (ok over an older fail)" "$OUT" "newest_measured_token=ok"
+has "the newest measured row decides the class (ok over an older fail)" "$OUT" "newest_measured_verdict=ok"
 { mrow $((NOW - 2 * DAY)) fail_other; mrow $((NOW - 3 * DAY)) ok; } > "$ROOT/rows"; run
-has "the newest measured row decides the class (fail over an older ok)" "$OUT" "newest_measured_token=fail"
+has "the newest measured row decides the class (fail over an older ok)" "$OUT" "newest_measured_verdict=fail"
 { mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 2 * DAY)) fail_other; } > "$ROOT/rows"; run
-has "two measured rows in the same second: the class is fail (conservative)" "$OUT" "newest_measured_token=fail"
+has "two measured rows in the same second: the class is fail (conservative)" "$OUT" "newest_measured_verdict=fail"
 { mrow $((NOW - 2 * DAY)) fail_other; mrow $((NOW - 2 * DAY)) ok; } > "$ROOT/rows"; run
-has "two measured rows in the same second, fail listed first: the class is fail" "$OUT" "newest_measured_token=fail"
+has "two measured rows in the same second, fail listed first: the class is fail" "$OUT" "newest_measured_verdict=fail"
 # a NOT YET whose newest measured row is a failed verdict says a resolved page is not recovery
 mrow $((NOW - 20 * DAY)) fail_passphrase > "$ROOT/rows"; run
 check "a lone 20-day-old failed-verdict row: exit 2" 2 "$RC"
@@ -179,7 +179,7 @@ has "mixed history: counts printed" "$OUT" "rows=3 measured=1 indeterminate=2"
 check "input order does not matter (newest measured row wins)" 2 "$RC"
 { mrow $((NOW - 2 * DAY)) ok; mrow $((NOW - 3 * DAY)) ok; } | tac > "$ROOT/rows"; run
 check "reverse-ordered rows: exit 2" 2 "$RC"
-row $((NOW - 5 * DAY)) "$MARKER token=ok rc=0 at=tick" ".123" > "$ROOT/rows"; run
+row $((NOW - 5 * DAY)) "$MARKER verdict=ok rc=0 at=tick" ".123" > "$ROOT/rows"; run
 check "a fractional-second dt is read: exit 2" 2 "$RC"
 { mrow $((NOW - 40 * DAY)) ok; mrow $((NOW - 40 * DAY)) ok; } > "$ROOT/rows"; run
 check "the two shipping paths (journald and phone-home) land two rows at one instant: exit 5" 5 "$RC"
@@ -201,7 +201,7 @@ check "an anchored row with no token: exit 3" 3 "$RC"
 mrow 0 ok > "$ROOT/rows"; run
 check "a sole measured row dated at the epoch: exit 3, not a 20717-day age" 3 "$RC"
 hasnt "epoch-dated row: no ACTION REQUIRED" "$OUT" "ACTION REQUIRED"
-jq -nc --arg m "$MARKER token=ok rc=0 at=tick" '{dt:"not a date", raw:({message:$m}|tojson)}' > "$ROOT/rows"; run
+jq -nc --arg m "$MARKER verdict=ok rc=0 at=tick" '{dt:"not a date", raw:({message:$m}|tojson)}' > "$ROOT/rows"; run
 check "a measured row with an unreadable timestamp: exit 3" 3 "$RC"
 # shape drift: an OBJECT that mentions nothing decodable, ALONE (no anchored row, no other line)
 jq -nc --arg dt "$(dt_of $((NOW - 3 * DAY)))" '{dt:$dt, raw:"not json at all"}' > "$ROOT/rows"; run
@@ -277,7 +277,7 @@ check "empty body and a canary holding a hot row plus a 5 h old row: exit 2" 2 "
 jq -nc --arg dt "$(dt_of $((NOW - 25 * 3600)))" '{dt:$dt, raw:({message:"too old"}|tojson)}' > "$ROOT/crow-old"; CROWS="$ROOT/crow-old" run; reset_knobs
 check "empty body and a canary holding only a 25 h old row (outside --since 24h): exit 3" 3 "$RC"
 # quoting rows only: no anchored row, so the canary is read too
-{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER token=ok rc=0 at=tick"; } > "$ROOT/rows"; run
+{ row $((NOW - 40 * DAY)) "a PR body quoting $MARKER verdict=ok rc=0 at=tick"; } > "$ROOT/rows"; run
 check "quoting rows only and a live canary: exit 2, canary read" 2 "$RC"; check "quoting rows only: canary read once" 1 "$(ccalls)"
 CROWS="$ROOT/crow-empty" run; reset_knobs
 check "quoting rows only and a dead canary: exit 3" 3 "$RC"
@@ -400,7 +400,7 @@ check "the probe MARKER is the 30-character producer marker" "$MARKER" "$probe_m
 has "probe MARKER equals the paging alert's anchored marker in betterstack-logs-alerts.tf" "$TF_SRC" "position(JSONExtractString(raw, 'message'), '$probe_marker') = 1"
 has "probe MARKER equals the marker the flip script emits (inngest-cutover-flip.sh)" "$FLIP_SRC" "\"$probe_marker \${row}\""
 flip_tokens="$(grep -oE 'luks_probe_finish [a-z_]+ [0-9"$]' "$REPO/apps/web-platform/infra/inngest-cutover-flip.sh" | awk '{print $2}' | sort -u | tr '\n' ' ')"
-tf_tokens="$(sed -n 's/^# token in {\(.*\)}, shipped twice.*$/\1/p' "$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf" | tr -d ' ' | tr ',' '\n' | sort -u | tr '\n' ' ')"
+tf_tokens="$(sed -n 's/^# verdict in {\(.*\)}, shipped twice.*$/\1/p' "$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf" | tr -d ' ' | tr ',' '\n' | sort -u | tr '\n' ' ')"
 check "the flip script emits exactly the vocabulary {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}" "fail_header fail_key_absent fail_passphrase indeterminate ok " "$flip_tokens"
 check "the alert file documents the same token vocabulary as the flip script" "$flip_tokens" "$tf_tokens"
 for t in $flip_tokens; do
@@ -495,7 +495,7 @@ if run_battery "${1:-}"; then
   mutate_sub m6o3-raw-clause-dropped   'then "X\t-\t-"'    ' or (($r.raw | type) != "string")' '' 'an object with a dt but no raw beside a valid row: exit 3'
   mutate_sub m6p-now-epoch-octal-regex 'unusable NOW_EPOCH' '^[1-9][0-9]{0,15}$' '^[0-9]+$' 'NOW_EPOCH=017: the fixed reason'
   mutate_sub m6q-fail-note-dropped     'The newest measured row is a FAILED verdict' 'a resolved page is not recovery' 'a note' 'NOT YET after a fail row: a resolved page is not recovery'
-  mutate_sub m6h-token-class-hardcoded '[mut:tokclass]'    'newest_measured_token=${NEWCLS}' 'newest_measured_token=ok' 'fail-then-dark: the newest measured token class is fail'
+  mutate_sub m6h-token-class-hardcoded '[mut:tokclass]'    'newest_measured_verdict=${NEWCLS}' 'newest_measured_verdict=ok' 'fail-then-dark: the newest measured token class is fail'
   mutate_sub m6i-env-seam-reintroduced '[mut:query-path]'  'QUERY="$SCRIPT_DIR/../betterstack-query.sh"' 'QUERY="${LUKS_KEEPER_QUERY_SCRIPT:-$SCRIPT_DIR/../betterstack-query.sh}"' 'an exported LUKS_KEEPER_QUERY_SCRIPT is ignored: the evil script is never run'
   mutate_sub m6j-marker-typo           '[mut:marker]'      'KEY_PROBE' 'KEY_PR0BE' 'probe MARKER equals the paging alert'"'"'s anchored marker in betterstack-logs-alerts.tf'
   mutate_sub m7a-directive-bare-form   '<!-- soleur:followthrough script=' '<!-- soleur:followthrough' 'soleur:followthrough' 'the header carries exactly one single-line follow-through directive'
