@@ -28,6 +28,7 @@ payload changes, so its plan is a no-op - verify by reading the run's plan, neve
 4. Test strategy made buildable: fixtures git can actually hold, shims that match the absolute/bare command shapes, ordering and boundary rows, named print-scan helper.
 
 ### New considerations
+
 - A merge fires `apply-web-platform-infra.yml` (no-op plan expected); the PR body says so first.
 - The provenance residual (one repository, not proven to be the synthetic account's) is stated in the runbook with its three-part argument and detector; the dead end after a FAILED stop is parked on #8211 (F17).
 
