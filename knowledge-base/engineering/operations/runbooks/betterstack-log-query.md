@@ -56,14 +56,22 @@ Live standing alarms over this source:
   read back `paused=false` on 2026-09-21. No `-var` flag and no tfvars entry is involved. The watched alias is built from
   `hcloud_volume.inngest_redis_luks.id`, never a literal. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
-  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
+  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (mutation rows).
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
+  Since #11526 the predicate is dual-channel: while Vector is down the probe POSTs the identical
+  field row curl-direct to this same source under `.shipper == "cloud-init-phone-home"` +
+  `.stage == "inngest-server-probe-vector-down"` with the fields in `.detail` (the
+  `inngest-tls-soak-10136.sh` envelope contract), and a second OR leg admits those rows — so a
+  Vector outage no longer blinds the alert. Readback for fallback rows selects on the decoded
+  envelope's `.shipper`/`.stage` equality, never a `message` substring. A page whose fallback row
+  carries an EMPTY `.detail` is the fail-loud schema-drop arm — decode it as a degraded emitter
+  (or, on the web host which has no LUKS volume, a degraded emit) rather than a mount regression.
 - **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
-  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email; push once the apply accepts it) on a `token=fail_*` row of
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push; `push = true` in the `.tf` is the source of truth and the apply read-back is the live proof). History, dated: it first shipped as "push once the apply accepts it", with a revert to `push = false` if refused; the apply accepted it (push run 40744937376 planned and created the alert with `push = true`; push run 40782617701 refreshed it and reported "No changes"). Pages on a `token=fail_*` row of
   `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
-  header, or is absent. `indeterminate` never pages. Merged but inert until the owner delivers the signed
+  header, or is absent. `indeterminate` never pages. Auto-resolve: the incident resolves on time alone, about 4500 to 4800 s after the last failing row; no later row is needed, so a silent probe also resolves it, and resolution is therefore not evidence of recovery (only a `token=ok` row is). While the probe keeps failing it stays open; a `fail,indeterminate,fail` sequence can resolve and re-page once. The arithmetic is recorded once, in the `AUTO-RESOLVE WINDOW` comment above the alert in the `.tf`. Merged but inert until the owner delivers the signed
   bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
@@ -370,6 +378,19 @@ Do NOT conclude "I can't verify from here" and stop. This mistake has now happen
 twice (the note below, and #5934); the script's error message itself now spells out
 the correct invocation. See hard rule `hr-verify-repo-capability-claim-before-assert`
 — a fail-safe/degraded probe output is *inconclusive*, never proof of a capability gap.
+
+## Exit 3 from the 11211 dispatch-recovery probe (not a Better Stack read)
+
+`scripts/followthroughs/dispatch-recovery-sweeper-11211.sh` reads Sentry and the Supabase Management API, never Better Stack; it is listed here because it is the sibling of the Better Stack follow-through probes in `scheduled-followthrough-sweeper.yml`. Its exit 3 (CANNOT ESTABLISH) repeats in every daily sweeper comment and is never a verdict. The comment carries a fixed reason; the credentials are GitHub repository secrets, not Doppler (`SENTRY_ACTIONS_RO_TOKEN` is deliberately not mirrored to Doppler, per the workflow comment; `SUPABASE_ACCESS_TOKEN` is bound the same way). Map of the reason:
+
+| Reason in the comment | Meaning | Action |
+| --- | --- | --- |
+| `<NAME> unusable` | The secret is unset, empty or has a character outside the token allowlist. | Re-set the repository secret named in the reason. |
+| `Sentry read failed (http=401)` or `(http=403)`, or the same for Supabase | The token was rejected: revoked, expired, or without the read scope. | Re-mint the token with read-only scope and update the repository secret. |
+| `... (http=000)` | No HTTP answer: DNS or connect failure, or the probe's `--max-time 30` expired. | Usually transient; it repeats daily, so act only if it persists. |
+| `... (http=429)` | Rate limited by the vendor. | Transient; the next daily sweep retries. |
+| `... (http=5xx)` | Vendor error. | Transient; check the vendor status page if it persists. |
+| `... unparseable`, `the query is not a single SELECT` | The response shape changed, or the pinned query was edited. | Read the probe header and its suite; a code fix, not a credential fix. |
 
 ## Why this exists (the three-token trap)
 
@@ -731,7 +752,8 @@ create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its 
 mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
 (`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
 `create_detail` token: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The gated new-skill
-create arm". Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
+create arm". To read a `no_action` row against a `refused`
+one, see the subsection "Reading a live-fire row" in that section. Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
 there); the rows that asked for a create are those with `.create_requested == true`. Empty output means no manual
 `patterns` run in the window; an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace on any row:
 

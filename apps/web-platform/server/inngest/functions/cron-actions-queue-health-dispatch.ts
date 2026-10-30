@@ -42,7 +42,8 @@
  *    purview.
  *  - End-to-end liveness: if the dispatch never reaches a runner, no GHA
  *    heartbeat arrives and the `scheduled-actions-queue-health` Sentry
- *    monitor goes red within its 60-min margin.
+ *    monitor goes red within its 60-min margin (monitor destroyed by the
+ *    #6590 PR-B prune — void-posts by design, spec NG4).
  *  - Dispatch error path: an Octokit failure inside `dispatch-workflow` is
  *    reported loudly to the Sentry issues stream via `reportSilentFallback`
  *    (token redacted). A TOKEN-MINT failure is outside the try — it

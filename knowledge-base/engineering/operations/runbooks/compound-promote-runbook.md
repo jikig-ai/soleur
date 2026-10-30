@@ -30,7 +30,7 @@ promotion — it is the detection half of the loop this runbook operates.
 
 **Handler:** `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`
 **Inngest function ID:** `cron-compound-promote`
-**Sentry monitor:** `scheduled-compound-promote`
+**Sentry monitor:** `scheduled-compound-promote` — destroyed by the #6590 PR-B prune (void-posts by design, spec NG4)
 
 The capability is **default OFF**. Enabling sends summaries (path + first 10
 lines per file) of your learnings corpus to Anthropic.
@@ -215,7 +215,7 @@ Recorded 2026-10-24. The manual-trigger event accepts an optional `data.input`:
 - Any other value on a **manual** trigger ends the run `status=error` before any Anthropic call (a
   typo is never silently treated as `corpus`). The Sentry op and tag is `invalid-run-option` and the
   `error_message` carries that prefix; the error row carries no patterns fields (key on the `invalid-run-option:` prefix of `error_message`; `error_class` is `InvalidRunOptionError` in source, but a minified server bundle does not guarantee class names). The handler writes the raw value to no sink (no Sentry, pino or Better Stack field, no marker, no `error_message`); the manual-trigger event that carried it persists in the Inngest event store under the retention recorded at PA-31 (f). A typo also posts a failed
-  check-in to the weekly Sentry monitor (pre-existing behaviour for any manual error).
+  check-in to the (destroyed, #6590 PR-B) weekly Sentry slug — a void-post by design, spec NG4.
 
 ```bash
 # Patterns-path manual run (read the INTERIM OPERATING RULE below first).
@@ -299,7 +299,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 | `week-cap` | No week-cap slot was left for the arm although the run started with at least one free slot | Not expected since the slot reservation: treat it as a defect (unless the run straddled the deploy of the reservation, or another `self-healing/auto` PR was opened after the run read the cap) and read `clusters_opened` and the open `self-healing/auto` PR count. Before that fix, the edit loop ran first and could take both slots, which refused the arm on a clean state (run `01M5YB28JD20JKKH4HG04CX2Z4`, 2026-10-27). A run that starts with two open `self-healing/auto` PRs never reaches the arm and ends `week-cap-reached` |
 | `create-open` | another open PR already carries the `CREATE (new skill)` line, or the open-PR list could not be read | one open create at a time; a list failure refuses rather than guesses |
 | `index-empty` | no open pattern page to read | defence in depth: the handler exits `empty-corpus` first, so this refusal is not expected in production; if it appears, check `patterns_open` |
-| `input-size` | pattern index plus skill list exceeds the input ceiling | refused, never truncated; trim the index or raise the ceiling by amending the ADR |
+| `input-size` | pattern index, the `create-candidates` block and the skill list together exceed the input ceiling | refused, never truncated; trim the index or raise the ceiling by amending the ADR |
 | `model-invalid` | the model answer did not parse into the closed schema | one call, no retry; read the Sentry event |
 | `shape` | a model string or a rendered file failed the shape allowlist, claim-word, PII or credential screen | the marker carries the field name, never the text |
 | `slug` | slug collides with a skill dir, agent name or an open PR path | choose another pattern or wait for the open PR |
@@ -364,15 +364,15 @@ or a fixed phrase) that never carries model text. Query recipe: `betterstack-log
 | `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on every manual `patterns` row, including the early `disabled`, `deduped` and `week-cap-reached` rows. NOT present on a manual run without `input:"patterns"` (a manual corpus row stays byte-identical to before the arm), so an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace at all. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm: read `status`. `week-cap-reached`, `empty-corpus`, `deduped` and `disabled` are early exits; `anthropic-truncated` means the edit clustering answer was truncated and the arm is skipped on that path (it never spends the call). The scope: a manual `patterns` row gains EXACTLY this one key when the arm did not run |
 | `create_arm` | `ran`, emitted ONLY when the arm ran | Absent means off. With it, `kind` is `create` |
 | `kind` | `create` | Emitted only together with `create_arm` |
-| `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or no pattern was offerable (all owned: `all-owned` / `other`), or the model named an already-proposed pattern anyway (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
+| `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or no pattern was offerable (all owned: `all-owned` / `other`), or the model named an already-proposed pattern anyway (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted, for a ledger hash only; whether that backstop fired is not readable from these fields alone, see "Reading a live-fire row"). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
 | `create_no_action_reason` | `no-pattern-qualifies`, `all-owned` or `other` | `all-owned` also marks an offer the ledger emptied before the call (the model may also answer `all-owned` itself, so the field alone does not show whether a call was spent, but `create_offered` does: `create_offered > 0` on a `no_action` row means a model call was spent, `0` means the offer was emptied before the call; the create call's `output_tokens` on the `SOLEUR_CLAUDE_COST` row for this run then separates an instant decline (tens of tokens) from a deliberated answer; the cost row carries the same source and run id as the edit-loop calls and no create-specific token, so every `patterns` run has several rows under one run id (the clustering call, then any edit-loop calls, then the create call) and the create call is the LAST of them); `other` also marks a same-run-emptied offer (clusters the edit loop dropped as `ledger-suppressed` count as same-run, so they classify as `other`) and a suppressed (already proposed) pattern the model named anyway |
 | `create_offered` | an integer count of candidate patterns (never text) | The patterns left after the same-run and ledger filters, i.e. the candidates the arm would send. Whenever a model call was made (a model `no_action`, a `suppressed` backstop hit, a post-call refusal, a `create`) it is the number the model was offered; for `model-invalid/transport` the call was attempted but may not have reached the model, so check the cost row. On a pre-call refusal (`create-open`, `input-size`, `no-api-key`, `persist/clone-missing` raised by the propose step, and the `budget` and `slug` refusals raised by the clone measurement) it is the candidate count and NO call was spent. `budget` and `slug` refusals also come from the post-call content gates, and `persist/clone-missing` is also returned by the persist step after a spent call, so for `budget` and `slug` read `create_detail`, and for `persist/clone-missing` only the cost row tells the two sides apart, rather than inferring from this field. On a pre-call `no_action` (`all-owned`, `other`) it is `0`. Absent on a `week-cap` or `index-empty` refusal, on `model-invalid/internal` (a step defect, mirrored to Sentry op `create-propose-internal`, where a call may already have been spent), and on a row whose memoized step output predates the field. Compare it with `patterns_open` to see how many patterns the filters held back. It says how many were offered, not why the model declined them |
 | `create_refusal_class`, `create_detail` | the `class` table above and its closed token | The same pair is mirrored to Sentry (op `create-refused`, tag `class`, `extra.detail`) |
 | `create_words`, `create_cap`, `create_total` | description words requested, the budget cap and the current model-visible total | Budget refusals only; `cap - total` is the headroom the description must fit |
-| `create_top1`, `create_nearest_rank` | the best overlap score with an existing skill and the rank of the model's nearest skill | `prefer-patch` refusals only; compare with the refusal threshold in the PR body trailer |
+| `create_top1`, `create_nearest_rank` | the best overlap score with an existing skill and the rank of the model's nearest skill | `prefer-patch` refusals only; compare with `OVERLAP_REFUSE_THRESHOLD` (Sentry `extra.threshold` on the same event). For `nearest-not-top3` also read Sentry `extra.nearest_in_offered`, see the `nearest-not-top3` row below |
 | `create_tokens`, `create_max`, `create_bytes` | the input-size bound (bytes / 4), its ceiling and the input bytes | `input-size` refusals only |
 | `create_path_index` | index into the six-path set (0 SKILL.md, 1 PURPOSE.md, 2 Cursor stub, 3 README.md, 4 plugins/soleur/README.md, 5 promotion log) | `persist` collector refusals (`path-*`) and `persist/bytes-differ` |
-| `create_file_index`, `create_exit`, `create_missing_tools`, `create_changed_count` | scan: refused file (0 or 1), the script's exit code, how many tools were missing; readme-sync: changed counts; `persist/base-moved`: how many base blobs moved; `create_exit` also: the exit status of a failed git call (`fetch-failed` and the other git failures) | `scan`, `readme-sync`, `base-moved` and git-failure refusals. The signal NAME, the missing tool NAMES and cause tokens are Sentry-only (`extra`). `min_words`, `max_words`, `headroom`, `threshold` and `pr` are Sentry-only numbers too |
+| `create_file_index`, `create_exit`, `create_missing_tools`, `create_changed_count` | scan: refused file (0 or 1), the script's exit code, how many tools were missing; readme-sync: changed counts; `persist/base-moved`: how many base blobs moved; `create_exit` also: the exit status of a failed git call (`fetch-failed` and the other git failures) | `scan`, `readme-sync`, `base-moved` and git-failure refusals. The signal NAME, the missing tool NAMES and cause tokens are Sentry-only (`extra`). `min_words`, `max_words`, `headroom`, `threshold`, `pr` and `nearest_in_offered` are Sentry-only numbers too |
 | `create_pr` | the draft PR number | `opened` only |
 
 Where the create outcome sits: the arm runs AFTER the edit loop, so `status` is the edit loop's status
@@ -400,7 +400,7 @@ open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
   the arm ends `no_action` (`create_no_action_reason: other`); when the ledger empties the offer it ends `no_action`
   (`create_no_action_reason: all-owned`). Either way there is no call (`create_offered: 0`) and no `ledger_suppressed` increment.
   A model that names an unoffered owned pattern anyway is the backstop: a same-run hash is still `no_action` / `other`
-  and is NOT recorded a second time (one `refusal_detail` entry per hash, no extra `ledger_suppressed`); a ledger hash
+  and is NOT recorded a second time (at most one `refusal_detail` entry per hash, the edit loop's own, and none for a hash it opened; no extra `ledger_suppressed`); a ledger hash
   is suppressed by the post-call gate (`ledger-suppressed`, counted once). An empty offer ends the step before the clone check and the
   open-create lookup, so a missing clone (`persist/clone-missing`) or an open create PR (`create-open`) is not surfaced on such a run.
 - **Base moved.** Step B refreshes the clone to the current main, re-runs the admission checks on it, and, just
@@ -441,6 +441,53 @@ open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
 - **Headroom is finite.** After one maximum-length skill merges the description budget headroom is 0, and every
   later create refuses `budget` / `over-headroom` until a human trims descriptions or raises the cap in
   `plugins/soleur/test/components.test.ts` (the cap is human-owned).
+
+### Reading a live-fire row (model decline or gate refusal)
+
+Extract the marker row by its JSON key, never by text: a Better Stack row wraps the marker as an escaped string, so a
+`--grep create_arm=` style match never hits, and a poller written that way times out while the row is already there.
+Include a known-positive check (the same filter must match the previous live-fire's row) before trusting an empty result.
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 20 \
+  | jq -cR 'fromjson? | (.raw | fromjson? // {}).message | (if type == "string" then (fromjson? // {}) else . end) | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME)'
+```
+
+A webhook delivery whose body merely quotes the marker name also matches `--grep`; the `select` on the key drops it.
+
+The marker already separates a model decline from a server-side refusal, so no extra
+field is needed. Every gate except the ledger / same-run backstop returns `create_outcome: refused` with
+`create_refusal_class` and `create_detail`. `no_action` with `no-pattern-qualifies` is therefore always the model's
+own answer: no server path emits that reason (the pre-call filter yields only `all-owned` or `other`, with
+`create_offered` at 0, and the backstop yields `other`). The backstop is the one `no_action` a server check produces
+after a spent call (the model named a pattern it was not offered), so `other` on a row with `create_offered > 0` is
+either the model's own `other` or that backstop, while `all-owned` on such a row is always the model's. Nothing on the
+marker reliably separates the two `other` cases: the same-run branch adds neither `ledger_suppressed` nor a
+`refusal_detail` entry, and the edit loop also increments both, so read a zero or absent value as unknown and a
+non-zero one as a hint, never as proof. The arm makes one call and gets one verdict, so there is nothing to count. A `no_action` row with `create_offered` absent (a memoized step that predates the field) cannot be
+split by offered count, except that `no-pattern-qualifies` is still the model's.
+
+| Marker values | Meaning | Follow-up |
+|---|---|---|
+| `no_action`, `no-pattern-qualifies`, `create_offered > 0` | The model declined; no gate beyond the schema parse ran. | None in code, however often it repeats: declining is the intended default and the maturity bar itself is unchanged. Since the candidates change, the prompt also asks for this same reason when no listed skill is a genuine nearest skill, and a pattern with no candidate line is not created from. Nothing in the marker separates those declines from the maturity bar, so compare the rate with the earlier live-fires before reading a rise as the model's maturity judgement. |
+| `no_action`, `all-owned`, `create_offered > 0` | A call was spent and the model itself answered `all-owned`. | None in code. |
+| `no_action`, `other`, `create_offered > 0` | A call was spent. The model answered `other` itself, or the backstop suppressed a create naming an unoffered owned pattern. The marker cannot tell which. | None in code. |
+| `no_action`, `all-owned` or `other`, `create_offered = 0` | A pre-call path ended the arm (every candidate already claimed this run, or all owned); no call was spent. | None. |
+| `refused`, `prefer-patch`, `nearest-not-top3` (`create_nearest_rank`) | A gate refused a model-proposed create. | The prompt now supplies the server's per-pattern top-3 candidates in a `create-candidates` block (title, summary and tags ranked with the gate's own `rankOverlap`; user-invoked skills dropped; a zero score never listed). The lists are lexical and the gate re-ranks the proposal text the model writes afterwards, so a repeat is possible; no PR-opening effect is claimed until an operator-authorised live-fire clears. Read the Sentry `create-refused` event's `extra.nearest_in_offered` (it is not in the Better Stack marker): absent means no candidates were offered for the named pattern, or the row predates this change; `0` means the model named a skill that is not among the candidates listed for the pattern it named (a skill listed only under a different pattern, or one outside the repo skill-name charset that is never listed, also reads `0`); `1` means the skill was listed for that pattern and did not survive the re-rank. The number is computed when the gate runs, so on a refusal at the post-fetch recheck it is measured against the re-fetched skill tree. A second live row with `1` opens a plan for a server-side single re-rank, as its own PR with a fresh ruling. It is not a loosening of the gate. |
+| `refused`, `prefer-patch`, `overlap` (`create_top1` at or above `OVERLAP_REFUSE_THRESHOLD`, also in the Sentry `extra.threshold`) or `open-pr-nearest` | The gate works as designed. | None. |
+| `refused`, `shape`, `slug` or `budget` | Handled per class in this runbook. | None new. |
+| `refused`, `model-invalid`, `max-tokens`, `empty`, `not-json`, `schema` or `unknown-pattern` | A call was spent and its output was unusable. | `max-tokens`: review the output token cap (reading only; a change is its own PR with its own operator-authorised live-fire). The others: the marker is the whole signal and the Sentry event adds nothing beyond it; no code follow-up is implied. |
+| `refused`, `model-invalid`, `transport` | The call may not have reached the model (read the Sentry `extra.cause`). | Re-fire only on the operator's go-ahead. |
+| `opened` | A draft PR exists (`create_pr` names it when present). | Record the PR and review it by hand. |
+| any other `refused` row, for example `prefer-patch/nearest-missing`, `model-invalid/no-api-key`, `model-invalid/internal`, `persist`, `scan`, `readme-sync`, `stub-drift`, `input-size`, `week-cap`, `index-empty` or `create-open` | See the class and detail tables above. Some of these end before the call, so `refused` with `create_offered > 0` does not by itself mean a model-proposed create; `nearest-missing` (the model named a skill that is not in the list it was shown: missing, or model-invocation-disabled) is not the `nearest-not-top3` trigger. | None new from this section. |
+
+What the marker cannot show: whether a decline was instant or deliberated. The only signal is `output_tokens` on the
+`SOLEUR_CLAUDE_COST` row for the run (the create call is the last row under the run id). The 2026-10-28 records read
+that row; a check of the 2026-10-29T08:03Z live-fire (Better Stack, by run id and then by marker over the following
+hour) found none. The cause is not established. The related incident is #11049 (claude-cost-capture-dark, open as of
+2026-10-29), but its alert counts cron cost rows with a non-null `cost_usd` across the whole fleet over 24 hours, so it
+neither predicts nor explains one run's missing row. Check the run's own row before concluding it is absent. Fixing
+the capture is separate work, not part of this arm.
 
 ### Review checklist for a create draft
 

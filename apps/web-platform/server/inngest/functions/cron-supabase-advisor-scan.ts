@@ -36,7 +36,9 @@
  *    EXPECTED_CRON_FUNCTIONS manifest keep this cron in the watchdog's purview.
  *  - End-to-end liveness: if the dispatch never reaches the runner, no GHA
  *    heartbeat arrives and the `scheduled-supabase-advisor-scan` monitor goes
- *    red on a missed check-in.
+ *    red on a missed check-in (monitor destroyed by the #6590 PR-B prune —
+ *    the check-in void-posts by design, spec NG4; dispatch failure cover is
+ *    the reportSilentFallback path below).
  *  - Dispatch error path: an Octokit/dispatch failure is reported to the Sentry
  *    issues stream via reportSilentFallback, tagged `feature:cron-supabase-advisor-scan`,
  *    with the minted token redacted out of the message.

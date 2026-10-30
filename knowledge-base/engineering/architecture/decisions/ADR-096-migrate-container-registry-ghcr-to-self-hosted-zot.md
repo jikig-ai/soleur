@@ -2240,3 +2240,51 @@ ADR-218 (see the rejected alternatives below).
 - **What pins it.** `scripts/zot-fill-rate-standing-wiring.test.sh` parses the workflow and executes the probe and
   filing bodies; `scripts/alarm-issue-filing-guard.test.sh` and `watchdog-workflow-idempotence.test.ts` are the
   independent witnesses for the filing steps' conditions and lookup lines.
+
+## Amendment 2026-10-28 (#11424) — the ghcr hosts-file deny gains a documented, name-scoped break-glass exception; the datacenter-first doctrine is recorded
+
+*No new ordinal is claimed; this amends ADR-096 in place. Status stays **Accepted** — this is an
+extension of the boundary, not a reversal of it.*
+
+**The boundary being excepted.** The hosts-file ghcr deny (#9169, extended to three names by #9390)
+is an **accident guard on name resolution**, in its own amendment's words: it sinkholes `ghcr.io`,
+`pkg-containers.githubusercontent.com` and `docker.pkg.github.com` to `0.0.0.0`/`::` so that no host
+code path can *accidentally* re-traverse the deleted GHCR pull leg. It is not an egress control and
+was never claimed as one — an IP literal, a client that bypasses NSS, or a deliberate per-command
+resolver override all get past it.
+
+**The sanctioned exception.** `soleur:registry-breakglass-mirror` is the documented, name-scoped
+exception to that guard — a manual operator/agent-invoked procedure, not a standing code path, not
+a host service and not a credential, that pulls OCI manifests and blobs from GHCR on a private-net
+datacenter host during the exact window it exists for (the CF-tunnel bridge down, so
+`registry-restore-from-ghcr.sh` cannot run):
+
+- **Name-scoped bypass.** Per-command `curl --resolve <name>:443:<ip>` supplies the real address
+  for exactly the names it names, for exactly that process. `/etc/hosts` is not edited, the deny
+  stays in force afterward, and there is zero persistent config change. TLS verification stays on:
+  `--resolve` changes only the dial address, so SNI, the handshake and certificate verification all
+  still target `ghcr.io`, and `-k`/`--insecure` is forbidden on the pull leg.
+- **Credential.** GHCR read is an operator-supplied `read:packages` PAT presented at invocation,
+  never read from Doppler — the repo's `GHCR_READ_TOKEN` is revoked by design (§5.5, `DECISION: B3`)
+  and nothing re-provisions it. No standing credential is created.
+- **Integrity.** Every pulled byte is digest-pinned — manifests and blobs are fetched and verified
+  at their sha256 — so integrity is anchored at the digest, not at the registry, the same anchor the
+  zot pull path already uses.
+- **Write leg.** The assembled OCI layout is pushed to zot at `10.0.1.30:5000` with `crane push`
+  over the private layer-2 network — the same plain-HTTP transport the standing
+  `hetzner -> zotRegistry` pull edge already uses. `crane validate --remote` reads the pushed set
+  back and the cosign signature is mirrored (ADR-087); an unverified or missing ref exits non-zero.
+
+**Datacenter-first doctrine.** Recorded as doctrine, learned the expensive way during the 2026-10-28
+O2 recovery: **pull where the bandwidth is; never push blobs through a forwarded registry
+connection.** Streaming ~1.1–2.4 GB over the operator's residential uplink failed repeatedly
+(~250 KiB–1.5 MB/s, HTTP/2 PROTOCOL_ERROR drops, ~1 h+); the datacenter-side fetch on web-1
+finished in ~3 minutes. The write direction is the asymmetric one: zot PATCH uploads die mid-stream
+over `ssh -L` and registries do not resume upload sessions, so blobs are never uploaded through a
+forwarded or residential connection — pull datacenter-side, push over the private net.
+
+**Scope discipline.** This sanctions the manual procedure only. It does not restore a GHCR pull
+credential to any host, does not reintroduce a code path, and does not soften the deny's apply-time
+assertion. The C4 model records it in the `ghcr` node description, the #8036 deletion comment and
+the `hetzner -> zotRegistry` pull edge's description rather than as an edge, because model edges
+depict standing relationships and a break-glass procedure is not one (CTO ruling D3, 2026-10-28).
