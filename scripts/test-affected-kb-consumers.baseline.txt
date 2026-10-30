@@ -153,6 +153,7 @@ scripts/followthrough-predicate-parity	knowledge-base/engineering/operations/run
 scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/followthrough-varq-ban	knowledge-base/project
 scripts/followthrough-varq-ban	knowledge-base/project/specs
+scripts/followthroughs/discord-blog-webhook-fallback	knowledge-base/marketing/distribution-content
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
@@ -234,6 +235,7 @@ scripts/test-all-pr-battery-gate	knowledge-base/engineering/architecture/diagram
 scripts/test-all-pr-battery-gate	knowledge-base/project
 scripts/watch-brand-hex-triggers-11177	knowledge-base/marketing/brand-guide.md
 scripts/watch-lint-ratchet-reeval-10515	knowledge-base/engineering/architecture/decisions
+scripts/web-first-deploy-10585	knowledge-base/engineering/operations/runbooks/web-host-replace.md
 scripts/web2-luks-live-6931	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/zot-upload-ceiling-7556	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/commands/sync-producer-reachability	knowledge-base/engineering/architecture/diagrams

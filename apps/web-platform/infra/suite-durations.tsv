@@ -92,6 +92,7 @@ apps/web-platform/infra/inngest-enumerate-reminders.test.sh	1500	measured
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	5500	measured
 apps/web-platform/infra/inngest-host.test.sh	500	measured
 apps/web-platform/infra/inngest-inventory.test.sh	7000	measured
+apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	1000	floor
 apps/web-platform/infra/inngest-link-flip-workflow.test.sh	1000	floor
 apps/web-platform/infra/inngest-link-resolver.test.sh	1000	floor
 apps/web-platform/infra/inngest-luks-key-probe.test.sh	1000	floor

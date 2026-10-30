@@ -95,6 +95,7 @@ apps/web-platform/infra/inngest-enumerate-reminders.test.sh	4
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	2
 apps/web-platform/infra/inngest-host.test.sh	1
 apps/web-platform/infra/inngest-inventory.test.sh	3
+apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	2
 apps/web-platform/infra/inngest-link-flip-workflow.test.sh	2
 apps/web-platform/infra/inngest-link-resolver.test.sh	2
 apps/web-platform/infra/inngest-luks-key-probe.test.sh	2

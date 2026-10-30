@@ -212,6 +212,7 @@
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
+128	apps/web-platform/infra/inngest-key-rotate-workflow.test.sh
 19	apps/web-platform/infra/inngest-luks-key-probe.test.sh
 7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-provision-rehearsal.test.sh
@@ -464,6 +465,7 @@
 1	scripts/grok-fidelity-bootstrap.sh
 6	scripts/guard-vacuity-floor.test.sh
 2	scripts/infra-config-red-alert.test.sh
+8	scripts/inngest-key-rotate.sh
 1	scripts/kb-staleness-metric.sh
 9	scripts/learning-retrieval-bench.sh
 2	scripts/lib/git-data-boot-signal-poll.sh
@@ -494,7 +496,7 @@
 7	scripts/plugin-delivery-canary.sh
 1	scripts/plugin-delivery-canary.test.sh
 1	scripts/probe-github-app-mint.sh
-29	scripts/prod-version-drift-check.test.sh
+30	scripts/prod-version-drift-check.test.sh
 5	scripts/raise-tmp-tmpfs-ceiling.sh
 1	scripts/raise-tmp-tmpfs-ceiling.test.sh
 1	scripts/registry-pull-path-health.sh

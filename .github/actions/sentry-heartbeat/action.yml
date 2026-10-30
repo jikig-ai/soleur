@@ -53,7 +53,7 @@ description: 'POST a single Sentry Crons heartbeat (ok|error) for the configured
 
 inputs:
   monitor-slug:
-    description: 'Sentry monitor slug (matches MONITOR_SLUG in cron-monitors.tf).'
+    description: 'Sentry monitor slug (matches MONITOR_SLUG in cron-monitors.tf — or a destroyed monitor kept in pruned-monitor-slugs.ts, void-posting by design, #6590 PR-B).'
     required: true
   status:
     description: 'Heartbeat status: literal "ok" or "error" (caller computes).'
