@@ -58,6 +58,7 @@ apps/web-platform/infra/git-data-nftables-syntax.test.sh	1
 apps/web-platform/infra/git-data-ownership.test.sh	1
 apps/web-platform/infra/git-data-pre-receive.test.sh	2
 apps/web-platform/infra/git-data-provision.test.sh	3
+apps/web-platform/infra/git-data-refs-assert.test.sh	3
 apps/web-platform/infra/git-data-remove.test.sh	3
 apps/web-platform/infra/git-data-render-strip-parity.test.sh	4
 apps/web-platform/infra/git-data-root-key.test.sh	1

@@ -1,6 +1,6 @@
 # git-data cutover — reviewer-gated modes (epic #5274 / ADR-068 / ADR-220 / ADR-239).
 #
-# workflow_dispatch-only, five modes on one reviewer-gated job (`cutover`), four wipe-family modes on a second
+# workflow_dispatch-only, six modes on one reviewer-gated job (`cutover`), four wipe-family modes on a second
 # reviewer-gated job (`wipe`, #10138; header at the job), plus a separate `notify-failure` job that reports
 # a failed, stranded or cancelled run of either:
 #
@@ -23,6 +23,10 @@
 #   unfreeze  clears a freeze sentinel ONLY when its writer lineage is this run's
 #             CUTOVER_LINEAGE (github.run_id); foreign/unattributed sentinels refuse.
 #   redeploy  the same-version redeploy lever alone (manual recovery for pin loads etc.).
+#   refs_assert (#11431) read-only, store flag OFF (FLAG_MODE=proof, so a flag that is on refuses flag_already_true): flag read,
+#             root-key access, the verified-only store probes (a held freeze refuses cutover_frozen), then ONE host session that
+#             reads the replicated refs and prints counts and at most two commit shas, never a name. This is how REFS-CONFIRMED
+#             is attained without SSH (runbook, "Reading REFS-CONFIRMED"). Changes nothing on any host.
 #   wipe / wipe_finish / wipe_check  (job `wipe`; the `cutover` job is skipped for them): retire the plaintext
 #             rollback volume. Owner-gated; see the runbook section "The wipe".
 #   snapshot_clear  (job `wipe`, no loader, no Hetzner write): remove a LEFTOVER throwaway device-mapper snapshot of the
@@ -84,13 +88,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "proof | flip | rollback | unfreeze | redeploy | wipe | wipe_finish | wipe_check | snapshot_clear"
+        description: "proof | flip | rollback | unfreeze | redeploy | refs_assert | wipe | wipe_finish | wipe_check | snapshot_clear"
         required: true
         type: choice
         default: proof
-        options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, snapshot_clear]
+        options: [proof, flip, rollback, unfreeze, redeploy, refs_assert, wipe, wipe_finish, wipe_check, snapshot_clear]
       confirm:
-        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA wipe=WIPE-GIT-DATA wipe_finish=WIPE-FINISH-GIT-DATA wipe_check=WIPE-CHECK-GIT-DATA snapshot_clear=CLEAR-SNAPSHOT-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
+        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA refs_assert=REFS-ASSERT-GIT-DATA wipe=WIPE-GIT-DATA wipe_finish=WIPE-FINISH-GIT-DATA wipe_check=WIPE-CHECK-GIT-DATA snapshot_clear=CLEAR-SNAPSHOT-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
         required: true
         type: string
       lineage:
@@ -148,6 +152,7 @@ jobs:
       recovery_failed: ${{ steps.finalizer.outputs.recovery_failed }}
       probe_failed: ${{ steps.probe.outcome == 'failure' && '1' || '' }}
       gc_timer_stopped: ${{ steps.finalizer.outputs.gc_timer_stopped }}
+      refs_class: ${{ steps.refs.outputs.refs_class }}
     steps:
       - name: Validate mode + confirm token
         id: confirm
@@ -165,6 +170,7 @@ jobs:
             rollback) want="ROLLBACK-GIT-DATA" ;;
             unfreeze) want="UNFREEZE-GIT-DATA" ;;
             redeploy) want="REDEPLOY-GIT-DATA" ;;
+            refs_assert) want="REFS-ASSERT-GIT-DATA" ;;
             *) echo "::error::unknown mode '$MODE'"; exit 1 ;;
           esac
           if [[ "$CONFIRM" != "$want" ]]; then
@@ -205,7 +211,9 @@ jobs:
         if: steps.confirm.outputs.mode != 'redeploy'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
-          FLAG_MODE: ${{ steps.confirm.outputs.mode }}
+          # refs_assert reads the store with the flag OFF: it maps to the precheck's `proof` read (flag true refuses
+          # flag_already_true), and the precheck script itself is unchanged.
+          FLAG_MODE: ${{ steps.confirm.outputs.mode == 'refs_assert' && 'proof' || steps.confirm.outputs.mode }}
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
@@ -491,6 +499,17 @@ jobs:
           # gate and only the flip's: mode=proof also reads a clear after a rollback redeploy, where the egress path is intentionally
           # unused and the container may be mid-recreate. Web-1 only (the roster); it reads the container running now.
           CONTAINER_PROBE: ${{ steps.confirm.outputs.mode == 'flip' && '1' || '' }}
+        run: bash apps/web-platform/infra/git-data-cutover.sh
+
+      # --- refs_assert (#11431): the host read behind REFS-CONFIRMED. No CUTOVER_LINEAGE is set, so a held freeze
+      #     sentinel is never tolerated as resume arm A; the step writes refs_class to its outputs on a refusal only. ---
+      - name: Host-side refs assertion (store probes + one refs read)
+        id: refs
+        if: steps.confirm.outputs.mode == 'refs_assert' && steps.flag_precheck.outputs.nothing_to_rollback != '1'
+        env:
+          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
+          GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
+          MODE: refs_assert
         run: bash apps/web-platform/infra/git-data-cutover.sh
 
       # --- flip: freeze the store (gc quiesced, provenance sentinel, lock purge) ------
@@ -824,7 +843,7 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            if [[ "$MODE" == "proof" ]]; then
+            if [[ "$MODE" == "proof" || "$MODE" == "refs_assert" ]]; then
               echo "Nothing on any host was changed."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1648,6 +1667,7 @@ jobs:
           RECOVERY_FAILED: ${{ needs.cutover.outputs.recovery_failed }}
           PROBE_FAILED: ${{ needs.cutover.outputs.probe_failed }}
           GC_TIMER_STOPPED: ${{ needs.cutover.outputs.gc_timer_stopped }}
+          REFS_CLASS: ${{ needs.cutover.outputs.refs_class }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -1655,10 +1675,23 @@ jobs:
           # A wipe job that published no outputs (lost runner, rejected approval) leaves MODE empty while the
           # cutover job was skipped: that is a wipe-family failure of unknown mode, never a cutover one.
           if [ -z "$MODE" ] && [ "${CUTOVER_RESULT:-}" = skipped ]; then MODE=wipe_unknown; fi
-          case "$MODE" in proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac
+          case "$MODE" in proof|flip|rollback|unfreeze|redeploy|refs_assert|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac
           case "$RESULT" in failure|cancelled|success|skipped) ;; *) RESULT=unknown ;; esac
           case "$RUN_ID" in ''|*[!0-9]*) echo "::error::run id is not numeric"; exit 1 ;; esac
           words=""; swords=""; remedy_needed=0; wipe_family=0
+          # refs_assert (#11431) is read-only and has its own two words, chosen BEFORE the generic logic: the class comes from the
+          # job output the refs step wrote on its refusal path (a runner-side refusal before the verb reads INCONCLUSIVE). Verdict
+          # word and class only reach the notification, never a sha or an id.
+          if [ "$MODE" = refs_assert ]; then
+            case "${REFS_CLASS:-}" in FAILED|INCONCLUSIVE) ;; *) REFS_CLASS=INCONCLUSIVE ;; esac
+            if [ "$REFS_CLASS" = FAILED ]; then
+              words=" REFS_ASSERT_FAILED (mode=refs_assert is read-only: nothing on any host changed. The store was read and does not show a replicated branch tip. Rehearsal step R6, the account deletion and any flip stay blocked: read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED: gh run view ${RUN_ID} --log)"
+              swords=" REFS_ASSERT_FAILED"
+            else
+              words=" REFS_ASSERT_INCONCLUSIVE (mode=refs_assert is read-only: nothing on any host changed. The read could not decide, so this is not evidence of non-replication. Read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED for the retry rule: gh run view ${RUN_ID} --log)"
+              swords=" REFS_ASSERT_INCONCLUSIVE"
+            fi
+          fi
           # The wipe family (#10138) has its own words, chosen BEFORE the generic logic below. No wipe word ever
           # carries the unfreeze remedy: a wipe run never froze anything. An ABSENT phase is read as "this run made
           # no irreversible call" only when the started output proves the job published outputs.
