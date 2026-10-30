@@ -5,11 +5,14 @@
 # knowledge-base/project/plans/2026-09-27-fix-luks-monitor-host-timer-never-installed-plan.md
 # (§Guard Contract).
 #
-#   Guard 1 — logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf):
-#     the predicate counts ONLY the host unit's own `OK:` rows (_SYSTEMD_UNIT=luks-monitor.service),
-#     so the verify job's SSH-driven rows can never keep it quiet — that masking is how the timer
-#     stayed dark for nine weeks. Silence must page (treat_as_zero, lower_than 1) and the window must
-#     cover a legitimate 24h30m gap between two timer runs.
+#   Guard 1 — betteruptime_heartbeat.luks_monitor_host_timer (uptime-alerts.tf, #11631): the
+#     host timer's dead-man is an archive-fed Better Stack heartbeat (period 3600, grace 7200, born
+#     paused, ignore_changes = [paused]) fed hourly by scripts/deadman-heartbeat-feeder.sh. It
+#     REPLACED the once-a-day logs alert luks_monitor_host_timer_dark, which read `Current value: 0`
+#     through 33 healthy nights; that alert and its exploration must stay ABSENT, and no logs
+#     exploration other than the dead-man FIRE alert may read the luks-monitor tag. The predicate
+#     (identifier, unit, OK needle, host) and its mutants moved to
+#     apps/web-platform/test/infra/deadman-heartbeat-feeder.test.sh with the feeder that runs it.
 #   Guard 2 — terraform_data.luks_monitor_install (workspaces-luks.tf): every delivered file is a
 #     trigger operand, the destinations match the cutover tail's, the SSH apply targets it, and the
 #     one probe kick is non-blocking and comes after the timer is armed and asserted.
@@ -38,6 +41,7 @@ REPO="$(cd "$DIR/../../.." && pwd)"
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 export LMI_LUKS_TF="${LMI_LUKS_TF:-$DIR/workspaces-luks.tf}"
 export LMI_ALERTS_TF="${LMI_ALERTS_TF:-$DIR/betterstack-logs-alerts.tf}"
+export LMI_UPTIME_TF="${LMI_UPTIME_TF:-$DIR/uptime-alerts.tf}"
 export LMI_WF="${LMI_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
 export LMI_MONITOR_SH="${LMI_MONITOR_SH:-$DIR/luks-monitor.sh}"
 export LMI_CUTOVER_SH="${LMI_CUTOVER_SH:-$DIR/workspaces-cutover.sh}"
@@ -77,7 +81,7 @@ pass=$_p0; fail=$_f0; FAILED=()
 
 command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing\n' >&2; exit 2; }
 python3 -c 'import yaml' 2>/dev/null || { printf '[FATAL] python3 yaml module missing\n' >&2; exit 2; }
-for f in "$LMI_LUKS_TF" "$LMI_ALERTS_TF" "$LMI_WF" "$LMI_MONITOR_SH" "$LMI_CUTOVER_SH" "$LMI_INNGEST_TF" "$LMI_RUNBOOK"; do
+for f in "$LMI_LUKS_TF" "$LMI_ALERTS_TF" "$LMI_UPTIME_TF" "$LMI_WF" "$LMI_MONITOR_SH" "$LMI_CUTOVER_SH" "$LMI_INNGEST_TF" "$LMI_RUNBOOK"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
@@ -213,18 +217,21 @@ luks_raw = open(E["LMI_LUKS_TF"]).read()
 luks = strip(luks_raw)
 alerts_raw = open(E["LMI_ALERTS_TF"]).read()
 alerts = strip(alerts_raw)
+uptime_raw = open(E["LMI_UPTIME_TF"]).read()
+uptime = strip(uptime_raw)
 monitor = open(E["LMI_MONITOR_SH"]).read()
 cutover = open(E["LMI_CUTOVER_SH"]).read()
 wf = yaml.safe_load(open(E["LMI_WF"]))
 jobs = wf.get("jobs") or {}
 
-# ─────────────────────────────── Guard 1 — the liveness alert ───────────────────────────────
+# ─────────────────────────────── Guard 1 — the liveness heartbeat ───────────────────────────────
 # Every .tf in the root, not only the alerts file: a luks-monitor exploration placed elsewhere is in
 # the assembly too. The alerts file and workspaces-luks.tf are read through their LMI_* copies.
 def tf_text(path):
     b = os.path.basename(path)
     if os.path.abspath(os.path.dirname(path)) == os.path.abspath(E["LMI_INFRA_DIR"]):
         if b == "betterstack-logs-alerts.tf": return alerts_raw
+        if b == "uptime-alerts.tf": return uptime_raw
         if b == "workspaces-luks.tf": return luks_raw
     return open(path).read()
 root_tf = sorted(os.path.join(E["LMI_INFRA_DIR"], f) for f in os.listdir(E["LMI_INFRA_DIR"]) if f.endswith(".tf"))
@@ -233,21 +240,9 @@ if E.get("LMI_EXTRA_TF"):
 all_tf_raw = "\n".join(tf_text(p) for p in root_tf)
 LOCAL_LISTS.update(local_lists(strip(all_tf_raw)))
 sql_locals = dict(re.findall(r'(?ms)^\s*([a-z0-9_]+)_sql\s*=\s*<<-SQL\n(.*?)\n\s*SQL\s*$', all_tf_raw))
-UNIT = "JSONExtractString(raw,'_SYSTEMD_UNIT')='luks-monitor.service'"
-EXPECTED = {
-    "dt BETWEEN {{start_time}} AND {{end_time}}",
-    "JSONExtractString(raw,'SYSLOG_IDENTIFIER')='luks-monitor'",
-    UNIT,
-    "JSONExtractString(raw,'message') LIKE '%OK: /mnt/data is LUKS-backed%'",
-    "JSONExtractString(raw,'host_name')='soleur-web-platform'",
-}
-
 def norm(s):
     s = " ".join(s.split())
     return re.sub(r'\s*([(),=])\s*', r'\1', s)
-
-EXPECTED = {norm(x) for x in EXPECTED}
-UNIT = norm(UNIT)
 
 def conjuncts(where):
     parts, depth, cur, toks = [], 0, [], re.split(r'(\s+AND\s+|[()])', where)
@@ -268,14 +263,6 @@ def conjuncts(where):
         else:
             merged.append(p.strip())
     return [norm(p) for p in merged]
-
-def predicate_ok(sql):
-    flat = " ".join(sql.split())
-    m = re.fullmatch(r'SELECT toDateTime\(\{\{end_time\}\}\) AS time, count\(\*\) AS value FROM \{\{source\}\} WHERE (.*)', flat)
-    if not m:
-        return False, "head is not the count-per-window shape: " + flat[:120]
-    cs = conjuncts(m.group(1))
-    return (len(cs) == len(EXPECTED) and set(cs) == EXPECTED), cs
 
 explorations = []
 for p_ in root_tf:
@@ -313,72 +300,50 @@ for name, body, ref, sql in [x for x in luks_explorations if x[0] == DEADMAN_EXP
           dm is not None and set(conjuncts(dm.group(1))) == DEADMAN_EXPECTED and len(conjuncts(dm.group(1))) == len(DEADMAN_EXPECTED),
           conjuncts(dm.group(1)) if dm else flat[:160])
 luks_explorations = [x for x in luks_explorations if x[0] != DEADMAN_EXPLORATION]
-for name, body, ref, sql in luks_explorations:
-    check("G1: exploration %s reads its SQL from a *_sql local (whitespace-collapsed)" % name, ref is not None and sql is not None,
-          attr(body, "sql_query"))
-    if sql is not None:
-        good, detail = predicate_ok(sql)
-        check("G1: exploration %s's predicate is exactly identifier AND unit AND OK-needle AND window (no OR, no negation)" % name,
-              good, detail)
-        check("G1: exploration %s keeps the host-unit conjunct (the verify job's rows must never satisfy it)" % name,
-              UNIT in (conjuncts(" ".join(sql.split()).split(" WHERE ", 1)[1]) if " WHERE " in " ".join(sql.split()) else []))
+# #11631 — after the retirement NO other exploration may read the luks-monitor tag: the host timer's
+# liveness is the heartbeat below, and a second once-a-day logs alert would repeat the always-red
+# state. The predicate and its mutants live in deadman-heartbeat-feeder.test.sh.
+check("G1: no logs exploration other than the dead-man fire alert reads the luks-monitor tag (retired alert stays gone)",
+      len(luks_explorations) == 0, [n for n, *_ in luks_explorations])
+for kind in ("logtail_exploration", "logtail_exploration_alert"):
+    check("G1: %s.luks_monitor_host_timer_dark is ABSENT from every root .tf (retired by #11631)" % kind,
+          re.search(r'(?m)^resource\s+"%s"\s+"luks_monitor_host_timer_dark"' % kind, strip(all_tf_raw)) is None)
 
-dark = block(alerts, "logtail_exploration", "luks_monitor_host_timer_dark")
-check("G1: logtail_exploration.luks_monitor_host_timer_dark exists", dark is not None)
-if dark:
-    check("G1: it reads local.luks_monitor_host_timer_sql",
-          re.search(r'local\.luks_monitor_host_timer_sql\b', attr(dark, "sql_query") or "") is not None, attr(dark, "sql_query"))
-    vb = re.search(r'variable\s*\{([^}]*)\}', dark)
-    vbody = vb.group(1) if vb else ""
-    check("G1: its source variable is the prd Vector source (not another source)",
-          re.search(r'(?m)^\s*values\s*=\s*\[\s*local\.vector_prd_source_id\s*\]\s*$', vbody) is not None, vbody)
-    check("G1: its name is soleur-luks-monitor-host-timer-dark-prd",
-          attr(dark, "name") == '"soleur-luks-monitor-host-timer-dark-prd"', attr(dark, "name"))
+hb = block(uptime, "betteruptime_heartbeat", "luks_monitor_host_timer")
+check("G1: betteruptime_heartbeat.luks_monitor_host_timer exists (exact header)", hb is not None)
+if hb:
+    h = top_level(hb)
+    check("G1: its name is soleur-luks-monitor-host-timer-prd",
+          h.get("name") == '"soleur-luks-monitor-host-timer-prd"', h.get("name"))
+    check("G1: period = 3600 (the feeder's hourly cadence)", h.get("period") == "3600", h.get("period"))
+    check("G1: grace = 7200 (one lost watchdog slot must not page a healthy host; page threshold 10800 s)",
+          h.get("grace") == "7200", h.get("grace"))
+    check("G1: paused = true (born paused; the owner arms it)", h.get("paused") == "true", h.get("paused"))
+    lc = re.search(r'lifecycle\s*\{([^}]*)\}', hb)
+    check("G1: lifecycle ignore_changes = [paused] (an out-of-band unpause survives the next apply)",
+          lc is not None and re.search(r'(?m)^\s*ignore_changes\s*=\s*\[\s*paused\s*\]\s*$', lc.group(1)) is not None,
+          lc.group(1) if lc else None)
+    check("G1: policy_id is gated on var.betterstack_paid_tier",
+          h.get("policy_id") == "var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null", h.get("policy_id"))
+    check("G1: email = true", h.get("email") == "true", h.get("email"))
 
-needle_in_sh = re.search(r'(?m)^\s*log "OK: /mnt/data is LUKS-backed \(', monitor) is not None
-check("G1: luks-monitor.sh still logs the exact OK needle the predicate matches", needle_in_sh)
-
-al = block(alerts, "logtail_exploration_alert", "luks_monitor_host_timer_dark")
-check("G1: logtail_exploration_alert.luks_monitor_host_timer_dark exists", al is not None)
-if al:
-    a = top_level(al)
-    check("G1: the alert watches ITS OWN exploration",
-          a.get("exploration_id") == "logtail_exploration.luks_monitor_host_timer_dark.id", a.get("exploration_id"))
-    check("G1: threshold alert, lower_than 1 (zero rows pages)",
-          a.get("alert_type") == '"threshold"' and a.get("operator") == '"lower_than"' and a.get("value") == "1",
-          (a.get("alert_type"), a.get("operator"), a.get("value")))
-    check("G1: on_missing_data = treat_as_zero (silence FIRES)", a.get("on_missing_data") == '"treat_as_zero"', a.get("on_missing_data"))
-    check("G1: paused = false", a.get("paused") == "false", a.get("paused"))
-    check("G1: email = true", a.get("email") == "true", a.get("email"))
-    try:
-        qp, cp, ck = int(a.get("query_period", "x")), int(a.get("confirmation_period", "0")), int(a.get("check_period", "x"))
-    except ValueError:
-        qp = cp = ck = -1
-    check("G1: query_period + confirmation_period covers a legitimate 24h30m (88200 s) gap between two timer runs",
-          qp >= 86400 and qp + cp >= 88200, (qp, cp))
-    check("G1: and pages within about 28 h of the last passing run (query_period + confirmation_period <= 100800)",
-          0 < qp + cp <= 100800, (qp, cp))
-    check("G1: the alert's name is soleur-luks-monitor-host-timer-dark-prd",
-          a.get("name") == '"soleur-luks-monitor-host-timer-dark-prd"', a.get("name"))
-    md = re.search(r'metadata\s*=\s*\{([^}]*)\}', al)
-    check("G1: incident_cause and metadata.runbook both carry the runbook URL local",
-          "${local.luks_monitor_runbook_url}" in (a.get("incident_cause") or "")
-          and md is not None and re.search(r'runbook\s*=\s*local\.luks_monitor_runbook_url\b', md.group(1)) is not None)
-    check("G1: evaluated at least hourly (check_period <= 3600)", 0 < ck <= 3600, ck)
-    um = re.search(r'luks_monitor_runbook_url\s*=\s*"([^"]+)"', alerts_raw)
-    frag = um.group(1).rsplit("#", 1)[1] if um and "#" in um.group(1) else None
-    def gh_anchor(h):
-        return re.sub(r'\s', "-", re.sub(r'[^\w\- ]', "", h.strip().lower()))
-    heads = [gh_anchor(m.group(1)) for m in re.finditer(r'(?m)^#{1,6}\s+(.+?)\s*$', open(E["LMI_RUNBOOK"]).read())]
-    check("G1: the runbook URL's fragment is a real heading anchor in the cutover runbook",
-          frag is not None and frag in heads, frag)
-    check("G1: the runbook URL names that runbook file",
-          um is not None and um.group(1).split("#")[0].endswith("/" + os.path.relpath(E["LMI_RUNBOOK"], E["LMI_REPO"])), um.group(1) if um else None)
+# The runbook anchor the other docs link to (inngest-server.md, betterstack-log-query.md, the cutover
+# runbook's own cross-references) must still resolve: the heading was kept when the alert was retired.
+def gh_anchor(h):
+    return re.sub(r'\s', "-", re.sub(r'[^\w\- ]', "", h.strip().lower()))
+heads = [gh_anchor(m.group(1)) for m in re.finditer(r'(?m)^#{1,6}\s+(.+?)\s*$', open(E["LMI_RUNBOOK"]).read())]
+check("G1: the runbook fragment host-timer-liveness-alert-8706 is a real heading anchor in the cutover runbook",
+      "host-timer-liveness-alert-8706" in heads)
 
 apply_job = jobs.get("apply") or {}
 main_runs = [str(s.get("run", "")) for s in apply_job.get("steps") or [] if "-target=logtail_exploration" in str(s.get("run", ""))]
-for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_exploration_alert.luks_monitor_host_timer_dark"):
+# The heartbeat is created by the same MAIN plan, and the four retired addresses stay targeted (a bare
+# -target on an address with no configuration plans its DELETE; dropping one orphans it under management).
+for t in ("betteruptime_heartbeat.luks_monitor_host_timer",):
     check("G1: the push-triggered apply job's MAIN plan targets %s" % t,
+          any(re.search(r'(?m)^\s*-target=%s(\s*\\)?\s*$' % re.escape(t), r) for r in main_runs))
+for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_exploration_alert.luks_monitor_host_timer_dark"):
+    check("G1: the MAIN plan keeps the retained destroy target %s" % t,
           any(re.search(r'(?m)^\s*-target=%s(\s*\\)?\s*$' % re.escape(t), r) for r in main_runs))
 
 # Row 10: nothing else starts the unit. Its rows would carry _SYSTEMD_UNIT=luks-monitor.service
@@ -1124,14 +1089,13 @@ PY
     grade "$label" "$want" "$got" "$f.log"
   }
   declare -A EXPECT_FAIL=(
-    [G1-1]="keeps the host-unit conjunct" [G1-2]="on_missing_data = treat_as_zero"
-    [G1-4]="covers a legitimate 24h30m" [G1-5a]="predicate is exactly" [G1-5b]="still logs the exact OK needle"
-    [G1-6]="predicate is exactly" [G1-6b]="predicate is exactly" [G1-7]="exploration luks_monitor_extra"
-    [G1-8]="MAIN plan targets logtail_exploration_alert" [G1-9]="watches ITS OWN exploration"
-    [G1-10]="exactly one line anywhere starts" [G1-11]="predicate is exactly" [G1-12]="pages within about 28 h"
-    [G1-13]="incident_cause and metadata.runbook" [G1-14]="exactly one line anywhere starts"
-    [G1-15]="exactly one line anywhere starts" [G1-16]="reads its SQL from a *_sql local"
-    [G1-17]="fragment is a real heading anchor" [G1-H1]="reads its SQL from a *_sql local"
+    [G1-2]="paused = true" [G1-4]="grace = 7200"
+    [G1-7]="no logs exploration other than" [G1-8]="MAIN plan targets betteruptime_heartbeat"
+    [G1-9]="ABSENT from every root" [G1-10]="exactly one line anywhere starts"
+    [G1-12]="period = 3600" [G1-13]="lifecycle ignore_changes"
+    [G1-14]="exactly one line anywhere starts" [G1-15]="exactly one line anywhere starts"
+    [G1-16]="no logs exploration other than" [G1-17]="fragment host-timer-liveness-alert-8706"
+    [G1-18]="keeps the retained destroy target" [G1-19]="policy_id is gated"
     [G2-1]="file() trigger operands" [G2-2]="file() trigger operands" [G2-4]="the kick comes after"
     [G2-7]="arming string occurs exactly once" [G2-8]="install destinations equal"
     [G2-9]="exactly one start of luks-monitor.service" [G2-10]="luks_monitor_install exists"
@@ -1160,18 +1124,26 @@ PY
   # Rows whose named check must be the ONLY failure: the edit is invisible to every other row.
   declare -A EXPECT_ONLY=([G4-H1]=1 [G4-26]=1 [G4-27]=1)
   mut_rows=0
-  A="$LMI_ALERTS_TF"; T="$LMI_LUKS_TF"; W="$LMI_WF"
+  A="$LMI_ALERTS_TF"; T="$LMI_LUKS_TF"; W="$LMI_WF"; U="$LMI_UPTIME_TF"
   ARM_LINE="systemctl enable --now luks-monitor.timer"
   SHOW_LINE="systemctl show -p LoadState,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec luks-monitor.timer --no-pager || true"
-  UNITC="      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'\n"
   # Guard 1
-  mutate "G1-1 drop the host-unit conjunct" 1 LMI_ALERTS_TF "$A" "s.replace(\"$UNITC\", '', 1)"
-  mutate "G1-2 on_missing_data no longer treat_as_zero" 1 LMI_ALERTS_TF "$A" "re.sub(r'(luks_monitor_host_timer_dark\" \{(?:.|\n)*?on_missing_data\s*=\s*)\"treat_as_zero\"', r'\1\"keep_last_value\"', s, 1)"
-  mutate "G1-4 query_period 86400 with confirmation 0" 1 LMI_ALERTS_TF "$A" "s.replace('query_period        = 97200', 'query_period        = 86400', 1)"
-  mutate "G1-5a reword the needle in the SQL only" 1 LMI_ALERTS_TF "$A" "s.replace(\"'%OK: /mnt/data is LUKS-backed%'\", \"'%OK: /mnt/data is encrypted%'\", 1)"
-  mutate "G1-5b reword the OK line in luks-monitor.sh only" 1 LMI_MONITOR_SH "$LMI_MONITOR_SH" "s.replace('log \"OK: /mnt/data is LUKS-backed (', 'log \"OK: /mnt/data is encrypted (', 1)"
-  mutate "G1-6 join the unit conjunct with OR" 1 LMI_ALERTS_TF "$A" "s.replace(\"      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'\", \"      OR JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'\", 1)"
-  mutate "G1-6b negate the unit conjunct" 1 LMI_ALERTS_TF "$A" "s.replace(\"'_SYSTEMD_UNIT') = 'luks-monitor.service'\", \"'_SYSTEMD_UNIT') != 'luks-monitor.service'\", 1)"
+  HBH='resource "betteruptime_heartbeat" "luks_monitor_host_timer" \{'
+  mutate "G1-2 the heartbeat is born unpaused" 1 LMI_UPTIME_TF "$U" "re.sub(r'($HBH(?:.|\n)*?)paused    = true', r'\1paused    = false', s, 1)"
+  mutate "G1-4 grace back to 3600 (one lost slot would page a healthy host)" 1 LMI_UPTIME_TF "$U" "re.sub(r'($HBH(?:.|\n)*?)grace  = 7200', r'\1grace  = 3600', s, 1)"
+  mutate "G1-12 period 86400" 1 LMI_UPTIME_TF "$U" "re.sub(r'($HBH(?:.|\n)*?)period = 3600', r'\1period = 86400', s, 1)"
+  mutate "G1-13 ignore_changes dropped (an unpause would be reverted)" 1 LMI_UPTIME_TF "$U" "re.sub(r'($HBH(?:.|\n)*?)ignore_changes = \[paused\]', r'\1ignore_changes = []', s, 1)"
+  mutate "G1-19 the policy gate dropped" 1 LMI_UPTIME_TF "$U" "re.sub(r'($HBH(?:.|\n)*?)policy_id = var.betterstack_paid_tier \? betteruptime_policy.uptime\[0\].id : null', r'\1policy_id = null', s, 1)"
+  mutate "G1-8 heartbeat target dropped from the MAIN plan" 1 LMI_WF "$W" "re.sub(r'(?m)^\s*-target=betteruptime_heartbeat\.luks_monitor_host_timer \\\\\n', '', s, 1)"
+  mutate "G1-18 a retained destroy target dropped from the MAIN plan" 1 LMI_WF "$W" "re.sub(r'(?m)^\s*-target=logtail_exploration_alert\.luks_monitor_host_timer_dark \\\\\n', '', s, 1)"
+  mutate "G1-9 the retired exploration re-added" 1 LMI_ALERTS_TF "$A" "$(cat <<'X'
+s + '''
+resource "logtail_exploration" "luks_monitor_host_timer_dark" {
+  name = "x"
+}
+'''
+X
+)"
   mutate "G1-7 a second luks-monitor exploration lacking the unit conjunct" 1 LMI_ALERTS_TF "$A" "s + '''
 locals {
   luks_monitor_extra_sql = <<-SQL
@@ -1188,11 +1160,8 @@ resource \"logtail_exploration\" \"luks_monitor_extra\" {
   }
 }
 '''"
-  mutate "G1-8 alert target dropped from the MAIN plan" 1 LMI_WF "$W" "re.sub(r'(?m)^\s*-target=logtail_exploration_alert\.luks_monitor_host_timer_dark \\\\\n', '', s, 1)"
-  mutate "G1-9 the alert watches another exploration" 1 LMI_ALERTS_TF "$A" "s.replace('exploration_id = logtail_exploration.luks_monitor_host_timer_dark.id', 'exploration_id = logtail_exploration.claude_cost_capture_dark.id', 1)"
   extra "G1-10 a second starter of luks-monitor.service" 1 LMI_EXTRA_SCAN "      - run: ssh web-1 systemctl start luks-monitor.service"
-  mutate "G1-H1 the SQL local renamed away (extractor finds nothing)" 1 LMI_ALERTS_TF "$A" "s.replace('  luks_monitor_host_timer_sql = <<-SQL', '  luks_monitor_host_timer_sqlx = <<-SQL', 1)"
-  mutate "G1-H2 conjuncts reordered and reflowed (must PASS)" 0 LMI_ALERTS_TF "$A" "s.replace(\"      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'\n$UNITC\", \"      AND JSONExtractString( raw,'_SYSTEMD_UNIT' )   =   'luks-monitor.service'\n      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'\n\", 1)"
+  mutate "G1-H3 heartbeat attributes reordered (must PASS)" 0 LMI_UPTIME_TF "$U" "re.sub(r'($HBH\n)  name   = (\"soleur-luks-monitor-host-timer-prd\")\n  period = 3600\n  grace  = 7200\n', r'\1  grace  = 7200\n  period = 3600\n  name   = \2\n', s, 1)"
   # Guard 2
   mutate "G2-1 the timer is no longer a trigger operand" 1 LMI_LUKS_TF "$T" "s.replace('    file(\"\${path.module}/luks-monitor.timer\"),\n', '', 1)"
   mutate "G2-2 a fifth, unhashed file provisioner" 1 LMI_LUKS_TF "$T" "s.replace('    destination = \"/etc/systemd/system/luks-monitor.timer\"\n  }\n', '    destination = \"/etc/systemd/system/luks-monitor.timer\"\n  }\n  provisioner \"file\" {\n    source      = \"\${path.module}/luks-monitor-token-refresh.sh\"\n    destination = \"/usr/local/bin/x\"\n  }\n', 1)"
@@ -1219,15 +1188,6 @@ resource \"logtail_exploration\" \"luks_monitor_extra\" {
   }
 }' .tf
   # Review round (2026-09-27): rows for every guard added after the first panel.
-  mutate "G1-11 drop the host_name conjunct (web-2 rows would count)" 1 LMI_ALERTS_TF "$A" "$(cat <<'X'
-s.replace("      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'\n", '', 1)
-X
-)"
-  mutate "G1-12 a 10-day window (pages far too late)" 1 LMI_ALERTS_TF "$A" "s.replace('query_period        = 97200', 'query_period        = 864000', 1)"
-  mutate "G1-13 the incident text loses the runbook link" 1 LMI_ALERTS_TF "$A" "$(cat <<'X'
-s.replace(' Runbook: ${local.luks_monitor_runbook_url}"', ' Runbook: see the cutover runbook"', 1)
-X
-)"
   extra "G1-14 a suffixless starter (systemctl start luks-monitor)" 1 LMI_EXTRA_SCAN "      - run: ssh web-1 systemctl start luks-monitor"
   extra "G1-15 a unit that Wants= the service" 1 LMI_EXTRA_SCAN $'[Unit]\nWants=luks-monitor.service' .service
   extra "G1-16 a luks exploration elsewhere with inline SQL" 1 LMI_EXTRA_TF 'resource "logtail_exploration" "rogue_luks" {
@@ -1356,8 +1316,8 @@ X
   mutate "G4-27 apt-config proxy key appended (no deny row sees it; only the pin)" 1 LMI_LUKS_TF "$T" "s.replace('apt-config shell AR Unattended-Upgrade::Automatic-Reboot 2>', 'apt-config shell AR Unattended-Upgrade::Automatic-Reboot P Acquire::http::Proxy 2>', 1)"
   mutate "G4-P1 the dead-man unit renamed in workspaces-cutover.sh only" 1 LMI_CUTOVER_SH "$LMI_CUTOVER_SH" "re.sub(r'--unit=workspaces-luks-deadman\\b', '--unit=workspaces-luks-deadman-v2', s, 1)"
   mutate "G4-P2 the state print names another dead-man service" 1 LMI_LUKS_TF "$T" "s.replace('workspaces-luks-deadman.timer workspaces-luks-deadman.service --no-pager', 'workspaces-luks-deadman.timer workspaces-luks-deadman-old.service --no-pager', 1)"
-  # A deleted row must not pass silently: 20 Guard 1 + 17 Guard 2 + 14 Guard 3 + 30 Guard 4 rows.
-  MUT_ROWS_EXPECTED=81
+  # A deleted row must not pass silently: 15 Guard 1 + 17 Guard 2 + 14 Guard 3 + 30 Guard 4 rows.
+  MUT_ROWS_EXPECTED=76
   if [[ "$mut_rows" -ne "$MUT_ROWS_EXPECTED" ]]; then
     printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"
     exit 1
@@ -1366,12 +1326,12 @@ fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
-# Anti-vacuity floor. The threshold sits on the line directly above its `if`. It is EXACT: 118 is the
-# measured inner-run (LMI_MUTANT=1) assertion count, and the outer run adds the 81 mutation rows
+# Anti-vacuity floor. The threshold sits on the line directly above its `if`. It is EXACT: 110 is the
+# measured inner-run (LMI_MUTANT=1) assertion count, and the outer run adds the 76 mutation rows
 # (MUT_ROWS_EXPECTED), so deleting any one check, not only a whole block, trips it. Adding a check
-# means raising 118 here.
+# means raising 110 here.
 _lmi_mut_floor="${LMI_MUTANT:+0}"
-MIN_ASSERTIONS=$((118 + ${_lmi_mut_floor:-81}))
+MIN_ASSERTIONS=$((110 + ${_lmi_mut_floor:-76}))
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1

@@ -11,7 +11,7 @@
 #
 # WHAT IT ASSERTS, over every `resource "logtail_exploration"` and `resource "logtail_exploration_alert"`
 # in EVERY *.tf of the infra root (presence rows 1-24 below, each one verdict over the whole set):
-#   1-4   census: at least 19 alerts and 19 explorations, every enumerated header yields a block (a header
+#   1-4   census: at least 17 alerts and 17 explorations, every enumerated header yields a block (a header
 #         `block_of` cannot extract would otherwise be invisible to every row after it; an UNQUOTED label
 #         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
 #         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
@@ -78,7 +78,7 @@
 # Usage: bash apps/web-platform/infra/betterstack-alert-structure.test.sh [--presence-only | --census-only]
 #   --presence-only skips the mutation battery (the inner runs use it).
 #   --census-only runs ONLY enumeration + the census floors (rows 1-4, a few seconds) and prints a final
-#   `N passed, 0 failed` line; it exits 1 when fewer than 19 alerts are enumerated. This is the cheap
+#   `N passed, 0 failed` line; it exits 1 when fewer than 17 alerts are enumerated. This is the cheap
 #   discoverability probe; --presence-only measured 12-19 s on a loaded host.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -95,8 +95,8 @@ done
 # ── pins (same file, same diff as what they protect: tripwires, see the header) ────────────────────
 REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert email exploration_id incident_cause metadata name on_missing_data operator paused push query_period recovery_period sms value"
 OPTIONAL_ATTRS=""
-CENSUS_FLOOR_ALERTS=19
-CENSUS_FLOOR_EXPLORATIONS=19
+CENSUS_FLOOR_ALERTS=17
+CENSUS_FLOOR_EXPLORATIONS=17
 GUARD_CENSUS_FLOOR=15
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"
@@ -583,7 +583,12 @@ _se=(); while IFS= read -r _s; do [ -z "$_s" ] || _se+=("$_s"); done < <(struct_
 _enum="$(for _k in "${!BLK[@]}"; do printf '%s.%s\n' "${_k%%|*}" "${_k#*|}"; done | sort -u)"
 _tgt="$(logtail_targets_of "$APPLY_WF")"
 _untg="$(comm -23 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt" | sed '/^$/d') | tr '\n' ' ')"
-_stray="$(comm -13 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt" | sed '/^$/d') | tr '\n' ' ')"
+# #11631: the two once-a-day dead-man alerts were retired (replaced by archive-fed heartbeats). The apply
+# workflow KEEPS their four bare -target= lines until the first verified apply, because a bare -target on
+# an address with no configuration plans its DELETE (the census lists them in INTENDED_DESTROYS). They are
+# the ONLY targets allowed to name no declared resource; a follow-up removes both the lines and this list.
+RETIRED_DESTROY_TARGETS=$'logtail_exploration.claude_cost_capture_dark\nlogtail_exploration_alert.claude_cost_capture_dark\nlogtail_exploration.luks_monitor_host_timer_dark\nlogtail_exploration_alert.luks_monitor_host_timer_dark'
+_stray="$(comm -13 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt" | sed '/^$/d') | grep -vxF -f <(printf '%s\n' "$RETIRED_DESTROY_TARGETS") | tr '\n' ' ')"
 [ -z "$_untg" ] && [ -n "$_tgt" ] \
   && ok "apply parity: every enumerated logtail resource has a -target= line in apply-web-platform-infra.yml" \
   || no "apply parity: no -target= line in apply-web-platform-infra.yml for: ${_untg% }: an untargeted resource is never applied and never exists (#5566); add the line"

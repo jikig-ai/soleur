@@ -132,7 +132,8 @@ export const MANIFEST: ManifestEntry[] = [
     //      stays a redundant second installer for a future re-cut.
     //   2. The daily workspaces-luks-verify.yml job, which ships its own copy of luks-monitor.sh.
     // The shared beat cannot tell them apart. The runtime proof that pusher 1 runs is
-    // logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf).
+    // betteruptime_heartbeat.luks_monitor_host_timer (uptime-alerts.tf, #11631), an archive-fed
+    // heartbeat that replaced the retired once-a-day logs alert.
     // web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO host-replace path:
     // web-host-cron, NOT dedicated-host-boot, and the replace_target requirement does not fire.
     arming: "web-host-cron",
@@ -152,7 +153,7 @@ export const MANIFEST: ManifestEntry[] = [
     // inngest_consumer precedent), so the live reconcile's `fed-but-paused` alarm is re-armed for
     // this row: a pause from here on is a real finding. `paused: true` above is SOURCE state only.
     exempt_reason:
-      "web-host-resident feeder (luks-monitor.timer on web-1) delivered and armed by the SSH terraform_data provisioner (terraform_data.luks_monitor_install, #8706) as the PRIMARY installer; the cutover script's tail still installs the same files as a redundant second installer for a future re-cut, and web-1 cloud-init boot is NOT a path — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path. The second pusher is the workspaces-luks-verify.yml job; the runtime proof that the host timer fires is logtail_exploration_alert.luks_monitor_host_timer_dark. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+      "web-host-resident feeder (luks-monitor.timer on web-1) delivered and armed by the SSH terraform_data provisioner (terraform_data.luks_monitor_install, #8706) as the PRIMARY installer; the cutover script's tail still installs the same files as a redundant second installer for a future re-cut, and web-1 cloud-init boot is NOT a path — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path. The second pusher is the workspaces-luks-verify.yml job; the runtime proof that the host timer fires is betteruptime_heartbeat.luks_monitor_host_timer (#11631), fed from the Logs archive by scripts/deadman-heartbeat-feeder.sh. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
     name: "git_data_prd",
@@ -362,5 +363,45 @@ export const MANIFEST: ManifestEntry[] = [
     },
     exempt_reason:
       "fed and armed (2026-10-12, #9703) — the feeder is a repo-side verifier workflow, remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
+    name: "luks_monitor_host_timer",
+    // #11631 — the archive-fed dead-man that replaced logtail_exploration_alert.luks_monitor_host_timer_dark
+    // (a once-a-day absence alarm that read `Current value: 0` through 33 healthy nights). The feeder
+    // reads the Logs archive itself (remote() UNION s3Cluster) over the old 97200 s window and beats only
+    // when web-1's luks-monitor.service recorded a passing row; with none it withholds and the heartbeat
+    // times out (period 3600 + grace 7200). FED but PAUSED: born paused, armed by the owner after two
+    // consecutive `qualifying_row_heartbeat_paused` runs; a record PR then drops `arming_pending`.
+    arming: "external-probe",
+    paused: true,
+    feeder: {
+      kind: "cron",
+      evidence: {
+        file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml",
+        pattern: "bash scripts/deadman-heartbeat-feeder.sh",
+      },
+    },
+    arming_pending: { tracking_issue: 11631 },
+    exempt_reason:
+      "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly, dispatched by the web-server watchdog clock): it queries the Better Stack Logs archive for web-1's passing luks-monitor row and beats only when one exists, so no host change and no host replace applies (a host-side ping would need a user_data change = a web-1 replace, which web-1 cannot take). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
+    name: "claude_cost_capture",
+    // #11631 — the archive-fed dead-man that replaced logtail_exploration_alert.claude_cost_capture_dark.
+    // Same feeder and workflow as luks_monitor_host_timer above, over the 86400 s window and the cost-marker
+    // predicate (a cron cost marker with a non-null cost_usd, or a credit-probe RED row). FED but PAUSED,
+    // armed by the owner after two consecutive `qualifying_row_heartbeat_paused` runs.
+    arming: "external-probe",
+    paused: true,
+    feeder: {
+      kind: "cron",
+      evidence: {
+        file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml",
+        pattern: "bash scripts/deadman-heartbeat-feeder.sh",
+      },
+    },
+    arming_pending: { tracking_issue: 11631 },
+    exempt_reason:
+      "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly): it queries the Better Stack Logs archive for Inngest cron cost markers and beats only when one exists in the last 24 h, so the signal is independent of any single host and no host replace applies. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
 ];
