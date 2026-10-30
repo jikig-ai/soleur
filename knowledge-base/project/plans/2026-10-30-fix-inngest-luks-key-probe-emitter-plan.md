@@ -1,12 +1,52 @@
 ---
 title: "infra(observability): inngest_luks_key_probe_fail SQL anchors the marker but pins no emitter"
+type: fix
 date: 2026-10-30
 slug: fix-inngest-luks-key-probe-emitter
 branch: feat-one-shot-11527-luks-key-probe-emitter
 issue: 11527
+priority: p3
+domain: engineering
+brand_survival_threshold: aggregate pattern
+lane: cross-domain
 ---
 
 # infra(observability): inngest_luks_key_probe_fail SQL anchors the marker but pins no emitter
+
+Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No spec.md exists for this branch; the pipeline runs plan before spec here.)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-10-30
+**Agents used:** none — this deepen ran inside a pipeline subagent with no Task/Agent tool, so the §4 halt gates, the precedent-diff, and the verify-the-negative pass were executed inline by the planning agent (mirroring both sibling runs).
+
+### Gate verdicts (all evaluated inline)
+
+- §4.4 Precedent-diff: pass — the emitter-OR shape mirrors the shipped `inngest_luks_wrong_volume_sql` (:306-331) in the same file; the marker-override arm is the convention ADR-218's 2026-10-29 amendment names for this issue.
+- §4.45 verify-the-negative: every negative claim re-verified by reading the emit sites and envelope constructor (`luks_probe_finish` dual-emit unconditional; `detail` key-absent on journald rows; exactly-1 `luks-key-probe` emit site; no third marker emitter).
+- §4.5 network-outage: evaluated, skipped — no SSH/network symptom; the changed resource carries no provisioner/`connection` block.
+- §4.55 downtime: skipped — in-place Better Stack exploration update; no host, volume, DB, or deploy-surface touched.
+- §4.6 User-Brand Impact: pass (section present, threshold `aggregate pattern`, concrete artifact/vector).
+- §4.7 Observability: pass (5 fields populated; `discoverability_test.command` is `grep -c`, an allowlisted verb under the 15 s cap, `expected_output` the literal `1`).
+- §4.8 PAT-shaped variable: pass (grep clean — `BETTERSTACK_QUERY_*` are ClickHouse read credentials, not GitHub PAT shapes).
+- §4.9 UI-wireframe: skipped (no UI-surface files).
+- §4.10 Encryption Posture: pass (triggered by `.tf` edit; all fields populated, `does_not_defend` non-empty, no exception needed).
+- §4.11 Guard Contract: pass — `scripts/lint-guard-contract.py` green (1 guard entry); assembly is structural (the WHERE clause chokepoint + the guard's extracted `FAIL_SQL` + the emit-site literal authorities), not a member list.
+- §4.12 Scope Check: pass (exactly one unfenced section; all asks mapped; inferred items carry justifications; split assessment derived from the file lists).
+- §4.13 Task Design: skipped (modifies an existing alert; no new workflow/timer/daemon surface).
+
+### Key improvements from the deepen pass
+
+1. **`detail=''` fail-loud arm placed inside leg B, not top-level** — the empty-disjunct learning measured that a conjunct-only predicate cannot deliver detail-absent fail-loud, and `detail` is key-absent on journald rows (a top-level `OR detail=''` would admit every leg-A row); the token check is therefore leg-scoped (`message` on A, `detail` on B), equivalent on every real row since leg-B `message` ≡ marker + `stage=luks-key-probe` + detail. Recorded as decision-challenges row D2 `pending - assumed:`.
+2. **Derived needles, call-form anchored** — `MUT_TAG` from `readonly LOG_TAG=`, `MUT_STAGE` from the bounded first arg of the phone-home call form, `MUT_SHIPPER` from the payload builder; exactly-1 emit-site cardinality verified live (`inngest-cutover-flip.sh:953` is the sole `luks-key-probe` caller).
+3. **Dual-emit caveat made explicit** — unlike the sibling's vector-gated fallback, this probe dual-emits unconditionally, so `value` can read 2 for one event; harmless under `higher_than 0`, recorded per the amendment's dedup caveat.
+4. **Inert-probe enumeration caveat** — the probe is merged-but-inert until #11266 delivers, so control A may read 0 real rows; the synthetic control E carries leg-semantics verification and the foreign-emitter census is still the enumeration the issue asks for.
+
+### New considerations discovered
+
+- The jq-failure fallback payload carries no `shipper`/`detail` → silently uncounted under the emitter OR (same boundary as the sibling's T1 dissent); recorded as a residual edge in the `.tf` comment requirement.
+- Two existing `token=fail_` mutation needles become dual-occurrence under the new shape (message + detail forms) — retargeted to the `message`-extracted needle per the sibling's measured lesson.
+- `scripts/followthroughs/inngest-luks-keeper-dark-11265.sh` is a sibling consumer of the same marker with the position-1 anchor — unaffected (independent query), recorded for census completeness.
 
 ## Overview
 
@@ -125,7 +165,7 @@ Then live-probe the new predicate before merge, land it through the merge-trigge
    - Derived needles (call-form anchored, FATAL-on-empty, mirroring the sibling guard): `MUT_TAG` from `readonly LOG_TAG="…"` in `$FLIP`; `MUT_STAGE` from the bounded first arg of the `inngest-boot-phone-home.sh` call form in `$FLIP`; `MUT_SHIPPER` from `shipper:"…"` in `apps/web-platform/infra/cloud-init-inngest.yml`.
    - New presence rows (+6): leg-A `SYSLOG_IDENTIFIER` equality (needle `${MUT_TAG}`); leg-B `shipper` equality (`${MUT_SHIPPER}`); leg-B `stage` equality (`${MUT_STAGE}`); leg-B `detail`-anchored `token=fail_`; leg-B `detail = ''` fail-loud disjunct; the OR-arm structure (`OR (` grouping the two emitter identities under the shared conjuncts — pin shape, not just tokens).
    - Reserved-token cardinality: exactly 1 emit site passes `luks-key-probe` as the phone-home helper's first arg across the emit scripts (non-comment lines).
-   - Retarget the two existing mutation needles whose `old` strings now match twice (`'token=fail_'`) > 0` occurs on both `message` and `detail`): pin them to the `message`-extracted form (the sibling's measured dual-occurrence lesson).
+   - Retarget the two existing mutation needles whose `old` strings now match twice (the `token=fail_` conjunct text occurs on both `message` and `detail`): pin them to the `message`-extracted form (the sibling's measured dual-occurrence lesson).
    - New `mutate_red` rows (+7): (a) leg-A emitter conjunct dropped; (b) leg-A literal flipped to `'doppler'`; (c) leg-B `shipper` conjunct dropped; (d) leg-B `stage` conjunct dropped; (e) `stage` literal flipped to a foreign stage; (f) the whole `OR (…)` emitter arm deleted (predicate collapses to leg-A only); (g) `detail = '' OR` disjunct neutralized (the fail-loud arm silently dropped).
    - Floors: `PRESENCE_ROWS=30` → `36`, `MUT_ROWS=30` → `37`, `_floor 60` → `73`, `MUT_SKIP` floor `30` → `36`; verify the arithmetic at implementation (deepen-plan re-verifies).
 3. Run `bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh` locally — expect `73 passed, 0 failed`. Run `bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` and `bash apps/web-platform/infra/betterstack-alert-structure.test.sh` — both must stay green (adjacent guards).
