@@ -3,7 +3,7 @@
 # Suite for plugins/soleur/scripts/ci-head-verdict.sh -- Guard 2 of the S3 plan (#9728,
 # knowledge-base/project/plans/archive/20261013-062704-2026-10-09-ci-s3-draft-pr-light-checks-plan.md): the one resolver every
 # reader of a PR head's CI state goes through (`verdict`, `wait-ready-run`, `ready-count`), plus Guard 3 (#9927): the read-only
-# `required` required-context set check (rows R1-R14 and RE1-RE6).
+# `required` required-context set check (rows R1-R17 and RE1, RE2, RE3, RE6: there is no RE4 or RE5).
 #
 # THE SEAM. `gh` is a PATH stub that answers ONLY the requests the SUT is expected to make, keyed on the
 # FULL argv (real flags only: `api -i`, `api graphql -F/-f`, `api --paginate --slurp`), and refuses anything
@@ -176,11 +176,16 @@ addrun() { # <dir> <id> <status> <conclusion|null> <created-offset-from-T> [head
 }
 
 OUT=""; ERR=""; RC=""
+# vrun is HERMETIC against the child seam: an ADMIN_MERGE_READY_BIN exported in the OUTER environment never reaches the SUT, only the one a row passes in
+# VRUN_ENV does (so RE6, which claims the production default path, really runs it). VRUN_KEEP_AMR_ENV=1 is the self-test seam that lets it through.
+VRUN_KEEP_AMR_ENV=0
 vrun() { # <dir> <sut-args...>
   local d="$1"; shift
   : > "$d/log"; rm -f "$d/.polls" "$d/sleeps"
   local -a envv=(FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_H="$H" PATH="$BIN:$PATH" CI_HEAD_VERDICT_POLL_SECONDS=0)
-  env -u CI_HEAD_VERDICT_NOW -u GH_REPO "${envv[@]}" ${VRUN_ENV:+$VRUN_ENV} "$TIMEOUT_BIN" 30 bash "$SUT" "$@" > "$d/out" 2> "$d/err"
+  local -a unsetv=(-u CI_HEAD_VERDICT_NOW -u GH_REPO)
+  [[ "$VRUN_KEEP_AMR_ENV" == 1 ]] || unsetv+=(-u ADMIN_MERGE_READY_BIN)
+  env "${unsetv[@]}" "${envv[@]}" ${VRUN_ENV:+$VRUN_ENV} "$TIMEOUT_BIN" 30 bash "$SUT" "$@" > "$d/out" 2> "$d/err"
   RC=$?; OUT=$(cat "$d/out"); ERR=$(cat "$d/err")
   # A bash-level error out of a MUTANT is a crash, not a defect the rows detected: flag it for the harness.
   if [[ "$MODE" == mutant ]] && grep -qE 'syntax error|command not found|unbound variable|unexpected EOF|bad substitution' <<<"$ERR"; then
@@ -900,12 +905,17 @@ row_R10() { local d
   ok R10.repo.child-gets-GH_REPO eq "$(cat "$d/amr.argv")" "$PR $H --base main GH_REPO=acme/widgets"; ok R10.repo.gh-gets-GH_REPO called "$d" "GH_REPO=acme/widgets"; }
 
 # R11: the documented extraction block in ready-run-wait.md RUNS verbatim (only PR_NUMBER is substituted) against the SUT and prints the marker,
-# the basis=workflow ids and the basis=candidate lines (a wf= text imitating a second run= included); a call that prints no marker (exit 2) falls to
-# its own "treat as error" line; and the reason vocabulary and the state list agree across the header, the doc and the code.
+# the basis=workflow ids and EVERY other RECOVERY line (the candidates, a wf= text imitating a second run= included, the pointers, the no-cancelled-run and
+# both owner-not-determined lines: the doc keys every action on them); a call that prints no marker (exit 2) falls to its own "treat as error" line; and
+# the reason vocabulary and the state list agree across the header, the doc and the code.
 reason_tokens() { # <anchor>; text on stdin -> the sorted tokens of the first sentence after the anchor (header `# ` prefixes removed)
   tr '\n' ' ' | sed 's/# //g' | grep -o "$1[^.]*\." | head -1 | sed "s/^$1//; s/\.\$//" | tr -c 'a-z0-9<>-' '\n' | grep . | sort -u
 }
-row_R11() { local doc="$SCRIPT_DIR/../skills/ship/references/ready-run-wait.md" snip root d got helps docs t own pass code miss=""
+snip_run() { # <dir> <snippet> <root>: the documented snippet against the SUT copy and the child stub of <dir>
+  : > "$1/log"; rm -f "$1/.polls"
+  env -u GH_REPO FX="$1" STUB_LOG="$1/log" STUB_PR="$PR" STUB_H="$H" PATH="$BIN:$PATH" CI_HEAD_VERDICT_POLL_SECONDS=0 ADMIN_MERGE_READY_BIN="$1/amr-stub.sh" CLAUDE_PLUGIN_ROOT="$3" bash -c "${2//PR_NUMBER/$PR}" 2>"$1/err"
+}
+row_R11() { local doc="$SCRIPT_DIR/../skills/ship/references/ready-run-wait.md" snip root d got helps docs t own pass code miss="" newl oldl old_snip lab rs req a p f rcc frag d2 g2 g3
   snip=$(awk '/^```bash$/ { b = 1; blk = ""; next } /^```$/ { if (b && blk ~ /^OUT=\$\(mktemp\)/) { printf "%s", blk; exit } b = 0; next } b { blk = blk $0 "\n" }' "$doc")
   ok R11.snippet-present test -n "$snip"
   root="$SANDBOX/snip-root"; rm -rf "$root"; mkdir -p "$root/scripts"; cp "$SUT" "$root/scripts/ci-head-verdict.sh"
@@ -921,6 +931,31 @@ row_R11() { local doc="$SCRIPT_DIR/../skills/ship/references/ready-run-wait.md" 
   ok R11.snippet-imitated-run-stays-in-wf grep -qF 'RECOVERY rerun run=801 basis=candidate ctx="other ctx" wf="x run=99 basis=workflow"' <<<"$got"
   ok R11.snippet-candidates-carry-no-command test "$(grep 'basis=candidate' <<<"$got" | grep -c 'gh run rerun')" = 0
   ok R11.snippet-nomiss nomiss "$d"
+  newl="grep '^RECOVERY ' \"\$OUT\" | grep -v '^RECOVERY rerun run=[0-9]* basis=workflow '"
+  oldl="grep '^RECOVERY rerun run=[0-9]* basis=candidate ' \"\$OUT\""
+  ok R11.snippet-has-the-every-recovery-line-filter test "$(grep -cF -- "$newl" <<<"$snip")" = 1
+  ok R11.snippet-owner-sentence-visible grep -qF 'RECOVERY owner not determined, read the run before re-running ctx="other ctx"' <<<"$got"
+  ok R11.snippet-prints-no-command-text-at-all test "$(grep -c 'gh run rerun' <<<"$got")" = 0
+  # the pointer lines, the no-cancelled-run line and the read-failed line must survive the extraction, and the OLD extraction (candidates only) must lose
+  # them: the second half proves the assertion can see the defect it guards against.
+  old_snip="${snip/"$newl"/"$oldl"}"
+  ok R11.old-extraction-negative-landed test "$old_snip" != "$snip"
+  while IFS='|' read -r lab rs req a p f rcc frag; do d2=$(reqrow "R11-$lab")
+    [[ "$lab" == readfail ]] && { addxrun "$d2" 700 cla-evidence cancelled; touch "$d2/aruns.fail"; }
+    amr_line not-ready "$rs" "$req" "$a" "$p" "$f" | setamr "$d2" "$rcc"
+    g2=$(snip_run "$d2" "$snip" "$root"); g3=$(snip_run "$d2" "$old_snip" "$root")
+    ok "R11.snippet-keeps.$lab" grep -qF -- "$frag" <<<"$g2"
+    ok "R11.old-extraction-loses.$lab" test "$(grep -cF -- "$frag" <<<"$g3")" = 0
+    ok "R11.snippet-keeps.$lab.marker-first" test "$(sed -n 1p <<<"$g2" | cut -d' ' -f1)" = SOLEUR_CI_REQUIRED_SET
+  done <<'EOF'
+stale-row|stale-row|26|[]|[]|["test"]|1|RECOVERY pointer reason=stale-row ctx="test"
+awaiting|awaiting-approval|26|[]|["test"]|[]|1|RECOVERY pointer reason=awaiting-approval ctx="test"
+stalled|stalled|26|["test"]|[]|[]|1|RECOVERY pointer reason=stalled ctx="test"
+failed-ptr|not-green|26|[]|["a"]|["b"]|1|RECOVERY pointer failed=["b"]
+pending-ptr|not-green|26|[]|["a"]|[]|1|RECOVERY pointer pending=["a"]
+nocancel|not-green|2|["cla-evidence"]|[]|[]|1|RECOVERY no cancelled run at this head ctx="cla-evidence"
+readfail|not-green|2|["cla-evidence"]|[]|[]|1|RECOVERY owner not determined (read failed) ctx="cla-evidence"
+EOF
   got=$(env -u GH_REPO FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_H="$H" PATH="$BIN:$PATH" ADMIN_MERGE_READY_BIN="$d/amr-stub.sh" CLAUDE_PLUGIN_ROOT="$root" bash -c "${snip//PR_NUMBER/abc}" 2>/dev/null)
   ok R11.snippet-no-marker-line-is-an-error eq "$got" "no marker line: treat as state=error"
   helps=$(bash "$SUT" --help | grep -o 'SOLEUR_CI_REQUIRED_SET state=<[^>]*>' | head -1); docs=$(grep -o 'SOLEUR_CI_REQUIRED_SET state=<[^>]*>' "$doc" | head -1)
@@ -1066,7 +1101,7 @@ row_RE3() { local d
   ok RE3.approval.state req_is pending awaiting-approval 2 '[]' '["test"]' '[]'; ok RE3.approval.nomiss nomiss "$d"
   ok RE3.approval.pointer outhas 'RECOVERY pointer reason=awaiting-approval ctx="test"'; }
 
-# RE6: the PRODUCTION layout. No ADMIN_MERGE_READY_BIN: the SUT finds admin-merge-ready.sh NEXT TO ITSELF. The SUT under test (the mutant, in a mutation
+# RE6: the PRODUCTION layout. No ADMIN_MERGE_READY_BIN (vrun unsets an outer one; hermetic_selftest proves it): the SUT finds admin-merge-ready.sh NEXT TO ITSELF. The SUT under test (the mutant, in a mutation
 # run) and the real child are copied into one directory, so a broken default path reads error no-admin-merge-ready instead of complete.
 row_RE6() { local d lay="$SANDBOX/prodlay" save="$SUT"
   rm -rf "$lay"; mkdir -p "$lay"; cp "$SUT" "$lay/ci-head-verdict.sh"; cp "$REAL_AMR" "$lay/admin-merge-ready.sh"
@@ -1076,6 +1111,96 @@ row_RE6() { local d lay="$SANDBOX/prodlay" save="$SUT"
   addrcheck "$d" 12 cla-evidence
   SUT="$lay/ci-head-verdict.sh"; vrun "$d" required "$PR"; SUT="$save"
   ok RE6.complete.state req_is complete all-green 2 '[]' '[]' '[]'; ok RE6.complete.rc rc_is 0; ok RE6.complete.nomiss nomiss "$d"; ok RE6.complete.child-read-only notcalled "$d" "pr merge"; }
+
+# ── Guard 3 rows (second fix batch): the format-character set, the digit class, the exactness controls ─────────────────
+# u8 <hex>: the UTF-8 bytes of a code point (no newline). json_esc <hex>: its JSON escape (a surrogate pair above U+FFFF).
+u8() { python3 -c 'import sys; sys.stdout.buffer.write(chr(int(sys.argv[1], 16)).encode("utf-8"))' "$1"; }
+json_esc() { python3 -c 'import sys
+c = int(sys.argv[1], 16)
+u = [c] if c < 0x10000 else [0xd800 + ((c - 0x10000) >> 10), 0xdc00 + ((c - 0x10000) & 0x3ff)]
+sys.stdout.write("".join("\\u%04x" % x for x in u))' "$1"; }
+# The code points the SUT must REPLACE in wf= text (clean) and REJECT in an array member (amr_arr_ok), and the neighbours it must leave alone. <label>:<hex>.
+# Every range edge is here: the label names the assertion that goes red when that edge moves.
+CP_BAD='us:1f del:7f c1lo:80 c1mid:85 c1hi:9f ls:2028 ps:2029 zwsp:200b zwnj:200c rlm:200f lre:202a rlo:202e wj:2060 invtimes:2062 invsep:2064 lri:2066 pdi:2069 bom:feff tag0:e0000 tagA:e0041 tag7f:e007f'
+CP_OK='nbsp:a0 hairsp:200a hyphen:2010 nnbsp:202f u2065:2065 u206a:206a fefe:fefe uDFFFF:dffff uE0080:e0080'
+cp_free() { # <out-file> <labelled-code-points>: the output holds none of those code points (a raw byte sequence, not its JSON escape)
+  python3 -c 'import sys
+t = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+sys.exit(0 if not any(chr(int(p.split(":")[1], 16)) in t for p in sys.argv[2].split()) else 1)' "$1" "$2"
+}
+
+# R15: the text path. Every bad code point is the only odd character inside a cancelled run's workflow name; no run matches the context, so every
+# run prints as a data-only candidate and the whole `wf=` text is visible. A bad code point must come out as ONE space, a neighbour must come out untouched.
+row_R15() { local d pair lab hex id=1000 ch exp
+  d=$(reqrow R15)
+  for pair in $CP_BAD $CP_OK; do id=$((id + 1)); ch=$(u8 "${pair#*:}"); addxrun "$d" "$id" "a${ch}b" cancelled; done
+  amr_line not-ready not-green 1 '["zzz"]' '[]' '[]' | setamr "$d" 1
+  rrun "$d"
+  ok R15.state req_is absent not-green 1 '["zzz"]' '[]' '[]'; ok R15.rc rc_is 0; ok R15.nomiss nomiss "$d"; ok R15.one req_one
+  ok R15.every-run-is-a-candidate nrerun "$(wc -w <<<"$CP_BAD $CP_OK")"
+  id=1000
+  for pair in $CP_BAD; do id=$((id + 1)); lab="${pair%%:*}"
+    ok "R15.replaced.$lab" outhas "RECOVERY rerun run=$id basis=candidate ctx=\"zzz\" wf=\"a b\""; done
+  for pair in $CP_OK; do id=$((id + 1)); lab="${pair%%:*}"; ch=$(u8 "${pair#*:}"); exp=$(jq -nc --arg c "a${ch}b" '$c')
+    ok "R15.kept.$lab" outhas "RECOVERY rerun run=$id basis=candidate ctx=\"zzz\" wf=$exp"; done
+  ok R15.no-bad-code-point-in-the-output cp_free "$d/out" "$CP_BAD"
+  # the basis=workflow line too: a bidi override in the matched workflow's name is replaced, never printed
+  d=$(reqrow R15-wf); addxrun "$d" 700 "cla-evidence$(u8 202e)" cancelled
+  amr_line not-ready not-green 2 '["cla-evidence"]' '[]' '[]' | setamr "$d" 1; rrun "$d"
+  ok R15.workflow-line.bidi-override outhas 'RECOVERY rerun run=700 basis=workflow ctx="cla-evidence" wf="cla-evidence ": gh run rerun 700'
+  ok R15.workflow-line.no-raw-bytes cp_free "$d/out" "rlo:202e"; }
+
+# R16: the array path. The same code points inside a member of the child's marker make it unparseable (state=error, nothing printed from it); the
+# neighbours are accepted. Then the exactness controls of the certified path: the base is compared whole and case-sensitively, and only `all-green` itself
+# is the plain ready reason.
+row_R16() { local d pair lab hex esc exp val
+  for pair in $CP_BAD; do lab="${pair%%:*}"; hex="${pair#*:}"; esc=$(json_esc "$hex"); d=$(reqrow "R16-$lab")
+    amr_raw not-ready not-green 26 "[\"a${esc}b\"] pending=[] failed=[]" | setamr "$d" 1; rrun "$d"
+    ok "R16.reject.$lab" req_err marker-unparseable; ok "R16.reject.$lab.rc" rc_is 3; ok "R16.reject.$lab.nomiss" nomiss "$d"; done
+  for pair in $CP_OK; do lab="${pair%%:*}"; hex="${pair#*:}"; esc=$(json_esc "$hex"); d=$(reqrow "R16-ok-$lab")
+    exp=$(printf '%s' "[\"a${esc}b\"]" | jq -cs '.[0]')
+    amr_raw not-ready not-green 26 "[\"a${esc}b\"] pending=[] failed=[]" | setamr "$d" 1; rrun "$d"
+    ok "R16.accept.$lab" req_is absent not-green 26 "$exp" '[]' '[]'; ok "R16.accept.$lab.rc" rc_is 0; done
+  for pair in case:Main longer:main2 shorter:mai; do lab="${pair%%:*}"; val="${pair#*:}"; d=$(reqrow "R16-base-$lab")
+    AMR_BASE="$val" amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; rrun "$d"
+    ok "R16.base-$lab.is-not-the-pr-base" req_err marker-mismatch; ok "R16.base-$lab.rc" rc_is 3; done
+  for val in all-green2 x-all-green; do d=$(reqrow "R16-reason-$val")
+    amr_line ready "$val" 26 '[]' '[]' '[]' | setamr "$d" 0; rrun "$d"
+    ok "R16.reason-$val.is-not-all-green" req_err rc-mismatch; ok "R16.reason-$val.rc" rc_is 3; done; }
+
+# R17: the PR argument and the required= field are ASCII digits whatever the locale. In a UTF-8 locale a [0-9] range can match a digit-like character
+# (U+0663), and the failed 10# expansion then aborts only its own command list, so the argument must be refused as a usage error (exit 2, no marker,
+# no gh call). The 15-digit cap is exact. Structural anchors pin the explicit class where no host locale shows the hole.
+hole_locale() { # the first installed UTF-8 locale in which a [0-9] range matches U+0663; empty when this host has none
+  local l
+  for l in en_US.utf8 en_US.UTF-8 C.utf8 C.UTF-8; do
+    LC_ALL=$l bash -c '[[ "$(printf "\xd9\xa3")" =~ ^[0-9]{1,15}$ ]]' 2>/dev/null && { printf '%s' "$l"; return 0; }
+  done
+  return 0
+}
+HOLE_LOC="$(hole_locale)"
+row_R17() { local d loc arg lab pair locs
+  d=$(reqrow R17); amr_line ready all-green 26 '[]' '[]' '[]' | setamr "$d" 0; arg="00000000000$PR"
+  ok R17.fifteen-digit-fixture test "${#arg}" -eq 15
+  VRUN_ENV="ADMIN_MERGE_READY_BIN=$d/amr-stub.sh" vrun "$d" required "$arg" </dev/null
+  ok R17.fifteen-digits.state req_is complete all-green 26 '[]' '[]' '[]'; ok R17.fifteen-digits.rc rc_is 0; ok R17.fifteen-digits.nomiss nomiss "$d"
+  ok R17.fifteen-digits.child-argv eq "$(cat "$d/amr.argv")" "$PR $H --base main GH_REPO="
+  locs="${HOLE_LOC:-C.utf8} C"
+  for loc in $locs; do
+    for pair in "arabic-indic:$(u8 663)" "fullwidth:$(u8 ff14)$(u8 ff12)$(u8 ff14)$(u8 ff12)" "trailing:${PR}$(u8 663)" "leading:$(u8 663)${PR}"; do lab="${pair%%:*}"; arg="${pair#*:}"
+      d=$(mkrow "R17-${loc//[^A-Za-z0-9]/_}-$lab"); VRUN_ENV="LC_ALL=$loc" vrun "$d" required "$arg"
+      ok "R17.$loc.$lab.rc" rc_is 2; ok "R17.$loc.$lab.no-marker" eq "$OUT" ""; ok "R17.$loc.$lab.nocall" eq "$(cat "$d/log")" ""
+      ok "R17.$loc.$lab.refused-by-the-digit-check" grep -q 'must be a number of at most 15 digits' <<<"$ERR"; done
+    d=$(mkrow "R17-${loc//[^A-Za-z0-9]/_}-verdict"); VRUN_ENV="LC_ALL=$loc" vrun "$d" verdict "$(u8 663)"
+    ok "R17.$loc.verdict.rc" rc_is 2; ok "R17.$loc.verdict.no-marker" eq "$OUT" ""
+    # the child's required= field: refused in the parser, so the marker is unparseable (never a count read through a failed 10#)
+    d=$(reqrow "R17-req-${loc//[^A-Za-z0-9]/_}"); amr_raw ready all-green "$(u8 663)" '[] pending=[] failed=[]' | setamr "$d" 0
+    VRUN_ENV="LC_ALL=$loc ADMIN_MERGE_READY_BIN=$d/amr-stub.sh" vrun "$d" required "$PR" </dev/null
+    ok "R17.$loc.required-digit.state" req_err marker-unparseable; ok "R17.$loc.required-digit.rc" rc_is 3
+  done
+  ok R17.pr-digit-class-is-explicit grep -qF '^[0123456789]{1,15}$' "$SUT"
+  ok R17.pr-normalization-failure-is-a-usage-error grep -qF 'is not a plain decimal number' "$SUT"
+  ok R17.required-digit-class-is-explicit grep -qF 'required=([0123456789]{1,9})' "$SUT"; }
 
 # ── reader-bypass lint (Guard 2 last row) ───────────────────────────────────────────────────
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -1207,6 +1332,20 @@ mutant_selftest() {
   else fail "harness controls (survivor reported: $surv_ok, parse crash flagged: $crash_ok, runtime crash flagged: $rt_ok, required-rows control survives: $req_ok)"; fi
 }
 
+# T-B: the production-default row must not see an outer ADMIN_MERGE_READY_BIN. (a) vrun is hermetic: a bogus one exported outside leaves RE6 green;
+# (b) with the seam open the same bogus one reaches the SUT and RE6 goes red (RE6 does read the environment, so (a) is the unset's doing); (c) with the seam
+# open and the REAL child exported outside, the broken-default mutant (M109 / M130) SURVIVES: exactly what the unset prevents.
+hermetic_selftest() {
+  VERDICTS_EXPECTED=$((VERDICTS_EXPECTED + 1)); ASSERTED=$((ASSERTED + 3))
+  local a_ok=0 b_ok=0 c_ok=0
+  if ( export ADMIN_MERGE_READY_BIN="$SANDBOX/no-such-child.sh"; MODE=mutant; ROW_BAD=0; row_RE6 >/dev/null 2>&1; exit $((ROW_BAD > 0 ? 1 : 0)) ); then a_ok=1; fi
+  if ! ( export ADMIN_MERGE_READY_BIN="$SANDBOX/no-such-child.sh"; VRUN_KEEP_AMR_ENV=1; MODE=mutant; ROW_BAD=0; row_RE6 >/dev/null 2>&1; exit $((ROW_BAD > 0 ? 1 : 0)) ); then b_ok=1; fi
+  ADMIN_MERGE_READY_BIN="$REAL_AMR" VRUN_KEEP_AMR_ENV=1 mutant_run SELF-HERM 'admin-merge-ready.sh}"' 'admin-merge-readyX.sh}"' row_RE6
+  [[ "$MUT_LANDED" -eq 1 && "$MUT_SURV" == " row_RE6" && "$MUT_CRASH" -eq 0 ]] && c_ok=1
+  if [[ "$a_ok" -eq 1 && "$b_ok" -eq 1 && "$c_ok" -eq 1 ]]; then pass "hermetic controls (a bogus outer ADMIN_MERGE_READY_BIN leaves RE6 green; with the seam open it reds RE6; the real child outside masks M109 only without the unset)"
+  else fail "hermetic controls (hermetic RE6 green: $a_ok, open-seam RE6 red: $b_ok, open-seam M109 survives: $c_ok)"; fi
+}
+
 run_row() { # <fn> <label>
   VERDICTS_EXPECTED=$((VERDICTS_EXPECTED + 1))
   ROW_BAD=0; MODE=normal
@@ -1276,11 +1415,15 @@ run_row row_R13 "R13 required: a signal while the child runs prints exactly one 
 run_row row_R14 "R14 required: leading-zero PR, 15-digit cap, malformed base object"
 run_row row_RE3 "RE3 required: real child with a failed test and populated arrays (stale-row, stalled, awaiting-approval)"
 run_row row_RE6 "RE6 required: production layout, the child is found next to the script"
+run_row row_R15 "R15 required: bidi, zero-width and tag characters (and DEL, C1, U+2028/9) are replaced in wf= text, neighbours untouched"
+run_row row_R16 "R16 required: the same code points make an array member unparseable; base and reason are compared whole and case-sensitively"
+run_row row_R17 "R17 required: the PR argument and required= are ASCII digits in any locale (exit 2, no marker)"
 echo "== reader-bypass lint =="
 run_row row_L1 "L1  every reader of a PR's CI state reaches the resolver"
 run_row row_L2 "L2  arm-after-ready order: ready-count, gh pr ready, wait-ready-run (known negatives rejected)"
 
 echo "== mutation rows =="
+IA=$'\n'"$(printf '%49s' '')"; IC=$'\n      '   # see the second review-fix batch below
 mutant M1  'select(.head_sha == $h and .event == "pull_request")' 'select(.head_sha == $h and .event == "pull_request" and ([.pull_requests[]?.number] | index(4242)) != null)' row_V11 row_V4
 mutant M2  'read_newest_run "$PR_SHA" "$t_epoch" || fail_api' 'read_newest_run "$PR_SHA" "$((t_epoch - 5))" || fail_api' row_V10
 mutant M3  'read_newest_run "$PR_SHA" "$t_epoch" || { echo' 'read_newest_run "$PR_SHA" "$((t_epoch - 5))" || { echo' row_W12
@@ -1359,7 +1502,7 @@ mutant M62 '"${BASH_REMATCH[2]}" == "$PR"' '"${BASH_REMATCH[2]}" == "${BASH_REMA
 mutant M63 'case "$rc:$AM_VERDICT" in 0:ready|1:not-ready|3:error|4:stale) : ;; *) CL_REASON="rc-mismatch"; return 0 ;; esac' ':' row_R6
 mutant M64 'case "$rc" in 0|1|3|4) : ;; *)' 'case "$rc" in 0|1|2|3|4|130) : ;; *)' row_R6
 mutant M65 'jq -es '\''length == 1 and (.[0] | type == "array")' 'jq -es '\''length >= 1 and (.[0] | type == "array")' row_R6
-mutant M66 'and ((explode | any(. < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232 or . == 8233)) | not)' 'and true' row_R6
+mutant M66 '. <= 917631))) | not))' '. <= 917631))) | not or true))' row_R6 row_R16
 mutant M67 '(( AM_NA + AM_NP + AM_NF <= AM_REQ )) || { AM_ERR=marker-unparseable; return 1; }' ':' row_R6
 mutant M68 'if (( AM_REQ > 0 )); then' 'if (( AM_REQ >= 0 )); then' row_R8
 mutant M69 'req_marker error "$reason" - - - -' 'req_marker error "$reason" - '\''[]'\'' '\''[]'\'' '\''[]'\''' row_R6
@@ -1384,16 +1527,16 @@ mutant M87 '(( need == 1 )) && try_read_cancelled' ':' row_R2
 mutant M88 'elif [[ "$(jq -r '\''length'\'' "$WORK/cancelled.json")" == 0 ]]; then' 'elif false; then' row_R2
 # Review-fix mutants (S1-S10, S13: the control-character set, the round trip, the rc 3/4 pass-through, the base and reason axes, the 10# prefix and
 # digit cap, the recovery id / key / cut / clean guards, the signal trap, the PR argument, the non-fatal base, the production path, the header).
-mutant M89 'any(. < 32 or . == 127 or (. >= 128' 'any(. < 32 or (. >= 128' row_R6
-mutant M90 ' or (. >= 128 and . <= 159) or . == 8232 or . == 8233)) | not)' ' or . == 8232 or . == 8233)) | not)' row_R6
-mutant M91 ' or . == 8232 or . == 8233)) | not)' ')) | not)' row_R6
-mutant M92 '(explode | any(. < 32 or . == 127' '(explode | any(. < 31 or . == 127' row_R6
+mutant M89 'any(. < 32 or . == 127 or (. >= 128' 'any(. < 32 or (. >= 128' row_R6 row_R16
+mutant M90 'any(. < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232' 'any(. < 32 or . == 127 or . == 8232' row_R6 row_R16
+mutant M91 'any(. < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232 or . == 8233' 'any(. < 32 or . == 127 or (. >= 128 and . <= 159)' row_R6 row_R16
+mutant M92 '(explode | any(. < 32 or . == 127' '(explode | any(. < 31 or . == 127' row_R6 row_R16
 mutant M93 '[[ "$a pending=$p failed=$fl" == "$tail" ]] || { AM_ERR=marker-unparseable; return 1; }' ':' row_R6
 mutant M94 'case "$rc" in 3|4) CL_REASON="$AM_REASON"; return 0 ;; esac' ':' row_R6
 mutant M95 '[[ "$AM_BASE" == "$PR_BASE" ]] || { CL_REASON="marker-mismatch"; return 0; }' ':' row_R6
 mutant M96 '[[ "$AM_REASON" == all-green ]] || { CL_REASON="rc-mismatch"; return 0; }' ':' row_R6
 mutant M97 'AM_REQ=$((10#${BASH_REMATCH[6]}))' 'AM_REQ=$((${BASH_REMATCH[6]}))' row_R8
-mutant M98 'required=([0-9]{1,9})' 'required=([0-9]+)' row_R6
+mutant M98 'required=([0123456789]{1,9})' 'required=([0123456789]+)' row_R6
 mutant M99 'and (.id | tostring | test("^[0-9]{1,15}$"))) ]' 'and true) ]' row_R12
 mutant M100 'select($k != "" and .n == $k)' 'select(.n == $k)' row_R12
 mutant M101 'tostring | clean | .[0:80]' 'tostring | clean' row_R12
@@ -1403,30 +1546,87 @@ mutant M104 '  # The marker is the last thing printed: a signal after this point
   trap - INT TERM HUP
 ' '' row_R13
 mutant M105 'trap - INT TERM HUP; fail_api "admin-merge-ready.sh gave' 'fail_api "admin-merge-ready.sh gave' row_R13
-mutant M106 'PR=$((10#$PR))' ':' row_R14
-mutant M107 '^[0-9]{1,15}$ ]] || usage_error' '^[0-9]+$ ]] || usage_error' row_R14
+mutant M106 'PR="$( { printf '\''%s'\'' "$((10#$PR))"; } 2>/dev/null )" || usage_error "<pr> is not a plain decimal number"' ':' row_R14
+mutant M107 '^[0123456789]{1,15}$ ]] || usage_error' '^[0123456789]+$ ]] || usage_error' row_R14
 mutant M108 '2>/dev/null)" || PR_BASE=""' '2>/dev/null)"' row_R14
 mutant M109 'admin-merge-ready.sh}"' 'admin-merge-readyX.sh}"' row_RE6
 mutant M110 ' required-unknown no-culprit bad-base interrupted.' ' required-unknown bad-base interrupted.' row_R11
 mutant M111 'confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)\n'"'"' "$ctxj"' 'gh pr ready --undo, then gh pr ready, with a user token)\n'"'"' "$ctxj"' row_R4 row_RE3
-mutant M113 'or (. >= 128 and . <= 159) or . == 8232 or . == 8233 then 32' 'or . == 8232 or . == 8233 then 32' row_R12
-mutant M114 'or . == 8232 or . == 8233 then 32' 'then 32' row_R12
+mutant M113 'map(if . < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232' 'map(if . < 32 or . == 127 or . == 8232' row_R12 row_R15
+mutant M114 ' or . == 8232 or . == 8233'"${IC}"'or (. >= 8203' "${IC}"'or (. >= 8203' row_R12 row_R15
 mutant M112 'confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)\n'"'"'
       else' 'gh pr ready --undo, then gh pr ready, with a user token)\n'"'"'
       else' row_R4 row_RE3
+# Second review-fix batch. IA / IC: the newline plus the indentation that tells the amr_arr_ok continuation lines (49 spaces) from the clean ones (6 spaces), so
+# every mutant below lands exactly once in ONE of the two spellings. L1-L3 are those continuation lines.
+L1='or (. >= 8203 and . <= 8207) or (. >= 8234 and . <= 8238)'
+L2='or (. >= 8288 and . <= 8292) or (. >= 8294 and . <= 8297)'
+L3='or . == 65279 or (. >= 917504 and . <= 917631)'
+# The single characters, in BOTH spellings: DEL, the C1 lower bound (U+0080) and U+2029 alone. Kill rows are the named assertions of R15 (clean) / R16 (array).
+mutant M115 'def clean: explode | map(if . < 32 or . == 127 or' 'def clean: explode | map(if . < 32 or' row_R15
+mutant M131 'map(if . < 32 or' 'map(if . < 31 or' row_R15
+mutant M116 'map(if . < 32 or . == 127 or (. >= 128 and' 'map(if . < 32 or . == 127 or (. >= 129 and' row_R15
+mutant M117 " or . == 8233${IC}or (. >= 8203" "${IC}or (. >= 8203" row_R15
+mutant M118 'any(. < 32 or . == 127 or (. >= 128' 'any(. < 32 or . == 127 or (. >= 129' row_R16
+mutant M119 " or . == 8233${IA}or (. >= 8203" "${IA}or (. >= 8203" row_R16
+# Every new range, dropped whole, in both spellings (U+200B-F, U+202A-E, U+2060-4, U+2066-9, U+FEFF, U+E0000-7F).
+mutant_ranges() {
+  local path ind row k=0 spec old new
+  for path in clean arr; do
+    if [[ $path == clean ]]; then ind="$IC"; row=row_R15; else ind="$IA"; row=row_R16; fi
+    for spec in "1|or (. >= 8234 and . <= 8238)|$L1" "1|or (. >= 8203 and . <= 8207)|$L1" "2|or (. >= 8294 and . <= 8297)|$L2" "2|or (. >= 8288 and . <= 8292)|$L2" \
+                "3|or (. >= 917504 and . <= 917631)|$L3" "3|or . == 65279|$L3"; do
+      k=$((k + 1)); new="${spec#*|}"; new="${new%%|*}"; old="${spec#*|}"; old="${old#*|}"
+      mutant "MR$k-$path" "$ind$old" "$ind$new" "$row"
+    done
+  done
+}
+mutant_ranges
+# Every range EDGE moved one inside, in both spellings: the fixtures sit exactly on the edges (CP_BAD), so each is a named assertion.
+mutant_edges() {
+  local path ind row spec n from to L
+  for path in clean arr; do
+    if [[ $path == clean ]]; then ind="$IC"; row=row_R15; else ind="$IA"; row=row_R16; fi
+    for spec in "1|>= 8203|>= 8204" "1|<= 8207|<= 8206" "1|>= 8234|>= 8235" "1|<= 8238|<= 8237" "2|>= 8288|>= 8289" "2|<= 8292|<= 8291" \
+                "2|>= 8294|>= 8295" "2|<= 8297|<= 8296" "3|>= 917504|>= 917505" "3|<= 917631|<= 917630"; do
+      IFS='|' read -r n from to <<<"$spec"; case "$n" in 1) L="$L1" ;; 2) L="$L2" ;; *) L="$L3" ;; esac
+      mutant "ME-$path-${from//[^0-9]/}" "$ind$L" "$ind${L/"$from"/"$to"}" "$row"
+    done
+  done
+}
+mutant_edges
+# The digit class and the cap (S-B / T-C). The class is pinned behaviourally where the host locale shows the hole (en_US.utf8 matches U+0663 in [0-9]) and
+# structurally everywhere. The normalization guard is unreachable behind the explicit class, so its removal is pinned by the structural anchor only.
+mutant M120 '[[ "$PR" =~ ^[0123456789]{1,15}$ ]] || usage_error' '[[ "$PR" =~ ^[0-9]{1,15}$ ]] || usage_error' row_R17
+mutant M121 '[[ "$PR" =~ ^[0123456789]{1,15}$ ]] || usage_error' '[[ "$PR" =~ ^[0123456789]{1,14}$ ]] || usage_error' row_R17
+mutant M122 'PR="$( { printf '\''%s'\'' "$((10#$PR))"; } 2>/dev/null )" || usage_error "<pr> is not a plain decimal number"' '{ PR=$((10#$PR)); } 2>/dev/null' row_R17
+mutant M123 '[[ "$PR" =~ ^[0123456789]{1,15}$ ]] || usage_error "<pr> must be a number of at most 15 digits"
+# decimal: `required 007` must equal the child'\''s pr=7, and a leading 0 must never read as octal
+PR="$( { printf '\''%s'\'' "$((10#$PR))"; } 2>/dev/null )" || usage_error "<pr> is not a plain decimal number"' '[[ "$PR" =~ ^[0-9]{1,15}$ ]] || usage_error "<pr> must be a number of at most 15 digits"
+{ PR=$((10#$PR)); } 2>/dev/null' row_R17
+mutant M124 'required=([0123456789]{1,9})' 'required=([0-9]{1,9})' row_R17
+# The certified path compares whole values: base case, base prefix (both directions), reason prefix and substring.
+mutant M125 '[[ "$AM_BASE" == "$PR_BASE" ]]' '[[ "${AM_BASE,,}" == "${PR_BASE,,}" ]]' row_R16
+mutant M126 '[[ "$AM_BASE" == "$PR_BASE" ]]' '[[ "$AM_BASE" == "$PR_BASE"* ]]' row_R16
+mutant M127 '[[ "$AM_BASE" == "$PR_BASE" ]]' '[[ "$PR_BASE" == "$AM_BASE"* ]]' row_R16
+mutant M128 '[[ "$AM_REASON" == all-green ]]' '[[ "$AM_REASON" == all-green* ]]' row_R16
+mutant M129 '[[ "$AM_REASON" == all-green ]]' '[[ "$AM_REASON" == *all-green* ]]' row_R16
+# T-B: the same broken production default (M109) with the REAL child exported in the OUTER environment: vrun's unset must keep it from masking the break.
+ADMIN_MERGE_READY_BIN="$REAL_AMR" mutant M130 'admin-merge-ready.sh}"' 'admin-merge-readyX.sh}"' row_RE6
 mutant_selftest
+hermetic_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
 # MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS (the measured counts at the last edit); raise them in the same edit as a new row.
-MIN_ASSERTIONS=1013
+MIN_ASSERTIONS=1267
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=112
+MIN_MUTANTS=161
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi
