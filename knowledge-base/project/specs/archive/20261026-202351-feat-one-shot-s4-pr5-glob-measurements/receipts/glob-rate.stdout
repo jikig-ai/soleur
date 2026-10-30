@@ -1,0 +1,6 @@
+suite	entries	duration_ms	src	existing_hits	glob_hits	total_hits	incremental_hits	units	runner_changed	not_evaluable	empty	deleted_path_units	rate_conservative	rate_excluded	ci_seconds_added	drained_pairs	tree_files	tree_missing	verdict	reason
+.claude/hooks/grep-q-pipe-guard.test.sh	0	6081	measured	83	0	83	0	200	40	0	1	3	125/200	83/159	456	22	-	-	always_on	over-25-percent
+plugins/soleur	0	-	missing	111	0	111	0	200	40	0	1	3	152/200	111/159	-	-	-	-	baselined	duration-missing
+plugins/soleur/test/boundary-prefix.test.sh	0	1184	floor	79	0	79	0	200	40	0	1	3	121/200	79/159	-	-	-	-	baselined	duration-floor
+tests/scripts/argv-bearer-sweep	0	47034	measured	85	0	85	0	200	40	0	1	3	128/200	85/159	-	-	-	-	baselined	rate-over-and-duration-over-30s
+SOLEUR_PR_AFFECTED_GLOB_RATE base=6512cf3ee554 date=2026-10-26T16:47:08Z units=200 attributable=159 runner_changed=40 not_evaluable=0 empty=1 deleted_path_units=3 suites=4 glob=0 always_on=1 baselined=3 spot_check=3 spot_compared=2010

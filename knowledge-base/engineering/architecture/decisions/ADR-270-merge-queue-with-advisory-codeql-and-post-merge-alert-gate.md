@@ -4,7 +4,7 @@ status: accepted
 date: 2026-10-03
 supersedes: ADR-032 (the 2026-07-01 "keep CodeQL required, no queue" decision and the 2026-09-14 capacity rejection, in part)
 issue: 9454
-related: [4856, 5840, 5780, 5800, 5811, 8149, 8450]
+related: [4856, 5840, 5780, 5800, 5811, 8149, 8450, 10033, 8167]
 related_adrs: [ADR-032, ADR-033, ADR-216]
 tags: [github, ruleset, merge-queue, codeql, terraform, ci]
 brand_survival_threshold: aggregate pattern
@@ -175,9 +175,9 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      new exception, see the 2026-10-09 addendum): a failed
      rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
      ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
-     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook are not
-     changed (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
-     the 2026-10-09 addendum). Accepted residuals: (1) some
+     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook were not
+     changed by this decision (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
+     the 2026-10-09 addendum; a flagless `--step` and the hook gained one too, see the 2026-10-20 addendum). Accepted residuals: (1) some
      required contexts post a PASS on `merge_group` without re-running their suites
      (`tenant-integration-required` and `vendor-pin-required`; see each workflow's `merge_group`
      comment), so in queue mode their only real run is the PR-time one against the PR-time base,
@@ -682,6 +682,197 @@ a fresh build. The stall probe threshold stays 45 minutes, so the window between
 to 30 minutes. The Parameters row, the "Stall probe" section and canary item 10 state the new value; dated records
 above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are left as
 written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
+
+### Addendum 2026-10-20 (#9869, #9868): `--step` and the pre-merge hook refuse an armed BEHIND PR on a merge-queue repo
+
+Decision: the two writers the 2026-10-09 addendum left unguarded now carry the same refusal, and the always-injected rule
+states it. One predicate (`queue_wait_eval` in `sync-pr-behind.sh`: the PR is OPEN, GitHub reports BEHIND or UNKNOWN —
+UNKNOWN is recompute lag, DIRTY never —, auto-merge is armed, and `main` has a `merge_queue` rule) serves three callers.
+(1) A FLAGLESS `sync-pr-behind.sh <PR> --step` answers `kind=queue_wait` with exit 14 and nothing fetched, merged or
+pushed; the two Phase 7 fences (ship, merge-pr mirror) pass `--fence` at their single call site, which skips the guard and
+its extra reads entirely, so the fence's own sync arms (expiry fallback, DIRTY-derived BEHIND, no `merge_queue` rule, a
+failed armed read) are unchanged, and both fences tighten their `--help` probe to require `--fence`. The refusal gets a
+code of its own because exit 11 is the fences' uncounted "no sync needed" arm: an OLD pasted fence would loop on it
+silently, whereas 14 reaches its `*)` arm, a loud bounded stop with the script's line above it naming the action. (2) A new
+read-only mode, `--queue-wait`, prints `queue_wait` or `proceed` from ONE `gh pr view --json state,mergeStateStatus,autoMergeRequest`
+snapshot plus the rules read (no GraphQL queue read, nothing written); a failed, hung or unparseable read is `kind=gh`
+exit 4 (fail closed, as in the standalone loop). (3) After its own `--queue-state` read says `not_queued OPEN armed`, the
+`pre-merge-rebase.sh` hook asks `--queue-wait` (`PR_QUEUE_ATTEMPTS=1`, 5 s per read, a 20 s outer wrapper) and skips its
+origin/main merge-and-push on `queue_wait`; `proceed` syncs silently; ANY untrusted answer (non-zero rc, no or several
+verdict lines, a suffix, a hang) falls through to today's sync with a named `cause=queue_wait_unreadable` note on every
+exit path — the hook never blocks on this read. An UNARMED PR still syncs (the first arm's pre-sync is what the hook is
+for). The skip applies to every `gh pr merge` spelling the parser resolves, `--admin` included, and its context says an
+`--admin` merge bypasses the queue and lands the head as pushed (gate it with `admin-merge-ready.sh`). This supersedes
+the 2026-10-09 sentence "`--step` stays the Phase 7 fence's unguarded call" and the Decision 5 residual for these two
+writers. #9868: `hr-pipeline-skills-never-inline-after-go-route` (the one BEHIND statement that survives a context
+compaction) ends "BEHIND→resync main via the Phase 7 poll, except an armed PR on a merge-queue repo (the queue makes it
+current; sync-pr-behind.sh refuses it)", stated on facts and without the `[ship.phase7.queue_wait]` marker (the
+marker-conditioned class is test-banned); it stays in `AGENTS.rules.md` because compaction survival is the point, and its
+body-hash manifest row and a hash-bound weakening ack were regenerated in the same change.
+
+Accepted residuals, stated so they are not rediscovered: (1) `--fence` is accident prevention, not authentication: a
+hand-rolled loop that types it bypasses the guard (a test pins that no instruction surface outside the two fences and
+`--help` names the flag, and that nothing else calls `--step`). (2) The fences pass `--fence`, so the fence's own fail-open
+arms (armed-read flake, rules-read failure, `QUEUE_RULE=0`) still sync by design; the guard catches only callers that are
+not the fence. (3) An OLD pasted fence paired with the NEW script now STOPS the poll with
+`[ship.phase7.sync_failed] … exited 14` plus the script's `kind=queue_wait` line (re-paste the fence from the current
+SKILL.md) — a loud, bounded stop where it previously synced; in-flight sessions hold pasted fences that are never re-read
+from disk, and a NEW fence with an OLD script is stopped by the tightened probe. (4) Spellings the hook's parser does not
+resolve (flag before the number, a URL operand) stay state L and still sync (the T-Q13 limitation). (5) A PR that GitHub
+never enqueues makes the hook skip its push; the fence's queue-wait expiry fallback (BEHIND only) performs the sync. A PR
+that stays UNKNOWN has no writer: the fence's wait, expiry and sync arms key on `OPEN BEHIND`, so the bound is the poll's
+`MAX_POLL_MIN` and the 'Armed and green but never enqueued' recipe in `merge-queue-dequeue.md`. (6) The base is `main`, as everywhere in the script. No C4 change:
+no new actor, system, container or data store, and the access relationships are unchanged; only which local script or hook
+writes a push changes. Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
+
+### Addendum 2026-10-22 (#9454): the bot-PR reaper defers to the queue
+
+Decision: `cron-bot-pr-reaper` (Inngest, every 2 h) was the one remaining `update-branch` writer after the agent-side
+refusals above; it now joins the armed-BEHIND refusal family. (1) Today exactly one `update-branch` call site exists
+under `apps/web-platform/server/` (the behind arm of `reapBotPr`, marked by a comment), and it is reachable only when
+`main` has no `merge_queue` rule: a memoized `read-merge-queue-rule` step reads `GET .../rules/branches/main?per_page=100`
+once per sweep, selects the rule by `.type`, and passes a `queue | none | unreadable` verdict into `reapBotPr` by value
+(an in-memory cache would be rebuilt on every Inngest replay). `queue` yields `skipped-queue-owned`, `unreadable` yields
+`skipped-queue-unknown`; neither reads check-runs or pushes inside the 6 h grace. This closes the residual the PR #10655
+body named (the reaper still called `update-branch` on armed bot PRs; the 2026-10-09 and 2026-10-20 addenda covered
+only the agent-side writers). (2) Alert, not update: a queue-or-unknown behind PR is routed into the existing `[ci/bot-pr-reaper]`
+stuck-issue arm past 6 h from `created_at` with terminal checks, or past 24 h whatever its checks (hung checks must not
+hide a stranded PR), with neutral reason text (never "green", never a cause the code cannot know). The 48 h watchdog in
+`cron-cloud-task-heartbeat` only warns and covers four head-ref prefixes, and a bounded fallback resync would re-add the
+push the queue exists to remove, so both were rejected (CTO rulings, `decision-challenges.md` of this change).
+(3) Fail closed: a failed request, a non-list body, an empty list or an entry without a string `type` (`main` always carries
+rules, so those are degraded 200s), or a full 100-rule page without `merge_queue` is `unreadable`, reported
+once per sweep to Sentry (`merge-queue-rule-unreadable`, token redacted), and never read as "no queue".
+(4) Accepted residuals: the PR list is not base-filtered, so the verdict is for `main` only; `created_at` over-approximates
+arm age for a re-armed PR (alerts early, the cheap direction); `blocked` while required checks are pending still alerts
+(pre-existing, unchanged); a PR held between 6 h and 24 h by re-running checks stays out of the alert set but keeps an open
+stuck issue open (no close and reopen flap; the held issue's body may still list a PR that has since merged until the
+hold clears); a check-runs read that fails past the grace is held as still running, logged and mirrored to Sentry
+(`bot-pr-checks-read-failed`, status only), and alerts past 24 h; the 48 h stale-bot-PR watchdog in `cron-cloud-task-heartbeat` still words its
+warning for a disarmed PR ("rebase the branch") and can double-warn a queue-stalled one, a wording gap left as is; the
+no-queue update path is retained although this repository's `main` carries the rule, because
+the verdict is a runtime read and the rule has been reverted once before (the 2026-06-30 deadlock kill-switch). The
+`sync-pr-behind.sh` residuals (hard-coded base, triplicated helpers) are tracked on #10832. No C4 change: no new actor,
+system, container or data store.
+
+### Addendum 2026-10-23 (#9454; Ref #10033, #8167): the apply delivery gap follower is detection only
+
+The merge queue raises the push rate to `main`, and the two apply workflows share one concurrency group that keeps a
+single pending run, so a second push evicts the first: the evicted run ends `cancelled` (usually with zero jobs) and nothing
+pages. The R2 state backend has no lock (ADR-006), so that group is the sole serializer of production applies. The sibling
+workflow's `-target` set excludes the deploy-fix resources, so a success of the other workflow is not delivery.
+
+Decision: ship a detect-and-file follower (`.github/workflows/apply-delivery-gap-follower.yml`, `scripts/apply-delivery-gap.sh`)
+and nothing else. It runs on `workflow_run: completed` of either apply workflow (main only), holds `contents: read`,
+`actions: read`, `issues: write`, no secret, no environment, applies nothing and dispatches nothing, and files one
+deduplicated `apply-delivery-gap` issue (a table keyed by workflow and push SHA, with the printed dispatch command). A gap is
+a green run (the issue is the page); a failed or partial read is a red run plus an `apply-delivery-gap-degraded` issue,
+because a run triggered by a queue-made push has no human actor.
+
+Why the two fixes stay deferred (tracked by the still-open #10033 and #8167): merging the two workflows would change the sole
+serializer of lock-less R2 state; a re-dispatch follower writes production and would have to honour two kill switches;
+"poll for the sibling" (the second option on #8167) is rejected because evicted runs have zero jobs and so carry no signal
+to poll; a `schedule:` trigger as a second detection path is rejected because it would duplicate the 12 h
+`scheduled-terraform-drift` cron, which separately detects unapplied Terraform-managed changes (it neither examines individual pushes nor monitors the follower).
+
+Flip evidence bar: build a deferred fix when there are 3 or more distinct undelivered SHAs in 30 days, or one row aged past
+1 hour with real deploy impact, plus a green operator-reviewed rehearsal on a disposable concurrency group and state key.
+The evidence unit is the SHA (the same SHA is re-printed by every reconcile while it stays undelivered): the recipe counts
+distinct 40-hex SHAs over 30 days from the follower's `row` notices in `gh run view --log` (which renders the notice as
+`##[notice]row workflow=<key> sha=<40hex> ...`, title dropped, so the grep anchors on `row workflow=[a-z-]+ sha=[0-9a-f]{40}`, not on
+the `::` spelling; decision row F30), falls back to the close comments
+of past gap issues beyond the 90-day log retention (they list delivered pushes only), and reads the "more than 1 hour" half of
+the bar from the live open issue, never retroactively; issue bodies hold no history. The recipe is in the runbook
+`apply-web-platform-infra-red-run.md`, section "An apply delivery gap issue".
+
+Refinements to the 2026-10-22 ruling, each pinned by the suite: the "last ~50 runs" read became an unfiltered paged read to a
+7-day cutoff with a 10-page ceiling (`run_window_truncated`), because the search parameters were measured stale against the
+unfiltered list; a push is delivered only when a later run of the same workflow succeeded at the push or a descendant AND its
+`apply` job succeeded (a skipped apply, a kill-switched push or another dispatch target are not delivery; for the infra
+workflow the job's step `Terraform apply (SSH-provisioned resources, over the bridge)` must also have concluded `success`,
+because that job can end green with the SSH-provisioned stage skipped, and a missing step fails closed); the infra workflow
+carries its own skip marker, so each candidate is dropped by its own workflow's marker; per-workflow stale caps for
+in-flight deferral (deploy-fix 150 min, infra 120 min, `waiting` 60 min), each above the workflow's `apply` timeout; the open
+issue is identified by bot author plus exact title, never by label alone; `priority/p1-high` is added at create only and
+`priority/p0-critical` is add-only; and a degraded issue pages a blind follower.
+
+A follower failure is a red run only (plus the degraded issue for read-class failures): nothing monitors the follower itself.
+The drift check is a separate detector, not a follower monitor: `scheduled-terraform-drift.yml` is dispatched by Inngest at
+06:00/18:00 UTC and runs an untargeted `terraform plan` (about 12 h latency). It detects unapplied Terraform-managed changes
+(including the `deploy-fix` trigger, `terraform_data.deploy_pipeline_fix`), but it does not examine individual cancelled pushes,
+cannot tell which push was missed, and does not watch the follower.
+
+> **Corrected 2026-10-23 (#10879 review):** the text above first said the drift check "does not catch a missed delivery that is
+> not Terraform state (a `deploy-fix` host copy)". That premise was false: `terraform_data.deploy_pipeline_fix`
+> (`apps/web-platform/infra/server.tf`) is Terraform state whose trigger hash changes with the script, and the drift workflow runs
+> a full-root plan with no `-target`, so a missed `deploy-fix` apply does surface in drift. The close comment likewise no longer
+> says the drift check covers pushes older than the window. See decision row F29 in
+> `knowledge-base/project/specs/archive/20261023-180340-feat-one-shot-apply-delivery-gap-follower/decision-challenges.md`.
+
+Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
+follower never closes without having seen a delivery); the close comment claims only the 7-day horizon ("Every cancelled push
+seen in the last 7 days now has a delivering run, other than any dropped by a workflow skip marker. Pushes older than 7 days are
+not examined by this check."), so a close never asserts anything about older pushes; `failure`, `timed_out` and `startup_failure` runs are not follower
+candidates: when they have jobs `notify-apply-failure` mails, but a run with zero jobs (a refused workflow file) fires no
+email and is caught only by the drift check (up to 12 h) and runbook triage (the runbook's "Zero jobs and no email" section);
+a preflight-only cancelled run is classed
+`cancelled-mid-run` (conservative); a disabled follower workflow is silent (its cadence is per apply run, so absence is
+undetectable); detection can be delayed to the completion of the evicting run if the platform does not emit
+`workflow_run` for a run cancelled while pending (undocumented; the design does not depend on it); the lookup of the open
+issue is bounded by the 500 most recent open bot-authored issues and warns when it reaches that bound; CODEOWNERS rows for
+the script, suite and fixtures, and a suite-affected-paths declaration if the orphan census needs one, follow after the
+PRs that currently edit those files merge. No C4 change: the follower is GitHub-internal, adds no actor, system, container
+or data store, and no monitor.
+
+### Addendum 2026-10-24 (#9454; Ref #10832): the sync script judges an armed BEHIND PR against its own base branch
+
+Residual (6) of the 2026-10-20 addendum ("the base is `main`, as everywhere in the script") is partly closed.
+`plugins/soleur/scripts/sync-pr-behind.sh` reads `rules/branches/<base>` from the PR's own `baseRefName`, validated against a
+conservative allowlist with `/` encoded as `%2F`, instead of a literal `main`; the request for a `main`-based PR is
+byte-identical. Still `main`: `sync_step`'s fetch and merge, the Phase 7 fences' inline rules reads, and the pre-merge hook's
+own merge. The `pr view` snapshot now has four fields (state, merge state, armed bit, `baseRefName`); the standalone loop
+widens its one pre-loop head read, so no path makes an extra `gh` call. One bounds helper (`qb_bounds`) and one sanitiser
+(`qb_clean`) replace the triplicated blocks, with identical behaviour for `main`.
+
+Judging the rules against the real base changed what a zero-rule answer means for a non-`main` base: the old script refused it
+by accident (it read `main`), and the new read would have handed it to a sync that merges `origin/main`. So the change adds
+two internal verdicts, `foreign` (a zero-rule read on a non-`main` base) and `badbase` (an empty or unsupported base name),
+with one arm per caller. Flagless `--step` and the standalone loop print `kind=gh` rc 4 and exit 4 with a "not a transient
+error" lead that says to sync by hand against that base (not "retarget": the script has never synced from a non-`main` trunk,
+so on a repo whose default branch is not `main` every PR is a "non-main" PR and retargeting is no help); `--queue-wait` prints
+`queue_wait` and exits 0, so the pre-merge hook skips its own `origin/main` merge instead of falling through to it. An unknown
+internal verdict fails closed at all three callers. The scope is deliberately narrow: only an ARMED BEHIND PR (UNKNOWN too, but
+at flagless `--step` and `--queue-wait` only: the standalone loop exits `not_behind` first for CLEAN, BLOCKED and UNKNOWN) with
+a non-`main` base and no queue rule, or a base the allowlist rejects (`badbase` also refuses a git-legal name such as `rel+1`
+even when that base has a queue). A disarmed or DIRTY non-`main` PR keeps syncing `origin/main` exactly as
+before (the suite pins both as known-wrong; at the standalone loop a CLEAN or BLOCKED PR exits `not_behind` and is not judged at all), and the Phase 7 fences pass `--fence`, skip the guard and keep their inline `main`
+reads, so accepted residuals (1) (`--fence` is accident prevention) and (2) (the fence's own fail-open arms) of the 2026-10-20
+addendum extend to this class and the fence expiry arm is the live exposure. The refusal is a convenience interlock, not an
+authorization boundary: a PR author can retarget between the snapshot and the read. The hook is still fail-open by design for
+the reads it cannot trust: the `--queue-wait` `unreadable` and snapshot-failure answers stay rc 4, so for a non-`main` base with
+a transient failed read the hook falls through to its own merge; "skips instead of falling through" holds only for `foreign`
+and `badbase`. The hook's skip text now says so (the skip is ALSO a refusal for a base with no queue, and disarm-first is only
+for a `main`-based PR), because it cannot tell `wait` from `foreign` without a third stdout token that its strict parse would
+read as a fall-through to the sync.
+
+Routes this change does not close (summary; the full list is on #10958): flagless `--step` on an UNSTABLE, DRAFT or HAS_HOOKS
+PR (the guard judges only BEHIND and UNKNOWN); the Phase 7 fence's DIRTY resolver path; the CONFLICTING recovery prose in
+`plugins/soleur/skills/ship/SKILL.md` and Phase 2 of `plugins/soleur/skills/merge-pr/SKILL.md` (an unconditional
+`git merge origin/main`); hook paths where the queue-wait block never runs (queue state not `not_queued`, an unresolved PR
+number); a hook or fence running an OLDER checkout's copy of the script (transitional); and a repo whose default branch is not
+`main`.
+
+Ruled by CTO agent, 2026-10-23 (rows F1-F7 in the branch's `decision-challenges.md`): making `sync_step` merge `origin/<base>`
+(option (c)) was cut because it touches the shared merge and push path the fences use. These places keep saying "main has a
+merge queue" on purpose: the fence prose in `plugins/soleur/skills/ship/SKILL.md` and `plugins/soleur/skills/merge-pr/SKILL.md`,
+`plugins/soleur/scripts/monitor-pr-checks.sh`, `plugins/soleur/lib/harness.ts`, `plugins/soleur/antigravity/INSTRUCTIONS.md`,
+`plugins/soleur/codex/INSTRUCTIONS.md`, `plugins/soleur/devin/INSTRUCTIONS.md`, `infra/github/README.md`,
+`apps/web-platform/server/inngest/functions/cron-bot-pr-reaper.ts`, `plugins/soleur/skills/ship/references/settle-then-admin-merge.md`,
+`plugins/soleur/skills/ship/references/queue-mode.md` (line 5, the Queue mode paragraph),
+`plugins/soleur/skills/ship/references/merge-queue-dequeue.md`, `plugins/soleur/skills/drain-prs/SKILL.md`, `AGENTS.rules.md`
+(rule-body hashes pin it) and `plugins/soleur/lib/pr-merge-poll.ts`. Everything left is tracked on #10958 (Ref #9454, Ref
+#10832). No C4 change: the script talks only to GitHub through `gh`, and no actor, system, container, data store or access
+relationship changes.
 
 ## Cost Impacts
 

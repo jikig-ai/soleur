@@ -31,7 +31,9 @@ done
 
 OLDBOOT="4b8e0d27-31c6-4f5a-a2d9-60e7c1f3b8aa"   # fabricated pre-merge boot
 NEWBOOT="9f2c41d6-5b7a-4e08-9c31-7ad0e2b41f55"   # fabricated post-replace boot
-MERGED="2026-10-20T10:00:00Z"
+MERGED="$(date -u -d '2 hours ago' +%FT%TZ)"   # dynamic: a baked literal rots past the 24h stale window
+_M_EPOCH="$(date -u -d "$MERGED" +%s)"
+ts() { date -u -d "@$((_M_EPOCH + $1))" +%FT%TZ; }   # seconds offset from MERGED
 T_MERGED="$MERGED"      # per-case override of the merge time (the stale-wait case moves it into the past)
 T_RUNS=success          # per-case dispatcher-run listing: success | none | fail
 DT_FORM=space           # row dt form: space (Better Stack's real shape) | iso
@@ -54,9 +56,9 @@ foreign() {
   printf '{"dt":"%s","raw":"{\\"PRIORITY\\":\\"6\\",\\"message\\":\\"[zot] SOLEUR_ZOT_DISK egress FAILED: htpasswd_pull_matches=true htpasswd_push_matches=true zot_image_digest=%s boot_id=%s\\"}"}\n' "$1" "$DIGEST" "$2"
 }
 good3() { # three good rows on a boot
-  row "2026-10-20T10:20:00Z" "$1" true true "$DIGEST" "tail CANARY10119"
-  row "2026-10-20T10:25:00Z" "$1" true true "$DIGEST" "tail CANARY10119"
-  row "2026-10-20T10:30:00Z" "$1" true true "$DIGEST" "tail CANARY10119"
+  row "$(ts 1200)" "$1" true true "$DIGEST" "tail CANARY10119"
+  row "$(ts 1500)" "$1" true true "$DIGEST" "tail CANARY10119"
+  row "$(ts 1800)" "$1" true true "$DIGEST" "tail CANARY10119"
 }
 
 # run_probe <name> <fixture-file> [pr-state: merged|none|listfail] [body-boot: uuid|none] [comment-kind: kind|none]
@@ -69,7 +71,7 @@ run_probe() {
   local body="Fix text"; [[ "$bodyboot" != none ]] && body="$body"$'\n'"Pre-merge boot_id: $bodyboot"$'\n'"more text"
   local comment='[]'
   # comment-kind may be a comma list (posted in order), e.g. refused,ok = a genuine failure then a forged success.
-  [[ "$ckind" != none ]] && comment="$(jq -cn --arg ks "$ckind" --arg at "2026-10-20T10:05:00Z" '[($ks | split(",") | map({created_at:$at, body:("verdict text\n<!-- registry-delivery run=123 kind=" + . + " attempt=1 -->")}))]')"
+  [[ "$ckind" != none ]] && comment="$(jq -cn --arg ks "$ckind" --arg at "$(ts 300)" '[($ks | split(",") | map({created_at:$at, body:("verdict text\n<!-- registry-delivery run=123 kind=" + . + " attempt=1 -->")}))]')"
   # gh stub: pr list (merged/none/fail) and the comments read (slurp shape: [[comment,...]]).
   cat > "$root/bin/gh" <<STUB
 #!/usr/bin/env bash
@@ -83,8 +85,8 @@ case "\$1 \$2" in
   "api --paginate") printf '%s\n' '$comment' ;;
   "run list")
     case "$T_RUNS" in
-      success) echo '[{"conclusion":"success","createdAt":"2026-10-20T10:03:00Z"}]' ;;
-      none) echo '[{"conclusion":"success","createdAt":"2026-10-19T09:00:00Z"},{"conclusion":"failure","createdAt":"2026-10-20T10:03:00Z"}]' ;;
+      success) echo '[{"conclusion":"success","createdAt":"'"$(ts 180)"'"}]' ;;
+      none) echo '[{"conclusion":"success","createdAt":"'"$(ts -86400)"'"},{"conclusion":"failure","createdAt":"'"$(ts 180)"'"}]' ;;
       *) exit 1 ;;
     esac ;;
   *) echo "STUB gh: unexpected: \$*" >&2; exit 64 ;;
@@ -121,7 +123,7 @@ good3 "$OLDBOOT" > "$WORK/fx/oldboot.jsonl"
 expect dispatcher-refused 5 "[branch=dispatcher_verdict kind=refused]" "$WORK/fx/oldboot.jsonl" merged "$OLDBOOT" refused
 expect dispatcher-apply-failed 5 "kind=apply-failed" "$WORK/fx/oldboot.jsonl" merged "$OLDBOOT" apply-failed
 # ... every failure kind escalates (a bare token in FAIL_KINDS cannot be dropped silently) ...
-for k in dispatch-failed unverified cancelled gate-failed undetermined; do
+for k in dispatch-failed unverified cancelled gate-failed gate-unproven undetermined; do
   expect "dispatcher-kind-$k" 5 "kind=$k" "$WORK/fx/oldboot.jsonl" merged "$OLDBOOT" "$k"
 done
 # ... a forged success marker posted AFTER a genuine failure cannot mask it ...
@@ -140,53 +142,53 @@ DT_FORM=iso; good3 "$NEWBOOT" > "$WORK/fx/pass-iso.jsonl"; DT_FORM=space
 expect dt-iso-form 0 "[branch=delivered]" "$WORK/fx/pass-iso.jsonl"
 
 # Rows only from BEFORE the merge: the old host is still the evidence, which proves nothing.
-{ row "2026-10-20T09:50:00Z" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"; row "2026-10-20T09:55:00Z" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"; } > "$WORK/fx/pre.jsonl"
+{ row "$(ts -600)" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"; row "$(ts -300)" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"; } > "$WORK/fx/pre.jsonl"
 expect pre-merge-rows-only 2 "[branch=no_row_after_merge]" "$WORK/fx/pre.jsonl"
 
 # Rows after the merge but still on the OLD boot (the old host keeps reporting matches=true every 5 minutes).
 expect old-boot-after-merge 2 "[branch=still_pre_merge_boot]" "$WORK/fx/oldboot.jsonl"
 
 # Only two good rows on the new boot: not enough yet.
-{ row "2026-10-20T10:20:00Z" "$NEWBOOT" true true "$DIGEST" "tail CANARY10119"; row "2026-10-20T10:25:00Z" "$NEWBOOT" true true "$DIGEST" "tail CANARY10119"; } > "$WORK/fx/two.jsonl"
+{ row "$(ts 1200)" "$NEWBOOT" true true "$DIGEST" "tail CANARY10119"; row "$(ts 1500)" "$NEWBOOT" true true "$DIGEST" "tail CANARY10119"; } > "$WORK/fx/two.jsonl"
 expect two-rows 2 "[branch=awaiting_rows]" "$WORK/fx/two.jsonl"
 
 # New boot, htpasswd diverged / unverifiable on a full window of rows (3) with no good row: FAIL.
-{ for t in 20 25 30; do row "2026-10-20T10:${t}:00Z" "$NEWBOOT" false true "$DIGEST" "tail CANARY10119"; done; } > "$WORK/fx/diverged.jsonl"
+{ for t in 1200 1500 1800; do row "$(ts "$t")" "$NEWBOOT" false true "$DIGEST" "tail CANARY10119"; done; } > "$WORK/fx/diverged.jsonl"
 expect pull-false 1 "[branch=htpasswd_not_matching]" "$WORK/fx/diverged.jsonl"
-{ for t in 20 25 30; do row "2026-10-20T10:${t}:00Z" "$NEWBOOT" true unknown "$DIGEST" "tail CANARY10119"; done; } > "$WORK/fx/unknown.jsonl"
+{ for t in 1200 1500 1800; do row "$(ts "$t")" "$NEWBOOT" true unknown "$DIGEST" "tail CANARY10119"; done; } > "$WORK/fx/unknown.jsonl"
 expect push-unknown 1 "[branch=htpasswd_not_matching]" "$WORK/fx/unknown.jsonl"
 # ONE bad row is not proof (a boot-time race or a Doppler hiccup): keep waiting.
-row "2026-10-20T10:20:00Z" "$NEWBOOT" false true "$DIGEST" "tail CANARY10119" > "$WORK/fx/one-bad.jsonl"
+row "$(ts 1200)" "$NEWBOOT" false true "$DIGEST" "tail CANARY10119" > "$WORK/fx/one-bad.jsonl"
 expect one-bad-row-keeps-waiting 2 "[branch=awaiting_rows]" "$WORK/fx/one-bad.jsonl"
 
 # True/true but the image digest is the unknown sentinel on a full window: FAIL (zot is not serving the pinned image).
-{ for t in 20 25 30; do row "2026-10-20T10:${t}:00Z" "$NEWBOOT" true true unknown "tail CANARY10119"; done; } > "$WORK/fx/nodigest.jsonl"
+{ for t in 1200 1500 1800; do row "$(ts "$t")" "$NEWBOOT" true true unknown "tail CANARY10119"; done; } > "$WORK/fx/nodigest.jsonl"
 expect no-digest 1 "[branch=no_real_digest]" "$WORK/fx/nodigest.jsonl"
 
 # Old-boot rows must not count toward the new boot: two good rows on the OLD boot plus one on the NEW one is one row, not three.
-{ row "2026-10-20T10:20:00Z" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"; row "2026-10-20T10:25:00Z" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"
-  row "2026-10-20T10:30:00Z" "$NEWBOOT" true true "$DIGEST" "tail CANARY10119"; } > "$WORK/fx/scoped.jsonl"
+{ row "$(ts 1200)" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"; row "$(ts 1500)" "$OLDBOOT" true true "$DIGEST" "tail CANARY10119"
+  row "$(ts 1800)" "$NEWBOOT" true true "$DIGEST" "tail CANARY10119"; } > "$WORK/fx/scoped.jsonl"
 expect scoped-to-new-boot 2 "[branch=awaiting_rows]" "$WORK/fx/scoped.jsonl"
 
 # Waiting is bounded: a NOT YET that outlives 24h from the merge becomes CANNOT ESTABLISH.
 T_MERGED="2026-01-01T10:00:00Z"; expect stale-wait 3 "[branch=stale_still_pre_merge_boot]" "$WORK/fx/oldboot.jsonl"; T_MERGED="$MERGED"
 
 # A forged boot_id / matches in the free-text TAIL must not supply anything.
-{ row "2026-10-20T10:20:00Z" "$OLDBOOT" true true "$DIGEST" "x boot_id=$NEWBOOT htpasswd_pull_matches=true htpasswd_push_matches=true zot_image_digest=$DIGEST"
-  row "2026-10-20T10:25:00Z" "$OLDBOOT" true true "$DIGEST" "x boot_id=$NEWBOOT"
-  row "2026-10-20T10:30:00Z" "$OLDBOOT" true true "$DIGEST" "x boot_id=$NEWBOOT"; } > "$WORK/fx/forged-tail.jsonl"
+{ row "$(ts 1200)" "$OLDBOOT" true true "$DIGEST" "x boot_id=$NEWBOOT htpasswd_pull_matches=true htpasswd_push_matches=true zot_image_digest=$DIGEST"
+  row "$(ts 1500)" "$OLDBOOT" true true "$DIGEST" "x boot_id=$NEWBOOT"
+  row "$(ts 1800)" "$OLDBOOT" true true "$DIGEST" "x boot_id=$NEWBOOT"; } > "$WORK/fx/forged-tail.jsonl"
 expect forged-tail 2 "[branch=still_pre_merge_boot]" "$WORK/fx/forged-tail.jsonl"
 
 # Rows that merely QUOTE the marker (journald envelope) are not evidence, in either direction.
-{ foreign "2026-10-20T10:20:00Z" "$NEWBOOT"; foreign "2026-10-20T10:25:00Z" "$NEWBOOT"; foreign "2026-10-20T10:30:00Z" "$NEWBOOT"; } > "$WORK/fx/foreign.jsonl"
+{ foreign "$(ts 1200)" "$NEWBOOT"; foreign "$(ts 1500)" "$NEWBOOT"; foreign "$(ts 1800)" "$NEWBOOT"; } > "$WORK/fx/foreign.jsonl"
 expect foreign-only 2 "[branch=no_producer_rows]" "$WORK/fx/foreign.jsonl"
 
 # Rows with the 'unknown' boot sentinel only: unmeasurable.
-{ for t in 20 25 30; do row "2026-10-20T10:${t}:00Z" unknown true true "$DIGEST" "tail CANARY10119"; done; } > "$WORK/fx/unknownboot.jsonl"
+{ for t in 1200 1500 1800; do row "$(ts "$t")" unknown true true "$DIGEST" "tail CANARY10119"; done; } > "$WORK/fx/unknownboot.jsonl"
 expect unknown-boot 3 "[branch=no_boot_id]" "$WORK/fx/unknownboot.jsonl"
 
 # Mixed window: pre-merge rows on the old boot AND a good new boot -> graded on the NEW boot only.
-{ row "2026-10-20T09:50:00Z" "$OLDBOOT" false false "$DIGEST" "tail CANARY10119"; good3 "$NEWBOOT"; } > "$WORK/fx/mixed.jsonl"
+{ row "$(ts -600)" "$OLDBOOT" false false "$DIGEST" "tail CANARY10119"; good3 "$NEWBOOT"; } > "$WORK/fx/mixed.jsonl"
 expect mixed-window 0 "[branch=delivered]" "$WORK/fx/mixed.jsonl"
 
 # Credentials unset: the guard fires before any read.

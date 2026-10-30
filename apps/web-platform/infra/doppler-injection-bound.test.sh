@@ -48,8 +48,8 @@
 #      indirect expansion over a per-host key name Terraform bakes in and the tracked unit never
 #      contains — `${!WEB_ZOT_CONSUMER_URL_KEY}` — where the key expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1
 #      (the `*_URL_KEY=%s` printf of each server.tf install provisioner builds it; the git-data and inngest
-#      keys are identity mappings today — see ACK_REASONS for the measured correction). Two of the four do
-#      it in their SCRIPT now and two still do it in the unit's own ExecStart (item 5). A literal
+#      keys are identity mappings today — see ACK_REASONS for the measured correction). All four do
+#      it in their SCRIPT now, after an unconditional xtrace refusal (item 5). A literal
 #      `--only-secrets` list in a TRACKED unit cannot name a per-host secret — the unit contains a
 #      VARIABLE name, never the secret's name, so there is nothing to enumerate. That alone is the
 #      limit, and it is sufficient. An earlier revision also argued "the flag is fail-closed on a
@@ -59,14 +59,15 @@
 #      rationale using the exact flag this repo already uses. It is a real limit of the invariant,
 #      not a false positive to predicate away, so it is an ACK with a reason.
 #
-#   5. THE UNIT WRAPPER MUST NOT EXPAND THE SECRET (#9639). Two of those four probe units used to
+#   5. THE UNIT WRAPPER MUST NOT EXPAND THE SECRET (#9639). All four probe units used to
 #      resolve the key in the unit's own ExecStart (`export URL="${!KEY}"`), which runs before the
 #      script's xtrace refusal and so prints the secret on a traced launch. They now run the
 #      script directly and the SCRIPT resolves the key after its refusal. Two consequences here:
 #      (a) the unit-side `${!` stopped being the reason they are in the population, so a script-side
 #      `${!<NAME>_KEY}` is a population reason too (bound to the `_KEY` convention, row G1.9);
 #      (b) a wrapper stage fails any doppler-run unit whose Exec directive still expands a secret,
-#      unless it is in WRAPPER_ACK_REASONS (the two unfixed siblings), whose pin can only ratchet down.
+#      unless it is in WRAPPER_ACK_REASONS — now EMPTY (the last sibling is fixed); the dict can
+#      only ratchet down, so a re-introduced expansion is an unacked FINDING.
 #
 # THE LISTS ARE AUTHORED AND COMMENTED, NEVER DERIVED. Two independent exhaustive derivations over
 # the same two sibling scripts produced DIFFERENT answers in both directions, and both misses are
@@ -164,7 +165,9 @@ cat > "$SCANNER" <<'PYEOF'
 #       expansion in the unit itself, or a ${!<NAME>_KEY} expansion in its target script (#9639));
 #   (5) check the bound is a `doppler run` FLAG (before the `--`) and names at least one secret;
 #   (6) reconcile against ACK_REASONS and pin its cardinality;
-#   (7) check each AUTHORED list against a LOWER BOUND of names its script provably reads.
+#   (7) check each AUTHORED list against a LOWER BOUND of names its script provably reads;
+#   (8) inner -c stage (#11103): no Exec directive of a doppler-run unit expands an injected
+#       name ($NAME/${NAME}/$${NAME}) inside a `bash -c` body — literal or @@SENTINEL@@-delivered.
 # Exit: 0 GREEN | 2 violations | 3 census floor | 4 per-surface enumeration floor | 5 ack
 #       inconsistency | 6 read-set lower-bound violation.
 import os, re, sys
@@ -211,11 +214,12 @@ MIN_POPULATION = 5
 # Row R3's "non-seam read-set" is the script's read-set MINUS the names Guard 1's in-script argv
 # gate unsets. Re-deriving it here would invert the intent: a naive read-set would demand every
 # fixture seam appear in `--only-secrets`, i.e. that the unit INJECT the very names the gate
-# exists to strip. These are the 32 names Guard 1's gates unset (15 measured 2026-09-03 +
+# exists to strip. These are the 38 names Guard 1's gates unset (15 measured 2026-09-03 +
 # CUTOVER_BOOT_ID added by #7777's latch-clear record, which stamps the boot the clear was
 # recorded under, + CUTOVER_NOOP_THROTTLE_S added by #7696's noop-heartbeat throttle, +
 # CUTOVER_NFT_CMD and CUTOVER_PHONE_HOME_CMD added by #10382's measured nftables re-read on
-# the noop emit, + the thirteen #6780 REFRESH_* seams); when a Guard-1 gate's list changes,
+# the noop emit, + the six LUKS key-probe seams added by #9927, + the thirteen #6780 REFRESH_*
+# seams); when a Guard-1 gate's list changes,
 # this copy moves with it.
 GUARD1_UNSET = {
     'CUTOVER_BOOT_ID', 'CUTOVER_CURL_CMD', 'CUTOVER_DONE_OWNER_MARKER', 'CUTOVER_FLAG_SET_CMD',
@@ -223,6 +227,10 @@ GUARD1_UNSET = {
     'CUTOVER_NFT_CMD', 'CUTOVER_NOOP_THROTTLE_S', 'CUTOVER_PHONE_HOME_CMD',
     'CUTOVER_REDIS_CLI_CMD', 'CUTOVER_REDIS_DBSIZE',
     'CUTOVER_SYSTEMCTL_CMD',
+    # #9927 — the LUKS key-continuity probe's six fixture seams (key path, stamp path, cryptsetup,
+    # findmnt, meminfo, oom_score_adj path), unset by the same --fixture-seams argv gate.
+    'CUTOVER_CRYPTSETUP_CMD', 'CUTOVER_FINDMNT_CMD', 'CUTOVER_LUKS_KEY_FILE',
+    'CUTOVER_LUKS_PROBE_STAMP', 'CUTOVER_MEMINFO', 'CUTOVER_OOM_ADJ_PATH',
     'CUTOVER_VERIFY_INTERVAL_S', 'CUTOVER_VERIFY_WINDOW_S', 'INNGEST_CUTOVER_LATCH',
     'INNGEST_CUTOVER_LATCH_MOUNT', 'INNGEST_CUTOVER_STATE',
     # #6780 — the thirteen REFRESH_* fixture seams inngest-config-refresh.sh's own
@@ -235,7 +243,15 @@ GUARD1_UNSET = {
     'REFRESH_STATE_DIR', 'REFRESH_TRUSTED_ROOT', 'REFRESH_VERIFY_TIMEOUT_S',
     'REFRESH_ZOT_ENV_FILE',
 }
-GUARD1_UNSET_CARDINALITY = 32
+GUARD1_UNSET_CARDINALITY = 38
+
+# The presence test of an xtrace refusal, `${INNGEST_REDIS_LUKS_KEY:+x}`, is not a read of the value.
+# lint-shell-trace-credential-refusal requires that test for EVERY credential name the file references,
+# so the flip script's refusal covers INNGEST_REDIS_LUKS_KEY even though the script reads the key from
+# the root-only /etc/default/inngest-luks (a pipe to cryptsetup) and the unit's environment must NOT
+# carry it (#9927 item 2). Only this exact SHAPE is removed before the read scan; any other expansion
+# of the name still counts as a read and still fails the read-set check.
+XTRACE_PRESENCE_TEST_RE = re.compile(r'\$\{INNGEST_REDIS_LUKS_KEY:\+x\}')
 
 # ── the ack list: AUTHORED, each entry carrying WHY, cardinality pinned ───────────────────────
 ACK_REASONS = {
@@ -262,13 +278,22 @@ ACK_REASONS = {
         'the script resolves WEB_NIC_GUARD_URL_KEY by indirect expansion (${!WEB_NIC_GUARD_URL_KEY}), which '
         'the WEB_NIC_GUARD_URL_KEY printf in server.tf builds PER HOST (WEB_NIC_GUARD_URL_WEB_1) — same fail-closed '
         'multi-host break',
+    'web-bash-synthetic.service':
+        'the script resolves WEB_BASH_SYNTHETIC_URL_KEY by indirect expansion (${!WEB_BASH_SYNTHETIC_URL_KEY}), which '
+        'the WEB_BASH_SYNTHETIC_URL_KEY printf in server.tf builds PER HOST (WEB_BASH_SYNTHETIC_URL_WEB_1 / _WEB_2) — no literal '
+        'list in a tracked unit can name it. The script is the same class as its siblings in the one respect that matters here: '
+        'its SOLEUR_WBS_* fixture seams (container, PATH prefix, verdict lib) are unset unless it is started with --fixture-seams, '
+        'which the unit never passes, so a stray name in the injected prd root steers nothing',
     'inngest-consumer-probe.service':
-        'indirect expansion of INNGEST_CONSUMER_URL_KEY; the INNGEST_CONSUMER_URL_KEY printf in server.tf maps it to the '
-        'identity name today (one dedicated inngest host), but the unit still never names the secret, so '
-        'the list would have to be authored against a variable rather than a name',
+        'the script resolves INNGEST_CONSUMER_URL_KEY by indirect expansion (${!INNGEST_CONSUMER_URL_KEY}), which '
+        'the INNGEST_CONSUMER_URL_KEY printf in server.tf maps to the identity name today (one dedicated inngest '
+        'host) — the unit never names the secret, so the list would have to be authored against a variable '
+        'rather than a name',
     'web-git-data-probe.service':
-        'indirect expansion of GIT_DATA_HEARTBEAT_URL_KEY; the GIT_DATA_HEARTBEAT_URL_KEY printf in server.tf is an '
-        'identity mapping today for the single git-data host, with the same never-named-in-the-unit limit',
+        'the script resolves GIT_DATA_HEARTBEAT_URL_KEY by indirect expansion (${!GIT_DATA_HEARTBEAT_URL_KEY}), which '
+        'the GIT_DATA_HEARTBEAT_URL_KEY printf in server.tf maps to the identity name today (one git-data '
+        'host) — the unit never names the secret, so the list would have to be authored against a variable '
+        'rather than a name',
     # -- exemption class B: the read-set is not authorable from the tracked source ---------------
     'cron-egress-resolve.service':
         'read-set is not derivable: cron-egress-resolve.sh:149-157 reads SENTRY_INGEST_DOMAIN / '
@@ -298,35 +323,119 @@ ACK_REASONS = {
         'apply_target=inngest-host, which does not reach the web hosts, so a bound added here '
         'would merge green and land nowhere. Tracked in #7775.',
 }
+# 8 -> 9 (#10455 b): web-bash-synthetic.service, class A (per-host key name; its seams are gated behind --fixture-seams).
 # 7 -> 8: cron-egress-firewall.service, added when the review widened the seam predicate. This
 # pin exists so the escape hatch cannot grow silently; it should only ever RATCHET DOWN as #7775
 # drains it.
-ACK_CARDINALITY = 8
+ACK_CARDINALITY = 9
 
 # ── wrapper acks (#9639): units whose Exec directive STILL expands a secret by indirect expansion ─────────────────
 # An Exec directive that expands a doppler-injected secret runs that expansion before the target script can refuse to
-# run under xtrace, so the secret reaches the journal on a traced launch. web-private-nic-guard and
-# web-zot-consumer-probe were fixed (the script resolves the key after its refusal). These two have the same wrapper
-# shape and NO xtrace refusal to order a moved lookup against; adding one is a separate change, so they are recorded as
-# NOT fixed on #9639. This list can only ratchet DOWN: a fix removes the entry and lowers the pin, and an entry for a
-# unit that no longer expands anything is itself a failure. Each entry is (the EXACT set of names the unit expands, the
-# reason): an acked unit that gains a second expansion, or swaps the one it has, is a finding again.
-WRAPPER_ACK_REASONS = {
-    'web-git-data-probe.service':
-        (('GIT_DATA_HEARTBEAT_URL_KEY',),
-         'NOT fixed (#9639): the unit expands GIT_DATA_HEARTBEAT_URL_KEY in its ExecStart wrapper and its script has no '
-         'xtrace refusal for a moved lookup to follow; adding one is a separate change'),
-    'inngest-consumer-probe.service':
-        (('INNGEST_CONSUMER_URL_KEY',),
-         'NOT fixed (#9639): the unit expands INNGEST_CONSUMER_URL_KEY in its ExecStart wrapper, its script has no xtrace '
-         'refusal to order against, and it sources a file an open pull request edits'),
-}
-WRAPPER_ACK_CARDINALITY = 2
+# run under xtrace, so the secret reaches the journal on a traced launch. All four probe units are now fixed —
+# web-private-nic-guard, web-zot-consumer-probe, inngest-consumer-probe (#10637/#10363) and, with this diff,
+# web-git-data-probe (#9639): each script resolves the key after its refusal and its unit expands nothing.
+# The dict is therefore EMPTY. It can only ratchet DOWN: a fix removes the entry and lowers the pin, an entry for
+# a unit that no longer expands anything is itself a failure (wrapper_stale), and with the dict empty any
+# re-introduced expansion is an unacked FINDING (the mismatch arm below is unreachable by construction while
+# the pin holds 0 — kept anyway, since the dict is ratchet-down-only, not frozen). Each entry is
+# (the EXACT set of names the unit expands, the reason): an acked unit that gains a second expansion, or swaps the
+# one it has, is a finding again.
+WRAPPER_ACK_REASONS = {}
+# 2 -> 1 (#10363): inngest-consumer-probe.service fixed — the script resolves INNGEST_CONSUMER_URL_KEY after an
+# unconditional xtrace refusal and the unit's ExecStart expands nothing (the F6 block in
+# inngest-consumer-probe.test.sh replays the traced launch).
+# 1 -> 0 (#9639): web-git-data-probe.service fixed the same way — its F6 block is in web-git-data-probe.test.sh.
+WRAPPER_ACK_CARDINALITY = 0
 # The wrapper stage must examine at least this many doppler-run units; a stage that checks none reports no findings.
 # This is a COUNTER-PRESENCE check only: the stage counts once per doppler-run unit, so the number equals doppler_run_units
-# (itself floored by MIN_DOPPLER_UNITS) and cannot see a broken INDIRECT_RE. Rows G1.1-G1.3 and G1.10-G1.12 are the
-# discriminating ones; G1.4 deletes the counter and proves this floor fires.
+# (itself floored by MIN_DOPPLER_UNITS) and cannot see a broken INDIRECT_RE. Rows G1.1-G1.3, G1.6, G1.9 and G1.11-G1.12
+# are the discriminating ones; G1.4 deletes the counter and proves this floor fires.
 MIN_WRAPPER_UNITS = 12
+
+# ── inner-c acks (#11103): units whose bash -c body expands an injected name ──────────────────
+# An Exec directive that wraps its target in `bash -c '...'` runs the INNER bash under the full
+# `doppler run`-injected environment, and bash's xtrace writes each command AFTER expansion to
+# stderr — one SHELLOPTS=xtrace / BASH_ENV / `bash -x` launch prints the resolved credential,
+# which journald ships off-box (vector.toml Sources 1/4). This is the plain-$ sibling of the
+# ${!...} wrapper stage above (#9639); it flagged NOTHING while inngest-redis.service and the
+# rendered inngest-server.service carried `$INNGEST_REDIS_PASSWORD` / `$${INNGEST_SIGNING_KEY}`
+# inside an inner -c, because the wrapper stage only knew the ${! grammar. #11103 fixed both:
+# the redis unit delivers the password via an aclfile writer's ExecStartPre (ExecStart expands
+# nothing, secret never on argv), and the server unit execs a launch script that resolves the
+# credentials AFTER an unconditional xtrace refusal. Same ack-guard shape as WRAPPER_ACK_REASONS:
+# each entry is (the EXACT set of names the unit expands, the reason), ratchet-down only, and an
+# acked unit that gains or swaps an expansion is a finding again.
+INNER_C_ACK_REASONS = {}
+# 0: both live sites are fixed; an entry is added only with a written reason and lowers nothing.
+INNER_C_ACK_CARDINALITY = 0
+# Counter-presence floor, same caveat as MIN_WRAPPER_UNITS: equals doppler_run_units by
+# construction and cannot see a broken INNER_C_EXPANSION_RE — the mutation rows (restore-
+# requirepass, second member, @@-fragment) are the discriminating ones; the own-dispatch row
+# deletes the counter and proves this floor fires.
+MIN_INNER_C_UNITS = 12
+
+# `bash -c '<body>'` inside an Exec directive — both single-quoted spellings, including the
+# nested-escape '\'' form (the pre-#9639 web-git-data-probe.service ExecStart nested its inner -c
+# that way; the IC1 fixture keeps a live example).
+# `sh -c` is deliberately NOT matched: the exploit class (SHELLOPTS, BASH_ENV, -x propagation) is
+# bash-specific — dash honours none of them — so a dash body is out of scope by decision, not by
+# miss. If a unit ever swaps a dash body for bash, this stage sees it on the next scan.
+INNER_C_BODY_RE = re.compile(r"bash\s+-c\s+'((?:'\\''|[^'])*)'")
+# Every expansion spelling that resolves under doppler: $NAME, ${NAME}, and the systemd-escaped
+# $$NAME/$${NAME} (unit $$ renders as a literal $ at runtime — all four expand identically).
+# Names are pinned to [A-Z][A-Z0-9_]{2,} (>=3 chars) — a doppler secret's shape. ${!...} does NOT
+# match here (`!` is not [A-Z]): it stays the wrapper stage's domain, so a unit carrying one is
+# never double-flagged.
+INNER_C_EXPANSION_RE = re.compile(r'\$+\{?([A-Z][A-Z0-9_]{2,})')
+# A backslash-escaped literal dollar — the ONLY spelling inside a double-quoted fragment value
+# that lands in the render as a live expansion (plain $ constructs are evaluated at render time
+# and leave the value behind, not the $; $$ renders the PID's digits). Scanning a double-quoted
+# value with the full regex would flag render-side defaults like `SDK_URL="${SDK_URL:-...}"` —
+# a false positive on text that never reaches the unit as an expansion.
+INNER_C_ESCAPED_RE = re.compile(r'\\\$+\{?([A-Z][A-Z0-9_]{2,})')
+INNER_C_SENTINEL_RE = re.compile(r'@@([A-Z][A-Z0-9_]{2,})@@')
+
+
+def inner_c_fragments(unit):
+    """`NAME='...'`/`NAME="..."` assignments in the unit's own source file.
+
+    The render fragments a unit's @@NAME@@ sentinels interpolate are assigned in the file that
+    emits the heredoc (u['source'] is '<rel>:<surface>'; the BACKEND_ENV arm in
+    inngest-bootstrap.sh is the live example — its value is where the durable arm's
+    $${INNGEST_REDIS_PASSWORD} expansion actually lives). (quote, value) pairs are collected per
+    name in assignment order — every arm is scanned, not just the last, because any arm's
+    fragment can carry the expansion; the quote decides which regex applies (see above).
+    """
+    rel = unit['source'].rsplit(':', 1)[0]
+    src = read(os.path.join(ROOT, rel))
+    frags = {}
+    for m in re.finditer(
+            r'^\s*(?:readonly\s+|local\s+|export\s+)?'
+            r'([A-Z][A-Z0-9_]{2,})=(["\'])(.*?)\2\s*$', src, re.M):
+        frags.setdefault(m.group(1), []).append((m.group(2), m.group(3)))
+    return frags
+
+
+def inner_c_expansions(body, frags):
+    """Expansion names in the body, plus any transitively-referenced @@SENTINEL@@ fragment.
+
+    A directive that writes `bash -c 'x; @@FRAG@@ y'` carries no literal expansion — the fragment
+    resolution is what delivers one. Without it the stage would certify the exact site it was
+    built to catch (the rendered inngest-server.service reads `@@BACKEND_ENV@@`, not a $). `seen`
+    keeps a self-referential fragment finite.
+    """
+    names = set(INNER_C_EXPANSION_RE.findall(body))
+    seen, work = set(), list(INNER_C_SENTINEL_RE.findall(body))
+    while work:
+        sname = work.pop()
+        if sname in seen:
+            continue
+        seen.add(sname)
+        for quote, v in frags.get(sname, []):
+            names.update((INNER_C_EXPANSION_RE if quote == "'" else INNER_C_ESCAPED_RE).findall(v))
+            work.extend(INNER_C_SENTINEL_RE.findall(v))
+    return names
+
 
 # ── surface enumeration (LIFTED from credential-persist-home-guard.test.sh:506-605) ───────────
 # The two non-obvious behaviours a fresh scanner gets wrong SILENTLY are kept verbatim:
@@ -524,7 +633,7 @@ INDIRECT_RE = re.compile(r'\$\{!(\w+)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 # key NAME an env file carries), in every spelling the unit-side regex knows (the two share one grammar). The array
 # index list `${!MAP_KEY[@]}` matches too: it is not a secret lookup, and a doppler script that iterates a `*_KEY` array
 # would enter the population as a false positive, which fails closed (an ack or a bound resolves it). Bound to the `_KEY` convention on purpose: the unrestricted form also matched
-# `${!_seam+x}` in inngest-luks-cutover.sh, pulling that unit into the population and turning it red.
+# `${!_seam+x}` in the (since retired) inngest-luks-cutover.sh, pulling that unit into the population and turning it red.
 SCRIPT_KEY_INDIRECT_RE = re.compile(r'\$\{!(\w*_KEY)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 PATH_TOKEN_RE = re.compile(r'/usr/(?:local/)?bin/([A-Za-z0-9._-]+)')
 
@@ -634,7 +743,7 @@ FORVAR_RE = re.compile(r'\bfor\s+([A-Z][A-Z0-9_]{2,})\s+in\b')
 
 
 def read_set_lower_bound(body):
-    src = strip_comments(body)
+    src = XTRACE_PRESENCE_TEST_RE.sub('', strip_comments(body))
     reads = set()
     for m in READ_RE.finditer(src):
         reads.add(m.group(1) or m.group(2))
@@ -699,6 +808,15 @@ def main():
         if not ack_names or len(reason.strip()) < 40:
             print('ACK_FAIL wrapper unit=%s — wrapper-ack entries carry a written reason, not a bare name' % name)
             return 5
+    if len(INNER_C_ACK_REASONS) != INNER_C_ACK_CARDINALITY:
+        print('ACK_FAIL inner_c_ack_cardinality=%d expected=%d — the inner-c ack list is an escape '
+              'hatch; changing its size must be a deliberate, visible edit'
+              % (len(INNER_C_ACK_REASONS), INNER_C_ACK_CARDINALITY))
+        return 5
+    for name, (ack_names, reason) in sorted(INNER_C_ACK_REASONS.items()):
+        if not ack_names or len(reason.strip()) < 40:
+            print('ACK_FAIL inner_c unit=%s — inner-c ack entries carry a written reason, not a bare name' % name)
+            return 5
 
     doppler = []
     for u in units + injected:
@@ -715,6 +833,8 @@ def main():
     population = []
     wrapper_checked = 0
     wrapper_hits = set()
+    inner_c_checked = 0
+    inner_c_hits = set()
     for u, infos in doppler:
         reasons, targets = [], []
         # --- wrapper stage (#9639): no Exec directive of a doppler-run unit expands a secret indirectly -------
@@ -728,12 +848,44 @@ def main():
                     'directive that invokes `doppler run`: the expansion runs before the target script can refuse to '
                     'run under xtrace; resolve the key inside the script after its refusal src=%s'
                     % (u['name'], ','.join('${!%s}' % i for i in w_ind), u['source']))
+            # NOTE: this elif (ack-mismatch arm) is UNREACHABLE while WRAPPER_ACK_REASONS is {} —
+            # every expanding unit hits the unacked FINDING above first. If a future unfixed sibling
+            # legitimately re-enters the dict, the author MUST also re-add the mismatch mutation rows
+            # deleted with the git-data drain (see the deleted-rows note in this file's G1 block).
             elif set(w_ind) != set(WRAPPER_ACK_REASONS[u['name']][0]):
                 findings.append(
                     'FINDING unit=%s reason=wrapper-acked unit expands %s but its ack names only %s: an ack covers the '
                     'exact expansion it recorded, not the unit src=%s'
                     % (u['name'], ','.join('${!%s}' % i for i in w_ind),
                        ','.join('${!%s}' % i for i in sorted(WRAPPER_ACK_REASONS[u['name']][0])), u['source']))
+        # --- inner -c stage (#11103): no Exec directive of a doppler-run unit expands an injected
+        #     name inside a `bash -c` body — literal, or delivered through a @@SENTINEL@@ fragment
+        #     assigned in the same source file. ${!...} is the wrapper stage's domain (excluded so
+        #     a unit carrying one is not double-flagged); `sh -c` is out of scope (dash
+        #     honours neither SHELLOPTS nor BASH_ENV — the class is bash-specific).
+        inner_c_checked += 1
+        ic_bodies = [m.group(1) for e in u['execs'] for m in INNER_C_BODY_RE.finditer(e)]
+        ic_names = set()
+        if ic_bodies:
+            frags = inner_c_fragments(u)
+            for b in ic_bodies:
+                ic_names |= inner_c_expansions(b, frags)
+            if ic_names:
+                inner_c_hits.add(u['name'])
+                if u['name'] not in INNER_C_ACK_REASONS:
+                    findings.append(
+                        'FINDING unit=%s reason=inner-bash-c expands a doppler-injected name (%s) inside an '
+                        'inner `bash -c` body of a doppler-run Exec directive: a traced launch '
+                        '(SHELLOPTS=xtrace / BASH_ENV / bash -x) prints the resolved value to stderr and '
+                        'journald ships it off-box; the directive must expand nothing and the target must '
+                        'resolve the name after an unconditional xtrace refusal src=%s'
+                        % (u['name'], ','.join('$%s' % i for i in sorted(ic_names)), u['source']))
+                elif ic_names != set(INNER_C_ACK_REASONS[u['name']][0]):
+                    findings.append(
+                        'FINDING unit=%s reason=inner-bash-c-acked unit expands %s but its ack names only '
+                        '%s: an ack covers the exact expansion set it recorded, not the unit src=%s'
+                        % (u['name'], ','.join('$%s' % i for i in sorted(ic_names)),
+                           ','.join('$%s' % i for i in sorted(INNER_C_ACK_REASONS[u['name']][0])), u['source']))
         for info in infos:
             for ind in info['indirect']:
                 reasons.append('indirect-expansion:%s' % ind)
@@ -752,6 +904,7 @@ def main():
             after_sep = after_sep or info['after_sep_only_secrets']
         print('  UNIT: %-46s surface=%-11s bound=%-5s src=%s'
               % (u['name'], u['surface'], bool(names), u['source']))
+        print('  INNER_C unit=%s bodies=%d' % (u['name'], len(ic_bodies)))
         if not reasons:
             continue
         population.append(u['name'])
@@ -797,6 +950,11 @@ def main():
         print('CENSUS_FAIL wrapper_units_checked=%d (<%d) — the wrapper stage examined too few units; a stage '
               'that checks none reports no findings and passes' % (wrapper_checked, MIN_WRAPPER_UNITS))
         return 3
+    print('CENSUS: inner_c_units_checked=%d min=%d' % (inner_c_checked, MIN_INNER_C_UNITS))
+    if inner_c_checked < MIN_INNER_C_UNITS:
+        print('CENSUS_FAIL inner_c_units_checked=%d (<%d) — the inner -c stage examined too few units; a stage '
+              'that checks none reports no findings and passes' % (inner_c_checked, MIN_INNER_C_UNITS))
+        return 3
 
     stale = sorted(set(ACK_REASONS) - set(population))
     if stale:
@@ -808,6 +966,12 @@ def main():
     if stale_w:
         print('ACK_FAIL wrapper_stale=%s — wrapper-acked units whose Exec directives no longer expand a secret '
               'indirectly; delete the entry and lower WRAPPER_ACK_CARDINALITY' % ','.join(stale_w))
+        rc = 5
+
+    stale_ic = sorted(set(INNER_C_ACK_REASONS) - inner_c_hits)
+    if stale_ic:
+        print('ACK_FAIL inner_c_stale=%s — inner-c-acked units whose bash -c bodies no longer expand an '
+              'injected name; delete the entry and lower INNER_C_ACK_CARDINALITY' % ','.join(stale_ic))
         rc = 5
 
     for f in findings:
@@ -857,7 +1021,7 @@ done
 # left the suite fully green. Those two guard the sets EVERY violation assertion quantifies over —
 # stage 2 (the doppler-run population) and stage 4 (the bound-required set) — so a zeroed floor
 # there is the most load-bearing vacuity available in this file.
-for _c in doppler_run_units bound_required_population wrapper_units_checked; do
+for _c in doppler_run_units bound_required_population wrapper_units_checked inner_c_units_checked; do
   _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | sed -n '1p' || true)"
   if [[ -z "$_line" ]]; then
     fail "census: no count reported for '$_c'"
@@ -894,17 +1058,8 @@ _pin_seen "the web-host vector unit from soleur-host-bootstrap.sh (heredoc surfa
   'soleur-vector-install'
 # The unit this change is about.
 _pin_seen "inngest-cutover-flip.service" 'inngest-cutover-flip\.service'
-# #6894: the LUKS cutover unit is a SECOND root doppler-run unit on the same host, and it moves the
-# store. Seen AND bound — a bound that silently lapsed would put every name in soleur-inngest/prd
-# into the environment of a root script that executes several of them.
-_pin_seen "inngest-luks-cutover.service (#6894)" 'inngest-luks-cutover\.service'
-if grep -qE '^  UNIT: +inngest-luks-cutover\.service +surface=service +bound=True' "$CONTROL_OUT"
-then
-  pass "the LUKS cutover unit's --only-secrets bound is DETECTED (its list is on continuation lines too)"
-else
-  fail "the LUKS cutover unit reads as UNBOUNDED" \
-    "$(grep -E '^  UNIT: +inngest-luks-cutover' "$CONTROL_OUT")"
-fi
+# #6894 (RETIRED, #10112): the LUKS cutover unit was a SECOND root doppler-run unit on this host; its two pins
+# (seen, and bound=True) went with the unit when the cutover trio left the image.
 
 # THE JOIN IS LOAD-BEARING. The flip unit's bound lives ENTIRELY on continuation lines; without
 # CONT_RE the scanner reads it as unbounded and every row below is meaningless. Assert the
@@ -935,6 +1090,36 @@ _pin_fp "inngest-server.service (\`inngest start\`, not a repo script)" 'inngest
 _pin_fp "inngest-redis.service (redis-server)" 'inngest-redis\.service'
 _pin_fp "the inngest-host vector unit" 'vector\.service'
 _pin_fp "the web-host vector unit" 'soleur-vector-install'
+
+# ── inner -c stage (#11103): identity pins on the two remediated units ─────────────────────────
+# A scanner whose enumeration loses one of these surfaces still clears every floor above; pin
+# that the stage SAW each unit (the INNER_C line is emitted once per doppler-run unit) and
+# reported NO inner-bash-c finding for it.
+for _u in inngest-redis.service inngest-server.service; do
+  if grep -qE "^  INNER_C unit=${_u} bodies=" "$CONTROL_OUT"; then
+    pass "inner-c stage examined $_u (its INNER_C line is present)"
+  else
+    fail "inner-c stage did NOT examine $_u — its enumeration of this surface is gone" \
+      "$(grep -cE '^  INNER_C unit=' "$CONTROL_OUT") doppler units examined in total"
+  fi
+  if grep -qE "^FINDING unit=${_u} reason=inner-bash-c" "$CONTROL_OUT"; then
+    fail "inner-c stage flagged $_u — a doppler-injected name still expands inside a bash -c body" \
+      "$(grep -E "^FINDING unit=${_u}" "$CONTROL_OUT" | head -2)"
+  else
+    pass "inner-c stage: no inner-bash-c finding for $_u (the #11103 fix holds)"
+  fi
+done
+# Identity pin for the unit this change is about: web-git-data-probe.service's ExecStart still
+# wraps `doppler run` in an outer `bash -c` body, which the stage must SEE (bodies>=1) yet report
+# no inner-c finding for — pre-#9639 the body carried the ${!...} the wrapper stage owns; now it
+# expands nothing. Either way, double-flagging this unit is the regression this pin catches.
+if grep -qE '^  INNER_C unit=web-git-data-probe\.service bodies=[1-9]' "$CONTROL_OUT" \
+   && ! grep -qE '^FINDING unit=web-git-data-probe\.service reason=inner-bash-c' "$CONTROL_OUT"; then
+  pass "inner-c stage: web-git-data-probe.service's \${!...} body is seen but not flagged (wrapper stage's domain)"
+else
+  fail "inner-c stage mis-handled web-git-data-probe.service's \${!...} body (exclusion or extraction broke)" \
+    "$(grep -E 'INNER_C unit=web-git-data-probe|FINDING unit=web-git-data-probe' "$CONTROL_OUT" | head -3)"
+fi
 
 # ── mutation battery ──────────────────────────────────────────────────────────────────────────
 echo ""
@@ -1089,37 +1274,33 @@ if prog == 'drop-ack-entry':
     s = re.sub(r'^ACK_CARDINALITY = \d+$', 'ACK_CARDINALITY = %d' % (n - 1), s, count=1, flags=re.M)
 elif prog == 'drop-ack-entry-only':
     s = re.sub(ENTRY, '', s)
-elif prog == 'ack-extra-name':
-    old = "(('GIT_DATA_HEARTBEAT_URL_KEY',),"
-    if s.count(old) != 1:
-        raise SystemExit('ack-extra-name: expected exactly one %s, found %d' % (old, s.count(old)))
-    s = s.replace(old, "(('GIT_DATA_HEARTBEAT_URL_KEY', 'GIT_DATA_EXTRA_KEY'),")
 elif prog == 'noop-wrapper-stage':
     # The wrapper stage's own dispatch: make it examine nothing. The new census floor must catch it.
     if s.count('        wrapper_checked += 1\n') != 1:
         raise SystemExit('noop-wrapper-stage: could not find the stage counter')
     s = s.replace('        wrapper_checked += 1\n', '')
-elif prog in ('drop-wrapper-ack', 'wrapper-pin-only', 'add-wrapper-ack'):
+elif prog == 'noop-inner-c-stage':
+    # The inner -c stage's own dispatch: make it examine nothing. The census floor must catch it.
+    if s.count('        inner_c_checked += 1\n') != 1:
+        raise SystemExit('noop-inner-c-stage: could not find the stage counter')
+    s = s.replace('        inner_c_checked += 1\n', '')
+elif prog in ('wrapper-pin-only', 'add-wrapper-ack'):
+    # (#9639 ruling) 'drop-wrapper-ack' and 'ack-extra-name' deleted with their rows: with the dict
+    # pinned empty both mutations cannot land (no entry to drop or widen — the suite's documented
+    # worst case), and the ack-mismatch arm they graded is unreachable by construction.
     m = re.search(r'^WRAPPER_ACK_CARDINALITY = (\d+)$', s, re.M)
     if not m:
         raise SystemExit('%s: could not find WRAPPER_ACK_CARDINALITY' % prog)
     n = int(m.group(1))
-    if prog == 'drop-wrapper-ack':
-        # Remove the sibling's wrapper ack AND lower the pin, so the pin cannot be what reds.
-        # Only inside WRAPPER_ACK_REASONS: ACK_REASONS carries an entry with the same key.
-        head, sep, tail = s.partition('WRAPPER_ACK_REASONS = {\n')
-        tail2 = re.sub(r"    'web-git-data-probe\.service':\n(?:        .*\n)+", '', tail, count=1)
-        if not sep or tail2 == tail:
-            raise SystemExit('drop-wrapper-ack: entry not found')
-        s2 = head + sep + tail2
-        s = re.sub(r'^WRAPPER_ACK_CARDINALITY = \d+$', 'WRAPPER_ACK_CARDINALITY = %d' % (n - 1), s2, count=1, flags=re.M)
-    elif prog == 'wrapper-pin-only':
+    if prog == 'wrapper-pin-only':
         s = re.sub(r'^WRAPPER_ACK_CARDINALITY = \d+$', 'WRAPPER_ACK_CARDINALITY = %d' % (n - 1), s, count=1, flags=re.M)
     else:
         # A wrapper ack for a FIXED unit (which no longer expands anything), with the pin raised to match.
         new = ("    'web-private-nic-guard.service':\n"
                "        (('WEB_NIC_GUARD_URL_KEY',), 'a stale wrapper ack for a unit that no longer expands a secret in any Exec directive'),\n")
         s2 = s.replace("WRAPPER_ACK_REASONS = {\n", "WRAPPER_ACK_REASONS = {\n" + new, 1)
+        if s2 == s:
+            s2 = s.replace("WRAPPER_ACK_REASONS = {}\n", "WRAPPER_ACK_REASONS = {\n" + new + "}\n", 1)
         if s2 == s:
             raise SystemExit('add-wrapper-ack: dict not found')
         s = re.sub(r'^WRAPPER_ACK_CARDINALITY = \d+$', 'WRAPPER_ACK_CARDINALITY = %d' % (n + 1), s2, count=1, flags=re.M)
@@ -1168,11 +1349,11 @@ ACK_N="$(grep -oE '^ACK_CARDINALITY = [0-9]+' "$SCRIPT_DIR/doppler-injection-bou
 expect_red_scanner "R7b ack cardinality pin (a silent ack edit cannot open a hole)" \
   "ACK_FAIL ack_cardinality=$((ACK_N - 1)) expected=${ACK_N}" 'drop-ack-entry-only'
 
-# G1.4 / G1.6 / G1.7 / G1.8 — the wrapper stage's own machinery (scanner-side mutations).
+# G1.4 / G1.7 / G1.8 — the wrapper stage's own machinery (scanner-side mutations). G1.6 moved to
+# the fixture rows below (re-scoped per the #9639 CTO ruling): with the dict pinned empty the
+# fixture unit itself supplies the expansion, and the ack-mismatch arm is unreachable.
 expect_red_scanner "G1.4 a wrapper stage that examines nothing (own-dispatch floor)" \
   "CENSUS_FAIL wrapper_units_checked" 'noop-wrapper-stage'
-expect_red_scanner "G1.6 an unfixed sibling's wrapper ack removed (pin lowered too)" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper expands a secret" 'drop-wrapper-ack'
 expect_red_scanner "G1.7 a wrapper ack for a FIXED unit is stale" \
   "ACK_FAIL wrapper_stale=web-private-nic-guard.service" 'add-wrapper-ack'
 WACK_N="$(grep -oE '^WRAPPER_ACK_CARDINALITY = [0-9]+' "$SCRIPT_DIR/doppler-injection-bound.test.sh" | grep -oE '[0-9]+$' || true)"
@@ -1182,8 +1363,9 @@ expect_red_scanner "G1.8 the wrapper-ack pin refuses a silent edit" \
 
 # ── #9639 F6: the wrapper stage ───────────────────────────────────────────────────────────────
 # No Exec directive of a doppler-run unit may expand a secret by indirect expansion: that expansion runs before the
-# target script can refuse to run under xtrace. Fixed units (web-private-nic-guard, web-zot-consumer-probe) stay in the
-# Guard-2 population through the SCRIPT-side `*_KEY` reason; the two unfixed siblings are wrapper-acked.
+# target script can refuse to run under xtrace. All four probe units are fixed and stay in the
+# Guard-2 population through the SCRIPT-side `*_KEY` reason; WRAPPER_ACK_REASONS is pinned empty,
+# so any re-introduced expansion is an unacked FINDING.
 NICU="web-private-nic-guard.service"
 OLD_NIC_EXEC='ExecStart=/bin/bash -c '"'"'doppler run --project soleur --config prd -- bash -c '"'"'\'"'"''"'"'export WEB_NIC_GUARD_URL="$${!WEB_NIC_GUARD_URL_KEY}"; exec /usr/local/bin/web-private-nic-guard.sh'"'"'\'"'"''"'"''"'"
 set_execstart() {   # <unit file> <full ExecStart line> : replace the unit's ExecStart line (the edit must land)
@@ -1201,6 +1383,18 @@ PY
 g11() { set_execstart "$1/$NICU" "$OLD_NIC_EXEC"; }
 expect_red "G1.1 the wrapper expansion restored in a fixed unit" \
   "FINDING unit=$NICU reason=wrapper expands a secret" g11
+# G1.6 — the pre-fix wrapper expansion restored in the (now-fixed) git-data unit. Re-scoped per
+# the #9639 CTO ruling: with WRAPPER_ACK_REASONS pinned empty the fixture unit itself supplies
+# the expansion, and this is the unacked-FINDING arm — the ack was the only thing covering it.
+GDU="web-git-data-probe.service"
+# The pre-fix git-data ExecStart is the nic-guard wrapper's shape with its names swapped (the
+# nested-escape quoting is identical), so derive it rather than re-quote it.
+OLD_GD_EXEC="${OLD_NIC_EXEC//WEB_NIC_GUARD_URL_KEY/GIT_DATA_HEARTBEAT_URL_KEY}"
+OLD_GD_EXEC="${OLD_GD_EXEC//WEB_NIC_GUARD_URL/GIT_DATA_HEARTBEAT_URL}"
+OLD_GD_EXEC="${OLD_GD_EXEC//web-private-nic-guard.sh/web-git-data-probe.sh}"
+g16() { set_execstart "$1/$GDU" "$OLD_GD_EXEC"; }
+expect_red "G1.6 the pre-fix wrapper expansion restored in the now-fixed git-data unit (unacked FINDING)" \
+  "FINDING unit=web-git-data-probe.service reason=wrapper expands a secret" g16
 # G1.2 — a SECOND directive expanding the secret, after a compliant first one: the check quantifies over every directive.
 g12() { printf '%s\n' "ExecStartPre=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export G12_X=\"\$\${!WEB_NIC_GUARD_URL_KEY}\"; true'\\'''" >> "$1/$NICU"; }
 expect_red "G1.2 a second Exec directive expands the secret (compliant first member)" \
@@ -1240,16 +1434,11 @@ expect_green "G1.9b a script using \${!_seam+x} does NOT enter the population (t
 # GH2 — must-PASS non-canonical: the fixed unit written WITHOUT the outer `bash -c` is still compliant and still counted.
 gh2() { set_execstart "$1/$NICU" 'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/web-private-nic-guard.sh'; }
 expect_green "GH2 a fixed unit written without the outer bash -c stays GREEN (the contract is no expansion, not one spelling)" gh2
-# G1.10 — an ack covers the EXACT expansion it recorded: a wrapper-acked unit that gains a second expansion is a finding again.
-g110() { printf '%s\n' "ExecStartPre=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export G110_X=\"\$\${!G110_OTHER_KEY}\"; true'\\'''" >> "$1/web-git-data-probe.service"; }
-expect_red "G1.10 a wrapper-acked unit gains a SECOND expansion its ack does not name" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands" g110
-# G1.10b/c — the ack is EXACT in both directions: a unit that SWAPS the one name it expands, and an ack that names MORE than the unit expands.
-g110b() { sed -i 's/\${!GIT_DATA_HEARTBEAT_URL_KEY}/${!GIT_DATA_SWAPPED_KEY}/' "$1/web-git-data-probe.service"; }
-expect_red "G1.10b a wrapper-acked unit SWAPS the name it expands (the ack names the old one)" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands \${!GIT_DATA_SWAPPED_KEY} but its ack names only \${!GIT_DATA_HEARTBEAT_URL_KEY}" g110b
-expect_red_scanner "G1.10c a wrapper ack that names MORE than the unit expands is a finding too" \
-  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands" 'ack-extra-name'
+# G1.10/G1.10b/G1.10c — DELETED per the #9639 CTO ruling: they graded the ack-mismatch arm
+# ("an acked unit expands a name its ack does not record"), which is unreachable while
+# WRAPPER_ACK_REASONS is pinned empty — every expanding unit hits the unacked branch first, and
+# an ack entry that would exercise the mismatch arm is itself caught by wrapper_stale/cardinality.
+# The elif mismatch check itself stays: the dict is ratchet-down-only, not frozen.
 # G1.11 — every spelling of an indirect expansion the unit-side regex must see, not only the bare and operator forms.
 g_spell() {   # <dir> <suffix after the variable name> : the nic unit's ExecStart expands ${!WEB_NIC_GUARD_URL_KEY<suffix>}
   set_execstart "$1/$NICU" "ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export WEB_NIC_GUARD_URL=\"\$\${!WEB_NIC_GUARD_URL_KEY$2}\"; exec /usr/local/bin/web-private-nic-guard.sh'\\'''"
@@ -1301,6 +1490,101 @@ g112e() {
 }
 expect_red "G1.12e a script resolving \${!FOO_KEY[0]} (a subscript form) enters the population" \
   "FINDING unit=g112e.service reason=no --only-secrets bound" g112e
+
+# ── #11103: the inner `bash -c` stage ─────────────────────────────────────────────────────────
+# The wrapper stage only knew the ${!...} grammar; inngest-redis.service's
+# `--requirepass "$INNGEST_REDIS_PASSWORD"` and the rendered inngest-server.service's signing-key
+# strip + BACKEND_ENV durable arm escaped it with PLAIN-$ spellings inside an inner -c (#11103).
+# IC rows pin the stage's own machinery: the two remediated sites, its dispatch counter, a second
+# member, the @@SENTINEL@@ fragment-resolution arm, and the regex itself.
+# IC1 — the pre-fix requirepass ExecStart restored in the redis unit: the plain-$ expansion
+# inside the inner -c is the exact live site this stage exists for.
+ic1() {
+  set_execstart "$1/inngest-redis.service" 'ExecStart=/usr/bin/doppler run --config ${DOPPLER_CONFIG} -- /usr/bin/bash -c '"'"'/usr/bin/redis-server /mnt/data/redis/inngest-redis.conf --requirepass "$INNGEST_REDIS_PASSWORD"'"'"''
+}
+expect_red "IC1 the pre-fix requirepass bash -c restored in inngest-redis.service" \
+  "FINDING unit=inngest-redis.service reason=inner-bash-c" ic1
+# IC2 — the stage's own dispatch: a counter deletion leaves the stage examining nothing, and
+# only the census floor sees it.
+expect_red_scanner "IC2 an inner -c stage that examines nothing (own-dispatch floor)" \
+  "CENSUS_FAIL inner_c_units_checked" 'noop-inner-c-stage'
+# IC3 — a SECOND member: a fresh doppler-run unit expands a name inside bash -c while every
+# pre-existing member is compliant. A check that stops at the first member is the defect.
+ic3() {
+  cat > "$1/ic3-innerc.service" <<'UNIT'
+[Unit]
+Description=IC3 fixture: doppler-run unit expanding a secret inside an inner bash -c
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/doppler run --config prd -- bash -c 'export X="$FOO_SECRET"; true'
+UNIT
+}
+expect_red "IC3 a second doppler-run unit expands a name inside bash -c (compliant first member)" \
+  "FINDING unit=ic3-innerc.service reason=inner-bash-c" ic3
+# IC4 — the @@SENTINEL@@ arm: the directive's -c body carries only @@FRAG@@; the expansion lives
+# in the same-file FRAG='...' assignment. A literal-text-only stage certifies the exact site it
+# exists to catch (the live site-2 expansion rode @@BACKEND_ENV@@).
+ic4() {
+  cat > "$1/ic4-gen.sh" <<'SH'
+#!/usr/bin/env bash
+FRAG='export K="$LEAK_SECRET";'
+cat > /etc/systemd/system/ic4-frag.service <<'IC4EOF'
+[Unit]
+Description=IC4 fixture: expansion delivered through a @@SENTINEL@@ fragment
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/doppler run --config prd -- bash -c 'x; @@FRAG@@ y'
+IC4EOF
+SH
+}
+expect_red "IC4 a secret-bearing @@FRAGMENT@@ interpolated into a bash -c body is seen through the sentinel" \
+  "FINDING unit=ic4-frag.service reason=inner-bash-c" ic4
+# IC5 — the expansion regex is LOAD-BEARING (positive control): neuter it, and the same violating
+# tree (IC3's fixture) goes GREEN under the mutated scanner. Without this arm a typo'd regex
+# ships a stage that matches nothing and passes forever.
+IC5_MUT="$TMPROOT/scanner.noicc.py"
+cp "$SCANNER" "$IC5_MUT"
+python3 - "$IC5_MUT" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s2, n = re.subn(
+    r"INNER_C_EXPANSION_RE = re\.compile\(r'[^']*'\)",
+    "INNER_C_EXPANSION_RE = re.compile(r'(?!x)x')", s, count=1)
+if n != 1:
+    raise SystemExit('IC5: could not neuter INNER_C_EXPANSION_RE (count=%d)' % n)
+open(p, 'w').write(s2)
+PY
+if cmp -s "$SCANNER" "$IC5_MUT"; then
+  fail "IC5: the regex-neuter mutation did not land (the control pins nothing)"
+else
+  _ic5sbx="$(fresh_sbx ic5)"
+  copy_scan_tree "$FROZEN_ROOT" "$_ic5sbx"
+  ic3 "$_ic5sbx"
+  _ic5_real_rc=0
+  python3 "$SCANNER" "$_ic5sbx" >/dev/null 2>&1 || _ic5_real_rc=$?
+  if [[ "$_ic5_real_rc" -eq 0 ]]; then
+    fail "IC5 control precondition: the violating tree is GREEN under the REAL scanner — the row discriminates nothing"
+  elif python3 "$IC5_MUT" "$_ic5sbx" >/dev/null 2>&1; then
+    pass "IC5 neutering INNER_C_EXPANSION_RE lets the violating tree pass (the regex is load-bearing)"
+  else
+    fail "IC5: the neutered-regex scanner still went RED — the stage flags something other than expansions" \
+      "$(python3 "$IC5_MUT" "$_ic5sbx" 2>&1 | grep -E 'FINDING|_FAIL' | head -3)"
+  fi
+fi
+# IC6 — must-PASS non-canonical: a `sh -c` (dash) body is out of scope by DECISION — dash honours
+# neither SHELLOPTS nor BASH_ENV, so the exploit class is bash-specific. Widening is a deliberate
+# later edit, not a silent default.
+ic6() {
+  cat > "$1/ic6-dash.service" <<'UNIT'
+[Unit]
+Description=IC6 fixture: a sh -c (dash) body is out of the inner -c stage's scope
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/doppler run --config prd -- sh -c 'export X="$DASH_OK"; true'
+UNIT
+}
+expect_green "IC6 a sh -c body expanding \$DASH_OK stays GREEN (dash honours none of the trace vectors)" ic6
 
 # ── harness rows ──────────────────────────────────────────────────────────────────────────────
 echo ""
@@ -1409,7 +1693,12 @@ expect_green "H4 runcmd doppler invocation is NOT flagged (boot self-check must 
 TOTAL=$((PASS + FAIL))
 # 25 -> 29 -> 45 -> 61 (#9639: the wrapper-stage rows, then the review round's spelling and ack-exactness rows): set to the measured green count, not below it. Slack in a floor is the budget an
 # attacker (or an accidental deletion) gets for free.
-MIN_ASSERTIONS=61
+# 61 -> 59 (#10112): the two LUKS cutover unit pins (seen, bound) left with the retired unit; set to the measured green count.
+# 59 -> 71 (#11103): the inner -c stage (census-floor member, two identity pins, the ${!...}
+# no-double-flag pin) + IC1-IC6 mutation rows; measured 71/71.
+# 71 -> 68 (#9639): G1.10/G1.10b/G1.10c deleted — the ack-mismatch arm is unreachable while
+# WRAPPER_ACK_REASONS is pinned empty; G1.6 re-scoped onto a fixture arm (still one assertion).
+MIN_ASSERTIONS=68
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

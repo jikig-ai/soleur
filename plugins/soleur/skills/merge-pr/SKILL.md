@@ -333,6 +333,8 @@ Announce the PR URL.
 
 **A draft PR is readied first, with a user token (`GITHUB_TOKEN` cannot ready a PR), and armed only after its ready run exists (ADR-276 S3):** `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <number>) && gh pr ready <number> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <number> --before-count "$K"`. Run it as one Bash call with `timeout: 420000` and run `gh pr merge --squash --auto` ONLY on exit 0; otherwise report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or an `api-error` needs no undo). The 5.2 poll reads a red `test` through the same resolver (`ready_unarmed` stops it).
 
+**Merge gate.** Arm only when the PR carries a current `Review-Evidence:` comment (posted by `soleur:review`; `head=` is the PR head, `coverage=full`). The gate text and the domain seats: [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md).
+
 **Never arm (enqueue) a cross-repository (fork) PR, or one touching `.github/**`, without explicit operator confirmation.** `merge_group` runs the candidate's workflows in the base-repo context with repo secrets, so a pre-queue-green fork or workflow edit can exfiltrate them before anyone reads a run. Check first: `gh pr view <number> --json isCrossRepository --jq .isCrossRepository` and `gh api repos/{owner}/{repo}/pulls/<number>/files --paginate --jq '.[].filename | select(startswith(".github/"))'` (not `gh pr view --json files`: it stops at 100 files); a `true` or any output means stop and ask.
 
 ```bash
@@ -394,7 +396,7 @@ if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != true ]]; then
   echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled; the poll heartbeats, sync by hand from a worktree"
   sync_ok=0
 fi
-# Bare ${CLAUDE_PLUGIN_ROOT} + plugin.json identity + --step probe + per-poll snapshot
+# Bare ${CLAUDE_PLUGIN_ROOT} + plugin.json identity + --fence probe + per-poll snapshot
 # (see ship/SKILL.md Phase 7 for the rationale; ADR-179).
 # Read once in a `set +u` subshell: a nounset host shell must not die on an unset root.
 SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
@@ -405,7 +407,7 @@ if [[ "$sync_ok" -eq 1 ]]; then
   elif ! grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
-  elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; then why="its --help has no --step (an older copy)"
+  elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--fence'; then why="its --help has no --fence (an older copy)"
   elif ! { SYNC_SNAP="$(mktemp)" && trap 'rm -f "$SYNC_SNAP"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
   fi
   if [[ -n "$why" ]]; then
@@ -549,7 +551,7 @@ while true; do
     fi
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
-    sync_rc=0; bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?   # errexit-safe (#8339)
+    sync_rc=0; bash "$SYNC_SNAP" "$PR" --step --fence || sync_rc=$?   # errexit-safe (#8339)
     case "$sync_rc" in
       0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs}/${MAX_BEHIND_SYNCS} pushed"
          behind_pushes=$((behind_pushes+1))

@@ -2,10 +2,10 @@
 # Guard suite for #8562: the dedicated inngest host provisions through a LATCHED, RETRYING systemd
 # unit (soleur-inngest-provision.service + .timer), not through a once-per-instance runcmd item.
 #
-# WHAT IS GUARDED. The plan's `## Guard Contract` (8 guards, 59 rows: 51 RED + 8 must-PASS),
-# knowledge-base/project/plans/2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md, plus 24
-# rows from the PR #9159 review (widened detectors, degraded success, the wider FSM quiesce):
-# 83 rows, 74 RED + 9 must-PASS.
+# WHAT IS GUARDED. The plan's `## Guard Contract` (8 guards),
+# knowledge-base/project/plans/archive/20260928-212808-2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md, plus the
+# rows added since (widened detectors, degraded success, the FSM quiesce). The executed counts
+# (rows, RED, must-PASS) are EXPECTED_ROWS / EXPECTED_RED / EXPECTED_MUSTPASS below.
 #   G1 single login + pull site, inside the script the unit executes (never runcmd)
 #   G2 every failure arm retries, none latches, one EXIT trap reports it
 #   G3 latch identity and position
@@ -40,7 +40,7 @@
 #           start into an auto-restart wait, honours ConditionPathExists= across a reboot, and
 #           fires an elapsed OnBootSec timer. The static layer pins the DIRECTIVES those behaviours
 #           depend on, not systemd's behaviour; T15's quiesce logic is also covered in Tier A
-#           (Q1-Q5).
+#           (T4, T4b, T4c, Q1, Q4, Q5).
 #
 # ROWS. Every row mutates a pristine copy of the RENDER (the guard's input), asserts the mutation
 # LANDED, runs the whole guard over it, and requires (RED) a FAIL line naming its assertion with
@@ -59,8 +59,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${SCRIPT_DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
 [ -n "$UBUNTU_BASE" ] || { echo "FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh" >&2; exit 1; }
 BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
-EXPECTED_ROWS=88
-EXPECTED_RED=79
+EXPECTED_ROWS=91
+EXPECTED_RED=82
 EXPECTED_MUSTPASS=9
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
@@ -709,7 +709,7 @@ case "\$1" in
   run) while [ "\$#" -gt 0 ] && [ "\$1" != -- ]; do shift; done; shift; exec "\$@" ;;
   secrets)
     case "\$2" in
-      --only-names) cat "\$FX/ctl/names" 2>/dev/null || printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"DOPPLER_PROJECT":{}}\n' ;;
+      --only-names) cat "\$FX/ctl/names" 2>/dev/null || printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{},"DOPPLER_PROJECT":{}}\n' ;;
       download) printf '{}\n' ;;
       get) [ "\$3" = INNGEST_DIAGNOSTIC_BOOT ] && cat "\$FX/ctl/diag" 2>/dev/null ;;
     esac ;;
@@ -950,23 +950,35 @@ guard_all() {
   _ta "$( has T3 '^phone isolation-check-FAILED attempt=2 iid=i-fixture' && [ "$(cnt T3 "$PULL_RE")" = 0 ] && echo 0 || echo 1)" "TA T3: isolation-check-FAILED (with iid), zero pulls (pulls=$(cnt T3 "$PULL_RE"))"
   _ta "$( [ "$(grep -cE '^phone isolation-check-passed attempt=1 iid=i-fixture' "$gw/T3a.log")" = 1 ] && echo 0 || echo 1)" "TA T3: the prior attempt did pass isolation (the carry-over probe is live)"
 
-  # T4 — bootstrap fails; the LUKS timer was active before the quiesce, so it is started again.
-  reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/boot_rc"; echo active > "$fx/ctl/is_active_inngest-luks-cutover.timer"; run_sc T4; common T4 1
+  # T4 — bootstrap fails; the flip timer was active before the quiesce, so it is started again.
+  reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/boot_rc"; echo active > "$fx/ctl/is_active_inngest-cutover-flip.timer"; run_sc T4; common T4 1
   local t4_x t4_j t4_q t4_b t4_r
   t4_x="$(at T4 '^phone bootstrap-exit-1 attempt=1 iid=i-fixture tail=')"; t4_j="$(at T4 '^phone bootstrap-failure-journal rc=1 attempt=1 iid=i-fixture ')"
-  t4_q="$(at T4 '^systemctl stop inngest-cutover-flip\.timer inngest-luks-cutover\.timer')"; t4_b="$(at T4 '^bootstrap start ')"
-  t4_r="$(at T4 '^systemctl start inngest-luks-cutover\.timer$')"
+  t4_q="$(at T4 '^systemctl stop inngest-cutover-flip\.timer$')"; t4_b="$(at T4 '^bootstrap start ')"
+  t4_r="$(at T4 '^systemctl start inngest-cutover-flip\.timer$')"
   _ta "$( [ -n "$t4_x" ] && [ -n "$t4_j" ] && [ "$t4_x" -lt "$t4_j" ] && echo 0 || echo 1)" "TA T4: bootstrap-exit-1 then bootstrap-failure-journal (both with iid)"
-  _ta "$( [ -n "$t4_q" ] && [ -n "$t4_b" ] && [ "$t4_q" -lt "$t4_b" ] && echo 0 || echo 1)" "TA T4: the cutover-FSM quiesce (systemctl stop of both timers) precedes the bootstrap run (stop=$t4_q boot=$t4_b)"
+  _ta "$( [ -n "$t4_q" ] && [ -n "$t4_b" ] && [ "$t4_q" -lt "$t4_b" ] && echo 0 || echo 1)" "TA T4: the cutover-FSM quiesce (systemctl stop of the flip timer) precedes the bootstrap run (stop=$t4_q boot=$t4_b)"
   _ta "$( has T4 '^bootstrap start DOPPLER_PROJECT=soleur-inngest ' && has T4 '^phone pre-bootstrap-run attempt=1 iid=i-fixture$' && echo 0 || echo 1)" "TA T4: the bootstrap sees DOPPLER_PROJECT=soleur-inngest; pre-bootstrap-run carries iid"
-  _ta "$( [ -n "$t4_r" ] && [ "$t4_r" -gt "$t4_b" ] && ! has T4 '^systemctl start inngest-cutover-flip\.timer$' && echo 0 || echo 1)" "TA T4: the failed attempt restarts exactly the timer that was active before the quiesce (luks restarted, flip not)"
+  _ta "$( [ -n "$t4_r" ] && [ "$t4_r" -gt "$t4_b" ] && echo 0 || echo 1)" "TA T4: the failed attempt restarts the flip timer that was active before the quiesce, after the bootstrap run"
+
+  # T4b — bootstrap fails; the flip timer was NOT active before the quiesce, so it is NOT started. This is the only
+  # case that tells "restart exactly the timers that were active" from an unconditional restart.
+  reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/boot_rc"; run_sc T4b; common T4b 1
+  _ta "$( has T4b '^systemctl stop inngest-cutover-flip\.timer$' && ! has T4b '^systemctl start inngest-cutover-flip\.timer$' && echo 0 || echo 1)" "TA T4b: a flip timer that was inactive before the quiesce is not started again by the failed attempt"
+
+  # T4c — the bootstrap SUCCEEDS with the flip timer active before the quiesce: the exit handler restores timers only on a failed
+  # attempt (a successful bootstrap re-enables the timer itself), and the post-boot-health marker lists exactly the four units
+  # in order, the flip timer last (the comment above that line promises a non-active 4th field surfaces a missing timer).
+  reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo active > "$fx/ctl/is_active_inngest-cutover-flip.timer"; run_sc T4c; common T4c 0
+  _ta "$( has T4c '^systemctl stop inngest-cutover-flip\.timer$' && ! has T4c '^systemctl start inngest-cutover-flip\.timer$' && echo 0 || echo 1)" "TA T4c: a successful attempt does not restart the flip timer from the exit handler"
+  _ta "$( has T4c '^phone post-boot-health svc=\[inactive,active,inactive,active,\] ' && echo 0 || echo 1)" "TA T4c: the post-boot-health svc list is exactly the four units, the flip timer last"
 
   # T5 — stale container: pre-clean by name, then everything addresses the returned ID.
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo newcid42 > "$fx/ctl/cid"; run_sc T5; common T5 0
   local t5_rm t5_cr
   t5_rm="$(at T5 '^docker rm -f soleur-inngest-bootstrap-extract$')"; t5_cr="$(at T5 '^docker create ')"
   _ta "$( [ -n "$t5_rm" ] && [ -n "$t5_cr" ] && [ "$t5_rm" -lt "$t5_cr" ] && echo 0 || echo 1)" "TA T5: the stale-name pre-clean precedes docker create"
-  _ta "$( [ "$(cnt T5 '^docker cp ')" -ge 13 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (the bootstrap + the 12 STAGED assets) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
+  _ta "$( [ "$(cnt T5 '^docker cp ')" -eq 13 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (want 13 = 1 bootstrap + 12 STAGED; update the count when STAGED changes) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
 
   # T7 — an unnamed arm (the fatal docker cp of the bootstrap script) is still reported, FIRST.
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/cp_boot_rc"; run_sc T7; common T7 1
@@ -1006,25 +1018,25 @@ guard_all() {
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; : > "$fx/ctl/boot_degraded"; echo inactive > "$fx/ctl/is_active_inngest-redis.service"; printf ' true\n' > "$fx/ctl/diag"; run_sc TD3; common TD3 0
   _ta "$( has TD3 '^phone bootstrap-done attempt=1 iid=i-fixture$' && ! has TD3 'DEGRADED' && echo 0 || echo 1)" "TA TD3: a REQUESTED diagnostic boot (INNGEST_DIAGNOSTIC_BOOT=true) is exempt: bootstrap-done and the latch"
 
-  # TQ — the cutover-FSM quiesce: each busy signal holds the bootstrap off and fails the attempt.
+  # TQ — the cutover-FSM quiesce: each busy signal holds the bootstrap off and fails the attempt. (A retired LUKS cutover unit
+  # or the frozen-active check coming back into the template is owned by Guard 3 in inngest-carrier-vocabulary.test.sh, not by
+  # this battery.)
   local q qn
-  for q in Q1 Q2 Q3 Q4; do
+  for q in Q1 Q4; do
     reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo active > "$fx/ctl/is_active_inngest-cutover-flip.timer"
     case "$q" in
       Q1) echo activating > "$fx/ctl/is_active_inngest-cutover-flip.service"; qn=".inngest-cutover-flip.service" ;;
-      Q2) echo activating > "$fx/ctl/is_active_inngest-luks-cutover.service"; qn=".inngest-luks-cutover.service" ;;
-      Q3) mkdir -p "$fx/lib/inngest-luks-cutover"; echo 12345678 > "$fx/lib/inngest-luks-cutover/frozen-active"; qn=".luks-frozen-active" ;;
       Q4) printf '{"exit_code":0,"dbsize":"0","reason":"x","flag":"flipping","start_ts":"t","guard":"g"}\n' > "$fx/lock/inngest-cutover-flip.state"; qn=".flip-flag-flipping" ;;
     esac
     run_sc "$q"; common "$q" 1
     _ta "$( has "$q" "^phone provision-fsm-busy units=\[${qn//./\\.}\] waited_s=300 attempt=1 iid=i-fixture$" && ! has "$q" '^bootstrap start ' && echo 0 || echo 1)" "TA $q: busy ($qn) past the bound -> provision-fsm-busy, exit 1, the bootstrap never runs"
-    _ta "$( has "$q" '^systemctl start inngest-cutover-flip\.timer$' && ! has "$q" '^systemctl start inngest-luks-cutover\.timer$' && echo 0 || echo 1)" "TA $q: the failed attempt restarts the flip timer it stopped (and only that one)"
+    _ta "$( has "$q" '^systemctl start inngest-cutover-flip\.timer$' && echo 0 || echo 1)" "TA $q: the failed attempt restarts the flip timer it stopped"
   done
-  # Q5 — the NOT-busy shapes must not hold anything off: an empty frozen-active, a settled flag.
-  reset_fx; echo 0 > "$fx/ctl/pull_rc"; mkdir -p "$fx/lib/inngest-luks-cutover"; : > "$fx/lib/inngest-luks-cutover/frozen-active"
+  # Q5 — the NOT-busy shape must not hold anything off: a settled flag.
+  reset_fx; echo 0 > "$fx/ctl/pull_rc"
   printf '{"exit_code":0,"dbsize":"0","reason":"x","flag":"done","start_ts":"t","guard":"g"}\n' > "$fx/lock/inngest-cutover-flip.state"
   run_sc Q5; common Q5 0
-  _ta "$( ! has Q5 'provision-fsm-busy' && has Q5 '^bootstrap start ' && echo 0 || echo 1)" "TA Q5: an EMPTY frozen-active and a settled flip flag are not busy"
+  _ta "$( ! has Q5 'provision-fsm-busy' && has Q5 '^bootstrap start ' && echo 0 || echo 1)" "TA Q5: a settled flip flag is not busy"
 
   # T6-A — every doppler call saw the token and HOME=/root (Tier B re-proves it through systemd).
   local t6_d t6_bad
@@ -1063,7 +1075,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=174
+C0_EXPECTED=173
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1133,7 +1145,7 @@ def move_block(start, end, after_anchor, after_after=0):
 def save(): open(p, "w").write(s)
 ISO_OPEN = "if doppler run --project soleur-inngest --config prd -- bash -s <<\x27CHKEOF\x27"
 BOOT_CALL = "bash \"$EXTRACT_DIR/inngest-bootstrap.sh\" > /var/log/inngest-bootstrap.log 2>&1 &"
-Q_OPEN = "systemctl stop inngest-cutover-flip.timer inngest-luks-cutover.timer >/dev/null 2>&1 || true"
+Q_OPEN = "systemctl stop inngest-cutover-flip.timer >/dev/null 2>&1 || true"
 Q_CLOSE = "/usr/local/bin/inngest-boot-phone-home.sh provision-fsm-busy \"units=[$_busy] waited_s=$_q attempt=$attempt iid=$IID\" || true"
 ISO_FAILED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED \"attempt=$attempt iid=$IID\" || true"
 ISO_PASSED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed \"attempt=$attempt iid=$IID\" || true"
@@ -1363,12 +1375,19 @@ row G2-r12 RED "TA Q1: busy" '
 rep_line("[ \"$(systemctl is-active \"$_u\" 2>/dev/null)\" = activating ] && _busy=\"$_busy.$_u\"", "[ \"$(systemctl is-active \"$_u\" 2>/dev/null)\" = activatingX ] && _busy=\"$_busy.$_u\""); save()'
 row G2-r13 RED "TA Q1: exits 1" '
 f = one(Q_CLOSE); del_line("exit 1", after=f); save()'
-row G2-r14 RED "TA Q2: busy" '
-rep_line("for _u in inngest-cutover-flip.service inngest-luks-cutover.service; do", "for _u in inngest-cutover-flip.service; do"); save()'
+row G2-r14 RED "TA Q1: busy" '
+rep_line("for _u in inngest-cutover-flip.service; do", "for _u in; do"); save()'
 row G2-r15 RED "TA Q1: the failed attempt restarts the flip timer" '
 del_line("for _t in $_fsm_timers_stopped; do systemctl start \"$_t\" >/dev/null 2>&1; done"); save()'
 row G2-r16 RED "G2: the iid derivation is byte-identical" '
 raw_rep("IID=\"$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd \x27A-Za-z0-9._-\x27)\"", "IID=\"$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd \x27A-Za-z0-9._\x27)\""); save()'
+row G2-r17 RED "TA T4b: a flip timer that was inactive" '
+rep_line("for _t in $_fsm_timers_stopped; do systemctl start \"$_t\" >/dev/null 2>&1; done", "systemctl start inngest-cutover-flip.timer >/dev/null 2>&1"); save()'
+row G2-r18 RED "TA T4c: a successful attempt does not restart" '
+del_line("for _t in $_fsm_timers_stopped; do systemctl start \"$_t\" >/dev/null 2>&1; done")
+ins_before("[ -z \"$cid\" ] || timeout 15 docker rm -f \"$cid\" >/dev/null 2>&1", ["for _t in $_fsm_timers_stopped; do systemctl start \"$_t\" >/dev/null 2>&1; done"]); save()'
+row G2-r19 RED "TA T4c: the post-boot-health svc list" '
+raw_rep("vector.service inngest-cutover-flip.timer 2>&1 | tr", "vector.service 2>&1 | tr"); save()'
 row G3-r9 RED "G3: exactly one latch write site" '
 a = one("on_exit() {"); ins_after("set +e", ["[ \"$rc\" -eq 124 ] && : | tee \"$LATCH\""], after=a); save()'
 row G3-r10 RED "G3: exactly one latch write site" '
@@ -1520,13 +1539,13 @@ tierb() {
       docker rm -f "$ctr-build" >/dev/null 2>&1
       if [ "$(tb_build_verdict "$rc" "$W/tierb-apt.log")" = skip ]; then
         if [ "$rc" -eq 125 ]; then
-          tb_skip "ADR-188 arm_skip: docker could not create the image-build container (rc=125: $(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 200))"
+          tb_skip "ADR-188 arm_skip: docker could not create the image-build container (rc=125: $(gd_apt_out_tail "$W/tierb-apt.log" 2 | tr '\n' ' ' | head -c 200))"
         else
           tb_skip "ADR-188 arm_skip: the ubuntu apt archive did not serve systemd/jq ($(grep -a FIXTURE_APT_CAUSE "$W/tierb-apt.log" | tail -1 | head -c 200))"
         fi
         return
       fi
-      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 300))"
+      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(gd_apt_out_tail "$W/tierb-apt.log" 2 | tr '\n' ' ' | head -c 300))"
       TB_FAIL=$((TB_FAIL + 1)); TIERB_RESULT="FAIL: image build rc=$rc"; return
     fi
     docker commit "$ctr-build" "$img_tag" >/dev/null && docker rm "$ctr-build" >/dev/null
@@ -1596,7 +1615,7 @@ L=/var/lib/tierb/calls.log
 printf '%s doppler %s TOKEN=%s HOME=%s\n' "$(date +%s.%N)" "$1" "${DOPPLER_TOKEN:-unset}" "${HOME:-unset}" >> "$L"
 case "$1" in
   run) while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
-  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{}}\n' ;;
+  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{}}\n' ;;
 esac
 exit 0
 STUB

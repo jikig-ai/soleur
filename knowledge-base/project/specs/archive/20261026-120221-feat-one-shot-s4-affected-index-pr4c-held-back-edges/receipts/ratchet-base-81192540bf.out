@@ -1,0 +1,4 @@
+# base: ratchet --base origin/main on a detached worktree of origin/main 81192540bf
+SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=1629 baseline=1629
+wall=159
+baseline_lines=1629 accept_lines=74

@@ -7,8 +7,9 @@
 # not exist; it is being rebuilt in #8211. Until then git-data-cutover.sh is a read-only
 # proof (access gate, the store probes and the fence probe) that moves no data. The design it rebuilds:
 # both volumes attached to the SAME git-data host and mounted SIMULTANEOUSLY during the
-# cutover (additive, non-destructive — the plaintext source is the rollback backstop until
-# the DL-2 wipe).
+# cutover (additive, non-destructive — the plaintext source was the rollback backstop until its
+# Terraform destroy on 2026-10-27; the retired plaintext resources are no longer declared in HCL,
+# ADR-239 Amendments 2026-10-26 and 2026-10-27).
 #
 # SHARP EDGE — encryption-at-rest is GUEST-SIDE LUKS, NOT an hcloud_volume attribute.
 # There is no hcloud "encrypted" flag; the hcloud_volume below is a PLAIN block
@@ -171,9 +172,9 @@ resource "doppler_service_token" "git_data" {
 # A PLAIN ext4 hcloud_volume — cryptsetup reformats it luks2 in the guest on first
 # boot (cloud-init isLuks-guards so a 2nd run is a no-op). `format = "ext4"` here is
 # only the hcloud-side initial FS; the guest's luksFormat overwrites the LUKS header
-# region and mkfs.ext4 lays the real FS INSIDE the mapper. Shape mirrors
-# hcloud_volume.git_data (git-data.tf, resource "hcloud_volume" "git_data"): separate volume + attachment
-# resources, attached to hcloud_server.git_data.
+# region and mkfs.ext4 lays the real FS INSIDE the mapper. Shape: a separate volume + attachment
+# resource pair, attached to hcloud_server.git_data (the retired plaintext pair that this mirrored
+# is no longer declared; its Hetzner device was deleted by a Terraform destroy on 2026-10-27).
 resource "hcloud_volume" "git_data_luks" {
   name     = "soleur-git-data-luks-store"
   size     = var.git_data_luks_volume_size

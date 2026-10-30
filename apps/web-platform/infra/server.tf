@@ -264,6 +264,12 @@ locals {
     "web-private-nic-guard.sh",
     "web-private-nic-guard.service",
     "web-private-nic-guard.timer",
+    # Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22): the script, its units and the verdict lib it shares
+    # with ci-deploy.sh. Baked for the same reason as the three probes above: the SSH installers below reach running hosts only.
+    "web-bash-synthetic.sh",
+    "web-bash-synthetic.service",
+    "web-bash-synthetic.timer",
+    "sdk-bash-verdict.sh",
     "web-zot-consumer-probe.sh",
     "web-zot-consumer-probe.service",
     "web-zot-consumer-probe.timer",
@@ -416,15 +422,32 @@ resource "hcloud_server" "web" {
     # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
     # land coin-flipped. One connector ⇒ deterministic by construction.
     #
-    # The predicate is `each.key == "web-1"` — the in-file idiom (`name` above, `host_name`
+    # The predicate is `each.key == "web-2"` — the in-file idiom (`name` above, `host_name`
     # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
     # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
     # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
-    # dns.tf 1 (the app A record), ci-ssh-key.tf 1). Promotion must move all of them in
-    # lockstep; a lone connector flip would put the connector on web-2 while the A record
-    # still points at web-1 — ingress split, at 3am. The coupling is recorded in ADR-068.
-    # (No load balancer exists yet — ADR-068 §(c)'s LB weight is future-tense, so it is NOT
-    # part of this coupling today. Fold it in when the LB actually lands.)
+    # dns.tf 1 (the app A record), ci-ssh-key.tf 1) and stays pinned — the A record
+    # still points at web-1 BY DESIGN.
+    #
+    # Why the connector lives on web-2 permanently: the connector role must sit on a
+    # REPLACEABLE host, and web-1 is not one. `web-host-replace` refuses web-1 by name
+    # (LUKS-pinned — hcloud_volume_attachment.workspaces_luks.server_id is hardcoded to it
+    # and carries prevent_destroy; ADR-148, tracker #6964) and in-place host mutation is
+    # forbidden, so web-1 could never carry a binary security fix such as the cloudflared
+    # >= 2026.10.2 eMudhra remediation. web-2 is the cattle standby the replace dispatch
+    # was built for — a fresh web-2 renders this flag and installs the pinned cloudflared
+    # .deb at birth. When web-1's eventual #6964 replacement lands it will NOT re-acquire
+    # the connector.
+    #
+    # The old ingress-split objection to moving the connector does not apply: all three
+    # tunnel ingress services are origin-RELATIVE to private IPs (tunnel.tf — deploy.→
+    # ${web_hosts["web-1"].private_ip}:9000, ssh.→…:22, registry.→10.0.1.30:5000), so a
+    # connector on web-2 proxies to web-1's services over the private net; ADR-114 I1's
+    # single-connector invariant is unchanged (still exactly one). The ADR-068 A-record
+    # coupling concern was about the connector following the A record — it does not have
+    # to, once ingress is origin-relative. (No load balancer exists yet — ADR-068 §(c)'s
+    # LB weight is future-tense, so it is NOT part of this coupling today. Fold it in
+    # when the LB actually lands.)
     #
     # `tunnel_token` above stays in this map unconditionally and is NOT ternary'd to "":
     # templatefile pre-checks expr.Variables() across BOTH branches of the `if` directive, so
@@ -432,7 +455,7 @@ resource "hcloud_server" "web" {
     # from this one — web-1 rendering gate-on with an empty token would `service install `,
     # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
     # predicate, one place.
-    web_tunnel_connector = each.key == "web-1"
+    web_tunnel_connector = each.key == "web-2"
     # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
@@ -589,6 +612,8 @@ resource "hcloud_server" "web" {
   # applies — unwedging #5887 with ZERO reboot. web-2 was born INTO the group at
   # create time, so this defers ONLY web-1. REMOVE this entry in the GA maintenance-
   # window PR as its FIRST diff, then take the reboot on a drained host (blue-green).
+  # The same removal must update the vector_out_of_scope_changes allow-set
+  # (knowledge-base/engineering/operations/runbooks/vector-redeliver.md).
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
   #
@@ -605,8 +630,12 @@ resource "hcloud_server" "web" {
   # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
   # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user
   # incident. SHAPE-ONLY (prints requires_runtime_bind_probe=true) so exit 0 is NOT weight authorization.
-  # Committed-config anti-pooling (dns.tf web-1-only, connector excludes web-2, no LB pools web-2) is
-  # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-143 + moved-block-wedge-cutover-5887.md §Scope B.
+  # Committed-config anti-pooling (dns.tf web-1-only, no LB pools web-2) is
+  # Condition C in lb-weight-gate.test.sh. The tunnel connector on web-2
+  # (web_tunnel_connector above) is management-plane ingress for deploy./ssh./registry.
+  # only — it proxies to the origin-relative private IPs and puts NO app.soleur.ai
+  # serving weight on web-2, so it is not pooling. See ADR-068 §(c) + ADR-143 +
+  # moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
 
@@ -960,6 +989,141 @@ resource "terraform_data" "private_nic_guard_install" {
       "systemctl daemon-reload",
       "systemctl enable --now web-private-nic-guard.timer",
       "systemctl list-timers web-private-nic-guard.timer --no-pager",
+    ]
+  }
+}
+
+# Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22) on web-1: one real wrapped Bash call in the RUNNING container every
+# 15 minutes, heartbeat web_bash_synthetic pinged only on a verified pass. Shape of private_nic_guard_install (same connection, trigger
+# hash, probe-first Vector ordering). web-2 is a RUNNING cattle host whose cloud-init never re-runs, so it has its own twin below.
+resource "terraform_data" "web_bash_synthetic_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering), so the first verdict line ships.
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-bash-synthetic.sh"),
+    file("${path.module}/web-bash-synthetic.service"),
+    file("${path.module}/web-bash-synthetic.timer"),
+    file("${path.module}/sdk-bash-verdict.sh"),
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery of the new key (see nic-guard).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-web-bash-synthetic-install-web-1-%RAND%.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.sh"
+    destination = "/usr/local/bin/web-bash-synthetic.sh"
+  }
+  # The shared verdict mapping lands NEXT TO ci-deploy.sh, which sources it from its own directory.
+  provisioner "file" {
+    source      = "${path.module}/sdk-bash-verdict.sh"
+    destination = "/usr/local/bin/sdk-bash-verdict.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.service"
+    destination = "/etc/systemd/system/web-bash-synthetic.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.timer"
+    destination = "/etc/systemd/system/web-bash-synthetic.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-bash-synthetic.sh",
+      "chmod 0644 /usr/local/bin/sdk-bash-verdict.sh",
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit: see the web-private-nic-guard install above.
+      # umask 0137: never world/group-readable, the env file holds a live prd read token.
+      "( umask 0137 && printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' 'WEB_BASH_SYNTHETIC_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-bash-synthetic )",
+      "chmod 600 /etc/default/web-bash-synthetic",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-bash-synthetic.timer",
+      "systemctl list-timers web-bash-synthetic.timer --no-pager",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (twin of web_bash_synthetic_install; dialed through the web-1 bastion in CI, ADR-220). A fresh
+# host gets the same files from cloud-init + soleur-host-bootstrap.sh + web-probe-envwrite.sh. web-host-provisioner-parity.test.sh's
+# W2_ALLOWED admits it. ROTATION GAP, stated: this twin hashes no token (the env file is derived on the host from the probe env
+# file web-probe-envwrite.sh wrote at birth), so a `-replace` rotation of doppler_service_token.web_probes re-fires only the web-1
+# installers; web-2's synthetic keeps the old token until the host is replaced, exactly like its sibling probes (ADR-079 addendum
+# 2026-10-22, residual 4; the web-1 side is pinned by web-probes-token-rotation.test.sh).
+resource "terraform_data" "web_bash_synthetic_install_web2" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering), so the first verdict line ships.
+  depends_on = [terraform_data.journald_persistent_web2]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-bash-synthetic.sh"),
+    file("${path.module}/web-bash-synthetic.service"),
+    file("${path.module}/web-bash-synthetic.timer"),
+    file("${path.module}/sdk-bash-verdict.sh"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_2_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-web-bash-synthetic-install-web-2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.sh"
+    destination = "/usr/local/bin/web-bash-synthetic.sh"
+  }
+  # The shared verdict mapping lands NEXT TO ci-deploy.sh, which sources it from its own directory.
+  provisioner "file" {
+    source      = "${path.module}/sdk-bash-verdict.sh"
+    destination = "/usr/local/bin/sdk-bash-verdict.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.service"
+    destination = "/etc/systemd/system/web-bash-synthetic.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.timer"
+    destination = "/etc/systemd/system/web-bash-synthetic.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-bash-synthetic.sh",
+      "chmod 0644 /usr/local/bin/sdk-bash-verdict.sh",
+      # NO credential material in this resource (web-host-provisioner-parity.test.sh bars it from every web-2 dialer): the unit's
+      # env file is DERIVED on the host from the sibling probe env file that web-probe-envwrite.sh wrote at web-2's birth, which
+      # already holds the SAME read-scoped web_probes token. The derivation is an ALLOW-LIST of the two Doppler keys this unit uses
+      # (the key names are spelled `DOPPLER_(…)` so this resource never names the credential variable outright, which
+      # web-host-provisioner-parity.test.sh's W2_CRED_RE bars; names are not material), plus the per-host heartbeat key name
+      # written here: a key a future nic-guard file gains can never leak into this unit's env. A missing source file, a missing
+      # key or a wrong line count fails the apply loudly: the alternative is a unit that fails every 15 minutes with the cause only
+      # in the journal.
+      "probe_env=/etc/default/web-private-nic-guard",
+      "test -s \"$probe_env\" || { echo \"FATAL: $probe_env is missing on web-2, so the synthetic cannot inherit the probe token. Check web-probe-envwrite.sh ran at boot.\" >&2; exit 1; }",
+      "( umask 0137 && { printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\\n' 'WEB_BASH_SYNTHETIC_URL_${upper(replace("web-2", "-", "_"))}'; grep -E '^DOPPLER_(TOKEN|ENABLE_VERSION_CHECK)=' \"$probe_env\"; } > /etc/default/web-bash-synthetic )",
+      "chmod 600 /etc/default/web-bash-synthetic",
+      "for k in TOKEN ENABLE_VERSION_CHECK; do grep -q \"^DOPPLER_$k=.\" /etc/default/web-bash-synthetic || { echo \"FATAL: /etc/default/web-bash-synthetic has no DOPPLER_$k line: $probe_env no longer carries it, so the derivation is broken.\" >&2; exit 1; }; done",
+      "grep -qx 'WEB_BASH_SYNTHETIC_URL_KEY=WEB_BASH_SYNTHETIC_URL_${upper(replace("web-2", "-", "_"))}' /etc/default/web-bash-synthetic || { echo 'FATAL: the per-host heartbeat key line is missing from the web-bash-synthetic env file' >&2; exit 1; }",
+      "test \"$(wc -l < /etc/default/web-bash-synthetic)\" -eq 3",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-bash-synthetic.timer",
+      "systemctl list-timers web-bash-synthetic.timer --no-pager",
     ]
   }
 }
@@ -1471,6 +1635,7 @@ resource "terraform_data" "journald_persistent" {
       "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
       "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
       "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "grep -q 'web-bash-synthetic' /etc/vector/vector.toml",
       # (#7228 / #7542) The FOURTH Source-4 tag, asserted for the same reason as the three above
       # and added when apply_target=vector-redeliver gave this file a delivery path of its own.
       # It is what makes AC27(a) a property of the APPLY rather than a claim about it: the arm's
@@ -1576,6 +1741,7 @@ resource "terraform_data" "journald_persistent_web2" {
       "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
       "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
       "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "grep -q 'web-bash-synthetic' /etc/vector/vector.toml",
       "grep -q 'inngest-consumer-probe' /etc/vector/vector.toml",
       # This twin's reason to exist (#9534): the egress-gw-probe Source-4 tag must
       # land in the file the agent reads, or web-2's probe rows keep dying at the
@@ -2128,7 +2294,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
     file("${path.module}/inngest-registry-probe.sh"),
     file("${path.module}/inngest-doublefire-probe.sh"),
-    # #6780 — the five dedicated-host carriers (the ADR-135 refresh set). Webhook-
+    # #6780 — the four dedicated-host carriers (the ADR-135 refresh set). Webhook-
     # delivered so FILE_MAP/payload stay consistent; on web hosts they are inert
     # /usr/local/bin files. Registered here so a body-only edit re-fires the push,
     # same #5492 rationale. Lockstep: DEPLOY_PIPELINE_FIX_TRIGGERS + DPF_REGEX + the
@@ -2137,7 +2303,6 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/inngest-cutover-flip.sh"),
     file("${path.module}/inngest-server-flip-guard.sh"),
     file("${path.module}/cat-inngest-cutover-state.sh"),
-    file("${path.module}/inngest-luks-cutover.sh"),
     # #5934 — the privileged char-device config.lock substrate sweep is
     # webhook-delivered (push-infra-config.sh payload + FILE_MAP + DEST_SPEC), so a
     # body-only edit must re-fire deploy_pipeline_fix to reach /usr/local/bin (same

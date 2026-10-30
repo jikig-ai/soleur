@@ -27,6 +27,7 @@
 // enforced by this module and pinned by its own suite.
 import pino from "pino";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
+import type { CreateNoActionReason, CreateRefusalClass } from "@/server/compound-promote-create";
 
 const log = pino({ base: { component: "compound-promote" } });
 
@@ -89,6 +90,21 @@ export interface RefusalDetailEntry {
   diff_hunk?: boolean;
 }
 
+/**
+ * Runtime copy of the status union (a type cannot be counted at runtime). A test pins its length
+ * to 8 and its members to the union, so the eight literals cannot silently become nine.
+ */
+export const COMPOUND_PROMOTE_STATUSES = [
+  "disabled",
+  "deduped",
+  "week-cap-reached",
+  "empty-corpus",
+  "anthropic-truncated",
+  "no-qualifying-clusters",
+  "completed",
+  "error",
+] as const satisfies readonly CompoundPromoteStatus[];
+
 export interface CompoundPromoteOutcome {
   status: CompoundPromoteStatus;
   corpus_count?: number;
@@ -111,6 +127,21 @@ export interface CompoundPromoteOutcome {
   /** Bytes of the corpus payload serialized into the Anthropic message. */
   corpus_input_bytes?: number;
   /**
+   * PATTERNS PATH ONLY (#8293): numbers and closed enums, never text. They are absent from a
+   * scheduled-path row, which stays byte-identical to what it was before the layer existed.
+   */
+  input_source?: "corpus" | "patterns";
+  /** Open pattern pages that loaded and validated. */
+  patterns_open?: number;
+  /** `failed` when the prior-outcome read could not be proven complete. */
+  ledger_read?: "ok" | "failed";
+  /** Proposals dropped because the same cluster hash was already proposed (open, merged, or closed under 60 days). */
+  ledger_suppressed?: number;
+  /** RAW search hit count, before identity and title filtering. */
+  ledger_prs_scanned?: number;
+  /** Bot-authored hits skipped for a title that no longer matches the builder's shape (warn-level, never fails the read). */
+  ledger_title_skipped?: number;
+  /**
    * Which trigger produced this run. BOTH triggers dispatch this same handler
    * (`{ cron: "0 0 * * 0" }` and `{ event: "...manual-trigger" }` are registered
    * on one function), so nothing downstream can tell them apart without this
@@ -119,6 +150,51 @@ export interface CompoundPromoteOutcome {
    * the weekly path stays dark.
    */
   trigger?: "cron" | "manual";
+  /**
+   * THE GATED CREATE ARM (#10550). Closed enums, booleans and numbers; never model text. EVERY field here is absent
+   * from a scheduled-path row and from a manual `corpus` row, which stay byte-identical to before the arm existed.
+   *
+   *   - `create_requested`   a manual `patterns` run: whether the event carried `allow_create === true`. Present on
+   *                          every such row (also the early terminal rows), so each switch-on is visible without SSH.
+   *   - `kind`, `create_arm` emitted ONLY when the arm ran (`create_arm: "ran"`); an absent field means off.
+   *   - `create_outcome`     `no_action` (the model declined, no pattern was offerable, or the pattern is already proposed), `refused`, `opened`.
+   *   - `create_refusal_class` the closed class of the ONE refusal reason `create-refused`; `create_detail` its closed
+   *                          token (a field label plus a rule id, or a fixed phrase); the numbers explain a budget or
+   *                          overlap refusal (cap and total, top-1 overlap score, rank of the nearest skill).
+   *   - `create_offered`     a count, never text: the candidate patterns left after the same-run and ledger filters. When a
+   *                          model call was made it is the number offered to the model; on a pre-call refusal it is the
+   *                          candidate count and no call was spent; on a pre-call `no_action` it is 0. Absent on a
+   *                          `week-cap` or `index-empty` refusal, on `model-invalid/internal` (a step defect, Sentry op
+   *                          `create-propose-internal`) and when the memoized step output carried none.
+   */
+  kind?: "create";
+  create_requested?: boolean;
+  create_arm?: "ran";
+  create_outcome?: "no_action" | "refused" | "opened";
+  create_no_action_reason?: CreateNoActionReason;
+  create_offered?: number;
+  create_refusal_class?: CreateRefusalClass;
+  create_detail?: string;
+  create_words?: number;
+  create_cap?: number;
+  create_total?: number;
+  create_top1?: number;
+  create_nearest_rank?: number;
+  /** `input-size` refusals: the token bound, its ceiling and the input bytes (the bound is bytes / 4). */
+  create_tokens?: number;
+  create_max?: number;
+  create_bytes?: number;
+  /** `persist` collector refusals and `persist/bytes-differ`: the index into the six-path set. */
+  create_path_index?: number;
+  /** `scan` refusals: the index of the refused file (0 SKILL.md, 1 PURPOSE.md) and how many tools were missing. */
+  create_file_index?: number;
+  create_missing_tools?: number;
+  /** `scan` / `readme-sync` refusals: the gate script's exit code; also `persist` refusals: the exit status of a failed git call. */
+  create_exit?: number;
+  /** `readme-sync` (paths that changed) and `persist/base-moved` (base blobs that moved). */
+  create_changed_count?: number;
+  /** The draft PR number when `create_outcome` is `opened`. */
+  create_pr?: number;
   /** Inngest run id — the join key to a Sentry event for the same run. */
   run_id?: string;
   /**
@@ -130,6 +206,34 @@ export interface CompoundPromoteOutcome {
   error_class?: string;
   error_message?: string;
 }
+
+/**
+ * The ONLY numbers a create refusal may put on the marker: refusal `numbers` key -> marker field. A number the pure
+ * module or a gate adds is Sentry-only (`extra`) until it is named here, so the marker's shape stays reviewed.
+ */
+export const CREATE_MARKER_NUMBERS = {
+  words: "create_words",
+  cap: "create_cap",
+  total: "create_total",
+  top1: "create_top1",
+  nearest_rank: "create_nearest_rank",
+  tokens: "create_tokens",
+  max: "create_max",
+  bytes: "create_bytes",
+  path_index: "create_path_index",
+  file_index: "create_file_index",
+  missing_tools: "create_missing_tools",
+  exit_code: "create_exit",
+  changed_count: "create_changed_count",
+} as const satisfies Record<string, keyof CompoundPromoteOutcome>;
+
+/**
+ * The numeric refusal keys that are SENTRY-ONLY on purpose: a create refusal may carry them in `numbers` (so they reach
+ * the `create-refused` event's `extra`), and the handler never forwards them to the marker. Every number key the three
+ * create modules pass is either a key of {@link CREATE_MARKER_NUMBERS} or listed here; a census test enforces it, so a
+ * new number is a decision about the marker's shape, not an accident.
+ */
+export const CREATE_SENTRY_ONLY_NUMBERS = ["min_words", "max_words", "headroom", "threshold", "pr", "nearest_in_offered"] as const;
 
 /** Cap on `refusal_detail` entries so one pathological run cannot flood the sink. */
 export const REFUSAL_DETAIL_CAP = 20;

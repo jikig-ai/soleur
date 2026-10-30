@@ -95,6 +95,7 @@ Targets NFR-026 (Encryption In-Transit) for the Inngest leg. The register status
 - **ADR-140** (encryption posture as a design-time default). The reason no ledger value or published wording changes in this PR: the posture is claimed only after resolvable evidence exists.
 - **ADR-118** (a shared cert's SANs are the cluster roster). The precedent for Terraform-minted pinned certificates delivered through Doppler and pinned by the client. This certificate differs deliberately: one fixed SAN (`10.0.1.40`, no roster to track), and it is not count-gated, because ADR-118's gating existed to stop a proxy server from logging a silent fallback on mere presence of the material, and no process here reads it before the host replace.
 - **ADR-241** (infra credential tiers). The flip job runs under `infra-privileged` and is added to the D8 census; it reuses the Tier-B write token bound to that environment to write the `prd_terraform` source key, and no new token is minted.
+- **ADR-307** (Inngest key rotation route, 2026-10-27, #10540). A rotation requires this ADR's link flag at `1`, and `inngest-link-flip.sh off` (and `flip`) needs `OFF-AFTER-ROTATION` once a rotation run exists.
 
 ## Addendum (2026-10-19) - what the review changed, and what the repository does and does not show
 
@@ -141,3 +142,57 @@ see what moved.
   decision), #10541 (TLS key out of the server environment), #10542 (Stripe send swallow, P1, blocks the host-replace go), #10543
   (dashboard send), #10544 (`inngest-host-replace` confirm and id-pin), #10545 (nft loader idempotency), #10556 (Sentry alert rule for
   `op=inngest-link`), #10557 (no no-SSH repair for a wedged `/mnt/data/inngest-link`).
+
+## Addendum (2026-10-22, #10783)
+
+Authority for the two flag writes on `inngest-link-flip.yml` is split. The `flip` is an in-session per-command go (form (b)) only
+because `delegation-verify.sh` denies `confirm=`, so no valid recorded Standing Delegation can cover it. `action=off` takes either
+form, before A5 (the signing-key rotation): after A5 the new key would travel over plaintext `:8288` if the link were turned off, so
+`action=off` after A5 is form (b) only. See "Production Envelope for the post-merge acts" in the Inngest server runbook. The dated go
+quoted in the Consequences sentence "The owner's go is procedural" is superseded by the runbook's authority wording.
+
+## Addendum (2026-10-22, the first flip attempt)
+
+The first `flip` (workflow run 39817708732) failed at the canary's `inspect` check with `cause=none` on web-1. The flip's revert step
+(its flag write ran as apply run 39817975968) redeployed both hosts; its own verdict did not verify web-2's canary and swap or the scheme the running containers resolved, and both
+hosts' `class=resolved ... state=http_default scheme=http` rows were read afterwards.
+
+**What is established and what is not.** Reproduced locally (Docker 29.9, `docker-evidence.md`): `docker run` keeps an `--env-file` entry **and** a
+`-e` entry for the same key, `docker inspect` lists both, and the `-e` value wins when the process starts. The canary requires exactly one
+`INNGEST_BASE_URL=` and one `NODE_EXTRA_CA_CERTS=` line, so a Doppler snapshot that pins `INNGEST_BASE_URL` would fail it, which is consistent with the failed run (`cause=none`, no count recorded) and not proven by it. The
+old check printed no counts (`cause=none`), so no production run has measured the line count, and the Doppler key set was never read: the pin is
+the **most likely** cause, not an observed one. The first measurement is the next flip's `check=inspect cause=<token> url_lines= ...` row, and
+the `-e`-wins behaviour was measured on one Docker version (the hosts' own is unknown). The mock docker reported the `-e` pairs only, so no
+test could show the duplicate.
+
+New invariant: **the `-e` flags are the only source of `INNGEST_BASE_URL` and `NODE_EXTRA_CA_CERTS` in the canary and prod containers.**
+`ci-deploy.sh` scrubs both names from the env-file once per deploy (`inngest_link_scrub_env_file`, after the resolver, before the first
+`docker run`). The `inspect` check stays strict and names its first failing condition
+(`cause=inspect_failed|url_count|url_value|ca_count|ca_value` with four fixed counts) with its own deploy-state reason
+`canary_inngest_link_inspect_failed`. A scrub fault aborts a strict (flag on) deploy with `inngest_env_scrub_failed` and is logged and continued
+otherwise, so `action=off`, the flip's revert and any flag-off deploy are never blocked by it (with the flag on it blocks like a resolver fault).
+Ruled by the CTO agent, 2026-10-22. Rejected alternatives: putting both names on `-e` for every variable (every Doppler secret would sit on the
+docker argv); an `--env-file` allowlist (the prd key set is open-ended and owned by Doppler, so an allowlist silently drops new secrets);
+de-duplicating at inspect time with last-wins (the proof would then depend on merge order and the Docker version, and a real duplicate would pass).
+The scrub regex, `REQUIRED_ENV` in `lib/docker-run-tuple.py` and the two counts in `inngest_link_canary_check` name the same two variables; a
+resolver-suite row pins that they agree.
+
+Accepted residuals: the first-boot tuple in `cloud-init.yml` keeps its duplicate (no inspect check runs there; the next deploy replaces it), the
+prod container is not inspected (the canary's proof transfers to it only for these two names, through the shared env-file), the image's own `ENV`
+was not measured, a plainly spelled `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first; a no-break-space or BOM prefixed spelling can), and the overlay's `grep` weakness
+is tracked separately (#10855).
+
+## Addendum (2026-10-23, the second flip attempt)
+
+The second `flip` (run 39977793262) failed at the host-side self-gate on web-1: `INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3` (Better Stack row 15:24:42Z, run-log reason `inngest_link_selfgate_failed`), before any canary ran.
+The revert redeployed both hosts: Better Stack rows show `class=env_scrubbed level=info removed=1` and `class=resolved level=info state=http_default scheme=http` at 15:26:10Z (web-1, `soleur-web-platform`) and 15:26:44Z (web-2, `soleur-web-2`); the revert run itself did not verify the scheme.
+That event named only the last attempt's curl exit code and HTTP code, so the failed stage was unreadable and its cause is not established. #10934 appends `phase= tcp= tls= verify=` after `attempts=` from one curl `-w` line; the pass predicate (curl exit 0, HTTP 200, pinned file) is unchanged.
+The phase is also written to the deploy state as the closed-enum key `inngest_link_selfgate_phase`, visible only in the release run's state dump and `/hooks/deploy-status` until the next deploy; the flip run log prints only the reason and the revert's redeploy normally erases the key, so for a flip the event row is the only record.
+Measured on local servers (`curl-w-measurements.md`; not every row on every build): a real stunnel whose upstream refused printed `rc=56 http=000` with TLS completed (curl 8.5.0), the incident's shape and not a cause. `phase=request` means only TLS verified and no HTTP response came back.
+The terminator's own journald is not shipped (stunnel logs at priority 6; `vector.toml` Source 1 admits only `inngest-server.service` or priority 3-4) and no issue tracks it; #10880 is a `vector.toml` carrier-drift CI guard. The runbook records the exit from this gap.
+Not measured: the hosts' curl version; the suite's real-curl comparison omits the hang phases, a TCP reset, an empty CA file and a truncated body.
+Rejected alternatives (CTO F1-F3, `decision-challenges.md`): a second `-k` or handshake-hook probe (a new unverified path beside the trust anchor), raw millisecond timings (cardinality, timing side channel), `%{errormsg}` (free text, curl 7.75+).
+
+## Addendum (2026-10-25, the terminator's journal)
+
+**Decision (PR #10975).** The third `flip` (run 40079474290, 2026-10-24) failed at the host-side self-gate with `phase=request tcp=3 tls=3 verify=0`: TLS verified and no HTTP response came back, which does not name a cause, so the exit the runbook's `request` stop rule names is the terminator's own journal. `soleur-inngest-tls.service` joins Source 1 `include_units` and Source 2 `exclude_units` in `vector.toml` (one source per row; the two lists are pinned equal), and `inngest_terminator_filter` drops only three healthy-request line shapes of that unit, each as a whole line, and fails open on every other row, because stunnel's lines carry no priority prefix and PRIORITY cannot split them. The row budget is a healthy-operation bound measured per unit after the replace (at most 400 per day before a flip and 8,000 after); a wording mismatch over-ships and never silences, and refusal rows are never dropped or throttled. This supersedes the 2026-10-23 addendum's statement that the journald is not shipped and no issue tracks it, for a host created from an image that carries this change only. The file reaches web-1 and web-2 at the merge (inert there) and the Inngest host only through the bootstrap image and a host replace, which needs the owner's typed go naming it, after the `user_data` trim (#11080) has merged and #10543 is fixed; until Guard A's pin is bumped it reports `vector.toml` as drifted (advisory), the link stays http and the flip remains a separate owner act. Measured only on stunnel 5.72.

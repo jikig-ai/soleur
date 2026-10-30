@@ -31,6 +31,9 @@
  *    (ok on rc 0/1, error on rc 2/3 or empty-stale anomaly). A weekly-cadence
  *    cron's absence-based liveness is too weak on its own, so this workflow
  *    provisions its own monitor (unlike Design A dev-migration-drift).
+ *    That monitor was destroyed by the #6590 PR-B prune — the heartbeat now
+ *    void-posts by design (spec NG4), and dispatch-error cover is the
+ *    reportSilentFallback path below.
  *  - Dispatch error path: an Octokit `workflow_dispatch` failure is caught and
  *    reported loudly to the Sentry issues stream via `reportSilentFallback`
  *    (token redacted). A token-mint failure occurs BEFORE the try/catch and
@@ -109,12 +112,10 @@ export const cronDomainModelDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 8 * * 1" },
+      { event: "cron/domain-model-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 8 * * 1" },
-    { event: "cron/domain-model-drift.manual-trigger" },
-  ],
-  cronDomainModelDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronDomainModelDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

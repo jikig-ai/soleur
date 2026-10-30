@@ -13,7 +13,8 @@
 #   • Every member MUST be an inngest-host dest in infra-config-install.sh DEST_SPEC (and its
 #     FILE_MAP lockstep) — the channel reuses that root helper, it does not widen the dest set.
 #
-# #6780 decision D3 — membership is the FIVE dedicated-host carriers: the repo files that
+# #6780 decision D3 — membership is the FOUR dedicated-host carriers (five until inngest-luks-cutover.sh was retired
+# with the cutover trio, #10112): the repo files that
 # install to /usr/local/bin on soleur-inngest and whose every edit previously cost a full
 # sole-scheduler force-replace (the inngest-redis-bootstrap.sh case is the exact shape this
 # channel eliminates). The earlier 8-member seed listed web-host scripts — verified absent
@@ -24,4 +25,3 @@ apps/web-platform/infra/inngest-redis-bootstrap.sh
 apps/web-platform/infra/inngest-cutover-flip.sh
 apps/web-platform/infra/inngest-server-flip-guard.sh
 apps/web-platform/infra/cat-inngest-cutover-state.sh
-apps/web-platform/infra/inngest-luks-cutover.sh

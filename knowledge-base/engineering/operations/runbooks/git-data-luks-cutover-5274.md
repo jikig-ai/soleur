@@ -15,6 +15,8 @@ rule are in ADR-239, amendment 2026-10-09. Three further modes, `wipe_check`, `w
 run in a separate job (`wipe`) and retire that volume by detaching it and deleting it at the provider API; they
 are owner-named and described in [The wipe](#the-wipe-dl-2-10138--6897).
 
+> **Superseded 2026-10-27 (#11195), as to "when that volume is destroyed by the DL-2 wipe":** the volume was deleted at the provider API on 2026-10-27 by a Terraform destroy, not by the DL-2 wipe; see "Plaintext-volume destroy".
+
 **No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
 Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
 whether it worked (`hr-no-ssh-fallback-in-runbooks`).
@@ -68,7 +70,7 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
     **Since PR #9096 (#5914, host-key step 6):** the resolver throws on an absent pin whatever the
     flag says, and a dispatch from `main` reads `TOFU_ARM absent`, which satisfies the reminder. The
     other conditions stand: the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure
-    path (the flip must not happen before it exists; see host-key step 5, "Requests after the
+    path (the flip must not happen before it exists, rehearsal flip excepted per the run sheet's Art. 17 rule; see host-key step 5, "Requests after the
     window").
     **Since #8572:** the paging condition is met once its PR has merged **and** both of its runs
     are green: `apply-sentry-infra.yml` (it creates the `git-data-host-key-pin-fault` rule and adds
@@ -89,8 +91,10 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
     Recommends openssh-client), so every app-side git-data dial failed ENOENT: every Art. 17
     erasure read `unreachable`, and no replication call could run. Required before
     `GIT_DATA_STORE_ENABLED` flips.
-- A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation immediately before the real
-  cutover, so nothing planted during the read-only period survives into it (ADR-220 D6).
+- A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation before the FIRST flip of any
+  kind, so nothing planted during the read-only period survives into it (ADR-220 D6). The first flip
+  is the rehearsal and it closes the rotate door, so the real cutover rides that rotate's stamp (see
+  the rehearsal section, "D6 and the real flip").
 - **The host's own liveness heartbeat is armed and measured (#9438, hard).** The `flip` freezes
   writes on this host, and the finalizer can only report what it can reach, so a host that is dark
   between boots must page BEFORE the flip. Satisfied means all of: `soleur-git-data-host-prd` was
@@ -149,6 +153,7 @@ promise.
 | `unfreeze` | nothing | n/a | removes the sentinel and restarts `git-data-gc.timer` (exit 6 if it will not start) |
 | `flip` | **web-1's app container restarts** (web-1 is the singleton ingress, ADR-143 D2); the freeze refuses git-data store writes for the window between freeze and unfreeze | the same-version redeploy takes ~75 s as a release deploy job (runs 36970234398 and 36962950359, 2026-10-02: 74 s and 77 s wall time, both hosts). The container's own unavailable window is inside that and is *not measured*: no per-host availability probe exists. The job bounds are 2400 s for the redeploy and 900 s for the finalizer's unwind. | `gh run view <id> --json jobs` on the two runs; `track.sh` bounds |
 | `rollback` | the same web-1 container restart, with the flag off; git-data keeps serving | as `flip`, plus the erasure probe that follows | as above |
+| `flip` to `rollback` (the flag-on window, #8211) | **no host stops, but the app runs the flag-on path for any user who opens a workspace or starts a session** from the flip's redeploy until the rollback's redeploy has restarted both hosts: a session's working tree is created under `WORKTREE_ROOT` on the web host (in the container's writable layer) and replicated to git-data only at session end. A session killed by a redeploy never replicates, and the rollback's redeploy discards every tree under `WORKTREE_ROOT`, so a session killed or still running at the rollback loses its unreplicated work (it may be the only copy). A user opening an existing workspace in the window can find it missing until the rollback. Delete Account inside the window removes both `/workspaces/<id>` and the `WORKTREE_ROOT/<id>` tree, on the serving host only (see the run sheet's Art. 17 rule) | *not measured*: it is the minutes between the flip's per-host `enabled` readback and the rollback's per-host `disabled` readback, so it includes the rollback's redeploy and the second dispatch's approval wait; the first run records it in the evidence block | `apps/web-platform/server/workspace-resolver.ts` (`getWorkspaceWorktreeRoot`, `isGitDataStoreEnabled`), `apps/web-platform/infra/lib/docker-run-tuple.py` (the mounts), `apps/web-platform/server/git-data-replication.ts` (replication at session end) |
 | `redeploy` | the same web-1 container restart; no flag or host change | ~75 s | as above |
 | `wipe_check` | nothing | n/a | no volume or provider state changes: provider API reads, a Better Stack read and one host-side session that creates and removes a transient host-local device-mapper snapshot (mounted read-only; a killed run can leave it, see `snapshot_clear`) |
 | `snapshot_clear` | nothing | n/a | removes one LEFTOVER host-local device-mapper snapshot of the plaintext device, its loop device and its RAM copy-on-write file; no volume or provider operation |
@@ -206,7 +211,7 @@ bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd
 bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd off
 ```
 
-`flip.sh ... prd on` also writes the Doppler mirror `FLAG_NEW_SESSIONS_PAUSED=1` in `dev` and `prd`, and `off` writes 0, so a container that (re)starts while Flagsmith is unreachable comes up refusing during the window. A container that is already running holds the last value Flagsmith gave it for up to 10 minutes of Flagsmith failure, so a single slow Flagsmith response (the client waits 200 ms) does not re-open the gate. A stale mirror of 1 left after the window would pause the fleet on the next Flagsmith failure, so run the `off` command and confirm the mirror is 0 when the window closes.
+`flip.sh ... prd on` also writes the Doppler mirror `FLAG_NEW_SESSIONS_PAUSED=1` in `dev` and `prd`, and `off` writes 0, so a container that (re)starts while Flagsmith is unreachable comes up refusing during the window. A container that is already running holds the last value Flagsmith gave it for up to 10 minutes of Flagsmith failure, so a single slow Flagsmith response (the client waits 200 ms) does not re-open the gate. A stale mirror of 1 left after the window would pause the fleet on the next Flagsmith failure, so run the `off` command and confirm the mirror is 0 when the window closes. The window closes at the rollback (R5 reads `disabled` on both hosts), not before: while `GIT_DATA_STORE_ENABLED` is true, do not run `off`. It also closes when a failed run's finalizer reads `disabled` on both hosts, or when a run aborts before the flag write (the flag was never true); `off` is allowed then. If R3 reads INCONCLUSIVE the flag stays on and the pause stays on: stop and take it to the CTO for a ruling, do not improvise a path.
 
 **What it refuses:** a new or resumed agent session (cc `dispatchSoleurGo` with no live Query, legacy `sendUserMessage` and `startAgentSession`), a first message on a new conversation (before the conversation row is created), `POST /api/repo/setup` and `POST /api/repo/create` (503, `Retry-After: 300`, code `quiet_window`, the connect-repo page shows calm retry copy), and the auto-sync agent. A refused message is **not** persisted and not sent: the user sends it again after the window. While the window is on, starting or resuming another conversation does not abort a legacy session that is already running.
 
@@ -223,15 +228,290 @@ Proceed only when, for EACH host: the newest row is under 2 minutes old (a stopp
 
 Treat any row with `new_sessions_paused=0` from the moment of the pre-flip read until after the exit read (`mode=proof`) or the rollback as an **abort**, and read both hosts again immediately before and immediately after the `mode=flip` dispatch. Refusal reaches a host within the 30 s flag cache TTL. A host that emits no row at all is not quiet; it is unread.
 
+### Flag-on rehearsal finding: the container egress rule (#8211, 2026-10-24)
+
+With `GIT_DATA_STORE_ENABLED=true` the app container's git fetch over `ssh://git@10.0.1.20/...` hung until its timeout (Better Stack `op=git-data-overlay`, `killed:true`, `signal:SIGTERM`, empty stderr). The CTO's diagnosis (2026-10-24, about 90% confidence, not yet measured): the container egress chain (`SOLEUR-EGRESS`, default drop) admitted nothing for the git-data host, while the host's own `web-git-data-probe` leaves through host OUTPUT, never that chain, and stayed green. The fix adds one accept (`ip daddr 10.0.1.20 tcp dport 22`) and bounds the app's connect (`ConnectTimeout=8`, `ServerAliveInterval=6`, `ServerAliveCountMax=2`), so a blackhole now reads `Connection timed out` inside the budget.
+
+Required after the merge, before the next `mode=flip` dispatch, with no host replace: the rule reaches web-1 through the infra-apply workflow and web-2 through the deploy-pipeline apply workflow (`deploy_pipeline_fix_web2`), both fired by the merge. Treat the flip as blocked until (a) the web-1 apply's SSH stage concluded `success` (not skipped by `ssh_token_gate`: no "SSH stage SKIPPED" ops email) and (b) the post-apply assertion `dedicated-git-data-22-accept` ran on BOTH web-1 and web-2. That assertion proves the rule text is in the live chain ahead of the default drop, not that a container reaches the host; the container-originated probe is the separate flip preflight (PR-E). The measurement is no `killed:true` on `op=git-data-overlay` after the next rehearsal.
+
 ### Before the first `flip`: the rollback rehearsal
 
 The first `flip` is not authorized until a flip-then-rollback rehearsal has run once with the erasure
-probe passing after the rollback. The probe proves the HOST wrapper contract (provision, fenced push and
-remove with a synthetic id through the CI root key); it does not exercise the app's own erasure path
-(`removeGitDataRepo` with its pin and ssh client in the redeployed web container). Pair the rehearsal with an
-app-path signal before the flip: the pin-fault rule state and an `erasure_outcome` event for a canary id. Record its run URL here when it exists: *not yet run*. This is a
-precondition recorded by #8211's plan review (the CPO condition: the rollback is shown to leave
-erasure working); the rehearsal is dispatched only on the user's per-step authorization.
+probe passing after the rollback. Its evidence block is recorded below ([Rehearsal 1 record](#rehearsal-1-record-2026-10-24)): mechanics passed, Level 2 NOT exercised, so this condition is NOT yet discharged.
+The probe proves the HOST wrapper contract (provision, fenced push and remove with a synthetic id through the
+CI root key); it does not exercise the app's own erasure path (`removeGitDataRepo` with its pin and ssh client in
+the redeployed web container). That is why Level 2 below is required: the CLO ruled on 2026-10-12 that Level 1
+alone does not discharge the #8211 Art. 17 condition, and that Level 1 is never worded "erasure verified".
+
+Ruled by CTO agent, 2026-10-19 (`knowledge-base/project/specs/archive/20261020-094500-feat-git-data-cutover-resume-8211/cto-rulings.md`): this
+section is the run sheet; it adds no mode and no dry run. **The rehearsal flip IS a production flip**: `flip`
+freezes the store, writes `GIT_DATA_STORE_ENABLED=true` into Doppler `prd`, redeploys both web hosts and writes
+`GIT_DATA_LUKS_CUTOVER_AT`. Everything below makes the flag-on window short and its consequences read; it does not
+make the window a drill (see the `flip` to `rollback` row of [the blast-radius table](#downtime-and-blast-radius-read-before-approving-each-dispatch)).
+Design source, read-only: `knowledge-base/project/specs/archive/20261013-002507-feat-one-shot-git-data-luks-cutover-8211/design-rollback-rehearsal.md`
+(sections cited as "the 10-12 design") and `knowledge-base/project/specs/archive/20261019-105503-feat-git-data-cutover-recheck-8211/rehearsal-run-sheet.md`.
+Where this section differs from those two, this section and the CTO rulings win; the differences are the dropped `WORKTREE_ROOT`
+directory read (R3b), the session-refusal control being required rather than optional, and the window end defined below.
+
+**Authorization.** Every dispatch below is its own owner-named command, with the environment approved by the owner in
+the owner's own session. A menu answer, an earlier "go" or the approval of the flip is not authorization for the
+rollback or the exit read (`hr-menu-option-ack-not-prod-write-auth`). An agent reads, prepares the record PR and waits:
+an agent never approves its own dispatch, and the headless `pending_deployments` form is not used for R1, R4, R6 or R7.
+No Standing Delegation covers any step here. `web-platform-infra-apply` allows self-approval (one reviewer,
+`prevent_self_review=false`, read 2026-10-19), so the two-key control is procedural (#10343). Dispatch on `main` only.
+
+**Level 2 is an OWNER-RUN sequence.** No script creates the synthetic account, drives its one session, deletes it or reads
+back, and none is built (Ruled by CTO agent, 2026-10-19): `POST /api/account/delete` needs the synthetic user's own
+authenticated session and a body `confirmEmail` that matches, so a script would hold a standing production credential to
+automate a two-step owner action. The owner creates and signs in the Soleur-owned synthetic account (its id is the
+repository name; it holds no real personal data and is cited by hash only), runs the one session, and issues the delete
+from that account's own session. An agent cannot drive any of these steps and does not propose to. In this section
+"synthetic account" always means that account and "credential canary" always means the post-rotation check of the owner chain; the word
+"canary" alone is not used.
+
+**Rules that hold for the whole window and after it.**
+
+- **No rotate or credential change inside the flag-on window and never after the flip. No credential canary and no
+  `apply-web-platform-infra.yml` dispatch inside the flag-on window. No merge to `main` inside it either.** The bans start at
+  the R1 approval. The measured window is the time from the flip's per-host `git_data_store=enabled` readback to the rollback's
+  per-host `git_data_store=disabled` readback: the app reads `GIT_DATA_STORE_ENABLED` from the container environment, which a
+  redeploy bakes in, so the flag-on path runs until the rollback's redeploy has restarted both hosts, not until the flag-off
+  write (and it starts at the flip's redeploy, which precedes its readback). A merge to `main` that touches app or plugin paths
+  produces a release whose `workflow_run` deploy restarts the containers and kills live sessions without replicating them; that
+  deploy shares the `web-1-swap` concurrency group with the cutover job, so it can delay or displace the pending rollback. A `git-data-host-rotate` dispatch destroys the LUKS volume, which from the flip on may
+  hold the only copy of the replicated repositories; the rotate guard refuses it with `store_dirty` once any run executed
+  the flag-write step, and the rehearsal flip is such a run once it reaches the flag write, so after R1 no rotate is
+  dispatchable (the break-glass is
+  [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175), and it is the one route after the flip). The
+  credential rotations are the owner's priority call and the rehearsal does not technically depend on them
+  (`precondition_8209_open` reads only that `DOPPLER_TOKEN_INFRA_PRIVILEGED` is present), but they, and their credential canaries,
+  are done before R1. A credential canary that is an `apply-web-platform-infra.yml` dispatch (the no-op apply of step 2c of `knowledge-base/project/specs/archive/20261019-105503-feat-git-data-cutover-recheck-8211/owner-command-chain.md`, the owner's credential-rotation chain)
+  also consumes one slot of the d6 window below; the other canaries do not.
+- **D6 and the real flip (Ruled by CTO agent, 2026-10-19).** A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation is
+  required before the FIRST flip of any kind, and that first flip is the rehearsal. The rehearsal flip executes the flag-write step, so
+  the rotate guard refuses every later rotate and the real cutover rides the rotate stamp that preceded the rehearsal (2026-10-14, run
+  38583657167), not a rotate "immediately before" it. ADR-220 D6's claim that nothing planted during the read-only period survives into
+  the cutover is therefore established only as of that rotate; the real flip is covered for the period since by the rehearsal's R7
+  `proof` reading `clear`, the pin fingerprint matching the rotate run's, and the heartbeat, but not by a fresh host. The
+  `d6_replace_stale` remedy text that demands a rotate before every flip is stale for the real flip, and the stamp must still be inside
+  the 100-run window at both flips.
+- **The d6 stamp must still be inside the 100-run window at each flip dispatch.** The flip reads the 100 newest
+  `workflow_dispatch` runs of `apply-web-platform-infra.yml` on `main` (`gh run list --workflow apply-web-platform-infra.yml
+  --branch main --event workflow_dispatch --limit 100`). If the rotate run has aged out the flip refuses `d6_replace_stale`
+  and the rotate guard forbids a new rotate: a deadlock (#10216). Re-read the index at R0 and again before the real flip.
+- **The window is held quiet by the session-refusal control, not by a count.** Counts are point-in-time reads, not
+  refusal. Under the `single-user incident` threshold a zero count never discharges the window; precondition 1 below names what
+  does. The one session permitted inside the window is the synthetic account's, so the control exempts that named account (Ruled by CTO agent, 2026-10-23, #8211; this paragraph is the record). That supersedes the 2026-10-19 premise that only a canary can create a tree in the window: the exempt session creates one by design, and it is the owner's R3 session. Mechanism: the owner sets `QUIET_WINDOW_EXEMPT_USER_ID` in Doppler `prd` to the synthetic account's id (one lowercase UUID). A malformed value (empty, a list, uppercase, padded) exempts nobody, but a well-formed WRONG id exempts whichever account owns it, so **verify the id is the Soleur-owned synthetic account, never a real user, before setting it**. `newAgentSessionsRefused` lets only that exact id through while the pause is on, at the five refusal gates (cc-dispatcher, both agent-runner gates, the ws-handler first-message check, `POST /api/repo/setup` and `/create`) and at the ws-handler supersede-abort skip (the exempt account's in-flight session is aborted by a new conversation like any other, so R3 uses one conversation); auto-sync stays refused for it too. The exemption is per account, not per session: nothing limits it to one session, so "one session" is the owner's discipline, and the account must be a member of no shared workspace and hold no real repository, since the gates key on the caller and not the workspace. The container's environment is fixed at its `docker run`, so only a redeploy changes what a host sees (restarting the same container does not; whether Doppler reaches a running container without one is unverified). The flip's own redeploy does NOT help: R1's pre-reads precede it. So set the variable in Doppler and load it with a separate same-version `mode=redeploy` BEFORE R1, then confirm `exemptConfigured=true` on BOTH hosts (measured 2026-10-23: `false` until that redeploy, `true` on both after). **Unset it before dispatching R4**, so the rollback's redeploy clears it (R7 is a `proof` and redeploys nothing). A hotfix redeploy before R4 would drop the exemption mid-R3 and refuse the account's next message: harmless, and the reason no merge to `main` is allowed in the window. Read-back: the reporter's structured fields carry `exemptConfigured` (a boolean, never the id), read per host with the same query window as the session count, decoded from the row's structured fields (the row's `raw | fromjson | .message` is an object holding `newSessionsPaused`, `agentSessionsLive` and the other pino fields, measured on production rows 2026-10-23; `exemptConfigured` joins them once this build is deployed, so it is absent from every row before that): `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 10m --grep 'agent_sessions_live=' --limit 400 | jq -r '"\(.dt) \(.raw|fromjson|.host_name) exemptConfigured=\(.raw|fromjson|.message.exemptConfigured)"' | sort`. The same freshness rule applies (newest row per host under 2 minutes old). Confirm the variable's NAME exists in `prd` without reading its value, at R0 and again that it is gone before R4: `doppler secrets --only-names --json -p soleur -c prd | jq -e 'has("QUIET_WINDOW_EXEMPT_USER_ID")'`. `exemptConfigured=false` on either host before R1 means the variable did not load (no `mode=redeploy` since it was set) or is malformed, and a malformed non-empty value also raises one Sentry warning `feature:quiet-window op:exempt-config-invalid` (length only). Proof the exempt session ran: a Sentry issue search on `feature:quiet-window op:exempt-pass` with `statsPeriod=24h`, read with `SENTRY_ISSUE_RO_TOKEN` from Doppler `prd` as in [Store not empty](#store-not-empty-store_not_empty) step 3 (an info event, mirrored at most once a minute with a `passes` count that is a lower bound, hashed id; delivery is unmeasured, so an EMPTY result does not prove the session did not run); the exempt pass is not counted in `refused_since_last`, so proof that real users stayed refused is `refused_since_last` above 0 on the reporter line in the window, and proof the exemption is gone is `exemptConfigured=false` after R4 plus a refused retry from the synthetic account. The reporter line itself is unchanged and still reads the global state. The control still FAILS OPEN on an unreadable flag (last value held 10 minutes, the Doppler mirror keeps it on), so the per-host line, not the flag, is the proof.
+- **No host is read over SSH by hand** (`hr-no-ssh-fallback-in-runbooks`); web-2 has no SSH ingress, so its log line is its
+  only evidence. The only host reads are the workflow's own.
+- **Where a working tree lives, and what a redeploy does to it (Ruled by CTO agent, 2026-10-19).** `WORKTREE_ROOT` defaults to
+  `/var/lib/soleur/worktrees` and the run tuple mounts only `/mnt/data/workspaces:/workspaces` and the plugins directory, so a tree
+  under it sits in the container's writable layer. It is not replicated until session end and is lost with the old container at the
+  rollback redeploy: a session killed or still running at the rollback loses its unreplicated work. R0 therefore adds a names-only
+  listing of the `prd` Doppler config for `WORKTREE_ROOT` (no value read). Absent: the default above holds. Present: do not dispatch
+  R1 until the CTO or the owner has classified where it points. This is a configuration name check, not the tree listing that was ruled
+  out.
+- **Art. 17 inside the window (Ruled by CLO agent, 2026-10-19; v1 internal attestation, not external counsel).** While the flag is on,
+  Delete Account (`deleteWorkspace`) removes both `/workspaces/<id>` and `WORKTREE_ROOT/<id>` on the serving host (#8211). The tree is
+  host-local and only the in-process session is aborted, so a tree on the other web host is not reached. A tree the reap could
+  not remove, or only moved aside, is reported to Sentry (`op:workspace-tree-erasure`, from Delete Account and from repo disconnect, paged by the
+  `art17-workspace-tree-erasure-incomplete` rule; the cascade continues) and is released only when the rollback swap replaces the
+  container (storage released, not overwritten, and its absence is not observed); a `removeGitDataRepo` call inside a freeze span
+  is refused and logged as an Art. 17 event. The rehearsal flip may run with the
+  per-id re-erasure path unbuilt ONLY while the built session-refusal control holds, shown by the control's per-host reporter line
+  (`new_sessions_paused=1` in the quiet-window build's current draft; the control fails open on an unreadable flag, so the flag alone
+  proves nothing) on both hosts before R1 and again immediately before R4. An owner acceptance does not substitute for the control on
+  this limb, and without it the rehearsal does not start. Record every refused erasure in the window (Sentry
+  `op:git-data-bare-repo-erasure`, hashed ids; resolve the issue after the sweep, never archive it) and the number of account
+  deletions in the window, or write "not measured". A request received in the window whose control line, per-host `disabled`
+  readback and R7 `clear` all hold is recorded as "received in window, bounded by R4, not observed erased"; any failed read opens a
+  `clo-attestation` issue with the Art. 12(3) deadline (one month from the request) in its title and keeps the first real flip
+  blocked. The owner's dispatch approval covers the production-flip risk, not an Art. 17 shortfall. After a rehearsal whose R7 read `clear`,
+  with the flag off and no store-enabled window since, the emptiness discharge of host-key step 5 remains available until the real
+  flip, although "`GIT_DATA_STORE_ENABLED` has never been on" is no longer literally true. This exception covers the rehearsal flip
+  only: the per-id re-erasure path, which is not built, stays a hard precondition of the first REAL flip (Ruled by CTO agent,
+  2026-10-19). The `deleteWorkspace` that also reaps `WORKTREE_ROOT/<id>` is built (#8211).
+- **Reading the working-tree erasure signal (#8211).** A Delete Account or repo disconnect whose local reap failed (a root not
+  removed, a tree only moved aside, a child killed at its time limit) raises a Sentry event with `op:workspace-tree-erasure` and
+  pages through `art17-workspace-tree-erasure-incomplete`. List the issues (same token and org as [Store not empty](#store-not-empty-store_not_empty)
+  step 3), then read each issue's events; `extra.failedRoots` (`workspaces`, `worktree`, or `resolver:<root>`), `extra.failureKinds`
+  (`moved-aside`, `survived`, `recreated`, `timeout`, `error`) and `extra.errorCodes` say what failed, and no path or raw id is carried:
+
+  ```bash
+  SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)
+  curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+    'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=op%3Aworkspace-tree-erasure&statsPeriod=14d' \
+    | jq -r '.[].id'
+  # for each issue id:
+  curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+    "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/<issue-id>/events/?full=true" \
+    | jq -r '.[] | [.dateCreated, (.tags[]? | select(.key == "feature") | .value), ((.context // .extra) | [.failedRoots, .failureKinds, .errorCodes] | tostring), ((.context // .extra) | .userIdHash // .workspaceIdHash // "no-id-hash")] | @tsv'
+  ```
+
+  The id is hashed (`userIdHash` on account-delete, `workspaceIdHash` on disconnect): to find the event for a known id, hash that
+  id with `SENTRY_USERID_PEPPER` from Doppler `prd` (HMAC-SHA256, hex) and compare. A hash equal to the literal `pepper_unset`
+  means the pepper was missing in the emitting process, so the events cannot be matched to an id. Resolve the issue once a
+  container replacement has released the tree (its absence is not observed), never archive it (an archived issue fires no trigger).
+**Preconditions for R1.** Every item of "Preconditions for the flip" above holds, except that the per-id re-erasure item is narrowed
+for the rehearsal flip by the Art. 17 rule above; the workflow enforces part of them and the owner holds the rest. The `Verify required secrets present` step refuses `flag_write_credential_absent`. The `Flip preconditions`
+step refuses `precondition_8209_open`, `pin_fault_paging_absent`, `d6_replace_stale`, `d6_last_rotate_failed`,
+`d6_rotate_in_flight`, `d6_run_unreadable`, `deploy_in_flight`, `live_image_stale` and `sandbox_deny_floor`. The flip's proof
+refuses `store_not_empty`. A flag that already reads `true` is NOT refused by `flip`: it is resume arm B (the write is skipped
+and the redeploy runs), so the R0 read that the flag is absent is the only control (`flag_already_true` is a `mode=proof` verdict).
+The workflow does not enforce the following, so the owner holds them:
+
+1. **A session-refusal control is merged and on from before R1 until after R4, and an active-session read exists.** This is
+   required, not optional (Ruled by CTO agent, 2026-10-19), and there is no owner-acceptance alternative: an acceptance would be
+   the owner accepting the stranded-user-work risk that the control removes, and that path was ruled out. Neither the control nor
+   the read exists in the repository yet (a quiet-window control with a counts-only session read is a separate build; this
+   section does not claim it). Until both are merged and the control's flag is created (a production write, the owner's), R1 is
+   not dispatchable, and every session-count step below has no source: a missing count means do not dispatch, never proceed.
+   With refusal held from before R1 only the synthetic account can create a working tree in the window, which is why no
+   `WORKTREE_ROOT` directory read is built or required.
+2. **The heartbeat re-read at the flip dispatch** (until #9943 enforces it). Both `soleur-git-data-host-prd` (the binding one)
+   and `soleur-git-data-prd` read `up`, and the newest `state=ok` event of `host_name=soleur-git-data` is under 15 minutes old
+   and later than its newest `boot_complete`. See [Liveness heartbeat](#liveness-heartbeat-9438).
+3. **A dated by-hand read of the other flip preconditions against live data** (d6 index, the two floors against `/health`, no
+   release in flight, the pin-fault workflow, the flag and stamp absent, host ids), taken the day of the dispatch and rerun at
+   R0. The last record is `knowledge-base/project/specs/archive/20261020-094500-feat-git-data-cutover-resume-8211/precondition-read-2026-10-19.md`;
+   it is a point-in-time read, not a standing fact. `deploy_in_flight` in particular reads `web-platform-release.yml` runs of
+   event `workflow_run`: a merge to `main` starts one, so a flip dispatched after a merge refuses until it settles. Read also
+   the unchecked boxes of "Preconditions for the flip" above (every merge-triggered apply `success`, the ssh client on the
+   deployed build) and state the per-id re-erasure status per the Art. 17 rule above: the 2026-10-19 record did not read them.
+4. **`DOPPLER_TOKEN_GIT_DATA_FLAG` is on the `web-platform-infra-apply` environment and its scope is UNVERIFIED** (both a scope too
+   narrow to write and one broader than `GIT_DATA_STORE_ENABLED`/`GIT_DATA_LUKS_CUTOVER_AT`). No standalone probe is built (Ruled
+   by CTO agent, 2026-10-19): the flip freezes before the flag write and the finalizer unwinds a write that fails (the
+   `flag_write_attempted` marker), so a too-narrow scope costs one freeze window and surfaces in the rehearsal, where a failed
+   flip is an acceptable outcome. The finalizer's flag-off write uses the same token, so it may itself fail (`RECOVERY_FAILED`,
+   flag state unknown): after any failed flip read the flag in `prd` before anything else.
+
+**Sequence.** Kind: R read-only, D owner-named dispatch (production), O owner-run production step, PR repository change.
+`gh run view <id> --json jobs` shows step names and conclusions; the readback lines below are log lines, read with
+`gh run view <id> --log`.
+
+| Step | Kind | Command | Checks | A refusal or failure looks like |
+|---|---|---|---|---|
+| R0 | R | Re-run the by-hand precondition reads of item 3, read `/health`, read the flag value (a non-secret boolean; only "absent" is acceptable) and the stamp (presence), list the `prd` config names for `WORKTREE_ROOT`, read the control's reporter line per host and the session count (items 1 and the Art. 17 rule) | heartbeats up and liveness under 15 min; flag and stamp absent; the running version is at or above both floors; d6 index inside the window; no release in flight; the merge queue is empty (GraphQL `mergeQueue` entries read, and releases or applies in flight released or applied first) | any row differs: do not dispatch R1. A stale heartbeat means the host is dark, not a workflow problem. Heartbeats AND a quiet merge queue are preconditions of the window: merges to `main` inside it are banned, and other sessions refill the queue |
+| R1 | D | `gh workflow run git-data-cutover.yml --ref main -f mode=flip -f confirm=FLIP-GIT-DATA`, then the `web-platform-infra-apply` reviewer approves, after the control line (both hosts) and the session count have been re-read | the `Flip preconditions` step, then the `proof`, freeze, flag write, redeploy of both hosts, per-host `enabled` readback, unfreeze, transactional probe, stamp | `::error title=git-data-cutover preconditions::verdict=<word>` with a `remedy:` line, before any host is touched. A failure after the flag write runs the finalizer (flag off, redeploy, unfreeze, gc restart): the rehearsal is FAILED and no rollback is needed. Follow [When a cutover run fails](#when-a-cutover-run-fails-the-notify-channel), never `gh run rerun` |
+| R2 | R | `gh run view <flip id> --json jobs` for the step conclusions, `gh run view <flip id> --log` for the lines | every step `success`; the lines `host web-1: git_data_store=enabled observed` and `host web-2: git_data_store=enabled observed` from the step `Per-host git_data_store= assertion`; the stamp step `success` | a missing host line fails the assertion step and runs the finalizer |
+| R3 | O | Before the window the synthetic account needs a VALID Claude credential (a session must be able to complete a turn) and a connected throwaway repository. Level 2 session: the synthetic account runs ONE agent session inside the window and the session ENDS (replication happens at session end; a session still live when R4 redeploys is killed and never replicates) | R3 has two verdicts. SESSION-ENDED: the owner attests the session ran and ended, and zero Sentry events `feature:worktree_lease op:git_data_replication_push` and `op:git-data-overlay` in the window, AND nothing in Better Stack over the window for any of the phrases `git-data replication push failed`, `git-data replication shed` and `ensure-workspace-repo silent fallback` (a hit counts only when the row's `op` is `git-data-overlay`: that default message is shared by the other ensure-workspace-repo ops), each read as `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<window start>' --grep '<phrase>'` and each exiting 0 (a failed read prints nothing too: first run the same command with `--grep 'agent_sessions_live='` and require rows). The Better Stack reads are the real check: Error-path reports reach Sentry as `feature=pino-mirror` without their tags (#8629), so the tag query alone reads zero for a failed push, a shed or a failed overlay. SESSION-ENDED is INCONCLUSIVE when the attestation is missing or a companion read was unclean or uncontrolled; only SESSION-ENDED lets R4 proceed. REFS-CONFIRMED needs a ref name under `refs/soleur/worktrees/<worktreeId>/` of `<syntheticId>.git` and its 40-hex sha, read by the `refs_assert` mode (a #8211 follow-up, not yet built) after R4 with the flag off. R6, the account deletion, any real flip and any retry beyond the synthetic account require REFS-CONFIRMED. While `GIT_DATA_STORE_ENABLED` is true the new-session pause stays on; the `off` command waits for R5 to read `disabled` on both hosts. A ref listing typed by the owner is never evidence, because the owner has no route to the refs that is not SSH. `<syntheticId>.git` existing, a `store_not_empty` verdict and a successful provision never count: on 2026-10-27 provisioning succeeded while every fetch and push was refused with `repo path does not resolve`. No other read confirms it inside the window (`proof` refuses while the flag is on, and no SSH read is permitted). Re-run 2026-10-27 (window 16:27-16:31Z): verdict FAILED — a clean Better Stack `git-data replication push failed` hit on web-1 at 16:30:17Z carried `! [remote rejected] main -> refs/soleur/worktrees/<id>/heads/main (shallow update not allowed)`; no `replication shed`, no overlay-fallback hits. The session ran and ended, but the verdict is not SESSION-ENDED, so R4 stays blocked. The fix reaches the host ONLY through the owner-gated `git-data-host-replace` dispatch — the transport wrapper is cloud-init baked, so merging changes no live host | none headless. The count of live sessions is `0` once it has ended |
+| R4 | D | `gh workflow run git-data-cutover.yml --ref main -f mode=rollback -f confirm=ROLLBACK-GIT-DATA`, only after R2 and R3 reads SESSION-ENDED, with the control line and the session count re-read immediately before | flag off, the same redeploy, per-host `disabled` readback, unfreeze iff the sentinel lineage is this run's, gc restart, transactional probe | `nothing_to_rollback` (exit 0) if the flip already unwound; `PROBE_FAILED` red after the unwind. Record the window: the flip's per-host `enabled` readback times to the rollback's per-host `disabled` readback times |
+| R5 | R | `gh run view <rollback id> --json jobs`, then `--log` | `host web-1: git_data_store=disabled observed` and the web-2 line; `unfreeze` success; `Positive replication probe` success with `STORE probe=probe verdict=ok` | a missing `disabled` line means the fleet may be on the old env: `mode=redeploy` converges it |
+| R6 | R then D then O | Level 1 reads timed after the rollback redeploy (below); then Level 2: `gh workflow run git-data-cutover.yml --ref main -f mode=proof -f confirm=CUTOVER-GIT-DATA` BEFORE the deletion (EXPECTED red, below); then the owner deletes the synthetic account through `POST /api/account/delete` from that account's own session, ONLY after REFS-CONFIRMED (the deletion removes the only artifact that could prove replication) | the Level 1 lines are as below; the proof before the deletion reads `store_not_empty`, which is necessary and NOT sufficient: R6 also requires REFS-CONFIRMED (R3) | a proof before the deletion that reads `clear` means the session never replicated (Level 2 did not run as designed); a `store_not_empty` without REFS-CONFIRMED reads "provisioned, not replicated" and does not pass R6; a Level 1 line missing means the container is not armed |
+| R7 | D | the exit read, after the deletion: `gh workflow run git-data-cutover.yml --ref main -f mode=proof -f confirm=CUTOVER-GIT-DATA` | verdict `clear` | `store_not_empty` is the incident ([Store not empty](#store-not-empty-store_not_empty), steps 1 to 4): run the Sentry sweep in step 3 to separate a failed erase of the synthetic account from a real repository, route to the CLO, keep the first real flip blocked, do not replace the host and do not wipe either volume |
+| R8 | R then O | read `GIT_DATA_LUKS_CUTOVER_AT` in `prd` (name listing) | the stamp is absent, or the owner records that it was left in place | present: the rollback clears it since #10297 (measured 2026-10-24: rollback log line `cutover_at=cleared`), so a present stamp after a rollback means the clear failed or the stamp predates the fix. The real flip overwrites a stale stamp, but until then a present stamp with the flag off makes `wipe` and `wipe_check` refuse (`flip_chained`, `wipe_precondition_flag_not_true`): delete it as an owner-gated step with a read-back, or investigate the failed clear first |
+| R9 | PR | write the evidence block under the rehearsal record below | the links resolve | review |
+
+**Ordering for the docker-format key repair (#8211 PR-G): merge first, wait for the release on both hosts, then R0.** The container probe body ships from the workflow checkout, but the app code (`server/git-data-key.ts`, which repairs the key for the real fetch, provision and Art. 17 remove paths) only changes with the released image. A probe pass before the image carrying the repair is served proves the probe's own copy of the transform and nothing about the app. So: merge the key fix to `main` first (merges to `main` are banned inside the window, so it cannot be done later), then wait until `deploy-arm.sh find --wait <merge-sha>` prints `DEPLOY=success` and `deploy-arm.sh served <merge-sha>` prints `CONTAINS`, and read `/health` `build_sha` on BOTH hosts equal to the merge release, and only then start R0. The flip's two release floors (`GIT_DATA_EMITTER_FLOOR`, `GIT_DATA_DENY_FLOOR`) do not pin this repair; a floor that does is a follow-up and is not part of the repair.
+
+**The expected red `proof` before the Level 2 deletion.** After R5 the synthetic repository is on the store by design, so the
+`mode=proof` of R6 is EXPECTED to read `probe=store-empty verdict=store_not_empty` (exit 5), and `notify-failure` opens or
+updates a `ci/git-data-cutover` issue for it, titled with the word `FAILED` only (it carries no verdict word). That red run is
+not the [Store not empty](#store-not-empty-store_not_empty) incident, and the incident route is not opened on it. The verdict
+carries no count, so it cannot tell one synthetic repository from several: the discriminator is the second `proof`, after the
+deletion. `clear` there shows the repository the app wrote is gone through the app's own path in the redeployed container
+(erasure is deliberately not gated on the flag) and that no other repository remains. A repository that exists with no ref in it ("provisioned, not replicated") is also `store_not_empty`: that verdict alone is never replication evidence, and R6 needs REFS-CONFIRMED. `store_not_empty` there IS the incident.
+Close the expected issue with a comment naming the planned run immediately after R6 and BEFORE dispatching R7:
+`notify-failure` appends to the newest open `ci/git-data-cutover` issue, so an unclosed one would absorb a genuine red R7 as a
+comment instead of filing its own.
+
+**Level 1 (always required; shows the container is ARMED and never observes an erasure).** On the redeployed containers
+after the rollback, each from a pinned Better Stack read timed AFTER the rollback redeploy finished: `git_data_pin=present
+fp=<the fp the replace run printed>`, `git_data_ssh_client=present`, `git_data_store=disabled`; the pin-fault workflow still
+enabled and the `art17-erasure-incomplete` rule unchanged (`scripts/sentry-alert-live-fidelity.sh`); zero Sentry events
+tagged `op:git-data-bare-repo-erasure` and zero `pin_fault` events between R1 and R7 (the account deletion is in R6). The
+agent-side Sentry reads use `SENTRY_ISSUE_RO_TOKEN` from Doppler `prd`, as in [Store not empty](#store-not-empty-store_not_empty) step 3; `SENTRY_ACTIONS_RO_TOKEN` (a repository secret) is for the future collector in CI, and an agent does not use the broader
+`SENTRY_AUTH_TOKEN`. Silence from the app is ambiguous between "erased" and "never armed", so an `erasure_outcome` event can
+only ever be a failure signal.
+
+**Abort.** Stop and do not proceed to the next step at: `FREEZE_HELD`, `RECOVERY_FAILED`, `PROBE_FAILED` or `STATE UNKNOWN`; a
+missing per-host `enabled` or `disabled` line; the exit read `store_not_empty`; a non-zero session count at R0, R1 or R4
+(the synthetic session must have ended before R4: the cc query can stay live up to ~15 min (10 min idle threshold plus the 5 min sweep interval in `cc-dispatcher.ts`) after the user's last activity, so end the session and wait for `0` before R4), or no session count at all. A rehearsal whose exit read is `store_not_empty` is
+recorded as "mechanics passed, store populated", and the first real flip is blocked until the incident is decided. A rehearsal that reaches R6 without REFS-CONFIRMED (`refs_assert` is not built) stops there, recorded as "mechanics passed, replication unproven": the deletion, R7 and R8 are not run, the synthetic account stays, and if the pre-deletion `proof` was dispatched its expected-red `ci/git-data-cutover` issue is closed with the planned-run comment at the stop point. Nobody
+reclaims or erases `WORKTREE_ROOT` without the owner and the CLO: that is the incident's decision, never the rehearsal's.
+
+**Known latent behaviours before the first real flip (store flag on for real users; parked on #8211).** Once the session-start fetch works, the overlay `reset --hard`s a fresh clone to the store tip with no ancestry check against the just-cloned GitHub tip, so a replica older than GitHub sets a fresh clone back (the commits stay on origin); and a stale clone force-pushes over a newer store tip, because the fence orders by lease generation, not content. REFS-CONFIRMED shows that refs exist; it mitigates neither. Turning the store flag on for real users needs a recorded owner and CTO decision on both.
+
+**Evidence block (R9 writes it here; rehearsal 1's is recorded after the template).** Values come from `gh run view` (`--json jobs` or `--log`), a
+pinned Better Stack read, the Sentry read token, a Doppler name listing or an owner attestation, and each line says which;
+counts and run ids only. The read-only collector that prints it
+(`scripts/followthroughs/git-data-rehearsal-evidence.sh`) is a separate build and does not exist at the time of writing.
+
+```text
+git-data flip-then-rollback rehearsal (#8211, CPO condition)
+flip run:      <url>   dispatched <UTC>   conclusion <...>   stamp step <...>   finalizer ran <yes|no>
+rollback run:  <url>   dispatched <UTC>   conclusion <...>   probe step <conclusion>   "STORE probe=probe verdict=ok" <seen|not seen>
+window:        flip per-host enabled <UTC> to rollback per-host disabled <UTC> = <n> minutes
+per-host:      web-1 git_data_store=enabled <UTC> / disabled <UTC>;  web-2 git_data_store=enabled <UTC> / disabled <UTC>
+app path:      level 2 (level 1 alone is recorded as "app-path erasure NOT exercised end to end" and does not discharge the Art. 17 condition);
+               startup lines after rollback redeploy: pin <fp>, ssh_client <present>, store <disabled>; Sentry events R1..R7: <n>
+               proof before deletion <store_not_empty>, proof after deletion <clear>
+exit read:     mode=proof run <url> verdict <clear|store_not_empty>
+r3 verdicts:   SESSION-ENDED <yes|INCONCLUSIVE>;  REFS-CONFIRMED <yes: refs_assert run <url>|not read (refs_assert not built)>  (a bare yes is invalid; R6, the deletion and the real flip need REFS-CONFIRMED)
+stamp:         before R1 <absent>, after rollback <value|absent>, after R8 <absent|left in place, owner-accepted>
+predecessor:   rotate run <id> apply step <conclusion> d6 marker step <conclusion>; no rotate dispatched since
+session ctl:   <control name>; sessions at R0/R1/R4 <n/n/n>; rotate dispatched after R1 <no>
+art17:         account deletions in window <n | not measured>; refused erasures in window <n>; control line before R1 / before R4 <...>
+not covered:   real-user replication load, web-2 behaviour beyond the log line, any state a flip writes that a rollback
+               does not remove (the stamp, until R8), Art. 17 requests refused during the freeze windows (swept per this
+               runbook), working trees under WORKTREE_ROOT (not readable: web-2 has no SSH ingress)
+```
+
+**What the rehearsal cannot prove.** Behaviour under real replication load; web-2 beyond its log line; that a rollback restores
+every user-visible path; Art. 17 completeness for requests that arrived during the freeze windows; that a second flip after a
+rehearsal is clean (the `store_not_empty` read is the check, not an assumption); and a session that starts between two count
+reads, which only the session-refusal control (not a count) covers. Any user who opens a workspace or starts a session while the
+window is open is exposed; the abort criteria bound that exposure and do not remove it.
+
+### Rehearsal 1 record (2026-10-24)
+
+Sources per line: `gh run view` (GH), a Better Stack read (BS), Sentry, a Doppler name listing (DP), owner attestation (OA).
+Counts and run ids only; the exempt account is the Soleur-owned throwaway account.
+
+```text
+git-data flip-then-rollback rehearsal 1 (#8211, CPO condition)
+flip run:      https://github.com/jikig-ai/soleur/actions/runs/40074019006   dispatched 2026-10-24T07:24:40Z   conclusion success   stamp step success   finalizer ran yes (nothing to unwind)   [GH]
+               every step success: host-side proof, freeze, flag write, same-version redeploy ("redeploy terminal: reason=ok ... swapped on all peers"),
+               per-host assertion, unfreeze, positive replication probe, stamp write
+rollback run:  https://github.com/jikig-ai/soleur/actions/runs/40076165647   conclusion success   probe step success   "STORE probe=probe verdict=ok" seen   "nothing_to_unfreeze"   [GH]
+window:        flip per-host enabled 2026-10-24T07:29:56Z to rollback per-host disabled 08:02:41Z = about 33 minutes   [GH]
+per-host:      web-1 git_data_store=enabled 07:29:56Z (attempt 1) / disabled 08:02:40Z (attempt 2);  web-2 enabled 07:30:58Z (attempt 2) / disabled 08:02:41Z (attempt 1)   [GH]
+extra redeploys inside the window: 40075036827 (success, 07:40Z, loads a Doppler WORKTREE_ROOT override)   [GH]
+               earlier, before the flip: 40020553589 (dispatched 2026-10-23T20:36:40Z, loads the exemption variable)   [GH]
+app path:      level 2 NOT EXERCISED ("app-path erasure NOT exercised end to end"; the Art. 17 condition is NOT discharged)
+               - first session ~07:34:46Z failed `EACCES: permission denied, mkdir`: the container user (uid 1001) cannot create the default
+                 WORKTREE_ROOT /var/lib/soleur/worktrees (the image never creates it); the user saw "Dashboard router is unavailable"   [BS, Sentry]
+               - a Doppler override WORKTREE_ROOT=/home/soleur/worktrees plus a same-version redeploy (CTO ruling 2026-10-24) let the retry start the
+                 sandbox; the agent then returned "Not logged in - Please run /login" (the throwaway account's Claude credential is invalid:
+                 a separate account repair)   [OA: owner attestation; no Better Stack hit]
+               - at 07:44:43Z the container's `git fetch` to the store was killed by SIGTERM with empty stderr (`ensure-workspace-repo
+                 op=git-data-overlay`): the container egress firewall (cron-egress-nftables.sh, default-drop SOLEUR-EGRESS chain) admits no
+                 10.0.1.20:22 and the app's ssh has no ConnectTimeout (CTO diagnosis, about 90% confidence, 2026-10-24)   [BS]
+               - so the exempt session almost certainly did not replicate; the proof before deletion was NOT taken
+exit read:     run https://github.com/jikig-ai/soleur/actions/runs/40077030535 (dispatched 2026-10-24T08:10:57Z) verdict clear (store-empty ok, access gate ok)   [GH]
+               This is NOT Art. 17 evidence: the synthetic account was never deleted and nothing replicated, so clear here is vacuous;
+               Level 2 stays NOT exercised and the first real flip stays BLOCKED
+stamp:         before R1: not read in the logs (UNVERIFIED); after the flip present; after the rollback ABSENT (rollback log line `cutover_at=cleared`)   [GH]
+               flag false after; WORKTREE_ROOT override unset before the rollback   [DP]
+predecessor:   rotate run 38583657167 (d6: 19th newest (index 18, 0-based) of 100 at dispatch); no rotate dispatched since   [GH]
+session ctl:   new_sessions_paused=1 on both hosts at every sample (one row per host per minute) from before R1 through 07:59Z;
+               agent_sessions_live=0 on both hosts except web-1 =1 from 07:44Z to 07:56Z (the exempt session's cc query);
+               exemptConfigured=true on both from 20:38Z on 2026-10-23   [BS]
+               the rollback was held until both hosts read 0 (dispatched 07:57:39Z)   [BS]
+               the pause flag turned off at 08:00:05Z (web-1) / 08:00:32Z (web-2), BEFORE the rollback's flag write (08:00:59Z) and the per-host
+               disabled readbacks (08:02:41Z): the control was off for the last ~2.5 minutes of the window; refused_since_last was 0 in every row,
+               so the control never refused anyone; who turned it off is UNCONFIRMED (owner action not established)   [BS] [DP mirror FLAG_NEW_SESSIONS_PAUSED=0]
+exemption:     QUIET_WINDOW_EXEMPT_USER_ID was deliberately LEFT SET in Doppler prd after the rollback (the rehearsal is to be re-run);
+               exemptConfigured=true was still reported on both hosts afterwards. The runbook step says unset before R4: this run did not, by choice   [DP name listing] [BS]
+real users:    no real-user session started in the window: by conversation-row count the only non-exempt conversation after 07:55Z was created
+               08:03:27Z (after both hosts read disabled); refused_since_last=0 throughout; NOTE the pause was off 08:00:05Z-08:02:41Z
+not covered:   as in the template above, plus everything in the app path lines
+verdict:       mechanics passed (flip and rollback clean), Level 2 NOT exercised, two flag-on defects found:
+               (1) WORKTREE_ROOT not creatable by the container user; (2) the app container cannot reach the git-data store over SSH
+```
+
+The first real flip stays BLOCKED until a second rehearsal reaches Level 2 and a non-vacuous exit read (`mode=proof` after the account deletion) is clear. Fixes in flight: a
+container egress rule plus an ssh bound, and a worktree directory plus flip preflights.
 
 ### The D6 rotate (dispatch BEFORE the flip)
 
@@ -477,8 +757,8 @@ curl -fsS -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN_
 
 - `up` — proceed to the dry run.
 - `down` — the fresh host's private NIC or sshd is not up. A fresh Hetzner host can boot with its
-  private NIC down (learning `2026-07-07-immutable-redeploy.md`). Re-dispatch the replace; both volumes
-  are retained.
+  private NIC down (learning `2026-07-07-immutable-redeploy.md`). Re-dispatch the replace; the LUKS volume
+  is retained.
 - `paused` — the heartbeat is not armed, so this read proves nothing. Arming is
   `arm-heartbeats.sh --arm` inside `apply-web-platform-infra.yml`, and it skips an address absent from
   state. Rely on the dry run's `role=git-data-jump` verdict for L3 instead.
@@ -786,7 +1066,7 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       `host_key_mismatch`) and the `removeGitDataRepo threw` arm. Follow its verdict-map row. Then,
       while `GIT_DATA_STORE_ENABLED` has never been on, discharge it by running 5.2 again: a fresh
       proof, fresh reads of (b) to (d), and a new record. After the first flip, emptiness is no
-      longer evidence, so the flip must not happen until a per-id re-erasure path exists (#8211).
+      longer evidence, so the flip must not happen until a per-id re-erasure path exists (#8211; the rehearsal flip is excepted, see the rehearsal run sheet's Art. 17 rule).
    3. Any verdict other than `clear` follows its verdict-map row; only `clear` discharges. After
       the row's remedy, re-dispatch **once**. A repeat of the same verdict opens an incident
       instead of a loop, and step 5 resumes with one re-dispatch after the incident closes. If the
@@ -807,8 +1087,8 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
    pin fault: a revert restores the unpinned arm AND its Guard 1 allow-list entry, so CI stays
    green. Republish the pin instead (see the pin-fault row).
 
-Step 3 is **not** ADR-220 D6's fresh replace immediately before the real cutover. That replace is still
-required; it now also rotates the host key and redeploys the app automatically.
+Step 3 is **not** ADR-220 D6's fresh replace before the first flip. That replace is still
+required (and, after the rehearsal flip, is no longer possible: see the rehearsal section, "D6 and the real flip"); step 3 now also rotates the host key and redeploys the app automatically.
 
 ### Deploy-day go/no-go (step 3)
 
@@ -985,6 +1265,8 @@ Measured against `apply-web-platform-infra.yml` and `git-data.tf`, not asserted 
 
 ### If the fresh host fails a boot check after step 3
 
+> Replace, rotate and create gating: if the git-data host itself is lost, the replace, rotate and create remedies named here refuse (the plaintext-id interlock) until `git_data_volume_id` is blanked in `git-data.tf`, and the rung-2 evidence must be fresh (it holds first, even under `plan_only`); see "If the git-data host is lost (until #11194)" and its Superseded banner in the section "Plaintext-volume destroy (Option B, #8211 / #6897)", and the banner of `git-data-birth.md`.
+
 Applies to `plaintext_unverified`, `plaintext_residue`, `luks_residue`, `fence_on_mapper=no` and
 `erasure_probe=no`.
 
@@ -1128,6 +1410,8 @@ this sequence slips past about 2026-11-05, tell the CLO.
 
 ## The wipe (DL-2, #10138 / #6897)
 
+> **Superseded 2026-10-27 (#11195), as to "retires the plaintext rollback volume" and every `wipe_check`, `wipe`, `wipe_finish` and `snapshot_clear` dispatch described in this section:** the volume was deleted by a Terraform destroy on 2026-10-27 and is gone (see "Plaintext-volume destroy"). Do not dispatch these modes against volume 106867358; the section is kept as the record of the reasoning and for the verdict words the Verdict map still uses.
+
 The `wipe` job of `git-data-cutover.yml` retires the plaintext rollback volume (Terraform `hcloud_volume.git_data`, the Hetzner volume named `soleur-git-data-store`) by detaching it and deleting it at the provider API. It has four modes (`wipe_check`, `wipe`, `wipe_finish`, `snapshot_clear`; the table under "The modes" gives their confirm tokens), every one behind the `web-platform-infra-apply` environment, and every one names the volume by its id (`volume_id`). The `cutover` job is skipped for all four.
 
 **What a run can claim.** The only claim any wipe run, step summary, notification, record or this section makes about the end state is that the DEVICE was deleted at the provider API: the DELETE returned 204, the read-back read 404 by id and an empty list by name, and the LUKS volume was still attached to the git-data server. A `wipe_finish` that finds the volume already absent made no delete call and claims less: the volume is absent at the provider API at its read-back, and the delete outcome is in the origin run (its summary says so and names the origin run). Nothing here states that the volume was empty or held no personal data; the host verb reports only pre-detach per-type counts and fixed words (an exit-34 refusal also carries one fixed 0/1 field and two counts [superseded 2026-10-19, from the merge of the change that adds the `hk_` group only: up to three fixed 0/1 fields and four counts, see the note below], see 'Reading the exit-34 line'), and no name read from the volume ever leaves the host. Standing line, the CLO's, which the run summary carries in its own words: this run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), the served store's lock residue, the `.gc-cursor` residue, or any copy held by someone with prior access. The record PR that follows (PR-C) states the end event in the CLO's form: device (Hetzner volume id N) deleted at T by run URL; provider API delete returned 204 and read-back was 404 (for a finish that found the volume absent: absent at the read-back, delete outcome in the origin run). It adds nothing about contents. Run logs, step summaries and notification emails are as public as #6897: they carry ids, counts and fixed verdict words only. In these words `snapshot` always means the transient host-local device-mapper snapshot that the pre-detach read takes (RAM copy-on-write, removed before the run continues), never a provider-side snapshot or backup.
@@ -1135,6 +1419,8 @@ The `wipe` job of `git-data-cutover.yml` retires the plaintext rollback volume (
 > **Superseded 2026-10-19, as to "an exit-34 refusal also carries one fixed 0/1 field and two counts" above, from the merge of the change that adds the `hk_` fields only:** from that merge, and only when `has_hooks_d=1`, the refusal can also carry four more fixed fields: two counts (`hk_entries`, `hk_nonfile`) and two 0/1 bits (`hk_pr_f`, `hk_pr_small`), so a line can carry up to three fixed 0/1 fields and four counts beyond the five counts. They are digits and 0/1 bits only; no name read from the volume leaves the host, and they say nothing about contents. Shape recorded, refusal stands, content unread. No run has printed them, so they are not measured; run 39136900735 carries the earlier eight-field line, which stays valid. Until that merge the sentence above is accurate as written. This note does not otherwise change the paragraph above.
 
 **Status (2026-10-14).** The mechanism exists (PR #10294, merged 2026-10-15). No `wipe_check`, `wipe`, `wipe_finish` or `snapshot_clear` has been dispatched (newest `git-data-cutover.yml` run 2026-10-08, read 2026-10-15). Anything marked UNVERIFIED below has not run against production. Update (2026-10-18, measured): two `wipe_check` runs have since been dispatched (read-only) and both refused with `wipe_boot_layout_signal_offlist`: run 39081408368, and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735), the first to print the `has_hooks_d`, `lf_entries` and `offlist_n` fields (see 'Reading the exit-34 line'). As of the `gh run list` read on 2026-10-18, no `wipe`, `wipe_finish` or `snapshot_clear` had been dispatched; re-read the run list before relying on this. CLO addendum 2 ([#6897 comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)) lifted C1 for one further `wipe_check` only; run 39136900735 is that run and spent the lift. It refused at exit 34 before `lock_residue` and `store_root_repos` printed, so neither run printed either field and the closed posting list is unchanged.
+
+> **Superseded 2026-10-22 (#6897), as to the Status paragraph above, for run 39396995702 only:** a third read-only `wipe_check`, [run 39396995702](https://github.com/jikig-ai/soleur/actions/runs/39396995702) (2026-10-20), was dispatched under CLO addendum 3 ([#6897 comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6287262843)) and refused at exit 34 (`wipe_boot_layout_signal_offlist`); refusal stands. This run printed the `hk_` group (see 'Reading the exit-34 line'). `lock_residue` and `store_root_repos` were not printed (exit 34 comes before the host prints them), so no run has printed either and the closed posting list stays as set by PR #10523. The lift in addendum 3 is spent. The run list read on 2026-10-22T08:22Z shows 19 `git-data-cutover.yml` runs, none non-completed, three of mode `wipe_check` and none of mode `wipe`, `wipe_finish` or `snapshot_clear`; re-read the run list before relying on this.
 
 **Status (2026-10-19).** Draft PR #10523 (Ref #10138 and Ref #6897, read 2026-10-19) adds the four `hk_` shape fields to the exit-34 line. The fields exist from the merge of that change and not before; they alter the stderr text of the exit-34 refusal and add four fixed exit-33 refusal words (`hooks_shape_failed`, `hooks_shape_unparseable`, `hooks_pr_failed`, `hooks_pr_unparseable`) that, when a read of `hooks` fails, replace the exit-34 line, under the existing verdict word `wipe_boot_layout_signal_absent`. No run has printed any `hk_` field, so each is not measured. Shape recorded, refusal stands, content unread. The allowlist, the exit-34 code, the verdict map and every gate are unchanged by that change, and it dispatches nothing. From that merge the closed posting list under 'Other results that route to the CLO' is the twelve-field list there (CLO ruling L3, 2026-10-19); the 'closed posting list is unchanged' clause just above describes the 2026-10-18 reading.
 
@@ -1171,6 +1457,8 @@ Schedule. The outer date is 2026-11-12 (ADR-239). With the 7-day floor, a stamp 
 **Rule for the queue:** do not dispatch while another git-data run is pending (a pending run is replaced by any newer dispatch and a wipe waiting for approval holds the web-1-swap queue: approve or reject promptly). The replacement happens in the workflow-level `git-data-state` group, which keeps one pending run. A rejected or timed-out environment approval pages as `WIPE_STATE_UNKNOWN` (the job never published an output).
 
 ### Dispatch strings
+
+> **Superseded 2026-10-27 (#11195), as to "Dispatch strings":** the volume named `soleur-git-data-store` was deleted by a Terraform destroy on 2026-10-27 and is gone; do not dispatch these modes against it (see "Plaintext-volume destroy"). The strings below are kept as the record.
 
 The id is the Hetzner id of the volume named `soleur-git-data-store`, read at the provider API with the read-only token (a read; the id is also the dispatch input, so the run title carries it):
 
@@ -1255,6 +1543,8 @@ A `wipe_finish` publishes no phase before its delete gate (nothing in a finish w
 
 ### The wedge
 
+> **Superseded 2026-10-27 (#11195), as to "After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data`":** this section describes the DL-2 wipe path, which was not the path taken. The volume was deleted by a Terraform destroy, and neither the state nor the HCL holds `hcloud_volume.git_data` or its attachment any more (see "Plaintext-volume destroy"). It is kept as the record of the reasoning.
+
 After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data` (and its attachment). Read facts, from `tests/scripts/test-git-data-wipe-wedge.sh`:
 
 - **The drift plan shows a create of `hcloud_volume.git_data`.** `scheduled-terraform-drift.yml` plans the whole root with no `-target` and keeps reporting that create until PR-C merges. It only plans, so the effect is a drift report; it is the second reader of the wedge, and expected.
@@ -1275,6 +1565,8 @@ Other results that route to the CLO, not to a retry: `wipe_boot_layout_signal_of
 The host line for `wipe_boot_layout_signal_offlist` (host exit 34) reads `wipe-assert: rc=34 reason=offlist top_d=<n> top_f=<n> top_l=<n> top_o=<n> repos=<n> has_hooks_d=<0|1> lf_entries=<n> offlist_n=<n>`. The last three fields were added by the 2026-10-18 change (PR #10480); a run dispatched before that change prints only the first five counts. The four `hk_` fields below are added by the 2026-10-19 change (PR #10523) and exist only from its merge. Where to read it: in the run log, behind the prefix `[git-data-cutover] probe-stderr:`; the `STORE probe=` line, the annotation and the step summary carry the verdict word only, not these fields. A line that matches neither this grammar nor the group grammar below exactly (an older five-count line, an extra token, a missing field) is posted as the verdict word and the five counts only; it is never partly trusted. Inherited, 2026-10-18 (the five-count fallback and the strict check `line34_ok`); the posting check `line34_grammar_ok` is added by the 2026-10-19 change (PR #10523). Both are functions of `apps/web-platform/infra/git-data-wipe-assert.test.sh`.
 
 Group grammar (CLO ruling L3 and CTO ruling R4, 2026-10-19; appears only from the merge of the 2026-10-19 change, PR #10523; not measured, because no run has printed it). After `offlist_n` the line may carry one optional group of four fields, present if and only if `has_hooks_d=1`: `... offlist_n=<n>( hk_entries=<n> hk_nonfile=<n> hk_pr_f=<0|1> hk_pr_small=<0|1>)?`, where `<n>` is `[0-9]+` (digits only, no other rule). Exactly two grammars are accepted for posting. First, the eight-field line above, for either value of `has_hooks_d`; [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735) stays valid under it, and its `hk_` fields read 'not measured'. Second, the same eight fields followed by the four-field group in the order shown, only when `has_hooks_d=1`. Anything else (a partial group, a group with `has_hooks_d=0`, a reordered group, a group that breaks an invariant listed under the field definitions, an extra token) is posted as the verdict word and the five counts only. An absent group is 'not measured', never a 0.
+
+> **Superseded 2026-10-22 (#6897), as to "not measured, because no run has printed it" and "checked only against synthesized lines", for run 39396995702 only:** that run printed the group (printed, 2026-10-20; the line is under 'Measured 2026-10-20' below). A run that prints no group stays 'not measured', never a 0. The synthesized-line wording above otherwise stands.
 
 Literal pattern (policy, 2026-10-19, conditioned on the merge of PR #10523; it is the pattern the suite's `line34_ok` and `line34_grammar_ok` both apply, an extended regular expression, matched against the text after the prefix `[git-data-cutover] probe-stderr:` and its one space; checked only against synthesized lines on 2026-10-19, not against any real run log):
 
@@ -1334,6 +1626,8 @@ Match every applicable row and apply all of their caveats together. Where two re
 - Policy (CLO ruling, 2026-10-18): the allowlist is unchanged and the refusal stands. A change to the allowlist needs a CTO ruling, counts-only fixed-vocabulary evidence of what the entry holds, CLO review with a dated addendum, an ADR-239 amendment where the allowlist is part of the recorded gate, and its own CLO ruling for each new output field. The question is tracked on #6897.
 - Nothing here dispatches a run or sets a date; a further `wipe_check` needs the owner to name the exact command and a new CLO addendum.
   > **Superseded 2026-10-18, as to "a further `wipe_check` needs the owner to name the exact command and a new CLO addendum" for run 39136900735 only:** the exact command was set out in CLO addendum 2, item 1 ([comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)), and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735) is that further `wipe_check`; the lift in addendum 2 is spent. The sentence still binds any run after it.
+- Measured 2026-10-20 ([run 39396995702](https://github.com/jikig-ai/soleur/actions/runs/39396995702), read-only, verdict `wipe_boot_layout_signal_offlist`, exit 34; printed): `wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hk_entries=1 hk_nonfile=0 hk_pr_f=1 hk_pr_small=1`. It was read from the public run log through the decision rule in this section: it passed the literal pattern, the group is present with `has_hooks_d=1`, the four invariants hold, the base conditions hold, and a count of carriage-return bytes in the extracted line gave 0 (computed from the run log, not printed). Reading, at one moment, in the transient host-local device-mapper snapshot: a regular file named `pre-receive` of at most 4096 bytes is the only entry directly inside the directory named `hooks`, at one moment; its content is unread. This is not an emptiness reading, the allowlist is not widened and the refusal stands. `lock_residue` and `store_root_repos` are not in the line, so this run published neither. The same run printed `separated run-record scan: store_dirty 39253824891`, a fact about the workflow's own run records and not a measurement of any volume.
+  > **Superseded 2026-10-22 (#6897), as to "a further `wipe_check` needs the owner to name the exact command and a new CLO addendum" for run 39396995702 only:** the exact command was set out in CLO addendum 3, item 1 ([comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6287262843)), and [run 39396995702](https://github.com/jikig-ai/soleur/actions/runs/39396995702) is that further `wipe_check`; the lift in addendum 3 is spent. The sentence binds any run after it.
 
 ### Retention of the evidence row
 
@@ -1353,7 +1647,34 @@ The boot-signal read takes the newest `boot_complete` row of the CURRENT server 
 
 SSH-class and for a stuck state only; no step above depends on it. `wipe_snapshot_teardown_failed` means a host-local device-mapper snapshot named `git-data-pt-snap` (copy-on-write file in `/dev/shm`) may still exist over the retired device. Every later run then refuses (`wipe_snapshot_present` or `wipe_device_has_holders`), and nothing can be detached while it stands. Do not clear it by rebooting the host: the reboot is the dead end above. Open an incident with the CTO and have the host-side teardown done in the script's own order (unmount the snapshot, `dmsetup remove --retry git-data-pt-snap`, detach the loop device, remove the COW file), then `wipe_check` shows the device as before.
 
+## Plaintext-volume destroy (Option B, #8211 / #6897)
+
+The retired plaintext Hetzner volume (id 106867358, name `soleur-git-data-store`) was deleted through Terraform on 2026-10-27, instead of by the DL-2 wipe (which cannot conclude; see the wipe section above). The claim limits, the controls and the consequences are in ADR-239 Amendment 2026-10-26, attested by Amendment 2026-10-27 as to items 1-3 and 5-9. This section is the record of the run and of what stays true afterwards; the one-shot workflow, its plan gate and the read-only probe were deleted by #11195, so there is nothing left to dispatch.
+
+**As run (2026-10-27, counts and identifiers only).** The owner dispatched the one-shot destroy workflow on `main` at 09:05:55Z: <https://github.com/jikig-ai/soleur/actions/runs/40478209838> (`validate` and `destroy` both `success`).
+
+- Pre-plan read: `shape=present_attached`; git-data server 170370833; LUKS volume 107140231 on server 170370833.
+- Plan: `0 to add, 0 to change, 2 to destroy` (the volume and its attachment); the destroy gate passed, then passed again inside the apply step.
+- Apply: `Apply complete! Resources: 0 added, 0 changed, 2 destroyed.` (the volume destruction completed at 09:07:04Z).
+- Read-back: `shape=gone`; git-data server and LUKS volume unchanged. An independent read-only Hetzner GET afterwards returned 404 for volume 106867358 and an empty list for the name `soleur-git-data-store`; the LUKS volume was still attached to server 170370833 and the server was `running`.
+
+The claim is limited to "device deleted at the provider API" (ADR-239 Amendment 2026-10-27, item 3). It says nothing about the volume's contents before deletion, lock residue, or what the provider retains after a delete; those stay unmeasured. Provider-side snapshots or copies are not measured here either.
+
+**Drift.** After the destroy the state no longer holds the two retired addresses, so untargeted plans no longer show them. The drift issues titled `infra: drift detected in web-platform` that were open before 2026-10-27 predate the destroy. Close one only if its plan lists exactly those two destroys; the first drift run after the destroy that logs "No drift detected in web-platform" is the check. <!-- lint-infra-ignore start -->*Superseded 2026-10-28 (#11194), as to who closes and when:* the drift workflow only comments, and `scripts/infra-drift-autoclose.sh` skips plans that replace a host, so nothing closes these issues. Close a drift issue by hand after the first drift run that logs "No drift detected in web-platform". The "exactly those two destroys" test applies only to issues opened before the destroy; once the `git_data_volume_id = ""` change (#11449) merges, the drift issue carries the server replace as well and stays open until the dispatch has run and that clean run exists.<!-- lint-infra-ignore end -->
+
+**If the git-data host is lost (until #11194).** Stop and escalate to the owner; the replace, rotate and create routes are disabled and the failure text that says "re-dispatch git-data-host-replace" is void. With the flag on, git push and pull and workspace provisioning fail (they do not corrupt), and the bare-repo part of an account deletion (Art. 17) stays `pending` with a Sentry alert while the one-month clock runs. The literal `git_data_volume_id` names a deleted device: a host rebirth boots into the bootstrap's `plaintext_unverified reason=source` FATAL until the id is set to `""`. A plain reboot is believed safe (the bootstrap runs from cloud-init `runcmd`, once per instance) but that is unverified on the live host. #11194 must end with either `id = ""` or a bootstrap that treats a nonexistent device as absent now that the volume is retired.
+
+<!-- lint-infra-ignore start -->
+> **Superseded 2026-10-28 (#11194), as to "the routes are disabled and the failure text is void":** the replace, rotate and create gates no longer demand the retired plaintext addresses (ADR-239 Amendment 2026-10-28), so they no longer disable the routes by themselves. Two things still hold each route. First, the rung-2 rehearsal evidence must be fresh: it has been stale since #11342 changed a bound payload, it holds first, and `plan_only` also holds there. The `rung2-known-good` break-glass route (see "Break-glass for the rung-2 interlock") is NOT usable for the plaintext-free tree: every ref between the last evidence commit (a3d0327c9f) and #11342 either still declares `hcloud_volume.git_data` and passes its `.id` (a plan would re-create the destroyed device) or carries the `"106867358"` literal (edade6cb3e, #11179), and in both the replace gate of that ref still demands the destroyed addresses. Second, each route refuses while `git-data.tf` passes a non-empty `git_data_volume_id` to `module "git_data_userdata"` (the plaintext-id interlock): that literal names the device deleted on 2026-10-27, and a host created from it boots into the bootstrap's `plaintext_unverified reason=source` FATAL. Stop and escalate to the owner. The remedy is the one-hunk change `git_data_volume_id = ""`, merged and followed by a dispatch in one sitting (about 24 hours; the tree and the live host's `user_data` differ in between and `infra: drift detected in web-platform` is filed until the dispatch), with `plan_only=true` run first (the interlock then prints its verdict without blocking and the job stops before any apply) and the result pasted on #11194. The empty-id boot has never run on a real host (#10296); the owner records acceptance on #11194 before the real dispatch. Until then the failure text that says "re-dispatch git-data-host-replace" does not apply. With the flag on, git push and pull and workspace provisioning fail (they do not corrupt), and the bare-repo part of an account deletion (Art. 17) stays `pending` with a Sentry alert while the one-month clock runs. A plain reboot is believed safe (the bootstrap runs from cloud-init `runcmd`, once per instance) but that is unverified on the live host. The owner sequence is the same everywhere (ADR-239 Amendment 2026-10-28 item 6; the banner of `git-data-birth.md`): (1) The owner merges this change. (2) [owner acknowledgement; paid Hetzner host; reviewer approval on the rehearsal's `web-platform-infra-apply` environment, which reads `prevent_self_review: false` with a single reviewer, so the owner can approve their own dispatch] The owner dispatches `gh workflow run git-data-rung2-rehearsal.yml --ref main -f confirm=REHEARSE-GIT-DATA -f dry_run=false` (`dry_run` defaults to `true`, which only plans and uploads no evidence; `teardown_only` is the recovery arm for a failed teardown; a non-`main` ref is refused later as `RUN_NOT_MAIN`). The hash is identical on `main` and on this branch, so it may run before step 1. (3) The capture script (`scripts/followthroughs/git-data-rung2-evidence-capture.sh`) runs inside the rehearsal workflow. On a PASS its run summary prints the next commands: `gh run download <run id> -n git-data-rung2-boot-evidence`, move the file into `apps/web-platform/infra/`, append the `RUNG2_SENTRY_CROSSCHECK_ACK` line first if the summary says ACK REQUIRED, commit the evidence ALONE on a branch (Guard 4 refuses a commit that also touches a hash-bound file), run `git_data_rung2_rehearsal_gate`, and open the evidence PR. The workflow never commits it (`contents: read`); the owner or a reviewer merges that PR. (4) The owner merges the `git_data_volume_id = ""` change (#11449) only when ready to dispatch in the same sitting: from that merge `scheduled-terraform-drift.yml` files `infra: drift detected in web-platform` until the dispatch. (5) A `plan_only=true` dispatch of `git-data-host-replace`, whose result is pasted on #11194. It can reach a verdict only once the rung-2 evidence is fresh (rung-2 holds first, even under `plan_only`), and the interlock then shows PASS after step 4. (6) The owner records acceptance of the unrehearsed empty-id branch as a comment on #11194 (CTO ruling B). It has never booted on a real host (#10296), and a fresh rehearsal does NOT exercise it (`rehearsal.tf` passes a non-empty id). (7) The owner-only real `git-data-host-replace` dispatch: the `reason` input is required, and the job's environment is `infra-privileged`, which has no reviewers and a main-only branch policy, so there is no approval click; the control is the owner's own go-ahead naming the command. (8) Post-dispatch verification; the owner closes the drift issue by hand after the first drift run that logs "No drift detected in web-platform" (the drift workflow only comments, and `scripts/infra-drift-autoclose.sh` skips plans that replace a host) and closes #11194. #11433 comes later and carries its own rehearsal.
+<!-- lint-infra-ignore end -->
+
+**Retention and public disclosure (CLO 2026-10-26 and 2026-10-27).** `docs/legal/**` was not edited by the destroy or by the record PR (#11284, Ref #11195): a dispatch is not a deletion, and the public sentence may change only after the verified read-back, which now exists. The DPD section 10.3(b) refresh is a CLO-owned dated item with its own pull request: bound 2026-11-03 (read-back plus 7 days; CLO 2026-10-27), outer limit 2026-11-11, escalation by a comment on #6897. Until it is live the public sentence overstates retention, which is the conservative direction. The ledger row for the device and its `expires_on` were retired by #11195 (ADR-239 Amendment 2026-10-27, item 6); the provider-retention gap they described is unmeasured, not closed.
+
+**After the destroy.** The wipe-family modes of `git-data-cutover.yml` still exist and will see the volume gone; a rollback cannot use the plaintext volume as a target. The record PR (#11284, Ref #11195) deleted the destroy workflow, its gate, probe and tests, restored the counters those moved, retired the ledger row, and appended the run URL and read-back to ADR-239.
+
 ## Verdict map
+
+> Replace, rotate and create gating: if the git-data host itself is lost, the replace, rotate and create remedies named here refuse (the plaintext-id interlock) until `git_data_volume_id` is blanked in `git-data.tf`, and the rung-2 evidence must be fresh (it holds first, even under `plan_only`); see "If the git-data host is lost (until #11194)" and its Superseded banner in the section "Plaintext-volume destroy (Option B, #8211 / #6897)", and the banner of `git-data-birth.md`.
 
 | Where you are | What the run reads | What to do |
 |---|---|---|
@@ -1393,10 +1714,16 @@ SSH-class and for a stuck state only; no step above depends on it. `wipe_snapsho
 | **Frozen** — the freeze sentinel exists | `probe=store-verified verdict=cutover_frozen` (exit 5) | Since #8211 PR2 the sentinel carries `writer=<lineage> at=<epoch>` provenance and the cutover is its only writer/clearer. A `cutover_frozen` outside a dispatched flip is an incident (from the PROBE step it means the pre-flight found a held sentinel, which the proof refuses too, so clear it with `mode=unfreeze` and the writer's lineage, not `mode=proof`): provision, remove, the transport wrapper and pre-receive all refuse (gc does not read it). The sentinel's `writer=` names the lineage `cutover-<run_id>` — the Actions run that wrote it (a refused freeze log line already prints it; the writer is also recoverable without SSH by finding the flip run whose `freeze` step last ran: `gh run list --workflow git-data-cutover.yml --limit 20`). If that run is dead, dispatch `mode=unfreeze -f lineage=cutover-<dead run id>` — the lineage input names the sentinel to clear. If the run is only FAILED mid-window, `gh run rerun --failed <run-id>` reuses its lineage (resume arm A tolerates the sentinel). Escalate a foreign/unattributed sentinel to the CLO, because the Art. 12(3) clock runs. |
 | **Store session could not be answered** — the store-verified stage | `probe=store-verified verdict=probe_failed rc=5\|6\|16\|96` (exit 5) | `rc=5`: `findmnt` could not read the store's source or its filesystem UUID; re-dispatch once, a repeat is an incident. `rc=6`: the store source is not the one the first probe read — it changed or something is mounted over it. That is not transient: open an incident, and discharge nothing until it explains the change. `rc=16`: `head` could not read the marker; re-dispatch once, a repeat is an incident. `rc=96` (the probe's `verified-only` pre-flight): the answer was empty, not a count, or carried extra lines, so nothing was proven; open an incident and discharge nothing. Other `rc` values read as in the last row below. |
 | **Store session could not be answered** — the store-empty stage | `probe=store-empty verdict=probe_failed rc=3\|4\|7\|8\|9\|96` (exit 5) | Every store-verified fact held, then the count could not be taken. `rc=3`: `repositories` is a dangling symlink or not a directory. `rc=7`: it is missing (the bootstrap always creates it). `rc=8`: its containing mount is not the store root, so a second mount is hiding what lies under it. `rc=9`: `readlink`/`stat` could not resolve it. `rc=4`: `find` failed. `rc=96`: the count answer was malformed. None of these is transient and an empty store produces none of them: open an incident, and discharge nothing. |
-| The store holds repositories | `probe=store-empty verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. Since #8211 PR2 this counts every entry under `repositories/` (the bootstrap's `_repo_count` rule), not only `*.git`. |
+| The store holds repositories | `probe=store-empty verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. Since #8211 PR2 this counts every entry under `repositories/` (the bootstrap's `_repo_count` rule), not only `*.git`. One exception: the `proof` that [the rehearsal run sheet](#before-the-first-flip-the-rollback-rehearsal) dispatches at R6 BEFORE the Level 2 deletion is expected to read this verdict and is not the incident; the `proof` after the deletion is. |
 | A probe could not be answered | `probe=store-mounted verdict=probe_failed rc=<n>`, or any probe's `rc=124\|255\|141` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96` from store-mounted: the answer did not match the expected pattern; re-dispatch once, then open an incident. No `rc` from store-on-mapper or store-verified: the first probe left nothing to compare; re-dispatch once. The re-dispatch advice in this row does not apply to the `wipe-assert` probe (the wipe modes): read its `rc` under 'Wipe, host — the session could not be answered', and a re-dispatch of any dispatch that runs the listing (`wipe_check` or `wipe`) needs a new CLO addendum. |
 | The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards on a store that has never been flipped (after a flip the rotate is refused, see the D6 section). The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
 | The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
+| The app container cannot write its worktree root | `probe=container-probe verdict=worktree_root_not_writable` (exit 5) | **Scope of every `container-probe` row:** the probe runs ONLY on the flip's proof step (the workflow sets `CONTAINER_PROBE=1` there; any other `mode=proof` prints `container probe: skipped` and reads `clear` without it, because the proof after a rollback redeploy must not read a container that may be mid-recreate with its egress path intentionally unused). It covers web-1 ONLY (the roster; web-2 has no SSH ingress): web-2's container egress, env drift and image version are NOT covered, and it reads the container running NOW, before the flip's own redeploy. Read from INSIDE the running app container as uid 1001 (`docker exec -u 1001:1001`, #8211 PR-E): a directory could not be made in `WORKTREE_ROOT` (default `/var/lib/soleur/worktrees`). The image owns that directory since PR-E (its Dockerfile creates it and gives it to 1001). This verdict means the served image predates that fix, or `WORKTREE_ROOT` is overridden in Doppler `prd` to a path the image does not own. Nothing was changed on any host and no flag was written. Deploy the fixed image (or remove the override), wait for the deploy to finish, then re-dispatch. The static twin runs earlier, on the checkout, and only on a flip or a `true` write: the precheck's `WORKTREE_ROOT_WRITABLE present\|absent\|unknown` line, which refuses unless it reads `present`, so a flip reaches this probe only with an image that owns the directory. |
+| The app container cannot reach git-data | `probe=container-probe verdict=container_egress_blackhole reason=timeout\|refused` (exit 5) | From inside the app container the transport ssh to the git-data address got no answer (`timeout`) or was refused (`refused`, which includes no route and network unreachable), while web-1's own SSH reaches it: the access gate passed in this same run. This is the container-egress blackhole of the 2026-10-24 flag-on rehearsal: the host's path to git-data is not the container's. The probe asked the transport wrapper for a repository that cannot exist, so it changed nothing on git-data. Fix the egress rules for container-originated traffic to the git-data address in a reviewed PR (the egress firewall arm and its enforce probe), deploy, then re-dispatch. No flag was written. |
+| The image does not own the worktree root (static gate, before any host is dialed) | the flag precheck prints `WORKTREE_ROOT_WRITABLE absent` and refuses `verdict=worktree_root_writable_absent` (exit 5), on `mode=flip` | The checked-out `apps/web-platform/Dockerfile` does not, in its final stage and before `USER`, `mkdir -p` the resolver's default worktree root and `chown` it to 1001 afterwards (a comment, a dead `false &&` chain, a later `rm` of the directory or a chown before the mkdir all read as absent). Land the Dockerfile fix on `main`, let the release deploy it, re-dispatch. Nothing was written. |
+| The static gate could not read its inputs | `WORKTREE_ROOT_WRITABLE unknown`, `verdict=worktree_root_writable_unknown` (exit 5) | The Dockerfile or `server/workspace-resolver.ts` was unreadable in the checkout, or the resolver's `WORKTREE_ROOT_DEFAULT` literal could not be parsed. Never read as absent. A checkout or a refactor fault: fix the code, do not re-dispatch. |
+| The flag write was refused for the same reason | `verdict=worktree_root_writable_absent` or `worktree_root_writable_unknown` from the write step (`FLAG_WRITE_VALUE=true`), exit 5 | The `true` write re-checks the static gate (a `false` write, the rollback's, never does). Same remedy as the two rows above; doppler was not called. |
+| The container probe could not be answered | `probe=container-probe verdict=probe_failed reason=scratch\|transport_env_absent\|key_shape\|auth_refused\|host_key\|ssh_unrunnable\|ssh_closed\|unclassified\|bad_answer\|arg_body` or `rc=<n>` (exit 5) | `transport_env_absent`: the container's environment lacks one of `GIT_TRANSPORT_SSH_PRIVATE_KEY`, `GIT_DATA_SSH_HOST_KEY`, `GIT_DATA_SSH_HOST` (Doppler `prd`, read when the container was created), or the host is not a dotted address; set them in `prd` and deploy so a new container reads them. `key_shape` (#8211 PR-G): before any dial, the transport key as the container holds it is not a parseable key file (fewer than 3 lines, or `ssh-keygen -y` refuses it; without `ssh-keygen` only the `BEGIN`/`END` lines are checked). Nothing was dialed, so this is NOT a key rotation case. Doppler stores `GIT_TRANSPORT_SSH_PRIVATE_KEY` (and the provision and remove keys) as a multi-line value, but `ci-deploy.sh` loads `prd` with `doppler secrets download --format docker` and `docker --env-file`, which collapses it to one line with literal backslash-n pairs. The probe and the app both repair that form (the probe's POSIX-sh transform and `server/git-data-key.ts` do the same thing: a value with no real newline that contains a literal backslash-n gets each pair replaced by a newline). So `key_shape` after this fix means the value in `prd` has an unparseable shape some other way (truncated, a paste of the wrong secret, an encrypted key, quotes around the value); it is NOT a rotation signal. The three keys are Terraform-owned `doppler_secret` resources (`apps/web-platform/infra/git-data.tf`), so the remedy is to re-apply, or taint and re-apply, the affected `doppler_secret` through the Terraform apply workflow (`apply-web-platform-infra.yml`) and deploy so a new container reads it; never a hand edit of the value in Doppler. Before this fix the same fault read as `auth_refused` (rehearsal-2 flip run 40305860011). `auth_refused`: git-data answered and refused a well-formed transport key; read the host-key and key rotation sections before anything else. `host_key`: the pinned key in `prd` does not verify against what answered; that is the pin-fault path, not an egress fault. `scratch`: the container could not create a scratch directory. `bad_answer`: the body exited 0 without its one-line answer, so nothing counts as proven. `ssh_unrunnable`: `ssh` or `timeout` could not be run in the container (exit 126 or 127), an image fault, not a network one: the served image lost its ssh client. `ssh_closed`: the endpoint closed or reset the connection, so it answered at the TCP level and the egress path is not a blackhole; read the git-data host's sshd and wrapper logs. `unclassified`: the dial failed with text the probe does not classify; re-dispatch once, then open an incident. `rc=1\|125\|126`: `docker exec` itself failed (no such container, or a stopped one); `rc=255\|124`: web-1's SSH or the 90 s bound failed; re-dispatch once. `reason=arg_body`: the probe body is missing beside the script, a packaging fault: do not re-dispatch. |
 | A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do — the PR1 variable vocabulary (`DRY_RUN`/`ROLLBACK`/`CONFIRM_WIPE`) is superseded by `MODE`. Dispatch `git-data-cutover.yml` with the `mode` input instead. |
 | Wrong mode/confirm pair, or a `lineage` input on a non-unfreeze mode | the confirm step exits 1 on `confirm token mismatch` / `lineage is only valid with mode=unfreeze` | `confirm` must equal the mode's token exactly; `lineage` is meaningful only under `mode=unfreeze` (it names a stranded sentinel's writer). |
 | Precondition: the #8209 Tier-B seam is not seeded | `verdict=precondition_8209_open` | Set `DOPPLER_TOKEN_INFRA_PRIVILEGED` on the environment (ADR-241 R7), then re-dispatch. |
@@ -1508,7 +1835,7 @@ then re-read the Better Stack `git_data_pin=present` line.
 ### Store not empty (`store_not_empty`)
 
 The store was assumed empty by construction (ADR-220 D4, #6976): the flag has never been on, so no
-repository should exist. A non-empty store breaks that assumption. Since ADR-239 the dry run measures
+repository should exist (after a rehearsal flip that premise no longer holds; see the run sheet's R6 and R7). A non-empty store breaks that assumption. Since ADR-239 the dry run measures
 the served LUKS store, so the entries are there; a deleted user's repository may remain on it. The
 retained plaintext volume is covered by the boot's `plaintext_empty` count, not by this verdict.
 
@@ -1862,6 +2189,8 @@ should page is a policy decision that stays on #8093.
 
 ## Rotation
 
+> Replace, rotate and create gating: if the git-data host itself is lost, the replace, rotate and create remedies named here refuse (the plaintext-id interlock) until `git_data_volume_id` is blanked in `git-data.tf`, and the rung-2 evidence must be fresh (it holds first, even under `plan_only`); see "If the git-data host is lost (until #11194)" and its Superseded banner in the section "Plaintext-volume destroy (Option B, #8211 / #6897)", and the banner of `git-data-birth.md`.
+
 The root-key root is additive-only, with no exception and no rotation input. **Any rotation, of the read
 token or of the key, is a reviewed PR** that adds a typed allowlist arm naming exactly the addresses it
 replaces. A key rotation's PR also lifts `prevent_destroy` on those addresses and accounts for the
@@ -1960,6 +2289,8 @@ host fails inside that window, it stays down until post-merge steps 1 and 2 are 
   window** while the host is down. No repository exists, so nothing is left behind.
 - Keep the window short: run post-merge steps 1 and 2 back to back.
 
+> **Not usable for the plaintext-free tree since #11194** (the last evidence commit predates the destroy; its gates still demand the destroyed addresses and its tree carries the destroyed id). The text below is the original, kept for the record.
+
 **Break-glass for the rung-2 interlock (#8210).** `git_data_host_replace` calls
 `git_data_rung2_rehearsal_gate`, which binds the landed evidence to a hash of the cloud-init
 template, the render module and every payload it binds — **at the dispatched ref** — and reads
@@ -2008,7 +2339,8 @@ these is seen:
 - a root-key apply refusing `verdict=git_data_root_key_fingerprint_mismatch` or
   `verdict=git_data_root_key_remint_refused`;
 - a dry run refusing `verdict=store_not_empty` or `verdict=flag_already_true` (remedies under the
-  verdict map);
+  verdict map; the rehearsal's planned `proof` before the Level 2 deletion is the one expected
+  `store_not_empty`, see the run sheet);
 - a dry run refusing `verdict=store_not_on_mapper`, `verdict=cutover_frozen`, or
   `verdict=store_unverified reason=marker_mismatch` with no matching boot FATAL;
 - a `git-data-root-key` state object or `soleur-git-data-root` Doppler access that no dispatch explains.

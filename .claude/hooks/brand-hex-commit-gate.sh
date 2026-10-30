@@ -13,8 +13,17 @@
 #   regardless of `/review`, and cannot be bypassed by `git commit --no-verify`.
 #   It is the FIRST net; the frontend-anti-slop scanner (#4635) is the second.
 #
-# Modelled on .claude/hooks/git-commit-secret-scan.sh — same trigger regex,
-# same fail-open philosophy, same JSON permissionDecision contract.
+# Modelled on git-commit-secret-scan.sh for the JSON contract and the fail-open stance. The trigger differs:
+# the strict `git commit` regex is kept, plus a loose both-words test that the lib/commit-target-roots.sh
+# lexer must confirm, so `git -C W commit` is seen. The repositories scanned are the ones the command text
+# names (`cd` / `pushd` / `git -C`) plus the hook's own cwd repository; a target the text does not name
+# literally (a variable, glob, `~`, GIT_DIR, --git-dir) warns on stderr and ALLOWS, never denies (#10793).
+# Known limits: a same-command `git add X && git commit` is judged against the pre-command index, and
+# `git commit <pathspec>` / `-o` / `-i` keep the plain diff base; the would-be-index lib is a follow-up (ADR-301).
+# One diff base serves the whole command, so `git -C A commit -a && git commit` is judged as one. Without perl
+# the lexer cannot run: a plain commit still takes the cwd path, one whose text moves the target warns and
+# allows, and a loose-only `git -x commit` form is allowed unscanned (with a bypass row). Its regexes inspect
+# only the first 4 KB of the command (they are super-linear), so a mover past that point is not seen.
 #
 # Decision mechanism: this hook emits the repo-standard PreToolUse JSON
 # `{permissionDecision: deny}` with exit 0 (NOT a bare `exit 2`). Every sibling
@@ -53,7 +62,8 @@
 # Fail-open conditions (allow + optional warn): non-Bash tool; Bash command that
 # is not `git commit`; not inside a git work tree; no in-scope changed files; no
 # token-definition file discoverable (email palette check is skipped, UI check
-# still applies). Environment/tooling gaps must not block every commit.
+# still applies); a commit whose target repository cannot be determined (warn + bypass row).
+# Environment/tooling gaps must not block every commit.
 
 set -uo pipefail
 
@@ -113,41 +123,138 @@ tool_kind="$HOOK_TOOL_KIND"
 command="$HOOK_CMD"
 [ -n "$command" ] || allow
 
-# Match `git commit` as a command-leading verb (identical to
-# git-commit-secret-scan.sh): tolerates chains (`&&`, `||`, `;`, `|`, `$(`),
-# rejects substring matches and `git commit-tree` / `git commit-graph`.
+# Match `git commit` as a command-leading verb: tolerates chains (`&&`, `||`, `;`, `|`, `$(`),
+# rejects substring matches and `git commit-tree` / `git commit-graph`. The strict match is the
+# no-cd path and stays as it was. It cannot see `git -C W commit` (the words are not adjacent), so a
+# command that merely carries both words goes on to the lexer, which must confirm a commit record.
+strict_match=1
 if ! grep -qE '(^|[[:space:]]|&&|\|\||;|\$\()[[:space:]]*git[[:space:]]+commit([[:space:]]|$)' <<<"$command"; then
-  allow
+  strict_match=0
+  [[ "$command" == *git* && "$command" == *commit* ]] || allow
 fi
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+# Which repositories does this commit target? Sourced fail-soft and checked explicitly, the way
+# git-commit-secret-scan.sh does. Unlike that hook, every outcome of "cannot tell" here is a warn
+# and an allow: this gate carries no secret-leak blast radius, so a skipped scan is the cheaper error.
+ctr_ok=0
+ctr_lib="$(dirname "${BASH_SOURCE[0]}")/lib/commit-target-roots.sh"
+# shellcheck source=lib/commit-target-roots.sh
+if [ -r "$ctr_lib" ] && . "$ctr_lib" 2>/dev/null && declare -f ctr_collect >/dev/null 2>&1 \
+   && declare -f ctr_resolve_roots >/dev/null 2>&1 && [ "${CTR_STAGE_API:-0}" = 1 ]; then
+  ctr_ok=1
+fi
+
+# Warn on stderr, record a bypass row, allow. Never a deny or an ask.
+warn_allow_undeterminable() {
+  local kind="$1" cause="$2"
+  # LC_ALL=C: [[:cntrl:]] misses U+2028 / U+0085 in a non-UTF-8 locale; tr -c keeps printable ASCII only.
+  cause="$(printf '%s' "${cause:0:200}" | LC_ALL=C tr -c '[:print:]' ' ')"
+  echo "[brand-hex-commit-gate] WARN: cannot determine which repository this git commit targets (${cause}) - brand-hex scan skipped. Name the repository as a literal absolute path (git -C /abs commit, or cd /abs && git commit) to have it scanned." >&2
+  emit brand-hex-commit-gate bypass "target undeterminable: ${kind}"
+  allow
+}
+
+# A command whose text moves the target cannot be trusted to the cwd repository when the lexer is
+# unavailable. It only decides between "warn + allow" and "scan the cwd repository", so it errs toward
+# moving: `cd` / `pushd` after any whitespace, separator, bracket or quote (a newline counts, so does
+# `if cd X; then`), `-C` as a git or env option (never `git commit -C <rev>`), and the GIT_* variables that
+# relocate the repository (never GIT_AUTHOR_DATE). It is tested on the command with each commit MESSAGE
+# argument removed, so a message saying "fix cd handling" or "GIT_DIR notes" is not a mover.
+# Mirrors what lib/commit-target-roots.sh refuses.
+moving_re='(^|[[:space:];&|({`"'"'"'!])(builtin[[:space:]]+)?\\?['"'"'"]?(cd|pushd)['"'"'"]?([[:space:]]|$)'
+moving_re+='|git[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*-C[[:space:]]'
+moving_re+='|(^|[[:space:]])env([[:space:]]+-[^[:space:]]+)*[[:space:]]+-[A-Za-z]*C([[:space:]]|$)'
+moving_re+='|--git-dir|--work-tree|--(c|cd|ch|chd|chdi|chdir)([[:space:]=]|$)|--wd|--working-directory|[[:space:]]-D[[:space:]]|core\.(worktree|bare)|--config-env'
+moving_re+='|GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CONFIG)'
+moving_re+='|(chroot|nsenter|unshare)[[:space:]]'
+# Lexer unavailable: does a loose-only text read as a git commit command at all?
+loose_commit_re='git[^;&|]*[[:space:]]commit([[:space:]]|$)'
+
+roots=()
+add_root() {
+  local r="$1" x
+  [ -n "$r" ] || return 0
+  for x in ${roots[@]+"${roots[@]}"}; do [ "$x" = "$r" ] && return 0; done
+  roots+=("$r")
+  return 0
+}
+
+lexed=0
+if [ "$ctr_ok" -eq 1 ] && command -v perl >/dev/null 2>&1; then
+  ctr_collect "$command"
+  if [ "$CTR_LEX_STATE" = ok ]; then lexed=1; fi
+fi
+if [ "$lexed" -eq 1 ]; then
+  if [ "$CTR_COMMIT_SEEN" -eq 0 ]; then
+    # No commit record: a loose-only match is not a commit. A strict textual match with no record
+    # is quoted prose (or something the walker cannot see): keep the unchanged cwd path.
+    [ "$strict_match" -eq 1 ] || allow
+  else
+    ctr_resolve_roots
+    if [ "${#CTR_BAD[@]}" -gt 0 ]; then warn_allow_undeterminable "target not literal" "${CTR_BAD[0]}"; fi
+    if [ -n "$CTR_ROOT_ERR" ]; then warn_allow_undeterminable "repository unreadable" "$CTR_ROOT_ERR"; fi
+    for r in ${CTR_ROOTS[@]+"${CTR_ROOTS[@]}"}; do add_root "$r"; done
+    # An inherited GIT_DIR outranks `cd` and `-C`: it must not redirect the probes below.
+    if [ "${#roots[@]}" -gt 0 ]; then
+      unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+    fi
+  fi
+else
+  # Lexer or lib unavailable. A plain commit still takes the cwd path, so a host without perl does
+  # not go silent on every commit; one that moves its target cannot be resolved.
+  # Bounded: the two regexes below are super-linear on pathological text (34 s at 80 KB measured), and the
+  # command is model-controlled. Past 4 KB the text is not inspected; a plain commit takes the cwd path.
+  probe="${command:0:4096}"
+  moving_text="$(printf '%s' "$probe" | sed -E "s/(^|[[:space:]])(-[A-Za-z]*m|--message)[[:space:]=]*('[^']*'|\"[^\"]*\")//g")"
+  if [[ "$moving_text" =~ $moving_re ]]; then
+    # A loose-only text that does not read as a commit (git log --grep=commit) is not one: no WARN, no row.
+    if [ "$strict_match" -eq 0 ] && ! [[ "$probe" =~ $loose_commit_re ]]; then allow; fi
+    if [ "$ctr_ok" -eq 1 ]; then
+      warn_allow_undeterminable "lexer unavailable" "${CTR_LEX_WHY:-the command lexer could not run}"
+    else
+      warn_allow_undeterminable "lib missing" "the target-resolution library is unavailable"
+    fi
+  fi
+  if [ "$strict_match" -eq 0 ]; then
+    # A loose-only commit form (git --no-pager commit) cannot be scanned without the lexer: leave a trace.
+    if [[ "$probe" =~ $loose_commit_re ]]; then emit brand-hex-commit-gate bypass "target undeterminable: lexer unavailable (loose form)"; fi
+    allow
+  fi
+fi
+
+# The hook process's own repository is always scanned too (the no-cd path). At a bare root
+# `git rev-parse --show-toplevel` fails (rc 128): that is "no cwd root", not an error.
+cwd_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+add_root "$cwd_root"
+if [ "${#roots[@]}" -eq 0 ]; then
   emit brand-hex-commit-gate bypass "not inside git work tree"
   allow
 fi
-
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
-[ -n "$repo_root" ] || allow
-cd "$repo_root" || allow
 
 # `git commit -a`/`--all` commits unstaged tracked changes too, so the diff
 # base must be the working tree (vs HEAD) rather than the index. Detect a
 # combined short flag containing `a` (e.g. -a, -am, -ma) or `--all`. `--amend`
 # does not match (it starts with `--` so the `-[A-Za-z]*a` short-flag form
-# cannot apply, and it is not `--all`).
-commit_args="${command#*git commit}"
-# Strip quoted argument values (e.g. -m '… -a …') first so flag-like text inside
-# the commit message cannot flip the diff base and cause a false deny.
-flag_scan="$(printf '%s' "$commit_args" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")"
-if grep -qE '(^|[[:space:]])(-[A-Za-z]*a[A-Za-z]*|--all)([[:space:]]|=|$)' <<<"$flag_scan"; then
-  NAME_REF="HEAD"
+# cannot apply, and it is not `--all`). With the lexer this is its own fact (the
+# first branch); the textual test below is what a perl-less host and a strict
+# match the lexer saw no commit record for keep.
+if [ "$lexed" -eq 1 ] && [ "$CTR_COMMIT_SEEN" -eq 1 ]; then
+  # The lexer's own -a / -p / --all fact: immune to flag-like text inside a message, to a quoted
+  # `git commit` that the textual cut below would land on, and to a second plain commit later in the line.
+  if [ "${CTR_COMMIT_ALL:-0}" -eq 1 ]; then NAME_REF="HEAD"; else NAME_REF="--cached"; fi
+elif [ "$strict_match" -eq 1 ]; then
+  commit_args="${command#*git commit}"
+  # Strip quoted argument values (e.g. -m '... -a ...') first so flag-like text inside
+  # the commit message cannot flip the diff base and cause a false deny.
+  flag_scan="$(printf '%s' "$commit_args" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")"
+  if grep -qE '(^|[[:space:]])(-[A-Za-z]*a[A-Za-z]*|--all)([[:space:]]|=|$)' <<<"$flag_scan"; then
+    NAME_REF="HEAD"
+  else
+    NAME_REF="--cached"
+  fi
 else
   NAME_REF="--cached"
 fi
-
-# Gather the files about to be committed (NUL-delimited; bash-native read, no
-# `grep -z` — host grep is ugrep where -z means --decompress).
-mapfile -d '' -t changed_files < <(git diff "$NAME_REF" --name-only -z 2>/dev/null)
-[ "${#changed_files[@]}" -gt 0 ] || allow
 
 # ---- path classification (overridable for non-Soleur layouts) ----
 UI_RE="${SOLEUR_BRAND_HEX_UI_RE:-^(apps/web-platform/(app|components)/.*\.(tsx|jsx|ts|css)|plugins/soleur/docs/.*\.(njk|html|css))$}"
@@ -244,61 +351,97 @@ COLOR_RE="$COLOR_RE|(linear-gradient|radial-gradient|conic-gradient)\\([^;{}]*#[
 
 findings=()
 
-for f in "${changed_files[@]}"; do
-  [ -n "$f" ] || continue
-  # Token-definition files are exempt even though they match the UI .css glob.
-  if is_token_def "$f"; then continue; fi
-
-  klass=""
-  if grep -qE "$EMAIL_RE" <<<"$f"; then
-    klass="email"
-  elif grep -qE "$UI_RE" <<<"$f"; then
-    klass="ui"
-  else
-    continue
+# Scan one repository's about-to-be-committed files, appending to the global findings. The
+# palette is discovered from THAT repository's committed CSS, so it is reset per root: a palette
+# leaked from another root would mis-judge an email template's hex.
+scan_root() {
+  local root="$1" pfx="" f klass lno content segs seg hexraw hex tok
+  cd "$root" 2>/dev/null || return 0
+  PALETTE=(); PALETTE_NAME=(); palette_built=0
+  # With more than one root the finding names which repository it came from (basename only).
+  # A bare basename is ambiguous when two roots share one (two checkouts both named app): then the path.
+  if [ "${#roots[@]}" -gt 1 ]; then
+    if [ "$dup_base" -eq 1 ]; then pfx="[$root] "; else pfx="[$(basename "$root")] "; fi
   fi
+  # Gather the files about to be committed (NUL-delimited; bash-native read, no
+  # `grep -z` — host grep is ugrep where -z means --decompress).
+  mapfile -d '' -t changed_files < <(git diff "$NAME_REF" --name-only -z 2>/dev/null)
+  [ "${#changed_files[@]}" -gt 0 ] || return 0
 
-  build_palette
+  for f in "${changed_files[@]}"; do
+    [ -n "$f" ] || continue
+    # Token-definition files are exempt even though they match the UI .css glob.
+    if is_token_def "$f"; then continue; fi
 
-  # Walk the added lines (the `+` side), tracking new-file line numbers.
-  while IFS=$'\t' read -r lno content; do
-    [ -n "$content" ] || continue
-    segs="$(printf '%s' "$content" | grep -oE "$COLOR_RE" 2>/dev/null || true)"
-    [ -n "$segs" ] || continue
-    while IFS= read -r seg; do
-      [ -n "$seg" ] || continue
-      # A segment may carry more than one hex (e.g. a two-stop gradient);
-      # classify every hex it contains, not just the first.
-      while IFS= read -r hexraw; do
-        [ -n "$hexraw" ] || continue
-        hex="$(norm_hex "$hexraw")"
-        if [ "$klass" = "email" ]; then
-          # Email exception: literal hex allowed only if it is a brand-palette
-          # colour. Fail open if no palette could be discovered.
-          if [ "${#PALETTE[@]}" -eq 0 ]; then
-            continue
-          fi
-          if [ -n "${PALETTE[$hex]:-}" ]; then
-            continue
-          fi
-          findings+=("$f:$lno (email, off-brand $hex)")
-        else
-          # Component/page/docs: literal colour is never allowed — must use a
-          # token. Name the matching brand token in the remediation if known.
-          tok="${PALETTE_NAME[$hex]:-}"
-          if [ -n "$tok" ]; then
-            findings+=("$f:$lno (component $hex; use token $tok)")
+    klass=""
+    if grep -qE "$EMAIL_RE" <<<"$f"; then
+      klass="email"
+    elif grep -qE "$UI_RE" <<<"$f"; then
+      klass="ui"
+    else
+      continue
+    fi
+
+    build_palette
+
+    # Walk the added lines (the `+` side), tracking new-file line numbers.
+    while IFS=$'\t' read -r lno content; do
+      [ -n "$content" ] || continue
+      segs="$(printf '%s' "$content" | grep -oE "$COLOR_RE" 2>/dev/null || true)"
+      [ -n "$segs" ] || continue
+      while IFS= read -r seg; do
+        [ -n "$seg" ] || continue
+        # A segment may carry more than one hex (e.g. a two-stop gradient);
+        # classify every hex it contains, not just the first.
+        while IFS= read -r hexraw; do
+          [ -n "$hexraw" ] || continue
+          hex="$(norm_hex "$hexraw")"
+          if [ "$klass" = "email" ]; then
+            # Email exception: literal hex allowed only if it is a brand-palette
+            # colour. Fail open if no palette could be discovered.
+            if [ "${#PALETTE[@]}" -eq 0 ]; then
+              continue
+            fi
+            if [ -n "${PALETTE[$hex]:-}" ]; then
+              continue
+            fi
+            findings+=("${pfx}$f:$lno (email, off-brand $hex)")
           else
-            findings+=("$f:$lno (component $hex; use a design token)")
+            # Component/page/docs: literal colour is never allowed — must use a
+            # token. Name the matching brand token in the remediation if known.
+            tok="${PALETTE_NAME[$hex]:-}"
+            if [ -n "$tok" ]; then
+              findings+=("${pfx}$f:$lno (component $hex; use token $tok)")
+            else
+              findings+=("${pfx}$f:$lno (component $hex; use a design token)")
+            fi
           fi
-        fi
-      done < <(printf '%s' "$seg" | grep -oE '#[0-9a-fA-F]{3,8}')
-    done <<< "$segs"
-  done < <(git diff "$NAME_REF" -U0 --no-color --no-ext-diff -- "$f" 2>/dev/null | awk '
-    /^@@/      { if (match($0, /\+[0-9]+/)) { ln = substr($0, RSTART+1, RLENGTH-1) + 0 } ; next }
-    /^\+\+\+/  { next }
-    /^\+/      { print ln "\t" substr($0, 2); ln++ }
-  ')
+        done < <(printf '%s' "$seg" | grep -oE '#[0-9a-fA-F]{3,8}')
+      done <<< "$segs"
+    done < <(git diff "$NAME_REF" -U0 --no-color --no-ext-diff --no-textconv -- "$f" 2>/dev/null | awk '
+      /^@@/      { if (match($0, /\+[0-9]+/)) { ln = substr($0, RSTART+1, RLENGTH-1) + 0 } ; next }
+      /^\+\+\+/  { next }
+      /^\+/      { print ln "\t" substr($0, 2); ln++ }
+    ')
+  done
+
+  return 0
+}
+
+# The scan now reaches repositories the command text names, so their own config must not run code in
+# this hook: no textconv driver (--no-textconv above) and no fsmonitor hook (command-scope config wins).
+# A clean filter still runs under `-a` (`git diff HEAD` filters worktree files); the commit itself runs it too.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
+
+dup_base=0
+for root in "${roots[@]}"; do
+  for other in "${roots[@]}"; do
+    if [ "$root" != "$other" ] && [ "$(basename "$root")" = "$(basename "$other")" ]; then dup_base=1; fi
+  done
+done
+
+for root in "${roots[@]}"; do
+  scan_root "$root"
 done
 
 if [ "${#findings[@]}" -eq 0 ]; then

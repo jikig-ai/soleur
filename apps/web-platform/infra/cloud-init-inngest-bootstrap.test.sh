@@ -598,7 +598,7 @@ if command -v terraform >/dev/null 2>&1; then
   TF_AVAILABLE=1
   RENDER_SCRATCH=$(mktemp -d)
   # Render the web cloud-init into $2. $1 = web_colocate_inngest; $3 = web_tunnel_connector
-  # (defaults true = web-1, the connector host, so AC7's call sites stay two-arg).
+  # (defaults true = web-2, the connector host, so AC7's call sites stay two-arg).
   # All map vars are placeholders EXCEPT the toggles; keep in sync with server.tf's
   # templatefile map — a new map var breaks this render (the intended tripwire).
   # stderr is NOT swallowed: a render error must surface, not present as an empty file
@@ -798,12 +798,18 @@ PY
   # burn the full budget and emit a false private_nic_timeout.
   assert "render web_tunnel_connector=false OMITS the NIC wait entirely (#6441)" \
     "! grep -qF 'soleur-wait-nic' '$CONN_OFF'"
-  # The apt install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
-  # keeps the binary and stays promotable without an image change.
-  assert "render web_tunnel_connector=false RETAINS ungated 'apt-get install -y cloudflared'" \
-    "grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
+  # The binary install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
+  # keeps the binary and stays promotable without an image change. The install is the pinned
+  # .deb + sha256 fail-closed arm (eMudhra advisory: an unpinned apt install can resurrect a
+  # below-floor binary on the next host birth), so BOTH its tokens must survive the render.
+  assert "render web_tunnel_connector=false RETAINS the ungated pinned cloudflared .deb install" \
+    "grep -qF 'cloudflared-linux-amd64.deb' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false RETAINS the cloudflared checksum fail-closed guard" \
+    "grep -qF 'soleur-boot-emit cloudflared_checksum fatal' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false carries NO unpinned 'apt-get install -y cloudflared' (eMudhra)" \
+    "! grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
   # RETENTION TOKENS BELOW THE endif — the assertions above cannot constrain the gate's LOWER
-  # boundary, because the apt-install token sits ABOVE the `%{ if }`. Without these, moving the
+  # boundary, because the .deb-install token sits ABOVE the `%{ if }`. Without these, moving the
   # `%{ endif ~}` DOWN swallows the webhook install + its fail-closed :9000 poll and every
   # assertion here still passes — a de-pooled host would boot permanently undeployable and
   # would not even fail closed (the poll it needs to fail on is inside the swallowed region).
@@ -818,9 +824,11 @@ PY
   assert "render web_tunnel_connector=false is valid YAML (column-0 directive hazard)" \
     "render_yaml_ok '$CONN_OFF'"
   # The render cannot see WHICH host maps to which toggle value — and that mapping is the
-  # risk that darkens web-1 (AC5's inverted-predicate catastrophe). Pin it at the source.
-  assert "server.tf pins the connector predicate to web-1 (each.key == \"web-1\")" \
-    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-1\"' '$SCRIPT_DIR/server.tf'"
+  # risk that darkens the connector host (AC5's inverted-predicate catastrophe). Pin it at
+  # the source: the connector lives on web-2, the replaceable cattle standby — web-1 is
+  # LUKS-pinned and `web-host-replace` refuses it, so it can never carry a binary fix.
+  assert "server.tf pins the connector predicate to web-2 (each.key == \"web-2\")" \
+    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-2\"' '$SCRIPT_DIR/server.tf'"
 
   rm -rf "$RENDER_SCRATCH"
 else
@@ -1720,8 +1728,9 @@ assert "GuardD dispatch: the operator count is a positive integer (got '$GD_ALL_
   "[[ '$GD_ALL_PERMISSIVE' =~ ^[0-9]+$ ]] && (( GD_ALL_PERMISSIVE > 0 ))"
 assert "GuardD dispatch: every heredoc operator parsed (parsed $GD_ALL of $GD_ALL_PERMISSIVE)" \
   "(( GD_ALL == GD_ALL_PERMISSIVE ))"
+# #5150: two quoted heredocs (RETENTIONUNITEOF, RETENTIONTIMEREOF) raised the inventory 11 -> 13.
 assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
-  "(( GD_ALL == 10 ))"
+  "(( GD_ALL == 13 ))"
 # Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
 # why this counts every match rather than inspecting the first.
 # Unquoted == the delimiter carries neither ' nor ". Derived from the SAME scan as the
@@ -2242,13 +2251,16 @@ STUB
   printf '#!/bin/sh\ncat\n' > "$G4_FX/bin/inngest-redact.sh"
   # #8562: the isolation self-check now runs in the same script, BEFORE the pull. The stub runs
   # the check's heredoc for real (`doppler run … -- bash -s`) and answers its name listing with
-  # the dark 5-name set, so the check PASSES and the pull arms are what these rows exercise.
+  # the dark 6-name set (floor raised 5→6 by #10390 defect 3: INNGEST_CONFIG_DIGEST is an
+  # admitted member, so the stub serves it — a 5-name set FATALs under the new floor and the
+  # pull arms would be scored for a reason that is not their row), so the check PASSES and the
+  # pull arms are what these rows exercise.
   cat > "$G4_FX/bin/doppler" <<'STUB'
 #!/bin/sh
 printf 'doppler %s\n' "$1" >> "$G4_LOG"
 case "$1" in
   run) while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
-  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{}}\n' ;;
+  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{}}\n' ;;
 esac
 exit 0
 STUB
@@ -2410,8 +2422,34 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
 # #6780: 173 -> 175 (the AC6c cross-file pin-consistency block added 2 unconditional rows).
 # #4699/#7596: -> 192 (the AC6d wiring pins + GuardA3 at-tag block added 17 unconditional rows over 175).
+# #5150: 192 -> 203 (trace retention: 6 bootstrap pins, 3 STAGED words, 2 image-build pins).
+RETENTION_BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
+RETENTION_CLOUD_INIT="$SCRIPT_DIR/cloud-init-inngest.yml"
+RETENTION_IMAGE_YML="$SCRIPT_DIR/../../../.github/workflows/build-inngest-bootstrap-image.yml"
+assert "retention unit is rendered in the bootstrap" \
+  "grep -qF 'inngest-trace-retention.service' '$RETENTION_BOOTSTRAP'"
+assert "retention timer is OnCalendar=daily" \
+  "grep -qF 'OnCalendar=daily' '$RETENTION_BOOTSTRAP'"
+assert "retention timer is Persistent=false" \
+  "grep -qF 'Persistent=false' '$RETENTION_BOOTSTRAP'"
+assert "retention timer sets RandomizedDelaySec" \
+  "grep -qF 'RandomizedDelaySec=30min' '$RETENTION_BOOTSTRAP'"
+assert "retention ExecStart takes the flock lock" \
+  "grep -qF 'flock -n /run/lock/inngest-trace-retention.lock' '$RETENTION_BOOTSTRAP'"
+assert "retention ensure-indexes runs before the timer is enabled" \
+  "awk '/--ensure-indexes/ && !e {e=NR} /systemctl enable --now inngest-trace-retention\\.timer/ && !t {t=NR} END {exit !(e>0 && t>0 && e<t)}' '$RETENTION_BOOTSTRAP'"
+assert "STAGED names inngest-trace-retention.sh as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sh([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "STAGED names inngest-trace-retention.sql as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sql([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "STAGED names inngest-trace-retention.sqlite.sql as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sqlite\\.sql([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "bootstrap image build copies inngest-trace-retention.sh into the build context" \
+  "grep -qF 'cp apps/web-platform/infra/inngest-trace-retention.sh' '$RETENTION_IMAGE_YML'"
+assert "bootstrap image copies inngest-trace-retention.sh to the image root" \
+  "grep -qF 'COPY inngest-trace-retention.sh /inngest-trace-retention.sh' '$RETENTION_IMAGE_YML'"
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=192
+BOOTSTRAP_MIN_ASSERTIONS=203
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

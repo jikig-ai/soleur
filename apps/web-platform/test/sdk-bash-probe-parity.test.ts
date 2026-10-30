@@ -21,7 +21,13 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { buildAgentEnv } from "@/server/agent-env";
-import { buildAgentSandboxConfig, probeAgentSandboxHardening } from "@/server/agent-runner-sandbox-config";
+import {
+  buildAgentSandboxConfig,
+  peerMessagingSocketDirs,
+  probeAgentSandboxHardening,
+  sessionTranscriptDirs,
+} from "@/server/agent-runner-sandbox-config";
+import { AGENT_SESSION_TMP_ROOT } from "@/server/agent-session-tmp";
 import * as probe from "../infra/lib/sdk-bash-probe.mjs";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,6 +90,43 @@ describe("the smoke probe's literal sandbox config tracks buildAgentSandboxConfi
     expect(probe.maskedDirs(uid, home)).toEqual(["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${home}/.claude/projects`]);
     const builder = buildAgentSandboxConfig(workspace) as { filesystem: { denyRead: string[] } };
     expect(builder.filesystem.denyRead).toEqual(expect.arrayContaining(probe.maskedDirs(uid, home)));
+  });
+
+  // Guard 2 (#10455 PR-B): the set the runtime probe CREATES equals, as a SET, the set the production builder pre-creates under the
+  // default container env. Built from the builder's own helpers, called directly (no exported chokepoint); equality, not arrayContaining.
+  const sameSet = (a: string[], b: string[]): boolean => a.length === new Set(a).size && b.length === new Set(b).size && a.length === b.length && a.every((x) => b.includes(x));
+  const builderPrecreateSet = (uid: number, h: string): string[] => {
+    // the controlled env: HOME fixed, every override unset
+    const env = { HOME: h } as Record<string, string | undefined>;
+    return [...new Set([...peerMessagingSocketDirs(env, uid), ...sessionTranscriptDirs(env), AGENT_SESSION_TMP_ROOT])];
+  };
+
+  it("Guard 2: precreateDirs(uid, home) equals the builder's pre-create set (exactly 4 members), for two different uids and HOMEs", () => {
+    for (const [uid, h] of [[process.getuid!(), home], [4242, "/home/other"]] as const) {
+      const builderSet = builderPrecreateSet(uid, h);
+      expect(builderSet, "floor: the controlled-env derivation must yield exactly the 4 default dirs").toHaveLength(4);
+      const probeSet = probe.precreateDirs(uid, h);
+      expect([...probeSet].sort(), `probe=${JSON.stringify(probeSet)} builder=${JSON.stringify(builderSet)}`).toEqual([...builderSet].sort());
+      expect(sameSet(probeSet, builderSet)).toBe(true);
+    }
+  });
+
+  it("Guard 2: SESSION_TMP_ROOT is pinned to AGENT_SESSION_TMP_ROOT, and the builder's denyRead carries every member of the probe's create set", () => {
+    expect(probe.SESSION_TMP_ROOT).toBe(AGENT_SESSION_TMP_ROOT);
+    const uid = process.getuid!();
+    const builder = buildAgentSandboxConfig(workspace) as { filesystem: { denyRead: string[] } };
+    expect(builder.filesystem.denyRead).toEqual(expect.arrayContaining(probe.precreateDirs(uid, home)));
+  });
+
+  it("HARNESS control (Guard 2 row 7): the set comparison rejects a superset, a subset and a duplicate, so it is not arrayContaining", () => {
+    const uid = process.getuid!();
+    const builderSet = builderPrecreateSet(uid, home);
+    expect(sameSet([...probe.precreateDirs(uid, home), "/tmp/extra"], builderSet)).toBe(false);
+    expect(sameSet(probe.precreateDirs(uid, home).slice(1), builderSet)).toBe(false);
+    expect(sameSet([...probe.precreateDirs(uid, home).slice(1), "/tmp/cc-socks"], [...builderSet.slice(1), builderSet[1]])).toBe(false);
+    expect(sameSet(probe.precreateDirs(uid, home), builderSet)).toBe(true);
+    // and the floor row's input: an empty derivation is not "equal to an empty probe set"
+    expect(builderSet.length).toBeGreaterThan(0);
   });
 
   it("HARNESS must-PASS: a config differing from the canonical only by key order is still equal", () => {
@@ -182,8 +225,11 @@ describe("the probe is baked into the image and ci-deploy.sh execs the baked pat
     // printed right after the assignment, gated on the smoke-only `announce` flag so the docker suite's default mode stays one-line
     expect(src).toMatch(/state\.dispatched = true;\n\s*if \(state\.announce\) console\.log\("SDK_BASH_DISPATCHED"\);/);
     expect(src).toMatch(/const state = \{ dispatched: false, announce: true \};/);
-    // the 124 arm of run_sdk_bash_smoke reads the identical literal, and the result parse ignores it (it is anchored on `SDK_BASH_RESULT `)
-    const smokeFn = deploy.slice(deploy.indexOf("run_sdk_bash_smoke() {"));
+    // the 124 arm reads the identical literal, and the result parse ignores it (it is anchored on `SDK_BASH_RESULT `). The rc/marker
+    // mapping moved out of run_sdk_bash_smoke into the sourced lib shared with the runtime synthetic (ADR-079 "Addendum — 2026-10-22 (#10455 b)"),
+    // so the contract is the function plus the lib it calls.
+    const smokeFn = deploy.slice(deploy.indexOf("run_sdk_bash_smoke() {")) + read("infra", "sdk-bash-verdict.sh");
+    expect(deploy).toContain("sdk_bash_map_result");
     expect(smokeFn).toContain(`SDK_BASH_DISPATCHED`);
     expect(smokeFn).toContain("grep -a '^SDK_BASH_RESULT '");
     expect(smokeFn).toContain("host_timeout_before_dispatch");
@@ -220,6 +266,10 @@ const ROWS: Row[] = [
   { name: "failed: dispatched, unknown error wording without any sandbox signature (signature-independent)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: "the widget exploded" }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /widget exploded/ },
   { name: "failed: dispatched and hung past the internal cap", obs: { nonce: NONCE, dispatched: true, timedOut: true, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^hung_after_dispatch$/ },
   { name: "failed: dispatched, the SDK threw a non-sandbox error", obs: { nonce: NONCE, dispatched: true, thrown: "Error: stream closed", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_then_error/ },
+  { name: "infra: dispatched, the SDK's child died to the OOM killer (exited with code 137): a host memory event, never a /fail page", obs: { nonce: NONCE, dispatched: true, thrown: "Error: Claude Code process exited with code 137", coverage: FULL }, verdict: "smoke_infra_error", reason: /^cli_child_killed/ },
+  { name: "infra: dispatched, the SDK's child got SIGTERM (a container stop or a deploy signal)", obs: { nonce: NONCE, dispatched: true, thrown: "Error: Claude Code process terminated by signal SIGTERM", coverage: FULL }, verdict: "smoke_infra_error", reason: /^cli_child_killed/ },
+  { name: "infra: the SDK's child was killed before Bash was dispatched too (code 143)", obs: { nonce: NONCE, dispatched: false, thrown: "Error: Claude Code process exited with code 143", coverage: FULL }, verdict: "smoke_infra_error", reason: /^cli_child_killed/ },
+  { name: "failed: dispatched, the SDK's child exited with code 1 (an ordinary failure, not a kill) stays a failure", obs: { nonce: NONCE, dispatched: true, thrown: "Error: Claude Code process exited with code 1", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_then_error/ },
   { name: "failed: dispatched, no tool_result at all", obs: { nonce: NONCE, dispatched: true, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_no_tool_result$/ },
   { name: "failed: the SDK threw 'sandbox required but unavailable' before Bash was dispatched (a sandbox that cannot start is the incident)", obs: { nonce: NONCE, dispatched: false, thrown: "Error: sandbox required but unavailable", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /sandbox required but unavailable/ },
   { name: "failed: nonce present but the result is error-flagged (a failing command cannot certify)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: `SDK_SMOKE_${EXECUTED}\nboom` }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /./ },
@@ -237,7 +287,7 @@ const ROWS: Row[] = [
 describe("smokeVerdict classifies every known outcome", () => {
   // Anti-vacuity floor: the table must not be emptied (a verdict suite that runs zero rows passes).
   it("runs at least the floor of rows", () => {
-    expect(ROWS.length).toBeGreaterThanOrEqual(18);
+    expect(ROWS.length).toBeGreaterThanOrEqual(22);
   });
 
   for (const row of ROWS) {

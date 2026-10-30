@@ -26,14 +26,17 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 }));
 import { reportSilentFallback } from "@/server/observability";
 import {
+  AGENTS_EDIT_LINE_MAX_CHARS,
   DRAFT_EDIT_MAX_TOKENS,
   DRAFT_EDIT_TIMEOUT_MS,
+  EDIT_LINE_TARGET_CHARS,
   EDIT_OUTPUT_SCHEMA,
   CREDENTIAL_RE,
   EDIT_TARGET_MAX_BYTES,
   PII_REGEX,
+  PROMOTION_QUORUM,
+  SKILL_EDIT_LINE_MAX_CHARS,
   agentsPointerNote,
-  skillConflictDiffBody,
   buildAdditiveEditDiff,
   checkDiffPaths,
   draftAdditiveEdit,
@@ -356,7 +359,9 @@ describe("buildAdditiveEditDiff -- the chokepoint that authors proposed_diff_uni
       ["a zero-width space", ["a\u200bb"], "charset"],
       ["a tag-block character", ["a" + String.fromCodePoint(0xe0041) + "b"], "charset"],
       ["a bidi override", ["a\u202eb"], "charset"],
-      ["a line over 500 characters", ["a".repeat(501)], "too-long"],
+      // The per-target length caps (AGENTS 600, SKILL.md 1000) have their own boundary rows in
+      // the "edit line caps" describe below; a SKILL.md target here pins the SKILL cap.
+      [`a SKILL.md line over ${SKILL_EDIT_LINE_MAX_CHARS} characters`, ["a".repeat(SKILL_EDIT_LINE_MAX_CHARS + 1)], "too-long"],
       ["21 lines", Array.from({ length: 21 }, (_, i) => `- line ${i}`), "too-many"],
       ["an AWS-key-shaped string", ["- key " + "AKIA" + "ABCDEFGHIJKLMNOP"], "credential"],
       ["a Stripe-key-shaped string", ["- key " + "sk_" + "live_" + "a".repeat(24)], "credential"],
@@ -367,8 +372,8 @@ describe("buildAdditiveEditDiff -- the chokepoint that authors proposed_diff_uni
       expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause });
     });
 
-    it("the boundary passes: 20 lines of 500 characters each", async () => {
-      const lines = Array.from({ length: 20 }, () => "b".repeat(500));
+    it("the boundary passes: 20 SKILL.md lines of the SKILL cap each", async () => {
+      const lines = Array.from({ length: 20 }, () => "b".repeat(SKILL_EDIT_LINE_MAX_CHARS));
       const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: lines });
       expect(r.ok).toBe(true);
     });
@@ -525,14 +530,22 @@ describe("isAdditiveDiff -- the in-code assertion that a derived diff removes no
 });
 
 describe("draftAdditiveEdit -- the model call", () => {
-  const summaries = new Map<string, string>([
-    ["knowledge-base/project/learnings/a.md", "SUMMARY-A the first learning"],
-    ["knowledge-base/project/learnings/b.md", "SUMMARY-B the second learning"],
-  ]);
+  // Sized from the constant, never a literal 5: a fixture that hard-codes the quorum would
+  // keep passing if the constant were lowered. The corpus holds two more than the quorum so
+  // a cluster can be at, over and under it.
+  const letter = (i: number) => String.fromCharCode(97 + i);
+  const learningPath = (i: number) => `knowledge-base/project/learnings/${letter(i)}.md`;
+  const summaries = new Map<string, string>(
+    Array.from({ length: PROMOTION_QUORUM + 2 }, (_, i) => [
+      learningPath(i),
+      `SUMMARY-${letter(i).toUpperCase()} the learning number ${i}`,
+    ]),
+  );
+  const quorumSources = Array.from({ length: PROMOTION_QUORUM }, (_, i) => learningPath(i));
   const cluster = {
     target_path: AGENTS,
     rationale: "Recurring failure RATIONALE-TEXT",
-    source_learnings: ["knowledge-base/project/learnings/a.md", "knowledge-base/project/learnings/b.md"],
+    source_learnings: quorumSources,
   };
   const answer = (obj: unknown, stopReason = "end_turn") =>
     vi.fn(async (..._a: unknown[]) => ({ text: JSON.stringify(obj), stopReason }));
@@ -616,13 +629,92 @@ describe("draftAdditiveEdit -- the model call", () => {
     expect(prompt).toContain("SUMMARY-A");
   });
 
-  it("T20: when NO source learning resolves the draft is edit-invalid/no-source and the model is NOT called", async () => {
-    const post = answer(good);
-    const r = await draftAdditiveEdit(
-      args(post, { cluster: { ...cluster, source_learnings: ["../../x", "knowledge-base/project/learnings/unknown.md"] } }),
-    );
-    expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "no-source" });
-    expect(post).not.toHaveBeenCalled();
+  describe("the server-enforced quorum (PROMOTION_QUORUM distinct corpus-resolved sources)", () => {
+    it("PROMOTION_QUORUM is 5: raising or lowering it needs an ADR-092 Amendment and the runbook line", () => {
+      // The one row that pins the VALUE. Every fixture is built from the constant, so a
+      // diff that lowers it passes the rest of the battery; this row makes it a visible diff.
+      expect(PROMOTION_QUORUM).toBe(5);
+    });
+
+    it("Q1: one source short of the quorum, and zero, are refused quorum-not-met and the model is NOT called", async () => {
+      for (const n of [PROMOTION_QUORUM - 1, 0]) {
+        const post = answer(good);
+        const r = await draftAdditiveEdit(
+          args(post, { cluster: { ...cluster, source_learnings: quorumSources.slice(0, n) } }),
+        );
+        expect(r, `n=${n}`).toEqual({ ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: n });
+        expect(post, `n=${n}`).not.toHaveBeenCalled();
+      }
+    });
+
+    it("Q1b: the refusal is unconditional -- empty rationale, every target class and runId set or unset all refuse", async () => {
+      // A gate skipped for a SUBSET of clusters (an extra `&&` operand) passes every row that
+      // varies nothing but the source count; vary the other inputs the cluster and call carry.
+      const sub = quorumSources.slice(0, PROMOTION_QUORUM - 1);
+      for (const target of [AGENTS, SKILL_ALPHA, SKILL_HYPHEN, SKILL_LINK, "not/allowlisted.md"]) {
+        for (const rationale of ["", "r", "x".repeat(5000)]) {
+          for (const runId of ["RUN-1", undefined]) {
+            const post = answer(good);
+            const r = await draftAdditiveEdit(
+              args(post, { runId, cluster: { target_path: target, rationale, source_learnings: sub } }),
+            );
+            const label = `${target} / ${rationale.length} / ${String(runId)}`;
+            expect(r, label).toEqual({ ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sub.length });
+            expect(post, label).not.toHaveBeenCalled();
+          }
+        }
+      }
+    });
+
+    it("Q2: exactly the quorum proceeds to the model call and derives an applying diff", async () => {
+      const post = answer(good);
+      const r = await draftAdditiveEdit(args(post));
+      expect(r.ok).toBe(true);
+      if (r.ok) await expectApplies(AGENTS, r.diff);
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it("Q3: the count is DISTINCT RESOLVED sources, not the raw list length", async () => {
+      const post = answer(good);
+      // 2 * (quorum - 2) + 3 entries listed: (quorum - 2) distinct in-corpus paths, each
+      // duplicated, plus three unknown paths. The raw length is above the quorum; the resolved set is not.
+      const distinct = quorumSources.slice(0, PROMOTION_QUORUM - 2);
+      const listed = [
+        ...distinct,
+        ...distinct,
+        "knowledge-base/project/learnings/unknown-1.md",
+        "knowledge-base/project/learnings/unknown-2.md",
+        "../../etc/passwd",
+      ];
+      expect(listed.length).toBeGreaterThanOrEqual(PROMOTION_QUORUM);
+      const r = await draftAdditiveEdit(args(post, { cluster: { ...cluster, source_learnings: listed } }));
+      expect(r).toMatchObject({ ok: false, reason: "quorum-not-met", sourceCount: PROMOTION_QUORUM - 2 });
+      expect(post).not.toHaveBeenCalled();
+      // ...and the same raw length collapsing to exactly the quorum still proceeds.
+      const ok = answer(good);
+      const r2 = await draftAdditiveEdit(
+        args(ok, { cluster: { ...cluster, source_learnings: [...quorumSources, ...quorumSources, "../../x"] } }),
+      );
+      expect(r2.ok).toBe(true);
+      expect(ok).toHaveBeenCalledTimes(1);
+    });
+
+    it("Q4: the check precedes every git read (a missing repoRoot and an unreadable target do not win)", async () => {
+      const sub = quorumSources.slice(0, PROMOTION_QUORUM - 1);
+      const noRoot = answer(good);
+      const r1 = await draftAdditiveEdit(
+        args(noRoot, { repoRoot: "/nonexistent/compound-repo", cluster: { ...cluster, source_learnings: sub } }),
+      );
+      expect(r1).toMatchObject({ ok: false, reason: "quorum-not-met" });
+      for (const target of [SKILL_LINK, SKILL_BIG]) {
+        const post = answer(good);
+        const r = await draftAdditiveEdit(
+          args(post, { cluster: { ...cluster, target_path: target, source_learnings: sub } }),
+        );
+        expect(r, target).toMatchObject({ ok: false, reason: "quorum-not-met" });
+        expect(post, target).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("T10/T11/T12: an unreadable, oversized or disallowed target never reaches the model", async () => {
@@ -781,27 +873,6 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
     });
   });
 
-  describe("skillConflictDiffBody: the comment fence cannot be closed by the diff", () => {
-    it("is longer than any backtick run in the diff, so a context line cannot close it", () => {
-      const diff = ["diff --git a/x b/x", "@@ -1 +1,2 @@", " ```", "+@someone hi", ""].join("\n");
-      const body = skillConflictDiffBody(diff);
-      const lines = body.split("\n");
-      const open = /^(`+)diff$/.exec(lines[0]);
-      expect(open).not.toBeNull();
-      const n = open![1].length;
-      expect(n).toBeGreaterThanOrEqual(4);
-      const closeRe = new RegExp("^ {0,3}`{" + n + ",}\\s*$");
-      const inner = lines.slice(1, -1);
-      expect(inner.some((l) => closeRe.test(l))).toBe(false);
-      expect(closeRe.test(lines[lines.length - 1])).toBe(true);
-    });
-    it("redacts the diff entirely when a PII pattern is present", () => {
-      const body = skillConflictDiffBody("+" + "AK" + "IA" + "ABCDEFGHIJKLMNOP");
-      expect(body).toContain("redacted");
-      expect(body).not.toContain("AKIA");
-    });
-  });
-
   describe("derivation faults are reported with their cause and exit code", () => {
     it("a git that cannot run is edit-derive-failed/git-exit with the exit code in extra", async () => {
       const savedPath = process.env.PATH;
@@ -847,12 +918,13 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
       text: JSON.stringify({ insert_after_line: "- Keep it small [id: cq-keep-small]. Because.", new_lines: [RULE_LINE] }),
       stopReason: "end_turn",
     }));
+    const paths = Array.from({ length: PROMOTION_QUORUM }, (_, i) => `knowledge-base/project/learnings/q${i}.md`);
     await draftAdditiveEdit({
-      cluster: { target_path: AGENTS, rationale: "r", source_learnings: ["knowledge-base/project/learnings/a.md"] },
+      cluster: { target_path: AGENTS, rationale: "r", source_learnings: paths },
       repoRoot,
       apiKey: "k",
       runId: "R",
-      corpusSummaries: new Map([["knowledge-base/project/learnings/a.md", "S"]]),
+      corpusSummaries: new Map(paths.map((p) => [p, "S"] as const)),
       headroomBytes: 10,
       post: post as unknown as Parameters<typeof draftAdditiveEdit>[0]["post"],
     });
@@ -861,5 +933,171 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
     expect(prompt).toMatch(/exactly one \[id: \.\.\.\] per line/);
     expect(prompt).toMatch(/no mention of any hr- or wg-/);
     expect(prompt).toMatch(/enforcement tags/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Edit line caps (#10552): one hard cap per target, the AGENTS cap pinned to the corpus lint.
+// ---------------------------------------------------------------------------------------------
+
+/** The corpus lint's per-rule cap, read from its source: anchored, exactly one assignment. */
+function extractPerRuleCap(src: string): number {
+  const hits = [...src.matchAll(/^PER_RULE_CAP[ \t]*=[ \t]*(\d+)[ \t]*(?:#.*)?$/gm)];
+  if (hits.length !== 1) {
+    throw new Error(`expected exactly one PER_RULE_CAP assignment, found ${hits.length}`);
+  }
+  return Number(hits[0][1]);
+}
+
+/** An AGENTS.rules.md-shaped bullet of EXACTLY `len` characters, with a unique id per index. */
+function ruleOfLength(len: number, i: number): string {
+  const tail = ` [id: cq-cap-probe-${String(i).padStart(2, "0")}]`;
+  const line = `- ${"x".repeat(len - 2 - tail.length)}${tail}`;
+  if (line.length !== len) throw new Error(`fixture is ${line.length} characters, wanted ${len}`);
+  return line;
+}
+
+describe("edit line caps: per-target hard cap, pinned to the corpus lint", () => {
+  const ANCHOR = "- Keep it small [id: cq-keep-small]. Because.";
+
+  describe("the pin: AGENTS_EDIT_LINE_MAX_CHARS equals the lint's PER_RULE_CAP", () => {
+    it("reads the lint constant from the committed source (a missing file is a hard failure)", () => {
+      const src = readFileSync(new URL("../../../../../scripts/lint-agents-rule-budget.py", import.meta.url), "utf8");
+      expect(AGENTS_EDIT_LINE_MAX_CHARS).toBe(extractPerRuleCap(src));
+    });
+
+    it("the extractor tolerates spacing and a trailing comment", () => {
+      expect(extractPerRuleCap("PER_RULE_CAP=600  # note\n")).toBe(600);
+      expect(extractPerRuleCap("x = 1\nPER_RULE_CAP   =   601\n")).toBe(601);
+    });
+
+    it("the extractor fails loudly on zero, two, or an f-string-only mention", () => {
+      expect(() => extractPerRuleCap("")).toThrow(/found 0/);
+      expect(() => extractPerRuleCap('print(f"cap {PER_RULE_CAP}")\n')).toThrow(/found 0/);
+      expect(() => extractPerRuleCap("PER_RULE_CAP = 600\nPER_RULE_CAP = 700\n")).toThrow(/found 2/);
+      expect(() => extractPerRuleCap("B_ALWAYS_WARN = 44000\n")).toThrow(/found 0/);
+    });
+
+    it("the soft target stays below both hard caps and the SKILL cap is not below the AGENTS cap", () => {
+      expect(EDIT_LINE_TARGET_CHARS).toBeLessThan(AGENTS_EDIT_LINE_MAX_CHARS);
+      expect(SKILL_EDIT_LINE_MAX_CHARS).toBeGreaterThanOrEqual(AGENTS_EDIT_LINE_MAX_CHARS);
+    });
+  });
+
+  describe("AGENTS.rules.md boundary", () => {
+    it(`20 rule lines of exactly ${AGENTS_EDIT_LINE_MAX_CHARS} characters are accepted`, async () => {
+      const lines = Array.from({ length: 20 }, (_, i) => ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, i));
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r.ok).toBe(true);
+    });
+
+    it("one character more is refused as edit-invalid/too-long, even after a compliant first line", async () => {
+      const lines = [ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 0), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS + 1, 1)];
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it.each(Array.from({ length: 20 }, (_, i) => i))("an over-cap line at position %i of 20 is refused (every line is checked)", async (at) => {
+      const lines = Array.from({ length: 20 }, (_, i) => ruleOfLength(i === at ? AGENTS_EDIT_LINE_MAX_CHARS + 1 : AGENTS_EDIT_LINE_MAX_CHARS, i));
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it("an over-cap line in the MIDDLE of three is refused (every line is checked, not the first or last)", async () => {
+      const lines = [ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 0), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS + 1, 1), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 2)];
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it("a 597-character rule line is NOT refused by the old 500-character cap (the #10552 defect)", async () => {
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: [ruleOfLength(597, 0)] });
+      expect(r.ok).toBe(true);
+    });
+  });
+
+  describe("SKILL.md boundary is its own cap, not the AGENTS one", () => {
+    it("the SKILL.md cap is exactly 1000: a 1000-character line is accepted and a 1001-character line refused (literals)", async () => {
+      expect(SKILL_EDIT_LINE_MAX_CHARS).toBe(1000);
+      const accepted = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["d".repeat(1000)] });
+      expect(accepted.ok).toBe(true);
+      const refused = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["d".repeat(1001)] });
+      expect(refused).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it.each(Array.from({ length: 20 }, (_, i) => i))("an over-cap SKILL.md line at position %i of 20 is refused", async (at) => {
+      const lines = Array.from({ length: 20 }, (_, i) => "e".repeat(i === at ? 1001 : 1000));
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it("an over-cap SKILL.md line in the MIDDLE of three is refused", async () => {
+      const ok = "c".repeat(SKILL_EDIT_LINE_MAX_CHARS);
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: [ok, ok + "c", ok] });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it(`a ${AGENTS_EDIT_LINE_MAX_CHARS + 1}-character SKILL.md line is accepted`, async () => {
+      const r = await derive(SKILL_ALPHA, {
+        insert_after_line: "## Steps",
+        new_lines: ["c".repeat(AGENTS_EDIT_LINE_MAX_CHARS + 1)],
+      });
+      expect(r.ok).toBe(true);
+    });
+  });
+
+  describe("chars equal bytes because the printable-ASCII screen runs first", () => {
+    it.each([
+      ["AGENTS.rules.md", AGENTS, ANCHOR, AGENTS_EDIT_LINE_MAX_CHARS],
+      ["SKILL.md", SKILL_ALPHA, "## Steps", SKILL_EDIT_LINE_MAX_CHARS],
+    ])("a two-byte-character line that fits the cap in characters but not in bytes is refused as charset (%s)", async (_l, path, anchor, cap) => {
+      // Half the cap plus one is under the character cap and OVER it in UTF-8 bytes.
+      const r = await derive(path, { insert_after_line: anchor, new_lines: [String.fromCharCode(0xe9).repeat(Math.floor(cap / 2) + 1)] });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "charset" });
+    });
+  });
+
+  describe("the prompt states the numbers the validator enforces", () => {
+    const letter = (i: number) => String.fromCharCode(97 + i);
+    const learningPath = (i: number) => `knowledge-base/project/learnings/${letter(i)}.md`;
+    const summaries = new Map<string, string>(
+      Array.from({ length: PROMOTION_QUORUM }, (_, i) => [learningPath(i), `SUMMARY-${i}`]),
+    );
+    const promptFor = async (targetPath: string): Promise<string> => {
+      const post = vi.fn(async (..._a: unknown[]) => ({ text: "{}", stopReason: "end_turn" }));
+      await draftAdditiveEdit({
+        cluster: {
+          target_path: targetPath,
+          rationale: "r",
+          source_learnings: Array.from({ length: PROMOTION_QUORUM }, (_, i) => learningPath(i)),
+        },
+        repoRoot,
+        apiKey: "test-key",
+        runId: "RUN-CAP",
+        corpusSummaries: summaries,
+        headroomBytes: 1234,
+        post,
+      } as unknown as Parameters<typeof draftAdditiveEdit>[0]);
+      return (post.mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[0].content;
+    };
+
+    it("AGENTS.rules.md: hard cap from the constant, soft target from the constant", async () => {
+      const prompt = await promptFor(AGENTS);
+      expect(prompt).toContain(`at most ${AGENTS_EDIT_LINE_MAX_CHARS} characters`);
+      expect(prompt).toContain(`aim for ${EDIT_LINE_TARGET_CHARS} or fewer`);
+      expect(prompt).not.toContain(`at most ${SKILL_EDIT_LINE_MAX_CHARS} characters`);
+    });
+
+    it("SKILL.md: its own hard cap, never the AGENTS one", async () => {
+      const prompt = await promptFor(SKILL_ALPHA);
+      expect(prompt).toContain(`at most ${SKILL_EDIT_LINE_MAX_CHARS} characters`);
+      expect(prompt).toContain(`aim for ${EDIT_LINE_TARGET_CHARS} or fewer`);
+      expect(prompt).not.toContain(`at most ${AGENTS_EDIT_LINE_MAX_CHARS} characters`);
+    });
+
+    it("both prompts say a longer line refuses the whole edit", async () => {
+      for (const target of [AGENTS, SKILL_ALPHA]) {
+        expect(await promptFor(target)).toMatch(/a line over the hard cap refuses the whole edit/);
+      }
+    });
   });
 });

@@ -7,8 +7,9 @@
 # The sweeper hands `earliest` to the probe as SOLEUR_FT_EARLIEST. It is the window start and nothing else: not a constant
 # here, and not the workflow file's last commit (a commit-time anchor would let an unrelated edit restart the soak).
 #
-# What it decides: the infra step runs at the runner's default width (Item I of #9217 removed its pin; the tests step keeps
-# one, because it nests the runner on a branch diff touching apps/web-platform/infra/). The soak is the 12 OLDEST completed,
+# What it decides: the infra step runs at the runner's default width (Item I of #9217 removed its pin; #9410 then removed
+# the last remaining pin — the tests step's — when it sharded the monitor, since no leg runs `all` and so nothing nests
+# the runner). The soak is the 12 OLDEST completed,
 # non-cancelled monitor runs on `main` (any event; a manual dry_run=true dispatch is a valid infra sample) created at or
 # after the window start. Once 12 exist a later bad run cannot change the verdict, so PASS is monotone and the sweeper's
 # re-check of a closed issue cannot reopen #7432. 12 runs at 4 a day is about 3 days. WIDTH IS PROVEN PER RUN, not assumed
@@ -30,9 +31,12 @@
 # (clean) | infra neither success nor failure (hard) | infra=failure: the runner's own tally line (`=== registered infra
 # suites: P passed, F failed, U unaccounted ===`) absent, duplicated, with U > 0 or with F not equal to the RED lines, or an
 # UNACCOUNTED line (all hard), no RED line (hard), a RED set inside KNOWN_DETERMINISTIC_REDS (clean, disclosed), otherwise
-# one STRIKE per non-allowlisted RED suite unless the run id is in JUDGED_REPRODUCING_RUNS (run-granular). A human adds an
-# id there, by PR, only after confirming the RED reproduces (which makes it not a strike under the trigger above); a run
-# judged NON-reproducing stays a strike. A run whose only REDs are allowlisted reads clean and is named in the PASS line;
+# one STRIKE per non-allowlisted RED suite unless the run id is in JUDGED_REPRODUCING_RUNS (run-granular — every
+# non-allowlisted RED in a listed run is excused, so ids are added only for runs verified to carry no second defect). A
+# human adds an id there, by PR, only after confirming the RED reproduces (which makes it not a strike under the
+# trigger above) — or, exceptionally, judging it reproducing-in-intent: a self-attributing defect class with its fix
+# in the same PR, the deviation disclosed at the data site and in the PR body; a run judged NON-reproducing stays a
+# strike. A run whose only REDs are allowlisted reads clean and is named in the PASS line;
 # there is no cap, because the deterministic tag-drift RED has its own P1 from the monitor.
 #
 # Exit codes (sweep-followthroughs.sh vocabulary), in precedence order: 1 FAIL (a counted run was killed) | 5 ACTION
@@ -66,7 +70,14 @@ REPO="jikig-ai/soleur"
 WF="main-health-monitor.yml"
 N=12
 KNOWN_DETERMINISTIC_REDS="cloud-init-inngest-bootstrap.test.sh"
-JUDGED_REPRODUCING_RUNS=""
+# Judged reproducing by PR (see header): runs 39378082716 + 39446197504 each carried one non-allowlisted
+# RED, git-data-wipe-assert.test.sh bound-killed rc=124 at the 360 s default — the H4 class the runner's
+# ATTRIBUTION block owns to _SUITE_BOUNDS, a deterministic capacity defect fixed by this same PR's =720
+# entry (#10654), not the -P 4 flake the soak measures. Neither literal reproduction test held
+# (same-sha infra-validation passed it; -P 1 would pass), so this judgment is disclosed deviation,
+# bounded by: self-attributing rc class, the fix landing in this PR, disclosure in the PR body.
+# Both runs verified single-RED (tallies 180/1/0, 182/1/0), so the run-granular excuse masks nothing.
+JUDGED_REPRODUCING_RUNS="39378082716 39446197504"
 
 for need in gh jq base64 awk grep sed sort tr head date wc; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
@@ -92,8 +103,10 @@ PIN_RE="(^|[^A-Za-z0-9_])[\"']?JOBS[\"']?[[:space:]]*[:=]"
 WIDTH_RE='^[0-9TZ:.-]+ +Running [0-9]+ registered infra suite\(s\)[^|]* with -P [0-9]+'
 SUMMARY_RE='^[0-9TZ:.-]+ +=== registered infra suites: [0-9]+ passed, [0-9]+ failed, [0-9]+ unaccounted \(of [0-9]+\) ===$'
 pins="$(grep -vE '^[[:space:]]*#' <<<"$body" | grep -cE "$PIN_RE")" || pins=0
-if [ "$pins" -ge 2 ]; then
-  echo "NOT YET: $pins JOBS assignments on main (the tests-step pin plus another); the infra-step pin has not been removed."
+# #9410 removed the last pin, so the baseline is ZERO: any assignment on main is a
+# restored pin, not the pre-soak state the >=2 threshold once distinguished.
+if [ "$pins" -ge 1 ]; then
+  echo "NOT YET: $pins JOBS assignment(s) on main — a pin has been restored (post-#9410 baseline is zero)."
   exit 2
 fi
 
@@ -115,7 +128,11 @@ killed=""; hard=""; unread=""; allowlisted=""; judged=""; strikes=""; nstrikes=0
 classify() {  # classify <run id>: appends to the lists above and returns; it never exits
   local rid="$1" jobs_json jid log slice nw k ann msg tmo toks infra_vals ni infra reds nred sumn sumline sf su s other n_other name
   jobs_json="$(gh api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" 2>/dev/null)" || { unread="$unread $rid(jobs)"; return; }
-  jid="$(jq -r '[.jobs[] | select(.name == "health-check")][0].id // empty' <<<"$jobs_json" 2>/dev/null)" || jid=""
+  # #9410 — the monitor is sharded: the infra run is the `test-infra` job (one
+  # leg, deliberately not a matrix, so this probe keeps reading ONE job's log
+  # and annotations: the `infra=`/`infra_elapsed_s=` notice, the `-P K` width
+  # line, the REDs and the single tally all stay on one check-run).
+  jid="$(jq -r '[.jobs[] | select(.name == "test-infra")][0].id // empty' <<<"$jobs_json" 2>/dev/null)" || jid=""
   [ -n "$jid" ] || { unread="$unread $rid(job)"; return; }
   # --allow-escape-sequences: gh refuses a log body carrying ESC bytes without it (every real monitor log does)
   log="$(gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null)" || { unread="$unread $rid(log)"; return; }

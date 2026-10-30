@@ -182,7 +182,7 @@ host's name.
 | Asserts `SENTRY_DSN` non-empty in Doppler `prd_terraform`, failing closed if it is *unreadable* | The pre-extraction boot stages emit through the baked `${sentry_dsn}` and nothing else. Empty ⇒ a failed birth emits nothing and pages nobody (ADR-128 R1). |
 | Resolves web-1's running version → tag → immutable `@sha256` digest, once | A mutable `:latest` can move between the coherence check and the apply, which would defeat the check entirely. |
 | Runs `host-image-coherence-preflight.sh` against the pinned digest | An image whose baked host-scripts disagree with the applied hash aborts cloud-init at `stage=verify` (see below). Pre-apply, so nothing is created on a doomed boot. |
-| Plans the host's **ten-address fan-out** and grades it with the inverted birth gate | Exactly one create, OF the requested host, WITH its private NIC and volume attachment, and zero destroys/reboots/out-of-scope changes. The NIC and attachment are required, not merely permitted — a server without them is #6416 and silent data loss respectively. |
+| Plans the host's **birth fan-out** (the address set pinned in `tests/scripts/lib/web-host-birth-gate.sh`) and grades it with the inverted birth gate | Exactly one create, OF the requested host, WITH its private NIC and volume attachment, and zero destroys/reboots/out-of-scope changes. The NIC and attachment are required, not merely permitted — a server without them is #6416 and silent data loss respectively. |
 | Includes `cloudflare_record.app` in the fan-out | `-target` is transitive upstream only, so the apex A record — a *dependent* of the server — would otherwise never re-point. On a web-1 birth that means a green run and `app.soleur.ai` still resolving to the dead host. |
 | Surfaces the fresh host's Sentry boot trail, `if: always()` | A green apply is not a green boot — the two are indistinguishable without asking Sentry. |
 
@@ -230,6 +230,11 @@ key.
 
 - **Boot telemetry:** the run's own step summary carries the fresh-host Sentry trail. Expect
   `cloud_init_complete` as the last-reached stage; a `fatal` names where the boot died.
+- **First-deploy verification:** the standing `follow-through`-labeled tracker
+  (probe `scripts/followthroughs/web-first-deploy-10585.sh`, enrolled by #10585 — locate via
+  `gh issue list -l follow-through`) asserts this host's FIRST deploy lands a
+  Deploy-succeeded-class journald row within 2 days of this boot — a deploy that never lands
+  surfaces there as ACTION REQUIRED.
 - **Serving** (only for a host that is in the serving path):
   `curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health` returns 200.
 - **No page is not proof of health.** `betteruptime_monitor.app` probes the `app.soleur.ai`

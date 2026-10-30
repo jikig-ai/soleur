@@ -20,6 +20,7 @@
 // ---------------------------------------------------------------------------
 
 import { accessSync, constants, unlinkSync, writeFileSync } from "fs";
+import { gitDataKeyFileContents } from "./git-data-key";
 import { randomUUID } from "crypto";
 import { join } from "path";
 import { execFile } from "child_process";
@@ -361,6 +362,27 @@ const PINNED_HOST_KEY_OPTS: readonly string[] = [
 ];
 
 /**
+ * Connect/keepalive bound for every git-data ssh dial (#8211). Without it a SYN that the container
+ * egress firewall (or any blackhole) drops is retried by the kernel for minutes: the caller's
+ * execFile timeout SIGTERMs ssh first and the failure surfaces as `killed: true, stderr: ""`, which
+ * names nothing. `ConnectTimeout` makes the dead dial fail in 8 s with ssh's own
+ * `Connection timed out` line; `ServerAliveInterval x ServerAliveCountMax` (6 s x 2 = 12 s) bounds a
+ * session that connects and then goes quiet. The worst case a dead peer can hold ssh is the sum,
+ * 8 + 12 = 20 s, which is STRICTLY under the shortest caller timeout (30 s: the provision and remove
+ * dials in git-data-replication.ts; the git transport calls allow 60 s). The test reads those caller
+ * timeouts from source and enforces the strict inequality.
+ * Spread into EVERY ssh option array in this file (test/git-data-ssh-connect-bound.test.ts pins it).
+ */
+const GIT_DATA_SSH_BOUND_OPTS: readonly string[] = [
+  "-o",
+  "ConnectTimeout=8",
+  "-o",
+  "ServerAliveInterval=6",
+  "-o",
+  "ServerAliveCountMax=2",
+];
+
+/**
  * The known_hosts body and the host-key ssh options for one git-data invocation.
  *
  * Throws unless the pin is a primitive string of exactly the resolver's shape
@@ -429,10 +451,11 @@ export async function gitWithPrivateKeyAuth(
   const knownHostsPath = join(dir, `.git-transport-${randomUUID()}.known_hosts`);
 
   try {
-    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF); the docker-env
+    // one-line form of the key is repaired here too (#8211 PR-G), whatever the caller passed.
     // BOTH writes live inside the try so a throw on the SECOND write still reaches
     // the finally cleanup for the first (0600 key) file (#5817 security review P3).
-    writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+    writeFileSync(keyPath, gitDataKeyFileContents(privateKey), {
       mode: 0o600,
     });
     writeFileSync(knownHostsPath, trust.knownHosts, { mode: 0o600 });
@@ -444,6 +467,7 @@ export async function gitWithPrivateKeyAuth(
       "-o",
       "IdentitiesOnly=yes",
       ...trust.sshOpts,
+      ...GIT_DATA_SSH_BOUND_OPTS,
       "-o",
       `UserKnownHostsFile=${knownHostsPath}`,
       "-o",
@@ -522,10 +546,11 @@ export async function sshWithPrivateKeyAuth(
   const knownHostsPath = join(dir, `.git-provision-${randomUUID()}.known_hosts`);
 
   try {
-    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF); the docker-env
+    // one-line form of the key is repaired here too (#8211 PR-G), whatever the caller passed.
     // BOTH writes live inside the try so a throw on the SECOND write still reaches
     // the finally cleanup for the first (0600 key) file (#5817 security review P3).
-    writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+    writeFileSync(keyPath, gitDataKeyFileContents(privateKey), {
       mode: 0o600,
     });
     writeFileSync(knownHostsPath, trust.knownHosts, { mode: 0o600 });
@@ -536,6 +561,7 @@ export async function sshWithPrivateKeyAuth(
       "-o",
       "IdentitiesOnly=yes",
       ...trust.sshOpts,
+      ...GIT_DATA_SSH_BOUND_OPTS,
       "-o",
       `UserKnownHostsFile=${knownHostsPath}`,
       "-o",

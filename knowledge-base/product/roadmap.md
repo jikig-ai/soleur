@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-09
+last_updated: 2026-10-26
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -417,7 +417,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L10 | Add explicit AI-crawler allow rules to robots.txt (GPTBot, ClaudeBot, PerplexityBot, Google-Extended — defensive) | P3 | [#2558](https://github.com/jikig-ai/soleur/issues/2558) | Not started |
 | L11 | Rewrite /agents/ meta description with concrete number + outcome | P2 | [#2667](https://github.com/jikig-ai/soleur/issues/2667) | Not started |
 | L12 | Add shared hub + sibling back-links for /blog/soleur-vs-*/ comparison cluster | P2 | [#2668](https://github.com/jikig-ai/soleur/issues/2668) | Not started |
-| L13 | Split /getting-started/ intent — "Two ways to start" pattern. Raised to P1 by growth audit 2026-10-19 ([#10516](https://github.com/jikig-ai/soleur/issues/10516)): the homepage self-host CTA now lands visitors here | P1 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
+| L13 | Split /getting-started/ intent — "Two ways to start" pattern. Raised to P1 by growth audit 2026-10-19 ([#10516](https://github.com/jikig-ai/soleur/issues/10516)): the homepage self-host CTA now lands visitors here. Worse per growth audit 2026-10-26 ([#11141](https://github.com/jikig-ai/soleur/issues/11141)): 5 install blocks and a 6-column command table | P1 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
 | L14 | Rename "Uncategorized" H2 on /skills/ + add inline definition of "agentic engineering" | P2 | [#2670](https://github.com/jikig-ai/soleur/issues/2670) | Done |
 | L15 | Add FAQ blocks to /getting-started/ and /vision/ | P2 | [#2671](https://github.com/jikig-ai/soleur/issues/2671) | Not started |
 | L16 | Add "This week in Soleur" weekly summary lede to /changelog/ | P2 | [#2672](https://github.com/jikig-ai/soleur/issues/2672) | Not started |
@@ -436,6 +436,10 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L29 | One model-support claim across homepage, pricing, getting-started and vision (Claude-only vs Grok Build vs "model-agnostic") — growth audit 2026-10-05 | P2 | [#9500](https://github.com/jikig-ai/soleur/issues/9500) | Not started |
 | L30 | One canonical Company-as-a-Service origin line across glossary, pillar and vision; replace weak glossary citation — growth audit 2026-10-05 | P2 | [#9501](https://github.com/jikig-ai/soleur/issues/9501) | Not started |
 | L31 | Retire the plaintext Redis AOF backstop volume `hcloud_volume.inngest_redis` (encryption at rest, #6894 / ADR-142) before its non-extendable ledger exception expires 2026-10-22: detach, zero with read-back, destroy via a reviewer-gated dispatch; records converge only after the Hetzner API shows the volume gone | P2 | [#8285](https://github.com/jikig-ai/soleur/issues/8285), [#6894](https://github.com/jikig-ai/soleur/issues/6894) | Done — volume destroyed 2026-10-09 (PR A [#9784](https://github.com/jikig-ai/soleur/pull/9784), PR B [#9877](https://github.com/jikig-ai/soleur/pull/9877)) |
+| L32 | Hold future-dated blog posts out of the build until their date (Eleventy preprocessor + daily scheduled `deploy-docs.yml` + future-date gate in `validate-seo.sh`) — 8 posts dated 2026-10-27 to 11-17 are live early; whole cause of the SEO 83→78 drop — growth audit 2026-10-26 | P0 | [#11132](https://github.com/jikig-ai/soleur/issues/11132) | Not started |
+| L33 | Undo developer-register drift on / and /pricing/ ("coding harness", "ships as a plugin", `/soleur:go` in FAQ) — named revert trigger inside the hero CTA test window, review 2026-11-03 ([#9588](https://github.com/jikig-ai/soleur/issues/9588)) — growth audit 2026-10-26 | P0 | [#11133](https://github.com/jikig-ai/soleur/issues/11133) | Not started |
+| L34 | Agentic-verification arc fixes before each spoke publishes: founder-problem titles/metas, 2+ external sources per post, own series entry in `pillars.js`, jargon pass — growth audit 2026-10-26 | P1 | [#11134](https://github.com/jikig-ai/soleur/issues/11134), [#11135](https://github.com/jikig-ai/soleur/issues/11135), [#11136](https://github.com/jikig-ai/soleur/issues/11136) | Not started |
+| L35 | Freshness honesty: block `last_updated` bumps without a facts-reviewed marker (7 pages re-dated 2026-10-22 over open defects); restore the missing 11-04 post OG image — growth audit 2026-10-26 | P2 | [#11138](https://github.com/jikig-ai/soleur/issues/11138), [#11137](https://github.com/jikig-ai/soleur/issues/11137) | Not started |
 
 #### Competitive-Parity Bets (vs Viktor)
 
@@ -447,7 +451,7 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 
 | # | Bet | Priority | ICP fit | Issue | Status |
 |---|-----|----------|---------|-------|--------|
-| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — heuristic annotation of fetched web content (WebFetch only, ADR-287); not yet a defense: flags off in prd, no out-of-sample numbers; LLM tier conditional on measured recall | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | In progress (WebFetch slice, flags off in prd) |
+| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — heuristic annotation of fetched web content (scorer: WebFetch only, ADR-287; static data-only framing also on six GitHub read tools, the Workstream board read tool and every Inngest cron spawn, #10194); not yet a defense: flags off in prd, no out-of-sample numbers; LLM tier conditional on measured recall | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | In progress (WebFetch slice, flags off in prd) |
 | CP2 | Structured human-in-the-loop approval queue for write/send actions (batched, reviewable — better than per-call CLI prompts for non-technical operators) | P2 | Near-term (current ICP) | [#4672](https://github.com/jikig-ai/soleur/issues/4672) | Not started |
 | CP3 | Cross-system scheduled business automations (business-process crons beyond infra/dev) | P2 | Unlocks with CP4 | [#4674](https://github.com/jikig-ai/soleur/issues/4674) | Not started |
 | CP4 | Business-SaaS integration breadth (Slack/Gmail/Asana-class MCP connectors for cross-silo orchestration) | P3 | Strategic (up-market) | [#4673](https://github.com/jikig-ai/soleur/issues/4673) | Not started |

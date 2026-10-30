@@ -552,7 +552,7 @@ export const workspaceReconcileOnPush = inngest.createFunction(
       { scope: "account", key: '"agent-runtime"', limit: 50 },
     ],
     retries: 1,
+    triggers: { event: WORKSPACE_RECONCILE_REQUESTED_EVENT },
   },
-  { event: WORKSPACE_RECONCILE_REQUESTED_EVENT },
-  workspaceReconcileOnPushHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  workspaceReconcileOnPushHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

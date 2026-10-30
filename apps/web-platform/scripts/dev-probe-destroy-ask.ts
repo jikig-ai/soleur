@@ -344,8 +344,8 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
   let release: () => void = () => undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    // The SDK wires `canUseTool` only for a streaming-input prompt (an AsyncIterable of user messages), as the dispatcher does;
-    // a bare string prompt runs the CLI without the permission callback and would make this probe vacuous.
+    // A streaming-input prompt (an AsyncIterable of user messages) is used because the cc dispatcher uses one. It is NOT required for
+    // `canUseTool` to fire: measured on SDK 0.3.284 (#11303, dev-probe-approval-gate.ts), a plain string prompt reaches `canUseTool` too.
     const promptText = `Run this exact command with the Bash tool: ${c.command}`;
     // Held open until the result frame: closing stdin right after the first message strands the CLI's permission request.
     const done = new Promise<void>((r) => { release = r; });

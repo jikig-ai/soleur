@@ -7,7 +7,7 @@ production infrastructure may be un-applied"**, or when you notice the workflow 
 - **Confirm token:** none — `manual-rerun` is the historical escape hatch and takes only a `reason`
 - **Irreversible:** no. It re-runs the ordinary per-merge apply against `main`'s current state
 - **Who sends the email:** the `notify-apply-failure` job in the same workflow (#7586)
-- **ADR:** none. The decision content lives in that job's own header
+- **ADR:** none for the apply itself (the decision content lives in that job's own header); the apply delivery gap follower below is recorded in the ADR-270 addendum of 2026-10-23
 
 Written because the recovery lever the email prescribes had no runbook entry while every sibling
 `apply_target` in that workflow had one (#7659 F4). An agent — or a person — who learns the apply
@@ -72,13 +72,17 @@ top right.
 **Or from a terminal**, if you have the GitHub CLI signed in with `workflow` scope:
 
 ```bash
-gh workflow run apply-web-platform-infra.yml --ref main \
+gh workflow run apply-web-platform-infra.yml --repo jikig-ai/soleur --ref main \
   -f apply_target=manual-rerun \
   -f reason='re-run after a non-green apply'
 ```
 
-It holds the fleet-wide apply mutex (`terraform-apply-web-platform-host`) for up to 47 minutes in
+It holds the fleet-wide apply mutex (`terraform-apply-web-platform-host`) for up to 59 minutes in
 the worst case, so an emergency dispatch issued at the same time will queue behind it.
+
+Cloudflare provider calls now retry API 5xx up to ~8 min per request (#10643), so a plan step red
+on `received gateway timeout response (HTTP 504)` post-change means the upstream degradation
+outlasted that budget — re-running once Cloudflare settles is the documented remedy.
 
 ## Do NOT fire this on these
 
@@ -96,3 +100,99 @@ the worst case, so an emergency dispatch issued at the same time will queue behi
 - The `Heartbeat re-pause sweep` step reports `outcome=noop` (nothing was left unconfirmed).
 - No further ops email arrives; there is deliberately **no** green-again email (deferred to a
   repo-wide `workflow_run` watcher).
+
+## An apply delivery gap issue (label `apply-delivery-gap`)
+
+**What it is.** The issue titled "infra: apply delivery gap - trigger-file change not applied" is filed by the
+`Apply Delivery Gap Follower` workflow (`scripts/apply-delivery-gap.sh`). Both apply workflows share one concurrency
+group that keeps a single pending run, so a second push can evict the first: the evicted run ends `cancelled`, usually
+with zero jobs, and no email is sent. The issue lists every such push from the last 7 days that no later run of the
+**same** workflow applied (table: workflow, push SHA, run, class, minutes since cancel, latest later run of this workflow, any outcome, which is not proof of delivery). It
+is detection only: it applies nothing and starts nothing. The body prints one dispatch command per workflow that has rows.
+
+**Decision table** (same shape as "Do NOT fire this on these" above):
+
+| Row says | Do this |
+|---|---|
+| class `evicted-before-start` | Run the printed command from `main`. It applies `main` HEAD, which covers every listed SHA of that workflow. |
+| class `cancelled-mid-run` | Read the cancelled run first: state is possibly partial (the follower over-classifies a preflight-only run as mid-run). If the re-dispatch then goes red, use the heartbeat sweep section above before re-running. |
+| "Latest later run" column shows a FAILED run | Read that run first. A failed run after an eviction is a different problem and `notify-apply-failure` already owns it. |
+| a kill-switch commit sits between the row and HEAD | The printed dispatch applies HEAD **including** the change that commit deliberately skipped. Decide about that change first. |
+| "Latest later run" shows `success` but the row stays open | That run does not count as delivery: its `apply` job was skipped (a kill-switched push or a plan-only or other dispatch target ends `success` without applying), or, for the infra workflow, its SSH-provisioned Terraform step was skipped. Re-dispatching alone will not clear the row until a run actually applies it. Read the run's step list and logs (the skipped step is named there) and check whether a kill-switch marker sits on the commits involved; do not open an SSH session. Then dispatch from `main`. |
+| you cancelled the push on purpose because it was bad | A revert commit touching the trigger paths delivers it by descendant and the row clears itself. An operator-cancelled mid-run push correctly stays `cancelled-mid-run`. |
+
+Always dispatch with `--repo jikig-ai/soleur --ref main` (the printed commands name the workflow file and `--ref main`; add the
+`--repo` flag when you are not standing in the checkout). A dispatch from another ref applies that branch to production and
+leaves the gap open.
+
+**Verification.** List the follower's own runs with
+`gh run list --repo jikig-ai/soleur --workflow apply-delivery-gap-follower.yml --limit 5`: it is not started by hand, it runs
+after every completed run of either apply workflow on `main` (`workflow_run`), so the run after your dispatch completes is the
+reconcile that confirms it. The issue closes itself on the next reconcile that sees every listed push delivered (a later run of the
+same workflow, at the push or a descendant, whose `apply` job succeeded) with nothing in flight. For the infra workflow
+the `apply` job alone is not enough: it can end `success` with the SSH-provisioned stage skipped, so delivery also needs
+the step `Terraform apply (SSH-provisioned resources, over the bridge)` to have concluded `success` (read from the same
+jobs response; a missing step counts as not delivered, so a rename of that step leaves rows open and the suite fails
+until the script is updated). `deploy-fix` has no such skip and needs the `apply` job only. The close comment says
+"Every cancelled push seen in the last 7 days now has a delivering run, other than any dropped by a workflow skip
+marker" and that pushes older than 7 days are not examined by this check; it claims nothing else about older pushes. For
+`deploy-fix` rows also run `scripts/check-deploy-script-parity.sh` to confirm the host copy matches.
+
+**Closing is not an acknowledgement.** The follower is stateless: while a row remains inside the 7-day window a new
+issue is filed after you close this one. Comment on the issue rather than editing it: the body is rewritten on every
+refresh. If the follower leaves a comment marked `apply-delivery-gap:aged-out`, no cancelled push remains inside the window
+and none was seen delivered: verify delivery (the parity check above, or the latest apply run) and close the issue by
+hand. `priority/p0-critical` is only ever added automatically; remove it by hand if the new gap is not mid-run.
+
+**First reconcile after the follower merged.** Merging does not fire a reconcile (the follower runs only after an apply run
+completes), and a reconcile examines only the last 7 days. The three incident replays used as fixtures (runs 37964350917,
+37964762496 and 38144232116) predate that cutoff, so none of them is filed on the first reconcile; do not expect the issue to
+appear for them. Any OTHER undelivered cancelled push inside the 7-day window at that moment is filed on the first reconcile
+after the merge, so a first issue that appears is real, not noise.
+
+**The degraded issue** ("infra: apply delivery gap follower degraded", label `apply-delivery-gap-degraded`, plus
+`action-required`) means the follower could not finish a full read, so it cannot tell you the state. It never closes the
+gap issue and never reports "no gap" on a partial read. The workflow run's last line names the reason:
+
+| `::error::apply_delivery_gap_<reason>` | Meaning |
+|---|---|
+| `runs_list_failed`, `jobs_read_failed`, `compare_failed`, `malformed_response` | An Actions API read failed after retries, or returned an unexpected shape. |
+| `run_window_truncated` | More than 10 pages of runs fall inside the 7-day window (the apply workflows are running far above their usual rate). |
+| `trigger_run_not_visible` | The run that fired the follower was not yet listed as completed after 3 reads. |
+| `api_budget_exceeded` | More than 150 jobs and compare reads were needed in one reconcile. |
+| `issue_list_failed`, `issue_write_failed`, `label_failed` | The issue API failed; no issue can be written, so the red run is the only trace. |
+| `degraded_upsert_failed` | The follower could not even file the degraded issue. |
+| `bad_input` | A configuration error in the workflow (rejected before any API call). |
+
+The next step is always `gh run rerun <run-id> --repo jikig-ai/soleur --failed`: every reconcile is a full stateless read, so a re-run is safe.
+The next fully complete reconcile closes the degraded issue by itself.
+
+**Who watches the follower.** Nobody does. A follower failure is a red run only (plus the degraded issue for the read-class
+reasons above, which is how a human learns it is blind). The 12 h `scheduled-terraform-drift` check is a separate detector, not
+a monitor of the follower: it is dispatched by Inngest at 06:00 and 18:00 UTC and runs an untargeted `terraform plan` (so
+latency is up to about 12 h). It detects unapplied Terraform-managed changes, including a changed `deploy-fix` trigger
+(`terraform_data.deploy_pipeline_fix`), but it does not examine individual cancelled pushes, cannot tell which push was
+missed, and does not monitor the follower.
+
+**Flip-evidence count (read-only).** The decision to build the deferred fixes (merge the two workflows, or add a
+re-dispatch follower) needs a count of distinct pushes, not runs. Counting unit: the **SHA**. Every reconcile re-prints a
+`row` notice for each still-undelivered push, so the same SHA appears in many runs: count distinct 40-hex SHAs over 30 days from
+the follower's own logs, deduplicated by `sha`:
+
+```bash
+gh run list --repo jikig-ai/soleur --workflow apply-delivery-gap-follower.yml --limit 1000 --json databaseId,createdAt \
+  --jq '.[] | select(.createdAt >= (now - 30*86400 | todate)) | .databaseId' |
+while read -r id; do
+  gh run view "$id" --repo jikig-ai/soleur --log | grep -E 'row workflow=[a-z-]+ sha=[0-9a-f]{40}'
+done | grep -oE 'sha=[0-9a-f]{40}' | cut -d= -f2 | sort -u | wc -l
+```
+
+The script prints `::notice title=apply-delivery-gap::row workflow=<key> sha=<40hex> class=<c>`, but `gh run view --log` renders
+a workflow command as `##[notice]row workflow=<key> sha=<40hex> class=<c>` (the title is dropped and the `::` spelling never
+appears), so a grep on `apply-delivery-gap::row` returns nothing on a real run. The pattern above anchors on the text after
+the word `row` and matches both spellings (the suite pins it against the script's own output). Run logs are kept for about 90 days. Beyond
+that, fall back to the close comments of past gap issues (`gh issue list --repo jikig-ai/soleur --label apply-delivery-gap
+--state all`): a close comment lists the 7-character SHAs of the pushes that were DELIVERED only, so it undercounts pushes that
+were never delivered or were closed by hand. An issue body is rewritten on every refresh and holds no history; do not count
+from bodies. The ">1 h with deploy impact" half of the bar is read from the live open issue ("Minutes since cancel" column) at
+the time, not reconstructed afterwards. The bar is recorded in ADR-270 (2026-10-23 addendum).

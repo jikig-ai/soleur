@@ -178,21 +178,21 @@ fi
 - If any monitor reports `error` or `missed`: flag with monitor name and status. This is a WARNING, not a blocker — the monitor may have been unhealthy before this deploy.
 - If Sentry API is unreachable or returns non-200: warn and skip (do not block on Sentry outages).
 
-**Graceful degradation:** This check is advisory. A Sentry API failure does not block the postmerge pipeline.
+**Graceful degradation:** advisory; a Sentry API failure does not block the pipeline.
 
 ### Inngest liveness awareness (#6374)
 
-Surface any OPEN inngest-down alarm so the operator is never told "prod is healthy" while the durable trigger layer (armed reminders + all `server/inngest/functions/` crons) is dark. The external watchdog (`scheduled-inngest-health.yml`) files `[ci/inngest-down]` on a confirmed down; this is a cheap read that needs no Sentry token:
+Surface any OPEN inngest-down alarm so the operator is never told "prod is healthy" while the durable trigger layer (armed reminders + all `server/inngest/functions/` crons) is dark. The external watchdog (`scheduled-inngest-health.yml`) files `[ci/inngest-down]` on a confirmed down (deeper probe: `/hooks/inngest-liveness`); this is a cheap read needing no Sentry token:
 
 ```bash
 gh issue list --label ci/inngest-down --state open \
   --json number,title,createdAt --jq '.[] | "#\(.number) \(.title) (opened \(.createdAt))"'
 ```
 
-- If it prints an open issue: surface a one-line advisory — "ADVISORY: inngest reports down (`#<n>`) — armed reminders and scheduled crons may not be firing; the external watchdog is auto-restarting / escalating. Do not assume scheduled work ran." Include it prominently in the Phase 7 report.
-- If empty: silent (no line needed).
+- If it prints an open issue: surface a one-line advisory — "ADVISORY: inngest reports down (`#<n>`) — armed reminders and scheduled crons may not be firing; the external watchdog is auto-restarting / escalating. Do not assume scheduled work ran." Include in the Phase 7 report.
+- If empty: silent.
 
-**Advisory only — never hard-block the turn.** inngest-down does not block all work; the operator retains agency. (An optional deeper probe — `curl` the `/hooks/inngest-liveness` HMAC+CF-Access hook — is available for a live verdict but is not required here; the open-issue read is the cheap default.)
+**Advisory only — never hard-block the turn.** inngest-down does not block all work; the operator retains agency.
 
 ## Phase 3.6: Sentry Error-Count Delta (Fix Efficacy)
 
@@ -307,6 +307,10 @@ single bound PR number. If a deploy bundled multiple PRs, only the bound PR is
 drafted — note in the Phase 7 report that other eligible PRs need the standalone
 catch-up path. `soleur:merge-pr`-only flows bypass this hook by design; the
 recovery is standalone `soleur:feature-tweet #N`.
+
+## Phase 3.9: Alert-Channel Sweep (advisory)
+
+After the deploy verdict, read [references/alert-channel-sweep.md](./references/alert-channel-sweep.md) and run it — a point read of `ci/` issues opened since the merge commit plus Better Stack open incidents, in the Phase-3.5 advisory idiom: report, never hard-block (epic #10390; the always-on arm is `scheduled-betterstack-incident-mirror.yml`, ADR-298). Report vocabulary: `Alert-channel sweep: <clean|verbatim rows|SKIPPED (<cause>)>`.
 
 ## Phase 4: Verify File Freshness
 
@@ -475,15 +479,13 @@ gh api --paginate --slurp "repos/jikig-ai/soleur/issues/<number>/comments?per_pa
 
 `deliver=false` (a registration-only or comment-only push) and a green run with no verdict is
 the expected case. Any `kind=` other than none is reported verbatim with the runbook's next
-action (`knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`);
-this phase reports, it does not block "done".
+action (`knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`).
 
 ## Phase 5.7: Sole-copy protection read-back (path-triggered, REPORT-ONLY)
 
 When the merged PR touched `apps/web-platform/infra/inngest-redis-luks.tf` (`gh pr diff <number> --name-only`), the merge's
 per-merge apply is what delivers the Hetzner delete protection on the Inngest sole-copy volume (#9879, ADR-282), so a green
-merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (no triggering paths)` and continue. This phase
-reports; it never dispatches a production apply on its own.
+merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (no triggering paths)` and continue.
 
 1. **Derive the expected word** (never hard-code it): `git fetch origin main`, then
    `git show <merge-sha>:apps/web-platform/infra/inngest-redis-luks.tf` and read `delete_protection` on
@@ -493,7 +495,7 @@ reports; it never dispatches a production apply on its own.
 2. **Find the merge-SHA run and wait for it:**
    `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --limit 5 --json databaseId,status,conclusion`. An empty
    list right after the merge is retried (every 30 s, up to 10 min), not read as "no run". Watch the id under Monitor
-   (`gh run watch <id>`; never `run_in_background` polling), bounded to about 50 min (the job runs up to 41 min plus queueing
+   (`gh run watch <id>`; never `run_in_background` polling), bounded to about 65 min (the job's `timeout-minutes` is 53, so keep the bound above it; plus queueing
    on the shared concurrency group). `success` is read back. `cancelled`, `timed_out`, `startup_failure`, `skipped`,
    `failure` or no run within the bound mean **not delivered or superseded**: read back anyway (a merge-SHA run can be
    `cancelled` by the shared concurrency group and still have delivered); the read-back is the arbiter.
@@ -524,7 +526,7 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
    `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason='deliver sole-copy protection'`.
    After a go-ahead and the dispatch: note the newest run id first, then
    `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --limit 1 --json databaseId,status`
-   (an empty or unchanged id is stale: retry), watch it under Monitor bounded to about 50 min, then read back again.
+   (an empty or unchanged id is stale: retry), watch it under Monitor bounded to about 65 min (above the apply job's 53-min ceiling), then read back again.
    `success` is read back; `cancelled`, `timed_out`, `startup_failure`, `skipped` or no run within the bound mean not
    delivered or superseded: read back anyway, and if it is still `not-protected` recommend the dispatch again (go-ahead).
 6. **On a `protected` read-back that matches the expected word, and only while ADR-282's status is still `adopting`, file ONE tracking issue** so the status flip does not depend
@@ -574,7 +576,7 @@ git mv <row-path> knowledge-base/project/<root>/archive/$(date +%Y%m%d-%H%M%S)-<
 then open a follow-up PR — archival cannot ride a PR that already merged. **M-row caveat:** an `M` on `specs/<dir>/` can be a
 drive-by edit to a SIBLING feature's in-flight spec — verify the dir belongs to the merged feature first; if not, revert the
 edit (`git checkout origin/main -- <path>` then commit) rather than `git mv`-ing another feature's dir. Like Phases 5.6/5.7
-it is REPORT-ONLY (Phase 5.5 is blocking in CI): it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
+it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
 
 ## Phase 6: Update Issue and Compound
 
@@ -587,6 +589,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - Production health: <PASSED/SKIPPED/FAILED>
 - Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 - Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
+- Alert-channel sweep: <clean/verbatim rows/SKIPPED> (advisory, #10390)
 - File freshness: <PASSED/N files checked>
 - Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 - Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED/UNVERIFIED:capability> (blocking in CI, #5463)
@@ -614,6 +617,7 @@ CI on main: PASSED
 Production health: <PASSED/SKIPPED/FAILED>
 Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
+Alert-channel sweep: <clean/verbatim rows/SKIPPED> (advisory, #10390)
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED/UNVERIFIED:capability> (blocking in CI, #5463)
@@ -630,7 +634,7 @@ per-prerequisite behaviour (skip / warn / poll).
 
 ## Notes
 
-- Always read merged files out of git rather than off the bare repo filesystem — but address them by the **merge commit SHA** (`git show <merge-sha>:<path>`), never by the local `main` ref. `main` is not fast-forwarded as a side effect of a merge, so in a worktree/bare layout it lags and a file the PR ADDED reads as absent. `git fetch origin main` FIRST: the merge SHA is correct but useless if the worktree does not have that object yet, and git reports the shortfall in wording (`exists on disk, but not in <sha>`) that looks like a verdict about the file. See Phase 4.
+- Always read merged files out of git by **merge commit SHA** (`git show <merge-sha>:<path>`), never the local `main` ref — and `git fetch origin main` FIRST (the merge object may be absent locally, and git's `exists on disk, but not in <sha>` wording reads like a file verdict). See Phase 4 for the full doctrine.
 - MCP tools resolve paths from the repo root. Use absolute paths when in a worktree.
 - This skill is designed to run after `soleur:merge-pr` completes. It can also be invoked standalone with a PR number.
 

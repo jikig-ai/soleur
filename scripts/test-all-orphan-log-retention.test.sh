@@ -192,8 +192,9 @@ rc=0
 # env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL: under an agent-run gate the refusal guard would
 # bounce the sandbox run to exit 4 before any suite executes. TEST_GROUP/MODE/
 # SCRIPTS_SHARD/SOLEUR_TEST_FORCE_ALL are the outer run's selection state — an
-# inherited TEST_GROUP=affected narrows the sandbox's own selection to zero
-# suites and the run exits 0 without ever executing the fixture.
+# inherited TEST_GROUP value (a shard, or the TEST_GROUP=affected alias of
+# --affected) perturbs the sandbox's own selection and the run's fixture
+# coverage.
 env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_A/test-all.sh" >"$out" 2>&1 || rc=$?
 
 if [[ "$rc" != "0" ]]; then
@@ -735,24 +736,29 @@ build_sandbox "$SBX_C9" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-c9.log"
 ( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-c9" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C9/test-all.sh" >"$out" 2>&1; wait ) &
 WRAP_PID=$!
-deadline=$(( SECONDS + 15 ))
+deadline=$(( SECONDS + 60 ))
 while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
   sleep 0.2
 done
+# Every wait in this arm is a BOUNDED POLL on a condition, so a generous budget costs
+# nothing on a healthy run and only buys headroom on a starved one (#10649: on a loaded
+# merge_group shard the 1 s watchdog poll and the debounce took >20 s, 31 of 403 runs
+# since the arm landed). Budgets: marker 60 s, death line 90 s, child absence 30 s.
 # Settle past one poll interval before the kill: the retained child
 # snapshot refreshes only once per _RUN_WD_POLL_S, so a suite child born
 # <1 poll before the runner's death is invisible to the reap (its ppid
 # rewrites to init before the watchdog ever sampled it). The mechanism's
 # contract is "children the watchdog OBSERVED are reaped" — the arm must
 # give a live poll time to land, or the kill races the refresh and the
-# child survives the full grace window (measured on a loaded CI shard).
-sleep 3
+# child survives the full grace window (measured on a loaded CI shard). 6 s, not 3:
+# one poll plus a starved scheduler's slack.
+sleep 6
 RUNNER_PID="$(pgrep -P "$WRAP_PID" 2>/dev/null | head -1)"
 if [[ -z "$RUNNER_PID" ]]; then
   fail "could not resolve the runner pid for the untrappable-death arm"
 else
   kill -KILL "$RUNNER_PID" 2>/dev/null
-  deadline=$(( SECONDS + 20 ))
+  deadline=$(( SECONDS + 90 ))
   while ! grep -q 'runner died untrappably' "$out" 2>/dev/null && (( SECONDS < deadline )); do
     sleep 0.2
   done
@@ -767,7 +773,7 @@ else
   # a completed sweep clears it inside ~3s; a truncated sweep (watchdog
   # self-TERM mid-list) leaves it alive for the whole window, so the check
   # still discriminates correctly (#9686).
-  deadline=$(( SECONDS + 10 ))
+  deadline=$(( SECONDS + 30 ))
   leftover=""
   while (( SECONDS < deadline )); do
     leftover="$(pgrep -f "sleep $SLEEPTOK" 2>/dev/null | head -1)"

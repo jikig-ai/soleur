@@ -13,7 +13,7 @@ import {
   LEADER_MAX_TOKENS,
   type AnthropicToolDef,
 } from "./constants";
-import { assemblePromptText } from "./prompt-assembly";
+import { assemblePromptText, sanitizeSourceRef } from "./prompt-assembly";
 
 const TOOLS: AnthropicToolDef[] = [
   {
@@ -76,7 +76,7 @@ export const knowledgeKbDrift: LeaderPromptModule = {
   userPromptTemplate: (input: ClassInput): string => {
     const content = assemblePromptText(input.scrubbedContent ?? "", null);
     return [
-      `KB-drift source-ref: ${input.sourceRef}`,
+      `KB-drift source-ref: ${sanitizeSourceRef(input.sourceRef)}`,
       "",
       "Drift context (PII-scrubbed):",
       content || "(no drift context provided)",

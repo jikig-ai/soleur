@@ -115,6 +115,27 @@ The shell tool's wire name here is **`shell`**, not `bash`; the plugin maps both
 JavaScript rather than a command and are not decided by the Bash guards — a limitation this
 harness shares with the guard scripts' own input contract.
 
+**One canonical gate is absent here, and its consequence is a refusal you cannot talk around.**
+`hooks/operator-stage-approval.sh` is what mints the digest-bound approval receipt a staged
+`--apply` consumes, and no OpenCode surface can both rewrite the command and ask in the same
+decision (ADR-264). So `plugins/soleur/scripts/lib/operator-script.sh`'s `soleur_op_stage_gate`
+finds no receipt and exits **75** (`SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED`). The typed-`yes`
+fallback is gated on `-t 0`/`-t 1` **and** `! soleur_op_in_agent_harness`, which recognises
+`OPENCODE` (alongside `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`), so that arm is closed here too:
+direct `shell` calls have no tty (`fd 0/1/2` are pipes, measured on OpenCode 2.1.2), and even if
+a child allocates a pseudo-terminal (`script`, `python pty`), `OPENCODE` keeps the fallback
+refused because a terminal inside an agent harness is not evidence of a person. **No receipt can
+be minted on this harness**, so a staged `--apply` refuses rather than approving. Nothing is
+approved silently.
+
+A degraded hook decision — a shell call whose `workdir` could not be correlated, or a runtime
+with no `tool.execute.before` surface — is announced on stderr **and** written to the event log
+when `SOLEUR_OPENCODE_EVENT_LOG` names a file (its parent directory must exist; unset means no
+log). Whether your terminal surfaces plugin stderr is not something this adapter measured, so
+arm the log when you need certainty. A `shell` call whose `workdir` cannot be used is
+**prompted** rather than run unchecked — the guards still run, against the session directory,
+and only their declining becomes the prompt.
+
 The post-compaction re-read is **armed, not guaranteed**, unlike Codex and Devin:
 `ctx.session.hook("compaction")` sets state and the next `ctx.session.hook("context")`
 re-injects the rule corpus plus the re-read directive. §12.3 captured that `context` fire
@@ -124,3 +145,29 @@ notice, re-read `AGENTS.rules.md` yourself rather than assuming the injection ha
 What is not reproduced at all is `compaction-state.sh`'s transcript-bounded window
 bookkeeping, which counts `compact_boundary` records in a Claude Code transcript this
 harness has no equivalent of.
+
+## Uninstall / removal
+
+There is **no `--uninstall` flag** on `install-opencode-adapter.ts` today (tracked in
+#10591 item 4), so removal is done by hand against the config dir the installer wrote to.
+Four things were created; remove all four, because a partial removal is worse than none:
+
+1. **The generated `agents/` and `commands/` stubs.** These directories are **shared** with
+   the operator, so delete only the files whose body names the canonical plugin path (the
+   stubs' signature) — never the whole directory.
+2. **`<configdir>/soleur/`** — the installed instructions tree.
+3. **`<configdir>/plugins/soleur-plugin.ts`** — the hook carrier. Leaving it behind keeps
+   Soleur live after you meant to remove it: it still registers the Bash guards and still
+   re-injects the rule corpus on every session. It does **not** fail closed by itself — the
+   `guard-did-not-run` deny fires only when a guard *script* cannot be spawned (the checkout
+   moved or was removed, or `__SOLEUR_PLUGIN_ROOT__` never resolved), which is a checkout
+   problem rather than a leftover-file one.
+4. **The `skills` and `instructions` entries the installer added to `<configdir>/opencode.json`.**
+   Edit the file and drop those two keys; leaving them behind points OpenCode at a tree that
+   no longer exists.
+
+Do **not** use `install-opencode-adapter.ts --check` to confirm removal. It is an
+idempotence check for an *installed* adapter: it reports `MISSING` for every path it expects
+and exits 1, so a correct removal is indistinguishable from a broken install. Verify by hand
+instead — the four paths above are absent, and a fresh OpenCode session no longer
+re-injects the Soleur rule corpus or emits a `[soleur] guard-run-failure` line.

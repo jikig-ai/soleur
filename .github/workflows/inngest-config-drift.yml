@@ -118,7 +118,7 @@ jobs:
           _summ_row() {
             local _r="$1" _name _fields
             _name="$(printf '%s' "$_r" | grep -oE 'SOLEUR_INFRA_PULL_[A-Z_]+' | head -1 || true)"
-            _fields="$(printf '%s' "$_r" | grep -oE '(version|sha256|reason|verify|rejver|offered|count)=[A-Za-z0-9_.:/-]+' | tr '\n' ' ' || true)"
+            _fields="$(printf '%s' "$_r" | grep -oE '(version|sha256|reason|verify|rejver|offered|count|member|detail)=[A-Za-z0-9_.:/-]+' | tr '\n' ' ' || true)"
             printf '%s' "${_name:-<unparsed>} ${_fields}"
           }
           MARKER_DISP="$(_summ_row "${MARKER:-}")"

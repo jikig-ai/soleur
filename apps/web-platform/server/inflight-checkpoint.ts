@@ -474,8 +474,10 @@ export async function restoreInflightCheckpoint(
 
 // Erasure cascade (Art. 17): checkpoint refs live ON the workspace clone, so
 // account deletion's `deleteWorkspace(userId)` (server/account-delete.ts) — which
-// removes the whole clone directory — reaps them with zero extra code for the
-// solo case (`userId === workspaces.id`). Per-conversation cleanup is
+// removes the whole clone directory under EVERY tenant root (`WORKSPACES_ROOT/<id>`
+// and `WORKTREE_ROOT/<id>`, #8211), so the live clone is covered with the git-data
+// split on — reaps them with zero extra code for the solo case
+// (`userId === workspaces.id`). Per-conversation cleanup is
 // consume-on-restore (the `update-ref -d` after a successful restore above). A
 // dedicated ref-prune for orphaned refs (a `disconnected` conversation never
 // resumed AND never deleted) is DEFERRED behind a ref-count gauge — refs

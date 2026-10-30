@@ -688,7 +688,7 @@ resource "hcloud_server" "registry" {
 # --- zot storage block volume ----------------------------------------------------------
 # The OCI blobs (both platform images + backfilled release tags + cosign .sig referrers)
 # live here — never tmpfs (a wiped registry breaks cold-boot pulls). dedupe is on, so a
-# small volume is ample. Shape mirrors hcloud_volume.git_data.
+# small volume is ample. Shape mirrors hcloud_volume.git_data_luks (git-data-luks.tf).
 resource "hcloud_volume" "registry" {
   name     = "soleur-registry-store"
   size     = var.registry_volume_size

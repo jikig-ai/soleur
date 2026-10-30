@@ -808,3 +808,573 @@ describe("Guard 1c (#10552) -- proposed_diff_unified comes from the derived diff
     expect(stripped.split("TARGET_ALLOW_RE.test(").length - 1).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Guard 1d -- the promotion quorum is ONE named constant, and the three places that used to
+// spell the number (the phase-1 prompt, the `Threshold-Hit` trailer, the drafter's refusal)
+// all read it. A census over the parse tree, never a list of today's call sites.
+//
+// What this pins and what it does not: it pins that the code reads the constant everywhere
+// and that the refusal has exactly one emit site. It does not pin the VALUE (the value row in
+// cron-compound-promote-draft-edit.test.ts does, and the ADR-092 Amendment names it).
+// ---------------------------------------------------------------------------
+
+// window-assembly: censusQuorum -- complete against the whole module, parsed once: every
+// VariableDeclaration, TemplateExpression, BinaryExpression and `reason` PropertyAssignment
+// in the file is visited, so a second declaration or emit site ANYWHERE in the module is
+// counted, not only those in today's functions.
+export function censusQuorum(src: string): {
+  declaredValue: number;
+  promptQuorumSpans: number;
+  promptHasNumericThreshold: boolean;
+  trailerQuorumSpans: number;
+  trailerHasNumericDenominator: boolean;
+  comparisons: number;
+  /** The comparison IS the `if` condition (no `&&`/`||`) and the `if` is a top-level statement of `draftAdditiveEdit`. */
+  gateIsPlain: boolean;
+  /** The gate's body directly returns `{ ok: false, reason: "quorum-not-met", sourceCount }`. */
+  gateReturnsRefusal: boolean;
+  /** Only pure in-memory calls precede the gate in its function, and >= 2 readEditTarget(/post( calls follow it. */
+  gateBeforeIo: boolean;
+  /** The quorum span in the phase-1 prompt follows a `>=` (the sense of the threshold). */
+  promptSenseOk: boolean;
+  /** The prompt's second line reads "<quorum> or more distinct" from the constant. */
+  promptOrMoreOk: boolean;
+  emits: number;
+} {
+  const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+  const decls: number[] = [];
+  let promptQuorumSpans = 0;
+  let promptHasNumericThreshold = false;
+  let promptSeen = 0;
+  let trailerQuorumSpans = 0;
+  let trailerHasNumericDenominator = false;
+  let trailerSeen = 0;
+  let comparisons = 0;
+  let gateIsPlain = false;
+  let gateReturnsRefusal = false;
+  let gateBeforeIo = false;
+  let promptSenseOk = false;
+  let promptOrMoreOk = false;
+  let shadows = 0;
+  let emits = 0;
+  const isQuorum = (e: ts.Node): boolean => ts.isIdentifier(e) && e.text === "PROMOTION_QUORUM";
+  const pieces = (t: ts.TemplateExpression): string[] => [t.head.text, ...t.templateSpans.map((s) => s.literal.text)];
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "PROMOTION_QUORUM") {
+      decls.push(n.initializer && ts.isNumericLiteral(n.initializer) ? Number(n.initializer.text) : Number.NaN);
+    }
+    // A parameter or destructured binding of the same name would shadow the constant inside the gate.
+    if ((ts.isParameter(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name) && n.name.text === "PROMOTION_QUORUM") {
+      shadows++;
+    }
+    if (ts.isTemplateExpression(n)) {
+      for (const span of n.templateSpans) {
+        if (isQuorum(span.expression) && span.literal.text.startsWith(" or more distinct")) promptOrMoreOk = true;
+      }
+      if (n.head.text.includes("clustering agent")) {
+        promptSeen++;
+        promptQuorumSpans += n.templateSpans.filter((s) => isQuorum(s.expression)).length;
+        n.templateSpans.forEach((span, i) => {
+          const before = i === 0 ? n.head.text : n.templateSpans[i - 1].literal.text;
+          if (isQuorum(span.expression) && before.endsWith(">=")) promptSenseOk = true;
+        });
+        if (pieces(n).some((p) => />=\s*\d/.test(p))) promptHasNumericThreshold = true;
+      }
+      if (n.head.text.startsWith("Threshold-Hit:")) {
+        trailerSeen++;
+        const last = n.templateSpans[n.templateSpans.length - 1];
+        if (last && isQuorum(last.expression)) trailerQuorumSpans++;
+        if (pieces(n).some((p) => /\/\s*\d/.test(p))) trailerHasNumericDenominator = true;
+      }
+    }
+    // Either operand order: `sources.length < Q` and `Q > sources.length` are the same gate.
+    if (
+      ts.isBinaryExpression(n) &&
+      ((n.operatorToken.kind === ts.SyntaxKind.LessThanToken &&
+        n.left.getText(sf) === "sources.length" &&
+        isQuorum(n.right)) ||
+        (n.operatorToken.kind === ts.SyntaxKind.GreaterThanToken &&
+          n.right.getText(sf) === "sources.length" &&
+          isQuorum(n.left)))
+    ) {
+      comparisons++;
+      // The gate must be (1) an `if` whose condition IS the comparison (no `&&`/`||` that could
+      // skip it for a subset of clusters), (2) a TOP-LEVEL statement of `draftAdditiveEdit`
+      // (not nested under another condition, not in a helper or a never-called closure),
+      // (3) returning the refusal as a direct statement of its body, with `ok: false`, the
+      // reason literal and `sourceCount`, and (4) preceded in that function only by pure
+      // statements: every call before it must be on an allowlist of in-memory helpers, so a
+      // new read or model call placed above it (under any spelling) turns this RED. At least
+      // two `readEditTarget(`/`post(` calls must follow it, so renaming the I/O cannot make
+      // the "before" scan vacuous.
+      const unparen = (e: ts.Expression): ts.Expression => (ts.isParenthesizedExpression(e) ? unparen(e.expression) : e);
+      let gate: ts.Node | undefined = n;
+      while (gate && !ts.isIfStatement(gate)) gate = gate.parent;
+      let fn: ts.Node | undefined = n;
+      while (fn && !ts.isFunctionDeclaration(fn) && !ts.isFunctionExpression(fn) && !ts.isArrowFunction(fn)) fn = fn.parent;
+      if (gate && ts.isIfStatement(gate) && fn && ts.isFunctionDeclaration(fn) && fn.body) {
+        const conditionIsComparison = unparen(gate.expression) === n;
+        const inDrafter = fn.name?.text === "draftAdditiveEdit" && gate.parent === fn.body;
+        gateIsPlain = conditionIsComparison && inDrafter;
+        const then = gate.thenStatement;
+        const thenStmts = ts.isBlock(then) ? [...then.statements] : [then];
+        gateReturnsRefusal = thenStmts.some((st) => {
+          if (!ts.isReturnStatement(st) || !st.expression || !ts.isObjectLiteralExpression(st.expression)) return false;
+          const props = new Map<string, string>();
+          for (const p of st.expression.properties) {
+            if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) props.set(p.name.text, p.initializer.getText(sf));
+          }
+          return (
+            props.get("ok") === "false" && /^["']quorum-not-met["']$/.test(props.get("reason") ?? "") && props.has("sourceCount")
+          );
+        });
+        const PURE_CALLS = new Set(["corpusSummaries.get", "sources.some", "sources.push"]);
+        const gateIdx = fn.body.statements.indexOf(gate);
+        let pure = gateIdx >= 0;
+        let ioAfter = 0;
+        const scanCalls = (m: ts.Node, before: boolean): void => {
+          if (ts.isCallExpression(m)) {
+            const callee = m.expression.getText(sf);
+            if (before && !PURE_CALLS.has(callee)) pure = false;
+            if (!before && (callee === "readEditTarget" || callee === "post")) ioAfter++;
+          }
+          m.forEachChild((c) => scanCalls(c, before));
+        };
+        fn.body.statements.forEach((st, i) => {
+          if (i < gateIdx) scanCalls(st, true);
+          else if (i > gateIdx) scanCalls(st, false);
+        });
+        gateBeforeIo = pure && ioAfter >= 2;
+      }
+    }
+    if (
+      ts.isPropertyAssignment(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === "reason" &&
+      (ts.isStringLiteral(n.initializer) || ts.isNoSubstitutionTemplateLiteral(n.initializer)) &&
+      n.initializer.text === "quorum-not-met"
+    ) {
+      emits++;
+    }
+    n.forEachChild(visit);
+  };
+  visit(sf);
+  if (decls.length !== 1) throw new Error(`expected exactly 1 PROMOTION_QUORUM declaration, found ${decls.length}`);
+  if (Number.isNaN(decls[0])) throw new Error("PROMOTION_QUORUM must be initialised with a numeric literal");
+  if (shadows > 0) throw new Error(`PROMOTION_QUORUM is shadowed by ${shadows} parameter/binding name(s)`);
+  if (promptSeen !== 1) throw new Error(`expected exactly 1 phase-1 prompt template, found ${promptSeen}`);
+  if (trailerSeen !== 1) throw new Error(`expected exactly 1 Threshold-Hit template, found ${trailerSeen}`);
+  return {
+    declaredValue: decls[0],
+    promptQuorumSpans,
+    promptHasNumericThreshold,
+    trailerQuorumSpans,
+    trailerHasNumericDenominator,
+    comparisons,
+    gateIsPlain,
+    gateReturnsRefusal,
+    gateBeforeIo,
+    promptSenseOk,
+    promptOrMoreOk,
+    emits,
+  };
+}
+
+describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const read = () => readFileSync(SRC_PATH, "utf-8");
+
+  it("one numeric declaration; the prompt, the trailer and the drafter's comparison each read it; exactly one emit site", () => {
+    const c = censusQuorum(read());
+    expect(c.declaredValue).toBeGreaterThan(0);
+    expect(c.promptQuorumSpans).toBe(1);
+    expect(c.promptHasNumericThreshold).toBe(false);
+    expect(c.trailerQuorumSpans).toBe(1);
+    expect(c.trailerHasNumericDenominator).toBe(false);
+    expect(c.comparisons).toBe(1);
+    expect(c.emits).toBe(1);
+    // The wire, not only the endpoints: the comparison IS the `if` condition of a top-level
+    // statement of draftAdditiveEdit, that `if` directly returns the refusal, only pure
+    // in-memory calls precede it, and the prompt says `>=` Q and "Q or more distinct".
+    expect(c.gateIsPlain).toBe(true);
+    expect(c.gateReturnsRefusal).toBe(true);
+    expect(c.gateBeforeIo).toBe(true);
+    expect(c.promptSenseOk).toBe(true);
+    expect(c.promptOrMoreOk).toBe(true);
+  });
+
+  it("quorum-not-met is NOT an edit-* member: EDIT_REFUSAL_REASONS stays at seven", () => {
+    const { declared } = censusEditReasons(read());
+    expect(declared).toHaveLength(7);
+    expect(declared).not.toContain("quorum-not-met");
+  });
+
+  // Each mutation is an in-file row (a PR-body table does not run in CI), one `it` per member
+  // so a failure names the member. The anchor must LAND or the row is vacuous.
+  const mutate = (anchor: string, replacement: string): string => {
+    const src = read();
+    expect(src, `anchor must land: ${anchor}`).toContain(anchor);
+    const out = src.replace(anchor, replacement);
+    expect(out).not.toBe(src);
+    return out;
+  };
+
+  it("mutation: the phase-1 prompt back to a literal threshold is RED", () => {
+    const c = censusQuorum(mutate("(each with >=${PROMOTION_QUORUM} source learnings", "(each with >=5 source learnings"));
+    expect(c.promptQuorumSpans === 1 && !c.promptHasNumericThreshold).toBe(false);
+  });
+
+  it("mutation: the trailer denominator back to a literal /5 is RED", () => {
+    const c = censusQuorum(mutate("/${PROMOTION_QUORUM}`,", "/5`,"));
+    expect(c.trailerQuorumSpans === 1 && !c.trailerHasNumericDenominator).toBe(false);
+  });
+
+  it("mutation: deleting the drafter's comparison is RED", () => {
+    const c = censusQuorum(mutate("sources.length < PROMOTION_QUORUM", "sources.length < 0"));
+    expect(c.comparisons).toBe(0);
+  });
+
+  it("mutation: the gate moved below readEditTarget is RED", () => {
+    const c = censusQuorum(
+      mutate(
+        "  if (sources.length < PROMOTION_QUORUM) {",
+        // Parsed, never executed: the arguments are irrelevant (and must not spell the repo-root
+        // helper name, which repo-wide-containment reads as an escape from the app).
+        "  const _t0 = await readEditTarget(cluster.target_path, cluster.target_path);\n  if (sources.length < PROMOTION_QUORUM) {",
+      ),
+    );
+    expect(c.comparisons).toBe(1);
+    expect(c.gateBeforeIo).toBe(false);
+  });
+
+  it("mutation: a gate that skips a subset of clusters (extra && operand) is RED", () => {
+    const c = censusQuorum(
+      mutate("sources.length < PROMOTION_QUORUM", "sources.length < PROMOTION_QUORUM && cluster.rationale.length > 0"),
+    );
+    expect(c.comparisons).toBe(1);
+    expect(c.gateIsPlain).toBe(false);
+  });
+
+  it("mutation: the gate nested under another condition is RED", () => {
+    const c = censusQuorum(
+      mutate(
+        "  if (sources.length < PROMOTION_QUORUM) {",
+        "  if (cluster.rationale.length > 0) if (sources.length < PROMOTION_QUORUM) {",
+      ),
+    );
+    expect(c.gateIsPlain).toBe(false);
+  });
+
+  it("mutation: an I/O call placed above the gate under another spelling is RED", () => {
+    for (const spelling of ["await args.post({})", "await readFile(cluster.target_path)", "await (0, readEditTarget)(cluster.target_path, '')"]) {
+      const c = censusQuorum(
+        mutate("  if (sources.length < PROMOTION_QUORUM) {", `  ${spelling};\n  if (sources.length < PROMOTION_QUORUM) {`),
+      );
+      expect(c.gateBeforeIo, spelling).toBe(false);
+    }
+  });
+
+  it("mutation: the I/O helpers renamed (so 'before' would be vacuous) is RED", () => {
+    const c = censusQuorum(read().replaceAll("readEditTarget(", "readTarget(").replaceAll("await post({", "await send({"));
+    expect(c.gateBeforeIo).toBe(false);
+  });
+
+  it("mutation: the gate's body emptied (no refusal returned) is RED", () => {
+    const c = censusQuorum(
+      mutate(
+        'return { ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sources.length };',
+        "void 0;",
+      ),
+    );
+    expect(c.gateReturnsRefusal).toBe(false);
+  });
+
+  it("mutation: a refusal-shaped string returned from an unrelated place is not the gate's refusal", () => {
+    const c = censusQuorum(
+      mutate(
+        'return { ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sources.length };',
+        'return { ok: true, diff: "quorum-not-met" };',
+      ),
+    );
+    expect(c.gateReturnsRefusal).toBe(false);
+  });
+
+  it("mutation: the second prompt line's sense changed ('or more' becomes 'or fewer') is RED", () => {
+    const c = censusQuorum(mutate("${PROMOTION_QUORUM} or more distinct ones", "${PROMOTION_QUORUM} or fewer distinct ones"));
+    expect(c.promptOrMoreOk).toBe(false);
+  });
+
+  it("dispatch: a parameter that shadows the constant THROWS", () => {
+    expect(() => censusQuorum(read() + "\nexport function _s(PROMOTION_QUORUM: number) { return PROMOTION_QUORUM; }\n")).toThrow(/shadowed/);
+  });
+
+  it("mutation: the prompt's sense flipped (>= becomes >) is RED", () => {
+    const c = censusQuorum(mutate("(each with >=${PROMOTION_QUORUM} source learnings", "(each with >${PROMOTION_QUORUM} source learnings"));
+    expect(c.promptSenseOk).toBe(false);
+  });
+
+  it("refactor-tolerance: the operand-swapped spelling of the same gate stays GREEN", () => {
+    const c = censusQuorum(mutate("sources.length < PROMOTION_QUORUM", "PROMOTION_QUORUM > sources.length"));
+    expect(c.comparisons).toBe(1);
+    expect(c.gateIsPlain).toBe(true);
+    expect(c.gateReturnsRefusal).toBe(true);
+    expect(c.gateBeforeIo).toBe(true);
+  });
+
+  it("mutation: a second emit site for the reason is RED", () => {
+    const c = censusQuorum(read() + '\nexport const _second = { reason: "quorum-not-met" };\n');
+    expect(c.emits).toBe(2);
+  });
+
+  it("mutation: the emit site removed is RED", () => {
+    // Anchor on the return, not the bare literal: the QuorumRefusal TYPE also spells it.
+    const c = censusQuorum(mutate('return { ok: false, reason: "quorum-not-met"', 'return { ok: false, reason: "edit-invalid"'));
+    expect(c.emits).toBe(0);
+  });
+
+  it("dispatch: zero or two declarations THROW, never read clean", () => {
+    // Anchors are derived from the source (any numeric value), never a literal 5: the census
+    // must keep working if the constant legitimately changes (the value pin owns the value).
+    const decl = /export const PROMOTION_QUORUM = \d+;/;
+    expect(read()).toMatch(decl);
+    expect(() => censusQuorum(read().replace(decl, ""))).toThrow(/found 0/);
+    expect(() => censusQuorum(read() + "\nconst PROMOTION_QUORUM = 4;\n")).toThrow(/found 2/);
+    expect(() => censusQuorum(read().replace(decl, "export const PROMOTION_QUORUM = Number('5');"))).toThrow(/numeric literal/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #10550 -- the gated create arm's censuses.
+//
+//   Guard 1e  CREATE_REFUSAL_CLASSES is declared once and every member is EMITTED by a refusal site in the create
+//             modules (and every emitted class is declared): a dead class or an undeclared one is RED.
+//   Guard 3d  The create steps' callbacks accumulate nothing (they return a verdict); every outcome is recorded in
+//             the handler body from the MEMOIZED return, so a replay still reports it.
+//   Guard 1f  `create-refused` has exactly one emit site in the handler, every create refusal in the arm goes through
+//             a mirroring helper (no bare returned refusal), and the marker spreads the create fields only where the
+//             arm could have run.
+// ---------------------------------------------------------------------------
+const SERVER_DIR = join(__dirname, "..", "..", "..", "server");
+const CREATE_MODULE = join(SERVER_DIR, "compound-promote-create.ts");
+const CREATE_ARM = join(SERVER_DIR, "compound-promote-create-arm.ts");
+const CREATE_GATES = join(SERVER_DIR, "compound-promote-create-gates.ts");
+
+/**
+ * window-assembly: censusCreateClasses -- complete against the three create modules, each parsed whole: every
+ * CallExpression whose callee is one of the refusal constructors and whose first argument is a string literal, plus
+ * every `class: "<literal>"` property of a returned object. The declared side is the array literal assigned to
+ * `CREATE_REFUSAL_CLASSES`. Throws when either side is empty so a census that found nothing can never read clean.
+ */
+export function censusCreateClasses(sources: string[]): { declared: string[]; emitted: string[] } {
+  const declared: string[] = [];
+  const emitted: string[] = [];
+  const CTORS = new Set(["refuse", "refusal", "fail"]);
+  for (const src of sources) {
+    const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+    const visit = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "CREATE_REFUSAL_CLASSES" && n.initializer) {
+        let init: ts.Node = n.initializer;
+        if (ts.isAsExpression(init)) init = init.expression;
+        if (ts.isArrayLiteralExpression(init)) {
+          for (const el of init.elements) if (ts.isStringLiteral(el)) declared.push(el.text);
+        }
+      }
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && CTORS.has(n.expression.text)) {
+        const a0 = n.arguments[0];
+        if (a0 && (ts.isStringLiteral(a0) || ts.isNoSubstitutionTemplateLiteral(a0))) emitted.push(a0.text);
+      }
+      if (ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && n.name.text === "class" && ts.isStringLiteral(n.initializer)) {
+        emitted.push(n.initializer.text);
+      }
+      n.forEachChild(visit);
+    };
+    visit(sf);
+  }
+  if (declared.length === 0) throw new Error("census found no declared create refusal classes");
+  if (emitted.length === 0) throw new Error("census found no emitted create refusal classes");
+  return { declared, emitted };
+}
+
+describe("Guard 1e (#10550) -- every create refusal class is declared once and emitted by a site", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const read = () => [CREATE_MODULE, CREATE_ARM, CREATE_GATES].map((f) => readFileSync(f, "utf-8"));
+
+  it("the declared set equals the emitted set, in both directions (the gates' `class:` literals included)", () => {
+    const { declared, emitted } = censusCreateClasses(read());
+    expect(declared).toHaveLength(13); // the single pin of the class-vocabulary length (the marker suite does not repeat it)
+    expect(new Set(declared).size).toBe(13);
+    expect(sortedUnique(emitted)).toEqual(sortedUnique(declared));
+  });
+
+  it("mutation: a declared-but-unemitted class is RED", () => {
+    const [create, arm, gates] = read();
+    const mutated = create.replace('"stub-drift",\n  "persist",', '"stub-drift",\n  "persist",\n  "ghost-class",');
+    expect(mutated).not.toBe(create); // the mutation must LAND, or the row is vacuous
+    const { declared, emitted } = censusCreateClasses([mutated, arm, gates]);
+    expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
+  });
+
+  it("mutation: an emitted-but-undeclared class is RED", () => {
+    const [create, arm, gates] = read();
+    const mutated = arm.replace('fail("week-cap", "no-slot"', 'fail("ghost-class", "no-slot"');
+    expect(mutated).not.toBe(arm);
+    const { declared, emitted } = censusCreateClasses([create, mutated, gates]);
+    expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
+  });
+
+  it("mutation: retargeting the ONLY week-cap site leaves week-cap declared-but-unemitted (RED)", () => {
+    const [create, arm, gates] = read();
+    const mutated = arm.replace('fail("week-cap", "no-slot"', 'fail("budget", "no-slot"');
+    expect(mutated).not.toBe(arm);
+    const { declared, emitted } = censusCreateClasses([create, mutated, gates]);
+    expect(sortedUnique(declared).filter((c) => !emitted.includes(c))).toEqual(["week-cap"]);
+  });
+
+  it("dispatch: a census finding nothing THROWS, never reads clean", () => {
+    expect(() => censusCreateClasses(["export const x = 1;\n"])).toThrow(/found no declared/);
+    expect(() => censusCreateClasses(['export const CREATE_REFUSAL_CLASSES = ["a"] as const;\n'])).toThrow(/found no emitted/);
+  });
+
+  it("refactor-tolerance: the same refusal through the other constructor spelling stays GREEN", () => {
+    const { emitted } = censusCreateClasses([
+      'export const CREATE_REFUSAL_CLASSES = ["a", "b"] as const;\nconst r = refuse("a", "d");\nconst q = refusal("b", "d");\n',
+    ]);
+    expect(sortedUnique(emitted)).toEqual(["a", "b"]);
+  });
+});
+
+/** The text of every `step.run("<name>", ...)` callback body in the handler (until the matching close of the call). */
+function stepBodies(src: string, name: string): string[] {
+  const handler = src.slice(src.indexOf("export async function cronCompoundPromoteHandler"));
+  const out: string[] = [];
+  let from = 0;
+  const needle = `step.run("${name}"`;
+  for (;;) {
+    const i = handler.indexOf(needle, from);
+    if (i === -1) break;
+    let depth = 0;
+    let j = handler.indexOf("(", i);
+    const start = j;
+    for (; j < handler.length; j++) {
+      if (handler[j] === "(") depth++;
+      else if (handler[j] === ")") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    out.push(
+      handler
+        .slice(start, j + 1)
+        .split("\n")
+        .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+        .join("\n"),
+    );
+    from = j;
+  }
+  return out;
+}
+
+describe("Guard 3d (#10550) -- the create steps accumulate nothing; outcomes are recorded from the memoized return", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const MUTATED = ["refusals.push(", "refusalDetail.push(", "clustersOpened++", "ledgerSuppressed++", "createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createOffered =", "createArmRan ="];
+
+  it.each(["create-propose", "create-persist"])("%s: exactly one step, and no handler-scope accumulator is mutated inside its callback", (name) => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const bodies = stepBodies(src, name);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].length).toBeGreaterThan(40); // non-vacuity: the window is the callback, not an empty span
+    expect(MUTATED.filter((m) => bodies[0].includes(m))).toEqual([]);
+  });
+
+  it("non-vacuity: the accumulation DOES happen, in the handler body outside both callbacks", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const inside = [...stepBodies(src, "create-propose"), ...stepBodies(src, "create-persist")].join("\n");
+    for (const m of ["createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createOffered =", "createArmRan =", "refusals.push("]) {
+      expect(src).toContain(m);
+      expect(inside).not.toContain(m);
+    }
+  });
+
+  it("mutation: a createOutcome assignment moved INTO the create-propose callback is caught", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const mutated = src.replace('return runCreateProposeStep({', 'createOutcome = "refused";\n        return runCreateProposeStep({');
+    expect(mutated).not.toBe(src);
+    expect(stepBodies(mutated, "create-propose")[0]).toContain("createOutcome =");
+  });
+
+  it("mutation: a createOffered assignment moved INTO the create-propose callback is caught (a replay would lose the field)", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const mutated = src.replace('return runCreateProposeStep({', 'createOffered = 0;\n        return runCreateProposeStep({');
+    expect(mutated).not.toBe(src);
+    expect(stepBodies(mutated, "create-propose")[0]).toContain("createOffered =");
+  });
+
+  it("dispatch: a handler with no / two create-propose steps is detected by the count, never read clean", () => {
+    expect(stepBodies("export async function cronCompoundPromoteHandler() {}", "create-propose")).toHaveLength(0);
+    const twice = 'export async function cronCompoundPromoteHandler() { await step.run("create-propose", () => 1); await step.run("create-propose", () => 2); }';
+    expect(stepBodies(twice, "create-propose")).toHaveLength(2);
+  });
+});
+
+describe("Guard 1f (#10550) -- one emit site for `create-refused`, every create refusal is mirrored, the marker spreads where the arm ran", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const code = (f: string) => readFileSync(f, "utf-8").split("\n").map((l) => l.replace(/^\s*\/\/.*$/, "").replace(/^\s*\*.*$/, "")).join("\n");
+
+  it("the handler has exactly ONE `create-refused` literal (the refusals[] push); the arm owns the Sentry op constant once", () => {
+    const handler = code(SRC_PATH);
+    expect(handler.split('"create-refused"').length - 1).toBe(1);
+    expect(handler).toMatch(/refusals\.push\("create-refused"\)/);
+    const arm = code(CREATE_ARM);
+    expect(arm.split('CREATE_REFUSED_OP = "create-refused"').length - 1).toBe(1);
+    expect(arm.split('"create-refused"').length - 1).toBe(1);
+  });
+
+  it("no bare `return refusal(` / `return refuse(` in the arm: every returned refusal passes a mirroring helper", () => {
+    const arm = code(CREATE_ARM);
+    expect(arm).not.toMatch(/return refusal\(/);
+    expect(arm).not.toMatch(/return refuse\(/);
+    // non-vacuity: the helpers are used many times
+    expect((arm.match(/\bfail\(|\bmirrored\(/g) ?? []).length).toBeGreaterThanOrEqual(20);
+  });
+
+  it("every returned refusal in the arm's step bodies is one of the helper spellings (no `return {` with kind refused)", () => {
+    const arm = code(CREATE_ARM);
+    expect(arm).not.toMatch(/return \{ kind: "refused"/);
+  });
+
+  it("the three markers that can follow the arm spread createMarker(); the early terminal rows do not", () => {
+    const handler = code(SRC_PATH);
+    expect(handler.split("...createMarker()").length - 1).toBe(3);
+    for (const status of ['status: "disabled"', 'status: "deduped"', 'status: "week-cap-reached"', 'status: "empty-corpus"']) {
+      const i = handler.indexOf(`emitOutcomeMarker({ trigger, run_id: runId, ${status}`);
+      expect(i, status).toBeGreaterThan(-1);
+      expect(handler.slice(i, handler.indexOf(");", i))).not.toContain("createMarker");
+    }
+  });
+
+  it("createMarker() returns nothing unless the arm ran (the scheduled path gains no field)", () => {
+    const handler = code(SRC_PATH);
+    const i = handler.indexOf("const createMarker = ");
+    expect(i).toBeGreaterThan(-1);
+    expect(handler.slice(i, i + 140)).toMatch(/if \(!createArmRan\) return \{\};/);
+  });
+
+  it("the arm sets createArmRan only inside runCreateArm, which is called under `allowCreate` at both sites", () => {
+    const handler = code(SRC_PATH);
+    expect(handler.split("createArmRan = true").length - 1).toBe(1);
+    const calls = [...handler.matchAll(/await runCreateArm\(\)/g)];
+    expect(calls).toHaveLength(2);
+    for (const m of calls) {
+      expect(handler.slice(Math.max(0, (m.index ?? 0) - 60), m.index)).toMatch(/allowCreate/);
+    }
+  });
+});

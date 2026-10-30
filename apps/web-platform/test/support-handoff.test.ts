@@ -31,6 +31,8 @@ vi.mock("../server/sandbox", () => ({ isPathInWorkspace: vi.fn(() => true) }));
 vi.mock("../server/tool-tiers", () => ({
   getToolTier: vi.fn(() => "auto-approve"),
   buildGateMessage: vi.fn(() => "Permission needed"),
+  buildGateCard: () => ({ card: "Permission needed" }),
+  pluginToolPrefix: (server: string) => `mcp__plugin_soleur_${server}__`,
 }));
 vi.mock("../server/review-gate", () => ({
   extractReviewGateInput: vi.fn(() => ({

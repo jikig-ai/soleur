@@ -85,10 +85,13 @@ A critical finding sets the Sentry heartbeat (`scheduled-ruleset-bypass-audit`)
 to failing. A divergence-only finding still files the issue (so the stale
 snapshot gets reconciled) but keeps the heartbeat green — merge-security is
 intact. Guard errors (canonical unreadable, ruleset missing, token under-scoped)
-throw and surface via the Sentry monitor + `reportSilentFallback` — **no SSH is
+throw and surface via `reportSilentFallback` — **no SSH is
 needed to see them** (per `hr-no-ssh-fallback-in-runbooks`; observability layer:
-Sentry → the `scheduled-ruleset-bypass-audit` monitor, and Better Stack logs for
-the `cron-ruleset-bypass-audit` function).
+the `reportSilentFallback` Sentry issue (vendor-default high-priority route) +
+the twice-daily `infra/github` terraform-plan drift leg, which independently
+detects out-of-band ruleset edits — the `scheduled-ruleset-bypass-audit` monitor
+was destroyed by the #6590 PR-B prune and the heartbeat void-posts by design,
+spec NG4; Better Stack logs still carry the `cron-ruleset-bypass-audit` function).
 
 ## CLA Required ruleset drift (#6061)
 
@@ -226,8 +229,9 @@ The ruleset still exists at id `14145388` but `enforcement` is `disabled` or
 
 ### Guard malfunction (the audit itself errored)
 
-The audit threw instead of completing — surfaced via the Sentry monitor
-`scheduled-ruleset-bypass-audit` and `reportSilentFallback`, not a drift issue.
+The audit threw instead of completing — surfaced via `reportSilentFallback`
+(the `scheduled-ruleset-bypass-audit` monitor was destroyed by the #6590 PR-B
+prune — the check-in void-posts by design), not a drift issue.
 Common causes:
 
 | Symptom in logs | Likely cause | Fix |

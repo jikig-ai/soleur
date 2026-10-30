@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { WATCHDOG_DISPATCH_TABLE } from "@/server/watchdog-dispatch-table";
+import { PRUNED_MONITOR_SLUGS } from "./pruned-monitor-slugs";
 import {
   JITTER_MAX_MS,
   MAX_ATTEMPTS_PER_SLOT,
@@ -158,11 +159,14 @@ describe("Sentry GHA-workflow heartbeat-slug parity (#6374)", () => {
   it("every workflow heartbeat slug has a cron-monitor in cron-monitors.tf", () => {
     const tf = readFileSync(MONITORS_TF, "utf-8");
     const { missingMonitor } = workflowSlugGaps(workflowHeartbeatSlugs(), tf);
+    // #6590 PR-B: pruned slugs keep their emitters (spec NG4) but lose the
+    // resource — the deliberate void-post posture, exempt here.
+    const gaps = missingMonitor.filter((s) => !PRUNED_MONITOR_SLUGS.has(s));
     expect(
-      missingMonitor,
+      gaps,
       `workflow heartbeat slug(s) with NO sentry_cron_monitor in cron-monitors.tf ` +
         `(Sentry silently drops check-ins to unknown slugs — the error heartbeat ` +
-        `pages nowhere): ${missingMonitor.join(", ")}`,
+        `pages nowhere): ${gaps.join(", ")}`,
     ).toEqual([]);
   });
 
@@ -238,7 +242,11 @@ describe("Sentry cron-monitor IaC parity", () => {
 
   it("every code slug has a sentry_cron_monitor resource in cron-monitors.tf", () => {
     const names = iacMonitorNames();
-    const missing = codeSlugs().filter((s) => !names.has(s));
+    // #6590 PR-B: pruned slugs keep their emitters (spec NG4) but lose the
+    // resource — the deliberate void-post posture, exempt here.
+    const missing = codeSlugs().filter(
+      (s) => !names.has(s) && !PRUNED_MONITOR_SLUGS.has(s),
+    );
     expect(
       missing,
       `Inngest handlers heartbeat to monitor slug(s) with no IaC resource — ` +
@@ -246,6 +254,40 @@ describe("Sentry cron-monitor IaC parity", () => {
         `sentry_cron_monitor block to apps/web-platform/infra/sentry/` +
         `cron-monitors.tf for: ${missing.join(", ")}`,
     ).toEqual([]);
+  });
+
+  // #6590 PR-B stale-set assertions — the PRUNED_MONITOR_SLUGS exemption
+  // cannot rot: an entry covering a LIVE monitor would silently exempt it
+  // (allowlist-rot class, #8595); an entry naming no producer is a typo or
+  // a re-added monitor that needs real work, not an exemption.
+  it("PRUNED_MONITOR_SLUGS names no still-declared monitor (∩ declared = ∅)", () => {
+    const names = iacMonitorNames();
+    const overlap = [...PRUNED_MONITOR_SLUGS].filter((s) => names.has(s));
+    expect(
+      overlap,
+      `pruned-set entries still declared in cron-monitors.tf — an exemption ` +
+        `covering a LIVE monitor silently un-guards it: ${overlap.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("every PRUNED_MONITOR_SLUGS entry still has a live producer (⊆ producers)", () => {
+    const producers = new Set([...codeSlugs(), ...workflowHeartbeatSlugs()]);
+    const dead = [...PRUNED_MONITOR_SLUGS].filter((s) => !producers.has(s));
+    expect(
+      dead,
+      `pruned-set entries with no live producer (typo, retired emitter, ` +
+        `re-added monitor, or a third-universe emitter like a script beacon — ` +
+        `extend \`producers\` if a pruned beacon is legitimate): ` +
+        `${dead.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("PRUNED_MONITOR_SLUGS is cardinality-pinned at the PR-B cohort size (43)", () => {
+    // A fresh never-declared slug slips past both stale-set assertions (∩
+    // declared = ∅ trivially; ⊆ producers if it has an emitter) — the
+    // "exempt a brand-new monitor" lane. The pin makes any change a
+    // deliberate act: pruning MORE monitors grows the set with a diff.
+    expect(PRUNED_MONITOR_SLUGS.size).toBe(43);
   });
 });
 
@@ -598,7 +640,6 @@ describe("GHA schedule cron ↔ monitor crontab parity (#8450)", () => {
     expect(checked.length).toBeGreaterThanOrEqual(3);
     for (const slug of [
       "scheduled-zot-restart-loop",
-      "scheduled-prod-version-drift",
       "scheduled-inngest-health",
     ]) {
       expect(checked).toContain(slug);
@@ -835,6 +876,7 @@ describe("Watchdog dispatch clock parity (#8495)", () => {
         "scheduled-inngest-health",
         "scheduled-zot-restart-loop",
         "scheduled-inngest-probe-heartbeat",
+        "scheduled-betterstack-incident-mirror",
       ]),
     );
     expect(checked).toBe(WATCHDOG_DISPATCH_TABLE.length);

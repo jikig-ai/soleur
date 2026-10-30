@@ -114,6 +114,52 @@ if ! grep -qE 'com\.cloudflare\.edge\.r2\.bucket\.\$\{var\.cf_account_id\}_defau
   fail=1
 fi
 
+# Cloudflare provider 5xx retry budget (#10643): the provider block must carry
+# retries/min_backoff/max_backoff set ABOVE the v4 defaults (3/1/30), so a
+# multi-minute upstream API blip cannot hard-fail a plan on ~7s of backoff.
+# terraform validate refuses unknown attribute names but lets a dropped
+# optional attribute pass silently — presence + value are pinned here.
+# v5 renames the trio `max_retries`; a v5 migration must update these keys too.
+cf_blocks=()
+for tf in ./*.tf ./modules/*/*.tf; do
+  [[ -e "$tf" ]] || continue
+  while IFS= read -r -d '' blk; do
+    cf_blocks+=("$(basename "$tf")|$blk")
+  done < <(awk '
+    /^[[:space:]]*provider[[:space:]]+"cloudflare"/ { inblk=1; blk=""; depth=0 }
+    inblk {
+      blk = blk $0 "\n"
+      line = $0
+      sub(/#.*/, "", line)
+      sub(/\/\/.*/, "", line)
+      n = gsub(/\{/, "{", line)
+      m = gsub(/\}/, "}", line)
+      depth += n - m
+      if (depth <= 0 && (n + m) > 0) { inblk=0; printf "%s\0", blk }
+    }
+  ' "$tf")
+done
+if [[ "${#cf_blocks[@]}" -lt 1 ]]; then
+  red "FAIL: no provider \"cloudflare\" block in any *.tf of this root (census floor — the guard must never read green on zero blocks)."
+  fail=1
+fi
+json_tf=$(find . -maxdepth 1 -name '*.tf.json' -print0 | xargs -0 grep -l '"cloudflare"' 2>/dev/null || true)
+if [[ -n "$json_tf" ]]; then
+  red "FAIL: $json_tf declares a cloudflare provider in *.tf.json — outside this guard's HCL window; needs manual review."
+  fail=1
+fi
+for rec in "${cf_blocks[@]}"; do
+  src=${rec%%|*}; cf_block=${rec#*|}
+  for kv in "retries 3" "min_backoff 1" "max_backoff 30"; do
+    key=${kv%% *}; floor=${kv##* }
+    val=$(printf '%s\n' "$cf_block" | grep -oE "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*[0-9]+" | head -1 | grep -oE '[0-9]+$' || true)
+    if [[ -z "$val" || "$val" -le "$floor" ]]; then
+      red "FAIL: $src provider \"cloudflare\" must set $key above the v4 default ($floor) — 5xx retry budget (#10643)."
+      fail=1
+    fi
+  done
+done
+
 # Bearer-vs-HMAC separation policy gate (PR #3919 regression guard, codified after
 # PR #3939 review). Driver-style scripts in apps/cla-evidence/scripts/ that invoke
 # `aws --endpoint-url ...` MUST wrap via `doppler run -p soleur -c prd_cla --`
