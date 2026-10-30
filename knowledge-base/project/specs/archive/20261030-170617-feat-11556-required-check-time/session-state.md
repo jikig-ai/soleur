@@ -150,3 +150,11 @@ Design pass (simplicity+arch+perf) found missed rename blast radius — all 3 se
 - CI run on ad81487f (41090513974): 29 green, test-scripts leg 7 red → guard-vacuity-floor: ranged floors argv-bound thresholds are unsliceable (same class as lint-orphan precedent). Fixed: MAX_CONSTRUCTION_FAILURES 15->17 with in-file ledger note; local guard 25/25 green.
 - HEAD 1a33ffedfb pushed. Auto-merge armed (BLOCKED=waiting checks). Run 41097434039 queued.
 - Also filed: #11647 arm debt, #11648 always-on drift, #11654 KB-archive early-warning.
+
+## Update 16 — run 4 red: test-scripts leg 4 (diagnosis in flight)
+- Run 41097499112 on 62269d87: all green except test-scripts (4/8) → leg 4 = replay-c + affected-a arms. Log fetch pending (GitHub /jobs API flaky 502s).
+- Auto-merge armed; HEAD unchanged. Prior leg-7 vacuity red was fixed via ratchet bump in same HEAD.
+
+## Update 17 — kb-consumers fix; run 5 in flight
+- Leg-4 red on run 41097499112 was test-affected-kb-consumers: my ratchet ledger comment's .test.sh path tokens became named-script hops → 2 new argv-code rows. Reworded to label names; local 31/31 green. HEAD cdc8f79ece.
+- NOTE: no more docs pushes until merge lands (each push cancels the in-flight CI run).
