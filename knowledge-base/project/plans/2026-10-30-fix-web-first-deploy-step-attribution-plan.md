@@ -211,6 +211,7 @@ All scenarios are `unit`-layer fixture cases in `web-first-deploy-10585.test.sh`
 - **`started_at` availability:** the jobs API already returns `.steps[].started_at` (8178 consumes it for the poll step); absent → `-` → tripwire on success jobs (fails loud, never quiet).
 - **Time pressure inverts:** the visible symptom self-resolves ~Nov 6 when the aged runs leave the 30-day window — the fix still matters because every future boot ages into the same window; the fixture is what proves it.
 - **Carried residuals** (8178-accepted, restated in Technical Considerations): `##[group]Run` title collision; sub-second `started_at`/header skew selecting an adjacent region (loud on success, best-effort-silent on failure — same posture as today).
+- **Precedent diff (deepen-plan Phase 4.4):** pattern-bound behavior = "log region derivation for an attribution-expired `gh run view --log`". Canonical precedent: `git-data-boot-poll-8178.sh:202-209` — the awk block is carried **verbatim** (`sub` two tab fields, `ts=substr(line,1,19)`, `ts >= ps` header gate, next-header/EOF bound) plus the BOM/CR bash normalization (`:202-203`). One intentional divergence, called out rather than inherited: 8178 greps fixed `VERDICT=`/`answered=` patterns straight off the raw region, while this plan feeds the region through the shared emit-filter (ts split + ANSI-ESC drop) because the 10585 trail parse needs `ts\tcontent` rows and the #9905 echoed-source exclusion — a consumer-shape adaptation, not a technique change.
 - **Sibling exposure:** `web-fresh-boot-zot-8651.sh` and `git-data-rehearsal-evidence.sh` anchor on the same step column (measured: `index($2, …)` at their log parses) — deferred to a follow-up issue filed during work, per the deferral-tracking check.
 - **Transient log fetches** (the 10-30 dry-run's phantom zero-line read on run 40720815376) are a separate, non-deterministic failure mode this fix does not claim to solve; the tripwire remains the correct verdict for a fetch that returns nothing twice.
 
@@ -240,3 +241,33 @@ All scenarios are `unit`-layer fixture cases in `web-first-deploy-10585.test.sh`
 - Tracker/runbook: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`, issue #11583
 - Related PRs: #8262 (8178 fix), #11603 (this branch's draft PR)
 - Related issues: #11600 (Closes), #10585, #8178, #9905, #8743, #6995, #7797
+
+## Enhancement Summary
+
+Deepen-plan pass (2026-10-30) — sequential-fallback mode: no agent-spawn tool in this environment, so the per-section research agents (Phase 4), the two implementation-realism passes (Phase 4.45) and the all-review-agents fan-out (Phase 5) were adjudicated inline by the orchestrator against the cited sources rather than spawned.
+
+### Gate results
+
+- 4.4 Precedent-diff — PASS (diff recorded in Dependencies & Risks: awk block carried verbatim, emit-filter divergence named).
+- 4.5 Network-outage — skip (no trigger patterns).
+- 4.55 Downtime & Cutover — skip (no offline-inducing operation).
+- 4.6 User-Brand Impact — PASS (section present; `none` threshold; no sensitive-path diff, no scope-out needed).
+- 4.7 Observability — PASS (all 5 fields populated; `grep` first token allowlisted; <15 s; literal `expected_output: started_at`).
+- 4.8 PAT-shaped variable — PASS (zero matches).
+- 4.9 UI wireframe — skip (no UI-surface files).
+- 4.10 Encryption Posture — skip (no store/connection).
+- 4.11 Guard Contract — PASS (`lint-guard-contract.py` clean; adequacy read: assembly names two chokepoints, matrix rows are design-derived — 9 rows incl. own-dispatch, second-member, order/lifetime, harness and must-PASS rows).
+- 4.12 Scope Check — PASS (exactly one unfenced section; 7 asks mapped verbatim; 4 inferred items each justified; `Recommendation: single PR`).
+- 4.13 Task-Design — skip (no new autonomous-task surface).
+
+### Key improvements applied during the deepen pass
+
+- Precedent-diff subsection naming the one intentional divergence from the 8178 technique (emit-filter on the recovered region).
+- Carried-residual enumeration (`##[group]Run` title collision, `started_at`/header skew — loud on success, best-effort on failure) moved into Dependencies & Risks.
+- Verify-the-negative sweep (Phase 4.45 inline): the plan's negative claims ("never a tripwire on attribution expiry alone", "never silently grades an unreadable trail") hold against `web-first-deploy-10585.sh` as written — the recovery path can only produce `trail` rows through the shared emit-filter, and the tripwire remains the sole success+empty exit path.
+- Post-edit self-audit: no dropped symbols; `read -r jid jcon jstep jstart` arity matches the extended 4-field `--jq`.
+
+### New considerations discovered
+
+- `web_host_replace`'s trail step is `if: always()` (no plan_only guard) while `web_host_create`'s is `if: always() && inputs.plan_only != true` — recorded in Research Reconciliation; the `jstep == "skipped"` short-circuit covers both.
+- `scripts/suite-durations.tsv` carries a floor row for this suite; the new cases are additive and stay within it — no manifest change required.
