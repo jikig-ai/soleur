@@ -34,7 +34,8 @@ SELECT 'messages_policy_using_author_member_draft',
                        AND policyname = 'messages_owner_draft_update'
                        AND position('user_id = ( SELECT auth.uid()' IN qual) > 0
                        AND position('is_workspace_member(' IN qual) > 0
-                       AND position('status = ''draft''::text' IN qual) > 0)
+                       AND position('status = ''draft''::text' IN qual) > 0
+                       AND position(' OR ' IN qual) = 0)
        THEN 0 ELSE 1 END
 UNION ALL
 SELECT 'messages_policy_with_check_author_member_draft_archived',
@@ -43,7 +44,13 @@ SELECT 'messages_policy_with_check_author_member_draft_archived',
                        AND policyname = 'messages_owner_draft_update'
                        AND position('user_id = ( SELECT auth.uid()' IN with_check) > 0
                        AND position('is_workspace_member(' IN with_check) > 0
-                       AND position('status = ANY (ARRAY[''draft''::text, ''archived''::text])' IN with_check) > 0)
+                       AND position('status = ANY (ARRAY[''draft''::text, ''archived''::text])' IN with_check) > 0
+                       AND position(' OR ' IN with_check) = 0)
+       THEN 0 ELSE 1 END
+UNION ALL
+-- RLS stays enabled: with it off every policy above is moot and any authenticated session could update the two granted columns.
+SELECT 'messages_rls_enabled',
+  CASE WHEN EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.messages'::regclass AND relrowsecurity)
        THEN 0 ELSE 1 END
 UNION ALL
 SELECT 'messages_jti_policy_still_restrictive_all',

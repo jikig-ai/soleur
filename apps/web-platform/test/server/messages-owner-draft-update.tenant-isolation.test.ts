@@ -181,6 +181,22 @@ describe.skipIf(!ENABLED)("migration 181 behaviour (rolled-back real rows)", () 
     });
   });
 
+  test("an author who is no longer a member of the draft's workspace updates zero rows", async () => {
+    // userB authored a draft in wsA but holds no wsA membership (a removed member). The membership conjunct in the policy
+    // is defense in depth next to the workspace-wide SELECT policy (an UPDATE's WHERE and RETURNING read through it), so
+    // this proves the BEHAVIOUR, and the migration-shape test pins the conjunct's text in both clauses.
+    await scenario(async (t, c) => {
+      const member = await draft(t, { ws: c.wsA, user: c.userC });
+      expect(await updateAs(t, c.userC, member, "draft_preview = 'ok'")).toHaveLength(1); // positive control
+      const stray = await draft(t, { ws: c.wsA, user: c.userB });
+      expect(await updateAs(t, c.userB, stray, "status = 'archived'")).toHaveLength(0);
+      expect(await updateAs(t, c.userB, stray, "draft_preview = 'hijacked'")).toHaveLength(0);
+      const r = await row(t, stray);
+      expect(r.status).toBe("draft");
+      expect(r.draft_preview).toBe("draft body");
+    });
+  });
+
   test("an already archived draft updates zero rows (USING status = draft)", async () => {
     await scenario(async (t, c) => {
       const live = await draft(t, { ws: c.wsA, user: c.userA });

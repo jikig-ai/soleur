@@ -15,6 +15,7 @@
 // stay clean (no conditional hooks after early returns).
 
 import { useState } from "react";
+import { useSWRConfig } from "swr";
 
 import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
 import { LeaderLoopStatus } from "@/components/dashboard/leader-loop-status";
@@ -23,6 +24,7 @@ import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
 import { usePendingAction, PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import { humanTitle } from "@/lib/messages/action-class-copy";
+import { swrKeys } from "@/lib/swr-config";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
 
@@ -123,6 +125,32 @@ const DENY_REASON_COPY: Record<DenyReason, string> = {
 const ALREADY_HANDLED_COPY =
   "This draft was already handled, or it isn't yours to change. Refresh to update this card.";
 
+// Edit / Discard / Dismiss on a draft that already has an approval row: the routes answer 409 draft_already_approved.
+const ALREADY_APPROVED_EDIT_COPY =
+  "You already approved this draft, so it can't be edited. Send it to go ahead.";
+const ALREADY_APPROVED_DISCARD_COPY =
+  "You already approved this draft, so it can't be discarded. Send it to go ahead.";
+
+// The copy for a failed Edit / Discard / Dismiss. Keyed on the response BODY, not the bare status: a CSRF origin
+// rejection is also a 403 (`{error:"Forbidden"}`), and only the routes' zero-row answer (`{error:"forbidden"}`) means
+// "already handled or not yours".
+async function failureCopy(
+  res: Response,
+  verb: "Edit" | "Discard" | "Dismiss",
+): Promise<{ copy: string; handled: boolean }> {
+  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (res.status === 403 && body?.error === "forbidden") {
+    return { copy: ALREADY_HANDLED_COPY, handled: true };
+  }
+  if (res.status === 409 && body?.error === "draft_already_approved") {
+    return {
+      copy: verb === "Edit" ? ALREADY_APPROVED_EDIT_COPY : ALREADY_APPROVED_DISCARD_COPY,
+      handled: false,
+    };
+  }
+  return { copy: `${verb} failed (${res.status})`, handled: false };
+}
+
 export function TodayCard(props: TodayCardProps) {
   if (props.source === "kb-drift") return <KbDriftCard {...props} />;
   if (props.source === "github") return <GitHubCard {...props} />;
@@ -152,6 +180,8 @@ function KbDriftCard({
 
   const [archived, setArchived] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
+  const { mutate: globalMutate } = useSWRConfig();
+  const refreshToday = () => void globalMutate(swrKeys.dashboardToday());
 
   // Keep AbortSignal.timeout: the hook releases the flag on watchdog but does
   // not abort the zombie fetch — the signal bound is what kills the flight.
@@ -167,13 +197,13 @@ function KbDriftCard({
           // hold pending until the 30s watchdog; the abort bound kills it.
           signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
-        if (res.status !== 200) {
+        if (res.status === 200) {
+          refreshToday();
+        } else {
           setArchived(false);
-          setDismissError(
-            res.status === 403
-              ? ALREADY_HANDLED_COPY
-              : `Dismiss failed (${res.status})`,
-          );
+          const { copy, handled } = await failureCopy(res, "Dismiss");
+          setDismissError(copy);
+          if (handled) refreshToday();
         }
       } catch {
         setArchived(false);
@@ -380,6 +410,8 @@ function StripeCard({
   urgency,
 }: TodayCardProps) {
   const [archived, setArchived] = useState(false);
+  const { mutate: globalMutate } = useSWRConfig();
+  const refreshToday = () => void globalMutate(swrKeys.dashboardToday());
   const [draft, setDraft] = useState(draftPreview);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -414,24 +446,11 @@ function StripeCard({
             setDraft(next!);
             return;
           }
-          if (res.status === 409) {
-            // /edit refuses once an approval row exists (draft_already_approved): say what to do
-            // next. Any other 409 body, or an unparseable one, keeps the bare status below.
-            const body = (await res.json().catch(() => ({}))) as {
-              error?: string;
-            } | null;
-            if (body?.error === "draft_already_approved") {
-              setEditError(
-                "You already approved this draft, so it can't be edited. Send it to go ahead or Discard it.",
-              );
-              return;
-            }
-          }
-          if (res.status === 403) {
-            setEditError(ALREADY_HANDLED_COPY);
-            return;
-          }
-          setEditError(`Edit failed (${res.status})`);
+          // /edit refuses once an approval row exists (409 draft_already_approved) and answers 403 `forbidden` for a
+          // draft that is already handled or not the caller's; any other body keeps the bare status.
+          const { copy, handled } = await failureCopy(res, "Edit");
+          setEditError(copy);
+          if (handled) refreshToday();
         } catch {
           setEditError("Edit failed — network error");
         }
@@ -446,13 +465,13 @@ function StripeCard({
           // hold pending until the 30s watchdog; the abort bound kills it.
           signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
-        if (res.status !== 200) {
+        if (res.status === 200) {
+          refreshToday();
+        } else {
           setArchived(false);
-          setEditError(
-            res.status === 403
-              ? ALREADY_HANDLED_COPY
-              : `Discard failed (${res.status})`,
-          );
+          const { copy, handled } = await failureCopy(res, "Discard");
+          setEditError(copy);
+          if (handled) refreshToday();
         }
       } catch {
         setArchived(false);

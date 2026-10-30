@@ -17,8 +17,15 @@ import { TodayCard } from "@/components/dashboard/today-card";
 // DOM contract (`data-testid` + label text) per
 // 2026-05-06-test-public-dom-contract-not-setstate-side-effects.md.
 
-const { createClientMock } = vi.hoisted(() => ({
+const { createClientMock, mutateSpy } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
+  mutateSpy: vi.fn(),
+}));
+
+// The card drops the in-memory Today list after a Discard / Dismiss / Send 200 and after a "forbidden" 403 (ADR-067, #11572 D15).
+vi.mock("swr", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("swr")>()),
+  useSWRConfig: () => ({ mutate: mutateSpy }),
 }));
 
 vi.mock("@/lib/supabase/client", () => ({
@@ -55,6 +62,7 @@ let nextResponse: MockResponse = { status: 200, body: {} };
 
 beforeEach(() => {
   createClientMock.mockReset();
+  mutateSpy.mockReset();
   createClientMock.mockImplementation(buildNoOpSupabaseClient);
   globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -315,7 +323,7 @@ describe("KbDriftCard onClick (PR-A)", () => {
 
 describe("StripeCard Edit refusal copy (#11486)", () => {
   const APPROVED_COPY =
-    "You already approved this draft, so it can't be edited. Send it to go ahead or Discard it.";
+    "You already approved this draft, so it can't be edited. Send it to go ahead.";
 
   const ORIGINAL_PROMPT = window.prompt;
 
@@ -475,6 +483,48 @@ describe("403 'already handled' copy for Discard, Edit and Dismiss (D15)", () =>
     expect(screen.getByTestId("draft-preview-body")).toBeInTheDocument();
   });
 
+  it("Discard 403 whose body is the CSRF 'Forbidden' keeps the bare status (not 'already handled')", async () => {
+    nextResponse = { status: 403, body: { error: "Forbidden" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Discard failed (403)");
+    });
+    expect(screen.queryByText(/already handled/)).toBeNull();
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+
+  it("Discard 409 draft_already_approved says to Send, not to retry the Discard", async () => {
+    nextResponse = { status: 409, body: { error: "draft_already_approved" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "You already approved this draft, so it can't be discarded. Send it to go ahead.",
+      );
+    });
+    expect(screen.getByTestId("draft-preview-body")).toBeInTheDocument();
+  });
+
+  it("Discard 200 drops the cached Today list", async () => {
+    nextResponse = { status: 200, body: { id: "msg-1", status: "archived" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
+    expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]);
+  });
+
+  it("Discard 403 forbidden also refreshes the list so the stale card goes away", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]));
+  });
+
   it("Discard 500 keeps 'Discard failed (500)'", async () => {
     nextResponse = { status: 500, body: { error: "internal_error" } };
     renderStripe();
@@ -485,6 +535,7 @@ describe("403 'already handled' copy for Discard, Edit and Dismiss (D15)", () =>
         "Discard failed (500)",
       );
     });
+    expect(mutateSpy).not.toHaveBeenCalled();
   });
 
   it("Edit 403 shows the already-handled line", async () => {

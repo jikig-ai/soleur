@@ -57,12 +57,20 @@ const ctx = () => ({ params: Promise.resolve({ id: MSG }) });
 interface Wiring {
   row?: { id: string } | null;
   error?: { message: string } | null;
+  approval?: { id: string } | null;
+  approvalError?: { message: string } | null;
 }
 
-function wire({ row = { id: MSG }, error = null }: Wiring = {}) {
+function wire({
+  row = { id: MSG },
+  error = null,
+  approval = null,
+  approvalError = null,
+}: Wiring = {}) {
   const calls = {
     table: "" as string,
     update: undefined as unknown,
+    select: undefined as string | undefined,
     filters: [] as Array<[string, unknown]>,
   };
   const chain = {
@@ -74,10 +82,18 @@ function wire({ row = { id: MSG }, error = null }: Wiring = {}) {
       calls.filters.push([col, val]);
       return chain;
     },
-    select: () => chain,
+    select(cols: string) {
+      calls.select = cols;
+      return chain;
+    },
     maybeSingle: async () => ({ data: row, error }),
   };
+  const approvalChain = {
+    eq: () => approvalChain,
+    maybeSingle: async () => ({ data: approval, error: approvalError }),
+  };
   mockFrom.mockImplementation((table: string) => {
+    if (table === "action_sends") return { select: () => approvalChain };
     calls.table = table;
     return chain;
   });
@@ -99,16 +115,17 @@ describe("POST /api/dashboard/today/[id]/discard", () => {
     expect(mockReport).not.toHaveBeenCalled();
   });
 
-  test("the UPDATE writes status archived on messages, filtered by id, user_id and status draft", async () => {
+  test("the UPDATE writes status archived on messages, filtered by id, user_id and status draft, and reads the row back", async () => {
     const calls = wire();
     await POST(req(), ctx());
     expect(calls.table).toBe("messages");
     expect(calls.update).toEqual({ status: "archived" });
-    expect(calls.filters).toEqual([
-      ["id", MSG],
-      ["user_id", FOUNDER],
-      ["status", "draft"],
-    ]);
+    // As a set: the order of the .eq calls is not behaviour.
+    expect([...calls.filters].sort()).toEqual(
+      [["id", MSG], ["status", "draft"], ["user_id", FOUNDER]].sort(),
+    );
+    // Without .select() PostgREST returns no row, so every successful discard would answer 403 (the #11569 symptom).
+    expect(calls.select).toBe("id");
   });
 
   test("zero rows matched (a draft the caller does not own, or already handled): 403 forbidden, no Sentry noise", async () => {
@@ -129,6 +146,26 @@ describe("POST /api/dashboard/today/[id]/discard", () => {
       feature: "dashboard-discard",
       op: "messages-archive",
     });
+  });
+
+  test("a draft that already has an approval row: 409 draft_already_approved, nothing archived", async () => {
+    const calls = wire({ approval: { id: "as-1" } });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "draft_already_approved", message_id: MSG });
+    expect(calls.update).toBeUndefined();
+  });
+
+  test("an approval lookup error fails closed: 500, mirrored to Sentry, nothing archived", async () => {
+    const calls = wire({ approvalError: { message: "boom" } });
+    const res = await POST(req(), ctx());
+    expect(res.status).toBe(500);
+    expect(mockReport).toHaveBeenCalledTimes(1);
+    expect(mockReport.mock.calls[0][1]).toMatchObject({
+      feature: "dashboard-discard",
+      op: "action-sends-lookup",
+    });
+    expect(calls.update).toBeUndefined();
   });
 
   test("unauthenticated: 401 and no UPDATE is attempted", async () => {

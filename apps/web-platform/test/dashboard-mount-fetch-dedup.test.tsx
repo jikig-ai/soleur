@@ -298,9 +298,12 @@ describe("dashboard Today fetcher bypasses the HTTP cache (#11572)", () => {
     const src = stripComments(
       readFileSync(join(ROOT, "app/(dashboard)/dashboard/page.tsx"), "utf8"),
     );
+    // Tolerates extra options and a trailing comma (formatting is not behaviour).
     expect(src).toMatch(
-      /fetch\(\s*["'`]\/api\/dashboard\/today["'`]\s*,\s*\{\s*cache:\s*["'`]no-store["'`]\s*\}\s*\)/,
+      /fetch\(\s*["'`]\/api\/dashboard\/today["'`]\s*,\s*\{[^}]*\bcache:\s*["'`]no-store["'`][^}]*\}\s*,?\s*\)/,
     );
+    // And no call to the same URL survives without an options object (a decoy elsewhere must not satisfy the row above).
+    expect(src).not.toMatch(/fetch\(\s*["'`]\/api\/dashboard\/today["'`]\s*\)/);
   });
 });
 

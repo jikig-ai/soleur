@@ -51,6 +51,12 @@ describe("181_messages_owner_draft_update.sql", () => {
     expect(upExec).toMatch(/WITH CHECK \(user_id = \(SELECT auth\.uid\(\)\)\s+AND status IN \('draft', 'archived'\)/);
   });
 
+  it("keeps the workspace-membership conjunct in BOTH clauses and no OR that could widen either", () => {
+    const member = /AND public\.is_workspace_member\(workspace_id, \(SELECT auth\.uid\(\)\)\)/g;
+    expect(upExec.match(member) ?? []).toHaveLength(2);
+    expect(upExec).not.toMatch(/\bOR\b/);
+  });
+
   it("revokes the table-level UPDATE BEFORE granting the two columns (a later REVOKE would strip the grant)", () => {
     const revoke = upExec.indexOf("REVOKE UPDATE ON TABLE public.messages FROM PUBLIC, anon, authenticated");
     const grant = upExec.indexOf("GRANT UPDATE (status, draft_preview) ON TABLE public.messages TO authenticated");
