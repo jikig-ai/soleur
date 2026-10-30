@@ -83,10 +83,10 @@ The inngest host's vector.toml is birth-frozen: the shared `apps/web-platform/in
 ### Institutional learnings applied
 
 - `2026-10-28-a-probe-that-could-finally-pass-would-have-closed-its-tracker-on-pre-restart-evidence.md` — PASS must be generation-scoped: pre-replace markers (e.g., the 10-18 `bs-token-restage-enabled` BOOT_STAGE row) must never satisfy it. → both probes carry a **generation floor**; PASS counts only evidence from the current host generation.
-- `2026-10-10-a-log-scraping-probe-matched-the-script-it-echoed` — probe greps anchor emitted line shapes, post-decode field isolation (the existing 7596 probe already does this).
-- `2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md` — no blind emit-side edit; the probes are the structured probes.
+- `2026-10-10-a-log-scraping-probe-matched-the-script-it-echoed-and-the-inline-copies-dropped-the-trim-the-library-had.md` — probe greps anchor emitted line shapes, post-decode field isolation (the existing 7596 probe already does this).
+- `best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md` — no blind emit-side edit; the probes are the structured probes.
 - `2026-09-24-followthrough-retirement-headers-underenumerate-touch-points.md` — probe headers carry `RETIREMENT:` lists.
-- `2026-07-07-followthrough-and-shape-gate-silent-falseness.md` — exit-code contract (no `${VAR:?}`, TRANSIENT on credential/query failure).
+- `best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md` — exit-code contract (no `${VAR:?}`, TRANSIENT on credential/query failure).
 - `2026-10-29-sentry-events-sort-optional-pin-it-for-coverage-arguments.md` — windowed reads pin ordering/bounds (the probes' SQL windows are explicit, not "newest N" coverage arguments).
 
 ## Research Reconciliation — Spec vs. Codebase
