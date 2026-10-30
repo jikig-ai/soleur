@@ -22,6 +22,7 @@ payload changes, so its plan is a no-op - verify by reading the run's plan, neve
 **Deepened on:** 2026-10-29. **Gates run:** 4.6 user-brand, 4.7 observability, 4.8 PAT sweep, 4.11 guard contract (lint green), 4.12 scope check; 4.9, 4.10, 4.13 not triggered (no UI surface, no `.tf` or store, no new workflow file). **Agents used:** plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO devex), CPO sign-off, sharp-edges verification, and deepen passes by security-sentinel, observability-coverage-reviewer, user-impact-reviewer and test-design-reviewer; technical forks ruled by `soleur:engineering:cto` (rows F1-F22 of `decision-challenges.md`).
 
 ### Key improvements
+
 1. Host script hardened: broken refs that git skips silently are caught through the non-empty-stderr rule, fds 3/4 closed for the git child, hardened `env -i` and `-c` flags, one NUL-delimited enumeration for count and name, `RA_MOUNT` identity and TOCTOU checks, `shallow` refusal, fail-closed field self-check.
 2. Answer line shrunk to counts plus at most two numerically smallest branch-tip shas (less fingerprint surface); verdicts carry a FAILED / INCONCLUSIVE class printed in the annotation and driving two notify words.
 3. Cross-consumer ripples closed: run-title classifier, vacuity ledger and shard map, the AC9 flag-precheck pin, the C4 edge sentence and its generated JSON, the apply-workflow path filter.
