@@ -72,8 +72,13 @@ export interface ManifestEntry {
    * issue — the honest-declaration idiom mirrors `feeder:{kind:"none", tracking_issue}`. Remove it
    * (at cutover/arming) and a still-paused fed monitor fires for real. It does NOT suppress the
    * `absent-live` alert — a declared-but-not-applied monitor is still surfaced.
+   *
+   * `expires` (OPTIONAL, ISO date `YYYY-MM-DD`, UTC) bounds the exemption (#11631): on or after that
+   * day the row is treated as NOT exempt and the nightly reconcile raises `fed-but-paused` naming the
+   * expiry and `tracking_issue`, so an unarmed dead-man cannot sit unarmed forever. A malformed value
+   * fails closed (alarms). Without `expires` the exemption has no deadline (the pre-#11631 behaviour).
    */
-  arming_pending?: { tracking_issue: number };
+  arming_pending?: { tracking_issue: number; expires?: string };
 }
 
 /**
@@ -383,7 +388,7 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "bash scripts/deadman-heartbeat-feeder.sh",
       },
     },
-    arming_pending: { tracking_issue: 11631 },
+    arming_pending: { tracking_issue: 11631, expires: "2026-11-13" },
     exempt_reason:
       "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly, dispatched by the web-server watchdog clock): it queries the Better Stack Logs archive for web-1's passing luks-monitor row and beats only when one exists, so no host change and no host replace applies (a host-side ping would need a user_data change = a web-1 replace, which web-1 cannot take). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
@@ -403,7 +408,7 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "bash scripts/deadman-heartbeat-feeder.sh",
       },
     },
-    arming_pending: { tracking_issue: 11631 },
+    arming_pending: { tracking_issue: 11631, expires: "2026-11-13" },
     exempt_reason:
       "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly): it queries the Better Stack Logs archive for Inngest cron cost markers and beats only when one exists in the last 24 h, so the signal is independent of any single host and no host replace applies. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
