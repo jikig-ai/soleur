@@ -51,8 +51,12 @@ name: Merge queue CLA synthetics
 # ADR-270: this workflow DEFINITION is taken from the candidate commit like every other
 # merge_group workflow, and entry to the queue needs a write-access actor.
 #
-# max_entries_to_merge = 1 (infra/github/ruleset-ci-required.tf) keeps one PR per merged group so
-# the PR number in head_ref is exact. If that is ever raised, this workflow must enumerate PRs.
+# max_entries_to_merge is raised to 3 under ADR-270's raise checklist (#11678), so a merged
+# group can contain multiple PRs and the PR number in head_ref names only the deepest member.
+# The verification script therefore enumerates EVERY constituent member — queue entries at
+# positions <= the entry whose headCommit matches head_sha — and requires each member's own
+# queued head to carry completed/success cla-check + cla-evidence (app 15368). A member it
+# cannot enumerate or verify is a failure, never a pass.
 
 on:
   merge_group:

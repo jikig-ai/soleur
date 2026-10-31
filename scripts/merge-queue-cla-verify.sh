@@ -79,30 +79,89 @@ gh_read() {
   die "gh api failed reading ${label} for PR #${pr}"
 }
 
-gh_read "the PR" "repos/${REPO}/pulls/${pr}"
-pr_json="$REPLY_JSON"
-pr_head="$(jq -er '.head.sha' <<<"$pr_json")" || die "PR #${pr} reply has no head sha"
-[[ "$pr_head" =~ ^[0-9a-f]{40}$ ]] || die "PR #${pr} head sha is not 40 lowercase hex characters"
-pr_base="$(jq -er '.base.ref' <<<"$pr_json")" || die "PR #${pr} reply has no base ref"
-[[ "$pr_base" == "main" ]] || die "PR #${pr} base is not main"
+# --- group membership enumeration (#11678, ADR-270 raise checklist) -----------
+# The candidate HEAD_SHA is the cumulative merge commit built for the DEEPEST
+# member of the group it verifies: with merge_method SQUASH each queue position
+# dispatches its own merge_group run whose candidate contains every shallower
+# member's changes. The members of THIS candidate are therefore the queue
+# entries at positions <= the position of the entry whose candidate IS
+# HEAD_SHA. The anchor is bound via headCommit.oid — never by name alone — so a
+# mid-verify queue renumbering (jump insertion at position 1, member ejection)
+# cannot silently rename the set being verified; if no listed entry owns
+# HEAD_SHA, positions <= the named PR's entry position is the fallback, and if
+# neither resolves the script dies (an unverifiable set is never a pass).
+#
+# Invariants, each fail-closed:
+#   * entries(first:100) pagination fully consumed — hasNextPage=true dies
+#     (a truncated page under-enumerates the member list silently)
+#   * the member set is non-empty (a `0 checked` enumeration is a failure,
+#     not a pass — the anti-vacuity row in the plan's Guard Contract)
+#   * the named PR appears in the member set AND is its maximal position
+#     (if head_ref ever names a non-deepest member, positions<= would
+#     silently skip the group's tail — that is the under-enumeration hole)
+MQ_QUERY='query($o:String!,$n:String!){
+  repository(owner:$o,name:$n){
+    mergeQueue(branch:"main"){ entries(first:100){
+      pageInfo{ hasNextPage }
+      nodes{ position headCommit{ oid } pullRequest{ number headRefOid } } } }
+  }
+}'
+gh_read "merge queue entries" graphql -f query="$MQ_QUERY" -F o="${REPO%%/*}" -F n="${REPO##*/}"
+entries="$REPLY_JSON"
+
+[[ "$(jq -er '.data.repository.mergeQueue.entries.pageInfo.hasNextPage' <<<"$entries")" == "false" ]] \
+  || die "merge queue entries list is paginated beyond first:100 — refusing a truncated member set"
+
+# anchor: the entry whose candidate is HEAD_SHA, else the named PR's entry
+anchor_pos="$(jq -er --arg sha "$HEAD_SHA" --argjson pr "$pr" '
+  .data.repository.mergeQueue.entries.nodes
+  | ([.[] | select(.headCommit.oid == $sha) | .position] | first)
+    // ([.[] | select(.pullRequest.number == $pr) | .position] | first)
+    // empty' <<<"$entries")" \
+  || die "cannot bind merge_group candidate to queue membership for PR #${pr}"
+
+# members: every entry at position <= anchor — each carries its OWN recorded
+# queued head (headRefOid is the entry's head at enqueue; a pushed PR would
+# have been dequeued, so it is the head the candidate contains)
+members="$(jq -ec --argjson pos "$anchor_pos" '
+  [.data.repository.mergeQueue.entries.nodes[]
+   | select(.position <= $pos)
+   | {number: .pullRequest.number, head: .pullRequest.headRefOid, pos: .position}]
+  | sort_by(.pos)' <<<"$entries")" \
+  || die "cannot enumerate queue members for candidate ${HEAD_SHA}"
+member_count="$(jq -r 'length' <<<"$members")"
+[[ "$member_count" -ge 1 ]] || die "zero queue members enumerated for candidate ${HEAD_SHA} — refusing a vacuous pass"
+
+# the named PR must be a member and its position maximal (deepest member)
+max_pos="$(jq -r '[.[].pos] | max' <<<"$members")"
+named_pos="$(jq -r --argjson pr "$pr" '[.[] | select(.number == $pr) | .pos] | first // -1' <<<"$members")"
+[[ "$named_pos" -ge 1 ]] || die "named PR #${pr} is absent from the enumerated member set — head_ref names a non-member"
+[[ "$named_pos" == "$max_pos" ]] \
+  || die "named PR #${pr} is at position ${named_pos} but the group runs deeper (max ${max_pos}) — refusing partial verification"
 
 # `gh api --paginate` prints one JSON object per page, concatenated with no outer array, so the
 # reply is slurped (-s) and every page's check_runs read.
-gh_read "the PR head check-runs" --paginate "repos/${REPO}/commits/${pr_head}/check-runs?filter=all&per_page=100"
-runs="$REPLY_JSON"
-
 # shellcheck disable=SC2016  # a jq program: $n is a jq variable, not a shell expansion
 latest_program='[.[].check_runs[]? | select(.name == $n and .app.id == 15368)]
   | sort_by(.id)
   | last
   | if . == null then "missing" else "\(.status)/\(.conclusion)" end'
 
-for ctx in cla-check cla-evidence; do
-  verdict="$(jq -rs --arg n "$ctx" "$latest_program" <<<"$runs")" \
-    || die "cannot read the ${ctx} check-runs of PR #${pr}"
-  verdict="$(printf '%s' "$verdict" | tr -cd 'A-Za-z0-9/_')"
-  [[ "$verdict" == "completed/success" ]] \
-    || die "${ctx} on PR #${pr} head is ${verdict:-unreadable}, not completed/success"
-done
+member_lines=()
+while IFS=' ' read -r mpr mhead; do
+  [[ -n "$mpr" ]] || continue
+  [[ "$mhead" =~ ^[0-9a-f]{40}$ ]] || die "member PR #${mpr} head sha is not 40 lowercase hex characters"
+  gh_read "the check-runs of member PR #${mpr}" --paginate \
+    "repos/${REPO}/commits/${mhead}/check-runs?filter=all&per_page=100"
+  mruns="$REPLY_JSON"
+  for ctx in cla-check cla-evidence; do
+    verdict="$(jq -rs --arg n "$ctx" "$latest_program" <<<"$mruns")" \
+      || die "cannot read the ${ctx} check-runs of member PR #${mpr}"
+    verdict="$(printf '%s' "$verdict" | tr -cd 'A-Za-z0-9/_')"
+    [[ "$verdict" == "completed/success" ]] \
+      || die "${ctx} on member PR #${mpr} head is ${verdict:-unreadable}, not completed/success"
+  done
+  member_lines+=("pr${mpr}@${mhead:0:10}")
+done < <(jq -r '.[] | "\(.number) \(.head)"' <<<"$members")
 
-echo "merge-queue-cla-verify=OK pr=${pr} head=${pr_head}"
+echo "merge-queue-cla-verify=OK members=${member_count} ${member_lines[*]}"
