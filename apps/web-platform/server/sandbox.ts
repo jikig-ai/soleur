@@ -113,6 +113,10 @@ export function isPathInWorkspace(
 ): boolean {
   if (!filePath) return false;
 
+  // A leading `~` is expanded to the process HOME by the CLI's file tools, so anchoring it under the workspace
+  // as a literal `~` directory would approve a read of the shared HOME's persisted CLI state (#10455).
+  if (/^~(?:[\\/]|$)/.test(filePath)) return false;
+
   // 2026-05-06 follow-up to #3353 — Bug A2 in plan
   // 2026-05-06-fix-sidebar-pdf-summarize-out-of-boundary-plan.md.
   //

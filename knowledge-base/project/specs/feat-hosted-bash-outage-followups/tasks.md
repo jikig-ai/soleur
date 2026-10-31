@@ -11,8 +11,8 @@ Plan: knowledge-base/project/plans/2026-10-31-fix-hosted-bash-outage-followups-p
 - 1.5 Confirm G2 executed in CI (not skipped); record wall time
 - 1.6 File-tool arm: Read/Grep/Glob (absolute, `../`) and a symlink at `$HOME/.claude/history.jsonl` through `createSandboxHook`; check subagent (Task) and Notebook tools are matched
 - 1.7 If red: stop rule (freeze dependents, CLO same day, fix behind a flag)
-- 1.8 If red: relocate CLI state with `CLAUDE_CONFIG_DIR` under `claudeTmpDir`; settle auth, `settings.json`, and session-resume decisions with evidence; thread the key through every `buildAgentEnv` consumer; add it to the `sdk_wrapper_shim_prodtuple` smoke tuple
-- 1.9 Operator-authorized only: purge of already-persisted shared data (CLO sizes the window first)
+- 1.8 (CTO ruled 2026-10-31: documented residual, NOT relocated; only if a relocation trigger fires) If red: relocate CLI state with `CLAUDE_CONFIG_DIR` under `claudeTmpDir`; settle auth, `settings.json`, and session-resume decisions with evidence; thread the key through every `buildAgentEnv` consumer; add it to the `sdk_wrapper_shim_prodtuple` smoke tuple
+- 1.9 Operator-authorized only: counts-only production-HOME census, then (separately) purge of already-persisted shared data (CLO sizes the window first)
 
 ## PR 1b — alert, coupling, records
 

@@ -83,6 +83,26 @@ export function extractToolPath(
 }
 
 /**
+ * True when ANY location-bearing field of a file tool's input escapes the workspace (#10455).
+ *
+ * `extractToolPath` returns only the FIRST truthy of file_path / path / notebook_path, so an input carrying an
+ * in-workspace decoy in one field and an escaping path in another was judged on the decoy, while the SDK tool reads
+ * its own field and ignores the rest. Every present field must be inside; a field that is present but not a string
+ * cannot be judged and is treated as an escape.
+ */
+export function pathFieldsEscape(
+  toolInput: Record<string, unknown>,
+  isInside: (candidate: string) => boolean,
+): boolean {
+  for (const key of ["file_path", "path", "notebook_path"] as const) {
+    const v = toolInput?.[key];
+    if (v === undefined || v === null || v === "") continue;
+    if (typeof v !== "string" || !isInside(v)) return true;
+  }
+  return false;
+}
+
+/**
  * Checks whether a tool name is a file-accessing tool that requires
  * workspace path validation.
  */

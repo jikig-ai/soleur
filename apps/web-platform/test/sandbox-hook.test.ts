@@ -250,8 +250,10 @@ describe("createSandboxHook - the shared HOME's persisted CLI state is unreachab
     rmSync(base, { recursive: true, force: true });
   });
 
-  test("positive control: a file inside the workspace is allowed, so the denials below are not an everything-denied hook", async () => {
+  test("positive controls: Read, Glob and Grep inside the workspace are allowed, so the denials below are not an everything-denied hook", async () => {
     expectExplicitAllow(await call("Read", { file_path: join(ws, "ok.txt") }));
+    expectExplicitAllow(await call("Glob", { pattern: "*.txt" }));
+    expectExplicitAllow(await call("Grep", { pattern: "own", path: ws }));
   });
 
   test.each([
@@ -261,7 +263,19 @@ describe("createSandboxHook - the shared HOME's persisted CLI state is unreachab
     ["Grep the .claude directory", "Grep", () => ({ pattern: "x", path: join(home, ".claude") })],
     ["LS the sessions directory", "LS", () => ({ path: join(home, ".claude", "sessions") })],
     ["NotebookRead outside the workspace", "NotebookRead", () => ({ notebook_path: join(home, ".claude", "x.ipynb") })],
-    ["Read through a relative escape", "Read", () => ({ file_path: join(ws, "..", "..", "home", ".claude", "history.jsonl") })],
+    // The literal string, not join(): join() collapses the `..` lexically and the hook would never see them.
+    ["Read through a relative escape", "Read", () => ({ file_path: "../../home/.claude/history.jsonl" })],
+    ["Read of a prefix-sibling directory", "Read", () => ({ file_path: `${ws}-evil/x.txt` })],
+    // A leading ~ is expanded to HOME by the CLI, so it must never be anchored under the workspace as a literal dir.
+    ["Read with a leading ~", "Read", () => ({ file_path: "~/.claude/history.jsonl" })],
+    ["Grep with a leading ~ path", "Grep", () => ({ pattern: "x", path: "~/.claude" })],
+    ["LS of ~ itself", "LS", () => ({ path: "~" })],
+    ["NotebookEdit with a leading ~", "NotebookEdit", () => ({ notebook_path: "~/.claude/x.ipynb" })],
+    // The hook used to judge only the FIRST truthy of file_path / path / notebook_path: an in-workspace decoy hid the real one.
+    ["Grep: in-workspace file_path decoy, escaping path", "Grep", () => ({ pattern: "x", file_path: join(ws, "ok.txt"), path: join(home, ".claude") })],
+    ["LS: in-workspace file_path decoy, escaping path", "LS", () => ({ file_path: join(ws, "ok.txt"), path: join(home, ".claude", "sessions") })],
+    ["NotebookEdit: in-workspace file_path decoy, escaping notebook_path", "NotebookEdit", () => ({ file_path: join(ws, "ok.txt"), notebook_path: join(home, ".claude", "x.ipynb") })],
+    ["a path field that is not a string cannot be judged", "Grep", () => ({ pattern: "x", path: ["a"] })],
     ["Read through a symlink planted in the workspace", "Read", () => ({ file_path: join(ws, "link-to-history") })],
     ["Glob with an absolute pattern into HOME", "Glob", () => ({ pattern: `${home}/.claude/**/*.json` })],
     ["Glob with a relative escape pattern", "Glob", () => ({ pattern: "../../home/.claude/*" })],

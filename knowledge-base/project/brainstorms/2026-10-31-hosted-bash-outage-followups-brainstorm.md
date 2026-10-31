@@ -29,6 +29,8 @@ A re-scoped, sequenced plan for what is genuinely still open after the hosted Ba
 5. **Plain-language message is copy-only on the existing tool-error row** (CPO): no new screen, no wireframe required unless a Retry button is added. Map only sandbox-setup failures; keep raw text behind a details disclosure.
 6. **Housekeeping (CLO):** add a negative-determination row for #10445 to `knowledge-base/legal/breach-register.md`. Basis: "commands never executed; no exposure mechanism identified". Do not write "no data affected".
 
+7. **PR 1a measurement ruling (CTO, 2026-10-31, after the plan).** The shared-HOME CLI state a sibling tenant can read (session metadata with the other tenant's workspace identifier, a peer key file, shell snapshots, account state) is a documented residual pinned by a test; no relocation. Triggers for relocation are in the ADR-075 addendum. The CLO determination is provisional (reachability only); a counts-only census of the production HOME is owed and needs the operator's authorisation.
+
 ## Parked (re-evaluation trigger)
 
 - #10549 AF_UNIX deny for egress sessions: SDK bump turns vendored-argv pins red, an egress socket incident, or egress becoming the majority.

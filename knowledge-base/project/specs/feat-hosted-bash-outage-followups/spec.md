@@ -8,6 +8,8 @@ brainstorm: knowledge-base/project/brainstorms/2026-10-31-hosted-bash-outage-fol
 
 # Spec: Hosted Bash outage follow-ups
 
+> **Superseded in part by the plan (2026-10-31).** FR3 (derive the deny set from `agentEnv`) is replaced by a coupling assertion in PR 1b because the deny set is constant by design; the work is five PR slots (1a, 1b, 3, 2, 4), not four. PR 1a measured the shared-HOME residual and the CTO ruled it a documented residual with no relocation (ADR-075 addendum 2026-10-31). Where this spec and the plan differ, the plan governs.
+
 ## Problem Statement
 
 Tracker #10455 lists follow-ups from the hosted Bash outage (#10445). Most headline items have shipped (synthetic #10697, smoke and AF_UNIX variant #10546, routed alerts #10892). The remainder is smaller, differently ordered, and includes one cross-tenant read-channel measurement that outranks the rest.
