@@ -138,9 +138,10 @@ REQUIRED = [
     # imports the vendored `zod/v3` inside zod@4.6.6, whose code path carries the
     # same class the GHSA patches on the v4 path -- no fixed inngest exists yet
     # (4.26.2 still imports zod/v3); (2) the "@likec4/core" override is outside
-    # likec4's declared ^3.25.76 range (inert today: @likec4/core@1.50.0 fully
-    # vendors zod) -- drop it when the likec4 1.60 pin-train (#11696) lands
-    # native zod-4.
+    # likec4's declared ^3.25.76 range and is LOAD-BEARING: deleting it
+    # re-vendors the nested zod@3.25.76 (runtime-inert but lockfile-visible --
+    # @likec4/core@1.50.0 itself imports no zod). Drop it only when the likec4
+    # 1.60 pin-train (#11696) lands native zod-4.
     ("web-platform", "zod", 4, "4.6.6"),
     ("pencil-setup", "zod", 4, "4.6.6"),
     ("pen-cli", "zod", 4, "4.6.6"),
