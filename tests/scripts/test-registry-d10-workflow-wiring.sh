@@ -347,6 +347,7 @@ fi
 # the workflow's own to change, and a value pin would only mirror the workflow into this file.
 # Exit 1 is always in the tested population (the header's non-zero codes UNION {1}): it is exercised and
 # barred from the `*)` arm even if the header row for 1 were dropped, and its annotation must name the manifest.
+# It is also compared like any other code: the header table must list 1 exactly when a die/exit site emits it.
 #
 # Also covered here (#10932 residuals 2 and 3): the Restore summary step (`w9_summary_check` runs its body for
 # success, cancelled, failure and an empty outcome and pins its `if` and env); every `die` / `exit` word in the
@@ -354,14 +355,15 @@ fi
 # (`w9_computed_sites`, which also pins the die() body to its reviewed shape, W9_DIE_BODY); and the verdict
 # swap (a nested run of this suite on a drop1 workflow must print the FAIL line carrying the drop1 control's observed
 # detail, and `w9_expect` / `w9_verdict` have canaries). NOT covered: a die whose code arrives through `eval`, an
-# indirect call (a command held in a variable) or a name split by quoting; `kill`, `exec` and errexit exits; the
-# engine's own prose; and, for the summary step, anything outside that one step (another step or a workflow-level
+# indirect call (a command held in a variable) or a name split by quoting; `kill`, `exec` and errexit exits;
+# implicit exits (`return N`, an unbound variable, a failed `${x:?}`); a `die N` / `exit N` that is text rather than
+# a live call (a trailing comment, a heredoc line, a dead branch); code 0; the engine's own prose; and, for the summary step, anything outside that one step (another step or a workflow-level
 # `env` / `defaults` writing or changing the summary, an earlier step failing before the restore step runs).
 #
 # The population is DERIVED (tests/scripts/lib/restore-engine-header.sh): the engine's header
 # table must equal the codes its own `die N` / `exit N` sites emit. Exit 1 follows the rule in
-# that lib: always exercised, never compared. The controls apply one mutation to the workflow text
-# (or one stray `die` to the engine) and require the same check to refuse it.
+# that lib: always exercised, and compared like any other code. The controls apply one mutation to the workflow
+# text (or to the engine) and require the same check to refuse it.
 # shellcheck source=tests/scripts/lib/restore-engine-header.sh
 source "${ROOT}/tests/scripts/lib/restore-engine-header.sh"
 RESTORE_ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
@@ -622,8 +624,8 @@ w9_check() { # <workflow text> <engine text>: prints one problem per line; no ou
   local wf="$1" eng="$2" envm jobm jif body hdr emit maxv code line want tested keys xrc sites
   w9_p=""
   [[ -n "$eng" ]] || { echo "the restore engine is missing or empty at ${RESTORE_ENGINE}"; return; }
-  hdr="$(restore_header_codes <<<"$eng" | grep -vx 1)"; emit="$(restore_emit_codes <<<"$eng" | grep -vx 1)"
-  [[ "$hdr" == "$emit" ]] || w9_add "the engine header table (${hdr//$'\n'/ }) differs from the codes its die/exit sites emit (${emit//$'\n'/ }), both without 1"
+  hdr="$(restore_header_codes <<<"$eng")"; emit="$(restore_emit_codes <<<"$eng")"
+  [[ "$hdr" == "$emit" ]] || w9_add "the engine header table (${hdr//$'\n'/ }) differs from the codes its die/exit sites emit (${emit//$'\n'/ })"
   sites="$(w9_computed_sites <<<"$eng")"
   [[ -z "$sites" ]] || w9_add "computed die/exit site or census problem (restore_emit_codes reads literal codes only, so the comparison above cannot see it): ${sites//$'\n'/ ; }. A hit on prose or a message: reword it to avoid the words die and exit. A real code: write a literal die N / exit N. die-body-changed: the die() body no longer matches W9_DIE_BODY; review the change, then update that pin in this suite."
   tested="$({ echo 1; restore_header_codes <<<"$eng"; } | sort -un)"
@@ -705,6 +707,23 @@ done
 w9_hi=$(( $({ restore_header_codes <<<"$RESTORE_ENGINE_TEXT"; restore_emit_codes <<<"$RESTORE_ENGINE_TEXT"; } | sort -n | tail -1) + 1 ))
 w9_out="$(w9_check "$RESTORE_WF_TEXT" "${RESTORE_ENGINE_TEXT}"$'\n'"die ${w9_hi} \"a code the header does not list\"")"
 _report "W9 control engine-extra-code: refused" "$(w9_expect differs "$w9_out")" "expected a refusal naming 'differs', got: ${w9_out:-<nothing>}"
+# Exit 1 is compared like any other code (#11667): dropping its header row, or every one of its emit sites,
+# must be refused. Each control mutates the real engine text; a mutation that did not land is a failure row
+# of its own, and a landed one adds exactly one passing row.
+w9_mut="$(sed -E '/^#[[:space:]]+1[[:space:]][[:space:]]+[A-Za-z]/d' <<<"$RESTORE_ENGINE_TEXT")"
+if [[ "$w9_mut" == "$RESTORE_ENGINE_TEXT" ]]; then
+  _report "W9 control eng-hdr-row1-removed: the mutation landed" fail "removing the header row for code 1 did not change the engine text"
+else
+  w9_out="$(w9_check "$RESTORE_WF_TEXT" "$w9_mut")"
+  _report "W9 control eng-hdr-row1-removed: refused" "$(w9_expect differs "$w9_out")" "expected a refusal naming 'differs', got: ${w9_out:-<nothing>}"
+fi
+w9_mut="$(sed -E '/^[[:space:]]*#/! s/\b(die|exit) 1\b/\1 2/g' <<<"$RESTORE_ENGINE_TEXT")"
+if [[ "$w9_mut" == "$RESTORE_ENGINE_TEXT" ]]; then
+  _report "W9 control eng-emit-sites1-removed: the mutation landed" fail "rewriting the die/exit 1 sites did not change the engine text"
+else
+  w9_out="$(w9_check "$RESTORE_WF_TEXT" "$w9_mut")"
+  _report "W9 control eng-emit-sites1-removed: refused" "$(w9_expect differs "$w9_out")" "expected a refusal naming 'differs', got: ${w9_out:-<nothing>}"
+fi
 
 # W9c controls (residual 3b): each appends ONE line to the real engine text and requires the census to name exactly it.
 # The census on the unmutated text must be empty first, so the appended line is the only thing that can have produced the offender.
@@ -808,7 +827,7 @@ else _report "W9v meta-control: a drop1 workflow makes the real W9 row print its
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
 # suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
 # single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
-EXPECTED_ASSERTIONS=89
+EXPECTED_ASSERTIONS=91
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"
