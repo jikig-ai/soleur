@@ -1062,6 +1062,65 @@ else
   check fail "Z5: foreign-group rows leaked into the light sample: $(grep -E 'DRIFT_ROW|FLOOR_UNMEASURED' "$FZ5/out.txt")"
 fi
 
+# === Fixture Z6: a loose flat *timings*.tsv inside an artifact-layout dir =====
+# is skipped WITH A WARN — never silently merged, never silently dropped. A
+# mixed dir (nested CI-artifact layout + a stray flat file) merges only the
+# artifacts; the flat file's rows must not reach the sample and the skip must
+# be audible on stderr — a dropped input is indistinguishable from a
+# measurement that never ran.
+FZ6="$WORK/Z6"; mkdir -p "$FZ6/run1/suite-timings-scripts-0"; assert_fixture_dir "$FZ6"
+printf 'z6-floor\t1222\tfloor\nz6-ghost\t1222\tfloor\n' > "$FZ6/durations.tsv"
+{ printf '# fixture incumbent\n# n=1\n'
+  printf 'z6-floor\t1\nz6-ghost\t1\n'; } > "$FZ6/manifest.tsv"
+printf 'z6-floor\t700000\n' > "$FZ6/run1/suite-timings-scripts-0/suite-timings.tsv"
+printf 'z6-ghost\t900000\n' > "$FZ6/run1/loose-suite-timings.tsv"
+if python3 "$GEN" --drift-report --group light --manifest "$FZ6/manifest.tsv" \
+     --durations "$FZ6/durations.tsv" --timings-dir "$FZ6/run1" \
+     > "$FZ6/out.txt" 2> "$FZ6/err.txt"; then
+  check pass "Z6: mixed artifact-layout + loose flat timings file exits 0"
+else
+  check fail "Z6: drift-report refused a mixed layout: $(tail -2 "$FZ6/err.txt")"
+fi
+if grep -qE 'WARN.*(loose|skipp)' "$FZ6/err.txt"; then
+  check pass "Z6: the loose flat file inside an artifact-layout dir is skipped WITH a WARN"
+else
+  check fail "Z6: flat file inside an artifact-layout dir dropped SILENTLY: $(cat "$FZ6/err.txt")"
+fi
+if grep -q 'DRIFT_ROW light z6-ghost' "$FZ6/out.txt"; then
+  check fail "Z6: the skipped flat file leaked z6-ghost into the sample"
+elif grep -qxF 'DRIFT_ROW light z6-floor 1222 700000 1/1' "$FZ6/out.txt" \
+     && grep -qxF 'FLOOR_UNMEASURED light 1' "$FZ6/out.txt"; then
+  check pass "Z6: only the artifact dir's rows merge — the flat file contributes nothing"
+else
+  check fail "Z6: unexpected sample: $(grep -E 'DRIFT_ROW|FLOOR_UNMEASURED' "$FZ6/out.txt")"
+fi
+
+# === Fixture Z7: a foreign-only --timings-dir warns on the non-drift path ======
+# The same dropped-input invisibility on the regen path: a dir carrying only
+# OTHER groups' artifacts contributes an empty sample. The all-floor degrade
+# is legitimate, but the zero contribution itself must be warned, not silent.
+FZ7="$WORK/Z7"; mkdir -p "$FZ7/run/suite-timings-scripts-heavy-0"; assert_fixture_dir "$FZ7"
+printf 'z7-a\n' > "$FZ7/registered.txt"
+printf 'z7-a\t800\n' > "$FZ7/run/suite-timings-scripts-heavy-0/suite-timings.tsv"
+if gen "$FZ7/run" "$FZ7/registered.txt" "$WORK/Z7-manifest.tsv" \
+     --durations-out "$WORK/Z7-durations.tsv" --write \
+     > "$WORK/Z7-out.txt" 2> "$WORK/Z7-err.txt"; then
+  check pass "Z7: foreign-only --timings-dir exits 0 (all-floor degrade)"
+else
+  check fail "Z7: refused: $(tail -2 "$WORK/Z7-err.txt")"
+fi
+if grep -qF 'contributed no timings' "$WORK/Z7-err.txt"; then
+  check pass "Z7: the foreign-only dir's zero contribution is warned, not silent"
+else
+  check fail "Z7: foreign-only dir contributed nothing SILENTLY: $(cat "$WORK/Z7-err.txt")"
+fi
+if grep -qF $'z7-a\t60000\tfloor' "$WORK/Z7-durations.tsv" 2>/dev/null \
+   && ! grep -q 'measured' "$WORK/Z7-durations.tsv"; then
+  check pass "Z7: foreign rows never merged — z7-a floored at DEFAULT_SUITE_MS, not 800"
+else
+  check fail "Z7: foreign rows leaked into the sample: $(cat "$WORK/Z7-durations.tsv" 2>/dev/null)"
+fi
+
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
 # Ordered BEFORE the floor — a neutered helper deflates the verdict counters, and this
 # reports "a verdict was discarded" rather than the misleading "rows were deleted".

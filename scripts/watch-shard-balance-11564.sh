@@ -42,6 +42,15 @@ esac
 
 TRACKER_TITLE='ci-shard-balance-watch: manifest drift findings'
 SENTINEL_PREFIX='<!-- shard-balance-watch:v1 '
+# Canonical artifact-name predicate for the artifact-bearing check: the
+# scripts and scripts-heavy families with a DIGIT suffix only. PINNED COPY of
+# the ANY_ARTIFACT union in scripts/regenerate-shard-manifest.py minus the
+# infra family (the -p download pattern below can never return infra
+# artifacts) — keep the two in lockstep: a suite-timings-scripts-<non-digit>
+# dir is not artifact-shaped, so it neither counts a run here nor reaches the
+# generator's per-group merge (and a dir the -p pattern never names — e.g.
+# suite-timings-infra-N — is never a measurement for this watch).
+ARTIFACT_NAME_RE='^suite-timings-(scripts|scripts-heavy)-[0-9]+$'
 FLOOR_DRIFT_BOUND_MS=300000
 LEG_DRIFT_RATIO=1.30
 SAMPLE=5
@@ -74,14 +83,22 @@ run_dirs=()
 for rid in $runs; do
   d="$WORK/runs/$rid"; mkdir -p "$d"
   if gh run download "$rid" -R "$GH_REPO" -p 'suite-timings-scripts-*' -D "$d" 2>"$WORK/err"; then
-    # A run counts as artifact-bearing only when a suite-timings-scripts-*-named
-    # artifact dir (the -p pattern also covers the -heavy- legs) actually carries
-    # the timings payload — an artifact-shaped dir without the tsv, or a
-    # differently-named artifact's tsv, does not establish a measurement.
-    if find "$d" -mindepth 2 -maxdepth 2 -path '*/suite-timings-scripts-*/suite-timings.tsv' -print -quit | grep -q .; then
+    # A run counts as artifact-bearing only when an ARTIFACT_NAME_RE-named
+    # artifact dir (the -p pattern also covers the -heavy- legs) actually
+    # carries the timings payload — an artifact-shaped dir without the tsv, a
+    # differently-named artifact's tsv, or a non-digit suffix does not
+    # establish a measurement.
+    bearing=0
+    for t in "$d"/*/suite-timings.tsv; do
+      [[ -f "$t" ]] || continue   # unmatched glob iterates once literally
+      if [[ "$(basename "$(dirname "$t")")" =~ $ARTIFACT_NAME_RE ]]; then
+        bearing=1; break
+      fi
+    done
+    if [[ "$bearing" -eq 1 ]]; then
       run_dirs+=("$d")
     else
-      echo "::warning::run $rid downloaded no suite-timings-scripts-*/suite-timings.tsv — skipped" >&2
+      echo "::warning::run $rid downloaded no suite-timings-(scripts|scripts-heavy)-N/suite-timings.tsv — skipped" >&2
     fi
   else
     echo "::warning::run $rid: gh run download failed — skipped ($(tail -1 "$WORK/err"))" >&2
@@ -104,8 +121,10 @@ report="$(python3 "$GEN" "${gargs[@]}" 2>"$WORK/err")" || {
 
 # ---- (4) threshold ------------------------------------------------------------
 # Flagged findings: over-bound floor rows + leg-balance breaches. Each finding
-# is one stable line in the sentinel-hashed set.
-findings=(); flag_ids=(); unmeasured_lines=()
+# is one stable line in the sentinel-hashed set — the sentinel identity is
+# DERIVED from these lines at hash time (step 5), never carried in a parallel
+# array that could silently desync from what the comment reports.
+findings=(); unmeasured_lines=()
 : > "$WORK/legs.txt"
 while IFS= read -r line; do
   case "$line" in
@@ -113,7 +132,6 @@ while IFS= read -r line; do
       read -r _ g label committed fresh ts <<<"$line"
       if (( fresh >= FLOOR_DRIFT_BOUND_MS )); then
         findings+=("floor-row $g $label committed=${committed}ms median=${fresh}ms timed=${ts}")
-        flag_ids+=("floor-row $g $label")
       fi ;;
     LEG_PREDICTED\ *|LEG_OBSERVED\ *) printf '%s\n' "$line" >> "$WORK/legs.txt" ;;
     BOUND_PERFECT\ *) bound_light="${line##* }" ;;
@@ -125,7 +143,6 @@ done <<<"$report"
 while IFS= read -r flag; do
   [[ -n "$flag" ]] || continue
   findings+=("$flag")
-  flag_ids+=("${flag%% max=*}")   # identity = type+group, magnitudes excluded
 done < <(awk -v ratio="$LEG_DRIFT_RATIO" '
   /^LEG_PREDICTED/ { g=$2; s[$2"\t"$3]=$4 }
   END {
@@ -139,7 +156,6 @@ if [[ -n "${bound_light:-}" && "${bound_light:-0}" -gt 0 ]]; then
   if awk -v m="$obs_max" -v b="$bound_light" -v r="$LEG_DRIFT_RATIO" \
        'BEGIN{exit !(m/b > r)}'; then
     findings+=("leg-observed light max=${obs_max}ms bound=${bound_light}ms")
-    flag_ids+=("leg-observed light")
   fi
 fi
 
@@ -151,12 +167,19 @@ if [[ "$PRINT_REPORT" -eq 1 ]]; then
 fi
 
 # ---- (5) compose the would-be comment -----------------------------------------
-# The sentinel hashes flag IDENTITY (type+group+label), never the committed=/
-# median=/timed=/max=/mean=/bound= magnitudes — those slide with the 5-run
-# window, and hashing them would defeat dedupe during a persistent episode.
+# The sentinel hashes flag IDENTITY (type+group+label) derived from the
+# findings themselves — never the committed=/median=/timed=/max=/mean=/bound=
+# magnitudes, which slide with the 5-run window and would defeat dedupe during
+# a persistent episode. Derivation: the identity fields end at the first
+# ` committed=`/` max=` marker (labels are whitespace-free — DRIFT_ROW parses
+# on whitespace); everything past it is magnitude. Deriving at hash time means
+# the hashed set IS the reported set — a constant-payload mutation here
+# collapses S16's computed-vs-computed arm, not just a literal-grep check.
 set_sha=""
 if [[ "${#findings[@]}" -gt 0 ]]; then
-  set_sha="$(printf '%s\n' "${flag_ids[@]}" | LC_ALL=C sort | sha1sum | cut -d' ' -f1)"
+  set_sha="$(printf '%s\n' "${findings[@]}" \
+    | sed -e 's/ committed=.*//' -e 's/ max=.*//' \
+    | LC_ALL=C sort | sha1sum | cut -d' ' -f1)"
 fi
 sentinel="${SENTINEL_PREFIX}drift=${set_sha} -->"
 {
@@ -207,7 +230,10 @@ if [[ -n "$tracker" ]]; then
   # The sentinel can live in the tracker BODY (the create payload) as well as
   # in later comments — scanning comments only would repost the identical set
   # once on the run right after filing. Body is read only when the issue
-  # author is a bot login, so a human quote cannot pre-register a hash.
+  # author is a bot login, so a human quote cannot pre-register a hash. The
+  # capture anchors on the sentinel marker itself ($p) — a bare drift=<40hex>
+  # earlier in the body (a quoted log line, another probe hash) is not watch
+  # state and cannot shadow the sentinel's own hash.
   ijson="$(gh issue view "$tracker" --json body,author,comments 2>"$WORK/err")" || {
     echo "::error::could not read tracker #${tracker}" >&2; exit 3; }
   last_sha="$(printf '%s' "$ijson" | jq -r --arg p "${SENTINEL_PREFIX}drift=" '
@@ -217,7 +243,7 @@ if [[ -n "$tracker" ]]; then
          + [$i.comments[] | select(((.author.login // "") | bot)
              and ((.body // "") | contains($p))) | .body])
       | map(select(contains($p))) | last // ""
-      | (capture("drift=(?<h>[0-9a-f]{40})") | .h) // ""' 2>/dev/null)" || {
+      | (capture($p + "(?<h>[0-9a-f]{40})") | .h) // ""' 2>/dev/null)" || {
     echo "::error::could not evaluate the sentinel state of #${tracker}" >&2; exit 3; }
 fi
 

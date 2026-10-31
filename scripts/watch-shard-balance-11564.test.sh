@@ -285,6 +285,63 @@ run
 [[ "$RC" -eq 3 && "$ERR" == *"zero suite-timings artifacts"* && "$(ncalls 'issue create')" -eq 0 ]] \
   && pass "S15 infra-named artifact only: run skipped, exit 3, never an all-clear" || fail "S15 (rc=$RC)"
 
+# ---- S16: changed membership -> repost AND a DIFFERENT computed sentinel -----
+# Computed-vs-computed: S7's fixed drift=000...1 oracle cannot catch a
+# constant-payload hash (a constant still differs from a hardcoded literal).
+# sentinel_B must differ from sentinel_A whenever the flagged-set MEMBERSHIP
+# differs — same flag count, same flag types, one label swapped.
+mkscene; seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big	1500000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+run; sha_a="$(sentinel_of "$MOCKD/created")"; [[ -n "$sha_a" ]] || fatal "S16 setup: no sentinel captured"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"","comments":[{"author":{"login":"github-actions"},"body":"prior\\n<!-- shard-balance-watch:v1 %s -->"}]}' "$sha_a" > "$MOCKD/issue.json"
+: > "$MOCKD/calls"
+# Same shape (one over-bound floor row, same imbalanced observed leg) but a
+# DIFFERENT member: f-floor-big2 flags where f-floor-big did.
+seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big2	1500000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+run
+sha_b="$(sentinel_of "$MOCKD/bodies")"
+[[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 1 && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "S16a changed membership reposts on the open tracker" || fail "S16a (comments=$(ncalls 'issue comment'))"
+[[ -n "$sha_b" && "$sha_b" != "$sha_a" ]] \
+  && pass "S16b sentinel_B != sentinel_A — the hash reads the set, not a constant" || fail "S16b (A=$sha_a B=$sha_b)"
+
+# ---- S17: a stray drift=<hex> before the sentinel cannot shadow it -----------
+# The capture is anchored on the sentinel marker itself — a bot-authored body
+# mentioning a bare drift=<40hex> earlier (a quoted log line, another probe's
+# hash) does not pre-register watch state.
+mkscene; seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big	1500000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+run; sha="$(sentinel_of "$MOCKD/created")"; [[ -n "$sha" ]] || fatal "S17 setup: no sentinel captured"
+: > "$MOCKD/calls"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"","comments":[{"author":{"login":"github-actions"},"body":"quoted log line drift=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa here\\n<!-- shard-balance-watch:v1 %s -->"}]}' "$sha" > "$MOCKD/issue.json"
+run
+[[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 0 && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "S17 a stray drift=<hex> before the sentinel does not shadow it (dedupe binds)" || fail "S17 (comments=$(ncalls 'issue comment'))"
+
+# ---- S18: a non-digit artifact suffix is not artifact-shaped -----------------
+# The counted shape is suite-timings-(scripts|scripts-heavy)-<digits> — the
+# same predicate the generator merges on (pinned copies, see ARTIFACT_NAME_RE).
+# A suite-timings-scripts-<non-digit> dir yields ZERO artifact rows: the run
+# is skipped, exit 3, never an all-clear.
+mkscene; seed 101 suite-timings-scripts-foo <<'EOF'
+f-floor-big	1500000
+EOF
+run
+[[ "$RC" -eq 3 && "$ERR" == *"zero suite-timings artifacts"* && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "S18 non-digit artifact suffix: run skipped, exit 3, never an all-clear" || fail "S18 (rc=$RC)"
+
 # ---- S10: workflow contract --------------------------------------------------
 [[ -s "$WF" ]] || fatal "workflow missing: $WF"
 wf="$(grep -vE '^[[:space:]]*#' "$WF")"
@@ -323,7 +380,7 @@ else
 fi
 
 echo; echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
-MIN_ASSERTIONS=20
+MIN_ASSERTIONS=24
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 2
 fi

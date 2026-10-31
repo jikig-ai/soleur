@@ -125,6 +125,10 @@ INFRA_ARTIFACT = re.compile(r"^suite-timings-infra-\d+$")
 # dir IS a CI-artifact layout" (vs a local dir of arbitrary names like leg1/),
 # so a foreign group's artifact can never launder into a group's sample via
 # the arbitrary-name fallback in fetch_timings_from_dir.
+# scripts/watch-shard-balance-11564.sh mirrors the scripts|scripts-heavy half
+# of this predicate (ARTIFACT_NAME_RE) for its artifact-bearing check — keep
+# the two copies in lockstep: the \d+$ anchor is load-bearing, a non-digit
+# suffix is not artifact-shaped.
 ANY_ARTIFACT = re.compile(
     r"^suite-timings-(scripts|scripts-heavy|infra)-\d+$")
 
@@ -264,8 +268,18 @@ def fetch_timings_from_dir(d, artifact_re=None):
     nested = matching if artifact_layout else (matching or nested_all)
     # Flat files must be *timings*.tsv, not *.tsv — a stray notes.tsv in the
     # dir would merge garbage labels or die on a bad ms field. They merge only
-    # outside an artifact layout: inside one, artifacts are the only source.
-    flat = [] if artifact_layout else glob.glob(os.path.join(d, "*timings*.tsv"))
+    # outside an artifact layout: inside one, artifacts are the only source —
+    # and a loose flat file beside them is skipped LOUDLY, never silently:
+    # a dropped input is indistinguishable from a measurement that never ran.
+    flat = glob.glob(os.path.join(d, "*timings*.tsv"))
+    if artifact_layout:
+        if flat:
+            print(f"WARN: {d}: skipping {len(flat)} loose *timings*.tsv "
+                  f"file(s) at the top level of a CI-artifact-layout dir — "
+                  f"artifact dirs are the only source inside a layout "
+                  f"({', '.join(sorted(os.path.basename(p) for p in flat))})",
+                  file=sys.stderr)
+        flat = []
     paths = sorted(nested + flat)
     if not paths:
         if artifact_layout:
@@ -927,7 +941,15 @@ def main():
                   file=sys.stderr)
     elif args.timings_dir:
         for d in args.timings_dir:
-            per_run.append((f"dir:{d}", fetch_timings_from_dir(d, artifact_re)))
+            t = fetch_timings_from_dir(d, artifact_re)
+            if not t:
+                # A dir that contributes nothing — foreign-group artifacts
+                # only, a non-digit suffix, or every row excluded — must say
+                # so: an invisible zero-row sample reads like a measurement.
+                print(f"WARN: --timings-dir {d} contributed no timings for "
+                      f"this group ({artifact_re.pattern}) — it adds nothing "
+                      f"to the aggregation", file=sys.stderr)
+            per_run.append((f"dir:{d}", t))
         src = "dir:" + ",".join(
             os.path.basename(os.path.abspath(d)) for d in args.timings_dir)
     else:
