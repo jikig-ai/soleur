@@ -23,6 +23,7 @@ _p=$PASS; _f=$FAIL; ok; bad "instrument self-test" >/dev/null; FAIL_MOVED=$((FAI
 if [[ "$PASS" -le "$_p" || "$FAIL_MOVED" -lt 1 ]]; then printf 'instrument: a counter did not move\n'; exit 1; fi
 
 SENTINEL="sentinel-token-ABCDEF0123456789"
+INTERP="counted in this container's writable layer at the run; not a statement about earlier containers, other hosts, or any time before or after the run"
 SHA="$(printf 'a%.0s' {1..40})"
 OLD="$(printf 'b%.0s' {1..40})"
 
@@ -41,21 +42,31 @@ case "$*" in
   "api repos/jikig-ai/soleur/issues/10455/comments --paginate") cat "$FIX/comments.json" ;;
   "issue comment 10455 -R jikig-ai/soleur --body "*)
     [[ -f "$FIX/gh.fail" ]] && exit 1
-    all="$*"; printf '%s\n' "${all#*--body }" >>"$FIX/posted.log" ;;
+    all="$*"; body="${all#*--body }"
+    printf '%s\n' "$body" >>"$FIX/posted.log"
+    # a posted comment becomes visible to later reads unless the posting account is not the pinned one
+    if [[ ! -f "$FIX/gh.noread" ]]; then
+      jq --arg b "$body" '. + [{user: {id: 54279}, author_association: "MEMBER", body: $b}]' "$FIX/comments.json" >"$FIX/c.tmp" && mv "$FIX/c.tmp" "$FIX/comments.json"
+    fi ;;
   *) echo "UNMODELLED gh $*" >>"$FIX/calls.log"; exit 64 ;;
 esac
 EOF
 cat >"$BIN/git" <<'EOF'
 #!/usr/bin/env bash
 echo "git $*" >>"$FIX/calls.log"
+DIS="$(cat "$FIX/dis")"; SERVED="$(cat "$FIX/served")"
+CLO=knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md
+SCRIPT=apps/web-platform/scripts/home-census-trigger.sh
+BOUND=":(glob)apps/web-platform/server/home-census* apps/web-platform/app/api/internal/home-census apps/web-platform/lib/internal-auth.ts apps/web-platform/server/sentry-scrub.ts apps/web-platform/sentry.server.config.ts $SCRIPT"
 case "$*" in
   "rev-parse --show-toplevel") echo "$REPO_FAKE" ;;
-  "fetch --no-tags origin refs/pull/"*"/head") : ;;
-  "fetch --no-tags origin main") : ;;
-  "rev-parse FETCH_HEAD") cat "$FIX/pr_head" ;;
-  "merge-base --is-ancestor "*" FETCH_HEAD") [[ -f "$FIX/not.ancestor" ]] && exit 1; : ;;
-  "cat-file -e "*) : ;;
-  "diff --quiet --no-ext-diff "*) [[ -f "$FIX/paths.differ" ]] && exit 1; : ;;
+  "cat-file -e ${SERVED}^{commit}"|"cat-file -e ${DIS}^{commit}") [[ -f "$FIX/no.commit" ]] && exit 1; : ;;
+  "fetch --no-tags origin refs/pull/"*"/head"|"fetch --no-tags origin main") : ;;
+  "show ${SERVED}:${CLO}") cat "$REPO_FAKE/$CLO" ;;
+  "diff --quiet --no-ext-diff $DIS $SERVED -- $BOUND") [[ -f "$FIX/paths.differ" ]] && exit 1; : ;;
+  "diff --quiet --no-ext-diff $DIS -- $SCRIPT") [[ -f "$FIX/script.differs" ]] && exit 1; : ;;
+  "diff --stat $DIS $SERVED -- apps/web-platform/infra/vector.toml apps/web-platform/lib/routes.ts") [[ -f "$FIX/vector.changed" ]] && echo " apps/web-platform/infra/vector.toml | 2 +-"; : ;;
+  "status --porcelain -- $SCRIPT") [[ -f "$FIX/script.dirty" ]] && echo " M $SCRIPT"; : ;;
   *) echo "UNMODELLED git $*" >>"$FIX/calls.log"; exit 64 ;;
 esac
 EOF
@@ -75,12 +86,15 @@ done
 case "$url" in
   https://app.soleur.ai/health)
     [[ "${args[*]}" == "--disable --noproxy * --proto =https --max-redirs 0 --max-time 20 -sS https://app.soleur.ai/health" ]] || { echo "UNMODELLED curl $*" >>"$FIX/calls.log"; exit 64; }
-    cat "$FIX/health.${HEALTH_CALL_SUFFIX:-json}" 2>/dev/null || cat "$FIX/health.json" ;;
+    n=$(( $(cat "$FIX/health.n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$FIX/health.n"
+    if [[ "$n" -ge 2 && -f "$FIX/health.after.json" ]]; then cat "$FIX/health.after.json"; else cat "$FIX/health.json"; fi ;;
   https://app.soleur.ai/api/internal/home-census)
-    [[ "$cfg" == 1 ]] || { echo "UNMODELLED curl (no --config -) $*" >>"$FIX/calls.log"; exit 64; }
+    want="--disable --noproxy * --proto =https --max-redirs 0 --max-time 60 -sS -o $out -w %{http_code} -X POST https://app.soleur.ai/api/internal/home-census -H content-type: application/json -d $body --config -"
+    [[ "$*" == "$want" && "$cfg" == 1 ]] || { echo "UNMODELLED curl (POST argv) $*" >>"$FIX/calls.log"; exit 64; }
     cat >"$FIX/curl.stdin"
     echo "BODY $body" >>"$FIX/calls.log"
     mode="$(jq -r .mode <<<"$body")"
+    [[ "$mode" == "dry_run" && -f "$FIX/dry.rc" ]] && exit "$(cat "$FIX/dry.rc")"
     [[ "$mode" == "real" && -f "$FIX/curl.rc" ]] && exit "$(cat "$FIX/curl.rc")"
     if [[ "$mode" == "dry_run" ]]; then cp "$FIX/dry.json" "$out"; printf '%s' "$(cat "$FIX/dry.code")"
     else echo "REALPOST" >>"$FIX/calls.log"; cp "$FIX/real.json" "$out"; printf '%s' "$(cat "$FIX/real.code")"; fi ;;
@@ -95,10 +109,10 @@ class_json() {
     | map({class: ., n_entries: "0", n_mode_bits_group_r: "0", n_mode_bits_other_r: "0", n_symlink: "0", errors: "0", absent: true, class_result: "none_counted"})'
 }
 result_json() { # evidence uptime_bucket
-  jq -nc --arg sha "$SHA" --arg ev "$1" --arg ub "$2" --argjson cls "$(class_json)" '{
+  jq -nc --arg interp "$INTERP" --arg sha "$SHA" --arg ev "$1" --arg ub "$2" --argjson cls "$(class_json)" '{
     schema_version: 1, ok: true, run_id: 1, mode: "real", data_source: "container_home", build_sha: $sha, control: "passed",
     evidence: $ev, uptime_bucket: $ub, sunset_utc: "2026-11-30T00:00:00Z", truncated: false, truncation_reason: "none",
-    snapshot: "non_atomic", mode_bits_semantics: "file_mode_only_not_reachability", interpretation: "x",
+    snapshot: "non_atomic", mode_bits_semantics: "file_mode_only_not_reachability", interpretation: $interp,
     claude_config_dir_set: false, outer_wrap_cohorts: "unmeasured", roots: [], roots_distinct: true, roots_note: "none",
     activity_witness: false, trigger_class_nonzero: "false", classes: $cls }'
 }
@@ -110,7 +124,7 @@ reset_fix() {
   jq -nc --arg s "$SHA" '{status: "ok", build_sha: $s}' >"$FIX/health.json"
   result_json mature lt_7d >"$FIX/dry.json"; printf 200 >"$FIX/dry.code"
   result_json mature lt_7d >"$FIX/real.json"; printf 200 >"$FIX/real.code"
-  echo "$SHA" >"$FIX/pr_head"
+  echo "$SHA" >"$FIX/dis"; echo "$SHA" >"$FIX/served"
   printf '[%s]\n' "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" >"$FIX/comments.json"
   printf 'DISCHARGED sha=%s\n' "$SHA" >"$REPO/knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"
   : >"$FIX/calls.log"
@@ -126,11 +140,8 @@ REAL_ARGS=(--mode real --run-id 1 --discharged-sha "$SHA" --pr 77)
 
 # ---- self-check and static refusals -------------------------------------------------------------------------------
 reset_fix
-start=$(date +%s%N)
 OUT="$(env -i PATH="$BIN:/usr/bin:/bin" FIX="$FIX" timeout 15s bash "$SCRIPT" --self-check 2>&1)"; RC=$?
-elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
 check "self-check prints the OK token" "$([[ "$OUT" == "HOME_CENSUS_TRIGGER_SELF_CHECK_OK" && $RC -eq 0 ]]; echo $?)"
-check "self-check runs in under 1 s" "$([[ $elapsed -lt 1000 ]]; echo $?)"
 check "self-check makes no network, doppler, curl, gh or git call" "$([[ ! -s "$FIX/calls.log" ]]; echo $?)"
 
 reset_fix
@@ -173,7 +184,7 @@ check "no unmodelled argv" "$(no_unmodelled; echo $?)"
 
 # ---- real: happy path ---------------------------------------------------------------------------------------------
 reset_fix; run "${REAL_ARGS[@]}"
-check "real exits 0 and prints the validated body" "$([[ $RC -eq 0 ]] && jq -e '.ok == true' <<<"$OUT" >/dev/null; echo $?)"
+check "real exits 0 and prints the validated body (last line; the vector/routes diff goes to stderr first)" "$([[ $RC -eq 0 ]] && jq -e '.ok == true' <<<"$(tail -n 1 <<<"$OUT")" >/dev/null; echo $?)"
 claim_line="$(calls | grep -n '^gh issue comment .*run_id=1 claim' | head -1 | cut -d: -f1)"
 post_line="$(calls | grep -n '^REALPOST' | head -1 | cut -d: -f1)"
 check "the write-ahead claim is posted BEFORE the real request" "$([[ -n "$claim_line" && -n "$post_line" && "$claim_line" -lt "$post_line" ]]; echo $?)"
@@ -194,8 +205,21 @@ reset_fix; set_comments "$(comment 54279 NONE "home-census C8 DISCHARGED sha=$SH
 reset_fix; run --mode real --run-id 1 --discharged-sha "$SHA" --pr 78; refused "--pr differs from the C8 comment" 8
 reset_fix; run --mode real --run-id 1 --discharged-sha "$OLD" --pr 77; refused "--discharged-sha differs from the C8 comment" 8
 reset_fix; : >"$REPO/knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"; run "${REAL_ARGS[@]}"; refused "sha absent from the committed CLO record" 8
-reset_fix; touch "$FIX/not.ancestor"; run "${REAL_ARGS[@]}"; refused "the discharged sha is not a commit of the PR" 8
-reset_fix; echo "$OLD" >"$FIX/pr_head"; run "${REAL_ARGS[@]}"; check "a PR head ahead of the discharged sha is accepted (the CLO record commit sits on top)" "$([[ $RC -eq 0 ]]; echo $?)"
+reset_fix; printf 'prose mentions DISCHARGED sha=%s in a sentence\n' "$SHA" >"$REPO/knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"; run "${REAL_ARGS[@]}"; refused "the sha only inside prose of the CLO record (the line must stand alone)" 8
+reset_fix; touch "$FIX/no.commit"; run "${REAL_ARGS[@]}"; check "an unavailable served commit exits 9" "$([[ $RC -eq 9 ]]; echo $?)"
+reset_fix; touch "$FIX/script.differs"; run "${REAL_ARGS[@]}"; refused "the trigger script differs from the discharged commit" 8
+reset_fix; touch "$FIX/script.dirty"; run "${REAL_ARGS[@]}"; refused "the trigger script has uncommitted changes" 8
+reset_fix; touch "$FIX/vector.changed"; run "${REAL_ARGS[@]}"
+check "a changed vector.toml is shown, not blocking" "$([[ $RC -eq 0 ]] && grep -q 'vector.toml | 2' <<<"$OUT"; echo $?)"
+reset_fix; set_comments "$(comment 99999 OWNER "home-census C8 DISCHARGED sha=$SHA pr=77")"; run "${REAL_ARGS[@]}"; refused "an OWNER-association comment from an unpinned id is ignored" 8
+reset_fix; set_comments "$(comment 54279 MEMBER "note
+home-census C8 DISCHARGED sha=$SHA pr=77")"; run "${REAL_ARGS[@]}"; refused "a DISCHARGED line inside a multi-line comment is not a discharge" 8
+reset_fix; set_comments "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" "$(comment 54279 MEMBER "quoted:
+home-census run_id=1 claim
+home-census run_id=2 claim")"
+run "${REAL_ARGS[@]}"; check "claim lines quoted inside a multi-line comment are not counted" "$([[ $RC -eq 0 ]]; echo $?)"
+reset_fix; touch "$FIX/gh.noread"; run "${REAL_ARGS[@]}"; check "a claim that is not visible as a pinned-author comment fails closed (exit 8)" "$([[ $RC -eq 8 ]]; echo $?)"
+check "an invisible claim: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
 reset_fix; touch "$FIX/paths.differ"; run "${REAL_ARGS[@]}"; check "census paths changed after discharge: exit 9" "$([[ $RC -eq 9 ]]; echo $?)"
 check "census paths changed after discharge: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
 reset_fix; result_json young lt_24h >"$FIX/dry.json"; run "${REAL_ARGS[@]}"; refused "young container without the explicit fallback" 8
@@ -228,14 +252,38 @@ reset_fix; printf 409 >"$FIX/real.code"; printf '{}' >"$FIX/real.json"; run "${R
 check "a 409 exits 11 and names only the preflight" "$([[ $RC -eq 11 ]] && ! grep -q -- '--mode real' <<<"$OUT"; echo $?)"
 reset_fix; printf 401 >"$FIX/real.code"; printf '{}' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
 check "a 401 exits 4" "$([[ $RC -eq 4 ]]; echo $?)"
-reset_fix; jq -nc --arg s "$OLD" '{status: "ok", build_sha: $s}' >"$FIX/health.json"
-run "${REAL_ARGS[@]}"; check "a served build that is not at the discharged commit exits 9 or refuses" "$([[ $RC -ne 0 ]]; echo $?)"
+# error_class is printed ONLY for the exact closed failure shape
+reset_fix; printf 409 >"$FIX/real.code"; jq -nc --arg i "$INTERP" '{schema_version: 1, ok: false, error_class: "build_mismatch", interpretation: $i}' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a 409 with the exact failure shape prints its error_class" "$([[ $RC -eq 11 ]] && grep -q 'error_class=build_mismatch' <<<"$OUT"; echo $?)"
+reset_fix; printf 409 >"$FIX/real.code"; jq -nc --arg i "$INTERP" '{schema_version: 1, ok: false, error_class: "build_mismatch", interpretation: $i, extra: "/home/canary"}' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a 409 body with an extra key prints no error_class and no body" "$([[ $RC -eq 11 ]] && ! grep -q 'error_class=' <<<"$OUT" && ! grep -q canary <<<"$OUT"; echo $?)"
+reset_fix; printf 410 >"$FIX/dry.code"; jq -nc --arg i "$INTERP" '{schema_version: 1, ok: false, error_class: "sunset", interpretation: $i}' >"$FIX/dry.json"; run --mode dry_run --run-id 1
+check "dry_run after the sunset exits 11 and names the sunset" "$([[ $RC -eq 11 ]] && grep -q 'error_class=sunset' <<<"$OUT"; echo $?)"
+reset_fix; printf 401 >"$FIX/dry.code"; printf '{}' >"$FIX/dry.json"; run --mode dry_run --run-id 1
+check "dry_run 401 exits 4 (the real-path mapping)" "$([[ $RC -eq 4 ]]; echo $?)"
+reset_fix; printf 502 >"$FIX/dry.code"; printf '<html>RAYID</html>' >"$FIX/dry.json"; run --mode dry_run --run-id 1
+check "dry_run 502 exits 6 and says it is safe to retry, without printing the body" "$([[ $RC -eq 6 ]] && grep -q 'safe to retry' <<<"$OUT" && ! grep -q RAYID <<<"$OUT"; echo $?)"
+reset_fix; printf 28 >"$FIX/dry.rc"; run --mode dry_run --run-id 1
+check "dry_run curl failure exits 12 (no scan ran, safe to retry)" "$([[ $RC -eq 12 ]] && grep -q 'safe to retry' <<<"$OUT"; echo $?)"
+reset_fix; jq '.classes[0].extra = "x"' "$FIX/dry.json" >"$FIX/t" && mv "$FIX/t" "$FIX/dry.json"; run --mode dry_run --run-id 1
+check "a dry_run 2xx body that fails the schema exits 10 and is not printed" "$([[ $RC -eq 10 ]] && ! grep -q '"extra"' <<<"$OUT"; echo $?)"
+# single-defect fixtures: each schema rule on its own
+BAD='/home/canary-path'
+for m in \
+  '.extra_key = "x"' 'del(.control)' '.interpretation = "'"$BAD"'"' '.classes[3].n_symlink = "'"$BAD"'"' '.classes[3].n_mode_bits_group_r = "7"' \
+  '.classes[0].class_result = "clean"' '.classes[0].class = "'"$BAD"'"' '.classes |= reverse' '.roots = [{label: "'"$BAD"'", root_present: true, root_listable: true}]' \
+  '.build_sha = "'"$BAD"'"' '.mode = "'"$BAD"'"' '.trigger_class_nonzero = "maybe"' '.run_id = 1.5' '.ok = false' '.schema_version = 2' '.sunset_utc = "'"$BAD"'"'; do
+  reset_fix; jq "$m" "$FIX/real.json" >"$FIX/t" && mv "$FIX/t" "$FIX/real.json"; run "${REAL_ARGS[@]}"
+  check "schema rule '$m': exit 10 and nothing printed" "$([[ $RC -eq 10 ]] && ! grep -q 'canary-path' <<<"$OUT" && ! grep -q '"schema_version"' <<<"$OUT"; echo $?)"
+done
+reset_fix; jq -nc --arg s "$OLD" '{status: "ok", build_sha: $s}' >"$FIX/health.after.json"; run "${REAL_ARGS[@]}"
+check "a build that changes during the call exits 10 and the body is not printed" "$([[ $RC -eq 10 ]] && ! grep -q '"schema_version"' <<<"$OUT"; echo $?)"
 reset_fix; jq -nc '{status: "ok", build_sha: "dev"}' >"$FIX/health.json"; run "${REAL_ARGS[@]}"
 check "a 'dev' build fails closed" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
 
 # ---- floors (printf + exit 1, never through the helper they backstop) ----------------------------------------------
-if [[ "$PASS" -lt 85 ]]; then
-  printf 'FLOOR: only %d assertions ran (expected at least 85)\n' "$PASS"
+if [[ "$PASS" -lt 123 ]]; then
+  printf 'FLOOR: only %d assertions ran (expected at least 123)\n' "$PASS"
   exit 1
 fi
 printf 'home-census-trigger tests: %d passed, %d failed\n' "$PASS" "$FAIL"

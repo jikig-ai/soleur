@@ -3,6 +3,7 @@
 // Every fixture is synthesized (cq-test-fixtures-synthesized-only): no test scans a real HOME.
 // The allowlist below is deliberately written HERE and not imported from the module, so the test
 // cannot certify itself (learning 2026-09-14-a-registry-that-carries-its-own-hash-certifies-itself).
+import { spawnSync } from "node:child_process";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -1066,3 +1067,60 @@ function homeTreeAt(root: string): Record<string, Node> {
   const t = homeTree("/home/t");
   return Object.fromEntries(Object.entries(t).map(([k, v]) => [k.replace("/home/t", root), v]));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Parity: the trigger script's jq schema must accept exactly what the server emits (no hand-copied list may drift).
+// ---------------------------------------------------------------------------------------------
+describe("trigger script schema parity", () => {
+  beforeEach(resetState);
+  const script = readFileSync(resolve(__dirname, "../../scripts/home-census-trigger.sh"), "utf8");
+  const interp = /^INTERPRETATION="([^"]*)"$/m.exec(script)?.[1] ?? "";
+  const program = (name: string) => {
+    const m = new RegExp(`${name}\\(\\) \\{[\\s\\S]*?jq -e[r]? --arg interp "\\$INTERPRETATION" '([\\s\\S]*?)'`).exec(script);
+    return m?.[1] ?? "";
+  };
+  const jq = (prog: string, json: unknown) => spawnSync("jq", ["-e", "--arg", "interp", interp, prog], { input: JSON.stringify(json) });
+
+  it("the script's INTERPRETATION equals the one the server emits", async () => {
+    const { deps } = makeDeps();
+    const body = JSON.parse(await (await handleHomeCensus(post({ run_id: 5, mode: "dry_run" }), deps)).text());
+    expect(interp.length).toBeGreaterThan(20);
+    expect(body.interpretation).toBe(interp);
+  });
+
+  it("body_valid accepts every server variant: dry_run, real, truncated, young, all-zero", async () => {
+    const prog = program("body_valid");
+    expect(prog.length, "the jq program was extracted").toBeGreaterThan(200);
+    const variants: Array<[string, Partial<CensusDeps>, Record<string, unknown>]> = [
+      ["dry_run", {}, { run_id: 1, mode: "dry_run" }],
+      ["real", {}, { run_id: 2, mode: "real", expect_build_sha: SHA }],
+      ["truncated", { entryCap: 3 }, { run_id: 3, mode: "real", expect_build_sha: SHA }],
+      ["young", { uptime: () => 100 }, { run_id: 4, mode: "real", expect_build_sha: SHA, accept_young: true }],
+      ["all-zero", { fs: memFs({ "/home": d(), "/home/soleur": d() }) }, { run_id: 5, mode: "real", expect_build_sha: SHA }],
+    ];
+    for (const [name, over, body] of variants) {
+      resetState();
+      const { deps } = makeDeps(over);
+      const json = JSON.parse(await (await handleHomeCensus(post(body), deps)).text());
+      const r = jq(prog, json);
+      expect(r.status, `${name}: ${r.stderr}`).toBe(0);
+    }
+    // and it refuses a body the server never emits
+    const { deps } = makeDeps();
+    const json = JSON.parse(await (await handleHomeCensus(post({ run_id: 6, mode: "dry_run" }), deps)).text());
+    json.classes[0].extra = "x";
+    expect(jq(prog, json).status).not.toBe(0);
+  });
+
+  it("failure_class accepts every failure body the server emits and nothing else", async () => {
+    const prog = program("failure_class");
+    expect(prog.length).toBeGreaterThan(100);
+    const { deps } = makeDeps();
+    const res = await handleHomeCensus(post({ run_id: 1, mode: "dry_run" }, "Bearer wrong"), deps);
+    const json = JSON.parse(await res.text());
+    const ok = jq(`select(${prog.replace(/^select\(/, "").replace(/\) \| \.error_class$/, "")}) | .error_class`, json);
+    expect(ok.stdout.toString().trim()).toBe('"unauthorized"');
+    json.extra = "x";
+    expect(jq(`select(${prog.replace(/^select\(/, "").replace(/\) \| \.error_class$/, "")}) | .error_class`, json).status).not.toBe(0);
+  });
+});

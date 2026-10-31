@@ -16,8 +16,16 @@ E_EPOCH="$(date -u -d "$EARLIEST" +%s)"
 declare -a RCS=()
 run "$EARLIEST" "$((E_EPOCH - 1))";  RCS+=("$RC"); check "one second before earliest exits 2" "$([[ $RC -eq 2 ]]; echo $?)"
 run "$EARLIEST" "$E_EPOCH";          RCS+=("$RC"); check "at earliest exits 5" "$([[ $RC -eq 5 ]]; echo $?)"
-run "$EARLIEST" "$((E_EPOCH + 86400 * 30))"; RCS+=("$RC"); check "long after earliest still exits 5" "$([[ $RC -eq 5 ]]; echo $?)"
+run "$EARLIEST" "$((E_EPOCH + 86400 * 10))"; RCS+=("$RC"); check "ten days after earliest (before the sunset) still exits 5" "$([[ $RC -eq 5 ]]; echo $?)"
 check "the action text names only the preflight command" "$(grep -q -- '--mode dry_run' <<<"$OUT" && ! grep -q -- '--mode real' <<<"$OUT"; echo $?)"
+run "$EARLIEST" "$(date -u -d "2026-11-30T00:00:00Z" +%s)"; RCS+=("$RC")
+check "at the sunset the probe says to retire, not to run" "$([[ $RC -eq 5 ]] && grep -q 'sunset has passed' <<<"$OUT" && grep -q 'Do not run the census' <<<"$OUT"; echo $?)"
+run "$EARLIEST" "$(( $(date -u -d "2026-11-30T00:00:00Z" +%s) - 1 ))"; RCS+=("$RC")
+check "one second before the sunset it still says the census can be considered" "$([[ $RC -eq 5 ]] && grep -q 'can now be considered' <<<"$OUT"; echo $?)"
+MOD_SUNSET="$(sed -n 's/^export const SUNSET_UTC = "\([^"]*\)";$/\1/p' "$HERE/../../apps/web-platform/server/home-census.ts")"
+PROBE_SUNSET="$(sed -n 's/^SUNSET_UTC="\([^"]*\)"$/\1/p' "$PROBE")"
+check "the probe's sunset equals the module's SUNSET_UTC (non-empty on both sides)" "$([[ -n "$MOD_SUNSET" && "$MOD_SUNSET" == "$PROBE_SUNSET" ]]; echo $?)"
+check "the action text says a real run is blocked until the CLO discharge" "$(run "$EARLIEST" "$E_EPOCH"; grep -q 'blocked until the controller records the CLO discharge' <<<"$OUT"; echo $?)"
 for bad in "" "tomorrow" "now" "@0" "2026-11-02" "2026-11-02T00:00:00+02:00"; do
   run "$bad" "$E_EPOCH"; RCS+=("$RC"); check "unusable clock '$bad' exits 3" "$([[ $RC -eq 3 ]]; echo $?)"
 done
@@ -26,8 +34,8 @@ for rc in "${RCS[@]}"; do check "never exits 0 or 1 (saw $rc)" "$([[ $rc -ne 0 &
 CODE="$(sed -E 's/^[[:space:]]*#.*$//' "$PROBE")"
 check "the probe touches no secret, network or census" "$(! grep -qiE 'doppler|curl|wget|INNGEST|secret|gh api|gh issue' <<<"$CODE"; echo $?)"
 check "the probe has a RETIREMENT line" "$(grep -q '^# RETIREMENT:' "$PROBE"; echo $?)"
-if [[ "$PASS" -lt 24 ]]; then
-  printf 'FLOOR: only %d assertions ran (expected at least 24)\n' "$PASS"
+if [[ "$PASS" -lt 29 ]]; then
+  printf 'FLOOR: only %d assertions ran (expected at least 29)\n' "$PASS"
   exit 1
 fi
 printf 'home-census-run probe tests: %d passed, %d failed\n' "$PASS" "$FAIL"

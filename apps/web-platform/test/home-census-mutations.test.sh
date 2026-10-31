@@ -52,7 +52,10 @@ M = [
  ("G4-4 canary hard-coded true", 4, [('      return (await d.read()) !== null;', '      return true;')]),
  ("G4-5 entry cap disabled", 4, [('        if (total >= entryCap) {', '        if (false) {')]),
  ("G4-6 two classes swapped in the scan plan", 4, [('{ ids: ["debug"], rel: ".claude/debug", kind: "dir" },', '{ ids: ["debug"], rel: ".claude/todos", kind: "dir" },')]),
- ("G4-7 terminal catch dropped on an fs promise", 4, [('const settled = p.then(noop, noop);', 'const settled = p.then(noop);')]),
+ ("G4-7 terminal catch dropped on an fs promise", 4, [('const settled = p.then(closeLate, noop);', 'const settled = p.then(closeLate);')]),
+ ("G4-8 account_state counted as a witness", 4, [('const WITNESS_CLASSES = ["sessions_json", "shell_snapshots"]', 'const WITNESS_CLASSES = ["sessions_json", "shell_snapshots", "account_state"]')]),
+ ("G4-9 an all-inconclusive headline collapses to false", 4, [('        : TRIGGER_CLASSES.some((c) => results[c] === "inconclusive")\n          ? "inconclusive"\n          : "false",', '        : "false",')]),
+ ("G4-10 a symlinked class reads as zero instead of unknown", 4, [('      primary.symlink++;\n      cutAll(step);\n      return;', '      primary.symlink++;\n      return;')]),
 ]
 def apply(idx, path):
     name, guard, edits = M[idx]
@@ -85,11 +88,20 @@ FAILED=0
 note() { printf '%s\n' "$*"; }
 
 # ---- always-on: vacuity, landing, baseline, instrument control -----------------------------------------------------
-if [[ "$N" -lt 17 ]]; then note "FLOOR: the battery holds $N mutations (expected 17)"; exit 1; fi
+LANDED=0
 for ((i = 0; i < N; i++)); do
   cp "$PRISTINE" "$SBR/probe.ts"
-  out="$(python3 "$SBR/mut.py" apply "$i" "$SBR/probe.ts" 2>&1)" || { note "LANDING FAILED: $out"; FAILED=1; }
+  if out="$(python3 "$SBR/mut.py" apply "$i" "$SBR/probe.ts" 2>&1)"; then
+    LANDED=$((LANDED + 1))
+  else
+    note "LANDING FAILED: $out"
+    FAILED=1
+  fi
 done
+if [[ "$LANDED" -lt 20 ]]; then
+  printf 'FLOOR: only %d mutations landed (expected 20)\n' "$LANDED"
+  exit 1
+fi
 run_vitest; rc=$?
 if [[ "$rc" -ne 0 ]]; then note "BASELINE is not green (rc=$rc): the battery cannot be interpreted"; tail -15 "$SBR/vitest.out"; exit 1; fi
 note "baseline: green (instrument control: the pristine copy exits 0)"
@@ -97,7 +109,9 @@ printf 'export const BROKEN = (\n' >>"$SB/server/home-census.ts"
 run_vitest; rc=$?
 cp "$PRISTINE" "$SB/server/home-census.ts"
 if [[ "$rc" -ne 1 ]]; then note "INSTRUMENT: a deliberately broken copy exited $rc, not 1; rc=1 cannot be trusted as 'caught'"; exit 1; fi
-note "instrument control: a broken copy exits 1"
+# A copy that fails to LOAD must not look like a failed assertion: a kill needs vitest's own "Tests N failed" summary line.
+if grep -qE '^ *Tests +[0-9]+ failed' "$SBR/vitest.out"; then note "INSTRUMENT: a copy that does not load printed a failed-test summary; the kill judge cannot tell the two apart"; exit 1; fi
+note "instrument control: a broken copy exits 1 and prints no failed-test summary"
 
 if [[ "$FULL" != "1" ]]; then
   [[ "$FAILED" -eq 0 ]] || exit 1
@@ -114,7 +128,9 @@ for ((i = 0; i < N; i++)); do
   run_vitest; rc=$?
   EXEC=$((EXEC + 1))
   case "$rc" in
-    1) RED=$((RED + 1)); note "RED         $name" ;;
+    1)
+      if grep -qE '^ *Tests +[0-9]+ failed' "$SBR/vitest.out"; then RED=$((RED + 1)); note "RED         $name"
+      else UNRES=$((UNRES + 1)); note "UNRESOLVED  $name (rc=1 without a failed-test summary: it did not load)"; fi ;;
     0) SURV=$((SURV + 1)); note "SURVIVED    $name" ;;
     *) UNRES=$((UNRES + 1)); note "UNRESOLVED  $name (rc=$rc)" ;;
   esac
