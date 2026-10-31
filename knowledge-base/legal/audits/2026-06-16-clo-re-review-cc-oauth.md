@@ -148,7 +148,7 @@ attestation and **not a substitute for licensed external counsel.**
 
 **Conditions (all implemented on the merge of PR #11715; see the ADR-048 addendum of the same date).**
 
-1. The mode is resolved first for a cross-owner lease; only an exact `api-key` skips both the subscription-row SELECT and the owner-gate refusal. Every other outcome (managed, unresolved, invalid, no resolver, resolver error, workspace mismatch) follows the previous path unchanged, with no new failure mode.
+1. The mode is resolved first for a cross-owner lease; only an exact `api-key` skips both the subscription-row SELECT and the owner-gate refusal. Every other outcome (managed, unresolved, invalid, no resolver, resolver error, workspace mismatch) follows the previous path unchanged, with no new failure mode (a scope that ends mid-await propagates as `escape`).
 2. Owner (non-delegated) behavior is unchanged.
 3. Consent, withdrawal, caps, cost attribution to the grantor and the audit row still apply.
 4. Failing-first tests with negative controls and an equality mutation check.
