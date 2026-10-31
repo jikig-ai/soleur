@@ -26,7 +26,8 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,12 +82,14 @@ async function runBash(opts: {
   sandbox: unknown;
   env?: Record<string, string | undefined>;
   signal?: AbortSignal;
+  /** The user prompt the CLI persists (G2 plants a per-run marker here); the scripted stub ignores its text. */
+  prompt?: string;
 }): Promise<ToolResult | null> {
   const controller = new AbortController();
   opts.signal?.addEventListener("abort", () => controller.abort());
   let found: ToolResult | null = null;
   const q = query({
-    prompt: "run it",
+    prompt: opts.prompt ?? "run it",
     options: {
       abortController: controller,
       model: "claude-haiku-4-5-20251001",
@@ -298,6 +301,12 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
   let rootB: string;
   let home: string;
   let shimDir: string;
+  // #10455 (PR 1a): per-run synthesized markers for the content A's real CLI persists. promptNeedle rides A's user prompt,
+  // toolNeedle is printed by A's scripted Bash call; neither is a secret. B must not be able to read either anywhere.
+  let promptNeedle: string;
+  let toolNeedle: string;
+  // A's exported env: the CLI snapshots the shell environment it spawns Bash with, so a tenant credential in agentEnv can land on disk.
+  let envNeedle: string;
   const savedPath = process.env.PATH;
 
   // Runs inside B's sandbox. For every pathname socket in the shared dir it sends a CONNECT with (1) no
@@ -322,6 +331,18 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       `hits=$(grep -rIlF --exclude=probe.sh -- "$needle" /tmp "$TMPDIR" "$HOME" 2>/dev/null | head -5)`,
       `echo NEEDLE_HITS=$(printf '%s' "$hits" | grep -c .)`,
       `echo NEEDLE_PATHS=$(printf '%s' "$hits" | tr '\\n' ,)`,
+      // #10455 PR 1a: one pass over everything B can read for the two content markers (prompt text, tool output).
+      `pn='${promptNeedle}'; tn='${toolNeedle}'; en='${envNeedle}'`,
+      `all=$(grep -rIoHF --exclude=probe.sh -e "$pn" -e "$tn" -e "$en" /tmp "$TMPDIR" "$HOME" 2>/dev/null | sort -u)`,
+      `echo ENV_NEEDLE_HITS=$(printf '%s\\n' "$all" | grep -cF ":$en")`,
+      `echo ENV_NEEDLE_PATHS=$(printf '%s\\n' "$all" | grep -F ":$en" | cut -d: -f1 | tr '\\n' ,)`,
+      `echo PROMPT_NEEDLE_HITS=$(printf '%s\\n' "$all" | grep -cF ":$pn")`,
+      `echo PROMPT_NEEDLE_PATHS=$(printf '%s\\n' "$all" | grep -F ":$pn" | cut -d: -f1 | tr '\\n' ,)`,
+      `echo TOOL_NEEDLE_HITS=$(printf '%s\\n' "$all" | grep -cF ":$tn")`,
+      `echo TOOL_NEEDLE_PATHS=$(printf '%s\\n' "$all" | grep -F ":$tn" | cut -d: -f1 | tr '\\n' ,)`,
+      // Which of the CLI's other persisted files B can read at all (names only, ids collapsed): the residual surface the content
+      // markers above cannot see (session metadata, keys, shell snapshots, account state).
+      `echo HOME_READABLE=$(find "$HOME/.claude" "$HOME/.claude.json" -maxdepth 3 -type f -readable 2>/dev/null | sed "s|$HOME/||; s/[0-9a-f]\\{8\\}-[0-9a-f-]\\{27\\}/<uuid>/g; s/-tmp-[^/]*/-<cwd>/; s/[0-9]\\{4,\\}/N/g" | sort -u | tr '\\n' ,)`,
       `echo SESSION_TMP_ROOT_ENTRIES=$(ls -A ${AGENT_SESSION_TMP_ROOT} 2>/dev/null | grep -c .)`,
       `lc=$(printf '%s' "$needle" | sed 's/%3D/=/g')`,
       `for s in $([ -n "$hits" ] && echo ${dir}/*.sock); do [ -S "$s" ] || continue; b=$(basename "$s")`,
@@ -348,7 +369,10 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     mkdirSync(join(rootB, "00000000-0000-0000-0000-00000000000b"));
     writeFileSync(join(shimDir, "bwrap"), `#!/usr/bin/env bash\nexec ${JSON.stringify(BWRAP_SHIM)} "$@"\n`);
     spawnSync("chmod", ["+x", join(shimDir, "bwrap")], { stdio: "ignore" });
-    stubA = await startAnthropicStub("env; sleep 60");
+    promptNeedle = `PROMPTNEEDLE${randomBytes(6).toString("hex")}`;
+    toolNeedle = `TOOLNEEDLE${randomBytes(6).toString("hex")}`;
+    envNeedle = `ENVNEEDLE${randomBytes(6).toString("hex")}`;
+    stubA = await startAnthropicStub(`echo ${toolNeedle}; env; sleep 60`);
     stubB = await startAnthropicStub(`bash ${shared}/probe.sh`);
     scrubAmbientCliEnv();
     pointCliAtStub(stubA.port, home, "decoy-api-key-sentinel");
@@ -406,6 +430,32 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     return null;
   };
 
+  /** Host side: every regular file under the roots whose content holds `value` (no symlinks followed; probe.sh excluded). */
+  const hostPathsHolding = (value: string, roots: string[]): string[] => {
+    const found: string[] = [];
+    const walk = (d: string): void => {
+      let entries: import("node:fs").Dirent[];
+      try {
+        entries = readdirSync(d, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const p = join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.isFile() && e.name !== "probe.sh") {
+          try {
+            if (statSync(p).size < 8_000_000 && readFileSync(p, "utf8").includes(value)) found.push(p);
+          } catch {
+            /* unreadable or vanished */
+          }
+        }
+      }
+    };
+    roots.forEach(walk);
+    return found;
+  };
+
   const scenario = async (perTenantTmp: boolean) => {
     const ownA = join(rootA, "00000000-0000-0000-0000-00000000000a");
     const ownB = join(rootB, "00000000-0000-0000-0000-00000000000b");
@@ -418,8 +468,9 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       home,
       cwd: ownA,
       sandbox: sandboxA,
-      env: tenantEnv(IDS.a, perTenantTmp),
+      env: { ...tenantEnv(IDS.a, perTenantTmp), G2_TENANT_ENV_MARKER: envNeedle },
       signal: stopA.signal,
+      prompt: `${promptNeedle} please run the scripted command`,
     });
     try {
       // Wait until A's bridge socket exists: B must run while A is live, or the probe has nothing to find.
@@ -433,6 +484,24 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       const nDeadline = Date.now() + 60_000;
       while (Date.now() < nDeadline && !(needle = findNeedle(perTenantTmp))) await new Promise((r) => setTimeout(r, 500));
       expect(needle, "A's persisted `env` output never appeared, so the cross-tenant scan would be vacuous").not.toBeNull();
+      // #10455 PR 1a non-vacuity, per needle class: the REAL CLI must have persisted each marker at a named host path before
+      // B's zero-hit result can mean anything. A class A never persisted is "not_exercisable" and fails here, never green.
+      const hostRoots = [home, shared, agentSessionTmpDir(IDS.a)];
+      const waitForHost = async (value: string): Promise<string[]> => {
+        const d = Date.now() + 30_000;
+        let paths: string[] = [];
+        while (Date.now() < d && (paths = hostPathsHolding(value, hostRoots)).length === 0) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        return paths;
+      };
+      const hostPrompt = await waitForHost(promptNeedle);
+      const hostTool = await waitForHost(toolNeedle);
+      const hostEnv = await waitForHost(envNeedle);
+      expect(hostPrompt, "not_exercisable: A's CLI never persisted its prompt marker anywhere host-visible").not.toEqual([]);
+      expect(hostTool, "not_exercisable: A's CLI never persisted its tool-output marker anywhere host-visible").not.toEqual([]);
+      expect(hostEnv, "not_exercisable: A's CLI never persisted its exported-env marker anywhere host-visible").not.toEqual([]);
+      const rel = (ps: string[]) => ps.map((p) => p.replace(home, "$HOME").replace(shared, "$TMPDIR")).join(",");
       writeFileSync(join(shared, "probe.sh"), probeScript(shared, needle!));
 
       const result = await runBash({
@@ -460,7 +529,69 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       // be able to replay it. The control arm (shared CLI temp, the pre-fix layout) PROVES the scan can see the leak.
       const hits = Number(/^NEEDLE_HITS=(\d+)$/m.exec(out)?.[1] ?? "-1");
       const replays = [...out.matchAll(/^REPLAY (\S+) \[(.*)\]$/gm)].map((m) => ({ sock: m[1], line: m[2] }));
+      const hitsOf = (label: string) => Number(new RegExp(`^${label}_HITS=(\\d+)$`, "m").exec(out)?.[1] ?? "-1");
+      const pathsOf = (label: string) => new RegExp(`^${label}_PATHS=(.*)$`, "m").exec(out)?.[1] ?? "?";
+      // Record the measurement (host paths where A's CLI persisted each marker, and what B could read) for the ADR addendum.
+      // Inventory of what A's real CLI left under the shared HOME (relative, session-id segments collapsed): the classes the
+      // tracker lists (history.jsonl, debug, todos, tasks, shell-snapshots) are reported present or absent, not assumed.
+      const homeInventory = (() => {
+        const names = new Set<string>();
+        const walk = (d: string, depth: number): void => {
+          if (depth > 3) return;
+          let entries: import("node:fs").Dirent[];
+          try {
+            entries = readdirSync(d, { withFileTypes: true });
+          } catch {
+            return;
+          }
+          for (const e of entries) {
+            const p = join(d, e.name);
+            if (e.isDirectory()) walk(p, depth + 1);
+            else names.add(p.slice(home.length + 1).replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, "<uuid>").replace(/-tmp-[^/]+/g, "-<cwd>"));
+          }
+        };
+        walk(home, 0);
+        return [...names].sort().join(",");
+      })();
+      // Host side: the top-level key NAMES (never values) of the session metadata files B can read, and whether A's workspace id
+      // appears in them. This is what Phase 1b's relocation decision turns on.
+      const metaShape = (() => {
+        const out: string[] = [];
+        const keys = (f: string): string => {
+          try {
+            return Object.keys(JSON.parse(readFileSync(f, "utf8"))).sort().join("|");
+          } catch {
+            return "unparseable";
+          }
+        };
+        try {
+          for (const f of readdirSync(join(home, ".claude", "sessions"))) {
+            const full = join(home, ".claude", "sessions", f);
+            if (f.endsWith(".json")) out.push(`sessions/*.json keys=${keys(full)} holds_A_workspace_id=${readFileSync(full, "utf8").includes(IDS.a)}`);
+            else out.push(`sessions/*.key bytes=${statSync(full).size}`);
+          }
+        } catch {
+          /* no sessions dir */
+        }
+        try {
+          const f = join(home, ".claude.json");
+          out.push(`.claude.json keys=${keys(f)} holds_A_workspace_id=${readFileSync(f, "utf8").includes(IDS.a)}`);
+        } catch {
+          /* absent */
+        }
+        return out.join(" ; ");
+      })();
+      const measure =
+        `G2_MEASURE perTenantTmp=${perTenantTmp} home_inventory=[${homeInventory}] B_home_readable=[${/^HOME_READABLE=(.*)$/m.exec(out)?.[1] ?? "?"}] meta=[${metaShape}] host_prompt=[${rel(hostPrompt)}] host_tool=[${rel(hostTool)}] host_env=[${rel(hostEnv)}] ` +
+        `B_env_hits=${hitsOf("ENV_NEEDLE")} B_env_paths=[${pathsOf("ENV_NEEDLE")}] ` +
+        `B_prompt_hits=${hitsOf("PROMPT_NEEDLE")} B_prompt_paths=[${pathsOf("PROMPT_NEEDLE")}] ` +
+        `B_tool_hits=${hitsOf("TOOL_NEEDLE")} B_tool_paths=[${pathsOf("TOOL_NEEDLE")}]`;
+      // The runner swallows test console output on this project; an opt-in file sink keeps the measurement recoverable.
+      if (process.env.G2_MEASURE_OUT) writeFileSync(`${process.env.G2_MEASURE_OUT}.${perTenantTmp ? "tenant" : "control"}`, `${measure}\n`);
       if (perTenantTmp) {
+        expect(hitsOf("PROMPT_NEEDLE"), `B read A's prompt at: ${pathsOf("PROMPT_NEEDLE")}`).toBe(0);
+        expect(hitsOf("TOOL_NEEDLE"), `B read A's tool output at: ${pathsOf("TOOL_NEEDLE")}`).toBe(0);
+        expect(hitsOf("ENV_NEEDLE"), `B read A's exported env at: ${pathsOf("ENV_NEEDLE")}`).toBe(0);
         expect(replays, "B found nothing to replay").toEqual([]);
         expect(hits, `B found A's credential at: ${/^NEEDLE_PATHS=(.*)$/m.exec(out)?.[1]}`).toBe(0);
         expect(Number(/^SESSION_TMP_ROOT_ENTRIES=(\d+)$/m.exec(out)?.[1] ?? "-1"), "B sees a sibling's CLI temp base").toBe(1);
