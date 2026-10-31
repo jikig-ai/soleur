@@ -59,26 +59,36 @@ emit() { # emit <json-or-text> honoring a trailing --jq filter
   case "$args" in *"--jq"*) jqf="${args##*--jq }"; jqf="${jqf%% *}";; esac
   if [[ -n "$jqf" ]]; then jq -r "$jqf" <<<"$data"; else printf '%s\n' "$data"; fi
 }
-pr_json() { # pr_json <merged>
-  printf '{"data":{"repository":{"mergeQueue":{"entries":{"totalCount":%s}},"pullRequest":{"id":"PR_x","state":"%s","merged":%s,"isInMergeQueue":%s,"headRefOid":"%s","autoMergeRequest":%s,"mergeQueueEntry":%s}}}}' \
+pr_json() { # pr_json <merged> [<head>]
+  printf '{"data":{"repository":{"mergeQueue":{"entries":{"totalCount":%s}},"pullRequest":{"id":"PR_x","state":"%s","merged":%s,"isInMergeQueue":%s,"headRefOid":"%s","baseRefName":"%s","autoMergeRequest":%s,"mergeQueueEntry":%s}}}}' \
     "${GH_FIX_DEPTH:-2}" "${GH_FIX_STATE:-OPEN}" "${1:-false}" "${GH_FIX_INQ:-false}" \
-    "${GH_FIX_HEAD:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" \
+    "${2:-${GH_FIX_HEAD:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}" "${GH_FIX_BASE:-main}" \
     "$( [[ "${GH_FIX_ARMED:-true}" == true ]] && printf '{"enabledAt":"2026-10-31T00:00:00Z"}' || printf 'null' )" \
     "$( [[ "${GH_FIX_INQ:-false}" == true ]] && printf '{"position":3,"state":"QUEUED"}' || printf 'null' )"
 }
 case "$args" in
   repo\ view*) emit "jikig-ai/soleur" ;;
-  api\ user*)  emit "operator-test" ;;
+  api\ user*)  emit '{"login":"operator-test"}' ;;
   pr\ comment*) [[ "${GH_FIX_COMMENTFAIL:-}" == 1 ]] && exit 1 || { echo posted; exit 0; } ;;
   api\ graphql*)
     if [[ "$args" == *enqueuePullRequest* ]]; then
+      # the mutation must be a jump, bound with raw-field vars (-F, literal)
+      [[ "$args" == *"jump:true"* ]] || { echo "stub gh: mutation lacks jump:true" >&2; exit 64; }
+      [[ "$args" == *"-F pr="* && "$args" == *"-F oid="* ]] || { echo "stub gh: mutation vars not -F bound" >&2; exit 64; }
       [[ "${GH_FIX_MUTFAIL:-}" == 1 ]] && exit 1
       emit '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"position":1,"state":"QUEUED"},"clientMutationId":null}}}'
     else
+      # the probe binds $o/$n/$pr by name — a renamed variable is a dead probe (P0 class)
+      [[ "$args" == *"-F o="* && "$args" == *"-F n="* && "$args" == *"-F pr="* ]] \
+        || { echo "stub gh: probe vars not bound as -F o=/n=/pr=" >&2; exit 64; }
       n=$(grep -c 'api graphql' "${GH_CALLS}" 2>/dev/null); n="${n//[[:space:]]/}"
-      if [[ "${GH_FIX_MERGED:-}" == 1 ]]; then emit "$(pr_json true)"
-      elif [[ "${GH_FIX_MERGEBETWEEN:-}" == 1 && "${n:-0}" -ge 2 ]]; then emit "$(pr_json true)"
-      else emit "$(pr_json false)"; fi
+      [[ "${GH_FIX_PROBEFAIL:-}" == 1 && "${n:-0}" -eq 1 ]] && { echo "gh: HTTP 500" >&2; exit 1; }
+      [[ "${GH_FIX_PROBEFAIL:-}" == 2 && "${n:-0}" -eq 2 ]] && { echo "gh: HTTP 500" >&2; exit 1; }
+      h="${GH_FIX_HEAD:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+      [[ "${n:-0}" -ge 2 && -n "${GH_FIX_HEAD2:-}" ]] && h="$GH_FIX_HEAD2"
+      if [[ "${GH_FIX_MERGED:-}" == 1 ]]; then emit "$(pr_json true "$h")"
+      elif [[ "${GH_FIX_MERGEBETWEEN:-}" == 1 && "${n:-0}" -ge 2 ]]; then emit "$(pr_json true "$h")"
+      else emit "$(pr_json false "$h")"; fi
     fi ;;
   *) exit 64 ;;
 esac
@@ -110,16 +120,29 @@ t inqueue-happy      0 "jumped PR #42"                  GH_FIX_INQ=true -- 42 --
 t already-merged     0 "already merged"                 GH_FIX_MERGED=1 -- 42 --reason r --yes
 t merged-in-confirm  0 "merged during confirmation"     GH_FIX_MERGEBETWEEN=1 -- 42 --reason r --yes
 t mutation-fail      1 "rejected"                       GH_FIX_MUTFAIL=1 -- 42 --reason r --yes
-t unattributed       3 "attribution comment FAILED"     GH_FIX_COMMENTFAIL=1 -- 42 --reason r --yes
+t unattributed       3 "attribution incomplete"         GH_FIX_COMMENTFAIL=1 -- 42 --reason r --yes
 t closed-refuse      1 "is CLOSED"                      GH_FIX_STATE=CLOSED -- 42 --reason r --yes
 t blank-reason       1 "--reason is required"           -- 42 --reason "   " --yes
+t nonmain-refuse     1 "does not target main"           GH_FIX_BASE=develop -- 42 --reason r --yes
+t probe1-fail        1 "probe failed"                   GH_FIX_PROBEFAIL=1 -- 42 --reason r --yes
+t probe2-fail        1 "re-probe failed"                GH_FIX_PROBEFAIL=2 -- 42 --reason r --yes
 
-# mutation must carry expectedHeadOid == the probed head (pinned, re-read):
+# refusals must never reach the mutation — a refused jump that still mutates is a P1.
+for row in "GH_FIX_ARMED=false" "GH_FIX_STATE=CLOSED" "GH_FIX_BASE=develop"; do
+  : > "$GH_CALLS"
+  env "$row" bash "$SUT" 42 --reason r --yes </dev/null >/dev/null 2>&1 || true
+  if grep -q 'enqueuePullRequest' "$GH_CALLS"; then fail "refusal path $row still attempted the mutation"
+  else pass "refusal path $row never mutates"; fi
+done
+
+# mutation must carry expectedHeadOid == the SECOND (post-confirm) probed head:
 : > "$GH_CALLS"
-env GH_FIX_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb bash "$SUT" 42 --reason r --yes </dev/null >/dev/null 2>&1
-if grep -q 'oid=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\|-F oid=bbbbbbbb' "$GH_CALLS" \
-   && grep -q 'enqueuePullRequest' "$GH_CALLS"; then
-  pass "mutation pins expectedHeadOid to the probed head"
+env GH_FIX_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    GH_FIX_HEAD2=cccccccccccccccccccccccccccccccccccccccc \
+    bash "$SUT" 42 --reason r --yes </dev/null >/dev/null 2>&1
+if grep -q -- '-F oid=cccccccccccccccccccccccccccccccccccccccc' "$GH_CALLS" \
+   && ! grep -q -- '-F oid=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$GH_CALLS"; then
+  pass "mutation pins expectedHeadOid to the re-read head, not the first probe"
 else fail "mutation expectedHeadOid pin (calls: $(tr '\n' '|' < "$GH_CALLS"))"; fi
 
 # attribution must carry --reason verbatim on the PR:

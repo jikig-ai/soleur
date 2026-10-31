@@ -176,9 +176,23 @@ run_cases() {
   else pass "P1b every gh call is a read (no -X/--method/--input; graphql -f/-F are read inputs)"; fi
 
   newgrp; run_sut "$FX"
-  if [[ "$RC" -eq 0 && "$OUT" == *"merge-queue-cla-verify=OK members=2"* ]]; then
-    pass "P2 2-member group all-green verifies members=2"
-  else fail "P2 group all-green did not verify members=2 (rc=$RC out=$OUT)"; fi
+  if [[ "$RC" -eq 0 && "$OUT" == *"merge-queue-cla-verify=OK members=2"* ]] \
+     && grep -Fq "commits/${S40_E}/check-runs" "$CALLS" && grep -Fq "commits/${S40_A}/check-runs" "$CALLS"; then
+    pass "P2 2-member group all-green verifies members=2 and reads EACH member head"
+  else fail "P2 group all-green did not verify members=2 with per-member reads (rc=$RC out=$OUT)"; fi
+
+  # a member whose highest-id run is still QUEUED (not completed) is not green.
+  newgrp
+  pages "$FX" "$S40_E" "[$(cr cla-check 15368 queued null 2026-10-03T10:00:00Z 101),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)]"
+  run_sut "$FX"
+  expect_red "F-queued member's queued (not completed) cla-check is not success" "cla-check"
+
+  # gapped positions: the member set must be contiguous with the anchor —
+  # positions [1,3] anchored at 3 is a sparse set, not a group.
+  newgrp
+  entries_json "[$(entry 1 "$S40_B" 4241 "$S40_E"),$(entry 3 "$S40_C" $PR "$S40_A")]" > "$FX/entries.json"
+  run_sut "$FX"
+  expect_red "F-gap positions gapped from the anchor refuse a sparse member set" "contiguous"
 
   # anchor fallback: no headCommit match anywhere AND the named entry's own
   # headCommit is null (schema-nullable) — the named PR's entry anchors legitimately.

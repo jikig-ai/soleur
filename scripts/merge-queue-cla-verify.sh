@@ -59,14 +59,16 @@ die() {
 [[ "${HEAD_REF:-}" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)-([0-9a-f]{40})$ ]] \
   || die "head_ref does not match refs/heads/gh-readonly-queue/main/pr-<N>-<40 hex>"
 pr="${BASH_REMATCH[1]}"
+[[ "${BASH_REMATCH[2]}" == "$HEAD_SHA" ]] \
+  || die "head_ref embeds sha ${BASH_REMATCH[2]} but head_sha is ${HEAD_SHA} — a tampered pairing is refused"
 
 # gh_read <label> <gh api args...> : the reply lands in $REPLY_JSON. Not a command substitution,
 # because die inside one would print into the captured variable and be swallowed. A gh failure is
 # retried ONCE after a short pause (a transient 5xx must not eject a healthy PR from the queue), and
 # a second failure is fatal and names the endpoint kind (never read as an empty answer): bounded,
-# fail closed. Worst case 2 x (60 s + pause) per read; the verify step in
-# merge-queue-cla-synthetics.yml carries timeout-minutes: 3 so an overrun is a step FAILURE that
-# fires the failure-post, not a job cancellation that leaves both contexts pending.
+# fail closed. Worst case (1 entries read + up to 3 member reads) x 2 attempts x (25 s + pause)
+# fits inside the verify step's timeout-minutes: 4, which itself fires the failure-post — a
+# job-level cancellation would not reach `if: failure()`.
 # MQ_VERIFY_RETRY_DELAY (seconds, 0-99, matching the regex below) is a test seam; the workflow does not set it.
 RETRY_DELAY=3
 [[ "${MQ_VERIFY_RETRY_DELAY:-}" =~ ^[0-9]{1,2}$ ]] && RETRY_DELAY="$((10#$MQ_VERIFY_RETRY_DELAY))"
@@ -75,7 +77,7 @@ gh_read() {
   local label="$1" attempt
   shift
   for attempt in 1 2; do
-    if REPLY_JSON="$(timeout 60 gh api "$@")"; then return 0; fi
+    if REPLY_JSON="$(timeout 25 gh api "$@")"; then return 0; fi
     [[ "$attempt" -eq 2 ]] || sleep "$RETRY_DELAY"
   done
   die "gh api failed reading ${label} for PR #${pr}"
@@ -163,7 +165,7 @@ latest_program='[.[].check_runs[]? | select(.name == $n and .app.id == 15368)]
 
 member_lines=()
 while IFS=' ' read -r mpr mhead; do
-  [[ -n "$mpr" ]] || continue
+  [[ -n "$mpr" ]] || die "blank member row enumerated — the member set is corrupt, refusing"
   [[ "$mhead" =~ ^[0-9a-f]{40}$ ]] || die "member PR #${mpr} head sha is not 40 lowercase hex characters"
   gh_read "the check-runs of member PR #${mpr}" --paginate \
     "repos/${REPO}/commits/${mhead}/check-runs?filter=all&per_page=100"

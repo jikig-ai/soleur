@@ -79,15 +79,15 @@ PROBE='query($o:String!,$n:String!,$pr:Int!){
   repository(owner:$o,name:$n){
     mergeQueue(branch:"main"){ entries(first:1){ totalCount } }
     pullRequest(number:$pr){
-      id state merged isInMergeQueue headRefOid
+      id state merged isInMergeQueue headRefOid baseRefName
       autoMergeRequest{ enabledAt }
     }
   }
 }'
 
 probe() {
-  gh api graphql -F o="$OWNER" -F n="$NAME" -F pr="$PR" -f query="$PROBE" \
-    --jq '{n:(.data.repository.mergeQueue.entries.totalCount),id:.data.repository.pullRequest.id,state:.data.repository.pullRequest.state,merged:.data.repository.pullRequest.merged,inq:.data.repository.pullRequest.isInMergeQueue,head:.data.repository.pullRequest.headRefOid,armed:(.data.repository.pullRequest.autoMergeRequest!=null)}'
+  timeout 60 gh api graphql -F o="$OWNER" -F n="$NAME" -F pr="$PR" -f query="$PROBE" \
+    --jq '{n:(.data.repository.mergeQueue.entries.totalCount),id:.data.repository.pullRequest.id,state:.data.repository.pullRequest.state,merged:.data.repository.pullRequest.merged,inq:.data.repository.pullRequest.isInMergeQueue,head:.data.repository.pullRequest.headRefOid,base:.data.repository.pullRequest.baseRefName,armed:(.data.repository.pullRequest.autoMergeRequest!=null)}'
 }
 
 FIRST="$(probe)" || die "probe failed — check gh auth scopes (contents+pull-requests write)"
@@ -106,11 +106,12 @@ if [[ "$armed" != "true" && "$inq" != "true" ]]; then
   die "PR #$PR is not in the merge queue and has no auto-merge armed — 'gh pr merge $PR --squash --auto' first"
 fi
 [[ "$depth" =~ ^[0-9]+$ ]] || die "queue depth read failed"
+[[ "$(jq -r '.base' <<<"$FIRST")" == "main" ]] || die "PR #$PR does not target main — the jump path is the main merge queue"
 
-note "PR #$PR state=$state inQueue=$inq armed=$armed; $depth entr$( [[ "$depth" == 1 ]] && echo y || echo ies ) in flight — a jump rebuilds ALL of them."
+note "PR #$PR in $REPO state=$state inQueue=$inq armed=$armed; $depth entr$( [[ "$depth" == 1 ]] && echo y || echo ies ) in flight — a jump rebuilds ALL of them."
 
 if [[ "$YES" -ne 1 ]]; then
-  read -r -p "merge-queue-jump: type 'jump' to confirm: " ans
+  read -r -p "merge-queue-jump: type 'jump' to confirm: " ans || die "aborted (EOF on stdin)"
   [[ "$ans" == "jump" ]] || die "aborted — '$ans' is not 'jump'"
 fi
 
@@ -120,6 +121,8 @@ SECOND="$(probe)" || die "re-probe failed before mutation"
 head="$(jq -r '.head' <<<"$SECOND")"
 merged2="$(jq -r '.merged' <<<"$SECOND")"
 [[ "$merged2" == "true" ]] && { note "PR #$PR merged during confirmation — nothing to jump."; exit 0; }
+inq2="$(jq -r '.inq' <<<"$SECOND")"; armed2="$(jq -r '.armed' <<<"$SECOND")"
+[[ "$armed2" == "true" || "$inq2" == "true" ]] || die "PR #$PR left the queue during confirmation — refusing to jump"
 [[ "$head" =~ ^[0-9a-f]{40}$ ]] || die "could not pin expectedHeadOid — refusing to jump an unpinned head"
 
 note "jumping PR #$PR at head ${head:0:10}…"
@@ -127,13 +130,14 @@ MUT='mutation($pr:ID!,$oid:GitObjectID!){
   enqueuePullRequest(input:{pullRequestId:$pr,expectedHeadOid:$oid,jump:true}){
     mergeQueueEntry{ position state } clientMutationId } }'
 
-if ! gh api graphql -F pr="$prid" -F oid="$head" -f query="$MUT" --jq '.data.enqueuePullRequest.mergeQueueEntry.position' >/dev/null 2>&1; then
-  die "enqueuePullRequest(jump:true) rejected — permission, stale head, or queue state changed; see runbook"
-fi
+newpos="$(timeout 60 gh api graphql -F pr="$prid" -F oid="$head" -f query="$MUT" --jq '.data.enqueuePullRequest.mergeQueueEntry.position' 2>/dev/null)" \
+  || die "enqueuePullRequest(jump:true) rejected — permission, stale head, or queue state changed; see runbook"
+[[ "$newpos" =~ ^[0-9]+$ ]] \
+  || die "enqueuePullRequest returned a non-entry payload (position='$newpos') — the jump did not land"
 
 ACTOR="$(gh api user --jq .login 2>/dev/null || echo "unknown")"
-if ! gh pr comment "$PR" -R "$REPO" --body "merge-queue jump requested by \`$ACTOR\` — $REASON" >/dev/null 2>&1; then
-  echo "merge-queue-jump: JUMPED but attribution comment FAILED — record '$ACTOR: $REASON' on PR #$PR manually" >&2
+if ! gh pr comment "$PR" -R "$REPO" --body "merge-queue jump requested by \`$ACTOR\` — $REASON" >/dev/null 2>&1 || [[ "$ACTOR" == "unknown" ]]; then
+  echo "merge-queue-jump: JUMPED but attribution incomplete — record '$(git config user.name 2>/dev/null || echo operator): $REASON' on PR #$PR manually" >&2
   exit 3
 fi
-note "jumped PR #$PR; attribution posted as $ACTOR."
+note "jumped PR #$PR (position $newpos); attribution posted as $ACTOR."
