@@ -6,7 +6,7 @@
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Sentry from "@sentry/nextjs";
 
 import {
@@ -453,6 +453,9 @@ function makeDeps(over: Partial<CensusDeps> = {}) {
 }
 
 const ORIG_SECRET = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
+afterAll(async () => {
+  await Sentry.close(1000).catch(() => {});
+});
 beforeEach(() => {
   process.env.INNGEST_MANUAL_TRIGGER_SECRET = SECRET;
 });
@@ -473,9 +476,13 @@ function resetState() {
 // ---------------------------------------------------------------------------------------------
 type Envelope = [Record<string, unknown>, Array<[{ type: string }, Record<string, unknown>]>];
 
-async function withRealSentry<T>(fn: (captured: Envelope[]) => Promise<T>): Promise<{ result: T; envelopes: Envelope[] }> {
-  const envelopes: Envelope[] = [];
-  await Sentry.close(2000).catch(() => {});
+let sink: Envelope[] = [];
+let sentryReady = false;
+// Initialized ONCE per file: a re-init after Sentry.close() in the same worker captures nothing (the global
+// carrier keeps the closed client), which would make every "no event leaked" assertion vacuous.
+function ensureSentry() {
+  if (sentryReady) return;
+  sentryReady = true;
   Sentry.init({
     dsn: "https://public@o0.ingest.sentry.io/0",
     serverName: "canary-host-name-0000",
@@ -484,7 +491,7 @@ async function withRealSentry<T>(fn: (captured: Envelope[]) => Promise<T>): Prom
     release: "web-platform@test+r1",
     transport: () => ({
       send: async (env: unknown) => {
-        envelopes.push(env as Envelope);
+        sink.push(env as Envelope);
         return { statusCode: 200 };
       },
       flush: async () => true,
@@ -496,9 +503,14 @@ async function withRealSentry<T>(fn: (captured: Envelope[]) => Promise<T>): Prom
   Sentry.addBreadcrumb({ message: "canary breadcrumb /home/canary-tenant/secret", category: "canary" });
   Sentry.setTag("canary_tag", "canary-global-tag");
   Sentry.setContext("canary_ctx", { path: CANARY_PATH });
-  const result = await fn(envelopes);
-  await Sentry.close(2000);
-  return { result, envelopes };
+}
+
+async function withRealSentry<T>(fn: (captured: Envelope[]) => Promise<T>): Promise<{ result: T; envelopes: Envelope[] }> {
+  ensureSentry();
+  sink = [];
+  const result = await fn(sink);
+  await Sentry.flush(2000);
+  return { result, envelopes: sink };
 }
 
 const eventsOf = (envs: Envelope[]) => envs.flatMap(([, items]) => items.filter(([h]) => h.type === "event").map(([, p]) => p));
@@ -506,10 +518,6 @@ const txOf = (envs: Envelope[]) => envs.flatMap(([, items]) => items.filter(([h]
 
 describe("emit allowlist over the REAL serialized output of every sink", () => {
   beforeEach(resetState);
-  afterEach(async () => {
-    await Sentry.close(1000).catch(() => {});
-  });
-
   it("response, Sentry envelope and pino bytes each carry exactly one allowlisted record (and the canaries never appear)", async () => {
     const { deps, lines } = makeDeps();
     const { result: res, envelopes } = await withRealSentry(async () => handleHomeCensus(post({ run_id: 7, mode: "real", expect_build_sha: SHA, accept_young: false }), deps));
@@ -596,6 +604,7 @@ describe("emit allowlist over the REAL serialized output of every sink", () => {
     const { deps, lines } = makeDeps({ fs: exploding });
     const { result: res, envelopes } = await withRealSentry(async () => handleHomeCensus(post({ run_id: 2, mode: "real", expect_build_sha: SHA }), deps));
     const text = await res.text();
+    expect(eventsOf(envelopes), "an event must have been emitted or the leak check below is vacuous").toHaveLength(1);
     expect([text, lines.join(""), JSON.stringify(envelopes)].join("\n")).not.toContain("canary");
     expect(checkAllowlist(JSON.parse(text))).toEqual([]);
   });
