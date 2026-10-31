@@ -794,6 +794,8 @@ export async function replicateToGitData(params: {
       `--push-option=lease-gen=${leaseGeneration}`,
       `--push-option=worktree-id=${worktreeId}`,
     ];
+    // Set only in the single transient-retry branch below; reported as a bit on the success marker.
+    let retried = false;
     try {
       await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
         cwd: workspacePath,
@@ -828,6 +830,7 @@ export async function replicateToGitData(params: {
         },
         "git-data replication push transient — retrying once",
       );
+      retried = true;
       await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
         cwd: workspacePath,
         timeout: 60_000,
@@ -840,6 +843,17 @@ export async function replicateToGitData(params: {
         leaseGeneration,
       },
       "git-data replication push complete",
+    );
+    // (#11704, CTO F6) Replication-success marker. WARN, because the container shipper forwards
+    // WARN and above only: the info line above never reaches Better Stack, so a success was
+    // invisible off-box. Closed grammar, counts and bits only — NO workspace id, worktree id,
+    // repo name, sha or lease generation (workspace_id === auth.users.id). The read side
+    // (scripts/followthroughs/git-data-replication-signal.sh) counts this exact phrase by
+    // substring, so it must occur ONLY here, on the success branch.
+    const transientRetried = retried ? 1 : 0;
+    log.warn(
+      { gitDataReplicationSuccess: 1, transientRetried },
+      `git_data_replication_success=1 transient_retried=${transientRetried}`,
     );
 
     return { status: "replicated" };

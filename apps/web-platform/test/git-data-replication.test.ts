@@ -5,6 +5,8 @@
 // an unsafe workspace_id is rejected before any SSH.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
 
 const TEST_PIN = makeEd25519Pin();
@@ -581,5 +583,163 @@ describe("replicateToGitData — workspace id is pseudonymised in logs (#6982)",
       }
     }
     vi.doUnmock("../server/logger");
+  });
+});
+
+// Replication-success marker (#11704 item 6 / CTO F6). A successful push emits ONE warn-level,
+// closed-grammar, counts-only line so a success reaches Better Stack (info never ships). The
+// read side (scripts/followthroughs/git-data-replication-signal.sh) counts the phrase by
+// substring, so it must exist on the success branch only and carry no identifier.
+describe("replicateToGitData — replication-success marker (#11704)", () => {
+  const MARKER_PREFIX = "git_data_replication_success=1 transient_retried=";
+  const REAL_WS = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+
+  type LogCall = { level: string; args: unknown[] };
+
+  // `log` is created at module init, so the logger mock must be installed BEFORE the dynamic import.
+  async function loadWithLogger() {
+    vi.resetModules();
+    const logCalls: LogCall[] = [];
+    const rec = (level: string) => (...a: unknown[]) => {
+      logCalls.push({ level, args: a });
+    };
+    vi.doMock("../server/logger", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../server/logger")>()),
+      createChildLogger: () => ({
+        info: rec("info"),
+        warn: rec("warn"),
+        error: rec("error"),
+        debug: rec("debug"),
+      }),
+    }));
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    const mod = await import("../server/git-data-replication");
+    return { mod, logCalls };
+  }
+
+  const markerCalls = (calls: LogCall[]) =>
+    calls.filter((c) => typeof c.args[1] === "string" && (c.args[1] as string).includes("git_data_replication_success="));
+
+  const run = (mod: typeof import("../server/git-data-replication"), leaseGeneration = 12) =>
+    mod.replicateToGitData({
+      workspacePath: "/tmp/ws",
+      workspaceId: REAL_WS,
+      worktreeId: WT,
+      leaseGeneration,
+      userId: USER,
+    });
+
+  afterEach(() => {
+    vi.doUnmock("../server/logger");
+  });
+
+  it("emits exactly one warn marker with the closed-grammar message and counts-only fields on success", async () => {
+    const { mod, logCalls } = await loadWithLogger();
+    await expect(run(mod)).resolves.toEqual({ status: "replicated" });
+
+    const markers = markerCalls(logCalls);
+    expect(markers).toHaveLength(1);
+    expect(markers[0].level).toBe("warn");
+    expect(markers[0].args[1]).toBe(`${MARKER_PREFIX}0`);
+    expect(markers[0].args[0]).toEqual({ gitDataReplicationSuccess: 1, transientRetried: 0 });
+  });
+
+  it("carries no identifier, hash, uuid or lease generation (serialized)", async () => {
+    const { mod, logCalls } = await loadWithLogger();
+    await run(mod, 987654321);
+
+    const serialized = JSON.stringify(markerCalls(logCalls));
+    expect(serialized).toContain("git_data_replication_success=1"); // not vacuously empty
+    expect(serialized).not.toMatch(/workspaceIdHash|worktreeIdHash|leaseGeneration/);
+    expect(serialized).not.toMatch(/[0-9a-f]{8,}/i);
+    expect(serialized).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    expect(serialized).not.toContain(REAL_WS);
+    expect(serialized).not.toContain("987654321");
+  });
+
+  it("flags the single transient retry: transient_retried=1 and exactly one marker", async () => {
+    const { mod, logCalls } = await loadWithLogger();
+    gitPush
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Command failed: git push"), { stderr: "error: remote failure" }),
+      )
+      .mockResolvedValueOnce(Buffer.from(""));
+    await expect(run(mod)).resolves.toEqual({ status: "replicated" });
+
+    expect(gitPush).toHaveBeenCalledTimes(2);
+    const markers = markerCalls(logCalls);
+    expect(markers).toHaveLength(1);
+    expect(markers[0].args[1]).toBe(`${MARKER_PREFIX}1`);
+    expect(markers[0].args[0]).toEqual({ gitDataReplicationSuccess: 1, transientRetried: 1 });
+  });
+
+  it("emits NO marker when the push fails (fence reject)", async () => {
+    const { mod, logCalls } = await loadWithLogger();
+    gitPush.mockRejectedValueOnce(
+      Object.assign(new Error("remote: git-data fence: stale lease generation 3 < stored max 5 — rejected"), {
+        stderr: "remote: git-data fence: stale lease generation 3 < stored max 5 — rejected",
+      }),
+    );
+    await expect(run(mod)).rejects.toThrow(/stale lease generation/);
+    expect(markerCalls(logCalls)).toHaveLength(0);
+  });
+
+  it("emits NO marker when both attempts fail (retry exhausted)", async () => {
+    const { mod, logCalls } = await loadWithLogger();
+    gitPush.mockRejectedValue(
+      Object.assign(new Error("Command failed: git push"), { stderr: "remote failure" }),
+    );
+    await expect(run(mod)).rejects.toThrow(/git push/);
+    expect(gitPush).toHaveBeenCalledTimes(2);
+    expect(markerCalls(logCalls)).toHaveLength(0);
+    gitPush.mockResolvedValue(Buffer.from(""));
+  });
+
+  it("emits NO marker on a pin fault (no valid host-key pin, nothing pushed)", async () => {
+    const { mod, logCalls } = await loadWithLogger();
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", "");
+    await expect(run(mod)).rejects.toThrow();
+    expect(gitPush).not.toHaveBeenCalled();
+    expect(markerCalls(logCalls)).toHaveLength(0);
+  });
+
+  it("emits NO marker when the replication is shed", async () => {
+    vi.stubEnv("GIT_DATA_MAX_CONCURRENT", "1");
+    vi.stubEnv("GIT_DATA_QUEUE_TIMEOUT_MS", "0");
+    const { mod, logCalls } = await loadWithLogger();
+    let releasePush: () => void = () => {};
+    const pushGate = new Promise<Buffer>((res) => {
+      releasePush = () => res(Buffer.from(""));
+    });
+    gitPush.mockImplementation(() => pushGate);
+
+    const held = run(mod);
+    await vi.waitFor(() => expect(mod.__gitDataInFlightForTest()).toBe(1));
+    const before = markerCalls(logCalls).length;
+    await expect(run(mod)).resolves.toMatchObject({ status: "shed" });
+    expect(markerCalls(logCalls)).toHaveLength(before); // the shed added none
+
+    releasePush();
+    await held;
+    gitPush.mockResolvedValue(Buffer.from(""));
+  });
+
+  it("the marker phrase occurs exactly once in the server tree (the read counts it by substring)", () => {
+    const serverDir = path.resolve(__dirname, "../server");
+    const hits: string[] = [];
+    const walk = (dir: string) => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, ent.name);
+        if (ent.isDirectory()) {
+          if (ent.name !== "node_modules") walk(p);
+        } else if (/\.(ts|tsx|js|mjs|cjs|sh)$/.test(ent.name)) {
+          const n = fs.readFileSync(p, "utf8").split("git_data_replication_success=1").length - 1;
+          for (let i = 0; i < n; i++) hits.push(p);
+        }
+      }
+    };
+    walk(serverDir);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatch(/git-data-replication\.ts$/);
   });
 });
