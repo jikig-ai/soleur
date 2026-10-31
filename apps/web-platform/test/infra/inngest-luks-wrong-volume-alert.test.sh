@@ -639,6 +639,18 @@ s = s[:i] + "  /*\n" + body + "  */\n" + gutted + s[j:]' \
   mutate_red "FROM {{source}} is repointed at a different template variable" TF \
     's = edit(s, WVSQL, "FROM {{source}}", "FROM {{other}}", SQLEND)' \
     "ruled form"
+  mutate_red "query_type is repointed off sql_expression (the stored query could change semantics)" TF \
+    's = edit(s, WVEX, "    query_type      = \"sql_expression\"\n", "    query_type      = \"chart_expression\"\n")' \
+    "query_type"
+  mutate_red "variable.name is repointed off source (dangles the source_variable/{{source}} binding)" TF \
+    's = edit(s, WVEX, "    name          = \"source\"\n", "    name          = \"dst\"\n")' \
+    "variable.name"
+  mutate_red "variable_type is repointed off source" TF \
+    's = edit(s, WVEX, "    variable_type = \"source\"\n", "    variable_type = \"data\"\n")' \
+    "variable_type"
+  mutate_red "push flips to false (the push notification channel is muted; email alone remains)" TF \
+    's = edit(s, WVAL, "  push           = true\n", "  push           = false\n")' \
+    "push"
   mutate_red "WHERE time BETWEEN {{start_time}} AND {{end_time}} is dropped (the window is gone)" TF \
     's = edit(s, WVSQL, "    WHERE time BETWEEN {{start_time}} AND {{end_time}}\n", "", SQLEND)' \
     "ruled form"
@@ -839,7 +851,7 @@ fi
 # that drifts past the presence rows (that control, not this comment, is the guard against a
 # dead battery).
 PRESENCE_ROWS=43
-MUT_ROWS=50
+MUT_ROWS=54
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
