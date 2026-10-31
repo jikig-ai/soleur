@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
+import type { CredentialBasis } from "@/lib/credential-basis";
+import { RemoveSubscriptionTokenDialog } from "./remove-subscription-token-dialog";
 
 interface KeyRotationFormProps {
   hasExistingKey: boolean;
@@ -16,6 +18,13 @@ interface KeyRotationFormProps {
    * check in `/api/keys` (AC5/AC8) — never UI hiding.
    */
   canUseOauthCredential?: boolean;
+  /**
+   * #11524 — `describeCredentialBasis(...)` for the stored subscription token,
+   * computed once by `SettingsContent` (null iff no token is stored). Drives
+   * the removal control and its confirm-copy variant; an inert stored token
+   * never gets a billing claim.
+   */
+  basis?: CredentialBasis | null;
 }
 
 type CredentialType = "api_key" | "oauth_token";
@@ -23,12 +32,37 @@ type CredentialType = "api_key" | "oauth_token";
 export function KeyRotationForm({
   hasExistingKey,
   canUseOauthCredential = false,
+  basis = null,
 }: KeyRotationFormProps) {
   const router = useRouter();
   const [apiKey, setApiKey] = useState("");
   const [credentialType, setCredentialType] = useState<CredentialType>("api_key");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  // #11524: post-removal notice. Owned here (not by the dialog) because the
+  // dialog unmounts when router.refresh() makes `basis` null.
+  const [removedNotice, setRemovedNotice] = useState<CredentialBasis | null>(
+    null,
+  );
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  const noticeId = useId();
+
+  // Focus after a successful removal: the API-key input when the account now
+  // has no sign-in (variant B), otherwise the notice region. The add-key
+  // input's typed text is untouched.
+  useEffect(() => {
+    if (!removedNotice) return;
+    if (removedNotice.variant === "B") {
+      document.getElementById("api-key-input")?.focus();
+    } else {
+      noticeRef.current?.focus();
+    }
+  }, [removedNotice]);
+
+  function handleAddApiKey() {
+    setCredentialType("api_key");
+    document.getElementById("api-key-input")?.focus();
+  }
 
   const isOauth = canUseOauthCredential && credentialType === "oauth_token";
 
@@ -63,6 +97,8 @@ export function KeyRotationForm({
       }
 
       setSuccess(true);
+      // The saved key supersedes the post-removal "add an API key" notice.
+      setRemovedNotice(null);
       setApiKey("");
       router.refresh();
     } catch {
@@ -76,6 +112,23 @@ export function KeyRotationForm({
   }
 
   return (
+    <>
+    {/* Mounted from the start (empty) so the live region is registered
+        before its text changes; styled only while it has content. */}
+    <p
+      ref={noticeRef}
+      id={noticeId}
+      role="status"
+      aria-live="polite"
+      tabIndex={-1}
+      className={
+        removedNotice
+          ? "mb-4 rounded-lg border border-green-500/60 px-4 py-3 text-sm text-green-400 focus:outline-none"
+          : "focus:outline-none"
+      }
+    >
+      {removedNotice?.notice}
+    </p>
     <form onSubmit={handleSubmit} className="space-y-4">
       {canUseOauthCredential && (
         <div>
@@ -121,6 +174,9 @@ export function KeyRotationForm({
         </label>
         <input
           id="api-key-input"
+          aria-describedby={
+            removedNotice?.variant === "B" ? noticeId : undefined
+          }
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
@@ -157,5 +213,13 @@ export function KeyRotationForm({
         {hasExistingKey ? "Rotate Key" : "Save Key"}
       </Button>
     </form>
+    {basis && (
+      <RemoveSubscriptionTokenDialog
+        basis={basis}
+        onRemoved={setRemovedNotice}
+        onAddApiKey={handleAddApiKey}
+      />
+    )}
+    </>
   );
 }

@@ -856,8 +856,8 @@ check("G1-order: exactly one flag precheck step, and it precedes the bridge, the
 p = steps[pre[0]] if len(pre) == 1 else {}
 check("G1-step: the precheck step runs the script, gated only off redeploy (the mode that never touches git-data), no continue-on-error",
       "git-data-flag-precheck.sh" in str(p.get("run", "")) and "redeploy" in str(p.get("if")) and not p.get("continue-on-error"), p)
-check("G1-env: the precheck step binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD, FLAG_MODE}",
-      p.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode }}"}, p.get("env"))
+check("G1-env: the precheck step binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD, FLAG_MODE (the confirm mode; refs_assert reads as proof)}",
+      p.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode == 'refs_assert' && 'proof' || steps.confirm.outputs.mode }}"}, p.get("env"))
 cfg = [i for i, s in enumerate(steps) if s.get("id") == "ssh_config"]
 pin_users = [s.get("id") or s.get("name") for s in steps if "git-data.pin" in json.dumps(s)]
 check("G1-pin: the pin the precheck writes is read by the ssh_config step, which runs after the precheck and the bridge",
@@ -965,7 +965,7 @@ be = next(i for i in range(b + 1, len(lines)) if lines[i].startswith("      - ")
 lines[be:be] = chunk
 open(p, "w").write("\n".join(lines))
 PY
-if mutate precheck-after-bridge "$WF" 28 "python:$T/mut/reorder.py"; then
+if mutate precheck-after-bridge "$WF" 32 "python:$T/mut/reorder.py"; then
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-order.tsv" 2>&1
   mutant_red precheck-after-bridge wf_row "$T/mut/wf-order.tsv" "G1-order:"
 fi

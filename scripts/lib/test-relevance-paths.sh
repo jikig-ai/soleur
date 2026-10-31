@@ -198,7 +198,8 @@ TAG_AUTHORSHIP_BATTERY_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
-# scripts/test-all-affected (test-all.sh, light group) — ~440 s on CI. Source of truth:
+# scripts/test-all-affected-{a,b,c,d} (test-all.sh, light group; #11562's --rows split over one
+# battery file) — ~440 s on CI. Source of truth:
 # scripts/test-all-affected.test.sh — RUNNER / AFF_LIB / REL_LIB / RWB_LIB at its top, plus the census
 # sandbox. THE SANDBOX HARDLINKS ALL OF scripts/ (`cp -al "$REPO_ROOT/scripts/."`), so a prefix
 # declaration would arm this battery on over half of recent commits (re-measure with the replay script) for no
