@@ -7051,6 +7051,8 @@ if want_webplat; then
   # it there would make the only cross-implementation check in the pair fail on a missing
   # binary rather than on a disagreement.
   run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
+  # #10455: the notify-only home-census reminder probe. EXPLICIT because scripts/followthroughs/ matches no SUITE_GLOBS entry.
+  run_suite "scripts/followthroughs/home-census-run-10455" bash scripts/followthroughs/home-census-run-10455.test.sh
   # #9776 / ADR-284: the hosted must-ask lane's mutation battery (90 anchor-asserted mutants, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard: `apps/web-platform/test/*.test.sh` matches no
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
@@ -7060,6 +7062,10 @@ if want_webplat; then
   # predicate, the canonical hash, the gated flow, the wait loop, the flag read and the census, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
   run_suite "apps/web-platform/test/approval-guard1-mutation" bash apps/web-platform/test/approval-guard1-mutation.test.sh
+  # #10455: the home-census Guard 1/4 mutation battery (17 anchor-asserted mutants on a COPY of the app tree; the full
+  # run is reviewer-only behind HOME_CENSUS_MUTATIONS=1, the always-on part is the baseline, vacuity, landing and
+  # instrument control). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
+  run_suite "apps/web-platform/test/home-census-mutations" bash apps/web-platform/test/home-census-mutations.test.sh
 
   # #9815: the wrapper + eligibility suite for the `related` narrowing. EXPLICIT,
   # in THIS arm for the same reason as destroy-ask-mutation — it drives the
