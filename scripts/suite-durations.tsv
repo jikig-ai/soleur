@@ -78,6 +78,7 @@ apps/cla-evidence/scripts/upload-evidence.test.sh	1135	measured
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	469	measured
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	338	measured
 apps/web-platform/scripts/dev-ledger-parity.test.sh	43159	measured
+apps/web-platform/scripts/home-census-trigger.test.sh	1222	floor
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	227	measured
 apps/web-platform/scripts/lib/no-cross-context-import.test.sh	4175	measured
 apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	135	measured
