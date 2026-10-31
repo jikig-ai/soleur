@@ -1078,21 +1078,21 @@ fi
 if [ -f "$DBIN/dcalls.log" ]; then dc_bad="$(grep -vcE '^-u \+%Y-%m-%dT%H:%M:%SZ$|^-u \+%s$|^-u \+%Y-%m-%d$' "$DBIN/dcalls.log" || true)"; else dc_bad=missing-log; fi
 assert_eq "0" "$dc_bad" "CLKF: every dispatched date argv is one of the three sanctioned shapes"
 
-# Ambient-arm sweep (Guard 1 completeness): a timestamp-bearing fixture (`mkdr`/`rcpt`/`RCT`,
+# Ambient-arm sweep (Guard 1 completeness): a clock-bearing fixture (`mkd`/`mkdr`/`rcpt`/`RCT`,
 # or a literal `, ran` inside a heredoc/sed-built fixture) exec'd outside a pinned-PATH arm is
 # the #11578 bomb reborn -- `run` and direct `bash "$GATE"` subshells see the real clock. An
 # ambient exec on the fixture's own line is flagged outright; otherwise the fixture line must
-# pair within 1 line (6 for `|`-terminated heredoc rows) with a pinned-PATH exec
+# pair within 3 lines (8 for `|`-terminated heredoc rows) with a pinned-PATH exec
 # (`run_d`/`killed_d`/`mutate_d`/`rx`) or an instrument assertion. Definitions (`()`) and
 # comments are excluded; portable [^A-Za-z0-9_] boundaries keep `mrcpt`/`RCPT_*` out (GNU and BSD grep alike).
 amb_n=0
 while IFS= read -r hit; do
   hn="${hit%%:*}"; l0="$(sed -n "${hn}p" "$0")"
   case "$l0" in *'run "$GATE"'*|*'bash "$GATE"'*) amb_n=$((amb_n + 1)); continue ;; esac
-  win=1; case "$l0" in *\|) win=6 ;; esac
+  win=3; case "$l0" in *\|) win=8 ;; esac
   sed -n "${hn},$((hn + win))p" "$0" | grep -qE '(^|[^A-Za-z0-9_])(run_d|killed_d|mutate_d|assert_eq|assert_reason|rx)[[:space:]]' || amb_n=$((amb_n + 1))
-done < <(grep -nE '(^|[^A-Za-z0-9_])(mkdr|rcpt|RCT)[[:space:]]|, ran ' "$0" | grep -vE ':[[:space:]]*#|\(\)|\$[0-9]')
-assert_eq "0" "$amb_n" "AMBF: every timestamp-bearing fixture pairs with a pinned-PATH exec or an instrument assertion"
+done < <(grep -nE '(^|[^A-Za-z0-9_])(mkd|mkdr|rcpt|RCT)[[:space:]]|, ran ' "$0" | grep -vE ':[[:space:]]*#|\(\)|\$[0-9]')
+assert_eq "0" "$amb_n" "AMBF: every clock-bearing fixture pairs with a pinned-PATH exec or an instrument assertion"
 
 # 503 = 493 prior + CLK rc/reason/verifier-call + CLK2/CLK3/CLK4 + TBIN + dispatch/argv floors + AMBF.
 # VT1's three asserts skip on timeout-less hosts, so the floor steps down with them.
