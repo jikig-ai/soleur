@@ -60,7 +60,7 @@ Concretely, inside `plugins/soleur/test/technical-ruling-gate.test.sh` only:
 
 1. **`$DBIN/date` stub** (new heredoc beside the existing `$DBIN/gh` stub, ~line 496): argv-strict — serves `-u +%Y-%m-%dT%H:%M:%SZ` (the gate's two call sites), `-u +%s` (the verifier's strict-mode epoch), and `-u +%Y-%m-%d` (the verifier's render path) from a pin file; appends its argv to `$DBIN/dcalls.log` for the dispatch floor; exits 64 loudly on any other argv so a future `date` consumer fails in the open instead of silently bypassing the pin. Real `date` is never exec'd (no passthrough — a passthrough is a bypass).
 2. **`dclock_at <iso>` helper + `$DBIN/clock` / `$DBIN/clock.epoch` pin files**: writes the ISO instant to `clock` and its epoch (via `jq -rn --arg p '$p|fromdateiso8601'`, jq already a suite dependency) to `clock.epoch`; called once after `DTODAY`/`DEXP` are set (~line 505) with `DNOON="${DTODAY}T12:00:00Z"` — noon gives margin: every "present" fixture instant (`DNOW` `T00:00:00Z`, `T00:07:00Z`) stays strictly `<` the pin and every `dts +n` (`n>=1`) stays strictly `>`.
-3. **CLK control cases** (new, placed after the Arm 6g2 receipt block ~line 689): repin `dclock_at "$(dts -1)"`, run a `mkdr`-with-ran scenario, assert the gate now reports `delegation-invalid` / rc 1 (the `ran` instant `DNOW` reads as future under a yesterday pin) — a verdict that can only occur if the stub is serving; under a bypassed stub the real clock yields rc 0, so this case is the bypass detector. Restore `dclock_at "$DNOON"` immediately after. Plus a `clock`/`clock.epoch` consistency assertion.
+3. **CLK control cases** (new, placed after the Arm 6g2 receipt block ~line 689): repin `dclock_at "$(dts -1)"`, run a `mkdr`-with-ran scenario, assert the gate now reports `delegation-invalid` / rc 1 (the `ran` instant `DNOW` reads as future under a yesterday pin) — a verdict that can only occur if the stub is serving; under a bypassed stub the real clock yields rc 2 `receipt-missing` (the ran row passes the future check and dies at the receipt check), so this case is the bypass detector. Restore `dclock_at "$DNOON"` immediately after. Plus a `clock`/`clock.epoch` consistency assertion.
 4. **Dispatch floor** (new, beside the existing SUT-marker floor ~line 989): assert `dcalls.log` has at least the committed-count invocations and contains only the three sanctioned argv — a stub never invoked, or invoked with an unexpected argv, cannot pass vacuously.
 
 **Alternatives considered.** (A) Recompute `DTODAY` inside `dscn()` per scenario — test-only and smaller, but the window shrinks from ~48 minutes (suite duration) to ~seconds per case rather than closing; a partial flake fix re-flakes. Rejected. (B) `TRG_NOW` env seam inside `technical-ruling-gate.sh` (mirroring the existing `TRG_*` seams at line 73) — equally deterministic, but it mutates a ship-time security gate to fix a test-side flake; the stub achieves identical determinism with zero production diff. Rejected on blast radius. (D) `dts 1` → `dts 2` — cut at the minimality gate (survives one crossing, not two, and silently changes fixture semantics). The A/B/C fork is recorded as a `pending - assumed: C` technical row in this branch's `decision-challenges.md` for the post-plan ruling spawn.
@@ -107,7 +107,7 @@ error_reporting:
   fail_loud: a `FAIL:` line per case plus a non-zero suite exit — and, if the clock stub is bypassed, the CLK case's `delegation-invalid` assertion reddens on any calendar day, not only at midnight
 failure_modes:
   - mode: `date` stub absent or bypassed (PATH regression, stub made non-executable)
-    detection: CLK bypass-detector case goes red (pinned-past verdict flips to rc 0)
+    detection: CLK bypass-detector case goes red (pinned-past verdict flips to rc 2 receipt-missing)
     alert_route: merge-group job failure
   - mode: new future-dependent fixture added under a `DPATH` reduced-PATH case (pin does not reach it)
     detection: suite comment at the `dclock_at` call site names the carve-out; review of the new case
@@ -164,7 +164,7 @@ None — `gh issue list --label code-review --state open` (2026-10-31) bodies co
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete `$DBIN/date` (or `chmod -x`) so the real `date` resolves | RED — CLK case: the pinned-past scenario reads rc 0 under the real clock, not the asserted rc 1 `delegation-invalid` |
+| 1 | Delete `$DBIN/date` (or `chmod -x`) so the real `date` resolves | RED — CLK case: the pinned-past scenario reads rc 2 `receipt-missing` under the real clock, not the asserted rc 1 `delegation-invalid` |
 | 2 | Replace the stub body with `exec /bin/date "$@"` (silent passthrough) | RED — same CLK divergence; a passthrough is a bypass the argv log also shows as absent-vs-real |
 | 3 | Repin `dclock_at` to an instant after a `dts 1` receipt inside a `receipt-future`-shaped scenario | RED — the pinned rc-2 verdict flips to rc 0, proving the pin (not luck) supplies the future relationship (order/lifetime row: the mutation observes inside the fixture-build→gate-exec window) |
 | 4 | Give the gate a new `date` call with a fifth argv shape (e.g. `date -u +%H`) | RED — argv-strict stub exits 64 loudly; `now` goes empty and the verdicts flip rather than silently serving real time (second-member/dispatch row) |
@@ -212,7 +212,7 @@ None — `gh issue list --label code-review --state open` (2026-10-31) bodies co
 ## Test Scenarios
 
 - Given the suite runs with the pin at fixture noon, when `receipt-future` builds `RCT "$(dts 1)"` and runs the pristine gate, then the receipt reads strictly `> now` and rc 2 holds — on any calendar day, at any start time. (`unit` — suite-internal)
-- Given `dclock_at "$(dts -1)"`, when a `mkdr`-with-ran scenario runs the pristine gate, then `ran=DNOW` reads as future → rc 1 `delegation-invalid`; under a bypassed stub the same fixture reads rc 0 → the CLK assertion is the bypass detector. (`unit`)
+- Given `dclock_at "$(dts -1)"`, when a `mkdr`-with-ran scenario runs the pristine gate, then `ran=DNOW` reads as future → rc 1 `delegation-invalid`; under a bypassed stub the same fixture reads rc 2 `receipt-missing` → the CLK assertion is the bypass detector. (`unit`)
 - Given the stub is replaced by `exec /bin/date "$@"`, when the suite runs, then CLK fails (guard matrix row 2). (`unit` — mutation coverage)
 - Given a green run's `dcalls.log`, when the floor assertion runs, then `wc -l` meets the committed count and `grep -vc` of the sanctioned argv is 0. (`unit`)
 - Given `DPATH` is set (mkbin_t arm), when TQ0-TQ3 run under the real clock, then their verdicts are unchanged — verified because no `DPATH` case builds a future-dependent fixture. (`unit` — carve-out control)

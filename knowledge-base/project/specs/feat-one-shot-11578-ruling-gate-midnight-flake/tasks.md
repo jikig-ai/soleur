@@ -17,7 +17,7 @@ Issue: #11578 (closes)
 
 ## Phase 2 — Controls
 
-- 2.1 After the Arm 6g2 receipt block (~line 689), add the CLK bypass-detection case: `dclock_at "$(dts -1)"`; `dscn`; `mkdr clk "$AT"`; `run_d "$GATE" "$DF"`; assert rc 1 + `assert_reason delegation-invalid` ("ran reads as future under a yesterday pin — only a live stub produces this verdict; a bypassed stub reads rc 0"); restore `dclock_at "$DNOON"` immediately after.
+- 2.1 After the Arm 6g2 receipt block (~line 689), add the CLK bypass-detection case: `dclock_at "$(dts -1)"`; `dscn`; `mkdr clk "$AT"`; `run_d "$GATE" "$DF"`; assert rc 1 + `assert_reason delegation-invalid` ("ran reads as future under a yesterday pin — only a live stub produces this verdict; a bypassed stub reads rc 2 receipt-missing"); restore `dclock_at "$DNOON"` immediately after.
 - 2.2 Add a `clock`/`clock.epoch` consistency assertion (`jq` epoch of `clock` equals `clock.epoch` content).
 - 2.3 Beside the existing SUT-marker floor (~line 989), add the dispatch floor: `wc -l < "$DBIN/dcalls.log"` ≥ the committed count measured on a green run, and `grep -vc` of the three sanctioned argv over the log equals 0.
 - 2.4 Confirm `print_results` floor (currently `493`) still holds — it is a `>=` floor, so added assertions do not require bumping it; re-measure and record the new count in a comment.

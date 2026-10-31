@@ -504,11 +504,11 @@ assert_fixture_dir "$DBIN"
 cat > "$DBIN/date" <<'STUB'
 #!/usr/bin/env bash
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-echo "$*" >> "$here/dcalls.log"
+printf '%s\n' "$*" >> "$here/dcalls.log"
 case "$*" in
-  "-u +%Y-%m-%dT%H:%M:%SZ") cat "$here/clock" ;;
-  "-u +%s") cat "$here/clock.epoch" ;;
-  "-u +%Y-%m-%d") p="$(cat "$here/clock")"; printf '%s\n' "${p%%T*}" ;;
+  "-u +%Y-%m-%dT%H:%M:%SZ") [ -s "$here/clock" ] || { echo "date stub: no pinned clock" >&2; exit 64; }; cat "$here/clock" ;;
+  "-u +%s") [ -s "$here/clock.epoch" ] || { echo "date stub: no pinned epoch" >&2; exit 64; }; cat "$here/clock.epoch" ;;
+  "-u +%Y-%m-%d") [ -s "$here/clock" ] || { echo "date stub: no pinned clock" >&2; exit 64; }; p="$(cat "$here/clock")"; printf '%s\n' "${p%%T*}" ;;
   *) echo "date stub: unexpected argv: $*" >&2; exit 64 ;;
 esac
 STUB
@@ -526,14 +526,18 @@ DEXP="$(jq -rn --arg d "$DTODAY" '($d + "T00:00:00Z" | fromdateiso8601) + 864000
 # "present" fixture instant (DNOW T00:00, T00:07) and strictly before every `dts +n` (n>=1), so
 # fixture instants and the gate's `now` share one source of truth (DTODAY) and a UTC-midnight
 # crossing mid-suite can never move a `dts 1` receipt onto the wrong side of "future" — the
-# flake class is eliminated, not narrowed. Carve-outs where the pin does NOT reach: `run` never
-# puts $DBIN on PATH (its shape-check fixtures carry no delegation rows, so no `date` call
-# fires); `DPATH` (mkbin_t) cases substitute $DBIN out entirely and hold only past-dated or
-# expiry-relative fixtures — do NOT add a future-dependent fixture under DPATH. dclock_at repins
-# the instant; any case that repins must restore DNOON afterwards, unconditionally (never
-# &&-chained — a failed assert must not skip the restore and poison every later case).
+# flake class is eliminated, not narrowed. `DPATH` (mkbin_t) cases carry the SAME stub: the
+# reduced dir gets a copy of $DBIN/date plus `clock`/`clock.epoch` symlinks back to $DBIN, so a
+# future-dependent fixture under DPATH is pinned too — the pin reaches every exec arm that can
+# pair a stubbed-gh delegation path with a clock. The only ambient arms left are `run` (static
+# $FIXTURES/ shape inputs, no delegation rows, no `date` reach) and direct `bash "$GATE"`
+# subshells; the AMBF floor below refuses a timestamp-bearing fixture outside a pinned-PATH
+# exec. dclock_at repins the instant; any case that repins must restore DNOON afterwards,
+# unconditionally (never &&-chained — a failed assert must not skip the restore and poison
+# every later case).
 DNOON="${DTODAY}T12:00:00Z"
 dclock_at() { # <iso>: pin the stub clock; writes the ISO instant and its epoch; fails loudly on an unparseable instant
+  assert_fixture_dir "$DBIN"
   local e
   e="$(jq -rn --arg p "$1" '$p | fromdateiso8601')" || { echo "FATAL: dclock_at: unparseable instant: $1" >&2; exit 2; }
   printf '%s\n' "$1" > "$DBIN/clock"
@@ -751,8 +755,11 @@ dclock_at "$(dts -1)"
 dscn; mkdr clk "$AT"; run_d "$GATE" "$DF"
 assert_eq "1" "$(last_rc)" "CLK: under a yesterday pin, ran=$DNOW is delegation-invalid (the stub is load-bearing)"
 assert_reason "delegation-invalid" "CLK yesterday pin"
+assert_eq "0" "$(ncalls 'issues/comments/1001')" "CLKb: the refusal lands before any verifier call"
 dclock_at "$DNOON"
 assert_eq "$(jq -rn --arg p "$(cat "$DBIN/clock")" '$p | fromdateiso8601')" "$(cat "$DBIN/clock.epoch")" "CLK2: clock and clock.epoch stay consistent after a repin"
+assert_eq "$(cat "$DBIN/clock.epoch")" "$("$DBIN/date" -u +%s)" "CLK3: the stub serves clock.epoch on -u +%s (a partial passthrough cannot hide)"
+assert_eq "${DNOON%%T*}" "$("$DBIN/date" -u +%Y-%m-%d)" "CLK4: the stub serves the pin's day on -u +%Y-%m-%d"
 
 echo "=== Arm 6g3: a receipt is written AFTER the act it vouches for (verification V8) ==="
 dscn_past; RCPT_CREATED="$(dts -10)" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr rv8 "$(dts -6)"; run_d "$GATE" "$DF"
@@ -771,6 +778,10 @@ mkbin_t() { # <dir> <tools to leave out...>: reduced PATH with the gate's tools,
     p="$(command -v "$t" 2>/dev/null)"; [[ "$p" == /* && -x "$p" ]] && ln -sf "$p" "$d/$t"
   done
   cp "$DBIN/gh" "$d/gh"; cp "$DBIN/gh-base" "$d/gh-base"
+  # The same pin, not the real clock (#11578): the reduced PATH serves the suite clock via the
+  # stub plus live symlinks to $DBIN's pin files, so a future-dependent fixture under a DPATH
+  # case cannot silently bypass the pin (its dispatches log to $d/dcalls.log, not $DBIN's).
+  ln -sf "$DBIN/date" "$d/date"; ln -sf "$DBIN/clock" "$d/clock"; ln -sf "$DBIN/clock.epoch" "$d/clock.epoch"
 }
 mkbin_t "$TMP/tbin-none" timeout
 mkbin_t "$TMP/tbin-g" timeout; ln -sf "$(command -v timeout)" "$TMP/tbin-g/gtimeout"
@@ -1049,13 +1060,28 @@ fi
 # matching count carrying foreign argv cannot sneak past.
 dc_n=0
 if [ -f "$DBIN/dcalls.log" ]; then dc_n="$(wc -l < "$DBIN/dcalls.log" | tr -d ' ')"; fi
-if (( dc_n >= 328 )); then
-  echo "  PASS: date-stub dispatches $dc_n >= 328"; PASS=$((PASS + 1))
+# The VT1 arm is `command -v timeout`-gated: on a gtimeout-only host it skips and 2 dispatches
+# never happen, so the committed floor steps down rather than false-fail a correct suite.
+dc_floor=330; command -v timeout >/dev/null 2>&1 || dc_floor=328
+if (( dc_n >= dc_floor )); then
+  echo "  PASS: date-stub dispatches $dc_n >= $dc_floor"; PASS=$((PASS + 1))
 else
-  echo "  FAIL: date-stub dispatches $dc_n < 328 -- the pin was bypassed or a consumer stopped calling date"; FAIL=$((FAIL + 1))
+  echo "  FAIL: date-stub dispatches $dc_n < $dc_floor -- the pin was bypassed or a consumer stopped calling date"; FAIL=$((FAIL + 1))
 fi
 dc_bad="$(grep -vcE '^-u \+%Y-%m-%dT%H:%M:%SZ$|^-u \+%s$|^-u \+%Y-%m-%d$' "$DBIN/dcalls.log" 2>/dev/null || true)"
 assert_eq "0" "$dc_bad" "CLKF: every dispatched date argv is one of the three sanctioned shapes"
 
-# 498 = 493 prior assertions + CLK rc + CLK reason + CLK2 consistency + dispatch floor + argv floor.
-print_results 498
+# Ambient-arm sweep (Guard 1 completeness): a timestamp-bearing fixture (`mkdr`/`rcpt`/`RCT`)
+# exec'd outside a pinned-PATH arm is the #11578 bomb reborn -- `run` and direct `bash "$GATE"`
+# subshells see the real clock. A fixture token must pair (same or next line) with a
+# pinned-PATH exec (`run_d`/`killed_d`/`mutate_d`/`rx`) or an instrument assertion; function
+# definitions (`()`) and comments are excluded, and `\b` keeps `mrcpt`/`RCPT_*` out.
+amb_n=0
+while IFS= read -r hit; do
+  hn="${hit%%:*}"
+  sed -n "${hn},$((hn + 1))p" "$0" | grep -qE '\b(run_d|killed_d|mutate_d|assert_eq|assert_reason|rx)\b' || amb_n=$((amb_n + 1))
+done < <(grep -nE '\b(mkdr|rcpt|RCT) ' "$0" | grep -vE ':[[:space:]]*#|\(\)')
+assert_eq "0" "$amb_n" "AMBF: every timestamp-bearing fixture pairs with a pinned-PATH exec or an instrument assertion"
+
+# 502 = 493 prior assertions + CLK rc/reason/verifier-call + CLK2/CLK3/CLK4 + dispatch/argv floors + AMBF.
+print_results 502
