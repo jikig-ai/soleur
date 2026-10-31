@@ -1010,7 +1010,8 @@ elif grep -qi 'timings-dir' "$FZ/e1.txt"; then
 else
   check fail "Z4a: refused but stderr does not explain: $(tail -1 "$FZ/e1.txt")"
 fi
-for targs in "--write" "--incremental" "--legs 3" "--run 4242" "--runs 2"; do
+for targs in "--write" "--incremental" "--legs 3" "--run 4242" "--runs 2" \
+             "--durations-out $WORK/z4-do.tsv" "--registered-file $WORK/z4-rf.txt"; do
   if python3 "$GEN" --drift-report --group light --manifest "$FZ/manifest.tsv" \
        --durations "$FZ/durations.tsv" --timings-dir "$FZ/run1" $targs \
        > /dev/null 2> "$FZ/e2.txt"; then
@@ -1026,6 +1027,39 @@ if python3 "$GEN" --drift-report --timings-dir "$FZ/no-such-dir" \
   check fail "Z4c: a missing timings dir accepted"
 else
   check pass "Z4c: a timings dir with no suite-timings.tsv refuses (exit 2)"
+fi
+
+# === Fixture Z5: a foreign-group-only artifact dir is a zero-row sample =======
+# The arbitrary-name fallback in fetch_timings_from_dir exists for local dirs
+# (leg1/, leg2/) — a run dir that IS a CI-artifact layout but carries only
+# OTHER groups' artifacts must NOT launder those rows into this group's sample
+# (timed_n counts only matching dirs).
+FZ5="$WORK/Z5"; mkdir -p "$FZ5/run1/suite-timings-scripts-heavy-0" \
+  "$FZ5/run2/suite-timings-scripts-0" "$FZ5/run2/suite-timings-infra-0"
+assert_fixture_dir "$FZ5"
+printf 'z5-floor\t1222\tfloor\nz5-meas\t5000\tmeasured\n' > "$FZ5/durations.tsv"
+{ printf '# fixture incumbent\n# n=1\n'
+  printf 'z5-floor\t1\nz5-meas\t1\n'; } > "$FZ5/manifest.tsv"
+# run1: heavy artifact only — its z5-floor row must not reach the light sample.
+# run2: a matching light dir + a same-run infra dir — light counts run2 only.
+printf 'z5-floor\t900000\nz5-meas\t6000\n' \
+  > "$FZ5/run1/suite-timings-scripts-heavy-0/suite-timings.tsv"
+printf 'z5-floor\t700000\nz5-meas\t4000\n' \
+  > "$FZ5/run2/suite-timings-scripts-0/suite-timings.tsv"
+printf 'z5-floor\t999999\n' \
+  > "$FZ5/run2/suite-timings-infra-0/suite-timings.tsv"
+if python3 "$GEN" --drift-report --group light --manifest "$FZ5/manifest.tsv" \
+     --durations "$FZ5/durations.tsv" \
+     --timings-dir "$FZ5/run1" --timings-dir "$FZ5/run2" \
+     > "$FZ5/out.txt" 2> "$FZ5/err.txt"; then
+  check pass "Z5: a foreign-group-only run dir still exits 0 (a legit zero-row sample)"
+else
+  check fail "Z5: drift-report refused a foreign-only artifact dir: $(tail -2 "$FZ5/err.txt")"
+fi
+if grep -qxF 'DRIFT_ROW light z5-floor 1222 700000 1/2' "$FZ5/out.txt"; then
+  check pass "Z5: heavy/infra rows cannot inflate the light sample (timed 1/2, median 700000)"
+else
+  check fail "Z5: foreign-group rows leaked into the light sample: $(grep -E 'DRIFT_ROW|FLOOR_UNMEASURED' "$FZ5/out.txt")"
 fi
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------

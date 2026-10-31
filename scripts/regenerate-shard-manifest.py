@@ -121,6 +121,12 @@ ARTIFACTS_PER_PAGE = 100
 LIGHT_ARTIFACT = re.compile(r"^suite-timings-scripts-\d+$")
 HEAVY_ARTIFACT = re.compile(r"^suite-timings-scripts-heavy-\d+$")
 INFRA_ARTIFACT = re.compile(r"^suite-timings-infra-\d+$")
+# Union of every group's artifact-name family — used only to recognise "this
+# dir IS a CI-artifact layout" (vs a local dir of arbitrary names like leg1/),
+# so a foreign group's artifact can never launder into a group's sample via
+# the arbitrary-name fallback in fetch_timings_from_dir.
+ANY_ARTIFACT = re.compile(
+    r"^suite-timings-(scripts|scripts-heavy|infra)-\d+$")
 
 
 def die(msg):
@@ -247,14 +253,23 @@ def fetch_timings_from_dir(d, artifact_re=None):
     matching = ([p for p in nested_all
                  if artifact_re.match(os.path.basename(os.path.dirname(p)))]
                 if artifact_re is not None else [])
-    # The filter engages only when CI-artifact-named dirs are actually present —
-    # a local dir of arbitrary names (leg1/, leg2/) is not an artifact layout
-    # and must merge whole rather than die on an empty filtered set.
-    nested = matching if matching else nested_all
+    # A dir that IS a CI-artifact layout (suite-timings-<family>-N-named dirs)
+    # but carries only OTHER groups' artifacts yields THIS group a zero-row
+    # sample — the arbitrary-name fallback exists for local dirs (leg1/, leg2/
+    # with no artifact naming), and letting it engage on a foreign-only
+    # artifact layout would merge the wrong group's rows into this sample.
+    artifact_layout = (artifact_re is not None and any(
+        ANY_ARTIFACT.match(os.path.basename(os.path.dirname(p)))
+        for p in nested_all))
+    nested = matching if artifact_layout else (matching or nested_all)
     # Flat files must be *timings*.tsv, not *.tsv — a stray notes.tsv in the
-    # dir would merge garbage labels or die on a bad ms field.
-    paths = sorted(nested + glob.glob(os.path.join(d, "*timings*.tsv")))
+    # dir would merge garbage labels or die on a bad ms field. They merge only
+    # outside an artifact layout: inside one, artifacts are the only source.
+    flat = [] if artifact_layout else glob.glob(os.path.join(d, "*timings*.tsv"))
+    paths = sorted(nested + flat)
     if not paths:
+        if artifact_layout:
+            return merged  # foreign-group-only run dir: a legit zero-row sample
         die(f"no suite-timings.tsv files found under {d}")
     for p in paths:
         with open(p, encoding="utf-8") as f:
@@ -664,7 +679,7 @@ def main():
                          "emit DRIFT_ROW / FLOOR_UNMEASURED / LEG_PREDICTED / "
                          "LEG_OBSERVED / BOUND_PERFECT rows; writes nothing, "
                          "exits 0 on findings; refuses --write/--incremental/"
-                         "--legs/--run/--runs")
+                         "--legs/--run/--runs/--durations-out/--registered-file")
     ap.add_argument("--manifest", default=None,
                     help="manifest path (default: the group's committed manifest)")
     ap.add_argument("--registered-file", default=None,
@@ -688,6 +703,13 @@ def main():
         if args.run is not None or args.runs is not None:
             die("--drift-report reads local artifact dirs only — refusing "
                 "--run/--runs (download runs to per-run dirs first)")
+        if args.durations_out is not None:
+            die("--drift-report writes nothing — refusing --durations-out "
+                "(the comparison base is --durations or the committed table)")
+        if args.registered_file is not None:
+            die("--drift-report derives its comparison base from "
+                "--manifest/--durations or the committed tables — refusing "
+                "--registered-file")
         if not args.timings_dir:
             die("--drift-report requires --timings-dir (repeatable — one dir "
                 "per sampled run)")
