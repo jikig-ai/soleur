@@ -33,7 +33,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -469,10 +469,15 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         const p = join(d, e.name);
         if (e.isDirectory()) walk(p);
         else if (e.isFile() && e.name !== "probe.sh") {
+          // One open descriptor for the size check and the read: a stat-then-read on the path is a check-then-use race.
+          let fd: number | undefined;
           try {
-            if (statSync(p).size <= MAX_SCAN_KIB * 1024 && readFileSync(p, "utf8").includes(value)) found.push(p);
+            fd = openSync(p, "r");
+            if (fstatSync(fd).size <= MAX_SCAN_KIB * 1024 && readFileSync(fd, "utf8").includes(value)) found.push(p);
           } catch {
             /* unreadable or vanished */
+          } finally {
+            if (fd !== undefined) closeSync(fd);
           }
         }
       }
