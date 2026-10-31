@@ -24,3 +24,11 @@
 - soleur:plan, soleur:deepen-plan (in-process halt gates)
 - CTO spawn #1 (Own the epic): holds classification + batching ruling
 - Files committed: 7aa59ed8b4 (mis-pathed), 4e390ec17b (relocation fix), pushed
+
+## Review Phase
+- PANEL_SHA: 62f53a71086d74fbf6ad00e6753ed077cfc2095b
+- Panel: 10 seats spawned in parallel (background) — git-history, pattern-recognition, architecture, security, performance, data-integrity, agent-native, code-quality, test-design, structural-enumeration
+- Class: code; merge-tree vs origin/main rc=0
+- Next: synthesize findings → fix inline (P1/P2/P3 all) → fix-round review (--fix-round --since PANEL_SHA) → soleur:qa → soleur:compound → soleur:ship → DONE
+- Implementation commit: 62f53a7108 (6 files: guard rewrite, persistFailure move, +2 replay tests, ledger amend, env -u pins)
+- Family remainder filed: #11720. Epic: 10390. Delegation: comment-6361717901 (valid to 2026-11-20; covers only scheduled-terraform-drift + revert PRs — merges are NOT delegated acts)
