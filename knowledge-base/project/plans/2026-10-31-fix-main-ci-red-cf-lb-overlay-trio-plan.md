@@ -421,7 +421,7 @@ which decide whether a listed root can actually materialize. The parity check (~
 - [ ] The runbook contains `## push-paths sub-root exclusions` and the workflow's matching `# Rationale: … §push-paths sub-root exclusions` pointer line.
 - [ ] `actionlint` (or the repo's workflow-lint equivalent) is clean on both edited workflows.
 - [ ] `bash tests/scripts/test-cf-lb-overlay-gate.sh` → green (adjacent suite, unchanged gate lib).
-- [ ] PR body uses `Closes #11687` and summarizes all three fixes.
+- [ ] PR body uses `Refs #11687` and summarizes all three fixes.
 
 ## Test Scenarios
 

@@ -22,7 +22,8 @@
 #
 # Sourced by EVERY workflow step that runs terraform plan/apply/refresh/destroy on a root that
 # declares a key-bearing random_* (apply-web-platform-infra.yml, apply-deploy-pipeline-fix.yml,
-# scheduled-terraform-drift.yml, infra-validation.yml, inngest-provision-rehearsal.yml);
+# scheduled-terraform-drift.yml, infra-validation.yml, inngest-provision-rehearsal.yml,
+# cf-lb-overlay.yml);
 # exercised by tests/scripts/test-tf-redact-random-ids.sh and swept over all workflows by
 # plugins/soleur/test/terraform-target-parity.test.ts (a step on a root with none may skip it).
 

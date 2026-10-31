@@ -28,4 +28,4 @@ Plan: knowledge-base/project/plans/2026-10-31-fix-main-ci-red-cf-lb-overlay-trio
 
 - [x] 5.1 All three gates green per AC2–AC4; `grep -c 'tf_redact_random_ids' .github/workflows/cf-lb-overlay.yml` == 2.
 - [x] 5.2 Adjacent suites green: `bash tests/scripts/test-cf-lb-overlay-gate.sh`; workflow lint clean on both edited workflows.
-- [x] 5.3 PR body uses `Closes #11687` and summarizes all three fixes.
+- [x] 5.3 PR body uses `Refs #11687` and summarizes all three fixes.

@@ -2303,7 +2303,7 @@ materialize_base_dir() {
       done <<< "$_lst"
       # Per-root floor: a root whose listing holds only non-.tf or nested files contributes
       # zero materialized files — without this its base_declared reads {} and that root's
-      # deletions blind-green (the file floor in ipt.py is global across both roots).
+      # deletions blind-green (the file floor in ipt.py is global across all three roots).
       # Fail-closed by direction: a branch forked before a root's first .tf reds 'base
       # unavailable', which the IPT_BASE_REF seam covers — the blind-green alternative is worse.
       [ "$_n" -ge 1 ] || { _rc=1; _why="floor"; }
@@ -3919,7 +3919,7 @@ fi
 # ── G4c base-resolution legs (#9956): the PRODUCTION resolve_base_ref + materialize_base_dir
 # path over a synthetic git repo. The compliant fixture's static `$FIX/base` tree cannot reach
 # these semantics — the base there is handed to ipt.py already materialized. Here the base is
-# RESOLVED from git history: M0 declares A, B, B2, RK; refs/remotes/origin/main is M1 = M0 plus
+# RESOLVED from git history: M0 declares A, B, B2, RK, LB; refs/remotes/origin/main is M1 = M0 plus
 # terraform_data.main_c, the stand-in for a resource block main adds after the fork point (the
 # #9956/#8904 false-red class: a stale checkout diffed against the moving tip reports it as an
 # orphan). HEAD variants differ per leg; merge-base(HEAD, origin/main) is M0 for every leg
@@ -3944,7 +3944,7 @@ EOF
 # _g4git — git against the fixture repo under the env -u scrub convention (hook-reachable code).
 _g4git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$G4GIT/repo" "$@"; }
 _g4git init -q -b main \
-  && _g4git add -A && _g4git commit -qm "M0: base declares A B B2 RK" \
+  && _g4git add -A && _g4git commit -qm "M0: base declares A B B2 RK LB" \
   || { printf 'FAIL SETUP: g4git M0\n' >&2; exit 1; }
 G4_M0="$(_g4git rev-parse HEAD)"
 printf 'resource "terraform_data" "main_c" {}\n' >> "$G4GIT/repo/apps/web-platform/infra/main.tf"
