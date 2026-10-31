@@ -399,3 +399,17 @@ Executed by the orchestrator during work; **no writes to prod**. Results are rec
 - Runs: 41141302808 (E404, old workflow), 41142562752, 41144957796, 41149881110, 41181530366 (ENEEDAUTH); infra-validation 41125333864 (red), 41144839849 (shard 2/4 timeout), 41181409788 (green).
 - Issues: #11585, #11633 (and the drive-by issue from task 5.4); PRs: #11598 (OIDC switch), #11622 (messages policy), #11688 (this PR), #10926 (untouched).
 - ADR-310, ADR-268; npm 11.20 `lib/utils/oidc.js`; `npm help trust`.
+
+## Addendum - 2026-10-31 (implementation and review deviations)
+
+Appended, not edited in place: the sections above record the plan as reviewed.
+
+- Guard 2 row 10 (registry/package env overrides) was dropped: destination and package are constants in
+  `.github/scripts/npm-oidc-diagnose.sh`, so no environment can redirect a bearer. The exchange URL and audience are pinned
+  by the 401 block instead.
+- Guard 1 member `diagnose-on-failure` pins the publish step's control-flow skeleton (not pattern greps); see the learning
+  `2026-10-31-a-pattern-grep-guard-is-satisfied-by-dead-branches-pin-the-control-flow-skeleton.md`.
+- Task 1.5 (affected-paths entry) was dropped: an edit to an existing `AFFECTED_*_PATHS` block forces the full battery.
+- Phase 3: a capped default-branch ledger follows the ordinary capped rules; `default-branch-reset` applies to uncapped
+  ledgers only (ADR-268 amendment). AC1's `0 failed` literal became `NPM_PUBLISH_OIDC_SUITE=PASS` (exact floor 294).
+- The `model.c4` ADR ordinal fix (task 5.4) was done inline instead of filing a deferred issue (cost-of-filing).
