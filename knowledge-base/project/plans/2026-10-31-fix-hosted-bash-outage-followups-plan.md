@@ -168,8 +168,8 @@ Matrix rows are executed once at PR time unless a row is already a permanent ass
 - PR 3: a classified helper line renders the plain sentence; `ls: Permission denied` does not; the alert fires for each newly classified helper class.
 
 ## Acceptance Criteria
-- [ ] PR 1a: G2 ran (log shows it was not skipped); each needle class either has a CONTROL-proven persisted path with zero hits in B, or is reported `not_exercisable`; or the reachable paths are fixed per Phase 1b and the CLO has been notified before merge.
-- [ ] PR 1a: file-tool arm refuses Read/Grep/Glob and symlink access to the shared history file.
+- [x] PR 1a: G2 ran (log shows it was not skipped); each needle class either has a CONTROL-proven persisted path with zero hits in B, or is reported `not_exercisable`; or the reachable paths are fixed per Phase 1b and the CLO has been notified before merge. Result (2026-10-31, real CLI 2.1.284, production posture): prompt, tool output and exported env are persisted at named host paths and unreachable for B (0 hits); the B-readable residual in the shared HOME is pinned (CTO ruling: documented residual, no relocation; triggers recorded for ADR-075 addendum in PR 1b).
+- [x] PR 1a: file-tool arm refuses Read/Grep/Glob and symlink access to the shared history file. (`test/sandbox-hook.test.ts`, 11 new rows incl. a symlink planted in the workspace; Task/subagent matcher coverage not exercised here).
 - [ ] PR 1b: the `tenant-deny` emit passes `null` first; the Sentry rule, reference entry and contract assertion exist; `bash scripts/tenant-deny-alert-discoverability.sh` prints `TENANT_DENY_ALERT_PATH_OK`; the Sentry apply workflow succeeded on the merge commit.
 - [ ] PR 1b: the coupling assertion passes and each Guard Contract row was shown to turn its guard red once.
 - [ ] PR 1b: ADR-075 addendum and breach-register row added; breach-register row never says "no data affected".
