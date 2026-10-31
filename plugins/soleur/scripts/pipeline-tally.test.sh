@@ -126,7 +126,7 @@ assert_rc0() { assert_eq "0" "$RC" "$1"; }
 # (and of `capped-reset`/`stale-reset`), so outcome asserts must match a whole
 # line, never assert_contains. line_present is the predicate; assert_line and
 # assert_no_line wrap it.
-line_present() { printf '%s\n' "$1" | grep -qxF -- "$2"; }
+line_present() { grep -qxF -- "$2" <<<"$1"; }
 assert_line() {
   if line_present "$1" "$2"; then
     echo "  PASS: $3"; PASS=$((PASS + 1))

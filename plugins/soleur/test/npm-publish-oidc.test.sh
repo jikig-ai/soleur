@@ -717,6 +717,7 @@ STUBBIN="$SANDBOX/stubbin"; mkdir -p "$STUBBIN"; assert_fixture_dir "$STUBBIN"
 cat > "$STUBBIN/curl" <<'STUBEOF'
 #!/usr/bin/env bash
 set -u
+cfgin=""; case " $* " in *" -K "*) [ -t 0 ] || cfgin="$(timeout 2 cat)" ;; esac
 D="${STUB_DIR:?}"
 n=$(( $(grep -c '^CALL ' "$D/calls.log" 2>/dev/null || true) + 1 ))
 { echo "CALL $n"; for a in "$@"; do printf 'ARG %s\n' "$a"; done; } >> "$D/calls.log"
@@ -737,7 +738,7 @@ while [ "$i" -lt "$#" ]; do
 done
 [ -n "$url" ] || refuse "no url"
 if [ "$cfg" -eq 1 ]; then
-  printf 'BEARER %s %s\n' "$n" "$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')" >> "$D/bearer.log"
+  printf 'BEARER %s %s\n' "$n" "$(printf '%s\n' "$cfgin" | sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')" >> "$D/bearer.log"
 fi
 case "$url" in
   */oidc/token/exchange/*)
@@ -825,7 +826,9 @@ run_diag() {
 verdict_is() { grep -qx "NPM_OIDC_VERDICT=$1" "$CD/out"; }
 one_verdict() { [[ "$(grep -c '^NPM_OIDC_VERDICT=' "$CD/out")" -eq 1 ]]; }
 only_allowed_annotations() {
-  ! grep -E '^::' "$CD/all" | grep -vE '^::(add-mask::[A-Za-z0-9._~+/=-]+|error title=npm trusted publisher::.+)$' | grep -q .
+  local rest
+  rest="$(grep -E '^::' "$CD/all" | grep -vE '^::(add-mask::[A-Za-z0-9._~+/=-]+|error title=npm trusted publisher::.+)$' || true)"
+  [[ -z "$rest" ]]
 }
 call_block() { awk -v n="$1" '$0 == "CALL " n {f=1; next} /^CALL /{f=0} f' "$CD/calls.log"; }
 calls_total() { grep -c '^CALL ' "$CD/calls.log" 2>/dev/null || true; }
@@ -854,11 +857,11 @@ diag_battery() { # diag_battery <script-under-test>
   ck "401: only allow-listed :: annotations"         only_allowed_annotations
   ck "401: stub exercised exactly twice (floor)"     test "$(calls_total)" -eq 2
   ck "401: stub refused nothing"                     test ! -e "$CD/refused"
-  ck "401: token fetch uses -G"                      bash -c "$(declare -f call_block); CD='$CD'; call_block 1 | grep -qx 'ARG -G'"
-  ck "401: token fetch carries the audience arg"     bash -c "$(declare -f call_block); CD='$CD'; call_block 1 | grep -qx 'ARG audience=npm:registry.npmjs.org'"
-  ck "401: token fetch keeps the URL verbatim"       bash -c "$(declare -f call_block); CD='$CD'; call_block 1 | grep -qx 'ARG https://127.0.0.1:9/token?api=1'"
-  ck "401: exchange is a POST"                       bash -c "$(declare -f call_block); CD='$CD'; call_block 2 | grep -A1 -x 'ARG -X' | grep -qx 'ARG POST'"
-  ck "401: exchange URL exact"                       bash -c "$(declare -f call_block); CD='$CD'; call_block 2 | grep -qx 'ARG https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@soleur%2fopencode'"
+  ck "401: token fetch uses -G"                      bash -c "$(declare -f call_block); CD='$CD'; grep -qx 'ARG -G' < <(call_block 1)"
+  ck "401: token fetch carries the audience arg"     bash -c "$(declare -f call_block); CD='$CD'; grep -qx 'ARG audience=npm:registry.npmjs.org' < <(call_block 1)"
+  ck "401: token fetch keeps the URL verbatim"       bash -c "$(declare -f call_block); CD='$CD'; grep -qx 'ARG https://127.0.0.1:9/token?api=1' < <(call_block 1)"
+  ck "401: exchange is a POST"                       bash -c "$(declare -f call_block); CD='$CD'; grep -qx 'ARG POST' < <(call_block 2 | grep -A1 -x 'ARG -X')"
+  ck "401: exchange URL exact"                       bash -c "$(declare -f call_block); CD='$CD'; grep -qx 'ARG https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@soleur%2fopencode' < <(call_block 2)"
   ck "401: bearer flowed (request token to the fetch)"  grep -qx "BEARER 1 $REQ_TOK" "$CD/bearer.log"
   ck "401: bearer flowed (id-token to the exchange)"    grep -qx "BEARER 2 $ID_TOK" "$CD/bearer.log"
   ck "401: no bearer value in any argv"              not grep -qF -e "$REQ_TOK" -e "$ID_TOK" "$CD/calls.log"
