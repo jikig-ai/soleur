@@ -84,3 +84,13 @@ versions (3.363.1–3.364.3): npm has no sequential-version requirement and
 - Detection stays loud-by-construction: a red `npm Publish` run + the
   classification hint in the job log is the contract; a dedicated dead-leg
   monitor was considered and cut (triage latency, not missing signal).
+
+## Amendment — 2026-10-31 (PR #11688)
+
+The failure signature is not only `E404`. With the OIDC wiring in place and no matching
+trusted-publisher entry, npm swallows the exchange failure at verbose log level and dies
+`ENEEDAUTH`. The `npm Publish` job now runs a failure-only step that replays the exchange
+and prints one `NPM_OIDC_VERDICT=` line with the values the entry must carry; the leg
+stays red until the owner step lands (no soft-skip). See
+`knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md`.
+Status stays `adopting`.

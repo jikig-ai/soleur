@@ -51,6 +51,7 @@ jobs:
         run: npm install -g npm@^11
 
       - name: Resolve version and publish to npm
+        id: publish
         working-directory: packages/opencode-plugin
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -69,10 +70,16 @@ jobs:
           fi
           if npm view "@soleur/opencode@$VERSION" version >/dev/null 2>&1; then
             echo "@soleur/opencode@$VERSION is already published on npm; skipping."
+            echo "NPM_OIDC_VERDICT=not-exercised"
+            echo "detail=version already on npm, so OIDC was not tested; confirm the trust entry with npm trust list"
             exit 0
           fi
           npm version --no-git-tag-version -- "$VERSION"
           if ! npm publish --access public --ignore-scripts; then
-            echo "npm publish failed. On E404, verify the npm trusted-publisher entry for jikig-ai/soleur + npm-publish.yml ('npm trust list @soleur/opencode'); the registry masks authz failures as 404." >&2
+            echo "npm publish failed. E404 or ENEEDAUTH can mean the OIDC trusted-publisher binding for jikig-ai/soleur + npm-publish.yml is missing or mismatched (npm masks authz failures and swallows OIDC exchange errors); the next step prints NPM_OIDC_VERDICT. Runbook: knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md" >&2
             exit 1
           fi
+
+      - name: Diagnose npm OIDC trusted-publisher binding
+        if: failure() && steps.publish.outcome == 'failure'
+        run: bash .github/scripts/npm-oidc-diagnose.sh
