@@ -25,3 +25,10 @@ None. (One transient `edit` tool "file not found" error on the plan file mid-ses
 - Disclosure: sequential-fallback — the planning subagent could not spawn nested subagents on this harness; all research/review/agent roles ran inline in that process. No independent review ran during planning.
 - Three `pending - assumed` rows ruled by `soleur:engineering:cto` on 2026-10-31 — all confirmed the assumed defaults (incumbent-preserving `--durations` seed; verbatim apply to archived session-state; drift evidence to both the issue and runbook). No plan amendment needed.
 - cto_spawns=1
+
+## Review Phase
+- Panel: 4-seat non-code class (git-history-analyzer, pattern-recognition, security-sentinel, code-quality) on PANEL_SHA 5943fce16f. Zero P0/P1.
+- Fixed inline: runbook floor-row count (94 incumbent re-derived at 1222; 2 stale 1200->1222; 3 new seated — was "97 incumbent (1200->1222)"), "24 re-seated" -> "21 re-seated + 3 seated", per-run granularity added (AC-4), tasks.md light-leg wording, plan Overview mechanism line.
+- Disputed-with-evidence: git-history P3 spread-band breach on run 41132662609 — seat summed 11 files incl. 3 heavy-leg artifacts (heavy-leg3 = 1.3 min); light-only spread 16.1 min corroborated by the 20.5-min wall floor. No doc change.
+- Noted not-fixed: commit trailers used "(Ref epic 11556)" vs "(Ref #NNNNN)" convention — rewriting pushed SHAs would invalidate the fix-round base; squash subject carries the convention.
+- Seats: security-sentinel clean; all three CTO rulings verified consistent by seats.

@@ -18,9 +18,11 @@ Issue: #11556 (epic — this checkpoint does not close it)
       `gh run download <id> -p 'suite-timings-scripts-*' -D $WORK/<id>` for:
       41132662609, 41136687119, 41138355176, 41141190932, 41146395715,
       41180934660, 41133279254, 41135223254
-- [x] 2.2 Completeness gate: every run dir holds exactly 8
-      `suite-timings.tsv` leg files (AC-1). Incomplete/expired dirs are
-      excluded and named; <3 complete dirs → abort with re-list note
+- [x] 2.2 Completeness gate: every run dir holds exactly 8 light-leg
+      `suite-timings.tsv` files (AC-1; `-p` also fetches the 3 heavy-leg
+      artifacts into the same dir — count light legs only).
+      Incomplete/expired dirs are excluded and named; <3 complete dirs →
+      abort with re-list note
 
 ## Phase 3 — Measure
 

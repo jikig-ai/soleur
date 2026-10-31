@@ -283,10 +283,13 @@ span to the NEXT registered mark.
   41132662609, 41136687119, 41138355176, 41141190932, 41146395715,
   41180934660 and pull_request 41133279254, 41135223254 (each dir held all 8
   light legs; `-p` also fetched the 3 heavy-leg artifacts, which
-  `LIGHT_ARTIFACT` excludes). **Observed on the seeded topology:** per-run
-  worst-leg suite-time 33.7–36.8 min and leg spread 8.9–17.2 min; jobs-API
-  wall clocks worst 35–38 min, spread 9–17 min — improved vs the 43–51 min
-  pre-split baseline but **above the ~28-min bound on every run** (seeded
+  `LIGHT_ARTIFACT` excludes). **Observed on the seeded topology:** worst-leg
+  suite-times per run (in the run-id order above) 35.9 / 35.0 / 36.2 /
+  33.7 / 34.9 / 35.2 / 36.8 / 35.2 min, leg spreads 16.1 / 11.5 / 13.5 /
+  10.5 / 12.0 / 12.9 / 17.2 / 8.9 min; jobs-API wall clocks worst 37 / 36 /
+  37 / 35 / 36 / 36 / 38 / 36 min, wall spreads 16 / 11 / 14 / 11 / 12 /
+  13 / 17 / 9 min — improved vs the 43–51 min pre-split baseline but
+  **above the ~28-min bound on every run** (seeded
   prices were off: replay-a seeded 635 s vs measured 1033 s; affected-b
   913 s vs 502 s). **Measured arm medians (ms, seeded → measured):**
   replay-a 635037→1033094, replay-b 336324→399378, replay-c 351151→326172,
@@ -295,8 +298,9 @@ span to the NEXT registered mark.
   incumbent-preserving `--durations` seed (the merge commit's own
   mechanism) — a full `--timings-dir --write` would have re-priced the 8
   always-on drifters #11648 tracks and red `test-all-fast-tier-budget`;
-  24 manifest rows re-seated, 3 new floor labels, 97 incumbent floor rows
-  re-derived (1200→1222 ms); budget suite stays green. Post-reprice
+  21 manifest rows re-seated plus 3 new labels seated; 94 incumbent floor
+  rows re-derived at the 1222 ms floor (2 stale rows moved 1200→1222);
+  budget suite stays green. Post-reprice
   predicted packing ~1230–1277 s/leg (~21.3 min worst) on committed
   prices — nominally under the bound but inherits incumbent staleness; the
   honest all-measured table predicts ~1824.7 s/leg (~30.4 min, spread

@@ -18,8 +18,10 @@ The Lever-A arm-sharding slice of epic #11556 merged 2026-10-30 (merge commit
 first green post-merge artifact runs. Eight green ci.yml runs now carry real
 `suite-timings-scripts-*` artifacts (6 merge_group + 2 pull_request; main push
 runs elide the shards job so `--runs` cannot aggregate them). This checkpoint:
-downloads the artifacts per run, re-prices via
-`regenerate-shard-manifest.py --timings-dir ... --write`, verifies observed leg
+downloads the artifacts per run, produces the measured table via
+`regenerate-shard-manifest.py --timings-dir ... --manifest`, re-prices the
+committed tables via the incumbent-preserving `--durations` seed (CTO ruling,
+2026-10-31 — see `decision-challenges.md`), verifies observed leg
 spread vs the ~28-min worst-leg prediction, records measured legs in the
 runbook, and restores the lost session-state Updates 18-19 (enqueue + merge
 record) that sit uncommitted in the stale `feat-11556-required-check-time`
