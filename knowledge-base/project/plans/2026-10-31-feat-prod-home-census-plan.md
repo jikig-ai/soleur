@@ -53,7 +53,7 @@ design labels this in every response (`interpretation`, `evidence`, `uptime_buck
 counts and metadata only, no content, no values, no real identifiers, no SSH fallback, existing monitoring) and says "The method still
 needs the CLO's approval of the exact mechanism before it runs"; the purge is authorized in principle only and not sized; PR 2 is a
 separate item with its own gates. The CLO determination and the ADR-075 addendum 2026-10-31 exist as described. Collision pre-check:
-the only open PR naming #10455 is this run's own draft PR #11712. Newly found: (1) the HOME does not persist across container starts;
+the only open PR naming #10455 is this run's own draft PR #11712. Newly found: (1) the HOME does not persist across container recreation (each deploy), though it does across a restart-policy restart;
 (2) no zero-deploy path exists; (3) the reminder primitive's handler posts every check result to a GitHub issue and the repository is
 PUBLIC; (4) both mechanisms the brief named lose on measured facts (see Alternative Approaches).
 
@@ -129,7 +129,7 @@ re-evaluated, so a static import makes the test vacuous).
 
 The limiter is a polling and load limiter (CTO ruling, plan-review deepen round): any holder of the shared secret can POST `real` with
 curl and skip the script, and repeated scans would let a holder watch a bucket transition (for example 4 to 5 entries) reveal an exact
-count and a session-activity timeline. It is per container and resets on a restart (which also wipes the HOME), so it is NOT the
+count and a session-activity timeline. It is per container and resets on a restart (a restart-policy restart keeps the HOME; only recreation wipes it), so it is NOT the
 governance of the two-run cap; that stays the script's write-ahead claim on #10455 (C8, C9). `accept_young` is a named intent guard
 against misreading a young result, not a security control; the script sends it only with `--c9-fallback` and records that on the claim.
 
