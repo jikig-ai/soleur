@@ -743,6 +743,10 @@ _SUITE_BOUNDS=(
   # against the 360 s default. Pin at 720 (git-data-wipe-assert precedent; ~1.5x the 495 s loaded figure)
   # so a starved leg renders as this suite's own RED rather than a leg timeout.
   "apps/web-platform/infra/betterstack-alert-structure.test.sh=720"
+  # #11669: ~141-150 s serial, but bound-killed at the 360 s default (rc=124, every visible row ok) on leg 2/4
+  # beside ci-deploy and betterstack-alert-structure. Pin at 720 (~2x the kill point); a real hang still renders
+  # as this suite's own RED before the leg's 15-minute ceiling.
+  "apps/web-platform/infra/cron-egress-nftables.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
