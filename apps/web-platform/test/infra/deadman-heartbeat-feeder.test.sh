@@ -1263,7 +1263,7 @@ static_violations() {
   # xtrace refusal present, names the four credential variables
   grep -qF 'case "$-" in' "$f" && grep -qF 'BETTERSTACK_API_TOKEN_READONLY:+x' "$f" && grep -qF 'BETTERSTACK_QUERY_PASSWORD:+x' "$f" || echo "xtrace-refusal"
   # the target is matched by literal equality and never interpolated
-  fn_body "$f" select_target | grep -qE '^\s*case "\$1" in' || echo "select_target-not-a-literal-case"
+  grep -qE '^\s*case "\$1" in' < <(fn_body "$f" select_target) || echo "select_target-not-a-literal-case"
   local top
   top="$(awk '
     /^[A-Za-z_][A-Za-z0-9_]*\(\) \{/ { if ($0 !~ /\}[[:space:]]*$/) skip = 1; next }
@@ -2193,11 +2193,11 @@ reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw luks-monitor
 expect_red G2-2 "the host_name conjunct dropped: a web-2 row beats" 3 no_qualifying_row 0 beat
 land g2-3a "LIKE '%OK: /mnt/data is LUKS-backed%'" "LIKE '%OK: /mnt/data is LUKS backed%'"; _m="$M"
 cases=$((cases + 1))
-if guard2_checks "$_m" "$EMIT_LUKS" 2>&1 | grep -q '^FAIL luks: the LIKE needle equals'; then pass "mutation row G2-3a is RED: a reworded needle in the feeder only fails the emitter-parity pin"
+if grep -q '^FAIL luks: the LIKE needle equals' < <(guard2_checks "$_m" "$EMIT_LUKS" 2>&1); then pass "mutation row G2-3a is RED: a reworded needle in the feeder only fails the emitter-parity pin"
 else fail "mutation row G2-3a: emitter parity did not notice the reworded needle"; fi
 sed 's/OK: \/mnt\/data is LUKS-backed/OK: \/mnt\/data is encrypted/' "$EMIT_LUKS" > "$WORK/mut/luks-monitor.reworded.sh"
 cases=$((cases + 1))
-if ! cmp -s "$EMIT_LUKS" "$WORK/mut/luks-monitor.reworded.sh" && guard2_checks "$FEEDER_SRC" "$WORK/mut/luks-monitor.reworded.sh" 2>&1 | grep -q '^FAIL luks: the LIKE needle equals'; then
+if ! cmp -s "$EMIT_LUKS" "$WORK/mut/luks-monitor.reworded.sh" && grep -q '^FAIL luks: the LIKE needle equals' < <(guard2_checks "$FEEDER_SRC" "$WORK/mut/luks-monitor.reworded.sh" 2>&1); then
   pass "mutation row G2-3b is RED (landed): a reworded OK line in luks-monitor.sh only fails the emitter-parity pin (both directions covered)"
 else fail "mutation row G2-3b: emitter parity did not notice (or the edit did not land)"; fi
 land g2-4 "= 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'message') LIKE '%OK" "= 'luks-monitor' OR JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'message') LIKE '%OK"; _m="$M"
@@ -2205,7 +2205,7 @@ reset_case; C_SRC="$_m"; C_ROWS="$(row s3 "$((26 * H))" "$(luks_raw other-tag lu
 expect_red G2-4 "the unit conjunct joined with OR: a wrong-identifier row beats" 3 no_qualifying_row 0 beat
 land g2-5 " AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid')))" " AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid')) OR raw LIKE '%cost%')"; _m="$M"
 cases=$((cases + 1))
-if guard2_checks "$_m" "$EMIT_LUKS" 2>&1 | grep -q '^FAIL cost: exactly one OR'; then pass "mutation row G2-5 is RED: a second OR arm on the cost predicate fails the exactly-two-arms pin"
+if grep -q '^FAIL cost: exactly one OR' < <(guard2_checks "$_m" "$EMIT_LUKS" 2>&1); then pass "mutation row G2-5 is RED: a second OR arm on the cost predicate fails the exactly-two-arms pin"
 else fail "mutation row G2-5: the second OR arm was not noticed"; fi
 land g2-6a " AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'" ''; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_COST"; C_ROWS="$(row s3 "$((2 * H))" "$(cost_raw session:abc123)" | fx g26a)"; C_BEATS=1; C_APIS=1
@@ -2218,7 +2218,7 @@ reset_case; C_SRC="$_m"; C_TARGET="$T_COST"; C_ROWS="$(row s3 "$((2 * H))" "$(co
 expect_red G2-6c "the non-null cost_usd conjunct dropped: a null-cost marker beats" 3 no_qualifying_row 0 beat
 land g2-7 'def_pred LUKS_PRED' 'def_pred LUKS_PRED_RENAMED'; _m="$M"
 cases=$((cases + 1))
-if guard2_checks "$_m" "$EMIT_LUKS" 2>&1 | grep -q '^FAIL both predicates are extractable'; then pass "mutation row G2-7 is RED: a renamed predicate table key trips the anti-vacuity extraction pin"
+if grep -q '^FAIL both predicates are extractable' < <(guard2_checks "$_m" "$EMIT_LUKS" 2>&1); then pass "mutation row G2-7 is RED: a renamed predicate table key trips the anti-vacuity extraction pin"
 else fail "mutation row G2-7: the extractor finding nothing was not noticed"; fi
 echo "-- Guard 2 harness rows: the fixtures can fail, and non-canonical inputs stay green --"
 reset_case; C_EVAL="$WORK/eval-allrows.py"; C_ROWS="$(row s3 "$((28 * H))" "$(luks_raw luks-monitor __none__ "$FAIL_MSG" soleur-web-2)" | fx hr1)"; C_BEATS=1; C_APIS=1; run_case
@@ -2348,7 +2348,7 @@ assert s.count(old) == 1
 open(sys.argv[2], "w").write(s.replace(old, "for t in luks-monitor-host-timer; do"))
 PYL
 cases=$((cases + 1))
-if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-droploop.yml" && workflow_violations "$WORK/mut/wf-droploop.yml" 2>&1 | grep -qx 'loop-targets-differ-from-script-table'; then pass "mutation row G4-3 is RED: dropping a target from the workflow loop fails the loop-vs-script-table pin"
+if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-droploop.yml" && grep -qx 'loop-targets-differ-from-script-table' < <(workflow_violations "$WORK/mut/wf-droploop.yml" 2>&1); then pass "mutation row G4-3 is RED: dropping a target from the workflow loop fails the loop-vs-script-table pin"
 else fail "mutation row G4-3: the dropped loop target was not noticed (or did not land)"; fi
 "$PY" -I - "$WORKFLOW" "$WORK/mut/wf-reorder.yml" <<'PYL'
 import sys
@@ -2357,7 +2357,7 @@ old = "for t in luks-monitor-host-timer claude-cost-capture; do"
 open(sys.argv[2], "w").write(s.replace(old, "for t in claude-cost-capture luks-monitor-host-timer; do"))
 PYL
 cases=$((cases + 1))
-if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-reorder.yml" && ! workflow_violations "$WORK/mut/wf-reorder.yml" 2>&1 | grep -q 'loop-targets'; then pass "must-PASS (non-canonical): reordering the loop targets stays green"
+if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-reorder.yml" && ! grep -q 'loop-targets' < <(workflow_violations "$WORK/mut/wf-reorder.yml" 2>&1); then pass "must-PASS (non-canonical): reordering the loop targets stays green"
 else fail "must-PASS: reordering the loop targets went red (or did not land)"; fi
 # (The former harness row that demanded NO other pin catch the G4-3 mutant is gone: it coupled this row to every
 # unrelated pin, so adding a pin that also noticed the dropped target would have failed a correct row. The row
@@ -2525,7 +2525,7 @@ sec_drv_absent() { sec_mut CTL-SEC "$EMIT_VECTOR" transforms.tag_journald 'TEXT_
 own_ctl "sec_mut() fails when the edit does not land inside the section" "did NOT land" sec_drv_absent
 sec_mut g2s-1 "$EMIT_VECTOR" transforms.tag_journald '.host_name = "@@HOST_NAME@@"' '.host = "@@HOST_NAME@@"'
 cases=$((cases + 1))
-if guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$SM" 2>&1 | grep -q '^FAIL luks: host_name is written by vector.toml'; then pass "mutation row G2S-1 is RED: host_name lost from [transforms.tag_journald] only (tag_metrics still has it)"
+if grep -q '^FAIL luks: host_name is written by vector.toml' < <(guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$SM" 2>&1); then pass "mutation row G2S-1 is RED: host_name lost from [transforms.tag_journald] only (tag_metrics still has it)"
 else fail "mutation row G2S-1: the scoped host_name pin did not notice"; fi
 cases=$((cases + 1))
 if grep -qE '^[[:space:]]*\.host_name = "@@HOST_NAME@@"' "$SM"; then pass "G2S-1 control: the old UNSCOPED pin would have survived this mutant (tag_metrics keeps the line)"
@@ -2533,7 +2533,7 @@ else fail "G2S-1 control: the unscoped pin would also have caught it, so the sco
 sec_mut g2s-2 "$EMIT_VECTOR" sources.host_scripts_journald '  "luks-monitor",
 ' ''
 cases=$((cases + 1))
-if guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$SM" 2>&1 | grep -q '^FAIL luks: the tag is in vector.toml'; then pass "mutation row G2S-2 is RED: the luks-monitor tag lost from [sources.host_scripts_journald] only (two other sources keep it)"
+if grep -q '^FAIL luks: the tag is in vector.toml' < <(guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$SM" 2>&1); then pass "mutation row G2S-2 is RED: the luks-monitor tag lost from [sources.host_scripts_journald] only (two other sources keep it)"
 else fail "mutation row G2S-2: the scoped allowlist pin did not notice"; fi
 cases=$((cases + 1))
 if grep -qF '"luks-monitor"' "$SM"; then pass "G2S-2 control: the old UNSCOPED pin would have survived this mutant"
@@ -2546,7 +2546,7 @@ assert s.count(old) == 1
 open(sys.argv[2], "w").write(s.replace(old, 'host_name = each.key == "web-1" ? "soleur-web-platformX"'))
 PYX
 cases=$((cases + 1))
-if ! cmp -s "$EMIT_SERVER_TF" "$WORK/mut/server.hostname.tf" && guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$EMIT_VECTOR" "$WORK/mut/server.hostname.tf" 2>&1 | grep -q '^FAIL luks: host_name literal'; then pass "mutation row G2S-3 is RED (landed): the server.tf host_name line changed while the server name line still carries the literal"
+if ! cmp -s "$EMIT_SERVER_TF" "$WORK/mut/server.hostname.tf" && grep -q '^FAIL luks: host_name literal' < <(guard2_checks "$FEEDER_SRC" "$EMIT_LUKS" "$EMIT_VECTOR" "$WORK/mut/server.hostname.tf" 2>&1); then pass "mutation row G2S-3 is RED (landed): the server.tf host_name line changed while the server name line still carries the literal"
 else fail "mutation row G2S-3: the anchored host_name pin did not notice (or the edit did not land)"; fi
 
 # --- Guard 4: the notification route, the Sentry attributes, the apply-step scoping, a single invoker ----------------
