@@ -21,6 +21,12 @@
 // refused with 407, while a request carrying the caller's OWN credential is live (negative control: the
 // check can answer something other than 407).
 //
+// G2 also measures (#10455, PR 1a) what a sibling tenant can read of the REAL CLI's persisted output: per-run synthesized markers for
+// the first tenant's prompt text and tool output must each be proven persisted at a host path and then be absent from everything the
+// second tenant can read (a canary file proves the search can find them); the CLI state the sibling CAN read in the shared HOME is
+// pinned as a documented residual (ADR-075 addendum 2026-10-31), and the first tenant's recorded messaging socket path must not be
+// visible from the sibling's mount view.
+//
 // Runs on a CI runner, not the production image: the docker suite
 // (infra/sandbox-masked-proc-docker.test.sh) carries the production-tuple arms.
 
