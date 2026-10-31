@@ -494,7 +494,7 @@ def growth_ack_digest(path):
                 if l.startswith(GROWTH_ACK_PREFIX):
                     return l.split("=", 1)[1].strip() or None
     except OSError:
-        pass
+        return None
     return None
 
 
