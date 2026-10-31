@@ -33,3 +33,10 @@
 - CTO spawn (Rule interface): ruled C — argv-strict `date` stub in `$DBIN` pinned to `DNOON` fixture noon; ruling + dissent recorded in decision-challenges.md
 - Re-run: exit 0 (PASS, 1 row examined)
 - cto_spawns=1; agent_rounds=2
+
+## Work Phase
+- Status: complete (commit `ba21d772fc`)
+- Implemented per plan: `$DBIN/date` argv-strict stub, `DNOON`/`dclock_at` pin, CLK bypass-detector case, `clock`/`clock.epoch` consistency, `dcalls.log` dispatch floor (328), closed argv set, `print_results` floor 493→498
+- Suite: `technical-ruling-gate.test.sh` green 498/0
+- Mutation matrix verified: rows 1-6 per Guard Contract (row 3 reproduced exact flake signature `the pristine gate gives rc 0, not the pinned 2`; mut-A found + fixed a `wc -l <` abort-on-missing-log bug in the floor)
+- AC1-AC6 all satisfied; SUT `# mut:` lines byte-identical (0-line diff)
