@@ -1999,11 +1999,11 @@ for res in ("luks_monitor_host_timer", "claude_cost_capture"):
     if "paused: true" not in b: bad.append("manifest-paused-" + res)
     if 'file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml"' not in b: bad.append("manifest-evidence-file-" + res)
     if 'pattern: "bash scripts/deadman-heartbeat-feeder.sh"' not in b: bad.append("manifest-evidence-pattern-" + res)
-    if 'arming_pending: { tracking_issue: 11631, expires: "2026-11-13" }' not in b: bad.append("manifest-arming_pending-" + res)
+    if 'arming_pending: {' in b: bad.append("manifest-arming_pending-still-declared-" + res)
 print("\n".join(bad))
 PYM
 )"
-if [[ -z "$_man" ]]; then pass "manifest: both rows are external-probe, paused, arming_pending, evidenced by the workflow and the feeder invocation"
+if [[ -z "$_man" ]]; then pass "manifest: both rows are external-probe, source-paused, armed (no arming_pending), evidenced by the workflow and the feeder invocation"
 else fail "manifest violations: $(paste -sd, - <<<"$_man")"; fi
 # Counted either way (a skip is one pass), so the exact floors do not depend on whether the host has bun: the
 # deploy-script-tests CI job does not install it, and the manifest rows are also pinned statically just above.
