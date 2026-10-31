@@ -89,6 +89,7 @@ n-mismatch silently degrades every leg to positional.
 
 import argparse
 import glob
+import hashlib
 import io
 import json
 import os
@@ -115,6 +116,17 @@ EPSILON_FRACTION = 0.05  # of mean leg load
 # this constant when nothing measured at all (the all-floor degrade).
 DEFAULT_SUITE_MS = 60000
 ARTIFACTS_PER_PAGE = 100
+
+# Committed-weight drift gate (#11662, G1): a --write to the group's committed
+# durations table refuses when measured weight drifts past these thresholds vs
+# the merge-base blob, unless --allow-growth acknowledges (and records) it.
+# Per-suite is conjunctive (factor AND absolute delta) so small-weight jitter
+# cannot fire it; floor rows never count per-suite — a floor→measured
+# transition counts only toward the total.
+DRIFT_SUITE_FACTOR = 1.5
+DRIFT_ABS_MS = 10000
+DRIFT_TOTAL_PCT = 0.10
+GROWTH_ACK_PREFIX = "# growth-acked="
 
 # Artifact name patterns, one per group and mutually exclusive: the heavy job's
 # artifacts carry a `-heavy-` infix the light pattern cannot match, and vice versa.
@@ -427,6 +439,157 @@ def read_durations(path):
     return weights, floors
 
 
+def repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def merge_base_blob(relpath):
+    """Committed file RELPATH at `git merge-base HEAD origin/main`, or None
+    when the merge-base commit has no such blob (first-ever table — the
+    bootstrap carve-out). Dies on an unresolvable base: fail closed, never
+    diff against a moving remote tip."""
+    root = repo_root()
+    p = subprocess.run(["git", "-C", root, "merge-base", "HEAD", "origin/main"],
+                       capture_output=True, text=True)
+    mb = p.stdout.strip()
+    if p.returncode != 0 or not mb:
+        die("drift gate: cannot resolve merge-base vs origin/main "
+            f"({p.stderr.strip() or 'empty result'}) — re-run inside the repo "
+            "checkout or pass --baseline-durations <path>")
+    q = subprocess.run(["git", "-C", root, "show", f"{mb}:{relpath}"],
+                       capture_output=True, text=True)
+    if q.returncode != 0:
+        if "does not exist" in q.stderr:
+            return None
+        die("drift gate: cannot read baseline blob "
+            f"{mb}:{relpath} ({q.stderr.strip()}) — could not measure, "
+            "refusing rather than bootstrapping past the gate")
+    return q.stdout
+
+
+def parse_durations_text(text, source):
+    """{label: (ms, src)} from durations-table text — the shared row parser for
+    baseline and to-be-written tables in the drift gate."""
+    rows = {}
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.rstrip("\n")
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[1].isdigit() \
+                or parts[2] not in ("measured", "floor"):
+            die(f"{source}:{lineno}: malformed durations row {line!r} — "
+                f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
+        rows[parts[0]] = (int(parts[1]), parts[2])
+    return rows
+
+
+def drift_violations(new_rows, base_rows):
+    """Per-suite and total measured-weight drift of NEW_ROWS vs BASE_ROWS,
+    each {label: (ms, src)}. floor→measured is exempt per-suite but counts
+    toward the total; measured→floor is a named report line; count growth is
+    reported, never gated. Returns (violations, notes)."""
+    violations, notes = [], []
+    new_m = {l: ms for l, (ms, s) in new_rows.items() if s == "measured"}
+    base_m = {l: ms for l, (ms, s) in base_rows.items() if s == "measured"}
+    base_f = {l for l, (ms, s) in base_rows.items() if s == "floor"}
+    for l in sorted(new_m):
+        if l in base_m:
+            b, n = base_m[l], new_m[l]
+            if n > DRIFT_SUITE_FACTOR * b and n - b > DRIFT_ABS_MS:
+                violations.append(
+                    f"per-suite drift {l!r}: {b}ms → {n}ms "
+                    f"(>{DRIFT_SUITE_FACTOR}x AND >{DRIFT_ABS_MS}ms delta)")
+        elif l in base_f:
+            notes.append(f"floor→measured {l!r}: {new_m[l]}ms "
+                         "(exempt per-suite, counts toward total)")
+    for l in sorted(base_m):
+        if l in new_rows and new_rows[l][1] == "floor":
+            notes.append(f"measured→floor {l!r}: was {base_m[l]}ms "
+                         "(stopped producing timings — a finding if persistent)")
+    if base_m:
+        growth = sum(new_m.values()) - sum(base_m.values())
+        if growth > DRIFT_TOTAL_PCT * sum(base_m.values()):
+            violations.append(
+                f"total measured weight {sum(base_m.values())}ms → "
+                f"{sum(new_m.values())}ms (+{growth}ms exceeds "
+                f"{DRIFT_TOTAL_PCT:.0%} of baseline)")
+    count_delta = len(new_rows) - len(base_rows)
+    if count_delta > 0:
+        notes.append(f"count growth: +{count_delta} new row(s) "
+                     "(registrations accrete — reported, never gated)")
+    return violations, notes
+
+
+def growth_ack_digest(path):
+    """The violation digest of an in-tree table's `# growth-acked=` stamp, or
+    None. The stamp is scoped to the violation set it acknowledged — a
+    different violation set must earn its own --allow-growth, so a stale
+    stamp can never auto-ack new drift."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for l in f:
+                if l.startswith(GROWTH_ACK_PREFIX):
+                    return l.split("=", 1)[1].strip() or None
+    except OSError:
+        return None
+    return None
+
+
+def violations_digest(violations):
+    return hashlib.sha256("\n".join(sorted(violations)).encode()).hexdigest()
+
+
+def drift_gate(new_rows, args, baseline_path, committed_write, write_target):
+    """Refuse (exit 2) a durations-table write whose measured weight drifts
+    past the pinned thresholds without an acknowledgement.
+
+    Arms on committed-table writes (write_target == the group's committed
+    default durations table) and whenever --baseline-durations is supplied — the fixture
+    seam; a plain redirected emission is never gated (spec R5).
+
+    Baseline precedence: --baseline-durations > merge-base blob; an absent
+    blob is the bootstrap carve-out (nothing to drift against), not a
+    fail-close. The ack is --allow-growth now, or a `# growth-acked=` header
+    already in the in-tree table at WRITE_TARGET. Returns True when the
+    emitted table must carry a fresh ack stamp."""
+    if baseline_path:
+        try:
+            with open(baseline_path, encoding="utf-8") as f:
+                base_text = f.read()
+        except OSError as e:
+            die(f"--baseline-durations unreadable: {e}")
+    elif committed_write:
+        base_text = merge_base_blob(
+            os.path.relpath(write_target, repo_root()))
+    else:
+        return False
+    if base_text is None:
+        print("drift gate: no baseline blob — first-ever table "
+              "(bootstrap carve-out, nothing to drift against)")
+        return False
+    violations, notes = drift_violations(
+        new_rows, parse_durations_text(base_text, "baseline"))
+    for n in notes:
+        print(f"drift gate: {n}")
+    if not violations:
+        return None
+    digest = violations_digest(violations)
+    acked = (args.allow_growth
+             or growth_ack_digest(write_target) == digest)
+    if not acked:
+        die("weight drift refusal — committed durations table exceeds "
+            "thresholds vs merge-base:\n  " + "\n  ".join(violations) +
+            "\nre-run with --allow-growth to acknowledge (recorded via a "
+            "# growth-acked= header stamp scoped to these violations)")
+    print(f"drift gate: {len(violations)} violation(s) acknowledged "
+          f"({'--allow-growth' if args.allow_growth else 'recorded ack'})")
+    # The stamp carries the acked violation digest — re-emitted whenever the
+    # gate is satisfied, so a recorded ack persists while the violation set is
+    # identical; a changed set produces a different digest and re-refuses.
+    return digest
+
+
 def read_durations_ms(path):
     """(all_ms, measured_ms) from a committed durations table for incremental
     mode: all_ms maps EVERY row's label to its ms — a src=floor row still
@@ -500,7 +663,7 @@ def drift_report_group(group, manifest_path, durations_path, dirs,
         print(f"BOUND_PERFECT light {sum(obs.values()) // max(n_legs, 1)}")
 
 
-def write_durations_delta(path_in, path_out, legs, floor_ms):
+def write_durations_delta(path_in, path_out, legs, floor_ms, growth_ack=False):
     """Apply the minimal parity delta to a durations table under
     --incremental: drop rows whose label left the manifest, and merge a
     `label<TAB>floor_ms<TAB>floor` row for every manifest label the table
@@ -534,6 +697,15 @@ def write_durations_delta(path_in, path_out, legs, floor_ms):
                   else (f"# default-weight-ms={floor_ms}"
                         if h.startswith("# default-weight-ms=") else h)
                   for h in header]
+    # The stamp is scoped to the acked violation set — a NEW ack (different
+    # digest) must REPLACE a stale stamp, never be blocked by it.
+    if growth_ack:
+        if any(h.startswith(GROWTH_ACK_PREFIX) for h in out_header):
+            out_header = [f"{GROWTH_ACK_PREFIX}{growth_ack}"
+                          if h.startswith(GROWTH_ACK_PREFIX) else h
+                          for h in out_header]
+        else:
+            out_header.append(f"{GROWTH_ACK_PREFIX}{growth_ack}")
     lines = out_header + [
         keep[l] if l in keep else f"{l}\t{floor_ms}\tfloor"
         for l in sorted(set(keep) | set(added))] + trailer
@@ -542,9 +714,12 @@ def write_durations_delta(path_in, path_out, legs, floor_ms):
     return len(added), len(dropped)
 
 
-def render_durations(weights, src_map, group, prov, floor_ms):
+def render_durations(weights, src_map, group, prov, floor_ms, growth_ack=None):
     """The committed `label<TAB>ms<TAB>src` table — the single duration source
-    both the CI regen and the #8231 local scheduler consume."""
+    both the CI regen and the #8231 local scheduler consume. GROWTH_ACK is a
+    violations digest stamped as `# growth-acked=<digest>`; it
+    persists only while the SAME violation set is re-acknowledged — a changed
+    violation set digests differently and re-refuses."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     fname = {"light": "suite-durations.tsv", "heavy": "suite-durations-heavy.tsv",
              "infra": "suite-durations.tsv"}[group]
@@ -556,6 +731,8 @@ def render_durations(weights, src_map, group, prov, floor_ms):
         f"# generated-at={ts}",
         f"# generator=regenerate-shard-manifest.py v{GENERATOR_VERSION}",
     ]
+    if growth_ack:
+        lines.append(f"{GROWTH_ACK_PREFIX}{growth_ack}")
     lines += [f"{label}\t{weights[label]}\t{src_map[label]}"
               for label in sorted(weights)]
     return "\n".join(lines) + "\n"
@@ -698,6 +875,17 @@ def main():
                     help="manifest path (default: the group's committed manifest)")
     ap.add_argument("--registered-file", default=None,
                     help="file of registered labels (default: derive via --enumerate)")
+    ap.add_argument("--allow-growth", action="store_true",
+                    help="acknowledge committed-weight drift past the "
+                         "thresholds and record it via a '# growth-acked=' "
+                         "header stamp in the emitted durations table "
+                         "(repeat regens on the branch do not re-fire)")
+    ap.add_argument("--baseline-durations", default=None,
+                    help="committed-baseline durations table for the drift "
+                         "gate (default: the merge-base blob of the group's "
+                         "committed suite-durations.tsv). Supplying it also "
+                         "arms the gate on redirected --manifest/"
+                         "--durations-out emissions — the fixture seam")
     args = ap.parse_args()
 
     if args.legs is not None and args.legs < 1:
@@ -904,15 +1092,33 @@ def main():
                         if l in incumbent and incumbent[l] != legs[l])
             print(f"vs incumbent: {moved} moved, {len(new_labels)} new, "
                   f"{len(dropped_rows)} no longer registered")
+        growth_ack = False
         if args.write:
+            # Drift gate BEFORE any write: the delta's measured rows pass
+            # through byte-identical, so incumbent-diff sees no drift — the
+            # baseline is the merge-base blob (R1 per-PR ratchet), catching
+            # slow regrow that byte-identical pass-through hides.
+            base_rows = {}
+            if os.path.exists(dur_src):
+                with open(dur_src, encoding="utf-8") as f:
+                    base_rows = parse_durations_text(f.read(), dur_src)
+            new_rows = {l: base_rows[l] if l in base_rows else
+                        (floor_ms, "floor") for l in legs}
+            # Arms on the durations write-target alone — the table is the
+            # guarded artifact, so --durations-out at the committed path is
+            # gated even with a redirected manifest.
+            committed_write = (
+                os.path.abspath(dur_out) == os.path.abspath(default_durations))
+            growth_ack = drift_gate(new_rows, args, args.baseline_durations,
+                                    committed_write, dur_out)
             with open(manifest_path, "w", encoding="utf-8") as f:
                 f.write(render(legs, n, "incremental", args.group,
                                runs_csv="incremental", floor_ms=floor_ms))
             print(f"wrote {manifest_path} ({len(legs)} rows)")
             if os.path.exists(dur_src):
-                if dur_add or dur_drop or dur_out != dur_src:
+                if dur_add or dur_drop or dur_out != dur_src or growth_ack:
                     n_add, n_drop = write_durations_delta(
-                        dur_src, dur_out, legs, floor_ms)
+                        dur_src, dur_out, legs, floor_ms, growth_ack)
                     print(f"wrote {dur_out} (parity delta: +{n_add} floor "
                           f"row(s), -{n_drop} stale row(s); retained rows "
                           f"byte-identical)")
@@ -1035,6 +1241,14 @@ def main():
         print(f"vs incumbent: {moved} moved, {new} new, {gone} no longer timed")
 
     if args.write:
+        # Drift gate BEFORE any write: committed-table writes diff against the
+        # merge-base blob (R1 per-PR ratchet); redirected emissions are gated
+        # only when --baseline-durations is supplied (the fixture seam).
+        new_rows = {l: (timings[l], src_map[l]) for l in timings}
+        committed_write = (
+            os.path.abspath(durations_path) == os.path.abspath(default_durations))
+        growth_ack = drift_gate(new_rows, args, args.baseline_durations,
+                                committed_write, durations_path)
         # Provenance follows the SOURCE the timings actually came from — a
         # `--run` flag paired with `--timings-dir`/`--durations` must not stamp
         # a run id on data that run never produced.
@@ -1054,7 +1268,7 @@ def main():
         print(f"wrote {manifest_path} ({len(legs)} rows)")
         with open(durations_path, "w", encoding="utf-8") as f:
             f.write(render_durations(timings, src_map, args.group,
-                                     runs_csv, floor_ms))
+                                     runs_csv, floor_ms, growth_ack))
         print(f"wrote {durations_path} ({len(timings)} rows)")
     else:
         print("dry-run — pass --write to update the manifest")

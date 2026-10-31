@@ -335,6 +335,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6
 scripts/actions-queue-tail-8450	7
 scripts/alarm-issue-filing-guard	1
+scripts/always-on-ledger	3
 scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6
 scripts/assert-dependabot-drain-live	3
@@ -564,6 +565,7 @@ scripts/test-all-affected-b	1
 scripts/test-all-affected-c	8
 scripts/test-all-affected-d	3
 scripts/test-all-capacity-signal	4
+scripts/test-all-corpus-weight-budget	3
 scripts/test-all-enumerate-toolchain	6
 scripts/test-all-fast-tier-budget	8
 scripts/test-all-group-affected	6

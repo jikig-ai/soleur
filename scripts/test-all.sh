@@ -4160,7 +4160,8 @@ _aff_runner_banner() {
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
 # #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
 # #10861: +1 always-on (the grep-q-pipe-guard whole-tree reader, PR4b row 6 verdict); re-pinned at 120-5.
-_MIN_ALWAYS_ON_DECLARED=115
+# #11662: +2 always-on (the anti-regrow guard pair: corpus-weight-budget + always-on-ledger); re-pinned at 122-5.
+_MIN_ALWAYS_ON_DECLARED=117
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5715,6 +5716,15 @@ if want_scripts; then
   # #9763: the fast-tier budget ratchet — pins always-on committed weight to
   # <=10s per suite and <=300s total so the local tier cannot silently regrow.
   run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
+  # #11662: the corpus-wide committed-weight budget — every committed weight
+  # <=600s or exempted in scripts/suite-weight-exemptions.tsv; unmeasured
+  # registrations red. Registered explicitly: scripts/*.test.sh is NOT
+  # auto-globbed (the #5417 orphan class).
+  run_suite "scripts/test-all-corpus-weight-budget" bash scripts/test-all-corpus-weight-budget.test.sh
+  # #11662: the always-on ledger — two-directional keys-parity against
+  # scripts/always-on-justifications.tsv plus the non-live membership ceiling
+  # (NON_LIVE_CAP), distinct from f1's pin-vs-list band.
+  run_suite "scripts/always-on-ledger" bash scripts/always-on-ledger.test.sh
   # #9814: the local weight-drift detector — warns when a suite's local actual
   # exceeds its committed weight by >2x AND >10s (advisory lines, never a gate).
   run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh

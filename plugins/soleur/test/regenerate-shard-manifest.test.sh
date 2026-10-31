@@ -857,15 +857,14 @@ else
   check fail "fixture Y: refused but stderr does not explain: $(tail -1 "$FY/err.txt")"
 fi
 
-# === Fixture Z: --drift-report read-only drift probe (#11564) =================
-# A second read-only reporting mode: given per-run --timings-dir dirs it compares
+# === Fixture Z1: --drift-report read-only drift probe (#11564) ==========# A second read-only reporting mode: given per-run --timings-dir dirs it compares
 # fresh cross-run medians against the COMMITTED durations/manifest pricing and
 # emits machine rows — DRIFT_ROW (a src=floor row that finally measured),
 # LEG_PREDICTED / LEG_OBSERVED / BOUND_PERFECT (leg-balance, light only), and
 # FLOOR_UNMEASURED (floor rows absent from every sample). It writes nothing and
 # exits 0 on findings; 2 on bad input. The --durations/--manifest overrides are
 # the comparison-base seam these fixtures feed.
-FZ="$WORK/Z"; mkdir -p "$FZ"; assert_fixture_dir "$FZ"
+FZ="$WORK/Z1"; mkdir -p "$FZ"; assert_fixture_dir "$FZ"
 # Committed-base fixture: two floors, one measured, one never-timed floor.
 printf 'z-floor-a\t1222\tfloor\nz-floor-b\t1222\tfloor\nz-meas-c\t5000\tmeasured\nz-unmeas-d\t1222\tfloor\n' \
   > "$FZ/durations.tsv"
@@ -1120,6 +1119,123 @@ if grep -qF $'z7-a\t60000\tfloor' "$WORK/Z7-durations.tsv" 2>/dev/null \
 else
   check fail "Z7: foreign rows leaked into the sample: $(cat "$WORK/Z7-durations.tsv" 2>/dev/null)"
 fi
+# === Fixture Z: committed-weight drift gate (#11662, G1) =====================
+# The --write path refuses measured-weight drift vs a baseline durations table
+# (--baseline-durations is the fixture seam for what the merge-base blob is in
+# production). Thresholds: per-suite >1.5x AND >10000ms delta; total >10%.
+FZ="$WORK/Z"; mkdir -p "$FZ"; assert_fixture_dir "$FZ"
+# Shared registered/manifest pair — the drift arms vary only the durations
+# tables, so one manifest/registered set serves all of them.
+printf 'z-keep\n' > "$FZ/registered.txt"
+for i in $(seq 1 20); do printf 'z-pad-%02d\n' "$i" >> "$FZ/registered.txt"; done
+{ printf '# fixture incumbent\n# n=%s\n' "$N"
+  awk -v n="$N" '{print $1 "\t" ((NR - 1) % n + 1)}' "$FZ/registered.txt"; } > "$FZ/manifest.tsv"
+# Baseline: z-keep 10000ms + 20 pads at 10000ms — total 210000ms.
+{ printf 'z-keep\t10000\tmeasured\n'
+  for i in $(seq 1 20); do printf 'z-pad-%02d\t10000\tmeasured\n' "$i"; done
+} > "$FZ/baseline.tsv"
+# M1: z-keep doubled to 25000ms — per-suite conjunctive (>1.5x AND >10000ms
+# delta) fires; total +15000ms < 10% of 210000ms isolates the per-suite arm.
+cp "$FZ/baseline.tsv" "$FZ/dur-m1.tsv"
+sed -i 's/^z-keep\t10000\tmeasured/z-keep\t25000\tmeasured/' "$FZ/dur-m1.tsv"
+if inc "$FZ/registered.txt" "$FZ/manifest.tsv" "$FZ/dur-m1.tsv" \
+     --baseline-durations "$FZ/baseline.tsv" --write > /dev/null 2> "$FZ/m1-err.txt"; then
+  check fail "M1: a >1.5x+10s measured drift wrote the table — the drift gate did not refuse"
+elif grep -q 'weight drift refusal' "$FZ/m1-err.txt"; then
+  check pass "M1: per-suite drift refusal fires (exit 2, names the cause)"
+else
+  check fail "M1: refused but not by the drift gate: $(tail -1 "$FZ/m1-err.txt")"
+fi
+# M2: every row +15% — each delta <10000ms (no per-suite fire); total +15% > 10%.
+{ for i in $(seq 1 20); do printf 'z-pad-%02d\t11500\tmeasured\n' "$i"; done
+  printf 'z-keep\t11500\tmeasured\n'; } > "$FZ/dur-m2.tsv"
+if inc "$FZ/registered.txt" "$FZ/manifest.tsv" "$FZ/dur-m2.tsv" \
+     --baseline-durations "$FZ/baseline.tsv" --write > /dev/null 2> "$FZ/m2-err.txt"; then
+  check fail "M2: +15% total measured growth wrote the table — total cap did not refuse"
+elif grep -q 'total measured weight' "$FZ/m2-err.txt"; then
+  check pass "M2: total-pct drift refusal fires and names the total predicate"
+else
+  check fail "M2: refused but stderr does not name the total: $(tail -1 "$FZ/m2-err.txt")"
+fi
+# M3: M1's drift WITH --allow-growth — writes, stamps # growth-acked=, and a
+# repeat run without the flag does not re-fire (the recorded ack).
+cp "$FZ/dur-m1.tsv" "$FZ/dur-m3.tsv"
+if inc "$FZ/registered.txt" "$FZ/manifest.tsv" "$FZ/dur-m3.tsv" \
+     --baseline-durations "$FZ/baseline.tsv" --allow-growth --write \
+     > /dev/null 2> "$FZ/m3-err.txt"; then
+  check pass "M3: --allow-growth writes despite the drift"
+else
+  check fail "M3: --allow-growth still refused: $(tail -1 "$FZ/m3-err.txt")"
+fi
+if grep -q '^# growth-acked=' "$FZ/dur-m3.tsv" 2>/dev/null; then
+  check pass "M3: the ack is recorded as a # growth-acked= header stamp"
+else
+  check fail "M3: no growth-acked stamp in the emitted table"
+fi
+if inc "$FZ/registered.txt" "$FZ/manifest.tsv" "$FZ/dur-m3.tsv" \
+     --baseline-durations "$FZ/baseline.tsv" --write > /dev/null 2> "$FZ/m3b-err.txt"; then
+  check pass "M3: recorded ack suppresses the repeat-regen re-fire"
+else
+  check fail "M3: repeat regen re-fired despite the recorded ack: $(tail -1 "$FZ/m3b-err.txt")"
+fi
+# M4 (must-pass): floor rows grown 5x — floors are excluded from BOTH
+# predicates, so the write greens.
+printf 'z-f1\t1000\tfloor\nz-keep\t5000\tmeasured\n' > "$FZ/baseline-f.tsv"
+printf 'z-f1\t5000\tfloor\nz-keep\t5000\tmeasured\n' > "$FZ/dur-m4.tsv"
+printf 'z-f1\nz-keep\n' > "$FZ/reg-f.txt"
+printf '# f\n# n=%s\nz-f1\t1\nz-keep\t1\n' "$N" > "$FZ/man-f.tsv"
+if inc "$FZ/reg-f.txt" "$FZ/man-f.tsv" "$FZ/dur-m4.tsv" \
+     --baseline-durations "$FZ/baseline-f.tsv" --write > /dev/null 2> "$FZ/m4-err.txt"; then
+  check pass "M4 (must-pass): floor-row growth is not gated"
+else
+  check fail "M4: floor growth refused — floors must be excluded: $(tail -1 "$FZ/m4-err.txt")"
+fi
+# M5 (must-pass): 50 NEW registrations at floor — count growth is reported,
+# never gated.
+: > "$FZ/reg-m5.txt"
+for i in $(seq 1 52); do printf 'z5-%02d\n' "$i" >> "$FZ/reg-m5.txt"; done
+{ printf 'z5-01\t5000\tmeasured\nz5-02\t5000\tmeasured\n'; } > "$FZ/dur-m5.tsv"
+cp "$FZ/dur-m5.tsv" "$FZ/baseline-m5.tsv"
+{ printf '# m5\n# n=%s\nz5-01\t1\nz5-02\t2\n'; } > "$FZ/man-m5.tsv"
+if inc "$FZ/reg-m5.txt" "$FZ/man-m5.tsv" "$FZ/dur-m5.tsv" \
+     --baseline-durations "$FZ/baseline-m5.tsv" --write \
+     > "$FZ/m5-out.txt" 2> "$FZ/m5-err.txt"; then
+  check pass "M5 (must-pass): 50 new registrations do not gate"
+else
+  check fail "M5: count growth refused — it is a report, not a gate: $(tail -1 "$FZ/m5-err.txt")"
+fi
+if grep -q 'count growth' "$FZ/m5-out.txt" 2>/dev/null; then
+  check pass "M5: count growth is reported in the drift-gate output"
+else
+  check fail "M5: count growth went unreported"
+fi
+# M6 (own-dispatch): neuter the per-suite comparison in a COPY of the
+# generator — the M1 fixture must stop refusing. If the neuter cannot change
+# the verdict, the arms exercise nothing (vacuity, the #7275 class). The copy
+# runs from a sandbox mirroring scripts/ + .github/workflows/ because the
+# generator resolves CI_YML relative to __file__.
+SB="$FZ/sb"; mkdir -p "$SB/scripts" "$SB/.github/workflows"
+cp "$REPO_ROOT/.github/workflows/ci.yml" "$SB/.github/workflows/ci.yml"
+cp "$GEN" "$SB/scripts/gen-n.py"
+sed -i 's/if n > DRIFT_SUITE_FACTOR \* b and n - b > DRIFT_ABS_MS:/if False:/' \
+  "$SB/scripts/gen-n.py"
+grep -q 'if False:' "$SB/scripts/gen-n.py" || check fail "M6: neuter sed did not land"
+cp "$FZ/baseline.tsv" "$FZ/dur-m6.tsv"
+sed -i 's/^z-keep\t10000\tmeasured/z-keep\t25000\tmeasured/' "$FZ/dur-m6.tsv"
+cp "$FZ/manifest.tsv" "$FZ/man-m6.tsv"
+if python3 "$SB/scripts/gen-n.py" --incremental --registered-file "$FZ/registered.txt" \
+     --manifest "$FZ/man-m6.tsv" --durations "$FZ/dur-m6.tsv" \
+     --baseline-durations "$FZ/baseline.tsv" --write > /dev/null 2> "$FZ/m6-err.txt"; then
+  check pass "M6: neutered comparison greens the drift fixture — the arms exercise the real predicate"
+else
+  check fail "M6: drift fixture still refused under a neutered comparison — arms are vacuous: $(tail -2 "$FZ/m6-err.txt")"
+fi
+# Source pins: a stub-the-comparison or drop-the-threshold edit breaks the pin.
+for tok in 'DRIFT_SUITE_FACTOR = 1.5' 'DRIFT_ABS_MS = 10000' 'DRIFT_TOTAL_PCT = 0.10' 'GROWTH_ACK_PREFIX'; do
+  grep -qF "$tok" "$GEN" \
+    && check pass "pin: $tok present in the generator" \
+    || check fail "pin: $tok missing — a threshold or ack edit silently demoted the gate"
+done
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
 # Ordered BEFORE the floor — a neutered helper deflates the verdict counters, and this
@@ -1134,7 +1250,7 @@ fi
 # --- ASSERTION FLOOR (ADR-193) -------------------------------------------------------------
 # printf + exit, NEVER through fail(). MIN_CASES sits on the line directly above its
 # `if` so guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=40
+MIN_CASES=53
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1

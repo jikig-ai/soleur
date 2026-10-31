@@ -334,6 +334,11 @@ ALWAYS_ON_SUITES=(
   # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
   # suite like its sibling above.
   "scripts/test-all-weight-drift"
+  # #11662: the corpus-wide committed-weight cap + exemptions ledger and the
+  # always-on justifications parity + non-live membership ceiling — both are
+  # corpus properties, invisible to any file-based edge.
+  "scripts/test-all-corpus-weight-budget"
+  "scripts/always-on-ledger"
   # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
@@ -2523,7 +2528,10 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # the th6 row in scripts/test-all-affected.test.sh re-derives the live root
 # set to catch NEW top-level dirs, and its th8 row (#10117) REDs the battery
 # on any dir-less corpus member no declared edge covers.
+# Declared edge (#11631): luks-monitor-install.test.sh is a PROMOTED_FILES member, so this suite builds and runs mutants of
+# it, and that suite really reads the LUKS cutover runbook. The edge makes a runbook edit select this suite.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
 
   "apps/"
   ".claude/"

@@ -181,6 +181,8 @@ export interface HeartbeatViolation {
   instanceKey?: string;
   live: "paused" | "absent";
   reason: Extract<ViolationReason, "fed-but-paused" | "absent-live">;
+  /** Rendered as a trailing quoted `detail="…"`; set only when an `arming_pending` exemption lapsed (#11631). */
+  detail?: string;
 }
 
 /**
@@ -979,6 +981,21 @@ export function reconcileLogsAlerts(
 type ManifestRow = Pick<ManifestEntry, "name" | "feeder" | "arming_pending">;
 
 /**
+ * Whether a row's `arming_pending` exemption still holds at `nowMs`. No `expires` -> holds (the
+ * pre-#11631 behaviour). `expires` is a strict `YYYY-MM-DD` UTC date: on or after 00:00:00Z of that day
+ * the exemption is over; a malformed or non-calendar value FAILS CLOSED (not exempt). Returns the
+ * `detail` to render when the exemption does not hold, or `null` when it does.
+ */
+function armingExemptionLapse(ap: NonNullable<ManifestRow["arming_pending"]>, nowMs: number): string | null {
+  if (ap.expires === undefined) return null;
+  const t = /^\d{4}-\d{2}-\d{2}$/.test(ap.expires) ? Date.parse(`${ap.expires}T00:00:00Z`) : NaN;
+  const valid = Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === ap.expires;
+  if (!valid) return `arming_pending.expires is malformed (${JSON.stringify(ap.expires)}); exemption not applied; tracking issue #${ap.tracking_issue}`;
+  if (nowMs >= t) return `arming_pending expired ${ap.expires}; still paused; tracking issue #${ap.tracking_issue}`;
+  return null;
+}
+
+/**
  * Reconcile the live Better Stack payload against the MANIFEST + discovered `.tf` instances.
  *
  * - **(a) fed-but-paused** — a heartbeat instance whose MANIFEST feeder is a working feeder
@@ -989,6 +1006,8 @@ type ManifestRow = Pick<ManifestEntry, "name" | "feeder" | "arming_pending">;
  *   payload (the `git_data_prd` shape, #6548). A `count` resolved to 0 yields no instance at all
  *   (the item-1 paid-tier carve-out, evaluated rather than assumed since #7884).
  *   `arming_pending` does NOT exempt (b) — a declared-but-not-applied monitor is still surfaced.
+ *   The exemption lapses on `arming_pending.expires` (UTC date, #11631): from then on (a) fires with a
+ *   `detail` naming the expiry and the tracking issue; a malformed `expires` fails closed.
  *
  * Iterates CONCRETE names: a `for_each` resource is checked once per resolved key (#7884 — the
  * templated `${each.key}` name used to be compared verbatim and always read absent).
@@ -998,6 +1017,7 @@ export function reconcileHeartbeats(
   manifest: readonly ManifestRow[],
   discovered: readonly DiscoveredHeartbeat[],
   live: readonly LiveHeartbeat[],
+  now: () => number = Date.now,
 ): HeartbeatViolation[] {
   const livePausedByName = new Map<string, boolean>();
   for (const hb of live) livePausedByName.set(hb.name, livePausedByName.get(hb.name) === true || hb.paused);
@@ -1022,8 +1042,10 @@ export function reconcileHeartbeats(
         violations.push({ ...base, live: "absent", reason: "absent-live" });
         continue;
       }
-      if (fed && !row.arming_pending && livePausedByName.get(disc.liveName) === true) {
-        violations.push({ ...base, live: "paused", reason: "fed-but-paused" });
+      if (fed && livePausedByName.get(disc.liveName) === true) {
+        const lapse = row.arming_pending ? armingExemptionLapse(row.arming_pending, now()) : null;
+        if (!row.arming_pending) violations.push({ ...base, live: "paused", reason: "fed-but-paused" });
+        else if (lapse !== null) violations.push({ ...base, live: "paused", reason: "fed-but-paused", detail: lapse });
       }
     }
   }
