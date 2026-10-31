@@ -1,0 +1,9 @@
+# Decision Challenges — feat-one-shot-9167-e2e-otp-signups
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Re-scope #9167 from its proposed fix ("Supabase OTP-signup toggle or fixture bootstrap") to observability-marker + issue close-out, after the audit showed no dev-Supabase exists in e2e and the error string is `page.route`-fabricated in `apps/web-platform/e2e/otp-login.e2e.ts` | technical | pending - assumed: re-scope — the premise is falsified by the codebase and by the attempt-1 log of cited run 36449125669 (real cascade = Turbopack font failure, #8785 CLOSED); the issue's own evidence comment prescribes the server-exit marker |
+| Mechanism for server-exit marker: bash wrapper (`e2e/web-server.sh`) around `npm run dev` vs a Playwright-side liveness fixture | technical | pending - assumed: bash wrapper — minimal (constitution ladder), lands inline in the existing `[WebServer]` log stream; Playwright `webServer` has no onExit hook (docs + microsoft/playwright#20343 verified) |
+| Tag the otp-login mock payload `msg`/`message` with `[e2e-mock]` vs keep gotrue-verbatim | technical | pending - assumed: tag — the app's mapping consumes `error.code === "otp_disabled"` (`error-messages.ts` `isNoAccountError`), never `msg`; a self-labeling log line prevents a third mis-triage cycle |
+| Add `name:` per `webServer` entry (`e2e-public` / `e2e-auth`) so each server's log lines are attributable | technical | pending - assumed: add — two servers currently share one `[WebServer]` prefix; attribution is the point of the marker |
+| Whether to keep #9167 open or close it in this PR | technical | pending - assumed: close — the issue's own hold-open bar ("30-run reassessment") is now measured at 60/60 e2e green on merge_group since 2026-10-06; `Closes #9167` + evidence comment |
