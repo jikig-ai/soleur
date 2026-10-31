@@ -2377,6 +2377,7 @@ n=$(( $(cat "$d/count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/count"
 printf '%s\n' "${1:-}" >> "$d/sql"
 [ -f "$d/seq/$n.out" ] || n=1
 cat "$d/seq/$n.out"
+[ -f "$d/seq/$n.err" ] && cat "$d/seq/$n.err" >&2
 echo "reader-stderr-canary-77 BETTERSTACK_QUERY_PASSWORD=hunter2" >&2
 exit "$(cat "$d/seq/$n.rc")"
 SHIM
@@ -2389,7 +2390,7 @@ ps_build() { # <flip_preconditions.sh> — head through fail(), then the new blo
 }
 ps_set() { printf '%s' "$3" > "$PSD/seq/$1.out"; printf '%s' "$2" > "$PSD/seq/$1.rc"; } # <attempt> <reader-rc> <stdout>
 ps_row() { printf '{"leg":"%s","age_s":%s,"p":%s}\n' "$1" "$2" "$3"; } # <leg> <age_s> <p>
-ps_reset() { rm -f "$PSD"/seq/* "$PSD/count"; : > "$PSD/log"; : > "$PSD/sql"; }
+ps_reset() { rm -f "$PSD"/seq/* "$PSD/count" "$PSD"/bs-pause-err.*; : > "$PSD/log"; : > "$PSD/sql"; }
 ps_run() {
   (cd "$PSD/ws" && env -i PATH="$PSD/bin:/usr/bin:/bin" RUNNER_TEMP="$PSD" GITHUB_WORKSPACE="$PSD/ws" BS_DOPPLER_TOKEN=fixture-bs-token PS_DIR="$PSD" \
     bash --noprofile --norc -eo pipefail "$PSD/slice.sh" > "$PSD/out" 2>&1)
@@ -2411,6 +2412,8 @@ ps_check() {
   else ! grep -q 'PS_REACHED_END' "$PSD/out" || bad="$bad end-reached"; fi
   ! grep -q 'token=wrong' "$PSD/log" || bad="$bad token-not-bound"
   ! grep -qE 'fixture-bs-token|hunter2|reader-stderr-canary' "$PSD/out" || bad="$bad secret-or-stderr-in-output"
+  # the reader's stderr temp file (and its .rows sibling) is removed on every path (RUNNER_TEMP is $PSD here)
+  ! ls "$PSD"/bs-pause-err.* >/dev/null 2>&1 || bad="$bad stderr-tempfile-left"
   PS_WHY="$bad"; [ -z "$bad" ]
 }
 case_ps1() { # <step.sh> — both legs fresh and green: passes; one read; the exact SQL; the token bound per command
@@ -2422,10 +2425,21 @@ case_ps1() { # <step.sh> — both legs fresh and green: passes; one read; the ex
     && grep -qF 'INTERVAL 2 MINUTE' "$PSD/sql" && grep -qF 'remote($BS_TABLE)' "$PSD/sql" \
     && grep -qF "match(raw,'agent_sessions_live=[0-9]+ cc_queries=[0-9]+ legacy_sessions=[0-9]+ starting=[0-9]+ new_sessions_paused=[01] refused_since_last=[0-9]+')" "$PSD/sql" \
     && grep -q 'token=bound' "$PSD/log" || { PS_WHY="sql-pin"; return 1; }
+  # the rest of the query contract the fake reader cannot enforce (it ignores the SQL): the age is computed server-side, p is an
+  # integer extracted behind the closed-grammar match, the window is a `dt >` bound, the row cap and the output format are literal.
+  grep -qF "dateDiff('second', dt, now()) AS age_s" "$PSD/sql" \
+    && grep -qF "toUInt8OrNull(extract(raw,'new_sessions_paused=([01])')) AS p" "$PSD/sql" \
+    && grep -qF 'WHERE dt > now() - INTERVAL 2 MINUTE' "$PSD/sql" \
+    && grep -qF 'ORDER BY dt DESC LIMIT 200 FORMAT JSONEachRow' "$PSD/sql" || { PS_WHY="sql-pin-2"; return 1; }
+  # the reader call is scoped to the three query secrets (as inngest-config-drift.yml does) with the token handed over per command
+  grep -qF 'doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh' "$PSD/log" \
+    || { PS_WHY="reader-not-scoped"; return 1; }
 }
-case_ps2() { # web-1 carries a 0 row OLDER than its newest 1 row: refused at once, no retry
+case_ps2() { # web-1 carries a 0 row OLDER than its newest 1 row: refused at once, no retry; the remedy is the owner-only command with its real path
   ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1; ps_row web-1 50 1; ps_row web-1 80 0; ps_row web-2 10 1)"
-  ps_run; ps_check 1 pause_not_on 1 0 0
+  ps_run; ps_check 1 pause_not_on 1 0 0 || return 1
+  grep -qF 'remedy: Owner action (agents must not run it): bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd on, then ask the owner to re-dispatch' "$PSD/out" \
+    && [ -f "$ROOT/plugins/soleur/skills/flag-set-role/scripts/flip.sh" ] || { PS_WHY="remedy-content"; return 1; }
 }
 case_ps3() { # the 0 row on web-2 only
   ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1; ps_row web-2 10 1; ps_row web-2 90 0)"
@@ -2435,9 +2449,37 @@ case_ps4() { # web-1 newest row aged 90 s: the F8 bound, three reads
   ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 90 1; ps_row web-1 110 1; ps_row web-2 10 1)"
   ps_run; ps_check 1 pause_unread 3 2 0
 }
-case_ps5() { # no row for web-2 after three reads
+case_ps5() { # no row for web-2 after three reads; the remedy names the read-only check
   ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1)"
+  ps_run; ps_check 1 pause_unread 3 2 0 || return 1
+  grep -q '^remedy: .*scripts/betterstack-query\.sh' "$PSD/out" && grep -q '^remedy: .*owner' "$PSD/out" || { PS_WHY="remedy-content"; return 1; }
+}
+case_ps75() { # the newest row exactly 75 s old is still fresh: one read, passes (the bound is -gt 75, not -ge)
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 75 1; ps_row web-1 95 1; ps_row web-2 10 1)"
+  ps_run; ps_check 0 none 1 0 1
+}
+case_ps76() { # 76 s is stale: three reads, pause_unread (one second over the 75 s bound)
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 76 1; ps_row web-1 96 1; ps_row web-2 10 1)"
   ps_run; ps_check 1 pause_unread 3 2 0
+}
+case_ps_negzero() { # a =0 row whose age is negative or non-integer is still a pause that is not on, never a bare unreadable answer
+  local _l
+  for _l in '{"leg":"web-1","age_s":-5,"p":0}' '{"leg":"web-2","age_s":1.5,"p":0}' '{"leg":"web-2","age_s":"x","p":"0"}'; do
+    ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1; ps_row web-2 10 1; printf '%s\n' "$_l")"
+    ps_run; ps_check 1 pause_not_on 1 0 0 || { PS_WHY="$PS_WHY [$_l]"; return 1; }
+  done
+}
+case_ps_trunc() { # 199 green rows pass; 200 rows hit the LIMIT 200 cap, so an older =0 row could be hidden: pause_unread after three reads
+  local _i _rows
+  _rows="$(_i=0; while [ "$_i" -lt 199 ]; do ps_row "web-$((_i % 2 + 1))" "$((10 + _i % 50))" 1; _i=$((_i + 1)); done)"
+  ps_build "$1"; ps_reset; ps_set 1 0 "$_rows"; ps_run; ps_check 0 none 1 0 1 || { PS_WHY="$PS_WHY [199 rows]"; return 1; }
+  _rows="$(_i=0; while [ "$_i" -lt 200 ]; do ps_row "web-$((_i % 2 + 1))" "$((10 + _i % 50))" 1; _i=$((_i + 1)); done)"
+  ps_reset; ps_set 1 0 "$_rows"; ps_run; ps_check 1 pause_unread 3 2 0 || { PS_WHY="$PS_WHY [200 rows]"; return 1; }
+}
+case_ps_refused() { # the reader's SOLEUR_CREDENTIAL_REFUSED line is surfaced (a refusal reads as a refusal); its other stderr is not
+  ps_build "$1"; ps_reset; ps_set 1 2 ""; printf 'SOLEUR_CREDENTIAL_REFUSED reader=betterstack reason=fixture\n' > "$PSD/seq/1.err"
+  ps_run; ps_check 1 pause_unread 3 2 0 || return 1
+  grep -q '^SOLEUR_CREDENTIAL_REFUSED reader=betterstack reason=fixture$' "$PSD/out" || { PS_WHY="refusal-not-surfaced"; return 1; }
 }
 if [ ! -s "$T/steps/flip_preconditions.sh" ]; then
   fail "PS0: the flip preconditions step body was not extracted" "never a pass on zero"
@@ -2485,22 +2527,27 @@ else
 PSBAD
   if [ -z "$_ps_bad" ]; then pass "PS8: a missing, null or non-integer p / age_s, an unknown leg or a non-JSON line among otherwise green rows refuses with verdict=pause_unread (fail closed)"
   else fail "PS8: a malformed row did not fail closed" "$_ps_bad"; fi
-  # PS9 — static pins, scoped to the new block: position after the deny-floor check and before the final echo, no xtrace, the reader guarded
-  # by `|| pause_rc=$?`, stderr never discarded, nothing but integers and labels printed. (The env-binding pin is the WF-pausegate census row.)
+  # PS9 — static pins on the block that no behavioural row can see: no xtrace, stderr never discarded, nothing but integers and labels printed.
+  # (Position is the WF-pausegate census row; the guarded reader and the per-command token are exercised by PS1/PS6.)
   _ps_bad=""
-  _s="$T/steps/flip_preconditions.sh"
-  _l_deny="$(grep -n 'ver_le "\$GIT_DATA_DENY_FLOOR" "\$running"' "$_s" | head -1 | cut -d: -f1)"
-  _l_mark="$(grep -n '^[[:space:]]*# new_sessions_paused (#11704)' "$_s" | head -1 | cut -d: -f1)"
-  _l_echo="$(grep -n '^[[:space:]]*echo "preconditions clear' "$_s" | head -1 | cut -d: -f1)"
-  { [ -n "$_l_deny" ] && [ -n "$_l_mark" ] && [ -n "$_l_echo" ] && [ "$_l_deny" -lt "$_l_mark" ] && [ "$_l_mark" -lt "$_l_echo" ]; } || _ps_bad="$_ps_bad [position deny=$_l_deny mark=$_l_mark echo=$_l_echo]"
   [ -s "$PSD/block.sh" ] || _ps_bad="$_ps_bad [empty-block]"
   ! grep -qE 'set[[:space:]]+-[a-zA-Z]*x|set[[:space:]]+-o[[:space:]]+xtrace' "$PSD/block.sh" || _ps_bad="$_ps_bad [xtrace]"
-  grep -qE 'betterstack-query\.sh .*\|\| pause_rc=\$\?' "$PSD/block.sh" || _ps_bad="$_ps_bad [reader-unguarded]"
-  grep -qF 'env DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run --preserve-env -p soleur -c prd_terraform --' "$PSD/block.sh" || _ps_bad="$_ps_bad [token-not-per-command]"
   ! grep -qF '2>/dev/null' "$PSD/block.sh" || _ps_bad="$_ps_bad [stderr-discarded]"
   ! grep -E '(^|[;[:space:]])(echo|fail)[[:space:]]' "$PSD/block.sh" | grep -qE 'BS_DOPPLER_TOKEN|pause_rows|pause_tsv|BS_ERR' || _ps_bad="$_ps_bad [prints-rows-or-token]"
-  if [ -z "$_ps_bad" ]; then pass "PS9: the block sits after the sandbox_deny_floor check and before the final echo; no xtrace; the reader substitution is guarded || pause_rc=\$?, binds the token per command, never discards stderr and prints no rows or credential"
+  if [ -z "$_ps_bad" ]; then pass "PS9: the block has no xtrace, never discards stderr and prints no rows or credential"
   else fail "PS9: a static pin of the pause block failed" "$_ps_bad"; fi
+  # PS10 — the 75 s bound is exact: a newest row at 75 s passes after one read, at 76 s refuses after three.
+  if case_ps75 "$T/steps/flip_preconditions.sh" && case_ps76 "$T/steps/flip_preconditions.sh"; then pass "PS10: web-1 newest row exactly 75 s old passes after one read and 76 s refuses with verdict=pause_unread after three reads (the bound is -gt 75)"
+  else fail "PS10: the 75 s freshness bound is not exact" "$PS_WHY"; fi
+  # PS11 — a =0 row with a negative or non-integer age is a pause that is not on, not an unreadable answer.
+  if case_ps_negzero "$T/steps/flip_preconditions.sh"; then pass "PS11: a valid =0 row with a negative, fractional or quoted-text age refuses with verdict=pause_not_on after one read (the zero is counted before the age check)"
+  else fail "PS11: a =0 row with a bad age was not classed pause_not_on" "$PS_WHY"; fi
+  # PS12 — a full LIMIT 200 answer could hide an older =0 row.
+  if case_ps_trunc "$T/steps/flip_preconditions.sh"; then pass "PS12: 199 green rows pass and 200 rows (the LIMIT 200 cap) refuse with verdict=pause_unread, because truncation could hide an older =0 row"
+  else fail "PS12: the 200-row truncation guard differs" "$PS_WHY"; fi
+  # PS13 — the credential-refusal marker is surfaced, the rest of the reader's stderr is not.
+  if case_ps_refused "$T/steps/flip_preconditions.sh"; then pass "PS13: a reader exit carrying SOLEUR_CREDENTIAL_REFUSED surfaces that one line and still refuses with verdict=pause_unread; the other reader stderr stays out of the log"
+  else fail "PS13: the credential-refusal line was not surfaced" "$PS_WHY"; fi
   # M-ps-*: each mutant edits ONE line of a COPY of the workflow; the named case runs over the mutant's extracted step body and must go RED.
   ps_mut() { # <name> <diff-lines> <sed -E program> <case-fn>
     local name="$1" want="$2" expr="$3" fn="$4" sd
@@ -2511,11 +2558,19 @@ PSBAD
       else fail "M-$name: no flip_preconditions body was extracted from the mutant" "$(head -c 200 "$T/mut/wf-$name.tsv")"; fi
     fi
   }
-  ps_mut ps-removed 45 '/^ +# new_sessions_paused \(#11704\)/,/^ +echo "preconditions clear/{/^ +echo "preconditions clear/!d}' case_ps2
+  ps_mut ps-removed 52 '/^ +# new_sessions_paused \(#11704\)/,/^ +echo "preconditions clear/{/^ +echo "preconditions clear/!d}' case_ps2
   ps_mut ps-zero-ignored 2 's#^( +)if \[ "\$pause_zero" -gt 0 \]; then fail pause_not_on#\1if [ "$pause_zero" -gt 999999 ]; then fail pause_not_on#' case_ps2
   ps_mut ps-empty-passes 2 's#\[ "\$pn" -eq 0 \] \|\| ##' case_ps5
   ps_mut ps-fresh-bound 2 's#^( +pause_max_age=)75$#\1600#' case_ps4
   ps_mut ps-grammar-loosened 2 "s#match\\(raw,'agent_sessions_live=[^)]*\\)#positionCaseInsensitive(raw,'new_sessions_paused=') > 0#" case_ps1
+  ps_mut ps-bound-ge 2 's#\[ "\$pa" -gt "\$pause_max_age" \]#[ "$pa" -ge "$pause_max_age" ]#' case_ps75
+  ps_mut ps-bound-widened 2 's#^( +pause_max_age=)75$#\189#' case_ps76
+  ps_mut ps-limit-1 2 's# LIMIT 200 FORMAT JSONEachRow# LIMIT 1 FORMAT JSONEachRow#' case_ps1
+  ps_mut ps-trunc-bound 2 's#\[ "\$pause_total" -ge 200 \]#[ "$pause_total" -gt 200 ]#' case_ps_trunc
+  ps_mut ps-zero-after-age 2 's#^( +)\$3 == "0" \{ z\[\$1\]\+\+ \}#\1$3 == "0" \&\& $2 ~ /^[0-9]+$/ { z[$1]++ }#' case_ps_negzero
+  ps_mut ps-refused-hidden 2 's#^( +)grep -m1 .\^SOLEUR_CREDENTIAL_REFUSED. "\$BS_ERR" >&2 \|\| true#\1true#' case_ps_refused
+  ps_mut ps-err-kept 2 '/^ +pause_sql=/,/^ +if \[ "\$pause_zero" -gt 0 \]; then fail pause_not_on/s#rm -f "\$BS_ERR" "\$BS_ERR\.rows"#: keep#' case_ps1
+  ps_mut ps-secrets-unscoped 2 's# --only-secrets [A-Z_,]+##' case_ps1
   if mutate ps-token-step-level "$WF" 2 's#^( +)BS_DOPPLER_TOKEN: \$\{\{ secrets\.DOPPLER_TOKEN \}\}$#\1DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}#'; then
     python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-ps-token.tsv" 2>&1
     mutant_red ps-token-step-level wf_row "$T/mut/wf-ps-token.tsv" "WF-pausegate:"
@@ -4335,7 +4390,8 @@ fi
 # #8211 PR-G: plus cp-keyshape-unmapped, cpb-normalise-dropped, cpb-keygen-unchecked, cpb-linefloor-dropped, cpb-shape-markers-dropped, cpb-blank-trim-dropped = 6, so exactly 179.
 # PR-G review round: plus cpb-first-check-dropped, cpb-last-check-dropped, cpb-floor-raised = 3, so exactly 182.
 # #11704: plus the six M-ps-* mutants (ps-removed, ps-zero-ignored, ps-empty-passes, ps-fresh-bound, ps-grammar-loosened, ps-token-step-level) = 6, so exactly 188 (measured).
-MUTANT_FLOOR=188
+# #11713 review: plus ps-bound-ge, ps-bound-widened (the exact 75 s bound), ps-limit-1 (the LIMIT 200 pin), ps-trunc-bound (a full 200-row answer refuses), ps-zero-after-age (a =0 row with a bad age is pause_not_on), ps-refused-hidden (the credential-refusal line is surfaced), ps-err-kept (the stderr temp file is removed), ps-secrets-unscoped (--only-secrets) = 8, so exactly 196 (measured).
+MUTANT_FLOOR=196
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4373,7 +4429,8 @@ fi
 # #8211 (remote URL path): CPU1 (1): 774 -> 775.
 # #11431 (refs_assert): P4b (1) and two standalone workflow verdicts (WF-refs, WF-flagwrite-refs; the workflow verdict count 58 -> 60): 775 -> 778. The G5 census, N-outputs, N-exprs, AC9 and D-6 were restated in place.
 # #11704 (new_sessions_paused precondition): PS1-PS9 (9) + the WF-pausegate census verdict (1; the workflow verdict count 60 -> 61) + 6 mutants x 2 (12) = 22 more: 778 -> 800, measured.
-FLOOR=800
+# #11713 review: PS9 trimmed to its three kept static pins (still one row); PS10 (75/76 bound), PS11 (=0 row with a bad age), PS12 (199/200 rows), PS13 (credential-refusal line) = +4, plus 8 mutants x 2 (16) = 20 more: 800 -> 820, measured. The remedy-content, SQL-pin, --only-secrets and temp-file checks sit inside case_ps1/2/5 and ps_check and add no row.
+FLOOR=820
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
