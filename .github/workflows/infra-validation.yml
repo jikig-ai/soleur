@@ -109,6 +109,11 @@ on:
       # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
       # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
       - ".github/workflows/apply-git-data-root-key.yml"
+      # (#11181) Same defect class for the cf-lb-overlay route: a PR editing ONLY the
+      # workflow, its plan grader, or its suite would skip the guards that watch them.
+      - ".github/workflows/cf-lb-overlay.yml"
+      - "tests/scripts/lib/cf-lb-overlay-gate.sh"
+      - "tests/scripts/test-cf-lb-overlay-gate.sh"
       - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
@@ -1168,6 +1173,18 @@ jobs:
         working-directory: apps/web-platform/infra/inngest-provision-rehearsal
         env:
           TF_DATA_DIR: ${{ runner.temp }}/inngest-provision-rehearsal-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
+      # (#11181) Same gap a fourth time: lb-staging nests under the infra dir, so the
+      # validate matrix never parses it — without this step a syntax error surfaces
+      # only at dispatch, after the environment approval. -backend=false, TF_DATA_DIR
+      # out of tree.
+      - name: Terraform validate the lb-staging root
+        working-directory: apps/web-platform/infra/lb-staging
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/lb-staging-tf
         run: |
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
