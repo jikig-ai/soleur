@@ -12,6 +12,24 @@ lane: single-domain
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31
+**Sections enhanced:** 3 (`## Observability` added; Gate Dispositions corrected; halt-gate evidence recorded)
+**Research agents used:** none spawned — Devin CLI harness has no plugin subagents; all prescribed roles (per-section research, review agents, verify-the-negative, learnings filter) ran sequentially inline. `Reviewed-Coverage: sequential-fallback`
+
+### Key Improvements
+
+1. `## Observability` emitted — deepen-plan Phase 4.7 fires on any non-docs Files-to-Edit path (plan 2.9's narrower code-class trigger had let it skip); the section declares the ratchet job's own verdict line as the liveness signal with a sandbox-runnable `discoverability_test` (`grep` verb, <15 s, literal `expected_output: 7`, verified against a 0-row baseline).
+2. Mention-not-edge evidence hardened: `ensure-doppler.sh` appears in `scripts/betterstack-query.sh` only inside the credentials-missing heredoc (`:109-110`, grep-verified — never executed); suite `scripts/betterstack-emitter-read` resolves to `lint-betterstack-emitter-read.test.sh` driving the lint as its guard under test (`scripts/test-all.sh:5946`).
+3. Every prescribed verification command executed once before finalizing: `ratchet` reproduces `exit=1 reason=new-pair live=1515 baseline=1510` in this worktree; `audit --all-refs` confirms the complete 7-line boundary set; anchors re-derived sha256-locally match the CI job byte-for-byte.
+
+### New Considerations Discovered
+
+- `scripts/betterstack-emitter-read-live` is a separate always-on suite (`scripts/test-all.sh:5945`) that runs the real lint — the pair under fix belongs only to the fixture-driving test battery, so no edge should be declared for it.
+- `decision-challenges.md` is machine-gated (`technical-ruling-gate.sh`): the technical row was rewritten to the `Ruled by CTO agent, <date>:` shape with the inline-execution disclosure, and the gate passes (2 rows examined).
+- markdownlint `knowledge-base/project/` exclusion means the literal TABs in the plan's TSV fence are safe (MD010 would fire elsewhere).
+
 ## Overview
 
 The advisory `affected-index-ratchet` job is red on `main` with `reason=new-pair live=1515 baseline=1510` (#11694). The five new pairs all resolve to mention-class boundary lines — usage-message text inside `scripts/betterstack-query.sh`'s credentials-missing heredoc and an allowlist-map key in `scripts/lint-betterstack-emitter-read.sh` — so the remedy is anchor-keyed accept rows in `scripts/ci-pr-affected-audit.accept.tsv`, not declared edges. `python3 -I scripts/ci-pr-affected-replay.py audit --all-refs` enumerates seven boundary lines across the five pairs; a local `ratchet` run must exit 0 after the rows land.
@@ -53,6 +71,39 @@ The advisory `affected-index-ratchet` job is red on `main` with `reason=new-pair
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: the only edited path is a repo-root CI data file (scripts/ci-pr-affected-audit.accept.tsv), outside every sensitive-path class`
 
+## Observability
+
+```yaml
+liveness_signal:
+  what:            # the `SOLEUR_PR_AFFECTED_RATCHET exit=<n> reason=<r>` verdict line printed by the affected-index-ratchet job — the check that consumes this file IS the signal
+  cadence:         # once per pull_request / merge_group run of .github/workflows/ci.yml
+  alert_target:    # GitHub Actions `::error title=affected-index-ratchet::exit=$rc reason=$reason` job annotation + red job conclusion (advisory today; #10859 makes it required)
+  configured_in:   # .github/workflows/ci.yml job `affected-index-ratchet` (runs `python3 -I scripts/ci-pr-affected-replay.py ratchet`)
+
+error_reporting:
+  destination:     # the job's stdout block + $GITHUB_STEP_SUMMARY `### affected-index-ratchet` section (new-pair / stale-accept rows with cause + remedy lines)
+  fail_loud:       # `##[error]exit=1 reason=new-pair` (or reason=stale-accept) in the job log; `::warning oracle-inputs-changed` annotates this very file's edit
+
+failure_modes:
+  - mode:          # new-pair — a suite names a tracked path with no declared edge and no accept row
+    detection:     # ratchet prints `new-pair<TAB>suite<TAB>path<TAB>file:line` + `ref` lines and exits 1
+    alert_route:   # job annotation; soak tracker #10865
+  - mode:          # stale-accept — an accept row whose (anchor, ordinal) is no longer live (the citing line was edited); exactly what these 7 rows become when betterstack-query.sh's message or the lint allowlist line changes — the intended signal
+    detection:     # ratchet prints `stale<TAB>suite<TAB>path<TAB>anchor/ordinal<TAB>anchor-not-live` and exits 1
+    alert_route:   # job annotation; soak tracker #10865
+  - mode:          # malformed accept file — wrong column count, non-12-hex anchor, duplicate row key
+    detection:     # file-load ValueError → census-degraded exit 2
+    alert_route:   # job annotation
+
+logs:
+  where:           # GitHub Actions job log + step summary for run 41228374961-class runs
+  retention:       # GitHub Actions default (~90 days)
+
+discoverability_test:
+  command:         grep -c -e inngest-bs-token-restage-7596 -e inngest-hostmetrics-trim-11602 scripts/ci-pr-affected-audit.accept.tsv
+  expected_output: 7
+```
+
 ## Implementation Phases
 
 ### Phase 1 — Accept-row append (the whole fix)
@@ -91,7 +142,7 @@ The advisory `affected-index-ratchet` job is red on `main` with `reason=new-pair
 
 ## Gate Dispositions (evaluated at plan time)
 
-- **Observability (Phase 2.9):** skipped — the only file edited is a data table under repo-root `scripts/`, outside the code-class trigger paths; the ratchet job itself is the observability surface for this check, and `oracle-inputs-changed: scripts/ci-pr-affected-audit.accept.tsv` prints as an announcement on the next run, not a verdict.
+- **Observability (Phase 2.9):** initially skipped under plan 2.9's code-class trigger (repo-root `scripts/` is outside `apps/*` and `plugins/*/scripts/`); deepen-plan 4.7's stricter trigger (any non-docs Files-to-Edit path) required the section — emitted above. The ratchet job itself is the observability surface for this check; `oracle-inputs-changed: scripts/ci-pr-affected-audit.accept.tsv` prints as an announcement on the next run, not a verdict.
 - **GDPR (2.7), IaC (2.8), Soak enrollment (2.9.1), Task Design (2.9.3), ADR/C4 (2.10), Encryption Posture (2.11), Guard Contract (2.12):** all skipped — a data-row append to an existing exemption table creates no regulated surface, infrastructure, soak gate, autonomous task, architectural decision, store/connection, or new guard. The ratchet is an existing guard; this change feeds its input, not its machinery.
 - **Skill description budget (1.8):** no SKILL.md `description:` edit is candidate — skipped.
 - **Community discovery (1.5) / functional overlap (1.5b):** no uncovered stack (shell/Python CI data fix); no community tool can cover a repo-local exemption table — assessed inline under sequential-fallback, skipped.
