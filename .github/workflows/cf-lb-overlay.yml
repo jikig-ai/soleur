@@ -480,12 +480,10 @@ jobs:
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           set +e
-          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
-          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
-              -var="ssh_key_path=/tmp/ci_ssh_key.pub" 2>&1 | tf_redact_random_ids \
+              -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
               -target=cloudflare_load_balancer_monitor.web \
               -target=cloudflare_load_balancer_pool.web_1 \
               -target=cloudflare_load_balancer.app 2>&1 | tf_redact_random_ids
