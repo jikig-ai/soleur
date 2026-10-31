@@ -14,6 +14,24 @@ brand_survival_threshold: none
 
 # ci: ci-shard-balance-watch — advisory drift probe for the shard manifests
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31
+**Sections enhanced:** Research Insights (deepen verifications); all halt gates verified mechanically in place.
+**Review coverage:** `Reviewed-Coverage: sequential-fallback` — this harness has no Task agent roster; the per-section research/review fan-out ran as one consolidated in-process pass applying the reviewers' lenses (correctness, over-engineering, simplicity) plus the mechanical halt gates below.
+
+### Key verifications (deepen pass)
+
+1. **Halt gates:** User-Brand Impact (present, threshold `none`, no sensitive-path files — `SENSITIVE_PATH_RE` matched nothing across the file lists), Observability (5-field schema complete; `discoverability_test` verb `bash` is allowlisted, `expected_output: ok` is a matchable literal, no `ssh`, sub-15 s), PAT sweep (0 hits), UI-wireframe (no UI-surface files — skipped), Encryption Posture (no persistent store or new cross-component connection; the word "queue" is GitHub's merge queue, not a store class — skipped), Guard Contract (`scripts/lint-guard-contract.py` → rc 0; adequacy read: Assembly names chokepoints not member lists; matrix rows are design-derived with harness rows 4/8/9), Scope Check (exactly one unfenced section, all subsections, every ask mapped, inferred rows justified, no BLOCKED marker), Task Design (one unfenced section, all six fields non-placeholder, dedupe names the sentinel mechanism beyond `concurrency.group`).
+2. **Precedent-diff (Phase 4.4):** 58 Inngest `cron-*` functions exist and would normally be canonical per ADR-033 — but this work is purely repo-scoped (GH API reads + issue comments, default `GITHUB_TOKEN`, no app secrets, no Sentry, no `step.run` replay value), which is carve-out (a) of that ADR; the `*-watch.yml` filename also keeps clear of the `scheduled-*.yml` Inngest-preference hook. Three live siblings (`registration-narrowing`, `codeql-1537-revisit`, `code-quality-followups`) are the binding precedent — the plan mirrors their shape rather than inventing.
+3. **Verify-the-negative (Phase 4.45):** "main pushes elide the shards job" confirmed — ci.yml's shard jobs carry `if:` with `needs.push-dedupe.outputs.elide != 'true'`; "artifacts live 14 days" confirmed — `retention-days: 14` on both upload steps; `-p 'suite-timings-scripts-*'` downloads heavy artifacts too, which the generator's `LIGHT_ARTIFACT`/`HEAVY_ARTIFACT` dir-name filters segregate per group (the per-leg-sums pollution gotcha is absorbed by the filter, not by naming discipline).
+4. **Post-edit self-audit:** no plan reference names a dropped symbol; every cited path was verified to exist on this branch (`scripts/regenerate-shard-manifest.py`, both manifests + durations tables, `scripts/lib/watch-notify-once.sh`, the runbook, `scripts/ci-pr-affected-audit.accept.tsv`).
+
+### New considerations discovered
+
+- The new `scripts/watch-shard-balance-11564` suite lands **floor-priced itself** after the incremental regen — the first concrete instance of the class the watcher exists to catch (expected, benign, and worth a line in the runbook section).
+- `LEG_OBSERVED` is defined as sum-of-cross-run-medians per leg (deterministic, matches the generator's aggregation semantics), which differs from the epic comment's per-run leg wall-clock; that is intentional — the assertion is about *packing* drift, not wall-clock overhead.
+
 ## Overview
 
 Ship the deferred `ci-shard-balance-watch` capability (issue #11564, child of open epic #11556) as an **advisory, notify-only scheduled GitHub Actions workflow**. It samples per-suite timing artifacts from recent merge-queue CI runs, compares fresh measurements against the committed shard manifests' pricing, and flags `src=floor` rows (never-measured or floor-priced suites) whose real cost exceeds a bound — the drift class that priced one suite at a 1.2 s floor while it actually cost ~25 min on a 54-min leg. A secondary leg-balance assertion compares predicted per-leg sums from the committed durations table against the perfect-balance bound, so a rebalance need is flagged before it becomes a worst-leg incident.
