@@ -3,7 +3,7 @@ title: test-all duration budgets + selection caps — anti-regrow guards
 status: draft
 owner: engineering
 lane: cross-domain
-brand_survival_threshold: single-user incident
+brand_survival_threshold: none
 brainstorm: knowledge-base/project/brainstorms/2026-10-30-test-all-duration-guards-brainstorm.md
 closes: 11662
 created: 2026-10-30
