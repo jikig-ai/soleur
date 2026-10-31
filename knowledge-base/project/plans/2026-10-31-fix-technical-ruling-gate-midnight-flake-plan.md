@@ -94,6 +94,32 @@ Concretely, inside `plugins/soleur/test/technical-ruling-gate.test.sh` only:
 
 - None (the stub and pin are heredoc-created inside the suite's own `$TMP`/`$DBIN` at run time; `knowledge-base/project/specs/feat-one-shot-11578-ruling-gate-midnight-flake/decision-challenges.md` is a planning artifact, already written).
 
+## Observability
+
+```yaml
+liveness_signal:
+  what: merge-group `test-scripts` shard runs this suite on every PR; a green `=== Results ===` block with `Failed: 0` is the signal the flake class is gone
+  cadence: per merge-group run
+  alert_target: GitHub check run on the merge-group commit (auto-blocks the merge)
+  configured_in: .github/workflows/ (the test-scripts shard that executed run 40970866637) — no new wiring in this PR
+error_reporting:
+  destination: the merge-group job log (the same channel that surfaced #11578)
+  fail_loud: a `FAIL:` line per case plus a non-zero suite exit — and, if the clock stub is bypassed, the CLK case's `delegation-invalid` assertion reddens on any calendar day, not only at midnight
+failure_modes:
+  - mode: `date` stub absent or bypassed (PATH regression, stub made non-executable)
+    detection: CLK bypass-detector case goes red (pinned-past verdict flips to rc 0)
+    alert_route: merge-group job failure
+  - mode: new future-dependent fixture added under a `DPATH` reduced-PATH case (pin does not reach it)
+    detection: suite comment at the `dclock_at` call site names the carve-out; review of the new case
+    alert_route: PR review
+logs:
+  where: suite stdout + `$DBIN/dcalls.log` inside the suite's `$TMP` (per-run, not persisted)
+  retention: merge-group job log retention
+discoverability_test:
+  command: grep -c '# mut:receipt-future' plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh
+  expected_output: "1"
+```
+
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** nothing user-facing — the blast radius is a merge-group CI shard reporting a spurious `FAIL: receipt-future` on a green gate (developer experience, not product surface).
@@ -118,7 +144,7 @@ None — `gh issue list --label code-review --state open` (2026-10-31) bodies co
 - Phase 1.5b functional overlap: bespoke internal machinery; agent not spawnable in this harness — skipped (non-blocking by design).
 - Phase 2.7 GDPR gate: no regulated-data surface, no (a)-(d) trigger — skipped.
 - Phase 2.8 IaC routing: no infrastructure — skipped.
-- Phase 2.9 Observability: Files-to-Edit is `plugins/soleur/test/` — outside the code-class detection set (`apps/*/server|src|infra`, `plugins/*/scripts`) — skipped; the suite's own PASS/FAIL lines are its signal.
+- Phase 2.9 Observability: not required by plan 2.9's code-class detection set (`apps/*/server|src|infra`, `plugins/*/scripts`); **emitted anyway** — deepen-plan Phase 4.7's mechanical trigger (non-docs Files-to-Edit) treats a test `.sh` as in-scope, and the block is genuinely useful: it names the merge-group failure signal this fix restores.
 - Phase 2.9.1 soak enrollment: no post-deploy soak criterion — skipped.
 - Phase 2.9.3 task design: no new autonomous-task surface — skipped.
 - Phase 2.10 ADR/C4: no architectural decision (would a reader of the ADR corpus be misled after this ships? No — the gate, verifier and C4 are unchanged) — skipped.
@@ -202,3 +228,7 @@ The failed merge-group run (issue body): shard start 2026-10-29 23:12Z, `receipt
 - Gate: `plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh` (clock reads L220, L274; seams L73)
 - Verifier: `plugins/soleur/scripts/delegation-verify.sh` (`date -u +%s` L511)
 - Prior-art stub idiom: `plugins/soleur/test/ship-battery-refusal-wait.test.sh:68-93`
+
+## Deepen Pass (soleur:deepen-plan, 2026-10-31)
+
+All mechanical halt gates verified inline: 4.6 User-Brand (present, threshold `none` — `plugins/soleur/test/` matches no `SENSITIVE_PATH_RE` arm, no scope-out needed); 4.7 Observability (block added — the mechanical non-docs trigger covers `plugins/*/test/*.sh` even though plan 2.9's code-class set does not); 4.8 PAT scan (zero hits); 4.10 encryption (no store/connection in Files lists — skip); 4.11 Guard Contract (`lint-guard-contract.py` scanned: 1 entry, ≥3-row matrix, Property/Assembly non-placeholder; adequacy read: Assembly names the `$DBIN`-on-PATH chokepoint plus the declared `DPATH` second arm, matrix rows derived from the design not the implementation); 4.12 Scope Check (one unfenced section, all asks mapped, inferred rows justified, `Recommendation: single PR`); 4.13 task design (no new autonomous-task surface — skip). 4.5 network-outage, 4.55 downtime, 4.9 UI-wireframe: no trigger. 4.4 precedent-diff: the fake-clock stub is pattern-bound — precedent `ship-battery-refusal-wait.test.sh:68-93` adopted verbatim in shape (argv-strict, clock file, exit-64 refusal); noted in Proposed Solution. Round-1 realism sweeps: negative claims in the plan ("no passthrough", "cannot reach production code", "zero `date` calls in `git-fixture-env`") each verified by grep during planning; every prescribed command was executed once before commit (grep counts, `git diff --name-only origin/main...HEAD -- plugins/` = empty). Agent fan-out (research seats, review seats, SpecFlow) could not spawn in this harness — no Task tool; performed as inline analysis instead, recorded here so a later phase knows the deepen was mechanical-only. Enhancement applied this pass: `## Observability` block (deepen 4.7 trigger) and the Gate Dispositions correction naming it.
