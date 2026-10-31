@@ -826,7 +826,7 @@ done
 echo ""
 
 # --- Test 31: capped default-branch ledger + caps ------------------------------
-echo "Test 31: capped main + raised --max-* -> default-branch-reset (counts zeroed, caps kept)"
+echo "Test 31: capped main + raised --max-* -> default-branch-reset; bare init keeps the latch"
 R31=$(new_repo_on r31 main); S31="$TMP/s31"; C31=$(cf_path_for "$S31" main); SL31=$(tally_slug main)
 assert_fixture_dir "$C31"
 mkdir -p "$(dirname "$C31")"
@@ -856,9 +856,14 @@ assert_eq "20" "$(cf_get "$C31" cap_seats)" "the raised cap is merged and kept"
 # Bare init on a capped main ledger: caps survive every reset form.
 printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
 run_tally "$R31" "$S31" init
-assert_line "$OUT" "tally-init: $SL31 default-branch-reset" "bare init on capped main -> default-branch-reset"
-assert_eq "12" "$(cf_get "$C31" cap_seats)" "bare default-branch-reset keeps the persisted cap (reset clears the ledger, never the budget)"
-assert_eq "0" "$(cf_get "$C31" seats)" "bare default-branch-reset zeroes counts"
+assert_line "$OUT" "tally-init: $SL31 continued capped=seats" "bare init on capped main -> continued capped=seats (the sticky latch holds)"
+assert_no_line "$OUT" "tally-init: $SL31 default-branch-reset" "bare init on capped main does not default-branch-reset"
+assert_eq "9" "$(cf_get "$C31" seats)" "bare init on capped main keeps the counts"
+assert_eq "seats" "$(cf_get "$C31" capped)" "bare init on capped main keeps the latch"
+assert_eq "12" "$(cf_get "$C31" cap_seats)" "bare init on capped main keeps the persisted cap"
+# The gate still stops on that ledger: the whole point of the latch.
+run_tally "$R31" "$S31" gate seats
+assert_contains "$OUT" "STOP" "gate on a capped main ledger still returns STOP after a bare init"
 echo ""
 
 # --- Test 32: --branch, and names that merely contain main ---------------------
@@ -954,6 +959,8 @@ assert_eq "seats" "$HOOK_CAP" "hook's cap: extraction still yields seats with th
 echo ""
 
 # --- Summary -------------------------------------------------------------------
-# Anti-vacuity floor: ~165 assertions execute on a full run (flock and orphan
-# arms may each skip ~4-5 on hosts lacking flock or with a live orphan root).
-print_results 90
+# Anti-vacuity floor: 244 assertions pass on a full run (flock and orphan arms
+# may each skip ~4-5 on hosts lacking flock or with a live orphan root), so the
+# floor sits below that by roughly one skipped arm pair. Derive it from a green
+# run, never from the number you expected.
+print_results 235

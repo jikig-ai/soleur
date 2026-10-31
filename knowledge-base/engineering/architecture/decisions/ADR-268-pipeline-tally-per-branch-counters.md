@@ -100,7 +100,7 @@ main's commit from the PR body, so git trailers never reach `git log` on main.
   enforcement is prose + sentinel, with `SOLEUR_TALLY_CAP_IGNORED` as the
   ignored-verdict detector.
 
-## Amendment 2026-10-31
+## Amendment — 2026-10-31 (PR #11688)
 
 Default-branch ledgers are init-scoped. A ledger keyed to exactly `main` or
 `master` (derived, or via `--branch`; `feat-main`, `main-x` and a detached
@@ -111,19 +111,33 @@ own ledger read `19/2/2/4`). `pipeline-tally.sh init` on a default branch now
 resets the ledger with the fail-open outcome `default-branch-reset` (exit 0),
 sitting after `repaired` and before `capped-reset` in the precedence (fresh >
 reset > repaired > default-branch-reset > capped-reset > stale-reset >
-continued); counts, `warned_*` and `capped` are cleared and `cap_<dim>` values
-are merged as for every other reset. `show` appends one last line,
+continued); counts and `warned_*` are cleared and `cap_<dim>` values are merged
+as for every other reset. `show` appends one last line,
 `note:default-branch-ledger (shared across sessions; not attributable to one
 run)`; the `tally:` line and the `cap:`/`warned:`/`capped:` tokens are
 unchanged, so `hooks/stop-hook.sh` and ship's render parse as before.
 
+The sticky budget latch still holds on `main`: a capped ledger with no new
+`--max-*` argv stays `continued capped=<dim>`, because every skill runs a bare
+`init` and none of them may lift a budget stop. Only an explicit `--reset` or
+raised caps clear the latch there, as on every other branch.
+
+What this does not do, stated plainly. Only `init` scopes the ledger. `incr`,
+`gate` and `show` on `main` read whatever has accumulated since the last `init`,
+and sessions do run them there: the shared ledger's `agent_rounds` moved from 12
+to 17 after the PR #11622 merge, while the `ci_cycles=15` it carried was already
+present. Skills run `init` inside their worktrees, so in practice `init` on `main`
+is rare and the scoping bites only when it happens; the `note:` line on `show`
+is the disclosure for the reads in between. A detached `HEAD` (branch `HEAD`) is
+not a default branch and still shares one ledger across detached sessions.
+
 Side effect, accepted: a concurrent session's `init` on `main` zeroes another
-session's counts, where before it only accumulated. Pipelines do not run on the
-default branch (commit-on-main is hook-blocked), so what is lost is the
-accidental cross-session accumulation; a skill that runs `init` twice on `main`
-in one session loses its first count.
+session's counts, where before it only accumulated, and `init` is not idempotent
+there: a second `init` inside one run loses the first's counts.
 
 Rejected alternatives: record-only (document that a `main` read is cumulative)
 leaves the same defect in place, since the next reader repeats the
 misattribution; refusing default-branch ledgers outright (UNKNOWN) turns every
-post-merge shell on `main` into an UNKNOWN verdict.
+post-merge shell on `main` into an UNKNOWN verdict; a per-session key would
+remove the shared ledger entirely and is left for a design change if `main`
+reads keep mattering.

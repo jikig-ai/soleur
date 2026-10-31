@@ -2212,7 +2212,7 @@
 "id": "1i97shu"
 },
 "1byd9un": {
-"title": "npm-publish.yml publishes @soleur/opencode on every release (#10723) via OIDC trusted publishing (ADR-310): the job's id-token exchanges for a credential bound to this repo + workflow filename — no long-lived NPM_TOKEN (the expired-credential class behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package",
+"title": "npm-publish.yml publishes @soleur/opencode on every release (#10723) via OIDC trusted publishing (ADR-310): the job's id-token exchanges for a credential bound to this repo + workflow filename — no long-lived NPM_TOKEN (the expired-credential class behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package, and with the OIDC wiring but no trust entry it swallows the exchange failure and dies ENEEDAUTH",
 "technology": "HTTPS (npm OIDC token exchange + registry PUT)",
 "source": {
 "model": "github"

@@ -85,7 +85,7 @@ versions (3.363.1–3.364.3): npm has no sequential-version requirement and
   classification hint in the job log is the contract; a dedicated dead-leg
   monitor was considered and cut (triage latency, not missing signal).
 
-## Amendment 2026-10-31
+## Amendment — 2026-10-31 (PR #11688)
 
 The failure signature is not only `E404`. With the OIDC wiring in place and no matching
 trusted-publisher entry, npm swallows the exchange failure at verbose log level and dies
