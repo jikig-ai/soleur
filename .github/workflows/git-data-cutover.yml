@@ -363,11 +363,12 @@ jobs:
           # newest row at most 75 s old (75 s = one 60 s reporter tick plus 15 s ingest slack, so ONE missed tick refuses; a stale pause is the
           # unsafe direction), before the SSH bridge is reached.
           # Placed last so a refusal here costs no earlier gate; a precondition-time check, not a lock held across the sequence (CTO F10).
-          # The reader gets the Better Stack credential as a per-command DOPPLER_TOKEN prefix, scoped with --only-secrets to the three query
-          # secrets (as inngest-config-drift.yml does) so it does not receive every prd_terraform secret; it still inherits the step env
-          # (GH_TOKEN, the Sentry read token). Integers are extracted in SQL behind the closed-grammar match, so the runner never receives a
+          # The reader gets the Better Stack credential as a per-command DOPPLER_TOKEN prefix. --only-secrets to the three query secrets (as
+          # inngest-config-drift.yml does) is hygiene: it narrows what doppler injects into the step; the token itself can still read
+          # prd_terraform. The reader also inherits the step env (GH_TOKEN, the Sentry read token). Integers are extracted in SQL behind the closed-grammar match, so the runner never receives a
           # raw log row; anything that is not a clean integer fails closed as pause_unread. Only integers, host labels and the class token are printed.
-          # A LIMIT 200 answer may have cut off an older =0 row, so a full page is pause_unread, never a pass.
+          # A LIMIT 200 answer may have cut off an older =0 row, so a full page is pause_unread, never a pass. A full page does not change
+          # in 20 s, so it ends the retry loop at once (no ~4 min of sleeping on an answer that cannot improve).
           BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-pause-err.$$"
           # shellcheck source=/dev/null
           source "${GITHUB_WORKSPACE:-.}/scripts/lib/betterstack-read-classify.sh" || true
@@ -404,7 +405,7 @@ jobs:
             done <<<"$pause_sum"
             if [ "$pause_zero" -gt 0 ]; then break; fi
             if [ "$pause_bad" -gt 0 ]; then pause_unread="${pause_unread:-non_integer}"; fi
-            if [ "$pause_total" -ge 200 ]; then pause_unread="${pause_unread:-truncated}"; fi
+            if [ "$pause_total" -ge 200 ]; then pause_unread="${pause_unread:-truncated}"; break; fi
             if [ -z "$pause_unread" ] || [ "$pause_try" -ge 3 ]; then break; fi
             sleep 20
           done

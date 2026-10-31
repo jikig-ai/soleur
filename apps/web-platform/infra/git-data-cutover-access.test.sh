@@ -2452,7 +2452,12 @@ case_ps4() { # web-1 newest row aged 90 s: the F8 bound, three reads
 case_ps5() { # no row for web-2 after three reads; the remedy names the read-only check
   ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1)"
   ps_run; ps_check 1 pause_unread 3 2 0 || return 1
-  grep -q '^remedy: .*scripts/betterstack-query\.sh' "$PSD/out" && grep -q '^remedy: .*owner' "$PSD/out" || { PS_WHY="remedy-content"; return 1; }
+  # distinct clauses of the remedy text (each exists in the workflow's pause_unread message), not the bare word "owner"
+  local _r; _r="$(grep '^remedy: ' "$PSD/out")"
+  grep -qF 'Read-only check (an agent may run it; it needs the Doppler prd_terraform query secrets): bash scripts/betterstack-query.sh' <<<"$_r" \
+    && grep -qF 'so the owner checks the web hosts' <<<"$_r" \
+    && grep -qF 'class=credentials-rejected (or a SOLEUR_CREDENTIAL_REFUSED line above) needs the owner to fix the BETTERSTACK_QUERY_* secrets in Doppler prd_terraform' <<<"$_r" \
+    || { PS_WHY="remedy-content"; return 1; }
 }
 case_ps75() { # the newest row exactly 75 s old is still fresh: one read, passes (the bound is -gt 75, not -ge)
   ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 75 1; ps_row web-1 95 1; ps_row web-2 10 1)"
@@ -2469,12 +2474,13 @@ case_ps_negzero() { # a =0 row whose age is negative or non-integer is still a p
     ps_run; ps_check 1 pause_not_on 1 0 0 || { PS_WHY="$PS_WHY [$_l]"; return 1; }
   done
 }
-case_ps_trunc() { # 199 green rows pass; 200 rows hit the LIMIT 200 cap, so an older =0 row could be hidden: pause_unread after three reads
+case_ps_trunc() { # 199 green rows pass; 200 rows hit the LIMIT 200 cap, so an older =0 row could be hidden: pause_unread after ONE read, no sleep (a full page cannot change in 20 s)
   local _i _rows
   _rows="$(_i=0; while [ "$_i" -lt 199 ]; do ps_row "web-$((_i % 2 + 1))" "$((10 + _i % 50))" 1; _i=$((_i + 1)); done)"
   ps_build "$1"; ps_reset; ps_set 1 0 "$_rows"; ps_run; ps_check 0 none 1 0 1 || { PS_WHY="$PS_WHY [199 rows]"; return 1; }
   _rows="$(_i=0; while [ "$_i" -lt 200 ]; do ps_row "web-$((_i % 2 + 1))" "$((10 + _i % 50))" 1; _i=$((_i + 1)); done)"
-  ps_reset; ps_set 1 0 "$_rows"; ps_run; ps_check 1 pause_unread 3 2 0 || { PS_WHY="$PS_WHY [200 rows]"; return 1; }
+  ps_reset; ps_set 1 0 "$_rows"; ps_run; ps_check 1 pause_unread 1 0 0 || { PS_WHY="$PS_WHY [200 rows]"; return 1; }
+  grep -qF 'truncated' "$PSD/out" || { PS_WHY="$PS_WHY [200 rows: cause truncated not named]"; return 1; }
 }
 case_ps_refused() { # the reader's SOLEUR_CREDENTIAL_REFUSED line is surfaced (a refusal reads as a refusal); its other stderr is not
   ps_build "$1"; ps_reset; ps_set 1 2 ""; printf 'SOLEUR_CREDENTIAL_REFUSED reader=betterstack reason=fixture\n' > "$PSD/seq/1.err"
@@ -2543,7 +2549,7 @@ PSBAD
   if case_ps_negzero "$T/steps/flip_preconditions.sh"; then pass "PS11: a valid =0 row with a negative, fractional or quoted-text age refuses with verdict=pause_not_on after one read (the zero is counted before the age check)"
   else fail "PS11: a =0 row with a bad age was not classed pause_not_on" "$PS_WHY"; fi
   # PS12 — a full LIMIT 200 answer could hide an older =0 row.
-  if case_ps_trunc "$T/steps/flip_preconditions.sh"; then pass "PS12: 199 green rows pass and 200 rows (the LIMIT 200 cap) refuse with verdict=pause_unread, because truncation could hide an older =0 row"
+  if case_ps_trunc "$T/steps/flip_preconditions.sh"; then pass "PS12: 199 green rows pass and 200 rows (the LIMIT 200 cap) refuse with verdict=pause_unread after exactly one read and no sleep (a full page cannot change in 20 s), because truncation could hide an older =0 row"
   else fail "PS12: the 200-row truncation guard differs" "$PS_WHY"; fi
   # PS13 — the credential-refusal marker is surfaced, the rest of the reader's stderr is not.
   if case_ps_refused "$T/steps/flip_preconditions.sh"; then pass "PS13: a reader exit carrying SOLEUR_CREDENTIAL_REFUSED surfaces that one line and still refuses with verdict=pause_unread; the other reader stderr stays out of the log"
@@ -2558,7 +2564,7 @@ PSBAD
       else fail "M-$name: no flip_preconditions body was extracted from the mutant" "$(head -c 200 "$T/mut/wf-$name.tsv")"; fi
     fi
   }
-  ps_mut ps-removed 52 '/^ +# new_sessions_paused \(#11704\)/,/^ +echo "preconditions clear/{/^ +echo "preconditions clear/!d}' case_ps2
+  ps_mut ps-removed 53 '/^ +# new_sessions_paused \(#11704\)/,/^ +echo "preconditions clear/{/^ +echo "preconditions clear/!d}' case_ps2
   ps_mut ps-zero-ignored 2 's#^( +)if \[ "\$pause_zero" -gt 0 \]; then fail pause_not_on#\1if [ "$pause_zero" -gt 999999 ]; then fail pause_not_on#' case_ps2
   ps_mut ps-empty-passes 2 's#\[ "\$pn" -eq 0 \] \|\| ##' case_ps5
   ps_mut ps-fresh-bound 2 's#^( +pause_max_age=)75$#\1600#' case_ps4
@@ -2567,6 +2573,7 @@ PSBAD
   ps_mut ps-bound-widened 2 's#^( +pause_max_age=)75$#\189#' case_ps76
   ps_mut ps-limit-1 2 's# LIMIT 200 FORMAT JSONEachRow# LIMIT 1 FORMAT JSONEachRow#' case_ps1
   ps_mut ps-trunc-bound 2 's#\[ "\$pause_total" -ge 200 \]#[ "$pause_total" -gt 200 ]#' case_ps_trunc
+  ps_mut ps-trunc-retries 2 's#(pause_unread="\$\{pause_unread:-truncated\}"); break; fi#\1; fi#' case_ps_trunc
   ps_mut ps-zero-after-age 2 's#^( +)\$3 == "0" \{ z\[\$1\]\+\+ \}#\1$3 == "0" \&\& $2 ~ /^[0-9]+$/ { z[$1]++ }#' case_ps_negzero
   ps_mut ps-refused-hidden 2 's#^( +)grep -m1 .\^SOLEUR_CREDENTIAL_REFUSED. "\$BS_ERR" >&2 \|\| true#\1true#' case_ps_refused
   ps_mut ps-err-kept 2 '/^ +pause_sql=/,/^ +if \[ "\$pause_zero" -gt 0 \]; then fail pause_not_on/s#rm -f "\$BS_ERR" "\$BS_ERR\.rows"#: keep#' case_ps1
@@ -4391,7 +4398,8 @@ fi
 # PR-G review round: plus cpb-first-check-dropped, cpb-last-check-dropped, cpb-floor-raised = 3, so exactly 182.
 # #11704: plus the six M-ps-* mutants (ps-removed, ps-zero-ignored, ps-empty-passes, ps-fresh-bound, ps-grammar-loosened, ps-token-step-level) = 6, so exactly 188 (measured).
 # #11713 review: plus ps-bound-ge, ps-bound-widened (the exact 75 s bound), ps-limit-1 (the LIMIT 200 pin), ps-trunc-bound (a full 200-row answer refuses), ps-zero-after-age (a =0 row with a bad age is pause_not_on), ps-refused-hidden (the credential-refusal line is surfaced), ps-err-kept (the stderr temp file is removed), ps-secrets-unscoped (--only-secrets) = 8, so exactly 196 (measured).
-MUTANT_FLOOR=196
+# #11713 fix round: plus ps-trunc-retries (a full 200-row answer ends the retry loop at once; the mutant removes the break) = 1, so exactly 197 (measured).
+MUTANT_FLOOR=197
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4430,7 +4438,8 @@ fi
 # #11431 (refs_assert): P4b (1) and two standalone workflow verdicts (WF-refs, WF-flagwrite-refs; the workflow verdict count 58 -> 60): 775 -> 778. The G5 census, N-outputs, N-exprs, AC9 and D-6 were restated in place.
 # #11704 (new_sessions_paused precondition): PS1-PS9 (9) + the WF-pausegate census verdict (1; the workflow verdict count 60 -> 61) + 6 mutants x 2 (12) = 22 more: 778 -> 800, measured.
 # #11713 review: PS9 trimmed to its three kept static pins (still one row); PS10 (75/76 bound), PS11 (=0 row with a bad age), PS12 (199/200 rows), PS13 (credential-refusal line) = +4, plus 8 mutants x 2 (16) = 20 more: 800 -> 820, measured. The remedy-content, SQL-pin, --only-secrets and temp-file checks sit inside case_ps1/2/5 and ps_check and add no row.
-FLOOR=820
+# #11713 fix round: plus the ps-trunc-retries mutant x 2 = 2 (PS12 and PS5 gained clauses inside existing rows): 820 -> 822 (measured).
+FLOOR=822
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
