@@ -129,6 +129,10 @@ test.describe("Login no-account redirect", () => {
     // Verified shape against `node_modules/@supabase/auth-js/src/lib/fetch.ts:65-69` —
     // client reads `data.code` first, falls back to `data.error_code`. Status is 400
     // per `errors.ts:47` AuthApiError constructor convention.
+    // The [e2e-mock] tag makes the fabricated error self-labeling in CI logs —
+    // the unlabeled string was triaged as a real environment failure (#9167).
+    // The app maps on error.code, never msg, so the tag changes nothing the
+    // test asserts; do not read this log line as a dev-Supabase failure.
     await page.route("**/auth/v1/otp*", (route) =>
       route.fulfill({
         status: 400,
@@ -136,8 +140,8 @@ test.describe("Login no-account redirect", () => {
         body: JSON.stringify({
           code: "otp_disabled",
           error_code: "otp_disabled",
-          msg: "Signups not allowed for otp",
-          message: "Signups not allowed for otp",
+          msg: "[e2e-mock] Signups not allowed for otp",
+          message: "[e2e-mock] Signups not allowed for otp",
         }),
       }),
     );

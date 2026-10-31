@@ -64,7 +64,11 @@ export default defineConfig({
   webServer: [
     // Server for public page tests (original config — fake unreachable Supabase URL)
     {
-      command: `npm run dev`,
+      name: "e2e-public",
+      // `command:` runs through e2e/web-server.sh: on child exit it prints
+      // `e2e-webserver: exited rc=<n> …` to stderr, so a mid-run death is
+      // attributable in this log instead of bare ERR_CONNECTION_REFUSED (#9167).
+      command: `bash e2e/web-server.sh npm run dev`,
       // `url:` readiness, not `port:`. A TCP check calls a server "ready" the
       // moment it listens, so a first compile of app/layout.tsx that 5xx's let
       // the suite start and fail one test at a time (64 reds, ~14 min). The
@@ -91,7 +95,8 @@ export default defineConfig({
     },
     // Server for authenticated tests (mock Supabase for middleware auth)
     {
-      command: `npm run dev`,
+      name: "e2e-auth",
+      command: `bash e2e/web-server.sh npm run dev`,
       // Same readiness contract as the public server above (url, 180s).
       url: `http://localhost:${AUTH_PORT}/login`,
       timeout: 180_000,
