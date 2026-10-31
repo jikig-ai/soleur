@@ -2005,8 +2005,13 @@ PYM
 )"
 if [[ -z "$_man" ]]; then pass "manifest: both rows are external-probe, paused, arming_pending, evidenced by the workflow and the feeder invocation"
 else fail "manifest violations: $(paste -sd, - <<<"$_man")"; fi
-if command -v bun >/dev/null 2>&1; then
-  cases=$((cases + 1))
+# Counted either way (a skip is one pass), so the exact floors do not depend on whether the host has bun: the
+# deploy-script-tests CI job does not install it, and the manifest rows are also pinned statically just above.
+cases=$((cases + 1))
+if ! command -v bun >/dev/null 2>&1; then
+  printf '  SKIP: the runtime manifest import needs bun, which this host does not have; the static manifest pin above still ran\n'
+  pass "manifest runtime import skipped explicitly (no bun on this host)"
+else
   _bm="$(cd "$REPO" && bun -e 'import { MANIFEST } from "./plugins/soleur/lib/heartbeat-manifest.ts"; const n = MANIFEST.filter((e) => ["luks_monitor_host_timer","claude_cost_capture"].includes(e.name)); console.log(n.length === 2 && n.every((e) => e.feeder && e.feeder.kind === "cron" && e.feeder.evidence.file.endsWith("scheduled-deadman-heartbeat-feeder.yml") && e.arming === "external-probe") ? "ok" : "bad");' 2>&1 | tail -1)"
   if [[ "$_bm" == ok ]]; then pass "manifest (imported at runtime via bun): both rows resolve with the cron feeder evidence"
   else fail "manifest runtime import did not resolve both rows: $_bm"; fi
