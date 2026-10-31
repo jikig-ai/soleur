@@ -681,6 +681,12 @@ if [[ "$rc" -eq 2 ]]; then
 else
   fail "a source network failure must exit 2" "$rc" "$out"
 fi
+# The message must not claim an empty sink: entries restored earlier in the run stay in it (#11667).
+if grep -qF -- 'stay in the sink' <<<"$out"; then
+  pass "the source network failure message says earlier entries stay in the sink"
+else
+  fail "the source network failure message must say that earlier entries stay in the sink" "$rc" "$out"
+fi
 
 # ── Exit code 3 — sink unavailable. ──────────────────────────────────────────────────────────
 # This is the code Phase 3 retries on, because a host replace can outrun the Cloudflare Tunnel's
@@ -1564,7 +1570,7 @@ fi
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=98
+MIN_ASSERTIONS=99
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"
