@@ -202,7 +202,7 @@ TIER_B_NAMES = ["DOPPLER_TOKEN_TF", "HCLOUD_TOKEN", "CF_API_TOKEN_R2",
 TIER_B_ENVIRONMENTS = {"infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover"}
 PRIV_STATE_BUCKET = "soleur-terraform-state"
 LOADER_REL = os.path.join("actions", "infra-credentials", "action.yml")
-GUARD4_ROOTS = ["apps/web-platform/infra", "apps/web-platform/infra/git-data-root-key"]
+GUARD4_ROOTS = ["apps/web-platform/infra", "apps/web-platform/infra/git-data-root-key", "apps/web-platform/infra/lb-staging"]
 
 out = []
 def check(name, cond, detail=""):
