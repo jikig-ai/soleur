@@ -14,6 +14,24 @@ brand_survival_threshold: none
 
 # fix(e2e): make Playwright webServer mid-run exit observable and close out #9167
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31
+**Sections enhanced:** Proposed Solution (selftest arm), Test Scenarios, Observability, Context
+**Review passes run (sequential-fallback, inline):** plan-review eng panel (DHH/Kieran/code-simplicity lenses), standing AC-concurrency check, CTO/devex named-panel lens, spec-flow edge-case pass, sharp-edges catalogue verification, Phase 4.45 verify-the-negative + self-audit sweeps.
+
+### Key Improvements
+
+1. `--selftest` arm added to `web-server.sh` — the marker emits on stderr for Playwright piping (webServer `stdout` defaults to `ignore` in the installed 1.58.2 types), but preflight Check 10's probe must read stdout AND bans shell metachars (`2>&1` would fail its reject); the flag satisfies both constraints in one file instead of a second probe script.
+2. `name:` per webServer entry (`e2e-public`/`e2e-auth`) — both servers currently share one `[WebServer]` prefix, so even the marker could not say *which* server died; verified `name?` exists in installed `playwright/types/test.d.ts`.
+3. Citation corrections applied pre-merge: #9170 is CLOSED (was "tracked separately"), PR #9523 confirmed MERGED as the font-vendoring fix.
+
+### New Considerations Discovered
+
+- `lib/auth/error-messages.ts` keeps a freetext regex fallback table under `mapSupabaseAuthError`; the `[e2e-mock]` tag stays safe because `isNoAccountError` checks `error.code === "otp_disabled"` before any message parsing, and the e2e test asserts redirect+banner, never fallback text.
+- Precedent-diff note: the webServer-exit-marker wrapper is a novel pattern in this repo (no existing `webServer` command wrapper); the test side does have precedent — `playwright-dev-server-distdir.test.ts`'s comment-stripped config-text contract, which the new test mirrors.
+- Verify-the-negative sweep: all negative claims in the plan confirmed against code — no dev-Supabase on the e2e path (mock-supabase.ts + `page.route`), no `msg` parsing on the otp_disabled path, no built-in Playwright exit hook in 1.58.2.
+
 ## Overview
 
 Issue #9167 attributes ~35 authenticated-suite e2e reds to a dev-Supabase
