@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=8
-# generated-from-run=durations:seed-durations.tsv
-# generated-from-runs=durations:seed-durations.tsv
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=1222
-# generated-at=2026-10-31T17:07:53Z
+# generated-at=2026-10-31T22:43:41Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -81,6 +81,7 @@ apps/cla-evidence/scripts/upload-evidence.test.sh	7
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
 apps/web-platform/scripts/dev-ledger-parity.test.sh	1
+apps/web-platform/scripts/home-census-trigger.test.sh	3
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	5
 apps/web-platform/scripts/lib/no-cross-context-import.test.sh	8
 apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	8

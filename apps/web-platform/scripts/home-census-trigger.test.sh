@@ -143,7 +143,7 @@ run() { # args...; sets RC, STDOUT (data channel), ERR, and OUT (both, stdout fi
   ERR="$(cat "$TMP/stderr.txt")"; OUT="${STDOUT}${STDOUT:+$'\n'}${ERR}"
 }
 calls() { cat "$FIX/calls.log" 2>/dev/null; }
-no_unmodelled() { ! calls | grep -q UNMODELLED; }
+no_unmodelled() { ! grep -q UNMODELLED < <(calls); }
 REAL_ARGS=(--mode real --run-id 1 --discharged-sha "$SHA" --pr 77)
 
 # ---- self-check and static refusals -------------------------------------------------------------------------------
@@ -168,47 +168,47 @@ run --mode real --run-id 1 --pr 77 --discharged-sha "${SHA:0:39}";           che
 run --mode real --run-id 1 --pr 77 --discharged-sha "$(printf 'A%.0s' {1..40})"; check "uppercase sha refused" "$([[ $RC -eq 2 ]]; echo $?)"
 run --mode real --run-id 1 --pr "7x" --discharged-sha "$SHA";                check "non-numeric pr refused" "$([[ $RC -eq 2 ]]; echo $?)"
 run --mode dry_run --run-id 1 --bogus;                                       check "unknown flag refused" "$([[ $RC -eq 2 ]]; echo $?)"
-check "no doppler or curl call for any refused argument" "$(! calls | grep -qE '^(doppler|curl)'; echo $?)"
+check "no doppler or curl call for any refused argument" "$(! grep -qE '^(doppler|curl)' < <(calls); echo $?)"
 
 # ---- credential handling ------------------------------------------------------------------------------------------
 reset_fix; printf 'bad"token' >"$FIX/token"
 run --mode dry_run --run-id 1
 check "token-shape refusal exits 3" "$([[ $RC -eq 3 ]]; echo $?)"
-check "token-shape refusal makes zero curl calls" "$(! calls | grep -q '^curl'; echo $?)"
+check "token-shape refusal makes zero curl calls" "$(! grep -q '^curl' < <(calls); echo $?)"
 reset_fix; : >"$FIX/token"; run --mode dry_run --run-id 1
 check "empty secret exits 3" "$([[ $RC -eq 3 ]]; echo $?)"
 reset_fix; touch "$FIX/doppler.fail"; run --mode dry_run --run-id 1
-check "doppler failure exits 3 and sends nothing" "$([[ $RC -eq 3 ]] && ! calls | grep -q '^curl'; echo $?)"
+check "doppler failure exits 3 and sends nothing" "$([[ $RC -eq 3 ]] && ! grep -q '^curl' < <(calls); echo $?)"
 
 # ---- dry_run happy path -------------------------------------------------------------------------------------------
 reset_fix; run --mode dry_run --run-id 5
 check "dry_run exits 0 and prints the validated body on stdout" "$([[ $RC -eq 0 ]] && jq -e '.schema_version == 1' <<<"$STDOUT" >/dev/null && [[ -z "$ERR" ]]; echo $?)"
-check "token is absent from every argv in the call log" "$(! calls | grep -qF "$SENTINEL"; echo $?)"
+check "token is absent from every argv in the call log" "$(! grep -qF "$SENTINEL" < <(calls); echo $?)"
 check "token reached curl on its stdin config channel" "$(grep -qF "Authorization: Bearer $SENTINEL" "$FIX/curl.stdin"; echo $?)"
 check "token never appears in the output" "$(! grep -qF "$SENTINEL" <<<"$OUT"; echo $?)"
-check "dry_run body built by jq with a numeric run_id and the served sha" "$(calls | grep -q '^BODY {"run_id":5,"mode":"dry_run","expect_build_sha":"'"$SRV"'"}$'; echo $?)"
-check "dry_run makes no gh or git call" "$(! calls | grep -qE '^(gh|git) '; echo $?)"
+check "dry_run body built by jq with a numeric run_id and the served sha" "$(grep -q '^BODY {"run_id":5,"mode":"dry_run","expect_build_sha":"'"$SRV"'"}$' < <(calls); echo $?)"
+check "dry_run makes no gh or git call" "$(! grep -qE '^(gh|git) ' < <(calls); echo $?)"
 check "no unmodelled argv" "$(no_unmodelled; echo $?)"
 
 # ---- real: happy path ---------------------------------------------------------------------------------------------
 reset_fix; run "${REAL_ARGS[@]}"
 check "real exits 0 and prints exactly the validated body on stdout" "$([[ $RC -eq 0 ]] && jq -e '.ok == true and .mode == "real"' <<<"$STDOUT" >/dev/null && [[ "$(wc -l <<<"$STDOUT")" -eq 1 ]]; echo $?)"
-check "the bound-path diff and the served/discharged refs are the two DIFFERENT shas" "$(calls | grep -q "^git diff --quiet --no-ext-diff $SHA $SRV -- "; echo $?)"
-check "the CLO record is read from the SERVED commit" "$(calls | grep -q "^git show $SRV:knowledge-base/legal/audits/"; echo $?)"
-check "every git diff/status/ls-tree check ran from the repository root" "$(! calls | grep -A1 -E '^git (diff|status|ls-tree)' | grep '^gitcwd' | grep -qv "^gitcwd $TOP_REAL\$"; echo $?)"
-check "expect_build_sha sent is the SERVED sha" "$(calls | grep '^BODY .*"mode":"real"' | grep -q "\"expect_build_sha\":\"$SRV\""; echo $?)"
+check "the bound-path diff and the served/discharged refs are the two DIFFERENT shas" "$(grep -q "^git diff --quiet --no-ext-diff $SHA $SRV -- " < <(calls); echo $?)"
+check "the CLO record is read from the SERVED commit" "$(grep -q "^git show $SRV:knowledge-base/legal/audits/" < <(calls); echo $?)"
+check "every git diff/status/ls-tree check ran from the repository root" "$(! grep -A1 -E '^git (diff|status|ls-tree)' < <(calls) | grep '^gitcwd' | grep -cv "^gitcwd $TOP_REAL\$" >/dev/null; echo $?)"
+check "expect_build_sha sent is the SERVED sha" "$(grep '^BODY .*"mode":"real"' < <(calls) | grep -c "\"expect_build_sha\":\"$SRV\"" >/dev/null; echo $?)"
 claim_line="$(calls | grep -n '^gh issue comment .*run_id=1 claim' | head -1 | cut -d: -f1)"
 post_line="$(calls | grep -n '^REALPOST' | head -1 | cut -d: -f1)"
 check "the write-ahead claim is posted BEFORE the real request" "$([[ -n "$claim_line" && -n "$post_line" && "$claim_line" -lt "$post_line" ]]; echo $?)"
 check "the public marker is posted after a terminal outcome" "$(grep -qx 'home-census run_id=1 done' "$FIX/posted.log"; echo $?)"
 check "every posted comment body matches the constant pattern" "$([[ "$(grep -cvE '^home-census run_id=[0-9]+ (claim|done)$' "$FIX/posted.log")" -eq 0 ]]; echo $?)"
-check "the real body is built by jq and carries no accept_young by default" "$(calls | grep '^BODY .*"mode":"real"' | grep -qv accept_young; echo $?)"
+check "the real body is built by jq and carries no accept_young by default" "$(grep '^BODY .*"mode":"real"' < <(calls) | grep -cv accept_young >/dev/null; echo $?)"
 check "no unmodelled argv (real path)" "$(no_unmodelled; echo $?)"
 
 # ---- real: governance refusals (each sends nothing) ---------------------------------------------------------------
 refused() { # name, expected rc
   check "$1: exit $2" "$([[ $RC -eq $2 ]]; echo $?)"
-  check "$1: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
+  check "$1: no real request" "$(! grep -q '^REALPOST' < <(calls); echo $?)"
   check "$1: no claim posted" "$([[ ! -s "$FIX/posted.log" ]]; echo $?)"
   check "$1: nothing on stdout (the data channel)" "$([[ -z "$STDOUT" ]]; echo $?)"
 }
@@ -222,7 +222,7 @@ reset_fix; printf 'prose mentions DISCHARGED sha=%s in a sentence\n' "$SHA" >"$R
 reset_fix; touch "$FIX/no.served"; run "${REAL_ARGS[@]}"; check "an unavailable served commit exits 9" "$([[ $RC -eq 9 ]]; echo $?)"
 reset_fix; touch "$FIX/no.discharged"; run "${REAL_ARGS[@]}"; refused "an unavailable discharged commit" 8
 reset_fix; touch "$FIX/no.clo"; run "${REAL_ARGS[@]}"; refused "the CLO record missing from the served build" 8
-reset_fix; touch "$FIX/no.tree"; run "${REAL_ARGS[@]}"; check "bound paths that match no file of the served build exit 9 (the diff would be vacuous)" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
+reset_fix; touch "$FIX/no.tree"; run "${REAL_ARGS[@]}"; check "bound paths that match no file of the served build exit 9 (the diff would be vacuous)" "$([[ $RC -eq 9 ]] && ! grep -q '^REALPOST' < <(calls); echo $?)"
 reset_fix; cp "$SCRIPT" "$TMP/copy.sh"; RUN_SCRIPT="$TMP/copy.sh" run "${REAL_ARGS[@]}"; refused "a copy of the script outside the checkout" 8
 reset_fix; touch "$FIX/gh.lag"; run "${REAL_ARGS[@]}"; check "a claim that appears only on the second read is accepted" "$([[ $RC -eq 0 ]]; echo $?)"
 reset_fix; printf 200 >"$FIX/real.code"; result_json mature lt_7d | jq '.mode = "dry_run" | .data_source = "synthetic"' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
@@ -251,9 +251,9 @@ home-census run_id=1 claim
 home-census run_id=2 claim")"
 run "${REAL_ARGS[@]}"; check "claim lines quoted inside a multi-line comment are not counted" "$([[ $RC -eq 0 ]]; echo $?)"
 reset_fix; touch "$FIX/gh.noread"; run "${REAL_ARGS[@]}"; check "a claim that is not visible as a pinned-author comment fails closed (exit 8)" "$([[ $RC -eq 8 ]]; echo $?)"
-check "an invisible claim: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
+check "an invisible claim: no real request" "$(! grep -q '^REALPOST' < <(calls); echo $?)"
 reset_fix; touch "$FIX/paths.differ"; run "${REAL_ARGS[@]}"; check "census paths changed after discharge: exit 9" "$([[ $RC -eq 9 ]]; echo $?)"
-check "census paths changed after discharge: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
+check "census paths changed after discharge: no real request" "$(! grep -q '^REALPOST' < <(calls); echo $?)"
 reset_fix; result_json young lt_24h >"$FIX/dry.json"; run "${REAL_ARGS[@]}"; refused "young container without the explicit fallback" 8
 reset_fix; set_comments "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" "$(comment 54279 MEMBER "home-census run_id=1 claim")" "$(comment 54279 MEMBER "home-census run_id=2 claim")"
 run --mode real --run-id 3 --discharged-sha "$SHA" --pr 77; refused "two claims already exist" 8
@@ -262,7 +262,7 @@ run "${REAL_ARGS[@]}"; refused "run_id at or below the last claim" 8
 reset_fix; set_comments "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" "$(comment 99999 NONE "home-census run_id=1 claim")" "$(comment 99999 NONE "home-census run_id=2 claim")" "$(comment 99999 NONE "home-census run_id=9 claim")"
 run "${REAL_ARGS[@]}"; check "forged claim comments from an unpinned author are not counted" "$([[ $RC -eq 0 ]]; echo $?)"
 reset_fix; touch "$FIX/gh.fail"; run "${REAL_ARGS[@]}"; check "claim comment failure fails closed (exit 8)" "$([[ $RC -eq 8 ]]; echo $?)"
-check "claim comment failure: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
+check "claim comment failure: no real request" "$(! grep -q '^REALPOST' < <(calls); echo $?)"
 
 reset_fix; set_comments "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" "$(comment 54279 MEMBER "home-census run_id=1 claim")"
 run "${REAL_ARGS[@]}"; refused "run_id equal to the last claim is refused (not only below it)" 8
@@ -272,7 +272,7 @@ run "${REAL_ARGS[@]}"; refused "the LAST pinned DISCHARGED comment wins (a later
 # ---- real: --c9-fallback ------------------------------------------------------------------------------------------
 reset_fix; result_json young lt_24h >"$FIX/dry.json"; run "${REAL_ARGS[@]}" --c9-fallback
 check "--c9-fallback proceeds on a young container" "$([[ $RC -eq 0 ]]; echo $?)"
-check "--c9-fallback sends accept_young true" "$(calls | grep '^BODY .*"mode":"real"' | grep -q '"accept_young":true'; echo $?)"
+check "--c9-fallback sends accept_young true" "$(grep '^BODY .*"mode":"real"' < <(calls) | grep -c '"accept_young":true' >/dev/null; echo $?)"
 
 # ---- real: output and error handling ------------------------------------------------------------------------------
 reset_fix; printf 403 >"$FIX/real.code"; printf 'RAYID-1234 client 203.0.113.9 canary-body' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
@@ -319,7 +319,7 @@ done
 reset_fix; jq -nc --arg s "$OLD" '{status: "ok", build_sha: $s}' >"$FIX/health.after.json"; run "${REAL_ARGS[@]}"
 check "a build that changes during the call exits 10 and the body is not printed" "$([[ $RC -eq 10 ]] && ! grep -q '"schema_version"' <<<"$OUT"; echo $?)"
 reset_fix; jq -nc '{status: "ok", build_sha: "dev"}' >"$FIX/health.json"; run "${REAL_ARGS[@]}"
-check "a 'dev' build fails closed" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
+check "a 'dev' build fails closed" "$([[ $RC -eq 9 ]] && ! grep -q '^REALPOST' < <(calls); echo $?)"
 
 # ---- floors (printf + exit 1, never through the helper they backstop) ----------------------------------------------
 if [[ "$PASS" -lt 188 ]]; then
