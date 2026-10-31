@@ -27,16 +27,20 @@
 # (mode 0700 directory), which the EXIT trap removes; a SIGKILL would leave it on
 # the ephemeral runner.
 set +x
-unset BASH_XTRACEFD
+unset BASH_XTRACEFD  # belt and braces: `set +x` above already stops tracing
 set -uo pipefail
 
-REGISTRY="${OIDC_DIAG_REGISTRY:-https://registry.npmjs.org}"
-PACKAGE="${OIDC_DIAG_PACKAGE:-@soleur/opencode}"
+# Destination and package are constants, not env-overridable: a settable destination is a way to
+# send the bearer to another host, and nothing needs one (the tests stub curl on PATH).
+REGISTRY="https://registry.npmjs.org"
+PACKAGE="@soleur/opencode"
 # The values the npm-side trusted-publisher entry must carry, derived from the run
 # itself so a rename or transfer cannot leave this guidance printing stale values.
-REPO="${GITHUB_REPOSITORY:-jikig-ai/soleur}"
+# Both are allowlisted before use: they are printed into a command an owner may paste.
+REPO="${GITHUB_REPOSITORY:-}"
+[[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || REPO="jikig-ai/soleur"
 WORKFLOW="${GITHUB_WORKFLOW_REF:-}"; WORKFLOW="${WORKFLOW%%@*}"; WORKFLOW="${WORKFLOW##*/}"
-case "$WORKFLOW" in *.yml|*.yaml) ;; *) WORKFLOW="npm-publish.yml" ;; esac
+[[ "$WORKFLOW" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$ ]] || WORKFLOW="npm-publish.yml"
 RUNBOOK="knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md"
 TOKPAT='^[A-Za-z0-9._~+/=-]+$'
 
@@ -48,13 +52,6 @@ say() { printf '%s=%s\n' "$1" "$(clean "$2")"; }
 verdict() { printf 'NPM_OIDC_VERDICT=%s\n' "$1"; }
 annotate() { printf '::error title=npm trusted publisher::%s\n' "$1"; }
 RUNBOOK_NOTE="Runbook: $RUNBOOK"
-
-if ! [[ "$REGISTRY" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
-  verdict registry-error
-  say detail "OIDC_DIAG_REGISTRY must be https://<host>[:port]; nothing was sent"
-  annotate "The registry override is not an https host; nothing was sent. $RUNBOOK_NOTE"
-  exit 0
-fi
 
 if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
   verdict id-token-missing
@@ -70,9 +67,9 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-if ! [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == https://* ]]; then
+if ! [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" =~ ^https://[^[:space:][:cntrl:]]+$ ]]; then
   verdict id-token-fetch-failed
-  say detail "the id-token request URL is not https; the request token was not sent"
+  say detail "the id-token request URL is not a plain https URL; the request token was not sent"
   annotate "The Actions id-token could not be fetched. $RUNBOOK_NOTE"
   exit 0
 fi
@@ -130,10 +127,16 @@ case "$outcome" in
     ;;
   trusted-publisher-missing-or-mismatched)
     msg="$(jq -r 'if (.message|type)=="string" then .message else empty end' "$tmp/exchange.json" 2>/dev/null)" || msg=""
-    # A registry that echoes a bearer back must not get it printed: the runner masks
-    # the exact id-token value only, so a truncated fragment would pass unmasked.
-    if [[ -n "$msg" ]] && { [[ "$msg" == *"${idtok:16:24}"* ]] || [[ "$msg" == *"$ACTIONS_ID_TOKEN_REQUEST_TOKEN"* ]]; }; then
-      msg=""
+    # A registry that echoes a bearer back must not get it printed: the runner masks the
+    # exact full value only, so a fragment would pass unmasked. Drop the message if any
+    # 16-character window of either bearer appears in it, raw or after clean() (which
+    # deletes control bytes and so can rejoin a fragment split by one).
+    if [[ -n "$msg" ]]; then
+      cmsg="$(clean "$msg")"; bearers="$idtok $ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+      for ((i = 0; i + 16 <= ${#bearers}; i++)); do
+        w="${bearers:i:16}"; [[ "$w" == *" "* ]] && continue
+        if [[ "$msg" == *"$w"* || "$cmsg" == *"$w"* ]]; then msg=""; break; fi
+      done
     fi
     if [[ -n "$msg" ]]; then
       say message "$msg"
@@ -144,7 +147,9 @@ case "$outcome" in
     say repository "$REPO"
     say workflow "$WORKFLOW"
     say environment "(none)"
-    say fix "npm trust github ${PACKAGE} --file ${WORKFLOW} --repo ${REPO} --allow-publish"
+    fixcmd="npm trust github ${PACKAGE} --file ${WORKFLOW} --repo ${REPO} --allow-publish"
+    # say() caps at 200 bytes; a truncated command could name a different repo if pasted.
+    if (( ${#fixcmd} <= 190 )); then say fix "$fixcmd"; fi
     say runbook "$RUNBOOK"
     annotate "No matching npm trusted publisher; configure repository, workflow and environment as printed in the run log. $RUNBOOK_NOTE"
     ;;

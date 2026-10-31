@@ -108,25 +108,24 @@ Default-branch ledgers are init-scoped. A ledger keyed to exactly `main` or
 the original per-branch contract, accumulated forever: the `83/15/1/12` tally
 read for PR #11622 was the shared `main` ledger, not that run's cost (the run's
 own ledger read `19/2/2/4`). `pipeline-tally.sh init` on a default branch now
-resets the ledger with the fail-open outcome `default-branch-reset` (exit 0),
-sitting after `repaired` and before `capped-reset` in the precedence (fresh >
-reset > repaired > default-branch-reset > capped-reset > stale-reset >
+resets an uncapped ledger with the fail-open outcome `default-branch-reset`
+(exit 0), sitting after `repaired` and before `capped-reset` in the precedence
+(fresh > reset > repaired > default-branch-reset > capped-reset > stale-reset >
 continued); counts and `warned_*` are cleared and `cap_<dim>` values are merged
 as for every other reset. `show` appends one last line,
 `note:default-branch-ledger (shared across sessions; not attributable to one
 run)`; the `tally:` line and the `cap:`/`warned:`/`capped:` tokens are
 unchanged, so `hooks/stop-hook.sh` and ship's render parse as before.
 
-The sticky budget latch still holds on `main`: a capped ledger with no new
-`--max-*` argv stays `continued capped=<dim>`, because every skill runs a bare
-`init` and none of them may lift a budget stop. Only an explicit `--reset` or
-raised caps clear the latch there, as on every other branch.
+A capped default-branch ledger is not scoped: it follows the ordinary capped
+rules, as on every branch (bare `init` keeps `capped`, raised `--max-*` is
+`capped-reset` with the counts kept, 24h idle is `stale-reset`). Every skill runs
+a bare `init`, and none of them may lift a budget stop.
 
-What this does not do, stated plainly. Only `init` scopes the ledger. `incr`,
-`gate` and `show` on `main` read whatever has accumulated since the last `init`,
-and sessions do run them there: the shared ledger's `agent_rounds` moved from 12
-to 17 after the PR #11622 merge, while the `ci_cycles=15` it carried was already
-present. Skills run `init` inside their worktrees, so in practice `init` on `main`
+What this does not do. Only `init` scopes the ledger. `incr`, `gate` and `show`
+on `main` read whatever has accumulated since the last `init`, and sessions do
+run them there (the shared ledger's `agent_rounds` moved from 12 to 17 after the
+PR #11622 merge). Skills run `init` inside their worktrees, so `init` on `main`
 is rare and the scoping bites only when it happens; the `note:` line on `show`
 is the disclosure for the reads in between. A detached `HEAD` (branch `HEAD`) is
 not a default branch and still shares one ledger across detached sessions.

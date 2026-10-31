@@ -42,13 +42,14 @@
 #
 # SECOND SUBJECT (Guard 1 member 7 + Guard 2, added with the failure-only diagnostic):
 # `diagnose-on-failure` pins that a failed `npm publish` always reaches the diagnose step
-# (one publish step, guarded `if ! npm publish ...; then ... exit 1`, no `|| true`/`set +e`/
-# `--dry-run`, the early exit prints NPM_OIDC_VERDICT=not-exercised before `exit 0`, and the
-# diagnose step is exactly `bash .github/scripts/npm-oidc-diagnose.sh` under
-# `if: failure() && steps.<id>.outcome == 'failure'` with no working-directory/env). Guard 2
+# (exactly one publish step of any spelling, whose control flow - echo lines aside - equals a
+# pinned skeleton: guarded `if ! npm publish ...; then exit 1`, marker before the early
+# `exit 0`, nothing that swallows or skips; and a diagnose step that is exactly
+# `bash .github/scripts/npm-oidc-diagnose.sh` under `if: failure() && steps.<id>.outcome ==
+# 'failure'` with no working-directory/shell/env/defaults at any level). Guard 2
 # drives `.github/scripts/npm-oidc-diagnose.sh` against a stub `curl` (PATH-selected, `env -i`
 # base, no network): classification table, log safety (bearers off argv and out of every
-# output stream, injection payloads, truncation), env overrides, derived values, and 24
+# output stream, injection payloads, truncation), derived values, and 29
 # sandbox-copy mutants of the script that must each fail the same battery (a pristine copy must
 # score 0). It lives in this file, not .github/scripts/test/, because it shares the
 # workflow-wiring guard's fixtures. Prints NPM_PUBLISH_OIDC_SUITE=PASS last, only on a clean run.
@@ -240,16 +241,16 @@ if want("diagnose-on-failure") and os.environ.get("DIAG_MEMBER_NEUTER") != "1":
     # OIDC exchange. Quantifies over the parsed steps list by index; the `if:` is
     # compared as a parsed `&&` conjunct SET (a substring check would accept
     # `failure() || always()`).
-    pub_steps = [i for i, st in enumerate(steps)
-                 if re.search(r"\bnpm\s+publish\b", run_body(st))]
+    # Any spelling of a publish counts: `npm publish`, `pnpm publish`, `npm --x publish`, `npx ... publish`.
+    pub_re = re.compile(r"\b(?:npm|pnpm|yarn|bun|npx)\b[^\n;|&]*\bpublish\b")
+    pub_steps = [i for i, st in enumerate(steps) if pub_re.search(run_body(st))]
     if len(pub_steps) != 1:
         violations.append(
-            "diagnose-on-failure: exactly one step must run `npm publish` (found %d); "
-            "a decoy or second publish step is not covered by the diagnose wiring" % len(pub_steps))
+            "diagnose-on-failure: exactly one step must publish (found %d); a decoy or second "
+            "publish step is not covered by the diagnose wiring" % len(pub_steps))
     pub_idx = pub_steps[0] if pub_steps else None
     if pub_idx is not None:
         pst = steps[pub_idx]
-        pbody = run_body(pst)
         pid = pst.get("id")
         if not isinstance(pid, str) or not pid:
             violations.append("diagnose-on-failure: the publish step has no `id:`")
@@ -260,33 +261,60 @@ if want("diagnose-on-failure") and os.environ.get("DIAG_MEMBER_NEUTER") != "1":
                 violations.append(
                     "diagnose-on-failure: %s sets continue-on-error "
                     "(a failed publish would go green)" % scope)
-        # The publish failure must be explicit and fatal: guarded publish, a fatal
-        # then-branch, and no construct that swallows or skips the publish.
-        if not re.search(
-                r"if\s+!\s+npm\s+publish\s+--access\s+public\s+--ignore-scripts\s*;\s*then", pbody):
+        for k in ("if", "shell"):
+            if pst.get(k) is not None:
+                violations.append("diagnose-on-failure: the publish step sets `%s:`" % k)
+        # CONTROL-FLOW SKELETON. Pattern greps over the publish body are satisfied by dead
+        # branches, `trap ... EXIT`, an unconditional early exit and similar, so the body is
+        # reduced to its control flow and compared to the golden skeleton: plain `echo "..."`
+        # lines are dropped (they cannot change flow; the marker echo becomes <MARKER>), every
+        # other line must match exactly. An intentional change to this step's flow therefore
+        # reds here and must update the golden below in the same diff.
+        golden = r"""set -euo pipefail
+if [[ "$EVENT_NAME" == "release" ]]; then
+RAW_TAG="$REF_NAME"
+else
+RAW_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | sed -n '1p')
+fi
+VERSION="${RAW_TAG#v}"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+exit 1
+fi
+if npm view "@soleur/opencode@$VERSION" version >/dev/null 2>&1; then
+<MARKER>
+exit 0
+fi
+npm version --no-git-tag-version -- "$VERSION"
+if ! npm publish --access public --ignore-scripts; then
+exit 1
+fi"""
+        skel = []
+        for l in run_body(pst).split("\n"):
+            t = l.strip()
+            if not t:
+                continue
+            if t == 'echo "NPM_OIDC_VERDICT=not-exercised"':
+                skel.append("<MARKER>")
+                continue
+            if re.fullmatch(r"""echo (?:"[^"]*"|'[^']*')(?: >&2)?""", t):
+                continue
+            skel.append(re.sub(r"\s+", " ", t))
+        got = "\n".join(skel)
+        if got != golden:
+            want_l, got_l = golden.split("\n"), got.split("\n")
+            first = next((i for i in range(max(len(want_l), len(got_l)))
+                          if (want_l[i] if i < len(want_l) else None) != (got_l[i] if i < len(got_l) else None)), 0)
             violations.append(
-                "diagnose-on-failure: the publish must be guarded as "
-                "`if ! npm publish --access public --ignore-scripts; then`")
-        else:
-            m = re.search(
-                r"if\s+!\s+npm\s+publish[^\n]*;\s*then(.*?)\bfi\b", pbody, re.S)
-            if not m or not re.search(r"\bexit\s+1\b", m.group(1)):
-                violations.append(
-                    "diagnose-on-failure: the failed-publish branch does not `exit 1`")
-        if re.search(r"\|\|\s*true|set\s+\+e|--dry-run", pbody):
-            violations.append(
-                "diagnose-on-failure: the publish step swallows failure or never publishes "
-                "(`|| true`, `set +e` or `--dry-run`)")
-        if not re.search(
-                r"NPM_OIDC_VERDICT=not-exercised[^\n]*\n(?:\s*echo[^\n]*\n)*\s*exit\s+0\b", pbody):
-            violations.append(
-                "diagnose-on-failure: the already-published early exit does not print "
-                "NPM_OIDC_VERDICT=not-exercised immediately before `exit 0` "
-                "(a green run that never exercised OIDC reads as proof)")
+                "diagnose-on-failure: the publish step's control flow differs from the pinned skeleton "
+                "at line %d (want %r, got %r)" % (
+                    first + 1, want_l[first] if first < len(want_l) else None,
+                    got_l[first] if first < len(got_l) else None))
         wanted = None
         if pid is not None:
             wanted = {"failure()", "steps.%s.outcome == 'failure'" % pid}
-        defaults_run = (pub.get("defaults") or {}).get("run") if isinstance(pub.get("defaults"), dict) else None
+        # Anything that could re-point the script (a cwd, a shell, an env, a default) is refused at
+        # every level, not only on the step.
+        hoisted = any(isinstance(n.get("defaults"), dict) and n["defaults"].get("run") for n in (doc, pub))
         found = False
         for st in steps[pub_idx + 1:]:
             if not isinstance(st, dict) or wanted is None:
@@ -296,19 +324,18 @@ if want("diagnose-on-failure") and os.environ.get("DIAG_MEMBER_NEUTER") != "1":
             if m:
                 cond = m.group(1).strip()
             conj = {re.sub(r"\s+", " ", p.strip()) for p in cond.split("&&")}
-            body = run_body(st).strip()
             clean_step = (
-                re.fullmatch(r"bash \.github/scripts/npm-oidc-diagnose\.sh", body)
-                and not st.get("working-directory") and not st.get("env")
-                and not st.get("continue-on-error") and not defaults_run)
+                re.fullmatch(r"bash \.github/scripts/npm-oidc-diagnose\.sh", run_body(st).strip())
+                and not st.get("working-directory") and not st.get("env") and not st.get("shell")
+                and not st.get("continue-on-error") and not hoisted)
             if conj == wanted and clean_step:
                 found = True
                 break
         if not found:
             violations.append(
                 "diagnose-on-failure: no step after the publish step is exactly "
-                "`bash .github/scripts/npm-oidc-diagnose.sh` (no working-directory, env or "
-                "continue-on-error) under exactly "
+                "`bash .github/scripts/npm-oidc-diagnose.sh` (no working-directory, shell, env, "
+                "continue-on-error or defaults.run at step, job or workflow level) under exactly "
                 "`if: failure() && steps.<publish id>.outcome == 'failure'`")
 
 if violations:
@@ -464,6 +491,37 @@ elif variant.startswith("d"):  # diagnose-on-failure mutations (Guard 1 matrix)
         steps[pidx]["run"] = str(steps[pidx]["run"]).replace(
             "npm publish --access public --ignore-scripts; then",
             "npm publish --access public --ignore-scripts --dry-run; then")
+    elif variant == "d20":  # diagnose step tolerated-failure
+        steps[didx]["continue-on-error"] = True
+    elif variant == "d21":  # job-level default cwd re-points the script
+        pub["defaults"] = {"run": {"working-directory": "packages/opencode-plugin"}}
+    elif variant == "d22":  # workflow-level default shell
+        doc["defaults"] = {"run": {"shell": "python3 {0}"}}
+    elif variant == "d23":  # EXIT trap overrides the status
+        steps[pidx]["run"] = str(steps[pidx]["run"]).replace(
+            "set -euo pipefail", "set -euo pipefail\ntrap 'exit 0' EXIT", 1)
+    elif variant == "d24":  # unconditional early exit: publish is unreachable
+        steps[pidx]["run"] = str(steps[pidx]["run"]).replace(
+            "npm version --no-git-tag-version",
+            "echo NPM_OIDC_VERDICT=not-exercised\n          exit 0\n          npm version --no-git-tag-version", 1)
+    elif variant == "d25":  # marker printed into the void
+        steps[pidx]["run"] = str(steps[pidx]["run"]).replace(
+            'echo "NPM_OIDC_VERDICT=not-exercised"', 'echo "NPM_OIDC_VERDICT=not-exercised" >/dev/null')
+    elif variant == "d26":  # publish step never runs
+        steps[pidx]["if"] = "${{ false }}"
+    elif variant == "d27":  # a second publish spelled differently
+        steps.insert(pidx + 1, {"name": "x", "run": "pnpm publish --access public"})
+    elif variant == "d28":  # a second, guarded copy of the publish step with its own id
+        import copy
+        dup = copy.deepcopy(steps[pidx]); dup["id"] = "publish2"
+        steps.insert(pidx + 1, dup)
+    elif variant == "d29":  # failed-publish branch exits only in a comment
+        r = str(steps[pidx]["run"]); i = r.rfind("exit 1")
+        steps[pidx]["run"] = r[:i] + "echo failed # exit 1" + r[i + 6:]
+    elif variant == "d9d":  # must-pass: extra echo lines and a comment change no flow
+        steps[pidx]["run"] = str(steps[pidx]["run"]).replace(
+            "npm version --no-git-tag-version",
+            "# a comment\n          echo \"about to publish\"\n          npm version --no-git-tag-version", 1)
     elif variant == "d9a":  # must-pass superset: a second compliant step
         import copy
         steps.insert(didx + 1, copy.deepcopy(steps[didx]))
@@ -548,7 +606,7 @@ expect_pass_member() { # expect_pass_member <label> <file>
   fi
 }
 
-for v in d1 d2 d3 d4a d4b d5 d6 d7 d8 d9a d9b d9c d10 d11 d12 d13 d14 d15 d16 d17 d18 d19; do
+for v in d1 d2 d3 d4a d4b d5 d6 d7 d8 d9a d9b d9c d9d d10 d11 d12 d13 d14 d15 d16 d17 d18 d19 d20 d21 d22 d23 d24 d25 d26 d27 d28 d29; do
   f="$SANDBOX/mutated-$v.yml"
   assert_fixture_dir "$(dirname "$f")"
   rc=0; mutate "$v" "$f" || rc=$?
@@ -577,6 +635,17 @@ expect_red_member "diagnose step gains a working-directory"      "$SANDBOX/mutat
 expect_red_member "early exit stops exiting"                     "$SANDBOX/mutated-d17.yml"
 expect_red_member "diagnose step gains a destination env"        "$SANDBOX/mutated-d18.yml"
 expect_red_member "publish becomes a dry run"                    "$SANDBOX/mutated-d19.yml"
+expect_red_member "diagnose step continue-on-error"              "$SANDBOX/mutated-d20.yml"
+expect_red_member "job-level defaults.run.working-directory"     "$SANDBOX/mutated-d21.yml"
+expect_red_member "workflow-level defaults.run.shell"            "$SANDBOX/mutated-d22.yml"
+expect_red_member "EXIT trap overrides the status"               "$SANDBOX/mutated-d23.yml"
+expect_red_member "unconditional early exit before publish"      "$SANDBOX/mutated-d24.yml"
+expect_red_member "marker printed to /dev/null"                  "$SANDBOX/mutated-d25.yml"
+expect_red_member "publish step if: false"                       "$SANDBOX/mutated-d26.yml"
+expect_red_member "second publish spelled pnpm publish"          "$SANDBOX/mutated-d27.yml"
+expect_red_member "second guarded publish step, own id"          "$SANDBOX/mutated-d28.yml"
+expect_red_member "failed-publish exit only in a comment"        "$SANDBOX/mutated-d29.yml"
+expect_pass_member "extra echo and comment lines"                "$SANDBOX/mutated-d9d.yml"
 
 # An unknown member name must be a hard error, never a passing member.
 CASES=$((CASES + 1))
@@ -646,6 +715,12 @@ not() { ! "$@"; }
 # Battery mode: `real` routes each assertion through pass/fail (CASES-counted);
 # `quiet` only counts failures, so a mutant run can be scored without touching
 # the suite's own verdict counters.
+# A PATH that has everything the script needs EXCEPT jq (a missing binary is modelled by its
+# absence, never by emptying PATH, which would remove the rest too).
+NOJQ="$SANDBOX/nojq"; mkdir -p "$NOJQ"; assert_fixture_dir "$NOJQ"
+for _t in bash tr sed cut mktemp rm rmdir wc cat; do
+  _src="$(command -v "$_t")"; [[ "$_src" == /* ]] && ln -sf "$_src" "$NOJQ/$_t"
+done
 B_MODE=real; B_BAD=0; B_SEQ=0; DIAG_BASH=(bash)
 bchk() { # bchk <label> <rc>
   if [[ "$B_MODE" == "real" ]]; then
@@ -687,7 +762,9 @@ run_diag() {
           [[ "$e" == "${a#UNSET=}="* ]] || kept+=("$e")
         done
         envs=("${kept[@]}") ;;
-      *) a="${a//@ID_TOK@/$ID_TOK}"; a="${a//@REQ_TOK@/$REQ_TOK}"; envs+=("$a") ;;
+      *) a="${a//@ID_TOK@/$ID_TOK}"; a="${a//@REQ_TOK@/$REQ_TOK}"
+         a="${a//@ID_PAYLOAD@/${ID_TOK#*.}}"; a="${a//@ID_SIG@/${ID_TOK##*.}}"
+         a="${a//@ID_FRAG1@/${ID_TOK:16:12}}"; a="${a//@ID_FRAG2@/${ID_TOK:28:12}}"; envs+=("$a") ;;
     esac
   done
   DRC=0
@@ -792,9 +869,17 @@ diag_battery() { # diag_battery <script-under-test>
   run_diag chttp "ACTIONS_ID_TOKEN_REQUEST_URL=http://127.0.0.1:9/token?api=1"
   ck "non-https request URL: id-token-fetch-failed"  verdict_is id-token-fetch-failed
   ck "non-https request URL: nothing was sent"       test ! -e "$CD/calls.log"
-  run_diag cbadreg "OIDC_DIAG_REGISTRY=http://registry.invalid"
-  ck "non-https registry override: registry-error"   verdict_is registry-error
-  ck "non-https registry override: nothing was sent" test ! -e "$CD/calls.log"
+  run_diag cctlurl "ACTIONS_ID_TOKEN_REQUEST_URL=https://127.0.0.1:9/a b"
+  ck "request URL with a space: id-token-fetch-failed"  verdict_is id-token-fetch-failed
+  ck "request URL with a space: nothing was sent"    test ! -e "$CD/calls.log"
+  run_diag cnojq "PATH=$NOJQ:$STUBBIN"
+  ck "no jq on PATH: registry-error"                 verdict_is registry-error
+  ck "no jq on PATH: says so"                        grep -qx 'detail=jq not found on the runner; the id-token response cannot be parsed' "$CD/out"
+  ck "no jq on PATH: nothing was sent"               test ! -e "$CD/calls.log"
+  run_diag ctmp "TMPDIR=/proc/self/no-such-dir"
+  ck "unwritable TMPDIR: id-token-fetch-failed"      verdict_is id-token-fetch-failed
+  ck "unwritable TMPDIR: says so"                    grep -qx 'detail=could not create a temp dir' "$CD/out"
+  ck "unwritable TMPDIR: nothing was sent"           test ! -e "$CD/calls.log"
   run_diag cfetch500 "STUB_TOK_CODE=500"
   ck "token fetch 500: id-token-fetch-failed"        verdict_is id-token-fetch-failed
   ck "token fetch 500: exchange never attempted"     test "$(calls_total)" -eq 1
@@ -820,24 +905,39 @@ diag_battery() { # diag_battery <script-under-test>
   run_diag cechoreq 'STUB_EXCH_BODY={"message":"bad @REQ_TOK@"}'
   ck "echoed request token: message dropped"         not grep -q '^message=' "$CD/out"
   ck "echoed request token: nothing of it printed"   not grep -qF -- "$REQ_TOK" "$CD/all"
+  run_diag cechopay 'STUB_EXCH_BODY={"message":"bad @ID_PAYLOAD@"}'
+  ck "echoed payload+signature: message dropped"     not grep -q '^message=' "$CD/out"
+  run_diag cechosig 'STUB_EXCH_BODY={"message":"bad @ID_SIG@"}'
+  ck "echoed signature only: message dropped"        not grep -q '^message=' "$CD/out"
+  # A control byte inside a bearer fragment is deleted by clean(), which would rejoin the fragment.
+  local bs ctl; bs=$'\\'; ctl="${bs}u0001"
+  run_diag cechoctl "STUB_EXCH_BODY={\"message\":\"x @ID_FRAG1@${ctl}@ID_FRAG2@\"}"
+  ck "bearer split by a control byte: message dropped"  not grep -q '^message=' "$CD/out"
   run_diag clong "STUB_EXCH_BODY={\"message\":\"$(head -c 5000 /dev/zero | tr '\0' A)\"}"
   ck "5 KB message: the printed line is capped"      test "$(grep '^message=' "$CD/out" | awk '{print length($0)}')" -le 210
   # The values the entry must carry follow the run, not a literal.
+  run_diag chostile "GITHUB_REPOSITORY=o/r --repo evil/x; id #" "GITHUB_WORKFLOW_REF=o/r/.github/workflows/x;touch pwned;.yml@refs/heads/main"
+  ck "hostile repository falls back to the default"  grep -qx 'repository=jikig-ai/soleur' "$CD/out"
+  ck "hostile workflow falls back to the default"    grep -qx 'workflow=npm-publish.yml' "$CD/out"
+  run_diag clongrepo "GITHUB_REPOSITORY=$(head -c 120 /dev/zero | tr '\0' a)/$(head -c 120 /dev/zero | tr '\0' b)"
+  ck "an over-long fix command is omitted, not truncated"  not grep -q '^fix=' "$CD/out"
   run_diag cderive "GITHUB_REPOSITORY=acme/widgets" "GITHUB_WORKFLOW_REF=acme/widgets/.github/workflows/pub.yml@refs/heads/main"
   ck "derived repository"                            grep -qx 'repository=acme/widgets' "$CD/out"
   ck "derived workflow"                              grep -qx 'workflow=pub.yml' "$CD/out"
   ck "derived fix command"                           grep -qF -- '--file pub.yml --repo acme/widgets --allow-publish' "$CD/out"
 
   # --- registry-controlled text must never become a workflow command ---
-  local p u2028 nel
-  u2028="$(printf '\xe2\x80\xa8')"; nel="$(printf '\xc2\x85')"
-  for p in 'x\n::notice::PASS' 'x\r\n::error::boom' 'x%0A::notice::PASS' "x${u2028}::notice::PASS" "x${nel}::notice::PASS" '::stop-commands::tok' 'x\nNPM_OIDC_VERDICT=exchange-ok'; do
+  local p u2028 u2029 nel del
+  u2028="$(printf '\xe2\x80\xa8')"; u2029="$(printf '\xe2\x80\xa9')"; nel="$(printf '\xc2\x85')"; del="$(printf '\x7f')"
+  for p in 'x\n::notice::PASS' 'x\r\n::error::boom' 'x%0A::notice::PASS' "x${u2028}::notice::PASS" "x${nel}::notice::PASS" "x${u2029}::notice::PASS" "x${del}::notice::PASS" '::stop-commands::tok' 'x\nNPM_OIDC_VERDICT=exchange-ok'; do
     run_diag cinject "STUB_EXCH_BODY={\"message\":\"$p\"}"
     ck "inject '$p': only allow-listed :: lines"     only_allowed_annotations
     ck "inject '$p': one verdict line"               one_verdict
     ck "inject '$p': still the trust verdict"        verdict_is trusted-publisher-missing-or-mismatched
     ck "inject '$p': no U+2028 in the output"        not env LC_ALL=C grep -q "$u2028" "$CD/out"
     ck "inject '$p': no C1 control in the output"    not env LC_ALL=C grep -q "$nel" "$CD/out"
+    ck "inject '$p': no U+2029 in the output"        not env LC_ALL=C grep -q "$u2029" "$CD/out"
+    ck "inject '$p': no DEL in the output"           not env LC_ALL=C grep -q "$del" "$CD/out"
   done
 
   # --- xtrace must not leak a bearer ---
@@ -848,11 +948,7 @@ diag_battery() { # diag_battery <script-under-test>
   ck "xtrace: id-token not traced"                   not grep -qF -- "$ID_TOK" "$CD/vis"
   ck "xtrace: request token not traced"              not grep -qF -- "$REQ_TOK" "$CD/all"
 
-  # --- env overrides are reflected in the recorded requests (must-pass input) ---
-  run_diag coverride "OIDC_DIAG_REGISTRY=https://registry.invalid" "OIDC_DIAG_PACKAGE=@x/y"
-  ck "override: verdict still classified"            verdict_is trusted-publisher-missing-or-mismatched
-  ck "override: exchange URL reflects registry+package"  bash -c "$(declare -f call_block); CD='$CD'; call_block 2 | grep -qx 'ARG https://registry.invalid/-/npm/v1/oidc/token/exchange/package/@x%2fy'"
-  ck "override: audience follows the registry host"  bash -c "$(declare -f call_block); CD='$CD'; call_block 1 | grep -qx 'ARG audience=npm:registry.invalid'"
+  # Destination and package are constants: the exact exchange URL and audience are pinned by the 401 block.
 }
 
 # Instrument self-test: the quiet-mode helper must count a failure and ignore a pass.
@@ -919,13 +1015,18 @@ diag_mutant no-proto           "s/ --proto '=https'//g"
 diag_mutant no-disable         's/curl --disable /curl /g'
 diag_mutant no-noproxy         "s/ --noproxy '\\*'//g"
 diag_mutant no-reqtok-pattern  '/^if ! \[\[ "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" =~ $TOKPAT \]\]; then$/,/^fi$/d'
-diag_mutant no-echo-guard      '/^    if \[\[ -n "$msg" \]\] && {/,/^    fi$/d'
+diag_mutant no-echo-guard      's/for ((i = 0; i + 16 <= ${#bearers}; i++)); do/for ((i = 0; i + 16 <= 0; i++)); do/'
 diag_mutant regerr-dumps-body  's/^    say curl_rc "$xrc"$/&; cat "$tmp\/exchange.json"/'
 diag_mutant no-body-bytes      's/say body_bytes/: body_bytes/'
 diag_mutant msg-type-unguarded 's/if (.message|type)=="string" then .message else empty end/.message/'
-diag_mutant no-https-url-check '/^if ! \[\[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == https:\/\/\* \]\]; then$/,/^fi$/d'
-diag_mutant no-registry-check  '/^if ! \[\[ "$REGISTRY" =~/,/^fi$/d'
-diag_mutant no-derive-repo     's/^REPO="${GITHUB_REPOSITORY:-jikig-ai\/soleur}"$/REPO="jikig-ai\/soleur"/'
+diag_mutant no-https-url-check '/^if ! \[\[ "$ACTIONS_ID_TOKEN_REQUEST_URL" =~ /,/^fi$/d'
+diag_mutant no-repo-allowlist  '/^\[\[ "$REPO" =~/d'
+diag_mutant no-workflow-allowlist '/^\[\[ "$WORKFLOW" =~/d'
+diag_mutant no-jq-branch       '/^if ! command -v jq/,/^fi$/d'
+diag_mutant no-2029-strip      's/\\xa8\\xa9/\\xa8/'
+diag_mutant no-del-strip       's/\\000-\\037\\177/\\000-\\037/'
+diag_mutant no-fix-length-guard 's/if (( ${#fixcmd} <= 190 )); then say fix "$fixcmd"; fi/say fix "$fixcmd"/'
+diag_mutant echo-guard-raw-only 's/ || "$cmsg" == \*"$w"\*//'
 
 # ---------------------------------------------------------------------------
 # Literals the script restates, pinned to their sources (a rename must red here,
@@ -933,13 +1034,13 @@ diag_mutant no-derive-repo     's/^REPO="${GITHUB_REPOSITORY:-jikig-ai\/soleur}"
 # ---------------------------------------------------------------------------
 CASES=$((CASES + 1))
 _pkg_json="$(jq -r .name "$REPO_ROOT/packages/opencode-plugin/package.json" 2>/dev/null)"
-_pkg_script="$(sed -n 's/^PACKAGE="${OIDC_DIAG_PACKAGE:-\(.*\)}"$/\1/p' "$DIAG_SCRIPT")"
+_pkg_script="$(sed -n 's/^PACKAGE="\(.*\)"$/\1/p' "$DIAG_SCRIPT")"
 if [[ -n "$_pkg_json" && "$_pkg_json" == "$_pkg_script" ]]; then pass "parity: script default package equals packages/opencode-plugin/package.json name"; else fail "parity: script PACKAGE default ($_pkg_script) != package.json name ($_pkg_json)"; fi
 CASES=$((CASES + 1))
 _rb="$(sed -n 's/^RUNBOOK="\(.*\)"$/\1/p' "$DIAG_SCRIPT")"
 if [[ -n "$_rb" && -f "$REPO_ROOT/$_rb" ]]; then pass "parity: the runbook path the script prints exists"; else fail "parity: runbook path '$_rb' printed by the script does not exist"; fi
 CASES=$((CASES + 1))
-_wf_default="$(sed -n 's/.*\*) WORKFLOW="\(.*\)" ;; esac$/\1/p' "$DIAG_SCRIPT")"
+_wf_default="$(sed -n 's/.*|| WORKFLOW="\(.*\)"$/\1/p' "$DIAG_SCRIPT")"
 if [[ -n "$_wf_default" && "$_wf_default" == "$(basename "$WF")" ]]; then pass "parity: script default workflow filename equals the real workflow file"; else fail "parity: script WORKFLOW default ($_wf_default) != $(basename "$WF")"; fi
 
 # ---------------------------------------------------------------------------
@@ -962,10 +1063,10 @@ if [[ "$CASES" -ne "$((PASS + FAIL))" ]]; then
   echo "FATAL: verdict accounting desync: $CASES call sites but $((PASS + FAIL)) verdicts — assertions ran and their verdicts were discarded." >&2
   exit 1
 fi
-# Exact count at the time of writing (226). Slack in a floor is attack budget: raise it in the
+# Exact count at the time of writing (279). Slack in a floor is attack budget: raise it in the
 # SAME edit that adds an assertion, never in a later tidy-up.
-if [[ "$((PASS + FAIL))" -lt 226 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 226." >&2
+if [[ "$((PASS + FAIL))" -lt 279 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 279." >&2
   exit 1
 fi
 echo "$PASS passed, $FAIL failed ($((PASS + FAIL)) assertions)"

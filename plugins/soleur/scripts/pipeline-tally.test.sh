@@ -826,7 +826,7 @@ done
 echo ""
 
 # --- Test 31: capped default-branch ledger + caps ------------------------------
-echo "Test 31: capped main + raised --max-* -> default-branch-reset; bare init keeps the latch"
+echo "Test 31: capped main follows the ordinary capped rules (raised cap -> capped-reset; bare -> continued; idle -> stale-reset)"
 R31=$(new_repo_on r31 main); S31="$TMP/s31"; C31=$(cf_path_for "$S31" main); SL31=$(tally_slug main)
 assert_fixture_dir "$C31"
 mkdir -p "$(dirname "$C31")"
@@ -846,12 +846,12 @@ warned_agent_rounds=0
 capped=seats
 EOF
 run_tally "$R31" "$S31" init --max-seats 20
-assert_line "$OUT" "tally-init: $SL31 default-branch-reset" "capped main + raised cap -> default-branch-reset (beats capped-reset)"
-assert_no_line "$OUT" "tally-init: $SL31 capped-reset" "capped main is not capped-reset"
-assert_eq "0" "$(cf_get "$C31" seats)" "raised-cap init on main zeroes counts"
-assert_eq "0" "$(cf_get "$C31" agent_rounds)" "raised-cap init on main zeroes every dim"
-assert_eq "" "$(cf_get "$C31" capped)" "default-branch-reset clears the latch"
-assert_eq "0" "$(cf_get "$C31" warned_seats)" "default-branch-reset clears warned_*"
+assert_line "$OUT" "tally-init: $SL31 capped-reset" "capped main + raised cap -> capped-reset (as on any branch)"
+assert_no_line "$OUT" "tally-init: $SL31 default-branch-reset" "capped main is not default-branch-reset"
+assert_eq "13" "$(cf_get "$C31" seats)" "raised-cap init on a capped main keeps the counts (the forensic record)"
+assert_eq "7" "$(cf_get "$C31" agent_rounds)" "raised-cap init on a capped main keeps every dim"
+assert_eq "" "$(cf_get "$C31" capped)" "capped-reset clears the latch"
+assert_eq "0" "$(cf_get "$C31" warned_seats)" "capped-reset clears warned_*"
 assert_eq "20" "$(cf_get "$C31" cap_seats)" "the raised cap is merged and kept"
 # Bare init on a capped main ledger: caps survive every reset form.
 printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
@@ -861,6 +861,24 @@ assert_no_line "$OUT" "tally-init: $SL31 default-branch-reset" "bare init on cap
 assert_eq "9" "$(cf_get "$C31" seats)" "bare init on capped main keeps the counts"
 assert_eq "seats" "$(cf_get "$C31" capped)" "bare init on capped main keeps the latch"
 assert_eq "12" "$(cf_get "$C31" cap_seats)" "bare init on capped main keeps the persisted cap"
+# A cap given that is NOT raised (equal or lower) is also an ordinary capped-reset with the counts
+# kept and the persisted cap kept (ratchet guard), so a forwarded flag cannot refund a budget.
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
+run_tally "$R31" "$S31" init --max-seats 5
+assert_line "$OUT" "tally-init: $SL31 capped-reset" "capped main + a LOWER cap -> capped-reset, not a budget refund"
+assert_eq "9" "$(cf_get "$C31" seats)" "a lower cap on a capped main keeps the counts"
+assert_eq "12" "$(cf_get "$C31" cap_seats)" "a lower cap on a capped main keeps the persisted cap"
+# A latch on a different dimension holds the same way.
+printf 'seats=0\nci_cycles=6\nfix_rounds=0\nagent_rounds=0\ncap_seats=0\ncap_ci_cycles=5\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=ci_cycles\n' > "$C31"
+run_tally "$R31" "$S31" init
+assert_line "$OUT" "tally-init: $SL31 continued capped=ci_cycles" "bare init on a main ledger capped on ci_cycles keeps that latch"
+# Idle for more than 24h, a capped main ledger stale-resets exactly like a capped feature-branch ledger.
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
+touch -d '3 days ago' "$C31"
+run_tally "$R31" "$S31" init
+assert_line "$OUT" "tally-init: $SL31 stale-reset" "capped + idle >24h + bare init on main -> stale-reset (as on any branch)"
+assert_eq "" "$(cf_get "$C31" capped)" "stale-reset clears the latch after 24h idle"
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
 # The gate still stops on that ledger: the whole point of the latch.
 run_tally "$R31" "$S31" gate seats
 assert_contains "$OUT" "STOP" "gate on a capped main ledger still returns STOP after a bare init"
@@ -959,8 +977,8 @@ assert_eq "seats" "$HOOK_CAP" "hook's cap: extraction still yields seats with th
 echo ""
 
 # --- Summary -------------------------------------------------------------------
-# Anti-vacuity floor: 244 assertions pass on a full run (flock and orphan arms
+# Anti-vacuity floor: 253 assertions pass on a full run (flock and orphan arms
 # may each skip ~4-5 on hosts lacking flock or with a live orphan root), so the
-# floor sits below that by roughly one skipped arm pair. Derive it from a green
-# run, never from the number you expected.
-print_results 235
+# floor sits 2 below that. Derive it from a green run, never from the number you
+# expected, and raise it in the same edit that adds an assertion.
+print_results 251

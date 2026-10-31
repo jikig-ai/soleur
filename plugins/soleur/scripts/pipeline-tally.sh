@@ -107,10 +107,12 @@
 #                     scopes it to the run that is starting — counts/warned/
 #                     capped cleared, caps merged as for every reset. Precedence:
 #                     fresh > reset (--reset) > repaired > default-branch-reset >
-#                     capped-reset > stale-reset > continued. Beats capped-reset
-#                     when new --max-* caps are given; a capped ledger with no
-#                     new caps stays `continued capped=<dim>` (the CAP
-#                     SEMANTICS latch below holds on main too). Not idempotent
+#                     capped-reset > stale-reset > continued. Applies to ledgers
+#                     that are NOT capped: a capped main/master ledger follows
+#                     the ordinary capped rules (bare init -> `continued
+#                     capped=<dim>`; raised caps -> capped-reset; 24h idle ->
+#                     stale-reset), so the CAP SEMANTICS latch below holds on
+#                     main as on every branch. Not idempotent
 #                     on main/master: each init there zeroes the counts, so a
 #                     second init inside one run loses the first's. Side
 #                     effect: a concurrent session's init on `main` zeroes
@@ -474,16 +476,17 @@ _tally_init_locked() {
     # a continuation.
     outcome="repaired"
     _tally_err unreadable
-  elif _tally_is_default_branch && ! { [[ -n "$T_capped" ]] && (( ! caps_given )); }; then
+  elif _tally_is_default_branch && [[ -z "$T_capped" ]]; then
     # `main`/`master` ledgers are shared by every session on the default branch
     # and would accumulate forever (a read there is not one run's cost), so an
-    # init scopes them to the run that is starting. Beats capped-reset,
-    # stale-reset and `continued`; --reset (explicit) and repaired (corrupt)
-    # keep their own names above. EXCEPTION: a capped ledger with no new
-    # --max-* argv falls through to `continued capped=<dim>` — the sticky
-    # latch is the budget stop, and a bare init (every skill runs one) must not
-    # lift it. A concurrent session's init on `main` still zeroes this
-    # session's counts — accepted (ADR-268 amendment 2026-10-31).
+    # init scopes them to the run that is starting. Beats stale-reset and
+    # `continued`; --reset (explicit) and repaired (corrupt) keep their own
+    # names above. A CAPPED ledger is not scoped here: it falls through to the
+    # ordinary capped rules (raised caps -> capped-reset, bare -> `continued
+    # capped=<dim>`, or stale-reset after 24h idle), exactly as on any other
+    # branch — the sticky latch is the budget stop, and a bare init (every skill
+    # runs one) must not lift it. A concurrent session's init on `main` still
+    # zeroes this session's counts — accepted (ADR-268 amendment 2026-10-31).
     outcome="default-branch-reset"
   elif [[ -n "$T_capped" ]] && (( caps_given )); then
     # Raised-cap resume BEATS stale: an explicit `--max-*` argv is operator
