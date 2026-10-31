@@ -10,6 +10,30 @@ type: chore
 
 # chore(registry): engine-edit + battery-armed polish after restore exit-1 tracker (#10932 residue)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31. **Review inputs:** CTO rulings (R1-R5, F1-F2, C1-C6), DHH, Kieran and
+code-simplicity reviewers, a sharp-edges verification pass that ran the plan's sed, grep and lint commands on
+the real files. **Gates run:** user-brand impact (pass, threshold none with scope-out), PAT sweep (no hits),
+Guard Contract lint (exit 0, 2 entries), scope check (one live section, every ask mapped, inferred rows
+justified), markdownlint (0 issues). **Not applicable, with reason:** network-outage deep-dive (the word
+"unreachable" appears only inside the quoted message text; the plan diagnoses no outage and proposes no
+connectivity fix), downtime and cutover (no serving surface is changed), encryption posture (no store or
+connection), UI wireframe, task-design.
+
+**Key corrections folded in:** arm 3 is workflow text, so only the engine half of item (b) is editable; the
+workflow is 490,228 bytes and main is red (#11687), so merge waits for #11690; line 664 is a `die 2` site, so
+the partial-store sentence sits in the EXIT CODES preamble and the exit-3 row is untouched; the engine suite
+needs a separate assertion pair (a folded check would leave the count at 98); two W9 controls, not three; the
+diff-scope checks use the three-dot form and exclude pipeline KB artifacts; ship must not write `Closes`.
+
+**Verify-the-negative pass.** Negative claims re-checked on the real tree: no other file asserts "Nothing was
+copied" (repo grep over scripts, tests, .github, apps, plugins, knowledge-base/engineering); none of the five
+`die 3` messages claims emptiness; no battery anchor touches the edited lines; no open code-review issue names
+a planned file. **Post-edit self-audit.** After the C1-C6 cuts the plan was re-read for dropped symbols
+(`hdr-drop1`, `emit-drop1`, `hdr-label1`, the A2 why-comment, the exit-3 clause, the folded assertion): none
+remain outside the Cut List and the decision table.
+
 ## Overview
 
 Issue #11667 is the consolidated residue of a closed restore-exit-1 tracker (#10932, umbrella #9757; their
@@ -98,6 +122,32 @@ chore). GDPR gate: no regulated-data surface. IaC routing, encryption posture, A
 infrastructure, store or connection, and no architectural decision. Task-design gate: no new autonomous task.
 Soak enrollment: no time-gated close criterion (the recut check below is a passive note, not a close
 criterion). UI/wireframe gates: no UI surface. Skill-description budget: no `SKILL.md` edit.
+
+## Observability
+
+The diff adds no error path or log call; it rewords one existing `::error::` message. The message itself is the
+operator-facing signal, and it is already mirrored by the restore step's annotations in the job log.
+
+```yaml
+liveness_signal:
+  what: the engine's source-resolution network error line carries the truthful clause
+  cadence: on every registry-luks-recut restore (rehearsal and real), only when GHCR is unreachable
+  alert_target: the job's ::error:: annotation in the Actions run log
+  configured_in: scripts/registry-restore-from-ghcr.sh
+error_reporting:
+  destination: GitHub Actions ::error:: annotation, read by the operator from the run page
+  fail_loud: the engine exits 2 through die(); the restore step maps exit 2 to its own named annotation
+failure_modes:
+  - mode: the reworded clause is reverted or lost
+    detection: the new engine-suite assertion for the anchor phrase fails in CI
+    alert_route: required test context on the PR and on main
+logs:
+  where: the Actions run log of the registry-luks-recut restore job
+  retention: GitHub Actions log retention
+discoverability_test:
+  command: grep -cF "entries restored earlier in this run stay in the sink" scripts/registry-restore-from-ghcr.sh
+  expected_output: 1
+```
 
 ## Open Code-Review Overlap
 
