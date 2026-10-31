@@ -33,7 +33,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -303,7 +303,7 @@ describe.skipIf(!SANDBOX_OK)("a hosted Bash call through the real SDK, the produ
 
 // G2. A short, shared temp dir: a unix socket path is limited to 108 bytes, and the SDK names its proxy
 // sockets under TMPDIR, so a long tmpdir fails bridge creation ("Failed to create bridge sockets").
-// Bounds shared by the host-side persistence check and B's in-sandbox search, so both look at the same files (largest searched file: 7812 KiB).
+// Size bound of B's in-sandbox search (largest searched file: 7812 KiB); the host-side check reads whatever its small test directories hold.
 const MAX_SCAN_KIB = 7812;
 // Host-side waits, in the order the scenario takes them. Worst case before B's probe even starts is their SUM (60 + 60 + 45 + 20 s).
 const SOCKET_WAIT_MS = 60_000;
@@ -469,15 +469,12 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         const p = join(d, e.name);
         if (e.isDirectory()) walk(p);
         else if (e.isFile() && e.name !== "probe.sh") {
-          // One open descriptor for the size check and the read: a stat-then-read on the path is a check-then-use race.
-          let fd: number | undefined;
+          // No stat before the read (a stat-then-read on the path is a check-then-use race). These roots are the test's own small
+          // directories; B's in-sandbox search skips files above MAX_SCAN_KIB, a documented bound (ADR-075 addendum).
           try {
-            fd = openSync(p, "r");
-            if (fstatSync(fd).size <= MAX_SCAN_KIB * 1024 && readFileSync(fd, "utf8").includes(value)) found.push(p);
+            if (readFileSync(p, "utf8").includes(value)) found.push(p);
           } catch {
             /* unreadable or vanished */
-          } finally {
-            if (fd !== undefined) closeSync(fd);
           }
         }
       }
