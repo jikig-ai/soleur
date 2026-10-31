@@ -61,8 +61,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$PR" =~ ^[0-9]+$ ]] || die "usage: merge-queue-jump.sh <pr-number> --reason \"...\" [--yes]"
-[[ -n "$REASON" ]] || die "--reason is required — it is the deliberate-act record posted on the PR"
-# A reason that is all whitespace is not a reason.
+# A reason that is empty or all whitespace is not a reason.
 [[ "$REASON" =~ [^[:space:]] ]] || die "--reason is required — it is the deliberate-act record posted on the PR"
 if [[ ! -t 0 && "$YES" -ne 1 ]]; then
   die "non-interactive stdin requires --yes (deliberate-act gate refuses a bare read on no TTY)"
@@ -78,23 +77,21 @@ OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
 
 PROBE='query($o:String!,$n:String!,$pr:Int!){
   repository(owner:$o,name:$n){
-    mergeQueue(branch:"main"){ entries(first:50){ totalCount } }
+    mergeQueue(branch:"main"){ entries(first:1){ totalCount } }
     pullRequest(number:$pr){
       id state merged isInMergeQueue headRefOid
       autoMergeRequest{ enabledAt }
-      mergeQueueEntry{ position state }
     }
   }
 }'
 
 probe() {
-  gh api graphql -F owner="$OWNER" -F name="$NAME" -F pr="$PR" -f query="$PROBE" \
-    --jq '{n:(.data.repository.mergeQueue.entries.totalCount),id:.data.repository.pullRequest.id,state:.data.repository.pullRequest.state,merged:.data.repository.pullRequest.merged,inq:.data.repository.pullRequest.isInMergeQueue,head:.data.repository.pullRequest.headRefOid,armed:(.data.repository.pullRequest.autoMergeRequest!=null),pos:.data.repository.pullRequest.mergeQueueEntry.position}' \
-    2>/dev/null
+  gh api graphql -F o="$OWNER" -F n="$NAME" -F pr="$PR" -f query="$PROBE" \
+    --jq '{n:(.data.repository.mergeQueue.entries.totalCount),id:.data.repository.pullRequest.id,state:.data.repository.pullRequest.state,merged:.data.repository.pullRequest.merged,inq:.data.repository.pullRequest.isInMergeQueue,head:.data.repository.pullRequest.headRefOid,armed:(.data.repository.pullRequest.autoMergeRequest!=null)}'
 }
 
 FIRST="$(probe)" || die "probe failed — check gh auth scopes (contents+pull-requests write)"
-[[ -n "$FIRST" && "$FIRST" != "null" ]] || die "PR #$PR not found in $REPO"
+[[ "$(jq -r '.id' <<<"$FIRST")" != "null" ]] || die "PR #$PR not found in $REPO"
 
 merged="$(jq -r '.merged' <<<"$FIRST")"
 state="$(jq -r '.state' <<<"$FIRST")"

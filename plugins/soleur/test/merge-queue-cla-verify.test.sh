@@ -180,11 +180,20 @@ run_cases() {
     pass "P2 2-member group all-green verifies members=2"
   else fail "P2 group all-green did not verify members=2 (rc=$RC out=$OUT)"; fi
 
-  # anchor fallback: no headCommit match — the named PR's own entry anchors membership.
+  # anchor fallback: no headCommit match anywhere AND the named entry's own
+  # headCommit is null (schema-nullable) — the named PR's entry anchors legitimately.
   newgrp
-  entries_json "[$(entry 1 "$S40_B" 4241 "$S40_E"),$(entry 2 "9999999999999999999999999999999999999999" $PR "$S40_A")]" > "$FX/entries.json"
+  entries_json "[$(entry 1 "$S40_B" 4241 "$S40_E" | jq -c 'del(.headCommit)'),$(jq -cn --argjson n $PR --arg h "$S40_A" '{position:2,pullRequest:{number:$n,headRefOid:$h}}')]" > "$FX/entries.json"
   run_sut "$FX"
   expect_green "P3 anchor falls back to the named PR's entry when no headCommit matches HEAD_SHA"
+
+  # the owner-check: the named entry's headCommit DIFFERS from HEAD_SHA — the
+  # verified candidate belongs to a deeper entry, so positions<=named would
+  # silently skip the tail.
+  newgrp
+  entries_json "[$(entry 1 "$S40_B" $PR "$S40_A"),$(entry 2 "9999999999999999999999999999999999999999" 4241 "$S40_E")]" > "$FX/entries.json"
+  run_sut "$FX"
+  expect_red "F-owner named entry's headCommit differing from HEAD_SHA dies (candidate belongs deeper)" "does not own"
 
   # deeper-position entries NOT in this candidate are excluded even with red CLA.
   newgrp

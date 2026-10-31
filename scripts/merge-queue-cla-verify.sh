@@ -64,7 +64,9 @@ pr="${BASH_REMATCH[1]}"
 # because die inside one would print into the captured variable and be swallowed. A gh failure is
 # retried ONCE after a short pause (a transient 5xx must not eject a healthy PR from the queue), and
 # a second failure is fatal and names the endpoint kind (never read as an empty answer): bounded,
-# fail closed. Worst case 2 x (60 s + pause) per read, inside the workflow's 5-minute job budget.
+# fail closed. Worst case 2 x (60 s + pause) per read; the verify step in
+# merge-queue-cla-synthetics.yml carries timeout-minutes: 3 so an overrun is a step FAILURE that
+# fires the failure-post, not a job cancellation that leaves both contexts pending.
 # MQ_VERIFY_RETRY_DELAY (seconds, 0-99, matching the regex below) is a test seam; the workflow does not set it.
 RETRY_DELAY=3
 [[ "${MQ_VERIFY_RETRY_DELAY:-}" =~ ^[0-9]{1,2}$ ]] && RETRY_DELAY="$((10#$MQ_VERIFY_RETRY_DELAY))"
@@ -112,13 +114,23 @@ entries="$REPLY_JSON"
 [[ "$(jq -er '.data.repository.mergeQueue.entries.pageInfo.hasNextPage' <<<"$entries")" == "false" ]] \
   || die "merge queue entries list is paginated beyond first:100 — refusing a truncated member set"
 
-# anchor: the entry whose candidate is HEAD_SHA, else the named PR's entry
+# anchor: the entry whose candidate is HEAD_SHA. Fallback: the named PR's entry —
+# allowed only when its own headCommit is absent or also HEAD_SHA; a named entry
+# whose headCommit differs means the verified candidate belongs to a DEEPER entry
+# and positions<=named would silently under-enumerate the tail.
 anchor_pos="$(jq -er --arg sha "$HEAD_SHA" --argjson pr "$pr" '
   .data.repository.mergeQueue.entries.nodes
   | ([.[] | select(.headCommit.oid == $sha) | .position] | first)
-    // ([.[] | select(.pullRequest.number == $pr) | .position] | first)
+    // ([.[] | select(.pullRequest.number == $pr)
+         | if ((.headCommit.oid // "") != "" and .headCommit.oid != $sha)
+           then "mismatch" else .position end] | first)
     // empty' <<<"$entries")" \
   || die "cannot bind merge_group candidate to queue membership for PR #${pr}"
+[[ "$anchor_pos" != "mismatch" ]] \
+  || die "named PR #${pr} does not own candidate ${HEAD_SHA} — head_ref names a non-deepest member, refusing partial verification"
+anchor_kind="headCommit"
+[[ "$(jq -er --arg sha "$HEAD_SHA" '[.data.repository.mergeQueue.entries.nodes[] | select(.headCommit.oid == $sha)] | length' <<<"$entries")" -ge 1 ]] \
+  || anchor_kind="named-fallback"
 
 # members: every entry at position <= anchor — each carries its OWN recorded
 # queued head (headRefOid is the entry's head at enqueue; a pushed PR would
@@ -131,6 +143,8 @@ members="$(jq -ec --argjson pos "$anchor_pos" '
   || die "cannot enumerate queue members for candidate ${HEAD_SHA}"
 member_count="$(jq -r 'length' <<<"$members")"
 [[ "$member_count" -ge 1 ]] || die "zero queue members enumerated for candidate ${HEAD_SHA} — refusing a vacuous pass"
+[[ "$member_count" == "$anchor_pos" ]] \
+  || die "member set (${member_count}) is not contiguous with the anchor position (${anchor_pos}) — a gapped or null position would silently drop a member"
 
 # the named PR must be a member and its position maximal (deepest member)
 max_pos="$(jq -r '[.[].pos] | max' <<<"$members")"
@@ -164,4 +178,4 @@ while IFS=' ' read -r mpr mhead; do
   member_lines+=("pr${mpr}@${mhead:0:10}")
 done < <(jq -r '.[] | "\(.number) \(.head)"' <<<"$members")
 
-echo "merge-queue-cla-verify=OK members=${member_count} ${member_lines[*]}"
+echo "merge-queue-cla-verify=OK members=${member_count} anchor=${anchor_kind} ${member_lines[*]}"

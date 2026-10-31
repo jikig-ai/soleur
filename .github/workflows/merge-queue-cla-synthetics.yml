@@ -87,6 +87,10 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify the PR head's real cla-check and cla-evidence
+        # Step-level timeout INSIDE the job budget: an overrun is a step failure,
+        # which fires the failure-post below — a job-level cancellation would not
+        # reach `if: failure()` and would leave both required contexts pending.
+        timeout-minutes: 3
         id: verify
         run: bash scripts/merge-queue-cla-verify.sh
 
