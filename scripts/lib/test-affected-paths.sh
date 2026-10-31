@@ -334,6 +334,11 @@ ALWAYS_ON_SUITES=(
   # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
   # suite like its sibling above.
   "scripts/test-all-weight-drift"
+  # #11662: the corpus-wide committed-weight cap + exemptions ledger and the
+  # always-on justifications parity + non-live membership ceiling — both are
+  # corpus properties, invisible to any file-based edge.
+  "scripts/test-all-corpus-weight-budget"
+  "scripts/always-on-ledger"
   # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
