@@ -770,6 +770,8 @@ describe("getAgentCredential — cross-owner api-key skip (#11594)", () => {
       expect(sinks.decrypted).toHaveLength(0);
       expect(spy).not.toHaveBeenCalled();
       expect(outcomes()).toEqual(["workspace_mismatch"]);
+      // WARN, like every outcome where the pre-check could not be evaluated (info never ships).
+      expect(sinks.levels.filter(([, o]) => (o as { outcome?: string })?.outcome === "workspace_mismatch").map(([l]) => l)).toEqual(["warn"]);
     },
   );
 
@@ -980,9 +982,14 @@ describe("getAgentCredential — unresolved-mode cause split (#11599)", () => {
     ) as Array<[string, string, { tags: Record<string, string>; extra: Record<string, unknown> }]>;
     expect(ev.map((e) => e[2].tags.reason)).toEqual(["unbound", "read_failed"]);
     expect(ev.map((e) => e[2].tags.cause)).toEqual(["auth_mode_unresolved", "auth_mode_unavailable"]);
-    // The tenant is identifiable (hashed) but the raw id never reaches a sink.
-    expect(ev[0][2].extra.userIdHash ?? ev[0][2].extra.userId).toBeDefined();
+    // The raw id never reaches a sink (the hashed form is what identifies the tenant).
     expect(JSON.stringify(sinks.calls)).not.toContain(OPERATOR);
+    // The debounce key includes the USER: the same reason for a different user is a new event.
+    await runWithByokLease({ workspaceContextUserId: OTHER, keyOwnerUserId: OTHER, resolveAuthMode: unbound }, (l) => Promise.resolve(l.getAgentCredential())).catch(() => undefined);
+    const after = sinks.calls.filter(
+      (c) => Array.isArray(c) && c[0] === "sentry.captureMessage" && (c[2] as { tags?: { op?: string } })?.tags?.op === "auth-mode-unresolved",
+    );
+    expect(after).toHaveLength(3);
   });
 
   it("AC5 a genuine api_keys read failure stays fetch_failed -> key_invalid", async () => {

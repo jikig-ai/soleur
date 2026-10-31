@@ -416,6 +416,17 @@ python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-31-f
 git grep -n "content\[0\]" -- apps/web-platform/server/agent-auth-user-message.ts   # pre-existing hits only; none added
 ```
 
+## Review Amendments (2026-10-31, supersede the plan text above where they differ)
+
+The review panel and the technical and legal rulings recorded in `decision-challenges.md` (rows headed "Review:") changed these points; the plan body above is the pre-review design and is kept as written.
+
+- **Log levels.** Wherever this plan says the refusal logs at "info", read WARN for the auth-mode refusal (call-site and cc-dispatcher gate lines) and `unresolved` / `workspace_mismatch` pre-check outcomes, and debug for `non_api_key`: info never leaves the host. `oauth_unusable` stays info.
+- **Lease event.** Debounced per (user, reason), tags `reason` and `cause`, user hashed.
+- **Workspace invariant.** The skip is denied for every cross-owner lease without a delegation workspace id (not only a delegation id without one); owner-mismatch rows are refusals.
+- **Recovery sentence.** Replaced by the CLO-amended text: `If you own this workspace and have an Anthropic API key saved, you can instead choose "My API key" in Settings (it applies to new conversations in this workspace, and a conversation keeps the mode it started with), then start a new conversation.`
+- **Types.** One cause list (`AUTH_MODE_UNRESOLVED_CAUSES`) in the import-free leaf; a client `isAuthModeErrorCode` predicate pinned by a parity test.
+- **Follow-ups.** #11719 (delegate dead ends) and #11724 (member-grantor alignment).
+
 ## Observability
 
 ```yaml

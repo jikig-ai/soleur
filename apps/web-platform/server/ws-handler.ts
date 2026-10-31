@@ -2637,7 +2637,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               (err) => {
                 // #11086/#11599: the lease already reported this refusal; no duplicate raw capture.
                 if (!isLeaseRefusalReported(err)) Sentry.captureException(err);
-                logSessionFailure(log, err, { userId }, {
+                logSessionFailure(log, err, { userId, conversationId: session.conversationId }, {
                   refused: "startAgentSession refused: stored subscription credential is not usable",
                   failed: "startAgentSession error",
                 });

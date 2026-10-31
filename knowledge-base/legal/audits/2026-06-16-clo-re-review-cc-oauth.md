@@ -10,7 +10,7 @@ status: DRAFT (CLO-agent-attested, Soleur-as-tenant-zero v1 internal assessment)
 disposition: AMBIGUOUS-LEANING-TOLERATED — keep enabled as documented risk-acceptance
 reviewed_by: "CLO agent (v1 internal counsel-review attestation, Soleur-as-tenant-zero posture)"
 operator: "Jean Deruelle (Jikigai SARL gérant)"
-re_evaluation_triggers: "Anthropic un-pauses / ships its promised advance-notice update; OR amends the 'still draw from your subscription's usage limits' sentence; OR any move off owner-only operator-self-use of the subscription credential (e.g. delegation of that credential, customer-facing, pooling); OR any code path that selects or serves the subscription row for a cross-owner lease, widens the api-key skip beyond an exact `api-key`, or substitutes the API key for a delegated `managed` lease"
+re_evaluation_triggers: "Anthropic un-pauses / ships its promised advance-notice update; OR amends the 'still draw from your subscription's usage limits' sentence; OR any move off owner-only operator-self-use of the subscription credential (e.g. delegation of that credential, customer-facing, pooling); OR any code path that decrypts or serves the subscription token to a non-owner, widens the api-key skip beyond an exact `api-key`, or serves the API key to a delegated `managed` lease in place of a subscription row that exists"
 addendum_2026_10_31: "section 6 plus supersession markers in section 5 and Q5: delegated api-key lease, #11594, PR #11715"
 draft_notice: "Draft internal legal guidance for a non-lawyer founder. NOT a substitute for licensed external counsel."
 ---
@@ -90,9 +90,11 @@ pooling) — which also escalates to *external* counsel.
 > **Superseded 2026-10-31 for the api-key path only (see §6):** the "delegation" limb of
 > this trigger applies to delegation of the subscription credential. Routing a delegated
 > lease to the grantor's API key in exact `api-key` mode does not fire it and does not
-> escalate to external counsel. It does fire, and does escalate, if any code path selects or
-> serves the subscription row for a cross-owner lease, widens the skip beyond exact
-> `api-key`, or lets a delegated `managed` lease fall back to the API key.
+> escalate to external counsel. It does fire, and does escalate, if any code path decrypts or
+> serves the subscription token to a non-owner, widens the skip beyond exact `api-key`, or
+> serves the API key to a delegated `managed` lease in place of a subscription row that
+> exists. (A cross-owner lease in any other mode still SELECTs the row and is refused, as
+> before; that is the unchanged owner gate, not a trigger.)
 
 ## 3. Basis downgrade (recorded)
 
@@ -153,4 +155,4 @@ attestation and **not a substitute for licensed external counsel.**
 5. Telemetry reuses the existing event and adds a closed `delegated` flag; no ciphertext, token shape or mode secrets are logged.
 6. A delegated `managed` lease falling back to the API key would be a silent credential substitution and is out of scope; it needs its own ruling.
 
-The CLO is to be consulted again if the implementation selects the subscription row for a cross-owner lease or widens the skip beyond an exact `api-key`.
+The CLO is to be consulted again if the implementation decrypts or serves the subscription token to a non-owner, or widens the skip beyond an exact `api-key`.
