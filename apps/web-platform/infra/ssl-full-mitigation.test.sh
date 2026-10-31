@@ -274,7 +274,7 @@ if [[ "$STAGE" == "pre-cutover" ]]; then
     # and `(true)` both match the apex — so any host-literal predicate is bypassable
     # by a rule that is still perfectly able to overwrite this one.
     ssl_rules=$(awk -F'\t' '
-      $4 != "ssl=-" && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" { n++ } END { print n + 0 }
+      $4 != "ssl=-" && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" { n++ } END { print n + 0 }
     ' "$RULES")
     rc=1; [[ "$ssl_rules" == "1" ]] && rc=0
     verdict "$rc" "exactly one rule in this ruleset sets ssl outside the app.soleur.ai scope (a second one overwrites this via last-match-wins, whatever its expression spells; found: ${ssl_rules})"
