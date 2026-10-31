@@ -58,8 +58,11 @@ growing. The battery regrew silently and can regrow again.
 - **FR3.** Every new guard ships with: totality check on its scan population, synthetic
   red+green fixture arms (a predicate that never fails is untested), exact-line
   registration pins, and a `suite-durations.tsv` floor row if registered.
-- **FR4.** The always-on ceiling is expressed relative to the derived live floor, not a
-  fixed constant (a fixed ceiling collides with `lint-orphan`'s derived floor).
+- **FR4.** The always-on ceiling bounds *non-live* membership —
+  `count(ALWAYS_ON_SUITES \ live_named) ≤ NON_LIVE_CAP`, a value-pinned cap with an
+  ack-edit escape — NOT `count ≤ live_floor + N` (spec-flow P0-2: live_floor ≈ 40–55
+  live-named registrations, so the floor-relative form reds at birth). The live regex
+  is parity-pinned to `lint-orphan-test-suites.sh`'s derived floor, never re-implemented.
 - **FR5.** The legal-control suite set (TOM-4 RLS, PA-22, lint-legal-*, art30,
   dpa-register, gdpr-gate-glob-liveness) is enumerated in the plan and exempt from census
   removal and demotion — CLO requirement.

@@ -255,7 +255,7 @@ failure_modes:      # [
 logs:               # suite stdout in CI logs + TEST_TIMING_LOG / retention: GHA default
 discoverability_test:
   command: grep -c "allow-growth" scripts/regenerate-shard-manifest.py
-  expected_output: "1"
+  expected_output: ">=1"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -314,10 +314,12 @@ not its presence.
 **Property.** No registered suite's committed weight exceeds `CORPUS_SUITE_CAP_MS`
 unless recorded in `suite-weight-exemptions.tsv`; no registration lacks a weight row.
 
-**Assembly.** Keys of `suite-durations.tsv` ∪ `suite-durations-heavy.tsv` reconciled
-against the registration population (`git ls-files`-derived enumeration at run time —
-the file-list producer, same as lint-orphan's). Exemptions ledger is the single
-exemption surface.
+**Assembly.** Keys of `suite-durations.tsv` ∪ `suite-durations-heavy.tsv` ∪
+`apps/web-platform/infra/suite-durations.tsv` reconciled against the registration
+population — `--enumerate` SUITE_REGISTRATION labels for the light+heavy groups
+and `apps/web-platform/infra/run-registered-suites.sh --enumerate` for the infra
+set (never `git ls-files`: durations keys are labels, not paths — R2). Exemptions
+ledger is the single exemption surface.
 
 **Mutation matrix.**
 

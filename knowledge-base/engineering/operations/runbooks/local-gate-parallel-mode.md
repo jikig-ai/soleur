@@ -39,3 +39,27 @@
 ## Evidence
 
 `knowledge-base/project/plans/2026-10-27-fix-8231-parallel-testall-plan.md` records the design, the lane classifications with reasons, and the benchmark numbers. `scripts/test-all-parallel-benchmark.test.sh` reproduces a measurement on demand.
+
+## Committed-weight anti-regrow guards (#11662, ADR-312)
+
+Four committed-weight guards keep the battery from silently regrowing:
+
+- **Regen drift gate** — `python3 scripts/regenerate-shard-manifest.py --incremental --write`
+  refuses (exit 2) when a `src=measured` row grows >1.5x AND >10s, or total
+  measured weight grows >10% vs merge-base. Re-run with `--allow-growth` to
+  acknowledge; the ack is recorded as a `# growth-acked=<digest>` stamp scoped
+  to that violation set — a different violation set needs its own ack.
+- **Corpus budget** — every committed weight <=600s or exempted in
+  `scripts/suite-weight-exemptions.tsv` (reason must cite a #NNN; cap <=~1.3x
+  current weight; a row whose suite fits the default cap reds).
+- **Always-on ledger** — every `ALWAYS_ON_SUITES` member needs a row in
+  `scripts/always-on-justifications.tsv`; non-live membership is capped at
+  `NON_LIVE_CAP=95` in `scripts/always-on-ledger.test.sh` (raise it as a
+  deliberate ack-edit, never a `_MIN_ALWAYS_ON_DECLARED` bump — that floor is
+  the f1 pin-vs-list band, a different property).
+- **Dead-registration census** — `lint-orphan-test-suites.sh` surface 7 reds a
+  `run_suite` whose argv target no longer exists.
+
+New suites get floor rows via `--incremental` (exercises G1 on the landing
+commit). `suite-durations*.tsv` and `suite-shard-legs.tsv` are generated —
+never hand-edited.
