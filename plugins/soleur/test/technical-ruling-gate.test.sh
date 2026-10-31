@@ -756,10 +756,15 @@ dscn; mkdr clk "$AT"; run_d "$GATE" "$DF"
 assert_eq "1" "$(last_rc)" "CLK: under a yesterday pin, ran=$DNOW is delegation-invalid (the stub is load-bearing)"
 assert_reason "delegation-invalid" "CLK yesterday pin"
 assert_eq "0" "$(ncalls 'issues/comments/1001')" "CLKb: the refusal lands before any verifier call"
+# Served-value pins INSIDE the yesterday window, through an instrument copy of the stub ($TMP/ibin
+# keeps instrument dispatches out of $DBIN/dcalls.log, which counts SUT traffic only). A partial
+# passthrough yields the real instant (today) -- never equal to the pinned yesterday on any day.
+ibin="$TMP/ibin"; mkdir -p "$ibin"; cp "$DBIN/date" "$DBIN/clock" "$DBIN/clock.epoch" "$ibin/"
+pind="$(dts -1)"
+assert_eq "$(cat "$ibin/clock.epoch")" "$("$ibin/date" -u +%s)" "CLK3: the stub serves the pinned epoch on -u +%s (a partial passthrough cannot hide)"
+assert_eq "${pind%%T*}" "$("$ibin/date" -u +%Y-%m-%d)" "CLK4: the stub serves the pinned day on -u +%Y-%m-%d (yesterday, never real today)"
 dclock_at "$DNOON"
 assert_eq "$(jq -rn --arg p "$(cat "$DBIN/clock")" '$p | fromdateiso8601')" "$(cat "$DBIN/clock.epoch")" "CLK2: clock and clock.epoch stay consistent after a repin"
-assert_eq "$(cat "$DBIN/clock.epoch")" "$("$DBIN/date" -u +%s)" "CLK3: the stub serves clock.epoch on -u +%s (a partial passthrough cannot hide)"
-assert_eq "${DNOON%%T*}" "$("$DBIN/date" -u +%Y-%m-%d)" "CLK4: the stub serves the pin's day on -u +%Y-%m-%d"
 
 echo "=== Arm 6g3: a receipt is written AFTER the act it vouches for (verification V8) ==="
 dscn_past; RCPT_CREATED="$(dts -10)" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr rv8 "$(dts -6)"; run_d "$GATE" "$DF"
@@ -784,8 +789,10 @@ mkbin_t() { # <dir> <tools to leave out...>: reduced PATH with the gate's tools,
   ln -sf "$DBIN/date" "$d/date"; ln -sf "$DBIN/clock" "$d/clock"; ln -sf "$DBIN/clock.epoch" "$d/clock.epoch"
 }
 mkbin_t "$TMP/tbin-none" timeout
-mkbin_t "$TMP/tbin-g" timeout; ln -sf "$(command -v timeout)" "$TMP/tbin-g/gtimeout"
+mkbin_t "$TMP/tbin-g" timeout
+if command -v timeout >/dev/null 2>&1; then ln -sf "$(command -v timeout)" "$TMP/tbin-g/gtimeout"; elif command -v gtimeout >/dev/null 2>&1; then ln -sf "$(command -v gtimeout)" "$TMP/tbin-g/gtimeout"; fi
 mkbin_t "$TMP/tbin-ok"
+assert_eq "$DBIN/date" "$(readlink "$TMP/tbin-ok/date")" "TBIN: the reduced PATH carries the pinned date stub, not the real clock"
 dscn; mkd tq0 deleg-valid.md; DPATH="$TMP/tbin-ok" run_d "$GATE" "$DF"
 assert_eq "0" "$(last_rc)" "TQ0: the reduced PATH itself passes a valid row (instrument control)"
 dscn; mkd tq1 deleg-valid.md; DPATH="$TMP/tbin-none" run_d "$GATE" "$DF"
@@ -1062,26 +1069,32 @@ dc_n=0
 if [ -f "$DBIN/dcalls.log" ]; then dc_n="$(wc -l < "$DBIN/dcalls.log" | tr -d ' ')"; fi
 # The VT1 arm is `command -v timeout`-gated: on a gtimeout-only host it skips and 2 dispatches
 # never happen, so the committed floor steps down rather than false-fail a correct suite.
-dc_floor=330; command -v timeout >/dev/null 2>&1 || dc_floor=328
+dc_floor=328; command -v timeout >/dev/null 2>&1 || dc_floor=326
 if (( dc_n >= dc_floor )); then
   echo "  PASS: date-stub dispatches $dc_n >= $dc_floor"; PASS=$((PASS + 1))
 else
   echo "  FAIL: date-stub dispatches $dc_n < $dc_floor -- the pin was bypassed or a consumer stopped calling date"; FAIL=$((FAIL + 1))
 fi
-dc_bad="$(grep -vcE '^-u \+%Y-%m-%dT%H:%M:%SZ$|^-u \+%s$|^-u \+%Y-%m-%d$' "$DBIN/dcalls.log" 2>/dev/null || true)"
+if [ -f "$DBIN/dcalls.log" ]; then dc_bad="$(grep -vcE '^-u \+%Y-%m-%dT%H:%M:%SZ$|^-u \+%s$|^-u \+%Y-%m-%d$' "$DBIN/dcalls.log" || true)"; else dc_bad=missing-log; fi
 assert_eq "0" "$dc_bad" "CLKF: every dispatched date argv is one of the three sanctioned shapes"
 
-# Ambient-arm sweep (Guard 1 completeness): a timestamp-bearing fixture (`mkdr`/`rcpt`/`RCT`)
-# exec'd outside a pinned-PATH arm is the #11578 bomb reborn -- `run` and direct `bash "$GATE"`
-# subshells see the real clock. A fixture token must pair (same or next line) with a
-# pinned-PATH exec (`run_d`/`killed_d`/`mutate_d`/`rx`) or an instrument assertion; function
-# definitions (`()`) and comments are excluded, and `\b` keeps `mrcpt`/`RCPT_*` out.
+# Ambient-arm sweep (Guard 1 completeness): a timestamp-bearing fixture (`mkdr`/`rcpt`/`RCT`,
+# or a literal `, ran` inside a heredoc/sed-built fixture) exec'd outside a pinned-PATH arm is
+# the #11578 bomb reborn -- `run` and direct `bash "$GATE"` subshells see the real clock. An
+# ambient exec on the fixture's own line is flagged outright; otherwise the fixture line must
+# pair within 1 line (6 for `|`-terminated heredoc rows) with a pinned-PATH exec
+# (`run_d`/`killed_d`/`mutate_d`/`rx`) or an instrument assertion. Definitions (`()`) and
+# comments are excluded; portable [^A-Za-z0-9_] boundaries keep `mrcpt`/`RCPT_*` out (GNU and BSD grep alike).
 amb_n=0
 while IFS= read -r hit; do
-  hn="${hit%%:*}"
-  sed -n "${hn},$((hn + 1))p" "$0" | grep -qE '\b(run_d|killed_d|mutate_d|assert_eq|assert_reason|rx)\b' || amb_n=$((amb_n + 1))
-done < <(grep -nE '\b(mkdr|rcpt|RCT) ' "$0" | grep -vE ':[[:space:]]*#|\(\)')
+  hn="${hit%%:*}"; l0="$(sed -n "${hn}p" "$0")"
+  case "$l0" in *'run "$GATE"'*|*'bash "$GATE"'*) amb_n=$((amb_n + 1)); continue ;; esac
+  win=1; case "$l0" in *\|) win=6 ;; esac
+  sed -n "${hn},$((hn + win))p" "$0" | grep -qE '(^|[^A-Za-z0-9_])(run_d|killed_d|mutate_d|assert_eq|assert_reason|rx)[[:space:]]' || amb_n=$((amb_n + 1))
+done < <(grep -nE '(^|[^A-Za-z0-9_])(mkdr|rcpt|RCT)[[:space:]]|, ran ' "$0" | grep -vE ':[[:space:]]*#|\(\)|\$[0-9]')
 assert_eq "0" "$amb_n" "AMBF: every timestamp-bearing fixture pairs with a pinned-PATH exec or an instrument assertion"
 
-# 502 = 493 prior assertions + CLK rc/reason/verifier-call + CLK2/CLK3/CLK4 + dispatch/argv floors + AMBF.
-print_results 502
+# 503 = 493 prior + CLK rc/reason/verifier-call + CLK2/CLK3/CLK4 + TBIN + dispatch/argv floors + AMBF.
+# VT1's three asserts skip on timeout-less hosts, so the floor steps down with them.
+pr_exp=503; command -v timeout >/dev/null 2>&1 || pr_exp=500
+print_results "$pr_exp"

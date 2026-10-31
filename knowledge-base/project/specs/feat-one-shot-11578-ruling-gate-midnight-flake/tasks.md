@@ -13,7 +13,7 @@ Issue: #11578 (closes)
   - exits 64 with a stderr line on any other argv (no passthrough — a passthrough is a bypass)
   - `chmod +x`
 - 1.2 Add `DNOON="${DTODAY}T12:00:00Z"` and `dclock_at <iso>` (writes `clock` + `clock.epoch` via `jq -rn --arg p '$p|fromdateiso8601'`; fails loudly on an unparseable instant) immediately after `DEXP` is set (~line 505); call `dclock_at "$DNOON"` once before the first `run_d` call (line 537).
-- 1.3 Add a suite comment naming the mechanism and the `DPATH`/`run` carve-outs (the pin reaches only `run_d`'s `$DBIN` PATH; `run`-arm fixtures carry no delegation rows and never fire a `date` call; `mkbin_t` reduced-PATH cases hold only past-dated/expiry-relative fixtures).
+- 1.3 Add a suite comment naming the mechanism and the `DPATH`/`run` carve-outs (the pin reaches only `run_d`'s `$DBIN` PATH; `run`-arm fixtures carry no delegation rows and never fire a `date` call; `mkbin_t` reduced-PATH cases carry the same stub via symlinks (post-review); ambient `run`/subshell arms are swept by the AMBF floor).
 
 ## Phase 2 — Controls
 

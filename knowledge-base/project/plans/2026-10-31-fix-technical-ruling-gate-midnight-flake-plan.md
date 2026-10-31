@@ -65,7 +65,7 @@ Concretely, inside `plugins/soleur/test/technical-ruling-gate.test.sh` only:
 
 **Alternatives considered.** (A) Recompute `DTODAY` inside `dscn()` per scenario — test-only and smaller, but the window shrinks from ~48 minutes (suite duration) to ~seconds per case rather than closing; a partial flake fix re-flakes. Rejected. (B) `TRG_NOW` env seam inside `technical-ruling-gate.sh` (mirroring the existing `TRG_*` seams at line 73) — equally deterministic, but it mutates a ship-time security gate to fix a test-side flake; the stub achieves identical determinism with zero production diff. Rejected on blast radius. (D) `dts 1` → `dts 2` — cut at the minimality gate (survives one crossing, not two, and silently changes fixture semantics). The A/B/C fork is recorded as a `pending - assumed: C` technical row in this branch's `decision-challenges.md` for the post-plan ruling spawn.
 
-**Why the pin is noon, and why `run` arms are untouched.** The pin must sit strictly between the suite's "present" instants (`DNOW`, `T00:07`) and `dts 1`. Noon of the fixture day does that under any real start time. The `run` helper (line 44) invokes the gate on ambient PATH for shape-check fixtures that contain no delegation rows, so its `date` calls never fire — it needs no stub and gets none (`$DBIN` is only on `run_d`'s PATH). The `mkbin_t` reduced-PATH cases (`DPATH` set) bypass `$DBIN` by design; their fixtures are all past-dated or expiry-relative, verified case-by-case — no future-dependence, so they are correct under the real clock. This carve-out is documented in the suite comment.
+**Why the pin is noon, and why `run` arms are untouched.** The pin must sit strictly between the suite's "present" instants (`DNOW`, `T00:07`) and `dts 1`. Noon of the fixture day does that under any real start time. The `run` helper (line 44) invokes the gate on ambient PATH for shape-check fixtures that contain no delegation rows, so its `date` calls never fire — it needs no stub and gets none (`$DBIN` is only on `run_d`'s PATH). The `mkbin_t` reduced-PATH cases (`DPATH` set) carry the same stub — post-review, `mkbin_t` links `$DBIN/date` and the pin files into every reduced dir, so the pin reaches DPATH arms; their fixtures stay directionally correct under noon. Ambient `run`/subshell arms remain unpinned by design and are swept by the AMBF floor; documented in the suite comment.
 
 ## Implementation Phases
 
@@ -109,7 +109,7 @@ failure_modes:
   - mode: `date` stub absent or bypassed (PATH regression, stub made non-executable)
     detection: CLK bypass-detector case goes red (pinned-past verdict flips to rc 2 receipt-missing)
     alert_route: merge-group job failure
-  - mode: new future-dependent fixture added under a `DPATH` reduced-PATH case (pin does not reach it)
+  - mode: new future-dependent fixture added under an ambient-PATH `run`/subshell arm (pin does not reach it; AMBF floor sweep refuses the pairing)
     detection: suite comment at the `dclock_at` call site names the carve-out; review of the new case
     alert_route: PR review
 logs:
@@ -158,7 +158,7 @@ None — `gh issue list --label code-review --state open` (2026-10-31) bodies co
 
 **Property.** Every `date` invocation the gate or verifier resolves under `run_d`'s stubbed PATH returns the suite-pinned instant, so a `dts`-derived fixture can never be on the wrong side of "future" relative to the instant the gate evaluates it — the midnight-crossing flake class is eliminated, not narrowed.
 
-**Assembly.** All `date` call sites reachable under `run_d`'s `PATH="${DPATH:-$DBIN:$PATH}"` with `DPATH` unset: `technical-ruling-gate.sh:220` and `:274` (`date -u +%Y-%m-%dT%H:%M:%SZ`), `delegation-verify.sh:511` (`date -u +%s`), `:639` (`date -u +%Y-%m-%d`, render path unused by the gate). The chokepoint is `$DBIN` on PATH — `run()` (line 44) never carries it and never reaches a `date` call site (no delegation rows under `run`); the `DPATH` arm is a second, declared chokepoint where the pin does not reach, bounded by the verified invariant that no `DPATH` case builds a future-dependent fixture (inventory in Research Insights — a new `DPATH` case using `dts +1` receipts would need the pin and must not be added under `DPATH`).
+**Assembly.** All `date` call sites reachable under `run_d`'s `PATH="${DPATH:-$DBIN:$PATH}"` with `DPATH` unset: `technical-ruling-gate.sh:220` and `:274` (`date -u +%Y-%m-%dT%H:%M:%SZ`), `delegation-verify.sh:511` (`date -u +%s`), `:639` (`date -u +%Y-%m-%d`, render path unused by the gate). The chokepoint is `$DBIN` on PATH — `run()` (line 44) never carries it and never reaches a `date` call site (no delegation rows under `run`); the `DPATH` arm carries the same stub via `mkbin_t` (post-review change): the reduced dir links `$DBIN/date` plus `clock`/`clock.epoch`, so the pin reaches every reduced-PATH case too; residual ambient arms (`run`, direct subshells) are swept by the AMBF floor (inventory in Research Insights — a new `DPATH` case using `dts +1` receipts would need the pin and must not be added under `DPATH`).
 
 **Mutation matrix:**
 
@@ -215,7 +215,7 @@ None — `gh issue list --label code-review --state open` (2026-10-31) bodies co
 - Given `dclock_at "$(dts -1)"`, when a `mkdr`-with-ran scenario runs the pristine gate, then `ran=DNOW` reads as future → rc 1 `delegation-invalid`; under a bypassed stub the same fixture reads rc 2 `receipt-missing` → the CLK assertion is the bypass detector. (`unit`)
 - Given the stub is replaced by `exec /bin/date "$@"`, when the suite runs, then CLK fails (guard matrix row 2). (`unit` — mutation coverage)
 - Given a green run's `dcalls.log`, when the floor assertion runs, then `wc -l` meets the committed count and `grep -vc` of the sanctioned argv is 0. (`unit`)
-- Given `DPATH` is set (mkbin_t arm), when TQ0-TQ3 run under the real clock, then their verdicts are unchanged — verified because no `DPATH` case builds a future-dependent fixture. (`unit` — carve-out control)
+- Given `DPATH` is set (mkbin_t arm), when TQ0-TQ3 run under the same pin (mkbin_t links the stub), then their verdicts are unchanged — verified directionally: all `DPATH` fixtures are past-dated under noon. (`unit` — carve-out control)
 
 ## Context
 
