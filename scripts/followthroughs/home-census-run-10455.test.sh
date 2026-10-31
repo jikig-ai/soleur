@@ -34,8 +34,8 @@ for rc in "${RCS[@]}"; do check "never exits 0 or 1 (saw $rc)" "$([[ $rc -ne 0 &
 CODE="$(sed -E 's/^[[:space:]]*#.*$//' "$PROBE")"
 check "the probe touches no secret, network or census" "$(! grep -qiE 'doppler|curl|wget|INNGEST|secret|gh api|gh issue' <<<"$CODE"; echo $?)"
 check "the probe has a RETIREMENT line" "$(grep -q '^# RETIREMENT:' "$PROBE"; echo $?)"
-if [[ "$PASS" -lt 29 ]]; then
-  printf 'FLOOR: only %d assertions ran (expected at least 29)\n' "$PASS"
+if [[ "$PASS" -lt 30 ]]; then
+  printf 'FLOOR: only %d assertions ran (expected at least 30)\n' "$PASS"
   exit 1
 fi
 printf 'home-census-run probe tests: %d passed, %d failed\n' "$PASS" "$FAIL"

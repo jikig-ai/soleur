@@ -23,6 +23,10 @@ performs it and carries it through build, review and merge. **Building and mergi
 writes the plan and the task list only; no product code is written here. Every PR and comment uses `Ref #10455`, never `Closes`.
 (`lane: cross-domain` is the fail-closed default: this feature has no `spec.md`.)
 
+## Dissent-round amendments (2026-10-31, CLO rulings D1-D9; CTO row 26 conformed)
+
+The 14-seat review round produced dissents against recorded rulings. The CLO ruled them (decision-challenges.md, "Dissent round" rows); where this plan's text and a ruling differ, the ruling wins. Superseded in this plan: the witness is `sessions_json` or `shell_snapshots` only (`account_state` no longer counts); `trigger_class_nonzero` is `true|false|unknown|inconclusive` (`false` only when every trigger class reads `none_counted`); publication rule (a) requires `trigger_class_nonzero` `false`; the HOME is wiped when the container is recreated (every deploy), not at every start, and uptime is process uptime; the full object is not posted to GitHub, but bucketed counts reach Sentry and Better Stack by design; the fixed `SUNSET_UTC` is the operative hard-disable with an extension rule (no later than last claimed run + 30 days); `CENSUS_PATHS` also binds `lib/internal-auth.ts`, `server/sentry-scrub.ts`, `sentry.server.config.ts` and the trigger script (also compared to the clean working tree); the discharged sha is checked against the CLO record of the SERVED build, and the `merge-base --is-ancestor` check is dropped (CTO row 26); wording: one real run, at most two.
+
 **The mechanism (CTO-ruled twice, CLO-approved with conditions; all rows in
 `knowledge-base/project/specs/feat-one-shot-10455-prod-home-census/decision-challenges.md`, whose "Plan-review round" rows supersede
 earlier rows):** a new secret-gated, synchronous internal route `POST /api/internal/home-census` in the web-platform container. It scans
@@ -33,7 +37,7 @@ route is passive: nothing arms it, so a deploy cannot run it. It has a sunset co
 **The finding that shaped the design.** `/home/soleur` is the container's writable layer (Dockerfile `useradd -m soleur` and
 `USER soleur`; the prod `docker run` in `ci-deploy.sh` binds only `/mnt/data/workspaces` and mounts `/tmp` as tmpfs). Every container
 start wipes it. So no zero-deploy path exists, the deploy that ships the census also wipes the HOME it measures, and a census sees only
-sessions since the container started. A zero is therefore never "clean"; it is "counted in this container since its last start". The
+sessions since the container started. A zero is therefore never "clean"; it is "counted in this container's writable layer at the run". The
 design labels this in every response (`interpretation`, `evidence`, `uptime_bucket`).
 
 ## Enhancement Summary
@@ -93,7 +97,7 @@ write "clean" or "no exposure" (CLO determination wording constraints).
 | Brief claim | Reality | Plan response |
 |---|---|---|
 | "Mechanism candidates ... a self-armed Inngest oneshot (ADR-046) or the generic reminder primitive with a registered check" | The oneshot self-arm re-sends on every deploy and its `ts` is a clock, not an authorization; the reminder handler posts every check body to a PUBLIC issue and the function is `portable` | CTO ruled a third mechanism: a passive secret-gated synchronous internal route; both candidates recorded as rejected |
-| "history.jsonl, debug/, todos/, tasks/ ... the production shared HOME" | The HOME is the container writable layer, wiped at every container start | 24 h maturity rule, `evidence`, `uptime_bucket`, mandatory `interpretation`; a zero is never "clean" |
+| "history.jsonl, debug/, todos/, tasks/ ... the production shared HOME" | The HOME is the container writable layer, wiped when the container is recreated (every deploy) | 24 h maturity rule, `evidence`, `uptime_bucket`, mandatory `interpretation`; a zero is never "clean" |
 | "the plan must name the exact command or trigger" | No existing trigger covers a non-cron host read (`trigger-cron` derives from `EXPECTED_CRON_FUNCTIONS`) | New committed script `apps/web-platform/scripts/home-census-trigger.sh` modeled on `trigger.sh`; command in "The production READ" |
 | "reported through existing monitoring (Sentry / Better Stack)" | The shared pino logger adds `pid`/`hostname` and mirrors to Sentry; Sentry would attach request data | A dedicated `pino({ base: undefined })` instance (warn level, synchronous destination) and an isolation-scoped, processor-scrubbed Sentry event |
 | "do NOT arm or run it ... unless the CLO has approved the exact mechanism" | CLO approved WITH CONDITIONS; C8 (re-read of the final diff, DISCHARGED) cannot be met before the diff exists and C9 needs 24 h of uptime | This run does not arm or run it; the real run is a tracked, later step (Phase 6) |
@@ -182,7 +186,7 @@ Allowed values: bucket labels, booleans, members of closed enums, and these cons
 `data_source`, `build_sha` (hex), `control` (`passed`|`failed`), `evidence` (`young` when the exact uptime is under 24 h, else `mature`),
 `uptime_bucket` (`lt_1h`|`lt_24h`|`lt_7d`|`ge_7d`; `process.uptime()` under-approximates container age, which errs toward `young`),
 `sunset_utc`, `truncated`, `truncation_reason`, `snapshot:"non_atomic"`, `mode_bits_semantics:"file_mode_only_not_reachability"`,
-`interpretation` (constant: "counted in this container since its last start; not a statement about earlier windows or other hosts";
+`interpretation` (constant: "counted in this container's writable layer at the run; not a statement about earlier containers, other hosts, or any time before or after the run";
 required on every response including zero), `claude_config_dir_set`, `outer_wrap_cohorts`, `roots`, `roots_distinct`, `classes`, and on
 failure `ok:false` with `error_class` (enum). **Never emitted:** names or anything name-derived, paths, HOME or root values, sizes,
 inodes, uid/gid, nlink, any timestamp other than the constant `sunset_utc`, pids, hashes, hostnames, container ids, workspace or user ids,
@@ -277,7 +281,7 @@ starts it; a deliberate extra run, any widening, or a hold on deploys needs a fr
 3. Never say: "clean", "no exposure", "secure", "isolated", "protected", "private", "not readable", "empty", "census complete" (when
    truncated or the control failed), "no prompt text", "found prompt text", "leaked". Young zero: "At the run, a young container (uptime
    bucket X) counted 0 in class C. Insufficient evidence, not a negative finding." Mature zero: "None counted in this container since
-   its start. Earlier containers no longer exist and are not measured." Nonzero: "Entries (bucket) were counted in class C, which we
+   its start. Earlier containers are not measured." Nonzero: "Entries (bucket) were counted in class C, which we
    presume from the CLI's writer behaviour to hold prompt text. No names or content were opened, and whether any sibling can read them
    is not established by the census."
 4. Interim support rule (CPO): no ad-hoc replies about shared-host data; inquiries go to the operator and the CLO; holding line "we are

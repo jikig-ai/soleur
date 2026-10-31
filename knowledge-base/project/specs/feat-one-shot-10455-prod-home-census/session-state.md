@@ -10,7 +10,7 @@
 
 ### Decisions
 - Mechanism (CTO): a new secret-gated synchronous route POST /api/internal/home-census replaces both named candidates; Inngest is not used. It is passive: merging and deploying do not run the census.
-- Production HOME is the container's writable layer and is wiped at every container start, so a zero never means clean; every response carries interpretation, evidence and uptime_bucket; a real run needs at least 24 h of container uptime.
+- Production HOME is the container's writable layer and is wiped when the container is recreated (every deploy), so a zero never means clean; every response carries interpretation, evidence and uptime_bucket; a real run needs at least 24 h of container uptime.
 - Legal method (CLO): approved with conditions C1-C10. Output is bucketed counts from a hard allowlist, no names, paths, sizes, timestamps or ids. Results go to the operator and the CLO only; public #10455 gets a bare "done" line.
 - The production READ is one named trigger command, operator-authorized on #10455 (comment 6546444433), run later and only after the CLO re-reads the final diff and the container has at least 24 h uptime; at most two real runs.
 - Out of scope: purge, PR 2, and the unmeasured locations (/workspaces, /tmp/.cs, CLAUDE_CONFIG_DIR, web-2, canary container).
