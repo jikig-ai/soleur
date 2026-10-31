@@ -11,6 +11,24 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31
+**Sections verified:** Scope Check, User-Brand Impact, Observability, Guard Contract, Research Reconciliation, Files, Acceptance Criteria
+**Agents/rulings used:** soleur:legal:clo (binding), soleur:engineering:cto (3 rulings rounds), soleur:product:cpo (sign-off), the plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), soleur:engineering:research:learnings-researcher.
+
+### Key Improvements
+
+1. The plan-review panel found a real credential-routing gap: a conversation's mode is stamped from the workspace it was created in, while a delegation resolves against the caller's CURRENT workspace at turn time. The skip now additionally requires the binding's workspace to equal the delegation's workspace (resolver-enforced, CTO R1), with its own failing test.
+2. The skip is quiet and exact: it reads the mode first, never selects the grantor subscription row, treats every resolver outcome except an exact `api-key` as today's refusal, and keeps a tripwire before the subscription decrypt.
+3. Client lifecycle gaps closed (unanswered-message marking, scoped clear on send, no Reconnect on either card); delegate dead-end copy is characterized by tests and deferred to one tracked issue.
+
+### New Considerations Discovered
+
+- In production a cross-owner lease is always a delegated lease (`workspaceContextUserId` equals the caller at both Agent-SDK call sites), so the new `auth_mode_*` frames reach owners only; delegates keep the generic refusal.
+- `BYOK_LEASE_CAUSES` used `satisfies` (membership, not exhaustiveness); the plan makes it a Record.
+- The first draft of the test plan assumed the credential-type harness could prove caller-scoped resolution; it mocks one tenant for every user, so that proof lives in the real-binding file.
+
 ## Overview
 
 Two follow-ups of the merged Authentication mode work (#11590, merge f184d2dcbe) land in one PR on operator instruction.
@@ -41,6 +59,8 @@ PR body: `Closes #11594` and `Closes #11599`, but only after the Acceptance Crit
 - A credential-type column or audit-RPC change for the delegated run -> P4 -> telemetry breadcrumb carries it (CTO (d)); cost-writer has no such column.
 - Making a delegated `managed` lease skip the token and use the API key -> CLO condition 6 (silent credential substitution; needs its own ruling).
 - Review cuts (CTO R6): the second "deterministic" reason set, a separate exported `isAuthModeUnresolvedLeaseError`, a separate new lease test file, two client test files, a Reconnect button on either card, a per-conversation Sentry debounce.
+
+**Deepen-plan verification (2026-10-31).** Mechanical halts run on this file: 4.6 User-Brand Impact present with threshold `single-user incident`; 4.7 Observability has all five fields (probe `grep -o 'op: "auth-mode-unresolved"' apps/web-platform/server/byok-lease.ts` printed `op: "auth-mode-unresolved"`, first token allowlisted, no `ssh`, finishes well inside 15 s); 4.8 no PAT-shaped token or variable; 4.9 UI-surface files are edited, but only for copy and one action on an existing `ErrorCard`, which the shared term list excludes, ruled in the decision file (the 2026-10-30 deepen-plan ruling is the precedent); 4.10 no `.tf`, migration, compose or cloud-init file, so no encryption-posture section; 4.11 `python3 scripts/lint-guard-contract.py` green (2 entries); 4.12 exactly one unfenced `## Scope Check`, no `unmapped` row, no `status: BLOCKED`; 4.13 no new workflow, function or daemon. Cited identifiers verified live: #11590 MERGED at f184d2dcbe (`git log` resolves it), #11591 CLOSED, #11594 and #11599 OPEN, #9051 OPEN (draft), #11524 CLOSED; every rule id cited in the plan body exists as an active rule; `deferred-scope-out` and `code-review` labels exist. Claims re-read from source: `getFreshTenantClient` shares an in-flight mint per user and revalidates freshness (`lib/supabase/tenant.ts`), the "only the scheme" breadcrumb pin is `test/byok-lease-credential-type.test.ts` AC17, `isOauthUnusableLeaseError` call sites are agent-runner x2, cc-dispatcher x2 (3822, 3915), soleur-go-runner x1, ws-handler x1, `mark_last_user_unanswered` and `credentialBlockedRef` exist in `lib/ws-client.ts`, no test `vi.mock`s `agent-auth-user-message`. The full all-agents fan-out of this skill was not repeated: the five-seat plan-review panel plus the CLO, CTO (x3 rounds) and CPO rulings already covered every section of this plan, and a second broad fan-out would re-read the same files.
 
 **Institutional learnings applied** (`knowledge-base/project/learnings/`): `2026-06-16-wserrorcode-second-canonical-copy-and-mount-fetch-sibling-test-sweep.md` (widen `WSErrorCode` AND the zod enum in the same change; `tsc`'s `_SchemaCovers` proof catches drift); `2026-05-04-flag-boundary-creates-new-error-class-mapper-must-handle.md` (new code handled in mapper, UI and telemetry in the same PR); `2026-10-05-new-consts-in-mocked-modules-break-test-factories.md` and `test-failures/2026-06-29-wholesale-module-mock-drops-named-exports-needed-by-transitive-siblings.md` (no new import from `byok-lease` at call sites: nine tests partially mock it); `best-practices/2026-04-17-regex-on-source-delegation-tests-trim-to-negative-space.md` (source-text pins only for negative space); `2026-07-20-adding-a-second-copy-of-a-guarded-literal-disarms-the-first.md` (the recovery sentence is one constant, not five literals); `best-practices/2026-04-19-markdownlint-fix-mangles-issue-ref-at-line-start.md` (a line-start `#NNNN` in the ADR becomes a phantom heading: keep issue refs mid-line or backticked).
 
