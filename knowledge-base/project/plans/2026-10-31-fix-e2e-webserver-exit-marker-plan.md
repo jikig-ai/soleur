@@ -104,7 +104,10 @@ mechanism, none in `e2e`).
    `playwright-dev-server-distdir.test.ts` uses for `NEXT_DIST_DIR`
    (`cq-assert-anchor-not-bare-token`).
 5. **Issue close-out.** Post the 60/60 measurement as a comment on #9167 and
-   carry `Closes #9167` in the PR body.
+   carry `Closes #9167` in the PR body. The PR body also carries `Ref #11299`
+   on its own line — that open issue tracks the same `ERR_CONNECTION_REFUSED`
+   mid-run server death this marker makes observable; the marker diagnoses but
+   does not fix the death, so it is a reference, never a `Closes`.
 
 ## Technical Considerations
 
