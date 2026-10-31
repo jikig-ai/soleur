@@ -10,6 +10,21 @@ requires_cpo_signoff: true
 brand_survival_threshold: single-user incident
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31
+**Sections enhanced:** Scope Check (made schema-compliant), Research Insights (verification record), C4 citation.
+**Reviewers and rulings already folded in before this pass:** CTO rounds 1 and 2 (F1 to F11), CPO sign-off, and a five-agent plan review (DHH, Kieran, code-simplicity, architecture, spec-flow).
+
+### Key improvements carried by the plan
+1. The ancestry skip is only shipped together with a rescue branch, because the session-end force-push would otherwise destroy the only copy of replicated-only commits.
+2. The pause gate fails closed on stale rows (newest row at most 75 s old), never receives raw log rows (integers extracted in SQL), and binds its Better Stack credential per command.
+3. The zero-markers read is per host with a worst-of aggregate, and only `MARKERS_PRESENT` is positive evidence.
+
+### New considerations discovered in this pass
+- The SQL of the pause gate and of the signal read cannot be validated offline; both get a live read-only dry run first (learning of 2026-10-19).
+- `git-data-cutover-access.test.sh` carries two anti-vacuity floors (`FLOOR`, `MUTANT_FLOOR`) and a workflow-verdict count pin that all move with the new rows.
+
 ## Overview
 
 One pull request (draft PR #11713) that carries the three Phase A changes of the CTO go-live plan on #8211 (comment 6546561355), referencing #11704 and #8211 with `Ref` only. Neither issue is closed by this PR.
@@ -69,6 +84,16 @@ Checked 2026-10-31: #11704 and #8211 are open (not stale). Cited files exist on 
 - `bug-fixes/2026-06-16-diverged-clone-recovery-branch-aside-before-reset.md`: branch-aside before any destructive move keeps commits reachable (the rescue branch).
 - `2026-07-03-base64gzip-hetzner-user-data-and-discrimination-test-must-exercise-sut.md`: a discrimination test must call the function under test (the characterization test runs the real hook through real `git push`).
 
+**Deepen verification record (2026-10-31, live commands against this tree and GitHub)**
+
+- Gates run mechanically: `## User-Brand Impact` present with a valid threshold (4.6); `## Observability` present, all five fields non-placeholder, `discoverability_test.command` starts with `bash`, contains no `ssh`, is a one-script call that finishes inside the 15 s cap when the reader is reachable, `expected_output` is the literal `verdict=`, and `credentials_required` is declared so Check 10 skips it explicitly (4.7); PAT-shape sweep returned no hit (4.8); no UI-surface file in the Files lists (4.9 skipped); no `.tf`, migration, cloud-init or compose file and no new store or connection (4.10 skipped); `python3 scripts/lint-guard-contract.py` green with 4 entries (4.11); `## Scope Check` has the three required subsections with every ask mapped (4.12); no new workflow, Inngest function, check, pg_cron, timer or daemon, so the Task-Design halt does not trigger (4.13).
+- Cited issues re-read live: #11704, #8211, #9066, #11433, #10296, #10928, #10901, #10905, #11716, #11717 are all OPEN and say what the plan attributes to them.
+- Cited paths verified to exist: `scripts/regenerate-shard-manifest.py`, `scripts/lint-orphan-test-suites.sh`, `tests/scripts/test-argv-bearer-sweep.sh`, `scripts/check-cloudflare-token-drift.test.sh`, `apps/web-platform/infra/web-hosts-fanout-parity.test.sh`, `scripts/regenerate-c4-model.sh`, `plugins/soleur/test/lib/git-fixture-env.ts`, `apps/web-platform/test/helpers/ssh-host-key-fixture.ts`, `plugins/soleur/test/c4-count-parity.test.sh`, the two cited learnings.
+- Verify-the-negative: "no origin-push path sends an arbitrary local branch to GitHub" was grepped over `apps/web-platform/server`: the pushes are `session-sync.ts` `HEAD:refs/heads/<KB_SYNC_SIDE_BRANCH>`, `push-branch.ts` `<sha|HEAD>:refs/heads/<branch>` for a named branch, `_cron-safe-commit.ts` `origin <branch>`, and a bare `["push"]` in `session-sync.ts` (pushes the checked-out branch only, which the rescue branch never is). Residual, accepted: a user or agent running `git push --all` from inside their own workspace would push the rescue branch to their own GitHub repository; it contains only that user's own commits.
+- "A pino warn is a Sentry breadcrumb only" re-read in `apps/web-platform/server/logger.ts` (`mirrorToSentry`: breadcrumb at warn, `captureException` only for error with an `Error`).
+- Post-edit self-audit: the plan no longer references the retired `store_behind`/`diverged` split, `PS10`..`PS12`, `CH4`/`CH5`, `S3` as a reverse-ancestry scenario or a third test file; the remaining mentions of `store_behind` are in the Cut List, the CPO-condition note and the runbook wording that says the warn cannot tell the two apart.
+- Test-compatibility audit (tunable semantic change): the workflow step gains lines but no existing semantic changes; suites that read the workflow were enumerated in Phase 5 (`git grep -l 'git-data-cutover'`), including `terraform-target-parity.test.ts` (slices by markers that stay untouched), `git-data-flag-precheck.test.sh` (pins `GIT_DATA_DENY_FLOOR` and `sandbox_deny_floor` only), `web-hosts-fanout-parity.test.sh` and `check-cloudflare-token-drift.test.sh` (count pins that the new step does not move, to be confirmed in Phase 5).
+
 **Related**: #11704, #8211, #9066, #11433, #10296, #10928, #10901/#10905, and the deferrals filed by this plan: #11716 (own-namespace stale-clone overwrite), #11717 (SSH-free hand-back of rescue branches).
 
 ## User-Brand Impact
@@ -86,7 +111,46 @@ None. Seven planned source and test paths were queried against open `code-review
 
 ## Scope Check
 
-Ask mapping: the brief names A, B (classification, ancestry-gated reset, characterization test), C (marker, read, runbook paragraph) and the post-ready tick of the #8211 comment. Every item below maps to one of those; the rest are supporting edits they force: runbook verdict rows, an ADR-068 addendum (the read-side ordering rule and the rescue branch are recorded decisions), two C4 edge-prose edits (precedent: ADR-263/ADR-115), the rescue branch (the safety condition of the ancestry gate, CTO F7), and two deferral issues the workflow rules require. Split assessment: the owner combined A/B/C deliberately, so no split.
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "[brief] Flip preconditions (git-data-cutover.yml / its script) must read the per-host reporter line from Better Stack on BOTH hosts and refuse unless `new_sessions_paused=1` in rows under 2 minutes old: `::error ... verdict=pause_not_on` with a `remedy:` line, refusing before any host is touched." | Phase 1 (1.0 to 1.2), Guard 1 | mapped |
+| 2 | "[brief] Classify the expected first-session overlay miss (ensure-workspace-repo fetch of a never-provisioned store repository: stderr `does not exist (provision it first)`, exit 128) as info instead of the level-50 `silent fallback` / op git-data-overlay row, keeping real overlay faults at level 50" | Phase 2 (2.1, 2.3, 2.4), Guard 2 | mapped |
+| 3 | "[brief] make the session-start overlay `reset --hard` run only when the store tip descends from the clone tip (ancestry check against the fresh clone's tip)" | Phase 2 (2.1, 2.2, 2.4), Guard 3 | mapped |
+| 4 | "[brief] add a characterization test that a stale-clone push stays confined to the user's own namespace and the lease fence rejects it (if the test shows cross-namespace overwrite, stop and report instead of papering over it)" | Phase 2 (2.5) | mapped |
+| 5 | "[brief] A warn-level, counts-only replication-success marker (no workspace id, repo name or sha) emitted on a successful git-data replication push so it reaches Better Stack" | Phase 3 (3.1, 3.2) | mapped |
+| 6 | "[brief] plus a Better Stack read or alert definition for \"zero markers while sessions are live\"" | Phase 3 (3.3), Guard 4 | mapped |
+| 7 | "[brief] update the runbook's \"R3 first-session reading\" paragraph to point at the new signal" | Phase 4 (4.1) | mapped |
+| 8 | "[brief] Each change gets failing-then-passing tests (the test must go red when the change is removed)" | every Phase's RED step, AC2, AC4 to AC8, the mutation matrices | mapped |
+| 9 | "[brief] touch NO hash-bound file ... and do NOT touch the wrapper comment" | Phase 0.2, Phase 5 intersection check, AC10 | mapped |
+| 10 | "[brief] Do NOT arm auto-merge or merge ... stop at a ready PR with all checks green and report it" | Phase 6, AC11 | mapped |
+| 11 | "[brief] After the PR is ready, tick the matching items in the #8211 plan comment (edit it via gh api, body unchanged otherwise) and add the PR number." | Phase 6 | mapped |
+| 12 | "[brief] Do not run scripts/test-all.sh unscoped; run only the scoped suites." | Phase 5 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `.github/workflows/git-data-cutover.yml` pause block; `git-data-cutover-access.test.sh` rows and floors | asks 1 and 8 | asked |
+| `ensure-workspace-repo.ts` classifier and ancestry gate; `ensure-workspace-repo.test.ts`; the real-git ancestry test file | asks 2, 3 and 8 | asked |
+| `git-data-stale-clone-push.test.sh` | ask 4 | asked |
+| `git-data-replication.ts` marker; `git-data-replication.test.ts` | ask 5 | asked |
+| `scripts/followthroughs/git-data-replication-signal.sh` and its test | ask 6 | asked |
+| runbook edits (R3 paragraph) | ask 7 | asked |
+| runbook verdict rows, soak and accepted-gap text | inferred - justification: the suite RB cross-check requires every new verdict word to have a map row, and the CTO round-2 ruling F10 requires the accepted gap to be documented | inferred |
+| ADR-068 addendum and the two C4 edge-prose edits | inferred - justification: the plan skill's Architecture Decision gate makes the ADR/C4 update a deliverable of the plan that changes the ordering rule (the rescue branch makes the read gate feed the write's content) | inferred |
+| rescue branch `soleur/store-tip-<12 hex>` | inferred - justification: without it the ancestry skip lets the next force-push destroy the only copy of replicated-only commits (architecture review P1, CTO F7/F11); the single-user-incident threshold forbids shipping the skip alone | inferred |
+| `scripts/suite-shard-legs.tsv`, `scripts/suite-durations.tsv` (regenerated) | inferred - justification: the repo-global shard-totality ratchet fails CI for a new registered suite otherwise | inferred |
+| deferral issues #11716 and #11717 | inferred - justification: workflow rules require a tracking issue for every deferred capability, and the CPO condition asks for the own-namespace residual to be tracked | inferred |
+| `tasks.md` | inferred - justification: the work skill executes against it | inferred |
+
+### Split Assessment
+
+- Subsystems touched: 4 - `.github/workflows/`, `apps/web-platform/server|test|infra/`, `scripts/followthroughs/`, `knowledge-base/`
+- Planned files: 17 | Estimated changed lines: about 900 (tests dominate; production code about 120 lines)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR - the owner combined A, B and C on 2026-10-31 and the thresholds are met only by test and documentation volume, not by production change surface; a split would also repeat the repo-global ratchet cycle three times
 
 ## Files to Edit
 
@@ -345,7 +409,7 @@ Amend ADR-068 with a dated addendum (2026-10-31, #11704): the session-start over
 
 ### C4 views
 
-External humans (founder/owner): unchanged, no new actor. External systems (Better Stack `betterstack`, GitHub `github`, Doppler `doppler`): all modeled; no new system. Containers and stores (`gitDataStore` at `platform.infra.gitDataStore`): unchanged, no new store. Actor-to-surface access relationships: unchanged. The only C4 edit is the prose of two existing edges, `github -> betterstack` (CI polls Logs via `betterstack-query.sh`: add the flip-time pause read) and `hetzner -> betterstack` (the web container's pino stdout at WARN and above: add the replication-success marker), per the ADR-263/ADR-115 precedent; `model.likec4.json` is regenerated; `c4-count-parity` and the C4 syntax test run in Phase 5 as the cardinality check.
+External humans (founder/owner): unchanged, no new actor. External systems (Better Stack `betterstack`, GitHub `github`, Doppler `doppler`): all modeled; no new system. Containers and stores (`gitDataStore` at `platform.infra.gitDataStore`): unchanged, no new store. Actor-to-surface access relationships: unchanged. The only C4 edit is the prose of two existing edges, `github -> betterstack` (CI polls Logs via `betterstack-query.sh`: add the flip-time pause read) and `hetzner -> betterstack` (the web container's pino stdout at WARN and above: add the replication-success marker), per the ADR-263 precedent; `model.likec4.json` is regenerated; `c4-count-parity` and the C4 syntax test run in Phase 5 as the cardinality check.
 
 ### Sequencing
 
