@@ -63,6 +63,8 @@ mkscene() {
   cat > "$MOCKD/gh" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MOCKD/calls"
+piped=""
+case " $* " in *" --body-file - "*) piped="$(timeout 2 cat)" ;; esac
 case "$1 $2" in
   "run list")
     [[ -f "$MOCKD/runlist_fail" ]] && { echo "gh: boom" >&2; exit 1; }
@@ -74,9 +76,9 @@ case "$1 $2" in
     mkdir -p "$dest"; cp -r "$MOCKD/artifacts/$rid/." "$dest"; exit 0 ;;
   "issue list") cat "$MOCKD/issues.json"; exit 0 ;;
   "issue view") cat "$MOCKD/issue.json"; exit 0 ;;
-  "issue comment") cat >> "$MOCKD/bodies"; exit 0 ;;
+  "issue comment") printf '%s' "$piped" >> "$MOCKD/bodies"; exit 0 ;;
   "issue create")
-    cat >> "$MOCKD/created"; printf 'https://example.invalid/i/505\n'; exit 0 ;;
+    printf '%s' "$piped" >> "$MOCKD/created"; printf 'https://example.invalid/i/505\n'; exit 0 ;;
   "issue close") printf '%s\n' "$*" >> "$MOCKD/closed"; exit 0 ;;
 esac
 echo "mock gh: unexpected call: $*" >&2; exit 64
