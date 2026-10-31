@@ -133,6 +133,14 @@ REQUIRED = [
     # GHSA-mrhx-c7xc-m3w5 (HIGH; CVE-2023-54404): memory exhaustion, range <4.6.6
     # with NO lower bound -- zod 3.x copies count too, which is why the nested
     # zod@3.25.76 under inngest/@likec4/core needed scoped overrides, not a pin.
+    # Two residual conditions, tracked rather than hidden: (1) the override
+    # satisfies the advisory's package-version predicate, but inngest@4.26.x
+    # imports the vendored `zod/v3` inside zod@4.6.6, whose code path carries the
+    # same class the GHSA patches on the v4 path -- no fixed inngest exists yet
+    # (4.26.2 still imports zod/v3); (2) the "@likec4/core" override is outside
+    # likec4's declared ^3.25.76 range (inert today: @likec4/core@1.50.0 fully
+    # vendors zod) -- drop it when the likec4 1.60 pin-train (#11696) lands
+    # native zod-4.
     ("web-platform", "zod", 4, "4.6.6"),
     ("pencil-setup", "zod", 4, "4.6.6"),
     ("pen-cli", "zod", 4, "4.6.6"),
@@ -370,13 +378,23 @@ def main():
             f"{MIN_ABSENT}. A discharged advisory's ratchet was deleted; an absence "
             f"assertion over an empty list passes while checking nothing.")
     anchor_manifest, anchor_path = ABSENT_PATH_ANCHOR
-    if anchor_path not in packages.get(anchor_manifest, {}):
+    if anchor_manifest not in packages or anchor_path not in packages[anchor_manifest]:
         failures.append(
             f"{anchor_manifest}: {anchor_path} is not installed, so every MUST_STAY_ABSENT "
             f"row below it is trivially absent and asserts nothing. Re-derive the paths "
             f"against the current tree before trusting this gate.")
     for manifest, pkg, path in MUST_STAY_ABSENT:
-        if path in packages.get(manifest, {}):
+        if manifest not in packages:
+            # A row naming a manifest not in LOCKS is an absence assertion over
+            # nothing -- fail loudly, the same reason MIN_ABSENT exists. The
+            # REQUIRED-loop .get() is fine (a dropped manifest reads as mass
+            # absence and trips MIN_RESOLVED/MIN_LOCKS); here nothing
+            # backstops a mistyped manifest but this check.
+            failures.append(
+                f"{manifest}: MUST_STAY_ABSENT row names a manifest not in LOCKS, "
+                f"so its absence assertion checks nothing.")
+            continue
+        if path in packages[manifest]:
             failures.append(
                 f"{manifest}: {path} is back at "
                 f"{packages[manifest][path].get('version', '<unknown version>')}. The {pkg} advisory was "

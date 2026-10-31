@@ -119,7 +119,8 @@ rt["node_modules/d/node_modules/brace-expansion"] = {"version": "5.999.999"}
 pen = pkgs([("hono", 4), ("@hono/node-server", 1), ("ip-address", 10), ("fast-uri", 3),
             ("body-parser", 2), ("zod", 4)])
 # The pinned headless engine's own lockfile (#11156): its tree resolves hono 4, @hono/node-server 2,
-# ip-address 10, fast-uri 3, undici 8 and brace-expansion 5, each of which needs a row of its own.
+# ip-address 10, fast-uri 3, undici 8, brace-expansion 5, body-parser 2 and zod 4,
+# each of which needs a row of its own.
 pencli = pkgs([("hono", 4), ("@hono/node-server", 2), ("ip-address", 10), ("fast-uri", 3),
                ("undici", 8), ("brace-expansion", 5), ("body-parser", 2), ("zod", 4)])
 spike = pkgs([("zod", 4)])
@@ -436,7 +437,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=29
+MIN_ASSERTIONS=33
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
