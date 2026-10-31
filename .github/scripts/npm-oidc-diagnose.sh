@@ -26,6 +26,14 @@
 # short-lived publish credential. curl still writes that body to a temp file
 # (mode 0700 directory), which the EXIT trap removes; a SIGKILL would leave it on
 # the ephemeral runner.
+case "$-" in
+  *x*)
+    if [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set +x
 unset BASH_XTRACEFD  # belt and braces: `set +x` above already stops tracing
 set -uo pipefail

@@ -1004,7 +1004,8 @@ diag_battery() { # diag_battery <script-under-test>
   DIAG_BASH=(bash -x)
   run_diag cxtrace
   DIAG_BASH=(bash)
-  ck "xtrace: exit 0"                                test "$DRC" -eq 0
+  ck "xtrace: refused with exit 78"                  test "$DRC" -eq 78
+  ck "xtrace: refusal says why"                      grep -qF -- 'refusing to trace' "$CD/all"
   ck "xtrace: id-token not traced"                   not grep -qF -- "$ID_TOK" "$CD/vis"
   ck "xtrace: request token not traced"              not grep -qF -- "$REQ_TOK" "$CD/all"
 
@@ -1068,7 +1069,8 @@ diag_mutant no-sanitiser       's/^clean() {.*/clean() { printf "%s" "$1"; }/'
 diag_mutant no-key-prefix      's/^say() {.*/say() { printf "%s\\n" "$2"; }/'
 diag_mutant token-fetch-no-G   's/ -G / /'
 diag_mutant no-audience-arg    's/--data-urlencode "audience=[^"]*"//'
-diag_mutant keep-xtrace        '/^set +x$/d'
+diag_mutant keep-xtrace        '/^case "$-" in$/,/^esac$/d;/^set +x$/d'
+diag_mutant no-xtrace-refusal  '/^case "$-" in$/,/^esac$/d'
 diag_mutant no-2028-strip      's/\\xe2\\x80\[/\\xe2\\x81[/'
 diag_mutant no-c1-strip        's/\\xc2\[/\\xc3[/'
 diag_mutant no-proto           "s/ --proto '=https'//g"
@@ -1125,10 +1127,10 @@ if [[ "$CASES" -ne "$((PASS + FAIL))" ]]; then
   echo "FATAL: verdict accounting desync: $CASES call sites but $((PASS + FAIL)) verdicts — assertions ran and their verdicts were discarded." >&2
   exit 1
 fi
-# Exact count at the time of writing (294). Slack in a floor is attack budget: raise it in the
+# Exact count at the time of writing (296). Slack in a floor is attack budget: raise it in the
 # SAME edit that adds an assertion, never in a later tidy-up.
-if [[ "$((PASS + FAIL))" -lt 294 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 294." >&2
+if [[ "$((PASS + FAIL))" -lt 296 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 296." >&2
   exit 1
 fi
 echo "$PASS passed, $FAIL failed ($((PASS + FAIL)) assertions)"
