@@ -247,6 +247,8 @@ CI root key); it does not exercise the app's own erasure path (`removeGitDataRep
 the redeployed web container). That is why Level 2 below is required: the CLO ruled on 2026-10-12 that Level 1
 alone does not discharge the #8211 Art. 17 condition, and that Level 1 is never worded "erasure verified".
 
+> **Superseded 2026-10-31 (#8211), as to "this condition is NOT yet discharged":** Rehearsal 2 reached Level 2 with REFS-CONFIRMED and a clear exit read after the account deletion; see [Rehearsal 2 record](#rehearsal-2-record-2026-10-31). The Rehearsal 1 text above is kept as the record of that run.
+
 Ruled by CTO agent, 2026-10-19 (`knowledge-base/project/specs/archive/20261020-094500-feat-git-data-cutover-resume-8211/cto-rulings.md`): this
 section is the run sheet; it adds no mode and no dry run. **The rehearsal flip IS a production flip**: `flip`
 freezes the store, writes `GIT_DATA_STORE_ENABLED=true` into Doppler `prd`, redeploys both web hosts and writes
@@ -573,6 +575,51 @@ verdict:       mechanics passed (flip and rollback clean), Level 2 NOT exercised
 
 The first real flip stays BLOCKED until a second rehearsal reaches Level 2 and a non-vacuous exit read (`mode=proof` after the account deletion) is clear. Fixes in flight: a
 container egress rule plus an ssh bound, and a worktree directory plus flip preflights.
+
+### Rehearsal 2 record (2026-10-31)
+
+Sources per line: `gh run view` (GH), a Better Stack read (BS), a Doppler name listing or value read of a non-secret (DP), a read-only database count (DB), owner action (OA).
+Counts and run ids only; the exempt account was the Soleur-owned throwaway account and is deleted.
+
+```text
+git-data flip-then-rollback rehearsal 2 (#8211, CPO condition), Level 2
+preceded by:   host replace run https://github.com/jikig-ai/soleur/actions/runs/41180737686 (apply success: 4 added, 2 changed, 4 destroyed, LUKS volume preserved,
+               boot_complete with every flag positive, pin_load success, new host key fingerprint SHA256:l0VDidKnlit7JrEJgc0IQMC3ha84UfF8x0gd5cfzbbU), its plan_only rehearsal 41180626456,
+               a clear read-only proof 41187005701 afterwards, and a same-version redeploy 41189244424 that loaded the exemption (exemptConfigured=true on both hosts)   [GH] [BS]
+flip run:      https://github.com/jikig-ai/soleur/actions/runs/41189609623   dispatched 2026-10-31T09:39:57Z   conclusion success   stamp step success   finalizer ran yes (unwound no)   [GH]
+rollback run:  https://github.com/jikig-ai/soleur/actions/runs/41192004705   dispatched 2026-10-31T10:15:26Z   conclusion success   probe step success   "STORE probe=probe verdict=ok" seen   "nothing_to_unfreeze"   [GH]
+window:        flag-on from 2026-10-31T09:43:29Z to 2026-10-31T11:44:36Z = 121.1 minutes (the rollback waited about an hour for the reviewer approval)   [GH]
+per-host:      web-1 git_data_store=enabled 09:44:09Z (attempt 1) / disabled 11:45:15Z (attempt 1);  web-2 enabled 09:45:10Z (attempt 2) / disabled 11:46:17Z (attempt 2)   [GH]
+app path:      level 2; startup lines after rollback flag-off: pin SHA256:l0VDidKnlit7JrEJgc0IQMC3ha84UfF8x0gd5cfzbbU, ssh_client present, store disabled (one row per host); Sentry events R1..R6: 0 (erasure 0, pin_fault 0)   [BS] [Sentry]
+               one agent conversation as the exempt account (the agent answered, the turn completed, live sessions back to 0); a second conversation was run as a probe at 10:07:51Z,
+               outside the single-conversation discipline, and produced no new overlay row   [OA] [BS]
+r3 verdicts:   SESSION-ENDED INCONCLUSIVE by the letter: two `ensure-workspace-repo silent fallback` rows with op git-data-overlay, both with stderr "does not exist (provision it first)" (the account's
+               repository was connected before the flip, so no store repository existed at the first session's start; see "R3 first-session reading" below); zero `git-data replication push failed`
+               and zero `git-data replication shed` rows; the control read (`agent_sessions_live=`) returned rows   [BS]
+               REFS-CONFIRMED yes: refs_assert run https://github.com/jikig-ai/soleur/actions/runs/41200765198 (dispatched 2026-10-31T12:21:51Z, after the rollback and before both proofs),
+               repos=1 namespaces=1 refs=1 heads=1; the replicated tip equals the GitHub default-branch tip of the throwaway repository (compared once by hand)   [GH]
+               R4 was dispatched on the CTO ruling of 2026-10-31 (roll back and read the store with refs_assert; closing the flag-on window outweighed holding it for a second session)
+proof before:  mode=proof run https://github.com/jikig-ai/soleur/actions/runs/41201026823 verdict store_not_empty (expected red; its failure notice landed as a comment on the unrelated open issue #10476)   [GH]
+deletion:      the exempt account deleted through the app (Settings, Danger Zone) at about 12:31Z; the users and api_keys rows read empty afterwards; zero Better Stack rows naming erasure or account deletion   [OA] [DB] [BS]
+exit read:     mode=proof run https://github.com/jikig-ai/soleur/actions/runs/41201603434   dispatched 2026-10-31T12:33:01Z   conclusion success   verdict clear (store-empty ok)   [GH]
+stamp:         before R1 absent; after the rollback absent (rollback log line `cutover_at=cleared`); after R8 absent   [DP] [GH]
+exemption:     QUIET_WINDOW_EXEMPT_USER_ID unset before R4, as this runbook says (absent in the prd name listing afterwards)   [DP]
+session ctl:   exemptConfigured=true on both hosts from the redeploy 41189244424; the new-sessions pause was turned ON by the owner at about 09:48Z, about 4 to 5 minutes AFTER the flag write (09:43:29Z):
+               the control line read paused=false on both hosts until then, because R1 was dispatched with the pause still off (R0 read paused=false and did not treat it as a blocker; it is one: see the
+               control section above). Turned OFF through the Flagsmith dashboard at about 12:20Z after R5, and the Doppler mirror FLAG_NEW_SESSIONS_PAUSED set to 0 in dev and prd   [BS] [DP] [OA]
+               sessions at R0/R1/R4: 0/0/0 on both hosts; merge queue empty before R1 and before R4; no rotate dispatched after R1   [BS] [GH]
+real users:    conversations created in the window that still exist: 0 (the exempt account's were deleted with it), so no real-user conversation started in the window; refused_since_last was 0 in every row read   [DB] [BS]
+art17:         account deletions in window 0 (the one deletion followed the window, at R6); refused erasures 0   [Sentry]
+predecessor:   rotate run 38583657167 (d6 stamp unchanged); no rotate dispatched since   [GH]
+not covered:   real-user replication load, web-2 behaviour beyond its log line, a session that starts between two count reads, working trees under WORKTREE_ROOT (web-2 has no SSH ingress);
+               info-level app rows never reach Better Stack (zero level-30 rows from any app context in 15 minutes), so a replication success is observable only through refs_assert
+verdict:       mechanics passed, Level 2 exercised and non-vacuous: REFS-CONFIRMED before the deletion, store_not_empty before it, the deletion through the app, an exit read clear after it.
+               Gaps found: (1) the R3 "zero overlay hits" clause cannot read clean for a first session; (2) replication success has no Better Stack signal; (3) R1 was dispatched with the pause off (all three tracked on #11704)
+```
+
+This record discharges the condition stated after Rehearsal 1: a second rehearsal reached Level 2 with REFS-CONFIRMED and a non-vacuous exit read (`mode=proof` after the account deletion) of `clear`. The other conditions for the first real flip are unchanged and are tracked on #8211.
+
+**R3 first-session reading (Ruled by CTO agent, 2026-10-31, #8211).** The store repository is created only by the session-end provision that precedes the push (the forced command provisions, `git-receive-pack` does not). Connecting a repository before the window, or inside it, does not provision one. So the first session of an account that has no store repository always logs one or two `ensure-workspace-repo silent fallback` rows with op `git-data-overlay` and stderr `does not exist (provision it first)` from its session-start fetch, and the R3 clause "zero hits" can never read clean for it. Such a row does not disqualify when all of these hold: it belongs to the exempt account only, its stderr is exactly that sentence, there is no `replication push failed`, `replication shed` or pin-fault row, and live sessions read 0. Any other overlay stderr keeps R3 INCONCLUSIVE. Positive evidence of replication is REFS-CONFIRMED from `refs_assert` after the rollback: the app's own `git-data replication push complete` row is logged at info level, and info rows do not reach Better Stack (measured 2026-10-31), so R3 cannot require it. While the flag is on, `refs_assert` and `proof` refuse (`flag_already_true`), so the store cannot be read inside the window; an INCONCLUSIVE R3 whose only blemish is this overlay row goes to R4, then `refs_assert`, and the rehearsal is redone only if `refs_assert` does not confirm.
 
 ### The D6 rotate (dispatch BEFORE the flip)
 
