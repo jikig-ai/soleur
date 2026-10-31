@@ -1676,6 +1676,71 @@ assert "GuardA3 anti-vacuity: the section ran its full inventory (expected 7, ra
   "(( GUARDA3_ASSERTIONS == 7 ))"
 
 # =========================================================================================
+# Guard A4 (#11602) — the pinned image provably carries the host_metrics trim
+# =========================================================================================
+# Guard A byte-compares every baked carrier at the pinned tag, so the image's
+# vector.toml IS HEAD's — but that is a structural binding, not the content
+# claim #11602 needs. This block names it: the image the NEXT
+# inngest-host-replace boots carries the trim — `scrape_interval_secs = 900`
+# and the EXACT collector set {memory, filesystem} (cpu/disk/load dropped,
+# #7577) — in the baked vector.toml's [sources.host_metrics] block. Asserted
+# at the PINNED TAG's tree — HEAD's vector.toml is not the image, the pinned
+# tag's tree is — and again at HEAD, so a HEAD-side revert reds too. A future
+# pin to a pre-trim tag (e.g. vinngest-v1.1.61) reds HERE, before the bake,
+# instead of shipping the ~17.8k-rows/day untrimmed set #11602 measured.
+#
+# Own counted span, own floor — never folded into the GuardA or GuardA3
+# inventories (a block inside another span is fungible against it).
+GUARDA4_BEFORE="$TOTAL"
+GA4_VEC_TAG=""
+GA4_HM_TAG=""
+if (( GA_TAG_OK == 1 )); then
+  GA4_VEC_TAG="$(git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/vector.toml" 2>/dev/null || true)"
+  # Same awk-window idiom as Guard A3's HSJ extraction — scope membership to
+  # the host_metrics block, not the whole file. The end pattern stops at the
+  # next section header, so the [sources.host_metrics.filesystem] subtable is
+  # excluded — the excluded-collector check below reads only the block proper.
+  GA4_HM_TAG="$(awk '/^\[sources\.host_metrics\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' <<<"$GA4_VEC_TAG")"
+fi
+# An unresolvable pinned tag (or a vector.toml absent from its tree) yields an
+# EMPTY blob — the named FAIL verdict below, never "nothing to compare, pass".
+assert "GuardA4: vector.toml resolves at the pinned tag $GA_TAG_REF (non-empty blob)" \
+  "[[ -n \"\$GA4_VEC_TAG\" ]]"
+assert "GuardA4: the pinned tag's vector.toml carries the [sources.host_metrics] block" \
+  "[[ -n \"\$GA4_HM_TAG\" ]]"
+assert "GuardA4: the pinned tag scrapes host_metrics at 900s" \
+  "grep -qE '^[[:space:]]*scrape_interval_secs[[:space:]]*=[[:space:]]*900[[:space:]]*\$' <<<\"\$GA4_HM_TAG\""
+assert "GuardA4: the pinned tag collectors include \"memory\"" \
+  "grep -qF '\"memory\"' <<<\"\$GA4_HM_TAG\""
+assert "GuardA4: the pinned tag collectors include \"filesystem\"" \
+  "grep -qF '\"filesystem\"' <<<\"\$GA4_HM_TAG\""
+assert "GuardA4: the pinned tag collectors exclude cpu/disk/load" \
+  "! grep -qE '\"(cpu|disk|load)\"' <<<\"\$GA4_HM_TAG\""
+# Exclusions alone do not bound the set: a future "network" collector would
+# pass them yet trip the #11602 probe's exact-set read. The literal whole-array
+# match is the only assert that pins membership, not just non-membership.
+assert "GuardA4: the pinned tag collectors array is literally [\"memory\", \"filesystem\"] (the exact set — no third member)" \
+  "grep -qE '^[[:space:]]*collectors[[:space:]]*=[[:space:]]*\[\"memory\",[[:space:]]*\"filesystem\"\][[:space:]]*\$' <<<\"\$GA4_HM_TAG\""
+
+GA4_HM_HEAD="$(awk '/^\[sources\.host_metrics\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
+assert "GuardA4: HEAD's vector.toml carries the [sources.host_metrics] block" \
+  "[[ -n \"\$GA4_HM_HEAD\" ]]"
+assert "GuardA4: HEAD scrapes host_metrics at 900s" \
+  "grep -qE '^[[:space:]]*scrape_interval_secs[[:space:]]*=[[:space:]]*900[[:space:]]*\$' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors include \"memory\"" \
+  "grep -qF '\"memory\"' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors include \"filesystem\"" \
+  "grep -qF '\"filesystem\"' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors exclude cpu/disk/load" \
+  "! grep -qE '\"(cpu|disk|load)\"' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors array is literally [\"memory\", \"filesystem\"] (the exact set — no third member)" \
+  "grep -qE '^[[:space:]]*collectors[[:space:]]*=[[:space:]]*\[\"memory\",[[:space:]]*\"filesystem\"\][[:space:]]*\$' <<<\"\$GA4_HM_HEAD\""
+
+GUARDA4_ASSERTIONS=$(( TOTAL - GUARDA4_BEFORE ))
+assert "GuardA4 anti-vacuity: the section ran its full inventory (expected 13, ran $GUARDA4_ASSERTIONS)" \
+  "(( GUARDA4_ASSERTIONS == 13 ))"
+
+# =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
 # =========================================================================================
 # PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
@@ -2449,7 +2514,8 @@ assert "bootstrap image build copies inngest-trace-retention.sh into the build c
 assert "bootstrap image copies inngest-trace-retention.sh to the image root" \
   "grep -qF 'COPY inngest-trace-retention.sh /inngest-trace-retention.sh' '$RETENTION_IMAGE_YML'"
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=203
+# 203 -> 215 when Guard A4 (#11602) landed: 11 span asserts + the anti-vacuity row.
+BOOTSTRAP_MIN_ASSERTIONS=215
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

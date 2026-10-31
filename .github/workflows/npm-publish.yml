@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -37,7 +38,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -47,10 +47,12 @@ jobs:
           set -euo pipefail
           bun plugins/soleur/scripts/sync-npm-package.ts
 
+      - name: Install npm CLI >= 11.5.1 for trusted publishing
+        run: npm install -g npm@^11
+
       - name: Resolve version and publish to npm
         working-directory: packages/opencode-plugin
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -70,4 +72,7 @@ jobs:
             exit 0
           fi
           npm version --no-git-tag-version -- "$VERSION"
-          npm publish --access public --ignore-scripts
+          if ! npm publish --access public --ignore-scripts; then
+            echo "npm publish failed. On E404, verify the npm trusted-publisher entry for jikig-ai/soleur + npm-publish.yml ('npm trust list @soleur/opencode'); the registry masks authz failures as 404." >&2
+            exit 1
+          fi

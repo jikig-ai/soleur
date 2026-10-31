@@ -666,6 +666,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_DISPATCH_RECOVERY_SWEEPER_11211_PATHS=(
   "apps/web-platform/app/api/dashboard/today/[id]/send/route.ts"
   "apps/web-platform/server/action-sends/decide-replay.ts"
   "scripts/lib/mutation-harness.sh"
+  "scripts/lib/mutation-harness-controls.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # #11265: the LUKS keeper dark-period probe suite pins the key-probe alert block and the flip script's
@@ -678,6 +679,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_INNGEST_LUKS_KEEPER_DARK_11265_PATHS=(
   "scripts/betterstack-query.sh"
   "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
   "scripts/lib/mutation-harness.sh"
+  "scripts/lib/mutation-harness-controls.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
@@ -3337,6 +3339,10 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
   "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/lint-rule-bodies.py"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
+  ".github/workflows/npm-publish.yml"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_HTTP_DEADLINES_REQUIRED_TEST_SH_PATHS=(
   "apps/web-platform/infra/zot-config-deadlines.test.sh"

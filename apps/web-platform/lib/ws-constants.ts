@@ -12,3 +12,11 @@
  * retry → error lifecycle.
  */
 export const STUCK_TIMEOUT_MS = 45_000;
+
+/**
+ * Wire text of the server's `resume_session` refusal (unknown id, or a
+ * cross-repo id deliberately indistinguishable from "not found"). SHARED by
+ * `server/ws-handler.ts` (sender) and `lib/ws-client.ts` (the credential-rebind
+ * fallback keys on it) so the two cannot drift. The wire text is unchanged.
+ */
+export const CONVERSATION_NOT_FOUND_MESSAGE = "Conversation not found";

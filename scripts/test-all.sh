@@ -6015,6 +6015,18 @@ if want_scripts; then
   # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Notify-only (never 0/1): a quoting row counted
   # as a measurement, an indeterminate row counted as health, or a stray exit 0/1 must redden CI.
   run_suite "scripts/followthroughs/inngest-luks-keeper-dark-11265" bash scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh
+  # #11602: exit-code harness for the host_metrics-trim measured-close probe (the issue's own GROUP BY
+  # tags.collector acceptance read). Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). Its exit code decides whether the sweeper closes #11602, so a vacuous PASS — a
+  # superset, a partial set, a zero-count collector, or a truncated read counted as the trim — must
+  # redden CI.
+  run_suite "scripts/followthroughs/inngest-hostmetrics-trim-11602" bash scripts/followthroughs/inngest-hostmetrics-trim-11602.test.sh
+  # #7596: exit-code harness for the boot-trace-allowlist measured-close probe (generation floor +
+  # _BOOT_ID anchor + the BOOT_STAGE second PASS arm + leg-attributed TRANSIENT reasons). Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether
+  # the sweeper closes #7596, so a pre-floor or stale-generation row counted as delivered must
+  # redden CI.
+  run_suite "scripts/followthroughs/inngest-bs-token-restage-7596" bash scripts/followthroughs/inngest-bs-token-restage-7596.test.sh
   # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
   # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
@@ -6424,6 +6436,10 @@ if want_scripts; then
   # the rung2 entries above: nothing auto-discovers tests/scripts/ or scripts/followthroughs/.
   run_suite "tests/scripts/inngest-provision-plan-shape" bash tests/scripts/test-inngest-provision-plan-shape.sh
   run_suite "scripts/followthroughs/inngest-provision-rehearsal-capture" bash scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
+  # (#11181) The cf-lb-overlay dispatch's plan graders (record/overlay/teardown/GA
+  # allow-sets fail closed). Registered HERE for the same reason as the rung2 and
+  # inngest-provision entries above: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/cf-lb-overlay-gate" bash tests/scripts/test-cf-lb-overlay-gate.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh

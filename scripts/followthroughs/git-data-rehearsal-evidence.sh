@@ -22,11 +22,16 @@
 #   SENTRY_ISSUE_RO_TOKEN="$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)" \
 #   doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
 #     --no-exit-on-missing-only-secrets -- scripts/followthroughs/git-data-rehearsal-evidence.sh \
-#       --flip <run id> --rollback <run id> --exit <run id> [--proof-before <run id>] [--rotate <run id>] [--level 1|2]
+#       --flip <run id> --rollback <run id> --exit <run id> [--refs <run id>] [--proof-before <run id>] [--rotate <run id>] [--level 1|2]
 # The token is SENTRY_ISSUE_RO_TOKEN ([event:read, org:read], Doppler soleur/prd) because the sweeper's SENTRY_ACTIONS_RO_TOKEN is
 # a repository secret no owner workstation can read; this is an owner-run exception to the followthrough convention (ADR-031).
 #
 # WHAT THE BLOCK MEANS, where it differs from the section 5 template:
+#   * `refs read:` is REFS-CONFIRMED read from the `mode=refs_assert` run the owner names with --refs (#11431): the run title
+#     `git-data refs_assert`, created after the rollback and before the proofs, the step `Host-side refs assertion` with
+#     conclusion success, exactly ONE `REFS-CONFIRMED` log line in that step and exactly ONE anchored `REFS_ASSERT ok repos=1 ...`
+#     line. The block prints the run URL and the counts, never a commit id. A log line in a red run is not a verdict; at Level 2
+#     a missing --refs reads UNREAD(refs-run) (the verdict that gates R6, the deletion and the real flip is never owner-typed).
 #   * `finalizer ran yes (unwound no)` is the healthy reading: the Finalizer step is `if: always()`, so it runs on every path,
 #     and "unwound" is read from the log (`finalizer: unwind complete.`), not from the step conclusion.
 #   * the per-host timestamps are the runner-log time of the workflow's own readback, up to a poll interval after the host emitted.
@@ -81,18 +86,19 @@ source "${ROOT}/scripts/lib/bearer-curl.sh" || { echo "FATAL: cannot load bearer
 source "${ROOT}/scripts/lib/git-data-rotate-stamp.sh" || { echo "FATAL: cannot load git-data-rotate-stamp.sh" >&2; exit 64; }
 
 usage() {
-  printf 'usage: %s --flip <run id> --rollback <run id> --exit <run id> [--proof-before <run id>] [--rotate <run id>] [--level 1|2]\n' \
+  printf 'usage: %s --flip <run id> --rollback <run id> --exit <run id> [--refs <run id>] [--proof-before <run id>] [--rotate <run id>] [--level 1|2]\n' \
     "$(basename "$0")" >&2
   exit 64
 }
 
-FLIP="" ROLLBACK="" EXITRUN="" PROOF_BEFORE="" ROTATE="" LEVEL=""
+FLIP="" ROLLBACK="" EXITRUN="" REFS="" PROOF_BEFORE="" ROTATE="" LEVEL=""
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || usage
   case "$1" in
     --flip) FLIP="$2" ;;
     --rollback) ROLLBACK="$2" ;;
     --exit) EXITRUN="$2" ;;
+    --refs) REFS="$2" ;;
     --proof-before) PROOF_BEFORE="$2" ;;
     --rotate) ROTATE="$2" ;;
     --level) LEVEL="$2" ;;
@@ -101,11 +107,11 @@ while [[ $# -gt 0 ]]; do
   shift 2
 done
 for _id in "$FLIP" "$ROLLBACK" "$EXITRUN"; do [[ "$_id" =~ ^[0-9]{1,20}$ ]] || usage; done
-for _id in "$PROOF_BEFORE" "$ROTATE"; do [[ -z "$_id" || "$_id" =~ ^[0-9]{1,20}$ ]] || usage; done
+for _id in "$PROOF_BEFORE" "$ROTATE" "$REFS"; do [[ -z "$_id" || "$_id" =~ ^[0-9]{1,20}$ ]] || usage; done
 [[ -z "$LEVEL" || "$LEVEL" == 1 || "$LEVEL" == 2 ]] || usage
 # One run cannot fill two slots (a pasted id repeated would certify a verdict from the wrong run).
 _seen=" "
-for _id in "$FLIP" "$ROLLBACK" "$EXITRUN" "$PROOF_BEFORE" "$ROTATE"; do
+for _id in "$FLIP" "$ROLLBACK" "$EXITRUN" "$PROOF_BEFORE" "$ROTATE" "$REFS"; do
   [[ -z "$_id" ]] && continue
   [[ "$_seen" == *" $_id "* ]] && usage
   _seen+="$_id "
@@ -205,14 +211,16 @@ fetch_ok_rb=0
 exit_ok=0
 pb_ok=0
 rot_ok=0
+refs_ok=0
 WFC="git-data cutover"
 if fetch_run "$FLIP" flip "git-data flip" "$WFC" 1; then fetch_ok_flip=1; fi
 if fetch_run "$ROLLBACK" rollback "git-data rollback" "$WFC" 1; then fetch_ok_rb=1; fi
 if fetch_run "$EXITRUN" exit "git-data proof" "$WFC" 1; then exit_ok=1; fi
+if [[ -n "$REFS" ]] && fetch_run "$REFS" refs "git-data refs_assert" "$WFC" 1; then refs_ok=1; fi
 if [[ -n "$PROOF_BEFORE" ]] && fetch_run "$PROOF_BEFORE" proofbefore "git-data proof" "$WFC" 1; then pb_ok=1; fi
 if [[ -n "$ROTATE" ]] && fetch_run "$ROTATE" rotate "" "Apply web-platform infra" 0; then rot_ok=1; fi
 
-# The runs must be in the rehearsal's order: rotate, flip, rollback, [proof before deletion], exit proof. A run from another
+# The runs must be in the rehearsal's order: rotate, flip, rollback, refs_assert, [proof before deletion], exit proof. A run from another
 # day passes every identity check, so ordering is what ties the four ids to ONE rehearsal.
 created_epoch() { [[ -s "${WORK}/$1.json" ]] && iso_epoch "$(jq -r '.createdAt // ""' "${WORK}/$1.json")"; }
 prev_epoch=0
@@ -227,6 +235,7 @@ order_check() { # <slot> <name of the slot's ok flag>
 }
 (( fetch_ok_flip )) && order_check flip fetch_ok_flip
 (( fetch_ok_rb )) && order_check rollback fetch_ok_rb
+(( refs_ok )) && order_check refs refs_ok
 (( pb_ok )) && order_check proofbefore pb_ok
 (( exit_ok )) && order_check exit exit_ok
 # the rotate precedes the flip it discharged
@@ -460,6 +469,39 @@ fi
 LEVEL_TXT="${LEVEL:-<owner: 1|2>}"
 
 # ---------------------------------------------------------------------------------------------------------------------
+# REFS-CONFIRMED: read from the mode=refs_assert run (the gate for R6, the account deletion and the real flip).
+# ---------------------------------------------------------------------------------------------------------------------
+REFS_STEP='Host-side refs assertion'
+REFS_ANS_RE='^REFS_ASSERT ok repos=1 namespaces=[1-9][0-9]* refs=[1-9][0-9]* heads=[1-9][0-9]* shas=[0-9a-f]{40}(,[0-9a-f]{40})?$'
+REFS_LINE="n/a (level 1; no synthetic session ran)"
+if [[ -n "$REFS" ]]; then
+  REFS_LINE="$(UNRD refs-run)"
+  if (( refs_ok )); then
+    j="${WORK}/refs.json"; l="${WORK}/refs.log"
+    stepc "$j" "$REFS_STEP" refs-step; refs_step="$REPLY"
+    refs_conf=""; refs_ans=""
+    if lcount "$l" "$REFS_STEP" '([[]git-data-cutover[]] )?REFS-CONFIRMED$'; then refs_conf="$REPLY"; fi
+    refs_msgs="$(awk -F "$TAB" -v re="${LOG_TS}([[]git-data-cutover[]] )?REFS_ASSERT ok " -v st="$REFS_STEP" \
+      '{ gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { m = $3; sub(/^[^ ]+ /, "", m); sub(/^[[]git-data-cutover[]] /, "", m); print m }' "$l" 2>/dev/null)" || refs_msgs=""
+    refs_n="$(printf '%s' "$refs_msgs" | awk 'END { print NR }')"
+    refs_c="$(jfield "$j" conclusion)"
+    if [[ -z "$refs_conf" ]]; then note_unread log-scan-refs; REFS_LINE="$(UNRD log-scan-refs)"
+    elif [[ "$refs_c" == success && "$refs_step" == success && "$refs_conf" == 1 && "$refs_n" == 1 && "$refs_msgs" =~ $REFS_ANS_RE ]]; then
+      refs_ans="${refs_msgs#REFS_ASSERT ok }"; refs_ans="${refs_ans% shas=*}"
+      REFS_LINE="mode=refs_assert run ${RUN_URL_BASE}/${REFS}   dispatched $(jfield "$j" createdAt)   conclusion ${refs_c}   step success   REFS-CONFIRMED yes (${refs_ans})"
+    else
+      note_unread refs-not-confirmed
+      REFS_LINE="mode=refs_assert run ${RUN_URL_BASE}/${REFS}   dispatched $(jfield "$j" createdAt)   conclusion ${refs_c}   step ${refs_step}   REFS-CONFIRMED NOT CONFIRMED (confirmed lines ${refs_conf}, answer lines ${refs_n}): $(UNRD refs-not-confirmed)"
+    fi
+  fi
+elif [[ "$LEVEL" == 2 ]]; then
+  note_unread refs-run
+  REFS_LINE="$(UNRD refs-run)"
+elif [[ -z "$LEVEL" ]]; then
+  REFS_LINE="<owner: pass --refs <run id> for a Level 2 rehearsal>"
+fi
+
+# ---------------------------------------------------------------------------------------------------------------------
 # predecessor: the rotate run, the apply step, plan_only, and the new server's boot_complete.
 # ---------------------------------------------------------------------------------------------------------------------
 PRED_LINE="<owner: pass --rotate <run id>>"
@@ -512,6 +554,7 @@ printf '%s\n' \
   "per-host:      ${PERHOST_LINE}" \
   "app path:      level ${LEVEL_TXT}; ${APP_LINE}; Sentry events R1..R6: ${SENTRY_PART}" \
   "               ${LEVEL2_LINE}" \
+  "refs read:     ${REFS_LINE}" \
   "exit read:     ${EXIT_LINE}" \
   "stamp:         <owner: before R1 / after rollback / after R8 are name listings of GIT_DATA_LUKS_CUTOVER_AT in prd; flip stamp step is on the flip line>" \
   "reconcile:     <owner: repositories written in the window (by proof); non-canary NVMe trees at R3b; incident none|url>" \

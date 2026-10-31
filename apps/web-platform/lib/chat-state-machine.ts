@@ -95,6 +95,13 @@ interface ChatMessageBase {
    * (leader-attributed) liveness like a single-leader debug heartbeat.
    */
   livenessRearms?: number;
+  /**
+   * #11525: in-memory flag set on the last USER message when a credential
+   * error (`key_invalid` / `byok_key_missing`) blocked the turn - the server
+   * persisted the message but started no reply. Renders "Not answered".
+   * Session-only: never persisted, dropped by a history hydrate.
+   */
+  unanswered?: boolean;
 }
 
 /**
