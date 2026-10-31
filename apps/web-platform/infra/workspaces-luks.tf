@@ -226,7 +226,8 @@ resource "terraform_data" "luks_monitor_token_install" {
 # The one probe start is `--no-block`: the apply never waits on or fails with the probe, so mount,
 # escrow or readyz faults still cannot redden a merge (ADR-119 2026-09-24). Delivery faults do: the
 # is-enabled / is-active asserts. The runtime proof that the timer fires is
-# logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf).
+# betteruptime_heartbeat.luks_monitor_host_timer (uptime-alerts.tf), fed hourly from the Logs archive
+# by scripts/deadman-heartbeat-feeder.sh (#11631), which replaced the retired once-a-day logs alert.
 #
 # #9045 — the read-only forensic print, run as the installer's FIRST step (so a live cutover freeze,
 # which refuses the arm step with exit 17, cannot suppress it). It reads what systemd manager memory
