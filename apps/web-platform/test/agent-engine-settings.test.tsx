@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 
-import { AgentEngineSettings } from "@/components/settings/agent-engine-settings";
+import { AgentEngineSettings, authModeLabel } from "@/components/settings/agent-engine-settings";
+import { authFailureCopy } from "@/server/agent-auth-user-message";
 
 const fetchMock = vi.fn();
 
@@ -319,5 +320,16 @@ describe("AgentEngineSettings", () => {
       const { findByTestId } = render(<AgentEngineSettings isOwner={false} />);
       expect(text(await findByTestId("user-provider-disclosure"))).toBe(NON_OWNER_DISCLOSURE);
     });
+  });
+});
+
+// #11599 — the operator recovery sentence quotes the Settings label in server copy that cannot import this component; this
+// ties the two so a relabel here fails the copy test instead of silently sending the operator to a control that is gone.
+describe("operator recovery copy names the Settings label", () => {
+  it("quotes the label the api-key option renders", () => {
+    const label = authModeLabel("claude-code", "api-key");
+    expect(label).toBe("My API key");
+    expect(authFailureCopy("not_logged_in", "oauth_token")).toContain(`"${label}"`);
+    expect(authFailureCopy("not_logged_in", "api_key")).not.toContain(`"${label}"`);
   });
 });

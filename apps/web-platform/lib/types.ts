@@ -198,6 +198,15 @@ export function isCredentialErrorCode(
   return code === "key_invalid" || code === "byok_key_missing";
 }
 
+/** Single predicate for the authentication-mode pair (#11599): not a credential block (the composer stays enabled). Spell the
+ *  pair ONLY here on the client; test/auth-mode-code-parity.test.ts pins it to the server's `AUTH_MODE_UNRESOLVED_CAUSES` and
+ *  the wire schema (`lib/` cannot import the server leaf). */
+export function isAuthModeErrorCode(
+  code: string | null | undefined,
+): code is "auth_mode_unresolved" | "auth_mode_unavailable" {
+  return code === "auth_mode_unresolved" || code === "auth_mode_unavailable";
+}
+
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
 export const WS_CLOSE_CODES = {

@@ -38,10 +38,13 @@ const mocks = vi.hoisted(() => {
 // Sentry) and every plaintext buffer the lease decrypts (to observe zeroize).
 const sinks = vi.hoisted(() => ({
   calls: [] as unknown[],
+  // [level, first logger argument] for every pino call, so a test can pin WHICH level a line is logged at.
+  levels: [] as Array<[string, unknown]>,
   decrypted: [] as Buffer[],
   providersQueried: [] as string[],
   reset() {
     this.calls.length = 0;
+    this.levels.length = 0;
     this.decrypted.length = 0;
     this.providersQueried.length = 0;
   },
@@ -51,11 +54,15 @@ vi.mock("@/server/logger", () => {
   const rec = (...a: unknown[]) => {
     sinks.calls.push(a);
   };
+  const at = (level: string) => (...a: unknown[]) => {
+    sinks.levels.push([level, a[0]]);
+    rec(...a);
+  };
   const logger: Record<string, unknown> = {
-    error: rec,
-    warn: rec,
-    info: rec,
-    debug: rec,
+    error: at("error"),
+    warn: at("warn"),
+    info: at("info"),
+    debug: at("debug"),
     trace: rec,
     fatal: rec,
   };
@@ -124,6 +131,7 @@ import {
   MissingByokKeyError,
 } from "@/server/byok-lease";
 import { encryptKey } from "@/server/byok";
+import { __resetMirrorDebounceForTests } from "@/server/observability";
 import { ConversationAuthModeError, AUTH_MODE_ERROR_REASONS } from "@/server/auth-mode-error";
 
 const OPERATOR = "550e8400-e29b-41d4-a716-446655440000";
@@ -154,6 +162,9 @@ let savedEnabled: string | undefined;
 beforeEach(() => {
   mocks.reset();
   sinks.reset();
+  // The lease's unresolved-mode event is debounced per (user, reason) in a module-level map: drain it so one test's event
+  // never suppresses the next test's first.
+  __resetMirrorDebounceForTests();
   delete process.env.BYOK_ENCRYPTION_KEY;
   savedEnabled = process.env.CC_OAUTH_ENABLED;
 });
@@ -549,8 +560,10 @@ describe("getAgentCredential — binding auth mode (#11591)", () => {
     expect(spy).toHaveBeenCalledTimes(2);
     expect(sinks.decrypted).toHaveLength(0);
     expect(sinks.providersQueried).not.toContain("anthropic");
+    // Two refused calls, ONE event: the lease event is debounced per (user, reason), so a resend in a dead conversation
+    // does not multiply it (the call-site WARN log still carries every turn).
     const ev = unresolved();
-    expect(ev).toHaveLength(2);
+    expect(ev).toHaveLength(1);
     for (const [, , o] of ev) {
       expect(o.tags.reason).toBe("invalid_value");
       expect(o.extra.reason).toBe("invalid_value");
@@ -658,9 +671,12 @@ describe("getAgentCredential — cross-owner api-key skip (#11594)", () => {
     delegationId: DELEGATION_ID,
     delegationWorkspaceId: WS,
   };
-  // Direct-lease-only shape: key owner differs from the workspace context with no delegation id.
+  // Direct-lease-only shape: key owner differs from the workspace context with no delegation id (so no delegation workspace).
+  // No production caller produces it; the skip is NEVER granted to it, in any mode (review: the workspace invariant is
+  // enforced for every cross-owner lease, not only those that carry a delegation id).
   const MISMATCH = { workspaceContextUserId: OPERATOR, keyOwnerUserId: OTHER };
-  const SHAPES: Array<[string, typeof DELEGATED | typeof MISMATCH, string]> = [
+  const SHAPES: Array<[string, typeof DELEGATED, string]> = [["delegated", DELEGATED, OPERATOR]];
+  const ALL_SHAPES: Array<[string, typeof DELEGATED | typeof MISMATCH, string]> = [
     ["delegated", DELEGATED, OPERATOR],
     ["owner mismatch", MISMATCH, OTHER],
   ];
@@ -725,6 +741,48 @@ describe("getAgentCredential — cross-owner api-key skip (#11594)", () => {
     expect(spy.mock.calls[0]).toEqual([]);
   });
 
+  // Pino INFO never leaves the host (the log shipper forwards WARN and above): the ordinary managed delegated turn is debug, and
+  // a pre-check that could not be evaluated is WARN so a systematic failure is visible.
+  it("AC2b the denied-skip log level: managed -> debug, a failed read / absent resolver -> warn, never info", async () => {
+    seedBoth(OPERATOR);
+    await lease({ ...DELEGATED, resolveAuthMode: async () => "managed" }).catch(() => undefined);
+    expect(sinks.levels.filter(([, o]) => (o as { outcome?: string })?.outcome === "non_api_key").map(([l]) => l)).toEqual(["debug"]);
+    sinks.levels.length = 0;
+    await lease({ ...DELEGATED, resolveAuthMode: async () => { throw new Error("db down"); } }).catch(() => undefined);
+    await lease({ ...DELEGATED }).catch(() => undefined);
+    const lv = sinks.levels.filter(([, o]) => (o as { outcome?: string })?.outcome === "unresolved").map(([l]) => l);
+    expect(lv).toEqual(["warn", "warn"]);
+    expect(sinks.levels.some(([l]) => l === "info")).toBe(false);
+  });
+
+  it.each([
+    ["exact api-key", "api-key"],
+    ["managed", "managed"],
+  ])(
+    "AC1b owner mismatch with no delegation workspace + %s: never skipped, the subscription row is selected and refused, the resolver is not asked",
+    async (_m, mode) => {
+      seedBoth(OTHER);
+      const spy = vi.fn(async () => mode);
+      const err = await lease({ ...MISMATCH, resolveAuthMode: spy }).catch((e) => e);
+      expect(err).toBeInstanceOf(OauthDelegationForbiddenError);
+      expect(sinks.providersQueried).toContain("anthropic_oauth");
+      expect(sinks.providersQueried).not.toContain("anthropic");
+      expect(sinks.decrypted).toHaveLength(0);
+      expect(spy).not.toHaveBeenCalled();
+      expect(outcomes()).toEqual(["workspace_mismatch"]);
+    },
+  );
+
+  it("AC1b a delegation id with no delegation workspace is not skipped either (the original guard, now the general one)", async () => {
+    seedBoth(OPERATOR);
+    const spy = vi.fn(async () => "api-key");
+    const { delegationWorkspaceId: _drop, ...noWs } = DELEGATED;
+    const err = await lease({ ...noWs, resolveAuthMode: spy }).catch((e) => e);
+    expect(err).toBeInstanceOf(OauthDelegationForbiddenError);
+    expect(spy).not.toHaveBeenCalled();
+    expect(outcomes()).toEqual(["workspace_mismatch"]);
+  });
+
   const NON_API_KEY: Array<[string, unknown, "non_api_key" | "unresolved"]> = [
     ["managed", "managed", "non_api_key"],
     ["null", null, "non_api_key"],
@@ -736,9 +794,9 @@ describe("getAgentCredential — cross-owner api-key skip (#11594)", () => {
     ["an absent resolver", Symbol.for("absent"), "unresolved"],
   ];
 
-  it.each(SHAPES.flatMap(([n, shape, owner]) => NON_API_KEY.map(([m, v, o]) => [n, shape, owner, m, v, o] as const)))(
+  it.each(SHAPES.flatMap(([n, shape, owner]) => NON_API_KEY.map(([m, v, o]) => [n, m, shape, owner, v, o] as const)))(
     "AC2 %s + %s: the grantor's subscription row is selected as today and the lease is refused (quiet, closed outcome)",
-    async (_n, shape, owner, _m, v, outcome) => {
+    async (_n, _m, shape, owner, v, outcome) => {
       seedBoth(owner);
       const resolveAuthMode =
         v === Symbol.for("absent")
@@ -759,9 +817,9 @@ describe("getAgentCredential — cross-owner api-key skip (#11594)", () => {
     },
   );
 
-  it.each(SHAPES.flatMap(([n, shape, owner]) => NON_API_KEY.map(([m, v]) => [n, shape, owner, m, v] as const)))(
+  it.each(SHAPES.flatMap(([n, shape, owner]) => NON_API_KEY.map(([m, v]) => [n, m, shape, owner, v] as const)))(
     "AC2 %s + %s with the grantor's subscription row absent: the api key is reached with zero error-tracker events",
-    async (_n, shape, owner, _m, v) => {
+    async (_n, _m, shape, owner, v) => {
       seedProvider("anthropic", REST_PLAINTEXT, owner);
       const resolveAuthMode =
         v === Symbol.for("absent")
@@ -784,7 +842,7 @@ describe("getAgentCredential — cross-owner api-key skip (#11594)", () => {
     expect(sinks.decrypted).toHaveLength(0);
   });
 
-  it.each(SHAPES)("AC2 %s with the kill-switch off: the resolver is never called and the subscription row is never queried", async (_n, shape, owner) => {
+  it.each(ALL_SHAPES)("AC2 %s with the kill-switch off: the resolver is never called and the subscription row is never queried", async (_n, shape, owner) => {
     delete process.env.CC_OAUTH_ENABLED;
     seedBoth(owner);
     const spy = vi.fn(async () => "api-key");
@@ -905,8 +963,26 @@ describe("getAgentCredential — unresolved-mode cause split (#11599)", () => {
       (c) => Array.isArray(c) && c[0] === "sentry.captureMessage" && (c[2] as { tags?: { op?: string } })?.tags?.op === "auth-mode-unresolved",
     ) as Array<[string, string, { tags: Record<string, string>; extra: Record<string, unknown> }]>;
     expect(ev).toHaveLength(1);
-    expect(ev[0][2].tags).toEqual({ feature: "byok-lease", op: "auth-mode-unresolved", reason });
+    expect(ev[0][2].tags).toEqual({ feature: "byok-lease", op: "auth-mode-unresolved", reason, cause });
     expect(JSON.stringify(sinks.calls)).not.toContain("SECRETROW");
+  });
+
+  it("AC5 the event is debounced per (user, reason): a repeat is suppressed, another reason is not, the user is hashed and the cause is a tag", async () => {
+    seedProvider("anthropic_oauth", VALID_OAUTH, OPERATOR);
+    const run = (resolver: () => Promise<string>) =>
+      runWithByokLease({ ...SELF, resolveAuthMode: resolver }, (l) => Promise.resolve(l.getAgentCredential())).catch((e) => e);
+    const unbound = async () => { throw new ConversationAuthModeError("unbound"); };
+    await run(unbound);
+    await run(unbound);
+    await run(async () => { throw new ConversationAuthModeError("read_failed"); });
+    const ev = sinks.calls.filter(
+      (c) => Array.isArray(c) && c[0] === "sentry.captureMessage" && (c[2] as { tags?: { op?: string } })?.tags?.op === "auth-mode-unresolved",
+    ) as Array<[string, string, { tags: Record<string, string>; extra: Record<string, unknown> }]>;
+    expect(ev.map((e) => e[2].tags.reason)).toEqual(["unbound", "read_failed"]);
+    expect(ev.map((e) => e[2].tags.cause)).toEqual(["auth_mode_unresolved", "auth_mode_unavailable"]);
+    // The tenant is identifiable (hashed) but the raw id never reaches a sink.
+    expect(ev[0][2].extra.userIdHash ?? ev[0][2].extra.userId).toBeDefined();
+    expect(JSON.stringify(sinks.calls)).not.toContain(OPERATOR);
   });
 
   it("AC5 a genuine api_keys read failure stays fetch_failed -> key_invalid", async () => {

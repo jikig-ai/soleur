@@ -102,28 +102,33 @@ describe("authModeUnresolvedFrame / authFailureFrameFromLeaseError", () => {
 });
 
 describe("logSessionFailure for the new causes", () => {
-  const mk = () => ({ info: vi.fn(), error: vi.fn() });
+  const mk = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
   const messages = { refused: "refused", failed: "Session error" };
 
-  it.each(["auth_mode_unresolved", "auth_mode_unavailable"])("%s logs at INFO with the context, never at ERROR", (cause) => {
+  // WARN, not INFO: INFO never leaves the host (the log shipper forwards WARN and above), and this line is the only one
+  // tying the refusal to a conversation. Never ERROR: that would reach the error tracker a second time.
+  it.each(["auth_mode_unresolved", "auth_mode_unavailable"])("%s logs at WARN with the context, never at ERROR or INFO", (cause) => {
     const log = mk();
     logSessionFailure(log, lookAlike(cause), { conversationId: "c" }, messages);
     expect(log.error).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledTimes(1);
-    expect(log.info.mock.calls[0][0]).toEqual({ conversationId: "c" });
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn.mock.calls[0][0]).toEqual({ conversationId: "c" });
     // The refusal message is derived from the call site's own `failed` string.
-    expect(log.info.mock.calls[0][1]).toContain("Session error");
+    expect(log.warn.mock.calls[0][1]).toContain("Session error");
   });
 
   it("oauth_unusable keeps the call site's own refused message; fetch_failed stays an ERROR", () => {
     const a = mk();
     logSessionFailure(a, lookAlike("oauth_unusable"), {}, messages);
     expect(a.info).toHaveBeenCalledWith({}, "refused");
+    expect(a.warn).not.toHaveBeenCalled();
     const b = mk();
     const err = lookAlike("fetch_failed");
     logSessionFailure(b, err, {}, messages);
     expect(b.error).toHaveBeenCalledWith({ err }, "Session error");
     expect(b.info).not.toHaveBeenCalled();
+    expect(b.warn).not.toHaveBeenCalled();
   });
 });
 

@@ -9,6 +9,7 @@ const {
   mockReportSilentFallback,
   mockMirrorP0Deduped,
   mockLogInfo,
+  mockLogWarn,
   mockFetchUserWorkspacePath,
   mockMessagesInsert,
   mockUpdateConversationFor,
@@ -17,6 +18,7 @@ const {
   mockReportSilentFallback: vi.fn(),
   mockMirrorP0Deduped: vi.fn(),
   mockLogInfo: vi.fn(),
+  mockLogWarn: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
   mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
   mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
@@ -80,10 +82,10 @@ vi.mock("@/server/cc-reprovision", () => ({
 }));
 
 vi.mock("@/server/logger", () => ({
-  default: { info: mockLogInfo, error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  default: { info: mockLogInfo, error: vi.fn(), warn: mockLogWarn, debug: vi.fn() },
   createChildLogger: () => ({
     info: mockLogInfo,
-    warn: vi.fn(),
+    warn: mockLogWarn,
     error: vi.fn(),
     debug: vi.fn(),
   }),
@@ -179,7 +181,7 @@ describe("cc-dispatcher — lease refusal for an unusable stored credential (#11
   // #11599 — the Concierge path used to render an unresolvable authentication mode as "Dashboard router is unavailable" and
   // cleared the resumable session_id. It now sends the typed frame above the generic else.
   it.each(["auth_mode_unresolved", "auth_mode_unavailable"] as const)(
-    "%s: sends the typed frame, keeps the resumable session_id, adds no dispatcher mirror, logs info",
+    "%s: sends the typed frame, keeps the resumable session_id, adds no dispatcher mirror, logs at WARN (info never ships)",
     async (cause) => {
       __setCcRunnerForTests(
         stubRunner(async () => {
@@ -194,7 +196,13 @@ describe("cc-dispatcher — lease refusal for an unusable stored credential (#11
       expect(frames(sendToClient).filter((f) => f.type === "error")).toEqual([authModeUnresolvedFrame(cause)]);
       expect(onSessionIdPersisted).not.toHaveBeenCalledWith(null);
       expect(dispatchMirrorCalls()).toHaveLength(0);
-      expect(mockLogInfo.mock.calls.filter(([, msg]) => typeof msg === "string" && /lease refused/.test(msg))).toHaveLength(1);
+      // WARN, not INFO: the log shipper forwards WARN and above, and this line is the only one carrying the conversation.
+      const refused = (calls: unknown[][]) => calls.filter(([, msg]) => typeof msg === "string" && /lease refused/.test(msg));
+      expect(refused(mockLogInfo.mock.calls)).toHaveLength(0);
+      const warned = refused(mockLogWarn.mock.calls);
+      expect(warned).toHaveLength(1);
+      expect(warned[0][0]).toMatchObject({ op: "auth-mode-unresolved-gate", conversationId: BASE.conversationId });
+      expect(JSON.stringify(warned[0][0])).not.toContain(BASE.userId);
     },
   );
 

@@ -15,6 +15,8 @@
 import { CREDENTIAL_SCHEMES, type CredentialScheme } from "@/lib/auth-scheme";
 
 import { matchAgentAuthFailure, type AgentAuthMatchKind } from "./agent-auth-match";
+// Import-free leaf (no Sentry, no observability): the one list of auth-mode causes, so a new cause fails `tsc` here too.
+import { AUTH_MODE_UNRESOLVED_CAUSES, type AuthModeUnresolvedCause } from "./auth-mode-error";
 
 /** A matcher kind plus the lease-time kind (a stored credential the CLI is known to drop, refused before any CLI spawn). */
 export type AuthFailureKind = AgentAuthMatchKind | "oauth_unusable";
@@ -26,12 +28,14 @@ const INVALID_API_KEY_TENANT_COPY =
   "Anthropic rejected your API key. Check that it is active and copied in full, then re-enter it in Settings.";
 
 /**
- * One recovery sentence appended to the operator-only (`oauth_token`) sign-in cells (#11599): an owner who also has an API
- * key saved can choose it for new conversations. The quoted label matches `authModeLabel` in the Settings component, and the
- * lead-in covers an owner who has no key saved. Operator-only: never appended to a tenant (`api_key`) or neutral cell.
+ * One recovery sentence appended to the operator-only (`oauth_token`) sign-in cells (#11599): the workspace owner who also has an
+ * API key saved can choose it for new conversations. The quoted label matches `authModeLabel` in the Settings component
+ * (pinned by test/agent-auth-user-message.test.ts). The mode is a workspace setting only the workspace owner can change, so the
+ * lead-in addresses the owner (CLO ruling L3, 2026-10-31; operator accounts are workspace owners of their own workspace) and
+ * names the workspace scope. Operator-only: never appended to a tenant (`api_key`) or neutral cell.
  */
 const RECOVER_VIA_API_KEY_MODE =
-  'If you have an Anthropic API key saved, you can instead choose "My API key" in Settings, then start a new conversation (a conversation keeps the mode it started with).';
+  'If you own this workspace and have an Anthropic API key saved, you can instead choose "My API key" in Settings (it applies to new conversations in this workspace, and a conversation keeps the mode it started with), then start a new conversation.';
 
 type CopyCell = { readonly api_key: string; readonly oauth_token: string; readonly neutral: string };
 
@@ -105,11 +109,11 @@ export interface AuthFailureFrame {
 export interface AuthModeUnresolvedFrame {
   type: "error";
   message: string;
-  errorCode: "auth_mode_unresolved" | "auth_mode_unavailable";
+  errorCode: AuthModeUnresolvedCause;
 }
 
 /** The two lease causes that mean "the authentication mode could not be resolved"; the cause names the recovery. */
-type AuthModeCause = AuthModeUnresolvedFrame["errorCode"];
+type AuthModeCause = AuthModeUnresolvedCause;
 
 /** Server-authored card copy. "authentication mode" is the Settings control's own term. `unresolved` is deterministic (a new
  *  conversation is the exit), `unavailable` is transient (send again). "not processed" is true even when an earlier turn ran. */
@@ -135,7 +139,7 @@ export function isOauthUnusableLeaseError(err: unknown): boolean {
 }
 
 function isAuthModeCause(cause: unknown): cause is AuthModeCause {
-  return cause === "auth_mode_unresolved" || cause === "auth_mode_unavailable";
+  return (AUTH_MODE_UNRESOLVED_CAUSES as readonly unknown[]).includes(cause);
 }
 
 /**
@@ -149,19 +153,25 @@ export function isLeaseRefusalReported(err: unknown): boolean {
 }
 
 /**
- * Log a failed session. A lease refusal the lease already reported (a closed class, no value) logs at INFO: an ERROR line
- * carrying `err` would reach Sentry a second time through the logger. Everything else keeps the ERROR line it always had.
+ * Log a failed session. A lease refusal the lease already reported (a closed class, no value) must not log an ERROR line
+ * carrying `err` (it would reach Sentry a second time through the logger). The unusable-token refusal logs at INFO; an
+ * unresolved authentication mode logs at WARN, because INFO never leaves the host (the log shipper forwards WARN and above) and
+ * this line is the only one tying the refusal to a conversation. Everything else keeps the ERROR line it always had.
  * `ctx` is spread into the log object at the top level, where the pino formatter pseudonymises `userId` (ADR-029); callers pass
  * it through rather than naming the field on a log line.
  */
 export function logSessionFailure(
-  log: { info: (obj: object, msg: string) => void; error: (obj: object, msg: string) => void },
+  log: {
+    info: (obj: object, msg: string) => void;
+    warn: (obj: object, msg: string) => void;
+    error: (obj: object, msg: string) => void;
+  },
   err: unknown,
   ctx: Record<string, unknown>,
   messages: { refused: string; failed: string },
 ): void {
   if (isOauthUnusableLeaseError(err)) log.info(ctx, messages.refused);
-  else if (isLeaseRefusalReported(err)) log.info(ctx, `${messages.failed} (lease refused: authentication mode unresolved)`);
+  else if (isLeaseRefusalReported(err)) log.warn(ctx, `${messages.failed} (lease refused: authentication mode unresolved)`);
   else log.error({ err, ...ctx }, messages.failed);
 }
 

@@ -19,7 +19,7 @@ type Engine = {
 // Display text only: the stored values (`managed`, `api-key`) and the PUT body are unchanged. The Claude engine's
 // `managed` mode means "the credential saved to your account" (never Soleur's), so the raw word would mislead.
 // Other engines keep the raw strings. No customer-facing copy here names a subscription (CLO ruling, #11591).
-function authModeLabel(engineId: string, mode: string): string {
+export function authModeLabel(engineId: string, mode: string): string {
   if (engineId !== DEFAULT_AGENT_ENGINE_ID) return mode;
   if (mode === "managed") return "Automatic";
   if (mode === "api-key") return "My API key";

@@ -41,6 +41,7 @@ import { TaskCompletedCard } from "@/components/chat/task-completed-card";
 import { ActivityTrail } from "@/components/chat/activity-trail";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { isAuthModeErrorCode } from "@/lib/types";
 import type {
   InteractivePromptResponsePayload,
   InteractivePromptPayload,
@@ -77,7 +78,7 @@ function credentialCardCopy(e: {
       return { title: "Rate Limited", noun: "key" };
     case "subscription_limit":
       return { title: "Subscription Limit Reached", noun: "key" };
-    // #11599 — the Settings control's own term. Not a credential block, so no key/token noun is used.
+    // #11599 — the Settings control's own term. Not a credential block (`noun` is read only when `credentialBlocked`).
     case "auth_mode_unresolved":
     case "auth_mode_unavailable":
       return { title: "Authentication Mode Unavailable", noun: "key" };
@@ -1147,8 +1148,7 @@ export function ChatSurface({
                     ? onSessionReconnect
                     : lastError.code !== "subscription_limit" &&
                         // #11599 — Reconnect does not resend and the socket stays up: no retry on either card.
-                        lastError.code !== "auth_mode_unresolved" &&
-                        lastError.code !== "auth_mode_unavailable"
+                        !isAuthModeErrorCode(lastError.code)
                       ? reconnect
                       : undefined
                 }

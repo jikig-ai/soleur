@@ -50,7 +50,7 @@ export async function readConversationBindingAuthMode(
  * `unbound`. A read error throws `read_failed`. An empty id can never name a caller's own row, so it is
  * `unbound` before any read (the scope arguments of the repository reads are optional by design).
  *
- * `expectedWorkspaceId` (#11594, passed by the lease for a delegated lease only): the mode a conversation carries is
+ * `expectedWorkspaceId` (#11594, passed by the lease's cross-owner pre-check only, and only when it holds a delegation workspace): the mode a conversation carries is
  * stamped from the workspace it was created in, while a delegation resolves against the caller's CURRENT workspace at
  * turn time. A run bound in a different workspace throws `workspace_mismatch` so the mode of one workspace can never
  * fund a delegation of another. Absent (the owner path), no comparison is made.

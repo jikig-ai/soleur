@@ -4,6 +4,7 @@ import { useState, useEffect, useReducer, useMemo, useRef, useCallback } from "r
 import { createClient } from "@/lib/supabase/client";
 import {
   WS_CLOSE_CODES,
+  isAuthModeErrorCode,
   isCredentialErrorCode,
   type WSMessage,
   type ConversationContext,
@@ -1298,7 +1299,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // does); the card clears on the next send. The deterministic code's exit is a new conversation (the mode is fixed per
           // conversation); the transient one says to send again, so it carries no action. Placed after the credential branch
           // so the teardown source gate is unaffected.
-          if (msg.errorCode === "auth_mode_unresolved" || msg.errorCode === "auth_mode_unavailable") {
+          if (isAuthModeErrorCode(msg.errorCode)) {
             dispatch({ type: "mark_last_user_unanswered" });
             setLastError({
               code: msg.errorCode,
@@ -2202,7 +2203,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // #11599 — a new turn supersedes the authentication-mode card of the previous one. Scoped to those two codes: every
       // other error keeps its existing lifecycle. After the refusals above, so a send that never leaves keeps the card.
       setLastError((prev) =>
-        prev && (prev.code === "auth_mode_unresolved" || prev.code === "auth_mode_unavailable") ? null : prev,
+        prev && isAuthModeErrorCode(prev.code) ? null : prev,
       );
       // Order is deliberate: the not-OPEN refusal above returns BEFORE
       // `reset_connection`. `unrecoverable` is entered from a non-transient close

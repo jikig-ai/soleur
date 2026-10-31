@@ -124,6 +124,17 @@ describe("useWebSocket — authentication mode unresolved (#11599)", () => {
     await waitFor(() => expect(result.current.lastError).toBeNull());
   });
 
+  // The ENTRY condition of the new branch: a code that is not one of the pair must not get the pair's treatment (the user's
+  // message flagged unanswered, an action link). Complements the scoped-clear row, which only pins the exit condition.
+  it.each(["rate_limited", "subscription_limit"])("an unrelated %s error does not take the authentication-mode branch", async (code) => {
+    const { result } = await afterOneMessage({ type: "error", errorCode: code, message: "m" });
+    await waitFor(() => expect(result.current.lastError?.code).toBe(code));
+    expect(result.current.lastError?.action).toBeUndefined();
+    const users = result.current.messages.filter((m) => m.role === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0].unanswered).not.toBe(true);
+  });
+
   it("the scoped clear leaves every other error code untouched", async () => {
     const { result } = await afterOneMessage({ type: "error", errorCode: "rate_limited", message: "slow down" });
     await waitFor(() => expect(result.current.lastError?.code).toBe("rate_limited"));

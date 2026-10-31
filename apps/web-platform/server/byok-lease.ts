@@ -59,7 +59,7 @@ import { isCcOauthEnabled } from "./cc-oauth-flag";
 import type { AgentAuthScheme, AgentCredential } from "./agent-env";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { createChildLogger } from "@/server/logger";
-import { reportSilentFallback } from "@/server/observability";
+import { mirrorWithDebounce, reportSilentFallback } from "@/server/observability";
 import { classifyCliDroppedValue } from "@/server/oauth-token-shape";
 import {
   ConversationAuthModeError,
@@ -161,7 +161,8 @@ export interface ByokLeaseArgs {
   /**
    * #11594 — the workspace the delegation was resolved in. Set only together with `delegationId`
    * (by `resolveKeyOwnerThenLease`). A cross-owner lease may skip the grantor-subscription refusal on an
-   * `api-key` conversation only when the conversation binding's workspace equals this one.
+   * `api-key` conversation only when the conversation binding's workspace equals this one; a cross-owner lease
+   * without it (a delegation id with no workspace, or an owner mismatch with no delegation) never skips.
    */
   delegationWorkspaceId?: string;
   /**
@@ -177,6 +178,14 @@ export interface ByokLeaseArgs {
   resolveAuthMode?: AuthModeResolverFn;
 }
 
+/** Why a lease failed; the doc on `ByokLeaseError` names each cause. */
+export type ByokLeaseCause =
+  | "fetch_failed"
+  | "decrypt_failed"
+  | "escape"
+  | "subscription_limit"
+  | "oauth_unusable"
+  | AuthModeUnresolvedCause;
 
 /**
  * BYOK-domain error class. Distinct from `RuntimeAuthError` (auth) and
@@ -198,14 +207,6 @@ export interface ByokLeaseArgs {
  *     other reason (start a new conversation). Fail closed; the closed `reason`
  *     rides on the error.
  */
-export type ByokLeaseCause =
-  | "fetch_failed"
-  | "decrypt_failed"
-  | "escape"
-  | "subscription_limit"
-  | "oauth_unusable"
-  | AuthModeUnresolvedCause;
-
 export class ByokLeaseError extends Error {
   public readonly cause: ByokLeaseCause;
 
@@ -384,7 +385,7 @@ export interface ByokLease {
    * @throws {ByokLeaseError} / {MissingByokKeyError} as `getRestApiKey`.
    * @throws {ByokLeaseError} cause="auth_mode_unresolved" | "auth_mode_unavailable" when
    *   an OWNER's oauth row exists and the mode cannot be resolved (no resolver, unreadable,
-   *   unbound, invalid value, workspace mismatch).
+   *   unbound, invalid value).
    */
   getAgentCredential(): AgentCredential | Promise<AgentCredential>;
 }
@@ -546,20 +547,28 @@ async function fetchRestApiKeyIntoSlot(slot: LeaseSlot): Promise<string> {
 
 type LeaseAuthMode = "managed" | "api-key";
 
-function failAuthModeClosed(reason: AuthModeUnresolvedReason): never {
-  // Null error and no raw value: the event carries only the closed reason (mirrors
-  // `oauth-credential-unusable`). Bounded by the subscription-holder population.
-  reportSilentFallback(null, {
-    feature: "byok-lease",
-    op: "auth-mode-unresolved",
-    message: "byok-lease: conversation auth mode could not be resolved; failing closed",
-    tags: { reason },
-    extra: { reason },
-  });
+function failAuthModeClosed(slot: LeaseSlot, reason: AuthModeUnresolvedReason): never {
+  const cause = classifyAuthModeReason(reason);
+  // Null error and no raw value: the event carries only the closed reason and cause (mirrors `oauth-credential-unusable`).
+  // `extra.userId` is hashed at the emit boundary and sets the error-tracker user, so the event can be tied to a tenant.
+  // Debounced per (user, reason): the card keeps the composer enabled, so a resend in a dead conversation must not
+  // multiply the event (the call-site WARN log still carries every turn's conversationId).
+  mirrorWithDebounce(
+    null,
+    {
+      feature: "byok-lease",
+      op: "auth-mode-unresolved",
+      message: "byok-lease: conversation auth mode could not be resolved; failing closed",
+      tags: { reason, cause },
+      extra: { reason, userId: slot.workspaceContextUserId },
+    },
+    slot.workspaceContextUserId,
+    `byok-lease:auth-mode-unresolved:${reason}`,
+  );
   // The closed reason rides on the error. The cause tells the user-facing layer which recovery is true:
   // a transient read failure (send again) versus every deterministic reason (start a new conversation), and
   // lets auto-sync retry only the former. The internal message is never shown to a user.
-  throw new ByokLeaseError(classifyAuthModeReason(reason), "Authentication unavailable; retry shortly", reason);
+  throw new ByokLeaseError(cause, "Authentication unavailable; retry shortly", reason);
 }
 
 /**
@@ -569,23 +578,30 @@ function failAuthModeClosed(reason: AuthModeUnresolvedReason): never {
  * read after scope end" true (and testable).
  */
 async function resolveLeaseAuthMode(slot: LeaseSlot): Promise<LeaseAuthMode> {
-  if (!slot.resolveAuthMode) return failAuthModeClosed("no_resolver");
+  if (!slot.resolveAuthMode) return failAuthModeClosed(slot, "no_resolver");
   let mode: unknown;
   try {
     mode = await slot.resolveAuthMode();
   } catch (err) {
-    return failAuthModeClosed(err instanceof ConversationAuthModeError ? err.reason : "resolver_failed");
+    return failAuthModeClosed(slot, err instanceof ConversationAuthModeError ? err.reason : "resolver_failed");
   }
   assertLeaseAlive(slot);
-  if (mode !== "managed" && mode !== "api-key") return failAuthModeClosed("invalid_value");
+  if (mode !== "managed" && mode !== "api-key") return failAuthModeClosed(slot, "invalid_value");
   return mode;
 }
 
 type SkipDeniedOutcome = "non_api_key" | "unresolved" | "workspace_mismatch";
 
-/** Closed enum only: no id, mode string or value. Info, not an event: a denied skip is today's refusal (CLO condition 1). */
+/**
+ * Closed enum only: no id, mode string or value (CLO condition 1). Not an error-tracker event: a denied skip is today's
+ * refusal. `non_api_key` is the ordinary managed delegated turn, so it logs at debug; `unresolved` / `workspace_mismatch`
+ * mean the skip could not be evaluated and log at warn, because info never leaves the host (the log shipper forwards warn
+ * and above), so a systematic failure of the pre-check would otherwise be invisible.
+ */
 function noteSkipDenied(outcome: SkipDeniedOutcome): void {
-  log.info({ outcome }, "byok-lease: cross-owner api-key skip not granted");
+  const msg = "byok-lease: cross-owner api-key skip not granted";
+  if (outcome === "non_api_key") log.debug({ outcome }, msg);
+  else log.warn({ outcome }, msg);
 }
 
 /**
@@ -601,8 +617,9 @@ async function crossOwnerChoseApiKey(slot: LeaseSlot): Promise<boolean> {
     noteSkipDenied("unresolved");
     return false;
   }
-  // A delegation without the workspace it was resolved in can never be matched against a binding: no skip.
-  if (slot.delegationId != null && slot.delegationWorkspaceId == null) {
+  // A cross-owner lease without the workspace it was resolved in can never be matched against a binding (a delegation id
+  // with no workspace, or an owner mismatch with no delegation at all): no skip. Callers reach this only when `crossOwner`.
+  if (slot.delegationWorkspaceId == null) {
     noteSkipDenied("workspace_mismatch");
     return false;
   }
@@ -611,6 +628,8 @@ async function crossOwnerChoseApiKey(slot: LeaseSlot): Promise<boolean> {
   try {
     mode = await slot.resolveAuthMode({ expectedWorkspaceId: slot.delegationWorkspaceId });
   } catch (err) {
+    // review: swallowed on purpose (CLO condition 1): a failed read never grants the skip and never adds a failure mode to a
+    // cross-owner lease; the caller runs today's refusal. The closed outcome is logged at warn by `noteSkipDenied`.
     mode = undefined;
     outcome = err instanceof ConversationAuthModeError && err.reason === "workspace_mismatch" ? "workspace_mismatch" : "unresolved";
   }
@@ -669,8 +688,9 @@ async function fetchAgentCredentialIntoSlot(
       // falls through to the api_key branch; it never falls back the other way.
       const mode = await resolveLeaseAuthMode(slot);
       if (mode === "managed") {
-        // Tripwire (CTO R2): the subscription row is decrypted for its owner only. The gate above already refuses a
-        // cross-owner run; this keeps the invariant local to the decrypt if the skip logic is ever edited.
+        // Tripwire (CTO R2), defence in depth: the subscription row is decrypted for its owner only. The gate above already
+        // refuses a cross-owner run, so this line is unreachable today and not independently testable; it keeps the invariant
+        // local to the decrypt if the gate is ever refactored.
         if (crossOwner) throw new OauthDelegationForbiddenError();
         const buf = decryptRow(oauthRow, slot.keyOwnerUserId);
         assertAliveAfterDecrypt(slot, buf);

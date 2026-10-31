@@ -13,16 +13,18 @@ export type AuthModeUnresolvedReason = AuthModeErrorReason | "no_resolver" | "re
  * The reasons worth retrying: a read that failed for an infrastructure reason. EVERY other reason, including any
  * added later, is deterministic and is not auto-retried (fail-safe default).
  */
-export const TRANSIENT_AUTH_MODE_REASONS: readonly string[] = ["read_failed", "resolver_failed"];
+export const TRANSIENT_AUTH_MODE_REASONS: readonly AuthModeUnresolvedReason[] = ["read_failed", "resolver_failed"];
 
 /** The lease-facing mode resolver. The optional argument is passed ONLY by the cross-owner pre-check (#11594). */
 export type AuthModeResolverFn = (ctx?: { expectedWorkspaceId?: string }) => Promise<string>;
 
-export type AuthModeUnresolvedCause = "auth_mode_unresolved" | "auth_mode_unavailable";
+/** The two lease causes that mean "the authentication mode could not be resolved". The one list every consumer derives from. */
+export const AUTH_MODE_UNRESOLVED_CAUSES = ["auth_mode_unresolved", "auth_mode_unavailable"] as const;
+export type AuthModeUnresolvedCause = (typeof AUTH_MODE_UNRESOLVED_CAUSES)[number];
 
 /** The lease cause for a closed reason: transient reasons are `auth_mode_unavailable`, everything else `auth_mode_unresolved`. */
 export function classifyAuthModeReason(reason: string): AuthModeUnresolvedCause {
-  return TRANSIENT_AUTH_MODE_REASONS.includes(reason) ? "auth_mode_unavailable" : "auth_mode_unresolved";
+  return (TRANSIENT_AUTH_MODE_REASONS as readonly string[]).includes(reason) ? "auth_mode_unavailable" : "auth_mode_unresolved";
 }
 
 /** Thrown by the conversation auth-mode resolver; matched by `instanceof`, never by name. */

@@ -68,7 +68,7 @@ describe("copy table", () => {
 // #11599 — the operator-only sign-in copy gains ONE recovery sentence. The quoted label matches the Settings control
 // (`authModeLabel` in components/settings/agent-engine-settings.tsx); the lead-in covers an owner with no key saved.
 const RECOVERY =
-  'If you have an Anthropic API key saved, you can instead choose "My API key" in Settings, then start a new conversation (a conversation keeps the mode it started with).';
+  'If you own this workspace and have an Anthropic API key saved, you can instead choose "My API key" in Settings (it applies to new conversations in this workspace, and a conversation keeps the mode it started with), then start a new conversation.';
 
 // The pre-#11599 oauth_token cells, verbatim: the sentence is APPENDED, nothing before it changes.
 const OLD_OAUTH_TOKEN: Partial<Record<AuthFailureKind, string>> = {
@@ -89,8 +89,12 @@ describe("recovery sentence (#11599)", () => {
     expect(authFailureCopy(kind, "oauth_token")).toBe(`${OLD_OAUTH_TOKEN[kind]} ${RECOVERY}`);
   });
 
-  it("session_expired (a bubble-only 'start a new message' cell) does not get it", () => {
-    expect(authFailureCopy("session_expired", "oauth_token")).not.toContain("My API key");
+  // Pinned EXACTLY (both directions): a reworded or appended recovery sentence on this bubble-only 'start a new message' cell
+  // must fail, not just one that happens to repeat the label.
+  it("session_expired (a bubble-only 'start a new message' cell) is unchanged and does not get it", () => {
+    expect(authFailureCopy("session_expired", "oauth_token")).toBe(
+      "Your Claude session expired before we could finish. Start a new message, and if it happens again, save a fresh token from claude setup-token.",
+    );
   });
 
   it("no tenant (api_key) or neutral cell ever carries it, and the sentence is plain text", () => {
@@ -200,7 +204,7 @@ describe("rewriteAgentAuthFailure", () => {
 
 describe("logSessionFailure", () => {
   const messages = { refused: "refused", failed: "failed" };
-  const mkLog = () => ({ info: vi.fn(), error: vi.fn() });
+  const mkLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
   const refusal = Object.assign(new Error("x"), { name: "ByokLeaseError", cause: "oauth_unusable" });
 
   it("logs an unusable-credential refusal at INFO, never ERROR, and keeps the context", () => {

@@ -422,23 +422,23 @@ git grep -n "content\[0\]" -- apps/web-platform/server/agent-auth-user-message.t
 liveness_signal:
   what: Sentry event op auth-mode-unresolved (feature byok-lease, tag reason) from the lease, and the agent-credential-selected breadcrumb {scheme, delegated}
   cadence: per cold credential fetch for a subscription holder or a cross-owner lease
-  alert_target: Sentry web-platform project issue stream (existing agent_auth_failure / byok-lease routing; no new rule)
+  alert_target: Sentry web-platform project issue stream. Review correction (2026-10-31): no `sentry_alert` rule matches `byok-lease` / `auth-mode-unresolved` (the `agent_auth_failure` rule matches `agent-auth` / `cli-auth-failure` and falls through), so only the vendor-default new-high-priority-issue email can fire, once; no new rule is added here (the event is bounded by the subscription-holder plus cross-owner population)
   configured_in: apps/web-platform/server/byok-lease.ts failAuthModeClosed and noteCredentialSelected
 error_reporting:
   destination: Sentry web-platform via the existing reportSilentFallback in server/observability.ts (lease-owned, one event per refusal); the five call-site mirrors are skipped for these causes so there is no second event
-  fail_loud: the client receives a typed error frame (auth_mode_unresolved or auth_mode_unavailable) with server-authored copy; pino logs the refusal at info with conversationId
+  fail_loud: the client receives a typed error frame (auth_mode_unresolved or auth_mode_unavailable) with server-authored copy; the call site logs the refusal at WARN with a hashed user id and conversationId (review correction: the plan said info, but info never leaves the host; the log shipper `app_container_warn_filter` in infra/vector.toml forwards level >= 40 only)
 failure_modes:
   - mode: mode cannot be resolved (unbound, invalid_value, no_resolver, read_failed, resolver_failed)
-    detection: Sentry op auth-mode-unresolved with the closed reason tag
+    detection: observability layer 2 (pino error line to Better Stack via Vector WARN+, plus the Sentry message event): Sentry op auth-mode-unresolved with the closed reason and cause tags, the user hashed, debounced per (user, reason); the per-turn conversationId is on the call-site WARN log (layer 2, Better Stack)
     alert_route: Sentry issue stream (bounded by the subscription-holder plus cross-owner population)
   - mode resolver throws, is absent or mismatches the workspace inside the quiet cross-owner pre-check
-    detection: not an error-tracker event by design (CLO condition 1: no new failure mode); an info log with a closed outcome (non_api_key, unresolved, workspace_mismatch) is emitted and OauthDelegationForbiddenError reaches the runner mirror as before
+    detection: not an error-tracker event by design (CLO condition 1: no new failure mode); a log with a closed outcome is emitted, at WARN for unresolved / workspace_mismatch (layer 2, Better Stack) and at debug for non_api_key (the ordinary managed delegated turn, deliberately not shipped), and OauthDelegationForbiddenError reaches the runner mirror as before
     alert_route: existing generic runner mirror for OauthDelegationForbiddenError
   - regression serving the wrong credential to a cross-owner run
     detection: the Guard 1 mutation-checked tests in CI; breadcrumb scheme/delegated pair provable from telemetry
     alert_route: CI failure blocks merge
 logs:
-  where: pino to Better Stack (existing byok-lease, agent-runner, cc-dispatcher child loggers)
+  where: pino to Better Stack for WARN and above (existing byok-lease, agent-runner, cc-dispatcher child loggers); INFO is local-only (docker logs) and is not relied on
   retention: Better Stack default retention for the web-platform source
 discoverability_test:
   command: grep -o 'op: "auth-mode-unresolved"' apps/web-platform/server/byok-lease.ts
