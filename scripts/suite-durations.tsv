@@ -416,6 +416,7 @@ scripts/ghcr-read-retired-8036	2048	measured
 scripts/git-data-boot-poll-8178	2834	measured
 scripts/git-data-reboot-evidence-landed-8210	1324	measured
 scripts/git-data-rehearsal-evidence-8211	1222	floor
+scripts/git-data-replication-signal-11704	1222	floor
 scripts/guard-vacuity-floor	44880	measured
 scripts/hosted-destroy-ask-window-9776	1222	floor
 scripts/hostname-mislabel-web1-6616	221	measured

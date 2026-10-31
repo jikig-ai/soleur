@@ -59,7 +59,7 @@
 # Credentials, each bound in exactly one step's env (the credential census suite pins this):
 #   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck steps (the cutover job's; the wipe job's precheck and flag re-read)
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_FLAG   `prd` write — the flag WRITE steps ONLY (#8573); the rollback's soak-anchor delete (#10297) rides the same step
-#   - secrets.DOPPLER_TOKEN                 prd_terraform read — bridge + webhook creds
+#   - secrets.DOPPLER_TOKEN                 prd_terraform read — bridge + webhook creds, and the flip preconditions step's Better Stack new_sessions_paused read (#11704; bound there as BS_DOPPLER_TOKEN, handed to the reader per command)
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_ROOT   soleur-git-data-root/prd read — the key fetch
 #   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the `wipe` job's loader step (the Hetzner write token), and the cutover flip's reachability check
 #   - secrets.SENTRY_ACTIONS_RO_TOKEN       read-only Sentry — the live pin-fault rule check
@@ -276,6 +276,11 @@ jobs:
           # WORKTREE_ROOT) — flipping onto an image that denies only
           # WORKSPACES_ROOT would leave every sibling worktree unmasked.
           GIT_DATA_DENY_FLOOR: ${{ vars.GIT_DATA_DENY_FLOOR }}
+          # the prd_terraform read credential for the new_sessions_paused Better Stack read ONLY (#11704): bound under a
+          # different name than DOPPLER_TOKEN, so nothing in this step authenticates to Doppler by default, and handed to the reader as a
+          # per-command DOPPLER_TOKEN prefix. A step-level env reaches every command in the step (gh, bc_curl, jq and the reader all
+          # inherit it); the prefix does NOT hide it from them. What it limits is which commands use it as a Doppler credential.
+          BS_DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
@@ -354,7 +359,60 @@ jobs:
           # the deny fix must be SERVED before the flag flips, not merely merged.
           [[ -n "${GIT_DATA_DENY_FLOOR:-}" ]] || fail sandbox_deny_floor "vars.GIT_DATA_DENY_FLOOR unset — set it to the first release carrying the #9725 workspaceTenantDenyRoots deny."
           ver_le "$GIT_DATA_DENY_FLOOR" "$running" || fail sandbox_deny_floor "running $running is below deny floor $GIT_DATA_DENY_FLOOR — a pre-fix image would deny only WORKSPACES_ROOT while workspaces live under WORKTREE_ROOT; wait for the deploy arm, then re-dispatch."
-          echo "preconditions clear: tier_b seam, pin-fault rule live, d6 replace stamped ($last_ok), no deploy in flight, image $running >= $GIT_DATA_EMITTER_FLOOR, image >= deny floor $GIT_DATA_DENY_FLOOR."
+          # new_sessions_paused (#11704): both web hosts must report new_sessions_paused=1 in EVERY reporter row of the last 2 minutes, the
+          # newest row at most 75 s old (75 s = one 60 s reporter tick plus 15 s ingest slack, so ONE missed tick refuses; a stale pause is the
+          # unsafe direction), before the SSH bridge is reached.
+          # Placed last so a refusal here costs no earlier gate; a precondition-time check, not a lock held across the sequence (CTO F10).
+          # The reader gets the Better Stack credential as a per-command DOPPLER_TOKEN prefix. --only-secrets to the three query secrets (as
+          # inngest-config-drift.yml does) is hygiene: it narrows what doppler injects into the step; the token itself can still read
+          # prd_terraform. The reader also inherits the step env (GH_TOKEN, the Sentry read token). Integers are extracted in SQL behind the closed-grammar match, so the runner never receives a
+          # raw log row; anything that is not a clean integer fails closed as pause_unread. Only integers, host labels and the class token are printed.
+          # A LIMIT 200 answer may have cut off an older =0 row, so a full page is pause_unread, never a pass. A full page does not change
+          # in 20 s, so it ends the retry loop at once (no ~4 min of sleeping on an answer that cannot improve).
+          BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-pause-err.$$"
+          # shellcheck source=/dev/null
+          source "${GITHUB_WORKSPACE:-.}/scripts/lib/betterstack-read-classify.sh" || true
+          pause_sql="SELECT multiIf(JSONExtractString(raw,'host_name') IN ('soleur-web-platform','soleur-inngest-prd'),'web-1', JSONExtractString(raw,'host_name') = 'soleur-web-2','web-2','') AS leg, dateDiff('second', dt, now()) AS age_s, toUInt8OrNull(extract(raw,'new_sessions_paused=([01])')) AS p FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 2 MINUTE AND leg != '' AND match(raw,'agent_sessions_live=[0-9]+ cc_queries=[0-9]+ legacy_sessions=[0-9]+ starting=[0-9]+ new_sessions_paused=[01] refused_since_last=[0-9]+') ORDER BY dt DESC LIMIT 200 FORMAT JSONEachRow"
+          pause_max_age=75
+          pause_try=0
+          while :; do
+            pause_try=$((pause_try + 1))
+            pause_rc=0; pause_class=""; pause_unread=""; pause_zero=0; pause_bad=0; pause_total=0; pause_detail=""; pause_tsv=""
+            pause_rows="$(DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh "$pause_sql" 2>"$BS_ERR")" || pause_rc=$?
+            if [ "$pause_rc" -ne 0 ]; then
+              # The reader's marker line is surfaced (a credential refusal reads as such, not as a host that never reported); its other stderr is not.
+              grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true
+              printf '%s' "$pause_rows" > "$BS_ERR.rows"
+              pause_class="unclassified"
+              if declare -F bs_read_classify >/dev/null; then pause_class="$(bs_read_classify "$pause_rc" "$BS_ERR.rows")"; fi
+              pause_unread="read_failed"; pause_rows=""
+            fi
+            pause_tsv="$(printf '%s\n' "$pause_rows" | jq -r '[(.leg | tostring), (.age_s | tostring), (.p | tostring)] | @tsv')" || pause_unread="${pause_unread:-unparseable}"
+            pause_sum="$(printf '%s\n' "$pause_tsv" | awk -F'\t' '
+              NF == 0 { next }
+              { tot++ }
+              ($1 != "web-1" && $1 != "web-2") || $3 !~ /^[01]$/ { bad++; next }
+              $3 == "0" { z[$1]++ }
+              $2 !~ /^[0-9]+$/ { bad++; next }
+              { n[$1]++; if (!($1 in a) || $2 + 0 < a[$1] + 0) a[$1] = $2 }
+              END { print "bad", bad + 0, tot + 0; split("web-1 web-2", L, " "); for (i = 1; i <= 2; i++) print L[i], n[L[i]] + 0, z[L[i]] + 0, (L[i] in a ? a[L[i]] : 0) }')"
+            while read -r pl pn pz pa; do
+              if [ "$pl" = bad ]; then pause_bad="$pn"; pause_total="$pz"; continue; fi
+              pause_zero=$((pause_zero + pz))
+              if [ "$pn" -eq 0 ] || [ "$pa" -gt "$pause_max_age" ]; then pause_unread="${pause_unread:-no_fresh_row}"; fi
+              if [ "$pn" -eq 0 ]; then pa="none"; fi
+              pause_detail="${pause_detail} ${pl} rows=${pn} zeros=${pz} newest_age_s=${pa};"
+            done <<<"$pause_sum"
+            if [ "$pause_zero" -gt 0 ]; then break; fi
+            if [ "$pause_bad" -gt 0 ]; then pause_unread="${pause_unread:-non_integer}"; fi
+            if [ "$pause_total" -ge 200 ]; then pause_unread="${pause_unread:-truncated}"; break; fi
+            if [ -z "$pause_unread" ] || [ "$pause_try" -ge 3 ]; then break; fi
+            sleep 20
+          done
+          rm -f "$BS_ERR" "$BS_ERR.rows"
+          if [ "$pause_zero" -gt 0 ]; then fail pause_not_on "Owner action (agents must not run it): bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd on, then ask the owner to re-dispatch. A reporter row in the last 2 minutes reads new_sessions_paused=0 (${pause_detail# }); after the pause is on, wait 2 minutes so no =0 row remains in the window. new_sessions_paused=1 does not mean zero sessions (the exempt synthetic account can still start one), so read agent_sessions_live too."; fi
+          if [ -n "$pause_unread" ]; then fail pause_unread "the pause could not be verified after ${pause_try} read(s): ${pause_unread}${pause_class:+ class=${pause_class}} bad_rows=${pause_bad} (${pause_detail# }). No reporter row under ${pause_max_age} s old for both hosts, a full 200-row answer, or the Better Stack read failed. Read-only check (an agent may run it; it needs the Doppler prd_terraform query secrets): bash scripts/betterstack-query.sh with the reporter-line query, or read the reporter line in Better Stack. Causes: no_fresh_row or truncated mean a missing or stale reporter heartbeat or a flood of rows, so the owner checks the web hosts; class=credentials-rejected (or a SOLEUR_CREDENTIAL_REFUSED line above) needs the owner to fix the BETTERSTACK_QUERY_* secrets in Doppler prd_terraform; read_failed with transport or reader-exit-1 may clear on a re-dispatch. Then re-dispatch."; fi
+          echo "preconditions clear: tier_b seam, pin-fault rule live, d6 replace stamped ($last_ok), no deploy in flight, image $running >= $GIT_DATA_EMITTER_FLOOR, image >= deny floor $GIT_DATA_DENY_FLOOR, both web hosts paused (new_sessions_paused=1 in every row of the last 2 minutes, newest <= ${pause_max_age} s)."
 
       # --- SSH access path (all host-touching modes) --------------------------------
       - name: CF Tunnel SSH bridge
