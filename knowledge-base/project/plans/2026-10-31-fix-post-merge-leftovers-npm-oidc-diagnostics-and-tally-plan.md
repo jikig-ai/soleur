@@ -13,6 +13,25 @@ closes: none
 
 # fix: post-merge leftovers (npm OIDC diagnostics, infra-validation recheck, tally reconciliation, read-only prod check)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31
+**Review inputs:** DHH, Kieran and simplicity plan-review panel; CTO rulings R1-R4; deepen pass by security-sentinel, observability-coverage-reviewer, test-design-reviewer, spec-flow-analyzer and git-history-analyzer; gates 4.6-4.13 run.
+
+### Key improvements
+
+1. Scope cut after review: the `model.c4` ordinal fix, JWT claim decode, step summary and exchange-token parsing were removed; the 2xx replay body is never read.
+2. Security hardening of the diagnose script: bearers only via curl stdin config with charset validation, C0/DEL/U+2028/U+2029 stripping, static-text annotation, xtrace refusal, `curl -G --data-urlencode` for the audience (the request URL already has a query string).
+3. Guard 1 now pins the `if:` as a parsed `&&` conjunct set (a substring check would accept `always()`), adds `continue-on-error`, wrong-id and `not-exercised` rows, and uses a member-scoped probe so the rows can be attributed and shown to fail.
+4. `ship` does not read `evidence.md` (verified), so the live PR body is the durable record and the plan prescribes an idempotent append after `ship` writes it.
+5. `discoverability_test` literal changed to `NPM_PUBLISH_OIDC_SUITE=PASS` because `0 failed` substring-matches `10 failed`.
+6. First-green-run gaps closed: `not-exercised` marker on the already-published early exit, runbook checklist (`gh workflow run`, `npm trust list`, skipped versions), softened 401 wording, entry creation gated on owner authorization.
+
+### New considerations discovered
+
+- A prior learning (2026-10-28) already hit the same shared `main` ledger and called it procedural; this is the second occurrence, hence the small script fix.
+- `workflow_run` runs check out main HEAD, which can be newer than the tag published; `release` plus `workflow_run` can double-fire (accepted, explained by `exchange-ok`).
+
 ## Overview
 
 One PR (draft PR #11688) closes four leftovers from the messages owner-draft UPDATE policy merge (PR #11622, squash `0ca85fb1f7`, 2026-10-30):
@@ -64,6 +83,8 @@ One PR (draft PR #11688) closes four leftovers from the messages owner-draft UPD
 - ADR-310 (adopting): OIDC trusted publishing decision; its dissent (fall back to rotating `NPM_TOKEN`) stays available only if the trust entry proves impossible.
 - ADR-268: tally contract; `Pipeline-Tally:` PR-body line is the cross-PR aggregation surface.
 - Prior art for the operator-reserved step: decision-challenges row T1a in `knowledge-base/project/specs/archive/20261030-144939-feat-one-shot-11585-npm-publish-e404/decision-challenges.md`.
+
+**Prior art on the shared `main` ledger.** `knowledge-base/project/learnings/2026-10-28-a-branch-scoped-ledger-read-as-a-cwd-bug-from-the-wrong-checkout.md` documents the same `main-88d050` ledger confusion (then `seats=57 fix_rounds=1`) and concluded "no script defect, procedural fix". This is its second occurrence (now `83/15/1/12`), so the cumulative shared-`main` ledger is treated as a recurring measurement hazard worth a small script fix; the learning's diagnosis (the script resolved the right branch) stands. Side finding, not acted on: that learning cites a `BRANCH == "main"` skip that does not exist in `pipeline-tally.sh` (verified: no commit ever touched default-branch handling in it).
 
 **CLI verification (npm).** `npm trust --help` (local npm 11.20.0) lists `npm trust github [package] --file [--repo] [--env] [--allow-publish] [-y]`, `list`, `revoke`; `npm help trust` states 2FA is required at account level and granular tokens with the bypass-2FA option are not supported. OIDC exchange endpoint and audience verified from `lib/utils/oidc.js` (npm 11.20): `POST /-/npm/v1/oidc/token/exchange/package/<escapedName>`, audience `npm:<registry host>`, id-token fetched from `ACTIONS_ID_TOKEN_REQUEST_URL` with bearer `ACTIONS_ID_TOKEN_REQUEST_TOKEN`.
 
@@ -126,7 +147,7 @@ Two open code-review issues mention paths this plan touches only incidentally: #
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** a stale `@soleur/opencode` on npm (the documented `npx @soleur/opencode install` path keeps serving 3.363.0 while GitHub tags advance); the new diagnostic step cannot worsen that because it runs only after the publish step already failed and always exits 0.
-- **If this leaks, the user's workflow is exposed via:** the diagnostic handles a short-lived OIDC id-token and, on success, a minted publish token. A leak would let a third party publish `@soleur/opencode` under the repo identity for minutes; mitigated by `::add-mask::` before first use, printing claims only (never tokens), and a test that fails if either token string appears in output.
+- **If this leaks, the user's workflow is exposed via:** the diagnostic handles two short-lived bearers (the Actions id-token request token and the OIDC id-token). A leak would let a third party exchange or publish under the repo identity for minutes; mitigated by keeping both bearers out of argv (curl config on stdin), `::add-mask::` before first use, a 2xx exchange body that is never read (the registry has already minted a short-lived publish credential by then; the script neither stores nor prints it), and tests that fail if any token string appears in output.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** aggregate, not single-user: a stale package mildly harms all new installers; no per-user data, money, or private resource is touched and the diff touches no preflight sensitive path.
 
@@ -153,23 +174,29 @@ No sequencing dependency; ADR-310 stays `adopting` until the first green OIDC pu
 liveness_signal:
   what: "npm Publish run conclusion on main plus the NPM_OIDC_VERDICT line printed by the diagnose step on failure; dist-tags.latest on the registry matching the newest v* tag"
   cadence: "per main merge (workflow_run) and per release"
-  alert_target: "GitHub Actions red run on the npm Publish workflow; tracking issue #11633 (action-required) until the trust entry exists"
+  alert_target: "GitHub Actions red run on the npm Publish workflow (a person is reached only if a failure-notification path exists, so action-required issue #11633 is the standing alert) until the trust entry exists. Until #11633 is resolved the leg is EXPECTED red: a red run alone is not a regression; a regression is a verdict other than trusted-publisher-missing-or-mismatched, or a discoverability_test FAIL"
   configured_in: ".github/workflows/npm-publish.yml (diagnose step) and .github/scripts/npm-oidc-diagnose.sh"
 
 error_reporting:
-  destination: "GitHub Actions run log and step summary ($GITHUB_STEP_SUMMARY); ::error annotation on the run page; no Sentry (CI surface)"
+  destination: "workflow run log (layer 6, CI) and a static-text ::error annotation on the run page; no Sentry and no step summary (CI surface; pipeline-tally.sh is a local developer CLI with no hosted path, so no sink is intended for it)"
   fail_loud: "publish step exits 1 (job stays red); diagnose step prints NPM_OIDC_VERDICT=<verdict> and an ::error:: annotation naming the exact trusted-publisher values to configure"
 
 failure_modes:
   - mode: "trusted-publisher entry missing or mismatched (current state)"
-    detection: "diagnose step: exchange POST returns 401/403/404; verdict trusted-publisher-missing-or-mismatched with claim-vs-expected diff"
-    alert_route: "red npm Publish run + ::error annotation; owner step tracked in #11633"
+    detection: "diagnose step: exchange POST returns 401/403/404; verdict trusted-publisher-missing-or-mismatched with the expected values"
+    alert_route: "workflow run log + ::error annotation on the red npm Publish run; owner step tracked in #11633"
   - mode: "id-token permission removed from the job"
     detection: "diagnose step: ACTIONS_ID_TOKEN_REQUEST_URL unset -> verdict id-token-missing; also pinned by npm-publish-oidc.test.sh member id-token"
-    alert_route: "red run + CI test failure on the PR"
+    alert_route: "workflow run log on the red run + CI test failure on the PR"
+  - mode: "owner step done but the leg is still red"
+    detection: "diagnose step verdict exchange-ok (the OIDC exchange now succeeds, so the failure is elsewhere: npm-side audience/registry issue, version conflict, provenance)"
+    alert_route: "workflow run log; comment on #11633"
+  - mode: "leg green but OIDC never exercised (version already on npm, early exit)"
+    detection: "workflow prints NPM_OIDC_VERDICT=not-exercised on the early-exit branch"
+    alert_route: "workflow run log; the first-green checklist in the runbook confirms the trust entry with npm trust list"
   - mode: "exchange succeeds but publish still fails (version conflict, provenance, registry outage)"
     detection: "diagnose step verdict exchange-ok directs the reader to the npm publish error above it"
-    alert_route: "red npm Publish run"
+    alert_route: "workflow run log on the red npm Publish run"
   - mode: "diagnose step itself regresses (removed, reordered before publish, loses failure() guard)"
     detection: "npm-publish-oidc.test.sh member diagnose-on-failure, mutation rows"
     alert_route: "CI failure on the PR touching the workflow"
@@ -180,16 +207,18 @@ logs:
 
 discoverability_test:
   command: bash plugins/soleur/test/npm-publish-oidc.test.sh
-  expected_output: "0 failed"
+  expected_output: "NPM_PUBLISH_OIDC_SUITE=PASS"
 ```
+
+Check 10 notes: the suite prints `NPM_PUBLISH_OIDC_SUITE=PASS` as its last line only when it has zero failures (new in Phase 1, replacing a bare `0 failed` which substring-matches `10 failed`/`20 failed`). Measured 2026-10-31: `real 0m1.7s`, and under `env -i PATH=/usr/local/bin:/usr/bin:/bin` about 1.9 s - far inside the 15 s cap; the suite-shaped-command detection proxy fires on the `test/` path and is argued down by that measurement. `pyyaml` is a hard dependency: `FATAL: pyyaml required` / exit 2 means the environment lacks it, not a regression; the suite writes only under `mktemp -d` (`TMPDIR`, falling back to `/var/tmp`), never into the repo or `$HOME`.
 
 ## Guard Contract
 
 ### Guard 1 - diagnose-on-failure wiring member (extends the existing npm-publish-oidc guard)
 
-**Property.** Whenever the publish step fails, the next step in the job runs the diagnose script; that step can never be absent, run before publish, run on success, or point at a step id that is not the publish step, and the publish step can never be made to succeed through `continue-on-error`.
+**Property.** Whenever the publish step fails, the next step in the job runs the diagnose script; that step can never be absent, run before publish, run on success or always, or point at a step id that is not the publish step, and the publish step can never be made to succeed through `continue-on-error`.
 
-**Assembly.** `jobs.publish.steps` in `.github/workflows/npm-publish.yml` is the only place the step lives. The member quantifies over the parsed steps list by index: the step whose run body contains `npm publish` (its `id`, its `continue-on-error`), and the later step whose `if:` must contain `failure()` and reference `steps.<that id>.outcome` and whose `run:` must invoke `.github/scripts/npm-oidc-diagnose.sh`. One chokepoint: the parsed YAML.
+**Assembly.** `jobs.publish.steps` in `.github/workflows/npm-publish.yml` is the only place the step lives. The member quantifies over the parsed steps list by index: the step whose run body contains `npm publish` (its `id`, its `continue-on-error`), and the later step whose `if:` is parsed into its `&&` conjunct set (after stripping an optional `${{ }}` wrapper and whitespace) and must equal exactly `{failure(), steps.<that id>.outcome == 'failure'}` in any order (a substring check would accept `failure() || always()`), and whose `run:` must invoke `.github/scripts/npm-oidc-diagnose.sh`. The member also requires the early-exit branch of the publish step to print `NPM_OIDC_VERDICT=not-exercised`. One chokepoint: the parsed YAML.
 
 **Mutation matrix.**
 
@@ -197,22 +226,25 @@ discoverability_test:
 |---|---|---|
 | 1 | Delete the diagnose step | RED |
 | 2 | Move the diagnose step before the publish step | RED |
-| 3 | Drop `failure()` from the step's `if:` (runs on success) | RED |
-| 4 | Dispatch: workflow whose `jobs.publish` is absent (vacuous) | RED |
+| 3 | `if:` reduced to `steps.publish.outcome == 'failure'` (implicit `success()`, the step never runs on the failure it exists for) | RED |
+| 4 | `if:` becomes `always()`, or `failure() \|\| true` (conjunct set no longer equal) | RED |
 | 5 | Publish step gains `continue-on-error: true` (job goes green while diagnose still fires) | RED |
 | 6 | `if:` references a wrong or missing step id (`steps.nope.outcome`, step never runs) | RED |
 | 7 | Replace the script invocation with `echo` (step present, does nothing) | RED |
-| 8 | Add a second compliant diagnose-style step after the first | GREEN (must-pass superset, not the canonical) |
+| 8 | Early-exit branch loses the `not-exercised` line | RED |
+| 9 | Add a second compliant diagnose-style step after the first; reverse the conjunct order; wrap the `if:` in `${{ }}` | GREEN (must-pass supersets, none is the canonical) |
 
-**Harness rows.** (a) Stub the new member to return 0 in a scratch copy of the suite: mutation rows 1-3 and 5-7 must then report `mutation SURVIVED` (the battery's own accounting turns that into a FAIL), proving the rows can fail. (b) Row 8 is the must-PASS non-canonical input.
+Rows for a missing `jobs.publish` are inherited from the existing m3/m5 and not repeated (the probe exits before any member runs, so such a row says nothing about this member).
+
+**Harness rows.** (a) The new member is exposed as `wiring_probe <file> diagnose-on-failure`, and rows 1-8 run through a member-scoped `expect_red_member` (not only `all`), so each failure is attributed to this member; stubbing the member to return 0 in a scratch edit makes rows 1-8 report `mutation SURVIVED`, proving the rows can fail. (A scratch copy of the whole suite is not used: it resolves `REPO_ROOT` from `BASH_SOURCE` and would die FATAL or recurse.) (b) Row 9 is the must-PASS non-canonical input.
 
 **Anchor.** The member compares live YAML to constants in the test file; both move in one diff, so this guard proves consistency, not integrity. Integrity of the npm-side binding is out of reach of any in-repo guard and is covered by the first post-merge run (AC9).
 
 ### Guard 2 - classifier and log-safety of the diagnose script (functional cases in the same suite)
 
-**Property.** For every classified outcome the script exits 0, prints exactly one `NPM_OIDC_VERDICT=` line, never prints the id-token or any exchange response body, emits one `::add-mask::` line for the id-token before any other use, and never lets a printed value start a line with `::`.
+**Property.** For every classified outcome the script exits 0, prints exactly one `NPM_OIDC_VERDICT=` line, never prints the id-token or a 2xx exchange body (it prints only a sanitized, 200-character-capped `.message` from a 4xx body), emits one `::add-mask::` line for the id-token before any other use, and never lets a printed value start a line with `::`.
 
-**Assembly.** Every code path in `.github/scripts/npm-oidc-diagnose.sh` that expands the id-token, the registry body, or prints a registry message: the token fetch, the exchange request, each verdict branch. All printing goes through one `say()` helper that prefixes every value with a `key=` label and strips CR/LF; the test greps combined stdout and stderr, excluding `::add-mask::` lines, for the stub strings, and separately requires exactly one add-mask line that precedes every other mention.
+**Assembly.** Every code path in `.github/scripts/npm-oidc-diagnose.sh` that expands the id-token, the registry body, or prints a registry message: the token fetch, the exchange request, each verdict branch. All printing goes through one `say()` helper that prefixes every value with a `key=` label and strips C0 controls, DEL, U+2028 and U+2029 (not only CR/LF); the `::error` annotation carries static text only; the test greps combined stdout and stderr, excluding `::add-mask::` lines, for the stub strings, and separately requires exactly one add-mask line that precedes every other mention.
 
 **Mutation matrix.**
 
@@ -224,13 +256,26 @@ discoverability_test:
 | 4 | A stubbed 429 or 503 is classified `trusted-publisher-missing-or-mismatched` | RED (must be `registry-error`) |
 | 5 | Script exits 1 on a verdict | RED (exit-0 assertion) |
 | 6 | Dispatch: stub `curl` never invoked | RED (stub-call-count floor) |
-| 7 | Registry message containing `\n::notice::PASS` or a leading `::stop-commands::` | RED if any output line starts with `::` other than the script's own annotation and add-mask lines |
-| 8 | Token fetch loses the `audience` parameter or drops the URL's existing `api-version` query (bad `?`/`&` join) | RED (recorded request URL assertion) |
-| 9 | Package-name and registry env overrides set | GREEN, the recorded exchange URL reflects them (must-pass non-canonical input) |
+| 7 | Registry message containing `\n::notice::PASS`, `%0A::notice::PASS`, a U+2028 line break, or a leading `::stop-commands::` | RED if any output line starts with `::` other than the script's own annotation and add-mask lines |
+| 8 | Token fetch loses `-G` or the `audience` `--data-urlencode` argument, or rebuilds the URL by hand (bad `?`/`&` join) | RED (recorded argv assertion) |
+| 9 | Script run under `bash -x` (xtrace forced) | RED unless the script refused/disabled tracing before touching a token |
+| 10 | Package-name and registry env overrides set | GREEN, the recorded exchange URL reflects them (must-pass non-canonical input) |
 
 **Harness rows.** (a) A scratch copy of the script that leaks must turn the leak assertion RED. (b) The stub-call-count floor proves the stub is exercised. (c) Row 9 is the must-PASS input.
 
 **Anchor.** Stub strings are random per run (generated with `printf` from `/dev/urandom` bytes), so a fixed constant in the script cannot satisfy the leak assertion by accident; the script is never told the stub values.
+
+**Test implementation notes (Guard 2 and the tally cases).**
+
+- The functional cases are parameterized on `$DIAG_SCRIPT`. Each mutant is a sandbox copy of the script (a `sed` edit) with a placement assertion that the mutated line is present, plus a pristine-script GREEN control; the real script path is never edited.
+- The stub `curl` records argv to a log, honors `-o` and `-w '%{http_code}'`, and refuses any unmodeled argv (exit 64, with an empty-refusal-log assertion). It is selected through `PATH`, with `env -i` as the base environment (`env -u` for the unset-env case), a sandbox `TMPDIR`, `https://registry.invalid` as the registry override and `127.0.0.1:9` as the token-URL override, so no case can reach the network.
+- Assertions on the recorded argv: the token fetch has `-G`, `--data-urlencode audience=npm:registry.npmjs.org` and the URL verbatim (the stub does not perform the join; row 8 asserts the arguments, not the joined URL); the exchange is `POST` to the exact URL; the stub's bearer value equals the stub token (positive control that the token flowed); every call carries `--connect-timeout 10 --max-time 20`; no bearer value appears in any argv (it travels on the stdin config); the 2xx temp file is removed.
+- Mask-before-use is asserted by having the stub snapshot the captured stdout at the exchange call and requiring the add-mask line to already be there. The leak check gives 4xx bodies a second secret field so it is not vacuous; `message=` is capped at 200 characters.
+- Classification table covered: 200/204 -> `exchange-ok`; 401/403/404 -> trusted-publisher verdict; 400/422/429/503/3xx and rc 28 (status 000) -> `registry-error`.
+- Injection payloads use an exact allow-list: one add-mask line and one `::error title=npm trusted publisher::` line, nothing else starting with `::`; payloads include `\n::notice::PASS`, `\r\n::error::`, `%0A`, U+2028 and `\nNPM_OIDC_VERDICT=exchange-ok` (the verdict line count must stay 1).
+- Stub strings are generated with `od -An -N16 -tx1 /dev/urandom | tr -d ' \n'` (not `tr | head`, which SIGPIPEs under `pipefail`) and printed on failure. A missing `jq` or `python3` is FATAL, never SKIP.
+- Verdict accounting: every new assertion goes through the suite's `pass`/`fail` helpers with a call-site `CASES` increment, and the `>= 20` floor is raised to the new total minus 2 (the suite has 20 cases today, zero slack). The suite prints `NPM_PUBLISH_OIDC_SUITE=PASS` as its last line only when `FAIL == 0` (this is the `discoverability_test` literal).
+- Tally tests: add `new_repo_on <name> <branch>` and `cf_path_for` helpers (today `new_repo` hardcodes the branch and `cf_path` the slug). `git init -b main` with the suite's `SOLEUR_SESSION_STATE_ROOT` puts the ledger under `$TMP`, and `git branch --show-current` prints the unborn branch name, so no real ledger is touched; cover the derived path (`-b main`, `-b master`) and `--branch main` from a feature repo. Detached `HEAD` needs a real commit (`-c user.name=... -c user.email=... -c commit.gpgsign=false commit --allow-empty`, then `checkout --detach`). Precedence rows: `main` + absent ledger -> `fresh`; `main` + `--reset` -> `reset`; `main` + corrupt ledger -> `repaired`; `main` + live ledger or stale ledger -> `default-branch-reset`; `main` capped + raised `--max-*` -> `default-branch-reset` (counts zeroed, caps kept). Assert exact output lines (`reset` is a substring of the new outcome). On a capped `main` ledger the `note:` line comes after the `capped:` line. The stop-hook regression is asserted as "the note line matches none of the hook's `grep -o` patterns" in the tally suite (the hook itself is exercised by its own suite). `print_results`' anti-vacuity floor is stale versus the suite's header comment and is raised to the real count.
 
 ## Implementation Phases
 
@@ -240,11 +285,12 @@ Failing tests first (cq-write-failing-tests-before): extend `plugins/soleur/test
 
 - 1.1 Add `id: publish` to the "Resolve version and publish to npm" step; keep `npm publish --access public --ignore-scripts` byte-identical (the flag-contract member pins it).
 - 1.2 Add step "Diagnose npm OIDC trusted-publisher binding" after it: `if: failure() && steps.publish.outcome == 'failure'`, `run: bash .github/scripts/npm-oidc-diagnose.sh`. No `env:` credential keys (the `no-cred-wiring` member scans them); the script reads the runner-provided `ACTIONS_ID_TOKEN_REQUEST_URL`/`ACTIONS_ID_TOKEN_REQUEST_TOKEN` (neither matches the member's key patterns).
-- 1.3 Create `.github/scripts/npm-oidc-diagnose.sh`, kept small. `set -uo pipefail` with no `-e` and `|| true` on every `curl` (the script must reach `exit 0` on rc 28/000); refuse xtrace (repo convention, #7797). Steps: (i) fetch the id-token with `curl -G --data-urlencode audience=npm:registry.npmjs.org "$ACTIONS_ID_TOKEN_REQUEST_URL"` (the URL already carries a query string, so a hand-written `?audience=` would be malformed) and `::add-mask::` it at once; (ii) `POST $REGISTRY/-/npm/v1/oidc/token/exchange/package/@soleur%2fopencode` with the id-token as bearer, response body written to a temp file; the body of a 2xx is deleted unread (no minted publish token is ever parsed or printed); (iii) verdicts: id-token env unset -> `id-token-missing`; token fetch failed -> `id-token-fetch-failed`; exchange 2xx -> `exchange-ok` (the failure is not an OIDC miss; read the npm error above); exchange 401/403/404 -> `trusted-publisher-missing-or-mismatched` with the printed `status=`, the registry `message=` (only if the body is JSON with a string `.message`, else just the byte count), the expected values `repository=jikig-ai/soleur workflow=npm-publish.yml environment=(none)`, the one-line `npm trust github @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur --allow-publish` remediation and the runbook path; any other status (429, 5xx, 000) -> `registry-error` with `status=`. Every printed value goes through `say()`: a `key=` prefix and CR/LF stripped, so no registry-controlled byte can start a line with `::`. One `::error title=npm trusted publisher::` annotation. Every `curl` carries `--connect-timeout 10 --max-time 20` and no retry flag. Always `exit 0`. The decoded JWT claims are deliberately not printed (plan review: the registry cannot distinguish missing from mismatched, and the expected values suffice; add the claim dump only if a mismatched-entry incident ever needs it).
+- 1.3 Create `.github/scripts/npm-oidc-diagnose.sh`, kept small, following the bearer-handling precedent in `scripts/sentry-issue.sh` (stdin curl config, `--disable` first, `--noproxy '*'`, token charset check). `set +x; unset BASH_XTRACEFD` first and refuse xtrace (#7797), then `set -uo pipefail` (no `-e`), `|| true` on every `curl` (the script must reach `exit 0` on rc 28/000). Both bearers (`ACTIONS_ID_TOKEN_REQUEST_TOKEN` and the fetched id-token) travel only as `printf 'header = "Authorization: Bearer %s"\n' "$t" | curl --disable --noproxy '*' -K - ...` (builtin `printf`, never argv), after validating each against `^[A-Za-z0-9._~+/=-]+$` (a quote or newline would inject curl directives); no `-v`, `--trace` or `-i`. Steps: (i) fetch the id-token with `curl -G --data-urlencode audience=npm:registry.npmjs.org "$ACTIONS_ID_TOKEN_REQUEST_URL"` (the URL already carries a query string, so a hand-written `?audience=` would be malformed) and emit its `::add-mask::` line with a bare `printf` once it is validated single-line; (ii) `POST $REGISTRY/-/npm/v1/oidc/token/exchange/package/@soleur%2fopencode` with the id-token as bearer; the body goes to a file under a `mktemp -d` created with `umask 077` and removed by an EXIT trap, and a 2xx body is never read (the registry has already minted a short-lived publish credential by then, which the script neither stores nor prints; residual risk stated in the runbook); (iii) verdicts: id-token env unset -> `id-token-missing`; token fetch failed -> `id-token-fetch-failed`; exchange 2xx -> `exchange-ok` (the OIDC exchange works, so the failure is elsewhere: npm-side audience/registry issue, version conflict, provenance - read the npm error above); exchange 401/403/404 -> `trusted-publisher-missing-or-mismatched`, worded as "rejected; most likely no matching trusted publisher" until AC9 captures the real response (a bogus bearer also returns 401), with `status=`, `message=` (only if the body is JSON with a string `.message`, capped at 200 characters, else just the byte count), the expected values `repository=jikig-ai/soleur workflow=npm-publish.yml environment=(none)`, the one-line `npm trust github @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur --allow-publish` remediation and the runbook path; any other status (429, 5xx, 000) -> `registry-error` with `status=`. Every printed value goes through `say()`: a `key=` prefix, C0 controls/DEL/U+2028/U+2029 stripped, so no registry-controlled byte can start a line with `::`. One `::error title=npm trusted publisher::` annotation with static text only. Every `curl` carries `--connect-timeout 10 --max-time 20` and no retry flag. Always `exit 0`. Decoded JWT claims are deliberately not printed (plan review: the registry cannot distinguish missing from mismatched; add a claim dump only if a mismatched-entry incident needs it). Accepted: a `workflow_run` run checks out main HEAD, which can be newer than the tag being published; `release` plus `workflow_run` can double-fire and the loser fails with a version conflict, which `exchange-ok` explains.
 - 1.4 Reword the publish failure hint in the workflow to name both signatures (`E404` and `ENEEDAUTH`) and the runbook path, keep `exit 1`. The hint is a `run:` body and the `no-cred-wiring` member scans it: it must not contain `NPM_TOKEN`, `_authToken`, `AUTH_TOKEN=` or `npm config set` (the runbook, which is not scanned, may).
+- 1.4a In the existing `npm view ... already published; skipping` early-exit branch of the publish step, add one line `echo "NPM_OIDC_VERDICT=not-exercised (version already on npm); confirm the trust entry with npm trust list"` so a green run that never exercised OIDC cannot read as proof (the line must not contain the `no-cred-wiring` tokens). Add a Guard 1 mutation row: early-exit branch loses the line -> RED.
 - 1.5 Extend `scripts/lib/test-affected-paths.sh` `AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS` with `.github/scripts/npm-oidc-diagnose.sh`. If the suite's measured runtime exceeds its `scripts/suite-durations.tsv` row (`floor`, 1200), update only that row.
-- 1.6 Create the runbook `knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md`, short: symptom table (E404 = dead credential era, ENEEDAUTH = OIDC exchange not accepted), how to read `NPM_OIDC_VERDICT`, the single owner step with the exact command and its verification (`npm trust list @soleur/opencode`, `gh workflow run npm-publish.yml`, `npm view @soleur/opencode dist-tags.latest`), a pointer to #11633 and ADR-310 for the rest, and no SSH.
-- 1.7 **Automation ladder for the trust entry (work-phase, bounded, read-only):** (a) one `doppler run -p soleur -c prd -- bash -c 'NODE_AUTH_TOKEN="$NPM_TOKEN" npm trust list @soleur/opencode'` - expected to fail (expired token; `npm trust` rejects bypass-2FA tokens); record the exit text, never the token. (b) Playwright MCP on `https://www.npmjs.com/package/@soleur/opencode/access`: add the entry if a logged-in maintainer session exists, otherwise record the `playwright-attempt:` line (`navigated <URL>; reached <named human gate>`; the gate is password plus 2FA/passkey, neither stored - Doppler holds only `NPM_TOKEN` and `NPM_RECOVERY_CODES`). (c) `NPM_RECOVERY_CODES` is not consumed (decision row T-OP1). Residual: one interactive maintainer login, tracked in action-required issue #11633. Record in `evidence.md` under `## npm Publish root cause`.
+- 1.6 Create the runbook `knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md`, short: symptom table (E404 = dead credential era, ENEEDAUTH = OIDC exchange not accepted), how to read `NPM_OIDC_VERDICT`, the single owner step with the exact command and its verification, a first-green-run checklist (`npm trust list @soleur/opencode`; `gh workflow run npm-publish.yml` to retrigger because nothing else will; `npm view @soleur/opencode dist-tags.latest`; note that only the highest `v*` tag is published and the skipped versions are not backfilled per ADR-310; `not-exercised` is not proof), the stated residual that a 2xx replay mints a short-lived credential the script discards, a pointer to #11633 and ADR-310 for the rest, and no SSH.
+- 1.7 **Automation ladder for the trust entry (work-phase, bounded; read-only up to the authorization gate):** (a) one `doppler run -p soleur -c prd -- bash -c 'NODE_AUTH_TOKEN="$NPM_TOKEN" npm trust list @soleur/opencode'` - expected to fail (expired token; `npm trust` rejects bypass-2FA tokens); record the exit text, never the token. (b) Playwright MCP on `https://www.npmjs.com/package/@soleur/opencode/access`: navigate and record whether a maintainer session exists, with a `playwright-attempt:` line (`navigated <URL>; reached <named human gate>`; the gate is password plus 2FA/passkey, neither stored - Doppler holds only `NPM_TOKEN` and `NPM_RECOVERY_CODES`). Creating the entry widens who can publish a public package, so the entry-creating click is taken only on explicit authorization from the owner in the work session (decision row T-OP1); an a-priori authorization recorded in an earlier pipeline's decision-challenges file is a recommendation, not that authorization. (c) `NPM_RECOVERY_CODES` is not consumed (T-OP1). Residual: one interactive maintainer login plus that authorization, tracked in action-required issue #11633. Record in `evidence.md` under `## npm Publish root cause`.
 - 1.8 Amend ADR-310 (`## Amendment 2026-10-31`, 3-4 lines): the `ENEEDAUTH` signature, why it appears, link to the runbook. Status unchanged.
 - 1.9 Gates by their own invocations: `actionlint .github/workflows/npm-publish.yml`; `bash -n` and `shellcheck` on the new script; `bash plugins/soleur/test/npm-publish-oidc.test.sh`; `bash scripts/lint-orphan-test-suites.sh`; `python3 scripts/lint-guard-contract.py`; `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch`. Stage the new files before any check that reads `git ls-files`.
 
@@ -258,7 +304,7 @@ Failing tests first (cq-write-failing-tests-before): extend `plugins/soleur/test
 Failing tests first: add cases to `plugins/soleur/scripts/pipeline-tally.test.sh` (Tests 30-34), run RED, then implement.
 
 - 3.1 Evidence line for `evidence.md`: `83/15/1/12` is the shared ledger of branch `main` (`main-88d050`, last written 2026-10-30T18:43Z, before the 22:54Z merge, cumulative across sessions); this PR's own ledger is `19/2/2/4` (`feat-one-shot-11569-11572-messages-update-policy-708df7`, last written 22:06Z); the merged body `19/1/2/4` matches it except `ci_cycles` (rendered before one more increment). Supporting cross-check: the sandbox-followups ledger also reads `ci_cycles=15`, and gh shows 10 pushed head SHAs on the PR (ADR-268 counts instrumented pushes only).
-- 3.2 Record the corrected line `Pipeline-Tally: seats=19; ci_cycles=2; fix_rounds=2; agent_rounds=4` for PR #11622 under `## Tally reconciliation` in `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/evidence.md` (the durable artifact `ship` folds into the PR #11688 body - `ship` is the sole PR-body author and full-replaces the body, so a block written straight into the body by `work` is clobbered). Do not edit PR #11622 (ruling R4). Wording rule for every evidence block: avoid the `ship-operator-step-gate.sh` deny tokens (`Operator`, `Post-merge`, `Follow-up`) and operator-action bullets; say "owner step" and "production state check".
+- 3.2 Record the corrected line `Pipeline-Tally: seats=19; ci_cycles=2; fix_rounds=2; agent_rounds=4` for PR #11622 under `## Tally reconciliation` in `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/evidence.md`. **Delivery to the PR body (verified against `ship/SKILL.md`):** `ship` Phase 6 generates the body from the diff and folds in only `decision-challenges.md`; it does not read `evidence.md`, and it archives `specs/<branch>/` at the end. So `evidence.md` is the work-phase scratch record, and the durable record is the live PR #11688 body: after `ship` has written its final body (and before the PR is marked ready), the orchestrator appends the four evidence sections to the live body with an idempotent read-modify-write (`gh pr view 11688 --json body`, append each `## <heading>` section only if absent, `gh pr edit --body-file`), then re-reads the body to confirm each heading is present. `ship`'s own `## Pipeline Tally` re-render edits only its section. Do not edit PR #11622 (ruling R4). Wording rule for every evidence block: avoid the `ship-operator-step-gate.sh` deny tokens (`Operator`, `Post-merge`, `Follow-up`) and operator-action bullets; say "owner step" and "production state check".
 - 3.3 `pipeline-tally.sh`: `_tally_paths` also sets `T_BRANCH` (resolved or `--branch` value); add `_tally_is_default_branch` (exact match `main` or `master`; `feat-main`, `main-x` and a detached `HEAD` do not match; add a test that `init` on detached `HEAD` does not reset).
 - 3.4 `_tally_init_locked`: new outcome `default-branch-reset` after `repaired` and before `capped-reset` (explicit `--reset` still reports `reset`; absent file still `fresh`); extend the counts-clearing `case` arm; fail-open, exit 0; caps merge as for other resets. Kept per CTO ruling R4 although the simplicity seat would reuse `reset` and drop the `show` note line (it dissents; recorded here, ruling stands).
 - 3.5 `show`: when the ledger's branch is a default branch, append one line `note:default-branch-ledger (shared across sessions; not attributable to one run)` after the existing lines; the `tally:` line and the `cap:`/`warned:`/`capped:` tokens are unchanged so `hooks/stop-hook.sh` and ship's render parse as before (the note contains none of those tokens).
@@ -267,7 +313,7 @@ Failing tests first: add cases to `plugins/soleur/scripts/pipeline-tally.test.sh
 
 ### Phase 4 - Read-only production check (verification task, no code)
 
-Executed by the orchestrator during work; **no writes to prod**. Results are recorded in `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/evidence.md` under `## Production state check (read-only)` (folded into the PR #11688 body by `ship`), with UTC timestamp, the baseline (2026-10-30: 1903 github drafts, 45 kb-drift drafts, 0 archived) and the deltas.
+Executed by the orchestrator during work; **no writes to prod**. Results are recorded in `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/evidence.md` under `## Production state check (read-only)` and appended to the live PR #11688 body as described in task 3.2, with UTC timestamp, the baseline (2026-10-30: 1903 github drafts, 45 kb-drift drafts, 0 archived) and the deltas.
 
 - 4.1 Counts (read-only transaction; the pooler may reject startup `options`, so the guard is in-SQL):
 
@@ -280,14 +326,14 @@ Executed by the orchestrator during work; **no writes to prod**. Results are rec
   ```
 
   Shape follows `knowledge-base/engineering/operations/runbooks/egress-audit-dsar.md`. Output is aggregate counts only (no row content).
-- 4.2 Sentry (read-only Discover query on the RO token; the org host and token ladder follow `scripts/sentry-issue.sh` and `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`):
+- 4.2 Sentry (read-only Discover query on the read-only token; the bearer rides curl's stdin config channel, never argv, per the `scripts/sentry-issue.sh` precedent; host and token ladder follow `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`):
 
   ```bash
-  doppler run -p soleur -c prd -- bash -c 'curl -fsS -H "Authorization: Bearer $SENTRY_ISSUE_RO_TOKEN" "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/?field=timestamp&field=title&query=op%3Adiscard-send-race&statsPeriod=14d&per_page=25"' | jq '{count: (.data | length)}'
+  doppler run -p soleur -c prd -- bash -c 'printf "header = \"Authorization: Bearer %s\"\n" "$SENTRY_ISSUE_RO_TOKEN" | curl --disable --noproxy "*" -sS --max-time 30 -G -K - --data-urlencode "query=op:discard-send-race" --data-urlencode "statsPeriod=14d" --data-urlencode "field=timestamp" --data-urlencode "per_page=25" "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/"' | jq '{count: (.data | length)}'
   ```
 
   On 401/403 follow the runbook's token note; report `count` (expected 0 unless a Discard raced a Send).
-- 4.2a Quoting: both commands expand their variable inside `bash -c '...'` so it is read from the Doppler-injected environment, not the caller's shell (a bare `doppler run -- psql "$VAR"` would expand it empty). The plan-time check was limited to `doppler run -p soleur -c prd -- sh -c 'echo ${DATABASE_URL_POOLER:+set}'` style presence checks; the live queries are executed by the orchestrator in the work phase, per the brief.
+- 4.2a Quoting: both commands expand their variable inside `bash -c '...'` so it is read from the Doppler-injected environment, not the caller's shell (a bare `doppler run -- psql "$VAR"` would expand it empty); `psql` carries the connection string in argv, an accepted risk shared with the existing runbooks. The plan-time check was limited to `doppler run -p soleur -c prd -- sh -c 'echo ${DATABASE_URL_POOLER:+set}'` style presence checks; the live queries are executed by the orchestrator in the work phase, per the brief.
 - 4.3 Interpretation to record: if `archived` is still 0, say so - it means only that no founder has used Discard or Dismiss yet, not a defect. A `discard-send-race` count of 0 is the expected steady state.
 
 ## Files to Edit
@@ -307,7 +353,7 @@ Executed by the orchestrator during work; **no writes to prod**. Results are rec
 - `knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md`
 - `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/tasks.md`
 - `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/decision-challenges.md`
-- `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/evidence.md` (written during work; sections listed in AC6)
+- `knowledge-base/project/specs/feat-one-shot-post-merge-leftovers-npm-tally/evidence.md` (work-phase scratch record; sections listed in AC6; the live PR body is the durable copy because `ship` neither reads nor keeps it)
 
 **Frozen / out of scope (do not touch):** `apps/web-platform/supabase/migrations/181_messages_owner_draft_update.sql`; PR #10926 (no edit, no comment); issues #11628, #11629, #11630, #11655, #11656 stay open; bot-owned pins in `apps/web-platform/infra/cloud-init.yml` and `cloud-init-inngest.yml`.
 
@@ -320,7 +366,7 @@ Executed by the orchestrator during work; **no writes to prod**. Results are rec
 - [ ] AC3: `.github/scripts/npm-oidc-diagnose.sh` passes `bash -n` and `shellcheck`; in the functional cases it never prints the stub id-token or response body (apart from its one `::add-mask::` line), prints exactly one `NPM_OIDC_VERDICT=` line and always exits 0.
 - [ ] AC4: runbook `knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md` exists, contains the exact `npm trust github @soleur/opencode --file npm-publish.yml --repo jikig-ai/soleur --allow-publish` line, no `ssh`, and is linked from the workflow hint and the ADR-310 amendment.
 - [ ] AC5: `bash plugins/soleur/scripts/pipeline-tally.test.sh` prints `0 failed` with the new default-branch cases; a non-default branch still reports `continued`; the `tally:` line format is byte-identical.
-- [ ] AC6: `evidence.md` (and therefore the `ship`-authored PR #11688 body) carries `## Tally reconciliation` (evidence table, corrected line for #11622), `## Infra Validation status` (green SHA + run URL), `## Production state check (read-only)` (Phase 4 results with timestamp) and `## npm Publish root cause` (ENEEDAUTH, trust entry missing, automation-ladder outcomes incl. the `playwright-attempt:` line, pointer to #11633). The body uses `Ref #11585` and `Ref #11633`, never `Closes` (the leg is not green until the owner step), and contains none of the deny tokens `Operator`/`Post-merge`/`Follow-up`.
+- [ ] AC6: the live PR #11688 body, read back with `gh pr view 11688 --json body`, carries (sourced from `evidence.md`, appended after `ship` writes the body) `## Tally reconciliation` (evidence table, corrected line for #11622), `## Infra Validation status` (green SHA + run URL), `## Production state check (read-only)` (Phase 4 results with timestamp) and `## npm Publish root cause` (ENEEDAUTH, trust entry missing, automation-ladder outcomes incl. the `playwright-attempt:` line, pointer to #11633). The body uses `Ref #11585` and `Ref #11633`, never `Closes` (the leg is not green until the owner step), and contains none of the deny tokens `Operator`/`Post-merge`/`Follow-up`.
 - [ ] AC7: `git diff --quiet origin/main...HEAD -- apps/web-platform/supabase/migrations/181_messages_owner_draft_update.sql` exits 0 (three-dot: the merge-base diff, not the moving tip); PR #10926 and issues #11628/#11629/#11630/#11655/#11656 untouched.
 
 ### Post-merge (automated verification)
