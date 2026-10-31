@@ -609,6 +609,8 @@ jobs:
               -target=doppler_secret.inngest_heartbeat_url_prd \
               -target=betteruptime_heartbeat.inngest_server_probe \
               -target=doppler_secret.inngest_server_probe_heartbeat_url \
+              -target=betteruptime_heartbeat.luks_monitor_host_timer \
+              -target=betteruptime_heartbeat.claude_cost_capture \
               -target=betteruptime_heartbeat.git_data_prd \
               -target=doppler_secret.git_data_heartbeat_url_prd \
               -target=betteruptime_heartbeat.git_data_host_prd \

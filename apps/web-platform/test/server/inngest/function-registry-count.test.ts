@@ -185,6 +185,12 @@ const NON_INNGEST_MONITORS = new Set([
   // Inngest/web-1 outage page as "probe dark" (ADR-248 amendment 2026-10-11);
   // no cron-*.ts counterpart. Its final sentry-heartbeat step pings the check-in.
   "scheduled-inngest-probe-heartbeat",
+  // #11631: GHA-fired (scheduled-deadman-heartbeat-feeder.yml, dispatched by the web watchdog clock
+  // every hour) — the archive-reading feeder for the luks-monitor host-timer and claude-cost-capture
+  // dead-man heartbeats. It must stay external to Inngest scheduling: each heartbeat is the sole paging
+  // surface for a check on the Inngest execution host (ADR-248 amendment, second clause); no cron-*.ts
+  // counterpart. Its final sentry-heartbeat step pings the check-in.
+  "scheduled-deadman-heartbeat-feeder",
   // #6374: GHA-fired (scheduled-inngest-health.yml, on.schedule '*/15') — the
   // EXTERNAL inngest health watchdog. It MUST be external to Inngest (a
   // self-hosted inngest cron cannot detect inngest being down — the #5542 blind

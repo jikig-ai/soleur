@@ -1223,6 +1223,9 @@ done < "$class_c_out"
 # the 43 low-catch-value monitors (67 → 24); the emitters stay (spec NG4 void-post).
 # The #4672 scheduled-approval-expiry monitor (the 5-minute approval-request sweep) is declared
 # after that prune, taking the root to 25.
+# Addendum 2026-10-30: …→ 26 `resource "sentry_cron_monitor"` blocks — the #11631
+# scheduled-deadman-heartbeat-feeder monitor (the hourly archive-reading feeder for the luks-monitor
+# host-timer and claude-cost-capture dead-man heartbeats) is declared, taking the root to 26.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
