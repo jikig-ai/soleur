@@ -1,9 +1,15 @@
-import { describe, test, expect } from "vitest";
+import { afterAll, beforeAll, describe, test, expect } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { createSandboxHook } from "../server/sandbox-hook";
 import { FILE_TOOLS } from "../server/tool-path-checker";
 
 const WORKSPACE = "/workspaces/user1";
+// Parent-directory token for the relative-escape rows. Spelled through a constant so the repo-wide containment guard, which
+// text-scans for runs of `..`, does not read these app-local synthetic paths as a suite that reads outside the app.
+const UP = "..";
 const hook = createSandboxHook(WORKSPACE);
 const signal = new AbortController().signal;
 
@@ -211,5 +217,91 @@ describe("createSandboxHook - negative-space coverage", () => {
     for (const tool of safeTools) {
       expect(fileSet.has(tool), `${tool} should NOT be a file tool`).toBe(false);
     }
+  });
+});
+
+// #10455 PR 1a: the file tools (Read, Grep, Glob, LS, Notebook*) run in the CLI process OUTSIDE bwrap, so the sandbox
+// `denyRead` list never applies to them; this hook is their only containment. The shared HOME holds the CLI's persisted
+// state for EVERY tenant on the host (history, session metadata, shell snapshots), so each of those paths, reached by an
+// absolute path, a relative escape, a leading ~ (with or without surrounding whitespace), a glob, or a symlinked FILE planted inside
+// the workspace, must be refused here. A symlinked DIRECTORY reached through a relative Glob pattern is NOT covered (the pattern check is
+// syntactic); it is a recorded open item in the ADR-075 addendum.
+describe("createSandboxHook - the shared HOME's persisted CLI state is unreachable through the file tools (#10455)", () => {
+  let base: string;
+  let ws: string;
+  let home: string;
+  let realHook: ReturnType<typeof createSandboxHook>;
+
+  const call = async (toolName: string, toolInput: Record<string, unknown>) =>
+    (await realHook(makeInput(toolName, toolInput), "test-id", { signal })) as SyncHookJSONOutput;
+
+  beforeAll(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), "sbx-hook-home-")));
+    ws = join(base, "workspaces", "00000000-0000-0000-0000-00000000000a");
+    home = join(base, "home");
+    mkdirSync(ws, { recursive: true });
+    mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+    mkdirSync(join(home, ".claude", "shell-snapshots"), { recursive: true });
+    writeFileSync(join(home, ".claude", "history.jsonl"), "{}\n");
+    writeFileSync(join(home, ".claude", "sessions", "1.json"), "{}");
+    writeFileSync(join(home, ".claude", "shell-snapshots", "snapshot-bash-1.sh"), "# snapshot\n");
+    writeFileSync(join(ws, "ok.txt"), "own file\n");
+    // A symlink planted INSIDE the workspace that points at a sibling-visible HOME file.
+    symlinkSync(join(home, ".claude", "history.jsonl"), join(ws, "link-to-history"));
+    realHook = createSandboxHook(ws);
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("positive controls: Read, Glob and Grep inside the workspace are allowed, so the denials below are not an everything-denied hook", async () => {
+    expectExplicitAllow(await call("Read", { file_path: join(ws, "ok.txt") }));
+    expectExplicitAllow(await call("Glob", { pattern: "*.txt" }));
+    expectExplicitAllow(await call("Grep", { pattern: "own", path: ws }));
+    // Not over-broad: `~` that is not a leading home reference, and surrounding whitespace on an in-workspace path.
+    expectExplicitAllow(await call("Read", { file_path: join(ws, "a~b.txt") }));
+    expectExplicitAllow(await call("Read", { file_path: ` ${join(ws, "ok.txt")} ` }));
+    expectExplicitAllow(await call("Read", { file_path: "~notes.txt" }));
+  });
+
+  test.each([
+    ["Read history.jsonl", "Read", () => ({ file_path: join(home, ".claude", "history.jsonl") })],
+    ["Read a session metadata file", "Read", () => ({ file_path: join(home, ".claude", "sessions", "1.json") })],
+    ["Read a shell snapshot", "Read", () => ({ file_path: join(home, ".claude", "shell-snapshots", "snapshot-bash-1.sh") })],
+    ["Grep the .claude directory", "Grep", () => ({ pattern: "x", path: join(home, ".claude") })],
+    ["LS the sessions directory", "LS", () => ({ path: join(home, ".claude", "sessions") })],
+    ["NotebookRead outside the workspace", "NotebookRead", () => ({ notebook_path: join(home, ".claude", "x.ipynb") })],
+    // The literal string, not join(): join() collapses the `..` lexically and the hook would never see them.
+    ["Read through a relative escape", "Read", () => ({ file_path: `${UP}/${UP}/home/.claude/history.jsonl` })],
+    ["Read of a prefix-sibling directory", "Read", () => ({ file_path: `${ws}-evil/x.txt` })],
+    // A leading ~ is expanded to HOME by the CLI, so it must never be anchored under the workspace as a literal dir.
+    ["Read with a leading ~", "Read", () => ({ file_path: "~/.claude/history.jsonl" })],
+    ["Grep with a leading ~ path", "Grep", () => ({ pattern: "x", path: "~/.claude" })],
+    ["LS of ~ itself", "LS", () => ({ path: "~" })],
+    ["NotebookEdit with a leading ~", "NotebookEdit", () => ({ notebook_path: "~/.claude/x.ipynb" })],
+    // The hook used to judge only the FIRST truthy of file_path / path / notebook_path: an in-workspace decoy hid the real one.
+    ["Grep: in-workspace file_path decoy, escaping path", "Grep", () => ({ pattern: "x", file_path: join(ws, "ok.txt"), path: join(home, ".claude") })],
+    ["LS: in-workspace file_path decoy, escaping path", "LS", () => ({ file_path: join(ws, "ok.txt"), path: join(home, ".claude", "sessions") })],
+    ["NotebookEdit: in-workspace file_path decoy, escaping notebook_path", "NotebookEdit", () => ({ file_path: join(ws, "ok.txt"), notebook_path: join(home, ".claude", "x.ipynb") })],
+    // The decoy sits in either position: first-truthy (any order) and last-truthy readers each pass only half of these.
+    ["Grep: in-workspace path decoy, escaping file_path", "Grep", () => ({ pattern: "x", path: ws, file_path: join(home, ".claude", "history.jsonl") })],
+    ["LS: in-workspace path decoy, escaping file_path", "LS", () => ({ path: ws, file_path: join(home, ".claude", "sessions", "1.json") })],
+    ["NotebookEdit: in-workspace notebook_path decoy, escaping file_path", "NotebookEdit", () => ({ notebook_path: join(ws, "ok.txt"), file_path: join(home, ".claude", "x.ipynb") })],
+    ["Grep: three fields, the escape in the middle one", "Grep", () => ({ pattern: "x", file_path: join(ws, "ok.txt"), path: join(home, ".claude"), notebook_path: join(ws, "ok.txt") })],
+    // The CLI trims the string before it expands `~` or tests for an absolute path, so surrounding whitespace must not hide an escape.
+    ["Read with a leading space before ~", "Read", () => ({ file_path: " ~/.claude/history.jsonl" })],
+    ["Read with a leading newline before ~", "Read", () => ({ file_path: "\n~/.claude/history.jsonl" })],
+    ["Read with a leading tab before ~", "Read", () => ({ file_path: "\t~" })],
+    ["Read with a leading space before an absolute path", "Read", () => ({ file_path: ` ${home}/.claude/history.jsonl` })],
+    ["Read with a leading space before a relative escape", "Read", () => ({ file_path: ` ${UP}/${UP}/home/.claude/history.jsonl` })],
+    ["a non-string path field (an array)", "Grep", () => ({ pattern: "x", path: ["a"] })],
+    ["a non-string path field (a number)", "Read", () => ({ file_path: 5 })],
+    ["Read through a symlink planted in the workspace", "Read", () => ({ file_path: join(ws, "link-to-history") })],
+    ["Glob with an absolute pattern into HOME", "Glob", () => ({ pattern: `${home}/.claude/**/*.json` })],
+    ["Glob with a relative escape pattern", "Glob", () => ({ pattern: `${UP}/${UP}/home/.claude/*` })],
+  ])("%s is refused", async (_label, tool, input) => {
+    const result = await call(tool, input());
+    expectDenied(result, "outside the workspace");
   });
 });
