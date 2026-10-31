@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=8
-# generated-from-run=durations:seed-durations.tsv
-# generated-from-runs=durations:seed-durations.tsv
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=1222
-# generated-at=2026-10-30T15:04:21Z
+# generated-at=2026-10-31T17:51:36Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -249,6 +249,7 @@ plugins/soleur/test/main-health-monitor-workflow.test.sh	5
 plugins/soleur/test/merge-effect-class-parity.test.sh	1
 plugins/soleur/test/merge-queue-cla-verify.test.sh	3
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	7
+plugins/soleur/test/merge-queue-jump.test.sh	3
 plugins/soleur/test/merge-queue-stall-check.test.sh	5
 plugins/soleur/test/monitor-lock.test.sh	4
 plugins/soleur/test/monitor-pr-checks.test.sh	6
@@ -400,6 +401,8 @@ scripts/followthroughs/ci-draft-light-soak-9728	3
 scripts/followthroughs/ci-push-dedupe-soak-9512	5
 scripts/followthroughs/discord-blog-webhook-fallback	4
 scripts/followthroughs/dispatch-recovery-sweeper-11211	3
+scripts/followthroughs/inngest-bs-token-restage-7596	3
+scripts/followthroughs/inngest-hostmetrics-trim-11602	3
 scripts/followthroughs/inngest-luks-keeper-dark-11265	6
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
 scripts/followthroughs/inngest-trace-retention-5150	1
@@ -618,6 +621,7 @@ tests/scripts/betterstack-ingest-probe	2
 tests/scripts/betterstack-query-archive	2
 tests/scripts/betterstack-read-classify	8
 tests/scripts/betterstack-roundtrip-latency	5
+tests/scripts/cf-lb-overlay-gate	3
 tests/scripts/cleanup-merged-space	8
 tests/scripts/destroy-guard-counter-github	4
 tests/scripts/destroy-guard-counter-sentry	7
