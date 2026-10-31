@@ -120,7 +120,9 @@ unchanged, so `hooks/stop-hook.sh` and ship's render parse as before.
 A capped default-branch ledger is not scoped: it follows the ordinary capped
 rules, as on every branch (bare `init` keeps `capped`, raised `--max-*` is
 `capped-reset` with the counts kept, 24h idle is `stale-reset`). Every skill runs
-a bare `init`, and none of them may lift a budget stop.
+a bare `init`, and none of them may lift a budget stop. The latch is written by
+`gate`, not by `incr`, so a ledger that is at its cap but has not yet been
+through a `gate` is not yet capped and is scoped like any other.
 
 What this does not do. Only `init` scopes the ledger. `incr`, `gate` and `show`
 on `main` read whatever has accumulated since the last `init`, and sessions do

@@ -485,7 +485,9 @@ _tally_init_locked() {
     # ordinary capped rules (raised caps -> capped-reset, bare -> `continued
     # capped=<dim>`, or stale-reset after 24h idle), exactly as on any other
     # branch — the sticky latch is the budget stop, and a bare init (every skill
-    # runs one) must not lift it. A concurrent session's init on `main` still
+    # runs one) must not lift it. The latch is written by `gate`, not by `incr`: an
+    # uncapped-latched ledger that is merely at its cap is scoped like any other
+    # until a gate has run (ADR-268 amendment). A concurrent session's init on `main` still
     # zeroes this session's counts — accepted (ADR-268 amendment 2026-10-31).
     outcome="default-branch-reset"
   elif [[ -n "$T_capped" ]] && (( caps_given )); then

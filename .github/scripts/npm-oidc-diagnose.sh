@@ -37,10 +37,12 @@ PACKAGE="@soleur/opencode"
 # The values the npm-side trusted-publisher entry must carry, derived from the run
 # itself so a rename or transfer cannot leave this guidance printing stale values.
 # Both are allowlisted before use: they are printed into a command an owner may paste.
-REPO="${GITHUB_REPOSITORY:-}"
-[[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || REPO="jikig-ai/soleur"
+# A value that fails its allowlist falls back to the default AND says so (a silent fallback would
+# print a trust-entry value that does not match the workflow that ran).
+REPO="${GITHUB_REPOSITORY:-}"; fell_back=""
+[[ "$REPO" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { [[ -z "$REPO" ]] || fell_back="repository"; REPO="jikig-ai/soleur"; }
 WORKFLOW="${GITHUB_WORKFLOW_REF:-}"; WORKFLOW="${WORKFLOW%%@*}"; WORKFLOW="${WORKFLOW##*/}"
-[[ "$WORKFLOW" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$ ]] || WORKFLOW="npm-publish.yml"
+[[ "$WORKFLOW" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.ya?ml$ ]] || { [[ -z "$WORKFLOW" ]] || fell_back="${fell_back:+$fell_back and }workflow"; WORKFLOW="npm-publish.yml"; }
 RUNBOOK="knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md"
 TOKPAT='^[A-Za-z0-9._~+/=-]+$'
 
@@ -129,14 +131,24 @@ case "$outcome" in
     msg="$(jq -r 'if (.message|type)=="string" then .message else empty end' "$tmp/exchange.json" 2>/dev/null)" || msg=""
     # A registry that echoes a bearer back must not get it printed: the runner masks the
     # exact full value only, so a fragment would pass unmasked. Drop the message if any
-    # 16-character window of either bearer appears in it, raw or after clean() (which
-    # deletes control bytes and so can rejoin a fragment split by one).
+    # 16-character window of either bearer appears in it once squeezed to token characters
+    # (the squeeze rejoins a fragment split by separators, spaces, newlines or control bytes
+    # and is a superset of the raw text, so no separate raw check is needed).
+    # A copy squeezed to token characters also catches a bearer split by separators or newlines,
+    # and any 24+ character token-shaped run in the RAW message is dropped (a re-encoded bearer, a
+    # long URL): a real error sentence has none. The message is capped first so this stays cheap.
     if [[ -n "$msg" ]]; then
-      cmsg="$(clean "$msg")"; bearers="$idtok $ACTIONS_ID_TOKEN_REQUEST_TOKEN"
-      for ((i = 0; i + 16 <= ${#bearers}; i++)); do
-        w="${bearers:i:16}"; [[ "$w" == *" "* ]] && continue
-        if [[ "$msg" == *"$w"* || "$cmsg" == *"$w"* ]]; then msg=""; break; fi
-      done
+      msg="${msg:0:4096}"
+      sq="$(printf '%s' "$msg" | LC_ALL=C tr -cd 'A-Za-z0-9._~+/=-')"
+      bearers="$idtok $ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+      if [[ "$msg" =~ [A-Za-z0-9._~+/=-]{24} ]]; then
+        msg=""
+      else
+        for ((i = 0; i + 16 <= ${#bearers}; i++)); do
+          w="${bearers:i:16}"; [[ "$w" == *" "* ]] && continue
+          if [[ "$sq" == *"$w"* ]]; then msg=""; break; fi
+        done
+      fi
     fi
     if [[ -n "$msg" ]]; then
       say message "$msg"
@@ -149,7 +161,8 @@ case "$outcome" in
     say environment "(none)"
     fixcmd="npm trust github ${PACKAGE} --file ${WORKFLOW} --repo ${REPO} --allow-publish"
     # say() caps at 200 bytes; a truncated command could name a different repo if pasted.
-    if (( ${#fixcmd} <= 190 )); then say fix "$fixcmd"; fi
+    if (( ${#fixcmd} <= 190 )); then say fix "$fixcmd"; else say detail "fix command omitted: it would exceed the 200-byte line cap; use the repository, workflow and environment values above"; fi
+    [[ -z "$fell_back" ]] || say detail "the ${fell_back} value from the run (GITHUB_REPOSITORY / GITHUB_WORKFLOW_REF) was not usable; the value above is the default, not derived from this run"
     say runbook "$RUNBOOK"
     annotate "No matching npm trusted publisher; configure repository, workflow and environment as printed in the run log. $RUNBOOK_NOTE"
     ;;
