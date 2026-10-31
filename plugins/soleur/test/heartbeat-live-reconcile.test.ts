@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ManifestEntry } from "../lib/heartbeat-manifest";
+import { MANIFEST, type ManifestEntry } from "../lib/heartbeat-manifest";
 import {
   type DiscoveredHeartbeat,
   type DiscoveredMonitor,
@@ -158,6 +158,109 @@ describe("reconcileHeartbeats — condition (a) live-paused-but-fed (#6537 shape
     );
     expect(absent).toHaveLength(1);
     expect(absent[0]).toMatchObject({ reason: "absent-live", live: "absent" });
+  });
+});
+
+describe("reconcileHeartbeats — arming_pending.expires (#11631: an unarmed dead-man cannot stay exempt forever)", () => {
+  const at = (iso: string) => () => Date.parse(iso);
+  const withExpiry = (expires: string): ManifestRow => ({
+    ...fedCron("luks_monitor_host_timer"),
+    arming_pending: { tracking_issue: 11631, expires },
+  });
+  const run = (row: ManifestRow, now: () => number) =>
+    reconcileHeartbeats(
+      [row],
+      [disc("luks_monitor_host_timer", "soleur-luks-monitor-host-timer-prd")],
+      [live("soleur-luks-monitor-host-timer-prd", true)],
+      now,
+    );
+
+  it("stays exempt before the expiry (last UTC millisecond of the day before)", () => {
+    expect(run(withExpiry("2026-11-13"), at("2026-11-12T23:59:59.999Z"))).toEqual([]);
+  });
+
+  it("alarms fed-but-paused ON the expiry date (00:00:00Z) and names the expiry and the tracking issue", () => {
+    const v = run(withExpiry("2026-11-13"), at("2026-11-13T00:00:00.000Z"));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ reason: "fed-but-paused", live: "paused" });
+    expect(v[0].detail).toContain("2026-11-13");
+    expect(v[0].detail).toContain("#11631");
+  });
+
+  it("alarms after the expiry date", () => {
+    const v = run(withExpiry("2026-11-13"), at("2027-01-01T12:00:00Z"));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ reason: "fed-but-paused" });
+  });
+
+  it("a row WITHOUT expires keeps today's behaviour: exempt at any date", () => {
+    const row: ManifestRow = { ...fedCron("luks_monitor_host_timer"), arming_pending: { tracking_issue: 6604 } };
+    expect(run(row, at("2099-01-01T00:00:00Z"))).toEqual([]);
+  });
+
+  it.each(["2026-13-40", "2026-11-31", "13/11/2026", "2026-11-13T00:00:00Z", "", "tomorrow", " 2026-11-13"])(
+    "fails closed on malformed expires %j: alarms, never silently exempt",
+    (bad) => {
+      const v = run(withExpiry(bad), at("2020-01-01T00:00:00Z"));
+      expect(v).toHaveLength(1);
+      expect(v[0]).toMatchObject({ reason: "fed-but-paused" });
+      expect(v[0].detail).toContain("malformed");
+      expect(v[0].detail).toContain("#11631");
+    },
+  );
+
+  it("expiry does not touch an armed (unpaused) heartbeat or the absent-live class", () => {
+    const row = withExpiry("2026-11-13");
+    const late = at("2027-01-01T00:00:00Z");
+    expect(
+      reconcileHeartbeats([row], [disc("luks_monitor_host_timer", "n")], [live("n", false)], late),
+    ).toEqual([]);
+    const absent = reconcileHeartbeats([row], [disc("luks_monitor_host_timer", "n")], [], late);
+    expect(absent).toHaveLength(1);
+    expect(absent[0].reason).toBe("absent-live");
+  });
+
+  it("runReconcile threads opts.nowImpl and renders the detail last on the MISMATCH line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hb-exp-"));
+    try {
+      writeFileSync(
+        join(dir, "heartbeats.tf"),
+        'resource "betteruptime_heartbeat" "luks_monitor_host_timer" {\n  name   = "soleur-luks-monitor-host-timer-prd"\n  paused = true\n}\n',
+      );
+      const go = async (nowIso: string) => {
+        const fetchImpl = async (url: string) =>
+          new Response(
+            JSON.stringify({
+              data: url.includes("heartbeats")
+                ? [{ id: "1", type: "heartbeat", attributes: { name: "soleur-luks-monitor-host-timer-prd", paused: true } }]
+                : [],
+              pagination: { next: null },
+            }),
+            { status: 200 },
+          );
+        return runReconcileRaw(dir, { token: "t", fetchImpl, sleepImpl: async () => {}, maxAttempts: 1, nowImpl: () => Date.parse(nowIso) }, [withExpiry("2026-11-13")]);
+      };
+      const before = await go("2026-11-12T00:00:00Z");
+      expect(before.markers.join("\n")).not.toContain("fed-but-paused");
+      const after = await go("2026-11-13T00:00:00Z");
+      const line = after.markers.find((m) => m.includes("reason=fed-but-paused"));
+      expect(line).toBeDefined();
+      expect(line).toMatch(/ route=fed-but-paused~resource\.betteruptime_heartbeat\.luks_monitor_host_timer detail="[^"]*2026-11-13[^"]*#11631[^"]*"$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("every committed MANIFEST arming_pending.expires is a real YYYY-MM-DD date, and the #11631 rows carry 2026-11-13", () => {
+    for (const r of MANIFEST) {
+      const e = r.arming_pending?.expires;
+      if (e === undefined) continue;
+      expect(e).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(new Date(`${e}T00:00:00Z`).toISOString().slice(0, 10)).toBe(e);
+    }
+    for (const n of ["luks_monitor_host_timer", "claude_cost_capture"]) {
+      expect(MANIFEST.find((r) => r.name === n)?.arming_pending).toEqual({ tracking_issue: 11631, expires: "2026-11-13" });
+    }
   });
 });
 
