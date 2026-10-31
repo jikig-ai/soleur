@@ -89,6 +89,7 @@ n-mismatch silently degrades every leg to positional.
 
 import argparse
 import glob
+import hashlib
 import io
 import json
 import os
@@ -477,15 +478,23 @@ def drift_violations(new_rows, base_rows):
     return violations, notes
 
 
-def durations_has_growth_ack(path):
-    """True when the in-tree table at PATH already carries a recorded
-    `# growth-acked=` stamp — repeat regens on the same branch do not re-fire
-    a refusal the operator already acknowledged."""
+def growth_ack_digest(path):
+    """The violation digest of an in-tree table's `# growth-acked=` stamp, or
+    None. The stamp is scoped to the violation set it acknowledged — a
+    different violation set must earn its own --allow-growth, so a stale
+    stamp can never auto-ack new drift."""
     try:
         with open(path, encoding="utf-8") as f:
-            return any(l.startswith(GROWTH_ACK_PREFIX) for l in f)
+            for l in f:
+                if l.startswith(GROWTH_ACK_PREFIX):
+                    return l.split("=", 1)[1].strip() or None
     except OSError:
-        return False
+        pass
+    return None
+
+
+def violations_digest(violations):
+    return hashlib.sha256("\n".join(sorted(violations)).encode()).hexdigest()
 
 
 def drift_gate(new_rows, args, baseline_path, committed_write, write_target):
@@ -520,17 +529,19 @@ def drift_gate(new_rows, args, baseline_path, committed_write, write_target):
         new_rows, parse_durations_text(base_text, "baseline"))
     for n in notes:
         print(f"drift gate: {n}")
-    acked = args.allow_growth or durations_has_growth_ack(write_target)
-    if violations and not acked:
+    if not violations:
+        return None
+    digest = violations_digest(violations)
+    acked = (args.allow_growth
+             or growth_ack_digest(write_target) == digest)
+    if not acked:
         die("weight drift refusal — committed durations table exceeds "
             "thresholds vs merge-base:\n  " + "\n  ".join(violations) +
             "\nre-run with --allow-growth to acknowledge (recorded via a "
-            "# growth-acked= header stamp)")
-    if violations:
-        print(f"drift gate: {len(violations)} violation(s) acknowledged "
-              f"({'--allow-growth' if args.allow_growth else 'recorded ack'})")
-        return args.allow_growth
-    return False
+            "# growth-acked= header stamp scoped to these violations)")
+    print(f"drift gate: {len(violations)} violation(s) acknowledged "
+          f"({'--allow-growth' if args.allow_growth else 'recorded ack'})")
+    return digest if args.allow_growth else None
 
 
 def read_durations_ms(path):
@@ -595,7 +606,7 @@ def write_durations_delta(path_in, path_out, legs, floor_ms, growth_ack=False):
                   for h in header]
     if growth_ack and not any(
             h.startswith(GROWTH_ACK_PREFIX) for h in out_header):
-        out_header.append(f"{GROWTH_ACK_PREFIX}{ts}")
+        out_header.append(f"{GROWTH_ACK_PREFIX}{growth_ack}")
     lines = out_header + [
         keep[l] if l in keep else f"{l}\t{floor_ms}\tfloor"
         for l in sorted(set(keep) | set(added))] + trailer
@@ -604,13 +615,12 @@ def write_durations_delta(path_in, path_out, legs, floor_ms, growth_ack=False):
     return len(added), len(dropped)
 
 
-def render_durations(weights, src_map, group, prov, floor_ms, growth_ack=False,
-                     carried_ack=None):
+def render_durations(weights, src_map, group, prov, floor_ms, growth_ack=None):
     """The committed `label<TAB>ms<TAB>src` table — the single duration source
-    both the CI regen and the #8231 local scheduler consume. GROWTH_ACK stamps
-    a fresh `# growth-acked=` line; CARRIED_ACK re-emits a pre-existing stamp
-    line verbatim so a regen cannot silently consume an acknowledgement it
-    did not earn."""
+    both the CI regen and the #8231 local scheduler consume. GROWTH_ACK is a
+    violations digest stamped as `# growth-acked=<digest>`; it is never
+    carried forward from a previous table — a regen must re-earn any
+    acknowledgement it relies on."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     fname = {"light": "suite-durations.tsv", "heavy": "suite-durations-heavy.tsv",
              "infra": "suite-durations.tsv"}[group]
@@ -623,9 +633,7 @@ def render_durations(weights, src_map, group, prov, floor_ms, growth_ack=False,
         f"# generator=regenerate-shard-manifest.py v{GENERATOR_VERSION}",
     ]
     if growth_ack:
-        lines.append(f"{GROWTH_ACK_PREFIX}{ts}")
-    elif carried_ack:
-        lines.append(carried_ack)
+        lines.append(f"{GROWTH_ACK_PREFIX}{growth_ack}")
     lines += [f"{label}\t{weights[label]}\t{src_map[label]}"
               for label in sorted(weights)]
     return "\n".join(lines) + "\n"
@@ -893,9 +901,11 @@ def main():
                     base_rows = parse_durations_text(f.read(), dur_src)
             new_rows = {l: base_rows[l] if l in base_rows else
                         (floor_ms, "floor") for l in legs}
+            # Arms on the durations write-target alone — the table is the
+            # guarded artifact, so --durations-out at the committed path is
+            # gated even with a redirected manifest.
             committed_write = (
-                os.path.abspath(manifest_path) == os.path.abspath(default_manifest)
-                and os.path.abspath(dur_out) == os.path.abspath(default_durations))
+                os.path.abspath(dur_out) == os.path.abspath(default_durations))
             growth_ack = drift_gate(new_rows, args, args.baseline_durations,
                                     committed_write, dur_out)
             with open(manifest_path, "w", encoding="utf-8") as f:
@@ -1025,16 +1035,9 @@ def main():
         # only when --baseline-durations is supplied (the fixture seam).
         new_rows = {l: (timings[l], src_map[l]) for l in timings}
         committed_write = (
-            os.path.abspath(manifest_path) == os.path.abspath(default_manifest)
-            and os.path.abspath(durations_path) == os.path.abspath(default_durations))
+            os.path.abspath(durations_path) == os.path.abspath(default_durations))
         growth_ack = drift_gate(new_rows, args, args.baseline_durations,
                                 committed_write, durations_path)
-        carried_ack = None
-        if os.path.exists(durations_path):
-            with open(durations_path, encoding="utf-8") as f:
-                carried_ack = next(
-                    (l.rstrip("\n") for l in f
-                     if l.startswith(GROWTH_ACK_PREFIX)), None)
         # Provenance follows the SOURCE the timings actually came from — a
         # `--run` flag paired with `--timings-dir`/`--durations` must not stamp
         # a run id on data that run never produced.
@@ -1054,8 +1057,7 @@ def main():
         print(f"wrote {manifest_path} ({len(legs)} rows)")
         with open(durations_path, "w", encoding="utf-8") as f:
             f.write(render_durations(timings, src_map, args.group,
-                                     runs_csv, floor_ms, growth_ack,
-                                     carried_ack))
+                                     runs_csv, floor_ms, growth_ack))
         print(f"wrote {durations_path} ({len(timings)} rows)")
     else:
         print("dry-run — pass --write to update the manifest")
