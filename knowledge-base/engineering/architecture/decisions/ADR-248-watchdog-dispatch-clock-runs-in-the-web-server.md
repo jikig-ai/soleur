@@ -183,3 +183,36 @@ Re-derive this decision if any of these happens:
   Inngest execution container, and the Cloudflare Worker becomes the default.
 
 **Relates to:** ADR-027, ADR-033, ADR-068, ADR-078, ADR-143 D2, ADR-241.
+
+## Amendment (2026-10-30, #11631): a fifth row, `scheduled-deadman-heartbeat-feeder.yml`
+
+A dated amendment. The text above is unchanged; the table now has five rows. (The incident mirror
+`scheduled-betterstack-incident-mirror.yml` is covered only in ADR-298, so this is the fifth table
+row, not the fourth documented here.)
+
+`scheduled-deadman-heartbeat-feeder.yml` (60-minute slot) feeds `betteruptime_heartbeat.luks_monitor_host_timer`
+and `betteruptime_heartbeat.claude_cost_capture` (ADR-218 amendment of the same date).
+
+**Eligibility (the second clause, broadened) — PENDING CTO VERIFICATION.** The CTO ruling that added this row
+did not verify that the luks-monitor and cost-capture checks count as "a check on the substrate" (see
+`decision-challenges.md` in the #11631 spec), and the clause below is this amendment's own widening of the
+2026-10-11 text, which only admitted a feeder for "a check on the substrate". The row stays even if review
+rejects the widening, because the alternative is a schedule-only feeder that false-pages most days once armed.
+The second clause of the eligibility rule (2026-10-11
+amendment) admitted a workflow that feeds an absence-alerted dead-man's-switch heartbeat for a check on the
+substrate. It now reads: a workflow that feeds such a heartbeat for a check **on or emitted from the Inngest
+execution host**, when that heartbeat is the paging surface and a substrate-dependent trigger would make a
+missing beat unattributable. The luks-monitor row is emitted by web-1's host timer, and the cost markers are
+emitted by the Inngest-executed crons. With an Inngest dispatch cron, a scheduler outage
+would stop the beats and page "luks timer dark" while the host is healthy.
+
+**Run count.** +24 runs a day (hourly slots; up to 48 ticks, since both web hosts tick each slot and the second
+tick is skipped as a collision duplicate, plus late fallback runs). The
+`:00` slot now has all five rows due at once on both hosts: up to 10 simultaneous ticks, each minting a
+GitHub App installation token.
+
+**ADR-033 corollary.** The feeder runs on a GitHub Actions runner, so it survives a total web-1 loss only
+while two web hosts exist (the `var.web_hosts` reversal trigger above). A web image fault
+that darkens both clocks leaves only the `schedule:` fallback, which can exceed the heartbeats' 10800 s
+page threshold, so a healthy host can page "luks timer dark". Runbook step 0 for either heartbeat page is
+therefore to check the Sentry monitor `scheduled-deadman-heartbeat-feeder` before touching the timer.

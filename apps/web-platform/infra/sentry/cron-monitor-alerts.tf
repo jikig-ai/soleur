@@ -57,6 +57,10 @@ locals {
     # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the
     # first measured check-in.
     scheduled_betterstack_incident_mirror = "the mirror's own ci/betterstack-incident GitHub issues are the primary channel; route after the first measured check-in (#10390)"
+    # #11631 — the dead-man heartbeat feeder's liveness monitor, added under the two-PR rule: the Better Stack
+    # heartbeats (soleur-luks-monitor-host-timer-prd, soleur-claude-cost-capture-prd) are the paging surface and
+    # time out when the feeder goes dark; route this after three measured check-ins (tracked on #11672).
+    scheduled_deadman_heartbeat_feeder = "the Better Stack heartbeats are the paging surface; route after three measured check-ins (tracked on #11672)"
   }
 }
 

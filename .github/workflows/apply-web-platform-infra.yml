@@ -18,34 +18,17 @@ on:
     branches: [main]
     paths:
       - "apps/web-platform/infra/**"
-      # (#7025, R10) NEGATED, not `paths-ignore`. GitHub rejects a workflow that uses both
-      # `paths` and `paths-ignore` for the same event, so the exclusion has to live inside
-      # `paths` as a `!` pattern — and it must sit AFTER the glob it narrows, because later
-      # patterns override earlier ones.
-      #
-      # WHY IT IS NEEDED. The rung-2 rehearsal is a SEPARATE Terraform root with its own
-      # state key, dispatched by its own workflow. It lives under apps/web-platform/infra/
-      # for proximity to the payloads it renders, so the glob above would fire a PRODUCTION
-      # apply of the PARENT root on a rehearsal-only edit — an apply of one root triggered by
-      # a file no expression in that root reads.
-      #
-      # This narrows the TRIGGER, never the apply's scope: the parent root's -target sets are
-      # untouched, and modules/git-data-userdata/ is deliberately NOT excluded, because the
-      # production host really does render from it.
+      # (#7025, R10) NEGATED, not `paths-ignore` (GitHub rejects both for one event): the `!` must sit AFTER the glob
+      # it narrows. Each `!` below is a SEPARATE Terraform root with its own state key, dispatched by its own workflow;
+      # a merge touching only it must never fire a PRODUCTION apply of the parent root. This narrows the TRIGGER, never
+      # the apply's scope (modules/git-data-userdata/ and the shared cloud-init-inngest.yml are deliberately NOT excluded:
+      # the production host renders from them; the git-data-root-key.fingerprint anchor sits outside its directory).
       - "!apps/web-platform/infra/rung2-rehearsal/**"
-      # (#9175) Same reason, same shape: inngest-provision-rehearsal/ is its own Terraform
-      # root with its own state key, dispatched only by inngest-provision-rehearsal.yml. Its
-      # files must never fire a PRODUCTION apply of the parent root. The shared
-      # cloud-init-inngest.yml it renders is deliberately NOT excluded — the production host
-      # renders from it too.
+      # (#9175) inngest-provision-rehearsal/, dispatched only by inngest-provision-rehearsal.yml.
       - "!apps/web-platform/infra/inngest-provision-rehearsal/**"
-      # (#8189, ADR-220) Same reason: git-data-root-key/ is its own root with its own state key,
-      # applied only by apply-git-data-root-key.yml. The committed anchor
-      # git-data-root-key.fingerprint sits OUTSIDE that directory and still fires this workflow.
+      # (#8189, ADR-220) git-data-root-key/, applied only by apply-git-data-root-key.yml.
       - "!apps/web-platform/infra/git-data-root-key/**"
-      # (#11181 F3) Same reason, same shape: lb-staging/ is its own Terraform root with
-      # its own state key, applied only by cf-lb-overlay.yml dispatch arms. Without the
-      # exclusion a staging-root merge would fire a PRODUCTION apply of the parent root.
+      # (#11181 F3) lb-staging/: own root, own state key, cf-lb-overlay.yml only.
       - "!apps/web-platform/infra/lb-staging/**"
       - ".github/workflows/apply-web-platform-infra.yml"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
@@ -58,8 +41,7 @@ on:
         description: "Why are you applying? (e.g. transient retry, or the dispatch reason)"
         required: true
         type: string
-      # NOTE on the input budget: GitHub raised the `workflow_dispatch` cap from 10 to 25 inputs on
-      # 2025-12-04; 9 are used (the five inngest-backstop-retire inputs were removed when that dispatch was retired).
+      # NOTE: 25-input cap since 2025-12-04; 9 used (5 inngest-backstop-retire inputs retired).
       # Prefer a DEDICATED workflow for the next per-target group (precedent: workspaces-luks-cutover.yml;
       # the concurrency group is a shared literal and survives the split). Re-derive the count:
       #   awk '/^  workflow_dispatch:/,/^concurrency:/' .github/workflows/apply-web-platform-infra.yml \
@@ -627,6 +609,8 @@ jobs:
               -target=doppler_secret.inngest_heartbeat_url_prd \
               -target=betteruptime_heartbeat.inngest_server_probe \
               -target=doppler_secret.inngest_server_probe_heartbeat_url \
+              -target=betteruptime_heartbeat.luks_monitor_host_timer \
+              -target=betteruptime_heartbeat.claude_cost_capture \
               -target=betteruptime_heartbeat.git_data_prd \
               -target=doppler_secret.git_data_heartbeat_url_prd \
               -target=betteruptime_heartbeat.git_data_host_prd \
