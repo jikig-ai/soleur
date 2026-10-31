@@ -99,3 +99,31 @@ main's commit from the PR body, so git trailers never reach `git log` on main.
   ralph-loop sessions on a Stop-hook-capable harness — everywhere else
   enforcement is prose + sentinel, with `SOLEUR_TALLY_CAP_IGNORED` as the
   ignored-verdict detector.
+
+## Amendment 2026-10-31
+
+Default-branch ledgers are init-scoped. A ledger keyed to exactly `main` or
+`master` (derived, or via `--branch`; `feat-main`, `main-x` and a detached
+`HEAD` do not match) is shared by every session on the default branch and, under
+the original per-branch contract, accumulated forever: the `83/15/1/12` tally
+read for PR #11622 was the shared `main` ledger, not that run's cost (the run's
+own ledger read `19/2/2/4`). `pipeline-tally.sh init` on a default branch now
+resets the ledger with the fail-open outcome `default-branch-reset` (exit 0),
+sitting after `repaired` and before `capped-reset` in the precedence (fresh >
+reset > repaired > default-branch-reset > capped-reset > stale-reset >
+continued); counts, `warned_*` and `capped` are cleared and `cap_<dim>` values
+are merged as for every other reset. `show` appends one last line,
+`note:default-branch-ledger (shared across sessions; not attributable to one
+run)`; the `tally:` line and the `cap:`/`warned:`/`capped:` tokens are
+unchanged, so `hooks/stop-hook.sh` and ship's render parse as before.
+
+Side effect, accepted: a concurrent session's `init` on `main` zeroes another
+session's counts, where before it only accumulated. Pipelines do not run on the
+default branch (commit-on-main is hook-blocked), so what is lost is the
+accidental cross-session accumulation; a skill that runs `init` twice on `main`
+in one session loses its first count.
+
+Rejected alternatives: record-only (document that a `main` read is cumulative)
+leaves the same defect in place, since the next reader repeats the
+misattribution; refusing default-branch ledgers outright (UNKNOWN) turns every
+post-merge shell on `main` into an UNKNOWN verdict.

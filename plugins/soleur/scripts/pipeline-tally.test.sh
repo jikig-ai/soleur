@@ -69,6 +69,14 @@ new_repo() { # $1 = dir name under $TMP; prints the path
   printf '%s' "$d"
 }
 
+new_repo_on() { # $1 = dir name under $TMP, $2 = branch; prints the path
+  local d="$TMP/$1"
+  assert_fixture_dir "$d"
+  mkdir -p "$d"
+  git -C "$d" init -q -b "$2"
+  printf '%s' "$d"
+}
+
 # run_tally <repo> <state-root> <args...> — invoke the SUT as a skill would:
 # cwd = the repo being tallied, session-state root redirected into the fixture
 # (`SOLEUR_SESSION_STATE_ROOT` is the lib's documented test override).
@@ -83,6 +91,9 @@ run_tally() {
 
 # Counter-file path the contract assigns this fixture: <root>/counters/<slug>.
 cf_path() { printf '%s/counters/%s' "$1" "$SLUG"; }
+
+# Counter-file path for an arbitrary branch: <root>/counters/<slug-of-branch>.
+cf_path_for() { printf '%s/counters/%s' "$1" "$(tally_slug "$2")"; }
 
 # Flat key=value read, contract format (same grep+cut idiom as the lib).
 cf_get() { grep "^$2=" "$1" 2>/dev/null | head -1 | cut -d= -f2-; }
@@ -110,6 +121,32 @@ assert_path_absent() {
 }
 
 assert_rc0() { assert_eq "0" "$RC" "$1"; }
+
+# Exact-line verdict helpers. `reset` is a SUBSTRING of `default-branch-reset`
+# (and of `capped-reset`/`stale-reset`), so outcome asserts must match a whole
+# line, never assert_contains. line_present is the predicate; assert_line and
+# assert_no_line wrap it.
+line_present() { printf '%s\n' "$1" | grep -qxF -- "$2"; }
+assert_line() {
+  if line_present "$1" "$2"; then
+    echo "  PASS: $3"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $3"
+    echo "    expected exact line: '$2'"
+    echo "    actual: '$1'"
+    FAIL=$((FAIL + 1))
+  fi
+}
+assert_no_line() {
+  if ! line_present "$1" "$2"; then
+    echo "  PASS: $3"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $3"
+    echo "    expected NO exact line: '$2'"
+    echo "    actual: '$1'"
+    FAIL=$((FAIL + 1))
+  fi
+}
 
 echo "=== pipeline-tally.sh contract tests ==="
 echo ""
@@ -732,6 +769,188 @@ run_tally "$R29" "$S29" gate seats   # read + touch — now fresh again
 run_tally "$R29" "$S29" init
 assert_contains "$OUT" "continued" "post-gate init continues (mtime refreshed), not stale-reset"
 assert_eq "5" "$(cf_get "$C29" seats)" "counts survive the gate-touched init"
+echo ""
+
+# --- Tests 30-34: default-branch ledgers are init-scoped (ADR-268 amendment) ----
+# `main`/`master` ledgers are shared across sessions and accumulate forever
+# (the 83/15/1/12 tally was the shared `main` ledger, not one run). `init` on a
+# default branch therefore resets (outcome `default-branch-reset`) and `show`
+# discloses the shared scope with a trailing `note:` line. `git init -b <name>`
+# with the sandboxed state root puts the ledger under $TMP; the unborn branch
+# name is what `git branch --show-current` prints, so no real ledger is touched.
+DB_NOTE='note:default-branch-ledger (shared across sessions; not attributable to one run)'
+
+# Instrument self-test: the exact-line helper must discriminate the new outcome
+# from its substring `reset`, or every precedence row below is vacuous.
+echo "Test 30a: instrument self-test — assert_line tells reset from default-branch-reset"
+if line_present "tally-init: x default-branch-reset" "tally-init: x reset"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: line_present matched 'reset' inside 'default-branch-reset'"
+else
+  PASS=$((PASS + 1)); echo "  PASS: line_present is exact-line (substring 'reset' does not match)"
+fi
+if line_present "tally-init: x reset" "tally-init: x reset"; then
+  PASS=$((PASS + 1)); echo "  PASS: line_present matches an identical line"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: line_present missed an identical line"
+fi
+echo ""
+
+# --- Test 30: precedence rows on the derived default branch --------------------
+echo "Test 30: init on main/master — fresh / reset / repaired / default-branch-reset precedence"
+for DB in main master; do
+  RDB=$(new_repo_on "r30-$DB" "$DB"); S30="$TMP/s30-$DB"; C30=$(cf_path_for "$S30" "$DB"); SL30=$(tally_slug "$DB")
+  run_tally "$RDB" "$S30" init
+  assert_line "$OUT" "tally-init: $SL30 fresh" "$DB + absent ledger -> fresh (not default-branch-reset)"
+  run_tally "$RDB" "$S30" incr seats 3
+  run_tally "$RDB" "$S30" init
+  assert_rc0 "$DB default-branch-reset exits 0 (fail-open)"
+  assert_line "$OUT" "tally-init: $SL30 default-branch-reset" "$DB + live ledger -> default-branch-reset"
+  assert_no_line "$OUT" "tally-init: $SL30 continued" "$DB live ledger is not continued"
+  assert_eq "0" "$(cf_get "$C30" seats)" "$DB default-branch-reset zeroes counts"
+  assert_not_contains "$ERR" "SOLEUR_TALLY_ERROR" "$DB default-branch-reset is not an error"
+  run_tally "$RDB" "$S30" incr seats 2
+  touch -d "25 hours ago" "$C30"
+  run_tally "$RDB" "$S30" init
+  assert_line "$OUT" "tally-init: $SL30 default-branch-reset" "$DB + stale ledger -> default-branch-reset (not stale-reset)"
+  assert_eq "0" "$(cf_get "$C30" seats)" "$DB stale default-branch-reset zeroes counts"
+  run_tally "$RDB" "$S30" incr seats 4
+  run_tally "$RDB" "$S30" init --reset
+  assert_line "$OUT" "tally-init: $SL30 reset" "$DB + explicit --reset -> reset (explicit beats default-branch)"
+  assert_eq "0" "$(cf_get "$C30" seats)" "$DB --reset zeroes counts"
+  assert_fixture_dir "$C30"
+  printf 'corrupt bytes\n' > "$C30"
+  run_tally "$RDB" "$S30" init
+  assert_line "$OUT" "tally-init: $SL30 repaired" "$DB + corrupt ledger -> repaired (beats default-branch-reset)"
+  assert_contains "$ERR" "reason=unreadable" "$DB repaired still emits the unreadable marker"
+done
+echo ""
+
+# --- Test 31: capped default-branch ledger + caps ------------------------------
+echo "Test 31: capped main + raised --max-* -> default-branch-reset (counts zeroed, caps kept)"
+R31=$(new_repo_on r31 main); S31="$TMP/s31"; C31=$(cf_path_for "$S31" main); SL31=$(tally_slug main)
+assert_fixture_dir "$C31"
+mkdir -p "$(dirname "$C31")"
+cat > "$C31" <<EOF
+seats=13
+ci_cycles=4
+fix_rounds=1
+agent_rounds=7
+cap_seats=12
+cap_ci_cycles=0
+cap_fix_rounds=0
+cap_agent_rounds=0
+warned_seats=11
+warned_ci_cycles=0
+warned_fix_rounds=0
+warned_agent_rounds=0
+capped=seats
+EOF
+run_tally "$R31" "$S31" init --max-seats 20
+assert_line "$OUT" "tally-init: $SL31 default-branch-reset" "capped main + raised cap -> default-branch-reset (beats capped-reset)"
+assert_no_line "$OUT" "tally-init: $SL31 capped-reset" "capped main is not capped-reset"
+assert_eq "0" "$(cf_get "$C31" seats)" "raised-cap init on main zeroes counts"
+assert_eq "0" "$(cf_get "$C31" agent_rounds)" "raised-cap init on main zeroes every dim"
+assert_eq "" "$(cf_get "$C31" capped)" "default-branch-reset clears the latch"
+assert_eq "0" "$(cf_get "$C31" warned_seats)" "default-branch-reset clears warned_*"
+assert_eq "20" "$(cf_get "$C31" cap_seats)" "the raised cap is merged and kept"
+# Bare init on a capped main ledger: caps survive every reset form.
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
+run_tally "$R31" "$S31" init
+assert_line "$OUT" "tally-init: $SL31 default-branch-reset" "bare init on capped main -> default-branch-reset"
+assert_eq "12" "$(cf_get "$C31" cap_seats)" "bare default-branch-reset keeps the persisted cap (reset clears the ledger, never the budget)"
+assert_eq "0" "$(cf_get "$C31" seats)" "bare default-branch-reset zeroes counts"
+echo ""
+
+# --- Test 32: --branch, and names that merely contain main ---------------------
+echo "Test 32: --branch main/master match; feat-main and main-x stay continued"
+R32=$(new_repo_on r32 feat/tally-probe); S32="$TMP/s32"
+for DB in main master; do
+  SLB=$(tally_slug "$DB")
+  run_tally "$R32" "$S32" init --branch "$DB"
+  assert_line "$OUT" "tally-init: $SLB fresh" "--branch $DB from a feature repo -> fresh first time"
+  run_tally "$R32" "$S32" incr seats 5 --branch "$DB"
+  run_tally "$R32" "$S32" init --branch "$DB"
+  assert_line "$OUT" "tally-init: $SLB default-branch-reset" "--branch $DB behaves like the derived default branch"
+  assert_eq "0" "$(cf_get "$(cf_path_for "$S32" "$DB")" seats)" "--branch $DB zeroed counts"
+done
+for NB in feat-main main-x xmain main/x Main; do
+  SLN=$(tally_slug "$NB")
+  run_tally "$R32" "$S32" init --branch "$NB"
+  run_tally "$R32" "$S32" incr seats 2 --branch "$NB"
+  run_tally "$R32" "$S32" init --branch "$NB"
+  assert_line "$OUT" "tally-init: $SLN continued" "--branch $NB is not a default branch (continued)"
+  assert_eq "2" "$(cf_get "$(cf_path_for "$S32" "$NB")" seats)" "--branch $NB keeps counts"
+  run_tally "$R32" "$S32" show --branch "$NB"
+  assert_not_contains "$OUT" "note:" "show --branch $NB carries no default-branch note"
+done
+# Derived (not --branch) feat-main repo, the real skill call shape.
+RFM=$(new_repo_on r32-featmain feat-main)
+run_tally "$RFM" "$S32" init
+run_tally "$RFM" "$S32" incr seats 1
+run_tally "$RFM" "$S32" init
+assert_line "$OUT" "tally-init: $(tally_slug feat-main) continued" "derived branch feat-main is still continued"
+echo ""
+
+# --- Test 33: detached HEAD is not a default branch ------------------------------
+echo "Test 33: init on a detached HEAD (real commit) does not default-branch-reset"
+R33=$(new_repo_on r33 main); S33="$TMP/s33"
+assert_fixture_dir "$R33"
+git -C "$R33" -c user.name=tally-test -c user.email=tally-test@example.invalid -c commit.gpgsign=false \
+  commit -q --allow-empty -m probe
+git -C "$R33" checkout -q --detach
+DETACHED=$(git -C "$R33" branch --show-current)
+assert_eq "" "$DETACHED" "fixture is really detached (branch --show-current is empty)"
+run_tally "$R33" "$S33" init
+assert_contains "$OUT" "tally-init: HEAD-" "detached HEAD keys on HEAD-<hash>"
+assert_contains "$OUT" " fresh" "first detached init is fresh"
+run_tally "$R33" "$S33" incr seats 4
+run_tally "$R33" "$S33" init
+assert_contains "$OUT" " continued" "second detached init is continued"
+assert_not_contains "$OUT" "default-branch-reset" "detached HEAD never default-branch-resets"
+run_tally "$R33" "$S33" show
+assert_contains "$OUT" "seats=4" "detached HEAD keeps its counts"
+assert_not_contains "$OUT" "note:" "detached HEAD show carries no default-branch note"
+echo ""
+
+# --- Test 34: show discloses the shared scope without disturbing consumers -----
+echo "Test 34: show on main appends the note line AFTER capped:, tally: line byte-identical"
+R34M=$(new_repo_on r34-main main); R34F=$(new_repo_on r34-feat feat/x); S34="$TMP/s34"
+for R in "$R34M" "$R34F"; do
+  run_tally "$R" "$S34" init --max-seats 12
+  run_tally "$R" "$S34" incr seats 3
+  run_tally "$R" "$S34" incr agent_rounds 2
+done
+run_tally "$R34M" "$S34" show; SHOW_MAIN="$OUT"
+run_tally "$R34F" "$S34" show; SHOW_FEAT="$OUT"
+assert_line "$SHOW_MAIN" "$DB_NOTE" "show on main carries the exact note line"
+assert_eq "1" "$(printf '%s\n' "$SHOW_MAIN" | grep -c '^note:')" "exactly one note: line"
+assert_eq "$DB_NOTE" "$(printf '%s\n' "$SHOW_MAIN" | tail -1)" "the note is the LAST line of show"
+assert_not_contains "$SHOW_FEAT" "note:" "show on a feature branch has no note"
+assert_eq "$(printf '%s\n' "$SHOW_FEAT" | grep '^tally:')" "$(printf '%s\n' "$SHOW_MAIN" | grep '^tally:')" "tally: line is byte-identical to a feature ledger with the same counts"
+assert_eq "tally: seats=3 ci_cycles=0 fix_rounds=0 agent_rounds=2" "$(printf '%s\n' "$SHOW_MAIN" | sed -n 1p)" "tally: line format unchanged and first"
+assert_eq "$(printf '%s\n' "$SHOW_FEAT" | grep '^cap:')" "$(printf '%s\n' "$SHOW_MAIN" | grep '^cap:')" "cap: token line is unchanged"
+# Capped main ledger: note must follow the capped: annotation line.
+C34=$(cf_path_for "$S34" main)
+sed -i 's/^capped=.*/capped=seats/; s/^warned_seats=.*/warned_seats=10/' "$C34"
+run_tally "$R34M" "$S34" show
+LN_CAPPED=$(printf '%s\n' "$OUT" | grep -n '^warned:.*capped:\|^capped:' | head -1 | cut -d: -f1)
+LN_NOTE=$(printf '%s\n' "$OUT" | grep -n '^note:' | head -1 | cut -d: -f1)
+assert_contains "$OUT" "capped:seats=12" "capped main ledger renders capped:seats=12"
+if [[ -n "$LN_CAPPED" && -n "$LN_NOTE" ]] && (( LN_NOTE > LN_CAPPED )); then
+  PASS=$((PASS + 1)); echo "  PASS: note line ($LN_NOTE) follows the capped: line ($LN_CAPPED)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: note line ($LN_NOTE) must follow the capped: line ($LN_CAPPED)"
+fi
+# Stop-hook regression: derive from hooks/stop-hook.sh's `grep -o` extractors.
+# The note line must match none of them, so the hook's parse of a main ledger
+# is identical with and without it.
+NOTE_LINE=$(printf '%s\n' "$OUT" | grep '^note:')
+HOOK_HITS=$(printf '%s\n' "$NOTE_LINE" | grep -oE 'capped:[a-z_]*=[0-9]*|cap:[a-z_]*=[0-9]*|^tally:.*|(seats|ci_cycles|fix_rounds|agent_rounds)=[0-9]+' || true)
+assert_eq "" "$HOOK_HITS" "the note line matches none of stop-hook.sh's grep -o patterns"
+HOOK_CAPPED=$(printf '%s' "$OUT" | grep -o 'capped:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1)
+HOOK_CAP=$(printf '%s' "$OUT" | grep -o 'cap:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1)
+assert_eq "seats" "$HOOK_CAPPED" "hook's capped: extraction still yields seats with the note present"
+assert_eq "seats" "$HOOK_CAP" "hook's cap: extraction still yields seats with the note present"
 echo ""
 
 # --- Summary -------------------------------------------------------------------

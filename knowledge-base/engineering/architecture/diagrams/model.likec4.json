@@ -2212,7 +2212,7 @@
 "id": "1i97shu"
 },
 "1byd9un": {
-"title": "npm-publish.yml publishes @soleur/opencode on every release (#10723) via OIDC trusted publishing (ADR-309): the job's id-token exchanges for a credential bound to this repo + workflow filename — no long-lived NPM_TOKEN (the expired-credential class behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package",
+"title": "npm-publish.yml publishes @soleur/opencode on every release (#10723) via OIDC trusted publishing (ADR-310): the job's id-token exchanges for a credential bound to this repo + workflow filename — no long-lived NPM_TOKEN (the expired-credential class behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package",
 "technology": "HTTPS (npm OIDC token exchange + registry PUT)",
 "source": {
 "model": "github"
@@ -8231,7 +8231,7 @@
 "id": "imb5op",
 "source": "github",
 "target": "npmRegistry",
-"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-309): the job's id-token exchanges \nfor a credential bound to this repo + ",
+"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-310): the job's id-token exchanges \nfor a credential bound to this repo + ",
 "points": [
 [
 6313,
@@ -16321,7 +16321,7 @@
 "id": "imb5op",
 "source": "github",
 "target": "npmRegistry",
-"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-309): the job's id-token exchanges \nfor a credential bound to this repo + ",
+"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-310): the job's id-token exchanges \nfor a credential bound to this repo + ",
 "points": [
 [
 9049,
@@ -27654,7 +27654,7 @@
 "id": "imb5op",
 "source": "github",
 "target": "npmRegistry",
-"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-309): the job's id-token exchanges \nfor a credential bound to this repo + ",
+"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-310): the job's id-token exchanges \nfor a credential bound to this repo + ",
 "points": [
 [
 13495,
@@ -36388,7 +36388,7 @@
 "id": "imb5op",
 "source": "github",
 "target": "npmRegistry",
-"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-309): the job's id-token exchanges \nfor a credential bound to this repo + ",
+"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-310): the job's id-token exchanges \nfor a credential bound to this repo + ",
 "points": [
 [
 3729,
@@ -37221,7 +37221,7 @@
 "id": "imb5op",
 "source": "github",
 "target": "npmRegistry",
-"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-309): the job's id-token exchanges \nfor a credential bound to this repo + ",
+"label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-310): the job's id-token exchanges \nfor a credential bound to this repo + ",
 "points": [
 [
 177,

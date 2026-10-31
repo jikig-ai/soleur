@@ -46,7 +46,8 @@ tmp="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/npm-oidc-diag.XXXXXX")" || {
   say detail "could not create a temp dir"
   exit 0
 }
-trap 'rm -rf "$tmp"' EXIT
+# Remove exactly the two files this script writes, then the (now empty) directory.
+trap 'rm -f -- "$tmp/idtoken.json" "$tmp/exchange.json"; rmdir -- "$tmp"' EXIT
 
 host="${REGISTRY#*://}"; host="${host%%/*}"
 
