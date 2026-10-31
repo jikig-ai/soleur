@@ -151,11 +151,11 @@ if (( ROWS == 0 )); then
     # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
     # "0" — so an auth failure would be reported as a substantive zero events.
     # The bearer rides curl's stdin config channel, never its argument list.
+    # Ordering pin exempt (lint rule 6): field=count() is a one-row aggregate
+    # select -- no ordering to pin, and `sort` on an unselected field risks a 400.
     SC=$(curl --disable --noproxy '*' -sS --fail --max-time 25 -G \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \
-      # Ordering pin exempt (lint rule 6): field=count() is a one-row aggregate
-      # select -- no ordering to pin, and `sort` on an unselected field risks a 400.
       --data-urlencode 'statsPeriod=48h' \
       --config - "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/events/" 2>/dev/null \
       < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") \

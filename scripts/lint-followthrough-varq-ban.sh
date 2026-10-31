@@ -474,7 +474,10 @@ done
 # DECLARED BLIND SPOTS (named, not silent): an endpoint or its params assembled across
 # NON-continuation statements (string concat, `printf -v`, a helper that appends `&sort=`
 # later); a runtime-constructed endpoint; a bound passed by variable indirection. Same
-# accepted class rule 3 declares.
+# accepted class rule 3 declares. One asymmetry is structural: this lint drops `#` lines
+# BEFORE folding, but bash ends a backslash-continuation AT a `#` line -- a comment
+# interposed inside a continued command splits it in two while the lint still reads one
+# logical line (shellcheck SC2215 catches it; the lint cannot see it).
 scanned_rule6=0
 rule6_hits=""
 for f in ${PROBES[@]+"${PROBES[@]}"}; do
