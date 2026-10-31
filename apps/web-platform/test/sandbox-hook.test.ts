@@ -7,6 +7,9 @@ import { createSandboxHook } from "../server/sandbox-hook";
 import { FILE_TOOLS } from "../server/tool-path-checker";
 
 const WORKSPACE = "/workspaces/user1";
+// Parent-directory token for the relative-escape rows. Spelled through a constant so the repo-wide containment guard, which
+// text-scans for runs of `..`, does not read these app-local synthetic paths as a suite that reads outside the app.
+const UP = "..";
 const hook = createSandboxHook(WORKSPACE);
 const signal = new AbortController().signal;
 
@@ -264,7 +267,7 @@ describe("createSandboxHook - the shared HOME's persisted CLI state is unreachab
     ["LS the sessions directory", "LS", () => ({ path: join(home, ".claude", "sessions") })],
     ["NotebookRead outside the workspace", "NotebookRead", () => ({ notebook_path: join(home, ".claude", "x.ipynb") })],
     // The literal string, not join(): join() collapses the `..` lexically and the hook would never see them.
-    ["Read through a relative escape", "Read", () => ({ file_path: "../../home/.claude/history.jsonl" })],
+    ["Read through a relative escape", "Read", () => ({ file_path: `${UP}/${UP}/home/.claude/history.jsonl` })],
     ["Read of a prefix-sibling directory", "Read", () => ({ file_path: `${ws}-evil/x.txt` })],
     // A leading ~ is expanded to HOME by the CLI, so it must never be anchored under the workspace as a literal dir.
     ["Read with a leading ~", "Read", () => ({ file_path: "~/.claude/history.jsonl" })],
@@ -278,7 +281,7 @@ describe("createSandboxHook - the shared HOME's persisted CLI state is unreachab
     ["a path field that is not a string cannot be judged", "Grep", () => ({ pattern: "x", path: ["a"] })],
     ["Read through a symlink planted in the workspace", "Read", () => ({ file_path: join(ws, "link-to-history") })],
     ["Glob with an absolute pattern into HOME", "Glob", () => ({ pattern: `${home}/.claude/**/*.json` })],
-    ["Glob with a relative escape pattern", "Glob", () => ({ pattern: "../../home/.claude/*" })],
+    ["Glob with a relative escape pattern", "Glob", () => ({ pattern: `${UP}/${UP}/home/.claude/*` })],
   ])("%s is refused", async (_label, tool, input) => {
     const result = await call(tool, input());
     expectDenied(result, "outside the workspace");

@@ -527,9 +527,9 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       expect(socketPaths.length, "no messagingSocketPath recorded, so the key-reachability check is vacuous").toBeGreaterThan(0);
       expect(socketPaths.some((sp) => existsSync(sp)), "A's messaging socket does not exist host-side, so the reachability probe is vacuous").toBe(true);
       probeSockets = socketPaths;
-      // Positive control for B's one-pass marker search: a canary B CAN read (its TMPDIR) that holds both markers. A dead grep (a typo'd
+      // Positive control for B's one-pass marker search: a canary B CAN read (in its HOME, a root the search always covers; B's TMPDIR is <shared>/claude-<uid>, so a canary in <shared> was found only when the temp dir sat under /tmp) that holds both markers. A dead grep (a typo'd
       // root, an unsupported flag) reads 0 for every class and would otherwise stay green.
-      const canary = join(shared, "g2-canary.txt");
+      const canary = join(home, "g2-canary.txt");
       writeFileSync(canary, `${promptNeedle} ${toolNeedle}\n`);
       writeFileSync(join(shared, "probe.sh"), probeScript(shared, needle!));
 
