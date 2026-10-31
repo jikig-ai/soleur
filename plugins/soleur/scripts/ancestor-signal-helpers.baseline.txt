@@ -8,6 +8,7 @@
 # (overwrites the whole file: review the diff row by row).
 apps/web-platform/infra/arm-heartbeats.test.sh	P	if [[ "$seen" -ge "$FAKE_CUT_AFTER" ]]; then kill -9 "$PPID" 2>/dev/null; exit 0; fi
 apps/web-platform/infra/git-data-luks-reopen.test.sh	P	[ -f "$FX/luksopen_kill" ] && kill -TERM "$PPID"
+apps/web-platform/infra/git-data-refs-assert.test.sh	W	p="$(awk '/^PPid:/ {print $2}' "/proc/$p/status")"
 apps/web-platform/infra/run-registered-suites.test.sh	P	kill -9 "$_shim" 2>/dev/null
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	P	[ -f "$FX/luksopen_kill" ] && kill -TERM "$PPID"
 apps/web-platform/infra/workspaces-luks-provision.test.sh	P	[ -f "$st/crash_after_luksFormat" ] && kill -9 "$PPID"

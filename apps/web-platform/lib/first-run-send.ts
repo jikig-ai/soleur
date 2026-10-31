@@ -30,13 +30,37 @@ export interface FirstRunSendDeps {
     conversationId: string,
     opts?: FirstRunUploadOpts,
   ) => Promise<AttachmentRef[]>;
-  send: (content: string, attachments?: AttachmentRef[]) => void;
+  /** `false` means the send was REFUSED (credential-blocked chat / socket not
+   *  open) and nothing left the client. A refused send must not consume the
+   *  `?msg=` message. Every caller (`sendMessage`, the test doubles) returns a
+   *  boolean, so only an explicit `false` is a refusal. */
+  send: (content: string, attachments?: AttachmentRef[]) => boolean;
+  /** Called when the FINAL attempt is refused / dropped: the `?msg=` param is
+   *  already stripped, so the caller must put `text` back where the user can see
+   *  and resend it (the composer draft) and tell the user when attachments were
+   *  dropped (`droppedAttachments` > 0; attachments cannot be restored).
+   *  `text` is null for an attachments-only send. */
+  onFinalRefusal?: (text: string | null, droppedAttachments: number) => void;
   /** True on the last allowed attempt: if the session still changed, fall back
    *  to sending the text alone on a live, confirmed socket instead of dropping
    *  the user's message (the URL param that carried it is already stripped). */
   final?: boolean;
   /** Upload deadline; neither the presign fetch nor the storage PUT has a timeout. */
   deadlineMs?: number;
+}
+
+/** The send was refused: keep the message for one re-arm. On `final` there is
+ *  no re-arm and the `?msg=` param is already stripped, so mirror the loss and
+ *  hand the text back to the caller instead of dropping it silently. */
+function refused(d: FirstRunSendDeps, text: string | null): { sent: boolean; retry: boolean } {
+  if (d.final !== true) return { sent: false, retry: true };
+  reportSilentFallback(new Error("[kb-chat] first-run send refused on the final attempt"), {
+    feature: FEATURE,
+    op: "refused-final",
+    extra: { hasText: Boolean(text), attempted: d.files.length },
+  });
+  if (text || d.files.length > 0) d.onFinalRefusal?.(text, d.files.length);
+  return { sent: false, retry: false };
 }
 
 const TIMED_OUT = Symbol("first-run-upload-timeout");
@@ -63,7 +87,7 @@ export async function runFirstRunSend(
   try {
     if (files.length === 0) {
       if (msgParam) {
-        d.send(msgParam);
+        if (d.send(msgParam) === false) return refused(d, msgParam);
         return { sent: true, retry: false };
       }
       return { sent: false, retry: false };
@@ -168,17 +192,21 @@ export async function runFirstRunSend(
       // dropped (captured above), but the typed text is not. Only ever into a
       // live, confirmed socket; never into a dead one.
       if (msgParam && live.connected && live.sessionConfirmed) {
-        d.send(msgParam);
+        if (d.send(msgParam) === false) return refused(d, msgParam);
         return { sent: true, retry: false };
       }
-      return { sent: false, retry: false };
+      // No live socket to send into (or nothing but attachments): the message and
+      // the attachments are lost, so hand them back like any other final refusal.
+      return refused(d, msgParam);
     }
 
+    let accepted = true;
     if (uploaded.length > 0) {
-      d.send(msgParam ?? "", uploaded);
+      accepted = d.send(msgParam ?? "", uploaded);
     } else if (msgParam) {
-      d.send(msgParam);
+      accepted = d.send(msgParam);
     }
+    if (accepted === false) return refused(d, msgParam);
     return { sent: true, retry: false };
   } catch (err) {
     reportSilentFallback(sanitized("first-run batch failed", err), {

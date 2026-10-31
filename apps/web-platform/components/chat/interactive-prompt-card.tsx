@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type {
   InteractivePromptPayload,
@@ -8,6 +8,7 @@ import type {
   TodoItem,
 } from "@/lib/types";
 import { formatAssistantText } from "@/lib/format-assistant-text";
+import { RefusedSendNotice, type RefusalContext } from "@/components/chat/refused-send-notice";
 
 /**
  * Stage 4 (#2886) — InteractivePromptCard component.
@@ -37,14 +38,48 @@ interface InteractivePromptCardPropsBase {
   conversationId: string;
   resolved?: boolean;
   selectedResponse?: InteractivePromptResponsePayload["response"];
-  onRespond: (response: InteractivePromptResponsePayload) => void;
+  /** Why a refused response was refused (credential vs plain connection). */
+  refusal?: RefusalContext;
+  /** Changes when the connection is sendable again: clears a stale refusal line. */
+  resetKey?: number;
+  /** Return `false` when the response was REFUSED (nothing left the client). */
+  onRespond: (response: InteractivePromptResponsePayload) => boolean | void;
 }
 
 // Discriminated props that match `InteractivePromptPayload`'s `{kind,payload}`.
 type InteractivePromptCardProps = InteractivePromptCardPropsBase &
   InteractivePromptPayload;
 
+/** The refusal line, rendered by `CardShell` so it sits INSIDE the card's
+ *  `[data-prompt-id]` subtree (not as a sibling). */
+const RefusalSlotContext = createContext<React.ReactNode>(null);
+
 export function InteractivePromptCard(props: InteractivePromptCardProps) {
+  // #11525 — a refused response (`false`) keeps the card actionable; say why.
+  // The count is the notice's React key: a second refusal remounts the alert.
+  const [refusalCount, setRefusalCount] = useState(0);
+  const { resetKey } = props;
+  useEffect(() => {
+    setRefusalCount(0);
+  }, [resetKey]);
+  const onRespond = (response: InteractivePromptResponsePayload) => {
+    const result = props.onRespond(response);
+    if (result === false) setRefusalCount((n) => n + 1);
+    else setRefusalCount(0);
+    return result;
+  };
+  const notice =
+    refusalCount > 0 && props.resolved !== true ? (
+      <RefusedSendNotice key={refusalCount} refusal={props.refusal} />
+    ) : null;
+  return (
+    <RefusalSlotContext.Provider value={notice}>
+      <InteractivePromptVariant {...props} onRespond={onRespond} />
+    </RefusalSlotContext.Provider>
+  );
+}
+
+function InteractivePromptVariant(props: InteractivePromptCardProps) {
   const baseClass =
     "rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/60 px-4 py-3";
   const disabled = props.resolved === true;
@@ -100,9 +135,11 @@ function CardShell({
   kind: InteractivePromptPayload["kind"];
   children: React.ReactNode;
 }) {
+  const refusalNotice = useContext(RefusalSlotContext);
   return (
     <div data-prompt-kind={kind} data-prompt-id={promptId}>
       {children}
+      {refusalNotice}
     </div>
   );
 }

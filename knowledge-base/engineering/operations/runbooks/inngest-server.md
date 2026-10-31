@@ -340,10 +340,83 @@ stale `host_name` possible on a web-1 row (#6616).
   state when a whole channel is dark — that, not a host fault, was the
   2026-08-14→16 darkness, #7569). Widen `--since` past the replace, confirm the
   host ships *something* (`--grep inngest- --limit 20`), then re-read.
-- The same read exists as a sweeper probe:
-  `scripts/followthroughs/inngest-bs-token-restage-7596.sh` asserts the
-  positive row and reports TRANSIENT until it arrives — enrolled on #7596 via
-  a `soleur:followthrough` directive (operator step; see the issue).
+- The same read exists as an automated sweeper probe:
+  `scripts/followthroughs/inngest-bs-token-restage-7596.sh`. The probe runs
+  three reads per pass — the journald leg above, an `inngest-server-probe`
+  boot-id read that pins the current host generation, and a
+  `SOLEUR_INNGEST_BOOT_STAGE` read for the host's own boot-stage markers on
+  the direct-curl ingest leg (which ship independently of the journald→Vector
+  leg). The two restage stages are NOT interchangeable:
+  `bs-token-restage-enabled` fires only in the replace-bound first-boot
+  runcmd (the `systemctl enable` arm — delivery proof), while
+  `bs-token-restaged` fires on EVERY boot (per-boot phone-home — boot
+  evidence only), so arm-2 requires the enabled marker and a plain post-floor
+  reboot can never satisfy the close on undelivered evidence. Enrollment on
+  #7596 via a `soleur:followthrough` directive is a **pending post-merge
+  step** — the probe is inert until the directive lands in the issue body;
+  once enrolled, **the sweeper closes the issue on measured evidence** — no
+  manual re-check after the replace.
+
+  Verdict taxonomy (the sweeper posts these as comments):
+
+  - `PASS ... pass_arm=journald journald_rows=present` — a post-floor
+    (generation floor: filing date 2026-10-30) `RESTAGED ok=1` row whose
+    `_BOOT_ID` matches the newest server-probe row's boot id. The close.
+  - `PASS ... pass_arm=boot_stage journald_rows=absent` — no journald restage
+    row, but a current-generation BOOT_STAGE `bs-token-restage-enabled`
+    marker arrived on the curl ingest leg (the replace-bound first-boot
+    enable — `bs-token-restaged` alone is per-boot evidence and never
+    qualifies): the unit was delivered and the emit path reached the sink,
+    so the issue's own "or the host's own boot-stage markers" wording is met.
+    `journald_rows=absent` is the `leg_journald` verdict delivered at close
+    time — the journald→Vector leg stayed dark even though the unit ran;
+    file a diagnostic issue naming that leg if you see this close shape.
+  - `TRANSIENT reason=pre_replace` — no post-floor evidence of any kind: the
+    replace has not landed yet (the channel_dark-family state).
+  - `TRANSIENT reason=leg_unit` — post-floor activity proves the host lives
+    but zero restage-unit evidence on either leg in the current generation:
+    the unit likely never ran/enabled. If this persists post-replace, the
+    emit leg is the suspect — the 2026-10-30 census showed the allowlist
+    already baked in v1.1.61 with zero restage rows in 14d, so this outcome
+    is a real possibility; file a diagnostic issue, do not re-bake blind.
+  - `TRANSIENT reason=restage_not_ok` — current-generation restage rows exist
+    but none carries `ok=1` / the enabled stage: the unit ran and failed.
+    The real failure tokens to grep: the journald emit
+    `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=<n>` (the doppler-read rc
+    names the failure class) and the BOOT_STAGE marker
+    `bs-token-restage-enable-FAILED` (the runcmd `systemctl enable` arm
+    failed — the boot-trace channel dies on the next reboot).
+  - `TRANSIENT reason=delivery_unproven` — a current-generation
+    `bs-token-restaged` marker fired (the per-boot restage ran) but no
+    same-generation `bs-token-restage-enabled` marker arrived. A plain
+    post-floor reboot is EXPECTED to land here: the enabled marker is
+    first-boot/runcmd-bound, so after a reboot the delivery proof lives in
+    the previous generation. Confirm the previous generation's enabled
+    marker (widen `--since` past the replace) and let the journald arm
+    carry the close; file a diagnostic issue if no enabled marker exists in
+    ANY generation.
+  - `TRANSIENT reason=boot_id_unresolvable` — post-floor restage evidence
+    exists but the generation anchor could not be resolved; the probe refuses
+    a stale-generation close rather than degrading to a MIN_DT-only PASS.
+    Remediation: check the anchor leg's health — re-run the read with
+    `--grep inngest-server-probe` over the same window; zero rows means the
+    server probe (not the restage unit) is the dark leg, and rows carrying
+    no `_BOOT_ID` mean the probe emits but its boot-id field is not
+    shipping.
+
+- **Counterpart probe (#11602):** the same replace delivers the host_metrics
+  trim. `scripts/followthroughs/inngest-hostmetrics-trim-11602.sh` runs the
+  issue's own acceptance read — `GROUP BY tags.collector` over the trailing
+  24h on `tags.host='soleur-inngest'` (metric rows carry no `host_name` —
+  `tags.host` is the sole discriminator) — and PASSES only when the observed
+  set is exactly `{memory, filesystem}` with ≥1 row of each. It reports
+  `TRANSIENT reason=untrimmed` while the full collector set still ships, and
+  `reason=no_host_metrics` on an empty window; ≤24h post-replace residual
+  old-generation rows keep it `untrimmed`, which self-clears. Its trim is
+  additionally pinned pre-bake by Guard A4 in
+  `cloud-init-inngest-bootstrap.test.sh` (the pinned tag's
+  `[sources.host_metrics]` block must carry `scrape_interval_secs = 900` and
+  exactly `{memory, filesystem}`).
 
 ## Provision unit (#8562)
 

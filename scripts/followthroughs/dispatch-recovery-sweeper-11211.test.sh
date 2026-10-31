@@ -34,6 +34,10 @@ MH_LIB="$REPO/scripts/lib/mutation-harness.sh"
 [ -f "$MH_LIB" ] || { echo "mutation-harness lib missing: $MH_LIB"; exit 4; }
 # shellcheck source=../lib/mutation-harness.sh
 source "$MH_LIB"
+MH_CTL="$REPO/scripts/lib/mutation-harness-controls.sh"
+[ -f "$MH_CTL" ] || { echo "mutation-harness controls missing: $MH_CTL"; exit 4; }
+# shellcheck source=../lib/mutation-harness-controls.sh
+source "$MH_CTL"
 instrument_selftest
 
 NOW=1790000000
@@ -417,6 +421,10 @@ if run_battery "${1:-}"; then
   # The expected count is a literal on purpose: derived from the table it would shrink with it. Update it WITH the table.
   check "scorer teeth: a dead scorer is caught wrongly-yes by all 8 negative controls" 8 "${sc_dead:-0}"
   check "scorer: the negative-control table still has 8 rows" 8 "${#sc_no[@]}"
+  # Controls for the lib's fragment-uniqueness scorer, exact mode, mh_selftest_caught and the mh_floor / assert_fixture_dir
+  # refusal rows (#11572 items 8, 9, 11): ONE shared definition, scripts/lib/mutation-harness-controls.sh. Called after FIX_N is
+  # taken, so every row counts toward MIN_BATTERY.
+  mh_lib_controls
   mutate_helper h1-check-always-ok     check  'check() { ok "$1"; }'
   mutate_helper h2-has-always-ok       has    'has() { ok "$1"; }'
   mutate_helper h3-hasnt-always-ok     hasnt  'hasnt() { ok "$1"; }'
@@ -458,7 +466,7 @@ if run_battery "${1:-}"; then
 fi
 
 # Floors: MIN_FIXTURE is the real fixture-row count (a --no-battery run reaches it exactly); MIN_BATTERY the battery's.
-MIN_FIXTURE=179; MIN_BATTERY=50
+MIN_FIXTURE=179; MIN_BATTERY=98
 LEDGER_N="$(wc -l < "$LEDGER")"
 echo; echo "=== dispatch-recovery-sweeper-11211.sh: $PASS passed, $FAIL failed ($LEDGER_N recorded) ==="
 if [ "$LEDGER_N" -ne $((PASS + FAIL)) ]; then printf 'LEDGER MISMATCH\n'; exit 1; fi

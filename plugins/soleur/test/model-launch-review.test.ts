@@ -896,22 +896,22 @@ describe("model-launch-review Haiku 5.5 launch", () => {
       `@anthropic-ai/claude-agent-sdk is pinned at ${pin}, which bundles a CLI that knows ` +
         "claude-haiku-5-5: delete SDK_PATH_CARVEOUT in audit-models.sh, swap " +
         "sandbox-canary.mjs, plugin-root-sandbox-propagation-probe.mjs AND " +
-        "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts to claude-haiku-5-5, " +
+        "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts AND " +
+        "apps/web-platform/test/broker-mechanism-spike.test.ts to claude-haiku-5-5, " +
         "and delete this test and the carve-out tests (#8643).",
     ).toBe(false);
   });
 
-  test("the THIRD SDK-path file (a test, so outside the audit) is on Haiku 4.5 exactly while the SDK pin cannot resolve 5.5", () => {
-    // sandbox-credential-deny-runtime.test.ts drives the real Agent SDK query(). It sits under
-    // /test/, which the audit excludes, so only this assertion can notice that it should move.
-    const src = readFileSync(
-      resolve(REPO_ROOT, "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"),
-      "utf8",
-    );
-    const onOld = /model:\s*"claude-haiku-4-5-20251001"/.test(src);
-    const onNew = /model:\s*"claude-haiku-5-5"/.test(src);
-    expect(onOld !== onNew, "exactly one Haiku id must be configured in that file").toBe(true);
-    expect(onOld, "on 4.5 iff the pinned SDK bundle does not know 5.5").toBe(!sdkKnowsHaiku55(pkgSdkPin()));
+  test("the test-side SDK-path files (outside the audit) are on Haiku 4.5 exactly while the SDK pin cannot resolve 5.5", () => {
+    // Each drives the real Agent SDK query(). They sit under /test/, which the audit excludes, so only
+    // this assertion can notice that they should move. broker-mechanism-spike.test.ts joined in #9543.
+    for (const file of ["sandbox-credential-deny-runtime.test.ts", "broker-mechanism-spike.test.ts"]) {
+      const src = readFileSync(resolve(REPO_ROOT, "apps/web-platform/test", file), "utf8");
+      const onOld = /model:\s*"claude-haiku-4-5-20251001"/.test(src);
+      const onNew = /model:\s*"claude-haiku-5-5"/.test(src);
+      expect(onOld !== onNew, `exactly one Haiku id must be configured in ${file}`).toBe(true);
+      expect(onOld, `${file}: on 4.5 iff the pinned SDK bundle does not know 5.5`).toBe(!sdkKnowsHaiku55(pkgSdkPin()));
+    }
   });
 
   test("anti-vacuity: an unreadable --root fails the scan, it never reports a clean 'none'", () => {
