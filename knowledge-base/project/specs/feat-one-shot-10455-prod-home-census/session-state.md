@@ -17,3 +17,5 @@
 
 ### Components Invoked
 soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan; research/review agents; CTO (3 rounds), CLO (3 rounds), CPO.
+
+- cto_spawns=1 (one batched ruling on three planner-resolved rows; all upheld, no amendments)
