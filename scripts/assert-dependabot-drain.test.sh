@@ -393,6 +393,17 @@ sys.stdout.write(re.sub(r"^ *\(\"web-platform\", \"sharp\", \"node_modules/next/
                         "]", s, count=1, flags=re.M))
 '
 
+# A row naming a manifest not in LOCKS is an absence assertion over nothing. The guard's
+# explicit manifest check (added with the spike row, which made packages.get() load-bearing
+# in the REQUIRED loop) must RED on it — previously the row silently passed while checking
+# nothing, the same class MIN_ABSENT exists for.
+mutate "a MUST_STAY_ABSENT row naming a manifest not in LOCKS REDs" "names a manifest not in LOCKS" '
+import sys
+s = sys.stdin.read()
+sys.stdout.write(s.replace("(\"web-platform\", \"postcss\", \"node_modules/next/node_modules/postcss\")",
+                           "(\"webplatform\", \"postcss\", \"node_modules/next/node_modules/postcss\")", 1))
+'
+
 # The path anchor keeps the absence literals live. Repointing it at a package that is not
 # installed must RED, otherwise a typo in the `next/` segment is permanently, silently green.
 mutate "a dead MUST_STAY_ABSENT path anchor REDs" "asserts nothing" '
@@ -437,7 +448,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=33
+MIN_ASSERTIONS=34
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
