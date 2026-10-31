@@ -47,8 +47,10 @@
 #
 # Mutation rows live at the bottom. Each one COPIES a source file into a scratch dir, mutates the
 # COPY, and re-runs this guard against the copy through the LUKS_GUARD_{TF,VARS,WF} overrides —
-# the ONLY mutable axes, and the exact set infra-validation.yml clears with `env -u` before this
-# suite runs. inngest-bootstrap.sh, cloud-init-inngest.yml, the runbook, vector.toml and the
+# the ONLY mutable axes. CI-level muting is barred by the sibling suites' infra-validation.yml
+# seam checks (registry-clientip-not-rfc1918 et al. red on ANY MUT_SKIP/*_GUARD_* literal in the
+# workflow's executable text), a stronger pin than an `env -u` run-line prefix — which those checks
+# forbid by construction. inngest-bootstrap.sh, cloud-init-inngest.yml, the runbook, vector.toml and the
 # inngest-probe-row lib are deliberately NOT overridable (their literals are derived, so a real
 # rename reddens the canon on the next run; there is no scratch-copy mutation axis to subvert).
 # No tracked file is ever written. That is a deliberate design, not a convenience: an earlier
