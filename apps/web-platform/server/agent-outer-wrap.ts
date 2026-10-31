@@ -104,7 +104,7 @@ const APP_ROOT = "/app";
  *  appear. Session-scoped dirs (todos/, shell-snapshots/, statsig/, ...)
  *  get fresh `--dir`s — they are per-session state and need no persistence. */
 const HOME_STATE_FILES = [".credentials.json", "settings.json"] as const;
-const HOME_SESSION_DIRS = [
+export const HOME_SESSION_DIRS = [
   "todos",
   "shell-snapshots",
   "statsig",
