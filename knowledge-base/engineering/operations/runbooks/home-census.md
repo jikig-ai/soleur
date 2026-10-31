@@ -78,9 +78,9 @@ conceded reachability classes; a nonzero in `other_under_claude` is a flag to th
 
 0. **Freeze first:** every user statement about data isolation or safety and all public legal-document edits stop at once, before the
    steps below. The inventory of published or scheduled isolation claims (docs site, legal pages, the distribution queue) is listed
-   here so the freeze is executable: `knowledge-base/marketing/distribution-content/` queue items that mention isolation or privacy,
-   the docs-site legal pages, and the pricing and security pages. A CTO owner decides relocation within a 7-day time-box, because the
-   exposure continues until the next container start wipes the HOME.
+   here so the freeze is executable: the docs site, the legal pages and the distribution queue under
+   `knowledge-base/marketing/distribution-content/`. A CTO owner and a time-box for the relocation decision are named at the re-open,
+   because the exposure continues until the next container start wipes the HOME.
 1. Anchor = the Sentry event timestamp, cross-checked with the Better Stack row time and the HTTP `Date` header; record it as the
    fresh awareness anchor.
 2. Append a dated re-open addendum to `knowledge-base/legal/audits/2026-10-31-clo-determination-10455-shared-home-sibling-read-art-4-12.md`
