@@ -378,7 +378,9 @@ export const MANIFEST: ManifestEntry[] = [
     // when web-1's luks-monitor.service recorded a passing row; with none it withholds and the heartbeat
     // times out (period 3600 + grace 7200). FED but PAUSED: born paused, armed by the owner after two
     // consecutive `qualifying_row_heartbeat_paused` runs (runbook workspaces-luks-cutover-6604.md, section
-    // "Arming the dead-man heartbeats (#11631)"); a record PR then drops `arming_pending`.
+    // "Arming the dead-man heartbeats (#11631)"). ARMED 2026-10-31 (live `paused:false status:up`, two
+    // consecutive `verdict=beat` runs read back), so `arming_pending` is gone and a later pause is a real
+    // `fed-but-paused` finding. `paused: true` above is SOURCE state only.
     arming: "external-probe",
     paused: true,
     feeder: {
@@ -388,7 +390,6 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "bash scripts/deadman-heartbeat-feeder.sh",
       },
     },
-    arming_pending: { tracking_issue: 11631, expires: "2026-11-13" },
     exempt_reason:
       "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly, dispatched by the web-server watchdog clock): it queries the Better Stack Logs archive for web-1's passing luks-monitor row and beats only when one exists, so no host change and no host replace applies (a host-side ping would need a user_data change = a web-1 replace, which web-1 cannot take). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
@@ -398,7 +399,8 @@ export const MANIFEST: ManifestEntry[] = [
     // Same feeder and workflow as luks_monitor_host_timer above, over the 86400 s window and the cost-marker
     // predicate (a cron cost marker with a non-null cost_usd, or a credit-probe RED row). FED but PAUSED,
     // armed by the owner after two consecutive `qualifying_row_heartbeat_paused` runs (runbook
-    // workspaces-luks-cutover-6604.md, section "Arming the dead-man heartbeats (#11631)").
+    // workspaces-luks-cutover-6604.md, section "Arming the dead-man heartbeats (#11631)"). ARMED 2026-10-31
+    // (live `paused:false status:up`); `arming_pending` dropped. `paused: true` is SOURCE state only.
     arming: "external-probe",
     paused: true,
     feeder: {
@@ -408,7 +410,6 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "bash scripts/deadman-heartbeat-feeder.sh",
       },
     },
-    arming_pending: { tracking_issue: 11631, expires: "2026-11-13" },
     exempt_reason:
       "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly): it queries the Better Stack Logs archive for Inngest cron cost markers and beats only when one exists in the last 24 h, so the signal is independent of any single host and no host replace applies. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },

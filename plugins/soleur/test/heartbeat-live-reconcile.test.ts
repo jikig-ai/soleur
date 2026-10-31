@@ -251,7 +251,7 @@ describe("reconcileHeartbeats — arming_pending.expires (#11631: an unarmed dea
     }
   });
 
-  it("every committed MANIFEST arming_pending.expires is a real YYYY-MM-DD date, and the #11631 rows carry 2026-11-13", () => {
+  it("every committed MANIFEST arming_pending.expires is a real YYYY-MM-DD date, and the armed #11631 rows no longer carry one", () => {
     for (const r of MANIFEST) {
       const e = r.arming_pending?.expires;
       if (e === undefined) continue;
@@ -259,7 +259,8 @@ describe("reconcileHeartbeats — arming_pending.expires (#11631: an unarmed dea
       expect(new Date(`${e}T00:00:00Z`).toISOString().slice(0, 10)).toBe(e);
     }
     for (const n of ["luks_monitor_host_timer", "claude_cost_capture"]) {
-      expect(MANIFEST.find((r) => r.name === n)?.arming_pending).toEqual({ tracking_issue: 11631, expires: "2026-11-13" });
+      // Armed 2026-10-31 (live status up, two feeder beats read back): the exemption is gone, so a later pause is a finding.
+      expect(MANIFEST.find((r) => r.name === n)?.arming_pending).toBeUndefined();
     }
   });
 });
