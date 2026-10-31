@@ -232,7 +232,7 @@ printf 'extracted %d rules block(s) from cloudflare_ruleset.seo_config_settings\
 # mitigation visible rather than silently unselected.
 MITIGATION=$(awk -F'\t' '$4 != "ssl=-" && $5 ~ /\\"soleur\.ai\\"/ { print; exit }' "$RULES")
 [[ -n "$MITIGATION" ]] || MITIGATION=$(awk -F'\t' '
-  $4 != "ssl=-" && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" { print; exit }
+  $4 != "ssl=-" && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" { print; exit }
 ' "$RULES")
 
 if [[ "$STAGE" == "pre-cutover" ]]; then
