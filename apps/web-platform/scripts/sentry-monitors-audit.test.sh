@@ -2083,6 +2083,15 @@ else
   if ! grep -q "\*\*${n_cron} cron monitors\*\*" "$readme"; then
     fail "T25: README cron-monitor count disagrees with the tf root (${n_cron})"; t25_ok=0
   fi
+  # Every OTHER bold count the README attaches to the cron monitors must agree too: line ~258 said
+  # "declares **25** of them" while the root had 26 and the headline count above it (which the first
+  # check pins) was right - a second citation of the same number, unpinned (#11631 review).
+  while IFS= read -r _cited; do
+    [[ -z "$_cited" ]] && continue
+    if [[ "$_cited" != "$n_cron" ]]; then
+      fail "T25: README cites ${_cited} cron monitors in a '**N** of them' sentence; the tf root declares ${n_cron}"; t25_ok=0
+    fi
+  done < <(grep -oE 'declares \*\*[0-9]+\*\* of them' "$readme" | grep -oE '[0-9]+')
   if ! grep -q "\*\*${n_salert} \`sentry_alert\` rules\*\*" "$readme"; then
     fail "T25: README sentry_alert count disagrees with the tf root (${n_salert})"; t25_ok=0
   fi

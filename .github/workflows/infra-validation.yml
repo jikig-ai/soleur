@@ -117,6 +117,23 @@ on:
       - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
+      # (#11631) deadman-heartbeat-feeder.test.sh drives the feeder (scripts/deadman-heartbeat-feeder.sh) against a
+      # fake tree and replays the shipping workflow's run block; neither file is under apps/*/infra/**, so a PR editing
+      # only one of them would skip the suite whose job is to turn that edit red - the same defect class as the #6178
+      # and #8079 entries below. (apply-web-platform-infra.yml, which the suite also reads, is already listed.)
+      - ".github/workflows/scheduled-deadman-heartbeat-feeder.yml"
+      - "scripts/deadman-heartbeat-feeder.sh"
+      # (#11631 review) The heartbeat parity/reconcile suites and the privileged-tier census read these sources
+      # (the watchdog dispatch table and the heartbeat manifest rows, the cost-marker emitter and its two Inngest
+      # emitters, and the census itself). None is under apps/*/infra/**, so a PR editing ONLY one of them would skip
+      # the guard that pins the dead-man heartbeats to those emitters. PR list only: the push list is deliberately
+      # narrower (see the comment above `push:`).
+      - "apps/web-platform/server/watchdog-dispatch-table.ts"
+      - "plugins/soleur/lib/heartbeat-manifest.ts"
+      - "apps/web-platform/server/claude-cost-marker.ts"
+      - "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts"
+      - "apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts"
+      - "tests/scripts/test-infra-privileged-tier-census.sh"
       # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
       # `wrangler pages deploy --branch` must equal cf-pages.tf's `production_branch`, and
       # its `--project-name` must equal cloudflare_pages_project.docs's `name`. Those are two
@@ -973,6 +990,18 @@ jobs:
       # its mutation rows.
       - name: Run Anthropic-spend alerts drift guard (#8611)
         run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
+
+      # (#11631) The archive-fed dead-man heartbeat feeder (luks-monitor host timer + cost capture) that replaced two
+      # native logs alerts (the luks one waited for a once-a-day row; the cost one fires a few times a day): the SQL
+      # it sends (both arms, the archive filter), the exit contract, the single beat site with no /fail, the
+      # predicates pinned to their emitters, the workflow/Terraform/manifest/watchdog wiring, and its mutation rows.
+      - name: Run dead-man heartbeat feeder guard (#11631)
+        run: bash apps/web-platform/test/infra/deadman-heartbeat-feeder.test.sh
+
+      # (#11631) Guard 3: no native logs alert above query_period 900 (the live legacy ones allowlisted by name), and the
+      # two retired dead-man alerts stay gone with their destroy targets and census entries intact.
+      - name: Run logs-alert query_period ceiling sentinel (#11631)
+        run: bash apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh
 
       # sandbox-canary-regression (below) is the fixed job's docker consumer — it needs a
       # real daemon and would fail obscurely without one. This assert reds the job HERE

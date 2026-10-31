@@ -58,4 +58,11 @@ export const WATCHDOG_DISPATCH_TABLE: ReadonlyArray<WatchdogDispatchEntry> = [
     eligibility:
       "Mirrors Better Stack's open incidents — the paging substrate the Inngest fleet's own outages report through (#10390) — to GitHub issues, so it shares Inngest's failure domain: an Inngest-scheduled mirror goes dark exactly when the incidents it mirrors are firing (ADR-033 anti-circularity).",
   },
+  {
+    workflowFile: "scheduled-deadman-heartbeat-feeder.yml",
+    monitorSlug: "scheduled-deadman-heartbeat-feeder",
+    intervalMinutes: 60,
+    eligibility:
+      "Feeds the dead-man's-switch heartbeats for two checks that live on the Inngest execution host (the web-1 luks-monitor host timer and the cost markers Inngest crons emit, #11631); the heartbeats are the paging surface. An Inngest-fired feeder would stop beating during any scheduler or web-1 outage while the 27 h / 24 h row windows still read healthy, so the page would blame the timer or cost path for a scheduler fault (ADR-248 amendment 2026-10-11, second clause).",
+  },
 ];
