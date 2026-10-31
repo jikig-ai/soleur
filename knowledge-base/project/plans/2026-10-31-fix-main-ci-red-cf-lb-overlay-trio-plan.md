@@ -268,13 +268,22 @@ mechanical fixes on already-patterned conventions).
   material (`github_webhook_secret`, Inngest event keys, egress audit ingest token)
   readable in the `cf-lb-overlay.yml#ga_overlay` job log — forgeable webhooks and ingest.
 - **Brand-survival threshold:** `single-user incident`
-- **Threshold decision (challengeable):** one unredacted dispatch exposes multiple
-  rotation-requiring infra credentials in a single run — a single-incident security
-  event, matching the #11652 epic's own `single-user incident` review tier.
+- **Threshold decision (challengeable):** Ruled by CTO agent, 2026-10-31 — keep
+  `single-user incident` / `requires_cpo_signoff: true`: the diff itself mutates the
+  production apply trigger list (`push.paths:` `!` exclusions are the only thing
+  stopping a sub-root merge from firing a PRODUCTION apply) and a credential-bearing
+  prod-apply run block (`ga_overlay` `terraform apply` on the parent root; a redactor
+  early-exit under `pipefail` can SIGPIPE terraform mid-apply) on a verified
+  sensitive-path-regex surface, so the worst-case is incident-class independent of the
+  pre-existing credential-echo bug it fixes.
 
-`requires_cpo_signoff: true` is set per the sign-off lifecycle; the CPO consult could not
-be spawned in this planning harness — recorded in `decision-challenges.md` for the review
-pipeline.
+`requires_cpo_signoff: true` is set per the sign-off lifecycle; Ruled by CTO agent,
+2026-10-31 — CPO sign-off and gdpr-gate have NO downstream consumer for this plan
+(`requires_cpo_signoff` is write-only, plan-review's `cpo` lens will not activate on
+this infra diff, review's `user-impact-reviewer` is a different seat, and the gdpr
+trigger that fired at threshold declaration is never re-fired by review on zero
+canonical-regex matches), so both are discharged by the parent BEFORE `soleur:work`
+and their verdicts recorded in `decision-challenges.md`.
 
 ## Observability
 

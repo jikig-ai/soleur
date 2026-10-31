@@ -1,5 +1,7 @@
 # Session State
 
+cto_spawns=1 (batched ruling on 4 unruled-technical rows, 2026-10-31; discharges: CPO sign-off approved-with-conditions, gdpr-gate clean)
+
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-10-31-fix-main-ci-red-cf-lb-overlay-trio-plan.md
 - Status: complete
