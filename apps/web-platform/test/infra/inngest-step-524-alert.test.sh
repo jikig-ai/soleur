@@ -5,7 +5,9 @@
 #   inngest_step_524         — a step was cut at the Cloudflare proxy (the double-run's cause)
 #   claude_cost_daily_burn   — the cron fleet spent more than $25 (local.claude_cost_daily_burn_usd)
 #                              in a trailing 24 h
-#   claude_cost_capture_dark — the cost telemetry itself went dark for 24 h
+# (The third alarm, the cost-telemetry dead-man, was retired by #11631: it is the archive-fed heartbeat
+# soleur-claude-cost-capture-prd, and its predicate, emitter-parity pins and mutants live in
+# apps/web-platform/test/infra/deadman-heartbeat-feeder.test.sh.)
 #
 # Guard 2 of the #8611 plan: every alert queries what its emitter writes, and nothing more.
 #   * The 524 predicate is EVALUATED against synthesized rows of the observed emitter shape
@@ -14,9 +16,8 @@
 #     every positive must be matched) and negatives that must NOT match (a 523, a 502, and a 524
 #     under message.msg). A changed literal, a broadened needle, a changed field path or a changed
 #     unit is caught against the shape, not against a copy of the SQL.
-#   * No negation anywhere (NOT / != / <> — `IS NOT NULL` excepted) and no `1 = 1`; OR only in
-#     capture-dark, exactly its two arms, arm B pinned to the credit probe's own CRON_NAME and op
-#     union read from its source file. GROUP BY is matched case-insensitively.
+#   * No negation anywhere (NOT / != / <> — `IS NOT NULL` excepted), no `1 = 1` and no OR.
+#     GROUP BY is matched case-insensitively.
 #   * The cost-alert literals are pinned to their TS emitters: component "claude-cost" and the
 #     SOLEUR_CLAUDE_COST:true key in server/claude-cost-marker.ts, the `cron:${cronName}` source in
 #     the substrate.
@@ -130,10 +131,9 @@ def block(kind, name):
     return m.group(1) if m else None
 
 names = re.findall(r'^resource "logtail_exploration" "([a-z0-9_]+)" \{', sec, re.M)
-check(len(names) >= 3, f"discovered {len(names)} explorations in the #8611 section (floor 3)")
+check(len(names) >= 2, f"discovered {len(names)} explorations in the #8611 section (floor 2)")
 check(names.count("inngest_step_524") == 1, "the 524 exploration is among them")
 check(names.count("claude_cost_daily_burn") == 1, "the daily burn exploration is among them")
-check(names.count("claude_cost_capture_dark") == 1, "the capture-dark exploration is among them")
 check(re.search(r'^\s*vector_prd_source_id\s*=\s*"2457081"\s*$', tf, re.M) is not None,
       "the pinned source local is still 2457081 (the inngest vector source)")
 
@@ -171,8 +171,7 @@ for n in names:
     check(re.search(r"\bNOT\b", _neg, re.I) is None and "!=" not in sql and "<>" not in sql,
           f"{n}: no negation (NOT / != / <>; `IS NOT NULL` excepted) — a negated arm inverts the alert")
     check(re.search(r"\b1\s*=\s*1\b", sql) is None, f"{n}: no `1 = 1` tautology")
-    if n != "claude_cost_capture_dark":
-        check(re.search(r"\bOR\b", sql, re.I) is None, f"{n}: no OR (an appended OR arm widens the window or the rows)")
+    check(re.search(r"\bOR\b", sql, re.I) is None, f"{n}: no OR (an appended OR arm widens the window or the rows)")
     if items and items[0].startswith("toDateTime("):
         check(re.search(r"^\s*WHERE dt BETWEEN \{\{start_time\}\} AND \{\{end_time\}\}\s*$", sql, re.M) is not None
               and "time BETWEEN" not in sql,
@@ -236,32 +235,14 @@ check(alert_attr("claude_cost_daily_burn", "operator") == '"higher_than"'
       "burn: pages above local.claude_cost_daily_burn_usd (= 25) per window")
 check("${local.claude_cost_daily_burn_usd}" in (block("logtail_exploration_alert", "claude_cost_daily_burn") or ""),
       "burn: the email text interpolates the same threshold local (it cannot drift from value)")
-for _n in ("claude_cost_daily_burn", "claude_cost_capture_dark"):
+for _n in ("claude_cost_daily_burn",):
     _qp, _cp, _rp = alert_attr(_n, "query_period"), alert_attr(_n, "check_period"), alert_attr(_n, "recovery_period")
     check(_qp == "86400" and _cp is not None and _rp is not None and _cp.isdigit() and _rp.isdigit() and int(_rp) >= int(_cp),
           f"{_n}: evaluates a 24 h window (query_period 86400) and recovery_period >= check_period — got {_qp}/{_cp}/{_rp}")
-check(alert_attr("claude_cost_capture_dark", "operator") == '"lower_than"' and alert_attr("claude_cost_capture_dark", "value") == "1",
-      "capture-dark: pages when the window holds nothing (lower_than 1 over treat_as_zero)")
-dark = sqls.get("claude_cost_capture_dark", "")
-check("'Nullable(Float64)') IS NOT NULL" in dark and "'anthropic-credit-exhausted'" in dark,
-      "capture-dark: counts non-null cost markers, and credit-probe RED rows suppress it")
-# capture-dark: exactly two OR'd arms; arm B pinned to the credit probe's own literals.
-_cron = re.search(r'^const CRON_NAME = "([a-z0-9-]+)";', probe_ts, re.M)
-_opu = re.search(r"op\?:\s*([^;]+);", probe_ts)
-_ops_ts = set(re.findall(r'"(anthropic-[a-z-]+)"', _opu.group(1))) if _opu else set()
-_armb = re.search(r"OR \(JSONExtractString\(raw, 'message', 'feature'\) = '([^']*)'\s+AND JSONExtractString\(raw, 'message', 'op'\) IN \(([^)]*)\)\)", dark)
-_ops_sql = set(re.findall(r"'([^']*)'", _armb.group(2))) if _armb else set()
-check(len(re.findall(r"\bOR\b", dark, re.I)) == 1 and _armb is not None,
-      "capture-dark: exactly one OR, joining the marker arm and the credit-probe arm")
-check(_cron is not None and _armb is not None and _armb.group(1) == _cron.group(1),
-      f"capture-dark: arm B's feature literal is the credit probe's CRON_NAME ({_cron.group(1) if _cron else None})")
-check(bool(_ops_sql) and _ops_ts and _ops_sql <= _ops_ts,
-      f"capture-dark: arm B's ops are members of the probe's op union (sql={sorted(_ops_sql)}, ts={sorted(_ops_ts)})")
 # Emitter parity: the literals every cost query matches on are the ones the TS emitters write.
 check(re.search(r'pino\(\{ base: \{ component: "claude-cost" \} \}\)', marker_ts) is not None
-      and all("JSONExtractString(raw, 'message', 'component') = 'claude-cost'" in sqls.get(x, "")
-              for x in ("claude_cost_daily_burn", "claude_cost_capture_dark")),
-      "emitter parity: component 'claude-cost' is the marker logger's pino base AND both cost queries' filter")
+      and "JSONExtractString(raw, 'message', 'component') = 'claude-cost'" in sqls.get("claude_cost_daily_burn", ""),
+      "emitter parity: component 'claude-cost' is the marker logger's pino base AND the burn query's filter")
 check(re.search(r"log\.warn\(\{ SOLEUR_CLAUDE_COST: true, \.\.\.m \}", marker_ts) is not None,
       "emitter parity: the marker writes the SOLEUR_CLAUDE_COST: true key the queries match")
 check("source: `cron:${cronName}`" in substrate_ts,
@@ -353,20 +334,13 @@ PY
     esac
   }
 
-  H524='inngest_step_524_sql = <<-SQL'; HBURN='claude_cost_daily_burn_sql = <<-SQL'; HDARK='claude_cost_capture_dark_sql = <<-SQL'
+  H524='inngest_step_524_sql = <<-SQL'; HBURN='claude_cost_daily_burn_sql = <<-SQL'
   # Row 1 — the 524 literal changes.
   mutate_red "1: the 524 literal changes" TF \
     "s = in_block(s, '$H524', \"'invalid status code: 524'\", \"'invalid status code: 504'\", '  SQL\n')"
   mutate_red "1b: the 524 field path moves off message.error" TF \
     "s = in_block(s, '$H524', \"JSONExtractString(raw, 'message', 'error')\", \"JSONExtractString(raw, 'message', 'msg')\", '  SQL\n')"
-  # Row 2 — an exploration reads a different source (the LAST one, so iteration is exercised).
-  mutate_red "2: capture-dark exploration points at the git-data source" TF \
-    "s = in_block(s, 'resource \"logtail_exploration\" \"claude_cost_capture_dark\"', 'values        = [local.vector_prd_source_id]', 'values        = [\"2734275\"]')"
   # Row 3 — a -target= line disappears.
-  mutate_red "3: the capture-dark alert is dropped from the apply allowlist" WF \
-    'old = "              -target=logtail_exploration_alert.claude_cost_capture_dark \\\n"
-assert s.count(old) == 1
-s = s.replace(old, "")'
   mutate_red "3b: the 524 exploration is dropped from the apply allowlist" WF \
     'old = "              -target=logtail_exploration.inngest_step_524 \\\n"
 assert s.count(old) == 1
@@ -374,11 +348,7 @@ s = s.replace(old, "")'
   # Row 4 — cost read at the top level / key match dropped (in the NON-first cost exploration).
   mutate_red "4: burn reads top-level cost_usd" TF \
     "s = in_block(s, '$HBURN', \"sum(JSONExtractFloat(raw, 'message', 'cost_usd'))\", \"sum(JSONExtractFloat(raw, 'cost_usd'))\", '  SQL\n')"
-  mutate_red "4b: capture-dark drops the \"SOLEUR_CLAUDE_COST\":true key match" TF \
-    "s = in_block(s, '$HDARK', \"raw LIKE '%\\\"SOLEUR_CLAUDE_COST\\\":true%'\", \"raw LIKE '%SOLEUR_CLAUDE_COST%'\", '  SQL\n')"
   # Row 5 — a raw message column / a free-text GROUP BY.
-  mutate_red "5: capture-dark selects the raw message column" TF \
-    "s = in_block(s, '$HDARK', 'count(*) AS value', \"count(*) AS value, JSONExtractString(raw, 'message', 'msg') AS msg\", '  SQL\n')"
   mutate_red "5b: the 524 query groups on free text" TF \
     "s = in_block(s, '$H524', '    GROUP BY time', \"    GROUP BY time, JSONExtractString(raw, 'message', 'error')\", '  SQL\n')"
   # Row 6 — a PRIORITY filter on the 524 query.
@@ -387,9 +357,6 @@ s = s.replace(old, "")'
   # Row 7 — the whole-window burn filters on its constant time alias (sums all history).
   mutate_red "7: burn's window filter moves onto the time alias" TF \
     "s = in_block(s, '$HBURN', 'WHERE dt BETWEEN', 'WHERE time BETWEEN', '  SQL\n')"
-  # Row 8 — capture-dark can no longer fire on silence.
-  mutate_red "8: capture-dark operator flips to higher_than" TF \
-    "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_capture_dark\"', 'operator            = \"lower_than\"', 'operator            = \"higher_than\"')"
   mutate_red "8b: the 524 alert is paused" TF \
     "s = in_block(s, 'resource \"logtail_exploration_alert\" \"inngest_step_524\"', '  paused = false\n', '  paused = true\n')"
   # Needle rows — every needle is exercised against its own measured text, and negatives stay quiet.
@@ -406,12 +373,6 @@ s = s.replace(old, "")'
     "s = in_block(s, '$HBURN', \"AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'\", \"AND NOT JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'\", '  SQL\n')"
   mutate_red "G6: burn's SOLEUR_CLAUDE_COST key match is negated" TF \
     "s = in_block(s, '$HBURN', \"AND raw LIKE '%\\\"SOLEUR_CLAUDE_COST\\\":true%'\", \"AND NOT raw LIKE '%\\\"SOLEUR_CLAUDE_COST\\\":true%'\", '  SQL\n')"
-  mutate_red "G7: capture-dark's credit-probe op filter becomes NOT IN" TF \
-    "s = in_block(s, '$HDARK', \"'op') IN (\", \"'op') NOT IN (\", '  SQL\n')"
-  mutate_red "G8: capture-dark's feature literal drifts from the probe's CRON_NAME" TF \
-    "s = in_block(s, '$HDARK', \"= 'cron-anthropic-credit-probe'\", \"= 'cron-anthropic-credit-prob'\", '  SQL\n')"
-  mutate_red "G9: capture-dark gains an always-true OR arm" TF \
-    "s = in_block(s, '$HDARK', \"OR (JSONExtractString(raw, 'message', 'feature')\", \"OR (1 = 1 OR JSONExtractString(raw, 'message', 'feature')\", '  SQL\n')"
   mutate_red "G11: burn's window gains an OR that sums all history" TF \
     "s = in_block(s, '$HBURN', 'WHERE dt BETWEEN {{start_time}} AND {{end_time}}\n', 'WHERE dt BETWEEN {{start_time}} AND {{end_time}}\n      OR dt < {{end_time}}\n', '  SQL\n')"
   mutate_red "G12: burn splits its sum with a lowercase group by source" TF \
@@ -421,8 +382,6 @@ s = s.replace(old, "")'
   # Window / threshold rows.
   mutate_red "Q1: burn's query_period shrinks to 300 s" TF \
     "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_daily_burn\"', 'query_period        = 86400', 'query_period        = 300')"
-  mutate_red "Q2: capture-dark's query_period shrinks to 300 s" TF \
-    "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_capture_dark\"', 'query_period        = 86400', 'query_period        = 300')"
   mutate_red "T1: burn's value is hardcoded apart from the threshold local" TF \
     "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_daily_burn\"', 'value               = local.claude_cost_daily_burn_usd', 'value               = 15')"
 
@@ -452,12 +411,12 @@ s = s.replace(old, "")'
   fi
 fi
 
-# 104 = 71 presence rows + 33 mutation rows (31 must-RED, S1 must-GREEN, C1 must-FATAL). The
-# MUT_SKIP floor is exactly today's presence count (3 discovered explorations): a discovery that
+# 74 = 50 presence rows + 24 mutation rows (22 must-RED, S1 must-GREEN, C1 must-FATAL). The
+# MUT_SKIP floor is exactly today's presence count (2 discovered explorations): a discovery that
 # finds fewer, or a checker that dies part-way, drops below it. Raise both in the same edit that
 # adds a row. A breached floor or ledger is FATAL (rc 2), never an assertion (rc 1).
-_floor=104
-[ -n "${MUT_SKIP:-}" ] && _floor=71
+_floor=74
+[ -n "${MUT_SKIP:-}" ] && _floor=50
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 2; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 2; fi

@@ -1150,13 +1150,17 @@ here (it worsens `EMAXCONNSESSION`); this step is log inspection only, not remed
 
 `scheduled-inngest-health.yml` (every 15 min), `scheduled-zot-restart-loop.yml` (hourly) and
 `scheduled-inngest-probe-heartbeat.yml` (every 15 min, #9703; see
-[§ Arming the probe heartbeat](#arming-the-probe-heartbeat-9703)) are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
+[§ Arming the probe heartbeat](#arming-the-probe-heartbeat-9703)) and `scheduled-deadman-heartbeat-feeder.yml`
+(hourly, #11631; feeds the `soleur-luks-monitor-host-timer-prd` and `soleur-claude-cost-capture-prd` dead-man
+heartbeats, see [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706))
+are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
 server (`apps/web-platform/server/watchdog-dispatch-clock.ts`), on every deployed web host. Their
 `schedule:` crons are only the fallback: GitHub delivered them once every 2–7 h. The clock is
 not an Inngest function because it watches Inngest. The run is created within seconds of the
 dispatch, but its job then waits in the org runner queue (median ~30 s, p90 ~20 min), so the
 Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-loop` margin 60,
-`scheduled-inngest-probe-heartbeat` margin 60) are sized for that queue. A real outage still pages as soon as a run executes.
+`scheduled-inngest-probe-heartbeat` margin 60, `scheduled-deadman-heartbeat-feeder` per
+`cron-monitors.tf`) are sized for that queue. A real outage still pages as soon as a run executes.
 
 1. **Is it running?** Each web host logs one `armed` row at boot and about five tick rows an
    hour. Vector adds the host name (`soleur-web-platform` = web-1, `soleur-web-2`) outside the
@@ -1207,7 +1211,11 @@ Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-lo
    (`QUEUE_ALLOWANCE_MINUTES`) + max runtime, at most `MAX_MARGIN_MINUTES` — the constants and
    the check live in `sentry-monitor-iac-parity.test.ts`. Update the expected slug set there
    and the `api -> github` watchdog edge and the `github -> sentry` workflow list in
-   `model.c4`. After the deploy, each host logs a new `armed` row and a tick row for the new
+   `model.c4`. The hourly `scheduled-deadman-heartbeat-feeder.yml` row (#11631) adds 24 runs a day (up to 48
+   ticks: both hosts tick each slot and the second is skipped as a duplicate) and puts all five rows due in the
+   `:00` slot on both hosts at once (up to 10 simultaneous ticks, each minting a token); budget that when adding
+   a sixth row. The feeder survives a total web-1 loss only while two web hosts exist (the `var.web_hosts`
+   reversal trigger in ADR-248). After the deploy, each host logs a new `armed` row and a tick row for the new
    workflow within one interval.
 5. **Which host sent a run?** Match the run's `created_at` to a `dispatched` row's `slot` and
    `host_name` (query in step 1); a skipped tick names the run that already covered the slot
@@ -2415,6 +2423,12 @@ the same freshest row's `server_active`/`http_code`/`cutover_flag` through the s
 `classify_dedicated_host` def and beats `<url>/fail` on `not-serving` (verdict `fail_beat` — an intended
 immediate incident), beats normally on `healthy` and `stopped-by-brake`, and withholds
 (`verdict=serving_unavailable`, exit 3) when the fields do not grade to a verdict.
+
+**After a host replace plus `op=resume`, this heartbeat stays down for up to about 1 h.** The probe timer
+fires at boot + 90 s and then hourly (`OnUnitActiveSec=1h`), so the feeder sees no fresh dedicated probe row
+until the next hourly fire, and the heartbeat reads `down` for that stretch although the server is fine. That
+is not a serving outage: the 60 s `soleur-inngest-server-prd` heartbeat is the real serving signal, so read
+that one before treating a down probe heartbeat as an incident in the first hour after a replace.
 
 **Reading the feeder (no SSH).** Each run prints one `inngest-probe-feeder: verdict=<v> ...` line. Once
 the warehouse has answered it carries `rows_total rows_probe rows_host rows_dedicated newest_dt lines
