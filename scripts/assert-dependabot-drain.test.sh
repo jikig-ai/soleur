@@ -89,7 +89,9 @@ def pkgs(entries):
 
 web = [("nanoid", 3), ("js-yaml", 3), ("hono", 4), ("@hono/node-server", 1),
        ("ip-address", 10), ("fast-uri", 3), ("undici", 7),
-       ("brace-expansion", 1), ("@opentelemetry/propagator-jaeger", 2)]
+       ("brace-expansion", 1), ("@opentelemetry/propagator-jaeger", 2),
+       ("@sentry/nextjs", 10), ("body-parser", 2), ("zod", 4),
+       ("next", 16)]
 w = pkgs(web)
 # js-yaml and brace-expansion carry two more major lines each, nested so the paths differ.
 w["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
@@ -100,7 +102,7 @@ w["node_modules/c/node_modules/brace-expansion"] = {"version": "5.999.999"}
 # add one back and require a RED.
 # `next` ITSELF must be present though: ABSENT_PATH_ANCHOR asserts the parent the absent
 # paths hang off is installed, so that a typo in the literal cannot be permanently green.
-w["node_modules/next"] = {"version": "16.3.1"}
+# pkgs() puts it there at 16.999.999, above the 16.4.1 floor the ("next",16) row declares.
 if extra:
     w.update(json.loads(extra))
 
@@ -114,12 +116,13 @@ rt["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
 # and a lockfile path in fixture DATA reads to that grep as a second call site.
 rt["node_modules/d/node_modules/brace-expansion"] = {"version": "5.999.999"}
 
-pen = pkgs([("hono", 4), ("@hono/node-server", 1), ("ip-address", 10), ("fast-uri", 3)])
+pen = pkgs([("hono", 4), ("@hono/node-server", 1), ("ip-address", 10), ("fast-uri", 3),
+            ("body-parser", 2), ("zod", 4)])
 # The pinned headless engine's own lockfile (#11156): its tree resolves hono 4, @hono/node-server 2,
 # ip-address 10, fast-uri 3, undici 8 and brace-expansion 5, each of which needs a row of its own.
 pencli = pkgs([("hono", 4), ("@hono/node-server", 2), ("ip-address", 10), ("fast-uri", 3),
-               ("undici", 8), ("brace-expansion", 5)])
-spike = pkgs([])
+               ("undici", 8), ("brace-expansion", 5), ("body-parser", 2), ("zod", 4)])
+spike = pkgs([("zod", 4)])
 
 for rel, p in [("apps/web-platform/package-lock.json", w),
                ("package-lock.json", rt),
@@ -198,7 +201,7 @@ fi
 # per the cross-file-drift convention (work/SKILL.md): the first version used `head -1`,
 # and a shadowing `MIN_ROWS = 0` added later inside main() was reported "[ok] MIN_ROWS is
 # 19" while the effective floor was 0.
-for spec in "MIN_ROWS:27" "MIN_RESOLVED:27" "MIN_LOCKS:5"; do
+for spec in "MIN_ROWS:36" "MIN_RESOLVED:36" "MIN_LOCKS:5"; do
   name="${spec%%:*}"; floor="${spec##*:}"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *${name} = [0-9]+" "$GUARD" || true)"
@@ -224,7 +227,7 @@ done
 
 # The anchors are the floor under the CVE thresholds. Source-grepped here so that lowering
 # a threshold AND its anchor together is a three-file edit rather than a two-line one.
-for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.12.2" "@hono/node-server:2:2.0.10"; do
+for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.12.2" "@hono/node-server:2:2.0.10" "next:16:16.4.1" "@sentry/nextjs:10:10.75.2" "body-parser:2:2.4.0" "zod:4:4.6.6"; do
   IFS=: read -r pkg major want <<< "$spec"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *\(\"${pkg}\", ${major}\): \"[0-9.]+\"," "$GUARD" || true)"
@@ -298,7 +301,7 @@ sys.stdout.write(s.replace(
     chr(34) + "chalk" + chr(34) + ", 4, " + chr(34) + "4.999.0" + chr(34), 1))
 '
 
-mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 27" '
+mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 36" '
 import re, sys
 s = sys.stdin.read()
 sys.stdout.write(re.sub(
@@ -306,7 +309,7 @@ sys.stdout.write(re.sub(
     "", s, flags=re.M))
 '
 
-mutate "a row renamed to a nonexistent package REDs" "below the RESOLVED-ROW floor of 27" '
+mutate "a row renamed to a nonexistent package REDs" "below the RESOLVED-ROW floor of 36" '
 import sys
 s = sys.stdin.read()
 sys.stdout.write(s.replace(chr(34) + "nanoid" + chr(34) + ", 3",
