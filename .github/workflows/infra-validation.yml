@@ -893,13 +893,13 @@ jobs:
       # (#6894) The wrong-volume Logs alert: its predicate, its arming variable, its -target lines,
       # and six mutation rows that each require this guard to red.
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
-        run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
+        run: env -u MUT_SKIP -u LUKS_GUARD_TF -u LUKS_GUARD_VARS -u LUKS_GUARD_WF bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 
       # (#9927) The LUKS key-continuity probe paging alert: its SQL (verdict=fail_ present, indeterminate
       # absent), parameters, both -target lines, a negative row that no dead-man resource ships here
       # (ruling D12), and the mutation rows that each require this guard to red.
       - name: Run inngest LUKS key-continuity probe alert drift guard (#9927)
-        run: bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh
+        run: env -u MUT_SKIP -u KEYPROBE_GUARD_TF -u KEYPROBE_GUARD_WF -u KEYPROBE_GUARD_FLIP -u KEYPROBE_GUARD_CI -u KEYPROBE_GUARD_RB -u KEYPROBE_GUARD_VT bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh
 
       # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
       # conjuncts (read against the fire command's own logger line), the paging semantics, both

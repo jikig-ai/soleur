@@ -154,6 +154,7 @@ vi.mock("@/lib/supabase/service", () => ({
 
 import {
   agentOnSpawnRequested,
+  agentOnSpawnRequestedHandler,
   agentOnSpawnRequestedOnFailure,
   agentOnSpawnSettle,
   agentOnSpawnSettleHandler,
@@ -550,6 +551,78 @@ describe("replay and retry through the real step boundary (T12, T21)", () => {
     expect(sent[0][1].extra.failedRunId).toBe(FAILED_RUN);
     // The code only: a PostgREST message can echo a value.
     expect(sent[0][1].extra.err?.message).toBe("settle-orphaned-spawn: action_sends update failed (code 08006)");
+  });
+});
+
+// --- #8841 ------------------------------------------------------------------
+// `persistFailure` used to call `reportSpawnDeadLetter` BEFORE its step.run
+// sites, so every Inngest replay re-entered persistFailure and re-reported the
+// dead-letter (2-3 Sentry events per spawn). It now sits after the memoized
+// steps. Driven through runLikeInngest — the model where each new step ends
+// the request and the handler re-runs from the top — so a report placed ahead
+// of a step.run fires once per invocation and these go red.
+
+describe("persistFailure reports the dead-letter exactly once across handler replays (#8841)", () => {
+  const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+
+  it("no-notify arm: a resolve-installation throw → github_installation_unauthorized, one report over 3 invocations", async () => {
+    // No workspaces row in db.rows: the resolver's maybeSingle returns null,
+    // so step 1 throws "founder has no github_installation_id". With one
+    // attempt the failure memoizes at once; the replay's catch enters
+    // persistFailure, whose persist-failure step ends a second request —
+    // the report can only fire on the third.
+    const out = await runLikeInngest(
+      ({ step }) =>
+        agentOnSpawnRequestedHandler({ event: original(), step, logger } as never),
+      { maxAttempts: 1 },
+    );
+    expect(out.outcome).toBe("returned");
+    expect(out.value).toEqual({
+      acknowledged: false,
+      failureReason: "github_installation_unauthorized",
+    });
+    expect(out.invocations).toBeGreaterThanOrEqual(2);
+    expect(row().failure_reason).toBe("github_installation_unauthorized");
+    const sent = deadLetters();
+    expect(sent).toHaveLength(1);
+    expect(sent[0][0]).toBe(
+      `agent-on-spawn deadlettered: github_installation_unauthorized [${CLASS}]`,
+    );
+  });
+
+  it("notify arm: a retry-exhausted cap-check → notify-cost-breaker + persist-failure, still one report", async () => {
+    // Memo-seeded so persistFailure is entered on the FIRST invocation:
+    // notify-cost-breaker (cap_check_unavailable is a cost-breaker reason)
+    // ends it, persist-failure ends the second, and only the third can
+    // report. The real notifyOfflineUser runs inside the step and returns
+    // false here — the service mock carries no createServiceClient and the
+    // function never throws — which memoizes like any resolved value.
+    const memo: StepMemo = new Map([
+      ["resolve-installation", { ok: true, data: 99 }],
+      ["check-runtime-pause", { ok: true, data: { pausedAt: null, capCents: 2000 } }],
+      ["read-action-send-created-at", { ok: true, data: "2026-09-03T10:00:00.000Z" }],
+      [
+        "turn-1-cap-check",
+        { ok: false, error: stepErrorFor("turn-1-cap-check", new Error("cap rpc unreachable")) },
+      ],
+    ]);
+    const out = await runLikeInngest(
+      ({ step }) =>
+        agentOnSpawnRequestedHandler({ event: original(), step, logger } as never),
+      { maxAttempts: 1, memo },
+    );
+    expect(out.outcome).toBe("returned");
+    expect(out.invocations).toBe(3);
+    // Both memoized side-effect steps really ran.
+    expect([...memo.keys()]).toEqual(
+      expect.arrayContaining(["notify-cost-breaker", "persist-failure"]),
+    );
+    expect(row().failure_reason).toBe("cap_check_unavailable");
+    const sent = deadLetters();
+    expect(sent).toHaveLength(1);
+    expect(sent[0][0]).toBe(
+      `agent-on-spawn deadlettered: cap_check_unavailable [${CLASS}]`,
+    );
   });
 });
 
