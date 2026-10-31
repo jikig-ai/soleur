@@ -1254,3 +1254,42 @@ with queueing), because a bound below the ceiling reads a healthy slow run as "n
   So the disclosure runs in a PRECEDING, UN-GATED job. By the time the approval is pending,
   the run summary page already carries these three statements. Without it the approval is
   ceremonial and "one human clicking twice" is the real control.
+
+## push-paths sub-root exclusions
+
+(#7025, R10) The four `!` exclusions in this workflow's `push.paths:` are NEGATED
+patterns, not `paths-ignore`. GitHub rejects a workflow that uses both `paths` and
+`paths-ignore` for the same event, so each exclusion has to live inside `paths` as a
+`!` pattern — and it must sit AFTER the glob it narrows, because later patterns
+override earlier ones.
+
+Each excluded directory is a SEPARATE Terraform root with its own state key,
+dispatched by its own workflow. It lives under `apps/web-platform/infra/` for
+proximity to the payloads it renders, so the `apps/web-platform/infra/**` glob
+would otherwise fire a PRODUCTION apply of the PARENT root on a sub-root-only edit —
+an apply of one root triggered by a file no expression in that root reads.
+
+The exclusions narrow the TRIGGER, never the apply's scope: the parent root's
+`-target` sets are untouched.
+
+Per-exclusion reasons:
+
+- `!apps/web-platform/infra/rung2-rehearsal/**` — (#7025, R10) the rung-2 rehearsal
+  root, dispatched by its own workflow.
+- `!apps/web-platform/infra/inngest-provision-rehearsal/**` — (#9175) same shape:
+  applied only by `inngest-provision-rehearsal.yml`.
+- `!apps/web-platform/infra/git-data-root-key/**` — (#8189, ADR-220) same shape:
+  applied only by `apply-git-data-root-key.yml`.
+- `!apps/web-platform/infra/lb-staging/**` — (#11181 F3) same shape: applied only by
+  `cf-lb-overlay.yml` dispatch arms. Without the exclusion a staging-root merge
+  would fire a PRODUCTION apply of the parent root.
+
+Deliberate NON-exclusions — these paths sit inside or beside excluded roots and
+still correctly fire this workflow because the production root reads them:
+
+- `apps/web-platform/infra/modules/git-data-userdata/` — the production host really
+  does render from it.
+- `apps/web-platform/infra/cloud-init-inngest.yml` (rendered by
+  inngest-provision-rehearsal/) — the production host renders from it too.
+- `apps/web-platform/infra/git-data-root-key.fingerprint` — sits OUTSIDE the
+  `git-data-root-key/` directory and is the committed anchor for this workflow.

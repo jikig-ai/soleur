@@ -466,14 +466,16 @@ jobs:
         run: |
           set -uo pipefail
           set +e
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
               -target=cloudflare_load_balancer_monitor.web \
               -target=cloudflare_load_balancer_pool.web_1 \
-              -target=cloudflare_load_balancer.app
-          rc=$?
+              -target=cloudflare_load_balancer.app 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (ga-overlay) failed (exit $rc). NOTHING applied."
             exit $rc
@@ -495,8 +497,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
       - name: Post-apply continuity check on app.soleur.ai
         run: |
           set -euo pipefail
