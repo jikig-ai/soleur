@@ -138,15 +138,14 @@ describe("fetchFromGitData — authorized read", () => {
     // guarded `reset --hard refs/remotes/git-data/<primary>` to overlay the tip.
     expect(argv).toContain(`+refs/soleur/worktrees/${WT}/heads/*:refs/remotes/git-data/*`);
     expect(argv).toContain(`+refs/soleur/worktrees/${WT}/tags/*:refs/tags/*`);
-    // CTO F13: rescue heads (`soleur-store-tip-<sha12>`, one per not-descendant graft) are
+    // CTO F13: rescue heads (`soleur-store-tip-<sha12>`, one per distinct skipped store tip) are
     // excluded from the overlay fetch — they are never overlaid, and pulling them all at every
     // graft would grow the 60 s fetch without bound. NEGATIVE refspec, NOT --prune (which would
-    // delete store-only branches). It must follow the heads refspec it narrows.
+    // delete store-only branches). Argument position is not asserted: git applies a negative
+    // refspec to the whole fetch, whatever its position. That the refspec really excludes the
+    // rescue heads is proven against real git in ensure-workspace-repo-ancestry-real-git.test.ts (S5).
     const negative = `^refs/soleur/worktrees/${WT}/heads/soleur-store-tip-*`;
     expect(argv).toContain(negative);
-    expect(argv.indexOf(negative)).toBeGreaterThan(
-      argv.indexOf(`+refs/soleur/worktrees/${WT}/heads/*:refs/remotes/git-data/*`),
-    );
     expect(argv).not.toContain("--prune");
     // NEGATIVE (the data-loss hazard the retarget closes): NO refspec destination
     // may map into a local branch — a `+…:refs/heads/*` force-fetch into a live

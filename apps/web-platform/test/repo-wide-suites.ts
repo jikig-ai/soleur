@@ -54,6 +54,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/eslint-test-dirs-ratchet.test.ts",
   "test/git-config-atomic.test.ts",
   "test/git-data-host-key-pin-shape-parity.test.ts",
+  "test/git-data-reporter-line-parity.test.ts",
   "test/git-data-remote-url-wrapper.test.ts",
   "test/git-data-replication.test.ts",
   "test/git-lock-marker-telemetry.test.ts",

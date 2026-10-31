@@ -7,7 +7,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const TEST_PIN = makeEd25519Pin();
 
@@ -46,6 +48,7 @@ import {
   removeGitDataRepo,
   assertSafeWorkspaceId,
   gitDataRemoteUrl,
+  gitDataPushRefspecs,
 } from "../server/git-data-replication";
 
 const WS = "ws-uuid-123";
@@ -68,6 +71,31 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
 });
+
+// A fake local git for the rescue listing / delete, backed by the execFileSync mock. It honours what a
+// real `git -C <cwd> for-each-ref <pattern>` would: a listing that does not carry `-C /tmp/ws` AND the
+// rescue pattern returns nothing, so dropping either from production makes the rows go red.
+const SHA_A = "0123456789abcdef0123456789abcdef01234567";
+const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
+const RESCUE_PATTERN = "refs/heads/soleur-store-tip-*";
+function fakeLocalGit(opts: {
+  refs?: Array<[sha: string, ref: string]>;
+  listingThrows?: Error;
+  failDelete?: boolean;
+}) {
+  execFileSyncMock.mockImplementation((...a: unknown[]) => {
+    const args = a[1] as string[];
+    if (args[2] === "for-each-ref") {
+      if (opts.listingThrows) throw opts.listingThrows;
+      const honoured = args[0] === "-C" && args[1] === "/tmp/ws" && args.includes(RESCUE_PATTERN);
+      return Buffer.from(honoured ? (opts.refs ?? []).map(([sha, ref]) => `${sha} ${ref}\n`).join("") : "");
+    }
+    if (args[2] === "update-ref" && opts.failDelete) throw new Error("fatal: cannot lock ref");
+    return Buffer.from("");
+  });
+}
+const listingCalls = () => execFileSyncMock.mock.calls.filter((c) => (c[1] as string[])[2] === "for-each-ref");
+const deleteCalls = () => execFileSyncMock.mock.calls.filter((c) => (c[1] as string[])[2] === "update-ref");
 
 describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
   it("composes an absolute ssh:// URL under the git-data store bare-repo root", () => {
@@ -111,10 +139,12 @@ describe("replicateToGitData — gated on", () => {
     const pushArgs = gitPush.mock.calls[0][0] as string[];
     expect(pushArgs).toContain("push");
     expect(pushArgs).toContain("git-data");
-    // CTO F12: ATOMIC, so a rejected ref (e.g. the rescue ref) cannot leave `main` forced while the
-    // old store tip is unreferenced. It rides the options block, right after --force.
-    expect(pushArgs.indexOf("--atomic")).toBe(pushArgs.indexOf("--force") + 1);
-    expect(pushArgs.indexOf("--atomic")).toBeLessThan(pushArgs.indexOf("git-data"));
+    // CTO F20: the main push is PER-REF, not atomic. Under --atomic one stale store head plus a later
+    // local ref that refname-conflicts with it (store `heads/fix/x`, local `fix`) rejected every ref of
+    // every later push forever; rescue-first already protects the old tip, so atomicity here is
+    // redundant. (--atomic lives on the rescue step only: see the two-step rows below.)
+    expect(pushArgs).not.toContain("--atomic");
+    expect(pushArgs.indexOf("--force")).toBeLessThan(pushArgs.indexOf("git-data"));
     // Fence push-options ride this push — worktree-id is now PER-USER, not "primary".
     expect(pushArgs).toContain("--push-option=lease-gen=7");
     expect(pushArgs).toContain(`--push-option=worktree-id=${WT}`);
@@ -131,54 +161,86 @@ describe("replicateToGitData — gated on", () => {
     expect(gitPush.mock.calls[0][1]).toBe("transport-key");
   });
 
-  // CTO T1b (amends F12): rescue-first two-step push. `--atomic` only protects a ref REJECTED inside
-  // the ref transaction; in the shallow `remote failure` class (measured, file:// store) `main` was
-  // still forced with the rescue ref left out. Pushing the rescue ref ALONE first, and throwing if
-  // that fails before `main` is touched, is what keeps the old store tip referenced.
-  describe("rescue-first two-step push (T1b)", () => {
+  // CTO T1b (amends F12), F19, F20, F21: rescue-first two-step push. `--atomic` only protects a ref
+  // REJECTED inside the ref transaction; in the shallow `remote failure` class (measured, file:// store)
+  // `main` was still forced with the rescue ref left out. Pushing the rescue ref ALONE first (atomic),
+  // and throwing if that fails before `main` is touched, is what keeps the old store tip referenced.
+  // The main push is per-ref (F20). After step 1 is confirmed the pushed local rescue branches are
+  // deleted best-effort (F21).
+  describe("rescue-first two-step push (T1b, F20, F21)", () => {
     const RESCUE_SPEC = `refs/heads/soleur-store-tip-*:refs/soleur/worktrees/${WT}/heads/soleur-store-tip-*`;
     const MAIN_SPEC = `refs/heads/*:refs/soleur/worktrees/${WT}/heads/*`;
-    const hasRescueBranch = () =>
-      execFileSyncMock.mockImplementation((...a: unknown[]) =>
-        (a[1] as string[]).includes("for-each-ref")
-          ? Buffer.from("0123456789abcdef0123456789abcdef01234567 commit\trefs/heads/soleur-store-tip-0123456789ab\n")
-          : Buffer.from(""),
-      );
+    const RESCUE_A = "refs/heads/soleur-store-tip-0123456789ab";
+    const RESCUE_B = "refs/heads/soleur-store-tip-fedcba987654";
+    const hasRescueBranch = () => fakeLocalGit({ refs: [[SHA_A, RESCUE_A]] });
     const argsOf = (i: number) => gitPush.mock.calls[i][0] as string[];
-    const forEachRefCalls = () =>
-      execFileSyncMock.mock.calls.filter((c) => (c[1] as string[]).includes("for-each-ref"));
+    const go = () =>
+      replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER });
+
+    it("the production refspec builder yields exactly the strings these rows pin (parity)", () => {
+      expect(gitDataPushRefspecs(WT)).toEqual({
+        heads: MAIN_SPEC,
+        tags: `refs/tags/*:refs/soleur/worktrees/${WT}/tags/*`,
+        rescue: RESCUE_SPEC,
+      });
+    });
 
     it("with a local rescue branch: the rescue-only push comes FIRST, then the main push; same generation and options", async () => {
       hasRescueBranch();
-      await replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER });
+      await go();
 
       expect(gitPush).toHaveBeenCalledTimes(2);
+      // step 1 keeps --atomic (F12/F20)
       expect(argsOf(0)).toEqual([
         "push", "--force", "--atomic", "git-data", RESCUE_SPEC,
         "--push-option=lease-gen=7", `--push-option=worktree-id=${WT}`,
       ]);
+      // step 2 is per-ref: NO --atomic (F20)
+      expect(argsOf(1)).not.toContain("--atomic");
       expect(argsOf(1)).toContain(MAIN_SPEC);
-      expect(argsOf(1)).toContain("--atomic"); // the main push is unchanged
       expect(argsOf(1)).toContain("--push-option=lease-gen=7");
       expect(argsOf(1)).not.toContain(RESCUE_SPEC);
-      // both steps use the transport key in the workspace, and the listing ran in the workspace
+      // both steps use the transport key in the workspace
       for (const c of gitPush.mock.calls) {
         expect(c[1]).toBe("transport-key");
         expect(c[3]).toMatchObject({ cwd: "/tmp/ws" });
       }
-      const [lookup] = forEachRefCalls();
-      expect(lookup[1]).toEqual(expect.arrayContaining(["/tmp/ws", "for-each-ref", "--count=1", "refs/heads/soleur-store-tip-*"]));
     });
 
-    it("with NO local rescue branch: exactly one push (the main push), after the listing", async () => {
-      await replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER });
-      expect(forEachRefCalls()).toHaveLength(1);
+    it("the rescue listing is `for-each-ref` over the rescue pattern in the workspace: -C <cwd>, full-sha format, no --count, 5 s timeout", async () => {
+      hasRescueBranch();
+      await go();
+      const [lookup] = listingCalls();
+      expect(lookup[1]).toEqual(["-C", "/tmp/ws", "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"]);
+      expect(lookup[2]).toMatchObject({ cwd: "/tmp/ws", timeout: 5000 });
+    });
+
+    it("with NO local rescue branch: exactly one push (the main push), and the listing was issued before it", async () => {
+      await go();
+      expect(listingCalls()).toHaveLength(1);
       expect(gitPush).toHaveBeenCalledTimes(1);
       expect(argsOf(0)).toContain(MAIN_SPEC);
       expect(argsOf(0)).not.toContain(RESCUE_SPEC);
+      expect(argsOf(0)).not.toContain("--atomic");
+      expect(deleteCalls()).toHaveLength(0);
+      expect(execFileSyncMock.mock.invocationCallOrder[execFileSyncMock.mock.calls.indexOf(listingCalls()[0])]).toBeLessThan(
+        gitPush.mock.invocationCallOrder[0],
+      );
     });
 
-    it("rescue push fails (non-transient): rejects, the main push is NEVER attempted, reported once", async () => {
+    it("ordering by invocation: listing, then the rescue push, then the local delete; the main push comes last", async () => {
+      hasRescueBranch();
+      await go();
+      const orderOf = (call: unknown[]) => execFileSyncMock.mock.invocationCallOrder[execFileSyncMock.mock.calls.indexOf(call)];
+      const listing = orderOf(listingCalls()[0]);
+      const del = orderOf(deleteCalls()[0]);
+      const [rescuePush, mainPush] = gitPush.mock.invocationCallOrder;
+      expect(listing).toBeLessThan(rescuePush);
+      expect(rescuePush).toBeLessThan(del); // never deleted before the push is confirmed
+      expect(del).toBeLessThan(mainPush);
+    });
+
+    it("rescue push fails (non-transient): rejects, the main push is NEVER attempted, nothing is deleted, reported once", async () => {
       hasRescueBranch();
       gitPush.mockRejectedValueOnce(
         Object.assign(new Error("Command failed: git push"), { stderr: "remote: git-data fence: stale lease generation 3 < stored max 5" }),
@@ -188,6 +250,7 @@ describe("replicateToGitData — gated on", () => {
       ).rejects.toThrow(/Command failed: git push/);
       expect(gitPush).toHaveBeenCalledTimes(1);
       expect(argsOf(0)).toContain(RESCUE_SPEC);
+      expect(deleteCalls()).toHaveLength(0); // F21: a failed step 1 keeps the local branch
       expect(reportSilentFallback).toHaveBeenCalledTimes(1);
     });
 
@@ -199,22 +262,24 @@ describe("replicateToGitData — gated on", () => {
         .mockResolvedValueOnce(Buffer.from(""))
         .mockRejectedValueOnce(transientErr())
         .mockResolvedValueOnce(Buffer.from(""));
-      await expect(
-        replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER }),
-      ).resolves.toEqual({ status: "replicated" });
+      await expect(go()).resolves.toEqual({ status: "replicated" });
       expect(gitPush).toHaveBeenCalledTimes(4);
       expect([0, 1, 2, 3].map((i) => argsOf(i).includes(RESCUE_SPEC))).toEqual([true, true, false, false]);
+      expect([0, 1, 2, 3].map((i) => argsOf(i).includes("--atomic"))).toEqual([true, true, false, false]);
+      expect(deleteCalls()).toHaveLength(1); // deleted once, after the confirmed (retried) step 1
       expect(reportSilentFallback).not.toHaveBeenCalled();
     });
 
-    it("the rescue step retries only ONCE: two transient failures there throw before main is touched", async () => {
+    it("the rescue step retries only ONCE: two transient failures there throw before main is touched, nothing deleted", async () => {
       hasRescueBranch();
       gitPush.mockRejectedValue(Object.assign(new Error("Command failed: git push"), { stderr: "failed to report status" }));
-      await expect(
-        replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER }),
-      ).rejects.toThrow(/git push/);
+      await expect(go()).rejects.toThrow(/git push/);
       expect(gitPush).toHaveBeenCalledTimes(2);
-      for (let i = 0; i < 2; i++) expect(argsOf(i)).toContain(RESCUE_SPEC);
+      for (let i = 0; i < 2; i++) {
+        expect(argsOf(i)).toContain(RESCUE_SPEC);
+        expect(argsOf(i)).toContain("--atomic");
+      }
+      expect(deleteCalls()).toHaveLength(0);
       expect(reportSilentFallback).toHaveBeenCalledTimes(1);
       gitPush.mockResolvedValue(Buffer.from(""));
     });
@@ -223,8 +288,50 @@ describe("replicateToGitData — gated on", () => {
       execFileSyncMock.mockImplementation((...a: unknown[]) =>
         (a[1] as string[]).includes("for-each-ref") ? Buffer.from("  \n") : Buffer.from(""),
       );
-      await replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER });
+      await go();
       expect(gitPush).toHaveBeenCalledTimes(1);
+    });
+
+    it("a listing failure is NOT swallowed: replicate rejects, no push is attempted, reported once", async () => {
+      fakeLocalGit({ listingThrows: new Error("git for-each-ref timed out") });
+      await expect(go()).rejects.toThrow(/for-each-ref timed out/);
+      expect(gitPush).not.toHaveBeenCalled();
+      expect(deleteCalls()).toHaveLength(0);
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+      expect(reportSilentFallback.mock.calls[0][1]).toMatchObject({ op: "git_data_replication_push" });
+    });
+
+    // F21: after step 1 is confirmed, every pushed local rescue branch is deleted with a
+    // compare-and-delete (`update-ref -d <ref> <sha>`), so a branch that moved since the listing survives.
+    it("after a confirmed step 1 each listed rescue branch is deleted with update-ref -d <ref> <sha> (compare-and-delete)", async () => {
+      fakeLocalGit({ refs: [[SHA_A, RESCUE_A], [SHA_B, RESCUE_B]] });
+      await expect(go()).resolves.toEqual({ status: "replicated" });
+      const dels = deleteCalls();
+      expect(dels.map((c) => c[1])).toEqual([
+        ["-C", "/tmp/ws", "update-ref", "-d", RESCUE_A, SHA_A],
+        ["-C", "/tmp/ws", "update-ref", "-d", RESCUE_B, SHA_B],
+      ]);
+      for (const c of dels) expect(c[2]).toMatchObject({ cwd: "/tmp/ws", timeout: 5000 });
+    });
+
+    it("a listing line that is not `<full sha> <rescue ref>` is never passed to update-ref", async () => {
+      execFileSyncMock.mockImplementation((...a: unknown[]) => {
+        const args = a[1] as string[];
+        if (args[2] === "for-each-ref") {
+          return Buffer.from(`${SHA_A} ${RESCUE_A}\nzzzz ${RESCUE_B}\n${SHA_B} refs/heads/main\n`);
+        }
+        return Buffer.from("");
+      });
+      await go();
+      expect(deleteCalls().map((c) => (c[1] as string[])[4])).toEqual([RESCUE_A]);
+    });
+
+    it("a failing local delete is best-effort: both refs are still attempted, main is pushed, replication succeeds", async () => {
+      fakeLocalGit({ refs: [[SHA_A, RESCUE_A], [SHA_B, RESCUE_B]], failDelete: true });
+      await expect(go()).resolves.toEqual({ status: "replicated" });
+      expect(deleteCalls()).toHaveLength(2);
+      expect(gitPush).toHaveBeenCalledTimes(2);
+      expect(reportSilentFallback).not.toHaveBeenCalled();
     });
   });
 
@@ -575,7 +682,7 @@ describe("replicateToGitData — concurrency limiter (#6982 W6)", () => {
     gitPush.mockResolvedValue(Buffer.from(""));
   });
 
-  it("SHEDS on queue timeout without blocking, and reports the shed", async () => {
+  it("SHEDS on queue timeout: resolves with a shed outcome, reports the shed, and consumes no slot", async () => {
     // Zero-length queue window: the third caller gives up immediately rather than the
     // test waiting out a real timeout.
     const mod = await loadWithLimits("1", "0");
@@ -687,6 +794,32 @@ describe("replicateToGitData — workspace id is pseudonymised in logs (#6982)",
   });
 });
 
+type LogCall = { level: string; args: unknown[] };
+
+// `log` is created at module init, so the logger mock must be installed BEFORE the dynamic import.
+async function loadWithLogger() {
+  vi.resetModules();
+  const logCalls: LogCall[] = [];
+  const rec = (level: string) => (...a: unknown[]) => {
+    logCalls.push({ level, args: a });
+  };
+  vi.doMock("../server/logger", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../server/logger")>()),
+    createChildLogger: () => ({
+      info: rec("info"),
+      warn: rec("warn"),
+      error: rec("error"),
+      debug: rec("debug"),
+    }),
+  }));
+  vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+  const mod = await import("../server/git-data-replication");
+  return { mod, logCalls };
+}
+
+const markerCalls = (calls: LogCall[]) =>
+  calls.filter((c) => typeof c.args[1] === "string" && (c.args[1] as string).includes("git_data_replication_success="));
+
 // Replication-success marker (#11704 item 6 / CTO F6, capped by F15). A successful push emits a
 // warn-level, closed-grammar, counts-only line so a success reaches Better Stack (info never
 // ships), at most once per 60 s per process per transient_retried value. The read side
@@ -697,32 +830,6 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
   const MARKER_PREFIX = "git_data_replication_success=1 transient_retried=";
   const SIGNAL_SCRIPT = path.resolve(__dirname, "../../../scripts/followthroughs/git-data-replication-signal.sh");
   const REAL_WS = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
-
-  type LogCall = { level: string; args: unknown[] };
-
-  // `log` is created at module init, so the logger mock must be installed BEFORE the dynamic import.
-  async function loadWithLogger() {
-    vi.resetModules();
-    const logCalls: LogCall[] = [];
-    const rec = (level: string) => (...a: unknown[]) => {
-      logCalls.push({ level, args: a });
-    };
-    vi.doMock("../server/logger", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("../server/logger")>()),
-      createChildLogger: () => ({
-        info: rec("info"),
-        warn: rec("warn"),
-        error: rec("error"),
-        debug: rec("debug"),
-      }),
-    }));
-    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
-    const mod = await import("../server/git-data-replication");
-    return { mod, logCalls };
-  }
-
-  const markerCalls = (calls: LogCall[]) =>
-    calls.filter((c) => typeof c.args[1] === "string" && (c.args[1] as string).includes("git_data_replication_success="));
 
   const run = (mod: typeof import("../server/git-data-replication"), leaseGeneration = 12) =>
     mod.replicateToGitData({
@@ -841,7 +948,7 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
       expect(msgs).toEqual([`${MARKER_PREFIX}0`, `${MARKER_PREFIX}1`]);
     });
 
-    it("a failed or shed replication neither emits nor consumes the window", async () => {
+    it("a failed replication neither emits nor consumes the window", async () => {
       const { mod, logCalls } = await loadWithLogger();
       gitPush.mockRejectedValueOnce(Object.assign(new Error("fence"), { stderr: "remote: git-data fence: stale lease generation 1 < 2" }));
       await expect(run(mod)).rejects.toThrow();
@@ -886,12 +993,7 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
   // T1b: with a local rescue branch the replication is two pushes; `transient_retried` is true if
   // EITHER step retried, and there is still exactly one marker for the whole replication.
   describe("with a local rescue branch (two-step push)", () => {
-    const withRescue = () =>
-      execFileSyncMock.mockImplementation((...a: unknown[]) =>
-        (a[1] as string[]).includes("for-each-ref")
-          ? Buffer.from("0123456789abcdef0123456789abcdef01234567 commit\trefs/heads/soleur-store-tip-0123456789ab\n")
-          : Buffer.from(""),
-      );
+    const withRescue = () => fakeLocalGit({ refs: [[SHA_A, "refs/heads/soleur-store-tip-0123456789ab"]] });
     const transientErr = () => Object.assign(new Error("Command failed: git push"), { stderr: "error: remote failure" });
 
     it("a retry on the RESCUE step only → one marker, transient_retried=1", async () => {
@@ -923,6 +1025,17 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
       await run(mod);
       expect(gitPush).toHaveBeenCalledTimes(2);
       expect(markerCalls(logCalls).map((c) => c.args[1])).toEqual([`${MARKER_PREFIX}0`]);
+    });
+
+    it("a failing local delete after step 1 logs a warn without identifiers and does not stop the marker", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      fakeLocalGit({ refs: [[SHA_A, "refs/heads/soleur-store-tip-0123456789ab"]], failDelete: true });
+      await expect(run(mod)).resolves.toEqual({ status: "replicated" });
+      const warns = logCalls.filter((c) => c.level === "warn" && String(c.args[1]).includes("could not delete a pushed local rescue branch"));
+      expect(warns).toHaveLength(1);
+      expect(JSON.stringify(warns)).not.toContain(REAL_WS);
+      expect(JSON.stringify(warns)).not.toContain("soleur-store-tip-0123456789ab");
+      expect(markerCalls(logCalls)).toHaveLength(1);
     });
 
     it("emits NO marker when the rescue push fails, and the main push is never attempted", async () => {
@@ -957,14 +1070,13 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
     await expect(run(mod)).rejects.toThrow(/git push/);
     expect(gitPush).toHaveBeenCalledTimes(2);
     expect(markerCalls(logCalls)).toHaveLength(0);
-    // N26: the failure is reported ONCE (not per attempt), and both attempts were the ATOMIC
-    // push (which covers a ref rejected in the ref transaction; it does not cover the transient
-    // `remote failure` class, where only the retry protects the store tip — see the comment at
-    // pushArgs in git-data-replication.ts). Whether the old store tip is still referenced after
+    // N26: the failure is reported ONCE (not per attempt). With no local rescue branch both attempts
+    // are the main push, which is per-ref and carries NO --atomic (F20); --atomic is on the rescue
+    // step only (asserted in the two-step rows). Whether the old store tip is still referenced after
     // two failed attempts is a property of the store, not of this mock-level row.
     expect(reportSilentFallback).toHaveBeenCalledTimes(1);
     expect(reportSilentFallback.mock.calls[0][1]).toMatchObject({ op: "git_data_replication_push" });
-    for (const call of gitPush.mock.calls) expect(call[0] as string[]).toContain("--atomic");
+    for (const call of gitPush.mock.calls) expect(call[0] as string[]).not.toContain("--atomic");
     gitPush.mockResolvedValue(Buffer.from(""));
   });
 
@@ -1014,5 +1126,145 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
     walk(serverDir);
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatch(/git-data-replication\.ts$/);
+  });
+});
+
+// Real git against a real bare store (F20, F21). The mocked rows above prove the argv; these prove what
+// git DOES with it. Only the authenticated transport is replaced: `gitWithPrivateKeyAuth` runs the very
+// argv production built through real `git`, with the `git-data` ssh URL rewritten onto a local bare repo
+// (`url.<base>.insteadOf`). The rescue listing, the compare-and-delete and `ensureGitDataRemote` run
+// unmocked. The store accepts push options, as the git-data host does.
+describe("replicateToGitData — real git store (F20 per-ref main push, F21 rescue-branch delete)", () => {
+  let root = "";
+  let ws = "";
+  let store = "";
+  let realExec: typeof import("node:child_process").execFileSync;
+  const storeRef = (b: string) => `refs/soleur/worktrees/${WT}/heads/${b}`;
+  const git = (cwd: string, args: string[]): string =>
+    realExec("git", args, { cwd, env: gitFixtureEnv(root), encoding: "utf8", stdio: "pipe" }).trim();
+  const commit = (file: string): string => {
+    fs.writeFileSync(path.join(ws, file), `${file}\n`);
+    git(ws, ["add", "--", file]);
+    git(ws, ["commit", "-q", "-m", `add ${file}`]);
+    return git(ws, ["rev-parse", "HEAD"]);
+  };
+
+  beforeEach(async () => {
+    realExec = (await vi.importActual<typeof import("node:child_process")>("node:child_process")).execFileSync;
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "replicate-real-git-"));
+    fs.mkdirSync(path.join(root, "stores"));
+    store = path.join(root, "stores", `${WS}.git`);
+    ws = path.join(root, "ws");
+    fs.mkdirSync(ws);
+    git(root, ["init", "-q", "--bare", store]);
+    git(store, ["config", "receive.advertisePushOptions", "true"]);
+    git(ws, ["init", "-q", "-b", "main"]);
+    commit("a.txt");
+    // the local git calls of production (remote config, rescue listing, delete) run for real
+    execFileSyncMock.mockImplementation((...a: unknown[]) =>
+      realExec(a[0] as string, a[1] as string[], { ...(a[2] as object), env: gitFixtureEnv(root) }),
+    );
+    // the authenticated transport: the production push argv, run by real git against the local store
+    gitPush.mockImplementation(async (...a: unknown[]) => {
+      const [args, , , opts] = a as [string[], string, string, { cwd: string }];
+      try {
+        realExec(
+          "git",
+          ["-c", `url.file://${root}/stores/.insteadOf=ssh://git@10.0.1.20/mnt/git-data/repositories/`, ...args],
+          { cwd: opts.cwd, env: gitFixtureEnv(root), stdio: "pipe" },
+        );
+      } catch (e) {
+        const stderr = String((e as { stderr?: unknown }).stderr ?? "");
+        throw Object.assign(new Error(`Command failed: git push\n${stderr}`), { stderr });
+      }
+      return Buffer.from("");
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    vi.doUnmock("../server/logger");
+  });
+
+  const replicate = async () => {
+    const { mod, logCalls } = await loadWithLogger();
+    mod.__resetGitDataSuccessMarkerCapForTest();
+    const out = mod.replicateToGitData({ workspacePath: ws, workspaceId: WS, worktreeId: WT, leaseGeneration: 1, userId: USER });
+    return { out, logCalls };
+  };
+
+  it("positive control: a clean store takes every ref and the success marker fires", async () => {
+    git(ws, ["branch", "fix"]);
+    const { out, logCalls } = await replicate();
+    await expect(out).resolves.toEqual({ status: "replicated" });
+    expect(git(store, ["rev-parse", storeRef("main")])).toBe(git(ws, ["rev-parse", "main"]));
+    expect(git(store, ["rev-parse", storeRef("fix")])).toBe(git(ws, ["rev-parse", "fix"]));
+    expect(markerCalls(logCalls)).toHaveLength(1);
+  });
+
+  // F20: the stale store head `heads/fix/x` blocks the new local ref `fix` (refname conflict). The main
+  // push is per-ref, so `main` still lands; git exits non-zero for the rejected ref, the call reports
+  // failure loudly, and NO success marker fires. Under --atomic the same push left `main` stale forever.
+  it("F20: store holds heads/fix/x, local has branch fix → main lands, the call FAILS loudly, no success marker", async () => {
+    git(ws, ["branch", "fix/x"]);
+    git(ws, ["push", "-q", "--force", `file://${store}`, `refs/heads/fix/x:${storeRef("fix/x")}`]);
+    git(ws, ["branch", "-D", "fix/x"]);
+    git(ws, ["branch", "fix"]);
+    const tip = commit("b.txt");
+    expect(() => git(store, ["rev-parse", storeRef("main")])).toThrow(); // main is not in the store yet
+
+    const { out, logCalls } = await replicate();
+    await expect(out).rejects.toThrow(/Command failed: git push/);
+
+    expect(git(store, ["rev-parse", storeRef("main")])).toBe(tip); // the per-ref push landed main
+    expect(git(store, ["rev-parse", storeRef("fix/x")])).toBeTruthy(); // the stale head is untouched
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback.mock.calls[0][1]).toMatchObject({ op: "git_data_replication_push" });
+    expect(markerCalls(logCalls)).toHaveLength(0);
+    // and it is the production main push that ran: no --atomic on it
+    expect(gitPush).toHaveBeenCalledTimes(1);
+    expect(gitPush.mock.calls[0][0] as string[]).not.toContain("--atomic");
+  });
+
+  // F21: after step 1 is confirmed the pushed local rescue branch is gone, the store copy remains, and
+  // the next replication issues no rescue push.
+  it("F21: the local rescue branch is deleted after the confirmed push, the store ref remains, a second replicate pushes no rescue", async () => {
+    const old = git(ws, ["rev-parse", "HEAD"]);
+    const rescue = `soleur-store-tip-${old.slice(0, 12)}`;
+    git(ws, ["branch", rescue, old]);
+    commit("b.txt"); // main moves past the rescued tip
+
+    const first = await replicate();
+    await expect(first.out).resolves.toEqual({ status: "replicated" });
+    expect(gitPush).toHaveBeenCalledTimes(2); // rescue step, then main
+    expect(gitPush.mock.calls[0][0] as string[]).toContain(gitDataPushRefspecs(WT).rescue);
+    expect(git(ws, ["for-each-ref", "refs/heads/soleur-store-tip-*"])).toBe(""); // local branch gone
+    expect(git(store, ["rev-parse", storeRef(rescue)])).toBe(old); // store copy remains
+    expect(git(store, ["rev-parse", storeRef("main")])).toBe(git(ws, ["rev-parse", "main"]));
+
+    gitPush.mockClear();
+    const second = await replicate();
+    await expect(second.out).resolves.toEqual({ status: "replicated" });
+    expect(gitPush).toHaveBeenCalledTimes(1); // no rescue push this time
+    expect(gitPush.mock.calls[0][0] as string[]).not.toContain(gitDataPushRefspecs(WT).rescue);
+    expect(git(store, ["rev-parse", storeRef(rescue)])).toBe(old);
+  });
+
+  it("F21: a rescue branch that moved since the listing is NOT deleted (compare-and-delete)", async () => {
+    const old = git(ws, ["rev-parse", "HEAD"]);
+    const rescue = `soleur-store-tip-${old.slice(0, 12)}`;
+    git(ws, ["branch", rescue, old]);
+    const moved = commit("b.txt");
+    // Move the rescue branch to a different commit the instant the (single) rescue push is confirmed.
+    const realPush = gitPush.getMockImplementation()!;
+    let calls = 0;
+    gitPush.mockImplementation(async (...a: unknown[]) => {
+      const r = await realPush(...a);
+      if (++calls === 1) git(ws, ["update-ref", `refs/heads/${rescue}`, moved]);
+      return r;
+    });
+    const { out } = await replicate();
+    await expect(out).resolves.toEqual({ status: "replicated" });
+    expect(git(ws, ["rev-parse", `refs/heads/${rescue}`])).toBe(moved); // survived: sha no longer matched
   });
 });

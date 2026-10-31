@@ -79,8 +79,12 @@ const GIT_DATA_MAX_CONCURRENT = Math.max(1, Number.isFinite(_mc) ? _mc : 2);
 // a `||` fallback makes 0 UNSETTABLE — in production and in tests, where "use a zero-length
 // window" silently ran the full production timeout instead.
 //
-// 120 s, not 10 s. A slot is held for the whole provision+push (30 s + 60 s worst case), so
-// a 10 s queue window meant the third concurrent session-end shed with near-certainty — the
+// 120 s, not 10 s. A slot is held for the whole provision+push. The provision dial is 30 s; the push
+// is one step (60 s, plus one 60 s transient retry) or, when a local rescue branch exists, TWO steps
+// (rescue then main), so the worst case is ~30 s + ~240 s of push time with the rescue step. That is
+// longer than this 120 s queue window and is ACCEPTED (CTO F21): there is deliberately no shared
+// deadline across the two steps, so a queued caller may shed while a slow two-step push holds its
+// slot. A 10 s queue window meant the third concurrent session-end shed with near-certainty — the
 // queue could essentially never grant a slot. That matters more here than latency: git-data
 // holds the SOLE copy of the delta between a user's last GitHub push and their worktree, and
 // replication is session-end-coupled, so a shed is not lag — it is that delta never being
@@ -679,6 +683,21 @@ export type GitDataReplicationOutcome =
   | { status: "disabled" }
   | { status: "shed"; slotsBusy: number; queueTimeoutMs: number };
 
+/**
+ * The refspecs of the replication push, in ONE place so the real-git tests import the production
+ * strings instead of keeping private copies. Heads + tags land under the user's own
+ * `refs/soleur/worktrees/<worktreeId>/` namespace; `rescue` is the session-start overlay's flat
+ * `soleur-store-tip-*` branches (RESERVED prefix: a user branch with that name is pushed as a rescue
+ * head too).
+ */
+export function gitDataPushRefspecs(worktreeId: string): { heads: string; tags: string; rescue: string } {
+  return {
+    heads: `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
+    tags: `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
+    rescue: `refs/heads/soleur-store-tip-*:refs/soleur/worktrees/${worktreeId}/heads/soleur-store-tip-*`,
+  };
+}
+
 export async function replicateToGitData(params: {
   workspacePath: string;
   workspaceId: string;
@@ -796,44 +815,40 @@ export async function replicateToGitData(params: {
     // depends on (#5817 review F1). NOT `--mirror`. Push-options ride THIS push
     // only, never origin/syncPush.
     //
-    // RESCUE-FIRST TWO-STEP PUSH (#11704, CTO F12 as amended by T1b). The session-start overlay can
-    // leave a local `soleur-store-tip-<sha12>` branch holding a store tip the clone does not
-    // descend from; this force-push would otherwise overwrite that tip in the store. So, only when
-    // such a local branch exists, the rescue refs are pushed ALONE first (`--force --atomic`, the
-    // same push-options, the same lease generation: the fence accepts an equal generation). If
-    // that push fails (after its one transient retry) this function THROWS before `main` is
-    // touched, so the old tip stays referenced in the store. The main push then follows unchanged
-    // (it may re-carry the rescue ref; that is a no-op).
+    // RESCUE-FIRST TWO-STEP PUSH (#11704, CTO F12 as amended by T1b, F19, F20, F21). The session-start
+    // overlay can leave a local `soleur-store-tip-<sha12>` branch holding a store tip the clone does
+    // not descend from; this force-push would otherwise overwrite that tip in the store. So, only when
+    // such a local branch exists, the rescue refs are pushed ALONE first (`--force --atomic`, the same
+    // push-options, the same lease generation: the fence accepts an equal generation). If that push
+    // fails (after its one transient retry) this function THROWS before `main` is touched, so the old
+    // tip stays referenced in the store. Once that push is confirmed, the pushed local rescue branches
+    // are deleted best-effort (F21), because the store copy persists and step 1 should run once per
+    // rescue, not at every session end. The main push then follows (it re-carries nothing of the
+    // rescue refs once they are deleted locally).
     //
-    // What `--atomic` does and does not do: it protects ONLY a ref REJECTED inside the ref
-    // transaction (e.g. a refname conflict) — all refs of that push stay unchanged. It does NOT
-    // protect the transient `remote failure` / `failed to report status` class (a first multi-ref
-    // push from a shallow clone against a file:// store, git 2.56): measured there, `main` was
-    // still forced and only the rescue ref was left out. The rescue-first push is what protects
-    // the old tip in that class. The probes used a --depth 1 client, push-options and a
-    // receive.shallowUpdate store over file://; the ssh wrapper path was NOT measured.
+    // What `--atomic` does (STEP 1 ONLY, F20): it protects a ref REJECTED inside the ref transaction
+    // (e.g. a refname conflict) — all refs of that push stay unchanged. It does NOT protect the
+    // transient `remote failure` / `failed to report status` class (a first multi-ref push from a
+    // shallow clone against a file:// store, git 2.56): measured there, `main` was still forced and
+    // only the rescue ref was left out. The rescue-first push is what protects the old tip in that
+    // class. The probes used a --depth 1 client, push-options and a receive.shallowUpdate store over
+    // file://; the ssh wrapper path was NOT measured.
+    //
+    // STEP 2 IS PER-REF, NOT ATOMIC (F20). Rescue-first already put the old tip in the store, so
+    // atomicity on `main` is redundant, and under `--atomic` one stale store head plus a later local
+    // ref that refname-conflicts with it (store `heads/fix/x`, local `fix`) rejected every ref of
+    // every later push forever. A partial rejection (`main` landed, some other ref rejected) makes git
+    // exit non-zero, `pushWithRetry` throws, and the outer catch reports `git-data replication push
+    // failed` loudly; that stderr is not in the transient regex, so it is not retried, and the success
+    // marker does not fire. Self-healing a stale store head is deferred to a tracked issue.
     via = "git";
+    const refspecs = gitDataPushRefspecs(worktreeId);
     const pushOptions = [
       `--push-option=lease-gen=${leaseGeneration}`,
       `--push-option=worktree-id=${worktreeId}`,
     ];
-    const pushArgs = [
-      "push",
-      "--force",
-      "--atomic",
-      "git-data",
-      `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
-      `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
-      ...pushOptions,
-    ];
-    const rescuePushArgs = [
-      "push",
-      "--force",
-      "--atomic",
-      "git-data",
-      `refs/heads/soleur-store-tip-*:refs/soleur/worktrees/${worktreeId}/heads/soleur-store-tip-*`,
-      ...pushOptions,
-    ];
+    const pushArgs = ["push", "--force", "git-data", refspecs.heads, refspecs.tags, ...pushOptions];
+    const rescuePushArgs = ["push", "--force", "--atomic", "git-data", refspecs.rescue, ...pushOptions];
     // True if EITHER step took its single transient retry; reported as a bit on the success marker.
     let retried = false;
     const pushWithRetry = async (args: string[]): Promise<void> => {
@@ -882,15 +897,38 @@ export async function replicateToGitData(params: {
 
     // Step 1 (only if a local rescue branch exists): the rescue refs alone, BEFORE `main` is touched.
     // A listing failure is not swallowed: it lands in the catch below like any other local-git fault.
-    const rescueListing = execFileSync(
-      "git",
-      ["-C", workspacePath, "for-each-ref", "--count=1", "refs/heads/soleur-store-tip-*"],
-      { cwd: workspacePath, stdio: "pipe" },
+    // The listing is local and bounded (5 s). Its lines are `<full sha> <refname>`.
+    const rescueListing = String(
+      execFileSync(
+        "git",
+        ["-C", workspacePath, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"],
+        { cwd: workspacePath, stdio: "pipe", timeout: 5000 },
+      ) ?? "",
     );
-    if (String(rescueListing ?? "").trim() !== "") {
+    if (rescueListing.trim() !== "") {
       await pushWithRetry(rescuePushArgs);
+      // (F21) The rescue heads are confirmed in the store: delete the pushed LOCAL branches,
+      // compare-and-delete on the listed sha so a branch moved since the listing is left alone.
+      // BEST-EFFORT: a failure is a warn and replication carries on (the branch is merely pushed
+      // again next time). Never fails the replication.
+      for (const line of rescueListing.split("\n")) {
+        const m = /^([0-9a-f]{40,64}) (refs\/heads\/soleur-store-tip-\S+)$/.exec(line.trim());
+        if (!m) continue;
+        try {
+          execFileSync("git", ["-C", workspacePath, "update-ref", "-d", m[2], m[1]], {
+            cwd: workspacePath,
+            stdio: "pipe",
+            timeout: 5000,
+          });
+        } catch {
+          log.warn(
+            { workspaceIdHash: hashUserId(workspaceId), worktreeIdHash: hashUserId(worktreeId) },
+            "git-data replication: could not delete a pushed local rescue branch (best-effort); it is pushed again next session",
+          );
+        }
+      }
     }
-    // Step 2: the main push, unchanged.
+    // Step 2: the main push (per-ref, no --atomic: F20).
     await pushWithRetry(pushArgs);
     log.info(
       {

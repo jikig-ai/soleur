@@ -58,7 +58,10 @@ vi.mock("@/server/logger", () => ({
   }),
 }));
 vi.mock("@/server/workspace-resolver", () => ({ isGitDataStoreEnabled: () => true }));
-vi.mock("@/server/git-data-client", () => ({
+// Only the authenticated fetch is replaced; the refspec builder stays the PRODUCTION one, so the rows
+// below fetch and push with the strings git-data-client.ts / git-data-replication.ts really use.
+vi.mock("@/server/git-data-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/git-data-client")>()),
   fetchFromGitData: (a: { workspacePath: string }) => H.fetchImpl(a),
 }));
 vi.mock("@/server/worktree-write-lease", () => ({ resolveWorktreeId: () => H.WT }));
@@ -70,6 +73,8 @@ import {
   __setGraftForTests,
 } from "@/server/ensure-workspace-repo";
 import { gitWithPrivateKeyAuth } from "@/server/git-auth";
+import { gitDataFetchRefspecs } from "@/server/git-data-client";
+import { gitDataPushRefspecs } from "@/server/git-data-replication";
 
 const REPO = "https://github.com/acme/widget";
 const WS_ID = "11111111-1111-4111-8111-111111111111";
@@ -91,7 +96,8 @@ function commit(dir: string, file: string, body: string): string {
   return git(dir, ["rev-parse", "HEAD"]);
 }
 
-const STORE_REFSPEC = `+refs/heads/*:refs/soleur/worktrees/${H.WT}/heads/*`;
+// The production replication refspecs (git-data-replication.ts), not private copies.
+const PUSH = gitDataPushRefspecs(H.WT);
 const storeHead = (b: string) => `refs/soleur/worktrees/${H.WT}/heads/${b}`;
 
 /** origin (main: C0 <- C1), an EMPTY shallow-accepting bare store. Returns C1. */
@@ -115,7 +121,7 @@ function replicate(extraLocalCommit: boolean): string {
   const user = join(root, "user");
   git(root, ["clone", "-q", "--depth", "1", `file://${origin}`, user]);
   const tip = extraLocalCommit ? commit(user, "b.txt", "user work\n") : git(user, ["rev-parse", "HEAD"]);
-  git(user, ["push", "-q", "--force", `file://${store}`, STORE_REFSPEC]);
+  git(user, ["push", "-q", "--force", `file://${store}`, PUSH.heads]);
   return tip;
 }
 
@@ -130,14 +136,17 @@ async function drive() {
     headAfterGraft = git(workspacePath, ["rev-parse", "HEAD"]);
   });
   H.fetchImpl = async ({ workspacePath }) => {
+    // the production overlay-fetch refspecs (git-data-client.ts), including the CTO F13 negative
+    // refspec: rescue heads are never pulled back at a graft
+    const fetch = gitDataFetchRefspecs(H.WT);
     git(workspacePath, [
       "fetch",
       "-q",
       "--update-shallow",
       `file://${store}`,
-      `+refs/soleur/worktrees/${H.WT}/heads/*:refs/remotes/git-data/*`,
-      // mirrors git-data-client.ts (CTO F13): rescue heads are never pulled back at a graft
-      `^refs/soleur/worktrees/${H.WT}/heads/soleur-store-tip-*`,
+      fetch.heads,
+      fetch.negativeRescue,
+      fetch.tags,
     ]);
   };
   return ensureWorkspaceRepoCloned({
@@ -221,7 +230,7 @@ describe("overlay ancestry gate on real shallow repositories", () => {
     expect(H.reportSilentFallback).not.toHaveBeenCalled();
   });
 
-  it("S4 the follow-up replication push (force, refs/heads/*) after a skip leaves the old store tip reachable", async () => {
+  it("S4 the two-step replication after a skip (rescue head first, then heads/tags) leaves the old store tip reachable", async () => {
     buildBase();
     const storeTip = replicate(true);
     advanceOrigin();
@@ -231,24 +240,29 @@ describe("overlay ancestry gate on real shallow repositories", () => {
     // before the push the store tip is held by exactly the user's main head
     expect(git(store, ["for-each-ref", "--contains", storeTip, "--format=%(refname)"])).toBe(storeHead("main"));
 
-    // The session-end push, exactly the replication refspec shape, with --force --atomic (CTO
-    // F12). A first push of 2+ refs from a shallow clone can hit git's `remote failure` /
-    // `failed to report status` (measured here against a file:// store, cause not established).
-    // MEASURED: in that failure class --atomic did NOT keep `main` unchanged — main was forced
-    // and the rescue ref was the one left out (git 2.56); --atomic only covers a ref REJECTED in
-    // the ref transaction (e.g. a refname conflict). git-data-replication.ts resends ONCE on this
-    // positive-match class, and so does this row; the rescue ref lands on the resend. Between the
-    // two attempts the old store tip is unreferenced, which is why the retry matters; the
-    // assertions below read the state after the resend.
-    const push = () => git(ws, ["push", "-q", "--force", "--atomic", `file://${store}`, STORE_REFSPEC]);
-    try {
-      push();
-    } catch (err) {
-      const text = String((err as { stderr?: unknown; message?: unknown }).stderr ?? "") +
-        String((err as { message?: unknown }).message ?? "");
-      if (!/remote failure|failed to report status/.test(text)) throw err;
-      push();
-    }
+    // The session-end replication, in production's two steps (git-data-replication.ts, F12/F19/F20):
+    // step 1 pushes the rescue refs alone (`--force --atomic`), step 2 pushes heads and tags per-ref
+    // (`--force`, no --atomic). A multi-ref first push from a shallow clone can hit git's
+    // `remote failure` / `failed to report status` (seen here against a file:// store, cause not
+    // established); production resends each step ONCE on that class and so does this row. The point
+    // of rescue-first is asserted below: once step 1 has landed, the old store tip is already held by
+    // a rescue head BEFORE step 2 forces `main`.
+    const pushStep = (extra: string[], specs: string[]) => {
+      const run = () => git(ws, ["push", "-q", "--force", ...extra, `file://${store}`, ...specs]);
+      try {
+        run();
+      } catch (err) {
+        const text = String((err as { stderr?: unknown }).stderr ?? "") +
+          String((err as { message?: unknown }).message ?? "");
+        if (!/remote failure|failed to report status/.test(text)) throw err;
+        run();
+      }
+    };
+    pushStep(["--atomic"], [PUSH.rescue]);
+    // after step 1 alone: the old tip is held by main AND the rescue head
+    expect(git(store, ["rev-parse", rescueHead])).toBe(storeTip);
+    expect(git(store, ["rev-parse", storeHead("main")])).toBe(storeTip);
+    pushStep([], [PUSH.heads, PUSH.tags]);
 
     // main was force-overwritten with the clone line ...
     expect(git(store, ["rev-parse", storeHead("main")])).not.toBe(storeTip);

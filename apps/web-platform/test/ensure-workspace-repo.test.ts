@@ -801,6 +801,23 @@ describe("ensureWorkspaceRepoCloned", () => {
         expect(mockLocalGit).toHaveBeenCalledWith(["reset", "--hard", primaryRef("main")], WS);
         expect(mockReportSilentFallback).not.toHaveBeenCalled();
       });
+
+      // N27 guard: the equality skip needs a valid FULL sha on both sides. Two results that are
+      // EQUAL but not a commit id (an empty or garbage `rev-parse`) are not "already at the store
+      // tip"; without the `FULL_SHA_RE.test(tip) &&` guard they would skip the reset.
+      it.each([
+        ["empty", ""],
+        ["non-hex", "zzz"],
+      ])("descends and both rev-parse results are %s (equal, but not a full sha) → reset --hard still runs", async (_n, out) => {
+        armOverlay({
+          head: async () => ({ stdout: `${out}\n` }),
+          storeTip: async () => ({ stdout: `${out}\n` }),
+        });
+        await run();
+        expect(mockLocalGit).toHaveBeenCalledWith(["reset", "--hard", primaryRef("main")], WS);
+        expect(gitCalls("branch")).toHaveLength(0);
+        expect(mockReportSilentFallback).not.toHaveBeenCalled();
+      });
     });
   });
 });

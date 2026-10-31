@@ -171,6 +171,29 @@ export async function authorizeGitDataAccess(params: {
 }
 
 /**
+ * The refspecs of the overlay fetch, in ONE place so the real-git tests import the production
+ * strings instead of keeping private copies.
+ *
+ * `negativeRescue` (#11704, CTO F13) is a NEGATIVE refspec: the overlay's rescue heads
+ * (`soleur-store-tip-<sha12>`, one more per distinct skipped store tip) are never overlaid, and
+ * fetching all of them at every graft would grow this 60 s fetch without bound. Excluding them is
+ * NOT a prune: nothing in the store is deleted (a prune here would delete store-only branches). The
+ * heads themselves still accumulate in the store (one per distinct skipped store tip); a host-side
+ * reaper is deferred and tracked (#11725), so "bounded by the existing gc" does not hold.
+ * `soleur-store-tip-` is a RESERVED branch prefix: a user branch with that name is excluded from the
+ * overlay too (and is pushed as a rescue head).
+ * REQUIRES git >= 2.29 (negative refspecs). The node:22-slim Debian git is 2.39, which has them, but
+ * the container's git version was NOT measured.
+ */
+export function gitDataFetchRefspecs(worktreeId: string): { heads: string; negativeRescue: string; tags: string } {
+  return {
+    heads: `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
+    negativeRescue: `^refs/soleur/worktrees/${worktreeId}/heads/soleur-store-tip-*`,
+    tags: `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
+  };
+}
+
+/**
  * Authorized fetch of a workspace's per-user worktree namespace from the shared
  * git-data store into `destPath`'s local `refs/heads/*` (the reverse of the
  * git-data-replication.ts write refspec: the write pushes local `refs/heads/*` →
@@ -245,6 +268,7 @@ export async function fetchFromGitData(params: {
   // The fence, not ref ancestry, is the ordering authority — symmetric to the write's
   // `--force`. Cross-user visibility is a separate explicit fetch of the peer namespace
   // (ADR-068 D0-ref), not this call.
+  const fetchRefspecs = gitDataFetchRefspecs(worktreeId);
   await gitWithPrivateKeyAuth(
     [
       "fetch",
@@ -257,15 +281,9 @@ export async function fetchFromGitData(params: {
       // refs; on a non-shallow or boundary-agnostic fetch it is inert.
       "--update-shallow",
       remoteUrl,
-      `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
-      // (#11704, CTO F13) NEGATIVE refspec: the overlay's rescue heads (`soleur-store-tip-<sha12>`,
-      // one more per not-descendant graft) are never overlaid, and fetching all of them at every
-      // graft would grow this 60 s fetch without bound. Excluding them is NOT a prune: nothing in
-      // the store is deleted (a prune here would delete store-only branches). The heads
-      // themselves still accumulate in the store (one per not-descendant graft); a host-side
-      // reaper is deferred and tracked, so "bounded by the existing gc" does not hold.
-      `^refs/soleur/worktrees/${worktreeId}/heads/soleur-store-tip-*`,
-      `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
+      fetchRefspecs.heads,
+      fetchRefspecs.negativeRescue,
+      fetchRefspecs.tags,
     ],
     transportKey,
     hostKeyPin,

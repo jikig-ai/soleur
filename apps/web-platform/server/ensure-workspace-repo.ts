@@ -477,6 +477,10 @@ export async function ensureWorkspaceRepoCloned(
               // the reset path is never reached.
               await preserveStoreTip(workspacePath, dataRef);
               // Counts-only: no user id, workspace id, path or commit id in the line.
+              // Key naming: this WARN carries `op:` (the same key the level-50 fallback below
+              // uses for `git-data-overlay`), while the info breadcrumbs in this file
+              // (`git-data-overlay-first-session-miss`, `cloned`) carry `action:`. The two keys are
+              // pinned by tests (ensure-workspace-repo*.test.ts), so renaming one is a breaking change.
               log.warn(
                 { op: "git-data-overlay-not-descendant" },
                 "git-data overlay skipped: store tip is not a descendant of the fresh clone tip; preserved on a local rescue branch",
