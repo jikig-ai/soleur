@@ -17,7 +17,7 @@
 #     decoy-concatenated breaks equality — dead text cannot satisfy it. A file-wide opener count
 #     (exactly one `…_sql = <<-SQL`) kills the /* */-wrapped decoy-heredoc arm that pure
 #     first-match extraction would have read as the live body.
-#   * BLOCK-SCOPED PARAMETERS. `res_block()` + `param()` pin every whole-line attribute inside
+#   * BLOCK-SCOPED PARAMETERS. `res_block()` + `param()` pin every alert-significant whole-line attribute inside
 #     each resource block, anchored at both ends and required EXACTLY ONCE — a commented copy no
 #     longer satisfies the pin, and a `source_variable`/`values`/`FROM {{source}}` repoint reds.
 #     The source pins are scoped to the exploration's own block because the same
@@ -236,7 +236,7 @@ printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "JSONExtractString(raw, 'shipper'
 # The stage literal is a RESERVED token on a shared helper (inngest-boot-phone-home.sh takes
 # `stage` as positional $1 across many call sites): a second emit site passing the same stage
 # arg is a leg-B identity collision the predicate cannot see — exactly one call site may pass it.
-_stage_sites="$(grep -cE '^[^#]*inngest-boot-phone-home\.sh[[:space:]]+inngest-server-probe-vector-down([[:space:]"]|$)' "$BOOT" || true)"
+_stage_sites="$(grep -chE "^[^#]*inngest-boot-phone-home\.sh[^[:space:]]*[[:space:]]+[\"']?${MUT_STAGE}[\"']?([[:space:]]|\$)" "$BOOT" "$CI" 2>/dev/null | awk '{s+=$1} END{print s+0}')"
 [ "$_stage_sites" = "1" ] \
   && ok "exactly one emit site passes the stage literal to inngest-boot-phone-home.sh — the token is reserved" \
   || no "stage-literal emit-site count=${_stage_sites} (want 1) — a second emitter collides on leg-B identity"
@@ -272,7 +272,10 @@ printf '%s' "$WV_SQL" | grep -cF >/dev/null 'WHEREtimeBETWEEN{{start_time}}AND{{
 # `token=[redacted]` BEFORE ingest, which is how a needle dies upstream of the predicate.
 # LIMITATION: anchored to the `replace(msg` idiom — a scrub spelled `del(`, `map_values` or
 # `replace(.message` evades it; that is the file's current rewrite style.
-! grep -qE 'replace\(msg.*(data_mount_devid|host_role|shipper|stage|SOLEUR_INNGEST_SERVER_PROBE)' "$VT" \
+# LIMITATION: the stem census counts /* */-commented resource blocks as live (dead-text
+# intolerance — a legitimately retired resource reds; mutate_green covers only `#` edits).
+# Family remainder: sibling guards still carry the pre-#11601 idiom — tracked at #11720.
+! grep -qE "replace\\(msg.*(data_mount_devid|host_role|shipper|stage|${INNGEST_PROBE_MARKER})" "$VT" \
   && ok "the needle keys (data_mount_devid, host_role, shipper, stage, marker) are absent from vector.toml's scrub rewrites" \
   || no "a needle key now appears in a pii_scrub replace() — the needle is dead before ingest (the pre-rename defect class)"
 
@@ -324,10 +327,22 @@ param "$WV_AL" confirmation_period 0 && param "$WV_AL" email true \
   && ok "alert: confirmation_period 0, email true" \
   || no "alert: confirmation_period is not 0 or email is not true"
 grep -qE '^[[:space:]]*escalation_target[[:space:]]*\{' <<< "$WV_AL" \
-  && grep -qE '^[[:space:]]*policy_id[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null[[:space:]]*$' <<< "$WV_AL" \
-  && grep -qE '^[[:space:]]*team_name[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? null : "Your team"[[:space:]]*$' <<< "$WV_AL" \
-  && ok "alert carries the escalation_target block mirrored from the sibling (paid-tier gated)" \
+  && param "$WV_AL" policy_id 'var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
+  && param "$WV_AL" team_name 'var\.betterstack_paid_tier \? null : "Your team"' \
+  && ok "alert carries the escalation_target block mirrored from the sibling (paid-tier gated, attributes exactly-once)" \
   || no "alert escalation_target is not the sibling's paid-tier-gated block"
+param "$WV_EX" query_type '"sql_expression"' \
+  && ok "exploration: query_type is sql_expression" \
+  || no "exploration: query_type is not sql_expression (semantic mute path)"
+param "$WV_EX" name '"source"' \
+  && ok "exploration: variable.name is source" \
+  || no "exploration: variable.name repointed — dangles the source_variable/{{source}} binding"
+param "$WV_EX" variable_type '"source"' \
+  && ok "exploration: variable_type is source" \
+  || no "exploration: variable_type is not source"
+param "$WV_AL" push 'true' \
+  && ok "alert: push channel armed (push = true)" \
+  || no "alert: push is not true — the push notification channel is muted"
 param "$WV_AL" runbook 'local\.inngest_luks_wrong_volume_runbook_url' \
   && grep -qF 'local.inngest_luks_wrong_volume_runbook_url' <<< "$(grep -E '^[[:space:]]*incident_cause' <<< "$WV_AL")" \
   && ok "alert points its metadata.runbook and incident_cause at the wrong-volume runbook local" \
@@ -363,7 +378,7 @@ _var_openers="$(grep -cE 'variable[[:space:]]+"inngest_luks_cutover_complete"[[:
 # satisfied by a commented-out `# default = true` inside it.
 VAR_BLOCK="$(awk '/^[[:space:]]*variable "inngest_luks_cutover_complete"[[:space:]]*\{/{f=1} f{print} f&&/^[[:space:]]*\}/{exit}' "$VARS")"
 [ -n "$VAR_BLOCK" ] \
-  && printf '%s\n' "$VAR_BLOCK" | grep -cE >/dev/null '^[[:space:]]*default[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$' \
+  && [ "$(printf '%s\n' "$VAR_BLOCK" | grep -cE '^[[:space:]]*default[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$')" = "1" ] \
   && ok "the arming variable exists and defaults to TRUE (post-cutover, the PLAINTEXT alias is the regression)" \
   || no "variable inngest_luks_cutover_complete is absent or does not default to true"
 
@@ -586,7 +601,7 @@ PY
   mutate_floor_red() {  # mutate_floor_red <label>
     local label="$1" copy rc=0
     copy="$MUT_DIR/floor-mutated.test.sh"
-    sed -e 's/^PRESENCE_ROWS=39$/PRESENCE_ROWS=40/' \
+    sed -e 's/^PRESENCE_ROWS=43$/PRESENCE_ROWS=44/' \
         -e "s|^REPO=.*|REPO=\"$REPO\"|" "$SELF" > "$copy"
     if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
     LUKS_GUARD_TF="$TF" LUKS_GUARD_VARS="$VARS" LUKS_GUARD_WF="$WF" \
@@ -598,7 +613,7 @@ PY
     esac
   }
 
-  # ── Guard-1 matrix rows (#11528): dead-text satisfaction, wiring, mute knobs, window ──────
+  # ── Mutation matrix rows (#11528): dead-text satisfaction, wiring, mute knobs, window ──────
   mutate_red "a /* */-wrapped decoy heredoc with a verbatim conjunct copy sits before the live local while the live body is gutted" TF \
     'i = s.index("  inngest_luks_wrong_volume_sql = <<-SQL\n")
 j = s.index("\n  SQL\n", i) + len("\n  SQL\n")
@@ -823,12 +838,13 @@ fi
 # outer run adds one row per mutation. The instrument control above is what catches a floor
 # that drifts past the presence rows (that control, not this comment, is the guard against a
 # dead battery).
-PRESENCE_ROWS=39
+PRESENCE_ROWS=43
 MUT_ROWS=50
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
+[ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); LUKS_GUARD_{TF,VARS,WF}=%s,%s,%s\n' "$_floor" "${LUKS_GUARD_TF:-unset}" "${LUKS_GUARD_VARS:-unset}" "${LUKS_GUARD_WF:-unset}"
 printf '\n=== inngest-luks-wrong-volume-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]

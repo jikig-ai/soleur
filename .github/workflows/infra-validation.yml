@@ -891,7 +891,7 @@ jobs:
         run: bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
 
       # (#6894) The wrong-volume Logs alert: its predicate, its arming variable, its -target lines,
-      # and six mutation rows that each require this guard to red.
+      # and the mutation rows that each require this guard to red.
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: env -u MUT_SKIP -u LUKS_GUARD_TF -u LUKS_GUARD_VARS -u LUKS_GUARD_WF bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 

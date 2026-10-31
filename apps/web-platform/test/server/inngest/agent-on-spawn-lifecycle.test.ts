@@ -570,7 +570,9 @@ describe("persistFailure reports the dead-letter exactly once across handler rep
     // so step 1 throws "founder has no github_installation_id". With one
     // attempt the failure memoizes at once; the replay's catch enters
     // persistFailure, whose persist-failure step ends a second request —
-    // the report can only fire on the third.
+    // the report can only fire on a subsequent invocation (the >=2 floor is
+    // deliberate: the exact count is harness-model-dependent; the sibling
+    // notify arm pins 3).
     const out = await runLikeInngest(
       ({ step }) =>
         agentOnSpawnRequestedHandler({ event: original(), step, logger } as never),
