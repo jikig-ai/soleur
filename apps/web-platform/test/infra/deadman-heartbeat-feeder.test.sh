@@ -19,7 +19,7 @@
 # AND / OR / parentheses, the `dt` window against a frozen clock, `_row_type`, the hot/archive UNION). It
 # evaluates the SQL the feeder ACTUALLY SENT, so a changed predicate or window changes the verdict. Anything outside
 # the subset is refused (status 65), never guessed. Its limits: no type coercion, no locale, no `raw` quirks.
-# Phase 0.1 of the plan (the live positive control, knowledge-base/project/specs/fix-observable-deadman-11631/
+# Phase 0.1 of the plan (the live positive control, knowledge-base/project/specs/archive/20261031-085048-fix-observable-deadman-11631/
 # phase0-measurements.md) is what proves the predicates against the real service; the answer shapes used below
 # (n as a JSON number or a quoted string, the epoch row for an empty window) were captured there.
 #
