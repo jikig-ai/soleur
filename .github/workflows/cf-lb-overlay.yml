@@ -465,9 +465,9 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
-          set +e
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          set +e
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \

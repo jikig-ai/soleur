@@ -2287,9 +2287,9 @@ materialize_base_dir() {
   local _rd="$1" _ref="$2" _dest="$3" _rc=0 _lst _f _r="" _n _why=""
   assert_fixture_dir "$_rd"
   assert_fixture_dir "$_dest"
-  mkdir -p "$_dest/apps/web-platform/infra/git-data-root-key" "$_dest/apps/web-platform/infra/lb-staging" || { _rc=1; _why="mkdir"; }
   if [ "$_rc" -eq 0 ]; then
     for _r in apps/web-platform/infra apps/web-platform/infra/git-data-root-key apps/web-platform/infra/lb-staging; do
+      mkdir -p "$_dest/$_r" || { _rc=1; _why="mkdir"; break; }
       _lst="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
         git -C "$_rd" ls-tree -r --name-only "$_ref" -- "$_r" 2>/dev/null)" || { _why="ls-tree"; _rc=1; break; }
       [ -n "$_lst" ] || { _why="empty-listing"; _rc=1; break; }
