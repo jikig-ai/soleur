@@ -515,3 +515,4 @@ All article URLs distributed via social-distribute use platform-specific UTM par
 
 - **verification-scaffold** (#10404, 2026-10-21): new skill installs the audited generic guardrail set (secret-scan, commit-on-main, block-stash, orphan-test) into a user repo's hooks + CI, advisory-first — the "taste compounds" story: Soleur's own guardrail depth, now portable.
 - **google-antigravity-support** (PR #10362, 2026-10-26): new harness support for Google Antigravity CLI (`agy`) — the "own your AI team without vendor lock-in" story: run an 8-department AI company on Gemini models while keeping your company's memory in your own repository.
+- **merge-queue-batching** (PR #11681, 2026-10-31): queue batching (`max_entries_to_merge` 1→3) plus a deliberate queue-jump path for urgent PRs — the "queue that respects operator judgment" angle: integrated-CI gating kept (unlike admin merges), per-member CLA verification, and an attribution trail for every jump.

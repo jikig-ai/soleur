@@ -114,7 +114,7 @@ cat > "$skeleton" << 'EOF'
       "parameters": {
         "merge_method": "SQUASH",
         "grouping_strategy": "ALLGREEN",
-        "max_entries_to_merge": 1,
+        "max_entries_to_merge": 3,
         "min_entries_to_merge": 1,
         "min_entries_to_merge_wait_minutes": 0,
         "max_entries_to_build": 2,
