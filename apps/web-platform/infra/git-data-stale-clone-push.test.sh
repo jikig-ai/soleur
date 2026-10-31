@@ -204,8 +204,9 @@ expect_eq "CH3 peer tip still byte-identical (confined to the own namespace)" "$
 expect_eq "bound hook digest unchanged by the run" "$HOOK_SHA_BEFORE" "$(sha256sum "$HOOK_SRC" | cut -d' ' -f1)"
 
 total=$((passes + fails))
-if [[ "$total" -lt 23 ]]; then
-  echo "FAIL: ran only ${total} assertions (<23) - the suite did not execute fully" >&2
+MIN_ASSERTIONS=23
+if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] anti-vacuity floor: ran only %s assertions (<%s) - the suite did not execute fully\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 echo "git-data-stale-clone-push: ${passes} passed, ${fails} failed (${total} assertions)"

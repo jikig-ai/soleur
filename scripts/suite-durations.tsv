@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1222
-# generated-at=2026-10-31T17:46:56Z
+# generated-at=2026-10-31T18:04:35Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -414,6 +414,7 @@ scripts/ghcr-read-retired-8036	2048	measured
 scripts/git-data-boot-poll-8178	2834	measured
 scripts/git-data-reboot-evidence-landed-8210	1324	measured
 scripts/git-data-rehearsal-evidence-8211	1222	floor
+scripts/git-data-replication-signal-11704	1222	floor
 scripts/guard-vacuity-floor	44880	measured
 scripts/hosted-destroy-ask-window-9776	1222	floor
 scripts/hostname-mislabel-web1-6616	221	measured
