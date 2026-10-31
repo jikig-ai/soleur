@@ -95,6 +95,16 @@ passes=$_p0; fails=$_f0
 if [[ -n "$_inst_bad" ]]; then
   printf 'FATAL: instrument self-test -- helper(s) did not move the verdict counters as required:%s\n' "$_inst_bad" >&2; exit 1
 fi
+# The probe is itself a verdict-owning helper: a probe disarmed together with eq/has/ok (its comparison gutted, `_inst_bad` never set)
+# would leave every line above green. Feed it a DELIBERATELY WRONG expectation (`pass` moves passes by 1 and fails by 0, so asking for
+# 0/1 is false) and require that it flags it. Reported by printf + exit 1, never through the helpers this backstops.
+_inst_bad=""
+probe deliberately-wrong 0 1 pass i
+_probe_flagged="$_inst_bad"
+passes=$_p0; fails=$_f0; _inst_bad=""
+if [[ -z "$_probe_flagged" ]]; then
+  printf 'FATAL: instrument self-test -- probe accepted a deliberately wrong expectation (probe is disarmed)\n' >&2; exit 1
+fi
 
 WORK="$(mktemp -d -t gdrs-signal.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 assert_fixture_dir "$WORK"
@@ -244,6 +254,10 @@ cases=$((cases + 1)); eq "masking: markers on web-1 do not rescue a silent web-2
 fx_rows "web-1:3:30:2:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "precedence: READ_UNCLEAN beats MARKERS_PRESENT (web-2 unread)" "2" "$RC"
+fx_rows "web-1:0:30:2:0:$SILENT_AGE"
+sut --since 15m
+cases=$((cases + 1)); eq "precedence: READ_UNCLEAN beats ZERO_MARKERS_WITH_SESSIONS (web-1 alarms, web-2 reporter row missing), exit 2 not 1" "verdict=READ_UNCLEAN exit=2 since=15m|2" "$(overall_line)|$RC"
+cases=$((cases + 1)); has "precedence: the alarming host still reports its own ZERO_MARKERS_WITH_SESSIONS verdict" "$(host_line web-1)" "host_verdict=ZERO_MARKERS_WITH_SESSIONS"
 fx_rows "web-1:0:30:2:0:$SILENT_AGE" "web-2:0:30:2:0:$FRESH_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "precedence: ZERO_MARKERS_WITH_SESSIONS beats PENDING" "1" "$RC"
@@ -412,6 +426,8 @@ restore; cases=$((cases + 1)); eq "control: pristine copy reads READ_UNCLEAN for
 
 mutate_case "precedence swapped (READ_UNCLEAN sorted last, no longer outranks)" 's/"READ_UNCLEAN:2" //; s/"MARKERS_PRESENT:0"/"MARKERS_PRESENT:0" "READ_UNCLEAN:2"/' "READ_UNCLEAN" \
   "web-1:3:30:2:0:$SILENT_AGE"
+mutate_case "READ_UNCLEAN and ZERO_MARKERS_WITH_SESSIONS swapped (the alarm outranks an unread host)" 's/"READ_UNCLEAN:2" "ZERO_MARKERS_WITH_SESSIONS:1"/"ZERO_MARKERS_WITH_SESSIONS:1" "READ_UNCLEAN:2"/' "READ_UNCLEAN" \
+  "web-1:0:30:2:0:$SILENT_AGE"
 mutate_case "settle rule dropped" 's/ || last_live_age < SETTLE_S//' "PENDING" \
   "web-1:0:30:2:0:$FRESH_AGE" "web-2:3:30:1:0:$SILENT_AGE"
 mutate_case "settle window widened" 's/^readonly SETTLE_S=600$/readonly SETTLE_S=6000/' "ZERO_MARKERS_WITH_SESSIONS" \
@@ -464,7 +480,7 @@ if (( passes + fails != cases )); then
   printf 'FATAL: accounting -- %d passes + %d fails != %d cases (a verdict was discarded or a call site lacks its increment)\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
-FLOOR=144
+FLOOR=149
 if [[ "$cases" -lt "$FLOOR" ]]; then
   printf 'FATAL: assertion floor -- only %d assertions ran, want >= %d\n' "$cases" "$FLOOR" >&2
   exit 1

@@ -6,7 +6,8 @@
 # reaches this script's output (counts and ages only):
 #   * the per-host quiet-window reporter line (apps/web-platform/server/quiet-window.ts), once a minute:
 #       agent_sessions_live=N cc_queries=N legacy_sessions=N starting=N new_sessions_paused=<0|1> refused_since_last=N
-#   * the replication-success marker (apps/web-platform/server/git-data-replication.ts), once per successful push:
+#   * the replication-success marker (apps/web-platform/server/git-data-replication.ts), emitted on a successful push but CAPPED at
+#     1 per 60 s per process per transient_retried value (so it is presence evidence, not a count):
 #       git_data_replication_success=1 transient_retried=<0|1>
 # The window is the hot table UNION the archive (the hot window is only about 40 minutes).
 #
