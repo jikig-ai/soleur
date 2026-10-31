@@ -177,8 +177,9 @@ Per-suite durations come from the run's own `suite-timings-scripts-*` /
 retention 14 days), each a TSV written in execution order. To reconstruct
 the registration order that produced them:
 
-1. Download all legs' TSVs for one run (`gh run download <run-id> -n
-   'suite-timings-*'` or via the artifacts API).
+1. Download all legs' TSVs for one run (`gh run download <run-id> -p
+   'suite-timings-scripts-*' -D <dir>` or via the artifacts API — `-p` is the
+   glob flag; `-n/--name` is exact-name and matches nothing here).
 2. Interleave the legs back into ordinal order: leg k holds ordinals
    k−1, k−1+K, k−1+2K, … under the runner's C-collation sort — recover the
    sequence by round-robin merge, NOT by concatenating legs.
@@ -277,6 +278,40 @@ span to the NEXT registered mark.
   `suite-timings-*` artifacts carry the real arm prices and are the
   `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
   artifact runs — main `push` runs elide the shards job).
+- **2026-10-31 post-merge re-price (#11562 ownership checkpoint, CLOSED):**
+  8 green post-merge ci.yml runs carried the arm timings — merge_group
+  41132662609, 41136687119, 41138355176, 41141190932, 41146395715,
+  41180934660 and pull_request 41133279254, 41135223254 (each dir held all 8
+  light legs; `-p` also fetched the 3 heavy-leg artifacts, which
+  `LIGHT_ARTIFACT` excludes). **Observed on the seeded topology:** per-run
+  worst-leg suite-time 33.7–36.8 min and leg spread 8.9–17.2 min; jobs-API
+  wall clocks worst 35–38 min, spread 9–17 min — improved vs the 43–51 min
+  pre-split baseline but **above the ~28-min bound on every run** (seeded
+  prices were off: replay-a seeded 635 s vs measured 1033 s; affected-b
+  913 s vs 502 s). **Measured arm medians (ms, seeded → measured):**
+  replay-a 635037→1033094, replay-b 336324→399378, replay-c 351151→326172,
+  affected-a 153713→53969, affected-b 912865→502348, affected-c
+  297241→517988, affected-d 382585→610788. **Committed re-price:**
+  incumbent-preserving `--durations` seed (the merge commit's own
+  mechanism) — a full `--timings-dir --write` would have re-priced the 8
+  always-on drifters #11648 tracks and red `test-all-fast-tier-budget`;
+  24 manifest rows re-seated, 3 new floor labels, 97 incumbent floor rows
+  re-derived (1200→1222 ms); budget suite stays green. Post-reprice
+  predicted packing ~1230–1277 s/leg (~21.3 min worst) on committed
+  prices — nominally under the bound but inherits incumbent staleness; the
+  honest all-measured table predicts ~1824.7 s/leg (~30.4 min, spread
+  10 ms). **Verdict:** the split delivers ~35 min worst legs — below the
+  old 43–51 min but short of ~28; the residual is incumbent-price
+  staleness (see next) plus 9–17 min of per-run variance, not arm packing.
+  **#11648 corroborated:** the 8 always-on drifters' fresh 8-run medians
+  (ms): test-all-group-affected 356,915; lint-ratchet 26,575;
+  check-deps-adapter-drift 24,513; token-drift-workflow-causes 19,777;
+  grep-q-pipe-guard 15,618; lint-encryption-posture 11,375;
+  gitleaks-merge-commit 11,791; lint-gh-argv-arg-live 13,212 — consistent
+  with the issue's 5-run table (sustained cost, not a measurement
+  artifact); evidence posted as an issue comment. 1 floor row in the
+  measured table: `tests/scripts/cf-lb-overlay-gate` (registered after the
+  staged runs — no CI timing yet).
 
 ## Runner-availability data (why extra legs are not free)
 
