@@ -109,9 +109,12 @@ New `scripts/test-all-corpus-weight-budget.test.sh` mirroring the fast-tier patt
 - Exemptions ledger is WORM-shaped: removing a line without removing the suite reds;
   caps can only be raised via ack-edit (the `INVENTORY_REMOVALS_ACK` precedent).
   Reuse `check_tier` (`test-all-fast-tier-budget.test.sh:50-101`) and the
-  `KNOWN_UNMEASURED_ALWAYS_ON` three-direction-closed allowlist idiom; seed the ledger
-  from `_suite_budget_ms` (`test-all.sh:1563-1578` — `registry-gate-mutation-battery`
-  2500000ms is the first entry).
+  `KNOWN_UNMEASURED_ALWAYS_ON` three-direction-closed allowlist idiom. Seed the
+  ledger from actual committed-weight violators only — `_suite_budget_ms` is a
+  WALL-CLOCK budget, not commensurable; verify at work time (top-20 committed
+  weights: nothing in the light/heavy tables exceeds 600s; the infra table's
+  `workspaces-boot-unlock` 661500ms is the only in-scope day-one row — or empty
+  ledger if infra stays out of scope).
 - Registered in `test-all.sh` via one `run_suite` line + `ALWAYS_ON_SUITES` entry +
   `suite-durations.tsv` floor row (fast, pure TSV math — well under 10s). Auto-enrolled
   in `guard-vacuity-floor.test.sh` and `check_durations` keys==keys — anti-vacuity floor
@@ -193,7 +196,8 @@ Extend `scripts/lint-orphan-test-suites.sh` with surface 7:
   unexempted fixture; greens on the same weight with a ledger row; reds on a missing
   duration row outside the pinned allowlist.
 - AC3: always-on ledger suite reds when a label is added to `ALWAYS_ON_SUITES` without a
-  justifications row, and when count exceeds `live_floor + 15` without a floor bump.
+  justifications row, and when `count(ALWAYS_ON \ live_named)` exceeds `NON_LIVE_CAP`
+  without an explicit cap ack-edit.
 - AC4: `lint-orphan-test-suites.sh` reds on a `run_suite` registration whose target file
   is deleted; greens when the file exists.
 - AC5: Every new guard suite has ≥3 mutation rows (incl. one mutating the guard's own
@@ -331,8 +335,10 @@ weakening requires editing both the cap and the ledger in one reviewed diff.
 
 ### Guard 3 — Always-on ceiling + justifications parity
 
-**Property.** `|ALWAYS_ON_SUITES| ≤ live_floor + HEADROOM`, and every always-on label
-has a `why-always-on` row in `always-on-justifications.tsv`.
+**Property.** `count(ALWAYS_ON_SUITES \ live_named) ≤ NON_LIVE_CAP` (bounded
+non-live membership — spec-flow P0-2; the `count ≤ live_floor + N` form reds at
+birth), and every always-on label has a `why-always-on` row in
+`always-on-justifications.tsv`.
 
 **Assembly.** `ALWAYS_ON_SUITES` array in `scripts/lib/test-affected-paths.sh` (the one
 declaration site — index-sourced, not text-scraped); `live_floor` derived via the
@@ -344,14 +350,17 @@ single justification surface.
 | # | Edit | Expected |
 |---|---|---|
 | M1 | Add label to `ALWAYS_ON_SUITES` without a justifications row | RED (parity) |
-| M2 | Add label + justifications row, count at floor+15 boundary | GREEN at ≤, RED at > |
-| M3 | Add `*-live` suite raising derived floor | GREEN (ceiling tracks floor, not a constant) |
-| M4 | Empty the justifications file | RED (parity + floor) |
-| M5 | Gut the floor derivation to return 0 | RED (own-dispatch) |
+| M2 | Add label + justifications row, non-live count at NON_LIVE_CAP boundary | GREEN at ≤, RED at > |
+| M3 | Add `*-live` suite raising derived floor | GREEN (live members don't consume non-live headroom) |
+| M4 | Empty the justifications file | RED (parity) |
+| M5 | Gut the live-named derivation to return 0 | RED (own-dispatch) |
 | M6 | Rename an always-on label, update TSV but not array | RED (set-identity, not cardinality) |
 
-**Anchor.** `HEADROOM=15` pinned; justifications keys parity is two-directional — a
-weakening requires editing array + TSV + suite in one diff.
+**Anchor.** `NON_LIVE_CAP=95` pinned (calibrate at work time); justifications keys
+parity is two-directional — a weakening requires editing array + TSV + suite in
+one diff. Coexistence: `_MIN_ALWAYS_ON_DECLARED=115` + f1 already enforce
+`floor ≤ count ≤ floor+5` (pin-vs-list drift); this cap bounds organic non-live
+membership — the suite header must state the distinction and not re-implement f1.
 
 ### Guard 4 — Registration→file census arm
 
@@ -370,7 +379,8 @@ sites — the single registration chokepoint); argv shapes: `bash <path>`, `sh -
 | M2 | Register `run_suite "x" env FOO=1 bash exists.test.sh` | GREEN (env-prefix stripped) |
 | M3 | Register `run_suite "x" bash exists.test.sh` | GREEN (canonical pass) |
 | M4 | Neuter the argv extractor to return empty | RED (own-dispatch vacuity) |
-| M5 | Target exists but is a directory | RED (file, not dir) |
+| M5 | Target is a directory under an interpreter-class argv0 (`bun test plugins/soleur/`) | GREEN (R7 — directories are legitimate interpreter operands) |
+| M5b | Target is a directory under a non-interpreter argv0 | RED (file, not dir) |
 
 **Anchor.** Population derived from the registration stream itself (enumerate mode or
 grep of `run_suite` lines) — a new call shape the extractor misses must red, not skip.
