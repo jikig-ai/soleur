@@ -163,3 +163,5 @@ against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
 most real findings to the queue, and the queue does not drain. Raising to
 ≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
 sits.
+
+**Filing gate exit 2 wording (`.claude/hooks/guardrails.sh`).** The `User-Impact:` line must contain, as a WHOLE singular word, a term from `.claude/hooks/lib/user-surface-taxonomy.txt` (`route`, `endpoint`, `page`, `screen`, `component`, `button`, `form`, `dashboard`, `CLI`, `command`, `email`, `notification`, `document`, `report`, `invoice`, `digest`); "documents" or "routes" fails the word boundary. `Fix-Size:` appears exactly once as `<N> lines / <M> files`, measured, and a size inside the inline threshold (<=100 lines AND <=4 files) is refused outright. **Why:** #11715 review: two refused `gh issue create` calls cost a round for a plural.

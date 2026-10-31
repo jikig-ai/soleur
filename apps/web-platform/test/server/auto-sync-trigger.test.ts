@@ -409,12 +409,12 @@ describe("triggerHeadlessSync — engine and retry rules from the auth-mode leas
     expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({ feature: "repo-setup", op: "auto-sync-bind-engine" });
   });
 
-  test.each(["unbound", "invalid_value", "no_resolver"])(
+  test.each(["unbound", "invalid_value", "no_resolver", "workspace_mismatch"] as const)(
     "a deterministic unresolved-mode reason (%s) fails on the FIRST attempt: retrying cannot change it",
     async (reason) => {
       const startAgentSession = vi
         .fn()
-        .mockRejectedValue(new ByokLeaseError("fetch_failed", "Authentication unavailable; retry shortly", reason));
+        .mockRejectedValue(new ByokLeaseError("auth_mode_unresolved", "Authentication unavailable; retry shortly", reason));
       const { seams } = baseSeams(startAgentSession);
 
       const p = triggerHeadlessSync(USER_ID, REPO_URL, seams);
@@ -424,6 +424,19 @@ describe("triggerHeadlessSync — engine and retry rules from the auth-mode leas
       expect(startAgentSession).toHaveBeenCalledTimes(1);
     },
   );
+
+  test("an auth_mode_unresolved refusal is not retried even when its message matches the lease retry message", async () => {
+    const startAgentSession = vi
+      .fn()
+      .mockRejectedValue(new ByokLeaseError("auth_mode_unresolved", "Authentication unavailable; retry shortly"));
+    const { seams } = baseSeams(startAgentSession);
+
+    const p = triggerHeadlessSync(USER_ID, REPO_URL, seams);
+    await vi.runAllTimersAsync();
+    await expect(p).resolves.toBe("failed");
+
+    expect(startAgentSession).toHaveBeenCalledTimes(1);
+  });
 
   test("the deterministic rule keys on the ByokLeaseError name: a look-alike error carrying reason=unbound is still retried", async () => {
     const lookAlike = Object.assign(new Error("Authentication unavailable; retry shortly"), { reason: "unbound" });
@@ -437,12 +450,13 @@ describe("triggerHeadlessSync — engine and retry rules from the auth-mode leas
     expect(startAgentSession).toHaveBeenCalledTimes(2);
   });
 
-  test.each(["read_failed", "resolver_failed"])(
-    "a transient unresolved-mode reason (%s) is still retried with backoff",
+  test.each(["read_failed", "resolver_failed"] as const)(
+    "a transient unresolved-mode reason (%s) is still retried with backoff, keyed on the cause and not on the message",
     async (reason) => {
+      // A message that differs from the lease retry message: only the explicit cause check can make this retryable.
       const startAgentSession = vi
         .fn()
-        .mockRejectedValueOnce(new ByokLeaseError("fetch_failed", "Authentication unavailable; retry shortly", reason))
+        .mockRejectedValueOnce(new ByokLeaseError("auth_mode_unavailable", "something else entirely", reason))
         .mockResolvedValueOnce(undefined);
       const { seams } = baseSeams(startAgentSession);
 
