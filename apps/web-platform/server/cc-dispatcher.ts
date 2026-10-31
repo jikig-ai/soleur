@@ -227,7 +227,11 @@ import {
   MissingByokKeyError,
   reportMissingByokKey,
 } from "./byok-lease";
-import { isOauthUnusableLeaseError, oauthUnusableFrame } from "./agent-auth-user-message";
+import {
+  authFailureFrameFromLeaseError,
+  isLeaseRefusalReported,
+  isOauthUnusableLeaseError,
+} from "./agent-auth-user-message";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import {
@@ -3819,18 +3823,20 @@ async function reportDispatchSoleurGoError(
       },
       "repo-readiness gate: blocked dispatch (repo not ready)",
     );
-  } else if (isOauthUnusableLeaseError(err)) {
-    // #11086 — the lease already reported its own closed-class event (feature byok-lease); a second mirror would double
-    // the Sentry count for one failed turn.
-    log.info(
-      {
-        feature: "cc-dispatcher",
-        op: "oauth-credential-unusable-gate",
-        userIdHash: hashUserId(ctx.userId),
-        conversationId: ctx.conversationId,
-      },
-      "lease refused a stored credential the CLI cannot use",
-    );
+  } else if (isLeaseRefusalReported(err)) {
+    // #11086/#11599 — the lease already reported its own closed-class event (feature byok-lease); a second mirror would
+    // double the Sentry count for one failed turn. The unusable-token refusal logs at INFO; an unresolved authentication mode
+    // logs at WARN (no `err`, so no second error-tracker event) because INFO never leaves the host and this line is the
+    // only one that carries the conversation.
+    const oauthUnusable = isOauthUnusableLeaseError(err);
+    const gateFields = {
+      feature: "cc-dispatcher",
+      op: oauthUnusable ? "oauth-credential-unusable-gate" : "auth-mode-unresolved-gate",
+      userIdHash: hashUserId(ctx.userId),
+      conversationId: ctx.conversationId,
+    };
+    if (oauthUnusable) log.info(gateFields, "lease refused a stored credential the CLI cannot use");
+    else log.warn(gateFields, "lease refused: the conversation's authentication mode could not be resolved");
   } else if (err instanceof WorkspaceNotReadyError) {
     // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
     // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
@@ -3912,12 +3918,15 @@ async function reportDispatchSoleurGoError(
       message: "Your API key is invalid — set up a fresh key to continue.",
       errorCode: "key_invalid",
     });
-  } else if (isOauthUnusableLeaseError(err)) {
-    // #11086 — a lease refusal precedes any stream, so there is no `stream_end` to wait for: send the recovery frame now.
+  } else if (isLeaseRefusalReported(err)) {
+    // #11086/#11599 — a lease refusal precedes any stream, so there is no `stream_end` to wait for: send the recovery frame now.
     // MUST sit above the generic `else` so it neither clears a resumable `session_id` nor re-mirrors.
     // Sent for every persona: unlike the mid-stream path there is no friendly bubble to protect, and the support client falls
     // back to its canned text on an error frame either way.
-    ctx.sendToClient(ctx.userId, oauthUnusableFrame());
+    const leaseFrame = authFailureFrameFromLeaseError(err);
+    // Same predicate family as the guard above, so null is unreachable; if the two ever diverge, never fall back to the
+    // operator-only sign-in copy for an unknown cause.
+    ctx.sendToClient(ctx.userId, leaseFrame ?? { type: "error", message: "Something went wrong. Please try again." });
     // An `auth-failed` close detached (not released) the worktree lease for the immediate re-acquire, and the credential
     // lease refused before the factory's own cleanup could run: drop the kept in-memory record. The detached handle's row is
     // not tombstoned (release is a no-op after detach) and expires on its own within 240 s. No-op when none is held.

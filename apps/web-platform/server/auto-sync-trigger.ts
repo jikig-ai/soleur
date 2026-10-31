@@ -90,9 +90,6 @@ const BACKOFF_MS = [1_000, 3_000, 9_000];
 
 const LEASE_RETRY_MESSAGE = "Authentication unavailable; retry shortly";
 
-// ByokLeaseError.reason values (byok-lease.ts `failAuthModeClosed`) that no retry can change.
-const DETERMINISTIC_AUTH_MODE_REASONS: ReadonlySet<string> = new Set(["unbound", "invalid_value", "no_resolver"]);
-
 /**
  * True when the error is a transient lease/auth-unavailable class worth
  * retrying. Matches the two typed classes plus the shared user-facing message
@@ -101,15 +98,15 @@ const DETERMINISTIC_AUTH_MODE_REASONS: ReadonlySet<string> = new Set(["unbound",
  */
 function isLeaseRetryable(err: unknown): boolean {
   if (err instanceof RuntimeAuthError) return true;
-  // #11591: an unresolved auth mode with a DETERMINISTIC reason (no binding, junk value, no resolver)
-  // fails the same way on every attempt, so retrying only delays the failure and multiplies Sentry
-  // events. `read_failed` / `resolver_failed` stay retryable. Duck-typed for the same import-graph reason.
-  if (
-    err instanceof Error &&
-    (err as { name?: unknown }).name === "ByokLeaseError" &&
-    DETERMINISTIC_AUTH_MODE_REASONS.has(String((err as { reason?: unknown }).reason))
-  ) {
-    return false;
+  // #11591/#11599: an unresolved auth mode is classified by the lease itself. `auth_mode_unavailable` (a read that
+  // failed for an infrastructure reason) is retried; `auth_mode_unresolved` (no binding, junk value, no resolver,
+  // workspace mismatch, and any reason added later) fails the same way on every attempt, so retrying only delays the
+  // failure and multiplies Sentry events. Any other lease refusal carrying a closed `reason` is deterministic too.
+  // Duck-typed (name + cause) for the same import-graph reason as below.
+  if (err instanceof Error && (err as { name?: unknown }).name === "ByokLeaseError") {
+    const { cause, reason } = err as { cause?: unknown; reason?: unknown };
+    if (cause === "auth_mode_unavailable") return true;
+    if (cause === "auth_mode_unresolved" || reason !== undefined) return false;
   }
   // Duck-type `ByokLeaseError("escape")` by name + cause instead of importing
   // the heavy `byok-lease` module graph (its module-init `createChildLogger` +
