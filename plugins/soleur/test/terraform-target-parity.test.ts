@@ -103,7 +103,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // one-for-one (declared count unchanged by it). Exact: grep -cE '^\s*test\(' = 310.
 // 310 -> 320 (#11294, +10): the "terraform stream key-material redaction" describe (sweep over every workflow, non-vacuity, no-escape rule,
 // mutation battery over every redacting step, drift ordering, variable-captured plans, and four public-sink tests: issue/comment/summary sinks, plan-output.txt writers, sticky PR comment feeds, sink mutation).
-const TEST_FLOOR = 320;
+// 320 -> 321 (#11294 follow-up, +1): the ANSI-colour pin (steps without -no-color print coloured lines; the filter strips colour first).
+const TEST_FLOOR = 321;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1913,6 +1914,22 @@ describe("terraform stream key-material redaction (#11294, every workflow)", () 
     // The checker is root-driven: the same step relocated to a clean root passes, to an unresolved one fails.
     expect(violations([{ ...stripRedactor(probe), dir: "apps/web-platform/infra/sentry", targets: [] }]), "clean root").toEqual([]);
     expect(violations([{ ...stripRedactor(probe), dir: "MATRIX", targets: [] }]).length, "matrix root").toBeGreaterThan(0);
+  });
+
+  test("steps that run without -no-color print ANSI-coloured lines, so the filter must strip colour before it matches (run 41125333991 leaked one)", () => {
+    // `ESC[1m` ends in an alphanumeric, so an address anchored on a non-word character never matched a coloured line.
+    const uncoloured = steps.filter((s) => hasRedactor(s) && !/-no-color/.test(s.code) && !/TF_CLI_ARGS/.test(s.code));
+    expect(uncoloured.length, "redacting steps that run coloured").toBeGreaterThanOrEqual(4);
+    expect(uncoloured.map((s) => s.job)).toContain("apply");
+    const lib = readFileSync(resolve(REPO_ROOT, REDACT_LIB), "utf8");
+    expect(lib, "the filter removes CSI sequences before any match").toMatch(/\\\[\[0-9;\?\]\*\[A-Za-z\]/);
+    // Behavioural: a coloured Refreshing line (synthesized value) comes out redacted through the real library.
+    const esc = "\u001b";
+    const input = `${esc}[0m${esc}[1mrandom_id.tunnel_secret: Refreshing state... [id=Synth-Fixture_0000000aSynth-Fixture_000000]${esc}[0m\n`;
+    const out = spawnSync("bash", ["-c", `source "${resolve(REPO_ROOT, REDACT_LIB)}"; tf_redact_random_ids`], { input, encoding: "utf8" });
+    expect(out.status).toBe(0);
+    expect(out.stdout).toContain("random_id.tunnel_secret: Refreshing state... [id=<redacted>]");
+    expect(out.stdout).not.toContain("Synth-Fixture");
   });
 
   test("the drift plan redacts BEFORE the 60000-byte cut and the file that is cat'ed into the public issue body", () => {
