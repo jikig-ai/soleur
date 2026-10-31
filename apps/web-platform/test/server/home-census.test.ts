@@ -3,7 +3,7 @@
 // Every fixture is synthesized (cq-test-fixtures-synthesized-only): no test scans a real HOME.
 // The allowlist below is deliberately written HERE and not imported from the module, so the test
 // cannot certify itself (learning 2026-09-14-a-registry-that-carries-its-own-hash-certifies-itself).
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import {
   SUNSET_UTC,
   TRIGGER_CLASSES,
   bucketCount,
+  defaultCensusDeps,
   handleHomeCensus,
   resolveRoots,
   scanHome,
@@ -21,7 +22,7 @@ import {
   type CensusDeps,
   type CensusFs,
 } from "@/server/home-census";
-import { HOME_SESSION_DIRS } from "@/server/agent-outer-wrap";
+import { HOME_SESSION_DIRS, HOME_STATE_FILES } from "@/server/agent-outer-wrap";
 import { scrubSentryEvent } from "@/server/sentry-scrub";
 
 // ---------------------------------------------------------------------------------------------
@@ -292,28 +293,39 @@ describe("scanner: synthesized HOME known answers", () => {
 // ---------------------------------------------------------------------------------------------
 describe("filesystem-call limit (import forms)", () => {
   const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\\])\/\/.*$/gm, "$1");
-  const FS_MODULE = /from\s+["'](?:node:)?(?:fs|fs\/promises)["']|require\(\s*["'](?:node:)?(?:fs|fs\/promises)["']\s*\)|import\(\s*["'](?:node:)?(?:fs|fs\/promises|child_process)["']\s*\)/;
-  const FORBIDDEN_NAMES = /\b(readFile|readFileSync|readlink|readlinkSync|realpath|realpathSync|stat|statSync|open|openSync|createReadStream|readdir|readdirSync|exec|execSync|spawn|spawnSync|execFile|fork|access|createWriteStream|writeFile|rm|unlink)\b/;
+  // Closed-set: the module may import EXACTLY {lstat, opendir} from node:fs/promises, nothing else from any fs-like or process-like module,
+  // and may not load code any other way (require, createRequire, process.binding, dynamic import).
+  const FS_SPEC = /^(?:node:)?(?:graceful-)?fs(?:[-/].*)?$/;
+  const PROC_SPEC = /^(?:node:)?(?:child_process|worker_threads|vm|net|http|https|http2|dgram|cluster|tls)$/;
   const MODULES = ["server/home-census.ts"].map((p) => resolve(__dirname, "../..", p));
 
   function scanModule(path: string): string[] {
     const src = stripComments(readFileSync(path, "utf8"));
     const bad: string[] = [];
-    if (/from\s+["'](?:node:)?child_process["']/.test(src)) bad.push("child_process import");
-    if (/import\(\s*["'](?:node:)?(?:fs|fs\/promises|child_process)["']\s*\)/.test(src)) bad.push("dynamic fs import");
-    for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*["'](?:node:)?(?:fs|fs\/promises)["']/g)) {
-      const names = m[1].split(",").map((x) => x.trim().split(/\s+as\s+/)[0]).filter(Boolean);
-      for (const n of names) if (!["lstat", "opendir"].includes(n)) bad.push(`fs import of ${n}`);
+    if (/\brequire\s*\(|\bcreateRequire\b|\bprocess\s*\.\s*(?:binding|dlopen|getBuiltinModule)\b|\bmodule\s*\.\s*require\b/.test(src)) bad.push("require-style load");
+    if (/\bimport\s*\(/.test(src)) bad.push("dynamic import");
+    for (const m of src.matchAll(/\bimport\s*["']([^"']+)["']/g)) {
+      if (FS_SPEC.test(m[1]) || PROC_SPEC.test(m[1])) bad.push(`side-effect import of ${m[1]}`);
     }
-    if (/import\s+\*\s+as\s+\w+\s+from\s+["'](?:node:)?(?:fs|fs\/promises)["']/.test(src)) bad.push("namespace fs import");
-    if (/import\s+\w+\s+from\s+["'](?:node:)?(?:fs|fs\/promises)["']/.test(src)) bad.push("default fs import");
-    if (/\bfs\.(?!lstat\b|opendir\b)\w+\(/.test(src.replace(/ctx\.fs\./g, "ctxfs.").replace(/opts\.fs\./g, "optsfs."))) bad.push("fs.<member> call other than lstat/opendir");
-    void FS_MODULE;
-    void FORBIDDEN_NAMES;
+    for (const m of src.matchAll(/\b(import|export)\b([^;]*?)\bfrom\s*["']([^"']+)["']/g)) {
+      const [, kind, clause, spec] = m;
+      if (PROC_SPEC.test(spec)) bad.push(`${kind} from ${spec}`);
+      if (!FS_SPEC.test(spec)) continue;
+      const braces = /^\s*(?:type\s+)?\{([^}]*)\}\s*$/.exec(clause);
+      if (kind !== "import" || spec !== "node:fs/promises" || !braces) {
+        bad.push(`${kind} of ${spec} outside the closed form`);
+        continue;
+      }
+      for (const n of braces[1].split(",").map((x) => x.trim().split(/\s+as\s+/)[0]).filter(Boolean)) {
+        if (!["lstat", "opendir"].includes(n)) bad.push(`fs import of ${n}`);
+      }
+    }
+    for (const m of src.matchAll(/\bfs\.(\w+)/g)) if (!["lstat", "opendir"].includes(m[1])) bad.push(`fs.${m[1]}`);
+    for (const m of src.matchAll(/\b(?:dir|d)\.(\w+)\(/g)) if (!["read", "close"].includes(m[1])) bad.push(`dir.${m[1]}`);
     return bad;
   }
 
-  it("scans at least one module (floor) and finds no forbidden import form", () => {
+  it("scans at least one module (floor) and finds no forbidden form", () => {
     expect(MODULES.length).toBeGreaterThanOrEqual(1);
     for (const m of MODULES) expect(scanModule(m), m).toEqual([]);
   });
@@ -324,18 +336,31 @@ describe("filesystem-call limit (import forms)", () => {
       const cases: Array<[string, string]> = [
         ["import { readFile } from 'node:fs/promises';", "fs import of readFile"],
         ["import { lstat, readlink } from 'node:fs/promises';", "fs import of readlink"],
-        ["import { stat } from 'fs';", "fs import of stat"],
-        ["import { exec } from 'child_process';", "child_process import"],
-        ["const x = await import('node:fs');", "dynamic fs import"],
-        ["import * as fs from 'node:fs';", "namespace fs import"],
+        ["import { stat } from 'fs';", "import of fs outside the closed form"],
+        ["import { exec } from 'child_process';", "import from child_process"],
+        ["const x = await import('node:fs');", "dynamic import"],
+        ["const x = await import(name);", "dynamic import"],
+        ["import * as fs from 'node:fs';", "outside the closed form"],
+        ["import fs, { lstat } from 'node:fs/promises';", "outside the closed form"],
+        ["export { readFile } from 'node:fs/promises';", "export of node:fs/promises outside the closed form"],
+        ["export * from 'node:fs';", "export of node:fs outside the closed form"],
+        ["const fs = require('node:fs');", "require-style load"],
+        ["const r = createRequire(import.meta.url);", "require-style load"],
+        ["process.binding('fs');", "require-style load"],
+        ["import 'node:fs';", "side-effect import of node:fs"],
+        ["import x from 'fs-extra';", "outside the closed form"],
+        ["opts.fs.readFile(p);", "fs.readFile"],
+        ["fs.promises.readFile(p);", "fs.promises"],
+        ["dir.readSync();", "dir.readSync"],
+        ["for await (const e of d.entries()) {}", "dir.entries"],
       ];
       for (const [i, [src, expected]] of cases.entries()) {
         const p = join(dir, `m${i}.ts`);
         writeFileSync(p, src);
-        expect(scanModule(p), src).toContain(expected);
+        expect(scanModule(p).join("|"), src).toContain(expected);
       }
       const ok = join(dir, "ok.ts");
-      writeFileSync(ok, "// readFile in a comment is fine\nimport { lstat, opendir } from 'node:fs/promises';\n/* readlink */");
+      writeFileSync(ok, "// readFile in a comment is fine\nimport { lstat as a, opendir as b } from 'node:fs/promises';\n/* readlink */\nopts.fs.lstat(p); fs.opendir(q); dir.read(); d.close();");
       expect(scanModule(ok)).toEqual([]);
       expect(() => scanModule(join(dir, "does-not-exist.ts"))).toThrow();
     } finally {
@@ -359,14 +384,14 @@ describe("filesystem-call limit (import forms)", () => {
 const ALLOWED_STRINGS = new Set([
   ...["0", "1-4", "5-19", "20-99", "100-999", "1000+"],
   ...["dry_run", "real", "synthetic", "container_home", "passed", "failed", "young", "mature"],
-  ...["lt_1h", "lt_24h", "lt_7d", "ge_7d", "none", "entry_cap", "time_cap", "depth_cap", "load_shed", "class_budget"],
+  ...["lt_1h", "lt_24h", "lt_7d", "ge_7d", "none", "entry_cap", "time_cap", "load_shed", "class_budget"],
   ...["non_atomic", "file_mode_only_not_reachability", "unmeasured", "true", "false", "unknown"],
   ...["none_counted", "counted", "inconclusive"],
   ...["env_home", "home_soleur", "root"],
   ...["env_home_rejected", "homedir_unavailable"],
   ...["unavailable", "unauthorized", "sunset", "payload_too_large", "invalid_json", "invalid_body", "invalid_mode", "build_mismatch", "young_container", "busy", "rate_limited", "control_failed", "internal"],
   ...["ok", "truncated", "refused"],
-  "counted in this container since its last start; not a statement about earlier windows or other hosts",
+  "counted in this container's writable layer at the run; not a statement about earlier containers, other hosts, or any time before or after the run",
   ...CLASS_IDS,
 ]);
 const CLASS_ENTRY_KEYS = ["absent", "class", "class_result", "errors", "n_entries", "n_mode_bits_group_r", "n_mode_bits_other_r", "n_symlink"];
@@ -554,7 +579,7 @@ describe("emit allowlist over the REAL serialized output of every sink", () => {
       expect(ev, `Sentry event key ${forbidden}`).not.toHaveProperty(forbidden);
     }
     expect(ev.message).toBe("home-census result");
-    expect(Object.keys(ev.tags ?? {}).sort()).toEqual(["control", "evidence", "mode", "run_id", "trigger_class_nonzero", "truncated"]);
+    expect(Object.keys(ev.tags ?? {}).sort()).toEqual(["control", "data_source", "evidence", "mode", "run_id", "trigger_class_nonzero", "truncated"]);
     expect(ev.tags.canary_tag).toBeUndefined();
     expect(Object.keys(ev.extra ?? {}).sort()).toEqual(["activity_witness", "class_result", "n_entries", "truncation_reason", "uptime_bucket"]);
     const flat = JSON.stringify(ev.extra);
@@ -748,10 +773,16 @@ describe("positive control and canary", () => {
     const byClass = Object.fromEntries(json.classes.map((c: any) => [c.class, c]));
     expect(json.activity_witness).toBe(false);
     for (const c of TRIGGER_CLASSES) expect(byClass[c].class_result, c).toBe("inconclusive");
-    expect(json.trigger_class_nonzero).toBe("false");
-    // with the witness (a conceded class is nonzero) the same zeros read as none_counted
+    expect(json.trigger_class_nonzero, "all-inconclusive must not read as a negative").toBe("inconclusive");
+    // account_state (.claude.json) is written by any CLI start: it is NOT a witness
     resetState();
-    const withWitness = { ...tree, "/home/soleur/.claude.json": f() };
+    const accountOnly = { ...tree, "/home/soleur/.claude.json": f() };
+    const r1 = JSON.parse(await (await handleHomeCensus(post(body), makeDeps({ fs: memFs(accountOnly) }).deps)).text());
+    expect(r1.activity_witness).toBe(false);
+    expect(r1.trigger_class_nonzero).toBe("inconclusive");
+    // with a session artifact the same zeros read as none_counted
+    resetState();
+    const withWitness = { ...tree, "/home/soleur/.claude/sessions": d(), "/home/soleur/.claude/sessions/1.json": f() };
     const r2 = JSON.parse(await (await handleHomeCensus(post(body), makeDeps({ fs: memFs(withWitness) }).deps)).text());
     const b2 = Object.fromEntries(r2.classes.map((c: any) => [c.class, c]));
     expect(r2.activity_witness).toBe(true);
@@ -822,3 +853,216 @@ describe("class-table drift", () => {
     for (const c of ["history_jsonl", "debug", "todos", "tasks"]) expect(TRIGGER_CLASSES as readonly string[]).toContain(c);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Review round: false zeros, mislabelled records, production defaults and wiring.
+// ---------------------------------------------------------------------------------------------
+describe("review round: a zero must not be read as a finding it did not establish", () => {
+  beforeEach(resetState);
+  const real = { run_id: 21, mode: "real", expect_build_sha: SHA };
+  const run = async (tree: Record<string, Node>, over: Partial<CensusDeps> = {}) => {
+    const { deps, lines } = makeDeps({ fs: memFs(tree), ...over });
+    const res = await handleHomeCensus(post(real), deps);
+    const json = JSON.parse(await res.text());
+    const by = Object.fromEntries((json.classes ?? []).map((c: any) => [c.class, c]));
+    return { json, by, lines, status: res.status };
+  };
+  const base = (): Record<string, Node> => ({ "/home": d(), "/home/soleur": d(), "/home/soleur/.claude": d() });
+
+  it("a symlinked class directory is unknown, not zero, and the headline is unknown or true, never false", async () => {
+    const tree = { ...base(), "/home/soleur/.claude/todos": { t: "link" } as Node, "/home/soleur/.claude/sessions": d(), "/home/soleur/.claude/sessions/1.json": f() };
+    const { by, json } = await run(tree);
+    expect(by.todos.class_result).toBe("unknown");
+    expect(by.todos.n_symlink).toBe("1-4");
+    expect(json.trigger_class_nonzero).toBe("unknown");
+  });
+
+  it("an unlistable sessions directory makes ALL its classes unknown, including the peer-key class", async () => {
+    const { by } = await run({ ...base(), "/home/soleur/.claude/sessions": { t: "eacces" } as Node });
+    for (const c of ["sessions_json", "sessions_key", "other_under_claude"]) {
+      expect(by[c].class_result, c).toBe("unknown");
+      expect(by[c].errors, c).toBe("1-4");
+    }
+  });
+
+  it("an erroring or cut-off trigger class is unknown through the handler; cut classes with entries stay counted", async () => {
+    const tree = { ...base(), "/home/soleur/.claude/tasks": { t: "eacces" } as Node, "/home/soleur/.claude/sessions": d(), "/home/soleur/.claude/sessions/1.json": f() };
+    const a = await run(tree);
+    expect(a.by.tasks.class_result).toBe("unknown");
+    expect(a.json.trigger_class_nonzero).toBe("unknown");
+    expect(a.by.debug.class_result).toBe("none_counted"); // witness present, class genuinely absent
+    resetState();
+    const b = await run(homeTreeAt("/home/soleur"), { entryCap: 5 });
+    expect(b.json.truncated).toBe(true);
+    expect(b.json.truncation_reason).toBe("entry_cap");
+    expect(b.by.debug.class_result).toBe("counted"); // 3 entries seen before the cap: a lower bound is still a count
+    expect(b.by.backups.class_result).toBe("unknown"); // never visited
+    expect(JSON.parse(b.lines[0]).outcome).toBe("truncated");
+  });
+
+  it("account_state alone is not a witness; sessions_json alone is", async () => {
+    const acc = await run({ ...base(), "/home/soleur/.claude.json": f() });
+    expect(acc.json.activity_witness).toBe(false);
+    expect(acc.by.debug.class_result).toBe("inconclusive");
+    resetState();
+    const ses = await run({ ...base(), "/home/soleur/.claude/sessions": d(), "/home/soleur/.claude/sessions/9.json": f() });
+    expect(ses.json.activity_witness).toBe(true);
+    expect(ses.by.debug.class_result).toBe("none_counted");
+    expect(ses.json.trigger_class_nonzero).toBe("false");
+  });
+
+  it("the witness classes are scanned before projects, so a huge projects tree cannot starve them", async () => {
+    const tree = homeTreeAt("/home/soleur");
+    for (let i = 0; i < 40; i++) tree[`/home/soleur/.claude/projects/p${i}`] = d(), (tree[`/home/soleur/.claude/projects/p${i}/t`] = f());
+    const { by, json } = await run(tree, { entryCap: 30 });
+    expect(json.activity_witness).toBe(true);
+    expect(by.sessions_json.class_result).toBe("counted");
+    expect(json.truncated).toBe(true);
+  });
+
+  it("projects: a nested directory is one counted depth-2 entry and does NOT truncate the run", async () => {
+    const tree = {
+      ...base(),
+      "/home/soleur/.claude/projects": d(),
+      "/home/soleur/.claude/projects/s": d(),
+      "/home/soleur/.claude/projects/s/t.jsonl": f(),
+      "/home/soleur/.claude/projects/s/subagents": d(),
+      "/home/soleur/.claude/projects/s/subagents/deep": d(),
+      "/home/soleur/.claude/projects/s/subagents/deep/x": f(),
+    };
+    const { by, json } = await run(tree);
+    expect(json.truncated).toBe(false);
+    expect(by.projects.n_entries).toBe("1-4");
+    const { scan } = await scanHome(scanOpts(memFs({ ...tree, "/home/t": d(), "/home/t/.claude": d() })));
+    void scan;
+    const direct = await scanHome(scanOpts(memFs(Object.fromEntries(Object.entries(tree).map(([k, v]) => [k.replace("/home/soleur", "/home/t"), v]))), {}));
+    expect(direct.scan.classes.projects.entries).toBe(2); // t.jsonl and the subagents directory
+  });
+
+  it("mode bits: a symlink and an uncounted depth-1 directory are not tallied", async () => {
+    const tree: Record<string, Node> = {
+      "/home": d(), "/home/t": d(), "/home/t/.claude": d(),
+      "/home/t/.claude/debug": d(), "/home/t/.claude/debug/link": { t: "link", mode: 0o777 }, "/home/t/.claude/debug/file": f(0o600),
+      "/home/t/.claude/projects": d(), "/home/t/.claude/projects/slug": { t: "dir", mode: 0o755 },
+    };
+    const { scan } = await scanHome(scanOpts(memFs(tree)));
+    expect(scan.classes.debug.symlink).toBe(1);
+    expect(scan.classes.debug.groupR).toBe(0);
+    expect(scan.classes.debug.otherR).toBe(0);
+    expect(scan.classes.projects.groupR).toBe(0);
+    expect(scan.classes.projects.entries).toBe(0);
+  });
+
+  it("the dev/ino re-check happens AFTER the open", async () => {
+    const fs = memFs(homeTree());
+    await scanHome(scanOpts(fs));
+    const calls = fs.calls.filter((c) => c.endsWith(" /home/t/.claude/debug"));
+    expect(calls).toEqual(["lstat /home/t/.claude/debug", "opendir /home/t/.claude/debug", "lstat /home/t/.claude/debug"]);
+  });
+
+  it("the production load-shed default does not truncate a normal scan (default histogram path runs)", async () => {
+    const tree: Record<string, Node> = { "/home": d(), "/home/t": d(), "/home/t/.claude": d(), "/home/t/.claude/debug": d() };
+    for (let i = 0; i < 600; i++) tree[`/home/t/.claude/debug/f${i}`] = f();
+    const { scan } = await scanHome({ fs: memFs(tree), roots: ROOT() });
+    expect(scan.truncated).toBe(false);
+    expect(scan.classes.debug.entries).toBe(600);
+  });
+
+  it("a hung canary fails the run with control_failed and releases the flag and the slot", async () => {
+    vi.useFakeTimers();
+    try {
+      const hung: CensusFs = { lstat: async () => Promise.reject(new Error("unused")), opendir: () => new Promise(() => {}) };
+      const { deps } = makeDeps({ canaryFs: hung, canaryDir: "/known" });
+      const pending = handleHomeCensus(post(real), deps);
+      await vi.advanceTimersByTimeAsync(3_100);
+      const res = await pending;
+      expect(res.status).toBe(503);
+      expect(JSON.parse(await res.text()).error_class).toBe("control_failed");
+      const g = globalThis as Record<symbol, any>;
+      expect(g[Symbol.for("soleur.homeCensus.inflight")]).toBe(false);
+      expect(g[Symbol.for("soleur.homeCensus.limiter")].starts).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a control failure emits a refusal record with NO class counts and never a result labelled container_home", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "home-census-empty-"));
+    try {
+      const { deps, lines } = makeDeps({ canaryDir: empty });
+      const { result: res, envelopes } = await withRealSentry(async () => handleHomeCensus(post(real), deps));
+      expect(res.status).toBe(503);
+      expect(lines).toHaveLength(1);
+      const line = JSON.parse(lines[0]);
+      expect(line.msg).toBe("home-census refused");
+      expect(line.error_class).toBe("control_failed");
+      expect(line).not.toHaveProperty("classes");
+      expect(line).not.toHaveProperty("data_source");
+      const ev = eventsOf(envelopes) as Array<Record<string, any>>;
+      expect(ev).toHaveLength(1);
+      expect(ev[0].message).toBe("home-census refused");
+      expect(ev[0].level).toBe("error");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("a dry_run is info-level and tagged synthetic: it never reads as a counted trigger class", async () => {
+    const { deps } = makeDeps();
+    const { envelopes } = await withRealSentry(async () => handleHomeCensus(post({ run_id: 31, mode: "dry_run" }), deps));
+    const ev = eventsOf(envelopes) as Array<Record<string, any>>;
+    expect(ev).toHaveLength(1);
+    expect(ev[0].level).toBe("info");
+    expect(ev[0].tags.data_source).toBe("synthetic");
+  });
+
+  it("a real scan with a counted trigger class is a warning tagged container_home", async () => {
+    const { deps } = makeDeps();
+    const { envelopes } = await withRealSentry(async () => handleHomeCensus(post(real), deps));
+    const ev = eventsOf(envelopes) as Array<Record<string, any>>;
+    expect(ev[0].level).toBe("warning");
+    expect(ev[0].tags.data_source).toBe("container_home");
+    expect(ev[0].tags.trigger_class_nonzero).toBe("true");
+  });
+
+  it("the non-secret non-tenant state files the outer wrap binds are never counted", async () => {
+    expect([...HOME_STATE_FILES].sort()).toEqual([".credentials.json", "settings.json"]);
+    const tree: Record<string, Node> = { "/home": d(), "/home/t": d(), "/home/t/.claude": d() };
+    for (const name of HOME_STATE_FILES) tree[`/home/t/.claude/${name}`] = f();
+    const { scan } = await scanHome(scanOpts(memFs(tree)));
+    expect(scan.classes.other_under_claude.entries).toBe(0);
+  });
+
+  it("resolveRoots refuses // and a trailing slash and keeps /home/. out", () => {
+    const nohome = () => {
+      throw new Error("x");
+    };
+    for (const bad of ["/home//x", "/home/x/", "/home/./x", "/root//", "/home/x/../y"]) {
+      expect(resolveRoots({ HOME: bad }, nohome).roots.map((r) => r.label), bad).not.toContain("env_home");
+    }
+  });
+
+  it("production defaults: the canary directory is non-empty and the real adapter lists a temp directory", async () => {
+    const def = defaultCensusDeps();
+    expect(def.canaryDir).toBeTruthy();
+    expect(readdirSync(def.canaryDir).length).toBeGreaterThan(0);
+    const dir = mkdtempSync(join(tmpdir(), "home-census-real-"));
+    try {
+      writeFileSync(join(dir, "x"), "x");
+      const st = await def.fs.lstat(dir);
+      expect(st.isDirectory()).toBe(true);
+      const dh = await def.fs.opendir(dir);
+      expect((await dh.read())?.name).toBe("x");
+      expect(await dh.read()).toBeNull();
+      await dh.close();
+      await expect(def.fs.lstat(join(dir, "missing"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+function homeTreeAt(root: string): Record<string, Node> {
+  const t = homeTree("/home/t");
+  return Object.fromEntries(Object.entries(t).map(([k, v]) => [k.replace("/home/t", root), v]));
+}

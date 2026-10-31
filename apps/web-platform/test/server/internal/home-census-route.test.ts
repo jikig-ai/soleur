@@ -121,6 +121,15 @@ describe("request contract", () => {
       expect(text, name).not.toContain("canary");
     }
   });
+  it("an over-large Content-Length is refused with 413 before the body is read", async () => {
+    const { deps } = makeDeps();
+    const r = new Request("https://app.soleur.ai/api/internal/home-census", {
+      method: "POST",
+      headers: new Headers({ "content-type": "application/json", authorization: `Bearer ${SECRET}`, "content-length": String(70 * 1024) }),
+      body: JSON.stringify({ run_id: 1 }),
+    });
+    expect((await handleHomeCensus(r, deps)).status).toBe(413);
+  });
   it("a body over 64 KB is refused with 413", async () => {
     const { deps } = makeDeps();
     const res = await handleHomeCensus(req(JSON.stringify({ run_id: 1, pad: "x".repeat(70 * 1024) })), deps);
@@ -154,7 +163,7 @@ describe("gate order and state", () => {
     const { deps } = makeDeps({ now: () => Date.parse(SUNSET_UTC) });
     expect((await handleHomeCensus(req(real()), deps)).status).toBe(410);
   });
-  it("the sunset is exactly merge+30 days and falls inside the 60-day total bound", () => {
+  it("the sunset constant is the reviewed literal (it must be at most merge date + 30 days when marked ready)", () => {
     expect(SUNSET_UTC).toBe("2026-11-30T00:00:00Z");
   });
   it("build mismatch answers 409 with a constant body that never echoes the supplied sha", async () => {
@@ -208,6 +217,30 @@ describe("gate order and state", () => {
     expect(res.status).toBe(500);
     expect(text).not.toContain("canary");
     expect(((globalThis as Record<symbol, unknown>)[Symbol.for("soleur.homeCensus.inflight")] ?? false)).toBe(false);
+  });
+});
+
+describe("abandoned filesystem ops", () => {
+  it("the in-flight flag is held until an fs op abandoned by the time cap has settled (handler level)", async () => {
+    let rejectOrphan: (e: Error) => void = () => {};
+    const stalled: CensusFs = {
+      lstat: () => new Promise((_, rej) => (rejectOrphan = rej)),
+      opendir: async () => {
+        throw new Error("unused");
+      },
+    };
+    const { deps } = makeDeps({ fs: stalled, timeCapMs: 50 });
+    const first = await handleHomeCensus(req(real()), deps);
+    expect(first.status).toBe(200);
+    expect((await j(first)).truncation_reason).toBe("time_cap");
+    const later = { ...deps, now: () => deps.now() + 3_600_001 };
+    const second = await handleHomeCensus(req(real({ run_id: 2 })), later);
+    expect(second.status).toBe(409);
+    expect((await j(second)).error_class).toBe("busy");
+    rejectOrphan(Object.assign(new Error("EIO lstat '/home/canary/secret'"), { code: "EIO" }));
+    await new Promise((r) => setTimeout(r, 30));
+    const third = await handleHomeCensus(req(real({ run_id: 3 })), { ...later, fs: makeDeps().deps.fs, timeCapMs: undefined });
+    expect(third.status).toBe(200);
   });
 });
 

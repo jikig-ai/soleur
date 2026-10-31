@@ -6,7 +6,7 @@
 // The reasoning lives in knowledge-base/project/plans/2026-10-31-feat-prod-home-census-plan.md and the
 // ADR-075 addendum; this file keeps only the load-bearing constraints.
 //
-// The HOME is the container's writable layer and is wiped at every container start, so a zero is never
+// The HOME is the container's writable layer; it is wiped when the container is recreated (every deploy), so a zero is never
 // "clean": every response carries `interpretation`, `evidence` and `uptime_bucket`.
 //
 // Removal: the sunset below makes the route return 410; #11714 tracks deleting this file, the route,
@@ -29,18 +29,22 @@ export const SUNSET_UTC = "2026-11-30T00:00:00Z";
 export const MAX_BODY_BYTES = 64 * 1024;
 const ENTRY_CAP = 20_000;
 const TIME_CAP_MS = 20_000;
-const MAX_DEPTH = 3;
-const TRIGGER_CLASS_BUDGET = 2_000;
+// Directories are descended to depth 2 only (projects/<slug>/<entry>); a directory found at depth 2 is one counted entry.
+const DESCEND_DEPTH = 2;
+// The top bucket is `1000+`, so 1,001 entries per trigger class already fixes the label; reading more is wasted I/O.
+const TRIGGER_CLASS_BUDGET = 1_001;
+const PROJECTS_BUDGET = 5_000;
+const CANARY_TIMEOUT_MS = 3_000;
 const YIELD_EVERY = 256;
 const YOUNG_UPTIME_S = 86_400;
 const LIMITER_MAX_REAL = 2;
 const LIMITER_GAP_MS = 3_600_000;
 const DRY_RUN_SENTRY_GAP_MS = 600_000;
-const LOAD_SHED_MEAN_MS = 250;
+const LOAD_SHED_MAX_MS = 150;
 const MESSAGE = "home-census result";
 const REFUSED_MESSAGE = "home-census refused";
 const INTERPRETATION =
-  "counted in this container since its last start; not a statement about earlier windows or other hosts";
+  "counted in this container's writable layer at the run; not a statement about earlier containers, other hosts, or any time before or after the run";
 
 export const CLASS_IDS = [
   "history_jsonl",
@@ -61,7 +65,8 @@ export const CLASS_IDS = [
 ] as const;
 export type ClassId = (typeof CLASS_IDS)[number];
 export const TRIGGER_CLASSES = ["history_jsonl", "debug", "todos", "tasks"] as const satisfies readonly ClassId[];
-const CONCEDED_CLASSES = ["sessions_json", "shell_snapshots", "account_state"] as const satisfies readonly ClassId[];
+// Session artifacts only: .claude.json is written by any CLI start, so it does not show that a tenant session ran.
+const WITNESS_CLASSES = ["sessions_json", "shell_snapshots"] as const satisfies readonly ClassId[];
 
 type Step = {
   ids: readonly ClassId[];
@@ -71,15 +76,17 @@ type Step = {
   classify?: (name: string) => ClassId;
   skipNames?: ReadonlySet<string>;
 };
-// Order matters: the four trigger classes are scanned FIRST so a large `projects` tree cannot starve them.
-const CLAUDE_KNOWN = new Set(["history.jsonl", "history", "debug", "todos", "tasks", "projects", "sessions", "shell-snapshots", "backups", "statsig", "file-history", ".last-cleanup"]);
+// Order matters: the four trigger classes are scanned FIRST, then the cheap witness classes, so a large `projects`
+// tree cannot use up the entry cap before the witness is established.
+// `.credentials.json` and `settings.json` are non-tenant state the outer wrap binds read-write (HOME_STATE_FILES); they
+// are skipped, never counted or opened.
+const CLAUDE_KNOWN = new Set(["history.jsonl", "history", "debug", "todos", "tasks", "projects", "sessions", "shell-snapshots", "backups", "statsig", "file-history", ".last-cleanup", ".credentials.json", "settings.json"]);
 const STEPS: readonly Step[] = [
   { ids: ["history_jsonl"], rel: ".claude/history.jsonl", kind: "file" },
   { ids: ["debug"], rel: ".claude/debug", kind: "dir" },
   { ids: ["todos"], rel: ".claude/todos", kind: "dir" },
   { ids: ["tasks"], rel: ".claude/tasks", kind: "dir" },
-  { ids: ["history_dir"], rel: ".claude/history", kind: "dir" },
-  { ids: ["projects"], rel: ".claude/projects", kind: "dir", recurse: true },
+  { ids: ["account_state"], rel: ".claude.json", kind: "file" },
   {
     ids: ["sessions_json", "sessions_key", "other_under_claude"],
     rel: ".claude/sessions",
@@ -87,7 +94,8 @@ const STEPS: readonly Step[] = [
     classify: (n) => (n.endsWith(".key") ? "sessions_key" : n.endsWith(".json") ? "sessions_json" : "other_under_claude"),
   },
   { ids: ["shell_snapshots"], rel: ".claude/shell-snapshots", kind: "dir" },
-  { ids: ["account_state"], rel: ".claude.json", kind: "file" },
+  { ids: ["history_dir"], rel: ".claude/history", kind: "dir" },
+  { ids: ["projects"], rel: ".claude/projects", kind: "dir", recurse: true },
   { ids: ["backups"], rel: ".claude/backups", kind: "dir" },
   { ids: ["last_cleanup"], rel: ".claude/.last-cleanup", kind: "file" },
   { ids: ["statsig"], rel: ".claude/statsig", kind: "dir" },
@@ -119,7 +127,7 @@ export interface Root {
   label: RootLabel;
   path: string;
 }
-type Reason = "entry_cap" | "time_cap" | "depth_cap" | "load_shed" | "class_budget";
+type Reason = "entry_cap" | "time_cap" | "load_shed" | "class_budget";
 interface Acc {
   entries: number;
   groupR: number;
@@ -185,7 +193,7 @@ export function resolveRoots(
   const acceptable = (p: string | undefined): p is string =>
     typeof p === "string" &&
     p.startsWith("/") &&
-    !p.split("/").includes("..") &&
+    !p.split("/").some((seg) => seg === ".." || seg === ".") &&
     !p.includes("//") &&
     !p.endsWith("/") &&
     (p.startsWith("/home/") || p === "/root" || p.startsWith("/root/"));
@@ -237,11 +245,22 @@ export const scanHome: ScanFn = async (opts) => {
     histogram.enable();
     const h = histogram;
     loadShed = () => {
-      const meanMs = h.mean / 1e6;
+      // max, not mean: a 256-entry window often holds no sample at all, and a mean over a mostly-idle window hides a stall.
+      const maxMs = h.max / 1e6;
       h.reset();
-      return Number.isFinite(meanMs) && meanMs > LOAD_SHED_MEAN_MS;
+      return Number.isFinite(maxMs) && maxMs > LOAD_SHED_MAX_MS;
     };
   }
+
+  let finished = false;
+  // A Dir handle that resolves after the scan returned (an op abandoned by the cap) is closed here; only handles have close().
+  const closeLate = (v: unknown) => {
+    if (finished && v && typeof (v as { close?: unknown }).close === "function") {
+      void Promise.resolve()
+        .then(() => (v as DirLike).close())
+        .catch(noop);
+    }
+  };
 
   // Every fs promise gets a terminal catch AT CREATION: an op abandoned by the time cap can reject later
   // with a message that carries a path, and that must never surface as an unhandled rejection.
@@ -252,7 +271,7 @@ export const scanHome: ScanFn = async (opts) => {
     } catch (e) {
       p = Promise.reject(e);
     }
-    const settled = p.then(noop, noop);
+    const settled = p.then(closeLate, noop);
     pending.add(settled);
     void settled.then(() => pending.delete(settled));
     return Promise.race([p, deadline]);
@@ -260,40 +279,58 @@ export const scanHome: ScanFn = async (opts) => {
 
   const stop = (reason: Reason): never => {
     scan.truncated = true;
-    scan.reason = scan.reason ?? reason;
+    scan.reason = reason; // the stop that actually ended the scan wins over an earlier per-class budget cut
     throw new StopScan(reason);
   };
-
-  const tally = (acc: Acc, st: StatLike) => {
-    if ((st.mode & 0o040) !== 0) acc.groupR++;
-    if ((st.mode & 0o004) !== 0) acc.otherR++;
-    if (st.isSymbolicLink()) acc.symlink++;
+  const bumpErr = (step: Step) => {
+    for (const id of step.ids) classes[id].errors++;
+  };
+  const cutAll = (step: Step) => {
+    for (const id of step.ids) classes[id].cut = true;
   };
 
-  async function walk(
-    path: string,
-    depth: number,
-    step: Step,
-    primary: Acc,
-    ids: Record<ClassId, Acc>,
-    budget: { left: number },
-  ): Promise<void> {
+  // A symlink is counted and nothing else (lstat reports mode 0777 for a link). Mode bits are tallied only for counted entries.
+  const tally = (acc: Acc, st: StatLike, counted: boolean) => {
+    if (st.isSymbolicLink()) {
+      acc.symlink++;
+      return;
+    }
+    if (!counted) return;
+    if ((st.mode & 0o040) !== 0) acc.groupR++;
+    if ((st.mode & 0o004) !== 0) acc.otherR++;
+  };
+
+  async function walk(path: string, depth: number, step: Step, primary: Acc, budget: { left: number }, expect: StatLike): Promise<void> {
     let dir: DirLike;
     try {
       dir = await call(() => opts.fs.opendir(path));
     } catch (e) {
       if (e instanceof StopScan) throw e;
-      if (errCode(e) !== "ENOENT") primary.errors++;
+      if (errCode(e) !== "ENOENT") bumpErr(step);
       return;
     }
     try {
+      // Re-lstat AFTER the open and compare dev/ino: a tenant can swap a directory for a symlink between the first lstat
+      // and the open (the HOME is writable by tenant sessions). A mismatch is an error, never a count.
+      let again: StatLike;
+      try {
+        again = await call(() => opts.fs.lstat(path));
+      } catch (e) {
+        if (e instanceof StopScan) throw e;
+        bumpErr(step);
+        return;
+      }
+      if (again.dev !== expect.dev || again.ino !== expect.ino || again.isSymbolicLink()) {
+        bumpErr(step);
+        return;
+      }
       for (;;) {
         let ent: { name: string } | null;
         try {
           ent = await call(() => dir.read());
         } catch (e) {
           if (e instanceof StopScan) throw e;
-          primary.errors++;
+          bumpErr(step);
           return;
         }
         if (ent === null) return;
@@ -304,7 +341,7 @@ export const scanHome: ScanFn = async (opts) => {
           stop("entry_cap");
         }
         if (budget.left <= 0) {
-          primary.cut = true;
+          cutAll(step);
           scan.truncated = true;
           scan.reason = scan.reason ?? "class_budget";
           return;
@@ -318,7 +355,7 @@ export const scanHome: ScanFn = async (opts) => {
             stop("load_shed");
           }
         }
-        const acc = step.classify && depth === 1 ? ids[step.classify(name)] : primary;
+        const acc = step.classify && depth === 1 ? classes[step.classify(name)] : primary;
         const child = `${path}/${name}`;
         let st: StatLike;
         try {
@@ -329,17 +366,11 @@ export const scanHome: ScanFn = async (opts) => {
           acc.errors++;
           continue;
         }
-        const counted = !step.recurse || depth >= 2;
+        const counted = !step.recurse || depth >= DESCEND_DEPTH;
         if (counted) acc.entries++;
-        tally(acc, st);
-        if (step.recurse && st.isDirectory() && !st.isSymbolicLink()) {
-          if (depth + 1 > MAX_DEPTH - 1) {
-            acc.cut = true;
-            scan.truncated = true;
-            scan.reason = scan.reason ?? "depth_cap";
-          } else {
-            await walk(child, depth + 1, step, primary, ids, budget);
-          }
+        tally(acc, st, counted);
+        if (step.recurse && depth < DESCEND_DEPTH && st.isDirectory() && !st.isSymbolicLink()) {
+          await walk(child, depth + 1, step, primary, budget, st);
         }
       }
     } finally {
@@ -358,7 +389,7 @@ export const scanHome: ScanFn = async (opts) => {
       await scanStepInner(root, step, primary);
     } catch (e) {
       // a class that was in progress when the scan stopped is unknown, never zero
-      if (e instanceof StopScan) for (const id of step.ids) classes[id].cut = true;
+      if (e instanceof StopScan) cutAll(step);
       throw e;
     }
   }
@@ -371,37 +402,25 @@ export const scanHome: ScanFn = async (opts) => {
     } catch (e) {
       if (e instanceof StopScan) throw e;
       const code = errCode(e);
-      if (code !== "ENOENT" && code !== "ENOTDIR") primary.errors++;
+      if (code !== "ENOENT" && code !== "ENOTDIR") bumpErr(step);
       return;
     }
     for (const id of step.ids) classes[id].absent = false;
     if (st.isSymbolicLink()) {
-      // A symlink (including a class directory that is itself a link) is counted and never opened.
+      // A symlink (including a class directory that is itself a link) is counted and never opened. The CLI would follow
+      // it, so the class is unknown, never zero.
       primary.symlink++;
+      cutAll(step);
       return;
     }
     if (step.kind === "file" || !st.isDirectory()) {
       primary.entries++;
-      tally(primary, st);
+      tally(primary, st, true);
       return;
     }
-    // Directory: open it, then lstat again and compare dev/ino. A tenant can swap a directory for a
-    // symlink between the two calls; the HOME is writable by tenant sessions.
     const isTrigger = (TRIGGER_CLASSES as readonly string[]).includes(step.ids[0]);
-    const budget = { left: isTrigger ? TRIGGER_CLASS_BUDGET : Number.POSITIVE_INFINITY };
-    let again: StatLike;
-    try {
-      again = await call(() => opts.fs.lstat(path));
-    } catch (e) {
-      if (e instanceof StopScan) throw e;
-      primary.errors++;
-      return;
-    }
-    if (again.dev !== st.dev || again.ino !== st.ino || again.isSymbolicLink()) {
-      primary.errors++;
-      return;
-    }
-    await walk(path, 1, step, primary, classes, budget);
+    const budget = { left: isTrigger ? TRIGGER_CLASS_BUDGET : step.ids[0] === "projects" ? PROJECTS_BUDGET : Number.POSITIVE_INFINITY };
+    await walk(path, 1, step, primary, budget, st);
   }
 
   try {
@@ -431,14 +450,10 @@ export const scanHome: ScanFn = async (opts) => {
       }
     }
   } catch (e) {
-    if (!(e instanceof StopScan)) {
-      scan.truncated = true;
-      scan.reason = scan.reason ?? "time_cap";
-    } else {
-      scan.truncated = true;
-      scan.reason = scan.reason ?? (e.message as Reason);
-    }
+    scan.truncated = true;
+    scan.reason = e instanceof StopScan ? (e.message as Reason) : (scan.reason ?? "time_cap");
   } finally {
+    finished = true;
     if (timer !== undefined) clearTimeout(timer);
     histogram?.disable();
   }
@@ -500,27 +515,47 @@ const CONTROL_EXPECTED: Record<ClassId, number> = {
   shell_snapshots: 4, account_state: 1, backups: 6, last_cleanup: 1, statsig: 7, file_history: 1, other_under_claude: 1,
 };
 
+// Expected [group-readable, other-readable] entry counts for the synthetic tree (first file of each directory is 0o640).
+const CONTROL_MODE: Record<ClassId, readonly [number, number]> = {
+  history_jsonl: [1, 1], debug: [1, 0], todos: [1, 0], tasks: [1, 0], history_dir: [1, 0], projects: [0, 0], sessions_json: [0, 0],
+  sessions_key: [1, 1], shell_snapshots: [1, 0], account_state: [1, 1], backups: [1, 0], last_cleanup: [0, 0], statsig: [1, 0],
+  file_history: [1, 0], other_under_claude: [0, 0],
+};
+
 function controlMatches(scan: InternalScan): boolean {
   if (scan.truncated) return false;
   for (const c of CLASS_IDS) {
     const a = scan.classes[c];
     if (!a.visited || a.errors !== 0 || a.entries !== CONTROL_EXPECTED[c]) return false;
+    if (a.groupR !== CONTROL_MODE[c][0] || a.otherR !== CONTROL_MODE[c][1] || a.symlink !== 0) return false;
   }
   return true;
 }
 
 async function canaryOk(fs: CensusFs, dir: string): Promise<boolean> {
-  try {
-    const d = await fs.opendir(dir);
+  // Bounded: a hung canary would otherwise hold the in-flight flag and a limiter slot until restart.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), CANARY_TIMEOUT_MS);
+  });
+  const probe = (async () => {
     try {
-      return (await d.read()) !== null;
-    } finally {
-      void Promise.resolve()
-        .then(() => d.close())
-        .catch(noop);
+      const d = await fs.opendir(dir);
+      try {
+        return (await d.read()) !== null;
+      } finally {
+        void Promise.resolve()
+          .then(() => d.close())
+          .catch(noop);
+      }
+    } catch {
+      return false;
     }
-  } catch {
-    return false;
+  })();
+  try {
+    return await Promise.race([probe, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -544,14 +579,14 @@ export type ErrorClass = (typeof ERROR_CLASSES)[number];
 
 function classResult(scan: InternalScan, id: ClassId, witness: boolean): ClassResult {
   const a = scan.classes[id];
+  if (a.visited && a.entries > 0) return "counted"; // a lower bound is still a count, even when the class was cut off
   if (!a.visited || a.cut || a.errors > 0) return "unknown";
-  if (a.entries > 0) return "counted";
   if ((TRIGGER_CLASSES as readonly string[]).includes(id) && !witness) return "inconclusive";
   return "none_counted";
 }
 
 export function buildResult(scan: InternalScan, m: Meta) {
-  const witness = CONCEDED_CLASSES.some((c) => scan.classes[c].entries > 0);
+  const witness = WITNESS_CLASSES.some((c) => scan.classes[c].entries > 0);
   const results = Object.fromEntries(CLASS_IDS.map((c) => [c, classResult(scan, c, witness)])) as Record<ClassId, ClassResult>;
   const anyTrigger = TRIGGER_CLASSES.some((c) => scan.classes[c].entries > 0);
   const anyUnknown = TRIGGER_CLASSES.some((c) => results[c] === "unknown");
@@ -577,7 +612,13 @@ export function buildResult(scan: InternalScan, m: Meta) {
     roots_distinct: m.rootsDistinct,
     roots_note: m.rootsNote,
     activity_witness: witness,
-    trigger_class_nonzero: anyTrigger ? "true" : anyUnknown ? "unknown" : "false",
+    trigger_class_nonzero: anyTrigger
+      ? "true"
+      : anyUnknown
+        ? "unknown"
+        : TRIGGER_CLASSES.some((c) => results[c] === "inconclusive")
+          ? "inconclusive"
+          : "false",
     classes: CLASS_IDS.map((c) => ({
       class: c,
       n_entries: bucketCount(scan.classes[c].entries),
@@ -599,7 +640,7 @@ export function buildFailure(errorClass: ErrorClass) {
 
 const BUCKETS = new Set(["0", "1-4", "5-19", "20-99", "100-999", "1000+"]);
 const CLASS_RESULTS = new Set<string>(["none_counted", "counted", "unknown", "inconclusive"]);
-const REASONS = new Set<string>(["none", "entry_cap", "time_cap", "depth_cap", "load_shed", "class_budget"]);
+const REASONS = new Set<string>(["none", "entry_cap", "time_cap", "load_shed", "class_budget"]);
 const OK_KEYS = new Set(["schema_version", "ok", "run_id", "mode", "data_source", "build_sha", "control", "evidence", "uptime_bucket", "sunset_utc", "truncated", "truncation_reason", "snapshot", "mode_bits_semantics", "interpretation", "claude_config_dir_set", "outer_wrap_cohorts", "roots", "roots_distinct", "roots_note", "activity_witness", "trigger_class_nonzero", "classes"]);
 
 /** Throws (message is constant) when a value is outside the closed allowlist. The route then answers 500. */
@@ -617,7 +658,7 @@ export function assertAllowlisted(body: CensusResult | ReturnType<typeof buildFa
   if (!(body.build_sha === "dev" || /^[0-9a-f]{40}$/.test(body.build_sha))) bad();
   if (!["dry_run", "real"].includes(body.mode) || !["synthetic", "container_home"].includes(body.data_source)) bad();
   if (!REASONS.has(body.truncation_reason)) bad();
-  if (!["true", "false", "unknown"].includes(body.trigger_class_nonzero)) bad();
+  if (!["true", "false", "unknown", "inconclusive"].includes(body.trigger_class_nonzero)) bad();
   if (!Array.isArray(body.classes) || body.classes.length !== CLASS_IDS.length) bad();
   for (const c of body.classes) {
     if (Object.keys(c).length !== 8) bad();
@@ -640,7 +681,7 @@ function censusLogger(dest?: LogDest) {
   // A dedicated instance: base undefined drops pid and hostname, timestamp false drops the time field,
   // level warn so Vector's `level >= 40` filter ships the line, a synchronous destination so the line
   // is written before the response. It has no Sentry-mirroring hook, so a warn line makes no breadcrumb.
-  return pino({ level: "warn", base: undefined, timestamp: false }, dest ?? pino.destination({ dest: 1, sync: true }));
+  return pino({ level: "warn", base: undefined, timestamp: false }, dest ?? pino.destination({ dest: 1, sync: true, retryEAGAIN: () => false }));
 }
 
 function stripToAllowlist(event: Sentry.ErrorEvent, keep: { message: string; level: Sentry.SeverityLevel; tags: Record<string, string>; extra?: Record<string, unknown> }): Sentry.ErrorEvent {
@@ -676,10 +717,12 @@ function emitResult(result: CensusResult, outcome: Outcome, deps: CensusDeps): v
   } catch {
     // never throws into the request
   }
-  const nonzero = result.trigger_class_nonzero === "true";
+  // A synthetic dry_run is never a finding: only a REAL scan with a counted trigger class is a warning.
+  const nonzero = result.mode === "real" && result.trigger_class_nonzero === "true";
   const level: Sentry.SeverityLevel = result.control === "failed" ? "error" : nonzero ? "warning" : "info";
   const tags = {
     run_id: String(result.run_id),
+    data_source: result.data_source,
     evidence: result.evidence,
     truncated: String(result.truncated),
     control: result.control,
@@ -691,7 +734,7 @@ function emitResult(result: CensusResult, outcome: Outcome, deps: CensusDeps): v
     const key = Symbol.for("soleur.homeCensus.dryRunSentry");
     const last = typeof g[key] === "number" ? (g[key] as number) : 0;
     const t = deps.now();
-    if (t - last < DRY_RUN_SENTRY_GAP_MS && last !== 0) return;
+    if (level !== "error" && t - last < DRY_RUN_SENTRY_GAP_MS && last !== 0) return; // a failed control is never throttled away
     g[key] = t;
   }
   // Flat and shallow on purpose: Sentry normalizes `extra` to depth 3 and would turn the class array into "[Object]".
@@ -707,7 +750,7 @@ function emitResult(result: CensusResult, outcome: Outcome, deps: CensusDeps): v
 
 function emitFailure(errorClass: ErrorClass, mode: "dry_run" | "real" | "unknown", level: Sentry.SeverityLevel, deps: CensusDeps): void {
   try {
-    censusLogger(deps.logDest).warn({ outcome: "refused" satisfies Outcome, schema_version: SCHEMA_VERSION, ok: false, error_class: errorClass, mode }, MESSAGE);
+    censusLogger(deps.logDest).warn({ outcome: "refused" satisfies Outcome, schema_version: SCHEMA_VERSION, ok: false, error_class: errorClass, mode }, REFUSED_MESSAGE);
   } catch {
     // never throws into the request
   }
@@ -775,7 +818,8 @@ export async function handleHomeCensus(request: Request, deps: CensusDeps = defa
     // 2. sunset
     if (deps.now() >= Date.parse(SUNSET_UTC)) return fail(410, "sunset");
 
-    // 3. parse (bounded, strict; the body is never echoed)
+    // 3. parse (bounded, strict; the body is never echoed). Content-Length is checked before the body is read.
+    if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES) return fail(413, "payload_too_large");
     let raw: string;
     try {
       raw = await request.text();
@@ -817,12 +861,13 @@ export async function handleHomeCensus(request: Request, deps: CensusDeps = defa
       const synth = buildSyntheticFs();
       const { scan } = await scanFn({ ...controlCommon, fs: synth.fs, roots: [{ label: "env_home", path: synth.root }] });
       const result = buildResult(scan, { runId, mode, dataSource: "synthetic", buildSha, control: controlMatches(scan) ? "passed" : "failed", uptimeS, claudeConfigDirSet, rootsDistinct: true, rootsNote: "none" });
+      assertAllowlisted(result); // before any sink, so a violation reaches none of them
       emitResult(result, "ok", deps);
       return respond(200, result);
     }
 
     // 5. real: build must match, then the young gate, then ONE synchronous claim step (no await between check and set)
-    if (body.expect_build_sha !== buildSha || buildSha === "dev") return fail(409, "build_mismatch", mode, true);
+    if (body.expect_build_sha !== buildSha) return fail(409, "build_mismatch", mode, true);
     if (uptimeS < YOUNG_UPTIME_S && body.accept_young !== true) return fail(409, "young_container", mode, true);
 
     const now = deps.now();
@@ -835,18 +880,19 @@ export async function handleHomeCensus(request: Request, deps: CensusDeps = defa
     g[inflightKey] = true;
     lim.starts.push(now);
     let release = true;
+    let scanStarted = false;
     try {
       // 6. positive control (known-answer in-memory scan) and the real-adapter canary
       const synth = buildSyntheticFs();
       const controlScan = await scanFn({ ...controlCommon, fs: synth.fs, roots: [{ label: "env_home", path: synth.root }] });
       const canary = await canaryOk(deps.canaryFs ?? REAL_FS, deps.canaryDir);
       if (!controlMatches(controlScan.scan) || !canary) {
-        lim.starts.pop(); // no real scan started: the slot is not consumed
-        const failedScan = buildResult(controlScan.scan, { runId, mode, dataSource: "container_home", buildSha, control: "failed", uptimeS, claudeConfigDirSet, rootsDistinct, rootsNote });
-        emitResult(failedScan, "failed", deps);
+        // No result object is emitted: the only counts here are the synthetic control's, and they must not be labelled as the HOME's.
+        emitFailure("control_failed", mode, "error", deps);
         return fail(503, "control_failed", mode);
       }
       // 7. scan; the in-flight flag is held until any fs op abandoned by the cap has settled
+      scanStarted = true;
       const { scan, settled } = await scanFn({ ...common, fs: deps.fs, roots });
       release = false;
       void settled.then(() => {
@@ -854,9 +900,12 @@ export async function handleHomeCensus(request: Request, deps: CensusDeps = defa
       });
       const result = buildResult(scan, { runId, mode, dataSource: "container_home", buildSha, control: "passed", uptimeS, claudeConfigDirSet, rootsDistinct, rootsNote });
       const outcome: Outcome = scan.truncated ? "truncated" : result.evidence === "young" ? "young" : "ok";
+      assertAllowlisted(result); // before any sink, so a violation reaches none of them
       emitResult(result, outcome, deps);
       return respond(200, result);
     } finally {
+      // The slot is consumed when a real scan STARTS: any exit before that (control or canary failure, a throw) refunds it.
+      if (!scanStarted) lim.starts.pop();
       if (release) g[inflightKey] = false;
     }
   } catch {
