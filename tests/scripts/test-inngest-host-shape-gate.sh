@@ -301,7 +301,7 @@ _ln() { grep -nE "$1" <<<"$JOB" | head -1 | cut -d: -f1; }
 _l_json="$(_ln '^          terraform show -json tfplan > tfplan\.json$')"
 _l_src="$(_ln "$_src_re")"
 _l_call="$(_ln "$_call_re")"
-_l_apply="$(_ln '^[[:space:]]*terraform apply -no-color -input=false tfplan$')"
+_l_apply="$(_ln '^[[:space:]]*terraform apply -no-color -input=false tfplan( 2>&1 \| tf_redact_random_ids)?$')"
 if [[ -n "$_l_json" && -n "$_l_src" && -n "$_l_call" && -n "$_l_apply" ]] \
    && (( _l_json < _l_src && _l_src < _l_call && _l_call < _l_apply )); then
   pass

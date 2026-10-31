@@ -220,6 +220,21 @@ const OVERRIDES: Record<string, RegistryEntry> = {
   // landing page reads the row as the signed-in Owner); every write is a SECURITY DEFINER approval RPC and
   // service_role holds NO table privilege at all (it reaches the table only through the RPCs). Created after the 174 snapshot.
   "approval_request": exposed({ authenticated: ["SELECT"] }, { provenance: "migration 180 (#4672): authenticated SELECT only (Owner-gated by RLS); no write grant for any api role; service_role has no table access (RPC-only)" }),
+  // Migration 181 (#11569): the owner-draft UPDATE policy plus a column-narrowed grant. 174's snapshot gave anon and
+  // authenticated the full table-level verb set on messages; 181 revokes the table-level UPDATE from both and re-grants
+  // UPDATE on (status, draft_preview) to authenticated only, so every other verb stays as 174 recorded it. To roll
+  // back, run 181's down file AND delete this entry (the registry would otherwise expect the narrowed posture).
+  "messages": exposed(
+    {
+      anon: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE"],
+      authenticated: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE"],
+      service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"],
+    },
+    {
+      columns: { authenticated: { draft_preview: ["UPDATE"], status: ["UPDATE"] } },
+      provenance: "migration 181 (#11569): table-level UPDATE revoked from anon and authenticated; authenticated re-granted UPDATE on status and draft_preview only (Discard, Edit, send-archive), paired with the messages_owner_draft_update policy; every other verb as 174 recorded it",
+    },
+  ),
   // OVERRIDES for migration 178's default-era api-grant narrowing (#11193 —
   // the deferred pass ADR-303 §Consequences names). Each entry replaces the
   // 174 snapshot's parsed full-DML set with the censused intended posture;

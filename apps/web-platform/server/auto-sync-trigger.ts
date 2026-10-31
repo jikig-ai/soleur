@@ -4,6 +4,8 @@ import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { userHasEffectiveByokKey as defaultUserHasEffectiveByokKey } from "@/server/byok-resolver";
 import { RuntimeAuthError } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
+import { assertLegacyEngineBinding } from "@/server/agent-engine-route-guard";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
 
@@ -88,6 +90,9 @@ const BACKOFF_MS = [1_000, 3_000, 9_000];
 
 const LEASE_RETRY_MESSAGE = "Authentication unavailable; retry shortly";
 
+// ByokLeaseError.reason values (byok-lease.ts `failAuthModeClosed`) that no retry can change.
+const DETERMINISTIC_AUTH_MODE_REASONS: ReadonlySet<string> = new Set(["unbound", "invalid_value", "no_resolver"]);
+
 /**
  * True when the error is a transient lease/auth-unavailable class worth
  * retrying. Matches the two typed classes plus the shared user-facing message
@@ -96,6 +101,16 @@ const LEASE_RETRY_MESSAGE = "Authentication unavailable; retry shortly";
  */
 function isLeaseRetryable(err: unknown): boolean {
   if (err instanceof RuntimeAuthError) return true;
+  // #11591: an unresolved auth mode with a DETERMINISTIC reason (no binding, junk value, no resolver)
+  // fails the same way on every attempt, so retrying only delays the failure and multiplies Sentry
+  // events. `read_failed` / `resolver_failed` stay retryable. Duck-typed for the same import-graph reason.
+  if (
+    err instanceof Error &&
+    (err as { name?: unknown }).name === "ByokLeaseError" &&
+    DETERMINISTIC_AUTH_MODE_REASONS.has(String((err as { reason?: unknown }).reason))
+  ) {
+    return false;
+  }
   // Duck-type `ByokLeaseError("escape")` by name + cause instead of importing
   // the heavy `byok-lease` module graph (its module-init `createChildLogger` +
   // tenant client) into the `/api/repo/setup` route's STATIC import graph. The
@@ -194,6 +209,39 @@ export async function triggerHeadlessSync(
       });
     });
     return "failed";
+  }
+
+  // Bind the engine run before dispatch (#11591). The credential lease reads the binding's auth mode and
+  // fails closed for an owner holding a subscription row when the conversation is unbound; a fresh insert
+  // has no concurrent binder, so a plain bind is enough. A failed bind is non-fatal (Sentry-mirrored): the
+  // lease still fails closed for a subscription holder and every other user is unaffected. A SUCCESSFUL
+  // bind to a non-Claude engine stops the dispatch (as ws-handler does): this headless sync always runs Claude.
+  let binding: unknown;
+  try {
+    binding = await new AgentEnginePersistenceRepository(serviceClient as unknown as PersistenceClient).bind({
+      workspaceId: conversationWorkspaceId,
+      executionKind: "conversation",
+      conversationId,
+      createdBy: userId,
+    });
+  } catch (bindErr) {
+    reportSilentFallback(bindErr, {
+      feature: "repo-setup",
+      op: "auto-sync-bind",
+      message: "Failed to bind the sync conversation's engine run",
+    });
+  }
+  if (binding !== undefined) {
+    try {
+      assertLegacyEngineBinding(binding);
+    } catch (mismatch) {
+      reportSilentFallback(mismatch, {
+        feature: "repo-setup",
+        op: "auto-sync-bind-engine",
+        message: "Sync conversation bound to an engine the headless sync cannot run",
+      });
+      return "failed";
+    }
   }
 
   // --- Retry wraps ONLY startAgentSession, reusing the SAME conversationId ---

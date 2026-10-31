@@ -56,6 +56,18 @@ if ! [[ "$CLOSED_LOOKBACK_DAYS" =~ ^[0-9]+$ ]] || (( CLOSED_LOOKBACK_DAYS < 1 ))
   printf '::error::CLOSED_LOOKBACK_DAYS must be a positive integer (got %q)\n' "$CLOSED_LOOKBACK_DAYS" >&2
   exit 2
 fi
+# Per-probe wall-clock cap, in seconds (CTO ruling 2026-10-29, Ref #11215). One slow probe used to be
+# able to eat the whole job: runs 40776246270, 40702857885 and 40587723911 were cancelled at the
+# 15-minute job ceiling with four probes (ci-draft-light-soak-9728, pr-battery-gate-saving-9323,
+# ci-push-dedupe-soak-9512, bearer-curl-s4-first-runs-9905) taking 1.5-5 minutes EACH. A probe that
+# outlives this cap is killed and reported as CANNOT ESTABLISH (exit 3) with its script name logged,
+# so the sweep reaches the trackers behind it. Validated before use: `timeout 0` DISABLES the cap and
+# `timeout abc` errors out of the hop with rc 125, which would read as a probe verdict.
+FT_PROBE_TIMEOUT="${FT_PROBE_TIMEOUT:-300}"
+if ! [[ "$FT_PROBE_TIMEOUT" =~ ^[0-9]+$ ]] || (( FT_PROBE_TIMEOUT < 1 )); then
+  printf '::error::FT_PROBE_TIMEOUT must be a positive integer number of seconds (got %q)\n' "$FT_PROBE_TIMEOUT" >&2
+  exit 2
+fi
 # Its OWN limit. Deliberately NOT achieved by widening the open query to
 # `--state all`: that shares one 50-item budget between the two sets, so a burst
 # of closed issues would silently starve the open set the sweeper's primary job
@@ -693,7 +705,7 @@ Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followt
   # a validator. `earliest` is a directive date, not a secret, so it rides argv.
   log "issue #$issue_num: running $script"
   local rc=0
-  local out
+  local out probe_t0=$SECONDS probe_elapsed
   # The subshell exports the already-validated names (HOME first: the launcher forwards it like a
   # secret) so a name that is set but not exported still reaches the launcher's environment, then
   # execs the launcher. `export` with no operand would print every exported variable WITH its
@@ -701,9 +713,29 @@ Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followt
   # own environment is unchanged and the launcher's stdout/stderr feed `out` exactly as `env`'s did.
   out=$(
     export -- HOME ${fwd_names[@]+"${fwd_names[@]}"}
-    exec python3 -I -c "$FT_LAUNCHER" "$script" "${earliest:-}" HOME ${fwd_names[@]+"${fwd_names[@]}"} 2>&1
+    # `timeout` (no --foreground) runs the launcher in its own process group and signals that group on
+    # expiry, so a probe's curl/gh/sleep children die with it; a survivor would otherwise keep this
+    # command substitution's pipe open and hold the sweep. KNOWN RESIDUAL: a descendant that leaves the
+    # group (setsid) or a daemon that outlives the probe still holds the pipe; no probe does either today.
+    # `-k 10` escalates to SIGKILL for a probe that traps TERM. It execs the launcher exactly as before,
+    # so the name-only contract holds.
+    exec timeout -k 10 "$FT_PROBE_TIMEOUT" python3 -I -c "$FT_LAUNCHER" "$script" "${earliest:-}" HOME ${fwd_names[@]+"${fwd_names[@]}"} 2>&1
   ) || rc=$?
+  probe_elapsed=$(( SECONDS - probe_t0 ))
   log "issue #$issue_num: $script exit=$rc"
+  # 124 = timeout expired; 137 = it had to escalate to SIGKILL (a probe ignoring TERM). Both are only a
+  # timeout when the wall clock agrees: a probe that wraps its own `timeout` and exits 124/137 early, or
+  # is OOM-killed (137), is a different verdict and must not be relabelled as the sweeper's cap.
+  if (( rc == 124 || rc == 137 )) && (( probe_elapsed >= FT_PROBE_TIMEOUT )); then
+    # Map it to 3 (CANNOT ESTABLISH): the probe could
+    # not establish a verdict inside the cap, which is neither a PASS/FAIL nor a transient crash. The
+    # script name is logged on its own line so the run log answers "which probe is slow" without a
+    # timestamp diff, and appended to $out so the tracker comment says why there is no probe output.
+    log "issue #$issue_num: $script TIMED OUT after ${FT_PROBE_TIMEOUT}s (rc $rc -> 3, CANNOT ESTABLISH)"
+    out="${out:+$out
+}sweeper: $script did not finish within ${FT_PROBE_TIMEOUT}s and was killed (CANNOT ESTABLISH)"
+    rc=3
+  fi
 
   # STRIP SHELL-TRACE LINES BEFORE THIS OUTPUT REACHES A PUBLIC COMMENT (#7797).
   # `$out` is posted verbatim into a GitHub issue comment below, and issue-comment

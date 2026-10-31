@@ -156,6 +156,7 @@ ROLLBACK=1002
 EXITRUN=1003
 PB=1004
 ROTATE=1005
+REFS=1006
 WFNAME='git-data cutover (#5274 / ADR-220 / ADR-239)'
 
 # write_run <id> <title> <createdAt> <jobs-json> [workflowName]
@@ -176,6 +177,9 @@ write_run "$FLIP" "git-data flip" "2026-10-20T09:00:00Z" "$FLIP_JOBS"
 write_run "$ROLLBACK" "git-data rollback" "2026-10-20T09:30:00Z" "$RB_JOBS"
 write_run "$EXITRUN" "git-data proof" "2026-10-20T10:00:00Z" '[]'
 write_run "$PB" "git-data proof" "2026-10-20T09:50:00Z" '[]'
+REFS_JOBS='[{"name":"cutover","steps":[
+  {"name":"Host-side refs assertion (store probes + one refs read)","conclusion":"success","completedAt":"2026-10-20T09:36:00Z"}]}]'
+write_run "$REFS" "git-data refs_assert" "2026-10-20T09:35:00Z" "$REFS_JOBS"
 
 # A log line is `<job>\t<step>\t<timestamp> <message>`. The DECOY lines are the step source `run:` echoes at the head of a
 # group (same words, after `echo "`), and a forged line in a DIFFERENT step: neither may count.
@@ -206,6 +210,19 @@ ll() { printf 'cutover\t%s\t%s %s\n' "$1" "$2" "$3"; }
 {
   ll "Host-side proof (access gate + store probes + fence)" "2026-10-20T09:51:00.0000000Z" "##[error]probe=store-empty verdict=store_not_empty"
 } > "$FX/log-$PB.txt"
+
+# The refs_assert run's log: the step source echo (decoy), the real lines, and a forged confirmation in a DIFFERENT step.
+REFS_SHA1="0123456789abcdef0123456789abcdef01234567"
+REFS_SHA2="89abcdef0123456789abcdef0123456789abcdef"
+REFS_STEP_NAME="Host-side refs assertion (store probes + one refs read)"
+# shellcheck disable=SC2016  # literal step source: nothing may expand
+{
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:10.0000000Z" '        log "REFS-CONFIRMED"'
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:30.0000000Z" "[git-data-cutover] STORE probe=refs-assert verdict=ok"
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:31.0000000Z" "[git-data-cutover] REFS-CONFIRMED"
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:32.0000000Z" "[git-data-cutover] REFS_ASSERT ok repos=1 namespaces=1 refs=2 heads=2 shas=${REFS_SHA1},${REFS_SHA2}"
+  ll "Validate mode" "2026-10-20T09:35:40.0000000Z" "[git-data-cutover] REFS-CONFIRMED"
+} > "$FX/log-$REFS.txt"
 
 FP_OK="SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
 FP_B="SHA256:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefg"
@@ -295,6 +312,7 @@ assert_eq "happy: per-host timestamps are step-scoped and BOM-tolerant (a forged
 assert_eq "happy: app path line, other hosts excluded, both web-1 source names summed, Sentry window printed" \
   "app path:      level 1; startup lines after rollback flag-off: pin $FP_OK (web-1 3, web-2 1), ssh_client present (web-1 3, web-2 1), store disabled (web-1 3, web-2 1); Sentry events R1..R6: 0 (erasure 0, pin_fault 0) in 2026-10-20T09:00:00..2026-10-20T10:00:00" \
   "$(line_of 'app path:')"
+assert_eq "happy: level 1 without --refs leaves the refs line n/a (no synthetic session ran)" "refs read:     n/a (level 1; no synthetic session ran)" "$(line_of 'refs read:')"
 assert_eq "happy: level 1 leaves the level 2 line n/a" "               level 2 only: n/a (level 1)" "$(line_of 'level 2 only')"
 assert_eq "happy: exit read (a forged verdict in another step is ignored)" \
   "exit read:     mode=proof run $U/$EXITRUN   dispatched 2026-10-20T10:00:00Z   conclusion success   verdict clear" "$(line_of 'exit read:')"
@@ -530,7 +548,7 @@ assert_has "sentry counts: summed and itemised, with the window" "$(line_of 'app
 reset_env
 
 # ===== ARM 10: proof verdicts and levels ==================================================================================
-sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --proof-before "$PB"
+sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --proof-before "$PB" --refs "$REFS"
 assert_eq "level 2 (inferred from --proof-before): exit 0" "0" "$RC"
 assert_eq "level 2: proof before and after" "               level 2 only: proof before deletion store_not_empty, proof after deletion clear" "$(line_of 'level 2 only')"
 assert_has "level 2: the level is carried" "$(line_of 'app path:')" "level 2;"
@@ -604,10 +622,70 @@ run_sut bash -x "$MUT" "${BASE_ARGS[@]}"
 assert_eq "xtrace with no credential: tracing stays available (not refused)" "1" "$([[ "$RC" != 78 ]] && echo 1 || echo 0)"
 reset_env
 
+# ===== ARM 13: REFS-CONFIRMED is READ from the mode=refs_assert run (#11431), never owner-typed ==========================
+L2_ARGS=(--flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --proof-before "$PB")
+sut "${L2_ARGS[@]}" --refs "$REFS"
+REFS_OUT="$OUT"; REFS_ERR="$ERR"
+assert_eq "refs: a green run with one confirmation and one anchored answer line reads REFS-CONFIRMED yes, counts only" \
+  "refs read:     mode=refs_assert run $U/$REFS   dispatched 2026-10-20T09:35:00Z   conclusion success   step success   REFS-CONFIRMED yes (repos=1 namespaces=1 refs=2 heads=2)" \
+  "$(line_of 'refs read:')"
+assert_eq "refs: exit 0 at level 2 with the refs run named" "0" "$RC"
+assert_eq "refs: no commit id reaches the block or stderr" "0" "$(printf '%s\n%s\n' "$REFS_OUT" "$REFS_ERR" | grep -cE "$REFS_SHA1|$REFS_SHA2" || true)"
+sut "${L2_ARGS[@]}"
+assert_has "refs: at level 2 a missing --refs is UNREAD(refs-run), never owner-typed" "$(line_of 'refs read:')|rc=$RC" "UNREAD(refs-run)|rc=3"
+sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --refs "$REFS" --level 1
+assert_has "refs: optional at level 1 and read when given" "$(line_of 'refs read:')" "REFS-CONFIRMED yes"
+sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN"
+assert_has "refs: level unknown and no --refs: the owner is told to pass it, not marked UNREAD" "$(line_of 'refs read:')|rc=$RC" "<owner: pass --refs <run id> for a Level 2 rehearsal>|rc=0"
+variant 2140 '.displayTitle = "git-data proof"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2140
+assert_has "refs: a run with the wrong title is refused (run-identity-refs)" "$ERR" "UNREAD(run-identity-refs)"
+variant 2141 '.createdAt = "2026-10-20T09:20:00Z"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2141
+assert_has "refs: a refs run created BEFORE the rollback is refused (run-order-refs)" "$ERR" "UNREAD(run-order-refs)"
+variant 2142 '.createdAt = "2026-10-20T09:55:00Z"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2142
+assert_has "refs: a refs run created after the pre-deletion proof is refused (the order is rollback, refs, proofs)" "$ERR" "UNREAD(run-order-proofbefore)"
+variant 2143 '.jobs[0].steps[0].conclusion = "failure"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2143
+assert_has "refs: a step that did not succeed is NOT CONFIRMED even with the log line present" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2144 '.conclusion = "failure"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2144
+assert_has "refs: a log line inside a red run is not a verdict" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2145 '.' "$REFS"
+grep -v 'REFS-CONFIRMED$' "$FX/log-$REFS.txt" > "$FX/log-2145.txt"
+sut "${L2_ARGS[@]}" --refs 2145
+assert_has "refs: a green run with no REFS-CONFIRMED line in the step (the decoy and the other step's line do not count) is NOT CONFIRMED" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 0, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2146 '.' "$REFS"
+{ cat "$FX/log-$REFS.txt"; ll "$REFS_STEP_NAME" "2026-10-20T09:35:33.0000000Z" "[git-data-cutover] REFS-CONFIRMED"; } > "$FX/log-2146.txt"
+sut "${L2_ARGS[@]}" --refs 2146
+assert_has "refs: two REFS-CONFIRMED lines in the step are NOT CONFIRMED (exactly one)" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 2, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2147 '.' "$REFS"
+sed 's/^\(.*REFS_ASSERT ok .*\)$/\10/' "$FX/log-$REFS.txt" > "$FX/log-2147.txt"
+sut "${L2_ARGS[@]}" --refs 2147
+assert_has "refs: an answer line that is not the anchored shape (a 41-hex id) is NOT CONFIRMED" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2149 '.' "$REFS"
+{ cat "$FX/log-$REFS.txt"; ll "$REFS_STEP_NAME" "2026-10-20T09:35:34.0000000Z" "[git-data-cutover] REFS_ASSERT ok repos=1 namespaces=1 refs=2 heads=2 shas=${REFS_SHA1}"; } > "$FX/log-2149.txt"
+sut "${L2_ARGS[@]}" --refs 2149
+assert_has "refs: two anchored answer lines in the step are NOT CONFIRMED (exactly one)" "rc=$RC|$(line_of 'refs read:')" "(confirmed lines 1, answer lines 2): UNREAD(refs-not-confirmed)"
+variant 2150 '.' "$REFS"
+sed 's/^\(.*REFS_ASSERT ok .*shas=\)[0-9a-f]*,[0-9a-f]*$/\1'"${REFS_SHA1}"'0/' "$FX/log-$REFS.txt" > "$FX/log-2150.txt"
+sut "${L2_ARGS[@]}" --refs 2150
+assert_has "refs: a single 41-hex first id is NOT CONFIRMED (the id length is exact)" "rc=$RC|$(line_of 'refs read:')" "(confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)"
+variant 2148 '.jobs[0].steps[0].name = "Refs (renamed)"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2148
+assert_has "refs: a renamed step is UNREAD, not a plain fact" "$ERR" "UNREAD(step-refs-step)"
+sut "${L2_ARGS[@]}" --refs "$FLIP"
+assert_eq "refs: one run id in two slots exits 64" "64" "$RC"
+ARM_ENV="$ARM_ENV GH_FAIL_IDS=$REFS"
+sut "${L2_ARGS[@]}" --refs "$REFS"
+assert_has "refs: a refs run that cannot be fetched is UNREAD(gh-run-view-refs)" "$ERR" "UNREAD(gh-run-view-refs)"
+reset_env
+
 # ===== the exact assertion count =======================================================================================
 # Reported with printf + exit, never through fail() (ADR-193). A bare floor is satisfiable by deleting arms; an exact
 # count moves only when this file is edited deliberately.
-EXACT=150
+EXACT=170
 if (( total != EXACT )); then
   printf 'FATAL: %d assertions ran, expected exactly %d -- coverage changed; update EXACT deliberately\n' "$total" "$EXACT" >&2
   exit 1

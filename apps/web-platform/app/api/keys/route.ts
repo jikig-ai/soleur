@@ -6,7 +6,94 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
 import { classifyCliDroppedValue, isAcceptableSubscriptionToken } from "@/server/oauth-token-shape";
 import { verifiedUserId } from "@/server/request-auth";
+import { hashUserId } from "@/server/observability";
+import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
 import * as Sentry from "@sentry/nextjs";
+
+// #11524 — remove the caller's stored subscription token (provider
+// 'anthropic_oauth') with no replacement. Goes through the service-role-only
+// delete_oauth_credential RPC (migration 179), which hardcodes the provider
+// (ADR-048 write boundary), so this path can never touch the user's
+// 'anthropic' api_key fallback. Deliberately NO operator / CC_OAUTH_ENABLED
+// fence: a user can always erase their own stored secret, including after the
+// kill-switch is flipped off. Nothing is created, copied or converted.
+export async function DELETE(request: Request) {
+  const { valid: originValid, origin } = validateOrigin(request);
+  if (!originValid) return rejectCsrf("api/keys", origin);
+
+  const userId = await verifiedUserId(request);
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // The body must be EXACTLY { credential_type: "oauth_token" }: a bare or
+  // mistyped DELETE can never reach the RPC, and the provider is never taken
+  // from input. The body is never logged.
+  const body: unknown = await request.json().catch(() => null);
+  const keys =
+    body !== null && typeof body === "object" && !Array.isArray(body)
+      ? Object.keys(body)
+      : [];
+  if (
+    keys.length !== 1 ||
+    (body as Record<string, unknown>).credential_type !== "oauth_token"
+  ) {
+    return NextResponse.json(
+      {
+        error: "Unsupported credential_type",
+        code: "unsupported_credential_type",
+      },
+      { status: 400 },
+    );
+  }
+
+  const service = createServiceClient();
+  const { data, error: rpcError } = await service.rpc(
+    "delete_oauth_credential",
+    { p_user_id: userId },
+  );
+
+  if (rpcError) {
+    logger.error({ err: rpcError }, "Failed to remove oauth credential");
+    Sentry.captureException(rpcError, {
+      tags: { feature: "api-keys", op: "delete-oauth" },
+      extra: { userIdHash: hashUserId(userId), provider: "anthropic_oauth" },
+    });
+    return NextResponse.json(
+      { error: "Failed to remove token" },
+      { status: 500 },
+    );
+  }
+
+  const deleted = data === true;
+  // Audit: op + outcome only. Never the token value, never the request body.
+  // A real erasure (deleted: true) is emitted at WARN on purpose:
+  // apps/web-platform/infra/vector.toml `app_container_warn_filter` ships only
+  // pino level >= 40 to Better Stack, so an info line would be dropped before
+  // the drain; erasures are low-volume, so the extra level is cheap. An
+  // idempotent no-op (deleted: false) erased nothing and stays at INFO.
+  // Verified in server/logger.ts: the logMethod hook mirrors every log at or
+  // above SENTRY_BREADCRUMB_LEVEL (default warn) to a Sentry breadcrumb
+  // carrying this object ({ deleted } included), so at the default threshold
+  // the WARN erasure is mirrored and no explicit breadcrumb is added. The pino formatter pseudonymises the top-level
+  // `userId` to `userIdHash` (ADR-029) in the Better Stack output; the
+  // breadcrumb mirror sees the raw args before that formatter, but
+  // sentry.server.config.ts beforeBreadcrumb -> scrubSentryBreadcrumb renames
+  // `userId` to `userIdHash` before send. Do not hash it here too.
+  if (deleted) {
+    logger.warn(
+      { feature: "api-keys", op: "oauth-credential-removed", userId, deleted },
+      "Subscription token removed",
+    );
+  } else {
+    logger.info(
+      { feature: "api-keys", op: "oauth-credential-removed", userId, deleted },
+      "Subscription token removal was a no-op",
+    );
+  }
+
+  return NextResponse.json({ deleted });
+}
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -97,10 +184,7 @@ export async function POST(request: Request) {
     // account) AND the kill-switch on. Either off ⇒ feature inert (403).
     const isOperator =
       process.env.ADMIN_USER_IDS?.split(",").includes(userId) ?? false;
-    const ccOauthEnabled =
-      process.env.CC_OAUTH_ENABLED === "1" ||
-      process.env.CC_OAUTH_ENABLED === "true";
-    if (!isOperator || !ccOauthEnabled) {
+    if (!isOperator || !isCcOauthEnabled()) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -142,7 +226,7 @@ export async function POST(request: Request) {
       logger.error({ err: rpcError }, "Failed to store oauth credential");
       Sentry.captureException(rpcError, {
         tags: { feature: "api-keys", op: "store-oauth" },
-        extra: { userId, provider: "anthropic_oauth" },
+        extra: { userIdHash: hashUserId(userId), provider: "anthropic_oauth" },
       });
       return NextResponse.json(
         { error: "Failed to store key" },

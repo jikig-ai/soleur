@@ -33,7 +33,15 @@
 #     (awk -F'\t': field 2 = step name, field 3 = "<ts> <content>"; ANSI-prefixed
 #     echoed `run:` source is excluded — the #9905 trap: echoed source carries
 #     the UNEXPANDED `var.web_hosts["${WEB_HOST_KEY_RAW}"]`, only the emitted
-#     line carries the resolved key). A host is owed only when the trail
+#     line carries the resolved key). ATTRIBUTION EXPIRY (#11600): GitHub stops
+#     attributing job-log lines to named steps ~2-3 weeks after completion —
+#     the whole log returns under field 2 "UNKNOWN STEP" while the content
+#     survives. When the named anchor yields nothing the probe recovers by
+#     slicing the trail step's output region on the runner's `##[group]Run`
+#     headers (first header stamped at or after the step's started_at from the
+#     jobs API opens it, next header or EOF closes it) — the same derivation
+#     git-data-boot-poll-8178.sh carries — and grades the region through the
+#     identical emitted-vs-echoed filter. A host is owed only when the trail
 #     emitted BOTH `web-host-(replace|create) <key> — fresh-host Sentry
 #     pointer` AND `fresh-host boot reached fresh_boot_ready` — a `booted
 #     DARK` trail contributes nothing (that failure is already loud; the job
@@ -81,7 +89,15 @@
 #   betterstack-query.sh's `curl --max-time 60` transport ceiling — a scan that
 #   outruns it reads CANNOT ESTABLISH, never a quiet pass. (3) A
 #   success-conclusion job whose trail step emitted zero parseable lines reads
-#   CANNOT ESTABLISH: a broken parse channel is measurable, not a quiet pass.
+#   CANNOT ESTABLISH — evaluated AFTER the UNKNOWN STEP recovery: a recovered
+#   region with no emitted trail-pattern lines, a log with no `##[group]Run`
+#   header at/after the step's started_at, or no started_at at all is the same
+#   verdict (a broken parse channel is measurable, not a quiet pass). (4) The
+#   `##[group]Run` region bound inherits 8178's residuals: a `::group::` title
+#   literally beginning "Run " could false-bound, and sub-second skew between
+#   the API's started_at and the header stamp could select an adjacent region —
+#   loud on a success job (empty region still tripwires), best-effort on a
+#   failure job (same posture as the named path).
 #
 # Exit semantics (sweep-followthroughs.sh rc->word map, notify-only subset):
 #   5 = ACTION REQUIRED   an owed host's first deploy is overdue
@@ -91,7 +107,8 @@
 #                         or failing, bash < 4, variables.tf missing, the
 #                         dispatch history hitting the -L cap (a possibly
 #                         truncated 30d window), a success job with an
-#                         unparseable trail, or the verdict-query transport
+#                         unparseable trail (attribution expiry included —
+#                         post-recovery), or the verdict-query transport
 #                         failed — never a quiet 2 for an unmeasured host
 #   78 = refused to run under xtrace with a live credential bound (#7797)
 #   (0 and 1 are NEVER taken — asserted by the suite's property sweep.)
@@ -197,6 +214,17 @@ ts_to_epoch() { # <ISO-8601Z, fraction tolerated> -> epoch
 host_name_for() { # <key> -> journald host_name (web-1's live name is the legacy soleur-web-platform)
   if [[ "$1" == "web-1" ]]; then printf 'soleur-web-platform'; else printf 'soleur-%s' "$1"; fi
 }
+# emit_rows — the ONE chokepoint for the emitted-vs-echoed rule (#9905): input
+# lines of shape "<ts> <content>", output "ts<TAB>content" minus lines whose
+# content begins with an ANSI escape (echoed `run:` source). The named-step
+# anchor and the UNKNOWN STEP recovery both consume through it, so the filter
+# can never drift between two copies.
+emit_rows() {
+  awk '{ line = $0; sub(/^[^ ]+ /, "", line)
+         if (substr(line, 1, 1) == sprintf("%c", 27)) next
+         ts = $0; sub(/ .*/, "", ts)
+         printf "%s\t%s\n", ts, line }'
+}
 
 NOW_EPOCH="$(date -u +%s)"
 if ! numeric "$NOW_EPOCH"; then
@@ -237,11 +265,11 @@ for id in $ids; do
   # from real log-shape drift. `total_count > .jobs|length` trips on a page
   # cap the same way the -L run-list cap trips above.
   jobs_tsv=$("$GH" api "repos/${REPO}/actions/runs/${id}/jobs?per_page=100" \
-    --jq 'if .total_count > (.jobs | length) then error("jobs page truncated") else .jobs[] | select((.name == "web_host_replace" or .name == "web_host_create") and (.conclusion // "") != "" and (.conclusion // "") != "skipped") | "\(.id)\t\(.conclusion)\t\(([.steps[]? | select(.name | startswith("Surface fresh-host Sentry breadcrumb trail")) | .conclusion] | .[0] // "absent"))" end' \
+    --jq 'if .total_count > (.jobs | length) then error("jobs page truncated") else .jobs[] | select((.name == "web_host_replace" or .name == "web_host_create") and (.conclusion // "") != "" and (.conclusion // "") != "skipped") | "\(.id)\t\(.conclusion)\t\(([.steps[]? | select(.name | startswith("Surface fresh-host Sentry breadcrumb trail")) | .conclusion] | .[0] // "absent"))\t\(([.steps[]? | select(.name | startswith("Surface fresh-host Sentry breadcrumb trail")) | .started_at] | .[0] // "-"))" end' \
     2>/dev/null) || {
     printf 'CANNOT ESTABLISH: cannot read the jobs of run %s (transport failure or a >100-job page the probe refuses to grade blind).\n' "$id" >&2
     exit 3; }
-  while IFS=$'\t' read -r jid jcon jstep; do
+  while IFS=$'\t' read -r jid jcon jstep jstart; do
     [[ -n "$jid" ]] || continue   # empty response = no qualifying job in this run
     if ! [[ "$jid" =~ ^[0-9]+$ ]]; then
       printf 'CANNOT ESTABLISH: unexpected job id %s in the jobs response of run %s.\n' "$(san "$jid")" "$id" >&2
@@ -253,21 +281,66 @@ for id in $ids; do
     log=$("$GH" run view --repo "$REPO" --job "$jid" --log </dev/null 2>/dev/null) || {
       printf 'CANNOT ESTABLISH: cannot read the log of job %s (run %s).\n' "$jid" "$id" >&2
       exit 3; }
+    # Normalize once for EVERY consumer of "$log" (8178's exact idiom): gh
+    # writes a UTF-8 BOM at the start of every step section after the first,
+    # landing after the two tab fields, immediately before the timestamp — and
+    # a real log carries one mark PER section, so only the global `//` strip
+    # clears them all. It also fixes the latent named-path edge where a
+    # section's first line carries a BOM-prefixed timestamp into ts_to_epoch.
+    log=${log//$'\r'/}
+    log=${log//$'\357\273\277'/}
     # The trail step's own output: field 2 is the step name, field 3 is
     # "<ts> <content>". Echoed `run:` source begins with an ANSI escape AFTER
-    # the timestamp — drop it; only emitted lines carry a resolved host key.
-    trail=$(awk -F'\t' -v step="$STEP" '
-      index($2, step) == 1 {
-        line = $3; sub(/^[^ ]+ /, "", line)
-        if (substr(line, 1, 1) == sprintf("%c", 27)) next
-        ts = $3; sub(/ .*/, "", ts)
-        printf "%s\t%s\n", ts, line
-      }' <<<"$log")
+    # the timestamp — emit_rows drops it; only emitted lines carry a resolved
+    # host key.
+    trail=$(awk -F'\t' -v step="$STEP" 'index($2, step) == 1 { print $3 }' <<<"$log" | emit_rows)
+    # ATTRIBUTION-EXPIRY RECOVERY (#11600): an aged log arrives with every line
+    # under "UNKNOWN STEP" — the named anchor above yields nothing while the
+    # content survives. The trigger is a PATTERNLESS named trail, not only an
+    # empty one: partial attribution leaves emitted lines under the step name
+    # while the pointer/ready sit under UNKNOWN STEP, and a nonempty-
+    # but-patternless trail on a success job is the same degraded channel an
+    # empty one is. Slice the trail step's output region on the runner's
+    # `##[group]Run` headers: the first header stamped at or after the step's
+    # started_at opens it, the next header (or EOF) closes it. The awk is
+    # git-data-boot-poll-8178.sh's region derivation verbatim; the region then
+    # flows through the SAME emit_rows chokepoint as the named path, and the
+    # recovered region REPLACES the named trail (the region is the step's
+    # whole emitted output — a superset of whatever survived attribution).
+    TRAIL_PATTERN='web-host-(replace|create) web-[0-9]+ — fresh-host Sentry pointer|fresh-host boot reached fresh_boot_ready'
+    recovery_cause=""
+    if ! grep -qE "$TRAIL_PATTERN" <<<"$trail"; then
+      trail=""
+      if [[ "$jstart" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+        region=$(awk -v ps="${jstart:0:19}" '
+          { line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); ts = substr(line, 1, 19) }
+          line ~ /^[0-9][0-9TZ:.-]* ##\[group\]Run / { if (started) exit; if (ts >= ps) { started = 1; next } }
+          started { print line }' <<<"$log")
+        if [[ -z "$region" ]]; then
+          recovery_cause=" (attribution-expired log: no ##[group]Run header at/after ${jstart:0:19} yielded a region)"
+        else
+          region_trail=$(emit_rows <<<"$region")
+          if grep -qE "$TRAIL_PATTERN" <<<"$region_trail"; then
+            trail="$region_trail"
+          elif [[ -z "$region_trail" ]]; then
+            recovery_cause=" (attribution-expired log: recovered region held no emitted lines)"
+          else
+            # A success job's trail step always emits the pointer — a region
+            # with output but no trail-pattern line is a degraded channel
+            # (#11600), never a quiet empty trail.
+            recovery_cause=" (attribution-expired log: recovered region emitted no trail-pattern lines)"
+          fi
+        fi
+      else
+        recovery_cause=" (the trail step's jobs-API entry carried no usable started_at)"
+      fi
+    fi
     # Tripwire: a SUCCESS-conclusion job always emits at least the pointer line
-    # — zero parseable lines means the parse channel itself broke (log shape
-    # drift), which is measurable CANNOT ESTABLISH, not a quiet population of 0.
+    # — zero parseable trail-pattern lines means the parse channel itself broke
+    # (log shape drift OR attribution expiry the recovery could not slice),
+    # which is measurable CANNOT ESTABLISH, not a quiet population of 0.
     if [[ "$jcon" == "success" && -z "$trail" ]]; then
-      printf 'CANNOT ESTABLISH: run %s job %s concluded success but the `%s` step emitted zero parseable lines — the log shape drifted; refusing to grade an unmeasured trail.\n' "$id" "$jid" "$STEP" >&2
+      printf 'CANNOT ESTABLISH: run %s job %s concluded success but the `%s` step emitted zero parseable lines — the log shape drifted; refusing to grade an unmeasured trail%s.\n' "$id" "$jid" "$STEP" "$recovery_cause" >&2
       exit 3
     fi
     ready_ts=$(awk -F'\t' '$2 ~ /^fresh-host boot reached fresh_boot_ready/ { t=$1 } END { if (t != "") print t }' <<<"$trail")

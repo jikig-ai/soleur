@@ -41,6 +41,15 @@
 # All tokens are SYNTHESIZED. No network, no Doppler, no real credential is ever read.
 set -uo pipefail
 
+# STDIN IS CLOSED FOR THE WHOLE SUITE (#11572 item 13). Children inherit this process's stdin, and the S6 stub `docker`
+# (written below) drains it unconditionally with `pw="$(cat)"` on every arm: under an open stdin (a terminal, a CI pipe
+# that never closes) any call that reaches it without its own piped stdin blocks forever. Other readers of stdin exist too
+# (the curl shim cats its body for `@-` and `--config -`); only the `read` loops in this file are all fed by a here-string, a
+# file, a process substitution or a pipe. This line gives every child that is not handed its own stdin an immediate EOF.
+# The pin rows after `_selftest_report` assert that it stays the FIRST statement after `set -uo pipefail`, and that fd 0
+# really is /dev/null at run time.
+exec < /dev/null
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT" || { echo "FATAL: cannot cd to $REPO_ROOT" >&2; exit 2; }
 
@@ -100,6 +109,43 @@ _selftest_report() {
   pass=$p0; fail=$f0; CASES=$c0
 }
 _selftest_report
+
+# Pin of the `exec < /dev/null` above (Guard 3 of #11572 item 13): it must be the FIRST statement after the first
+# `set -uo pipefail`, at column 0 and unconditional. A layout where it sits later, inside a function, an `if` or a `case` arm
+# is refused (each of those lets a child be started with the inherited stdin before it runs, or never runs it).
+_pin_exec_stdin() { # <suite file>
+  awk '
+    !s && $0 == "set -uo pipefail" { s = 1; next }
+    s && !r && $0 !~ /^[[:space:]]*(#|$)/ { r = 1; ok = ($0 == "exec < /dev/null") }
+    END { exit !(s && r && ok) }' "$1"
+}
+if _pin_exec_stdin "${BASH_SOURCE[0]}"; then row "stdin: the suite closes its stdin (exec < /dev/null) as the first statement after set -uo pipefail" ok
+else row "stdin: the suite closes its stdin (exec < /dev/null) as the first statement after set -uo pipefail" fail "the exec line is missing, not first, conditional, or nested"; fi
+# Runtime: fd 0 really is /dev/null (the file pin above cannot see an exec that never ran). Without /proc, a read that returns
+# EOF at once (rc 1) stands in; an open stdin would time out (rc > 128) instead.
+_fd0="$(readlink /proc/self/fd/0 2>/dev/null || true)"
+if [[ -z "$_fd0" ]]; then IFS= read -r -t 2 _fd0_line; _fd0_rc=$?; [[ "$_fd0_rc" == 1 ]] && _fd0=/dev/null; fi
+if [[ "$_fd0" == /dev/null ]]; then row "stdin: fd 0 is /dev/null at run time" ok
+else row "stdin: fd 0 is /dev/null at run time" fail "fd 0 is '$_fd0'"; fi
+# Controls: the pin accepts the canonical layout and refuses each broken one (written under the scratch root).
+printf '#!/usr/bin/env bash\n# c\nset -uo pipefail\n\n# note\nexec < /dev/null\nX=1\n' > "$TMPD/pin-good.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nX=1\nexec < /dev/null\n' > "$TMPD/pin-late.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nf() {\nexec < /dev/null\n}\nX=1\n' > "$TMPD/pin-nested.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nif false; then\nexec < /dev/null\nfi\nX=1\n' > "$TMPD/pin-conditional.sh"
+# A comment above the real `set` that quotes it: an anchor loosened to a substring match would start counting at the comment,
+# and then accept the exec line that sits between the comment and the real `set`.
+printf '#!/usr/bin/env bash\n# note: set -uo pipefail\nexec < /dev/null\nset -uo pipefail\nX=1\n' > "$TMPD/pin-set-quoted.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\n exec < /dev/null\nX=1\n' > "$TMPD/pin-exec-indented.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null || true\nX=1\n' > "$TMPD/pin-exec-trailing.sh"
+if _pin_exec_stdin "$TMPD/pin-good.sh"; then row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" ok
+else row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" fail "a good layout was refused"; fi
+for _pin_bad in late nested conditional set-quoted; do
+  if _pin_exec_stdin "$TMPD/pin-$_pin_bad.sh"; then row "stdin pin control: the $_pin_bad layout is refused" fail "the pin accepted a $_pin_bad layout"
+  else row "stdin pin control: the $_pin_bad layout is refused" ok; fi
+done
+if _pin_exec_stdin "$TMPD/pin-exec-indented.sh" || _pin_exec_stdin "$TMPD/pin-exec-trailing.sh"; then
+  row "stdin pin control: an exec line with a leading space, or with trailing text, is refused" fail "the pin accepted an altered exec line"
+else row "stdin pin control: an exec line with a leading space, or with trailing text, is refused" ok; fi
 
 # --------------------------------------------------------------------------------------
 # TOOLING: the real tools a probe needs, symlinked into ONE dir. curl/gh/doppler/ssh/git are
@@ -8154,7 +8200,7 @@ else row "S9 exclusions: an exclusion rule hid a credential -var it should not, 
 
 # ---- Guard 2: the four rehearsal terraform step bodies EXECUTED under strict stubs --------------------------------------------------
 S9_CANARY="S9CANARYzot0123"
-for t in date; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date; every other command in the four bodies is a builtin
+for t in date sed; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date, the sourced redaction filter (#11294) is sed; every other command in the four bodies is a builtin
 { printf '#!%s\n' "$BASH_BIN"; cat <<'S9DOP'
 # Stub doppler: records argv (NUL-delimited) and answers ONLY the two argv shapes the steps use (anything else: exit 64 and a refusal line, so a changed
 # flag, config or project is visible). `run` execs the command after `--` and injects NO TF_VAR_* (production inherits an equal value from prd_terraform; the stub
@@ -8184,6 +8230,8 @@ S9_N=0
 s9_run() { # <bodyfile> <expected terraform argv> -> S9_RC S9_DIR
   local r; S9_N=$((S9_N + 1)); r="$S9/rows/r$S9_N"; assert_fixture_dir "$r"; mkdir -p "$r/calls" "$r/cwd"
   S9_RC=0
+  # The step bodies source the redaction filter through $GITHUB_WORKSPACE (#11294); this scratch workspace gets a copy of the real one.
+  mkdir -p "$r/cwd/tests/scripts/lib" && cp "$REPO_ROOT/tests/scripts/lib/tf-redact-random-ids.sh" "$r/cwd/tests/scripts/lib/"
   ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 GITHUB_WORKSPACE="$r/cwd" DOPPLER_TOKEN="default-scope" DOPPLER_TOKEN_PRD="prd-scope" \
       S9_CANARY_VAL="$S9_CANARY" S9_TF_ARGV="$2" "$BASH_BIN" --noprofile --norc -eo pipefail "$1" ) > "$r/out" 2>&1 || S9_RC=$?
   S9_DIR="$r"
@@ -8216,12 +8264,12 @@ s9_mrow() { # <tag> <id> <want reasons> <old> <new> [<old> <new>]...: copy the b
 for spec in 'teardown-only|Teardown only (recovery arm)|destroy -auto-approve -input=false|false' 'teardown-job|Terraform destroy (everything|destroy -auto-approve -input=false|false' \
             'plan-a|Terraform plan (phase A|plan -no-color -input=false -out=tfplan-a|false' 'plan-b|Terraform plan (phase B|plan -no-color -input=false -out=tfplan-b|true'; do
   IFS='|' read -r tag sel argv nic <<<"$spec"
-  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic"$'\n'
+  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic 2>&1 | tf_redact_random_ids"$'\n' # the step tail now pipes through the redactor (#11294)
   s3_body "$REPO_ROOT/$S9_WF" "$sel" > "$S9/body-$tag.sh" || fatal "S9 could not extract the $tag step"
   s9_run "$S9/body-$tag.sh" "$S9_TF_ARGV"; s9_judge_run
   if [[ -z "$S9_R_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real step body runs GREEN under the strict stubs: one terraform call with exactly the expected argv, the token masked before terraform runs, in its environment and in no argv" ok
   else row "S9 Guard 2 control ($tag): the real step body is not GREEN under the strict stubs (every mutant below would measure the base)" fail "reasons='$S9_R_REASONS'"; fatal "S9 control not green for $tag: a red baseline voids every mutant"; fi
-  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
+  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}" 2>&1 | tf_redact_random_ids\n'
   s9_mrow "$tag" m2-reorder "env-not-set" "$S9_EXP" '' "$S9_TAIL" "$S9_TAIL$S9_EXP"
   s9_mrow "$tag" m3-mask "mask-missing" "$S9_MASK" ''
   s9_mrow "$tag" m4-doppler-scope "rc ncalls refused" "-c prd_terraform" "-c prd"
@@ -8277,7 +8325,9 @@ SELFTEST_PASSES=0
 # 825 -> 824 at #6590 PR-B: the orphan-sweeps-relook-10972 suite was retired (monitor destroyed);
 # its DELEGATED_MANIFEST row left with it. Rebased over #11483's dispatch-recovery-sweeper-11211
 # (+1, main 825): net floor stays 824.
-EXPECTED_TESTS=824
+# 824 -> 830 at #11572 (item 13): 829 measured on main before this change, plus the one stdin pin row (830 passed, 0 failed).
+# 830 -> 837 at the #11572 review rounds (2026-10-30): the pin is "first statement after set -uo pipefail" (1 row), plus the run-time fd 0 row, the canonical-layout control, four refused-layout controls (late, nested, conditional, a quoted `set` above the real one) and one altered-exec-line control: measured (837 passed, 0 failed).
+EXPECTED_TESTS=837
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

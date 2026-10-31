@@ -245,10 +245,15 @@ export const ISOLATION_TARGETS: Target[] = [
   },
   {
     table: "messages",
-    updateCol: "workspace_id",
+    // Migration 181 narrows authenticated UPDATE to (status, draft_preview) behind messages_owner_draft_update, which
+    // only reaches an author's DRAFT rows. The attack therefore self-assigns draft_preview of a draft card A authored:
+    // A can update it (positive control) and a denial for B/C comes from the policy, not from a column privilege.
+    updateCol: "draft_preview",
     seed: async (b, c) => {
-      const [{ id }] = await b`insert into messages (workspace_id, template_id, conversation_id, role, content)
-        values (${c.wsA}, 'work', ${c.convA}, 'user', 'rls-fuzz-seed') returning id`;
+      const [{ id }] = await b`insert into messages
+        (workspace_id, template_id, user_id, status, source, owning_domain, draft_preview, tier)
+        values (${c.wsA}, 'work', ${c.userA}, 'draft', 'rls-fuzz', 'engineering', 'rls-fuzz-seed', 'external_low_stakes')
+        returning id`;
       return idLocate(id);
     },
     forge: (h, c) =>

@@ -1976,7 +1976,7 @@ need(re.search(r'max_runtime_minutes\s*=\s*6\b', mb) is not None, "sentry-monito
 need(re.search(r'failure_issue_threshold\s*=\s*1\b', mb) is not None, "sentry-monitor-failure_issue_threshold-1")
 need(re.search(r'recovery_threshold\s*=\s*1\b', mb) is not None, "sentry-monitor-recovery_threshold-1")
 need(re.search(r'timezone\s*=\s*"UTC"', mb) is not None, "sentry-monitor-timezone-UTC")
-need(re.search(r'^\s*scheduled_deadman_heartbeat_feeder\s*=\s*"[^"]*11631', alerts, re.M) is not None, "sentry-unrouted-label")
+need(re.search(r'^\s*scheduled_deadman_heartbeat_feeder\s*=\s*"[^"]*tracked on #11672', alerts, re.M) is not None, "sentry-unrouted-label")
 need("sentry_cron_monitor.scheduled_deadman_heartbeat_feeder.id" not in re.sub(r"(?s)locals \{.*?\n\}\n", "", alerts, count=1), "sentry-monitor-routed-prematurely")
 print("\n".join(bad))
 PYW
@@ -1999,7 +1999,7 @@ for res in ("luks_monitor_host_timer", "claude_cost_capture"):
     if "paused: true" not in b: bad.append("manifest-paused-" + res)
     if 'file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml"' not in b: bad.append("manifest-evidence-file-" + res)
     if 'pattern: "bash scripts/deadman-heartbeat-feeder.sh"' not in b: bad.append("manifest-evidence-pattern-" + res)
-    if "arming_pending: { tracking_issue: 11631 }" not in b: bad.append("manifest-arming_pending-" + res)
+    if 'arming_pending: { tracking_issue: 11631, expires: "2026-11-13" }' not in b: bad.append("manifest-arming_pending-" + res)
 print("\n".join(bad))
 PYM
 )"
@@ -2563,15 +2563,11 @@ w_sblock g4s-3 MONITORS_TF 'timezone                = "UTC"' 'timezone          
 wire_red G4S-3 'sentry-monitor-timezone-UTC' "$UPTIME_TF" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$WM"
 w_sblock g4s-4 MONITORS_TF 'max_runtime_minutes     = 6' 'max_runtime_minutes     = 8'
 wire_red G4S-4 'sentry-monitor-max_runtime-6' "$UPTIME_TF" "$APPLY_WF" "$TABLE_TS" "$FEEDER_SRC" "$WM"
-w_mut g4a-1 APPLY_WF '              -target=terraform_data.egress_gateway_web2
-' '              -target=terraform_data.egress_gateway_web2 \
-              -target=betteruptime_heartbeat.claude_cost_capture
-'
+w_mut g4a-1 APPLY_WF '              -target=terraform_data.egress_gateway_web2 2>&1' '              -target=terraform_data.egress_gateway_web2 \
+              -target=betteruptime_heartbeat.claude_cost_capture 2>&1'
 wire_red G4A-1 'apply-target-in-ssh-step-claude_cost_capture' "$UPTIME_TF" "$WM" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
-w_mut g4a-2 APPLY_WF '              -target=terraform_data.egress_gateway_web2
-' '              -target=terraform_data.egress_gateway_web2 \
-              -target=logtail_exploration.luks_monitor_host_timer_dark
-'
+w_mut g4a-2 APPLY_WF '              -target=terraform_data.egress_gateway_web2 2>&1' '              -target=terraform_data.egress_gateway_web2 \
+              -target=logtail_exploration.luks_monitor_host_timer_dark 2>&1'
 wire_red G4A-2 'apply-destroy-target-in-ssh-step' "$UPTIME_TF" "$WM" "$TABLE_TS" "$FEEDER_SRC" "$MONITORS_TF"
 # The feeder script has exactly one invoker among the repo's workflows.
 feeder_invokers() { # <workflows-dir> -> the number of workflow files that run the feeder script (non-comment lines)

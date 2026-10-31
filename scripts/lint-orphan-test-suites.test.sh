@@ -100,7 +100,7 @@ while (( $# )); do
       ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
       ;;
     *)
-      echo "ERROR: unknown argument '$1'" >&2
+      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
       exit 2
       ;;
   esac
@@ -1129,7 +1129,7 @@ mkdir -p "$TMP/rows" || harness_die "row-dispatch mkdir"
 # EXEC_IDS is the dispatched set, recorded PARENT-SIDE (worker subshells cannot tick parent
 # state) at the moment each worker spawns. Replay and aggregation iterate it — never
 # re-derived, because `in_range` is stateful (a second pass doubles _site_seq) and a substring
-# membership test is wrong (M1 is a prefix of M10..M16). C0 dispatches ahead of the range
+# membership test is wrong (M1 is a prefix of M10..M35). C0 dispatches ahead of the range
 # gate: it is the unconditional control, not a gated site. `in_range` stays a standalone
 # statement — as the left operand of `&&` before `&`, bash binds the AND-list into the
 # backgrounded subshell and the parent's counters would read zero.
@@ -1294,7 +1294,7 @@ else
 fi
 
 # FLOORS — equality, not thresholds, so a deleted site can never read as a smaller green.
-# _site_seq counts every gated call site (M1..M16): a removed row FATALs here even when the
+# _site_seq counts every gated call site (M1..M35): a removed row FATALs here even when the
 # range it fell in still produces a green half. (The old MIN_ROWS=18 was a floor over 19 sites
 # — deleting R1 or R1b stayed green. Equality removes that slack; conservation below pins the
 # unconditional sites.)

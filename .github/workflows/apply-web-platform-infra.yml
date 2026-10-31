@@ -473,6 +473,8 @@ jobs:
           # which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
           # recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           set +e
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
@@ -695,8 +697,8 @@ jobs:
               -target=doppler_secret.inngest_tls_key \
               -target=doppler_secret.inngest_tls_cert \
               -target=doppler_secret.inngest_tls_ca \
-              -target=supabase_project.prd
-          rc=$?
+              -target=supabase_project.prd 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan failed (exit $rc)."
             exit $rc
@@ -941,14 +943,10 @@ jobs:
       # config's rules over the live list (the #6746 "Flexible SSL for web
       # platform" app.soleur.ai outage class).
       #
-      # The destroy-guard step above CANNOT catch this: on a create, before.rules
-      # is null, so its before−after delta is negative and filtered by
-      # select(. > 0), and resource_deletes is 0 — no [ack-destroy] fires. A
-      # plan-derived guard inherits plan's blind spot. This gate asserts on plan
-      # SHAPE (a whole-list resource planned as a pure create from absent state)
-      # and then QUERIES THE LIVE CLOUDFLARE API to decide. DEFAULT-DENY: it
-      # passes only on a proven-empty entrypoint (200-empty or 404) and
-      # fail-closes on every ambiguity.
+      # The destroy-guard step above CANNOT catch this (on a create, before.rules is null, so its delta is
+      # filtered out and no [ack-destroy] fires): a plan-derived guard inherits plan's blind spot. This gate
+      # asserts on plan SHAPE and then QUERIES THE LIVE CLOUDFLARE API. DEFAULT-DENY: it passes only on a
+      # proven-empty entrypoint (200-empty or 404) and fail-closes on every ambiguity.
       #
       # Positioned AFTER "Terraform plan" (which wrote tfplan.json) and BEFORE the
       # MAIN "Terraform apply", OUTSIDE any [ack-destroy] bypass — a whole-list
@@ -987,8 +985,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -auto-approve -input=false tfplan
+            terraform apply -auto-approve -input=false tfplan 2>&1 | tf_redact_random_ids
 
       # Tunnel ingress origin verification (#6594 / ADR-114 I2).
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply/Measure the apex origin (ADR-194 Hypothesis Z) (test-anchored lines kept below)
@@ -1242,16 +1242,16 @@ jobs:
         # add guard coverage.
         #
         # This is a SEPARATE `terraform apply` (not the saved tfplan), so it runs
-        # its own internal plan against its target set. R2 backend creds (bare
-        # AWS_ACCESS_KEY_ID/_SECRET) are already in $GITHUB_ENV from "Extract
-        # backend credentials" and persist across steps; `--name-transformer
-        # tf-var` injects TF_VAR_* doppler secrets but passes those bare AWS_*
-        # vars through untouched (same pattern as the main apply above).
+        # its own internal plan against its target set. R2 backend creds persist
+        # in $GITHUB_ENV from "Extract backend credentials" (same pattern as the
+        # main apply above).
         # `-var="ssh_key_path=${CI_SSH_PUB}"` satisfies HCL file() parsing for the
         # excluded hcloud_ssh_key.default (never consumed; see the plan step).
         # TF_VAR_ci_ssh_private_key is exported by the bridge action → agent=false.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false \
               -var="ssh_key_path=${CI_SSH_PUB}" \
@@ -1279,7 +1279,7 @@ jobs:
               -target=terraform_data.luks_monitor_install \
               -target=terraform_data.workspaces_boot_unlock_install \
               -target=terraform_data.egress_gateway \
-              -target=terraform_data.egress_gateway_web2
+              -target=terraform_data.egress_gateway_web2 2>&1 | tf_redact_random_ids
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
       # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the
@@ -1396,18 +1396,11 @@ jobs:
       # and removes it only on a 2xx rollback or on reaching `up`, so a non-empty file here
       # means exactly "these monitors are live and unconfirmed".
       #
-      # Deliberately NOT a `trap` inside the ARM step (Cut List C6): bash keeps only the last EXIT
-      # handler, an INT/TERM handler returns and then fires EXIT too, and bash defers the handler
-      # until the foreground `sleep` returns. A sibling step gated `if: always()` runs on every one
-      # of those paths — any signal that kills the ARM step leaves the job alive, and a job-level
-      # cancellation runs this inside the grace window.
+      # Deliberately NOT a `trap` inside the ARM step (Cut List C6): bash keeps only the last EXIT handler and
+      # defers it until the foreground `sleep` returns. A sibling `if: always()` step runs on every cut path.
       #
-      # THE BODY IS NOT HERE (#7659). It shipped as ~45 lines of bash inside this scalar, guarded
-      # by ten regexes over the step text — the very shape the ARM gate was extracted OUT of in
-      # this same change, with a second `hb_patch_paused`, a second copy of the API base literal,
-      # and a fail-not-annotate branch that a regex could not tell from an unrelated `exit 1`.
-      # `arm-heartbeats.sh --sweep` is that body, executed by arm-heartbeats.test.sh (cases S1–S6).
-      # What stays here is what a script cannot own: the step's own secret env and the mint.
+      # THE BODY IS NOT HERE (#7659): `arm-heartbeats.sh --sweep` is that body, executed by
+      # arm-heartbeats.test.sh (cases S1-S6). What stays here is the step's own secret env and the mint.
       - name: Re-pause any monitor left unconfirmed
         if: always()
         # POST-GATE CEILING (#7657 D3). The ARM step got a ceiling and the LAST-CHANCE ROLLBACK did
@@ -1806,12 +1799,9 @@ jobs:
         # REQUIRED), and the gate's allow-set is exactly the -target= list below.
         run: |
           set -uo pipefail
-          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
-          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
-          # cannot clear it. Without this the step died AT the doppler line on a plan failure
-          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
-          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
-          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # `set +e`: `bash -e {0}` inherits errexit (see the per-merge plan).
           set +e
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
@@ -1830,8 +1820,8 @@ jobs:
               -target='doppler_secret.inngest_event_key_dedicated' \
               -target='doppler_secret.inngest_redis_password_dedicated' \
               -target='doppler_secret.inngest_betterstack_logs_token' \
-              -target='doppler_service_token.inngest'
-          rc=$?
+              -target='doppler_service_token.inngest' 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (inngest-host) failed (exit $rc)."
             exit $rc
@@ -1879,8 +1869,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids
 
       - name: Dispatch summary
         if: always()
@@ -2107,12 +2099,9 @@ jobs:
         # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
-          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
-          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
-          # cannot clear it. Without this the step died AT the doppler line on a plan failure
-          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
-          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
-          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # `set +e`: `bash -e {0}` inherits errexit (see the per-merge plan).
           set +e
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
@@ -2120,8 +2109,8 @@ jobs:
               -target='hcloud_server.inngest' \
               -target='hcloud_server_network.inngest' \
               -target='hcloud_volume_attachment.inngest_redis_luks' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (inngest-host-replace) failed (exit $rc)."
             exit $rc
@@ -2174,11 +2163,13 @@ jobs:
         # we applied) that the Redis AOF volume carries no delete action (backstop to the guard).
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # Mid-replace failure: the destroy ran first, so name the fresh stock class before the
           # operator acts — stock-caused vs config/contract/apply failures take different arms.
           # stock_recovery_report is a diagnostic annotation only; it always returns 0 (#9510).
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report inngest-host-replace tfplan.json --probe-state
@@ -2290,12 +2281,9 @@ jobs:
         # plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
-          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
-          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
-          # cannot clear it. Without this the step died AT the doppler line on a plan failure
-          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
-          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
-          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # `set +e`: `bash -e {0}` inherits errexit (see the per-merge plan).
           set +e
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
@@ -2306,8 +2294,8 @@ jobs:
               -target='hcloud_firewall_attachment.registry' \
               -target='hcloud_volume.registry' \
               -target='doppler_secret.registry_betterstack_logs_token' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (registry-host-replace) failed (exit $rc)."
             exit $rc
@@ -2361,12 +2349,14 @@ jobs:
         # the private NIC shows a create (re-attached) — belt-and-suspenders to the guard.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
           # leaves the registry DOWN. Emit a self-documenting recovery annotation, then fail hard
           # (gating behavior unchanged). Serving is covered by the ADR-096 GHCR dark-launch
           # fallback; the store volume is preserved (guarded), so re-dispatch re-creates the host.
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # "GHCR fallback covers serving" was RETRACTED by #7071 — the host->GHCR read PAT is
             # revoked (401) and the minter is disabled (403 DENIED), so no host pulls from GHCR
             # at all. This PR corrected the same sentence on the recut arm and left these two
@@ -2537,12 +2527,9 @@ jobs:
         # ABORTS unless the plan is EXACTLY the scoped region migration.
         run: |
           set -uo pipefail
-          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
-          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
-          # cannot clear it. Without this the step died AT the doppler line on a plan failure
-          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
-          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
-          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # `set +e`: `bash -e {0}` inherits errexit (see the per-merge plan).
           set +e
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
@@ -2552,8 +2539,8 @@ jobs:
               -target='hcloud_firewall_attachment.registry' \
               -target='hcloud_volume.registry' \
               -target='doppler_secret.registry_betterstack_logs_token' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (registry-region-migrate) failed (exit $rc)."
             exit $rc
@@ -2610,11 +2597,13 @@ jobs:
         # load-bearing safety — belt-and-suspenders to the guard).
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # A mid-migration apply failure (old volume/host gone, new create fails — quota/stock/boot)
           # leaves the registry DOWN. Serving is covered by the ADR-096 GHCR dark-launch fallback;
           # the store is a GHCR mirror (re-fills), so re-dispatch re-creates the host + fresh volume.
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # Same #7071 retraction as above. Do not reinstate the fallback claim.
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
@@ -2690,12 +2679,10 @@ jobs:
   # does not predict a GitHub-hosted runner's). A rehearsal that succeeds SLOWLY subtracts from
   # the post-destroy window and pushes a timeout into `terraform apply` or D11.
   #
-  # WHAT THE SPLIT BUYS, precisely, because it is easy to overclaim: a FAILURE-SEMANTICS
-  # property, not a mutex property. A timeout HERE destroys nothing and leaves
-  # `store_refill_needed` unset, so the chained restore correctly skips. A timeout in the recut
-  # job is unrecoverable — it is a *cancellation*, so no `::error::` fires and the Dispatch
-  # summary that is the sole emitter of the new volume id never runs. The split moves the
-  # unmeasured term to the side where overrunning is free.
+  # WHAT THE SPLIT BUYS: a FAILURE-SEMANTICS property, not a mutex property. A timeout HERE destroys nothing and
+  # leaves `store_refill_needed` unset, so the chained restore skips; a timeout in the recut job is a
+  # *cancellation* (no `::error::`, no Dispatch summary emitting the new volume id). The unmeasured term moves
+  # to the side where overrunning is free.
   #
   # WHAT IT DOES NOT BUY: the `concurrency` group is WORKFLOW-level, so this releases no mutex.
   # The worst-case fleet-wide apply block is now the SUM across this job, the recut, and the
@@ -3229,12 +3216,9 @@ jobs:
         # volume, which is a host replace, not a recut. They move TOGETHER or not at all.
         run: |
           set -uo pipefail
-          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
-          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
-          # cannot clear it. Without this the step died AT the doppler line on a plan failure
-          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
-          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
-          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # `set +e`: `bash -e {0}` inherits errexit (see the per-merge plan).
           set +e
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
@@ -3247,8 +3231,8 @@ jobs:
               -target='hcloud_firewall_attachment.registry' \
               -target='hcloud_volume.registry' \
               -target='doppler_secret.registry_betterstack_logs_token' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (registry-luks-recut) failed (exit $rc)."
             exit $rc
@@ -3385,8 +3369,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # NOTE the corrected claim. This message previously said "GHCR fallback covers
             # serving" — the #7071-retracted premise, asserted to an operator mid-incident, on
             # the surface where they decide what to do next. It does NOT cover serving: the
@@ -4004,12 +3990,9 @@ jobs:
         # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
-          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
-          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
-          # cannot clear it. Without this the step died AT the doppler line on a plan failure
-          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
-          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
-          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # `set +e`: `bash -e {0}` inherits errexit (see the per-merge plan).
           set +e
           GATE_MODE=replace
           EXTRA_REPLACE=(); EXTRA_TARGET=()
@@ -4032,8 +4015,8 @@ jobs:
               -target='hcloud_firewall_attachment.git_data' \
               -target='doppler_secret.git_data_ssh_host_key' \
               "${EXTRA_TARGET[@]}" \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (git-data-host-replace) failed (exit $rc)."
             exit $rc
@@ -4123,6 +4106,8 @@ jobs:
         # (re-attached) — belt-and-suspenders to the guard.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
           # leaves git-data DOWN with the writer-side CAS fence offline. UNLIKE registry (GHCR
           # fallback) / inngest (paused reminders), git-data has NO serving fallback — in plain
@@ -4131,7 +4116,7 @@ jobs:
           # corrupt (single-writer at replicas=1 → no split-brain). Emit a self-documenting
           # recovery annotation, then fail hard (gating behavior unchanged).
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report git-data-host-replace tfplan.json --probe-state
@@ -4368,6 +4353,8 @@ jobs:
           # would exit the step before the ::error:: guidance prints. `set -e` is re-armed after.
           set +e
           set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target='random_password.workspaces_luks' \
@@ -4375,8 +4362,8 @@ jobs:
               -target='doppler_service_token.workspaces_luks' \
               -target='hcloud_volume.workspaces_luks' \
               -target='hcloud_volume_attachment.workspaces_luks' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (workspaces-luks-cutover) failed (exit $rc)."
             exit $rc
@@ -4404,8 +4391,10 @@ jobs:
         # the encrypted volume + attachment each show a create. This is additive — zero downtime.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             echo "::error::terraform apply (workspaces-luks-cutover) failed — the encrypted volume was not provisioned. The current /mnt/data is UNTOUCHED (additive create); re-dispatch to retry."
             exit 1
           fi
@@ -4578,13 +4567,15 @@ jobs:
           # set +e so the `rc=$?` diagnostic runs — GitHub runs `run:` under an inherited `-e`.
           set +e
           set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_volume.workspaces_luks' \
               -target='hcloud_volume.workspaces_luks' \
               -target='hcloud_volume_attachment.workspaces_luks' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (workspaces-luks-recut) failed (exit $rc)."
             exit $rc
@@ -4612,8 +4603,10 @@ jobs:
         # the LUKS volume shows BOTH a delete AND a create (replace); the attachment shows a create.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             echo "::error::terraform apply (workspaces-luks-recut) failed — the orphaned volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state). The serving /mnt/data is UNTOUCHED (different volume) so serving is unaffected. RECOVERY: re-dispatch workspaces-luks-recut with the SAME confirm + expected_luks_volume_id — a re-dispatch plans a bare create which the gate's recovery arm accepts (before==null → id-pin is a no-op), completing the raw-volume + attachment create."
             exit 1
           fi
@@ -4962,6 +4955,8 @@ jobs:
           # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
           set +e
           set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target="hcloud_server.web[\"${WEB_HOST_KEY}\"]" \
@@ -4977,8 +4972,8 @@ jobs:
               -target="doppler_secret.web_nic_guard_url[\"${WEB_HOST_KEY}\"]" \
               -target="doppler_secret.web_bash_synthetic_url[\"${WEB_HOST_KEY}\"]" \
               -var="ssh_key_path=${CI_SSH_PUB}" \
-              -var="image_name=${PINNED}"
-          rc=$?
+              -var="image_name=${PINNED}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (web-host-create for ${WEB_HOST_KEY}) failed (exit $rc)."
             exit $rc
@@ -5044,8 +5039,10 @@ jobs:
         # illusion of a second opinion.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report web-host-create tfplan.json --probe-state
@@ -5382,6 +5379,8 @@ jobs:
           # inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
           set +e
           set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace="hcloud_server.web[\"${WEB_HOST_KEY}\"]" \
@@ -5390,8 +5389,8 @@ jobs:
               -target="hcloud_volume_attachment.workspaces[\"${WEB_HOST_KEY}\"]" \
               -target="hcloud_firewall_attachment.web" \
               -var="ssh_key_path=${CI_SSH_PUB}" \
-              -var="image_name=${PINNED}"
-          rc=$?
+              -var="image_name=${PINNED}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (web-host-replace for ${WEB_HOST_KEY}) failed (exit $rc). Nothing has been destroyed."
             exit $rc
@@ -5462,8 +5461,10 @@ jobs:
         # post-mortem arrives after the original host is gone.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report web-host-replace tfplan.json --probe-state
@@ -5878,6 +5879,8 @@ jobs:
           # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
           set +e
           set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target='hcloud_server.git_data' \
@@ -5900,8 +5903,8 @@ jobs:
               -target='doppler_secret.git_data_betterstack_logs_token' \
               -target='tls_private_key.git_data_host_ssh' \
               -target='doppler_secret.git_data_ssh_host_key' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
-          rc=$?
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (git-data-host-create) failed (exit $rc)."
             exit $rc
@@ -5980,8 +5983,10 @@ jobs:
         # ARM, which runs BEFORE apply, so a bad plan is refused rather than post-mortem'd.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report git-data-host-create tfplan.json --probe-state
@@ -5994,15 +5999,8 @@ jobs:
           fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
           if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
-      # (#6982, R20) POLL FOR THE BOOT SIGNAL. This is ADR-149 checklist item 4's honest
-      # discharge, and the step whose absence made the previous one a lie: until now the
-      # only post-apply step was a text summary whose own comment read "A green apply is
-      # NOT a green boot — and for THIS host there is currently no boot signal at all."
-      #
-      # #6982 ships the PRODUCER (git-data-bootstrap.sh's stage:boot_complete emit). A
-      # producer with no reader is not a signal, so this is the reader. ADR-145's R2-R5
-      # pattern is a poll INSIDE the birth job — "the job now waits for a bad outcome,
-      # which is what makes it a signal rather than a step".
+      # (#6982, R20) POLL FOR THE BOOT SIGNAL: ADR-149 checklist item 4's reader for the producer #6982 ships
+      # (the bootstrap script's stage:boot_complete emit); the job waits for a bad outcome (ADR-145 R2-R5).
       #
       # Runs after a green OR a failed apply, never after a skipped one: a partial birth is
       # exactly when the boot evidence matters most, but a plan the gate REFUSED has no host
@@ -6013,11 +6011,8 @@ jobs:
       # `!= 'skipped'`: a renamed `apply` id resolves to '', and only the enumerated form
       # fails closed on that (the idiom's rationale in apply-deploy-pipeline-fix.yml).
       #
-      # It reads BETTER STACK, not Sentry, and that is forced rather than chosen: the
-      # boot-completion emit goes to both, but scripts/sentry-issue.sh needs
-      # SENTRY_ISSUE_RO_TOKEN (its own header records that SENTRY_IAC_AUTH_TOKEN 403s on
-      # event:read), while the Better Stack query credentials resolve through the
-      # DOPPLER_TOKEN this job already holds.
+      # It reads BETTER STACK, not Sentry (forced): scripts/sentry-issue.sh needs SENTRY_ISSUE_RO_TOKEN, while
+      # the Better Stack query credentials resolve through the DOPPLER_TOKEN this job already holds.
       - name: Poll for the git-data boot-completion signal
         id: poll
         if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
@@ -6268,6 +6263,8 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # The policy is targeted alongside the token because its
           # `include.service_token` references the token's id, which changes on
           # replace. Omitting it would leave the Access policy pointing at a token
@@ -6278,7 +6275,7 @@ jobs:
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=cloudflare_zero_trust_access_service_token.ci_ssh \
               -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token \
-              -replace=cloudflare_zero_trust_access_service_token.ci_ssh
+              -replace=cloudflare_zero_trust_access_service_token.ci_ssh 2>&1 | tf_redact_random_ids
 
       - name: Blast-radius gate (reads the PLAN, not the flags)
         working-directory: ${{ env.INFRA_DIR }}
@@ -6374,8 +6371,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
 
       - name: Sync the new CI-SSH service token to Doppler
         # WITHOUT THIS THE ARM IS A NO-OP THAT LOOKS LIKE A FIX: the freshly minted
@@ -6552,6 +6551,8 @@ jobs:
           LINK_VALUE: ${{ inputs.inngest_link_value }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # The requested value is the plan's own TF_VAR (`env` runs AFTER doppler injected its variables): empty for
           # `off`, which plans the count-gated resource away. The source key is written only after this gate passes.
           TF_LINK="$LINK_VALUE"
@@ -6560,7 +6561,7 @@ jobs:
             env "TF_VAR_inngest_link_tls=${TF_LINK}" \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
-              -target=doppler_secret.inngest_link_tls
+              -target=doppler_secret.inngest_link_tls 2>&1 | tf_redact_random_ids
           terraform show -json tfplan > "$RUNNER_TEMP/flag-plan.json"
           # Blast-radius gate: only this address may change. `off` plans at most ONE delete (none = already absent);
           # any other value must plan EXACTLY ONE create or update (zero changes = the value did not land).
@@ -6623,8 +6624,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
 
       # Separate from the apply: the reconcile keys on the apply step's own outcome.
       - name: Verify the source key matches the applied state
@@ -6820,17 +6823,15 @@ jobs:
         # production restart.
         run: |
           set -uo pipefail
-          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a bare
-          # run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail` cannot
-          # clear it. Without this the step would die AT the doppler line on a plan failure and
-          # both `rc=$?` and the `::error::` below would be unreachable. The handler still ends
-          # `exit $rc`, so this cannot turn a failed prod plan green.
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # `set +e`: `bash -e {0}` inherits errexit (see the per-merge plan).
           set +e
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
-              -target=terraform_data.journald_persistent
-          rc=$?
+              -target=terraform_data.journald_persistent 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (vector-redeliver) failed (exit $rc). NOTHING has been applied."
             exit $rc
@@ -6888,8 +6889,10 @@ jobs:
         # scope are the SAME OBJECT, not two lists kept in sync. Never add `-target=` here.
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
 
       - name: Tear down cloudflared SSH bridge
         if: always()

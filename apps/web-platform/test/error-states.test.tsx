@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ErrorCard } from "../components/ui/error-card";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
@@ -44,6 +44,32 @@ describe("ErrorCard component", () => {
     const link = screen.getByText("Update key");
     expect(link).toBeDefined();
     expect(link.getAttribute("href")).toBe("/dashboard/settings");
+  });
+
+  test("newTab renders a plain external anchor (target=_blank, rel=noopener noreferrer)", () => {
+    render(
+      <ErrorCard
+        title="Invalid API Key"
+        message="Your key has expired"
+        action={{ label: "Update key", href: "/dashboard/settings" }}
+        newTab
+      />,
+    );
+    const link = screen.getByText("Update key").closest("a")!;
+    expect(link.getAttribute("href")).toBe("/dashboard/settings");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  test("without newTab the action keeps the same-tab NavLink (no target)", () => {
+    render(
+      <ErrorCard
+        title="Error"
+        message="x"
+        action={{ label: "Go", href: "/dashboard" }}
+      />,
+    );
+    expect(screen.getByText("Go").closest("a")!.getAttribute("target")).toBeNull();
   });
 
   test("does not render retry button when no onRetry", () => {
@@ -169,7 +195,9 @@ describe("Error state clearing on remount (#1377)", () => {
     const link = screen.getByText("Update token");
     expect(link.closest("a")).toHaveAttribute("href", "/dashboard/settings");
     expect(screen.queryByText("Update key")).toBeNull();
-    expect(screen.queryByText("Reconnect")).toBeNull();
+    // #11525: the oauth card now offers an explicit Reconnect (never an AUTO one).
+    expect(screen.getAllByRole("button", { name: "Reconnect" }).length).toBeGreaterThan(0);
+    expect(mockReconnect).not.toHaveBeenCalled();
   });
 
   test("the scheme, never the message text, selects the card (#11086, CTO F7)", async () => {
@@ -223,14 +251,19 @@ describe("Error state clearing on remount (#1377)", () => {
     expect(screen.queryByText("Invalid API Key")).toBeNull();
   });
 
-  test("reconnect button not shown for key_invalid errors", async () => {
+  test("key_invalid offers an explicit Reconnect on the card, and never reconnects on its own (#11525)", async () => {
     wsReturn.lastError = {
       code: "key_invalid",
       message: "Your API key is invalid or expired.",
       action: { label: "Update key", href: "/dashboard/settings" },
     };
     await renderChatPage();
-    expect(screen.queryByText("Reconnect")).toBeNull();
+    const alert = screen.getByRole("alert");
+    // Absence of the button used to be the proxy for "no auto reconnect";
+    // that invariant is asserted directly now: nothing reconnects until a click.
+    expect(mockReconnect).not.toHaveBeenCalled();
+    await userEvent.click(within(alert).getByRole("button", { name: "Reconnect" }));
+    expect(mockReconnect).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -333,5 +366,43 @@ describe("Error card dismissal on chat surface", () => {
 
     expect(screen.getByText("Rate Limited")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+  // #11525 lifecycle: dismiss hides the card only (composer stays disabled);
+  // Reconnect nulls lastError (the hook); a second key_invalid shows the card.
+  // Mutation: deleting the `!lastError -> setDismissedErrorKey(null)` effect in
+  // chat-surface.tsx makes the last assertion fail (same code::message key).
+  test("dismiss -> Reconnect -> second key_invalid re-shows the card; dismiss keeps the composer disabled (#11525)", async () => {
+    const keyInvalid = () => ({
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    });
+    wsReturn.lastError = keyInvalid();
+    wsReturn.credentialBlocked = true;
+    const mod = await import(
+      "@/app/(dashboard)/dashboard/chat/[conversationId]/page"
+    );
+    const result = render(<mod.default />);
+
+    await userEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    expect(screen.queryByText("Invalid API Key")).toBeNull();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+
+    // Reconnect from the always-visible helper line (the card is dismissed).
+    await userEvent.click(screen.getByTestId("credential-helper-reconnect"));
+    expect(mockReconnect).toHaveBeenCalledTimes(1);
+
+    // The hook's reconnect() nulls lastError ...
+    wsReturn.lastError = null;
+    wsReturn.credentialBlocked = false;
+    result.rerender(<mod.default />);
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
+
+    // ... and the retry fails again with an identical frame.
+    wsReturn.lastError = keyInvalid();
+    wsReturn.credentialBlocked = true;
+    result.rerender(<mod.default />);
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeDisabled();
   });
 });

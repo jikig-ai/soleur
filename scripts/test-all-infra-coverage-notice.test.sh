@@ -407,11 +407,15 @@ GATED=(
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
   "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
   # ADR-262 (--pr-gated): one row per label, so the two --rows halves of the lint-orphan battery
-  # are two rows over one array (two declines from one call site).
+  # are two rows over one array (two declines from one call site) — likewise the four arms of the
+  # test-all-affected battery (#11562).
   "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
-  "scripts/test-all-affected|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-a|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
