@@ -1,4 +1,7 @@
-import { describe, test, expect } from "vitest";
+import { afterAll, beforeAll, describe, test, expect } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { createSandboxHook } from "../server/sandbox-hook";
 import { FILE_TOOLS } from "../server/tool-path-checker";
@@ -211,5 +214,59 @@ describe("createSandboxHook - negative-space coverage", () => {
     for (const tool of safeTools) {
       expect(fileSet.has(tool), `${tool} should NOT be a file tool`).toBe(false);
     }
+  });
+});
+
+// #10455 PR 1a: the file tools (Read, Grep, Glob, LS, Notebook*) run in the CLI process OUTSIDE bwrap, so the sandbox
+// `denyRead` list never applies to them; this hook is their only containment. The shared HOME holds the CLI's persisted
+// state for EVERY tenant on the host (history, session metadata, shell snapshots), so each of those paths, reached by an
+// absolute path, a relative escape, a glob, or a symlink planted inside the workspace, must be refused here.
+describe("createSandboxHook - the shared HOME's persisted CLI state is unreachable through the file tools (#10455)", () => {
+  let base: string;
+  let ws: string;
+  let home: string;
+  let realHook: ReturnType<typeof createSandboxHook>;
+
+  const call = async (toolName: string, toolInput: Record<string, unknown>) =>
+    (await realHook(makeInput(toolName, toolInput), "test-id", { signal })) as SyncHookJSONOutput;
+
+  beforeAll(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), "sbx-hook-home-")));
+    ws = join(base, "workspaces", "00000000-0000-0000-0000-00000000000a");
+    home = join(base, "home");
+    mkdirSync(ws, { recursive: true });
+    mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+    mkdirSync(join(home, ".claude", "shell-snapshots"), { recursive: true });
+    writeFileSync(join(home, ".claude", "history.jsonl"), "{}\n");
+    writeFileSync(join(home, ".claude", "sessions", "1.json"), "{}");
+    writeFileSync(join(home, ".claude", "shell-snapshots", "snapshot-bash-1.sh"), "# snapshot\n");
+    writeFileSync(join(ws, "ok.txt"), "own file\n");
+    // A symlink planted INSIDE the workspace that points at a sibling-visible HOME file.
+    symlinkSync(join(home, ".claude", "history.jsonl"), join(ws, "link-to-history"));
+    realHook = createSandboxHook(ws);
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("positive control: a file inside the workspace is allowed, so the denials below are not an everything-denied hook", async () => {
+    expectExplicitAllow(await call("Read", { file_path: join(ws, "ok.txt") }));
+  });
+
+  test.each([
+    ["Read history.jsonl", "Read", () => ({ file_path: join(home, ".claude", "history.jsonl") })],
+    ["Read a session metadata file", "Read", () => ({ file_path: join(home, ".claude", "sessions", "1.json") })],
+    ["Read a shell snapshot", "Read", () => ({ file_path: join(home, ".claude", "shell-snapshots", "snapshot-bash-1.sh") })],
+    ["Grep the .claude directory", "Grep", () => ({ pattern: "x", path: join(home, ".claude") })],
+    ["LS the sessions directory", "LS", () => ({ path: join(home, ".claude", "sessions") })],
+    ["NotebookRead outside the workspace", "NotebookRead", () => ({ notebook_path: join(home, ".claude", "x.ipynb") })],
+    ["Read through a relative escape", "Read", () => ({ file_path: join(ws, "..", "..", "home", ".claude", "history.jsonl") })],
+    ["Read through a symlink planted in the workspace", "Read", () => ({ file_path: join(ws, "link-to-history") })],
+    ["Glob with an absolute pattern into HOME", "Glob", () => ({ pattern: `${home}/.claude/**/*.json` })],
+    ["Glob with a relative escape pattern", "Glob", () => ({ pattern: "../../home/.claude/*" })],
+  ])("%s is refused", async (_label, tool, input) => {
+    const result = await call(tool, input());
+    expectDenied(result, "outside the workspace");
   });
 });

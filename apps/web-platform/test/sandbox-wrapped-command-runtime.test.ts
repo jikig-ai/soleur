@@ -342,7 +342,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       `echo TOOL_NEEDLE_PATHS=$(printf '%s\\n' "$all" | grep -F ":$tn" | cut -d: -f1 | tr '\\n' ,)`,
       // Which of the CLI's other persisted files B can read at all (names only, ids collapsed): the residual surface the content
       // markers above cannot see (session metadata, keys, shell snapshots, account state).
-      `echo HOME_READABLE=$(find "$HOME/.claude" "$HOME/.claude.json" -maxdepth 3 -type f -readable 2>/dev/null | sed "s|$HOME/||; s/[0-9a-f]\\{8\\}-[0-9a-f-]\\{27\\}/<uuid>/g; s/-tmp-[^/]*/-<cwd>/; s/[0-9]\\{4,\\}/N/g" | sort -u | tr '\\n' ,)`,
+      `echo HOME_READABLE=$(find "$HOME/.claude" "$HOME/.claude.json" -maxdepth 3 -type f -readable 2>/dev/null | sed "s|$HOME/||; s|sessions/[0-9]*\\.[0-9a-f]\\{64\\}\\.key|sessions/<pid>.<hash>.key|; s|sessions/[0-9]*\\.json|sessions/<pid>.json|; s|snapshot-bash-[0-9]*-[a-z0-9]*\\.sh|snapshot-bash-<ts>-<id>.sh|; s|backup\\.[0-9]*|backup.<ts>|" | sort -u | tr '\\n' ,)`,
       `echo SESSION_TMP_ROOT_ENTRIES=$(ls -A ${AGENT_SESSION_TMP_ROOT} 2>/dev/null | grep -c .)`,
       `lc=$(printf '%s' "$needle" | sed 's/%3D/=/g')`,
       `for s in $([ -n "$hits" ] && echo ${dir}/*.sock); do [ -S "$s" ] || continue; b=$(basename "$s")`,
@@ -588,6 +588,64 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         `B_tool_hits=${hitsOf("TOOL_NEEDLE")} B_tool_paths=[${pathsOf("TOOL_NEEDLE")}]`;
       // The runner swallows test console output on this project; an opt-in file sink keeps the measurement recoverable.
       if (process.env.G2_MEASURE_OUT) writeFileSync(`${process.env.G2_MEASURE_OUT}.${perTenantTmp ? "tenant" : "control"}`, `${measure}\n`);
+      // #10455 PR 1a CTO ruling: the readable CLI state in the shared HOME is a DOCUMENTED RESIDUAL (not relocated). Pin it so a CLI
+      // upgrade that adds a file fails here and forces a review; relocation (Phase 1b) is triggered by any of: a readable file shown to
+      // hold a credential/prompt/tool output/another tenant's content, a demonstrated peer-key use from inside the sandbox, a changed
+      // file set, or a messagingSocketPath outside the denied dirs (ADR-075 addendum).
+      const READABLE_HOME_STATE = [
+        ".claude.json",
+        ".claude/.last-cleanup",
+        ".claude/backups/.claude.json.backup.<ts>",
+        ".claude/sessions/<pid>.<hash>.key",
+        ".claude/sessions/<pid>.json",
+        ".claude/shell-snapshots/snapshot-bash-<ts>-<id>.sh",
+      ];
+      const readable = [...new Set((/^HOME_READABLE=(.*)$/m.exec(out)?.[1] ?? "").split(",").filter(Boolean))].sort();
+      expect(readable, "the set of CLI state files B can read in the shared HOME changed: review it, then update the pin").toEqual(
+        [...READABLE_HOME_STATE].sort(),
+      );
+      // The peer key is only usable through A's messaging socket: every recorded socket path must sit inside a denied dir.
+      const deniedDirs = (sandboxB as { filesystem: { denyRead: string[] } }).filesystem.denyRead;
+      const sessionDir = join(home, ".claude", "sessions");
+      const socketPaths = (() => {
+        try {
+          return readdirSync(sessionDir)
+            .filter((f) => f.endsWith(".json"))
+            .map((f) => (JSON.parse(readFileSync(join(sessionDir, f), "utf8")) as { messagingSocketPath?: string }).messagingSocketPath)
+            .filter((x): x is string => typeof x === "string");
+        } catch {
+          return [];
+        }
+      })();
+      expect(socketPaths.length, "no messagingSocketPath recorded, so the key-unusability check is vacuous").toBeGreaterThan(0);
+      for (const sp of socketPaths) {
+        expect(
+          deniedDirs.some((d) => sp === d || sp.startsWith(`${d}/`)),
+          `A's messaging socket ${sp} is outside every denied dir, so the readable peer key may be usable`,
+        ).toBe(true);
+      }
+      // None of the readable files may hold a credential or any content marker. A's workspace id in sessions/*.json (the cwd) is the
+      // single allowed, documented exception.
+      const readableHostFiles: string[] = [join(home, ".claude.json")];
+      for (const dir of ["shell-snapshots", "backups", "sessions"]) {
+        try {
+          for (const f of readdirSync(join(home, ".claude", dir))) readableHostFiles.push(join(home, ".claude", dir, f));
+        } catch {
+          /* absent */
+        }
+      }
+      const forbidden = [needle!, "decoy-api-key-sentinel", promptNeedle, toolNeedle, envNeedle];
+      for (const f of readableHostFiles) {
+        let body = "";
+        try {
+          body = readFileSync(f, "utf8");
+        } catch {
+          continue;
+        }
+        for (const marker of forbidden) {
+          expect(body.includes(marker), `a B-readable CLI state file holds a tenant secret or content marker: ${f.replace(home, "$HOME")}`).toBe(false);
+        }
+      }
       if (perTenantTmp) {
         expect(hitsOf("PROMPT_NEEDLE"), `B read A's prompt at: ${pathsOf("PROMPT_NEEDLE")}`).toBe(0);
         expect(hitsOf("TOOL_NEEDLE"), `B read A's tool output at: ${pathsOf("TOOL_NEEDLE")}`).toBe(0);
