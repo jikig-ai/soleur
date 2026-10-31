@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=8
-# generated-from-run=durations:seed-durations.tsv
-# generated-from-runs=durations:seed-durations.tsv
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=1222
-# generated-at=2026-10-31T17:07:53Z
+# generated-at=2026-10-31T19:54:21Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -335,6 +335,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6
 scripts/actions-queue-tail-8450	7
 scripts/alarm-issue-filing-guard	1
+scripts/always-on-ledger	3
 scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6
 scripts/assert-dependabot-drain-live	3
@@ -564,6 +565,7 @@ scripts/test-all-affected-b	1
 scripts/test-all-affected-c	8
 scripts/test-all-affected-d	3
 scripts/test-all-capacity-signal	4
+scripts/test-all-corpus-weight-budget	3
 scripts/test-all-enumerate-toolchain	6
 scripts/test-all-fast-tier-budget	8
 scripts/test-all-group-affected	6
