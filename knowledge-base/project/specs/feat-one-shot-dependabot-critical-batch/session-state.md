@@ -23,3 +23,13 @@
 - Guard defect fixed: packages[manifest] → packages.get(manifest, {}) — deleting a LOCKS entry used to KeyError before MIN_LOCKS could fire (latent until the spike row existed)
 - Fixture updated to synthesize the 4 new watched packages (control was self-red)
 - likec4 override (Option A) shipped; fallback not needed; follow-up filed as issue #11696
+
+## Review Phase
+- 8-seat panel + 2-seat fix-round + shellcheck: ALL findings resolved inline
+- P2s closed: .get() silent-green in absence assertions (explicit manifest check + new mutate arm), MIN_ASSERTIONS ratchet 29→34, zod dup devDep reverted (already pinned in deps)
+- P3s closed: stale pencli enumeration comment, likec4 'inert'→load-bearing, tasks.md checkboxes
+- Deferred durable: inngest vendored zod/v3 residual (no upstream fix — documented in drain comment; filing refused by inline-size gate)
+- Follow-up filed: #11696 likec4 1.60 pin-train
+
+## QA Phase
+- All 8 plan Test Scenarios executed during work verification — census CLEAN (zero zod<4.6.6, no 3.x copies), override resolution verified, typecheck+build green on next 16.4.3, 195-file vitest run green (c4-*/inngest/sentry/next-config included), 34 drivable-red arms, npm ci reproduced clean
