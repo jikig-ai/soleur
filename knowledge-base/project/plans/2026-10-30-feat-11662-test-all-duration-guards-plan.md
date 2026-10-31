@@ -419,10 +419,10 @@ Resolutions to spec-flow findings — these amend the phases above:
   wrong (labels like `tests/scripts/lint-rule-ids` aren't files). Reference =
   `bash scripts/test-all.sh --enumerate` SUITE_REGISTRATION (same producer
   `scripts-shard-manifest.test.sh:159-161` uses). Scope: labels in
-  `suite-durations.tsv` + `suite-durations-heavy.tsv`; bun/webplat/infra registrations
+  `suite-durations.tsv` + `suite-durations-heavy.tsv` +
+  `apps/web-platform/infra/suite-durations.tsv`; bun/webplat registrations
   (no duration tables) are declared out-of-scope v1 — NOT folded into the unmeasured
-  allowlist (it would be 10–20 entries, not ≤2). `apps/web-platform/infra/suite-durations.tsv`
-  included in scope.
+  allowlist (it would be 10–20 entries, not ≤2).
 - **R3 (P1-1) Transition semantics.** floor→measured: exempt from the per-suite factor
   (no fair baseline) but COUNTS toward total-measured growth (else batch floor→measure
   is an unbounded accretion channel). measured→floor (a suite that stops producing timing
@@ -435,7 +435,7 @@ Resolutions to spec-flow findings — these amend the phases above:
 - **R6 (P1-6) Exemptions ledger rules:** `reason` must carry a `#NNN` tracking ref
   (lint-orphan doctrine); minimal-ledger invariant — a row whose suite fits the default
   cap reds (no permanent exemptions); slack bounded (`cap_ms` ≤ ~1.3× current weight —
-  a 700s suite exempted to 900s can't regrow ungated); stale-key parity (row for a
+  regrow headroom is bounded at the acked cap, not ungated); stale-key parity (row for a
   deleted/renamed label reds); legal-control labels' rows route to CLO review.
 - **R7 (P1-8) G4 producer = `--enumerate-commands` stream** (resolved argv — covers the
   `run_suite "$f" bash "$f"` glob loop, env-prefixes, `${VAR:-}`), never grep. Directory

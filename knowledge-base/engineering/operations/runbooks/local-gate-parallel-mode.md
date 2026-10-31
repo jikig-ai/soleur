@@ -60,6 +60,7 @@ Four committed-weight guards keep the battery from silently regrowing:
 - **Dead-registration census** — `lint-orphan-test-suites.sh` surface 7 reds a
   `run_suite` whose argv target no longer exists.
 
-New suites get floor rows via `--incremental` (exercises G1 on the landing
-commit). `suite-durations*.tsv` and `suite-shard-legs.tsv` are generated —
-never hand-edited.
+New suites get floor rows via `--incremental` (G1 reports count growth on
+the landing commit — floor rows are excluded from the drift predicates).
+`suite-durations*.tsv` and `suite-shard-legs.tsv` are generated artifacts —
+hand-edits are an accepted v1 hole ADR-312 names, rate-limited not prevented.

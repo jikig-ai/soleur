@@ -1379,98 +1379,129 @@ fi
 # The reverse direction of surfaces 1-6: every SUITE_COMMAND's resolved argv
 # target must exist (tracked or on disk) — a dead registration fails statically
 # here, not at rc 127 runtime (#11662 G4). SUITE_COMMAND_DECLINED field 3 is a
-# rerun string, not argv — excluded by the record filter. The population is the
-# enumerate-commands stream itself: a call shape the resolver cannot classify
-# reds (unknown argv0), never silently skips. Inline `bash -c`/`sh -c` bodies
-# carry no file operand and are counted, not checked. Directory operands are
-# legitimate only under interpreter-class argv0 (`bun test <dir>`,
-# `node --test <dir>`); a directory under a file-class argv0 reds.
+# rerun string, not argv — excluded by the record filter. A call shape the
+# resolver cannot classify reds (unknown argv0), never silently skips; inline
+# `bash -c`/`sh -c` bodies carry no file operand and are counted. Directory
+# operands are legitimate only under interpreter-class argv0 (`bun test`,
+# `node --test`). Totality is asserted against the stream's own record count,
+# and a synthetic dead registration must flag in each arm — a floor alone
+# cannot see a deleted detection path.
+_s7_scan() { # <stream-file> — prints "checked inline dead"; ERROR lines on stderr
+  local checked=0 inline=0 dead=0 tgt="" dir_ok=0 skip=0 i a0
+  while IFS=$'\t' read -r -a s7f; do
+    [[ "${s7f[0]:-}" == "SUITE_COMMAND" ]] || continue
+    local label="${s7f[1]:-<missing-label>}"
+    local -a av=("${s7f[@]:2}")
+    # Strip env wrappers and VAR=val prefixes to reach the real argv0.
+    while ((${#av[@]})); do
+      case "${av[0]}" in
+        env)  av=("${av[@]:1}") ;;
+        *=*)  av=("${av[@]:1}") ;;
+        *)    break ;;
+      esac
+    done
+    a0="${av[0]:-}"; tgt=""; dir_ok=0; skip=0
+    case "$a0" in
+      bash|sh)
+        for ((i = 1; i < ${#av[@]}; i++)); do
+          case "${av[$i]}" in
+            -c) skip=1; break ;;
+            -*) continue ;;
+            *)  tgt="${av[$i]}"; break ;;
+          esac
+        done ;;
+      python3)
+        if [[ "${av[1]:-}" == "-m" ]]; then
+          case "${av[2]:-}" in
+            unittest)
+              tgt="${av[3]:-}"; tgt="${tgt//.//}.py" ;;
+            pytest)
+              for ((i = 3; i < ${#av[@]}; i++)); do
+                case "${av[$i]}" in -*) continue ;; *) tgt="${av[$i]}"; dir_ok=1; break ;; esac
+              done ;;
+            *)
+              echo "ERROR: registration '${label}' runs unhandled 'python3 -m ${av[2]:-}' — extend the surface-7 resolver." >&2
+              dead=$((dead + 1)); skip=1 ;;
+          esac
+        else
+          for ((i = 1; i < ${#av[@]}; i++)); do
+            case "${av[$i]}" in -*) continue ;; *) tgt="${av[$i]}"; break ;; esac
+          done
+        fi ;;
+      bun|node)
+        for ((i = 1; i < ${#av[@]}; i++)); do
+          case "${av[$i]}" in
+            test|--test|-*) continue ;;
+            *)  tgt="${av[$i]}"; dir_ok=1; break ;;
+          esac
+        done ;;
+      *)
+        echo "ERROR: registration '${label}' has unknown argv0 '${a0}' — the surface-7 resolver cannot classify it, so its target existence is unchecked." >&2
+        dead=$((dead + 1)); skip=1 ;;
+    esac
+    if (( skip )) || [[ -z "$tgt" ]]; then
+      inline=$((inline + 1)); continue
+    fi
+    checked=$((checked + 1))
+    if [[ -d "$REPO_ROOT/$tgt" ]]; then
+      if (( ! dir_ok )); then
+        echo "ERROR: registration '${label}' targets directory '${tgt}' under non-interpreter argv0 '${a0}' — a directory is not a runnable file target." >&2
+        dead=$((dead + 1))
+      fi
+    elif ! _tracked_member "$tgt" && [[ ! -e "$REPO_ROOT/$tgt" ]]; then
+      echo "ERROR: registration '${label}' targets '${tgt}' which does not exist — dead registration, red statically not at rc 127." >&2
+      dead=$((dead + 1))
+    fi
+  done < "$1"
+  printf '%d %d %d\n' "$checked" "$inline" "$dead"
+}
+
 if [[ ! -s "$WORK/aff_enum" ]]; then
   echo "ERROR: '\$WORK/aff_enum' is absent or empty — surface 7 cannot enumerate registrations, so the dead-target census would certify nothing." >&2
   fails=$((fails + 1))
 else
-  s7_checked=0 s7_inline=0
-  while IFS=$'\t' read -r -a s7f; do
-    [[ "${s7f[0]:-}" == "SUITE_COMMAND" ]] || continue
-    s7_label="${s7f[1]}"
-    s7_argv=("${s7f[@]:2}")
-    # Strip env wrappers and VAR=val prefixes to reach the real argv0.
-    while ((${#s7_argv[@]})); do
-      case "${s7_argv[0]}" in
-        env)  s7_argv=("${s7_argv[@]:1}") ;;
-        *=*)  s7_argv=("${s7_argv[@]:1}") ;;
-        *)    break ;;
-      esac
-    done
-    s7_a0="${s7_argv[0]:-}"
-    s7_tgt="" s7_dir_ok=0 s7_skip=0
-    case "$s7_a0" in
-      bash|sh)
-        for ((s7_i = 1; s7_i < ${#s7_argv[@]}; s7_i++)); do
-          case "${s7_argv[$s7_i]}" in
-            -c) s7_skip=1; break ;;
-            -*) continue ;;
-            *)  s7_tgt="${s7_argv[$s7_i]}"; break ;;
-          esac
-        done ;;
-      python3)
-        if [[ "${s7_argv[1]:-}" == "-m" ]]; then
-          case "${s7_argv[2]:-}" in
-            unittest)
-              s7_mod="${s7_argv[3]:-}"
-              s7_tgt="${s7_mod//.//}.py" ;;
-            pytest)
-              s7_tgt="${s7_argv[3]:-}" ;;
-            *)
-              echo "ERROR: registration '${s7_label}' runs unhandled 'python3 -m ${s7_argv[2]:-}' — extend the surface-7 resolver." >&2
-              fails=$((fails + 1)); s7_skip=1 ;;
-          esac
-        else
-          s7_tgt="${s7_argv[1]:-}"
-        fi ;;
-      bun|node)
-        for ((s7_i = 1; s7_i < ${#s7_argv[@]}; s7_i++)); do
-          case "${s7_argv[$s7_i]}" in
-            test|--test|-*) continue ;;
-            *)  s7_tgt="${s7_argv[$s7_i]}"; s7_dir_ok=1; break ;;
-          esac
-        done ;;
-      *)
-        echo "ERROR: registration '${s7_label}' has unknown argv0 '${s7_a0}' — the surface-7 resolver cannot classify it, so its target existence is unchecked." >&2
-        fails=$((fails + 1)); s7_skip=1 ;;
-    esac
-    if (( s7_skip )) || [[ -z "$s7_tgt" ]]; then
-      s7_inline=$((s7_inline + 1)); continue
-    fi
-    s7_checked=$((s7_checked + 1))
-    if [[ -d "$REPO_ROOT/$s7_tgt" ]]; then
-      if (( ! s7_dir_ok )); then
-        echo "ERROR: registration '${s7_label}' targets directory '${s7_tgt}' under non-interpreter argv0 '${s7_a0}' — a directory is not a runnable file target." >&2
-        fails=$((fails + 1))
-      fi
-    elif ! _tracked_member "$s7_tgt" && [[ ! -e "$REPO_ROOT/$s7_tgt" ]]; then
-      echo "ERROR: registration '${s7_label}' targets '${s7_tgt}' which does not exist — dead registration, red statically not at rc 127." >&2
-      fails=$((fails + 1))
-    fi
-  done < "$WORK/aff_enum"
-  if (( s7_checked < 300 )); then
-    echo "ERROR: surface 7 resolved only ${s7_checked} file targets (${s7_inline} inline/skipped) — the enumerate-commands producer narrowed, so the dead-registration census certified a subset." >&2
+  # Instrument self-check: a synthetic dead registration MUST flag — without it
+  # the whole scan arm can be deleted and stay green.
+  printf 'SUITE_COMMAND\ts7-synthetic-dead\tbash\tsynthetic-no-such-file.test.sh\n' > "$WORK/s7_fixture"
+  read -r _ _ s7_self < <(_s7_scan "$WORK/s7_fixture" 2>/dev/null)
+  if (( s7_self != 1 )); then
+    echo "ERROR: surface 7 self-check failed — a synthetic dead registration did not flag (dead=${s7_self:-<no parse>})." >&2
     fails=$((fails + 1))
   fi
+  read -r s7_checked s7_inline s7_dead < <(_s7_scan "$WORK/aff_enum")
+  # Field-1 exact match: SUITE_COMMAND_DECLINED rows share the prefix and are
+  # rerun strings, not argv — they must not inflate the totality denominator.
+  s7_total=$(awk -F'\t' '$1=="SUITE_COMMAND"' "$WORK/aff_enum" | wc -l | tr -d ' ')
+  if (( s7_checked + s7_inline != s7_total )); then
+    echo "ERROR: surface 7 accounted for $((s7_checked + s7_inline)) of ${s7_total} SUITE_COMMAND records — the resolver silently dropped records." >&2
+    fails=$((fails + 1))
+  fi
+  (( s7_dead > 0 )) && fails=$((fails + 1))
 fi
 
-# Infra arm: `run-registered-suites.sh --enumerate` paths must exist on disk.
-s7_infra=0
+# Infra arm: every `run-registered-suites.sh --enumerate` path must exist on
+# disk — same totality shape (checked == enumerated) and a planted-dead-path
+# self-check.
+s7_infra=0 s7_dead2=0
 while IFS= read -r s7_ip; do
   [[ -n "$s7_ip" ]] || continue
   s7_infra=$((s7_infra + 1))
-  if [[ ! -e "$REPO_ROOT/$s7_ip" ]]; then
-    echo "ERROR: infra registration '${s7_ip}' does not exist on disk — dead registration." >&2
-    fails=$((fails + 1))
-  fi
+  [[ -e "$REPO_ROOT/$s7_ip" ]] || { echo "ERROR: infra registration '${s7_ip}' does not exist on disk — dead registration." >&2; s7_dead2=$((s7_dead2 + 1)); }
 done < "$WORK/raw3"
-if (( s7_infra < 50 )); then
-  echo "ERROR: surface 7 checked only ${s7_infra} infra paths — the infra enumerate producer narrowed, so the dead-registration census certified a subset." >&2
+s7_infra_total=$(wc -l < "$WORK/raw3" | tr -d ' ')
+if (( s7_infra != s7_infra_total )); then
+  echo "ERROR: surface 7 checked ${s7_infra} of ${s7_infra_total} infra paths — the infra enumerate producer narrowed." >&2
+  fails=$((fails + 1))
+fi
+(( s7_dead2 > 0 )) && fails=$((fails + 1))
+cp "$WORK/raw3" "$WORK/raw3s"
+printf 'synthetic-no-such-dir/x.test.sh\n' >> "$WORK/raw3s"
+s7_infra_d=0
+while IFS= read -r s7_ip; do
+  [[ -n "$s7_ip" && ! -e "$REPO_ROOT/$s7_ip" ]] && s7_infra_d=$((s7_infra_d + 1))
+done < "$WORK/raw3s"
+if (( s7_infra_d != 1 )); then
+  echo "ERROR: surface 7 infra self-check failed — a synthetic dead path did not flag (flagged ${s7_infra_d}, expected 1)." >&2
   fails=$((fails + 1))
 fi
 

@@ -113,7 +113,7 @@ fi
 
 # Live-regex parity pin: the same derivation must still exist in lint-orphan.
 cases=$((cases + 1))
-grep -qF -- '(^|[^a-zA-Z])live([^a-zA-Z]|$)|liveness' "$ORPHAN_LINT" \
+grep -qE -- 'live_floor=.*liveness' "$ORPHAN_LINT" \
   && pass "live regex parity-pinned to lint-orphan's live_floor derivation" \
   || fail "live regex drifted from lint-orphan's derivation — sync BOTH sites"
 
@@ -178,8 +178,9 @@ fi
 # M5 (own-dispatch): a derivation returning zero live members lands every
 # member in the non-live count — over the cap it must red.
 cases=$((cases + 1))
-printf 'ALWAYS_ON_SUITES=(\n  "a/1"\n  "a/2"\n  "a/3"\n  "a/4"\n  "a/5"\n  "a/live-six"\n)\n' > "$FIX/i5.sh"
-if check_ledger "$FIX/i5.sh" "$FIX/j2.tsv" 5 2>/dev/null; then
+printf 'ALWAYS_ON_SUITES=(\n  "a/1"\n  "a/2"\n  "a/3"\n  "a/4"\n  "a/5"\n  "a/6"\n)\n' > "$FIX/i5.sh"
+printf 'a/1\tr\na/2\tr\na/3\tr\na/4\tr\na/5\tr\na/6\tr\n' > "$FIX/j5.tsv"
+if check_ledger "$FIX/i5.sh" "$FIX/j5.tsv" 5 2>/dev/null; then
   fail "M5: zero-live derivation over cap stayed green"
 else
   pass "M5: a gutted live derivation lands members in the cap count"
@@ -192,6 +193,35 @@ if check_ledger "$FIX/i6.sh" "$FIX/j2.tsv" 95 2>/dev/null; then
   fail "M6: a set-identity rename stayed green"
 else
   pass "M6: rename without TSV sync reddens (parity is two-directional)"
+fi
+
+# M7a: a stale ledger row (non-member) is the SOLE red source.
+cases=$((cases + 1))
+printf 'a/1\tr\na/2\tr\na/3\tr\na/4\tr\na/5\tr\na/extra\tr\n' > "$FIX/j6.tsv"
+if check_ledger "$FIX/i2.sh" "$FIX/j6.tsv" 95 2>/dev/null; then
+  fail "M7a: a stale justification row stayed green"
+else
+  pass "M7a: stale row for a non-member reddens (parity is two-directional)"
+fi
+
+# M7b: an empty reason field is the SOLE red source (P3 armed).
+cases=$((cases + 1))
+printf 'a/1\tr\na/2\tr\na/3\t\na/4\tr\na/5\tr\n' > "$FIX/j7.tsv"
+if check_ledger "$FIX/i2.sh" "$FIX/j7.tsv" 95 2>/dev/null; then
+  fail "M7b: an empty reason field stayed green"
+else
+  pass "M7b: empty reason field reddens"
+fi
+
+# M7c: word-boundary — 'alive' counts as NON-live (regex not substring).
+cases=$((cases + 1))
+printf 'ALWAYS_ON_SUITES=(\n  "a/1"\n  "a/2"\n  "a/3"\n  "a/4"\n  "a/5"\n  "a/alive-six"\n)\n' > "$FIX/i7.sh"
+printf 'a/alive-six\tr\n' >> "$FIX/j5.tsv" 2>/dev/null || true
+printf 'a/1\tr\na/2\tr\na/3\tr\na/4\tr\na/5\tr\na/alive-six\tr\n' > "$FIX/j8.tsv"
+if check_ledger "$FIX/i7.sh" "$FIX/j8.tsv" 5 2>/dev/null; then
+  fail "M7c: 'alive' matched the live regex (word-boundary semantics lost)"
+else
+  pass "M7c: 'alive' counts as non-live (word-boundary pinned)"
 fi
 
 # M7 (must-PASS, non-canonical): comment rows and blank lines in the TSV are

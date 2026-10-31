@@ -159,9 +159,9 @@ pass_n=$((pass_n - 1)); fails=$((fails - 1))
 # ---------------------------------------------------------------------------
 # Canonical run against the real tables + live registration streams.
 # ---------------------------------------------------------------------------
-SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate scripts 2>/dev/null \
+env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate scripts 2>/dev/null \
   | sed -n 's/^SUITE_REGISTRATION\t//p' > "$FIX/labels.txt"
-SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate scripts-heavy 2>/dev/null \
+env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate scripts-heavy 2>/dev/null \
   | sed -n 's/^SUITE_REGISTRATION\t//p' >> "$FIX/labels.txt"
 ( cd "$REPO_ROOT" && bash "$INFRA_RUNNER" --enumerate ) 2>/dev/null \
   | sed -n 's/^SUITE_REGISTRATION\t//p' > "$FIX/infra-labels.txt"
@@ -259,7 +259,7 @@ else
 fi
 
 cases=$((cases + 1))
-printf 'a/one\t5000\tneedless; #000\n' > "$FIX/ex.tsv"
+printf 'a/big\t900000\tdeclared-big suite; #000\na/one\t350\tneedless; #000\n' > "$FIX/ex.tsv"
 if check_corpus "$FIX/d.tsv" "$FIX/dh.tsv" "$FIX/di.tsv" "$FIX/ex.tsv" "$FIX/l.txt" "$FIX/li.txt" none 2>/dev/null; then
   fail "M7b: a minimal-ledger violation stayed green"
 else
@@ -280,6 +280,19 @@ if check_corpus "$FIX/d.tsv" "$FIX/dh.tsv" "$FIX/di.tsv" "$FIX/ex.tsv" "$FIX/l.t
   fail "M7d: a reason without a #NNN ref stayed green"
 else
   pass "M7d: reason missing #NNN reddens"
+fi
+
+# ---------------------------------------------------------------------------
+# Table census: a fourth suite-durations*.tsv would evade the check silently
+# (the join names exactly the three committed tables — R8 pins exact names).
+# ---------------------------------------------------------------------------
+cases=$((cases + 1))
+mapfile -t _tabs < <(compgen -G "$REPO_ROOT/scripts/suite-durations*.tsv" | sort)
+if [[ "${_tabs[*]}" == "$REPO_ROOT/scripts/suite-durations-heavy.tsv $REPO_ROOT/scripts/suite-durations.tsv" && -r "$DUR_INFRA" ]]; then
+  pass "durations-table census: exactly the three committed tables joined"
+else
+  printf '  [FAIL] unexpected durations table(s): %s
+' "${_tabs[*]}" >&2; fails=$((fails + 1))
 fi
 
 # ---------------------------------------------------------------------------

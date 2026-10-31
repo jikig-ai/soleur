@@ -1,9 +1,12 @@
 ---
-adr: 312
 title: Committed-weight enforcement is corpus-wide; duration weight enters the tree only through a gated generator
-status: active
+status: adopting
 date: 2026-10-31
+supersedes: none
 issue: 11662
+related: [11662, 11679, 9763]
+related_adrs: [ADR-240, ADR-242]
+tags: [test-runner, durations, ratchet, ci]
 ---
 
 # ADR-312: Committed-weight enforcement is corpus-wide; duration weight enters the tree only through a gated generator

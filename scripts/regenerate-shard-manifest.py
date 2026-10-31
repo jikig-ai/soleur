@@ -421,7 +421,11 @@ def merge_base_blob(relpath):
     q = subprocess.run(["git", "-C", root, "show", f"{mb}:{relpath}"],
                        capture_output=True, text=True)
     if q.returncode != 0:
-        return None
+        if "does not exist" in q.stderr:
+            return None
+        die("drift gate: cannot read baseline blob "
+            f"{mb}:{relpath} ({q.stderr.strip()}) — could not measure, "
+            "refusing rather than bootstrapping past the gate")
     return q.stdout
 
 
@@ -502,8 +506,8 @@ def drift_gate(new_rows, args, baseline_path, committed_write, write_target):
     """Refuse (exit 2) a durations-table write whose measured weight drifts
     past the pinned thresholds without an acknowledgement.
 
-    Arms on committed-table writes (manifest_path == the group's committed
-    manifest) and whenever --baseline-durations is supplied — the fixture
+    Arms on committed-table writes (write_target == the group's committed
+    default durations table) and whenever --baseline-durations is supplied — the fixture
     seam; a plain redirected emission is never gated (spec R5).
 
     Baseline precedence: --baseline-durations > merge-base blob; an absent
@@ -542,7 +546,10 @@ def drift_gate(new_rows, args, baseline_path, committed_write, write_target):
             "# growth-acked= header stamp scoped to these violations)")
     print(f"drift gate: {len(violations)} violation(s) acknowledged "
           f"({'--allow-growth' if args.allow_growth else 'recorded ack'})")
-    return digest if args.allow_growth else None
+    # The stamp carries the acked violation digest — re-emitted whenever the
+    # gate is satisfied, so a recorded ack persists while the violation set is
+    # identical; a changed set produces a different digest and re-refuses.
+    return digest
 
 
 def read_durations_ms(path):
@@ -605,9 +612,15 @@ def write_durations_delta(path_in, path_out, legs, floor_ms, growth_ack=False):
                   else (f"# default-weight-ms={floor_ms}"
                         if h.startswith("# default-weight-ms=") else h)
                   for h in header]
-    if growth_ack and not any(
-            h.startswith(GROWTH_ACK_PREFIX) for h in out_header):
-        out_header.append(f"{GROWTH_ACK_PREFIX}{growth_ack}")
+    # The stamp is scoped to the acked violation set — a NEW ack (different
+    # digest) must REPLACE a stale stamp, never be blocked by it.
+    if growth_ack:
+        if any(h.startswith(GROWTH_ACK_PREFIX) for h in out_header):
+            out_header = [f"{GROWTH_ACK_PREFIX}{growth_ack}"
+                          if h.startswith(GROWTH_ACK_PREFIX) else h
+                          for h in out_header]
+        else:
+            out_header.append(f"{GROWTH_ACK_PREFIX}{growth_ack}")
     lines = out_header + [
         keep[l] if l in keep else f"{l}\t{floor_ms}\tfloor"
         for l in sorted(set(keep) | set(added))] + trailer
@@ -619,9 +632,9 @@ def write_durations_delta(path_in, path_out, legs, floor_ms, growth_ack=False):
 def render_durations(weights, src_map, group, prov, floor_ms, growth_ack=None):
     """The committed `label<TAB>ms<TAB>src` table — the single duration source
     both the CI regen and the #8231 local scheduler consume. GROWTH_ACK is a
-    violations digest stamped as `# growth-acked=<digest>`; it is never
-    carried forward from a previous table — a regen must re-earn any
-    acknowledgement it relies on."""
+    violations digest stamped as `# growth-acked=<digest>`; it
+    persists only while the SAME violation set is re-acknowledged — a changed
+    violation set digests differently and re-refuses."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     fname = {"light": "suite-durations.tsv", "heavy": "suite-durations-heavy.tsv",
              "infra": "suite-durations.tsv"}[group]
