@@ -123,16 +123,21 @@ New `scripts/test-all-corpus-weight-budget.test.sh` mirroring the fast-tier patt
   `ALWAYS_ON_SUITES` — every entry needs a justification row, checked the way durations
   keys-parity is checked today.
 - Count ceiling in the new justifications suite (`scripts/always-on-ledger.test.sh` or an
-  arm of an existing guard): `count(ALWAYS_ON_SUITES) ≤ live_floor + HEADROOM` where
-  `live_floor` is derived exactly as `lint-orphan-test-suites.sh:1104-1108` derives it
-  (never a fixed constant — the floor moves with `*-live` registrations), `HEADROOM`
-  pinned at 15.
+  arm of an existing guard): `count(ALWAYS_ON \ live_named) ≤ NON_LIVE_CAP` — bounds
+  *non-live* membership (~86 today), pinned `NON_LIVE_CAP=95` first-draft (calibrate at
+  work time against `--enumerate-commands`). **NOT** `count ≤ live_floor + N` — spec-flow
+  P0-2: live_floor ≈ 40–55 live-named registrations, so that form reds at birth
+  (~120 ≤ ~70). `live_floor` itself is single-sourced from
+  `lint-orphan-test-suites.sh:1104` — reuse or parity-pin the derivation, never
+  re-implement (the "ask the producer" doctrine).
 - **Coexistence with the existing band (must document, not duplicate):**
   `_MIN_ALWAYS_ON_DECLARED=115` + `test-all-affected.test.sh` row f1 already enforce
   `floor ≤ count ≤ floor+5` — that band bounds *pin-vs-list drift*. The new ceiling
-  bounds *organic non-live growth above the derived live-scanner floor* — a different
-  property. The suite must state the two bounds' distinct subjects in its header and
-  must not re-implement f1's check.
+  bounds *organic non-live membership* — a different property; the suite header must
+  state the distinction and not re-implement f1's check. Escape is HEADROOM-ack
+  (edit `NON_LIVE_CAP`), never a "floor bump" (the floor is derived).
+- Interaction with #11648 (always-on demotion): the cap is sized against post-demotion
+  membership only if #11648 lands first — declare the ordering at work time.
 - Backfill the ~120 justification rows from existing provenance comments (#9307, #9763,
   Round-N audit notes) — mechanical extraction.
 
@@ -387,12 +392,66 @@ in `plugins/soleur/test/`), not the registration-census direction this plan adds
 Scope-out remains open; revisit if Phase 4's census should also enumerate
 `plugins/soleur/test/` — note for work-time evaluation.
 
+## Spec-Flow Revisions (folded 2026-10-30)
+
+Resolutions to spec-flow findings — these amend the phases above:
+
+- **R1 (P0-1) Baseline = merge-base blob, with a recorded ack.** The drift comparison is
+  `new table − merge-base blob` (per-PR ratchet; catches slow regrow that incumbent-diff
+  misses, since `--incremental` passes measured rows byte-identical). An `--allow-growth`
+  ack is RECORDED (`# growth-acked=<ts>` header stamp or ledger row) so repeat regens on
+  the same branch don't re-fire — the unrecorded ack is what makes merge-base double-fire.
+  Absent-baseline bootstrap (first-ever table) is an explicit carve-out, not a fail-close.
+- **R2 (P0-3) G2 population = `--enumerate` registration labels for the light+heavy
+  groups only.** Durations keys are labels, not paths — `git ls-files` reconciliation is
+  wrong (labels like `tests/scripts/lint-rule-ids` aren't files). Reference =
+  `bash scripts/test-all.sh --enumerate` SUITE_REGISTRATION (same producer
+  `scripts-shard-manifest.test.sh:159-161` uses). Scope: labels in
+  `suite-durations.tsv` + `suite-durations-heavy.tsv`; bun/webplat/infra registrations
+  (no duration tables) are declared out-of-scope v1 — NOT folded into the unmeasured
+  allowlist (it would be 10–20 entries, not ≤2). `apps/web-platform/infra/suite-durations.tsv`
+  included in scope.
+- **R3 (P1-1) Transition semantics.** floor→measured: exempt from the per-suite factor
+  (no fair baseline) but COUNTS toward total-measured growth (else batch floor→measure
+  is an unbounded accretion channel). measured→floor (a suite that stops producing timing
+  rows — e.g., now hangs): named report line; persistent floor-recycling is a finding.
+- **R4 (P1-2) Per-suite factor is conjunctive:** `new > 1.5× committed AND new−committed
+  > 10_000ms` (the WEIGHT_DRIFT precedent — factor-only fires on 80ms→200ms jitter).
+- **R5 (P1-3) Gate lives in the shared `--write` path** covering `--incremental`,
+  `--runs`, AND the `--durations <table> --write` injection arm; fires only on
+  committed-table writes (`manifest_path == default`), never redirected emissions.
+- **R6 (P1-6) Exemptions ledger rules:** `reason` must carry a `#NNN` tracking ref
+  (lint-orphan doctrine); minimal-ledger invariant — a row whose suite fits the default
+  cap reds (no permanent exemptions); slack bounded (`cap_ms` ≤ ~1.3× current weight —
+  a 700s suite exempted to 900s can't regrow ungated); stale-key parity (row for a
+  deleted/renamed label reds); legal-control labels' rows route to CLO review.
+- **R7 (P1-8) G4 producer = `--enumerate-commands` stream** (resolved argv — covers the
+  `run_suite "$f" bash "$f"` glob loop, env-prefixes, `${VAR:-}`), never grep. Directory
+  operands ALLOWED for interpreter-class argv0 (`bun test plugins/soleur/` is legitimate
+  — fixes M5). `python3 -m unittest X.Y` translates module→path. Unknown argv0 (outside
+  `bash|sh|python3|env|node|bun`) reds. `SUITE_COMMAND_DECLINED` field 3 is a rerun
+  string, not argv — excluded from the check. Trackedness via `_tracked_member`.
+- **R8 (P2) Self-registration dogfood:** new guard suites need explicit `run_suite`
+  (SUITE_GLOBS excludes `scripts/*.test.sh`), always-on ≤10s weight, a justifications
+  row, and manifest+durations rows via `--incremental` — which exercises G1 on the
+  landing commit. Guard suites go in ALWAYS_ON (verdicts are corpus properties — must
+  run under every bounded selection). Stray `scripts/*.tsv.n` files: verify
+  tracked-or-delete at work time; G2 pins exact table names, never `suite-durations*` glob.
+- **R9 (P1-4) Hand-edited weights are an accepted residual hole** for v1 — G1 rate-limits
+  the sanctioned flow; G2's absolute cap is the level guard. The ADR claim is written as
+  "sanctioned regeneration flow," not "only path" — a provenance/checksum pin is a
+  named non-goal unless plan-review calls for it.
+- **R10 (P2-8) No absolute total-corpus cap in v1** — legitimate suite accretion is
+  intentionally unbounded; per-suite cap + growth-rate gate carry the invariant. Confirm
+  deliberate at review.
+
 ## Open Questions
 
-1. Exact drift literals (`DRIFT_SUITE_FACTOR` 1.5×, `DRIFT_TOTAL_PCT` 10%) — confirm
-   against the 6-week growth distribution at work time; values are pinned-first-draft.
-2. Whether Phase 3's ledger suite folds into `test-all-fast-tier-budget.test.sh` or
+1. Exact drift literals (`DRIFT_SUITE_FACTOR` 1.5×, `DRIFT_ABS_MS` 10s, `DRIFT_TOTAL_PCT`
+   10%) — confirm against the 6-week growth distribution at work time.
+2. `NON_LIVE_CAP` calibration — measure `count(ALWAYS_ON \ live_named)` against
+   `--enumerate-commands` at work time (first-draft 95).
+3. Whether Phase 3's ledger suite folds into `test-all-fast-tier-budget.test.sh` or
    stands alone — work-time decision on suite-file layout.
-3. Corpus cap start value (600s) — validate against top-20 committed weights; the two
-   meta-suites (337s/164s) fit comfortably; verify no legit suite sits in 600s-band
-   before pinning.
+4. Corpus cap start value (600s) — validate against top-20 committed weights; verify no
+   legit suite sits in the 600s band before pinning.
