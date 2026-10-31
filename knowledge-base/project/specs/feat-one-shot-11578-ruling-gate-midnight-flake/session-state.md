@@ -40,3 +40,14 @@
 - Suite: `technical-ruling-gate.test.sh` green 498/0
 - Mutation matrix verified: rows 1-6 per Guard Contract (row 3 reproduced exact flake signature `the pristine gate gives rc 0, not the pinned 2`; mut-A found + fixed a `wc -l <` abort-on-missing-log bug in the floor)
 - AC1-AC6 all satisfied; SUT `# mut:` lines byte-identical (0-line diff)
+
+## Review Phase
+- Class: code → 8-agent panel + conditional seats (test-design-reviewer on `*.test.sh`, structural-enumeration on `## Guard Contract`; pattern-recognition replaced by enum per skill guidance). 9 seats spawned. PANEL_SHA=b167c6a776.
+- Lint ratchet: not adopted (note only). merge-tree rc 0; PR MERGEABLE (BEHIND main — ship handles).
+- Synthesis: no P1 code defects; no dissent against the CTO ruling. 1 enum `[P1-uncovered]` (DPATH/`run` arms could pair a future fixture with the real clock) + 1 agent-native P2 (`dc_floor` unreachable on gtimeout-only hosts) + convergent P3s.
+- Fix round 1 (`914ee24758`): mkbin_t symlinks stub+pin files into reduced dirs (closes DPATH arm), AMBF sweep floor added, stub printf + per-arm pin-existence guards, CLKb/CLK3/CLK4 asserts, `assert_fixture_dir` parity, doc rc-0→rc-2 corrections. Suite 502/0.
+- Fix-round seats re-spawned over `b167c6a776..914ee24758` (7 seats + enum re-verification, shellcheck clean): 4 CLEAN, 4 FINDINGS (residual real holes).
+- Fix round 2 (`d01a1f1206`, ADR-267 cap reached): CLK3/CLK4 moved inside `dts -1` pin window via `$TMP/ibin` instrument copy (unforgeable on any day; floor back to SUT-only 328), `ln -sf "$(command -v timeout)"` gtimeout fallback (step-down now reachable), `print_results` 503/500 conditional, AMBF portable boundaries + `, ran` heredoc token + ambient-exec flag + def-body exclusions (72 sites, 0 flags), dc_bad missing-log sentinel, TBIN readlink wiring assert, plan/tasks DPATH doc drift fixed. Suite 503/0.
+- Residual accepted notes (P3, not fixed): AMBF is a heuristic sweep (enum's residual grammar observations recorded; no live bypass exists — every timestamp-bearing fixture verified under a pinned arm); `dc_floor`/`print_results` remain committed counts (house convention); gh stub `echo "$*"` at :484 (pre-existing, unchanged by this diff).
+- seats=9 + 8 fix-round = 17; agent_rounds=4 → update tally.
+- Lead affected-gate running: `test-all.sh --affected` selected 256 of 700 suites.
