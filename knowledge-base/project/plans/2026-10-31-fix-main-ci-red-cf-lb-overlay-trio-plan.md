@@ -14,6 +14,25 @@ requires_cpo_signoff: true
 
 # fix: green main CI — three d1fa52f9 (#11652 cf-lb-overlay) failure signatures
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31
+**Sections enhanced:** Research Insights (verification evidence), Technical Considerations, Acceptance Criteria
+**Research agents used:** none — this harness exposes no Task/subagent spawn, so the deepen pass ran its mechanical halt gates + in-process realism checks and recorded the deferred consults in `decision-challenges.md`
+
+### Key Improvements
+
+1. Reproduced all three signatures locally (exact failure texts + byte counts) — the fix targets verified, not reported, state.
+2. Caught that signature 3 needs a G4GIT fixture `lb-staging/main.tf`, not only the bash list edit — the materializer's fail-closed `empty-listing` arm reds every g4git leg otherwise.
+3. Byte math verified: relocating the four comment blocks (~1.8 KB) minus the pointer+context (~0.35 KB) frees ~1.4 KB against a 228 B requirement.
+4. Deepen halt gates verified mechanically: User-Brand Impact (threshold `single-user incident`), Observability (allowlisted `grep` probe, literal `expected_output`, no ssh, no `credentials_required`), PAT sweep (0 hits), Guard Contract lint (green), Scope Check (1 unfenced section, all rows mapped/justified), UI-wireframe + Encryption Posture + Task-Design (not triggered).
+
+### New Considerations Discovered
+
+- `rc=$?` after the new redactor pipe would read the *redactor's* exit status — the convention is `rc=${PIPESTATUS[0]}` (verified at `apply-web-platform-infra.yml` ~line 2110).
+- `terraform apply` output also echoes planned `random_id` values — both steps need the pipe, not only the plan step named in the issue.
+- A branch forked before `d1fa52f9` will red `base unavailable` by design; `IPT_BASE_REF` is the documented seam — recorded under Context, not a plan defect.
+
 ## Overview
 
 Main CI run 41181409803 on `d1fa52f9` (#11652 — cf-lb-overlay dispatch machinery) is the
@@ -207,6 +226,37 @@ markdownlint on plan + tasks.md before summary.
 **Community / functional overlap.** Repo-internal CI repair against repo-authored gates;
 no community artifact applies. External research skipped (strong local context,
 mechanical fixes on already-patterned conventions).
+
+**Deepen-pass verification evidence (measured, 2026-10-31).**
+
+- `wc -c .github/workflows/apply-web-platform-infra.yml` → `490228` (228 over the 490000
+  gate); the four `!` exclusion comment blocks total ~1.8 KB.
+- `bun test plugins/soleur/test/workflow-file-size.test.ts` → `8 pass / 1 fail`,
+  message: `apply-web-platform-infra.yml is 490228 bytes, 228 bytes over the
+  490000-byte gate … Relocate comment prose to a runbook`.
+- `bun test plugins/soleur/test/terraform-target-parity.test.ts` → 3 fails in the
+  `#11294` redaction describe; violations list prints exactly two steps:
+  `cf-lb-overlay.yml#ga_overlay#Terraform plan (GA LB trio only)` and
+  `#Terraform apply (the graded tfplan)`, both `on apps/web-platform/infra`.
+- Parity extraction on the census suite: `bash={infra, git-data-root-key}` vs
+  `python={infra, git-data-root-key, lb-staging}` — matches the issue's `419/1`.
+- `tests/scripts/lib/tf-redact-random-ids.sh` exists and exports `tf_redact_random_ids`
+  (the #11294 filter); call-site precedent at `apply-web-platform-infra.yml` ~line 2100:
+  `source` + `2>&1 | tf_redact_random_ids` + `rc=${PIPESTATUS[0]}`.
+- `ipt.py` tolerates a root missing under `BASE_ROOT` (`os.path.isdir … continue`) — the
+  static `$FIX/base` trees are unaffected; only the G4GIT git-history fixture needs the
+  committed `lb-staging` file.
+- Pointer↔heading bijection test requires `pointers == headings` and `>= 10` pointers —
+  one new heading + one new pointer keeps the bijection.
+- Halt-gate results this pass: PAT regex 0 hits; `lint-guard-contract.py` green
+  (1 entry, ≥3 matrix rows); unfenced `## Scope Check` count = 1; Observability probe
+  `grep -l tf_redact_random_ids .github/workflows/cf-lb-overlay.yml` starts with the
+  allowlisted verb `grep`, contains no `ssh` and no shell-active bytes, and prints the
+  literal `.github/workflows/cf-lb-overlay.yml`.
+- Deferred consults (no spawn mechanism): repo-research / learnings fan-out, domain
+  leaders, spec-flow, gdpr-gate, scoped advisor, plan-review panel, CPO sign-off —
+  recorded in `specs/feat-one-shot-11687-main-ci-red/decision-challenges.md`; the
+  review pipeline supplies them.
 
 ## User-Brand Impact
 
