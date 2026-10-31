@@ -216,6 +216,7 @@ describe("gate order and state", () => {
     const text = await res.text();
     expect(res.status).toBe(500);
     expect(text).not.toContain("canary");
+    expect(Object.keys(JSON.parse(text)).sort()).toEqual(["error_class", "interpretation", "ok", "schema_version"]);
     expect(((globalThis as Record<symbol, unknown>)[Symbol.for("soleur.homeCensus.inflight")] ?? false)).toBe(false);
   });
 });

@@ -961,6 +961,17 @@ describe("review round: a zero must not be read as a finding it did not establis
     expect(calls).toEqual(["lstat /home/t/.claude/debug", "opendir /home/t/.claude/debug", "lstat /home/t/.claude/debug"]);
   });
 
+  it("a trigger class over its budget is cut with class_budget, still reads counted (a lower bound), and later classes are still visited", async () => {
+    const tree: Record<string, Node> = { "/home": d(), "/home/t": d(), "/home/t/.claude": d(), "/home/t/.claude/debug": d(), "/home/t/.claude/backups": d(), "/home/t/.claude/backups/b": f() };
+    for (let i = 0; i < 1_100; i++) tree[`/home/t/.claude/debug/f${i}`] = f();
+    const { scan } = await scanHome(scanOpts(memFs(tree)));
+    expect(scan.truncated).toBe(true);
+    expect(scan.reason).toBe("class_budget");
+    expect(bucketCount(scan.classes.debug.entries)).toBe("1000+");
+    expect(scan.classes.debug.cut).toBe(true);
+    expect(scan.classes.backups.entries).toBe(1);
+  });
+
   it("the production load-shed default does not truncate a normal scan (default histogram path runs)", async () => {
     const tree: Record<string, Node> = { "/home": d(), "/home/t": d(), "/home/t/.claude": d(), "/home/t/.claude/debug": d() };
     for (let i = 0; i < 600; i++) tree[`/home/t/.claude/debug/f${i}`] = f();

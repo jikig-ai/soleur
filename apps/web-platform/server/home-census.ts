@@ -677,11 +677,17 @@ export interface LogDest {
 }
 type Outcome = "ok" | "truncated" | "young" | "failed" | "refused";
 
-function censusLogger(dest?: LogDest) {
+let defaultLogger: ReturnType<typeof makeCensusLogger> | undefined;
+function makeCensusLogger(dest?: LogDest) {
   // A dedicated instance: base undefined drops pid and hostname, timestamp false drops the time field,
   // level warn so Vector's `level >= 40` filter ships the line, a synchronous destination so the line
-  // is written before the response. It has no Sentry-mirroring hook, so a warn line makes no breadcrumb.
+  // is written before the response (and a full pipe drops the line instead of blocking the loop: retryEAGAIN false).
+  // It has no Sentry-mirroring hook, so a warn line makes no breadcrumb.
   return pino({ level: "warn", base: undefined, timestamp: false }, dest ?? pino.destination({ dest: 1, sync: true, retryEAGAIN: () => false }));
+}
+// The default (stdout) logger is built once per process; a test-injected destination gets its own instance.
+function censusLogger(dest?: LogDest) {
+  return dest ? makeCensusLogger(dest) : (defaultLogger ??= makeCensusLogger());
 }
 
 function stripToAllowlist(event: Sentry.ErrorEvent, keep: { message: string; level: Sentry.SeverityLevel; tags: Record<string, string>; extra?: Record<string, unknown> }): Sentry.ErrorEvent {
@@ -778,6 +784,10 @@ export interface CensusDeps {
   scan?: ScanFn;
 }
 
+// The synthetic tree is immutable: build it once per process, not once per request.
+let syntheticCache: { fs: CensusFs; root: string } | undefined;
+const syntheticFs = () => (syntheticCache ??= buildSyntheticFs());
+
 const REAL_FS: CensusFs = { lstat: (p) => fsLstat(p), opendir: (p) => fsOpendir(p) };
 
 export function defaultCensusDeps(): CensusDeps {
@@ -858,7 +868,7 @@ export async function handleHomeCensus(request: Request, deps: CensusDeps = defa
 
     if (mode === "dry_run") {
       // A synthetic in-memory HOME only: no real filesystem call, no run_id consumed, real uptime/build/sunset.
-      const synth = buildSyntheticFs();
+      const synth = syntheticFs();
       const { scan } = await scanFn({ ...controlCommon, fs: synth.fs, roots: [{ label: "env_home", path: synth.root }] });
       const result = buildResult(scan, { runId, mode, dataSource: "synthetic", buildSha, control: controlMatches(scan) ? "passed" : "failed", uptimeS, claudeConfigDirSet, rootsDistinct: true, rootsNote: "none" });
       assertAllowlisted(result); // before any sink, so a violation reaches none of them
@@ -883,7 +893,7 @@ export async function handleHomeCensus(request: Request, deps: CensusDeps = defa
     let scanStarted = false;
     try {
       // 6. positive control (known-answer in-memory scan) and the real-adapter canary
-      const synth = buildSyntheticFs();
+      const synth = syntheticFs();
       const controlScan = await scanFn({ ...controlCommon, fs: synth.fs, roots: [{ label: "env_home", path: synth.root }] });
       const canary = await canaryOk(deps.canaryFs ?? REAL_FS, deps.canaryDir);
       if (!controlMatches(controlScan.scan) || !canary) {

@@ -9,7 +9,7 @@
 # Credential posture: INNGEST_MANUAL_TRIGGER_SECRET is read read-only from Doppler, passed to curl on its stdin
 # config channel (never argv), never echoed, and the script refuses to run under shell tracing.
 #
-# STREAM CONTRACT: stdout is the data channel. A 2xx body is printed ONLY after it validates against the allowlist
+# STREAM CONTRACT: stdout is the data channel; every refusal and status message goes to stderr. A 2xx body is printed ONLY after it validates against the allowlist
 # schema; any other body is never printed (a proxy 403 or 502 page carries a Ray ID and the caller's IP). Only the
 # status class and the exit code are printed for those.
 #
@@ -109,7 +109,7 @@ if [[ "$MODE" == "real" ]]; then
   [[ "$DISCHARGED" =~ ^[0-9a-f]{40}$ ]] || { echo "home-census-trigger: --discharged-sha must be 40 lowercase hex" >&2; exit 2; }
 fi
 
-die() { local code="$1"; shift; printf '%s\n' "$*"; exit "$code"; }
+die() { local code="$1"; shift; printf '%s\n' "$*" >&2; exit "$code"; }
 
 # --- served build (no credential) ---
 served_sha() {

@@ -232,6 +232,11 @@ run "${REAL_ARGS[@]}"; check "forged claim comments from an unpinned author are 
 reset_fix; touch "$FIX/gh.fail"; run "${REAL_ARGS[@]}"; check "claim comment failure fails closed (exit 8)" "$([[ $RC -eq 8 ]]; echo $?)"
 check "claim comment failure: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
 
+reset_fix; set_comments "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" "$(comment 54279 MEMBER "home-census run_id=1 claim")"
+run "${REAL_ARGS[@]}"; refused "run_id equal to the last claim is refused (not only below it)" 8
+reset_fix; set_comments "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$OLD pr=77")"
+run "${REAL_ARGS[@]}"; refused "the LAST pinned DISCHARGED comment wins (a later discharge of another sha supersedes)" 8
+
 # ---- real: --c9-fallback ------------------------------------------------------------------------------------------
 reset_fix; result_json young lt_24h >"$FIX/dry.json"; run "${REAL_ARGS[@]}" --c9-fallback
 check "--c9-fallback proceeds on a young container" "$([[ $RC -eq 0 ]]; echo $?)"
@@ -282,8 +287,8 @@ reset_fix; jq -nc '{status: "ok", build_sha: "dev"}' >"$FIX/health.json"; run "$
 check "a 'dev' build fails closed" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
 
 # ---- floors (printf + exit 1, never through the helper they backstop) ----------------------------------------------
-if [[ "$PASS" -lt 123 ]]; then
-  printf 'FLOOR: only %d assertions ran (expected at least 123)\n' "$PASS"
+if [[ "$PASS" -lt 129 ]]; then
+  printf 'FLOOR: only %d assertions ran (expected at least 129)\n' "$PASS"
   exit 1
 fi
 printf 'home-census-trigger tests: %d passed, %d failed\n' "$PASS" "$FAIL"
