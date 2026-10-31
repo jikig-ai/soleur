@@ -25,6 +25,49 @@ runbook, and restores the lost session-state Updates 18-19 (enqueue + merge
 record) that sit uncommitted in the stale `feat-11556-required-check-time`
 worktree.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-31 (sequential-fallback — all gates and review lenses
+run inline; no subagents spawned)
+**Sections enhanced:** User-Brand/Observability (new `## Observability`
+section), Phase 4 runbook workstream, Acceptance Criteria (AC-8)
+**Research agents used:** repo-research-analyst + learnings-researcher roles
+(inline, plan Phase 1); eng review panel (dhh/kieran/code-simplicity lenses,
+inline); CTO devex lens (inline); spec-flow edge-case pass (inline)
+
+### Key Improvements
+
+1. `## Observability` added — deepen-plan Phase 4.7's detection counts the
+   two committed TSVs as non-docs; the section documents the pre-existing
+   verification surface (shard lint + artifact wall clocks) and declares a
+   compliant `grep` discoverability probe.
+2. Mechanical plan-review findings applied: AC-8 now enumerates
+   pipeline-written artifacts (INDEX.md, tasks.md, spec-dir files) so the
+   diff-scope AC is true on the final tree; the runbook edit also fixes the
+   `-n 'suite-timings-*'` exact-name flag to `-p 'suite-timings-scripts-*'`.
+3. All deepen halt gates verified: User-Brand (valid `none`, no sensitive
+   paths), PAT, UI-wireframe, Encryption, Guard Contract, Scope Check (1
+   unfenced, all subsections, no BLOCKED/unmapped), Task-Design — pass.
+
+### New Considerations Discovered
+
+- **#9763 fast-tier ratchet interaction (deciding):** a direct
+  `--timings-dir --write` re-prices the 8 always-on drifters #11648 tracks to
+  real 11-378 s weights → `test-all-fast-tier-budget.test.sh` reds on the
+  committed-weight caps (10 s/suite, 300 s total; current: 120 labels /
+  200,061 ms / 0 over-cap — measured 2026-10-31). Resolved via the
+  incumbent-preserving `--durations` seed — the same mechanism merge commit
+  `8598aae15e` used ("incumbent-preserving regen via --durations seed" in its
+  own commit body). Recorded as `pending - assumed` technical ruling in
+  `decision-challenges.md` for parent escalation to `soleur:engineering:cto`.
+- Attribution verified live: `8598aae15e` is an ancestor of `origin/main`;
+  #11562 CLOSED (the split issue this checkpoint closes out); rule id
+  `cq-ac-must-not-depend-on-concurrent-sessions` confirmed active-migrated;
+  `timeout-minutes: 60` on the test-scripts job verified at ci.yml:1494;
+  `gh run download -p` glob flag verified via `--help`.
+- Precedent-diff gate: the seed-regen mechanism has in-repo precedent
+  (`8598aae15e`) — not novel.
+
 ## Research Insights
 
 _Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed)._
@@ -341,6 +384,37 @@ python3 scripts/regenerate-shard-manifest.py \
 - **Threshold decision (challengeable):** bookkeeping over generated CI data +
   docs; worst case is slow CI, a convenience impact, not data/trust loss.
 
+## Observability
+
+(Not a new observability surface — this section exists because deepen-plan
+Phase 4.7's detection counts the two TSVs in Files to Edit as non-docs. The
+verification surface below is entirely pre-existing: no probe, alert, or
+monitor is introduced by this change.)
+
+```yaml
+liveness_signal:
+  what: test-scripts per-leg wall clocks and suite-time sums from the suite-timings-scripts-* artifacts, plus the committed provenance header
+  cadence: per CI run (merge_group / pull_request); the Measured-history cadence is the reading of them
+  alert_target: PR required-check failure; manual runbook checkpoint (the ci-leg-balance-9232 soak closed 2026-09-30 — the documented gap this checkpoint reads by hand)
+  configured_in: .github/workflows/ci.yml (test-scripts job) and plugins/soleur/test/scripts-shard-manifest.test.sh
+error_reporting:
+  destination: PR required-check failure on the consuming run
+  fail_loud: scripts-shard-manifest.test.sh exits non-zero on malformed rows / src-enum / keys!=keys violations; a leg over timeout-minutes: 60 fails the job loudly
+failure_modes:
+  - mode: malformed or key-drifted committed tables degrade the packing
+    detection: scripts-shard-manifest.test.sh + scripts-shard-totality.test.sh on every PR
+    alert_route: PR required-check failure
+  - mode: stale prices drift legs past peers (the class this checkpoint reads)
+    detection: per-leg wall clocks and suite sums from suite-timings-* artifacts, read per the runbook
+    alert_route: manual runbook ownership checkpoint (this plan's Phase 2 measurement)
+logs:
+  where: ci.yml suite-timings-scripts-N artifacts + committed TSV provenance headers (generated-from-runs)
+  retention: 14 days (artifacts); git history (tables)
+discoverability_test:
+  command: grep -h 'generated-from' scripts/suite-durations.tsv
+  expected_output: generated-from
+```
+
 ## Domain Review
 
 **Domains relevant:** none
@@ -350,11 +424,8 @@ data files and ops docs. (Product/UX gate: no UI-surface file in either Files
 list — override does not fire. Domain leaders not spawned; sequential-fallback
 single-pass assessment.)
 
-## User-Brand / Observability / GDPR / IaC / ADR / Encryption / Guard gates
+## GDPR / IaC / ADR / Encryption / Guard / Task-Design gate notes
 
-- **Observability (2.9):** skipped — no Files-to-Edit under `apps/*/server/`,
-  `apps/*/src/`, `apps/*/infra/`, or `plugins/*/scripts/`; data+docs plan.
-  Verification is the committed shard lint suites, not a new probe.
 - **GDPR (2.7):** skipped — no regulated-data surface; no (a)-(d) trigger
   (no LLM processing, threshold `none`, no KB-reading cron, no new
   distribution surface).
