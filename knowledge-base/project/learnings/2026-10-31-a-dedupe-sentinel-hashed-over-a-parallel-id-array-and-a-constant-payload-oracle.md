@@ -1,7 +1,3 @@
----
-synced_to: [soleur:review]
----
-
 # Learning: a dedupe sentinel whose identity lives in a parallel array can silently desync — and a constant-payload oracle cannot catch the swap it exists for
 
 ## Problem
@@ -68,6 +64,12 @@ computed-vs-computed.
    anchor capture on the `<!-- shard-balance-watch:v1 ` marker; S17 fixture —
    Prevention: when extracting a self-written marker from a mutable document,
    capture relative to the marker, not to the payload shape.
+5. **Route-to-definition bullet to `plugins/soleur/skills/review/SKILL.md` was
+   reverted: the file sits exactly at the skill-body byte ceiling (475921)** —
+   Recovery: dropped the routed bullet; this file is the record — Prevention:
+   check `lint-skill-body-budget.py` headroom on the target BEFORE drafting a
+   routed bullet; a zero-headroom target needs an extraction PR first, not a
+   stub bullet.
 
 ## Tags
 
