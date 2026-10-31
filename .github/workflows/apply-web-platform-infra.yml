@@ -28,7 +28,7 @@ on:
       - "!apps/web-platform/infra/inngest-provision-rehearsal/**"
       # (#8189, ADR-220) git-data-root-key/, applied only by apply-git-data-root-key.yml.
       - "!apps/web-platform/infra/git-data-root-key/**"
-      # (#11181 F3) lb-staging/, applied only by cf-lb-overlay.yml dispatch arms.
+      # (#11181 F3) lb-staging/: own root, own state key, cf-lb-overlay.yml only.
       - "!apps/web-platform/infra/lb-staging/**"
       - ".github/workflows/apply-web-platform-infra.yml"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
@@ -41,8 +41,7 @@ on:
         description: "Why are you applying? (e.g. transient retry, or the dispatch reason)"
         required: true
         type: string
-      # NOTE on the input budget: GitHub raised the `workflow_dispatch` cap from 10 to 25 inputs on
-      # 2025-12-04; 9 are used (the five inngest-backstop-retire inputs were removed when that dispatch was retired).
+      # NOTE: 25-input cap since 2025-12-04; 9 used (5 inngest-backstop-retire inputs retired).
       # Prefer a DEDICATED workflow for the next per-target group (precedent: workspaces-luks-cutover.yml;
       # the concurrency group is a shared literal and survives the split). Re-derive the count:
       #   awk '/^  workflow_dispatch:/,/^concurrency:/' .github/workflows/apply-web-platform-infra.yml \
@@ -610,6 +609,8 @@ jobs:
               -target=doppler_secret.inngest_heartbeat_url_prd \
               -target=betteruptime_heartbeat.inngest_server_probe \
               -target=doppler_secret.inngest_server_probe_heartbeat_url \
+              -target=betteruptime_heartbeat.luks_monitor_host_timer \
+              -target=betteruptime_heartbeat.claude_cost_capture \
               -target=betteruptime_heartbeat.git_data_prd \
               -target=doppler_secret.git_data_heartbeat_url_prd \
               -target=betteruptime_heartbeat.git_data_host_prd \

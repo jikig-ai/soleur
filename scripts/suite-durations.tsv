@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1222
-# generated-at=2026-10-30T15:04:21Z
+# generated-at=2026-10-31T17:07:53Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -172,9 +172,9 @@ plugins/soleur/test/ci-e2e-skip-anchors.test.sh	111	measured
 plugins/soleur/test/ci-head-verdict.test.sh	276015	measured
 plugins/soleur/test/ci-path-gating.test.sh	205	measured
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1222	floor
-plugins/soleur/test/ci-pr-affected-replay-a	635037	measured
-plugins/soleur/test/ci-pr-affected-replay-b	336324	measured
-plugins/soleur/test/ci-pr-affected-replay-c	351151	measured
+plugins/soleur/test/ci-pr-affected-replay-a	1033094	measured
+plugins/soleur/test/ci-pr-affected-replay-b	399378	measured
+plugins/soleur/test/ci-pr-affected-replay-c	326172	measured
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1222	floor
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	948	measured
 plugins/soleur/test/claude-code-action-auth.test.sh	1132	measured
@@ -252,7 +252,7 @@ plugins/soleur/test/monitor-lock.test.sh	1222	floor
 plugins/soleur/test/monitor-pr-checks.test.sh	245125	measured
 plugins/soleur/test/net-issue-flow.test.sh	8356	measured
 plugins/soleur/test/notice-frontmatter.test.sh	7119	measured
-plugins/soleur/test/npm-publish-oidc.test.sh	1200	floor
+plugins/soleur/test/npm-publish-oidc.test.sh	1222	floor
 plugins/soleur/test/operator-9321-stages.test.sh	51837	measured
 plugins/soleur/test/operator-ack-guard.test.sh	110567	measured
 plugins/soleur/test/operator-agent-runnable.test.sh	15585	measured
@@ -398,6 +398,8 @@ scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
+scripts/followthroughs/inngest-bs-token-restage-7596	1222	floor
+scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/inngest-trace-retention-5150	1222	floor
@@ -555,10 +557,10 @@ scripts/tenant-dpa-register-guard-unit	286	measured
 scripts/test-affected-derive	5526	measured
 scripts/test-affected-derive-cache	1279	measured
 scripts/test-affected-kb-consumers	91233	measured
-scripts/test-all-affected-a	153713	measured
-scripts/test-all-affected-b	912865	measured
-scripts/test-all-affected-c	297241	measured
-scripts/test-all-affected-d	382585	measured
+scripts/test-all-affected-a	53969	measured
+scripts/test-all-affected-b	502348	measured
+scripts/test-all-affected-c	517988	measured
+scripts/test-all-affected-d	610788	measured
 scripts/test-all-capacity-signal	4519	measured
 scripts/test-all-enumerate-toolchain	21652	measured
 scripts/test-all-fast-tier-budget	708	measured
@@ -616,6 +618,7 @@ tests/scripts/betterstack-ingest-probe	118	measured
 tests/scripts/betterstack-query-archive	186	measured
 tests/scripts/betterstack-read-classify	210	measured
 tests/scripts/betterstack-roundtrip-latency	165085	measured
+tests/scripts/cf-lb-overlay-gate	1222	floor
 tests/scripts/cleanup-merged-space	9398	measured
 tests/scripts/destroy-guard-counter-github	70	measured
 tests/scripts/destroy-guard-counter-sentry	267	measured
@@ -681,7 +684,7 @@ tests/scripts/stock-preflight-gate	2261	measured
 tests/scripts/supabase-advisor-scan	1002	measured
 tests/scripts/supabase-logs-query	8686	measured
 tests/scripts/tenant-integration-gate-verdict	57	measured
-tests/scripts/tf-redact-random-ids	1200	floor
+tests/scripts/tf-redact-random-ids	1222	floor
 tests/scripts/tmp-purge	6916	measured
 tests/scripts/trio-baseline-census	1222	floor
 tests/scripts/vector-redeliver-gate	776	measured
