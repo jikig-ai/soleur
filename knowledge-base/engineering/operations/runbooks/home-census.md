@@ -8,7 +8,7 @@ tracker: 10455
 
 A counts-only, metadata-only, read-only census of the shared HOME in the web-platform container. Authorization: the controller's
 comment 6546444433 on #10455. Legal method: the CLO ruling with conditions C1-C10 and the dissent-round rulings D1-D9, recorded in
-`knowledge-base/project/specs/feat-one-shot-10455-prod-home-census/decision-challenges.md`. Building and merging the mechanism does
+`knowledge-base/project/specs/archive/20261031-224809-feat-one-shot-10455-prod-home-census/decision-challenges.md`. Building and merging the mechanism does
 not run it. The purge of already-persisted shared data and the deploy-smoke promotion (PR 2) are not part of this runbook.
 
 One real run, at most two; the second only after a recorded `young` result. If no mature window occurs before the sunset, the census
