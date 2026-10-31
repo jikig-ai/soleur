@@ -41,12 +41,12 @@ passes=0; fails=0; FAILED=()
 
 assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir EMPTY\n' >&2; exit 2 ;;
-    */../*|*/..) printf 'FATAL: .. in %s\n' "$1" >&2; exit 2 ;;
-    /proc/*|/sys/*|/dev/*) printf 'FATAL: synthetic fs %s\n' "$1" >&2; exit 2 ;;
-    /|//|/.) printf 'FATAL: fs root\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
     /*) : ;;
-    *)  printf 'FATAL: relative %s\n' "$1" >&2; exit 2 ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
 command -v jq >/dev/null 2>&1 || { echo "[FATAL] jq not found" >&2; exit 2; }
