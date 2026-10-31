@@ -75,6 +75,20 @@
 #   E2b    (round 5) must-NOT-trip: a non-executable data file whose first line is `# note: author_association` (not `#!`) is not walked; the COPY
 #          whose shebang clause is `'#'*` walks it and rule 5 fires
 #
+# RULE 6 (#11553) -- the ordering-bound rule on `/events/` calls (sort= OR start= AND end=;
+# field=<fn>() aggregate exempt):
+#   R6-M1  a statsPeriod-only /events/ URL literal                  -> exit 1, cites file AT TRUE LINE
+#   R6-M2  `end=` without `start=` (a half-bound is unbound)        -> exit 1
+#   R6-M3  DISPATCH: guard COPY with the /events/ needle neutered,  -> exit 2 on the production
+#          production run                                            tree, diagnostic names rule 6
+#   R6-M4  a second unbounded call after a compliant first          -> exit 1, cites the SECOND call
+#   R6-H1  must-PASS non-canonical: start=+end= bound, no sort=     -> exit 0
+#   R6-H2  must-PASS: field=count() aggregate, statsPeriod only     -> exit 0 (the live exemption)
+#   R6-H3  must-PASS: /events/ URL inside a full-line `#` comment   -> exit 0
+#   R6-H4  must-PASS: --data-urlencode 'sort=-timestamp' on a       -> exit 0 (shape-B fold is real)
+#          continuation-folded curl -G block
+#   R6-H5  the live tree: rule 6 examined >= 5 /events/ calls       -> count parsed from summary
+#
 # ADR-193 floor: `asserted` moves at the CALL SITE (check()), never inside pass()/fail(); the
 # conservation identity and MIN_ASSERTIONS are reported with printf + exit 1, never via fail().
 #
@@ -1262,7 +1276,118 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=191
+# ============================ RULE 6 (#11553) ============================
+# ordering bound on /events/ calls: `sort=` OR `start=` AND `end=` on the same logical
+# line (backslash-continuations folded); a `field=<fn>()` aggregate select is exempt.
+
+# --- R6-M1: a statsPeriod-only /events/ URL literal -> exit 1 AT THE TRUE LINE ---
+d=$(mkcase r6m1)
+cat >"$d/a-unpinned.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# rolling window probe
+QUERY_ENC=abc
+URL="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp"
+echo "$URL"
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R6-M1 statsPeriod-only /events/ call -> exit 1" "R6-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'a-unpinned.sh:5: rule 6:' <<<"$GUARD_OUT"; check $? "R6-M1 cites the offender at its TRUE line (a-unpinned.sh:5)" "R6-M1 mis-cited the offender (expected a-unpinned.sh:5): $GUARD_OUT"
+
+# --- R6-M2: `end=` without `start=` -- a half-bound is unbound -> exit 1 ---
+d=$(mkcase r6m2)
+cat >"$d/half-bound.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+URL="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=x&end=2026-10-31T00:00:00"
+echo "$URL"
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R6-M2 end= without start= -> exit 1 (a half-bound is unbound)" "R6-M2 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'half-bound.sh:3: rule 6:' <<<"$GUARD_OUT"; check $? "R6-M2 cites the offender at its TRUE line (half-bound.sh:3)" "R6-M2 mis-cited the offender (expected half-bound.sh:3): $GUARD_OUT"
+
+# --- R6-M3 DISPATCH: a guard COPY with the /events/ needle neutered drives scanned_rule6
+# to 0 on the production tree -> exit 2, diagnostic names RULE 6 (not a sibling floor) ---
+R6F_GUARD="$SANDBOX/guard-no-events-needle.sh"
+sed 's|\*/events/\*|\*/never-events/|' "$GUARD" >"$R6F_GUARD"
+if diff -q "$GUARD" "$R6F_GUARD" >/dev/null; then
+  check 1 "" "R6-M3 DISPATCH: the /events/ needle is absent -- the mutation did not land and the row is vacuous"
+else
+  R6F_OUT="$(bash "$R6F_GUARD" 2>&1)"; R6F_RC=$?
+  (( R6F_RC == 2 )); check $? "R6-M3 DISPATCH: neutered /events/ needle -> exit 2 on the production tree" "R6-M3 expected exit 2, got $R6F_RC: $R6F_OUT"
+  grep -q 'rule 6 (ordering bound)' <<<"$R6F_OUT"; check $? "R6-M3 the floor diagnostic names RULE 6 specifically" "R6-M3 diagnostic does not name rule 6: $R6F_OUT"
+fi
+
+# --- R6-M4: a second unbounded /events/ call after a compliant first -> exit 1 citing it ---
+d=$(mkcase r6m4)
+cat >"$d/two-calls.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+URL1="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=a&statsPeriod=1h&sort=-timestamp"
+URL2="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=b&statsPeriod=2h"
+echo "$URL1 $URL2"
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R6-M4 second unbounded call after a compliant first -> exit 1" "R6-M4 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'two-calls.sh:4: rule 6:' <<<"$GUARD_OUT"; check $? "R6-M4 cites the SECOND call's line (two-calls.sh:4)" "R6-M4 mis-cited (expected two-calls.sh:4): $GUARD_OUT"
+
+# --- R6-H1 must-PASS non-canonical: start=+end= bound with no sort= -> exit 0 ---
+d=$(mkcase r6h1)
+cat >"$d/bounded.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+URL="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=x&start=2026-10-01T00:00:00&end=2026-10-31T00:00:00"
+echo "$URL"
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R6-H1 start=+end= bound (no sort=) -> exit 0" "R6-H1 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R6-H2 must-PASS: field=count() aggregate with statsPeriod only -> exit 0 ---
+d=$(mkcase r6h2)
+cat >"$d/aggregate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+curl -sS -G \
+  --data-urlencode 'field=count()' \
+  --data-urlencode 'query=op:x' \
+  --data-urlencode 'statsPeriod=48h' \
+  "https://de.sentry.io/api/0/organizations/jikigai-eu/events/" >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R6-H2 field=count() aggregate + statsPeriod -> exit 0 (exemption holds)" "R6-H2 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R6-H3 must-PASS: /events/ URL inside a full-line comment only -> exit 0 ---
+d=$(mkcase r6h3)
+cat >"$d/comment-only.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# The probe reads https://de.sentry.io/api/0/organizations/jikigai-eu/events/?statsPeriod=24h with no bound documented.
+echo "ok"
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R6-H3 /events/ in a full-line comment -> exit 0 (executable-line scoping)" "R6-H3 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R6-H4 must-PASS: --data-urlencode 'sort=-timestamp' on a continuation-folded curl -G
+# block -- the bound param is on a DIFFERENT physical line from the URL -> exit 0 ---
+d=$(mkcase r6h4)
+cat >"$d/folded.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+curl -sS -G \
+  --data-urlencode 'query=op:x' \
+  --data-urlencode 'sort=-timestamp' \
+  --data-urlencode 'statsPeriod=48h' \
+  "https://de.sentry.io/api/0/organizations/jikigai-eu/events/" >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R6-H4 folded curl -G with --data-urlencode sort= -> exit 0 (fold is real)" "R6-H4 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R6-H5 LIVE: the production run examined at least the floor of /events/ calls ---
+R6L_OUT="$(bash "$GUARD" 2>&1)"
+n6=$(grep -oE 'rule 6 \(ordering bound\) examined [0-9]+' <<<"$R6L_OUT" | grep -oE '[0-9]+$')
+[[ -n "$n6" && "$n6" -ge 5 ]]; check $? "R6-H5 live tree: rule 6 examined >= 5 /events/ calls (got ${n6:-none})" "R6-H5 scanned_rule6 missing or < 5 on live tree: $R6L_OUT"
+
+MIN_ASSERTIONS=204
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
