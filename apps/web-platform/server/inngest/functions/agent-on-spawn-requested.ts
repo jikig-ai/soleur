@@ -1274,9 +1274,18 @@ const TRANSIENT_ANTHROPIC_CAUSES: readonly string[] = [
 
 // `ByokLeaseError.cause` values (server/byok-lease.ts). `oauth_unusable` is defensive exhaustiveness: this path leases through
 // `getRestApiKey()` only, which never reads the operator subscription row, so the cause cannot reach it today.
-const BYOK_LEASE_CAUSES: ReadonlySet<string> = new Set(
-  ["fetch_failed", "decrypt_failed", "escape", "subscription_limit", "oauth_unusable"] as const satisfies readonly ByokLeaseError["cause"][],
-);
+// Exhaustive by construction (#11599): a `Record` keyed on every `ByokLease` cause fails `tsc` when a cause is added
+// without a decision here, where `satisfies` on an array only checks membership.
+const BYOK_LEASE_CAUSE_MAP: Record<ByokLeaseError["cause"], true> = {
+  fetch_failed: true,
+  decrypt_failed: true,
+  escape: true,
+  subscription_limit: true,
+  oauth_unusable: true,
+  auth_mode_unresolved: true,
+  auth_mode_unavailable: true,
+};
+const BYOK_LEASE_CAUSES: ReadonlySet<string> = new Set(Object.keys(BYOK_LEASE_CAUSE_MAP));
 
 // Tags a retryable LIVE error inside `turn-${n}-claude` with its FailureReason,
 // while `status` and the SDK class are still readable: it returns a fresh Error

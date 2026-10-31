@@ -182,7 +182,12 @@ export type WSErrorCode =
   | "delegation_expired"
   | "delegation_hourly_cap_exceeded"
   | "delegation_daily_cap_exceeded"
-  | "delegation_cross_tenant";
+  | "delegation_cross_tenant"
+  // #11599 — the conversation's authentication mode could not be resolved. NOT credential-blocked codes (the key is
+  // fine and the composer stays enabled): `unresolved` is deterministic (start a new conversation), `unavailable` is
+  // transient (send again). Mirrored in `errorSchema.errorCode` (lib/ws-zod-schemas.ts); `_SchemaCovers` proves it.
+  | "auth_mode_unresolved"
+  | "auth_mode_unavailable";
 
 /** Single predicate for the credential-blocked pair (#11525): the chat is
  *  blocked (composer disabled, sends refused) iff the error code is one of

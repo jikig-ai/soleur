@@ -14,22 +14,24 @@
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
-import { ConversationAuthModeError } from "./auth-mode-error";
+import { ConversationAuthModeError, type AuthModeResolverFn } from "./auth-mode-error";
 
 async function repositoryFor(userId: string): Promise<AgentEnginePersistenceRepository> {
   const tenant = await getFreshTenantClient(userId);
   return new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient);
 }
 
-/** The run's raw `authMode` bound by `userId`, or `null` when there is no such run. One read path for both consumers. */
-async function readRunAuthMode(
+/** The run's raw `authMode` and workspace bound by `userId`, or `null` when there is no such run. One read path for both consumers. */
+async function readRunBinding(
   repo: AgentEnginePersistenceRepository,
   userId: string,
   conversationId: string,
-): Promise<string | null> {
-  const run = (await repo.getConversationRun(conversationId, userId)) as { binding?: { authMode?: unknown } } | null;
+): Promise<{ authMode: string; workspaceId: unknown } | null> {
+  const run = (await repo.getConversationRun(conversationId, userId)) as {
+    binding?: { authMode?: unknown; workspaceId?: unknown };
+  } | null;
   const mode = run?.binding?.authMode;
-  return typeof mode === "string" ? mode : null;
+  return typeof mode === "string" ? { authMode: mode, workspaceId: run?.binding?.workspaceId } : null;
 }
 
 /** The binding's raw `authMode`, or `null` when the conversation has no run bound by `userId`. Rejects on a read error. */
@@ -37,7 +39,7 @@ export async function readConversationBindingAuthMode(
   userId: string,
   conversationId: string,
 ): Promise<string | null> {
-  return readRunAuthMode(await repositoryFor(userId), userId, conversationId);
+  return (await readRunBinding(await repositoryFor(userId), userId, conversationId))?.authMode ?? null;
 }
 
 /**
@@ -47,14 +49,23 @@ export async function readConversationBindingAuthMode(
  * `assertLegacyConversationEngineBinding`; any other state, including no conversation row, throws
  * `unbound`. A read error throws `read_failed`. An empty id can never name a caller's own row, so it is
  * `unbound` before any read (the scope arguments of the repository reads are optional by design).
+ *
+ * `expectedWorkspaceId` (#11594, passed by the lease for a delegated lease only): the mode a conversation carries is
+ * stamped from the workspace it was created in, while a delegation resolves against the caller's CURRENT workspace at
+ * turn time. A run bound in a different workspace throws `workspace_mismatch` so the mode of one workspace can never
+ * fund a delegation of another. Absent (the owner path), no comparison is made.
  */
-export function makeConversationAuthModeResolver(userId: string, conversationId: string): () => Promise<string> {
-  return async () => {
+export function makeConversationAuthModeResolver(userId: string, conversationId: string): AuthModeResolverFn {
+  return async (ctx) => {
     if (!userId || !conversationId) throw new ConversationAuthModeError("unbound");
     try {
       const repo = await repositoryFor(userId);
-      const mode = await readRunAuthMode(repo, userId, conversationId);
-      if (mode !== null) return mode;
+      const run = await readRunBinding(repo, userId, conversationId);
+      if (run !== null) {
+        const expected = ctx?.expectedWorkspaceId;
+        if (expected !== undefined && run.workspaceId !== expected) throw new ConversationAuthModeError("workspace_mismatch");
+        return run.authMode;
+      }
       const state = await repo.getConversationBindingState(conversationId, userId);
       if (state === "legacy") return "managed";
       throw new ConversationAuthModeError("unbound");

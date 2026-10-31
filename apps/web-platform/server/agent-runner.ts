@@ -149,7 +149,7 @@ function supabase() { return _supabase ??= createServiceClient(); }
  */
 function resolveSessionErrorCode(
   err: unknown,
-): "key_invalid" | "byok_key_missing" | "subscription_limit" | undefined {
+): ReturnType<typeof mapByokLeaseCauseToErrorCode> | "byok_key_missing" {
   if (err instanceof KeyInvalidError) return "key_invalid";
   if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
   // Phase 3.2 AC-D: MissingByokKeyError carries its own client-facing
