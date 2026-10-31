@@ -22,8 +22,8 @@
 // check can answer something other than 407).
 //
 // G2 also measures (#10455, PR 1a) what a sibling tenant can read of the REAL CLI's persisted output: per-run synthesized markers for
-// the first tenant's prompt text and tool output must each be proven persisted at a host path and then be absent from everything the
-// second tenant can read (a canary file proves the search can find them); the CLI state the sibling CAN read in the shared HOME is
+// the first tenant's prompt text and tool output must each be proven persisted at a host path and then be absent from the three roots the
+// second tenant's search covers (its HOME, its TMPDIR and the host /tmp, files up to 7812 KiB; one canary per root proves the search can find them); the CLI state the sibling CAN read in the shared HOME is
 // pinned as a documented residual (ADR-075 addendum 2026-10-31), and the first tenant's recorded messaging socket path must not be
 // visible from the sibling's mount view.
 //
@@ -303,6 +303,14 @@ describe.skipIf(!SANDBOX_OK)("a hosted Bash call through the real SDK, the produ
 
 // G2. A short, shared temp dir: a unix socket path is limited to 108 bytes, and the SDK names its proxy
 // sockets under TMPDIR, so a long tmpdir fails bridge creation ("Failed to create bridge sockets").
+// Bounds shared by the host-side persistence check and B's in-sandbox search, so both look at the same files (largest searched file: 7812 KiB).
+const MAX_SCAN_KIB = 7812;
+// Host-side waits, in the order the scenario takes them. Worst case before B's probe even starts is their SUM (60 + 60 + 45 + 20 s).
+const SOCKET_WAIT_MS = 60_000;
+const PERSIST_WAIT_MS = 60_000;
+const MARKER_BUDGET_MS = 45_000;
+const G2_ARMS_RUN = new Set<string>();
+
 describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling session's proxy sockets or read its persisted CLI content (#10445, #10455)", () => {
   let stubA: AnthropicStub | undefined;
   let stubB: AnthropicStub | undefined;
@@ -317,6 +325,8 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
   let toolNeedle: string;
   // A's messaging socket paths (host side, read from A's own session files); B must not be able to see any of them.
   let probeSockets: string[] = [];
+  // Host /tmp canaries (B searches the host /tmp), removed after each test.
+  const tmpCanaries: string[] = [];
   const savedPath = process.env.PATH;
 
   // Runs inside B's sandbox. For every pathname socket in the shared dir it sends a CONNECT with (1) no
@@ -338,13 +348,17 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       // #10445 CTO ruling: A ran `env`, so its per-session proxy credential sits in the CLI's persisted output. The host
       // read it from A's own temp dir and wrote it here as the needle; B searches everything it can read for it.
       `needle='${needle}'`,
-      `hits=$(grep -rIlF --exclude=probe.sh -- "$needle" /tmp "$TMPDIR" "$HOME" 2>/dev/null | head -5)`,
+      // ONE bounded pass over the three roots B's search covers (its HOME, its TMPDIR and the host /tmp): files up to MAX_SCAN_KIB, a 60 s
+      // wall-clock cap whose expiry is reported (SEARCH_FIND_RC=124) so a truncated walk can never read as "nothing found". -a, not -I: a
+      // file the CLI writes with a NUL byte or invalid UTF-8 must still be searched, for the credential and for the content markers alike.
+      `pn='${promptNeedle}'; tn='${toolNeedle}'`,
+      // B writes a canary into its OWN TMPDIR: a write that works proves the root it searches is the root it can write to.
+      `printf '%s %s\\n' "$pn" "$tn" > "$TMPDIR/g2-canary-tmpdir.txt" 2>/dev/null`,
+      `all=$( { timeout 60 find "$HOME" "$TMPDIR" /tmp -xdev -type f -size -${MAX_SCAN_KIB + 1}k ! -name probe.sh -print0 2>/dev/null; echo $? > "$TMPDIR/.g2-find-rc"; } | xargs -0 -r grep -aoHF -e "$needle" -e "$pn" -e "$tn" 2>/dev/null | sort -u)`,
+      `echo SEARCH_FIND_RC=$(cat "$TMPDIR/.g2-find-rc" 2>/dev/null || echo missing)`,
+      `hits=$(printf '%s\\n' "$all" | grep -F ":$needle" | cut -d: -f1 | sort -u | head -5)`,
       `echo NEEDLE_HITS=$(printf '%s' "$hits" | grep -c .)`,
       `echo NEEDLE_PATHS=$(printf '%s' "$hits" | tr '\\n' ,)`,
-      // #10455 PR 1a: one pass over everything B can read for the two content markers (prompt text, tool output).
-      // -a, not -I: a state file the CLI writes with a NUL byte or invalid UTF-8 must still be searched.
-      `pn='${promptNeedle}'; tn='${toolNeedle}'`,
-      `all=$(grep -raoHF --exclude=probe.sh -e "$pn" -e "$tn" /tmp "$TMPDIR" "$HOME" 2>/dev/null | sort -u)`,
       `echo PROMPT_NEEDLE_HITS=$(printf '%s\\n' "$all" | grep -cF ":$pn")`,
       `echo PROMPT_NEEDLE_PATHS=$(printf '%s\\n' "$all" | grep -F ":$pn" | cut -d: -f1 | tr '\\n' ,)`,
       `echo TOOL_NEEDLE_HITS=$(printf '%s\\n' "$all" | grep -cF ":$tn")`,
@@ -401,7 +415,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     vi.unstubAllEnvs();
     await stubA?.close();
     await stubB?.close();
-    for (const dir of [shared, rootA, rootB, home, shimDir, agentSessionTmpDir(IDS.a), agentSessionTmpDir(IDS.b)]) {
+    for (const dir of [shared, rootA, rootB, home, shimDir, agentSessionTmpDir(IDS.a), agentSessionTmpDir(IDS.b), ...tmpCanaries.splice(0)]) {
       if (!dir) continue;
       try {
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
@@ -456,7 +470,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         if (e.isDirectory()) walk(p);
         else if (e.isFile() && e.name !== "probe.sh") {
           try {
-            if (statSync(p).size < 8_000_000 && readFileSync(p, "utf8").includes(value)) found.push(p);
+            if (statSync(p).size <= MAX_SCAN_KIB * 1024 && readFileSync(p, "utf8").includes(value)) found.push(p);
           } catch {
             /* unreadable or vanished */
           }
@@ -485,20 +499,20 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     });
     try {
       // Wait until A's bridge socket exists: B must run while A is live, or the probe has nothing to find.
-      const deadline = Date.now() + 60_000;
+      const deadline = Date.now() + SOCKET_WAIT_MS;
       const sockets = () => readdirSync(shared).filter((n) => n.endsWith(".sock"));
       while (Date.now() < deadline && sockets().length === 0) await new Promise((r) => setTimeout(r, 500));
       expect(sockets().length, "session A never created a proxy socket (the probe would be vacuous)").toBeGreaterThan(0);
 
       // Non-vacuity: A's `env` output (with its credential) is on disk host-side BEFORE B looks. B runs against the oracle.
       let needle: string | null = null;
-      const nDeadline = Date.now() + 60_000;
+      const nDeadline = Date.now() + PERSIST_WAIT_MS;
       while (Date.now() < nDeadline && !(needle = findNeedle(perTenantTmp))) await new Promise((r) => setTimeout(r, 500));
       expect(needle, "A's persisted `env` output never appeared, so the cross-tenant scan would be vacuous").not.toBeNull();
       // #10455 PR 1a non-vacuity, per needle class: the REAL CLI must have persisted each marker at a named host path before
       // B's zero-hit result can mean anything. A class A never persisted is "not_exercisable" and fails here, never green.
       const hostRoots = [home, shared, agentSessionTmpDir(IDS.a)];
-      const budget = Date.now() + 45_000; // one shared budget, so a stall fails with a message well inside the 240 s test timeout
+      const budget = Date.now() + MARKER_BUDGET_MS; // one shared budget for the marker polls; the stacked worst case (165 s, plus the transcript wait) still leaves B's run inside the 240 s test timeout only on a healthy runner
       const pollUntil = async <T,>(read: () => T, done: (v: T) => boolean): Promise<T> => {
         let v = read();
         while (Date.now() < budget && !done(v)) {
@@ -527,10 +541,17 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       expect(socketPaths.length, "no messagingSocketPath recorded, so the key-reachability check is vacuous").toBeGreaterThan(0);
       expect(socketPaths.some((sp) => existsSync(sp)), "A's messaging socket does not exist host-side, so the reachability probe is vacuous").toBe(true);
       probeSockets = socketPaths;
-      // Positive control for B's one-pass marker search: a canary B CAN read (in its HOME, a root the search always covers; B's TMPDIR is <shared>/claude-<uid>, so a canary in <shared> was found only when the temp dir sat under /tmp) that holds both markers. A dead grep (a typo'd
-      // root, an unsupported flag) reads 0 for every class and would otherwise stay green.
+      // Positive controls for B's one-pass marker search, ONE PER ROOT it covers: its HOME, the host /tmp, and its own TMPDIR (B writes that
+      // one itself; its TMPDIR is <shared>/claude-<uid>, not <shared>). A dead search flag, a typo'd root or a dropped root reads 0 for
+      // every class and would otherwise stay green; each canary must be found exactly once.
       const canary = join(home, "g2-canary.txt");
       writeFileSync(canary, `${promptNeedle} ${toolNeedle}\n`);
+      // A NUL-bearing carrier in HOME: pins -a (a search that skips binary files misses a state file with an embedded NUL byte).
+      const canaryBin = join(home, "g2-canary.bin");
+      writeFileSync(canaryBin, Buffer.concat([Buffer.from([0]), Buffer.from(`${promptNeedle} ${toolNeedle}`), Buffer.from([0, 1])]));
+      const canaryTmp = join("/tmp", `g2-canary-${randomBytes(6).toString("hex")}.txt`);
+      writeFileSync(canaryTmp, `${promptNeedle} ${toolNeedle}\n`);
+      tmpCanaries.push(canaryTmp);
       writeFileSync(join(shared, "probe.sh"), probeScript(shared, needle!));
 
       const result = await runBash({
@@ -560,15 +581,19 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       const replays = [...out.matchAll(/^REPLAY (\S+) \[(.*)\]$/gm)].map((m) => ({ sock: m[1], line: m[2] }));
       const hitsOf = (label: string) => Number(new RegExp(`^${label}_HITS=(\\d+)$`, "m").exec(out)?.[1] ?? "-1");
       const pathsOf = (label: string) => new RegExp(`^${label}_PATHS=(.*)$`, "m").exec(out)?.[1] ?? "?";
-      // The canary is the only B-readable carrier of either marker under the production layout; the control arm's shared CLI temp
-      // additionally holds A's tool output.
-      expect(hitsOf("PROMPT_NEEDLE"), `B read A's prompt at: ${pathsOf("PROMPT_NEEDLE")} (expected only the canary)`).toBe(1);
-      expect(pathsOf("PROMPT_NEEDLE")).toContain(canary);
-      if (perTenantTmp) {
-        expect(hitsOf("TOOL_NEEDLE"), `B read A's tool output at: ${pathsOf("TOOL_NEEDLE")} (expected only the canary)`).toBe(1);
-        expect(pathsOf("TOOL_NEEDLE")).toContain(canary);
-      } else {
-        expect(hitsOf("TOOL_NEEDLE"), "control: B's marker search must find A's tool output in the shared CLI temp as well as the canary").toBeGreaterThan(1);
+      // The search must have completed: a timed-out walk (rc 124) or a missing rc would make every zero below meaningless.
+      const findRc = /^SEARCH_FIND_RC=(\S+)$/m.exec(out)?.[1];
+      expect(findRc, "B's search walk timed out or never reported, so a zero below proves nothing").toBeDefined();
+      expect(findRc).not.toBe("124");
+      expect(findRc).not.toBe("missing");
+      // The four canary files (HOME text and binary, host /tmp, B's own TMPDIR) are the only B-readable carriers of either marker under the production
+      // layout; the control arm's shared CLI temp additionally holds A's tool output. Soft: a failure here must not hide the #10445 checks.
+      const CANARY_FILES = 4; // HOME text, HOME binary, host /tmp, B's own TMPDIR
+      for (const [label, expected] of [["PROMPT_NEEDLE", "prompt"], ["TOOL_NEEDLE", "tool output"]] as const) {
+        const exact = label === "PROMPT_NEEDLE" || perTenantTmp;
+        if (exact) expect.soft(hitsOf(label), `B read A's ${expected} at: ${pathsOf(label)} (expected only the ${CANARY_FILES} canary files)`).toBe(CANARY_FILES);
+        else expect.soft(hitsOf(label), "control: B's marker search must find A's tool output in the shared CLI temp as well as the canaries").toBeGreaterThan(CANARY_FILES);
+        for (const c of [canary, canaryBin, canaryTmp, "/g2-canary-tmpdir.txt"]) expect.soft(pathsOf(label), `the ${c} canary was not found: that root is not searched`).toContain(c);
       }
 
       // #10455 PR 1a CTO ruling: the readable CLI state in the shared HOME is a DOCUMENTED RESIDUAL (not relocated; ADR-075 addendum).
@@ -584,23 +609,25 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       ];
       const OPTIONAL_HOME_STATE = [".claude/.last-cleanup", ".claude/backups/.claude.json.backup.<ts>"];
       const readable = [...new Set((/^HOME_READABLE=(.*)$/m.exec(out)?.[1] ?? "").split(",").filter(Boolean))].sort();
-      expect(REQUIRED_HOME_STATE.filter((r) => !readable.includes(r)), "a required CLI state file is no longer readable: the pin is stale or the probe is blind").toEqual([]);
-      expect(
+      expect.soft(REQUIRED_HOME_STATE.filter((r) => !readable.includes(r)), "a required CLI state file is no longer readable: the pin is stale or the probe is blind").toEqual([]);
+      expect.soft(
         readable.filter((r) => !REQUIRED_HOME_STATE.includes(r) && !OPTIONAL_HOME_STATE.includes(r)),
         "B can read a CLI state file that is not in the reviewed pin: review it, then update the pin and the ADR-075 addendum",
       ).toEqual([]);
-      // The peer key is only usable through A's messaging socket. Realized, not declared: B must not be able to SEE the recorded path.
-      expect(out, "B could see A's recorded messaging socket path").not.toMatch(/^SOCK_VISIBLE=/m);
-      expect(out).toContain(`SOCK_CHECKED=${socketPaths.length}`);
+      // The peer key is NOT demonstrated usable from B's view (usability is not measured here). Realized, not declared: B must not be able to SEE the recorded path.
+      expect.soft(out, "B could see A's recorded messaging socket path").not.toMatch(/^SOCK_VISIBLE=/m);
+      expect.soft(out).toMatch(new RegExp(`^SOCK_CHECKED=${socketPaths.length}$`, "m"));
       const deniedDirs = (sandboxB as { filesystem: { denyRead: string[] } }).filesystem.denyRead;
       for (const sp of socketPaths) {
-        expect(
+        expect.soft(
           deniedDirs.some((d) => sp === d || sp.startsWith(`${d}/`)),
           `A's messaging socket ${sp} is outside every denied dir (secondary check; the probe above is the proof)`,
         ).toBe(true);
       }
-      // None of the readable files may hold a credential or a content marker, and A's workspace id may not be in the account state file
-      // (it is in sessions/*.json; that is the documented residual). The scan must have actually read something.
+      // The pinned scan set (the account state file plus the shell-snapshots, backups and sessions directories; .last-cleanup is not
+      // scanned) may not hold a credential or a content marker, and A's workspace id may not be in the account state file (the CLI writes
+      // it into sessions/*.json; that is the documented residual, and only the messaging socket path is read back by this test).
+      // The scan must have actually read something.
       const readableHostFiles: string[] = [join(home, ".claude.json")];
       for (const dir of ["shell-snapshots", "backups", "sessions"]) {
         try {
@@ -620,11 +647,11 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         }
         scanned += 1;
         for (const marker of forbidden) {
-          expect(body.includes(marker), `a B-readable CLI state file holds a tenant secret or content marker: ${f.replace(home, "$HOME")}`).toBe(false);
+          expect.soft(body.includes(marker), `a B-readable CLI state file holds a tenant secret or content marker: ${f.replace(home, "$HOME")}`).toBe(false);
         }
-        if (f === join(home, ".claude.json")) expect(body.includes(IDS.a), "the account state file holds A's workspace id").toBe(false);
+        if (f === join(home, ".claude.json")) expect.soft(body.includes(IDS.a), "the account state file holds A's workspace id").toBe(false);
       }
-      expect(scanned, `the forbidden-marker scan read too few files to prove anything: ${readableHostFiles.map((f) => f.replace(home, "$HOME")).join(",")}`).toBeGreaterThanOrEqual(2); // the account state file plus at least one session file; backups and snapshots rotate
+      expect.soft(scanned, `the forbidden-marker scan read too few files to prove anything: ${readableHostFiles.map((f) => f.replace(home, "$HOME")).join(",")}`).toBeGreaterThanOrEqual(2); // the account state file plus at least one session file; backups and snapshots rotate
       if (perTenantTmp) {
         expect(replays, "B found nothing to replay").toEqual([]);
         expect(hits, `B found A's credential at: ${/^NEEDLE_PATHS=(.*)$/m.exec(out)?.[1]}`).toBe(0);
@@ -677,6 +704,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       const ownAnswers = probes.filter((x) => x.label === "own");
       expect(ownAnswers.some((p) => !p.line.includes("407")), `no socket accepted B's own credential:\n${out}`).toBe(true);
       expect(ownAnswers.some((p) => p.line.includes("407")), `every socket accepted B's credential:\n${out}`).toBe(true);
+      G2_ARMS_RUN.add(perTenantTmp ? "per-tenant" : "control");
     } finally {
       stopA.abort();
       await sessionA.catch(() => undefined);
@@ -685,6 +713,10 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
 
   it("per-tenant CLI temp: B cannot find or replay A's credential (A ran `env`); tokenless and wrong-credential requests return 407; the caller's own credential is live", () => scenario(true), 240_000);
   it("CONTROL: with a shared CLI temp (the pre-fix layout) the same scan finds A's credential and the replay is accepted", () => scenario(false), 240_000);
+
+  it("floor: both arms ran to their last assertion (an emptied or deleted arm cannot pass vacuously)", () => {
+    expect([...G2_ARMS_RUN].sort()).toEqual(["control", "per-tenant"]);
+  });
 });
 
 // ---- #10455 (a): the AF_UNIX-deny variant through the real SDK ---------------------------------------------------

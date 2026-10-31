@@ -223,7 +223,9 @@ describe("createSandboxHook - negative-space coverage", () => {
 // #10455 PR 1a: the file tools (Read, Grep, Glob, LS, Notebook*) run in the CLI process OUTSIDE bwrap, so the sandbox
 // `denyRead` list never applies to them; this hook is their only containment. The shared HOME holds the CLI's persisted
 // state for EVERY tenant on the host (history, session metadata, shell snapshots), so each of those paths, reached by an
-// absolute path, a relative escape, a glob, or a symlink planted inside the workspace, must be refused here.
+// absolute path, a relative escape, a leading ~ (with or without surrounding whitespace), a glob, or a symlinked FILE planted inside
+// the workspace, must be refused here. A symlinked DIRECTORY reached through a relative Glob pattern is NOT covered (the pattern check is
+// syntactic); it is a recorded open item in the ADR-075 addendum.
 describe("createSandboxHook - the shared HOME's persisted CLI state is unreachable through the file tools (#10455)", () => {
   let base: string;
   let ws: string;
@@ -257,6 +259,10 @@ describe("createSandboxHook - the shared HOME's persisted CLI state is unreachab
     expectExplicitAllow(await call("Read", { file_path: join(ws, "ok.txt") }));
     expectExplicitAllow(await call("Glob", { pattern: "*.txt" }));
     expectExplicitAllow(await call("Grep", { pattern: "own", path: ws }));
+    // Not over-broad: `~` that is not a leading home reference, and surrounding whitespace on an in-workspace path.
+    expectExplicitAllow(await call("Read", { file_path: join(ws, "a~b.txt") }));
+    expectExplicitAllow(await call("Read", { file_path: ` ${join(ws, "ok.txt")} ` }));
+    expectExplicitAllow(await call("Read", { file_path: "~notes.txt" }));
   });
 
   test.each([
@@ -278,7 +284,19 @@ describe("createSandboxHook - the shared HOME's persisted CLI state is unreachab
     ["Grep: in-workspace file_path decoy, escaping path", "Grep", () => ({ pattern: "x", file_path: join(ws, "ok.txt"), path: join(home, ".claude") })],
     ["LS: in-workspace file_path decoy, escaping path", "LS", () => ({ file_path: join(ws, "ok.txt"), path: join(home, ".claude", "sessions") })],
     ["NotebookEdit: in-workspace file_path decoy, escaping notebook_path", "NotebookEdit", () => ({ file_path: join(ws, "ok.txt"), notebook_path: join(home, ".claude", "x.ipynb") })],
-    ["a path field that is not a string cannot be judged", "Grep", () => ({ pattern: "x", path: ["a"] })],
+    // The decoy sits in either position: first-truthy (any order) and last-truthy readers each pass only half of these.
+    ["Grep: in-workspace path decoy, escaping file_path", "Grep", () => ({ pattern: "x", path: ws, file_path: join(home, ".claude", "history.jsonl") })],
+    ["LS: in-workspace path decoy, escaping file_path", "LS", () => ({ path: ws, file_path: join(home, ".claude", "sessions", "1.json") })],
+    ["NotebookEdit: in-workspace notebook_path decoy, escaping file_path", "NotebookEdit", () => ({ notebook_path: join(ws, "ok.txt"), file_path: join(home, ".claude", "x.ipynb") })],
+    ["Grep: three fields, the escape in the middle one", "Grep", () => ({ pattern: "x", file_path: join(ws, "ok.txt"), path: join(home, ".claude"), notebook_path: join(ws, "ok.txt") })],
+    // The CLI trims the string before it expands `~` or tests for an absolute path, so surrounding whitespace must not hide an escape.
+    ["Read with a leading space before ~", "Read", () => ({ file_path: " ~/.claude/history.jsonl" })],
+    ["Read with a leading newline before ~", "Read", () => ({ file_path: "\n~/.claude/history.jsonl" })],
+    ["Read with a leading tab before ~", "Read", () => ({ file_path: "\t~" })],
+    ["Read with a leading space before an absolute path", "Read", () => ({ file_path: ` ${home}/.claude/history.jsonl` })],
+    ["Read with a leading space before a relative escape", "Read", () => ({ file_path: ` ${UP}/${UP}/home/.claude/history.jsonl` })],
+    ["a non-string path field (an array)", "Grep", () => ({ pattern: "x", path: ["a"] })],
+    ["a non-string path field (a number)", "Read", () => ({ file_path: 5 })],
     ["Read through a symlink planted in the workspace", "Read", () => ({ file_path: join(ws, "link-to-history") })],
     ["Glob with an absolute pattern into HOME", "Glob", () => ({ pattern: `${home}/.claude/**/*.json` })],
     ["Glob with a relative escape pattern", "Glob", () => ({ pattern: `${UP}/${UP}/home/.claude/*` })],

@@ -9,7 +9,7 @@ status: "DRAFT v1 — internal CLO attestation (Soleur-as-tenant-zero v1), NOT e
 disposition: "REACHABILITY-ONLY, PROVISIONAL. Art. 4(12) first limb (a confidentiality-measure gap) is conceded; the second limb (unauthorised access to personal data) is not established. Reachability alone does not start the Art. 33 clock. Art. 33: No. Art. 34: No. Evidentiary limbs: inconclusive."
 signed_off_at: 2026-10-31
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
-awareness_anchor: "2026-10-31 — the measurement in PR #11689 (test apps/web-platform/test/sandbox-wrapped-command-runtime.test.ts, G2). Antecedent: the 2026-10-09 arm-F ruling, which recorded no row because no personal-data fact had been measured."
+awareness_anchor: "2026-10-31 — the measurement in PR #11689 (test apps/web-platform/test/sandbox-wrapped-command-runtime.test.ts, G2). Antecedent: the 2026-10-09 arm-F ruling, which recorded no row because no Art. 4(12) event occurred (#9871 was a deploy-availability incident touching no personal-data limb)."
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — no Art. 33 duty arose on the facts established to date. Re-opens with a FRESH 72h from awareness of any evidence that a sibling tenant actually read one of the files below. If the affected workspace is one where Jikigai is processor, Art. 33(2) notice to the controller is owed without the risk threshold."
@@ -30,8 +30,10 @@ related_records: "`knowledge-base/legal/audits/2026-10-29-clo-determination-1129
    A sibling tenant's sandbox can read, in the shared HOME: the session metadata files
    (`~/.claude/sessions/<pid>.json`: working directory, which contains the other tenant's workspace
    identifier; session identifier; process identifier; status; name; messaging socket path), a
-   peer-protocol key file, shell snapshot files, and the account state file. The other tenant's
-   prompt text, tool output and a credential were not readable in that test.
+   peer-protocol key file, shell snapshot files, and the account state file. The files are measured
+   by name; the field contents come from the CLI's writer, and the test reads back only the
+   messaging socket path. The other tenant's prompt text and tool output were not readable in that
+   test, and no credential was (a decoy key and an API stub, not real credentials).
 2. **The workspace identifier is personal data, pseudonymous** (Art. 4(1), Recital 26), never
    anonymous. For a solo workspace the identifier equals the user identifier (see the doc comments
    on `provisionWorkspace` and `purgeWorkspaceLogoObjects` in `apps/web-platform/server/workspace.ts`,
@@ -50,7 +52,7 @@ related_records: "`knowledge-base/legal/audits/2026-10-29-clo-determination-1129
 
 `history.jsonl`, `debug/`, `todos/` and `tasks/` are the classes most likely to carry prompt text.
 The CLI in SDK print mode did not produce them in the test, so they are **unmeasured, not safe**,
-and the production HOME was **not inspected**. No statement to users, and no claim that no content
+and the production HOME was **not inspected**. No purge of already-persisted shared data has been performed or sized; its scope and window follow the census. No statement to users, and no claim that no content
 is readable, may be made until a read-only, counts-only, metadata-only census of the production HOME
 has run: no content opened, no values reproduced, no real identifiers quoted. The CLO authorises the
 method. The operator, as controller, must authorise production access in the operator's own message.
@@ -74,3 +76,11 @@ not quote real identifiers, process identifiers or key bytes.
 A demonstrated sibling read; a census that finds prompt text in the production HOME; a demonstrated
 use of the peer key from inside a sandbox; or a CLI change that adds a readable file holding any of
 the above. Each re-opens this record with a fresh awareness anchor and goes to external counsel.
+
+## Corrections at review, before merge (2026-10-31)
+
+The review of PR #11689 corrected four statements in this record: the antecedent (the 2026-10-09 arm-F ruling
+recorded no row because no Art. 4(12) event occurred, not because no measurement existed); the session metadata
+fields (measured by file name; the contents come from the CLI's writer and only the messaging socket path is read
+back); the credential (a decoy key and an API stub were used, not real credentials); and the purge (not performed
+and not sized; its scope and window follow the census). The verdict and the provisional status are unchanged.

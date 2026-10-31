@@ -61,6 +61,9 @@ export const SAFE_TOOLS = ["Skill", "TodoRead", "TodoWrite"] as const;
  */
 export const UNVERIFIED_PARAM_TOOLS = ["LS", "NotebookRead", "NotebookEdit"] as const;
 
+/** Every input field a file tool reads a location from. Single source for `extractToolPath` and `pathFieldsEscape`. */
+const PATH_FIELDS = ["file_path", "path", "notebook_path"] as const;
+
 /**
  * Extracts the filesystem path from a tool's input parameters.
  *
@@ -74,12 +77,11 @@ export const UNVERIFIED_PARAM_TOOLS = ["LS", "NotebookRead", "NotebookEdit"] as 
 export function extractToolPath(
   toolInput: Record<string, unknown>,
 ): string {
-  return (
-    (toolInput.file_path as string) ||
-    (toolInput.path as string) ||
-    (toolInput.notebook_path as string) ||
-    ""
-  );
+  for (const key of PATH_FIELDS) {
+    const v = toolInput[key];
+    if (v) return v as string;
+  }
+  return "";
 }
 
 /**
@@ -94,7 +96,9 @@ export function pathFieldsEscape(
   toolInput: Record<string, unknown>,
   isInside: (candidate: string) => boolean,
 ): boolean {
-  for (const key of ["file_path", "path", "notebook_path"] as const) {
+  // A present input that is not an object cannot be judged field by field, so it is an escape (null/undefined has no fields).
+  if (toolInput != null && typeof toolInput !== "object") return true;
+  for (const key of PATH_FIELDS) {
     const v = toolInput?.[key];
     if (v === undefined || v === null || v === "") continue;
     if (typeof v !== "string" || !isInside(v)) return true;

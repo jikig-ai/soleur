@@ -104,6 +104,9 @@ function resolveWorkspacePath(workspacePath: string): string | null {
  * then checks containment with a trailing `/` guard to prevent prefix
  * collisions (e.g., /workspaces/user1 must not match /workspaces/user10).
  *
+ * A leading `~` (expanded to the process HOME by the CLI's file tools) is refused, and a string with surrounding whitespace is
+ * judged in its trimmed form as well, because the CLI trims before it expands (#10455).
+ *
  * @see https://cwe.mitre.org/data/definitions/22.html (CWE-22)
  * @see https://cwe.mitre.org/data/definitions/59.html (CWE-59)
  */
@@ -112,6 +115,15 @@ export function isPathInWorkspace(
   workspacePath: string,
 ): boolean {
   if (!filePath) return false;
+
+  // The CLI's path expander trims the string BEFORE it expands `~` or tests for an absolute path, so " ~/.claude/x" or
+  // " /etc/passwd" is acted on as the trimmed path while a raw-string check would anchor it under the workspace as a
+  // relative name. Judge the trimmed form too, and require both to be inside (#10455).
+  const trimmed = filePath.trim();
+  if (trimmed !== filePath) {
+    if (!trimmed) return false;
+    if (!isPathInWorkspace(trimmed, workspacePath)) return false;
+  }
 
   // A leading `~` is expanded to the process HOME by the CLI's file tools, so anchoring it under the workspace
   // as a literal `~` directory would approve a read of the shared HOME's persisted CLI state (#10455).

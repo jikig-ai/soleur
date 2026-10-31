@@ -76,7 +76,7 @@ cross-domain (set unconditionally by Phase 0.1).
 
 ### Legal
 
-**Summary:** No Art. 33/34 duty (no personal data exposed); no SLA or credit commitment in the ToS (§10.2); an aggregate count was clearable; wording must avoid "no data affected".
+**Summary:** No Art. 33/34 duty (no exposure mechanism was identified for the #10445 outage); no SLA or credit commitment in the ToS (§10.2); an aggregate count was clearable; wording must avoid "no data affected".
 
 ## Session Errors
 
