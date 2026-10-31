@@ -11,8 +11,9 @@
 # The window is the hot table UNION the archive (the hot window is only about 40 minutes).
 #
 # WHAT IT PRINTS. One `host=<web-1|web-2> host_verdict=<TOKEN> markers=N reporter_rows=N live_rows=N newest_live=N
-# newest_age_s=N last_live_age_s=<N|none>` line per host, then ONE overall line `verdict=<TOKEN> exit=<N> since=<window>`. The overall
-# verdict is the worst of the two hosts (a healthy host never masks a silent one).
+# last_live_age_s=<N|none>` line per host, then ONE overall line `verdict=<TOKEN> exit=<N> since=<window>`. The overall verdict is
+# the worst of the two hosts (a healthy host never masks a silent one). CALLERS BRANCH ON THE FINAL `verdict=<TOKEN> exit=<N> since=...`
+# LINE (the token), never on the numeric exit order: the codes are labels, not a severity scale (1 is the alarm, 2 outranks it).
 #
 # VERDICTS, WORST FIRST, WITH THE EXIT CODE:
 #   READ_UNCLEAN                 2  a read failed, its answer was not clean integers, or a host has no reporter row in the window.
@@ -28,14 +29,20 @@
 #                                   MARKERS_PRESENT; a host with no live row and no marker is NO_SESSIONS and is set aside only when
 #                                   the other host is MARKERS_PRESENT (it has nothing to prove). It is never set aside beside a
 #                                   host that is PENDING, ZERO_MARKERS_WITH_SESSIONS or READ_UNCLEAN.
-# Usage or a missing tool exits 64; shell tracing with a live credential exits 78. Only MARKERS_PRESENT exits 0.
+#                                   MARKERS_PRESENT means AT LEAST ONE replication landed on that host in the window. It is not
+#                                   evidence for every user or every session: one synthetic account can satisfy it, so a go/no-go
+#                                   also needs the per-user read (runbook R3). `markers` is presence evidence, not a count (the
+#                                   emitter caps one marker per 60 s per process per transient_retried value).
+# Other exits: usage or a missing tool 64; shell tracing with a live credential 78; interrupted 130 (INT) or 143 (TERM/HUP).
+# Only MARKERS_PRESENT exits 0.
 #
 # THE MARKER EXISTS ONLY ON IMAGES FROM THE RELEASE THAT CARRIES IT: read /health first. Before that release this reads
 # NO_SESSIONS or ZERO_MARKERS_WITH_SESSIONS, which says nothing about replication. It is meaningful only while the store flag is
 # on and for sessions that connected a repository. It never counts a row from a non-web host (a CI job that merely printed the
 # phrase is not an occurrence, #6475).
 #
-# READ-ONLY. One SELECT through scripts/betterstack-query.sh; no write, no dispatch, no Doppler access of its own. The Better Stack
+# READ-ONLY. One SELECT through scripts/betterstack-query.sh; no write, no dispatch, no Doppler access of its own. An agent may run it
+# (counts and ages only; it needs the caller's read-only Doppler prd_terraform access for the Better Stack query credentials). The
 # credentials are injected by the caller and travel only in the reader's environment:
 #   doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
 #     --no-exit-on-missing-only-secrets -- scripts/followthroughs/git-data-replication-signal.sh --since 15m
@@ -87,7 +94,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$SINCE" ]] || usage
 
-# The window literal is built ONLY from a value that matched one of these shapes (no quote or space can reach the SQL).
+# The window literal is built ONLY from a value that matched one of these shapes (no quote or free text can reach the SQL).
 LOWER=""
 if [[ "$SINCE" =~ ^([0-9]{1,4})([mhd])$ ]]; then
   _n="${BASH_REMATCH[1]}"
@@ -118,7 +125,6 @@ sql="SELECT leg,
   countIf(is_reporter) AS reporter_rows,
   countIf(is_reporter AND live > 0) AS live_rows,
   argMaxIf(live, dt, is_reporter) AS newest_live,
-  dateDiff('second', maxIf(dt, is_reporter), now()) AS newest_age_s,
   dateDiff('second', maxIf(dt, is_reporter AND live > 0), now()) AS last_live_age_s
 FROM (
   SELECT dt,
@@ -133,25 +139,22 @@ FROM (
 WHERE leg != ''
 GROUP BY leg ORDER BY leg FORMAT JSONEachRow"
 
+# The verdict table, WORST FIRST as "TOKEN:exit". Position is the rank (the worse a verdict, the earlier it sits); the number is the exit
+# code. An unknown token reads as READ_UNCLEAN.
+VERDICT_TABLE=("READ_UNCLEAN:2" "ZERO_MARKERS_WITH_SESSIONS:1" "PENDING:3" "NO_SESSIONS:4" "MARKERS_PRESENT:0")
 verdict_rc() { # <verdict> -> exit code
-  case "$1" in
-    MARKERS_PRESENT) echo 0 ;;
-    ZERO_MARKERS_WITH_SESSIONS) echo 1 ;;
-    READ_UNCLEAN) echo 2 ;;
-    PENDING) echo 3 ;;
-    NO_SESSIONS) echo 4 ;;
-    *) echo 2 ;;
-  esac
+  local e
+  for e in "${VERDICT_TABLE[@]}"; do
+    [[ "${e%%:*}" == "$1" ]] && { echo "${e#*:}"; return; }
+  done
+  echo 2
 }
 verdict_rank() { # <verdict> -> higher is worse
-  case "$1" in
-    READ_UNCLEAN) echo 5 ;;
-    ZERO_MARKERS_WITH_SESSIONS) echo 4 ;;
-    PENDING) echo 3 ;;
-    NO_SESSIONS) echo 2 ;;
-    MARKERS_PRESENT) echo 1 ;;
-    *) echo 5 ;;
-  esac
+  local i n=${#VERDICT_TABLE[@]}
+  for ((i = 0; i < n; i++)); do
+    [[ "${VERDICT_TABLE[i]%%:*}" == "$1" ]] && { echo $((n - i)); return; }
+  done
+  echo "$n"
 }
 
 finish() { # <verdict> [detail] -- prints the overall line and exits with the verdict's code
@@ -171,41 +174,37 @@ if (( rc != 0 )); then
 fi
 
 # --- parse: integers only; anything else is an unclean read ---------------------------------------------------------------
-# One compact row per leg: leg markers reporter_rows live_rows newest_live newest_age_s last_live_age_s. A value that is not a
-# non-negative integer (number or numeric string), an unknown or duplicated leg, or a non-object line makes the whole answer
-# unclean, never a zero.
-clean=1
+# One compact row per leg: leg markers reporter_rows live_rows newest_live last_live_age_s. A value that is not a non-negative
+# integer (number or numeric string), an unknown or duplicated leg, or a non-object line makes jq exit non-zero (`error`), and a
+# non-zero jq is an unclean read, never a zero.
 rows_tsv="${WORK}/rows.tsv"
 if ! jq -r -s '
     def isint: ((type == "number" and . >= 0 and . == floor) or (type == "string" and test("^[0-9]{1,12}$")));
-    def keys6: ["markers","reporter_rows","live_rows","newest_live","newest_age_s","last_live_age_s"];
+    def keys5: ["markers","reporter_rows","live_rows","newest_live","last_live_age_s"];
     if ([.[] | type == "object"] | all)
        and ([.[] | .leg] | (length == (unique | length)))
        and ([.[] | ((.leg // "") | . == "web-1" or . == "web-2")] | all)
-       and ([.[] | . as $r | keys6 | all(. as $k | $r[$k] | isint)] | all)
+       and ([.[] | . as $r | keys5 | all(. as $k | $r[$k] | isint)] | all)
     then .[] | [.leg, (.markers|tonumber), (.reporter_rows|tonumber), (.live_rows|tonumber), (.newest_live|tonumber),
-                (.newest_age_s|tonumber), (.last_live_age_s|tonumber)] | @tsv
-    else "UNCLEAN" end
+                (.last_live_age_s|tonumber)] | @tsv
+    else error("unclean") end
   ' "${WORK}/bs.out" >"$rows_tsv" 2>/dev/null; then
-  clean=0
-elif grep -qx 'UNCLEAN' "$rows_tsv"; then
-  clean=0
+  finish READ_UNCLEAN "read_class=bs-response-shape"
 fi
-(( clean )) || finish READ_UNCLEAN "read_class=bs-response-shape"
 
 # --- per-host verdicts ---------------------------------------------------------------------------------------------------
 overall="MARKERS_PRESENT"
-overall_rank=1
+overall_rank="$(verdict_rank MARKERS_PRESENT)"
 any_present=0
 declare -a LINES=()
 for leg in web-1 web-2; do
   row="$(awk -F'\t' -v l="$leg" '$1 == l { print; exit }' "$rows_tsv")"
   if [[ -z "$row" ]]; then
     # No row at all for this host: the reporter is silent (or the host never shipped). Never NO_SESSIONS.
-    LINES+=("host=${leg} host_verdict=READ_UNCLEAN markers=none reporter_rows=0 live_rows=none newest_live=none newest_age_s=none last_live_age_s=none")
+    LINES+=("host=${leg} host_verdict=READ_UNCLEAN markers=none reporter_rows=0 live_rows=none newest_live=none last_live_age_s=none")
     hv="READ_UNCLEAN"
   else
-    IFS=$'\t' read -r _l markers reporter live_rows newest_live newest_age last_live_age <<<"$row"
+    IFS=$'\t' read -r _l markers reporter live_rows newest_live last_live_age <<<"$row"
     if (( reporter == 0 )); then
       # Markers without a reporter row cannot be set against live sessions; a missing reporter is a read fault.
       hv="READ_UNCLEAN"
@@ -219,7 +218,7 @@ for leg in web-1 web-2; do
       hv="ZERO_MARKERS_WITH_SESSIONS"
     fi
     if (( live_rows == 0 )); then lla="none"; else lla="$last_live_age"; fi
-    LINES+=("host=${leg} host_verdict=${hv} markers=${markers} reporter_rows=${reporter} live_rows=${live_rows} newest_live=${newest_live} newest_age_s=${newest_age} last_live_age_s=${lla}")
+    LINES+=("host=${leg} host_verdict=${hv} markers=${markers} reporter_rows=${reporter} live_rows=${live_rows} newest_live=${newest_live} last_live_age_s=${lla}")
   fi
   [[ "$hv" == "MARKERS_PRESENT" ]] && any_present=1
   r="$(verdict_rank "$hv")"

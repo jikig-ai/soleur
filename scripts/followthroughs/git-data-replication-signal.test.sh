@@ -71,14 +71,30 @@ ok() { # <name> <rc of the check>
   if [[ "$2" == 0 ]]; then pass "$1"; else fail "$1"; fi
 }
 
-# Instrument self-test: drive BOTH helpers and require both verdict counters to move before any verdict is trusted.
-_p0=$passes; _f0=$fails
-pass "instrument" >/dev/null
-fail "instrument" 2>/dev/null
-if (( passes != _p0 + 1 || fails != _f0 + 1 )); then
-  printf 'FATAL: instrument self-test -- pass()/fail() did not both move counters\n' >&2; exit 1
-fi
+# Instrument self-test: drive EVERY verdict-owning helper with a matching and a MISMATCHING case and require the verdict counters to
+# move the right way (a helper whose body was disarmed to `pass` would leave fails flat). The counters are unwound afterwards so the
+# accounting below stays exact; the result is reported with printf + exit, never through the helpers under test.
+_p0=$passes; _f0=$fails; _inst_bad=""
+probe() { # <name> <want passes delta> <want fails delta> <helper> args...
+  local name="$1" wp="$2" wf="$3" p f; shift 3
+  p=$passes; f=$fails
+  "$@" >/dev/null 2>&1
+  (( passes - p == wp && fails - f == wf )) || _inst_bad="$_inst_bad $name"
+}
+probe pass 1 0 pass i
+probe fail 0 1 fail i
+probe eq-match 1 0 eq i a a
+probe eq-mismatch 0 1 eq i a b
+probe has-match 1 0 has i abc b
+probe has-mismatch 0 1 has i abc x
+probe lacks-match 1 0 lacks i abc x
+probe lacks-mismatch 0 1 lacks i abc b
+probe ok-match 1 0 ok i 0
+probe ok-mismatch 0 1 ok i 1
 passes=$_p0; fails=$_f0
+if [[ -n "$_inst_bad" ]]; then
+  printf 'FATAL: instrument self-test -- helper(s) did not move the verdict counters as required:%s\n' "$_inst_bad" >&2; exit 1
+fi
 
 WORK="$(mktemp -d -t gdrs-signal.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 assert_fixture_dir "$WORK"
@@ -123,15 +139,15 @@ STUB
 chmod +x "$TREE/scripts/betterstack-query.sh"
 
 # --- fixture helpers --------------------------------------------------------------------------------------------------
-# rowspec = leg:markers:reporter_rows:live_rows:newest_live:newest_age_s:last_live_age_s
+# rowspec = leg:markers:reporter_rows:live_rows:newest_live:last_live_age_s
 fx_rows() { # <rowspec>...  -> $FX/bs.jsonl (numbers, as the live reader returns them)
   assert_fixture_dir "$FX"
   : > "$FX/bs.jsonl"
-  local spec leg m r l nl na la
+  local spec leg m r l nl la
   for spec in "$@"; do
-    IFS=: read -r leg m r l nl na la <<<"$spec"
-    printf '{"leg":"%s","markers":%s,"reporter_rows":%s,"live_rows":%s,"newest_live":%s,"newest_age_s":%s,"last_live_age_s":%s}\n' \
-      "$leg" "$m" "$r" "$l" "$nl" "$na" "$la" >> "$FX/bs.jsonl"
+    IFS=: read -r leg m r l nl la <<<"$spec"
+    printf '{"leg":"%s","markers":%s,"reporter_rows":%s,"live_rows":%s,"newest_live":%s,"last_live_age_s":%s}\n' \
+      "$leg" "$m" "$r" "$l" "$nl" "$la" >> "$FX/bs.jsonl"
   done
 }
 SILENT_AGE=700   # last live row older than the 10-minute settle
@@ -159,86 +175,86 @@ reader_calls() { if [[ -f "$FX/bs.calls" ]]; then wc -l < "$FX/bs.calls" | tr -d
 # ===== the verdict rows ===================================================================================================
 echo "-- verdicts and exit codes"
 # MARKERS_PRESENT: the only positive evidence.
-fx_rows "web-1:3:30:2:0:40:$SILENT_AGE" "web-2:2:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:3:30:2:0:$SILENT_AGE" "web-2:2:30:1:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "MARKERS_PRESENT: overall verdict and exit 0" "verdict=MARKERS_PRESENT exit=0 since=15m|0" "$(overall_line)|$RC"
-cases=$((cases + 1)); has "MARKERS_PRESENT: per-host line carries the counts" "$(host_line web-1)" "host_verdict=MARKERS_PRESENT markers=3 reporter_rows=30 live_rows=2 newest_live=0 newest_age_s=40 last_live_age_s=$SILENT_AGE"
+cases=$((cases + 1)); has "MARKERS_PRESENT: per-host line carries the counts" "$(host_line web-1)" "host_verdict=MARKERS_PRESENT markers=3 reporter_rows=30 live_rows=2 newest_live=0 last_live_age_s=$SILENT_AGE"
 cases=$((cases + 1)); eq "MARKERS_PRESENT: the reader ran exactly once (a script that never reads cannot pass)" "1" "$(reader_calls)"
 
 # A must-PASS that differs from the canonical in host order: the verdict does not depend on row order.
-fx_rows "web-2:2:30:1:0:40:$SILENT_AGE" "web-1:3:30:2:0:40:$SILENT_AGE"
+fx_rows "web-2:2:30:1:0:$SILENT_AGE" "web-1:3:30:2:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "MARKERS_PRESENT: reader returns web-2 before web-1 (order-independent)" "verdict=MARKERS_PRESENT exit=0 since=15m|0" "$(overall_line)|$RC"
 
 # Numeric strings (ClickHouse may quote 64-bit integers) are clean integers too.
-printf '{"leg":"web-1","markers":"3","reporter_rows":"30","live_rows":"2","newest_live":"0","newest_age_s":"40","last_live_age_s":"%s"}\n{"leg":"web-2","markers":"2","reporter_rows":"30","live_rows":"1","newest_live":"0","newest_age_s":"40","last_live_age_s":"%s"}\n' "$SILENT_AGE" "$SILENT_AGE" > "$FX/bs.jsonl"
+printf '{"leg":"web-1","markers":"3","reporter_rows":"30","live_rows":"2","newest_live":"0","last_live_age_s":"%s"}\n{"leg":"web-2","markers":"2","reporter_rows":"30","live_rows":"1","newest_live":"0","last_live_age_s":"%s"}\n' "$SILENT_AGE" "$SILENT_AGE" > "$FX/bs.jsonl"
 sut --since 15m
 cases=$((cases + 1)); eq "MARKERS_PRESENT: quoted integers are accepted" "0" "$RC"
 
 # NO_SESSIONS: inconclusive, never a pass.
-fx_rows "web-1:0:30:0:0:40:0" "web-2:0:30:0:0:40:0"
+fx_rows "web-1:0:30:0:0:0" "web-2:0:30:0:0:0"
 sut --since 15m
 cases=$((cases + 1)); eq "NO_SESSIONS: both hosts, exit 4 (never 0)" "verdict=NO_SESSIONS exit=4 since=15m|4" "$(overall_line)|$RC"
 cases=$((cases + 1)); has "NO_SESSIONS: last_live_age_s reads none, not a number" "$(host_line web-1)" "last_live_age_s=none"
 
 # PENDING: live row, zero markers, window not settled.
-fx_rows "web-1:0:30:2:0:40:$FRESH_AGE" "web-2:3:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:0:30:2:0:$FRESH_AGE" "web-2:3:30:1:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "PENDING: last live row 300 s old, newest row 0, exit 3" "verdict=PENDING exit=3 since=15m|3" "$(overall_line)|$RC"
-fx_rows "web-1:0:30:2:0:40:599" "web-2:3:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:0:30:2:0:599" "web-2:3:30:1:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "PENDING: the boundary, 599 s is still unsettled" "3" "$RC"
-fx_rows "web-1:0:30:2:1:30:30" "web-2:3:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:0:30:2:1:30" "web-2:3:30:1:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "PENDING: the newest reporter row still reads live" "3" "$RC"
-fx_rows "web-1:0:30:2:1:900:900" "web-2:3:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:0:30:2:1:900" "web-2:3:30:1:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "PENDING: newest row reads live even though it is old (cannot be called settled)" "3" "$RC"
 
 # ZERO_MARKERS_WITH_SESSIONS: the alarm.
-fx_rows "web-1:0:30:2:0:40:600" "web-2:3:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:0:30:2:0:600" "web-2:3:30:1:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "ZERO_MARKERS_WITH_SESSIONS: the settle boundary, exactly 600 s alarms, exit 1" "verdict=ZERO_MARKERS_WITH_SESSIONS exit=1 since=15m|1" "$(overall_line)|$RC"
 cases=$((cases + 1)); has "ZERO_MARKERS_WITH_SESSIONS: the per-host line names the silent host" "$(host_line web-1)" "host_verdict=ZERO_MARKERS_WITH_SESSIONS markers=0"
 cases=$((cases + 1)); has "ZERO_MARKERS_WITH_SESSIONS: the healthy host keeps its own verdict" "$(host_line web-2)" "host_verdict=MARKERS_PRESENT"
 
 # READ_UNCLEAN: a missing reporter row on either host, never NO_SESSIONS.
-fx_rows "web-1:0:30:0:0:40:0"
+fx_rows "web-1:0:30:0:0:0"
 sut --since 15m
 cases=$((cases + 1)); eq "READ_UNCLEAN: no row at all for web-2 beside a quiet web-1 (never NO_SESSIONS), exit 2" "verdict=READ_UNCLEAN exit=2 since=15m|2" "$(overall_line)|$RC"
 cases=$((cases + 1)); has "READ_UNCLEAN: the missing host line says so" "$(host_line web-2)" "host_verdict=READ_UNCLEAN markers=none reporter_rows=0"
-fx_rows "web-2:0:30:0:0:40:0"
+fx_rows "web-2:0:30:0:0:0"
 sut --since 15m
 cases=$((cases + 1)); eq "READ_UNCLEAN: no row at all for web-1 (either host)" "2" "$RC"
 : > "$FX/bs.jsonl"
 sut --since 15m
 cases=$((cases + 1)); eq "READ_UNCLEAN: an empty answer is not zero sessions" "2" "$RC"
-fx_rows "web-1:3:0:0:0:40:0" "web-2:0:30:0:0:40:0"
+fx_rows "web-1:3:0:0:0:0" "web-2:0:30:0:0:0"
 sut --since 15m
 cases=$((cases + 1)); eq "READ_UNCLEAN: a host with markers but zero reporter rows" "2" "$RC"
 
 # ===== per-host masking and worst-of precedence ==========================================================================
 echo "-- per-host masking and precedence"
-fx_rows "web-1:0:30:2:0:40:$SILENT_AGE" "web-2:9:30:3:0:40:$SILENT_AGE"
+fx_rows "web-1:0:30:2:0:$SILENT_AGE" "web-2:9:30:3:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "masking: markers on web-2 do not rescue a silent web-1" "1" "$RC"
-fx_rows "web-1:9:30:3:0:40:$SILENT_AGE" "web-2:0:30:2:0:40:$SILENT_AGE"
+fx_rows "web-1:9:30:3:0:$SILENT_AGE" "web-2:0:30:2:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "masking: markers on web-1 do not rescue a silent web-2 (mirror)" "1" "$RC"
-fx_rows "web-1:3:30:2:0:40:$SILENT_AGE"
+fx_rows "web-1:3:30:2:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "precedence: READ_UNCLEAN beats MARKERS_PRESENT (web-2 unread)" "2" "$RC"
-fx_rows "web-1:0:30:2:0:40:$SILENT_AGE" "web-2:0:30:2:0:40:$FRESH_AGE"
+fx_rows "web-1:0:30:2:0:$SILENT_AGE" "web-2:0:30:2:0:$FRESH_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "precedence: ZERO_MARKERS_WITH_SESSIONS beats PENDING" "1" "$RC"
-fx_rows "web-1:0:30:0:0:40:0" "web-2:0:30:2:0:40:$FRESH_AGE"
+fx_rows "web-1:0:30:0:0:0" "web-2:0:30:2:0:$FRESH_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "precedence: PENDING beats NO_SESSIONS" "3" "$RC"
-fx_rows "web-1:0:30:0:0:40:0" "web-2:4:30:2:0:40:$SILENT_AGE"
+fx_rows "web-1:0:30:0:0:0" "web-2:4:30:2:0:$SILENT_AGE"
 sut --since 15m
 cases=$((cases + 1)); eq "a host with no live row and no marker is set aside beside a host with markers" "0" "$RC"
 cases=$((cases + 1)); has "the set-aside host still reports NO_SESSIONS on its own line" "$(host_line web-1)" "host_verdict=NO_SESSIONS"
-fx_rows "web-1:4:30:2:0:40:$SILENT_AGE" "web-2:0:30:0:0:40:0"
+fx_rows "web-1:4:30:2:0:$SILENT_AGE" "web-2:0:30:0:0:0"
 sut --since 15m
 cases=$((cases + 1)); eq "set-aside is symmetric (web-2 idle beside web-1 markers)" "0" "$RC"
 
@@ -246,11 +262,11 @@ cases=$((cases + 1)); eq "set-aside is symmetric (web-2 idle beside web-1 marker
 echo "-- only MARKERS_PRESENT exits 0"
 zero_exits=""
 for fixture in \
-  "web-1:3:30:2:0:40:$SILENT_AGE web-2:2:30:1:0:40:$SILENT_AGE" \
-  "web-1:0:30:0:0:40:0 web-2:0:30:0:0:40:0" \
-  "web-1:0:30:2:0:40:$FRESH_AGE web-2:0:30:2:0:40:$FRESH_AGE" \
-  "web-1:0:30:2:0:40:$SILENT_AGE web-2:0:30:2:0:40:$SILENT_AGE" \
-  "web-1:0:30:0:0:40:0"; do
+  "web-1:3:30:2:0:$SILENT_AGE web-2:2:30:1:0:$SILENT_AGE" \
+  "web-1:0:30:0:0:0 web-2:0:30:0:0:0" \
+  "web-1:0:30:2:0:$FRESH_AGE web-2:0:30:2:0:$FRESH_AGE" \
+  "web-1:0:30:2:0:$SILENT_AGE web-2:0:30:2:0:$SILENT_AGE" \
+  "web-1:0:30:0:0:0"; do
   # shellcheck disable=SC2086  # the fixture string is split on purpose into rowspec words
   fx_rows $fixture
   sut --since 15m
@@ -260,7 +276,7 @@ cases=$((cases + 1)); eq "across all five verdict fixtures, exit 0 belongs to MA
 
 # ===== reader failures: never a zero =====================================================================================
 echo "-- reader failures"
-fx_rows "web-1:3:30:2:0:40:$SILENT_AGE" "web-2:2:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:3:30:2:0:$SILENT_AGE" "web-2:2:30:1:0:$SILENT_AGE"
 for pair in "1:reader-exit-1" "3:credentials-absent" "6:transport" "124:transport" "78:reader-refusal" "99:other"; do
   rcv="${pair%%:*}"; cls="${pair#*:}"
   reset_env; ENVV+=("BS_STUB_RC=$rcv")
@@ -282,16 +298,16 @@ bad() { # <name> <line-or-lines>
   sut --since 15m
   cases=$((cases + 1)); eq "$1" "verdict=READ_UNCLEAN exit=2 since=15m read_class=bs-response-shape|2" "$(overall_line)|$RC"
 }
-GOOD2='{"leg":"web-2","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0,"newest_age_s":40,"last_live_age_s":700}'
-bad "shape: a non-integer count" '{"leg":"web-1","markers":"abc","reporter_rows":30,"live_rows":1,"newest_live":0,"newest_age_s":40,"last_live_age_s":700}
+GOOD2='{"leg":"web-2","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0,"last_live_age_s":700}'
+bad "shape: a non-integer count" '{"leg":"web-1","markers":"abc","reporter_rows":30,"live_rows":1,"newest_live":0,"last_live_age_s":700}
 '"$GOOD2"
-bad "shape: a negative age" '{"leg":"web-1","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0,"newest_age_s":-4,"last_live_age_s":700}
+bad "shape: a negative age" '{"leg":"web-1","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0,"last_live_age_s":-4}
 '"$GOOD2"
-bad "shape: a fractional count" '{"leg":"web-1","markers":1.5,"reporter_rows":30,"live_rows":1,"newest_live":0,"newest_age_s":40,"last_live_age_s":700}
+bad "shape: a fractional count" '{"leg":"web-1","markers":1.5,"reporter_rows":30,"live_rows":1,"newest_live":0,"last_live_age_s":700}
 '"$GOOD2"
-bad "shape: a missing field" '{"leg":"web-1","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0,"newest_age_s":40}
+bad "shape: a missing field" '{"leg":"web-1","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0}
 '"$GOOD2"
-bad "shape: an unknown leg" '{"leg":"web-3","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0,"newest_age_s":40,"last_live_age_s":700}
+bad "shape: an unknown leg" '{"leg":"web-3","markers":1,"reporter_rows":30,"live_rows":1,"newest_live":0,"last_live_age_s":700}
 '"$GOOD2"
 bad "shape: a duplicated leg" "$GOOD2
 $GOOD2"
@@ -310,10 +326,19 @@ sql_pins() { # <interval literal expected in the SQL> -> 0 when every pin holds 
   [[ "$s" == *"match(raw,'agent_sessions_live=[0-9]+ cc_queries=[0-9]+ legacy_sessions=[0-9]+ starting=[0-9]+ new_sessions_paused=[01] refused_since_last=[0-9]+')"* ]] || rc=1
   [[ "$s" == *'UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1'* ]] || rc=1
   [[ "$s" == *"WHERE leg != ''"* ]] || rc=1
+  # Every select-list expression, literally (a stub that ignores the SQL cannot see a changed aggregate).
+  [[ "$s" == *"countIf(is_marker) AS markers,"* ]] || rc=1
+  [[ "$s" == *"countIf(is_reporter) AS reporter_rows,"* ]] || rc=1
+  [[ "$s" == *"countIf(is_reporter AND live > 0) AS live_rows,"* ]] || rc=1
+  [[ "$s" == *"argMaxIf(live, dt, is_reporter) AS newest_live,"* ]] || rc=1
+  [[ "$s" == *"dateDiff('second', maxIf(dt, is_reporter AND live > 0), now()) AS last_live_age_s"* ]] || rc=1
+  [[ "$s" == *"toUInt32OrZero(extract(raw,'agent_sessions_live=([0-9]+)')) AS live"* ]] || rc=1
+  [[ "$s" == *"JSONExtractString(raw,'host_name') = 'soleur-web-2','web-2','') AS leg"* ]] || rc=1
+  [[ "$s" == *"GROUP BY leg ORDER BY leg FORMAT JSONEachRow"* ]] || rc=1
   return "$rc"
 }
 pins() { PINS_RC=0; sql_pins "$1" || PINS_RC=$?; }
-fx_rows "web-1:3:30:2:0:40:$SILENT_AGE" "web-2:2:30:1:0:40:$SILENT_AGE"
+fx_rows "web-1:3:30:2:0:$SILENT_AGE" "web-2:2:30:1:0:$SILENT_AGE"
 sut --since 15m
 pins "15 MINUTE"; cases=$((cases + 1)); ok "SQL pins hold for --since 15m (window, host lists, both grammars, archive arm, web-host filter)" "$PINS_RC"
 cases=$((cases + 1)); eq "the reader got exactly one argument" "1" "$(cat "$FX/bs.argc" 2>/dev/null | head -1)"
@@ -335,13 +360,13 @@ pins "15 MINUTE"; cases=$((cases + 1)); eq "the SQL pin function rejects a docto
 # ===== usage, hygiene and credentials ===================================================================================
 echo "-- usage, output hygiene, credentials"
 for badargs in "" "--since" "--since 15" "--since 0m" "--since 15x" "--since 15m;x" "--since 12345m" "--since 2026-13-45T00:00:00Z" "--since 15m --extra 1" "15m" "--until 15m"; do
-  fx_rows "web-1:3:30:2:0:40:$SILENT_AGE" "web-2:2:30:1:0:40:$SILENT_AGE"
+  fx_rows "web-1:3:30:2:0:$SILENT_AGE" "web-2:2:30:1:0:$SILENT_AGE"
   reset_env
   # shellcheck disable=SC2086  # the argument string is split on purpose
   run_sut "$MUT" $badargs
   cases=$((cases + 1)); eq "usage: '$badargs' exits 64 with no read" "64|0" "$RC|$(reader_calls)"
 done
-fx_rows "web-1:3:30:2:0:40:$SILENT_AGE" "web-2:0:30:2:0:40:$SILENT_AGE"
+fx_rows "web-1:3:30:2:0:$SILENT_AGE" "web-2:0:30:2:0:$SILENT_AGE"
 sut --since 15m
 ALL_OUT="$OUT$ERR"
 for forbidden in soleur-web-platform soleur-inngest-prd soleur-web-2 "$BS_PASS_SYN" synuser syn.betterstackdata.com '"raw"' 'agent_sessions_live=' 'git_data_replication_success='; do
@@ -382,36 +407,36 @@ mutate_case() { # <name> <sed expr> <expected control verdict> <fixture rowspec>
 }
 
 # The control answers are asserted outright too, so a control that drifted cannot make a mutant look detected.
-fx_rows "web-1:3:30:2:0:40:$SILENT_AGE"
+fx_rows "web-1:3:30:2:0:$SILENT_AGE"
 restore; cases=$((cases + 1)); eq "control: pristine copy reads READ_UNCLEAN for a missing web-2" "2" "$(snapshot | cut -d'|' -f2)"
 
-mutate_case "precedence swapped (READ_UNCLEAN no longer outranks)" 's/READ_UNCLEAN) echo 5 ;;/READ_UNCLEAN) echo 0 ;;/' "READ_UNCLEAN" \
-  "web-1:3:30:2:0:40:$SILENT_AGE"
+mutate_case "precedence swapped (READ_UNCLEAN sorted last, no longer outranks)" 's/"READ_UNCLEAN:2" //; s/"MARKERS_PRESENT:0"/"MARKERS_PRESENT:0" "READ_UNCLEAN:2"/' "READ_UNCLEAN" \
+  "web-1:3:30:2:0:$SILENT_AGE"
 mutate_case "settle rule dropped" 's/ || last_live_age < SETTLE_S//' "PENDING" \
-  "web-1:0:30:2:0:40:$FRESH_AGE" "web-2:3:30:1:0:40:$SILENT_AGE"
+  "web-1:0:30:2:0:$FRESH_AGE" "web-2:3:30:1:0:$SILENT_AGE"
 mutate_case "settle window widened" 's/^readonly SETTLE_S=600$/readonly SETTLE_S=6000/' "ZERO_MARKERS_WITH_SESSIONS" \
-  "web-1:0:30:2:0:40:$SILENT_AGE" "web-2:3:30:1:0:40:$SILENT_AGE"
+  "web-1:0:30:2:0:$SILENT_AGE" "web-2:3:30:1:0:$SILENT_AGE"
 mutate_case "newest-row-still-live check dropped" 's/(( newest_live > 0 || last_live_age < SETTLE_S ))/(( last_live_age < SETTLE_S ))/' "PENDING" \
-  "web-1:0:30:2:1:900:900" "web-2:3:30:1:0:40:$SILENT_AGE"
+  "web-1:0:30:2:1:900" "web-2:3:30:1:0:$SILENT_AGE"
 mutate_case "aggregation looks at the first host only" 's/^for leg in web-1 web-2; do$/for leg in web-1; do/' "ZERO_MARKERS_WITH_SESSIONS" \
-  "web-1:9:30:2:0:40:$SILENT_AGE" "web-2:0:30:2:0:40:$SILENT_AGE"
-mutate_case "NO_SESSIONS exits 0" 's/NO_SESSIONS) echo 4 ;;/NO_SESSIONS) echo 0 ;;/' "NO_SESSIONS" \
-  "web-1:0:30:0:0:40:0" "web-2:0:30:0:0:40:0"
+  "web-1:9:30:2:0:$SILENT_AGE" "web-2:0:30:2:0:$SILENT_AGE"
+mutate_case "NO_SESSIONS exits 0" 's/"NO_SESSIONS:4"/"NO_SESSIONS:0"/' "NO_SESSIONS" \
+  "web-1:0:30:0:0:0" "web-2:0:30:0:0:0"
 mutate_case "a missing reporter row reads NO_SESSIONS" '/No row at all for this host/,/^  else/ s/hv="READ_UNCLEAN"/hv="NO_SESSIONS"/' "READ_UNCLEAN" \
-  "web-1:0:30:0:0:40:0"
+  "web-1:0:30:0:0:0"
 mutate_case "markers with zero reporter rows count as present" 's/if (( reporter == 0 )); then/if (( 0 )); then/' "READ_UNCLEAN" \
-  "web-1:3:0:0:0:40:0" "web-2:0:30:0:0:40:0"
+  "web-1:3:0:0:0:0" "web-2:0:30:0:0:0"
 SNAP_RC=6
 mutate_case "a failed read is not classified (class token lost)" 's/^if (( rc != 0 )); then$/if (( 0 )); then/' "READ_UNCLEAN" \
-  "web-1:3:30:2:0:40:$SILENT_AGE" "web-2:2:30:1:0:40:$SILENT_AGE"
+  "web-1:3:30:2:0:$SILENT_AGE" "web-2:2:30:1:0:$SILENT_AGE"
 SNAP_RC=""
 mutate_case "set-aside rule removed (idle host lowers a positive host)" 's/^if \[\[ "\$overall" == "NO_SESSIONS" \]\] && (( any_present )); then overall="MARKERS_PRESENT"; fi$/:/' "MARKERS_PRESENT" \
-  "web-1:0:30:0:0:40:0" "web-2:4:30:2:0:40:$SILENT_AGE"
+  "web-1:0:30:0:0:0" "web-2:4:30:2:0:$SILENT_AGE"
 
 # SQL guards: the named pin goes RED when the clause is removed.
 sql_mutant() { # <name> <sed expr>
   local name="$1" expr="$2"
-  fx_rows "web-1:3:30:2:0:40:$SILENT_AGE" "web-2:2:30:1:0:40:$SILENT_AGE"
+  fx_rows "web-1:3:30:2:0:$SILENT_AGE" "web-2:2:30:1:0:$SILENT_AGE"
   restore
   reset_env; run_sut "$MUT" --since 15m
   pins "15 MINUTE"; cases=$((cases + 1)); ok "control for '$name': the pristine SQL passes every pin" "$PINS_RC"
@@ -426,6 +451,12 @@ sql_mutant "archive arm dropped" 's/^        UNION ALL SELECT dt, raw FROM s3Clu
 sql_mutant "marker grammar loosened" 's/transient_retried=\[01\]/transient_retried=/'
 sql_mutant "reporter grammar loosened" 's/ refused_since_last=\[0-9\]+//'
 sql_mutant "web-2 host dropped" "s/ = 'soleur-web-2'/ = 'soleur-web-9'/"
+sql_mutant "newest_live takes argMax over every row (argMaxIf -> argMax)" 's/argMaxIf(live, dt, is_reporter)/argMax(live, dt)/'
+sql_mutant "last live age ignores live > 0 (maxIf loses its condition)" 's/maxIf(dt, is_reporter AND live > 0)/maxIf(dt, is_reporter)/'
+sql_mutant "live_rows counts every reporter row (countIf loses live > 0)" 's/countIf(is_reporter AND live > 0)/countIf(is_reporter)/'
+sql_mutant "live read from cc_queries= instead of agent_sessions_live=" "s/extract(raw,'agent_sessions_live=/extract(raw,'cc_queries=/"
+sql_mutant "last_live_age_s is a constant" 's/dateDiff(.second., maxIf(dt, is_reporter AND live > 0), now())/0/'
+sql_mutant "markers counts reporter rows" 's/countIf(is_marker) AS markers/countIf(is_reporter) AS markers/'
 
 # ===== accounting and the assertion floor (ADR-193) ===========================================================================
 # Reported with printf + exit, never through fail(): a floor routed through the suspect cannot witness the suspect.
@@ -433,7 +464,7 @@ if (( passes + fails != cases )); then
   printf 'FATAL: accounting -- %d passes + %d fails != %d cases (a verdict was discarded or a call site lacks its increment)\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
-FLOOR=126
+FLOOR=144
 if [[ "$cases" -lt "$FLOOR" ]]; then
   printf 'FATAL: assertion floor -- only %d assertions ran, want >= %d\n' "$cases" "$FLOOR" >&2
   exit 1
