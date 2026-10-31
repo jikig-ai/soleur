@@ -378,7 +378,7 @@ jobs:
           while :; do
             pause_try=$((pause_try + 1))
             pause_rc=0; pause_class=""; pause_unread=""; pause_zero=0; pause_bad=0; pause_total=0; pause_detail=""; pause_tsv=""
-            pause_rows="$(DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh "$pause_sql" 2>"$BS_ERR")" || pause_rc=$?
+            pause_rows="$(DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh "$pause_sql" 2>"$BS_ERR")" || pause_rc=$?
             if [ "$pause_rc" -ne 0 ]; then
               # The reader's marker line is surfaced (a credential refusal reads as such, not as a host that never reported); its other stderr is not.
               grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true

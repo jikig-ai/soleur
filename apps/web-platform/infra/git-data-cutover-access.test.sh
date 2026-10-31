@@ -2432,7 +2432,7 @@ case_ps1() { # <step.sh> — both legs fresh and green: passes; one read; the ex
     && grep -qF 'WHERE dt > now() - INTERVAL 2 MINUTE' "$PSD/sql" \
     && grep -qF 'ORDER BY dt DESC LIMIT 200 FORMAT JSONEachRow' "$PSD/sql" || { PS_WHY="sql-pin-2"; return 1; }
   # the reader call is scoped to the three query secrets (as inngest-config-drift.yml does) with the token handed over per command
-  grep -qF 'doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh' "$PSD/log" \
+  grep -qF 'doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh' "$PSD/log" \
     || { PS_WHY="reader-not-scoped"; return 1; }
 }
 case_ps2() { # web-1 carries a 0 row OLDER than its newest 1 row: refused at once, no retry; the remedy is the owner-only command with its real path
