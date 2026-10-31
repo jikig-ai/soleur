@@ -14,7 +14,8 @@
 ### Decisions
 - Issue premise falsified: `Signups not allowed for otp` is mock noise (`page.route` on `**/auth/v1/otp*`), not a real dev-Supabase env failure; the cited run's real cascade was the Turbopack font failure (#8785, CLOSED). OTP-toggle fix descoped in `## Scope Check`.
 - Plan re-scoped to the live residual: webServer mid-run `ERR_CONNECTION_REFUSED` death has no exit marker — ships `apps/web-platform/e2e/web-server.sh` (spawn+wait+rc marker, `128+N` signal encoding), `name:` per webServer entry, `--selftest` arm.
-- Issue close-out: 60/60 merge-group `e2e` jobs green since 2026-10-06; PR posts measurement comment + `Closes #9167`.
+- Issue close-out: CTO ruling corrected the plan-time "60/60" claim — measured: 0 OTP/font-mechanism recurrences in ~300+ merge-group e2e jobs, but 6 `ERR_CONNECTION_REFUSED :3100` reds (the #11299 signature). PR posts the corrected measurement comment + `Closes #9167` + `Ref #11299`.
+- `cto_spawns=1` (technical-ruling gate: 5 rows ruled, batched spawn).
 - Parent-session amendment: PR body also carries `Ref #11299` (same ERR_CONNECTION_REFUSED signature; marker diagnoses, does not fix).
 - `[e2e-mock]` tag on fabricated `msg`/`message` — safe (`isNoAccountError` maps on `error.code`, never `msg`).
 - Technical rulings recorded as `pending - assumed:` rows in decision-challenges.md (plugin subagents unavailable on this harness — sequential-fallback).

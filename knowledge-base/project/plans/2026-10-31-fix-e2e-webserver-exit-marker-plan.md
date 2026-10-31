@@ -42,8 +42,11 @@ real cascade in the cited run was the Turbopack font-compile failure already
 fixed under #8785. The one residual, evidenced mechanism is a Next dev server
 dying mid-run with no exit signal in the log (merge-group run 37435711833).
 This plan ships a server-exit marker around the two Playwright `webServer`
-commands, self-labels the mock-fabricated error string, and posts the 60/60
-post-fix measurement that satisfies the issue's own 30-run reassessment bar.
+commands, self-labels the mock-fabricated error string, and posts the measured
+post-fix history that answers the issue's own 30-run reassessment bar (zero
+recurrences of the OTP/font mechanism in ~300+ merge-group e2e jobs; the only
+in-window reds are the #11299 connection-refused signature this marker
+diagnoses).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -51,7 +54,7 @@ post-fix measurement that satisfies the issue's own 30-run reassessment bar.
 |---|---|---|
 | "the e2e job's dev-Supabase returns `Signups not allowed for otp`" | e2e never reaches a dev-Supabase. Authenticated tests use `storageState` cookies + an in-process mock (`e2e/mock-supabase.ts`, `e2e/global-setup.ts`) and `page.route("**/auth/v1/otp*")` intercepts browser-side calls. The exact string is the mock payload at `e2e/otp-login.e2e.ts:139` and appears in green runs (e.g. run 37212574590, 115 passed). | No Supabase config change exists to make. The fix hypothesis is descoped; the log line is self-labeled `[e2e-mock]` instead. |
 | "the authenticated fixture never lands" | The fixture is a written `e2e/.auth/user.json` storage-state file plus a minted mock JWT (`global-setup.ts` `mintMockJwt`) — no signup request is ever sent. | Nothing to fix; claim is a misread of the log line. |
-| cascade of ~35 reds on run 36449125669 | Attempt-1 log shows `Signups not allowed for otp` twice as `[browser]` console noise (16:24:31/34), then the real signature: `Module not found: Can't resolve '@vercel/turbopack-next/internal/font/google/font'` (16:24:58) — the #8785 font failure, CLOSED 2026-10-05. | None — already fixed upstream; verified by the 60/60 measurement below. |
+| cascade of ~35 reds on run 36449125669 | Attempt-1 log shows `Signups not allowed for otp` twice as `[browser]` console noise (16:24:31/34), then the real signature: `Module not found: Can't resolve '@vercel/turbopack-next/internal/font/google/font'` (16:24:58) — the #8785 font failure, CLOSED 2026-10-05. | None — already fixed upstream; verified non-recurring by the measurement below. |
 | residual mechanism | Run 37435711833 (2026-10-05, post-fix): 39 failed / 75 passed; first red `nav-states-shell.e2e.ts:655`, then `net::ERR_CONNECTION_REFUSED` at :3100 for every authenticated test — the Next dev server went away mid-run and nothing logged why. | `e2e/web-server.sh` exit marker (this plan). |
 | "Fix-Size: ~10 lines / 1 file" | Actual: ~4 files / ~120 lines including the test that keeps the marker honest. | Reflected in phases and estimates. |
 
@@ -66,10 +69,16 @@ about it — every authenticated test then fails with bare
 timestamp cannot distinguish OOM-kill from crash from harness teardown. The
 issue's own evidence comment names the missing piece: "the e2e job would need
 a server-exit marker to say why it went away." Meanwhile the issue has stayed
-open solely pending a 30-run post-fix measurement, which this planning pass
-ran: **60/60 merge-group `e2e` jobs green since 2026-10-06** (four run-level
-failures in the window are all `test-scripts` shard flakes, a different
-mechanism, none in `e2e`).
+open solely pending a 30-run post-fix measurement. A CTO ruling re-ran the
+measurement and corrected the plan-time figure: over ~300 merge-group runs
+back to 2026-10-23 there are **zero recurrences of the OTP/font cascade
+mechanism** (the "30-run" bar is exceeded ~10× for the mechanism this issue
+tracks), **zero `Signups not allowed for otp` environment failures** (the
+string appears once per log as benign mock noise), and **6 `e2e`-job reds —
+all `ERR_CONNECTION_REFUSED at http://localhost:3100`**, the #11299
+signature (runs 39959325727, 39972020036, 40136850405, 40326601435,
+40539669640, 40552563192, 10-23 → 10-27). Those recurrences are the marker's
+reason to exist, not a reason to keep #9167 open.
 
 ## Proposed Solution
 
@@ -103,11 +112,15 @@ mechanism, none in `e2e`).
    `command:`/`name:` line cannot satisfy the assertion, the same convention
    `playwright-dev-server-distdir.test.ts` uses for `NEXT_DIST_DIR`
    (`cq-assert-anchor-not-bare-token`).
-5. **Issue close-out.** Post the 60/60 measurement as a comment on #9167 and
-   carry `Closes #9167` in the PR body. The PR body also carries `Ref #11299`
-   on its own line — that open issue tracks the same `ERR_CONNECTION_REFUSED`
-   mid-run server death this marker makes observable; the marker diagnoses but
-   does not fix the death, so it is a reference, never a `Closes`.
+5. **Issue close-out.** Post the corrected measurement as a comment on #9167 —
+   zero recurrences of the OTP/font mechanism across ~300+ merge-group e2e
+   jobs, with the six `ERR_CONNECTION_REFUSED :3100` reds named by run id as
+   the live #11299 residual — and carry `Closes #9167` in the PR body. The PR
+   body also carries `Ref #11299` on its own line: that open issue tracks the
+   same mid-run server death this marker makes observable; the marker
+   diagnoses but does not fix the death, so it is a reference, never a
+   `Closes`. The falsified "60/60 e2e green since 2026-10-06" figure must
+   never be posted — it claims a clean window that contains six e2e reds.
 
 ## Technical Considerations
 
@@ -196,7 +209,7 @@ discoverability_test:
 | `name:` per webServer entry | "the e2e job would need a server-exit marker to say why it went away" [#9167 evidence comment] — attribution is part of "why it went away" | asked |
 | `[e2e-mock]` tag on mock `msg`/`message` | — | inferred — justification: the unlabeled fabricated string caused this issue plus two prior mis-triages (#9115/#9155 run reads); a self-labeling line prevents the third recurrence |
 | `test/playwright-web-server-exit-marker.test.ts` | — | inferred — justification: a diagnostic mechanism with no test rots silently; the config-text assertion mirrors the existing `playwright-dev-server-distdir.test.ts` contract |
-| #9167 measurement comment + `Closes #9167` | "Leaving this open for the 30-run reassessment" [#9167 evidence comment] — the bar is now measured at 60/60 | asked |
+| #9167 measurement comment + `Closes #9167` | "Leaving this open for the 30-run reassessment" [#9167 evidence comment] — the bar is answered by the corrected measurement (0 OTP/font recurrences in ~300+ e2e jobs; 6 connection-refused reds = #11299 residual) | asked |
 
 ### Split Assessment
 
@@ -236,7 +249,7 @@ a single `wait`.
 - [ ] `apps/web-platform/test/playwright-web-server-exit-marker.test.ts` asserts: rc pass-through (0, 42), signal-death shape (self-SIGKILL → `rc=137`), marker fields present, and config-text wiring on a comment-stripped read (each webServer entry's command references `e2e/web-server.sh` and sets `name:`).
 - [ ] The `otp_disabled` mock in `apps/web-platform/e2e/otp-login.e2e.ts` carries `[e2e-mock]` in `msg`/`message` and a comment stating the string is intentionally fabricated (CI-log noise, not an environment signal); the otp-disabled test still maps via `error.code` and passes.
 - [ ] The `e2e` CI check is green on this PR (wrapper does not break server startup) and its log shows `[e2e-public]` / `[e2e-auth]` prefixes.
-- [ ] A comment is posted to #9167 carrying the measured 60/60 merge-group `e2e` outcome since 2026-10-06, the run-37435711833 `ERR_CONNECTION_REFUSED` signature, and the marker's design; the PR body contains `Closes #9167`.
+- [ ] A comment is posted to #9167 carrying the corrected merge-group `e2e` measurement (0 OTP/font-mechanism recurrences in ~300+ jobs; the six `ERR_CONNECTION_REFUSED :3100` reds named by run id as the #11299 residual), the run-37435711833 signature, and the marker's design; the PR body contains `Closes #9167`.
 
 ## Test Scenarios
 
@@ -247,7 +260,7 @@ a single `wait`.
 - Given the wrapper is invoked with no command, when it starts, then it prints usage and exits 2 — `unit`
 - Given `playwright.config.ts`, when its `webServer:` block is text-scanned, then every entry's `command:` references `e2e/web-server.sh` and every entry declares a unique `name:` — `unit`
 - Given the otp-login e2e suite runs in the `e2e` job, when the otp-disabled test executes, then it passes and the `[browser] [auth] Supabase error:` log line contains `[e2e-mock]` — `e2e` — `pyramid-justified: the discrimination property only exists on the real browser-console → CI-log path; no unit layer can observe it`
-- Given merge-group `e2e` job history since 2026-10-06, when per-job conclusions are listed (`gh run list --workflow ci.yml --event merge_group` + `gh run view <id> --json jobs`), then 60/60 are `success` — verified at plan time; re-verified before posting the #9167 comment — `integration`
+- Given merge-group `e2e` job history (~300 runs), when per-job conclusions are listed (`gh run list --workflow ci.yml --event merge_group` + `gh run view <id> --json jobs`), then zero failures carry the OTP/font signature and every in-window red is `ERR_CONNECTION_REFUSED :3100` — re-verified before posting the #9167 comment — `integration`
 
 ## Implementation Phases
 
@@ -401,13 +414,13 @@ exit "$rc"
 - `2026-09-25-the-flake-was-sigpipe-at-4kib…`: log-line-driven root-cause attribution must be checked against what produced the line, not what the line says.
 - `cq-assert-anchor-not-bare-token` + the distdir test's own header: config-text assertions must strip comments or a commented-out line satisfies them — the new test follows the same `stripComments` helper pattern.
 
-**Premise Validation (Phase 0.6).** Checked: #9167 OPEN (not resolved); PRs #9115/#9155 both MERGED (observing runs only, not blockers); cited run 36449125669 attempt-1 log read directly — `Signups not allowed for otp` is `[browser]` console noise from the mock, real failure is the font `Module not found` signature; #8785 CLOSED; mock-supabase/global-setup/playwright.config all present on `origin/main`. Stale/wrong: the issue's premise (dev-Supabase env failure) and its proposed fix (OTP toggle) — both falsified. ADR corpus: no ADR covers e2e webServer lifecycle; the proposed mechanism does not sit in any rejected-alternatives table. Issue-comment direction (server-exit marker + 30-run bar) held and is now satisfied (60/60).
+**Premise Validation (Phase 0.6).** Checked: #9167 OPEN (not resolved); PRs #9115/#9155 both MERGED (observing runs only, not blockers); cited run 36449125669 attempt-1 log read directly — `Signups not allowed for otp` is `[browser]` console noise from the mock, real failure is the font `Module not found` signature; #8785 CLOSED; mock-supabase/global-setup/playwright.config all present on `origin/main`. Stale/wrong: the issue's premise (dev-Supabase env failure) and its proposed fix (OTP toggle) — both falsified. ADR corpus: no ADR covers e2e webServer lifecycle; the proposed mechanism does not sit in any rejected-alternatives table. Issue-comment direction (server-exit marker + 30-run bar) held and is now answered by the corrected measurement (0 OTP/font recurrences in ~300+ e2e jobs; 6 connection-refused reds = the #11299 residual).
 
 **Property List (Phase 0.6b).**
 
 - P1 — The e2e suite must not cascade-fail with an undiagnosable signature when a dev server dies mid-run. *(Existing coverage: none — Playwright reports nothing on mid-run exit.)*
 - P2 — A log line fabricated by the test suite must be identifiable as fabricated. *(Coverage: none — currently byte-identical to a real gotrue error.)*
-- P3 — The issue's hold-open condition (30-run post-font-fix measurement) must be answered. *(Coverage: none — needed a run of the measurement, done here: 60/60.)*
+- P3 — The issue's hold-open condition (30-run post-font-fix measurement) must be answered. *(Coverage: none — needed a run of the measurement, done and corrected by CTO ruling: 0 OTP/font recurrences in ~300+ e2e jobs; 6 connection-refused reds = #11299 residual.)*
 
 **Cut List (Phase 0.6b).**
 

@@ -19,6 +19,6 @@ Issue: #9167 (closes)
 
 ## Phase 4 — Verification & issue close-out
 
-- [ ] 4.1 Re-run merge-group `e2e` measurement (`gh run list --workflow ci.yml --event merge_group` + per-run `gh run view <id> --json jobs` for the `e2e` job, window since 2026-10-06) and post the count + falsified-premise summary + run-37435711833 signature + marker design as `gh issue comment 9167`.
+- [ ] 4.1 Re-run merge-group `e2e` measurement (`gh run list --workflow ci.yml --event merge_group -L 300` + per-run `gh run view <id> --json jobs` for the `e2e` job) and post the corrected count (0 OTP/font-mechanism recurrences; the `ERR_CONNECTION_REFUSED :3100` reds named by run id as the #11299 residual — NEVER the falsified "60/60 green since 2026-10-06" figure) + falsified-premise summary + run-37435711833 signature + marker design as `gh issue comment 9167`.
 - [ ] 4.2 PR body carries `Closes #9167` (via soleur:ship).
 - [ ] 4.3 Verify `e2e` CI check green on the PR and its log shows `[e2e-public]` / `[e2e-auth]` prefixes.
