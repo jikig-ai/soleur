@@ -494,6 +494,25 @@ fi
 exec "$here/gh-base" "$@"
 WRAP
 chmod +x "$DBIN/gh"
+# Fake SUT clock (#11578): an argv-strict `date` stub serves the suite-pinned instant to every
+# `date` consumer reachable under run_d's stubbed PATH -- the gate's two `-u +%Y-%m-%dT%H:%M:%SZ`
+# reads (gate receipt_check + ran check), the verifier's strict-mode `-u +%s`, and the verifier
+# render path's `-u +%Y-%m-%d`. Each argv is logged to dcalls.log for the dispatch floor below;
+# ANY other argv exits 64 so a new call shape fails in the open. Real `date` is never exec'd --
+# a passthrough is a bypass that re-opens the midnight flake the pin exists to close.
+assert_fixture_dir "$DBIN"
+cat > "$DBIN/date" <<'STUB'
+#!/usr/bin/env bash
+here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+echo "$*" >> "$here/dcalls.log"
+case "$*" in
+  "-u +%Y-%m-%dT%H:%M:%SZ") cat "$here/clock" ;;
+  "-u +%s") cat "$here/clock.epoch" ;;
+  "-u +%Y-%m-%d") p="$(cat "$here/clock")"; printf '%s\n' "${p%%T*}" ;;
+  *) echo "date stub: unexpected argv: $*" >&2; exit 64 ;;
+esac
+STUB
+chmod +x "$DBIN/date"
 DURL1="https://github.com/example-org/example-repo/issues/77#issuecomment-1001"
 DURL2="https://github.com/example-org/example-repo/issues/77#issuecomment-1002"
 DREPO="$TMP/drepo"; mkdir -p "$DREPO"
@@ -503,6 +522,24 @@ sed -e "s|@URL@|$DURL2|g" "$DFX/envelope-valid.md" > "$DREPO/env-valid-2.md"
   || { echo "FATAL: delegation fixture repository not built" >&2; exit 2; }
 DTODAY="$(date -u +%Y-%m-%d)"; DNOW="${DTODAY}T00:00:00Z"
 DEXP="$(jq -rn --arg d "$DTODAY" '($d + "T00:00:00Z" | fromdateiso8601) + 864000 | strftime("%Y-%m-%d")')"
+# Pin the stub clock to noon of the fixture day (#11578). Noon sits strictly after every
+# "present" fixture instant (DNOW T00:00, T00:07) and strictly before every `dts +n` (n>=1), so
+# fixture instants and the gate's `now` share one source of truth (DTODAY) and a UTC-midnight
+# crossing mid-suite can never move a `dts 1` receipt onto the wrong side of "future" — the
+# flake class is eliminated, not narrowed. Carve-outs where the pin does NOT reach: `run` never
+# puts $DBIN on PATH (its shape-check fixtures carry no delegation rows, so no `date` call
+# fires); `DPATH` (mkbin_t) cases substitute $DBIN out entirely and hold only past-dated or
+# expiry-relative fixtures — do NOT add a future-dependent fixture under DPATH. dclock_at repins
+# the instant; any case that repins must restore DNOON afterwards, unconditionally (never
+# &&-chained — a failed assert must not skip the restore and poison every later case).
+DNOON="${DTODAY}T12:00:00Z"
+dclock_at() { # <iso>: pin the stub clock; writes the ISO instant and its epoch; fails loudly on an unparseable instant
+  local e
+  e="$(jq -rn --arg p "$1" '$p | fromdateiso8601')" || { echo "FATAL: dclock_at: unparseable instant: $1" >&2; exit 2; }
+  printf '%s\n' "$1" > "$DBIN/clock"
+  printf '%s\n' "$e" > "$DBIN/clock.epoch"
+}
+dclock_at "$DNOON"
 DSC=0
 dscn() { # fresh stub state: comment 1001 valid, comment 1002 edited (invalid), both on open epic 77 by an admin
   DSC=$((DSC + 1)); STUB_DIR="$TMP/dscn$DSC"; mkdir -p "$STUB_DIR"; export STUB_DIR
@@ -703,6 +740,19 @@ dscn; RCT "$DNOW"; mkdr ax5 "$(dts 5)"; run_d "$GATE" "$DF"
 assert_eq "1" "$(last_rc)" "AX5: a ran time in the future is delegation-invalid (an act cannot have run yet), even inside the delegation's window"
 assert_reason "delegation-invalid" "AX5"
 assert_eq "0" "$(ncalls 'issues/comments/1001')" "AX5b: it is refused before any verifier call"
+
+# CLK (Guard 1 bypass detector): under a yesterday pin a `ran` of $DNOW reads as FUTURE, so the
+# pristine gate refuses delegation-invalid (rc 1) before any verifier call -- a verdict only a
+# live stub can produce. A bypassed or missing stub reads the real clock: the same fixture then
+# reads ran-in-past and the row fails receipt-missing (rc 2). This case reddens on ANY calendar
+# day, so the pin cannot rot silently. The noon pin is restored unconditionally below (never
+# &&-chained -- a failed assert must not skip the restore and poison every later case).
+dclock_at "$(dts -1)"
+dscn; mkdr clk "$AT"; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "CLK: under a yesterday pin, ran=$DNOW is delegation-invalid (the stub is load-bearing)"
+assert_reason "delegation-invalid" "CLK yesterday pin"
+dclock_at "$DNOON"
+assert_eq "$(jq -rn --arg p "$(cat "$DBIN/clock")" '$p | fromdateiso8601')" "$(cat "$DBIN/clock.epoch")" "CLK2: clock and clock.epoch stay consistent after a repin"
 
 echo "=== Arm 6g3: a receipt is written AFTER the act it vouches for (verification V8) ==="
 dscn_past; RCPT_CREATED="$(dts -10)" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr rv8 "$(dts -6)"; run_d "$GATE" "$DF"
@@ -992,4 +1042,20 @@ else
   echo "  FAIL: SUT execution markers $n_rows < 222 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-print_results 493
+# Date-stub dispatch floor (Guard 1): every `date` argv the SUT dispatched under run_d's PATH is
+# logged. The count is a zero-slack floor committed from a measured green run (raise it when a
+# consumer is added); a stub never invoked reads 0 and cannot pass vacuously, and a passthrough
+# bypass is already red via CLK. The argv set is closed: a fifth shape exits 64 in the open, so a
+# matching count carrying foreign argv cannot sneak past.
+dc_n=0
+if [ -f "$DBIN/dcalls.log" ]; then dc_n="$(wc -l < "$DBIN/dcalls.log" | tr -d ' ')"; fi
+if (( dc_n >= 328 )); then
+  echo "  PASS: date-stub dispatches $dc_n >= 328"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: date-stub dispatches $dc_n < 328 -- the pin was bypassed or a consumer stopped calling date"; FAIL=$((FAIL + 1))
+fi
+dc_bad="$(grep -vcE '^-u \+%Y-%m-%dT%H:%M:%SZ$|^-u \+%s$|^-u \+%Y-%m-%d$' "$DBIN/dcalls.log" 2>/dev/null || true)"
+assert_eq "0" "$dc_bad" "CLKF: every dispatched date argv is one of the three sanctioned shapes"
+
+# 498 = 493 prior assertions + CLK rc + CLK reason + CLK2 consistency + dispatch floor + argv floor.
+print_results 498
