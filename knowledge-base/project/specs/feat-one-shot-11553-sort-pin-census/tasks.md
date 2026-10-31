@@ -34,3 +34,8 @@ Issue: #11553 (deferred scope-out of PR #11543)
 
 - `dispatch-recovery-sweeper-11211.sh` — plan classified it "already bounded"; its `/events/` literal and `start=`/`end=` live on SEPARATE statements (the lint's declared blind spot). Inlined the bound into each `/events/` logical line (SENTRY_BASE/TAIL split removed; `[mut:*]` anchors kept). Suite + live lint green.
 - 3.4 ran the named suites directly: `lint-followthrough-varq-ban.test.sh` (204/0) + live lint (exit 0, scanned_rule6=16); `anthropic-admin-key-6297.test.sh` delegated to ship-phase affected run.
+
+## Ship-phase addendum (2026-10-31)
+- [x] Review sequential-fallback 9/9 + fix-round 1; findings fixed inline, 0 filed
+- [x] QA PASS; compound learning + route; Phase 5.5 gates all PASS
+- [x] #11740 filed (operator-row render); archival deferred to ship Phase 6.45

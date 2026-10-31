@@ -18,3 +18,12 @@
 - `soleur:plan` (run to completion: premise validation, mechanism minimality, skeleton, research via sequential-fallback repo-research-analyst + learnings-researcher, spec-flow pass, scope/domain/UBI/GDPR/observability/ADR/encryption/guard-contract gates, scoped advisor consult, sharp-edges verification pass, plan-review panel — eng lenses + CTO devex, sequential-fallback with `Reviewed-Coverage: sequential-fallback` disclosure, tasks.md + commits `524c4e4`→plan artifacts + `e38deb18e9` deepen fixes)
 - `soleur:deepen-plan` (run to completion: all 13 halt gates evaluated and recorded in the plan's `## Enhancement Summary` gate ledger; `lint-guard-contract.py` clean; `technical-ruling-gate.sh --branch` PASS — 10 ruling rows; markdownlint clean on plan + tasks)
 - Supporting: `cloud-detect.sh`, `collision-precheck.sh` (PR #11735 = own draft, benign; foreign `test-all.sh` PIDs reported), `gh issue/pr view` premise checks
+
+## Review/QA/Compound/Ship Phase (2026-10-31)
+- Review: sequential-fallback (no subagent surface on Devin) — 9/9 lenses inline; 1 P1 fixed (ac3361b1a4: `#` comment inside curl continuation split the command, silently killed the Sentry cross-check), 2 P3 fixed (98ff985701: inline-comment satisfier blind-spot doc + R6-M5 left-edge row). 0 filed. Trailer: Reviewed-Coverage: sequential-fallback 9/9. Fix-round 1 attested (429d6ac57f).
+- QA: PASS — R6-* rows 208/0, live lint scanned_rule6=16, anthropic suite green post-fix.
+- Compound: learning 2026-10-31 (comment-in-continuation fold asymmetry); routed one bullet to work-test-harness-sharp-edges.md.
+- Ship gates: review-findings 0 unresolved; net-issue-flow -1; PIR no signal; undeferred-operator none; vendor/soak none; technical-ruling PASS; merge-base lints OK; holds none.
+- Decision-challenge operator row filed as #11740 (issue-text census correction).
+### Errors
+- Filing gate refused twice (needs --milestone + a filing exit; --body-file must be repo-readable): recovered with meta/machinery label + repo-relative body file. One-off.
