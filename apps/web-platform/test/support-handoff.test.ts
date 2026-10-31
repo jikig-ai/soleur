@@ -21,7 +21,9 @@ const { mockIsFileTool, mockIsSafeTool } = vi.hoisted(() => ({
   mockIsSafeTool: vi.fn((t: string) => t === "Skill"),
 }));
 
-vi.mock("../server/tool-path-checker", () => ({
+vi.mock("../server/tool-path-checker", async (importOriginal) => ({
+  // Keep the real exports (pathFieldsEscape judges every path field); override only the seams this suite drives.
+  ...(await importOriginal<typeof import("../server/tool-path-checker")>()),
   UNVERIFIED_PARAM_TOOLS: [] as readonly string[],
   extractToolPath: vi.fn(() => null),
   isFileTool: mockIsFileTool,

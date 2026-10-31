@@ -102,5 +102,33 @@ EMPTY="$(printf '' | tf_redact_random_ids)"; [ -z "$EMPTY" ]; check "empty input
 NOLF="$(printf 'random_id.x: Refreshing state... [id=%s]' "$K22" | tf_redact_random_ids; printf x)"
 [ "$NOLF" = 'random_id.x: Refreshing state... [id=<redacted>]x' ]; check "a missing trailing newline is not invented" "$?"
 
+# --- ANSI colour (#11294 follow-up): a step without -no-color prints `ESC[0mESC[1mrandom_id.X: ... [id=<key>]ESC[0m` ------
+# The first real apply run leaked ONE line this way: the bold sequence ends in `m`, an alphanumeric, so the address was not
+# preceded by a non-word character and the address anchor never matched. The filter must see the line the way a human does.
+ESC=$'\033'
+ANSI="${ESC}[0m${ESC}[1mrandom_id.tunnel_secret: Refreshing state... [id=$K43]${ESC}[0m
+${ESC}[0m${ESC}[1mrandom_password.zot_pull: Refreshing state... [id=none]${ESC}[0m
+${ESC}[0m${ESC}[1mhcloud_volume.v: Refreshing state... [id=12345]${ESC}[0m
+${ESC}[0m${ESC}[1mrandom_id.inngest_signing_key_dedicated: Creation complete after 0s [id=$K43]${ESC}[0m"
+leaks "$ANSI"; check "ansi positive control: the detector flags the raw coloured lines" "$?"
+AOUT="$(tf_redact_random_ids <<<"$ANSI")"
+clean "$AOUT"; check "ansi: no 22- or 43-char token survives on a coloured random_* line" "$?"
+contains "$AOUT" 'random_id.tunnel_secret: Refreshing state... [id=<redacted>]'; check "ansi: the coloured Refreshing line is redacted and keeps its address" "$?"
+contains "$AOUT" 'random_id.inngest_signing_key_dedicated: Creation complete after 0s [id=<redacted>]'; check "ansi: the coloured Creation complete line is redacted" "$?"
+contains "$AOUT" 'hcloud_volume.v: Refreshing state... [id=12345]'; check "ansi: a coloured non-random line keeps its text" "$?"
+[ "$(nlines "$AOUT")" = "$(nlines "$ANSI")" ]; check "ansi: line count preserved" "$?"
+ABLOCK="${ESC}[1m  # random_id.k${ESC}[0m will be destroyed
+${ESC}[0m  ${ESC}[31m-${ESC}[0m resource \"random_id\" \"k\" {
+      ${ESC}[31m-${ESC}[0m hex         = \"$HEX32\" -> null
+      ${ESC}[31m-${ESC}[0m id          = \"$K22\" -> null
+    }
+  ${ESC}[1m# hcloud_volume.v${ESC}[0m will be updated in-place
+        id        = \"12345\""
+ABOUT="$(tf_redact_random_ids <<<"$ABLOCK")"
+absent "$ABOUT" "$HEX32"; check "ansi plan block: the hex value is redacted" "$?"
+clean "$ABOUT"; check "ansi plan block: no key token survives" "$?"
+contains "$ABOUT" '        id        = "12345"'; check "ansi plan block: the next resource's id line is NOT redacted" "$?"
+NOCSI="$(printf 'plain %s text, no escapes\n' "[ok]" | tf_redact_random_ids)"; [ "$NOCSI" = 'plain [ok] text, no escapes' ]; check "ansi: a line with brackets but no escape sequence is byte-identical" "$?"
+
 printf '\n%s passed, %s failed\n' "$PASSES" "$FAILS"
 [ "$FAILS" -eq 0 ] && [ "$PASSES" -ge 25 ] || exit 1
