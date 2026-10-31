@@ -7,10 +7,13 @@
 # filters) for fresh floor-row medians and leg-balance rows, then thresholds the
 # findings and manages ONE watch-owned tracker issue:
 #   `ci-shard-balance-watch: manifest drift findings`
-# carrying the sentinel `<!-- shard-balance-watch:v1 drift=<sha1-of-set> -->`.
-# A comment posts only when the flagged-set hash changes; an emptied set posts
-# a resolution comment and closes the tracker (the watch owns this tracker —
-# the no-close convention binds trackers it does not own).
+# carrying the sentinel `<!-- shard-balance-watch:v1 drift=<sha1-of-ids> -->`.
+# The hashed set is flag IDENTITY (type+group+label), not magnitudes — a
+# comment posts only when flagged-set MEMBERSHIP changes (T5: one comment per
+# flagged-set change); a median/max slide inside a persistent episode does not
+# repost. An emptied set posts a resolution comment and closes the tracker
+# (the watch owns this tracker — the no-close convention binds trackers it
+# does not own).
 #
 # Why merge_group and not --runs over main pushes: push-dedupe elides the
 # shards job on push events, so push runs routinely carry no suite-timings-*
@@ -71,10 +74,14 @@ run_dirs=()
 for rid in $runs; do
   d="$WORK/runs/$rid"; mkdir -p "$d"
   if gh run download "$rid" -R "$GH_REPO" -p 'suite-timings-scripts-*' -D "$d" 2>"$WORK/err"; then
-    if find "$d" -name 'suite-timings.tsv' -print -quit | grep -q .; then
+    # A run counts as artifact-bearing only when a suite-timings-scripts-*-named
+    # artifact dir (the -p pattern also covers the -heavy- legs) actually carries
+    # the timings payload — an artifact-shaped dir without the tsv, or a
+    # differently-named artifact's tsv, does not establish a measurement.
+    if find "$d" -mindepth 2 -maxdepth 2 -path '*/suite-timings-scripts-*/suite-timings.tsv' -print -quit | grep -q .; then
       run_dirs+=("$d")
     else
-      echo "::warning::run $rid downloaded no suite-timings.tsv — skipped" >&2
+      echo "::warning::run $rid downloaded no suite-timings-scripts-*/suite-timings.tsv — skipped" >&2
     fi
   else
     echo "::warning::run $rid: gh run download failed — skipped ($(tail -1 "$WORK/err"))" >&2
@@ -98,7 +105,7 @@ report="$(python3 "$GEN" "${gargs[@]}" 2>"$WORK/err")" || {
 # ---- (4) threshold ------------------------------------------------------------
 # Flagged findings: over-bound floor rows + leg-balance breaches. Each finding
 # is one stable line in the sentinel-hashed set.
-findings=(); unmeasured_lines=()
+findings=(); flag_ids=(); unmeasured_lines=()
 : > "$WORK/legs.txt"
 while IFS= read -r line; do
   case "$line" in
@@ -106,6 +113,7 @@ while IFS= read -r line; do
       read -r _ g label committed fresh ts <<<"$line"
       if (( fresh >= FLOOR_DRIFT_BOUND_MS )); then
         findings+=("floor-row $g $label committed=${committed}ms median=${fresh}ms timed=${ts}")
+        flag_ids+=("floor-row $g $label")
       fi ;;
     LEG_PREDICTED\ *|LEG_OBSERVED\ *) printf '%s\n' "$line" >> "$WORK/legs.txt" ;;
     BOUND_PERFECT\ *) bound_light="${line##* }" ;;
@@ -115,22 +123,23 @@ done <<<"$report"
 
 # Leg-balance: observed max/BOUND (light) and predicted max/mean per group.
 while IFS= read -r flag; do
-  [[ -n "$flag" ]] && findings+=("$flag")
+  [[ -n "$flag" ]] || continue
+  findings+=("$flag")
+  flag_ids+=("${flag%% max=*}")   # identity = type+group, magnitudes excluded
 done < <(awk -v ratio="$LEG_DRIFT_RATIO" '
   /^LEG_PREDICTED/ { g=$2; s[$2"\t"$3]=$4 }
-  /^LEG_OBSERVED/  { o[$2"\t"$3]=$4 }
   END {
     for (k in s) { split(k,a,"\t"); tot[a[1]]+=s[k]; if (s[k]>mx[a[1]]) mx[a[1]]=s[k] }
     for (g in mx) { n=0; for (k in s) { split(k,a,"\t"); if (a[1]==g) n++ }
       mean=tot[g]/n; if (mean>0 && mx[g]/mean > ratio)
         printf "leg-predicted %s max=%dms mean=%dms\n", g, mx[g], mean }
-    for (k in o) { split(k,a,"\t"); tot[a[1]]+=o[k]; if (o[k]>mxo) mxo=o[k] }
   }' "$WORK/legs.txt" 2>/dev/null)
 if [[ -n "${bound_light:-}" && "${bound_light:-0}" -gt 0 ]]; then
   obs_max="$(awk '/^LEG_OBSERVED/{if($4>m)m=$4} END{print m+0}' "$WORK/legs.txt")"
   if awk -v m="$obs_max" -v b="$bound_light" -v r="$LEG_DRIFT_RATIO" \
        'BEGIN{exit !(m/b > r)}'; then
     findings+=("leg-observed light max=${obs_max}ms bound=${bound_light}ms")
+    flag_ids+=("leg-observed light")
   fi
 fi
 
@@ -142,9 +151,12 @@ if [[ "$PRINT_REPORT" -eq 1 ]]; then
 fi
 
 # ---- (5) compose the would-be comment -----------------------------------------
+# The sentinel hashes flag IDENTITY (type+group+label), never the committed=/
+# median=/timed=/max=/mean=/bound= magnitudes — those slide with the 5-run
+# window, and hashing them would defeat dedupe during a persistent episode.
 set_sha=""
 if [[ "${#findings[@]}" -gt 0 ]]; then
-  set_sha="$(printf '%s\n' "${findings[@]}" | LC_ALL=C sort | sha1sum | cut -d' ' -f1)"
+  set_sha="$(printf '%s\n' "${flag_ids[@]}" | LC_ALL=C sort | sha1sum | cut -d' ' -f1)"
 fi
 sentinel="${SENTINEL_PREFIX}drift=${set_sha} -->"
 {
@@ -172,28 +184,46 @@ fi
 
 # ---- (6) tracker lifecycle ----------------------------------------------------
 # Find-or-file the ONE open watch-owned tracker by exact title. Filtering is
-# client-side so a mocked/partial `gh` reply can never read as a tracker id.
+# client-side (title AND author) so a mocked/partial `gh` reply can never read
+# as a tracker id, and a same-title issue filed by anyone else on this public
+# repo is never mistaken for the watch's own tracker. Bot logins follow the
+# repo convention (github-actions / app/github-actions / github-actions[bot] —
+# same set scheduled-terraform-drift.yml's reconcile reader uses).
 ilist="$(gh issue list -R "$GH_REPO" --state open \
-    --search "in:title \"$TRACKER_TITLE\"" --limit 20 --json number,title 2>"$WORK/err")" || {
+    --search "in:title \"$TRACKER_TITLE\"" --limit 20 --json number,title,author 2>"$WORK/err")" || {
   echo "::error::tracker find failed: $(tail -1 "$WORK/err")" >&2; exit 3; }
-tracker="$(printf '%s' "$ilist" | jq -r --arg t "$TRACKER_TITLE" \
-    '[.[] | select(.title==$t)][0].number // empty' 2>/dev/null)" || tracker=""
+mapfile -t tracker_ids < <(printf '%s' "$ilist" | jq -r --arg t "$TRACKER_TITLE" '
+    def bot: . == "github-actions" or . == "app/github-actions" or . == "github-actions[bot]";
+    [.[] | select(.title == $t and ((.author.login // "") | bot)) | .number]
+    | sort | .[]' 2>/dev/null)
+tracker="${tracker_ids[0]:-}"
+if [[ "${#tracker_ids[@]}" -gt 1 ]]; then
+  echo "::warning::${#tracker_ids[@]} open watch-authored issues titled '$TRACKER_TITLE' (${tracker_ids[*]}) — acting on #${tracker}; the watch owns exactly one tracker, close the duplicates manually" >&2
+fi
 [[ "$tracker" =~ ^[0-9]+$ ]] || tracker=""
 
 last_sha=""
 if [[ -n "$tracker" ]]; then
-  ijson="$(gh issue view "$tracker" --json comments 2>"$WORK/err")" || {
-    echo "::error::could not read tracker #${tracker} comments" >&2; exit 3; }
+  # The sentinel can live in the tracker BODY (the create payload) as well as
+  # in later comments — scanning comments only would repost the identical set
+  # once on the run right after filing. Body is read only when the issue
+  # author is a bot login, so a human quote cannot pre-register a hash.
+  ijson="$(gh issue view "$tracker" --json body,author,comments 2>"$WORK/err")" || {
+    echo "::error::could not read tracker #${tracker}" >&2; exit 3; }
   last_sha="$(printf '%s' "$ijson" | jq -r --arg p "${SENTINEL_PREFIX}drift=" '
-      [.comments[] | select(((.author.login // "") == "github-actions" or (.author.login // "") == "github-actions[bot]")
-        and ((.body // "") | contains($p))) | .body]
-      | last // "" | (capture("drift=(?<h>[0-9a-f]{40})") | .h) // ""' 2>/dev/null)" || {
-    echo "::error::could not evaluate the comments of #${tracker}" >&2; exit 3; }
+      def bot: . == "github-actions" or . == "app/github-actions" or . == "github-actions[bot]";
+      . as $i
+      | ([(if (($i.author.login // "") | bot) then ($i.body // "") else "" end)]
+         + [$i.comments[] | select(((.author.login // "") | bot)
+             and ((.body // "") | contains($p))) | .body])
+      | map(select(contains($p))) | last // ""
+      | (capture("drift=(?<h>[0-9a-f]{40})") | .h) // ""' 2>/dev/null)" || {
+    echo "::error::could not evaluate the sentinel state of #${tracker}" >&2; exit 3; }
 fi
 
 if [[ "${#findings[@]}" -eq 0 ]]; then
   if [[ -n "$tracker" ]]; then
-    printf 'All-clear: no floor-row or leg-balance drift in the sampled runs. Closing this tracker; it re-opens automatically if drift returns.\n' \
+    printf 'All-clear: no floor-row or leg-balance drift in the sampled runs. Closing this tracker; the watch files a fresh one if drift returns.\n' \
       | gh issue comment "$tracker" --body-file - >/dev/null 2>"$WORK/err" \
       && gh issue close "$tracker" >/dev/null 2>>"$WORK/err" || {
         echo "::error::resolution post/close on #${tracker} failed" >&2; exit 1; }

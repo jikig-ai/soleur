@@ -59,7 +59,7 @@ mkscene() {
   : > "$MOCKD/calls"; : > "$MOCKD/bodies"; : > "$MOCKD/created"; : > "$MOCKD/closed"
   printf '101\n' > "$MOCKD/run_ids"
   printf '[]' > "$MOCKD/issues.json"
-  printf '{"number":505,"state":"OPEN","comments":[]}' > "$MOCKD/issue.json"
+  printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"","comments":[]}' > "$MOCKD/issue.json"
   cat > "$MOCKD/gh" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MOCKD/calls"
@@ -138,8 +138,8 @@ f-meas-y	5000
 EOF
 run; sha="$(sentinel_of "$MOCKD/created")"; [[ -n "$sha" ]] || fatal "no sentinel captured"
 : > "$MOCKD/calls"
-printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings"}]' > "$MOCKD/issues.json"
-printf '{"number":505,"state":"OPEN","comments":[{"author":{"login":"github-actions"},"body":"prior\\n<!-- shard-balance-watch:v1 %s -->"}]}' "$sha" > "$MOCKD/issue.json"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"","comments":[{"author":{"login":"github-actions"},"body":"prior\\n<!-- shard-balance-watch:v1 %s -->"}]}' "$sha" > "$MOCKD/issue.json"
 run
 [[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 0 && "$(ncalls 'issue create')" -eq 0 ]] \
   && pass "S3 identical flagged set: no second comment (sentinel dedupe)" || fail "S3 (comments=$(ncalls 'issue comment'))"
@@ -149,7 +149,7 @@ mkscene; seed 101 suite-timings-scripts-0 <<'EOF'
 f-meas-x	5000
 f-meas-y	5000
 EOF
-printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings"}]' > "$MOCKD/issues.json"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
 run
 [[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 1 && "$(ncalls 'issue close')" -eq 1 \
    && "$(cat "$MOCKD/bodies")" == *"All-clear"* ]] \
@@ -176,8 +176,8 @@ f-floor-big	1500000
 f-meas-x	5000
 f-meas-y	5000
 EOF
-printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings"}]' > "$MOCKD/issues.json"
-printf '{"number":505,"state":"OPEN","comments":[{"author":{"login":"github-actions"},"body":"old\\n<!-- shard-balance-watch:v1 drift=0000000000000000000000000000000000000001 -->"}]}' > "$MOCKD/issue.json"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"","comments":[{"author":{"login":"github-actions"},"body":"old\\n<!-- shard-balance-watch:v1 drift=0000000000000000000000000000000000000001 -->"}]}' > "$MOCKD/issue.json"
 run
 [[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 1 && "$(cat "$MOCKD/bodies")" == *"drift="* \
    && "$(sentinel_of "$MOCKD/bodies")" != "drift=0000000000000000000000000000000000000001" ]] \
@@ -210,12 +210,88 @@ EOF
 ERR="$(cat "$MOCKD/stderr")"
 [[ "$RC" -eq 78 && "$ERR" == *"xtrace"* ]] && pass "S9c bash -x refused with exit 78" || fail "S9c (rc=$RC)"
 
+# ---- S12: sentinel in the tracker BODY dedupes the run right after create ---
+# gh issue create lands the sentinel in the issue BODY; a comments-only scan
+# reposts the identical set once. Replay the created body back as the live
+# issue and the second run must no-op.
+mkscene; seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big	1500000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+run
+[[ "$(ncalls 'issue create')" -eq 1 ]] || fatal "S12 setup: no tracker created"
+python3 -c 'import json,sys; print(json.dumps({"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":open(sys.argv[1]).read(),"comments":[]}))' \
+  "$MOCKD/created" > "$MOCKD/issue.json"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+: > "$MOCKD/calls"
+run
+[[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 0 && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "S12 body-sentinel dedupe: the run right after create does not repost" || fail "S12 (comments=$(ncalls 'issue comment') creates=$(ncalls 'issue create'))"
+
+# ---- S13: magnitude shift, same membership -> no repost ----------------------
+# The sentinel hashes flag IDENTITY (type+group+label): a persistent episode's
+# median/max sliding with the 5-run window must not churn the tracker.
+mkscene; seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big	1500000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+run
+[[ "$(ncalls 'issue create')" -eq 1 ]] || fatal "S13 setup: no tracker created"
+python3 -c 'import json,sys; print(json.dumps({"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":open(sys.argv[1]).read(),"comments":[]}))' \
+  "$MOCKD/created" > "$MOCKD/issue.json"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+: > "$MOCKD/calls"
+seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big	1900000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+run
+[[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 0 && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "S13 median slide (1500s->1900s) with identical membership does not repost" || fail "S13 (comments=$(ncalls 'issue comment'))"
+
+# ---- S14: tracker find-or-file is author-scoped + dup-warned -----------------
+mkscene; seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big	1500000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+# A same-title issue filed by a non-bot user is NEVER adopted as the tracker.
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"mallory"}}]' > "$MOCKD/issues.json"
+run
+[[ "$RC" -eq 0 && "$(ncalls 'issue view')" -eq 0 && "$(ncalls 'issue comment')" -eq 0 \
+   && "$(ncalls 'issue create')" -eq 1 ]] \
+  && pass "S14a a foreign-authored same-title issue is ignored; the watch files its own" || fail "S14a (views=$(ncalls 'issue view') creates=$(ncalls 'issue create'))"
+mkscene; seed 101 suite-timings-scripts-0 <<'EOF'
+f-floor-big	1500000
+f-meas-x	5000
+f-meas-y	5000
+EOF
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}},{"number":777,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions[bot]"}}]' > "$MOCKD/issues.json"
+run
+[[ "$RC" -eq 0 && "$(grep -c '^issue view 505 ' "$MOCKD/calls")" -eq 1 \
+   && "$(grep -c '^issue comment 505 ' "$MOCKD/calls")" -eq 1 && "$ERR" == *"::warning::"* ]] \
+  && pass "S14b duplicate watch-authored trackers warn and act on the lowest number" || fail "S14b (views505=$(grep -c '^issue view 505 ' "$MOCKD/calls") warn=${ERR:+set})"
+
+# ---- S15: a non-matching artifact name does not count as artifact-bearing ----
+# A suite-timings.tsv under a dir the -p pattern never names (infra family) is
+# not a measurement for this watch — the run must be skipped, not sampled.
+mkscene; seed 101 suite-timings-infra-9 <<'EOF'
+f-floor-big	1500000
+EOF
+run
+[[ "$RC" -eq 3 && "$ERR" == *"zero suite-timings artifacts"* && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "S15 infra-named artifact only: run skipped, exit 3, never an all-clear" || fail "S15 (rc=$RC)"
+
 # ---- S10: workflow contract --------------------------------------------------
 [[ -s "$WF" ]] || fatal "workflow missing: $WF"
 wf="$(grep -vE '^[[:space:]]*#' "$WF")"
 wf_missing=""
 grep -qF "cron: '41 9 * * 2'" <<<"$wf" || wf_missing="$wf_missing cron"
 grep -qE '^permissions: \{\}' <<<"$wf" || wf_missing="$wf_missing permissions-top"
+grep -qE '^      actions: read' <<<"$wf" || wf_missing="$wf_missing actions-read"
 grep -qE '^      contents: read$' <<<"$wf" || wf_missing="$wf_missing contents-read"
 grep -qE '^      issues: write$' <<<"$wf" || wf_missing="$wf_missing issues-write"
 grep -qF 'group: shard-balance-watch' <<<"$wf" || wf_missing="$wf_missing concurrency"
@@ -247,7 +323,7 @@ else
 fi
 
 echo; echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
-MIN_ASSERTIONS=14
+MIN_ASSERTIONS=20
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 2
 fi

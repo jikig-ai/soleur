@@ -65,6 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read   # gh run list / gh run download read the Actions API (the token 403s without it)
       contents: read
       issues: write
     steps:
