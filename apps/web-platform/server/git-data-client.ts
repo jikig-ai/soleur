@@ -258,6 +258,13 @@ export async function fetchFromGitData(params: {
       "--update-shallow",
       remoteUrl,
       `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
+      // (#11704, CTO F13) NEGATIVE refspec: the overlay's rescue heads (`soleur-store-tip-<sha12>`,
+      // one more per not-descendant graft) are never overlaid, and fetching all of them at every
+      // graft would grow this 60 s fetch without bound. Excluding them is NOT a prune: nothing in
+      // the store is deleted (a prune here would delete store-only branches). The heads
+      // themselves still accumulate in the store (one per not-descendant graft); a host-side
+      // reaper is deferred and tracked, so "bounded by the existing gc" does not hold.
+      `^refs/soleur/worktrees/${worktreeId}/heads/soleur-store-tip-*`,
       `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
     ],
     transportKey,

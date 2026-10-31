@@ -111,6 +111,10 @@ describe("replicateToGitData — gated on", () => {
     const pushArgs = gitPush.mock.calls[0][0] as string[];
     expect(pushArgs).toContain("push");
     expect(pushArgs).toContain("git-data");
+    // CTO F12: ATOMIC, so a rejected ref (e.g. the rescue ref) cannot leave `main` forced while the
+    // old store tip is unreferenced. It rides the options block, right after --force.
+    expect(pushArgs.indexOf("--atomic")).toBe(pushArgs.indexOf("--force") + 1);
+    expect(pushArgs.indexOf("--atomic")).toBeLessThan(pushArgs.indexOf("git-data"));
     // Fence push-options ride this push — worktree-id is now PER-USER, not "primary".
     expect(pushArgs).toContain("--push-option=lease-gen=7");
     expect(pushArgs).toContain(`--push-option=worktree-id=${WT}`);
@@ -125,6 +129,103 @@ describe("replicateToGitData — gated on", () => {
     expect(pushArgs).not.toContain("refs/heads/*:refs/heads/*");
     // The push uses the TRANSPORT key, not the provision key.
     expect(gitPush.mock.calls[0][1]).toBe("transport-key");
+  });
+
+  // CTO T1b (amends F12): rescue-first two-step push. `--atomic` only protects a ref REJECTED inside
+  // the ref transaction; in the shallow `remote failure` class (measured, file:// store) `main` was
+  // still forced with the rescue ref left out. Pushing the rescue ref ALONE first, and throwing if
+  // that fails before `main` is touched, is what keeps the old store tip referenced.
+  describe("rescue-first two-step push (T1b)", () => {
+    const RESCUE_SPEC = `refs/heads/soleur-store-tip-*:refs/soleur/worktrees/${WT}/heads/soleur-store-tip-*`;
+    const MAIN_SPEC = `refs/heads/*:refs/soleur/worktrees/${WT}/heads/*`;
+    const hasRescueBranch = () =>
+      execFileSyncMock.mockImplementation((...a: unknown[]) =>
+        (a[1] as string[]).includes("for-each-ref")
+          ? Buffer.from("0123456789abcdef0123456789abcdef01234567 commit\trefs/heads/soleur-store-tip-0123456789ab\n")
+          : Buffer.from(""),
+      );
+    const argsOf = (i: number) => gitPush.mock.calls[i][0] as string[];
+    const forEachRefCalls = () =>
+      execFileSyncMock.mock.calls.filter((c) => (c[1] as string[]).includes("for-each-ref"));
+
+    it("with a local rescue branch: the rescue-only push comes FIRST, then the main push; same generation and options", async () => {
+      hasRescueBranch();
+      await replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER });
+
+      expect(gitPush).toHaveBeenCalledTimes(2);
+      expect(argsOf(0)).toEqual([
+        "push", "--force", "--atomic", "git-data", RESCUE_SPEC,
+        "--push-option=lease-gen=7", `--push-option=worktree-id=${WT}`,
+      ]);
+      expect(argsOf(1)).toContain(MAIN_SPEC);
+      expect(argsOf(1)).toContain("--atomic"); // the main push is unchanged
+      expect(argsOf(1)).toContain("--push-option=lease-gen=7");
+      expect(argsOf(1)).not.toContain(RESCUE_SPEC);
+      // both steps use the transport key in the workspace, and the listing ran in the workspace
+      for (const c of gitPush.mock.calls) {
+        expect(c[1]).toBe("transport-key");
+        expect(c[3]).toMatchObject({ cwd: "/tmp/ws" });
+      }
+      const [lookup] = forEachRefCalls();
+      expect(lookup[1]).toEqual(expect.arrayContaining(["/tmp/ws", "for-each-ref", "--count=1", "refs/heads/soleur-store-tip-*"]));
+    });
+
+    it("with NO local rescue branch: exactly one push (the main push), after the listing", async () => {
+      await replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER });
+      expect(forEachRefCalls()).toHaveLength(1);
+      expect(gitPush).toHaveBeenCalledTimes(1);
+      expect(argsOf(0)).toContain(MAIN_SPEC);
+      expect(argsOf(0)).not.toContain(RESCUE_SPEC);
+    });
+
+    it("rescue push fails (non-transient): rejects, the main push is NEVER attempted, reported once", async () => {
+      hasRescueBranch();
+      gitPush.mockRejectedValueOnce(
+        Object.assign(new Error("Command failed: git push"), { stderr: "remote: git-data fence: stale lease generation 3 < stored max 5" }),
+      );
+      await expect(
+        replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 3, userId: USER }),
+      ).rejects.toThrow(/Command failed: git push/);
+      expect(gitPush).toHaveBeenCalledTimes(1);
+      expect(argsOf(0)).toContain(RESCUE_SPEC);
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    });
+
+    it("a transient failure on EACH step retries that step once (4 pushes, order rescue, rescue, main, main)", async () => {
+      hasRescueBranch();
+      const transientErr = () => Object.assign(new Error("Command failed: git push"), { stderr: "error: remote failure" });
+      gitPush
+        .mockRejectedValueOnce(transientErr())
+        .mockResolvedValueOnce(Buffer.from(""))
+        .mockRejectedValueOnce(transientErr())
+        .mockResolvedValueOnce(Buffer.from(""));
+      await expect(
+        replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER }),
+      ).resolves.toEqual({ status: "replicated" });
+      expect(gitPush).toHaveBeenCalledTimes(4);
+      expect([0, 1, 2, 3].map((i) => argsOf(i).includes(RESCUE_SPEC))).toEqual([true, true, false, false]);
+      expect(reportSilentFallback).not.toHaveBeenCalled();
+    });
+
+    it("the rescue step retries only ONCE: two transient failures there throw before main is touched", async () => {
+      hasRescueBranch();
+      gitPush.mockRejectedValue(Object.assign(new Error("Command failed: git push"), { stderr: "failed to report status" }));
+      await expect(
+        replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER }),
+      ).rejects.toThrow(/git push/);
+      expect(gitPush).toHaveBeenCalledTimes(2);
+      for (let i = 0; i < 2; i++) expect(argsOf(i)).toContain(RESCUE_SPEC);
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+      gitPush.mockResolvedValue(Buffer.from(""));
+    });
+
+    it("a listing that returns nothing printable (whitespace) is treated as no rescue branch", async () => {
+      execFileSyncMock.mockImplementation((...a: unknown[]) =>
+        (a[1] as string[]).includes("for-each-ref") ? Buffer.from("  \n") : Buffer.from(""),
+      );
+      await replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER });
+      expect(gitPush).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("rejects an unsafe worktree_id BEFORE any provision/push (CWE-22)", async () => {
@@ -586,12 +687,15 @@ describe("replicateToGitData — workspace id is pseudonymised in logs (#6982)",
   });
 });
 
-// Replication-success marker (#11704 item 6 / CTO F6). A successful push emits ONE warn-level,
-// closed-grammar, counts-only line so a success reaches Better Stack (info never ships). The
-// read side (scripts/followthroughs/git-data-replication-signal.sh) counts the phrase by
-// substring, so it must exist on the success branch only and carry no identifier.
+// Replication-success marker (#11704 item 6 / CTO F6, capped by F15). A successful push emits a
+// warn-level, closed-grammar, counts-only line so a success reaches Better Stack (info never
+// ships), at most once per 60 s per process per transient_retried value. The read side
+// (scripts/followthroughs/git-data-replication-signal.sh) matches it with the regex MARKER_RE
+// (a parity row below extracts that regex from the script and runs it against what is emitted),
+// so the phrase must exist on the success branch only and carry no identifier.
 describe("replicateToGitData — replication-success marker (#11704)", () => {
   const MARKER_PREFIX = "git_data_replication_success=1 transient_retried=";
+  const SIGNAL_SCRIPT = path.resolve(__dirname, "../../../scripts/followthroughs/git-data-replication-signal.sh");
   const REAL_WS = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
 
   type LogCall = { level: string; args: unknown[] };
@@ -630,6 +734,7 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
     });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.doUnmock("../server/logger");
   });
 
@@ -644,17 +749,122 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
     expect(markers[0].args[0]).toEqual({ gitDataReplicationSuccess: 1, transientRetried: 0 });
   });
 
-  it("carries no identifier, hash, uuid or lease generation (serialized)", async () => {
-    const { mod, logCalls } = await loadWithLogger();
-    await run(mod, 987654321);
+  // N6: the read side matches with a REGEX (MARKER_RE inside the script's SQL match()), not a
+  // substring. Extract it from the script and run it against what the TS actually emits for both
+  // retried bits, so a grammar change on either side fails here.
+  it("parity: MARKER_RE extracted from the signal script matches the exact message emitted for retried 0 and 1", async () => {
+    const src = fs.readFileSync(SIGNAL_SCRIPT, "utf8");
+    const m = /^MARKER_RE='([^']+)'$/m.exec(src);
+    expect(m).not.toBeNull();
+    const markerRe = new RegExp(m![1]);
 
-    const serialized = JSON.stringify(markerCalls(logCalls));
-    expect(serialized).toContain("git_data_replication_success=1"); // not vacuously empty
-    expect(serialized).not.toMatch(/workspaceIdHash|worktreeIdHash|leaseGeneration/);
-    expect(serialized).not.toMatch(/[0-9a-f]{8,}/i);
-    expect(serialized).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-    expect(serialized).not.toContain(REAL_WS);
-    expect(serialized).not.toContain("987654321");
+    const first = await loadWithLogger();
+    await run(first.mod);
+    const retried0 = markerCalls(first.logCalls)[0].args[1] as string;
+
+    const second = await loadWithLogger();
+    gitPush
+      .mockRejectedValueOnce(Object.assign(new Error("Command failed: git push"), { stderr: "error: remote failure" }))
+      .mockResolvedValueOnce(Buffer.from(""));
+    await run(second.mod);
+    const retried1 = markerCalls(second.logCalls)[0].args[1] as string;
+
+    expect(retried0).toBe(`${MARKER_PREFIX}0`);
+    expect(retried1).toBe(`${MARKER_PREFIX}1`);
+    expect(markerRe.test(retried0)).toBe(true);
+    expect(markerRe.test(retried1)).toBe(true);
+    // the regex is not vacuous: it does not match a different grammar
+    expect(markerRe.test(`${MARKER_PREFIX}2`)).toBe(false);
+    expect(markerRe.test("git_data_replication_success=0 transient_retried=0")).toBe(false);
+  });
+
+  // CTO F15 (T4): at most ONE marker per 60 s per process per transient_retried value. The first
+  // success after idle always emits, so a `markers > 0` read stays valid; the marker is presence
+  // evidence, not a count. Date is faked (not the timers) so the push queue is unaffected.
+  describe("volume cap (one per 60 s per transient_retried value)", () => {
+    const T0 = Date.parse("2026-10-31T00:00:00Z");
+    const at = (ms: number) => vi.setSystemTime(T0 + ms);
+    const transient = () =>
+      gitPush
+        .mockRejectedValueOnce(Object.assign(new Error("Command failed: git push"), { stderr: "error: remote failure" }))
+        .mockResolvedValueOnce(Buffer.from(""));
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      at(0);
+    });
+
+    it("two successes inside the window emit ONE marker; both still replicate and log the info line", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      await expect(run(mod)).resolves.toEqual({ status: "replicated" });
+      at(30_000);
+      await expect(run(mod)).resolves.toEqual({ status: "replicated" });
+      expect(gitPush).toHaveBeenCalledTimes(2);
+      expect(markerCalls(logCalls)).toHaveLength(1);
+      expect(logCalls.filter((c) => c.args[1] === "git-data replication push complete")).toHaveLength(2);
+    });
+
+    it("the window is exactly 60 s from the last EMITTED marker: 59.999 s suppressed, 60 s emits", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      await run(mod); // emits at t0
+      at(59_999);
+      await run(mod);
+      expect(markerCalls(logCalls)).toHaveLength(1);
+      at(60_000);
+      await run(mod);
+      expect(markerCalls(logCalls)).toHaveLength(2);
+    });
+
+    it("a success after 61 s emits a second marker; the window restarts from that emission", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      await run(mod);
+      at(61_000);
+      await run(mod);
+      expect(markerCalls(logCalls)).toHaveLength(2);
+      at(61_000 + 59_000); // inside the NEW window, though > 60 s after the first marker
+      await run(mod);
+      expect(markerCalls(logCalls)).toHaveLength(2);
+    });
+
+    it("transient_retried=1 keeps its own slot: it emits inside the retried=0 window, then is capped itself", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      await run(mod); // retried=0 at t0
+      at(10_000);
+      transient();
+      await run(mod); // retried=1, first of its kind
+      at(20_000);
+      transient();
+      await run(mod); // retried=1 again inside ITS window
+      at(25_000);
+      await run(mod); // retried=0 again inside ITS window
+      const msgs = markerCalls(logCalls).map((c) => c.args[1]);
+      expect(msgs).toEqual([`${MARKER_PREFIX}0`, `${MARKER_PREFIX}1`]);
+    });
+
+    it("a failed or shed replication neither emits nor consumes the window", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      gitPush.mockRejectedValueOnce(Object.assign(new Error("fence"), { stderr: "remote: git-data fence: stale lease generation 1 < 2" }));
+      await expect(run(mod)).rejects.toThrow();
+      at(1_000);
+      await run(mod); // first SUCCESS, one second after a failure: emits
+      expect(markerCalls(logCalls)).toHaveLength(1);
+    });
+
+    it("the exported reset clears the window (test seam)", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      await run(mod);
+      mod.__resetGitDataSuccessMarkerCapForTest();
+      await run(mod); // same instant, would be capped without the reset
+      expect(markerCalls(logCalls)).toHaveLength(2);
+    });
+
+    it("a clock that steps backwards does not silence the marker for the rest of the process", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      await run(mod);
+      at(-3_600_000); // wall clock stepped back an hour
+      await run(mod);
+      expect(markerCalls(logCalls)).toHaveLength(2);
+    });
   });
 
   it("flags the single transient retry: transient_retried=1 and exactly one marker", async () => {
@@ -671,6 +881,61 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
     expect(markers).toHaveLength(1);
     expect(markers[0].args[1]).toBe(`${MARKER_PREFIX}1`);
     expect(markers[0].args[0]).toEqual({ gitDataReplicationSuccess: 1, transientRetried: 1 });
+  });
+
+  // T1b: with a local rescue branch the replication is two pushes; `transient_retried` is true if
+  // EITHER step retried, and there is still exactly one marker for the whole replication.
+  describe("with a local rescue branch (two-step push)", () => {
+    const withRescue = () =>
+      execFileSyncMock.mockImplementation((...a: unknown[]) =>
+        (a[1] as string[]).includes("for-each-ref")
+          ? Buffer.from("0123456789abcdef0123456789abcdef01234567 commit\trefs/heads/soleur-store-tip-0123456789ab\n")
+          : Buffer.from(""),
+      );
+    const transientErr = () => Object.assign(new Error("Command failed: git push"), { stderr: "error: remote failure" });
+
+    it("a retry on the RESCUE step only → one marker, transient_retried=1", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      withRescue();
+      gitPush.mockRejectedValueOnce(transientErr()).mockResolvedValue(Buffer.from(""));
+      await run(mod);
+      expect(gitPush).toHaveBeenCalledTimes(3);
+      const markers = markerCalls(logCalls);
+      expect(markers).toHaveLength(1);
+      expect(markers[0].args[1]).toBe(`${MARKER_PREFIX}1`);
+    });
+
+    it("a retry on the MAIN step only → one marker, transient_retried=1", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      withRescue();
+      gitPush
+        .mockResolvedValueOnce(Buffer.from(""))
+        .mockRejectedValueOnce(transientErr())
+        .mockResolvedValue(Buffer.from(""));
+      await run(mod);
+      expect(gitPush).toHaveBeenCalledTimes(3);
+      expect(markerCalls(logCalls).map((c) => c.args[1])).toEqual([`${MARKER_PREFIX}1`]);
+    });
+
+    it("no retry on either step → one marker, transient_retried=0", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      withRescue();
+      await run(mod);
+      expect(gitPush).toHaveBeenCalledTimes(2);
+      expect(markerCalls(logCalls).map((c) => c.args[1])).toEqual([`${MARKER_PREFIX}0`]);
+    });
+
+    it("emits NO marker when the rescue push fails, and the main push is never attempted", async () => {
+      const { mod, logCalls } = await loadWithLogger();
+      withRescue();
+      gitPush.mockRejectedValueOnce(
+        Object.assign(new Error("fence"), { stderr: "remote: git-data fence: stale lease generation 3 < stored max 5" }),
+      );
+      await expect(run(mod)).rejects.toThrow();
+      expect(gitPush).toHaveBeenCalledTimes(1);
+      expect(markerCalls(logCalls)).toHaveLength(0);
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("emits NO marker when the push fails (fence reject)", async () => {
@@ -692,6 +957,14 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
     await expect(run(mod)).rejects.toThrow(/git push/);
     expect(gitPush).toHaveBeenCalledTimes(2);
     expect(markerCalls(logCalls)).toHaveLength(0);
+    // N26: the failure is reported ONCE (not per attempt), and both attempts were the ATOMIC
+    // push (which covers a ref rejected in the ref transaction; it does not cover the transient
+    // `remote failure` class, where only the retry protects the store tip — see the comment at
+    // pushArgs in git-data-replication.ts). Whether the old store tip is still referenced after
+    // two failed attempts is a property of the store, not of this mock-level row.
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback.mock.calls[0][1]).toMatchObject({ op: "git_data_replication_push" });
+    for (const call of gitPush.mock.calls) expect(call[0] as string[]).toContain("--atomic");
     gitPush.mockResolvedValue(Buffer.from(""));
   });
 
@@ -724,7 +997,7 @@ describe("replicateToGitData — replication-success marker (#11704)", () => {
     gitPush.mockResolvedValue(Buffer.from(""));
   });
 
-  it("the marker phrase occurs exactly once in the server tree (the read counts it by substring)", () => {
+  it("the marker phrase occurs exactly once in the server tree (the signal script's MARKER_RE counts every occurrence in the window)", () => {
     const serverDir = path.resolve(__dirname, "../server");
     const hits: string[] = [];
     const walk = (dir: string) => {

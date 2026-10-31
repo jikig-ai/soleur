@@ -136,6 +136,8 @@ async function drive() {
       "--update-shallow",
       `file://${store}`,
       `+refs/soleur/worktrees/${H.WT}/heads/*:refs/remotes/git-data/*`,
+      // mirrors git-data-client.ts (CTO F13): rescue heads are never pulled back at a graft
+      `^refs/soleur/worktrees/${H.WT}/heads/soleur-store-tip-*`,
     ]);
   };
   return ensureWorkspaceRepoCloned({
@@ -172,7 +174,7 @@ describe("overlay ancestry gate on real shallow repositories", () => {
     expect(H.logWarn).not.toHaveBeenCalled();
     expect(H.reportSilentFallback).not.toHaveBeenCalled();
     // no rescue branch on the benign path
-    expect(git(ws, ["for-each-ref", "refs/heads/soleur/"])).toBe("");
+    expect(git(ws, ["for-each-ref", "refs/heads/soleur-store-tip-*"])).toBe("");
   });
 
   it("S2 origin advanced: not a descendant → HEAD, tree and store ref unchanged; store tip preserved on the rescue branch", async () => {
@@ -192,7 +194,7 @@ describe("overlay ancestry gate on real shallow repositories", () => {
     expect(git(store, ["rev-parse", storeHead("main")])).toBe(storeRefBefore);
     expect(storeRefBefore).toBe(storeTip);
     // the rescue branch exists at the store tip and is not the checked-out branch
-    const rescue = `soleur/store-tip-${storeTip.slice(0, 12)}`;
+    const rescue = `soleur-store-tip-${storeTip.slice(0, 12)}`;
     expect(git(ws, ["rev-parse", `refs/heads/${rescue}`])).toBe(storeTip);
     expect(git(ws, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("main");
     // one warn with the op token, no fallback to Sentry, no identifiers in any log line
@@ -214,7 +216,7 @@ describe("overlay ancestry gate on real shallow repositories", () => {
     expect(out).toBe("ok");
     expect(git(ws, ["rev-parse", "HEAD"])).toBe(c2);
     expect(git(ws, ["status", "--porcelain"])).toBe("");
-    expect(git(ws, ["rev-parse", `refs/heads/soleur/store-tip-${c1.slice(0, 12)}`])).toBe(c1);
+    expect(git(ws, ["rev-parse", `refs/heads/soleur-store-tip-${c1.slice(0, 12)}`])).toBe(c1);
     expect(H.logWarn).toHaveBeenCalledTimes(1);
     expect(H.reportSilentFallback).not.toHaveBeenCalled();
   });
@@ -224,17 +226,21 @@ describe("overlay ancestry gate on real shallow repositories", () => {
     const storeTip = replicate(true);
     advanceOrigin();
     await drive();
-    const rescueHead = storeHead(`soleur/store-tip-${storeTip.slice(0, 12)}`);
+    const rescueHead = storeHead(`soleur-store-tip-${storeTip.slice(0, 12)}`);
 
     // before the push the store tip is held by exactly the user's main head
     expect(git(store, ["for-each-ref", "--contains", storeTip, "--format=%(refname)"])).toBe(storeHead("main"));
 
-    // The session-end push, exactly the replication refspec shape, with --force. A first push of
-    // 2+ refs from a shallow clone can hit git's `remote failure` / `failed to report status`
-    // (measured here: main is forced first, the second ref then fails); git-data-replication.ts
-    // therefore resends ONCE on that positive-match class, and so does this row. The rescue ref
-    // is the one that lands on the resend; the assertions below read the state after that.
-    const push = () => git(ws, ["push", "-q", "--force", `file://${store}`, STORE_REFSPEC]);
+    // The session-end push, exactly the replication refspec shape, with --force --atomic (CTO
+    // F12). A first push of 2+ refs from a shallow clone can hit git's `remote failure` /
+    // `failed to report status` (measured here against a file:// store, cause not established).
+    // MEASURED: in that failure class --atomic did NOT keep `main` unchanged — main was forced
+    // and the rescue ref was the one left out (git 2.56); --atomic only covers a ref REJECTED in
+    // the ref transaction (e.g. a refname conflict). git-data-replication.ts resends ONCE on this
+    // positive-match class, and so does this row; the rescue ref lands on the resend. Between the
+    // two attempts the old store tip is unreferenced, which is why the retry matters; the
+    // assertions below read the state after the resend.
+    const push = () => git(ws, ["push", "-q", "--force", "--atomic", `file://${store}`, STORE_REFSPEC]);
     try {
       push();
     } catch (err) {
@@ -250,6 +256,34 @@ describe("overlay ancestry gate on real shallow repositories", () => {
     expect(git(store, ["rev-parse", rescueHead])).toBe(storeTip);
     expect(git(store, ["for-each-ref", "--contains", storeTip, "--format=%(refname)"])).toBe(rescueHead);
     expect(git(store, ["cat-file", "-t", storeTip])).toBe("commit");
+  });
+});
+
+describe("overlay fetch refspec on real shallow repositories (CTO F13)", () => {
+  it("S5 a rescue head in the store is NOT pulled back by the negative refspec; ordinary heads still are", async () => {
+    buildBase();
+    // the store holds: main (user work) plus an earlier rescue head and a feature head
+    const user = join(root, "user");
+    git(root, ["clone", "-q", "--depth", "1", `file://${origin}`, user]);
+    const tip = commit(user, "b.txt", "user work\n");
+    git(user, ["branch", "soleur-store-tip-aaaaaaaaaaaa"]);
+    git(user, ["branch", "feature-x"]);
+    // one ref per push: a multi-ref first push from a shallow clone can hit `remote failure`
+    // (see S4), which is about the fixture, not about the fetch under test
+    for (const b of ["main", "soleur-store-tip-aaaaaaaaaaaa", "feature-x"]) {
+      git(user, ["push", "-q", "--force", `file://${store}`, `+refs/heads/${b}:${storeHead(b)}`]);
+    }
+    expect(git(store, ["for-each-ref", "--format=%(refname)", `refs/soleur/worktrees/${H.WT}/heads/`])).toContain(
+      "soleur-store-tip-aaaaaaaaaaaa",
+    );
+
+    const out = await drive();
+    expect(out).toBe("ok");
+    const fetched = git(ws, ["for-each-ref", "--format=%(refname)", "refs/remotes/git-data/"]).split("\n");
+    expect(fetched).toContain("refs/remotes/git-data/main");
+    expect(fetched).toContain("refs/remotes/git-data/feature-x");
+    expect(fetched.some((r) => r.includes("soleur-store-tip-"))).toBe(false);
+    expect(git(ws, ["rev-parse", "HEAD"])).toBe(tip); // the overlay itself still works
   });
 });
 

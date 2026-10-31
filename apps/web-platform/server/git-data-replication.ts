@@ -96,6 +96,17 @@ export function __gitDataInFlightForTest(): number {
   return gitDataInFlight;
 }
 
+// (#11704, CTO F15) Per-process cap on the replication-success marker: at most one per
+// SUCCESS_MARKER_WINDOW_MS per `transient_retried` value (index 0 / 1). `null` = never emitted.
+const SUCCESS_MARKER_WINDOW_MS = 60_000;
+const lastSuccessMarkerAt: [number | null, number | null] = [null, null];
+
+/** Test-only: forget the last-emitted times so the next success emits regardless of the window. */
+export function __resetGitDataSuccessMarkerCapForTest(): void {
+  lastSuccessMarkerAt[0] = null;
+  lastSuccessMarkerAt[1] = null;
+}
+
 /**
  * Acquire a replication slot. Resolves `true` when a slot was taken, `false` when the
  * caller should SHED (queue timed out). Never rejects and never blocks indefinitely.
@@ -784,58 +795,103 @@ export async function replicateToGitData(params: {
     // durable replica — the ref-completeness the cutover's ref-set-equality check
     // depends on (#5817 review F1). NOT `--mirror`. Push-options ride THIS push
     // only, never origin/syncPush.
+    //
+    // RESCUE-FIRST TWO-STEP PUSH (#11704, CTO F12 as amended by T1b). The session-start overlay can
+    // leave a local `soleur-store-tip-<sha12>` branch holding a store tip the clone does not
+    // descend from; this force-push would otherwise overwrite that tip in the store. So, only when
+    // such a local branch exists, the rescue refs are pushed ALONE first (`--force --atomic`, the
+    // same push-options, the same lease generation: the fence accepts an equal generation). If
+    // that push fails (after its one transient retry) this function THROWS before `main` is
+    // touched, so the old tip stays referenced in the store. The main push then follows unchanged
+    // (it may re-carry the rescue ref; that is a no-op).
+    //
+    // What `--atomic` does and does not do: it protects ONLY a ref REJECTED inside the ref
+    // transaction (e.g. a refname conflict) — all refs of that push stay unchanged. It does NOT
+    // protect the transient `remote failure` / `failed to report status` class (a first multi-ref
+    // push from a shallow clone against a file:// store, git 2.56): measured there, `main` was
+    // still forced and only the rescue ref was left out. The rescue-first push is what protects
+    // the old tip in that class. The probes used a --depth 1 client, push-options and a
+    // receive.shallowUpdate store over file://; the ssh wrapper path was NOT measured.
     via = "git";
-    const pushArgs = [
-      "push",
-      "--force",
-      "git-data",
-      `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
-      `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
+    const pushOptions = [
       `--push-option=lease-gen=${leaseGeneration}`,
       `--push-option=worktree-id=${worktreeId}`,
     ];
-    // Set only in the single transient-retry branch below; reported as a bit on the success marker.
+    const pushArgs = [
+      "push",
+      "--force",
+      "--atomic",
+      "git-data",
+      `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
+      `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
+      ...pushOptions,
+    ];
+    const rescuePushArgs = [
+      "push",
+      "--force",
+      "--atomic",
+      "git-data",
+      `refs/heads/soleur-store-tip-*:refs/soleur/worktrees/${worktreeId}/heads/soleur-store-tip-*`,
+      ...pushOptions,
+    ];
+    // True if EITHER step took its single transient retry; reported as a bit on the success marker.
     let retried = false;
-    try {
-      await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
-        cwd: workspacePath,
-        timeout: 60_000,
-      });
-    } catch (pushErr) {
-      // (#8211 fix-forward 2) ONE retry on a POSITIVE-MATCH transient class: a
-      // first push of 2+ refs from a shallow clone can hit `remote failure` /
-      // `failed to report status`. The match list is positive, so the
-      // deterministic refusals — `shallow update not allowed` and fence rejects
-      // (`stale lease generation` / `remote: git-data fence:`) — fall through to
-      // the outer catch's loud path unretried. The execFile rejection carries
-      // git's stderr on `err.stderr`; `err.message` is the fallback surface.
-      // Resending is idempotent: the fence accepts an equal lease-gen.
-      const stderr = String(
-        (pushErr as { stderr?: string })?.stderr ??
-          (pushErr as Error)?.message ??
-          "",
-      );
-      if (!/remote failure|failed to report status/.test(stderr)) throw pushErr;
-      // Observability (review P3): the transient class this retry exists for
-      // must stay measurable — a silent resend reports "push complete" with no
-      // record that it ever fired, and its frequency is what decides whether
-      // one retry suffices. The phrase is deliberately disjoint from the
-      // Better Stack failure queries (`git-data replication push failed`,
-      // `git-data replication shed`).
-      log.warn(
-        {
-          workspaceIdHash: hashUserId(workspaceId),
-          worktreeIdHash: hashUserId(worktreeId),
-          leaseGeneration,
-        },
-        "git-data replication push transient — retrying once",
-      );
-      retried = true;
-      await gitWithPrivateKeyAuth(pushArgs, transportKey, hostKeyPin, {
-        cwd: workspacePath,
-        timeout: 60_000,
-      });
+    const pushWithRetry = async (args: string[]): Promise<void> => {
+      try {
+        await gitWithPrivateKeyAuth(args, transportKey, hostKeyPin, {
+          cwd: workspacePath,
+          timeout: 60_000,
+        });
+      } catch (pushErr) {
+        // (#8211 fix-forward 2) ONE retry on a POSITIVE-MATCH transient class: a
+        // first push of 2+ refs from a shallow clone can hit `remote failure` /
+        // `failed to report status`. The match list is positive, so the
+        // deterministic refusals — `shallow update not allowed` and fence rejects
+        // (`stale lease generation` / `remote: git-data fence:`) — fall through to
+        // the outer catch's loud path unretried. The execFile rejection carries
+        // git's stderr on `err.stderr`; `err.message` is the fallback surface.
+        // Resending is idempotent: the fence accepts an equal lease-gen. Each step of
+        // the two-step push gets its own single retry.
+        const stderr = String(
+          (pushErr as { stderr?: string })?.stderr ??
+            (pushErr as Error)?.message ??
+            "",
+        );
+        if (!/remote failure|failed to report status/.test(stderr)) throw pushErr;
+        // Observability (review P3): the transient class this retry exists for
+        // must stay measurable — a silent resend reports "push complete" with no
+        // record that it ever fired, and its frequency is what decides whether
+        // one retry suffices. The phrase is deliberately disjoint from the
+        // Better Stack failure queries (`git-data replication push failed`,
+        // `git-data replication shed`).
+        log.warn(
+          {
+            workspaceIdHash: hashUserId(workspaceId),
+            worktreeIdHash: hashUserId(worktreeId),
+            leaseGeneration,
+          },
+          "git-data replication push transient — retrying once",
+        );
+        retried = true;
+        await gitWithPrivateKeyAuth(args, transportKey, hostKeyPin, {
+          cwd: workspacePath,
+          timeout: 60_000,
+        });
+      }
+    };
+
+    // Step 1 (only if a local rescue branch exists): the rescue refs alone, BEFORE `main` is touched.
+    // A listing failure is not swallowed: it lands in the catch below like any other local-git fault.
+    const rescueListing = execFileSync(
+      "git",
+      ["-C", workspacePath, "for-each-ref", "--count=1", "refs/heads/soleur-store-tip-*"],
+      { cwd: workspacePath, stdio: "pipe" },
+    );
+    if (String(rescueListing ?? "").trim() !== "") {
+      await pushWithRetry(rescuePushArgs);
     }
+    // Step 2: the main push, unchanged.
+    await pushWithRetry(pushArgs);
     log.info(
       {
         workspaceIdHash: hashUserId(workspaceId),
@@ -844,17 +900,31 @@ export async function replicateToGitData(params: {
       },
       "git-data replication push complete",
     );
-    // (#11704, CTO F6) Replication-success marker. WARN, because the container shipper forwards
+    // (#11704, CTO F6/F15) Replication-success marker. WARN, because the container shipper forwards
     // WARN and above only: the info line above never reaches Better Stack, so a success was
     // invisible off-box. Closed grammar, counts and bits only — NO workspace id, worktree id,
     // repo name, sha or lease generation (workspace_id === auth.users.id). The read side
-    // (scripts/followthroughs/git-data-replication-signal.sh) counts this exact phrase by
-    // substring, so it must occur ONLY here, on the success branch.
+    // (scripts/followthroughs/git-data-replication-signal.sh) matches it with its MARKER_RE
+    // regex (a test extracts that regex and runs it against this message), so the phrase must
+    // occur ONLY here, on the success branch.
+    //
+    // CAPPED (F15): at most ONE marker per 60 s per process per `transient_retried` value, so
+    // the volume is bounded by process uptime rather than by pushes (this fires once per
+    // successful replication, i.e. per leader completion). The first success after idle always
+    // emits, so `markers > 0` in a window still proves "at least one replication"; the marker is
+    // PRESENCE evidence, not a count, and not per-user coverage. The `push complete` info line
+    // above is not capped.
     const transientRetried = retried ? 1 : 0;
-    log.warn(
-      { gitDataReplicationSuccess: 1, transientRetried },
-      `git_data_replication_success=1 transient_retried=${transientRetried}`,
-    );
+    const now = Date.now();
+    const last = lastSuccessMarkerAt[transientRetried];
+    // `now < last`: a wall clock stepped backwards must not silence the marker until it catches up.
+    if (last === null || now < last || now - last >= SUCCESS_MARKER_WINDOW_MS) {
+      lastSuccessMarkerAt[transientRetried] = now;
+      log.warn(
+        { gitDataReplicationSuccess: 1, transientRetried },
+        `git_data_replication_success=1 transient_retried=${transientRetried}`,
+      );
+    }
 
     return { status: "replicated" };
   } catch (err) {
