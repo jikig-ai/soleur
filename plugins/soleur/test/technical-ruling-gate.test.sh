@@ -1090,7 +1090,8 @@ while IFS= read -r hit; do
   hn="${hit%%:*}"; l0="$(sed -n "${hn}p" "$0")"
   case "$l0" in *'run "$GATE"'*|*'bash "$GATE"'*) amb_n=$((amb_n + 1)); continue ;; esac
   win=3; case "$l0" in *\|) win=8 ;; esac
-  sed -n "${hn},$((hn + win))p" "$0" | grep -qE '(^|[^A-Za-z0-9_])(run_d|killed_d|mutate_d|assert_eq|assert_reason|rx)[[:space:]]' || amb_n=$((amb_n + 1))
+  wt="$(sed -n "${hn},$((hn + win))p" "$0")"
+  grep -qE '(^|[^A-Za-z0-9_])(run_d|killed_d|mutate_d|assert_eq|assert_reason|rx)[[:space:]]' <<<"$wt" || amb_n=$((amb_n + 1))
 done < <(grep -nE '(^|[^A-Za-z0-9_])(mkd|mkdr|rcpt|RCT)[[:space:]]|, ran ' "$0" | grep -vE ':[[:space:]]*#|\(\)|\$[0-9]')
 assert_eq "0" "$amb_n" "AMBF: every clock-bearing fixture pairs with a pinned-PATH exec or an instrument assertion"
 
