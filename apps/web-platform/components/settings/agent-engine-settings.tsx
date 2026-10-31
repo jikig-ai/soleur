@@ -26,6 +26,14 @@ function authModeLabel(engineId: string, mode: string): string {
   return mode;
 }
 
+// A non-owner member cannot change the mode and does not own the provider account the conversations run under (CLO ruling,
+// 2026-10-31): the helper says who chooses, and the amber disclosure stays (never hidden) but is accurate for them. No text
+// names a subscription.
+const NON_OWNER_HELPER =
+  "This setting is chosen by the workspace owner. It applies to new conversations; existing conversations keep the mode they started with.";
+const NON_OWNER_DISCLOSURE =
+  "Conversations in this workspace use a provider account saved by you or by another workspace member. Prompts, files, and outputs sent through this engine are subject to that provider's retention, region, and account terms, and to the account holder's own settings and access. Soleur-managed provider access remains restricted. Only submit data you are authorized to share with the provider.";
+
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [engines, setEngines] = useState<Engine[]>([]);
   const [selected, setSelected] = useState<string>(DEFAULT_AGENT_ENGINE_ID);
@@ -143,9 +151,15 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 data-testid="auth-mode-helper"
                 className="mt-2 text-xs text-soleur-text-secondary"
               >
-                Applies to new conversations. Existing conversations keep the mode they started with.
-                Automatic uses the credential saved to your account;
-                My API key uses your saved API key.
+                {isOwner ? (
+                  <>
+                    Applies to new conversations. Existing conversations keep the mode they started with.
+                    Automatic uses the credential saved to your account;
+                    My API key uses your saved API key.
+                  </>
+                ) : (
+                  NON_OWNER_HELPER
+                )}
               </p>
             )}
             {/* True in both modes for the Claude engine (the call runs under the owner's own provider
@@ -157,10 +171,16 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 role="note"
                 data-testid="user-provider-disclosure"
               >
-                This uses your own provider account. Prompts, files, and outputs sent through this
-                engine are subject to that provider&apos;s retention, region, and account terms.
-                Soleur-managed provider access remains restricted. Only submit data you are
-                authorized to share with the provider.
+                {isOwner ? (
+                  <>
+                    This uses your own provider account. Prompts, files, and outputs sent through this
+                    engine are subject to that provider&apos;s retention, region, and account terms.
+                    Soleur-managed provider access remains restricted. Only submit data you are
+                    authorized to share with the provider.
+                  </>
+                ) : (
+                  NON_OWNER_DISCLOSURE
+                )}
               </p>
             )}
           </div>

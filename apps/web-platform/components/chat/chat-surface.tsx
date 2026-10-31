@@ -77,6 +77,10 @@ function credentialCardCopy(e: {
       return { title: "Rate Limited", noun: "key" };
     case "subscription_limit":
       return { title: "Subscription Limit Reached", noun: "key" };
+    // #11599 — the Settings control's own term. Not a credential block, so no key/token noun is used.
+    case "auth_mode_unresolved":
+    case "auth_mode_unavailable":
+      return { title: "Authentication Mode Unavailable", noun: "key" };
     default:
       return { title: "Connection Error", noun: "key" };
   }
@@ -1141,7 +1145,10 @@ export function ChatSurface({
                 onRetry={
                   credentialBlocked
                     ? onSessionReconnect
-                    : lastError.code !== "subscription_limit"
+                    : lastError.code !== "subscription_limit" &&
+                        // #11599 — Reconnect does not resend and the socket stays up: no retry on either card.
+                        lastError.code !== "auth_mode_unresolved" &&
+                        lastError.code !== "auth_mode_unavailable"
                       ? reconnect
                       : undefined
                 }

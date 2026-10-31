@@ -111,7 +111,7 @@ import { makeAuthModeResolver } from "./agent-auth-mode";
 import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import {
   authFailureFrameFromLeaseError,
-  isOauthUnusableLeaseError,
+  isLeaseRefusalReported,
   logSessionFailure,
   rewriteAgentAuthFailure,
   type AuthFailureFrame,
@@ -2968,9 +2968,10 @@ are the requirements to implement.`;
         // workspace context.
         reportMissingByokKey(err);
         Sentry.captureException(err);
-      } else if (!isOauthUnusableLeaseError(err)) {
-        // #11086: an unusable stored credential was already reported by the lease (feature byok-lease, closed class only);
-        // a second raw capture would double the Sentry count for one failed turn (the cc path skips its mirror the same way).
+      } else if (!isLeaseRefusalReported(err)) {
+        // #11086/#11599: an unusable stored credential or an unresolved authentication mode was already reported by the lease
+        // (feature byok-lease, closed class only); a second raw capture would double the Sentry count for one failed turn
+        // (the cc path skips its mirror the same way).
         Sentry.captureException(err);
       }
       logSessionFailure(log, err, { userId, conversationId }, {
@@ -3253,8 +3254,8 @@ async function sendUserMessageInner(
     // BEFORE the generic captureException so the workspace context lands
     // on the trail. Returns; we still surface the WS error event below.
     if (err instanceof MissingByokKeyError) reportMissingByokKey(err);
-    // #11086: the lease already reported an unusable stored credential; skip the duplicate raw capture and error log.
-    if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
+    // #11086/#11599: the lease already reported this refusal; skip the duplicate raw capture and error log.
+    if (!isLeaseRefusalReported(err)) Sentry.captureException(err);
     logSessionFailure(log, err, { userId, conversationId }, {
       refused: "sendUserMessage refused: stored subscription credential is not usable",
       failed: "sendUserMessage session error",

@@ -253,4 +253,71 @@ describe("AgentEngineSettings", () => {
       expect(mode.getAttribute("aria-describedby")).toBe("user-provider-disclosure");
     });
   });
+
+  // #11599 — the helper line and the amber disclosure are tuned for non-owner viewers (CLO-approved text, 2026-10-31):
+  // the owner render is byte-identical, a non-owner is not told things that are false for them, and the disclosure is kept.
+  describe("#11599 — non-owner copy", () => {
+    const claudeOnly = {
+      defaultEngineId: "claude-code",
+      defaultAuthMode: "managed",
+      engines: [{ id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true }],
+    };
+    const OWNER_HELPER =
+      "Applies to new conversations. Existing conversations keep the mode they started with. Automatic uses the credential saved to your account; My API key uses your saved API key.";
+    const OWNER_DISCLOSURE =
+      "This uses your own provider account. Prompts, files, and outputs sent through this engine are subject to that provider's retention, region, and account terms. Soleur-managed provider access remains restricted. Only submit data you are authorized to share with the provider.";
+    const NON_OWNER_HELPER =
+      "This setting is chosen by the workspace owner. It applies to new conversations; existing conversations keep the mode they started with.";
+    const NON_OWNER_DISCLOSURE =
+      "Conversations in this workspace use a provider account saved by you or by another workspace member. Prompts, files, and outputs sent through this engine are subject to that provider's retention, region, and account terms, and to the account holder's own settings and access. Soleur-managed provider access remains restricted. Only submit data you are authorized to share with the provider.";
+    const text = (el: HTMLElement) => (el.textContent ?? "").replace(/\s+/g, " ").trim();
+
+    it("owner render is byte-identical: the original helper and disclosure text", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
+      const { findByTestId } = render(<AgentEngineSettings isOwner />);
+      expect(text(await findByTestId("auth-mode-helper"))).toBe(OWNER_HELPER);
+      expect(text(await findByTestId("user-provider-disclosure"))).toBe(OWNER_DISCLOSURE);
+    });
+
+    it("a non-owner sees the CLO-approved helper line and disclosure; ids, role and describedby are unchanged", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
+      const { findByTestId, findByLabelText } = render(<AgentEngineSettings isOwner={false} />);
+      const helper = await findByTestId("auth-mode-helper");
+      const disclosure = await findByTestId("user-provider-disclosure");
+      expect(text(helper)).toBe(NON_OWNER_HELPER);
+      expect(text(disclosure)).toBe(NON_OWNER_DISCLOSURE);
+      expect(helper.id).toBe("auth-mode-helper");
+      expect(disclosure.id).toBe("user-provider-disclosure");
+      // Kept, not hidden: still the amber note.
+      expect(disclosure.getAttribute("role")).toBe("note");
+      const mode = await findByLabelText("Authentication mode");
+      expect(mode.getAttribute("aria-describedby")).toBe("auth-mode-helper user-provider-disclosure");
+    });
+
+    it("no non-owner text names a subscription or claims the viewer's own account, and the controls stay disabled", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
+      const { findByTestId, findByLabelText, getByRole } = render(<AgentEngineSettings isOwner={false} />);
+      const all = text(await findByTestId("auth-mode-helper")) + text(await findByTestId("user-provider-disclosure"));
+      expect(all).not.toMatch(/subscription/i);
+      expect(all).not.toMatch(/your own provider account|your saved API key|saved to your account/i);
+      expect(await findByLabelText("Authentication mode")).toBeDisabled();
+      expect(getByRole("radio", { name: /Claude Code/ })).toBeDisabled();
+    });
+
+    it("another engine under api-key keeps the single disclosure element, with the non-owner text for a non-owner", async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          defaultEngineId: "codex",
+          defaultAuthMode: "api-key",
+          engines: [
+            { id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true },
+            { id: "codex", version: "v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true },
+          ],
+        }),
+      });
+      const { findByTestId } = render(<AgentEngineSettings isOwner={false} />);
+      expect(text(await findByTestId("user-provider-disclosure"))).toBe(NON_OWNER_DISCLOSURE);
+    });
+  });
 });

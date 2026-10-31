@@ -38,7 +38,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
-import { authFailureFrameFromLeaseError, isOauthUnusableLeaseError, logSessionFailure } from "./agent-auth-user-message";
+import { authFailureFrameFromLeaseError, isLeaseRefusalReported, logSessionFailure } from "./agent-auth-user-message";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { CONVERSATION_NOT_FOUND_MESSAGE } from "@/lib/ws-constants";
@@ -2635,8 +2635,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           if (pendingLeader) {
             startAgentSession(userId, session.conversationId, pendingLeader, undefined, undefined, pendingContext).catch(
               (err) => {
-                // #11086: the lease already reported an unusable stored credential; no duplicate raw capture.
-                if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
+                // #11086/#11599: the lease already reported this refusal; no duplicate raw capture.
+                if (!isLeaseRefusalReported(err)) Sentry.captureException(err);
                 logSessionFailure(log, err, { userId }, {
                   refused: "startAgentSession refused: stored subscription credential is not usable",
                   failed: "startAgentSession error",
@@ -2646,7 +2646,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
                   : err instanceof ByokDelegationError
                     ? `delegation_${err.reason}` as WSErrorCode
                     : undefined;
-                // #11086 — a lease refusal of an unusable stored credential gets the recovery frame, not the generic text.
+                // #11086/#11599 — a lease refusal of an unusable stored credential or an unresolved authentication mode gets its
+                // typed frame, not the generic text.
                 const leaseFrame = authFailureFrameFromLeaseError(err);
                 sendToClient(
                   userId,

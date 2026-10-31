@@ -65,6 +65,44 @@ describe("copy table", () => {
   });
 });
 
+// #11599 — the operator-only sign-in copy gains ONE recovery sentence. The quoted label matches the Settings control
+// (`authModeLabel` in components/settings/agent-engine-settings.tsx); the lead-in covers an owner with no key saved.
+const RECOVERY =
+  'If you have an Anthropic API key saved, you can instead choose "My API key" in Settings, then start a new conversation (a conversation keeps the mode it started with).';
+
+// The pre-#11599 oauth_token cells, verbatim: the sentence is APPENDED, nothing before it changes.
+const OLD_OAUTH_TOKEN: Partial<Record<AuthFailureKind, string>> = {
+  not_logged_in:
+    "We couldn't sign in to Claude with your saved subscription token, so nothing ran. Generate a new token with claude setup-token, save it in Settings, then try again.",
+  invalid_api_key:
+    "Anthropic rejected your saved credential. Generate a new token with claude setup-token and save it in Settings.",
+  oauth_token_revoked:
+    "Your subscription token has been revoked or has expired. Generate a new one with claude setup-token and save it in Settings.",
+  structured:
+    "Claude couldn't authenticate your request. Save a fresh token from claude setup-token in Settings and try again.",
+  oauth_unusable:
+    "We couldn't sign in to Claude with your saved subscription token, so nothing ran. Generate a new token with claude setup-token, save it in Settings, then try again. Nothing was billed to your API key.",
+};
+
+describe("recovery sentence (#11599)", () => {
+  it.each(Object.keys(OLD_OAUTH_TOKEN) as AuthFailureKind[])("%s: the operator cell is the old text plus the single recovery sentence", (kind) => {
+    expect(authFailureCopy(kind, "oauth_token")).toBe(`${OLD_OAUTH_TOKEN[kind]} ${RECOVERY}`);
+  });
+
+  it("session_expired (a bubble-only 'start a new message' cell) does not get it", () => {
+    expect(authFailureCopy("session_expired", "oauth_token")).not.toContain("My API key");
+  });
+
+  it("no tenant (api_key) or neutral cell ever carries it, and the sentence is plain text", () => {
+    for (const kind of KINDS) {
+      for (const scheme of ["api_key", null, "weird"]) {
+        expect(authFailureCopy(kind, scheme as never)).not.toContain("My API key");
+      }
+    }
+    expect(RECOVERY).not.toMatch(/`|\u00B7/);
+  });
+});
+
 describe("buildAuthFailureFrame", () => {
   it("is a key_invalid error frame carrying the scheme only when it is known", () => {
     expect(buildAuthFailureFrame("not_logged_in", "oauth_token")).toEqual({

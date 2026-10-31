@@ -1293,6 +1293,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             return;
           }
 
+          // #11599 — the conversation's authentication mode could not be resolved. NOT a credential block: the key is fine, so
+          // no teardown and the composer stays enabled. The turn did not complete (mark the message, as the credential branch
+          // does); the card clears on the next send. The deterministic code's exit is a new conversation (the mode is fixed per
+          // conversation); the transient one says to send again, so it carries no action. Placed after the credential branch
+          // so the teardown source gate is unaffected.
+          if (msg.errorCode === "auth_mode_unresolved" || msg.errorCode === "auth_mode_unavailable") {
+            dispatch({ type: "mark_last_user_unanswered" });
+            setLastError({
+              code: msg.errorCode,
+              message: msg.message,
+              ...(msg.errorCode === "auth_mode_unresolved"
+                ? { action: { label: "Start a new conversation", href: "/dashboard/chat/new" } }
+                : {}),
+            });
+            return;
+          }
+
           // #11525 — the rebind `resume_session` was REFUSED: ONLY the genuine
           // "Conversation not found" counts. Drop the id, show no extra bubble,
           // mirror once, and let the surface fall back ONCE to `startSession`
@@ -2182,6 +2199,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         mirrorRefusedSend();
         return false;
       }
+      // #11599 — a new turn supersedes the authentication-mode card of the previous one. Scoped to those two codes: every
+      // other error keeps its existing lifecycle. After the refusals above, so a send that never leaves keeps the card.
+      setLastError((prev) =>
+        prev && (prev.code === "auth_mode_unresolved" || prev.code === "auth_mode_unavailable") ? null : prev,
+      );
       // Order is deliberate: the not-OPEN refusal above returns BEFORE
       // `reset_connection`. `unrecoverable` is entered from a non-transient close
       // (socket CLOSED, no reconnect) or `stream_replay{incomplete}` (socket
