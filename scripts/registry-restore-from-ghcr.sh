@@ -58,9 +58,9 @@
 # ── EXIT CODES — fully enumerated, each with a distinct operator action ──────────────────────
 # A bare `1` for "something went wrong" is not actionable on the path that follows an
 # irreversible destroy. The runbook carries one operator action per code.
-# For codes 2-6, a failure after the first entry can leave the sink holding a partial set. crane
-# skips blobs the sink already holds, so a re-run does not redo them, but only the retryable codes
-# are fixed by one (code 4 says re-running will not fix it).
+# For codes 2-6, a failure partway through (after any copy) can leave the sink holding a partial set.
+# crane skips blobs the sink already holds, so a re-run never redoes them and is safe; whether a
+# re-run can succeed is what the RETRYABLE / NOT retryable wording on each row below says.
 #
 #   0  every required reference restored AND verified (blobs + signature)
 #   1  INPUT or MANIFEST fault — the engine refused its arguments or the pin manifest: an unknown

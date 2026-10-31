@@ -355,14 +355,15 @@ fi
 # (`w9_computed_sites`, which also pins the die() body to its reviewed shape, W9_DIE_BODY); and the verdict
 # swap (a nested run of this suite on a drop1 workflow must print the FAIL line carrying the drop1 control's observed
 # detail, and `w9_expect` / `w9_verdict` have canaries). NOT covered: a die whose code arrives through `eval`, an
-# indirect call (a command held in a variable) or a name split by quoting; `kill`, `exec` and errexit exits; the
-# engine's own prose; and, for the summary step, anything outside that one step (another step or a workflow-level
+# indirect call (a command held in a variable) or a name split by quoting; `kill`, `exec` and errexit exits;
+# implicit exits (`return N`, an unbound variable, a failed `${x:?}`); a `die N` / `exit N` that is text rather than
+# a live call (a trailing comment, a heredoc line, a dead branch); code 0; the engine's own prose; and, for the summary step, anything outside that one step (another step or a workflow-level
 # `env` / `defaults` writing or changing the summary, an earlier step failing before the restore step runs).
 #
 # The population is DERIVED (tests/scripts/lib/restore-engine-header.sh): the engine's header
 # table must equal the codes its own `die N` / `exit N` sites emit. Exit 1 follows the rule in
-# that lib: always exercised, and compared like any other code. The controls apply one mutation to the workflow text
-# (or to the engine) and require the same check to refuse it.
+# that lib: always exercised, and compared like any other code. The controls apply one mutation to the workflow
+# text (or to the engine) and require the same check to refuse it.
 # shellcheck source=tests/scripts/lib/restore-engine-header.sh
 source "${ROOT}/tests/scripts/lib/restore-engine-header.sh"
 RESTORE_ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
