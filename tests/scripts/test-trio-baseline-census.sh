@@ -2277,7 +2277,7 @@ mutant m_q8 T4 "Q8: with the REF gate removed from resolve_base the Q8 history i
 # last member's delta, not the whole group.
 prep c_q9
 printf 'landed by the entry ahead in the queue\n' > "$D/fx/README.md"
-printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"   # member-1's violation: no ADR line
+printf '@allow\tscripts/future.sh\tWEBHOOK_DEPLOY_SECRET\t-\t#9294:PR-2\n' >> "$BL"   # member-1's violation: no ADR line
 commit_all                                                                       # member-1's delta = HEAD^1
 q_allow; commit_all                                                              # member-2's own delta: ADR-ruled, clean
 knobs RF_EVENT=merge_group RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-3-0123abcd
