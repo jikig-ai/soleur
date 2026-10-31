@@ -299,12 +299,15 @@ against their bodies (`jq --arg`); zero hits.
   artifact and no new data egress; blast radius is a wrongly-reported internal tracker,
   which the lint exists to make *less* likely.
 
-## Observability
+## Gate Evaluation — Observability Schema (not required)
 
 Phase 2.9 evaluated — no Files-to-Edit entry under `apps/*/server|src|infra` or
-`plugins/*/scripts/`, and no new infrastructure surface: section not required. (The
-changed scripts *are* the observability surface; their signal contract — sweeper comments
-and the 0/1/2 exit code — is pre-existing and unchanged by this diff.)
+`plugins/*/scripts/`, and no new infrastructure surface: the 5-field schema is not
+required. (The changed scripts *are* the observability surface; their signal contract —
+sweeper comments and the 0/1/2 exit code — is pre-existing and unchanged by this diff.)
+No `## Observability` schema block is emitted because preflight Check 10's
+`SENSITIVE_PATH_RE` also does not match this diff — emitting a block that fails the schema
+would trip deepen-plan Phase 4.7's field validation on a gate that does not fire.
 
 ## Guard Contract
 
@@ -432,3 +435,43 @@ Mirror: `scripts/followthroughs/discord-blog-webhook-fallback.sh:184` +
 - `scripts/lint-followthrough-varq-ban.sh` + `.test.sh` (rule-family conventions: per-rule
   counter, floor, dispatch mutation, header index entry)
 - ADR-031 (Sentry token posture — the reads stay on `SENTRY_ACTIONS_RO_TOKEN`)
+
+## Enhancement Summary (deepen-plan pass, 2026-10-31 — sequential-fallback)
+
+Deepen ran in-process (Devin subagent; `Reviewed-Coverage: sequential-fallback` — no
+independent review ran).
+
+### Gate ledger
+
+- **4.4 Precedent-diff:** PASS — precedent is the lint file itself (rules 2–5 family
+  convention: probe-set walk, per-rule counter + floor, dispatch-mutation row, header
+  index entry); rule 6 inherits all four shapes.
+- **4.45 Round-1 realism:** PASS — negative claims verified by grep at research time
+  (`grep 'sort=\|/events/' scripts/lint-*` empty; verdict code of all 7 probes read).
+- **4.5 Network-outage:** SKIP — no trigger patterns.
+- **4.55 Downtime & Cutover:** SKIP — no infra/deploy/DDL surface.
+- **4.6 User-Brand Impact:** PASS — section present, threshold `none`, diff matches no
+  sensitive-path entry (checked against `SENSITIVE_PATH_RE`).
+- **4.7 Observability:** PASS — trigger set (`apps/*/server|src|infra`,
+  `plugins/*/scripts/`) not matched; prose `## Observability` heading deliberately
+  avoided (renamed `## Gate Evaluation — Observability Schema`) so the field-validation
+  step is not falsely armed.
+- **4.8 PAT:** PASS — no PAT-shaped variable.
+- **4.9 UI wireframe:** SKIP — no UI-surface file.
+- **4.10 Encryption Posture:** SKIP — no store/connection.
+- **4.11 Guard Contract:** PASS — `lint-guard-contract.py` clean (1 entry, ≥3 rows);
+  adequacy read: Assembly is structural (probe-set chokepoint + continuation folding),
+  not a member list; matrix rows derived from the design (drop pin, half-bound, neutered
+  needle → floor, second member, must-PASS non-canonical + aggregate characterization).
+- **4.12 Scope Check:** PASS — exactly 1 unfenced section; 3/3 asks mapped; 2 `inferred`
+  items carry justifications; no BLOCKED marker.
+- **4.13 Task-Design:** SKIP — no new autonomous-task surface.
+
+### Key improvements applied during deepen
+
+- AC1 reworded: the six pins asserted per `/events/` call site, not per `URL=` literal
+  (egress's URL is inline in curl argv) — mechanical plan-review finding.
+- Guard Contract matrix grew harness rows (comment-only, folded-`--data-urlencode`,
+  aggregate characterization) beyond the 3-row floor.
+- `**Mutation matrix:**` bold field marker retained (lint-guard-contract counts rows
+  only after that marker).
