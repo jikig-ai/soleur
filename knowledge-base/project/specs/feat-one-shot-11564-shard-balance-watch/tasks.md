@@ -4,10 +4,10 @@ Plan: `knowledge-base/project/plans/2026-10-31-ci-shard-balance-watch-drift-prob
 
 ## Phase 1 — measurement mode (generator)
 
-- [ ] 1.1 Add `--drift-report` to `scripts/regenerate-shard-manifest.py` (read-only; requires `--timings-dir`; refuses `--write`/`--incremental`/`--legs`; `--durations`/`--manifest` honored as comparison-base overrides = fixture seam)
-- [ ] 1.2 Emit `DRIFT_ROW <group> <label> <committed_ms> <fresh_median_ms> <timed>/<sampled>` per floor row with >=1 fresh sample (light + heavy)
-- [ ] 1.3 Emit `LEG_PREDICTED <group> <leg> <ms>` from committed tables; `LEG_OBSERVED light <leg> <ms>` (light only); `BOUND_PERFECT light <ms>`; `FLOOR_UNMEASURED <group> <count>`
-- [ ] 1.4 Extend `plugins/soleur/test/regenerate-shard-manifest.test.sh` — emission shape, floor-vs-measured discrimination, light/heavy artifact filtering, refusal arms, exit codes
+- [x] 1.1 Add `--drift-report` to `scripts/regenerate-shard-manifest.py` (read-only; requires `--timings-dir`; refuses `--write`/`--incremental`/`--legs`; `--durations`/`--manifest` honored as comparison-base overrides = fixture seam)
+- [x] 1.2 Emit `DRIFT_ROW <group> <label> <committed_ms> <fresh_median_ms> <timed>/<sampled>` per floor row with >=1 fresh sample (light + heavy)
+- [x] 1.3 Emit `LEG_PREDICTED <group> <leg> <ms>` from committed tables; `LEG_OBSERVED light <leg> <ms>` (light only); `BOUND_PERFECT light <ms>`; `FLOOR_UNMEASURED <group> <count>`
+- [x] 1.4 Extend `plugins/soleur/test/regenerate-shard-manifest.test.sh` — emission shape, floor-vs-measured discrimination, light/heavy artifact filtering, refusal arms, exit codes
 
 ## Phase 2 — watch script
 

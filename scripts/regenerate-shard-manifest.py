@@ -363,15 +363,13 @@ def aggregate_runs(per_run):
     return {label: median(xs) for label, xs in samples.items()}
 
 
-def read_durations(path):
-    """Read a committed durations table (`label<TAB>ms<TAB>src`).
-
-    Returns (weights, floor_labels): src=measured rows supply weights; src=floor
-    rows supply NO weight — they re-derive at floor_ms on this invocation, so an
-    estimate can never launder into a measurement across regenerations."""
-    weights, floors = {}, set()
+def read_durations_rows(path):
+    """{label: (ms, src)} per data row of a committed durations table; None when
+    the file is absent. The single parser every durations reader funnels
+    through — row-shape rules live here only."""
     if not os.path.exists(path):
-        die(f"--durations file not found: {path}")
+        return None
+    rows = {}
     with open(path, encoding="utf-8") as fh:
         for lineno, raw in enumerate(fh, 1):
             line = raw.rstrip("\n")
@@ -382,10 +380,21 @@ def read_durations(path):
                     or parts[2] not in ("measured", "floor"):
                 die(f"{path}:{lineno}: malformed durations row {line!r} — "
                     f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
-            if parts[2] == "measured":
-                weights[parts[0]] = int(parts[1])
-            else:
-                floors.add(parts[0])
+            rows[parts[0]] = (int(parts[1]), parts[2])
+    return rows
+
+
+def read_durations(path):
+    """Read a committed durations table (`label<TAB>ms<TAB>src`).
+
+    Returns (weights, floor_labels): src=measured rows supply weights; src=floor
+    rows supply NO weight — they re-derive at floor_ms on this invocation, so an
+    estimate can never launder into a measurement across regenerations."""
+    rows = read_durations_rows(path)
+    if rows is None:
+        die(f"--durations file not found: {path}")
+    weights = {l: ms for l, (ms, src) in rows.items() if src == "measured"}
+    floors = {l for l, (ms, src) in rows.items() if src == "floor"}
     return weights, floors
 
 
@@ -396,23 +405,70 @@ def read_durations_ms(path):
     src=measured values so the floor median never launders an estimate into a
     measurement. An absent file yields ({}, []): the caller floors at
     DEFAULT_SUITE_MS, which is the honest degrade for a pre-#9232 manifest."""
-    all_ms, measured = {}, []
-    if not os.path.exists(path):
-        return all_ms, measured
-    with open(path, encoding="utf-8") as fh:
-        for lineno, raw in enumerate(fh, 1):
-            line = raw.rstrip("\n")
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split("\t")
-            if len(parts) != 3 or not parts[1].isdigit() \
-                    or parts[2] not in ("measured", "floor"):
-                die(f"{path}:{lineno}: malformed durations row {line!r} — "
-                    f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
-            all_ms[parts[0]] = int(parts[1])
-            if parts[2] == "measured":
-                measured.append(int(parts[1]))
+    rows = read_durations_rows(path) or {}
+    all_ms = {l: ms for l, (ms, _src) in rows.items()}
+    measured = [ms for _l, (ms, src) in rows.items() if src == "measured"]
     return all_ms, measured
+
+
+def drift_report_group(group, manifest_path, durations_path, dirs,
+                       artifact_re, n_wf):
+    """Emit the --drift-report rows for ONE group (#11564).
+
+    Read-only comparison of fresh cross-run medians against the committed
+    pricing. Emission contract (stdout, one row per line):
+      DRIFT_ROW <group> <label> <committed_ms> <fresh_median_ms> <timed>/<sampled>
+        — one per src=floor row that measured in >= 1 sampled run.
+      LEG_PREDICTED <group> <leg> <sum_ms>
+        — committed durations summed through the incumbent manifest.
+      LEG_OBSERVED light <leg> <sum_ms>
+        — fresh medians summed through the incumbent manifest; LIGHT ONLY:
+          heavy-leg artifacts must never enter light leg sums (the per-leg-sums
+          pollution gotcha) and heavy legs are one-suite-per-leg atomic floors
+          with no packing lever for the assertion to move (T7).
+      BOUND_PERFECT light <ms> — observed total / legs.
+      FLOOR_UNMEASURED <group> <count> — floor rows absent from every sample
+        (informational: an unmeasured row cannot exceed a cost bound)."""
+    rows = read_durations_rows(durations_path)
+    if rows is None:
+        die(f"--drift-report: comparison-base durations table not found: "
+            f"{durations_path}")
+    incumbent = read_incumbent(manifest_path)
+    per_run = [fetch_timings_from_dir(d, artifact_re) for d in dirs]
+    sampled = len(per_run)
+    samples = {}
+    for timings in per_run:
+        for label, ms in timings.items():
+            samples.setdefault(label, []).append(ms)
+    fresh = {label: median(xs) for label, xs in samples.items()}
+    timed_n = {label: len(xs) for label, xs in samples.items()}
+
+    floor_labels = {l for l, (_ms, src) in rows.items() if src == "floor"}
+    for label in sorted(floor_labels & set(fresh)):
+        print(f"DRIFT_ROW {group} {label} {rows[label][0]} "
+              f"{fresh[label]} {timed_n[label]}/{sampled}")
+    print(f"FLOOR_UNMEASURED {group} {len(floor_labels - set(fresh))}")
+
+    # Predicted: every committed row prices its incumbent leg (floor rows
+    # included — the manifest's own accounting).
+    legs_sorted = sorted(set(incumbent.values()))
+    for leg in legs_sorted:
+        s = sum(rows.get(l, (0, ""))[0]
+                for l, l_leg in incumbent.items() if l_leg == leg)
+        print(f"LEG_PREDICTED {group} {leg} {s}")
+
+    if group == "light":
+        obs = {leg: sum(fresh[l] for l, l_leg in incumbent.items()
+                        if l_leg == leg and l in fresh)
+               for leg in legs_sorted}
+        for leg in legs_sorted:
+            print(f"LEG_OBSERVED light {leg} {obs[leg]}")
+        # The perfect-balance bound is over the SAME label population the
+        # observed legs sum (untabled fresh labels cannot be leg-summed), over
+        # the manifest's own leg count — ci.yml's n only fills the
+        # manifest-less degrade.
+        n_legs = len(legs_sorted) if legs_sorted else n_wf
+        print(f"BOUND_PERFECT light {sum(obs.values()) // max(n_legs, 1)}")
 
 
 def write_durations_delta(path_in, path_out, legs, floor_ms):
@@ -601,6 +657,14 @@ def main():
     ap.add_argument("--write", action="store_true",
                     help="rewrite the manifest + durations table; default is a "
                          "dry-run report")
+    ap.add_argument("--drift-report", action="store_true",
+                    help="read-only drift probe (#11564): compare fresh "
+                         "cross-run medians from repeated --timings-dir dirs "
+                         "against the committed durations/manifest pricing and "
+                         "emit DRIFT_ROW / FLOOR_UNMEASURED / LEG_PREDICTED / "
+                         "LEG_OBSERVED / BOUND_PERFECT rows; writes nothing, "
+                         "exits 0 on findings; refuses --write/--incremental/"
+                         "--legs/--run/--runs")
     ap.add_argument("--manifest", default=None,
                     help="manifest path (default: the group's committed manifest)")
     ap.add_argument("--registered-file", default=None,
@@ -609,6 +673,24 @@ def main():
 
     if args.legs is not None and args.legs < 1:
         die("--legs must be >= 1")
+
+    # --drift-report refusals fire BEFORE the incremental-combination refusal
+    # so every contradiction names this mode. Emission runs after the group
+    # bindings below.
+    if args.drift_report:
+        if args.write:
+            die("--drift-report is read-only — it refuses --write")
+        if args.incremental:
+            die("--drift-report cannot combine with --incremental — report "
+                "mode fetches no timing-free incumbent state")
+        if args.legs is not None:
+            die("--drift-report emits no packing — refusing --legs")
+        if args.run is not None or args.runs is not None:
+            die("--drift-report reads local artifact dirs only — refusing "
+                "--run/--runs (download runs to per-run dirs first)")
+        if not args.timings_dir:
+            die("--drift-report requires --timings-dir (repeatable — one dir "
+                "per sampled run)")
 
     if args.incremental and (args.run is not None or args.runs is not None
                              or args.timings_dir):
@@ -658,6 +740,33 @@ def main():
         die(f"--legs {args.legs} mismatches the {job} matrix's declared {n_wf} "
             f"legs — refusing to commit an n-mismatched {os.path.basename(default_manifest)}. "
             f"Pass --manifest <path> to emit at K={args.legs} elsewhere.")
+
+    # --drift-report: the read-only measurement half of the shard-balance watch
+    # (#11564). Measurement lives here because this file is the only
+    # implementation of the merge semantics (verdict exclusions, per-group
+    # artifact filters); the watch script owns policy and consumes the rows.
+    if args.drift_report:
+        if args.manifest or args.durations:
+            # Single-group mode: --durations/--manifest are the comparison-
+            # base overrides (the fixture seam); the group follows --group.
+            dur_src = args.durations or (
+                default_durations
+                if os.path.abspath(manifest_path) == os.path.abspath(default_manifest)
+                else manifest_path + ".durations.tsv")
+            drift_report_group(args.group, manifest_path, dur_src,
+                               args.timings_dir, artifact_re, n_wf)
+        else:
+            # Committed-tables loop: the dirs carry both artifact families, so
+            # the default (light) invocation covers light + heavy; an explicit
+            # --group narrows to that group.
+            pairs = [(args.group, default_manifest, default_durations,
+                      artifact_re)] if args.group != "light" else [
+                ("light", MANIFEST, DURATIONS, LIGHT_ARTIFACT),
+                ("heavy", MANIFEST_HEAVY, DURATIONS_HEAVY, HEAVY_ARTIFACT)]
+            for gname, mpath, dpath, are in pairs:
+                drift_report_group(gname, mpath, dpath, args.timings_dir,
+                                   are, n_wf)
+        return
 
     # --incremental: the add/remove regen path (#9402, ADR-240 amd.). Row-set
     # construction is {incumbent ∩ registered, leg pinned verbatim} ∪
