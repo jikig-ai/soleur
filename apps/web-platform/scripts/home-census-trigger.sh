@@ -171,9 +171,12 @@ DIS_LINE="$(grep -E '^home-census C8 DISCHARGED sha=[0-9a-f]{40} pr=[0-9]+$' <<<
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die 8 "home-census-trigger: not inside the repository"
 grep -qF -- "DISCHARGED sha=${DISCHARGED}" "${ROOT}/${CLO_RECORD}" 2>/dev/null || die 8 "home-census-trigger: the committed CLO record does not carry this sha; nothing was sent"
 
-# (2) The PR head equals the discharged sha (fetched into FETCH_HEAD only, no destination refspec).
+# (2) The discharged sha is a commit of that PR: an ancestor of (or equal to) the PR head, fetched into FETCH_HEAD only (no
+# destination refspec). Ancestry and not equality, because the committed CLO record that carries the sha is itself a commit
+# on top of the reviewed one; the census-path comparison in (3) is what proves nothing in the census changed after it.
 git fetch --no-tags origin "refs/pull/${PR}/head" >/dev/null 2>&1 || die 8 "home-census-trigger: could not fetch the PR head; nothing was sent"
-[[ "$(git rev-parse FETCH_HEAD 2>/dev/null)" == "$DISCHARGED" ]] || die 8 "home-census-trigger: the PR head is not the discharged sha; nothing was sent"
+git rev-parse FETCH_HEAD >/dev/null 2>&1 || die 8 "home-census-trigger: the PR head is not available; nothing was sent"
+git merge-base --is-ancestor "$DISCHARGED" FETCH_HEAD || die 8 "home-census-trigger: the discharged sha is not a commit of the PR; nothing was sent"
 
 # (3) The served build's census paths equal the discharged commit's.
 if ! git cat-file -e "${SERVED}^{commit}" 2>/dev/null; then

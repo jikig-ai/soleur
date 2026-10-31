@@ -53,6 +53,7 @@ case "$*" in
   "fetch --no-tags origin refs/pull/"*"/head") : ;;
   "fetch --no-tags origin main") : ;;
   "rev-parse FETCH_HEAD") cat "$FIX/pr_head" ;;
+  "merge-base --is-ancestor "*" FETCH_HEAD") [[ -f "$FIX/not.ancestor" ]] && exit 1; : ;;
   "cat-file -e "*) : ;;
   "diff --quiet --no-ext-diff "*) [[ -f "$FIX/paths.differ" ]] && exit 1; : ;;
   *) echo "UNMODELLED git $*" >>"$FIX/calls.log"; exit 64 ;;
@@ -193,7 +194,8 @@ reset_fix; set_comments "$(comment 54279 NONE "home-census C8 DISCHARGED sha=$SH
 reset_fix; run --mode real --run-id 1 --discharged-sha "$SHA" --pr 78; refused "--pr differs from the C8 comment" 8
 reset_fix; run --mode real --run-id 1 --discharged-sha "$OLD" --pr 77; refused "--discharged-sha differs from the C8 comment" 8
 reset_fix; : >"$REPO/knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"; run "${REAL_ARGS[@]}"; refused "sha absent from the committed CLO record" 8
-reset_fix; echo "$OLD" >"$FIX/pr_head"; run "${REAL_ARGS[@]}"; refused "PR head differs from the discharged sha" 8
+reset_fix; touch "$FIX/not.ancestor"; run "${REAL_ARGS[@]}"; refused "the discharged sha is not a commit of the PR" 8
+reset_fix; echo "$OLD" >"$FIX/pr_head"; run "${REAL_ARGS[@]}"; check "a PR head ahead of the discharged sha is accepted (the CLO record commit sits on top)" "$([[ $RC -eq 0 ]]; echo $?)"
 reset_fix; touch "$FIX/paths.differ"; run "${REAL_ARGS[@]}"; check "census paths changed after discharge: exit 9" "$([[ $RC -eq 9 ]]; echo $?)"
 check "census paths changed after discharge: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
 reset_fix; result_json young lt_24h >"$FIX/dry.json"; run "${REAL_ARGS[@]}"; refused "young container without the explicit fallback" 8
@@ -232,6 +234,6 @@ reset_fix; jq -nc '{status: "ok", build_sha: "dev"}' >"$FIX/health.json"; run "$
 check "a 'dev' build fails closed" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
 
 # ---- floors (printf + exit 1, never through the helper they backstop) ----------------------------------------------
-if [[ "$PASS" -lt 84 ]]; then printf 'FLOOR: only %d assertions ran (expected at least 84)\n' "$PASS"; exit 1; fi
+if [[ "$PASS" -lt 85 ]]; then printf 'FLOOR: only %d assertions ran (expected at least 85)\n' "$PASS"; exit 1; fi
 printf 'home-census-trigger tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
