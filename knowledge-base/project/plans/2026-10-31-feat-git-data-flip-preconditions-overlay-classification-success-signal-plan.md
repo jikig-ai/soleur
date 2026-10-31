@@ -155,7 +155,7 @@ None. Seven planned source and test paths were queried against open `code-review
 ## Files to Edit
 
 - `.github/workflows/git-data-cutover.yml` (step `flip_preconditions`: env `BS_DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}` and the pause block last; the final "preconditions clear" echo; the header credential ledger comment, which lists `secrets.DOPPLER_TOKEN` as "bridge + webhook creds")
-- `apps/web-platform/infra/git-data-cutover-access.test.sh` (executed rows, mutants, one new `wf.py` row with the verdict-count pin 60 to 61; the `FLOOR=778` assertion floor and `MUTANT_FLOOR=182` restated from a measured run, each with its history comment line)
+- `apps/web-platform/infra/git-data-cutover-access.test.sh` (executed rows, mutants, one new `wf.py` row with the verdict-count pin 60 to 61; the `FLOOR` assertion floor and `MUTANT_FLOOR` (778 and 182 at plan time; 820 and 196 after the review round, see the Superseded note) restated from a measured run, each with its history comment line)
 - `apps/web-platform/server/ensure-workspace-repo.ts` (first-session classifier, ancestry gate, rescue branch)
 - `apps/web-platform/server/git-data-replication.ts` (warn success marker, retry flag)
 - `apps/web-platform/test/ensure-workspace-repo.test.ts` (mocked rows)
@@ -213,7 +213,7 @@ Mutants (`mutate()` against the extracted step file, then the named PS row goes 
 - first-session miss (rejection `Error` with `code: 128` and the real-shaped stderr "remote: git-data transport: repo does not exist (provision it first): '/srv/x/ws-uuid.git'\nfatal: Could not read from remote repository.") -> outcome `ok`, `mockReportSilentFallback` NOT called with op `git-data-overlay`, `mockLogInfo` called with an action token, no reset, and `JSON.stringify` of every log call contains neither `u1`, `ws-uuid` nor the path.
 - a non-miss fetch failure ("git-data unreachable") stays level 50 (existing row (e) retained).
 - descends: `merge-base --is-ancestor HEAD <dataRef>` resolves -> `reset --hard` runs, call order merge-base then reset.
-- not descendant (`merge-base` rejects with `code: 1`) -> `git branch soleur-store-tip-<12 hex of rev-parse <dataRef>>` is called BEFORE anything else, no reset, `mockLogWarn` with op `git-data-overlay-not-descendant` (no ids), no `reportSilentFallback`, outcome `ok`.
+- not descendant (`merge-base` rejects with `code: 1`) -> `git branch soleur-store-tip-<12 hex> <full sha>` (name from the first 12 hex of `rev-parse <dataRef>`, target the full sha) is called BEFORE anything else, no reset, `mockLogWarn` with op `git-data-overlay-not-descendant` (no ids), no `reportSilentFallback`, outcome `ok`.
 - not descendant and branch creation fails (non-idempotent failure) -> `reportSilentFallback` op `git-data-overlay`, NO reset, outcome `ok`; branch already exists at the same sha -> treated as success.
 - `merge-base` rejects with `code: 128` -> level-50 catch, no reset, no branch.
 
@@ -252,7 +252,7 @@ PR #11713 body ends with `Ref #11704`, `Ref #8211` and the Generated-with line; 
 
 ### Pre-merge (PR)
 
-- AC1 `git-data-cutover-access.test.sh` rows PS1..PS9 pass, every M-ps-* mutant goes RED for its named row, the verdict-count pin reads 61, and `FLOOR` / `MUTANT_FLOOR` are restated from a measured run.
+- AC1 `git-data-cutover-access.test.sh` rows PS1..PS13 pass (PS1..PS9 at plan time, see the Superseded note), every M-ps-* mutant goes RED for its named row, the verdict-count pin reads 61, and `FLOOR` / `MUTANT_FLOOR` are restated from a measured run.
 - AC2 With the pause block deleted from the workflow, PS2 fails (the test goes red when the change is removed).
 - AC3 The refusal strings are `::error title=git-data-cutover preconditions::verdict=pause_not_on` and `...verdict=pause_unread`, each followed by a `remedy:` line, both before the bridge step; the PR records the live read-only dry run of the exact SQL (shape only).
 - AC4 `ensure-workspace-repo.test.ts` mocked rows and the real-git rows S1..S4 pass; with the classifier removed the first-session row fails; with the ancestry gate removed S2 fails; with the rescue-branch creation removed S2 and S4 fail.
@@ -271,7 +271,7 @@ PR #11713 body ends with `Ref #11704`, `Ref #8211` and the Generated-with line; 
 
 ## Test Scenarios
 
-The executed rows PS1..PS9, the mocked and real-git overlay rows, CH1..CH3 and the signal verdict rows above are the scenarios; each red-then-green pair is listed with the change it guards. Adversarial shapes included on purpose: a stale newest row, a `0` row that is not the newest, a non-integer age, a reader that fails then recovers, a 128 with a different stderr, a phrase with the wrong exit code, a shallow store tip, an origin that advanced past the store.
+The executed rows PS1..PS13, the mocked and real-git overlay rows, CH1..CH3 and the signal verdict rows above are the scenarios; each red-then-green pair is listed with the change it guards. Adversarial shapes included on purpose: a stale newest row, a `0` row that is not the newest, a non-integer age, a reader that fails then recovers, a 128 with a different stderr, a phrase with the wrong exit code, a shallow store tip, an origin that advanced past the store.
 
 ## Guard Contract
 
@@ -430,8 +430,19 @@ The addendum describes behaviour that is true once this PR is deployed; it is wr
 - The SQL (multiIf, extract, match, dateDiff on `remote($BS_TABLE)`) cannot be validated offline; Phase 1.0 and 3.3 run it once, read-only, against the live sink before the tests are trusted.
 - The step also holds `GH_TOKEN` and the Sentry read token: the Better Stack credential is bound per command (`BS_DOPPLER_TOKEN`), the block never enables `xtrace` and never prints reader stderr verbatim.
 - The step body is sliced by two other suites (`# d6_replace_stale (#10166)` and `# deploy_in_flight` markers, plus a one-line `fail()` regex); the new block goes after both and `fail()` stays one line.
-- A shallow store makes ancestry answers conservative: an unprovable ancestry reads as not-descendant and skips (safe direction, now that the store tip is preserved); the extra store heads this creates are bounded by the existing gc.
+- A shallow store makes ancestry answers conservative: an unprovable ancestry reads as not-descendant and skips (safe direction, now that the store tip is preserved); the extra store heads this creates are NOT bounded by the existing gc (false: gc deletes no refs; see F13 and the Superseded note below) and a host-side reaper is deferred (#11725).
 - The pause check is a precondition-time check, not a lock (CTO F10): a host restart between the check and the flag write is covered by the owner's re-reads, the finalizer and the go gate, and documented in the runbook.
 - The marker phrase must not appear in any log other than the success branch (the read counts it by substring); a Phase 3 row greps the server tree.
 - A plan or task text that pairs a human actor with an infrastructure imperative trips `lint-infra-no-human-steps`; the lint is part of Phase 5.
 - The worktree directory was removed by an external cleanup once during planning: commit and push plan artifacts early.
+
+## Superseded (2026-10-31, fix round on PR #11713)
+
+The sections above are the plan-time record. Where later rulings changed them, these are the current facts (rulings F12-F23 are in `knowledge-base/project/specs/feat-one-shot-git-data-flip-preconditions-overlay-success-signal/decision-challenges.md`; mechanism in the ADR-068 addendum 2026-10-31):
+
+- **Rescue-head retention.** "The extra store heads are bounded by the existing gc" is false (gc deletes no refs). Heads grow by one per distinct skipped store tip, including the common store-behind case; they are excluded from the overlay fetch by a negative refspec (needs git >= 2.29; the container's version is unmeasured); a host-side reaper is deferred to #11725 (F13). The `soleur-store-tip-*` prefix is reserved.
+- **Rescue branch command.** The plan's `git branch <dataRef>` and `git branch soleur/store-tip-...` are superseded by `git branch soleur-store-tip-<12 hex> <full sha>` (flat name, F12). Indeterminate ancestry also rescues, then rethrows to level 50 (F14).
+- **Two-step replication push.** The replication push is two steps (F19): step 1 pushes the rescue ref alone with `--atomic` and is skipped when there is no local `soleur-store-tip-*` branch; step 2 is the `--force` push of `refs/heads/*` and tags WITHOUT `--atomic` (F20). Each step has its own single transient retry; a failure at either step is the loud `git-data replication push failed` and no success marker fires. After step 1's confirmed push the local rescue branches are deleted best-effort (F21). Worst-case slot hold is about 240 s against the 120 s queue timeout, accepted.
+- **Marker volume.** The success marker is capped at one per 60 s per process per `transient_retried` value; presence, not a count (F15, F18).
+- **Pause precondition rows and mutants.** The executed rows are PS1..PS13 (not PS1..PS9) and the review round added 8 mutants to the six `M-ps-*` ones (ps-bound-ge, ps-bound-widened, ps-limit-1, ps-trunc-bound, ps-zero-after-age, ps-refused-hidden, ps-err-kept, ps-secrets-unscoped), so the suite's `MUTANT_FLOOR` was 196 and `FLOOR` 820 at the start of the fix round (778/182 at plan time). Each later round restates both from a measured run; the ledger comments in `git-data-cutover-access.test.sh` are the authority, not this plan. The pause read refuses a `truncated` (full 200-row) answer without retrying it. `--only-secrets` on the reader is hygiene, not isolation: the token can still read `prd_terraform`.
+- **Residuals.** An overlay that cannot create a rescue branch (object missing, or fetch failed) is an accepted residual of the #11716 class (F22). Runbook R3 treats `git-data-overlay-not-descendant` as read-and-record, not a gating blemish (F23).
