@@ -55,6 +55,56 @@ export function __setLocalGitForTests(fn: LocalGitFn): void {
   localGitFn = fn;
 }
 
+// #11704 (CTO F5) — the EXPECTED first-session store miss. The bound transport wrapper
+// refuses a fetch of a never-provisioned store repository with
+// `reject "repo does not exist (provision it first): '<path>'"`, relayed through ssh as
+// `remote: git-data transport: ...`, after which git exits 128. The store repository is
+// created by the session-end provision that precedes the replication push, so this miss
+// self-heals at the first session end and is not a fault. Info ONLY when BOTH the numeric
+// exit code is 128 AND the phrase is on `err.stderr` (falling back to `err.message` only
+// when stderr is absent or empty); anything else stays a level-50 silent fallback.
+// The phrase is owned by git-data-transport-wrapper.sh; a test greps that source for it.
+const FIRST_SESSION_MISS_RE = /does not exist \(provision it first\)/;
+
+export function isFirstSessionStoreMiss(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; stderr?: unknown; message?: unknown };
+  if (e.code !== 128) return false;
+  const stderr =
+    typeof e.stderr === "string"
+      ? e.stderr
+      : Buffer.isBuffer(e.stderr)
+        ? e.stderr.toString("utf8")
+        : "";
+  const text = stderr.length > 0 ? stderr : typeof e.message === "string" ? e.message : "";
+  return FIRST_SESSION_MISS_RE.test(text);
+}
+
+// #11704 (CTO F7/F11) — `git branch` on a name that already exists exits 128. An existing
+// rescue branch at the SAME full sha is the idempotent retry of an earlier skip: success.
+async function createRescueBranch(
+  workspacePath: string,
+  dataRef: string,
+  fullSha: string,
+  branch: string,
+): Promise<void> {
+  try {
+    await localGitFn(["branch", branch, dataRef], workspacePath);
+  } catch (err) {
+    let existing = "";
+    try {
+      const { stdout } = await localGitFn(
+        ["rev-parse", "--verify", `refs/heads/${branch}`],
+        workspacePath,
+      );
+      existing = stdout.trim();
+    } catch {
+      // not resolvable → the original failure stands
+    }
+    if (existing !== fullSha) throw err;
+  }
+}
+
 // Strict github.com HTTPS allowlist. The clone arg is also `--`-guarded against
 // argv flag-smuggling; this format check is defense-in-depth so a malformed /
 // non-github repo_url never reaches `git clone` (review PR #4890, HIGH).
@@ -369,15 +419,67 @@ export async function ensureWorkspaceRepoCloned(
           // concurrent graft: only reset a still-valid worktree.
           await withWorkspacePermissionLock(workspacePath, async () => {
             if (!isValidGitWorkTree(workspacePath)) return;
+
+            // #11704 (CTO F4/F7/F11) — ANCESTRY GATE. Adopt the store tip only when it
+            // descends from the fresh clone tip. Exit 0 = descends (reset); exit 1 = it
+            // does not (skip); any other exit (e.g. 128 on a missing object) is NOT an
+            // answer and rethrows into the level-50 catch below, so the reset never runs.
+            // The clone is `--depth 1` and the store is shallow, so exit 1 cannot tell
+            // "store behind the clone" from "diverged": one reason, rescued either way.
+            let descends = false;
+            try {
+              await localGitFn(
+                ["merge-base", "--is-ancestor", "HEAD", dataRef],
+                workspacePath,
+              );
+              descends = true;
+            } catch (err) {
+              if ((err as { code?: unknown } | null)?.code !== 1) throw err;
+            }
+
+            if (!descends) {
+              // The session-end push force-overwrites the user's own store namespace from
+              // refs/heads/*, so skipping the reset alone would make a replicated-only
+              // store tip unreachable at the next push. Preserve it on a local branch
+              // FIRST (plain `git branch`, no -f); the next push carries it into the
+              // store as a head. Any failure rethrows into the level-50 catch before
+              // anything is skipped, and the reset path is never reached.
+              const { stdout: shaOut } = await localGitFn(["rev-parse", dataRef], workspacePath);
+              const fullSha = shaOut.trim();
+              if (!/^[0-9a-f]{40,64}$/.test(fullSha)) {
+                throw new Error("git-data overlay: store tip did not resolve to a commit id");
+              }
+              await createRescueBranch(
+                workspacePath,
+                dataRef,
+                fullSha,
+                `soleur/store-tip-${fullSha.slice(0, 12)}`,
+              );
+              // Counts-only: no user id, workspace id, path or commit id in the line.
+              log.warn(
+                { op: "git-data-overlay-not-descendant" },
+                "git-data overlay skipped: store tip is not a descendant of the fresh clone tip; preserved on a local rescue branch",
+              );
+              return;
+            }
+
             await localGitFn(["reset", "--hard", dataRef], workspacePath);
           });
         }
       } catch (err) {
-        reportSilentFallback(err, {
-          feature: "ensure-workspace-repo",
-          op: "git-data-overlay",
-          extra: { userId },
-        });
+        if (isFirstSessionStoreMiss(err)) {
+          // Expected, self-healing (see isFirstSessionStoreMiss): info, no identifiers.
+          log.info(
+            { action: "git-data-overlay-first-session-miss" },
+            "git-data overlay: store repository not provisioned yet (first session); keeping the GitHub clone",
+          );
+        } else {
+          reportSilentFallback(err, {
+            feature: "ensure-workspace-repo",
+            op: "git-data-overlay",
+            extra: { userId },
+          });
+        }
         // fall through — the GitHub clone stands; overlay is best-effort.
       }
     }
