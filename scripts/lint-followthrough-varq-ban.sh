@@ -477,7 +477,10 @@ done
 # accepted class rule 3 declares. One asymmetry is structural: this lint drops `#` lines
 # BEFORE folding, but bash ends a backslash-continuation AT a `#` line -- a comment
 # interposed inside a continued command splits it in two while the lint still reads one
-# logical line (shellcheck SC2215 catches it; the lint cannot see it).
+# logical line (shellcheck SC2215 catches it; the lint cannot see it). The dual is a
+# false-satisfier: an INLINE `# ... sort= ...` comment on an /events/ logical line meets
+# the bound predicate while the call carries no bound -- mid-line comment-stripping
+# needs quote-awareness the fold does not have, so the class is declared, not checked.
 scanned_rule6=0
 rule6_hits=""
 for f in ${PROBES[@]+"${PROBES[@]}"}; do

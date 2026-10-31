@@ -82,6 +82,7 @@
 #   R6-M3  DISPATCH: guard COPY with the /events/ needle neutered,  -> exit 2 on the production
 #          production run                                            tree, diagnostic names rule 6
 #   R6-M4  a second unbounded call after a compliant first          -> exit 1, cites the SECOND call
+#   R6-M5  look-alike params (resort=/xstart=/append=)              -> exit 1, all three cited
 #   R6-H1  must-PASS non-canonical: start=+end= bound, no sort=     -> exit 0
 #   R6-H2  must-PASS: field=count() aggregate, statsPeriod only     -> exit 0 (the live exemption)
 #   R6-H3  must-PASS: /events/ URL inside a full-line `#` comment   -> exit 0
@@ -1331,6 +1332,25 @@ run_guard "$d"
 (( GUARD_RC == 1 )); check $? "R6-M4 second unbounded call after a compliant first -> exit 1" "R6-M4 expected exit 1, got $GUARD_RC: $GUARD_OUT"
 grep -q 'two-calls.sh:4: rule 6:' <<<"$GUARD_OUT"; check $? "R6-M4 cites the SECOND call's line (two-calls.sh:4)" "R6-M4 mis-cited (expected two-calls.sh:4): $GUARD_OUT"
 
+# --- R6-M5: look-alike param names (resort=/xstart=/append=) must NOT satisfy the bound ---
+# The predicate's non-identifier left edge is the only thing standing between these and a
+# free pass: `resort=` contains `sort=`, `xstart=`/`xend=` contain `start=`/`end=`, and
+# `append=` contains `end=`. Each at its true line -> exit 1, all three cited.
+d=$(mkcase r6m5)
+cat >"$d/lookalikes.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+URL1="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=a&resort=-timestamp&statsPeriod=1h"
+URL2="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=b&xstart=2026-10-01&xend=2026-10-31&statsPeriod=1h"
+URL3="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=c&append=true&statsPeriod=1h"
+echo "$URL1 $URL2 $URL3"
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R6-M5 look-alike params (resort=/xstart=/append=) do not satisfy the bound -> exit 1" "R6-M5 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'lookalikes.sh:3: rule 6:' <<<"$GUARD_OUT"; check $? "R6-M5 cites resort= offender at lookalikes.sh:3" "R6-M5 missed the resort= call: $GUARD_OUT"
+grep -q 'lookalikes.sh:4: rule 6:' <<<"$GUARD_OUT"; check $? "R6-M5 cites xstart=/xend= offender at lookalikes.sh:4" "R6-M5 missed the xstart=/xend= call: $GUARD_OUT"
+grep -q 'lookalikes.sh:5: rule 6:' <<<"$GUARD_OUT"; check $? "R6-M5 cites append= offender at lookalikes.sh:5" "R6-M5 missed the append= call: $GUARD_OUT"
+
 # --- R6-H1 must-PASS non-canonical: start=+end= bound with no sort= -> exit 0 ---
 d=$(mkcase r6h1)
 cat >"$d/bounded.sh" <<'EOF'
@@ -1387,7 +1407,7 @@ R6L_OUT="$(bash "$GUARD" 2>&1)"
 n6=$(grep -oE 'rule 6 \(ordering bound\) examined [0-9]+' <<<"$R6L_OUT" | grep -oE '[0-9]+$')
 [[ -n "$n6" && "$n6" -ge 5 ]]; check $? "R6-H5 live tree: rule 6 examined >= 5 /events/ calls (got ${n6:-none})" "R6-H5 scanned_rule6 missing or < 5 on live tree: $R6L_OUT"
 
-MIN_ASSERTIONS=204
+MIN_ASSERTIONS=208
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
