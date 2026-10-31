@@ -234,6 +234,9 @@ reset_fix; jq -nc '{status: "ok", build_sha: "dev"}' >"$FIX/health.json"; run "$
 check "a 'dev' build fails closed" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
 
 # ---- floors (printf + exit 1, never through the helper they backstop) ----------------------------------------------
-if [[ "$PASS" -lt 85 ]]; then printf 'FLOOR: only %d assertions ran (expected at least 85)\n' "$PASS"; exit 1; fi
+if [[ "$PASS" -lt 85 ]]; then
+  printf 'FLOOR: only %d assertions ran (expected at least 85)\n' "$PASS"
+  exit 1
+fi
 printf 'home-census-trigger tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
